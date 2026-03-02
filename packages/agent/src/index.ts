@@ -51,6 +51,7 @@ export {
 // ============== Tokenizer ==============
 export {
   estimateTokens,
+  countTokens,
 } from './tokenizer.js';
 
 // ============== Messages ==============

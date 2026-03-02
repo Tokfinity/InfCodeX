@@ -1,6 +1,6 @@
 {
   "name": "@kodax/agent",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "KodaX Agent - 通用 Agent 框架，会话管理和消息处理",
   "type": "module",
   "main": "dist/index.js",
@@ -19,7 +19,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/ai": "*"
+    "@kodax/ai": "*",
+    "js-tiktoken": "^1.0.12"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
