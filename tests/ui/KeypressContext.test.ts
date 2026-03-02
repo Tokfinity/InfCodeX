@@ -10,11 +10,9 @@ import {
   KeypressHandlerPriority,
   type KeyInfo,
   type KeypressHandler,
-} from "../../src/ui/types.js";
-import {
   createKeypressManager,
   type KeypressManager,
-} from "../../src/ui/contexts/KeypressContext.js";
+} from "@kodax/repl";
 
 // === Test Helpers ===
 

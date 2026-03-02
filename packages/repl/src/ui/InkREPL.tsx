@@ -34,7 +34,7 @@ import {
   runKodaX,
   KODAX_DEFAULT_PROVIDER,
   KodaXTerminalError,
-} from "@kodax/core";
+} from "@kodax/coding";
 import {
   PermissionMode,
   ConfirmResult,
@@ -314,7 +314,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
-  const createStreamingEvents = useCallback((): import("@kodax/core").KodaXEvents => ({
+  const createStreamingEvents = useCallback((): import("@kodax/coding").KodaXEvents => ({
     onThinkingDelta: (text: string) => {
       // UI layer stores thinking content for display - UI 层存储 thinking 内容用于显示
       appendThinkingContent(text);

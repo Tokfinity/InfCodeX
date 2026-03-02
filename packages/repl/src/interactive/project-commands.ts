@@ -6,7 +6,7 @@
 
 import * as readline from 'readline';
 import chalk from 'chalk';
-import { runKodaX, KodaXOptions, KodaXMessage } from '@kodax/core';
+import { runKodaX, KodaXOptions, KodaXMessage } from '@kodax/coding';
 import { ProjectStorage } from './project-storage.js';
 import {
   ProjectFeature,

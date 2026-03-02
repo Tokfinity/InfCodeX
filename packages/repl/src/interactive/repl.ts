@@ -27,7 +27,7 @@ import {
   KodaXProviderError,
   KODAX_DEFAULT_PROVIDER,
   generateSessionId,
-} from '@kodax/core';
+} from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from '../permission/types.js';
 import { isToolCallAllowed, isAlwaysConfirmPath } from '../permission/permission.js';

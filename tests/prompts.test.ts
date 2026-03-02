@@ -1,7 +1,7 @@
 /**
  * KodaX 提示词内容验证测试
  *
- * 确保 core/prompts/ 和 cli/ 中的提示词关键内容存在
+ * 确保 coding/prompts/ 和 cli/ 中的提示词关键内容存在
  */
 
 import { describe, it, expect } from 'vitest';
@@ -11,7 +11,7 @@ import path from 'path';
 // ============== SYSTEM_PROMPT 测试 ==============
 
 describe('SYSTEM_PROMPT Content Verification', () => {
-  const systemPromptPath = path.join(process.cwd(), 'src', 'core', 'prompts', 'system.ts');
+  const systemPromptPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'system.ts');
 
   it('should contain Large File Handling section', async () => {
     const content = await fs.readFile(systemPromptPath, 'utf-8');
@@ -93,7 +93,7 @@ describe('SYSTEM_PROMPT Content Verification', () => {
 // ============== LONG_RUNNING_PROMPT 测试 ==============
 
 describe('LONG_RUNNING_PROMPT Content Verification', () => {
-  const longRunningPath = path.join(process.cwd(), 'src', 'core', 'prompts', 'long-running.ts');
+  const longRunningPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'long-running.ts');
 
   it('should contain Long-Running Task Mode section', async () => {
     const content = await fs.readFile(longRunningPath, 'utf-8');
@@ -154,7 +154,7 @@ describe('LONG_RUNNING_PROMPT Content Verification', () => {
 // ============== buildInitPrompt 测试 ==============
 
 describe('buildInitPrompt Content Verification', () => {
-  const cliUtilsPath = path.join(process.cwd(), 'src', 'cli', 'utils.ts');
+  const cliUtilsPath = path.join(process.cwd(), 'packages', 'repl', 'src', 'common', 'utils.ts');
 
   it('should contain feature definition', async () => {
     const content = await fs.readFile(cliUtilsPath, 'utf-8');
@@ -242,7 +242,7 @@ describe('--append Prompt Content Verification', () => {
 // ============== toolBash timeout message 测试 ==============
 
 describe('toolBash Timeout Message Verification', () => {
-  const bashToolPath = path.join(process.cwd(), 'src', 'core', 'tools', 'bash.ts');
+  const bashToolPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'tools', 'bash.ts');
 
   it('should contain all timeout suggestions', async () => {
     const content = await fs.readFile(bashToolPath, 'utf-8');
@@ -256,7 +256,7 @@ describe('toolBash Timeout Message Verification', () => {
 // ============== Retry prompts 测试 ==============
 
 describe('Retry Prompts Content Verification', () => {
-  const agentPath = path.join(process.cwd(), 'src', 'core', 'agent.ts');
+  const agentPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'agent.ts');
 
   it('should contain first retry prompt with concise instruction', async () => {
     const content = await fs.readFile(agentPath, 'utf-8');
@@ -282,12 +282,12 @@ describe('Retry Prompts Content Verification', () => {
 // ============== 源文件一致性测试 ==============
 
 describe('Source File Consistency', () => {
-  const systemPromptPath = path.join(process.cwd(), 'src', 'core', 'prompts', 'system.ts');
-  const longRunningPath = path.join(process.cwd(), 'src', 'core', 'prompts', 'long-running.ts');
+  const systemPromptPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'system.ts');
+  const longRunningPath = path.join(process.cwd(), 'packages', 'coding', 'src', 'prompts', 'long-running.ts');
   const kodaxCliPath = path.join(process.cwd(), 'src', 'kodax_cli.ts');
-  const cliUtilsPath = path.join(process.cwd(), 'src', 'cli', 'utils.ts');
+  const cliUtilsPath = path.join(process.cwd(), 'packages', 'repl', 'src', 'common', 'utils.ts');
 
-  it('should have SYSTEM_PROMPT in core/prompts/system.ts', async () => {
+  it('should have SYSTEM_PROMPT in coding/prompts/system.ts', async () => {
     const systemPromptContent = await fs.readFile(systemPromptPath, 'utf-8');
 
     // Verify key sections exist
@@ -307,7 +307,7 @@ describe('Source File Consistency', () => {
     }
   });
 
-  it('should have LONG_RUNNING_PROMPT in core/prompts/long-running.ts', async () => {
+  it('should have LONG_RUNNING_PROMPT in coding/prompts/long-running.ts', async () => {
     const longRunningContent = await fs.readFile(longRunningPath, 'utf-8');
 
     const keySections = [

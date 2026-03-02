@@ -15,6 +15,37 @@ export type { InkREPLOptions } from "./InkREPL.js";
 // CLI event handler - CLI 事件处理器
 export { createCliEvents } from "./cli-events.js";
 
+// Contexts - 上下文 (unique exports not in hooks)
+export {
+  UIStateProvider,
+  useUIState,
+  useUIActions,
+  useUI,
+  generateId,
+  createHistoryItem,
+  createToolCall,
+  KeypressProvider,
+  useKeypressManager,
+  createKeypressManager,
+  KeyMatchers,
+  StreamingProvider,
+  useStreamingState,
+  useStreamingActions,
+  useStreaming,
+  createStreamingManager,
+} from "./contexts/index.js";
+export type {
+  UIStateProviderProps,
+  KeypressProviderProps,
+  KeypressManager,
+  StreamingContextValue,
+  StreamingActions,
+  StreamingProviderProps,
+  StreamingStateListener,
+  StreamingManager,
+  CreatableHistoryItem,
+} from "./contexts/index.js";
+
 // Components - 组件
 export * from "./components/index.js";
 

@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { TextBuffer } from "../src/ui/utils/text-buffer.js";
+import { TextBuffer } from "@kodax/repl";
 
 /**
  * Simulates the navigation decision logic

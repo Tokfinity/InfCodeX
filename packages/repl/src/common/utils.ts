@@ -9,7 +9,7 @@ import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
-import { getProvider, KODAX_PROVIDERS } from '@kodax/core';
+import { getProvider, KODAX_PROVIDERS } from '@kodax/coding';
 
 const execAsync = promisify(exec);
 

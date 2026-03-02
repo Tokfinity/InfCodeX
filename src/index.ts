@@ -4,8 +4,8 @@
  * 根入口文件 - 代理到 monorepo packages
  */
 
-// Core API - 从 @kodax/core 重新导出
-export * from '@kodax/core';
+// Core API - 从 @kodax/coding 重新导出
+export * from '@kodax/coding';
 
 // REPL API - 从 @kodax/repl 重新导出
 export {

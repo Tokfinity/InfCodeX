@@ -5,8 +5,8 @@
  */
 
 import path from 'path';
-import { executeTool } from '@kodax/core';
-import type { KodaXToolExecutionContext } from '@kodax/core';
+import { executeTool } from '@kodax/coding';
+import type { KodaXToolExecutionContext } from '@kodax/coding';
 import {
   PermissionMode,
   PermissionContext,

@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import readline from 'readline';
-import type { KodaXEvents } from '@kodax/core';
+import type { KodaXEvents } from '@kodax/coding';
 import { PREVIEW_MAX_LENGTH } from '../common/utils.js';
 import type { ConfirmResult } from '../permission/types.js';
 

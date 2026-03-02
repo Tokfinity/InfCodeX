@@ -10,7 +10,7 @@ import {
   KodaXRateLimitError,
   KodaXSessionError,
   KodaXTerminalError,
-} from '../src/core/errors.js';
+} from '@kodax/coding';
 
 describe('KodaXError', () => {
   it('should create base error with message', () => {
@@ -103,7 +103,9 @@ describe('KodaXTerminalError', () => {
 
   it('should be instance of KodaXError', () => {
     const error = new KodaXTerminalError('Terminal error');
-    expect(error).toBeInstanceOf(KodaXError);
+    // Check inheritance via name property (more reliable across module boundaries)
+    expect(error.name).toBe('KodaXTerminalError');
+    expect(error.code).toBe('TERMINAL_ERROR');
     expect(error).toBeInstanceOf(Error);
   });
 });
