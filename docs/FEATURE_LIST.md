@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-02-28 20:25_
+_Last Updated: 2026-03-02 18:00_
 
 ---
 
@@ -21,7 +21,7 @@ _Last Updated: 2026-02-28 20:25_
 | v0.3.3 | Released | 1 | 1/1 (100%) |
 | v0.4.0 | Released | 1 | 1/1 (100%) |
 | v0.4.6 | Released | 1 | 1/1 (100%) |
-| v0.5.0 | InProgress | 4 | 2/4 (50%) |
+| v0.5.0 | InProgress | 6 | 2/6 (33%) |
 
 ---
 
@@ -38,6 +38,8 @@ _Last Updated: 2026-02-28 20:25_
 | 007 | Enhancement | Planned | Medium | 主题系统完善 | v0.5.0 | - | [Design](features/v0.5.0.md#007) | 2026-02-25 | - | - |
 | 008 | Enhancement | Completed | High | 权限控制体系改进 | v0.5.0 | v0.4.6 | [Design](features/v0.5.0.md#008) | 2026-02-26 | 2026-02-27 | 2026-02-27 |
 | 009 | Refactor | Completed | Critical | 架构重构：AI 层独立 + 权限层分离 | v0.5.0 | v0.5.0 | [Design](features/v0.5.0.md#009) | 2026-02-27 | 2026-02-27 | 2026-02-27 |
+| 010 | Refactor | Planned | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | - | [Design](features/v0.5.0.md#010) | 2026-03-02 | - | - |
+| 011 | Enhancement | Planned | High | 智能上下文压缩 (Compact) | v0.5.0 | - | [Design](features/v0.5.0.md#011) | 2026-03-02 | - | - |
 
 ---
 
@@ -319,9 +321,101 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
+### 010: 架构拆分：Agent Core + Skills 独立 (PLANNED)
+- **Category**: Refactor
+- **Status**: Planned
+- **Priority**: Critical
+- **Planned**: v0.5.0
+- **Released**: -
+- **Design**: [v0.5.0.md#010](features/v0.5.0.md#010)
+- **Created**: 2026-03-02
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+参考 pi-mono 的多层架构设计，将 KodaX 拆分为更细粒度的包，实现 Agent 框架通用化和 Skills 能力独立化。
+
+**Goals**:
+1. **@kodax/agent** - 通用 Agent 框架（状态机、消息循环、transport 抽象）
+2. **@kodax/skills** - Skills 系统独立包（零依赖，可被任何 Agent 使用）
+3. **@kodax/coding** - Coding Agent（工具 + Prompts，依赖 agent + skills）
+4. **@kodax/repl** - CLI 应用（纯 UI 和交互）
+
+**Background**:
+- 当前 Skills 在 `repl` 包中，导致只有 REPL 能用
+- 当前 `core` 包混合了 Agent 框架和 Coding 工具
+- 希望 KodaX 能支持非 Coding Agent 的场景
+
+**Inspired by**: [pi-mono](https://github.com/badlogic/pi-mono)
+- `@mariozechner/pi-agent-core` - 通用 Agent 框架
+- `@mariozechner/pi-coding-agent` - Coding Agent（Skills 在这里）
+
+**Key Changes**:
+- 创建 `packages/agent/` - 从 core 提取通用 Agent 框架
+- 创建 `packages/skills/` - 从 repl 提取 Skills 系统
+- 重命名 `packages/core/` → `packages/coding/` - Coding 专用工具和 Prompts
+- 简化 `packages/repl/` - 只保留 UI 和交互逻辑
+
+**Implementation Notes**:
+- Skills 模块零依赖（只依赖 Node.js 内置模块）
+- Agent 包提供通用状态机和消息循环
+- Coding 包依赖 Agent + Skills
+- REPL 只依赖 Coding 包
+
+---
+
+### 011: 智能上下文压缩 Compact (PLANNED)
+- **Category**: Enhancement
+- **Status**: Planned
+- **Priority**: High
+- **Planned**: v0.5.0
+- **Released**: -
+- **Design**: [v0.5.0.md#011](features/v0.5.0.md#011)
+- **Created**: 2026-03-02
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+对标 pi-mono 的 Compaction 系统，升级 KodaX 的上下文压缩能力，从简单截断升级为智能摘要。
+
+**Goals**:
+1. **可配置阈值** - 用户可配置压缩触发阈值和保留消息数
+2. **LLM 智能摘要** - 用 LLM 生成结构化摘要（目标、进度、决策等）
+3. **手动 /compact 命令** - 支持用户主动触发压缩
+4. **文件追踪** - 累积追踪读写过的文件
+5. **扩展钩子** - 提供压缩前事件钩子
+
+**Background**:
+- 当前压缩只是简单截断每条消息到 100 字符
+- 阈值写死在常量中（100k tokens），无法配置
+- 没有手动触发机制
+- 不保留关键上下文（文件操作、决策等）
+
+**Inspired by**: [pi-mono compaction](https://github.com/badlogic/pi-mono)
+- LLM 生成结构化摘要：Goal、Progress、Decisions、Next Steps
+- 累积文件追踪：readFiles、modifiedFiles
+- 可配置：reserveTokens、keepRecentTokens
+- 扩展 API：session_before_compact 事件
+
+**Key Changes**:
+- 创建 `packages/core/src/compaction/` 模块
+- 添加配置支持到 `~/.kodax/config.json`
+- 添加 `/compact` REPL 命令
+- 实现 LLM 摘要生成器
+- 添加文件追踪逻辑
+
+**Implementation Notes**:
+- `packages/core/src/compaction/compaction.ts` - 压缩逻辑
+- `packages/core/src/compaction/summary-generator.ts` - LLM 摘要生成
+- `packages/core/src/compaction/file-tracker.ts` - 文件追踪
+- `packages/repl/src/interactive/commands.ts` - `/compact` 命令
+- `packages/repl/src/common/config.ts` - 配置加载
+
+---
+
 ## Summary
-- Total: 9 (1 Planned, 1 InProgress, 7 Completed)
-- By Priority: Critical: 2, High: 4, Medium: 2, Low: 0
+- Total: 11 (3 Planned, 1 InProgress, 7 Completed)
+- By Priority: Critical: 3, High: 5, Medium: 2, Low: 0
 - Current Version: v0.5.0
-- Next Release (v0.5.0): 2 features planned (006, 007)
-- Highest Priority Planned: 006 - Skills 系统 (Critical)
+- Next Release (v0.5.0): 4 features planned (006, 007, 010, 011)
+- Highest Priority Planned: 006 - Skills 系统 (Critical), 010 - 架构拆分 (Critical)

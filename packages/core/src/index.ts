@@ -140,6 +140,7 @@ export {
 
 export {
   estimateTokens,
+  countTokens,
 } from './tokenizer.js';
 
 // ============== Agent ==============
