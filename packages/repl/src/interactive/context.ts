@@ -2,7 +2,7 @@
  * KodaX Interactive Context Management - 交互式上下文管理
  */
 
-import { KodaXMessage } from '@kodax/core';
+import { KodaXMessage } from '@kodax/coding';
 
 // Interactive mode - 交互模式
 export type InteractiveMode = 'code' | 'ask';

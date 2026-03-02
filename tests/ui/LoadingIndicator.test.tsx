@@ -14,7 +14,7 @@ import {
   Spinner,
   DotsIndicator,
   ProgressIndicator,
-} from "../../src/ui/components/LoadingIndicator.js";
+} from "@kodax/repl";
 
 // === Tests ===
 

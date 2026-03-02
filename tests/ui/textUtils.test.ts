@@ -11,7 +11,7 @@ import {
   splitByCodePoints,
   truncateByVisualWidth,
   isWideChar,
-} from "../../src/ui/utils/textUtils.js";
+} from "@kodax/repl";
 
 describe("LRUCache", () => {
   let cache: LRUCache<string, number>;

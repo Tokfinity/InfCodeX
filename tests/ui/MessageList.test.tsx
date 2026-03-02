@@ -19,8 +19,9 @@ import {
   type HistoryItemInfo,
   type HistoryItemHint,
   type ToolCall,
-} from "../../src/ui/types.js";
-import { MessageList, HistoryItemRenderer } from "../../src/ui/components/MessageList.js";
+  MessageList,
+  HistoryItemRenderer,
+} from "@kodax/repl";
 
 // === Test Helpers ===
 

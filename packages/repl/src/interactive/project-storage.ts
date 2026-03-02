@@ -9,7 +9,7 @@ import * as fs from 'fs/promises';
 import {
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
-} from '@kodax/core';
+} from '@kodax/coding';
 import {
   ProjectFeature,
   FeatureList,

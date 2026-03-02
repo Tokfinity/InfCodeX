@@ -11,13 +11,11 @@ import { render } from "ink-testing-library";
 import {
   ToolCallStatus,
   type ToolCall,
-} from "../../src/ui/types.js";
-import {
   ToolGroup,
   ToolCallDisplay,
   ToolStatusBadge,
   ToolProgressBar,
-} from "../../src/ui/components/ToolGroup.js";
+} from "@kodax/repl";
 
 // === Test Helpers ===
 

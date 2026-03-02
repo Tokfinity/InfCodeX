@@ -31,7 +31,7 @@ import {
   getProvider,
   KODAX_TOOLS,
   KodaXTerminalError,
-} from '@kodax/core';
+} from '@kodax/coding';
 import {
   getGitRoot,
   loadConfig,

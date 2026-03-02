@@ -5,7 +5,7 @@
  * Extracted from InkREPL.tsx to improve code organization - 从 InkREPL.tsx 提取以改善代码组织
  */
 
-import type { KodaXMessage } from "@kodax/core";
+import type { KodaXMessage } from "@kodax/coding";
 
 /**
  * Extract text content from message - 从消息中提取文本内容

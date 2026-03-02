@@ -7,7 +7,7 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import chalk from 'chalk';
-import { KodaXMessage, KodaXSessionStorage } from '@kodax/core';
+import { KodaXMessage, KodaXSessionStorage } from '@kodax/coding';
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 
 export class FileSessionStorage implements KodaXSessionStorage {

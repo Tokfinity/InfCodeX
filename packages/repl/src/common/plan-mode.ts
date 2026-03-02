@@ -3,7 +3,7 @@
  * Plan Mode 主逻辑 - 分步执行任务
  */
 
-import { runKodaX, KodaXOptions } from '@kodax/core';
+import { runKodaX, KodaXOptions } from '@kodax/coding';
 import { planStorage, ExecutionPlan } from './plan-storage.js';
 import chalk from 'chalk';
 import * as readline from 'readline';

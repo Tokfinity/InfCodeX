@@ -16,12 +16,10 @@ import {
   type HistoryItemToolGroup,
   type UIState,
   DEFAULT_UI_STATE,
-} from "../../src/ui/types.js";
-import {
   generateId,
   createHistoryItem,
   createToolCall,
-} from "../../src/ui/contexts/UIStateContext.js";
+} from "@kodax/repl";
 
 // === Test Constants ===
 
@@ -126,7 +124,8 @@ describe("UIState Types", () => {
       expect(state.history).toBeDefined();
       expect(state.pendingToolCalls).toBeDefined();
       expect(state.sessionId).toBeDefined();
-      expect(state.mode).toBeDefined();
+      expect(state.provider).toBeDefined();
+      expect(state.model).toBeDefined();
     });
 
     it("should have optional tokenUsage", () => {

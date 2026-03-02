@@ -5,7 +5,7 @@
 import * as readline from 'readline';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
-import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions } from '@kodax/core';
+import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions } from '@kodax/coding';
 import { PermissionMode } from '../permission/types.js';
 import { saveConfig } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
