@@ -19,6 +19,23 @@ import { StreamingState } from "../types.js";
 // === Types ===
 
 /**
+ * Iteration record - 迭代记录
+ * Stores a snapshot of one iteration's thinking and response - 存储一轮迭代的 thinking 和响应快照
+ */
+export interface IterationRecord {
+  /** Iteration number (1-based) - 迭代序号（从1开始） */
+  iteration: number;
+  /** Thinking content summary (truncated) - Thinking 内容摘要（截断） */
+  thinkingSummary: string;
+  /** Full thinking content length - 完整 thinking 内容长度 */
+  thinkingLength: number;
+  /** Response content - 响应内容 */
+  response: string;
+  /** Tools used in this iteration - 本轮使用的工具 */
+  toolsUsed: string[];
+}
+
+/**
  * Streaming context value - 流式上下文值
  */
 export interface StreamingContextValue {
@@ -48,6 +65,15 @@ export interface StreamingContextValue {
 
   /** 工具输入字符计数 */
   toolInputCharCount: number;
+
+  /** 工具输入内容 (用于UI显示参数摘要) */
+  toolInputContent: string;
+
+  /** Iteration history - 迭代历史 */
+  iterationHistory: IterationRecord[];
+
+  /** Current iteration number (1-based) - 当前迭代序号（从1开始） */
+  currentIteration: number;
 }
 
 /**
@@ -96,11 +122,23 @@ export interface StreamingActions {
   /** 追加工具输入字符数 */
   appendToolInputChars: (count: number) => void;
 
+  /** 追加工具输入内容 */
+  appendToolInputContent: (text: string) => void;
+
+  /** 清空工具输入内容 */
+  clearToolInputContent: () => void;
+
   /** 获取当前的 AbortSignal (用于传递给 API 请求) */
   getSignal: () => AbortSignal | undefined;
 
   /** 获取完整响应内容（包括缓冲区中未刷新的内容）- 用于中断时保存 */
   getFullResponse: () => string;
+
+  /** Start a new iteration - saves current content to history and clears for next round - 开始新迭代，保存当前内容到历史并清空 */
+  startNewIteration: (iteration: number) => void;
+
+  /** Clear iteration history - 清空迭代历史 */
+  clearIterationHistory: () => void;
 }
 
 /**
@@ -120,6 +158,9 @@ const DEFAULT_STREAMING_STATE: StreamingContextValue = {
   thinkingContent: "",
   currentTool: undefined,
   toolInputCharCount: 0,
+  toolInputContent: "",
+  iterationHistory: [],
+  currentIteration: 1,
 };
 
 // === Streaming Manager ===
@@ -182,11 +223,23 @@ export interface StreamingManager {
   /** 追加工具输入字符数 */
   appendToolInputChars: (count: number) => void;
 
+  /** 追加工具输入内容 */
+  appendToolInputContent: (text: string) => void;
+
+  /** 清空工具输入内容 */
+  clearToolInputContent: () => void;
+
   /** 获取当前的 AbortSignal */
   getSignal: () => AbortSignal | undefined;
 
   /** 获取完整响应内容（包括缓冲区中未刷新的内容） */
   getFullResponse: () => string;
+
+  /** Start a new iteration - 开始新迭代 */
+  startNewIteration: (iteration: number) => void;
+
+  /** Clear iteration history - 清空迭代历史 */
+  clearIterationHistory: () => void;
 }
 
 /**
@@ -393,6 +446,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         currentTool: tool,
         toolInputCharCount: 0,
+        toolInputContent: "", // Reset tool input content when tool changes
       };
       notify();
     },
@@ -406,12 +460,96 @@ export function createStreamingManager(): StreamingManager {
       notify();
     },
 
+    appendToolInputContent: (text: string) => {
+      // Limit content to ~100 chars for display (no need to store full input)
+      // 限制内容为 ~100 字符用于显示（无需存储完整输入）
+      if (state.toolInputContent.length < 100) {
+        state = {
+          ...state,
+          toolInputContent: (state.toolInputContent + text).slice(0, 100),
+        };
+        notify();
+      }
+    },
+
+    clearToolInputContent: () => {
+      state = {
+        ...state,
+        toolInputContent: "",
+      };
+      notify();
+    },
+
     getSignal: () => state.abortController?.signal,
 
     getFullResponse: () => {
       // Return current response + any pending buffered content
       // 返回当前响应 + 缓冲区中未刷新的内容
       return state.currentResponse + pendingResponseText;
+    },
+
+    /**
+     * Start a new iteration - saves current content to history and clears for next round
+     * 开始新迭代 - 保存当前内容到历史并清空准备下一轮
+     */
+    startNewIteration: (iteration: number) => {
+      flushPendingUpdates(); // Flush before saving - 保存前刷新
+
+      // Only save if there's actual content in this iteration
+      // 只有当前迭代有内容时才保存
+      if (state.thinkingContent || state.currentResponse) {
+        // Generate thinking summary: first 60 chars + "..." if longer
+        // 生成 thinking 摘要：前60字符，超长则加 "..."
+        const thinkingSummary = state.thinkingContent.length > 60
+          ? state.thinkingContent.slice(0, 60) + "..."
+          : state.thinkingContent;
+
+        const record: IterationRecord = {
+          iteration: state.currentIteration,
+          thinkingSummary,
+          thinkingLength: state.thinkingContent.length,
+          response: state.currentResponse,
+          toolsUsed: [], // Could track tools used in this iteration if needed
+        };
+
+        state = {
+          ...state,
+          iterationHistory: [...state.iterationHistory, record],
+          // Clear current content for next iteration - 清空当前内容准备下一轮
+          thinkingContent: "",
+          thinkingCharCount: 0,
+          currentResponse: "",
+          isThinking: false,
+          currentTool: undefined,
+          toolInputCharCount: 0,
+          toolInputContent: "",
+          currentIteration: iteration,
+        };
+      } else {
+        // No content, just update iteration number - 没有内容，只更新迭代号
+        state = {
+          ...state,
+          currentIteration: iteration,
+        };
+      }
+
+      notify();
+    },
+
+    /**
+     * Clear iteration history - 清空迭代历史
+     */
+    clearIterationHistory: () => {
+      flushPendingUpdates();
+      state = {
+        ...state,
+        iterationHistory: [],
+        currentIteration: 1,
+        thinkingContent: "",
+        thinkingCharCount: 0,
+        currentResponse: "",
+      };
+      notify();
     },
   };
 }
@@ -508,12 +646,28 @@ export function StreamingProvider({
     managerRef.current.appendToolInputChars(count);
   }, []);
 
+  const appendToolInputContent = useCallback((text: string) => {
+    managerRef.current.appendToolInputContent(text);
+  }, []);
+
+  const clearToolInputContent = useCallback(() => {
+    managerRef.current.clearToolInputContent();
+  }, []);
+
   const getSignal = useCallback(() => {
     return managerRef.current.getSignal();
   }, []);
 
   const getFullResponse = useCallback(() => {
     return managerRef.current.getFullResponse();
+  }, []);
+
+  const startNewIteration = useCallback((iteration: number) => {
+    managerRef.current.startNewIteration(iteration);
+  }, []);
+
+  const clearIterationHistory = useCallback(() => {
+    managerRef.current.clearIterationHistory();
   }, []);
 
   const actions: StreamingActions = {
@@ -531,8 +685,12 @@ export function StreamingProvider({
     clearThinkingContent,
     setCurrentTool,
     appendToolInputChars,
+    appendToolInputContent,
+    clearToolInputContent,
     getSignal,
     getFullResponse,
+    startNewIteration,
+    clearIterationHistory,
   };
 
   return React.createElement(

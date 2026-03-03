@@ -192,10 +192,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearThinkingContent,
     setCurrentTool,
     appendToolInputChars,
+    appendToolInputContent,
     clearResponse,
     appendResponse,
     getSignal,
     getFullResponse,
+    startNewIteration,
+    clearIterationHistory,
   } = useStreamingActions();
 
   // State
@@ -331,6 +334,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     onToolInputDelta: (_toolName: string, partialJson: string) => {
       appendToolInputChars(partialJson.length);
+      appendToolInputContent(partialJson); // Issue 068 Phase 4: 追踪参数内容
     },
     onToolResult: () => {
       setCurrentTool(undefined);
@@ -341,6 +345,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     onError: (error: Error) => {
       console.log(chalk.red(`[Stream Error] ${error.message}`));
+    },
+    // Iteration start - called at the beginning of each agent iteration
+    // 迭代开始 - 在每轮 agent 迭代开始时调用
+    onIterationStart: (iter: number, _maxIter: number) => {
+      // Save current content to history and start fresh for new iteration
+      // 保存当前内容到历史，开始新一轮
+      if (iter > 1) {
+        startNewIteration(iter);
+        startThinking();
+      }
     },
     // Permission hook - called before each tool execution
     // 权限钩子 - 在每个工具执行前调用
@@ -421,31 +435,38 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       return true;
     },
-  }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, currentConfig, context.gitRoot]);
+  }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot]);
 
   // Helper function to show confirmation dialog
   // 显示确认对话框的辅助函数
   const showConfirmDialog = (tool: string, input: Record<string, unknown>): Promise<ConfirmResult> => {
     // Build confirmation prompt text - 构建确认提示文本
-    const inputPreview = input.path
-      ? ` ${input.path as string}`
-      : input.command
-        ? ` ${(input.command as string).slice(0, 60)}${(input.command as string).length > 60 ? '...' : ''}`
-        : '';
-
     let promptText: string;
-    switch (tool) {
-      case 'bash':
-        promptText = `Execute bash command?${inputPreview}`;
-        break;
-      case 'write':
-        promptText = `Write to file?${inputPreview}`;
-        break;
-      case 'edit':
-        promptText = `Edit file?${inputPreview}`;
-        break;
-      default:
-        promptText = `Execute ${tool}?`;
+
+    // Handle simple confirm dialog (used by project commands, etc.)
+    // 处理简单确认对话框（用于 project 命令等）
+    if (tool === "confirm" && input._message) {
+      promptText = input._message as string;
+    } else {
+      const inputPreview = input.path
+        ? ` ${input.path as string}`
+        : input.command
+          ? ` ${(input.command as string).slice(0, 60)}${(input.command as string).length > 60 ? '...' : ''}`
+          : '';
+
+      switch (tool) {
+        case 'bash':
+          promptText = `Execute bash command?${inputPreview}`;
+          break;
+        case 'write':
+          promptText = `Write to file?${inputPreview}`;
+          break;
+        case 'edit':
+          promptText = `Edit file?${inputPreview}`;
+          break;
+        default:
+          promptText = `Execute ${tool}?`;
+      }
     }
 
     // Return promise that resolves when user answers - 返回一个 Promise，当用户回答时 resolve
@@ -513,6 +534,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       setIsLoading(true);
       clearResponse();
+      clearIterationHistory(); // Clear iteration history for new conversation - 清空迭代历史
       startStreaming();
 
       touchContext(context);
@@ -617,7 +639,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             thinking: currentConfig.thinking,
+            events: createStreamingEvents(), // Include streaming events for /project commands
           }),
+          // Confirm dialog callback for interactive commands - 交互式命令的确认对话框回调
+          confirm: async (message: string): Promise<boolean> => {
+            const result = await showConfirmDialog("confirm", {
+              _alwaysConfirm: true,
+              _message: message,
+            });
+            return result.confirmed;
+          },
           readline: null as unknown as ReturnType<
             typeof import("readline").createInterface
           >,
@@ -635,6 +666,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         };
 
         let skillContentToInject: string | undefined = undefined;
+        let projectInitPromptToInject: string | undefined = undefined;
 
         try {
           const result = await executeCommand(parsed, context, callbacks, currentConfig);
@@ -642,6 +674,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           // Check if result contains skill content to inject
           if (typeof result === 'object' && result !== null && 'skillContent' in result) {
             skillContentToInject = result.skillContent;
+          }
+          // Check if result contains project init prompt to inject
+          if (typeof result === 'object' && result !== null && 'projectInitPrompt' in result) {
+            projectInitPromptToInject = result.projectInitPrompt;
           }
         } finally {
           console.log = originalLog;
@@ -670,6 +706,79 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
           try {
             const result = await runAgentRound(currentOptionsRef.current, enhancedPrompt);
+
+            // Update context
+            context.messages = result.messages;
+
+            // Add assistant response to UI history
+            const lastAssistant = result.messages[result.messages.length - 1];
+            if (lastAssistant?.role === "assistant") {
+              const content = extractTextContent(lastAssistant.content);
+              if (content) {
+                addHistoryItem({
+                  type: "assistant",
+                  text: content,
+                });
+              }
+            }
+
+            // Auto-save
+            if (context.messages.length > 0) {
+              const title = extractTitle(context.messages);
+              context.title = title;
+              await storage.save(context.sessionId, {
+                messages: context.messages,
+                title,
+                gitRoot: context.gitRoot ?? "",
+              });
+            }
+          } catch (err) {
+            const error = err instanceof Error ? err : new Error(String(err));
+
+            // Check if this is an abort error (user pressed Ctrl+C)
+            const isAbortError = error.name === 'AbortError' ||
+              error.message.includes('aborted') ||
+              error.message.includes('ABORTED');
+
+            console.log = originalLog;
+
+            if (isAbortError) {
+              // Save any unsaved streaming content
+              const unsavedResponse = getFullResponse().trim();
+              if (unsavedResponse) {
+                addHistoryItem({
+                  type: "assistant",
+                  text: unsavedResponse + "\n\n[Interrupted]",
+                });
+              }
+            } else {
+              console.log(chalk.red(error.message));
+              addHistoryItem({
+                type: "error",
+                text: error.message,
+              });
+            }
+          } finally {
+            setIsLoading(false);
+            stopStreaming();
+            clearThinkingContent();
+          }
+
+          return;
+        }
+
+        // If project init was invoked, run agent with init prompt
+        if (projectInitPromptToInject) {
+          setIsLoading(false);
+          stopStreaming();
+
+          // Re-start streaming for project init execution
+          setIsLoading(true);
+          startStreaming();
+          startThinking();
+
+          try {
+            const result = await runAgentRound(currentOptionsRef.current, projectInitPromptToInject);
 
             // Update context
             context.messages = result.messages;
@@ -958,6 +1067,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             streamingResponse={streamingState.currentResponse}
             currentTool={streamingState.currentTool}
             toolInputCharCount={streamingState.toolInputCharCount}
+            toolInputContent={streamingState.toolInputContent}
+            iterationHistory={streamingState.iterationHistory}
+            currentIteration={streamingState.currentIteration}
           />
         </Box>
       )}
@@ -987,6 +1099,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           model={getProviderModel(currentConfig.provider) ?? currentConfig.provider}
           currentTool={streamingState.currentTool}
           thinking={currentConfig.thinking}
+          thinkingCharCount={streamingState.thinkingCharCount}
+          toolInputCharCount={streamingState.toolInputCharCount}
+          toolInputContent={streamingState.toolInputContent}
         />
       </Box>
 

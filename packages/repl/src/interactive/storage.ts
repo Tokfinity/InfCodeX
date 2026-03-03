@@ -54,7 +54,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
         const first = JSON.parse(firstLine);
         if (first._type === 'meta') {
           const sessionGitRoot = first.gitRoot ?? '';
-          if (currentGitRoot && sessionGitRoot && currentGitRoot !== sessionGitRoot) continue;
+          // Issue 071 fix: Strict project isolation for git projects
+          // When in a git project, only show sessions with matching gitRoot
+          // Sessions without gitRoot (legacy) are hidden to prevent cross-project confusion
+          if (currentGitRoot) {
+            if (!sessionGitRoot || sessionGitRoot !== currentGitRoot) continue;
+          }
+          // When not in a git project, show all sessions (user can choose)
           const lineCount = content.split('\n').length;
           sessions.push({ id: f.replace('.jsonl', ''), title: first.title ?? '', msgCount: lineCount - 1 });
         } else {

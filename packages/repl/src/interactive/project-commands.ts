@@ -237,7 +237,7 @@ async function projectInit(
   callbacks: CommandCallbacks,
   _currentConfig: CurrentConfig,
   confirm: (message: string) => Promise<boolean>
-): Promise<void> {
+): Promise<{ projectInitPrompt: string } | void> {
   const storage = getProjectStorage();
 
   // 检查是否已存在
@@ -272,41 +272,10 @@ async function projectInit(
 
   console.log(chalk.dim('\n📝 Initializing project...\n'));
 
-  try {
-    // 调用 CLI 的 buildInitPrompt 函数
-    const initPrompt = buildInitPrompt(task);
-
-    // 获取 KodaX 选项
-    const options = callbacks.createKodaXOptions?.();
-    if (!options) {
-      console.log(chalk.red('\n[Error] KodaX options not available\n'));
-      return;
-    }
-
-    // 执行初始化
-    const result = await runKodaX(
-      {
-        ...options,
-        session: {
-          ...options.session,
-          initialMessages: context.messages,
-        },
-      },
-      initPrompt
-    );
-
-    // 更新上下文消息
-    context.messages = result.messages;
-
-    console.log(chalk.green('\n✓ Project initialized'));
-    console.log(chalk.dim(`  Created: feature_list.json, PROGRESS.md\n`));
-
-    // 显示状态
-    await projectStatus();
-  } catch (error) {
-    const err = error instanceof Error ? error : new Error(String(error));
-    console.log(chalk.red(`\n[Error] ${err.message}\n`));
-  }
+  // 构建 init prompt，返回给 InkREPL 处理
+  // 这样可以使用正确的流式事件处理器
+  const initPrompt = buildInitPrompt(task);
+  return { projectInitPrompt: initPrompt };
 }
 
 /**
@@ -658,31 +627,35 @@ export async function handleProjectCommand(
   context: InteractiveContext,
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig
-): Promise<void> {
+): Promise<{ projectInitPrompt: string } | void> {
   const subCommand = args[0]?.toLowerCase();
 
-  // 获取 readline 接口，如果没有则使用降级方案
+  // 确定确认函数的来源
+  // 优先使用 callbacks.confirm (Ink UI)，其次使用 readline (传统 REPL)
   const rl = callbacks.readline;
-  if (!rl) {
-    console.log(chalk.yellow('\n[Warning] Readline interface not available'));
-    console.log(chalk.dim('Some interactive features may not work\n'));
-    // 对于不需要交互的命令，继续执行
-    if (!['init', 'next', 'auto'].includes(subCommand ?? '')) {
-      // 可以执行非交互命令
-    } else {
+  const hasConfirm = !!callbacks.confirm;
+
+  // 对于需要交互的命令，检查是否有确认能力
+  if (['init', 'next', 'auto'].includes(subCommand ?? '')) {
+    if (!hasConfirm && !rl) {
+      console.log(chalk.red(`\n[Error] /project ${subCommand} is not available in the current UI mode`));
+      console.log(chalk.dim('This command requires interactive input which is not supported.\n'));
       return;
     }
   }
 
-  // 创建辅助函数
-  const confirm = rl ? createConfirmFn(rl) : async () => false;
+  // 创建辅助函数 - 优先使用 callbacks.confirm
+  const confirm: (message: string) => Promise<boolean> = hasConfirm
+    ? callbacks.confirm!
+    : rl
+      ? createConfirmFn(rl)
+      : async () => false;
   const question = rl ? createQuestionFn(rl) : async () => '';
 
   switch (subCommand) {
     case 'init':
     case 'i':
-      await projectInit(args.slice(1), context, callbacks, currentConfig, confirm);
-      break;
+      return await projectInit(args.slice(1), context, callbacks, currentConfig, confirm);
 
     case 'status':
     case 'st':

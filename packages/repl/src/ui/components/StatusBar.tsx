@@ -15,14 +15,18 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   tokenUsage,
   currentTool,
   thinking,
+  thinkingCharCount,
+  toolInputCharCount,
+  toolInputContent,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
 
   const displaySessionId = sessionId;
 
   // Map permission mode to display string with color hint
+  // Issue 068: Show thinking char count in mode display when available
   const modeDisplay = thinking
-    ? `${permissionMode.toUpperCase()}+think`
+    ? `${permissionMode.toUpperCase()}+think${thinkingCharCount ? ` (${thinkingCharCount})` : ''}`
     : permissionMode.toUpperCase();
 
   // Color-code by permission mode
@@ -34,6 +38,16 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         : permissionMode === "accept-edits"
           ? "cyan"
           : "magenta"; // auto-in-project
+
+  // Issue 068 Phase 4: Build tool display with parameter summary
+  // Priority: toolInputContent (parameter preview) > toolInputCharCount (char count) > none
+  const toolDisplay = currentTool
+    ? toolInputContent
+      ? `⏳ ${currentTool} (${toolInputContent}...)`
+      : toolInputCharCount
+        ? `⏳ ${currentTool} (${toolInputCharCount} chars)`
+        : `⏳ ${currentTool}`
+    : null;
 
   return (
     <Box
@@ -53,10 +67,10 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <Text dimColor>{displaySessionId}</Text>
       </Box>
 
-      {/* Middle: current tool - 中间：当前工具 */}
-      {currentTool && (
+      {/* Middle: current tool with char count - 中间：当前工具（含字符数） */}
+      {toolDisplay && (
         <Box>
-          <Text color={theme.colors.warning}>⏳ {currentTool}</Text>
+          <Text color={theme.colors.warning}>{toolDisplay}</Text>
         </Box>
       )}
 
