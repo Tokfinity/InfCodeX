@@ -23,6 +23,7 @@ import {
   type HistoryItemSystem,
   type ToolCall,
 } from "../types.js";
+import type { IterationRecord } from "../contexts/StreamingContext.js";
 
 // === Types ===
 
@@ -45,6 +46,12 @@ export interface MessageListProps {
   currentTool?: string;
   /** Tool input character count - 工具输入字符计数 */
   toolInputCharCount?: number;
+  /** Tool input content (truncated, for display) - 工具输入内容（截断，用于显示） */
+  toolInputContent?: string;
+  /** Iteration history - 迭代历史 */
+  iterationHistory?: IterationRecord[];
+  /** Current iteration number - 当前迭代序号 */
+  currentIteration?: number;
 }
 
 export interface HistoryItemRendererProps {
@@ -384,6 +391,9 @@ export const MessageList: React.FC<MessageListProps> = ({
   streamingResponse = "",
   currentTool,
   toolInputCharCount = 0,
+  toolInputContent = "",
+  iterationHistory = [],
+  currentIteration = 1,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
 
@@ -417,13 +427,16 @@ export const MessageList: React.FC<MessageListProps> = ({
   }
 
   // Determine loading status text - 确定加载状态文本
+  // Issue 068 Phase 4: Priority: toolInputContent (parameter preview) > toolInputCharCount (char count) > none
   let loadingText = "Thinking";
   let prefix = "";
   if (currentTool) {
     prefix = "[Tool] ";
-    loadingText = toolInputCharCount > 0
-      ? `${currentTool} (${toolInputCharCount} chars)`
-      : `Executing ${currentTool}...`;
+    loadingText = toolInputContent
+      ? `${currentTool} (${toolInputContent}...)`
+      : toolInputCharCount > 0
+        ? `${currentTool} (${toolInputCharCount} chars)`
+        : `Executing ${currentTool}...`;
   } else if (isThinking) {
     // Show [Thinking] prefix when in thinking mode (with or without char count)
     prefix = "[Thinking] ";
@@ -437,6 +450,51 @@ export const MessageList: React.FC<MessageListProps> = ({
       {filteredItems.map((item) => (
         <HistoryItemRenderer key={item.id} item={item} theme={theme} maxLines={maxLines} />
       ))}
+
+      {/* Iteration history display - 迭代历史显示 */}
+      {iterationHistory.length > 0 && (
+        <Box flexDirection="column" marginBottom={1}>
+          {iterationHistory.map((record) => (
+            <Box key={`iteration-${record.iteration}`} flexDirection="column" marginBottom={1}>
+              {/* Iteration header - 迭代标题 */}
+              <Box>
+                <Text color={theme.colors.dim} bold>
+                  ── Round {record.iteration} ──
+                </Text>
+              </Box>
+              {/* Thinking summary - Thinking 摘要 */}
+              {record.thinkingSummary && (
+                <Box marginLeft={1}>
+                  <Text color={theme.colors.dim} italic>
+                    💭 {record.thinkingSummary}
+                    {record.thinkingLength > 60 && <Text dimColor> ({record.thinkingLength} chars total)</Text>}
+                  </Text>
+                </Box>
+              )}
+              {/* Response snippet (first 200 chars) - 响应片段（前200字符） */}
+              {record.response && (
+                <Box marginLeft={1} flexDirection="column">
+                  {record.response.slice(0, 200).split("\n").map((line, idx) => (
+                    <Text key={idx} color={theme.colors.text} dimColor>{line || " "}</Text>
+                  ))}
+                  {record.response.length > 200 && (
+                    <Text dimColor>... ({record.response.length} chars total)</Text>
+                  )}
+                </Box>
+              )}
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {/* Current iteration header (if multiple iterations) - 当前迭代标题（如果是多轮） */}
+      {iterationHistory.length > 0 && (
+        <Box marginBottom={1}>
+          <Text color={theme.colors.accent} bold>
+            ── Round {currentIteration} (current) ──
+          </Text>
+        </Box>
+      )}
 
       {/* Thinking content display - light gray - Thinking 内容显示 - 淡灰色 */}
       {/* Display condition: response in progress + has thinking content - 显示条件：响应进行中 + 有 thinking 内容 */}

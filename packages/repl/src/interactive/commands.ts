@@ -32,7 +32,7 @@ export type CommandHandler = (
   context: InteractiveContext,
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig
-) => Promise<void>;
+) => Promise<CommandResult | void>;
 
 // Command callbacks - 命令回调
 export interface CommandCallbacks {
@@ -49,7 +49,9 @@ export interface CommandCallbacks {
   deleteAllSessions?: () => Promise<void>;
   setPlanMode?: (enabled: boolean) => void;
   createKodaXOptions?: () => KodaXOptions;
-  /** REPL readline interface for commands requiring user interaction - REPL 的 readline 接口，供需要用户交互的命令使用 */
+  /** Confirm dialog callback for interactive commands - 确认对话框回调，用于交互式命令 */
+  confirm?: (message: string) => Promise<boolean>;
+  /** REPL readline interface for commands requiring user interaction - REPL 的 readline 接口，供需要用户交互的命令使用（已废弃，使用 confirm 替代） */
   readline?: readline.Interface;
 }
 
@@ -544,7 +546,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Project long-running task management',
     usage: '/project [init|status|next|auto|pause|list|mark|progress]',
     handler: async (args, context, callbacks, currentConfig) => {
-      await handleProjectCommand(args, context, callbacks, currentConfig);
+      return await handleProjectCommand(args, context, callbacks, currentConfig);
     },
     detailedHelp: printProjectHelp,
   },
@@ -770,7 +772,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 }
 
 // Execute command - 执行命令
-export type CommandResult = boolean | { skillContent: string };
+export type CommandResult = boolean | { skillContent: string } | { projectInitPrompt: string };
 
 export async function executeCommand(
   parsed: { command: string; args: string[]; skillInvocation?: { name: string } },
@@ -793,7 +795,11 @@ export async function executeCommand(
 
   const cmd = commandRegistry.get(parsed.command);
   if (cmd) {
-    await cmd.handler(parsed.args, context, callbacks, currentConfig);
+    const result = await cmd.handler(parsed.args, context, callbacks, currentConfig);
+    // Handle project init prompt - 处理项目初始化提示
+    if (result && typeof result === 'object' && 'projectInitPrompt' in result) {
+      return result;
+    }
     return true;
   }
 

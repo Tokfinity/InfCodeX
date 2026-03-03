@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-03 11:45_
+_Last Updated: 2026-03-03 16:30_
 
 ---
 
@@ -66,7 +66,7 @@ _Last Updated: 2026-03-03 11:45_
 | 055 | Low | Open | Built-in Skills 未完全符合 Agent Skills 规范 | v0.4.7 | - | 2026-03-01 | - |
 | 056 | Medium | Resolved | Skills 系统缺少渐进式披露机制 | v0.4.8 | v0.4.8 | 2026-03-01 | 2026-03-01 |
 | 057 | Medium | Resolved | Skill 命令格式不符合 pi-mono 设计规范 | v0.4.8 | v0.4.8 | 2026-03-01 | 2026-03-01 |
-| 058 | Medium | Open | Windows Terminal 流式输出闪烁和滚动问题 | v0.4.8 | - | 2026-03-01 | - |
+| 058 | Medium | Partially Resolved | 终端流式输出闪烁问题 (WT✅ VS Code⚠️) | v0.4.8 | v0.4.9 | 2026-03-01 | 2026-03-02 |
 | 059 | High | Resolved | Skills 延迟加载导致首次调用失败 | v0.4.8 | v0.4.8 | 2026-03-01 | 2026-03-01 |
 | 060 | Medium | Open | UI 更新定时器未统一，存在相位差 | v0.4.5 | - | 2026-03-02 | - |
 | 061 | Low | Open | Windows Terminal 流式输出时滚轮滚动异常 | v0.4.5 | - | 2026-03-02 | - |
@@ -74,10 +74,15 @@ _Last Updated: 2026-03-03 11:45_
 | 063 | High | Won't Fix | Shift+Enter 换行功能失效，直接发送消息 | v0.4.9 | - | 2026-03-02 | 2026-03-02 |
 | 064 | High | Resolved | 项目目录下 .kodax/skills/ 未被发现 | v0.4.9 | v0.4.9 | 2026-03-02 | 2026-03-02 |
 | 065 | Critical | Resolved | 流式响应后 Skills 全部消失 | v0.4.9 | v0.4.9 | 2026-03-02 | 2026-03-02 |
-| 066 | High | Open | /project init 命令在 InkREPL 中静默失败 | v0.5.4 | - | 2026-03-03 | - |
+| 066 | High | Resolved | /project init 命令在 InkREPL 中静默失败 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 067 | Critical | Open | API 速率限制重试机制失效 | v0.5.4 | - | 2026-03-03 | - |
-| 068 | High | Open | Thinking 指示器长时间无进度反馈 | v0.5.4 | - | 2026-03-03 | - |
+| 068 | High | Resolved | Thinking 指示器长时间无进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 069 | Medium | Open | 缺少 LLM 交互式提问工具 | v0.5.4 | - | 2026-03-03 | - |
+| 070 | Low | Open | 流式输出可能丢失换行符 | v0.5.4 | - | 2026-03-03 | - |
+| 071 | High | Resolved | Session Resume 跨项目恢复错误 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
+| 072 | High | Open | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | - | 2026-03-03 | - |
+| 073 | High | Resolved | /project auto 等子命令无流式进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
+| 074 | Medium | Resolved | 多轮迭代时 Thinking 和 Response 内容混在一起显示 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 
 ---
 
@@ -1203,8 +1208,8 @@ _Last Updated: 2026-03-03 11:45_
 ---
 
 ## Summary
-- Total: 52 (7 Open, 41 Resolved, 4 Won't Fix)
-- Highest Priority Open: 006 - 整数解析无范围检查 (Low)
+- Total: 52 (6 Open, 42 Resolved, 4 Won't Fix)
+- Highest Priority Open: 067 - API 速率限制重试机制失效 (Critical)
 
 ---
 
@@ -3053,14 +3058,16 @@ _Last Updated: 2026-03-03 11:45_
 
 ---
 
-### 058: Windows Terminal 流式输出闪烁和滚动问题 (RESOLVED)
-- **Priority**: Medium → Resolved
-- **Status**: Resolved
+### 058: Windows Terminal 流式输出闪烁和滚动问题 (PARTIALLY RESOLVED)
+- **Priority**: Medium
+- **Status**: Partially Resolved
 - **Introduced**: v0.4.8
 - **Created**: 2026-03-01
-- **Resolved**: 2026-03-02
+- **Resolved**: 2026-03-02 (Windows Terminal)
 - **Fixed in**: v0.4.9
-- **Affected Platforms**: Windows Terminal (主要)
+- **Affected Platforms**:
+  - ✅ Windows Terminal - 已修复
+  - ⚠️ VS Code Integrated Terminal - 仍有闪烁
 
 - **Solution**:
   升级 Ink 5.x → 6.8.0 并配合 React 18 → 19
@@ -3074,8 +3081,48 @@ _Last Updated: 2026-03-03 11:45_
   避免在终端刷新间隙产生"上一屏内容"的闪烁帧。
 
   **结果**:
-  - ✅ 闪烁问题已解决
+  - ✅ Windows Terminal 闪烁问题已解决
+  - ⚠️ VS Code Integrated Terminal 仍有闪烁
   - ⚠️ 滚动问题拆分为 Issue 061
+
+- **VS Code Terminal 闪烁原因调研** (2026-03-03):
+
+  **根本原因**: Ink 架构问题，非 KodaX 特有
+
+  1. **全屏重绘**: Ink 执行全屏重绘而非增量更新，每次 UI 变化都可能重绘整个终端内容
+  2. **渲染管线延迟**: React → Yoga(Flexbox) → 2D buffer → Diff → ANSI sequences，需在 ~16ms 内完成
+  3. **终端差异**: 不同终端对 synchronized output mode 支持程度不同
+
+  | 终端 | 闪烁程度 | 原因 |
+  |------|----------|------|
+  | Windows Terminal | ✅ 轻微 | 较好的 synchronized output 支持 |
+  | VS Code Terminal | ⚠️ 明显 | GPU 加速 + 较弱的同步刷新支持 |
+  | Ghostty | ✅ 最佳 | 原生支持 synchronized output mode |
+  | iTerm2 | ✅ 良好 | 完整特性支持 |
+
+  **VS Code 缓解方案**:
+  ```json
+  // VS Code settings.json
+  {
+    "terminal.integrated.gpuAcceleration": "off",  // 禁用 GPU 加速可能减少闪烁
+    "terminal.integrated.scrollback": 5000
+  }
+  ```
+
+  **效果**: 禁用 GPU 加速后闪烁可能减轻，但终端渲染性能可能下降
+
+  **其他建议**:
+  - 使用外部终端（如 Windows Terminal、Ghostty）运行 KodaX
+  - 增加终端窗口高度，避免内容溢出触发全屏重绘
+  - 缩小终端窗口宽度，避免触发并排 diff 视图
+
+  **长期方案**:
+  - 考虑迁移到 [OpenTUI](https://github.com/sst/opentui)（零闪烁设计），但需要重写 UI 层
+  - 或实现分段流式输出，将完成的行移入 `<Static>` 组件
+
+  **参考**:
+  - [Ink #359](https://github.com/vadimdemedes/ink/issues/359) - Screen height issues
+  - [Ink #450](https://github.com/vadimdemedes/ink/issues/450) - Exact height flickering
 
 ---
 
@@ -3707,10 +3754,11 @@ _Last Updated: 2026-03-03 11:45_
 
 ---
 
-### 066: /project init 命令在 InkREPL 中静默失败
+### 066: /project init 命令在 InkREPL 中静默失败 (RESOLVED)
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
 - **Created**: 2026-03-03
 
 - **Original Problem**:
@@ -3747,16 +3795,40 @@ _Last Updated: 2026-03-03 11:45_
   }
   ```
 
-- **Proposed Solution**:
-  方案 A：为 InkREPL 提供 readline 兼容接口
-  - 使用 Ink 的 input 组件模拟 readline 交互
+- **Resolution**:
+  **完整解决方案**：两阶段修复
 
-  方案 B：使用 React 状态管理替代 readline
-  - `projectInit` 等函数改用回调方式处理确认对话框
-  - InkREPL 通过 React 组件显示确认 UI
+  **Phase 1：为 Ink UI 添加 `confirm` 回调**
+  1. **扩展 CommandCallbacks 接口** (`commands.ts`):
+     - 添加 `confirm?: (message: string) => Promise<boolean>` 回调
+  2. **InkREPL 提供确认能力** (`InkREPL.tsx`):
+     - 复用现有的 `showConfirmDialog` 机制
+  3. **更新 project-commands.ts**:
+     - 优先使用 `callbacks.confirm`（Ink UI）
 
-  方案 C（临时）：至少给出明确错误
-  - 显示 "此命令在当前 UI 模式下不可用，请使用传统 REPL 模式"
+  **Phase 2：修复流式响应不显示问题**
+  **问题**：`projectInit` 直接调用 `runKodaX` 但没有传递流式事件处理器，导致 LLM 工作时 UI 无法显示进度，用户看到 "Thinking..." 卡住。
+
+  **解决方案**：
+  1. **扩展 CommandResult 类型** (`commands.ts`):
+     - 新增 `{ projectInitPrompt: string }` 返回类型
+     - 修改 `CommandHandler` 返回 `Promise<CommandResult | void>`
+  2. **修改 projectInit** (`project-commands.ts`):
+     - 返回 `{ projectInitPrompt: initPrompt }` 而不是直接调用 `runKodaX`
+  3. **修改 InkREPL** (`InkREPL.tsx`):
+     - 检测 `projectInitPrompt` 返回值
+     - 使用正确的流式事件处理器调用 `runAgentRound`
+
+  **修复后效果**：
+  - `/project init` 在 Ink UI 中正常工作
+  - 流式响应正常显示，不再卡在 "Thinking..."
+  - 确认对话框正常显示
+
+- **Resolution Date**: 2026-03-03
+- **Files Changed**:
+  - `packages/repl/src/interactive/commands.ts` - 添加 confirm 回调接口，扩展 CommandResult 类型
+  - `packages/repl/src/ui/InkREPL.tsx` - 提供 confirm 回调，处理 projectInitPrompt
+  - `packages/repl/src/interactive/project-commands.ts` - 使用 confirm 回调，返回提示词
 
 ---
 
@@ -3864,11 +3936,13 @@ _Last Updated: 2026-03-03 11:45_
 
 ---
 
-### 068: Thinking 指示器长时间无进度反馈
+### 068: Thinking 指示器长时间无进度反馈 (RESOLVED)
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
 - **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
 
 - **Original Problem**:
   用户报告两个问题导致不知道 KodaX 当前在做什么：
@@ -3903,106 +3977,97 @@ _Last Updated: 2026-03-03 11:45_
   - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 字符统计已追踪
   - `packages/repl/src/ui/InkREPL.tsx:317-342` - 事件回调
 
-- **Root Cause Analysis**:
+- **Root Cause**:
+  **根本原因**：`StatusBarProps` 接口缺少 `thinkingCharCount` 和 `toolInputCharCount` 字段
+  - 数据追踪已在 `StreamingContext` 中实现
+  - `MessageList` 已正确接收并显示这些数据
+  - 但 `StatusBar` 的 props 接口没有定义这些字段，导致无法传递和显示
 
-  **KodaX 现状分析**：
-  | 组件 | 当前显示 | 问题 |
-  |------|---------|------|
-  | StatusBar | Tool 名称 (⏳) | 不显示 char count |
-  | MessageList | `[Tool] Processing...` | 不显示具体 tool 名称 |
-  | Thinking | spinner only | 不显示 thinking char count |
+- **Resolution**:
+  **Phase 1 实现（P0 优先级）**：
 
-  **数据追踪现状** (`StreamingContext.tsx`)：
-  - `thinkingCharCount` ✅ 已追踪但未显示
-  - `toolInputCharCount` ✅ 已追踪但未显示
-  - `currentTool` ✅ 已追踪，StatusBar 显示但 MessageList 不显示
+  1. **types.ts** - 在 `StatusBarProps` 接口添加两个字段：
+     - `thinkingCharCount?: number`
+     - `toolInputCharCount?: number`
 
-  **pi-mono 对标分析**：
-  | 特性 | pi-mono | KodaX |
-  |------|---------|-------|
-  | Tool 执行状态 | 名称 + 参数摘要 + 背景 color | 仅 `[Tool] Processing...` |
-  | Tool 结果预览 | 5 行预览 + 展开提示 | 无 |
-  | Thinking 进度 | 内容直接流式显示 | spinner only |
-  | LLM 等待 | `Working... (Ctrl+I)` | `Thinking...` |
-  | Footer 统计 | 完成后显示 token | 无 |
+  2. **StatusBar.tsx** - 增强 UI 显示：
+     - Tool 显示：`⏳ {currentTool} ({toolInputCharCount} chars)`
+     - Thinking 显示：`MODE+think ({thinkingCharCount})`
 
-  **根本原因**：
-  1. **MessageList loadingText 逻辑问题**：有 `currentTool` 时只显示 `[Tool] Processing...`，未显示 tool 名称
-  2. **StatusBar 未利用 char count**：`thinkingCharCount` 和 `toolInputCharCount` 已在 Context 中追踪，但未在 UI 显示
-  3. **缺少 Tool 参数摘要**：未在 loading 状态显示 tool 的输入参数
+  3. **InkREPL.tsx** - 传递新 props：
+     - `thinkingCharCount={streamingState.thinkingCharCount}`
+     - `toolInputCharCount={streamingState.toolInputCharCount}`
 
-- **Proposed Solution**:
-
-  **方案：增强 StatusBar + MessageList 显示**
-
-  **Phase 1：StatusBar 增强** (P0)
-  ```typescript
-  // StatusBar.tsx - 显示更多信息
-  {currentTool && (
-    <Box>
-      <Text color={theme.colors.warning}>⏳ {currentTool}</Text>
-      {toolInputCharCount > 0 && (
-        <Text color={theme.colors.dim}> ({toolInputCharCount} chars)</Text>
-      )}
-    </Box>
-  )}
-  {isThinking && !currentTool && (
-    <Box>
-      <Text color={theme.colors.accent}>Thinking</Text>
-      {thinkingCharCount > 0 && (
-        <Text color={theme.colors.dim}> ({thinkingCharCount} chars)</Text>
-      )}
-    </Box>
-  )}
-  ```
-
-  **Phase 2：MessageList Loading 文本改进** (P0)
-  ```typescript
-  // MessageList.tsx - 改进 loadingText 逻辑
-  let loadingText = "Thinking";
-  let prefix = "";
-
-  if (currentTool) {
-    prefix = `[Tool] `;
-    loadingText = toolInputCharCount > 0
-      ? `${currentTool} (${toolInputCharCount} chars)`
-      : `${currentTool}`;
-  } else if (thinkingCharCount > 0) {
-    loadingText = `Thinking (${thinkingCharCount} chars)`;
-  }
-  ```
-
-  **Phase 3：增加心跳超时提示** (P1)
-  - 当 thinking 超过 10 秒无更新，显示 "Waiting for response..." 或类似提示
-  - 使用 `useEffect` 监控 `thinkingContent` 更新时间
-
-  **Phase 4：Tool 参数摘要显示** (P2)
-  - 提取 tool 输入的前 50 个字符作为摘要
-  - 在 StatusBar 或 MessageList 显示
-
-  **预期效果**：
+  **效果**：
   ```
   Before:
-  ⠦ [Tool] Processing...
+  StatusBar: ⏳ Read
+  MessageList: ⠦ [Tool] Processing...
 
   After:
   StatusBar: ⏳ Read (234 chars)
   MessageList: ⠦ [Tool] Read (234 chars)...
 
-  Before:
-  ⠦ Thinking…
-
-  After:
-  StatusBar: Thinking (1234 chars)
-  MessageList: ⠦ Thinking (1234 chars)...
+  Thinking 模式：
+  StatusBar: PLAN+think (1234)
   ```
 
-- **Implementation Notes**:
-  - 修改文件：
-    - `packages/repl/src/ui/components/StatusBar.tsx`
-    - `packages/repl/src/ui/components/MessageList.tsx`
-  - 无需修改 Context（已追踪所需数据）
-  - 无需修改 Provider（事件回调已正确实现）
+- **Files Changed**:
+  - `packages/repl/src/ui/types.ts` - 添加 StatusBarProps 字段
+  - `packages/repl/src/ui/components/StatusBar.tsx` - 显示 char count
+  - `packages/repl/src/ui/InkREPL.tsx` - 传递新 props
+
+  **Phase 2 实现（Tool 参数摘要）**：
+
+  用户反馈：光显示 tool 名称不够，想看参数摘要。
+
+  1. **StreamingContext.tsx** - 添加 `toolInputContent` 字段：
+     - `StreamingContextValue.toolInputContent: string` - 存储 tool 输入内容（截断到 100 字符）
+     - `appendToolInputContent(text)` - 追加参数内容
+     - `clearToolInputContent()` - 清空参数内容
+     - `setCurrentTool` 时重置 `toolInputContent`
+
+  2. **types.ts** - 在 `StatusBarProps` 添加：
+     - `toolInputContent?: string` - 参数摘要
+
+  3. **InkREPL.tsx** - 调用 `appendToolInputContent`：
+     - `onToolInputDelta` 回调中追加参数内容
+     - 传递 `toolInputContent` prop 到 StatusBar 和 MessageList
+
+  4. **StatusBar.tsx** - 显示参数摘要：
+     ```typescript
+     // Priority: toolInputContent > toolInputCharCount > none
+     const toolDisplay = currentTool
+       ? toolInputContent
+         ? `⏳ ${currentTool} (${toolInputContent}...)`
+         : toolInputCharCount
+           ? `⏳ ${currentTool} (${toolInputCharCount} chars)`
+           : `⏳ ${currentTool}`
+       : null;
+     ```
+
+  5. **MessageList.tsx** - 显示参数摘要：
+     - 同样的优先级逻辑
+
+  **最终效果**：
+  ```
+  Before (Phase 1):
+  StatusBar: ⏳ Read (234 chars)
+  MessageList: ⠦ [Tool] Read (234 chars)...
+
+  After (Phase 2):
+  StatusBar: ⏳ Read ({"file_path": "/path/to/file.ts", "limit": 50}...)
+  MessageList: ⠦ [Tool] Read ({"file_path": "/path/to/file.ts", "limit": 50}...)...
+  ```
+
+- **Files Changed (Phase 2)**:
+  - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 添加 toolInputContent 字段和方法
+  - `packages/repl/src/ui/types.ts` - 添加 toolInputContent 到 StatusBarProps
+  - `packages/repl/src/ui/InkREPL.tsx` - 调用 appendToolInputContent 并传递 prop
+  - `packages/repl/src/ui/components/StatusBar.tsx` - 显示参数摘要
+  - `packages/repl/src/ui/components/MessageList.tsx` - 显示参数摘要
+
+- **Tests Added**: 无（UI 变更，手动验证）
 
 ---
 
@@ -4045,6 +4110,360 @@ _Last Updated: 2026-03-03 11:45_
     // ...
   };
   ```
+
+---
+
+### 070: 流式输出可能丢失换行符
+- **Priority**: Low
+- **Status**: Open
+- **Introduced**: v0.5.4
+- **Created**: 2026-03-03
+
+- **Original Problem**:
+  流式输出时，某些内容应该换行但没有换行：
+  ```
+  ## Phase 1: 补全后端认证功能后端认证服务已有完整功能。现在更新**控制器**和**路由**：现在更新**路由**：现在更新**错误类**，添加
+  `ValidationError`：`ValidationError` 已存在。现在为新增功能**编写测试**：...
+  ```
+  观察到的现象：
+  - "## Phase 1: 补全后端认证功能" 后面应该换行，但 "后端认证服务已有完整功能" 直接跟在后面
+  - 多个 "现在更新..." 句子连在一起没有换行
+
+- **Expected Behavior**:
+  - 流式输出应保留 LLM 输出的所有换行符
+  - 段落、标题、列表等应有正确的换行
+
+- **Context**:
+  - `packages/ai/src/providers/anthropic.ts:88-90` - 流式文本传递
+  - `packages/repl/src/ui/contexts/StreamingContext.tsx:283-286` - appendResponse
+  - `packages/repl/src/ui/components/MessageList.tsx:461-463` - 换行渲染
+
+- **Root Cause** (待确认):
+  **初步分析**：KodaX 代码链路没有换行处理逻辑，可能是 LLM 本身输出问题。
+
+  **代码链路检查**：
+  1. `anthropic.ts:90`: `streamOptions?.onTextDelta?.(delta.text ?? '')` - 直接传递，无处理
+  2. `StreamingContext.tsx:284`: `pendingResponseText += text` - 直接追加，无处理
+  3. `MessageList.tsx:461`: `streamingResponse.split("\n")` - 按 \n 分割渲染，逻辑正常
+
+  **可能的真正原因**：
+  1. **LLM 输出问题**：某些 LLM（特别是 extended thinking 模式）可能在快速输出时丢失换行
+  2. **终端渲染问题**：Ink 终端渲染可能有宽度限制导致视觉上的换行丢失
+  3. **流式 chunk 边界问题**：换行符可能被分割在两个 chunk 中（不太可能，因为文本是直接追加的）
+
+- **Proposed Solution**:
+  1. **添加调试日志**：在 `onTextDelta` 中记录收到的原始文本，确认是否包含换行
+  2. **对比测试**：用相同 prompt 在 Claude Code 原版和 KodaX 中测试，对比输出
+  3. **检查 LLM 配置**：确认是否是特定模型或 temperature 设置导致
+
+- **Reproduction**:
+  1. 使用 KodaX 进行多轮复杂任务
+  2. 观察 LLM 输出中是否有换行丢失
+  3. 特别关注标题（##）、列表（-）、代码块（```）后的换行
+
+---
+
+### 071: Session Resume 跨项目恢复错误 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+- **Original Problem**:
+  使用 `kodax -c` 命令时，恢复的不是当前项目的最新 session，而是其他项目的 session。
+
+  **观察到的现象**：
+  - 在项目 A 目录下运行 `kodax -c`，却加载了项目 B 的 session
+  - 跨项目的 session 混在一起，用户困惑
+
+- **Expected Behavior**:
+  - `kodax -c` 应该只恢复当前项目（基于 gitRoot）的最新 session
+  - 不同项目的 session 应该隔离
+
+- **Context**:
+  - `packages/repl/src/interactive/storage.ts:57` - session 过滤逻辑
+  - `packages/repl/src/ui/InkREPL.tsx:1191-1205` - session 恢复调用
+
+- **Root Cause**:
+  **过滤条件逻辑错误**：
+
+  ```typescript
+  // storage.ts:57 - 当前实现
+  if (currentGitRoot && sessionGitRoot && currentGitRoot !== sessionGitRoot) continue;
+  ```
+
+  **问题分析**：
+  1. 条件 `currentGitRoot && sessionGitRoot && currentGitRoot !== sessionGitRoot` 只在三个条件都满足时才过滤
+  2. 如果 `sessionGitRoot` 为空（旧 session 没有保存 gitRoot 信息），整个条件为 `false`，session 不会被过滤
+  3. 这导致旧的无 gitRoot 信息的 session 会出现在所有项目的列表中
+
+  **为什么不建议用 cwd 作为后备**：
+  - gitRoot 是 git 仓库根目录，同一项目任何子目录下运行都一样（稳定）
+  - cwd 是当前工作目录，不同子目录运行会不同（不稳定）
+  - 旧 session 没有 gitRoot 信息，大概率也没有保存当时的 cwd
+  - 用 cwd 匹配既无法匹配旧 session，也无法保证一致性
+
+- **Proposed Solution** (推荐严格模式):
+  ```typescript
+  // storage.ts - 修复后的过滤逻辑
+  async list(gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number; gitRoot?: string }>> {
+    // ...
+    const currentGitRoot = gitRoot ?? await getGitRoot();
+
+    for (const f of files) {
+      // ...
+      const sessionGitRoot = first.gitRoot ?? '';
+
+      if (currentGitRoot) {
+        // 当前在 git 项目中：严格匹配 gitRoot
+        // sessionGitRoot 为空（旧 session）不显示，避免跨项目混淆
+        if (!sessionGitRoot || sessionGitRoot !== currentGitRoot) continue;
+      }
+      // 如果当前不在 git 项目中（无 gitRoot），显示所有 session
+      // （非 git 项目场景较少，用户可以选择具体 session）
+
+      sessions.push({
+        id: f.replace('.jsonl', ''),
+        title: first.title ?? '',
+        msgCount: lineCount - 1,
+        gitRoot: sessionGitRoot  // 保留 gitRoot 用于调试
+      });
+    }
+
+    // 按时间倒序，取最近 10 个
+    return sessions.sort((a, b) => b.id.localeCompare(a.id)).slice(0, 10);
+  }
+  ```
+
+  **修复要点**：
+  1. 当前在 git 项目中时，只显示 `sessionGitRoot === currentGitRoot` 的 session
+  2. 旧 session（无 gitRoot 信息）在 git 项目中不显示，避免混淆
+  3. 非 git 项目场景保持宽松，显示所有 session 供用户选择
+
+- **Reproduction**:
+  1. 在项目 A 中创建 session（确保 session 有 gitRoot）
+  2. 在项目 B 中创建 session
+  3. 在项目 B 目录下运行 `kodax -c`
+  4. 观察加载的是否是项目 B 的 session
+
+- **Resolution**:
+  修改 `storage.ts` 中 `list()` 函数的过滤逻辑，实现严格的项目隔离：
+
+  **修复前** (line 57)：
+  ```typescript
+  if (currentGitRoot && sessionGitRoot && currentGitRoot !== sessionGitRoot) continue;
+  ```
+  问题：当 `sessionGitRoot` 为空时，条件为 false，session 不会被过滤。
+
+  **修复后**：
+  ```typescript
+  if (currentGitRoot) {
+    if (!sessionGitRoot || sessionGitRoot !== currentGitRoot) continue;
+  }
+  ```
+  - 当前在 git 项目中时，只显示 `sessionGitRoot === currentGitRoot` 的 session
+  - 旧 session（无 gitRoot 信息）在 git 项目中不显示，避免混淆
+  - 非 git 项目场景保持宽松，显示所有 session 供用户选择
+
+- **Files Changed**:
+  - `packages/repl/src/interactive/storage.ts` - 修改 `list()` 函数过滤逻辑
+
+- **Tests Added**: 无（逻辑变更，手动验证）
+
+---
+
+### 072: 流式中断后 tool_call_id 不匹配导致 API 错误
+- **Priority**: High
+- **Status**: Open
+- **Introduced**: v0.5.4
+- **Created**: 2026-03-03
+
+- **Original Problem**:
+  auto-in-project 模式跑长任务时，有时会自动中断（无报错），上一条消息显示 `[Interrupted]`。
+  继续交互时报 API 错误，再次交互后恢复正常。
+
+  **错误示例**：
+  ```
+  [Stream Error] minimax-coding API error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"invalid params, tool result's tool id(call_function_dxdvwryzhuyn_1) not found (2013)"}}
+
+  [Stream Error] kimi-code API error: 400 {"error":{"type":"invalid_request_error","message":"tool_call_id is not found"}}
+  ```
+
+  **观察到的现象**：
+  1. 长任务运行时自行中断，无明确报错
+  2. 上一条 AI 消息末尾显示 `[Interrupted]`
+  3. 用户继续交互时，第一次请求报 `tool_call_id not found` 错误
+  4. 第二次交互恢复正常
+
+- **Expected Behavior**:
+  - 流式中断后，下次请求应能正常继续，不报 API 错误
+  - 或者中断时应给出明确的错误信息
+
+- **Context**:
+  - 流式响应中断处理逻辑
+  - tool_call 消息状态管理
+  - 多种 LLM 提供商（minimax-coding, kimi-code 等）
+
+- **Root Cause** (待确认):
+  **推测**：
+  1. 流式中断时，LLM 已输出部分 tool_call，但完整信息未保存到消息历史
+  2. 下次请求时，KodaX 尝试发送 tool_result，但对应的 tool_call_id 在历史消息中不存在
+  3. API 校验失败，返回 400 错误
+
+  **可能涉及的代码**：
+  - `packages/ai/src/providers/` - 各提供商的流式处理
+  - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 中断处理
+  - `packages/coding/src/session/` - 消息状态管理
+
+- **Proposed Solution**:
+  1. **中断时清理不完整的 tool_call**：检测并移除未完成的 tool_call
+  2. **容错处理**：发送请求前验证 tool_call_id 是否存在于历史消息
+  3. **自动重试**：检测到此错误时自动重试，而非让用户手动重试
+
+- **Reproduction**:
+  1. 使用 auto-in-project 模式运行长任务
+  2. 等待任务自行中断（或手动中断）
+  3. 继续与 AI 交互
+  4. 观察是否报 tool_call_id 错误
+
+---
+
+### 073: /project auto 等子命令无流式进度反馈 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+- **Original Problem**:
+  用户报告 `/project auto` 执行时，Thinking 状态长时间停留但无任何进度反馈：
+  ```
+  You [03:33 PM]
+    /project auto
+
+  ⠦ Thinking…
+  (长时间停留，无 chars 统计，无工具调用信息)
+  ```
+
+- **Expected Behavior**:
+  - `/project auto` 应显示 thinking 字符统计、工具调用名称和参数摘要
+  - 与正常对话时的进度反馈一致
+
+- **Context**:
+  - `packages/repl/src/ui/InkREPL.tsx:625-629` - `createKodaXOptions` 函数
+  - `packages/repl/src/ui/InkREPL.tsx:318-338` - `createStreamingEvents` 函数
+  - `packages/repl/src/interactive/project-commands.ts:478` - `executeSingleFeature` 调用 `runKodaX`
+
+- **Root Cause**:
+  `createKodaXOptions` 函数返回的 options 对象**缺少 `events` 属性**：
+
+  ```typescript
+  // 修复前
+  createKodaXOptions: () => ({
+    ...currentOptionsRef.current,
+    provider: currentConfig.provider,
+    thinking: currentConfig.thinking,
+    // 缺少 events: createStreamingEvents()
+  }),
+  ```
+
+  当 `/project auto` 调用 `executeSingleFeature` 时：
+  1. 调用 `callbacks.createKodaXOptions?.()` 获取 options
+  2. options 不包含 `events` 属性
+  3. `runKodaX` 调用时没有流式回调
+  4. 结果：
+     - `onThinkingDelta` 永远不会被调用 → 没有 thinking 字符计数
+     - `onTextDelta` 永远不会被调用 → 没有流式响应
+     - `onToolUseStart` 永远不会被调用 → 没有工具名称显示
+
+- **Resolution**:
+  在 `createKodaXOptions` 中添加 `events: createStreamingEvents()`：
+
+  ```typescript
+  // 修复后
+  createKodaXOptions: () => ({
+    ...currentOptionsRef.current,
+    provider: currentConfig.provider,
+    thinking: currentConfig.thinking,
+    events: createStreamingEvents(), // Include streaming events for /project commands
+  }),
+  ```
+
+- **Files Changed**:
+  - `packages/repl/src/ui/InkREPL.tsx` - 添加 `events` 到 `createKodaXOptions`
+
+- **Tests Added**: 无（UI 变更，手动验证）
+
+---
+
+### 074: 多轮迭代时 Thinking 和 Response 内容累积显示 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+- **Original Problem**:
+  在 `/project auto` 等多轮迭代场景中，所有轮次的 Thinking 和 Response 内容被累积在一起显示，无法区分不同轮次：
+  ```
+  Round 1:
+    Thinking: Let me analyze...
+    Response: I found the issue...
+
+  Round 2: (内容被追加到 Round 1 后面，而不是分开显示)
+    Thinking: Now I need to fix...
+    Response: The fix has been applied...
+  ```
+
+- **Expected Behavior**:
+  - 每轮迭代的 Thinking 和 Response 应分开显示
+  - 每轮结束时显示 Thinking 摘要（前60字符 + "..."）
+  - 用户能清楚看到每轮做了什么
+
+- **Context**:
+  - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 状态管理
+  - `packages/repl/src/ui/InkREPL.tsx` - 事件回调
+  - `packages/repl/src/ui/components/MessageList.tsx` - UI 显示
+  - `packages/coding/src/agent.ts` - 多轮迭代循环
+
+- **Root Cause**:
+  1. `onStreamEnd` 只调用 `stopThinking()`，不清空 `thinkingContent` 和 `currentResponse`
+  2. `onIterationStart` 回调在 UI 层没有被实现
+  3. 导致新一轮内容被追加到上一轮内容后面
+
+- **Resolution**:
+  1. **StreamingContext** - 添加迭代历史管理：
+     - 新增 `IterationRecord` 类型存储每轮摘要
+     - 新增 `iterationHistory` 和 `currentIteration` 状态
+     - 新增 `startNewIteration()` 和 `clearIterationHistory()` 方法
+
+  2. **InkREPL** - 实现 `onIterationStart` 回调：
+     - 在每轮迭代开始时调用 `startNewIteration(iteration)`
+     - 在新对话开始时调用 `clearIterationHistory()`
+
+  3. **MessageList** - 显示迭代历史：
+     - 按轮次渲染历史记录
+     - 每轮显示：标题 + Thinking 摘要 + Response 片段
+
+- **Display Format**:
+  ```
+  ── Round 1 ──
+    💭 Let me analyze the project structure to find... (150 chars total)
+    I found the issue in the config file...
+  ── Round 2 (current) ──
+    💭 Now I need to fix the database connection... (processing)
+  ```
+
+- **Files Changed**:
+  - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 迭代历史管理
+  - `packages/repl/src/ui/InkREPL.tsx` - 事件回调实现
+  - `packages/repl/src/ui/components/MessageList.tsx` - 历史显示
+
+- **Tests Added**: 无（UI 变更，手动验证）
 
 ---
 

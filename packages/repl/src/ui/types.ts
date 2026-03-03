@@ -131,6 +131,12 @@ export interface StatusBarProps {
   };
   currentTool?: string;
   thinking?: boolean;
+  /** Thinking character count - Issue 068: 显示 thinking 进度 */
+  thinkingCharCount?: number;
+  /** Tool input character count - Issue 068: 显示 tool 输入进度 */
+  toolInputCharCount?: number;
+  /** Tool input content (truncated) - Issue 068 Phase 4: 显示参数摘要 */
+  toolInputContent?: string;
 }
 
 /**
