@@ -34,11 +34,15 @@ export function extractTextContent(content: string | unknown[]): string {
             }
             break;
           case "thinking":
+            // Extract thinking content for session restore - 提取 thinking 内容用于会话恢复
+            if ("thinking" in block && block.thinking) {
+              textParts.push(`[Thinking]\n${block.thinking}`);
+            }
+            break;
           case "tool_use":
           case "tool_result":
           case "redacted_thinking":
             // These block types are not displayed in message history - 这些块类型不显示在历史消息中
-            // thinking is AI internal thought process, should not be shown during session restore - thinking 是 AI 内部思考过程，不应在 session 恢复时显示
             break;
           default:
             // Unknown types are also ignored - 未知类型也忽略
