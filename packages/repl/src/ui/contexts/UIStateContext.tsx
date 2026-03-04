@@ -23,6 +23,16 @@ import {
   DEFAULT_UI_STATE,
 } from "../types.js";
 
+// === Constants ===
+
+/**
+ * Maximum history items to keep in memory - 内存中保留的最大历史记录数
+ * Render limit is 20 conversation rounds (MAX_VISIBLE_ROUNDS in InkREPL) - 渲染限制 20 轮会话
+ * Each round has ~3 items on average (user + assistant + thinking/tool/etc) - 每轮平均约 3 项
+ * Memory limit is 2.5x render limit = 50 rounds ≈ 150 items - 内存限制 2.5 倍 = 50 轮 ≈ 150 项
+ */
+const MAX_HISTORY_ITEMS = 150;
+
 // === Action Types ===
 
 type UIAction =
@@ -93,7 +103,32 @@ function uiReducer(state: UIState, action: UIAction): UIState {
       return { ...state, currentResponse: "" };
 
     case "ADD_HISTORY_ITEM":
-      return { ...state, history: [...state.history, action.payload] };
+      // Add item and trim to max limit at round boundaries - 添加项目并在 round 边界处裁剪到最大限制
+      const newHistory = [...state.history, action.payload];
+      if (newHistory.length <= MAX_HISTORY_ITEMS) {
+        return { ...state, history: newHistory };
+      }
+
+      // Find the start of the oldest complete round to keep - 找到要保留的最老完整 round 的起始位置
+      // A round starts with a "user" type message - round 以 "user" 类型消息开始
+      // Count backwards from the end to find where to cut - 从末尾向前计数找到裁剪点
+      let userCount = 0;
+      let cutIndex = 0;
+
+      for (let i = newHistory.length - 1; i >= 0; i--) {
+        if (newHistory[i]?.type === "user") {
+          userCount++;
+          // Estimate: if we have too many items, cut at round boundary - 估算：如果项目太多，在 round 边界处裁剪
+          // Target ~50 rounds, so cut when we've seen 50 user messages from the end
+          if (userCount > 50) {
+            cutIndex = i;
+            break;
+          }
+        }
+      }
+
+      const trimmedHistory = cutIndex > 0 ? newHistory.slice(cutIndex) : newHistory;
+      return { ...state, history: trimmedHistory };
 
     case "UPDATE_HISTORY_ITEM":
       return {
