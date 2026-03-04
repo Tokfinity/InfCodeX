@@ -4,6 +4,50 @@ _Last Updated: 2026-03-04_
 
 ---
 
+## Archived Issue Index
+
+| ID | Priority | Status | Title | Fixed | Resolved |
+|----|----------|--------|-------|-------|----------|
+| 001 | Low | Resolved | 未使用常量 PLAN_GENERATION_PROMPT | v0.4.5 | 2026-02-27 |
+| 002 | Low | Won't Fix | /plan 命令未使用 _currentConfig 参数 | - | 2026-02-27 |
+| 003 | Medium | Won't Fix | Plan 文件无版本号 | - | 2026-02-22 |
+| 004 | Medium | Won't Fix | Plan 解析正则表达式脆弱 | - | 2026-02-22 |
+| 005 | Low | Resolved | 中英文注释混用 | v0.4.5 | 2026-02-27 |
+| 007 | Medium | Resolved | 静默吞掉错误 | v0.3.3 | 2026-02-27 |
+| 008 | Medium | Resolved | 交互提示缺少输入验证 | v0.4.0 | 2026-02-26 |
+| 009 | High | Resolved | 不安全的类型断言 | v0.4.0 | 2026-02-26 |
+| 010 | Medium | Resolved | 非空断言缺乏显式检查 | v0.4.0 | 2026-02-26 |
+| 011 | Medium | Resolved | 命令预览长度不一致 | v0.4.0 | 2026-02-26 |
+| 012 | Low | Resolved | ANSI Strip 性能问题 | v0.4.5 | 2026-02-27 |
+| 016 | Medium | Resolved | InkREPL 组件过大 | v0.4.5 | 2026-02-27 |
+| 019 | Low | Resolved | 状态栏 Session ID 显示问题 | v0.4.0 | 2026-02-25 |
+| 020 | Medium | Resolved | 资源泄漏 - Readline 接口 | v0.4.0 | 2026-02-25 |
+| 021 | Medium | Resolved | 全局可变状态 | v0.4.0 | 2026-02-25 |
+| 022 | Low | Resolved | 函数过长 | v0.4.0 | 2026-02-25 |
+| 023 | Low | Resolved | Delete 键无效 | v0.4.0 | 2026-02-25 |
+| 024 | Low | Resolved | Backspace 键无效 | v0.4.0 | 2026-02-25 |
+| 025 | Low | Resolved | Shift+Enter 换行无效 | v0.4.0 | 2026-02-25 |
+| 026 | Low | Resolved | Resize handler 空引用 | v0.4.0 | 2026-02-25 |
+| 027 | Medium | Resolved | 异步上下文直接退出 | v0.4.0 | 2026-02-25 |
+| 028 | Low | Resolved | 超宽终端分隔符 | v0.4.0 | 2026-02-25 |
+| 029 | High | Resolved | --continue 会话不恢复 | v0.4.0 | 2026-02-25 |
+| 030 | Medium | Resolved | gitRoot 未设置 | v0.4.0 | 2026-02-25 |
+| 031 | Medium | Resolved | Thinking 内容不显示 | v0.4.0 | 2026-02-25 |
+| 032 | Medium | Resolved | 非流式输出 | v0.4.0 | 2026-02-25 |
+| 033 | Low | Resolved | Banner 消失 | v0.4.0 | 2026-02-25 |
+| 034 | Medium | Resolved | /help 输出不可见 | v0.4.0 | 2026-02-25 |
+| 035 | Low | Resolved | Backspace 检测边缘情况 | v0.4.0 | 2026-02-26 |
+| 036 | Medium | Resolved | React 状态同步潜在问题 | v0.4.5 | 2026-02-27 |
+| 037 | Medium | Resolved | 两套键盘事件系统冲突 | v0.4.5 | 2026-02-27 |
+| 038 | Low | Won't Fix | 输入焦点竞态条件 | - | 2026-02-27 |
+| 040 | Medium | Resolved | REPL 显示问题 - 命令输出渲染位置错误 | v0.4.5 | 2026-02-27 |
+| 041 | Low | Resolved | 历史导航清空输入无法恢复 | v0.4.5 | 2026-02-27 |
+| 042 | Low | Resolved | Shift+Enter/Ctrl+J 换行无效 | v0.4.5 | 2026-02-27 |
+| 043 | Medium | Resolved | 流式响应中断不完全 | v0.4.5 | 2026-02-27 |
+| 045 | Medium | Resolved | Spinner 出现时问答顺序颠倒 | v0.4.5 | 2026-02-27 |
+
+---
+
 ## 2026-02 Archived Issues
 
 ### 001: 未使用常量 PLAN_GENERATION_PROMPT (RESOLVED)
