@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-04 12:18_
+_Last Updated: 2026-03-04 16:00_
 
 ---
 
@@ -49,6 +49,7 @@ _Last Updated: 2026-03-04 12:18_
 | 076 | Medium | Resolved | 正常响应后历史记录偶现 [Interrupted] 标记 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-04 |
 | 077 | Low | Open | Skills 系统高级功能未完全实现 | v0.5.5 | - | 2026-03-04 | - |
 | 078 | High | Resolved | CLI --max-iter 默认值覆盖 coding 包默认值 | v0.5.5 | v0.5.5 | 2026-03-04 | 2026-03-04 |
+| 079 | High | Resolved | Ink 历史渲染无限长导致崩溃 | v0.5.7 | v0.5.7 | 2026-03-04 | 2026-03-04 |
 
 ---
 
@@ -3812,6 +3813,29 @@ _Last Updated: 2026-03-04 12:18_
 - **Verification**:
   - 构建通过
   - 默认值现在由 coding 包统一管理（agent.ts:44 `const maxIter = options.maxIter ?? 200;`）
+
+---
+
+### 079: Ink 历史渲染无限长导致崩溃 (RESOLVED 2026-03-04)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.7
+- **Fixed**: v0.5.7
+- **Created**: 2026-03-04
+- **Original Problem**:
+  - Ink 中渲染的历史没有长度限制
+  - 长时间使用后，历史记录变得非常长
+  - 过长的历史导致 KodaX 崩溃（内存问题或渲染性能问题）
+
+- **Resolution**:
+  - 限制可见历史为最近 20 轮会话
+  - 每轮 = 用户输入(type="user") + AI 响应
+  - 通过统计 history 中 type === "user" 的消息数来确定轮次
+  - 超过 20 轮的消息仍保留在 state 中，只是不渲染
+  - 实际发送给 AI 的 context.messages 保持完整
+
+- **Files Changed**:
+  - `packages/repl/src/ui/InkREPL.tsx` - 添加 useMemo 计算 renderHistory
 
 ### 2026-02-19: 代码审查与重构
 - Resolved 020: 资源泄漏 - Readline 接口
