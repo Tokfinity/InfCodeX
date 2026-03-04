@@ -41,13 +41,18 @@ export abstract class KodaXBaseProvider {
     return ['rate', 'limit', '速率', '频率', '1302', '429', 'too many'].some(k => s.includes(k));
   }
 
-  protected async withRateLimit<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  protected async withRateLimit<T>(
+    fn: () => Promise<T>,
+    signal?: AbortSignal,
+    retries = 3
+  ): Promise<T> {
     for (let i = 0; i < retries; i++) {
       try {
         return await fn();
       } catch (e) {
         if (this.isRateLimitError(e)) {
           const delay = (i + 1) * 2000;
+
           // 最后一次重试失败，抛出错误
           if (i === retries - 1) {
             throw new KodaXRateLimitError(
@@ -55,11 +60,25 @@ export abstract class KodaXBaseProvider {
               60000
             );
           }
-          // 抛出速率限制错误，包含重试信息
-          throw new KodaXRateLimitError(
-            `API rate limit hit. Retrying in ${delay / 1000}s (${i + 1}/${retries})`,
-            delay
-          );
+
+          // 显示重试信息
+          console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
+
+          // 检查是否已被取消
+          if (signal?.aborted) {
+            throw new DOMException('Request aborted', 'AbortError');
+          }
+
+          // 等待后再重试
+          await new Promise(resolve => setTimeout(resolve, delay));
+
+          // 等待后再次检查（防止等待期间被取消）
+          if (signal?.aborted) {
+            throw new DOMException('Request aborted', 'AbortError');
+          }
+
+          // 继续循环，执行下一次 fn()
+          continue;
         }
         // 对于其他错误，包装成 Provider 错误
         if (e instanceof Error) {
