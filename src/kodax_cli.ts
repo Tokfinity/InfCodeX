@@ -396,7 +396,7 @@ function showBasicHelp(): void {
   console.log('  --init TASK             Initialize a long-running task');
   console.log('  --append                With --init: append to existing feature_list.json');
   console.log('  --overwrite             With --init: overwrite existing feature_list.json');
-  console.log('  --max-iter N            Max iterations per session (default: 50)');
+  console.log('  --max-iter N            Max iterations per session (default: 200)');
   console.log('  --auto-continue         Auto-continue long-running task until all features pass');
   console.log('  --max-sessions N        Max sessions for --auto-continue (default: 50)');
   console.log('  --max-hours H           Max hours for --auto-continue (default: 2.0)\n');
@@ -446,7 +446,7 @@ async function main() {
     .option('--init <task>', 'Initialize a long-running task')
     .option('--append', 'With --init: append to existing feature_list.json')
     .option('--overwrite', 'With --init: overwrite existing feature_list.json')
-    .option('--max-iter <n>', 'Max iterations', '50')
+    .option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')
     .option('--auto-continue', 'Auto-continue long-running task until all features pass')
     .option('--max-sessions <n>', 'Max sessions for --auto-continue', '50')
     .option('--max-hours <n>', 'Max hours for --auto-continue', '2')

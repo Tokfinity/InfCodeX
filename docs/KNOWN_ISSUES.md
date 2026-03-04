@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-04 00:25_
+_Last Updated: 2026-03-04 03:00_
 
 ---
 
@@ -86,6 +86,7 @@ _Last Updated: 2026-03-04 00:25_
 | 075 | Medium | Resolved | 粘贴多行文本到输入框时换行丢失 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 076 | Medium | Resolved | 正常响应后历史记录偶现 [Interrupted] 标记 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-04 |
 | 077 | Low | Open | Skills 系统高级功能未完全实现 | v0.5.5 | - | 2026-03-04 | - |
+| 078 | High | Resolved | CLI --max-iter 默认值覆盖 coding 包默认值 | v0.5.5 | v0.5.5 | 2026-03-04 | 2026-03-04 |
 
 ---
 
@@ -1211,7 +1212,7 @@ _Last Updated: 2026-03-04 00:25_
 ---
 
 ## Summary
-- Total: 53 (7 Open, 42 Resolved, 4 Won't Fix)
+- Total: 78 (7 Open, 67 Resolved, 4 Won't Fix)
 - Highest Priority Open: 067 - API 速率限制重试机制失效 (Critical)
 
 ---
@@ -4674,6 +4675,39 @@ _Last Updated: 2026-03-04 00:25_
   这些是**可选的高级功能**，当前不需要紧急实现：
   - 核心 Skills 功能已满足基本使用需求
   - 如需完整子代理功能，可参考 pi-mono 的 subagent 扩展实现
+
+### 078: CLI --max-iter 默认值覆盖 coding 包默认值 (RESOLVED 2026-03-04)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.5
+- **Fixed**: v0.5.5
+- **Created**: 2026-03-04
+- **Original Problem**:
+  用户报告：之前 v0.5.5 版本应该有一个 maxIter 从 50 调整到 200 的修复，但实际测试时还是 50 轮就中断。
+
+- **Root Cause**:
+  Commander.js 的默认值设置导致问题：
+  ```typescript
+  // kodax_cli.ts:449
+  .option('--max-iter <n>', 'Max iterations', '50')  // 默认值 '50'
+  ```
+  由于有默认值 '50'，即使用户不传参数，`opts.maxIter` 也是 '50' (truthy)，导致 ternary 表达式 `opts.maxIter ? parseInt(opts.maxIter, 10) : undefined` 永远返回 50，而不是 undefined。
+
+  正确的逻辑应该是：
+  - 用户不传 `--max-iter` → CLI 返回 undefined → coding 包用默认值 200
+  - 用户传 `--max-iter 100` → CLI 返回 100 → 用 100
+
+- **Resolution**:
+  1. 移除 CLI 的默认值 `'50'`，改为 `.option('--max-iter <n>', 'Max iterations (default: 200 from coding package)')`
+  2. 更新帮助文本从 "default: 50" 改为 "default: 200"
+
+- **Files Changed**:
+  - `src/kodax_cli.ts:399` - 帮助文本 50 → 200
+  - `src/kodax_cli.ts:449` - 移除默认值
+
+- **Verification**:
+  - 构建通过
+  - 默认值现在由 coding 包统一管理（agent.ts:44 `const maxIter = options.maxIter ?? 200;`）
 
 ### 2026-02-19: 代码审查与重构
 - Resolved 020: 资源泄漏 - Readline 接口
