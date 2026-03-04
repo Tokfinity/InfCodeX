@@ -20,6 +20,96 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 
 /**
+ * 清理不完整的 tool_use 块 - Issue 072 fix
+ *
+ * 当流式中断时，assistant 消息可能包含 tool_use 但没有对应的 tool_result。
+ * 这会导致下次请求时 API 报错 "tool_call_id not found"。
+ *
+ * 修复逻辑：
+ * 1. 检查最后一条 assistant 消息是否包含 tool_use 块
+ * 2. 检查是否有对应的 tool_result 块（应该在下一条 user 消息中）
+ * 3. 如果没有对应的 tool_result，移除 tool_use 块，保留 text/thinking 块
+ *
+ * @param messages - 消息列表
+ * @returns 清理后的消息列表
+ */
+function cleanupIncompleteToolCalls(messages: KodaXMessage[]): KodaXMessage[] {
+  if (messages.length === 0) return messages;
+
+  const lastMsg = messages[messages.length - 1];
+
+  // 只处理 assistant 消息
+  if (lastMsg?.role !== 'assistant') return messages;
+
+  // 只处理数组形式的 content
+  if (typeof lastMsg.content !== 'string' && Array.isArray(lastMsg.content)) {
+    const content = lastMsg.content;
+
+    // 提取所有 tool_use 的 id
+    const toolUseIds = new Set<string>();
+    const toolUseBlocks: Array<{ index: number; id: string }> = [];
+
+    for (let i = 0; i < content.length; i++) {
+      const block = content[i];
+      if (block && typeof block === 'object' && 'type' in block) {
+        if (block.type === 'tool_use' && 'id' in block) {
+          toolUseIds.add(block.id);
+          toolUseBlocks.push({ index: i, id: block.id });
+        }
+      }
+    }
+
+    // 如果没有 tool_use 块，无需清理
+    if (toolUseIds.size === 0) return messages;
+
+    // 检查是否有对应的 tool_result 块（在后续的 user 消息中）
+    let hasToolResults = false;
+    for (let i = messages.length - 1; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!msg || msg.role !== 'user') continue;
+
+      const userContent = msg.content;
+      if (typeof userContent === 'string' || !Array.isArray(userContent)) continue;
+
+      for (const block of userContent) {
+        if (block && typeof block === 'object' && 'type' in block) {
+          if (block.type === 'tool_result' && 'tool_use_id' in block) {
+            if (toolUseIds.has(block.tool_use_id)) {
+              hasToolResults = true;
+              break;
+            }
+          }
+        }
+      }
+      if (hasToolResults) break;
+    }
+
+    // 如果没有对应的 tool_result，移除 tool_use 块
+    if (!hasToolResults && toolUseBlocks.length > 0) {
+      // 过滤掉 tool_use 块，保留其他块（text, thinking 等）
+      const cleanedContent = content.filter((block) => {
+        if (!block || typeof block !== 'object') return true;
+        if (!('type' in block)) return true;
+        return (block as { type: string }).type !== 'tool_use';
+      });
+
+      // 如果清理后内容为空，返回去掉最后一条消息
+      if (cleanedContent.length === 0) {
+        return messages.slice(0, -1);
+      }
+
+      // 否则返回修改后的消息
+      return [
+        ...messages.slice(0, -1),
+        { ...lastMsg, content: cleanedContent },
+      ];
+    }
+  }
+
+  return messages;
+}
+
+/**
  * 检查 Promise 信号
  */
 export function checkPromiseSignal(text: string): [string, string] {
@@ -282,10 +372,16 @@ export async function runKodaX(
       // 参考 Gemini CLI: 静默处理中断，不报告为错误
       if (error.name === 'AbortError') {
         events.onStreamEnd?.();
+
+        // Issue 072 fix: 清理不完整的 tool_use 块
+        // 当流式中断时，assistant 消息可能包含 tool_use 但没有对应的 tool_result
+        // 这会导致下次请求时 API 报错 "tool_call_id not found"
+        const cleanedMessages = cleanupIncompleteToolCalls(messages);
+
         return {
           success: true,  // 中断不算失败
           lastText,
-          messages,
+          messages: cleanedMessages,
           sessionId,
           interrupted: true,
         };

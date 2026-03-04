@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-04 03:00_
+_Last Updated: 2026-03-04 12:18_
 
 ---
 
@@ -9,51 +9,13 @@ _Last Updated: 2026-03-04 03:00_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 001 | Low | Resolved | 未使用常量 PLAN_GENERATION_PROMPT | v0.3.1 | v0.4.5 | 2026-02-19 | 2026-02-27 |
-| 002 | Low | Won't Fix | /plan 命令未使用 _currentConfig 参数 | v0.3.1 | - | 2026-02-19 | 2026-02-27 |
-| 003 | Medium | Won't Fix | Plan 文件无版本号 | v0.3.1 | - | 2026-02-19 | 2026-02-22 |
-| 004 | Medium | Won't Fix | Plan 解析正则表达式脆弱 | v0.3.1 | - | 2026-02-19 | 2026-02-22 |
-| 005 | Low | Resolved | 中英文注释混用 | v0.3.1 | v0.4.5 | 2026-02-19 | 2026-02-27 |
 | 006 | Low | Open | 整数解析无范围检查 | v0.3.1 | - | 2026-02-19 | - |
-| 007 | Medium | Resolved | 静默吞掉错误 | v0.3.1 | v0.3.3 | 2026-02-19 | 2026-02-22 |
-| 008 | Medium | Resolved | 交互提示缺少输入验证 | v0.3.1 | v0.3.3 | 2026-02-19 | 2026-02-22 |
-| 009 | Medium | Resolved | 不安全的类型断言 | v0.3.1 | v0.3.3 | 2026-02-19 | 2026-02-22 |
-| 010 | Medium | Resolved | 非空断言缺乏显式检查 | v0.3.1 | v0.4.4 | 2026-02-19 | 2026-02-25 |
-| 011 | Medium | Resolved | 命令预览长度不一致 | v0.3.1 | v0.4.4 | 2026-02-19 | 2026-02-26 |
-| 012 | Medium | Resolved | ANSI Strip 性能问题 | v0.3.1 | v0.4.4 | 2026-02-19 | 2026-02-26 |
 | 013 | Low | Open | 自动补全缓存内存泄漏风险 | v0.3.1 | - | 2026-02-19 | - |
 | 014 | Low | Open | 语法高亮语言支持不全 | v0.3.1 | - | 2026-02-19 | - |
 | 015 | Low | Open | Unicode 检测不完整 | v0.3.1 | - | 2026-02-19 | - |
-| 016 | Medium | Resolved | InkREPL 组件过大 | v0.3.1 | v0.4.4 | 2026-02-19 | 2026-02-26 |
 | 017 | Low | Open | TextBuffer 未使用方法 | v0.3.1 | - | 2026-02-19 | - |
 | 018 | Low | Open | TODO 注释未清理 | v0.3.1 | - | 2026-02-19 | - |
-| 019 | Medium | Resolved | 状态栏 Session ID 显示问题 | v0.3.1 | v0.4.4 | 2026-02-20 | 2026-02-26 |
-| 020 | High | Resolved | 资源泄漏 - Readline 接口 | v0.3.1 | v0.3.2 | 2026-02-19 | 2026-02-19 |
-| 021 | High | Resolved | 全局可变状态 | v0.3.1 | v0.3.2 | 2026-02-19 | 2026-02-19 |
-| 022 | High | Resolved | 函数过长 | v0.3.1 | v0.3.2 | 2026-02-19 | 2026-02-19 |
-| 023 | High | Resolved | Delete 键无效 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 024 | High | Resolved | Backspace 键无效 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 025 | High | Resolved | Shift+Enter 换行无效 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 026 | High | Resolved | Resize handler 空引用 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 027 | High | Resolved | 异步上下文直接退出 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 028 | Medium | Resolved | 超宽终端分隔符 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 029 | High | Resolved | --continue 会话不恢复 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 030 | Medium | Resolved | gitRoot 未设置 | v0.3.1 | v0.3.2 | 2026-02-20 | 2026-02-20 |
-| 031 | High | Resolved | Thinking 内容不显示 | v0.3.2 | v0.3.3 | 2026-02-20 | 2026-02-20 |
-| 032 | High | Resolved | 非流式输出 | v0.3.2 | v0.3.3 | 2026-02-20 | 2026-02-20 |
-| 033 | Medium | Resolved | Banner 消失 | v0.3.2 | v0.3.3 | 2026-02-20 | 2026-02-20 |
-| 034 | Medium | Resolved | /help 输出不可见 | v0.3.2 | v0.3.3 | 2026-02-20 | 2026-02-20 |
-| 035 | High | Resolved | Backspace 检测边缘情况 | v0.3.3 | v0.3.3 | 2026-02-22 | 2026-02-23 |
-| 041 | High | Resolved | 历史导航清空输入无法恢复 | v0.3.3 | v0.3.3 | 2026-02-23 | 2026-02-23 |
-| 042 | Medium | Resolved | Shift+Enter/Ctrl+J 换行无效 | v0.3.3 | v0.3.3 | 2026-02-23 | 2026-02-23 |
-| 043 | Medium | Resolved | 流式响应中断不完全 | v0.3.3 | v0.3.4 | 2026-02-23 | 2026-02-23 |
-| 036 | Medium | Resolved | React 状态同步潜在问题 | v0.3.3 | v0.4.5 | 2026-02-22 | 2026-02-26 |
-| 037 | Medium | Resolved | 两套键盘事件系统冲突 | v0.3.3 | v0.4.5 | 2026-02-22 | 2026-02-26 |
-| 038 | Low | Won't Fix | 输入焦点竞态条件 | v0.3.3 | - | 2026-02-22 | 2026-02-22 |
 | 039 | Low | Open | 死代码 printStartupBanner | v0.3.3 | v0.4.0 | 2026-02-22 | - |
-| 040 | High | Resolved | REPL 显示问题 - 命令输出渲染位置错误 | v0.3.3 | v0.4.2 | 2026-02-23 | 2026-02-25 |
-| 044 | High | Resolved | 流式输出时 Ctrl+C 延迟生效 | v0.3.4 | v0.3.6 | 2026-02-23 | 2026-02-24 |
-| 045 | High | Resolved | Spinner 出现时问答顺序颠倒 | v0.4.3 | v0.4.4 | 2026-02-25 | 2026-02-25 |
 | 046 | High | Resolved | Session 恢复时消息显示异常 | v0.4.5 | v0.4.5 | 2026-02-26 | 2026-02-27 |
 | 047 | Medium | Resolved | 流式输出时界面闪烁 | v0.4.5 | v0.4.5 | 2026-02-26 | 2026-02-27 |
 | 048 | Medium | Resolved | Spinner 动画期间消息显示乱序 | v0.4.5 | v0.4.5 | 2026-02-27 | 2026-02-27 |
@@ -80,13 +42,17 @@ _Last Updated: 2026-03-04 03:00_
 | 069 | Medium | Open | 缺少 LLM 交互式提问工具 | v0.5.4 | - | 2026-03-03 | - |
 | 070 | Low | Open | 流式输出可能丢失换行符 | v0.5.4 | - | 2026-03-03 | - |
 | 071 | High | Resolved | Session Resume 跨项目恢复错误 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
-| 072 | High | Open | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | - | 2026-03-03 | - |
+| 072 | High | Resolved | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | v0.5.6 | 2026-03-03 | 2026-03-04 |
 | 073 | High | Resolved | /project auto 等子命令无流式进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 074 | Medium | Resolved | 多轮迭代时 Thinking 和 Response 内容混在一起显示 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 075 | Medium | Resolved | 粘贴多行文本到输入框时换行丢失 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 076 | Medium | Resolved | 正常响应后历史记录偶现 [Interrupted] 标记 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-04 |
 | 077 | Low | Open | Skills 系统高级功能未完全实现 | v0.5.5 | - | 2026-03-04 | - |
 | 078 | High | Resolved | CLI --max-iter 默认值覆盖 coding 包默认值 | v0.5.5 | v0.5.5 | 2026-03-04 | 2026-03-04 |
+
+---
+
+_41 issues archived to ISSUES_ARCHIVED.md on 2026-03-04_
 
 ---
 
@@ -1212,8 +1178,9 @@ _Last Updated: 2026-03-04 03:00_
 ---
 
 ## Summary
-- Total: 78 (7 Open, 67 Resolved, 4 Won't Fix)
+- Total: 40 (14 Open, 23 Resolved, 1 Partially Resolved, 2 Won't Fix)
 - Highest Priority Open: 067 - API 速率限制重试机制失效 (Critical)
+- 41 issues archived to ISSUES_ARCHIVED.md
 
 ---
 
@@ -4284,10 +4251,11 @@ _Last Updated: 2026-03-04 03:00_
 
 ---
 
-### 072: 流式中断后 tool_call_id 不匹配导致 API 错误
+### 072: 流式中断后 tool_call_id 不匹配导致 API 错误 (RESOLVED)
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.4
+- **Fixed**: v0.5.6
 - **Created**: 2026-03-03
 
 - **Original Problem**:
@@ -4316,27 +4284,29 @@ _Last Updated: 2026-03-04 03:00_
   - tool_call 消息状态管理
   - 多种 LLM 提供商（minimax-coding, kimi-code 等）
 
-- **Root Cause** (待确认):
-  **推测**：
-  1. 流式中断时，LLM 已输出部分 tool_call，但完整信息未保存到消息历史
-  2. 下次请求时，KodaX 尝试发送 tool_result，但对应的 tool_call_id 在历史消息中不存在
-  3. API 校验失败，返回 400 错误
+- **Root Cause**:
+  1. 流式中断时（用户按 Ctrl+C 或 API 连接中断），Agent 的 AbortError 处理会返回当前 messages
+  2. 这些 messages 包含 assistant 消息，其中有 tool_use 块，但还没有对应的 user 消息包含 tool_result 块
+  3. 这些不完整的 messages 被保存到会话存储
+  4. 用户继续交互时，加载的消息包含 tool_use 但没有对应的 tool_result
+  5. API 校验 tool_call_id 失败，返回 400 错误 "tool_call_id not found"
 
-  **可能涉及的代码**：
-  - `packages/ai/src/providers/` - 各提供商的流式处理
-  - `packages/repl/src/ui/contexts/StreamingContext.tsx` - 中断处理
-  - `packages/coding/src/session/` - 消息状态管理
+- **Resolution**:
+  在 `agent.ts` 的 AbortError 处理中添加 `cleanupIncompleteToolCalls()` 函数：
 
-- **Proposed Solution**:
-  1. **中断时清理不完整的 tool_call**：检测并移除未完成的 tool_call
-  2. **容错处理**：发送请求前验证 tool_call_id 是否存在于历史消息
-  3. **自动重试**：检测到此错误时自动重试，而非让用户手动重试
+  1. 在返回中断结果之前，检查最后一条 assistant 消息是否包含 tool_use 块
+  2. 检查是否有对应的 tool_result 块（在后续 user 消息中）
+  3. 如果没有对应的 tool_result，移除 tool_use 块，保留 text/thinking 块
+  4. 如果清理后内容为空，则移除整条 assistant 消息
 
-- **Reproduction**:
-  1. 使用 auto-in-project 模式运行长任务
-  2. 等待任务自行中断（或手动中断）
-  3. 继续与 AI 交互
-  4. 观察是否报 tool_call_id 错误
+  这样确保中断后的消息不包含不完整的 tool_use，避免下次请求时 API 报错。
+
+- **Resolution Date**: 2026-03-04
+
+- **Files Changed**:
+  - `packages/coding/src/agent.ts` - 添加 `cleanupIncompleteToolCalls()` 函数，在 AbortError 处理中调用
+
+- **Tests Added**: 无（手动验证场景：中断正在执行工具的会话后继续交互）
 
 ---
 
