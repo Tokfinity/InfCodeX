@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-03-04
+
+### Fixed
+- Issue 074: Iteration history appearing twice in display during multi-turn conversations
+- Issue 079: Ink history rendering crashes due to infinite growth (limit to 20 conversation rounds)
+
+## [0.5.6] - 2026-03-04
+
+### Fixed
+- Issue 072: Tool call ID mismatch after stream interruption causes API errors
+
+## [0.5.5] - 2026-03-04
+
+### Fixed
+- Issue 066: /project init command silently fails in InkREPL
+- Issue 068: Thinking indicator shows no progress for long time
+- Issue 071: Session resume cross-project recovery error
+- Issue 073: /project auto subcommand lacks streaming progress feedback
+- Issue 078: CLI --max-iter default overrides coding package default
+- CLI maxIter now correctly defaults to 200 (from coding package) instead of 50
+
+## [0.5.4] - 2026-03-03
+
+### Added
+- Issue 054: Agent Skills system basic integration completed
+
+### Fixed
+- Issue 067: API rate limit retry mechanism ineffective
+- Issue 069: Missing LLM interactive question tool
+- Issue 070: Streaming output may lose newline characters
+
 ## [0.4.7] - 2026-02-28
 
 ### Added
