@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-02 18:00_
+_Last Updated: 2026-03-04 10:00_
 
 ---
 
@@ -8,7 +8,7 @@ _Last Updated: 2026-03-02 18:00_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.5.0 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.5.8 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.5.0 | 当前规划的版本 |
 
 ---
@@ -21,6 +21,7 @@ _Last Updated: 2026-03-02 18:00_
 | v0.3.3 | Released | 1 | 1/1 (100%) |
 | v0.4.0 | Released | 1 | 1/1 (100%) |
 | v0.4.6 | Released | 1 | 1/1 (100%) |
+| v0.5.5 | Released | 1 | 1/1 (100%) |
 | v0.5.0 | InProgress | 8 | 2/8 (25%) |
 
 ---
@@ -38,7 +39,7 @@ _Last Updated: 2026-03-02 18:00_
 | 007 | Enhancement | Planned | Medium | 主题系统完善 | v0.5.0 | - | [Design](features/v0.5.0.md#007) | 2026-02-25 | - | - |
 | 008 | Enhancement | Completed | High | 权限控制体系改进 | v0.5.0 | v0.4.6 | [Design](features/v0.5.0.md#008) | 2026-02-26 | 2026-02-27 | 2026-02-27 |
 | 009 | Refactor | Completed | Critical | 架构重构：AI 层独立 + 权限层分离 | v0.5.0 | v0.5.0 | [Design](features/v0.5.0.md#009) | 2026-02-27 | 2026-02-27 | 2026-02-27 |
-| 010 | Refactor | Planned | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | - | [Design](features/v0.5.0.md#010) | 2026-03-02 | - | - |
+| 010 | Refactor | Completed | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | v0.5.5 | [Design](features/v0.5.0.md#010) | 2026-03-02 | 2026-03-02 | 2026-03-02 |
 | 011 | Enhancement | Planned | High | 智能上下文压缩 (Compact) | v0.5.0 | - | [Design](features/v0.5.0.md#011) | 2026-03-02 | - | - |
 | 012 | Enhancement | Planned | High | TUI 自动补全增强 | v0.5.0 | - | [Design](features/v0.5.0.md#012) | 2026-03-02 | - | - |
 | 013 | Refactor | Planned | High | Command System 2.0 | v0.5.0 | - | [Design](features/v0.5.0.md#013) | 2026-03-03 | - | - |
@@ -323,16 +324,16 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
-### 010: 架构拆分：Agent Core + Skills 独立 (PLANNED)
+### 010: 架构拆分：Agent Core + Skills 独立 (COMPLETED)
 - **Category**: Refactor
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: Critical
 - **Planned**: v0.5.0
-- **Released**: -
+- **Released**: v0.5.5
 - **Design**: [v0.5.0.md#010](features/v0.5.0.md#010)
 - **Created**: 2026-03-02
-- **Started**: -
-- **Completed**: -
+- **Started**: 2026-03-02
+- **Completed**: 2026-03-02
 
 **Description**:
 参考 pi-mono 的多层架构设计，将 KodaX 拆分为更细粒度的包，实现 Agent 框架通用化和 Skills 能力独立化。
@@ -477,8 +478,8 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 ---
 
 ## Summary
-- Total: 13 (5 Planned, 1 InProgress, 7 Completed)
+- Total: 13 (4 Planned, 1 ReadyForTesting, 8 Completed)
 - By Priority: Critical: 3, High: 6, Medium: 2, Low: 0
 - Current Version: v0.5.0
-- Next Release (v0.5.0): 6 features planned (006, 007, 010, 011, 012, 013)
-- Highest Priority Planned: 006 - Skills 系统 (Critical), 010 - 架构拆分 (Critical)
+- Next Release (v0.5.0): 5 features planned (007, 011, 012, 013) + 1 ReadyForTesting (006)
+- Highest Priority Planned: 006 - Skills 系统 (Critical), 011 - 智能上下文压缩 (High)
