@@ -169,7 +169,7 @@ interface CliOptions {
   init?: string;
   append: boolean;
   overwrite: boolean;
-  maxIter: number;
+  maxIter?: number;
   autoContinue: boolean;
   maxSessions: number;
   maxHours: number;
