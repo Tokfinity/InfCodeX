@@ -159,17 +159,17 @@ export class SkillRegistry implements ISkillRegistry {
     const lines = [
       '## Available Skills',
       '',
-      'The following skills are available. Use them by typing `/skill:name [args]` or asking naturally:',
+      'The following skills provide specialized instructions for specific tasks.',
+      'When a user request matches a skill description, use the read tool to load the skill file,',
+      'then follow the skill instructions to complete the task.',
       '',
     ];
 
     for (const skill of visibleSkills) {
       const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
-      lines.push(`- \`/skill:${skill.name}${hint}\` - ${skill.description}`);
+      lines.push(`- ${skill.name}:${hint} ${skill.description}`);
     }
 
-    lines.push('');
-    lines.push('When a skill matches the user request, invoke it for specialized assistance.');
     lines.push('');
 
     return lines.join('\n');
