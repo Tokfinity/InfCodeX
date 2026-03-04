@@ -468,7 +468,7 @@ async function main() {
     init: opts.init,
     append: opts.append ?? false,
     overwrite: opts.overwrite ?? false,
-    maxIter: parseInt(opts.maxIter ?? '50', 10),
+    maxIter: parseInt(opts.maxIter ?? '200', 10),
     autoContinue: opts.autoContinue ?? false,
     maxSessions: parseInt(opts.maxSessions ?? '50', 10),
     maxHours: parseFloat(opts.maxHours ?? '2'),
