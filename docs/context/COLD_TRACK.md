@@ -1,11 +1,16 @@
 # 冷轨归档
 
 _创建时间: 2026-02-25_
-_最后更新: 2026-03-04 02:15_
+_最后更新: 2026-03-04 14:30_
 
 ---
 
 ## 墓碑区
+
+### T07: Issue 072 流式中断 tool_call_id 修复
+- **问题**: 流式中断后 tool_call_id 不匹配导致 API 错误
+- **解决**: 添加 cleanupIncompleteToolCalls() 清理不完整的 tool_use 块
+- **完成日期**: 2026-03-04
 
 ### T06: 上下文字符预算管理
 - **失败原因**: pi-mono 未实现此功能，是 KodaX 扩展的非标准功能，实际不需要
@@ -937,4 +942,45 @@ process.stdout.write('\x1B[?1049l');  // Exit alternate screen buffer
   5. 完全回滚
 - **解决方案**: 需要升级 Ink 或采用其他架构方案
 
+---
+
+## 历史记录区
+
+### Session: 2026-03-04 (Issue 072 修复 + 归档)
+
+#### Turn 1 - Issue 072 修复
+**User**: /resolve-next-issue 072，请对每一处修复做详细评估
+
+**Assistant**:
+- 分析 Issue 072：流式中断后 tool_call_id 不匹配
+- 根因：当 Ctrl+C 中断时，messages 包含 tool_use 但无 tool_result
+- 修复：添加 cleanupIncompleteToolCalls() 函数清理不完整 tool_use 块
+
+**修改文件**: packages/coding/src/agent.ts
+
+#### Turn 2 - 归档工作
+**User**: archive-issues，请把早期已修复的 issue 进行归档
+
+**Assistant**:
+- 归档 41 个 issues 到 ISSUES_ARCHIVED.md
+- 用户询问：归档后详情是否完整保留？
+
+**Turn 3 - 完善归档
+**Assistant**:
+- 读取 KNOWN_ISSUES.md 获取完整详情
+- 重写 ISSUES_ARCHIVED.md，保留完整内容：
+  - Original Problem（完整描述和代码示例）
+  - Root Cause Analysis
+  - Resolution（详细修复方案）
+  - Files Changed
+  - Tests Added
+
+#### Turn 4 - 提交推送
+**Assistant**:
+- 提交: d8499f7
+- 修复(072): clean up incomplete tool_use blocks on streaming interruption
+
+**Tools**: Read, Edit, Write, Bash (git add, commit, push)
+
+---
 
