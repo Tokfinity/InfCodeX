@@ -307,14 +307,46 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
         return true;
       }
 
-      // Enter to submit or accept completion - 回车提交或接受补全
+      // Enter to submit or accept completion
+      // 当补全列表可见时，Enter 接受补全并立即发送（参考 claude-code 行为）
       if (key.name === "return") {
-        // If autocomplete visible, accept selection
-        // 如果自动补全可见，接受选择
+        // If autocomplete visible, accept completion and submit immediately
+        // 如果自动补全可见，接受补全并立即发送
         if (isAutocompleteVisible) {
           const completion = handleEnter();
           if (completion) {
-            acceptCompletion(completion);
+            // Calculate the final text after completion
+            // 计算补全后的最终文本
+            const beforeCursor = text.slice(0, getAbsoluteCursorPos());
+            let finalText: string;
+
+            if (beforeCursor.startsWith('/')) {
+              finalText = completion;
+            } else if (beforeCursor.includes('@')) {
+              const lastAtIndex = beforeCursor.lastIndexOf('@');
+              const beforeAt = text.slice(0, lastAtIndex);
+              finalText = beforeAt + completion;
+            } else {
+              finalText = completion;
+            }
+
+            // Submit directly with the completed text
+            // 直接使用补全后的文本发送
+            if (finalText.trim()) {
+              addHistory(finalText);
+              onSubmit(finalText);
+              clear();
+              setIsFirstLine(true);
+            }
+          } else {
+            // No completion selected, just close dropdown and submit current text
+            // 没有选中补全，关闭下拉框并发送当前文本
+            const currentLine = lines[cursor.row] ?? "";
+            if (currentLine.endsWith("\\")) {
+              handleLineContinuation();
+              return true;
+            }
+            handleSubmit();
           }
           return true;
         }
