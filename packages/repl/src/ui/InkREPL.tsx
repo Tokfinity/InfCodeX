@@ -11,7 +11,7 @@
  */
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { render, Box, useApp, Text, Static, useInput } from "ink";
+import { render, Box, useApp, Text, Static, useInput, useStdout } from "ink";
 import { InputPrompt } from "./components/InputPrompt.js";
 import { MessageList } from "./components/MessageList.js";
 import { ThinkingIndicator } from "./components/LoadingIndicator.js";
@@ -171,26 +171,67 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir }) => {
 
 /**
  * AutocompleteSuggestions - Renders autocomplete suggestions from context
- * Placed in InkREPL to prevent input box jitter (suggestions render above history)
+ * Uses fixed height container to prevent input box jitter when suggestion count changes
+ * Only reserves space after suggestions have appeared at least once
+ * 使用固定高度容器，防止建议数量变化时输入框抖动
+ * 只有在建议至少出现过一次后才预留空间
  */
+const SUGGESTIONS_RESERVE_HEIGHT = 8; // Fixed height to reserve for suggestions
+
 const AutocompleteSuggestions: React.FC = () => {
   const autocomplete = useAutocompleteContext();
+  // Track if suggestions have ever been visible (to reserve space after first appearance)
+  // 跟踪建议是否曾经可见（第一次出现后预留空间）
+  const [hasEverShown, setHasEverShown] = useState(false);
 
-  // If context is not available, render nothing
+  // Update hasEverShown when suggestions become visible (use useEffect to avoid setState during render)
+  // 当建议变为可见时更新 hasEverShown（使用 useEffect 避免在渲染期间调用 setState）
+  useEffect(() => {
+    if (autocomplete?.state.visible && autocomplete.suggestions.length > 0) {
+      setHasEverShown(true);
+    }
+  }, [autocomplete?.state.visible, autocomplete?.suggestions.length]);
+
+  // If context is not available, render placeholder only if hasEverShown
+  // 如果 context 不可用，只在 hasEverShown 时渲染占位符
   if (!autocomplete) {
-    return null;
+    return hasEverShown ? <Box height={SUGGESTIONS_RESERVE_HEIGHT} /> : null;
   }
 
   const { state, suggestions } = autocomplete;
 
+  // If suggestions have never been shown, don't reserve space yet
+  // 如果建议从未出现过，暂不预留空间
+  if (!hasEverShown) {
+    if (!state.visible || suggestions.length === 0) {
+      return null;
+    }
+    // First time showing - render with fixed height
+    return (
+      <Box height={SUGGESTIONS_RESERVE_HEIGHT}>
+        <SuggestionsDisplay
+          suggestions={suggestions}
+          selectedIndex={state.selectedIndex}
+          visible={state.visible}
+          maxVisible={7}
+          width={80}
+        />
+      </Box>
+    );
+  }
+
+  // After first appearance, always render fixed-height container
+  // 第一次出现后，始终渲染固定高度容器
   return (
-    <SuggestionsDisplay
-      suggestions={suggestions}
-      selectedIndex={state.selectedIndex}
-      visible={state.visible}
-      maxVisible={7}
-      width={80}
-    />
+    <Box height={SUGGESTIONS_RESERVE_HEIGHT}>
+      <SuggestionsDisplay
+        suggestions={suggestions}
+        selectedIndex={state.selectedIndex}
+        visible={state.visible}
+        maxVisible={7}
+        width={80}
+      />
+    </Box>
   );
 };
 
@@ -205,8 +246,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   onExit,
 }) => {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const { history } = useUIState();
   const { addHistoryItem, clearHistory: clearUIHistory } = useUIActions();
+
+  // Get terminal dimensions for fixed layout - 获取终端尺寸用于固定布局
+  const terminalHeight = stdout.rows || 24;
+  const terminalWidth = stdout.columns || 80;
 
   // Issue 079: Limit visible history to last 20 conversation rounds
   // A "round" = one user input + AI response(s)
@@ -1135,7 +1181,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   );
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={terminalWidth} flexShrink={0} flexGrow={0}>
       {/* Banner - shown once at start, using Static to prevent re-rendering */}
       {showBanner && (
         <Static items={[1]}>
@@ -1150,86 +1196,94 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         </Static>
       )}
 
-      {/* Message History */}
-      {history.length > 0 && (
-        <Box flexDirection="column" marginBottom={1}>
-          <MessageList
-            items={renderHistory}
-            isLoading={isLoading}
-            isThinking={streamingState.isThinking}
-            thinkingCharCount={streamingState.thinkingCharCount}
-            thinkingContent={streamingState.thinkingContent}
-            streamingResponse={streamingState.currentResponse}
-            currentTool={streamingState.currentTool}
-            toolInputCharCount={streamingState.toolInputCharCount}
-            toolInputContent={streamingState.toolInputContent}
-            iterationHistory={streamingState.iterationHistory}
-            currentIteration={streamingState.currentIteration}
+      {/* Message History - flexGrow to fill remaining space */}
+      {/* 消息历史 - 使用 flexGrow 填充剩余空间 */}
+      <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+        {history.length > 0 && (
+          <Box flexDirection="column">
+            <MessageList
+              items={renderHistory}
+              isLoading={isLoading}
+              isThinking={streamingState.isThinking}
+              thinkingCharCount={streamingState.thinkingCharCount}
+              thinkingContent={streamingState.thinkingContent}
+              streamingResponse={streamingState.currentResponse}
+              currentTool={streamingState.currentTool}
+              toolInputCharCount={streamingState.toolInputCharCount}
+              toolInputContent={streamingState.toolInputContent}
+              iterationHistory={streamingState.iterationHistory}
+              currentIteration={streamingState.currentIteration}
+            />
+          </Box>
+        )}
+
+        {/* Loading/Thinking Indicator */}
+        {isLoading && history.length === 0 && (
+          <Box>
+            <ThinkingIndicator message="Thinking" showSpinner />
+          </Box>
+        )}
+      </Box>
+
+      {/* Fixed bottom section: Input + Suggestions + Status */}
+      {/* 固定底部区域: 输入 + 建议 + 状态 */}
+      <Box flexDirection="column" flexShrink={0}>
+        {/* Input Area - always at fixed position */}
+        {/* 输入区域 - 始终在固定位置 */}
+        <Box>
+          <InputPrompt
+            onSubmit={handleSubmit}
+            prompt=">"
+            focus={!isLoading}
+            cwd={process.cwd()}
+            gitRoot={options.context?.gitRoot || context.gitRoot}
           />
         </Box>
-      )}
 
-      {/* Loading/Thinking Indicator */}
-      {isLoading && history.length === 0 && (
-        <Box marginBottom={1}>
-          <ThinkingIndicator message="Thinking" showSpinner />
+        {/* Autocomplete Suggestions - fixed 8-line container, expands downward */}
+        {/* 自动补全建议 - 固定8行容器，向下扩展 */}
+        <AutocompleteSuggestions />
+
+        {/* Status Bar */}
+        <Box marginTop={1}>
+          <StatusBar
+            sessionId={context.sessionId}
+            permissionMode={currentConfig.permissionMode}
+            provider={currentConfig.provider}
+            model={getProviderModel(currentConfig.provider) ?? currentConfig.provider}
+            currentTool={streamingState.currentTool}
+            thinking={currentConfig.thinking}
+            thinkingCharCount={streamingState.thinkingCharCount}
+            toolInputCharCount={streamingState.toolInputCharCount}
+            toolInputContent={streamingState.toolInputContent}
+          />
         </Box>
-      )}
 
-      {/* Autocomplete Suggestions - rendered here to prevent input box jitter */}
-      {/* 自动补全建议 - 在此处渲染以防止输入框抖动 */}
-      <AutocompleteSuggestions />
-
-      {/* Input Area */}
-      <Box flexShrink={0}>
-        <InputPrompt
-          onSubmit={handleSubmit}
-          prompt=">"
-          focus={!isLoading}
-          cwd={process.cwd()}
-          gitRoot={options.context?.gitRoot || context.gitRoot}
-        />
-      </Box>
-
-      {/* Status Bar */}
-      <Box flexShrink={0} marginTop={1}>
-        <StatusBar
-          sessionId={context.sessionId}
-          permissionMode={currentConfig.permissionMode}
-          provider={currentConfig.provider}
-          model={getProviderModel(currentConfig.provider) ?? currentConfig.provider}
-          currentTool={streamingState.currentTool}
-          thinking={currentConfig.thinking}
-          thinkingCharCount={streamingState.thinkingCharCount}
-          toolInputCharCount={streamingState.toolInputCharCount}
-          toolInputContent={streamingState.toolInputContent}
-        />
-      </Box>
-
-      {/* Confirmation Dialog - 确认对话框 */}
-      {confirmRequest && (
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="yellow"
-          paddingX={1}
-          marginTop={1}
-        >
-          <Text color="yellow" bold>
-            [Confirm] {confirmRequest.prompt}
-          </Text>
-          {/* Don't show "always" option for protected paths - 永久保护路径不显示 "always" 选项 */}
-          {confirmRequest.input._alwaysConfirm ? (
-            <Text dimColor>
-              Press (y) to confirm, (n) to cancel (protected path)
+        {/* Confirmation Dialog - 确认对话框 */}
+        {confirmRequest && (
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor="yellow"
+            paddingX={1}
+            marginTop={1}
+          >
+            <Text color="yellow" bold>
+              [Confirm] {confirmRequest.prompt}
             </Text>
-          ) : (
-            <Text dimColor>
-              Press (y) yes, (a) always yes for this tool, (n) no
-            </Text>
-          )}
-        </Box>
-      )}
+            {/* Don't show "always" option for protected paths - 永久保护路径不显示 "always" 选项 */}
+            {confirmRequest.input._alwaysConfirm ? (
+              <Text dimColor>
+                Press (y) to confirm, (n) to cancel (protected path)
+              </Text>
+            ) : (
+              <Text dimColor>
+                Press (y) yes, (a) always yes for this tool, (n) no
+              </Text>
+            )}
+          </Box>
+        )}
+      </Box>
     </Box>
   );
 };
