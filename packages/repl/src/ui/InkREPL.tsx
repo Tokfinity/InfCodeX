@@ -16,6 +16,7 @@ import { InputPrompt } from "./components/InputPrompt.js";
 import { MessageList } from "./components/MessageList.js";
 import { ThinkingIndicator } from "./components/LoadingIndicator.js";
 import { StatusBar } from "./components/StatusBar.js";
+import { SuggestionsDisplay } from "./components/SuggestionsDisplay.js";
 import {
   UIStateProvider,
   useUIState,
@@ -26,6 +27,7 @@ import {
   KeypressProvider,
   useKeypress,
 } from "./contexts/index.js";
+import { AutocompleteContextProvider, useAutocompleteContext } from "./hooks/index.js";
 import { StreamingState, type HistoryItem, KeypressHandlerPriority } from "./types.js";
 import {
   KodaXOptions,
@@ -164,6 +166,31 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir }) => {
         {"-".repeat(dividerWidth)}
       </Text>
     </Box>
+  );
+};
+
+/**
+ * AutocompleteSuggestions - Renders autocomplete suggestions from context
+ * Placed in InkREPL to prevent input box jitter (suggestions render above history)
+ */
+const AutocompleteSuggestions: React.FC = () => {
+  const autocomplete = useAutocompleteContext();
+
+  // If context is not available, render nothing
+  if (!autocomplete) {
+    return null;
+  }
+
+  const { state, suggestions } = autocomplete;
+
+  return (
+    <SuggestionsDisplay
+      suggestions={suggestions}
+      selectedIndex={state.selectedIndex}
+      visible={state.visible}
+      maxVisible={7}
+      width={80}
+    />
   );
 };
 
@@ -1149,6 +1176,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         </Box>
       )}
 
+      {/* Autocomplete Suggestions - rendered here to prevent input box jitter */}
+      {/* 自动补全建议 - 在此处渲染以防止输入框抖动 */}
+      <AutocompleteSuggestions />
+
       {/* Input Area */}
       <Box flexShrink={0}>
         <InputPrompt
@@ -1209,13 +1240,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
  *
  * KeypressProvider provides centralized keyboard handling.
  * InputPrompt uses useKeypress from this context.
+ * AutocompleteContextProvider shares autocomplete state between InputPrompt and InkREPL.
  */
 const InkREPL: React.FC<InkREPLProps> = (props) => {
+  const cwd = process.cwd();
+  const gitRoot = props.options?.context?.gitRoot ?? undefined;
+
   return (
     <UIStateProvider>
       <StreamingProvider>
         <KeypressProvider>
-          <InkREPLInner {...props} />
+          <AutocompleteContextProvider cwd={cwd} gitRoot={gitRoot}>
+            <InkREPLInner {...props} />
+          </AutocompleteContextProvider>
         </KeypressProvider>
       </StreamingProvider>
     </UIStateProvider>
