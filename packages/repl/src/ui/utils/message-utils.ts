@@ -35,8 +35,9 @@ export function extractTextContent(content: string | unknown[]): string {
             break;
           case "thinking":
             // Extract thinking content for session restore - 提取 thinking 内容用于会话恢复
+            // Add [/Thinking] end tag to distinguish from regular output - 添加结束标签以区分正式输出
             if ("thinking" in block && block.thinking) {
-              textParts.push(`[Thinking]\n${block.thinking}`);
+              textParts.push(`[Thinking]\n${block.thinking}\n[/Thinking]`);
             }
             break;
           case "tool_use":
