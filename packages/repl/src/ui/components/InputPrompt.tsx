@@ -16,10 +16,9 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { Box, Text, useApp } from "ink";
 import { TextInput } from "./TextInput.js";
-import { SuggestionsDisplay } from "./SuggestionsDisplay.js";
 import { useTextBuffer } from "../hooks/useTextBuffer.js";
 import { useInputHistory } from "../hooks/useInputHistory.js";
-import { useAutocomplete } from "../hooks/useAutocomplete.js";
+import { useAutocomplete, useAutocompleteContext } from "../hooks/useAutocomplete.js";
 import { useKeypress } from "../contexts/KeypressContext.js";
 import { getTheme } from "../themes/index.js";
 import { KeypressHandlerPriority, type InputPromptProps } from "../types.js";
@@ -64,7 +63,17 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
     },
   });
 
-  // Autocomplete integration - 自动补全集成
+  // Autocomplete integration - use context from parent if available, otherwise create local
+  // 自动补全集成 - 优先使用父组件的 context，否则创建本地实例
+  const contextAutocomplete = useAutocompleteContext();
+  const localAutocomplete = useAutocomplete({
+    cwd,
+    gitRoot,
+    enabled: autocompleteEnabled,
+  });
+
+  // Use context if available (from AutocompleteContextProvider in InkREPL)
+  // 如果有 context 则使用（来自 InkREPL 中的 AutocompleteContextProvider）
   const {
     state: autocompleteState,
     suggestions,
@@ -74,11 +83,7 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
     handleUp: handleAutocompleteUp,
     handleDown: handleAutocompleteDown,
     handleEscape: handleAutocompleteEscape,
-  } = useAutocomplete({
-    cwd,
-    gitRoot,
-    enabled: autocompleteEnabled,
-  });
+  } = contextAutocomplete ?? localAutocomplete;
 
   // Track previous text to detect changes - 跟踪前一次文本以检测变化
   const prevTextRef = useRef(text);
@@ -353,15 +358,13 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
 
   return (
     <Box flexDirection="column" marginY={1}>
-      {/* Autocomplete suggestions - displayed ABOVE input to prevent layout shift */}
-      {/* 自动补全建议 - 显示在输入框上方，防止布局抖动 */}
-      <SuggestionsDisplay
-        suggestions={suggestions}
-        selectedIndex={autocompleteState.selectedIndex}
-        visible={autocompleteState.visible}
-        maxVisible={7}
-        width={80}
-      />
+      {/*
+        SuggestionsDisplay is now rendered in InkREPL via AutocompleteContextProvider
+        This prevents input box jitter when suggestions appear/disappear
+
+        SuggestionsDisplay 现在通过 AutocompleteContextProvider 在 InkREPL 中渲染
+        这样可以防止建议出现/消失时输入框抖动
+      */}
       <TextInput
         lines={lines}
         cursorRow={cursor.row}

@@ -10,7 +10,7 @@
  * 3. Handle Tab/Enter for selection in keypress handler
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, createContext, useContext, type ReactNode } from "react";
 import {
   AutocompleteProvider,
   createAutocompleteProvider,
@@ -18,6 +18,55 @@ import {
 } from "../../interactive/autocomplete-provider.js";
 import type { Suggestion } from "../types.js";
 import type { Completion } from "../../interactive/autocomplete.js";
+
+// ============================================================================
+// Autocomplete Context - for sharing state between InputPrompt and InkREPL
+// 自动补全上下文 - 在 InputPrompt 和 InkREPL 之间共享状态
+// ============================================================================
+
+/**
+ * Context value type (extends UseAutocompleteReturn)
+ * 上下文值类型（扩展 UseAutocompleteReturn）
+ */
+interface AutocompleteContextValue extends UseAutocompleteReturn {}
+
+const AutocompleteContext = createContext<AutocompleteContextValue | null>(null);
+
+/**
+ * AutocompleteContextProvider - provides autocomplete state to children
+ * AutocompleteContextProvider - 为子组件提供自动补全状态
+ *
+ * Usage: Wrap your app or component tree with this provider
+ * 用法: 用此 provider 包装你的应用或组件树
+ */
+export function AutocompleteContextProvider({
+  children,
+  cwd,
+  gitRoot,
+}: {
+  children: ReactNode;
+  cwd?: string;
+  gitRoot?: string;
+}): React.ReactElement {
+  const autocomplete = useAutocomplete({ cwd, gitRoot, enabled: true });
+
+  return (
+    <AutocompleteContext.Provider value={autocomplete}>
+      {children}
+    </AutocompleteContext.Provider>
+  );
+}
+
+/**
+ * useAutocompleteContext - access autocomplete context from parent component
+ * useAutocompleteContext - 从父组件访问自动补全上下文
+ *
+ * Use this in InkREPL to render SuggestionsDisplay outside InputPrompt
+ * 在 InkREPL 中使用此 hook 在 InputPrompt 外部渲染 SuggestionsDisplay
+ */
+export function useAutocompleteContext(): AutocompleteContextValue | null {
+  return useContext(AutocompleteContext);
+}
 
 /**
  * Options for useAutocomplete hook
@@ -93,9 +142,31 @@ function completionToSuggestion(completion: Completion, index: number): Suggesti
  *
  * Integrates autocomplete provider with React component state.
  * 将自动补全提供者与 React 组件状态集成。
+ *
+ * If called without options and within AutocompleteContextProvider, uses context.
+ * Otherwise creates a new provider instance.
+ * 如果不带选项调用且在 AutocompleteContextProvider 内，使用 context。
+ * 否则创建新的 provider 实例。
  */
 export function useAutocomplete(
   options: UseAutocompleteOptions = {}
+): UseAutocompleteReturn {
+  // Try to use context if available and no explicit options
+  const context = useContext(AutocompleteContext);
+  if (context && !options.cwd && !options.gitRoot) {
+    return context;
+  }
+
+  // Otherwise create local instance
+  return useAutocompleteImpl(options);
+}
+
+/**
+ * Internal implementation - creates and manages autocomplete provider
+ * 内部实现 - 创建和管理自动补全提供者
+ */
+function useAutocompleteImpl(
+  options: UseAutocompleteOptions
 ): UseAutocompleteReturn {
   const { cwd, gitRoot, enabled = true } = options;
 
