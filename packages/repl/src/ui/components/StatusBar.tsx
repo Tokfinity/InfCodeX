@@ -18,6 +18,8 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   thinkingCharCount,
   toolInputCharCount,
   toolInputContent,
+  currentIteration,
+  maxIter,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
 
@@ -38,6 +40,27 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         : permissionMode === "accept-edits"
           ? "cyan"
           : "magenta"; // auto-in-project
+
+  // Issue 068: Build iteration display with color gradient
+  // Color gradient: Green (safe) -> Yellow (warning) -> Red (critical)
+  const iterationDisplay = currentIteration && maxIter
+    ? `🔄 ${currentIteration}/${maxIter}`
+    : null;
+
+  // Calculate iteration color based on progress
+  const iterationColor = useMemo(() => {
+    if (!currentIteration || !maxIter) return "dim";
+
+    const ratio = currentIteration / maxIter;
+
+    if (ratio < 0.5) {
+      return "green"; // Safe zone
+    } else if (ratio < 0.8) {
+      return "yellow"; // Warning zone
+    } else {
+      return "red"; // Critical zone
+    }
+  }, [currentIteration, maxIter]);
 
   // Issue 068 Phase 4: Build tool display with parameter summary
   // Priority: toolInputContent (parameter preview) > toolInputCharCount (char count) > none
@@ -61,6 +84,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         </Text>
         <Text dimColor> | </Text>
         <Text color={modeColor}>{modeDisplay}</Text>
+        {/* Iteration display - Issue 068: 显示迭代进度 */}
+        {iterationDisplay && (
+          <>
+            <Text dimColor> | </Text>
+            <Text color={iterationColor}>{iterationDisplay}</Text>
+          </>
+        )}
         <Text dimColor> | </Text>
         <Text dimColor>{displaySessionId}</Text>
       </Box>

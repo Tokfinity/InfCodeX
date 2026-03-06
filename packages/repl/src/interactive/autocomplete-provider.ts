@@ -298,13 +298,15 @@ export class AutocompleteProvider {
 
     // Check trigger conditions - 检查触发条件
     // 1. Starts with / (command or skill at line start)
-    // 2. Contains / anywhere (command or skill mid-line, e.g., "some text /skill:name")
-    // 3. Contains @ (file path)
+    // 2. Contains /skill: anywhere (skill completion, supports mid-line)
+    // 3. Contains / anywhere (command or skill mid-line, e.g., "some text /help")
     // 4. After command with space (arguments)
+    // 5. Contains @ (file path)
     return (
       beforeCursor.startsWith('/') ||
-      /\/\w*$/.test(beforeCursor) ||           // / followed by word chars at end (mid-line commands/skills)
-      /\/\w+\s/.test(beforeCursor) ||          // /word followed by space (arguments after mid-line command)
+      /\/skill:/.test(beforeCursor) ||      // /skill: pattern anywhere (mid-line support)
+      /\/\w*$/.test(beforeCursor) ||        // / followed by word chars at end (mid-line commands/skills)
+      /\/\w+\s/.test(beforeCursor) ||       // /word followed by space (arguments after mid-line command)
       beforeCursor.includes('@')
     );
   }
