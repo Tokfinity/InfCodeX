@@ -74,6 +74,9 @@ export interface StreamingContextValue {
 
   /** Current iteration number (1-based) - 当前迭代序号（从1开始） */
   currentIteration: number;
+
+  /** 是否正在压缩上下文 */
+  isCompacting: boolean;
 }
 
 /**
@@ -142,6 +145,12 @@ export interface StreamingActions {
 
   /** Clear iteration history - 清空迭代历史 */
   clearIterationHistory: () => void;
+
+  /** 开始压缩上下文 */
+  startCompacting: () => void;
+
+  /** 结束压缩上下文 */
+  stopCompacting: () => void;
 }
 
 /**
@@ -164,6 +173,7 @@ const DEFAULT_STREAMING_STATE: StreamingContextValue = {
   toolInputContent: "",
   iterationHistory: [],
   currentIteration: 1,
+  isCompacting: false,
 };
 
 // === Streaming Manager ===
@@ -246,6 +256,12 @@ export interface StreamingManager {
 
   /** Clear iteration history - 清空迭代历史 */
   clearIterationHistory: () => void;
+
+  /** Start compacting context - 开始压缩上下文 */
+  startCompacting: () => void;
+
+  /** Stop compacting context - 结束压缩上下文 */
+  stopCompacting: () => void;
 }
 
 /**
@@ -550,6 +566,30 @@ export function createStreamingManager(): StreamingManager {
       };
       notify();
     },
+
+    /**
+     * Start compacting context - 开始压缩上下文
+     */
+    startCompacting: () => {
+      flushPendingUpdates();
+      state = {
+        ...state,
+        isCompacting: true,
+      };
+      notify();
+    },
+
+    /**
+     * Stop compacting context - 结束压缩上下文
+     */
+    stopCompacting: () => {
+      flushPendingUpdates();
+      state = {
+        ...state,
+        isCompacting: false,
+      };
+      notify();
+    },
   };
 }
 
@@ -673,6 +713,14 @@ export function StreamingProvider({
     managerRef.current.clearIterationHistory();
   }, []);
 
+  const startCompacting = useCallback(() => {
+    managerRef.current.startCompacting();
+  }, []);
+
+  const stopCompacting = useCallback(() => {
+    managerRef.current.stopCompacting();
+  }, []);
+
   const actions: StreamingActions = {
     startStreaming,
     stopStreaming,
@@ -695,6 +743,8 @@ export function StreamingProvider({
     getThinkingContent,
     startNewIteration,
     clearIterationHistory,
+    startCompacting,
+    stopCompacting,
   };
 
   return React.createElement(

@@ -77,6 +77,8 @@ export interface KodaXProviderConfig {
   baseUrl?: string;
   model: string;
   supportsThinking: boolean;
+  /** 模型的上下文窗口大小 (tokens) */
+  contextWindow?: number;
 }
 
 export interface KodaXProviderStreamOptions {

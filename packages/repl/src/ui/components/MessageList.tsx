@@ -52,6 +52,8 @@ export interface MessageListProps {
   iterationHistory?: IterationRecord[];
   /** Current iteration number - 当前迭代序号 */
   currentIteration?: number;
+  /** Whether compacting context - 是否正在压缩上下文 */
+  isCompacting?: boolean;
 }
 
 export interface HistoryItemRendererProps {
@@ -394,6 +396,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   toolInputContent = "",
   iterationHistory = [],
   currentIteration = 1,
+  isCompacting = false,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
 
@@ -427,10 +430,13 @@ export const MessageList: React.FC<MessageListProps> = ({
   }
 
   // Determine loading status text - 确定加载状态文本
-  // Issue 068 Phase 4: Priority: toolInputContent (parameter preview) > toolInputCharCount (char count) > none
+  // Issue 068 Phase 4: Priority: compacting > toolInputContent (parameter preview) > toolInputCharCount (char count) > none
   let loadingText = "Thinking";
   let prefix = "";
-  if (currentTool) {
+  if (isCompacting) {
+    // Show "Compacting" when compacting context - 压缩上下文时显示 "Compacting"
+    loadingText = "Compacting";
+  } else if (currentTool) {
     prefix = "[Tool] ";
     loadingText = toolInputContent
       ? `${currentTool} (${toolInputContent}...)`

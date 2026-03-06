@@ -12,6 +12,8 @@ import { executeTool, KODAX_TOOLS } from './tools/index.js';
 import { buildSystemPrompt } from './prompts/index.js';
 import { generateSessionId, extractTitleFromMessages } from './session.js';
 import { compactMessages, checkIncompleteToolCalls } from './messages.js';
+import { compact as intelligentCompact, needsCompaction, type CompactionConfig } from '@kodax/agent';
+import { loadCompactionConfig } from './compaction-config.js';
 import { estimateTokens } from './tokenizer.js';
 import { KODAX_MAX_INCOMPLETE_RETRIES, PROMISE_PATTERN, KODAX_TOOL_REQUIRED_PARAMS } from './constants.js';
 import { exec } from 'child_process';
@@ -134,6 +136,14 @@ export async function runKodaX(
   const maxIter = options.maxIter ?? 200;
   const events = options.events ?? {};
 
+  // Load compaction config
+  const compactionConfig = await loadCompactionConfig(options.context?.gitRoot ?? undefined);
+
+  // Get contextWindow: user config > provider > default 200k
+  const contextWindow = compactionConfig.contextWindow
+    ?? provider.getContextWindow?.()
+    ?? 200000;
+
   // 处理 autoResume/resume：自动加载当前目录最近会话
   let resolvedSessionId = options.session?.id;
   if ((options.session?.autoResume || options.session?.resume) && options.session?.storage && !resolvedSessionId) {
@@ -186,9 +196,34 @@ export async function runKodaX(
     try {
       events.onIterationStart?.(iter + 1, maxIter);
 
-      const compacted = compactMessages(messages);
-      if (compacted !== messages) {
-        events.onCompact?.(estimateTokens(messages));
+      // Compaction: use new intelligent compaction if enabled, otherwise fall back to legacy
+      let compacted: KodaXMessage[];
+
+      if (compactionConfig.enabled && needsCompaction(messages, compactionConfig, contextWindow)) {
+        // Use new intelligent compaction
+        try {
+          const result = await intelligentCompact(messages, compactionConfig, provider, contextWindow);
+
+          if (result.compacted) {
+            compacted = result.messages;
+            events.onCompact?.(result.tokensBefore);
+          } else {
+            compacted = result.messages;
+          }
+        } catch (error) {
+          // Fall back to legacy compaction on error
+          console.error('[Compaction Error] Falling back to legacy compaction:', error);
+          compacted = compactMessages(messages);
+          if (compacted !== messages) {
+            events.onCompact?.(estimateTokens(messages));
+          }
+        }
+      } else {
+        // Use legacy compaction
+        compacted = compactMessages(messages);
+        if (compacted !== messages) {
+          events.onCompact?.(estimateTokens(messages));
+        }
       }
 
       // 流式调用 Provider

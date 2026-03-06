@@ -30,8 +30,9 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'anthropic';
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     supportsThinking: true,
+    contextWindow: 200000,  // 200K tokens
   };
   constructor() { super(); this.client = new Anthropic({ apiKey: this.getApiKey() }); }
 }
@@ -43,6 +44,7 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     model: 'glm-5',
     supportsThinking: true,
+    contextWindow: 200000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -52,8 +54,9 @@ class KimiCodeProvider extends KodaXAnthropicCompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'KIMI_API_KEY',
     baseUrl: 'https://api.kimi.com/coding/',
-    model: 'k2p5',
+    model: 'k2.5',
     supportsThinking: true,
+    contextWindow: 256000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -65,20 +68,30 @@ class MiniMaxCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://api.minimaxi.com/anthropic',
     model: 'MiniMax-M2.5',
     supportsThinking: true,
+    contextWindow: 204800,
   };
   constructor() { super(); this.initClient(); }
 }
 
 class OpenAIProvider extends KodaXOpenAICompatProvider {
   readonly name = 'openai';
-  protected readonly config: KodaXProviderConfig = { apiKeyEnv: 'OPENAI_API_KEY', model: 'gpt-4o', supportsThinking: false };
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'OPENAI_API_KEY',
+    model: 'gpt-5.3-codex',
+    supportsThinking: false,
+    contextWindow: 400000,
+  };
   constructor() { super(); this.initClient(); }
 }
 
 class KimiProvider extends KodaXOpenAICompatProvider {
   readonly name = 'kimi';
   protected readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'KIMI_API_KEY', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-128k', supportsThinking: false,
+    apiKeyEnv: 'KIMI_API_KEY',
+    baseUrl: 'https://api.moonshot.cn/v1',
+    model: 'moonshot-v1-128k',
+    supportsThinking: false,
+    contextWindow: 128000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -86,7 +99,11 @@ class KimiProvider extends KodaXOpenAICompatProvider {
 class QwenProvider extends KodaXOpenAICompatProvider {
   readonly name = 'qwen';
   protected readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'QWEN_API_KEY', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-max', supportsThinking: false,
+    apiKeyEnv: 'QWEN_API_KEY',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen3.5-plus',
+    supportsThinking: false,
+    contextWindow: 256000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -94,7 +111,11 @@ class QwenProvider extends KodaXOpenAICompatProvider {
 class ZhipuProvider extends KodaXOpenAICompatProvider {
   readonly name = 'zhipu';
   protected readonly config: KodaXProviderConfig = {
-    apiKeyEnv: 'ZHIPU_API_KEY', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus', supportsThinking: false,
+    apiKeyEnv: 'ZHIPU_API_KEY',
+    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-5',
+    supportsThinking: false,
+    contextWindow: 200000,
   };
   constructor() { super(); this.initClient(); }
 }
