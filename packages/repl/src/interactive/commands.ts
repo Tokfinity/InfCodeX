@@ -191,8 +191,10 @@ export const BUILTIN_COMMANDS: Command[] = [
           // Update context with compacted messages
           context.messages = result.messages;
 
-          // Clear UI history to match compacted context
-          // 清理 UI 历史以匹配压缩后的上下文
+          // Clear UI history - it will be re-created from the new context.messages
+          // This ensures the UI shows the summary + recent 10% messages
+          // 清除 UI 历史 - 它会从新的 context.messages 重新创建
+          // 这确保 UI 显示摘要 + 最近的 10% 消息
           callbacks.clearHistory?.();
 
           // Display statistics

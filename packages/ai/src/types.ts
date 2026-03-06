@@ -46,7 +46,7 @@ export type KodaXContentBlock =
 // ============== 消息类型 ==============
 
 export interface KodaXMessage {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string | KodaXContentBlock[];
 }
 

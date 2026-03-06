@@ -16,7 +16,8 @@ import type {
 /**
  * 序列化对话为文本
  *
- * 将消息转换为结构化文本格式， * 这样可以防止 LLM 将其视为需要继续的对话
+ * 将消息转换为结构化文本格式，保留完整内容不截断
+ * 参考 pi-mono 的实现：让 LLM 决定重点，不通过截断丢失信息
  *
  * 输出格式:
  * ```
@@ -47,7 +48,7 @@ export function serializeConversation(messages: KodaXMessage[]): string {
           const content = typeof result.content === 'string'
             ? result.content
             : JSON.stringify(result.content);
-          lines.push(`[Tool result]: ${truncate(content, 500)}`);
+          lines.push(`[Tool result]: ${content}`);
         }
       }
     } else if (msg.role === 'assistant') {
@@ -57,7 +58,7 @@ export function serializeConversation(messages: KodaXMessage[]): string {
           (b): b is KodaXThinkingBlock => b.type === 'thinking'
         );
         for (const thinking of thinkingBlocks) {
-          lines.push(`[Assistant thinking]: ${truncate(thinking.thinking, 300)}`);
+          lines.push(`[Assistant thinking]: ${thinking.thinking}`);
         }
 
         // Text blocks
@@ -65,7 +66,7 @@ export function serializeConversation(messages: KodaXMessage[]): string {
           (b): b is KodaXTextBlock => b.type === 'text'
         );
         for (const text of textBlocks) {
-          lines.push(`[Assistant]: ${truncate(text.text, 500)}`);
+          lines.push(`[Assistant]: ${text.text}`);
         }
 
         // Tool calls
@@ -75,15 +76,16 @@ export function serializeConversation(messages: KodaXMessage[]): string {
         if (toolBlocks.length > 0) {
           const calls = toolBlocks.map(tc => {
             const input = tc.input as Record<string, unknown>;
+            // 使用 JSON.stringify 保留完整参数，不截断
             const params = Object.entries(input)
-              .map(([k, v]) => `${k}="${truncate(String(v), 100)}"`)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
               .join(', ');
             return `${tc.name}(${params})`;
           }).join('; ');
           lines.push(`[Assistant tool calls]: ${calls}`);
         }
       } else {
-        lines.push(`[Assistant]: ${truncate(msg.content, 500)}`);
+        lines.push(`[Assistant]: ${msg.content}`);
       }
     }
   }
@@ -107,16 +109,4 @@ function extractTextFromMessage(msg: KodaXMessage): string {
   );
 
   return textBlocks.map(b => b.text).join(' ');
-}
-
-/**
- * 截断文本
- *
- * @param text - 原始文本
- * @param maxLength - 最大长度
- * @returns 截断后的文本
- */
-function truncate(text: string, maxLength: number): string {
-  if (text.length <= maxLength) return text;
-  return text.slice(0, maxLength) + '...';
 }
