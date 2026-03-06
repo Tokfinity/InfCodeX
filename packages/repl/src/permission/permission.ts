@@ -13,9 +13,36 @@
 
 import path from 'path';
 import os from 'os';
-import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS } from './types.js';
+import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS } from './types.js';
 
 // ============== Pattern Parsing and Matching ==============
+
+/**
+ * Check if a bash command is a write operation
+ * 检查 bash 命令是否是写操作
+ *
+ * @param command - bash command string
+ * @returns true if the command is a write operation
+ */
+export function isBashWriteCommand(command: string): boolean {
+  const normalizedCommand = command.trim().toLowerCase();
+
+  // Check against blacklist
+  for (const writeCmd of BASH_WRITE_COMMANDS) {
+    // Check if command starts with the write command
+    // e.g., "git commit -m 'msg'" starts with "git commit"
+    if (normalizedCommand.startsWith(writeCmd.toLowerCase())) {
+      return true;
+    }
+    // Also check if it's a pipe/redirection containing the write command
+    // e.g., "echo test | git commit"
+    if (normalizedCommand.includes(writeCmd.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Parse allowed tool pattern - 解析允许的工具模式

@@ -35,6 +35,33 @@ export const MODIFICATION_TOOLS = new Set(['write', 'edit', 'bash', 'undo']);
 /** File modification tools (not commands) - 文件修改工具（不包括命令） */
 export const FILE_MODIFICATION_TOOLS = new Set(['write', 'edit']);
 
+/**
+ * Bash commands that have write side-effects (blocked in plan mode)
+ * 具有写副作用的 Bash 命令（plan 模式下被阻止）
+ *
+ * Note: This is a blacklist approach - only explicitly listed commands are blocked
+ * All other bash commands (like git status, cat, ls) are allowed in plan mode
+ */
+export const BASH_WRITE_COMMANDS = new Set([
+  // Package managers - 包管理器
+  'npm install', 'npm i', 'npm uninstall', 'npm remove', 'npm update', 'npm ci',
+  'yarn add', 'yarn remove', 'yarn upgrade',
+  'pnpm add', 'pnpm remove', 'pnpm update',
+
+  // Git write operations - Git 写操作
+  'git clean', 'git reset', 'git checkout', 'git switch', 'git merge', 'git rebase',
+  'git cherry-pick', 'git revert', 'git commit', 'git push', 'git pull',
+
+  // File operations - 文件操作
+  'rm', 'mv', 'cp', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
+
+  // Download/create - 下载/创建
+  'curl', 'wget', 'dd', 'tar',
+
+  // Process control - 进程控制
+  'kill', 'pkill', 'killall',
+]);
+
 // ============== Permission Context ==============
 
 /**
