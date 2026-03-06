@@ -154,6 +154,10 @@ export interface StatusBarProps {
   toolInputCharCount?: number;
   /** Tool input content (truncated) - Issue 068 Phase 4: 显示参数摘要 */
   toolInputContent?: string;
+  /** Current iteration number - Issue 068: 显示迭代进度 */
+  currentIteration?: number;
+  /** Maximum iterations - Issue 068: 显示迭代进度 */
+  maxIter?: number;
 }
 
 /**

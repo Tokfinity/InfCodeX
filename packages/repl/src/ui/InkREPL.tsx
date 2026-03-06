@@ -315,6 +315,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearIterationHistory,
     startCompacting,
     stopCompacting,
+    setMaxIter,
   } = useStreamingActions();
 
   // State
@@ -496,7 +497,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Iteration start - called at the beginning of each agent iteration
     // 迭代开始 - 在每轮 agent 迭代开始时调用
-    onIterationStart: (iter: number, _maxIter: number) => {
+    onIterationStart: (iter: number, maxIter: number) => {
+      // Update max iterations if provided
+      // 如果提供了最大迭代次数则更新
+      if (maxIter) {
+        setMaxIter(maxIter);
+      }
+
       // Save current content to history and start fresh for new iteration
       // 保存当前内容到历史，开始新一轮
       if (iter > 1) {
@@ -1326,6 +1333,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             thinkingCharCount={streamingState.thinkingCharCount}
             toolInputCharCount={streamingState.toolInputCharCount}
             toolInputContent={streamingState.toolInputContent}
+            currentIteration={streamingState.currentIteration}
+            maxIter={streamingState.maxIter}
           />
         </Box>
 

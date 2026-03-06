@@ -75,6 +75,9 @@ export interface StreamingContextValue {
   /** Current iteration number (1-based) - 当前迭代序号（从1开始） */
   currentIteration: number;
 
+  /** Maximum iterations allowed - 最大允许迭代次数 */
+  maxIter: number;
+
   /** 是否正在压缩上下文 */
   isCompacting: boolean;
 }
@@ -146,6 +149,9 @@ export interface StreamingActions {
   /** Clear iteration history - 清空迭代历史 */
   clearIterationHistory: () => void;
 
+  /** Set maximum iterations - 设置最大迭代次数 */
+  setMaxIter: (maxIter: number) => void;
+
   /** 开始压缩上下文 */
   startCompacting: () => void;
 
@@ -173,6 +179,7 @@ const DEFAULT_STREAMING_STATE: StreamingContextValue = {
   toolInputContent: "",
   iterationHistory: [],
   currentIteration: 1,
+  maxIter: 200, // Default max iterations - 默认最大迭代次数
   isCompacting: false,
 };
 
@@ -256,6 +263,9 @@ export interface StreamingManager {
 
   /** Clear iteration history - 清空迭代历史 */
   clearIterationHistory: () => void;
+
+  /** Set maximum iterations - 设置最大迭代次数 */
+  setMaxIter: (maxIter: number) => void;
 
   /** Start compacting context - 开始压缩上下文 */
   startCompacting: () => void;
@@ -568,6 +578,18 @@ export function createStreamingManager(): StreamingManager {
     },
 
     /**
+     * Set maximum iterations - 设置最大迭代次数
+     */
+    setMaxIter: (maxIter: number) => {
+      flushPendingUpdates();
+      state = {
+        ...state,
+        maxIter,
+      };
+      notify();
+    },
+
+    /**
      * Start compacting context - 开始压缩上下文
      */
     startCompacting: () => {
@@ -713,6 +735,10 @@ export function StreamingProvider({
     managerRef.current.clearIterationHistory();
   }, []);
 
+  const setMaxIter = useCallback((maxIter: number) => {
+    managerRef.current.setMaxIter(maxIter);
+  }, []);
+
   const startCompacting = useCallback(() => {
     managerRef.current.startCompacting();
   }, []);
@@ -743,6 +769,7 @@ export function StreamingProvider({
     getThinkingContent,
     startNewIteration,
     clearIterationHistory,
+    setMaxIter,
     startCompacting,
     stopCompacting,
   };
