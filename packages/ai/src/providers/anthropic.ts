@@ -123,7 +123,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   }
 
   private convertMessages(messages: KodaXMessage[]): Anthropic.Messages.MessageParam[] {
-    return messages.map(m => {
+    // Filter out 'system' role messages - Anthropic API only supports 'user' and 'assistant' in messages array
+    // System messages are handled via the separate 'system' parameter
+    return messages.filter(m => m.role !== 'system').map(m => {
       if (typeof m.content === 'string') return { role: m.role, content: m.content };
       const content: Anthropic.Messages.ContentBlockParam[] = [];
       // thinking blocks 必须放在最前面
@@ -141,7 +143,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         if (b.type === 'tool_use' && m.role === 'assistant') content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
         else if (b.type === 'tool_result' && m.role === 'user') content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: b.content });
       }
-      return { role: m.role, content } as Anthropic.Messages.MessageParam;
-    });
+      return { role: m.role, content };
+    }) as Anthropic.Messages.MessageParam[];
   }
 }

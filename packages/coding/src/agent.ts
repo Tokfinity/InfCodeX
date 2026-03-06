@@ -202,7 +202,14 @@ export async function runKodaX(
       if (compactionConfig.enabled && needsCompaction(messages, compactionConfig, contextWindow)) {
         // Use new intelligent compaction
         try {
-          const result = await intelligentCompact(messages, compactionConfig, provider, contextWindow);
+          const result = await intelligentCompact(
+            messages,
+            compactionConfig,
+            provider,
+            contextWindow,
+            undefined, // customInstructions
+            systemPrompt // 传入 systemPrompt 以生成更好的摘要
+          );
 
           if (result.compacted) {
             compacted = result.messages;
@@ -211,11 +218,19 @@ export async function runKodaX(
             compacted = result.messages;
           }
         } catch (error) {
-          // Fall back to legacy compaction on error
-          console.error('[Compaction Error] Falling back to legacy compaction:', error);
-          compacted = compactMessages(messages);
-          if (compacted !== messages) {
+          // 改进的错误回退逻辑：告知用户并删除最老的10%消息
+          console.error('[Compaction Error] LLM摘要失败，回退到简单截断:', error);
+
+          // 计算删除10%的消息
+          const removeCount = Math.ceil(messages.length * 0.1);
+          if (removeCount > 0 && messages.length > removeCount) {
+            compacted = messages.slice(removeCount);
+            console.warn(`[Compaction Fallback] 删除了最老的 ${removeCount} 条消息，保留 ${compacted.length} 条`);
             events.onCompact?.(estimateTokens(messages));
+          } else {
+            // 消息太少，不删除
+            compacted = messages;
+            console.warn('[Compaction Fallback] 消息数量太少，跳过删除');
           }
         }
       } else {

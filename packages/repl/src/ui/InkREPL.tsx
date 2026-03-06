@@ -411,7 +411,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     { isActive: !!confirmRequest }
   );
 
-  // Sync history from context to UI on mount
+  // Sync history from context to UI
+  // Re-sync when history is cleared (e.g., after /compact command)
   // Only sync if history is empty to avoid duplicates (Issue 046)
   useEffect(() => {
     if (context.messages.length > 0 && history.length === 0) {
@@ -431,11 +432,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             type: "assistant",
             text: content,
           });
+        } else if (msg.role === "system") {
+          // Handle system role messages (e.g., compaction summaries)
+          addHistoryItem({
+            type: "system",
+            text: content,
+          });
         }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on mount
+  }, [context.messages.length, history.length, addHistoryItem]); // Re-run when messages or history changes
 
   // Preload skills on mount to ensure they're available for first /skill:xxx call
   // Issue 059: Skills lazy loading caused first skill invocation to fail

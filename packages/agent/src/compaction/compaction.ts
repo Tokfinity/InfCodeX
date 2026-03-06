@@ -45,7 +45,9 @@ export function needsCompaction(
  * @param messages - 消息列表
  * @param config - 压缩配置
  * @param provider - LLM Provider
+ * @param contextWindow - 上下文窗口大小
  * @param customInstructions - 自定义指令（可选）
+ * @param systemPrompt - 项目的系统提示（可选，用于生成更好的摘要）
  * @returns 压缩结果
  */
 export async function compact(
@@ -53,7 +55,8 @@ export async function compact(
   config: CompactionConfig,
   provider: KodaXBaseProvider,
   contextWindow: number = DEFAULT_CONTEXT_WINDOW,
-  customInstructions?: string
+  customInstructions?: string,
+  systemPrompt?: string
 ): Promise<CompactionResult> {
   const tokensBefore = estimateTokens(messages);
 
@@ -68,13 +71,27 @@ export async function compact(
     };
   }
 
-  // 1. 找到切割点 (保留 keepRecentPercent)
-  const keepTokens = Math.floor(contextWindow * (config.keepRecentPercent / 100));
-  const cutIndex = findCutPoint(messages, keepTokens);
+  // 1. 提取之前的摘要（用于多轮压缩）
+  let previousSummary: string | undefined;
+  let messagesWithoutOldSummary = messages;
 
-  // 2. 提取待压缩消息
-  const toCompact = messages.slice(0, cutIndex);
-  const toKeep = messages.slice(cutIndex);
+  // 查找最近的 system 摘要消息
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith('[对话历史摘要]')) {
+      previousSummary = msg.content.replace('[对话历史摘要]\n\n', '');
+      messagesWithoutOldSummary = [...messages.slice(0, i), ...messages.slice(i + 1)];
+      break;
+    }
+  }
+
+  // 2. 找到切割点 (保留 keepRecentPercent)
+  const keepTokens = Math.floor(contextWindow * (config.keepRecentPercent / 100));
+  const cutIndex = findCutPoint(messagesWithoutOldSummary, keepTokens);
+
+  // 3. 提取待压缩消息
+  const toCompact = messagesWithoutOldSummary.slice(0, cutIndex);
+  const toKeep = messagesWithoutOldSummary.slice(cutIndex);
 
   // 边界情况：没有消息需要压缩
   if (toCompact.length === 0) {
@@ -87,20 +104,23 @@ export async function compact(
     };
   }
 
-  // 3. 提取文件操作
+  // 4. 提取文件操作
   const fileOps = extractFileOps(toCompact);
 
-  // 4. 生成 LLM 摘要
+  // 5. 生成 LLM 摘要（传入 systemPrompt 和 previousSummary 支持多轮压缩）
   const summary = await generateSummary(
     toCompact,
     provider,
     fileOps,
-    customInstructions
+    customInstructions,
+    systemPrompt,
+    previousSummary
   );
 
-  // 5. 构建新消息历史
+  // 6. 构建新消息历史
+  // 使用 'system' role 明确表示这是历史摘要，而非用户输入
   const summaryMessage: KodaXMessage = {
-    role: 'user',
+    role: 'system',
     content: `[对话历史摘要]\n\n${summary}`,
   };
 
@@ -124,26 +144,53 @@ export async function compact(
  * 从最新消息往前累加，直到达到 keepRecentTokens
  * 确保不在 tool_result 处切割（必须与对应的 tool_use 在一起）
  *
+ * 参考 pi-mono 的实现：
+ * - 可以在 user 或 assistant 消息处切割
+ * - 如果在 assistant 消息处切割，它的 tool_result 会跟随它
+ * - 永远不在 tool_result 处切割
+ *
  * @param messages - 消息列表
  * @param keepRecentTokens - 保留的最近 token 数
- * @returns 切割点索引
+ * @returns 切割点索引（如果找不到有效切割点返回 0）
  */
 function findCutPoint(
   messages: KodaXMessage[],
   keepRecentTokens: number
 ): number {
   let tokenCount = 0;
+  const validCutPoints: number[] = [];
 
+  // 1. 从后往前找到所有有效切割点
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]!;
+    const msg = messages[i];
+    if (!msg) continue;
+
+    // user 和 assistant 消息是有效切割点
+    // 注意：system 消息通常在开头，不应该作为切割点
+    if (msg.role === 'user' || msg.role === 'assistant') {
+      validCutPoints.push(i);
+    }
+  }
+
+  // 2. 从最新消息往前累加，找到第一个超过预算的位置
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+
     tokenCount += estimateTokens([msg]);
 
     if (tokenCount > keepRecentTokens) {
-      // 检查是否是有效的切割点
-      if (isValidCutPoint(messages, i)) {
-        return i;
+      // 找到第一个 >= i 的有效切割点
+      const cutPoint = validCutPoints.find(cp => cp >= i);
+      if (cutPoint !== undefined) {
+        return cutPoint;
       }
-      // 否则继续往前找
+      // 如果没有找到 >= i 的切割点，使用最大的（最靠前的）有效切割点
+      if (validCutPoints.length > 0) {
+        return validCutPoints[validCutPoints.length - 1];
+      }
+      // 如果完全没有有效切割点，返回 0（保留所有消息）
+      return 0;
     }
   }
 
@@ -151,35 +198,3 @@ function findCutPoint(
   return 0;
 }
 
-/**
- * 检查是否是有效的切割点
- *
- * 不能在 tool_result 处切割（必须与前一条 assistant 的 tool_use 在一起）
- *
- * @param messages - 消息列表
- * @param index - 候选切割点索引
- * @returns 是否有效
- */
-function isValidCutPoint(messages: KodaXMessage[], index: number): boolean {
-  const msg = messages[index];
-  if (!msg) return false;
-
-  // user 消息可能包含 tool_result，需要检查
-  if (msg.role === 'user' && Array.isArray(msg.content)) {
-    const hasToolResult = msg.content.some(b => b.type === 'tool_result');
-    if (hasToolResult) {
-      // 检查前一条是否是 assistant with tool_use
-      if (index > 0) {
-        const prev = messages[index - 1];
-        if (prev && prev.role === 'assistant' && Array.isArray(prev.content)) {
-          const hasToolUse = prev.content.some(b => b.type === 'tool_use');
-          if (hasToolUse) {
-            return false; // 不能在这里切割，tool_result 必须与 tool_use 在一起
-          }
-        }
-      }
-    }
-  }
-
-  return true;
-}
