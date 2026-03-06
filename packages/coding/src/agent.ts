@@ -276,7 +276,7 @@ export async function runKodaX(
 
       if (result.toolBlocks.length === 0) {
         events.onComplete?.();
-        limitReached = false; // 正常完成， 不是达到上限
+        // limitReached 保持 false（初始值）
         break;
       }
 

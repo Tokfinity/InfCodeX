@@ -51,8 +51,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   return (
     <Box
-      borderStyle="single"
-      borderColor={theme.colors.dim}
       paddingX={1}
       justifyContent="space-between"
     >
@@ -76,7 +74,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
       {/* Right side: model and token usage - 右侧：模型和 Token 使用 */}
       <Box>
-        <Text dimColor>| </Text>
+        <Text dimColor> | </Text>
         <Text color={theme.colors.secondary}>
           {provider}/{model}
         </Text>

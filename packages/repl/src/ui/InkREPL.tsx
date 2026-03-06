@@ -171,59 +171,71 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir }) => {
 
 /**
  * AutocompleteSuggestions - Renders autocomplete suggestions from context
- * Uses fixed height container to prevent input box jitter when suggestion count changes
- * Only reserves space after suggestions have appeared at least once
- * 使用固定高度容器，防止建议数量变化时输入框抖动
- * 只有在建议至少出现过一次后才预留空间
+ * Shows suggestions below input, reserves space after first appearance
+ * 在输入框下方显示建议，首次出现后预留空间
+ *
+ * Behavior:
+ * 1. No suggestions initially → no space reserved
+ * 2. Suggestions appear → reserve 8 lines
+ * 3. Suggestions disappear (Esc/input change) → keep 8 lines
+ * 4. Message sent (submitCounter changes) → remove 8 lines
  */
-const SUGGESTIONS_RESERVE_HEIGHT = 8; // Fixed height to reserve for suggestions
-
-const AutocompleteSuggestions: React.FC = () => {
+const AutocompleteSuggestions: React.FC<{ submitCounter: number }> = ({
+  submitCounter,
+}) => {
   const autocomplete = useAutocompleteContext();
-  // Track if suggestions have ever been visible (to reserve space after first appearance)
-  // 跟踪建议是否曾经可见（第一次出现后预留空间）
-  const [hasEverShown, setHasEverShown] = useState(false);
 
-  // Update hasEverShown when suggestions become visible (use useEffect to avoid setState during render)
-  // 当建议变为可见时更新 hasEverShown（使用 useEffect 避免在渲染期间调用 setState）
+  // Track if we should reserve space (set true when suggestions first appear)
+  // 跟踪是否应该预留空间（建议首次出现时设为 true）
+  const [shouldReserveSpace, setShouldReserveSpace] = useState(false);
+
+  // Track last submit counter to detect changes
+  // 跟踪上次的提交计数器以检测变化
+  const lastSubmitCounterRef = useRef(submitCounter);
+
+  // Get suggestion state
+  // 获取建议状态
+  const hasSuggestions = useMemo(() => {
+    if (!autocomplete) return false;
+    const { state, suggestions } = autocomplete;
+    return state.visible && suggestions.length > 0;
+  }, [autocomplete]);
+
+  // Update reserve space when suggestions appear
+  // 当建议出现时更新预留空间
   useEffect(() => {
-    if (autocomplete?.state.visible && autocomplete.suggestions.length > 0) {
-      setHasEverShown(true);
+    if (hasSuggestions && !shouldReserveSpace) {
+      setShouldReserveSpace(true);
     }
-  }, [autocomplete?.state.visible, autocomplete?.suggestions.length]);
+  }, [hasSuggestions, shouldReserveSpace]);
 
-  // If context is not available, render placeholder only if hasEverShown
-  // 如果 context 不可用，只在 hasEverShown 时渲染占位符
+  // Clear space when message is sent (submitCounter changes)
+  // 发送消息时清除空间（submitCounter 变化）
+  useEffect(() => {
+    if (submitCounter !== lastSubmitCounterRef.current) {
+      lastSubmitCounterRef.current = submitCounter;
+      if (shouldReserveSpace) {
+        setShouldReserveSpace(false);
+      }
+    }
+  }, [submitCounter, shouldReserveSpace]);
+
+  // If context is not available, render nothing or placeholder
+  // 如果 context 不可用，不渲染或渲染占位符
   if (!autocomplete) {
-    return hasEverShown ? <Box height={SUGGESTIONS_RESERVE_HEIGHT} /> : null;
+    return shouldReserveSpace ? <Box height={8} /> : null;
   }
 
   const { state, suggestions } = autocomplete;
 
-  // If suggestions have never been shown, don't reserve space yet
-  // 如果建议从未出现过，暂不预留空间
-  if (!hasEverShown) {
-    if (!state.visible || suggestions.length === 0) {
-      return null;
-    }
-    // First time showing - render with fixed height
-    return (
-      <Box height={SUGGESTIONS_RESERVE_HEIGHT}>
-        <SuggestionsDisplay
-          suggestions={suggestions}
-          selectedIndex={state.selectedIndex}
-          visible={state.visible}
-          maxVisible={7}
-          width={80}
-        />
-      </Box>
-    );
+  // Render suggestions or empty placeholder
+  // 渲染建议或空占位符
+  if (!hasSuggestions) {
+    return shouldReserveSpace ? <Box height={8} /> : null;
   }
 
-  // After first appearance, always render fixed-height container
-  // 第一次出现后，始终渲染固定高度容器
   return (
-    <Box height={SUGGESTIONS_RESERVE_HEIGHT}>
+    <Box height={8}>
       <SuggestionsDisplay
         suggestions={suggestions}
         selectedIndex={state.selectedIndex}
@@ -311,6 +323,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [planMode, setPlanMode] = useState(false);
   const [isRunning, setIsRunning] = useState(true);
   const [showBanner, setShowBanner] = useState(true); // Show banner in Ink UI
+  const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
 
   // Confirmation dialog state - 确认对话框状态
   const [confirmRequest, setConfirmRequest] = useState<{
@@ -699,6 +712,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         type: "user",
         text: input,
       });
+
+      // Clear autocomplete suggestions space when message is sent
+      // 发送消息时清除自动补全建议的预留空间
+      setSubmitCounter(prev => prev + 1);
 
       setIsLoading(true);
       clearResponse();
@@ -1295,10 +1312,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         {/* Autocomplete Suggestions - fixed 8-line container, expands downward */}
         {/* 自动补全建议 - 固定8行容器，向下扩展 */}
-        <AutocompleteSuggestions />
+        <AutocompleteSuggestions submitCounter={submitCounter} />
 
         {/* Status Bar */}
-        <Box marginTop={1}>
+        <Box>
           <StatusBar
             sessionId={context.sessionId}
             permissionMode={currentConfig.permissionMode}

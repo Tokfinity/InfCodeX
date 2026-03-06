@@ -5,8 +5,8 @@
  * Support HistoryItem types: user, assistant, tool_group, thinking, error, info, hint - 参考 Gemini CLI 的消息显示架构实现，支持 HistoryItem 类型：user, assistant, tool_group, thinking, error, info, hint
  */
 
-import React, { useMemo, type ReactNode } from "react";
-import { Box, Text } from "ink";
+import React, { useMemo, memo, type ReactNode } from "react";
+import { Box, Text, Static } from "ink";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 import type { Theme } from "../types.js";
@@ -147,7 +147,7 @@ function getToolStatusColor(status: ToolCallStatus, theme: Theme): string {
 /**
  * User message renderer - 用户消息渲染器
  */
-const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = ({ item, theme }) => (
+const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.primary} bold>
@@ -159,7 +159,7 @@ const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = ({ i
       <Text color={theme.colors.text}>{item.text}</Text>
     </Box>
   </Box>
-);
+));
 
 /**
  * Assistant message renderer - 助手消息渲染器
@@ -168,7 +168,7 @@ const AssistantItemRenderer: React.FC<{
   item: HistoryItemAssistant;
   theme: Theme;
   maxLines: number;
-}> = ({ item, theme, maxLines }) => {
+}> = memo(({ item, theme, maxLines }) => {
   const { lines, hasMore } = truncateLines(item.text, maxLines);
 
   return (
@@ -197,12 +197,12 @@ const AssistantItemRenderer: React.FC<{
       </Box>
     </Box>
   );
-};
+});
 
 /**
  * System message renderer - 系统消息渲染器
  */
-const SystemItemRenderer: React.FC<{ item: HistoryItemSystem; theme: Theme }> = ({ item, theme }) => (
+const SystemItemRenderer: React.FC<{ item: HistoryItemSystem; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.dim} bold>
@@ -214,12 +214,12 @@ const SystemItemRenderer: React.FC<{ item: HistoryItemSystem; theme: Theme }> = 
       <Text dimColor>{item.text}</Text>
     </Box>
   </Box>
-);
+));
 
 /**
  * Tool call renderer - 工具调用渲染器
  */
-const ToolCallRenderer: React.FC<{ tool: ToolCall; theme: Theme }> = ({ tool, theme }) => {
+const ToolCallRenderer: React.FC<{ tool: ToolCall; theme: Theme }> = memo(({ tool, theme }) => {
   const icon = getToolStatusIcon(tool.status);
   const color = getToolStatusColor(tool.status, theme);
   const duration = formatDuration(tool.startTime, tool.endTime);
@@ -256,12 +256,12 @@ const ToolCallRenderer: React.FC<{ tool: ToolCall; theme: Theme }> = ({ tool, th
       )}
     </Box>
   );
-};
+});
 
 /**
  * Tool group renderer - 工具组渲染器
  */
-const ToolGroupRenderer: React.FC<{ item: HistoryItemToolGroup; theme: Theme }> = ({ item, theme }) => (
+const ToolGroupRenderer: React.FC<{ item: HistoryItemToolGroup; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.accent} bold>
@@ -273,12 +273,12 @@ const ToolGroupRenderer: React.FC<{ item: HistoryItemToolGroup; theme: Theme }> 
       <ToolCallRenderer key={tool.id} tool={tool} theme={theme} />
     ))}
   </Box>
-);
+));
 
 /**
  * Thinking content renderer - 思考内容渲染器
  */
-const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }> = ({ item, theme }) => (
+const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.dim} italic>
@@ -291,12 +291,12 @@ const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }
       </Text>
     </Box>
   </Box>
-);
+));
 
 /**
  * Error message renderer - 错误消息渲染器
  */
-const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = ({ item, theme }) => (
+const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.error} bold>
@@ -307,12 +307,12 @@ const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = ({
       <Text color={theme.colors.error}>{item.text}</Text>
     </Box>
   </Box>
-);
+));
 
 /**
  * Info message renderer - 信息消息渲染器
  */
-const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = ({ item, theme }) => (
+const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.info} bold>
@@ -323,12 +323,12 @@ const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = ({ i
       <Text color={theme.colors.info}>{item.text}</Text>
     </Box>
   </Box>
-);
+));
 
 /**
  * Hint message renderer - 提示消息渲染器
  */
-const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = ({ item, theme }) => (
+const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.hint} bold>
@@ -339,7 +339,7 @@ const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = ({ i
       <Text dimColor>{item.text}</Text>
     </Box>
   </Box>
-);
+));
 
 // === Main Components ===
 
@@ -347,7 +347,7 @@ const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = ({ i
  * History item renderer
  * Dispatch to corresponding renderer based on type - 历史项渲染器，根据类型分发到对应的渲染器
  */
-export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = ({
+export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
   item,
   theme: themeProp,
   maxLines = 1000, // Increased from 20 to avoid truncation (Issue 046)
@@ -378,7 +378,7 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = ({
         </Box>
       );
   }
-};
+});
 
 /**
  * MessageList - Message list component - 消息列表组件
@@ -421,6 +421,31 @@ export const MessageList: React.FC<MessageListProps> = ({
     return items;
   }, [items, streamingResponse]);
 
+  // Find the last user prompt index for splitting static/dynamic content
+  // 参考 Gemini CLI 的实现：将历史分为静态部分和最后响应部分
+  const lastUserPromptIndex = useMemo(() => {
+    for (let i = filteredItems.length - 1; i >= 0; i--) {
+      const type = filteredItems[i]?.type;
+      if (type === "user" || type === "system") {
+        return i;
+      }
+    }
+    return -1;
+  }, [filteredItems]);
+
+  // Split history into static and dynamic parts
+  // 静态部分：最后一个用户输入之前的历史（使用 Static 包裹，不会重新渲染）
+  const staticHistoryItems = useMemo(
+    () => filteredItems.slice(0, lastUserPromptIndex + 1),
+    [filteredItems, lastUserPromptIndex]
+  );
+
+  // 最后响应部分：最后一个用户输入之后的响应（静态但会更新）
+  const lastResponseHistoryItems = useMemo(
+    () => filteredItems.slice(lastUserPromptIndex + 1),
+    [filteredItems, lastUserPromptIndex]
+  );
+
   if (items.length === 0 && !isLoading) {
     return (
       <Box paddingY={1}>
@@ -451,12 +476,10 @@ export const MessageList: React.FC<MessageListProps> = ({
       : "processing...";
   }
 
-  return (
-    <Box flexDirection="column" paddingY={1}>
-      {filteredItems.map((item) => (
-        <HistoryItemRenderer key={item.id} item={item} theme={theme} maxLines={maxLines} />
-      ))}
-
+  // Render pending items (streaming content, loading indicators, etc.)
+  // 待处理项目：流式内容、加载指示器等（不使用 Static，可以动态更新）
+  const pendingItems = (
+    <Box flexDirection="column">
       {/* Iteration history display - 迭代历史显示 */}
       {iterationHistory.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
@@ -546,6 +569,27 @@ export const MessageList: React.FC<MessageListProps> = ({
           <Text color={theme.colors.accent}> {loadingText}…</Text>
         </Box>
       )}
+    </Box>
+  );
+
+  return (
+    <Box flexDirection="column" paddingY={1}>
+      {/* Static history items - won't re-render after initial render */}
+      {/* 静态历史项 - 初始渲染后不会重新渲染 */}
+      <Static items={[...staticHistoryItems, ...lastResponseHistoryItems]}>
+        {(item) => (
+          <HistoryItemRenderer
+            key={item.id}
+            item={item}
+            theme={theme}
+            maxLines={maxLines}
+          />
+        )}
+      </Static>
+
+      {/* Pending items - can update dynamically */}
+      {/* 待处理项目 - 可以动态更新 */}
+      {pendingItems}
     </Box>
   );
 };
