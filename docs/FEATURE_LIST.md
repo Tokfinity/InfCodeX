@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-05 16:20_
+_Last Updated: 2026-03-05 21:30_
 
 ---
 
@@ -8,7 +8,7 @@ _Last Updated: 2026-03-05 16:20_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.5.8 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.5.13 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.5.0 | 当前规划的版本 |
 
 ---
@@ -22,7 +22,7 @@ _Last Updated: 2026-03-05 16:20_
 | v0.4.0 | Released | 1 | 1/1 (100%) |
 | v0.4.6 | Released | 1 | 1/1 (100%) |
 | v0.5.5 | Released | 1 | 1/1 (100%) |
-| v0.5.0 | InProgress | 7 | 4/7 (57%) |
+| v0.5.0 | InProgress | 7 | 5/7 (71%) |
 | v0.6.0 | Planned | 1 | 0/1 (0%) |
 
 ---
@@ -41,8 +41,8 @@ _Last Updated: 2026-03-05 16:20_
 | 008 | Enhancement | Completed | High | 权限控制体系改进 | v0.5.0 | v0.4.6 | [Design](features/v0.5.0.md#008) | 2026-02-26 | 2026-02-27 | 2026-02-27 |
 | 009 | Refactor | Completed | Critical | 架构重构：AI 层独立 + 权限层分离 | v0.5.0 | v0.5.0 | [Design](features/v0.5.0.md#009) | 2026-02-27 | 2026-02-27 | 2026-02-27 |
 | 010 | Refactor | Completed | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | v0.5.5 | [Design](features/v0.5.0.md#010) | 2026-03-02 | 2026-03-02 | 2026-03-02 |
-| 011 | Enhancement | Planned | High | 智能上下文压缩 (Compact) | v0.5.0 | - | [Design](features/v0.5.0.md#011) | 2026-03-02 | - | - |
-| 012 | Enhancement | InProgress | High | TUI 自动补全增强 | v0.5.0 | - | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | - |
+| 011 | Enhancement | InProgress | High | 智能上下文压缩 (Compact) | v0.5.0 | - | [Design](features/v0.5.0.md#011) | 2026-03-02 | 2026-03-05 | - |
+| 012 | Enhancement | Completed | High | TUI 自动补全增强 | v0.5.0 | v0.5.13 | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | 2026-03-05 |
 | 013 | Refactor | Planned | High | Command System 2.0 | v0.5.0 | - | [Design](features/v0.5.0.md#013) | 2026-03-03 | - | - |
 
 ---
@@ -368,15 +368,15 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
-### 011: 智能上下文压缩 Compact (PLANNED)
+### 011: 智能上下文压缩 Compact (IN PROGRESS)
 - **Category**: Enhancement
-- **Status**: Planned
+- **Status**: InProgress
 - **Priority**: High
 - **Planned**: v0.5.0
 - **Released**: -
 - **Design**: [v0.5.0.md#011](features/v0.5.0.md#011)
 - **Created**: 2026-03-02
-- **Started**: -
+- **Started**: 2026-03-05
 - **Completed**: -
 
 **Description**:
@@ -417,16 +417,16 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
-### 012: TUI 自动补全增强 (IN PROGRESS)
+### 012: TUI 自动补全增强 (COMPLETED)
 - **Category**: Enhancement
-- **Status**: InProgress
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.5.0
-- **Released**: -
+- **Released**: v0.5.13
 - **Design**: [v0.5.0.md#012](features/v0.5.0.md#012)
 - **Created**: 2026-03-02
 - **Started**: 2026-03-05
-- **Completed**: -
+- **Completed**: 2026-03-05
 
 **Description**:
 对标 pi-mono 的自动补全系统，提升 KodaX 的命令行补全体验。
@@ -454,6 +454,7 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 - `packages/repl/src/ui/hooks/useAutocomplete.ts` - React hook for autocomplete
 - `packages/repl/src/ui/components/InputPrompt.tsx` - Integrated autocomplete UI
 - Tests: 71 unit tests passing (fuzzy, skill-completer, argument-completer, autocomplete-provider)
+- Released in v0.5.13 with smart replacement and mid-line command support
 
 ---
 
@@ -489,10 +490,9 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 ---
 
 ## Summary
-- Total: 13 (3 Planned, 1 In Progress, 9 Completed)
+- Total: 13 (3 Planned, 0 In Progress, 10 Completed)
 - By Priority: Critical: 3, High: 6, Medium: 2, Low: 0
 - Current Version: v0.5.0
-- Next Release (v0.5.0): 4 features (1 in progress, 3 planned) - 011, 012, 013
+- Next Release (v0.5.0): 2 features planned (011, 013)
 - Future Release (v0.6.0): 1 feature planned (007)
-- Highest Priority InProgress: 012 - TUI 自动补全增强 (High)
 - Highest Priority Planned: 011 - 智能上下文压缩 (High)

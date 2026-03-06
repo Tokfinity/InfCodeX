@@ -301,6 +301,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     getThinkingContent,
     startNewIteration,
     clearIterationHistory,
+    startCompacting,
+    stopCompacting,
   } = useStreamingActions();
 
   // State
@@ -585,6 +587,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       return true;
     },
+    // Compaction event - notification only, do NOT clear UI history here
+    // 压缩事件 - 仅通知，不要在这里清理 UI 历史记录
+    onCompact: (_estimatedTokens: number) => {
+      // Auto-compaction happened during agent execution
+      // UI will be updated naturally when context.messages changes
+      // Do NOT clear UI history or print messages here - that's handled by /compact command
+      // 自动压缩在 agent 执行期间发生
+      // UI 会在 context.messages 改变时自然更新
+      // 不要在这里清空 UI 历史或打印消息 - 那由 /compact 命令处理
+    },
   }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot]);
 
   // Helper function to show confirmation dialog
@@ -791,6 +803,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             thinking: currentConfig.thinking,
             events: createStreamingEvents(), // Include streaming events for /project commands
           }),
+          // Start/stop compacting indicator - 开始/停止压缩指示器
+          startCompacting: () => {
+            startCompacting();
+          },
+          stopCompacting: () => {
+            stopCompacting();
+          },
           // Confirm dialog callback for interactive commands - 交互式命令的确认对话框回调
           confirm: async (message: string): Promise<boolean> => {
             const result = await showConfirmDialog("confirm", {
@@ -1202,6 +1221,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       createStreamingEvents,
       getSignal,
       getFullResponse,
+      startCompacting,
+      stopCompacting,
     ]
   );
 
@@ -1238,6 +1259,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               toolInputContent={streamingState.toolInputContent}
               iterationHistory={streamingState.iterationHistory}
               currentIteration={streamingState.currentIteration}
+              isCompacting={streamingState.isCompacting}
             />
           </Box>
         )}

@@ -29,6 +29,14 @@ export abstract class KodaXBaseProvider {
     return this.config.model;
   }
 
+  /**
+   * 获取模型的上下文窗口大小
+   * @returns 上下文窗口大小 (tokens)
+   */
+  getContextWindow(): number {
+    return this.config.contextWindow ?? 200000;  // 默认 200k
+  }
+
   protected getApiKey(): string {
     const key = process.env[this.config.apiKeyEnv];
     if (!key) throw new Error(`${this.config.apiKeyEnv} not set`);

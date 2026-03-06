@@ -5,12 +5,14 @@
 import * as readline from 'readline';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
-import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions } from '@kodax/coding';
+import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions, getProvider } from '@kodax/coding';
 import { PermissionMode } from '../permission/types.js';
 import { saveConfig } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
 import { runWithPlanMode, listPlans, resumePlan, clearCompletedPlans } from '../common/plan-mode.js';
 import { handleProjectCommand, printProjectHelp } from './project-commands.js';
+import { compact } from '@kodax/agent';
+import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
   initializeSkillRegistry,
@@ -53,6 +55,10 @@ export interface CommandCallbacks {
   confirm?: (message: string) => Promise<boolean>;
   /** REPL readline interface for commands requiring user interaction - REPL 的 readline 接口，供需要用户交互的命令使用（已废弃，使用 confirm 替代） */
   readline?: readline.Interface;
+  /** Start compacting context indicator - 开始压缩上下文指示器 */
+  startCompacting?: () => void;
+  /** Stop compacting context indicator - 停止压缩上下文指示器 */
+  stopCompacting?: () => void;
 }
 
 // Command definition - 命令定义
@@ -132,6 +138,123 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  Useful for starting fresh while keeping the session.'));
       console.log();
       console.log(chalk.yellow('  Warning: This action cannot be undone!'));
+      console.log();
+    },
+  },
+  {
+    name: 'compact',
+    description: 'Manually trigger context compaction',
+    usage: '/compact [instructions]',
+    handler: async (args, context, callbacks, currentConfig) => {
+      try {
+        // Load compaction config
+        const config = await loadCompactionConfig(context.gitRoot);
+
+        if (!config.enabled) {
+          console.log(chalk.yellow('\n[Compaction is disabled in config]'));
+          console.log(chalk.dim('Enable it in ~/.kodax/config.json or .kodax/config.json\n'));
+          return;
+        }
+
+        // Get provider instance
+        const providerName = currentConfig.provider;
+        const provider = getProvider(providerName);
+
+        if (!provider) {
+          console.log(chalk.red(`\n[Provider not found: ${providerName}]`));
+          return;
+        }
+
+        // Get custom instructions if provided
+        const customInstructions = args.length > 0 ? args.join(' ') : undefined;
+
+        // Get contextWindow: user config > provider > default 200k
+        const contextWindow = config.contextWindow
+          ?? provider.getContextWindow?.()
+          ?? 200000;
+
+        console.log(chalk.dim('\n[Compacting conversation...]'));
+
+        // Start compacting indicator
+        callbacks.startCompacting?.();
+
+        try {
+          // Perform compaction
+          const result = await compact(context.messages, config, provider, contextWindow, customInstructions);
+
+          if (!result.compacted) {
+            console.log(chalk.green('\n[No compaction needed]'));
+            console.log(chalk.dim(`Current token usage: ${result.tokensBefore.toLocaleString()}\n`));
+            return;
+          }
+
+          // Update context with compacted messages
+          context.messages = result.messages;
+
+          // Clear UI history to match compacted context
+          // 清理 UI 历史以匹配压缩后的上下文
+          callbacks.clearHistory?.();
+
+          // Display statistics
+          console.log(chalk.green('\n[Compaction complete]'));
+          console.log(chalk.bold('\nStatistics:'));
+          console.log(chalk.dim(`  Tokens:      ${result.tokensBefore.toLocaleString()} → ${result.tokensAfter.toLocaleString()} (${Math.round((1 - result.tokensAfter / result.tokensBefore) * 100)}% reduction)`));
+          console.log(chalk.dim(`  Messages:    Removed ${result.entriesRemoved} messages`));
+
+          if (result.details) {
+            const fileCount = result.details.readFiles.length + result.details.modifiedFiles.length;
+            if (fileCount > 0) {
+              console.log(chalk.dim(`  Files:       Tracked ${fileCount} files (${result.details.readFiles.length} read, ${result.details.modifiedFiles.length} modified)`));
+            }
+          }
+
+          console.log();
+          console.log(chalk.dim('Summary preview:'));
+          console.log(chalk.dim('─'.repeat(60)));
+          if (result.summary) {
+            // Show first 300 chars of summary
+            const preview = result.summary.slice(0, 300);
+            console.log(chalk.dim(preview + (result.summary.length > 300 ? '...' : '')));
+          }
+          console.log(chalk.dim('─'.repeat(60)));
+          console.log();
+        } finally {
+          // Stop compacting indicator
+          callbacks.stopCompacting?.();
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[Compaction failed: ${errorMessage}]\n`));
+      }
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/compact - Manual Context Compaction\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /compact           ') + 'Compact conversation with default instructions');
+      console.log(chalk.dim('  /compact <text>    ') + 'Compact with custom instructions for the summary');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  Manually triggers context compaction using LLM-generated summaries.'));
+      console.log(chalk.dim('  Older messages are replaced with a structured summary, keeping recent context.'));
+      console.log();
+      console.log(chalk.bold('What it does:'));
+      console.log(chalk.dim('  1. Keeps recent messages (based on keepRecentTokens config)'));
+      console.log(chalk.dim('  2. Generates structured summary of older messages using LLM'));
+      console.log(chalk.dim('  3. Tracks files that were read/modified in the conversation'));
+      console.log(chalk.dim('  4. Replaces old messages with summary to save tokens'));
+      console.log();
+      console.log(chalk.bold('Configuration:'));
+      console.log(chalk.dim('  Config file: ~/.kodax/config.json or .kodax/config.json'));
+      console.log(chalk.dim('  Settings:'));
+      console.log(chalk.dim('    - compaction.enabled: Enable/disable auto-compaction'));
+      console.log(chalk.dim('    - compaction.reserveTokens: Tokens to reserve for responses'));
+      console.log(chalk.dim('    - compaction.keepRecentTokens: Recent tokens to preserve'));
+      console.log();
+      console.log(chalk.bold('Examples:'));
+      console.log(chalk.dim('  /compact                        ') + '# Compact with default instructions');
+      console.log(chalk.dim('  /compact focus on auth logic    ') + '# Emphasize authentication in summary');
+      console.log();
+      console.log(chalk.dim('  See also: /help status (shows token usage)'));
       console.log();
     },
   },
@@ -603,7 +726,7 @@ function printHelp(): void {
 
   // Group by category - 按类别分组
   const categories: Record<string, Command[]> = {
-    'General': BUILTIN_COMMANDS.filter(c => ['help', 'exit', 'clear', 'status'].includes(c.name)),
+    'General': BUILTIN_COMMANDS.filter(c => ['help', 'exit', 'clear', 'compact', 'status'].includes(c.name)),
     'Permission': BUILTIN_COMMANDS.filter(c => ['mode', 'auto'].includes(c.name)),
     'Session': BUILTIN_COMMANDS.filter(c => ['save', 'load', 'sessions', 'history', 'delete'].includes(c.name)),
     'Settings': BUILTIN_COMMANDS.filter(c => ['model', 'thinking', 'plan'].includes(c.name)),

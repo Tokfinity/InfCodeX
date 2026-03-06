@@ -58,3 +58,29 @@ export {
 export {
   compactMessages,
 } from './messages.js';
+
+// ============== Compaction ==============
+export type {
+  CompactionConfig,
+  CompactionDetails,
+  CompactionResult,
+  FileOperations,
+} from './compaction/types.js';
+
+export {
+  extractFileOps,
+  mergeFileOps,
+} from './compaction/file-tracker.js';
+
+export {
+  serializeConversation,
+} from './compaction/utils.js';
+
+export {
+  generateSummary,
+} from './compaction/summary-generator.js';
+
+export {
+  needsCompaction,
+  compact,
+} from './compaction/compaction.js';
