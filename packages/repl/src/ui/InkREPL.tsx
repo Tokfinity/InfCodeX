@@ -46,6 +46,7 @@ import {
   isAlwaysConfirmPath,
   isCommandOnProtectedPath,
   FILE_MODIFICATION_TOOLS,
+  isBashWriteCommand,
 } from "../permission/index.js";
 import type { PermissionContext } from "../permission/types.js";
 import {
@@ -544,9 +545,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const gitRoot = context.gitRoot;
 
       // === 1. Plan mode: block modification tools ===
-      if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'bash' || tool === 'undo')) {
+      // Block file modification tools and undo
+      if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
         console.log(chalk.yellow(`[Blocked] Tool '${tool}' is not allowed in plan mode (read-only)`));
         return false;
+      }
+
+      // For bash in plan mode, only block write operations
+      if (mode === 'plan' && tool === 'bash') {
+        const command = (input.command as string) ?? '';
+        if (isBashWriteCommand(command)) {
+          console.log(chalk.yellow(`[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`));
+          return false;
+        }
+        // Allow read-only bash commands
       }
 
       // === 2. Protected paths: always confirm ===
