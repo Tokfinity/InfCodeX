@@ -447,6 +447,10 @@ export async function runKodaX(
     }
   }
 
+  // 达到迭代上限 - 循环完成所有迭代没有提前退出
+  // 如果代码执行到这里，说明循环正常结束（没有 COMPLETE、中断或错误）
+  limitReached = true;
+
   // 最终保存
   if (options.session?.storage) {
     const gitRoot = await getGitRoot();
