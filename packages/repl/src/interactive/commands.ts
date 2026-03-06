@@ -124,8 +124,9 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'clear',
     description: 'Clear conversation history',
-    handler: async (_args, _context, callbacks) => {
-      callbacks.clearHistory();
+    handler: async (_args, context, callbacks) => {
+      context.messages = [];  // Clear messages first
+      callbacks.clearHistory();  // Then clear UI
       console.log(chalk.yellow('\n[Conversation cleared]'));
     },
     detailedHelp: () => {
@@ -196,6 +197,9 @@ export const BUILTIN_COMMANDS: Command[] = [
           // 清除 UI 历史 - 它会从新的 context.messages 重新创建
           // 这确保 UI 显示摘要 + 最近的 10% 消息
           callbacks.clearHistory?.();
+
+          // Save compacted messages to session storage
+          await callbacks.saveSession();
 
           // Display statistics
           console.log(chalk.green('\n[Compaction complete]'));

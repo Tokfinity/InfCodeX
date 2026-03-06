@@ -759,9 +759,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             console.log();
           },
           clearHistory: () => {
-            context.messages = [];
+            // Only clear UI history, not context.messages
+            // context.messages should only be cleared by specific commands like /clear
             clearUIHistory();
-            console.log(chalk.dim("[Conversation cleared]"));
           },
           printHistory: () => {
             if (context.messages.length === 0) {
