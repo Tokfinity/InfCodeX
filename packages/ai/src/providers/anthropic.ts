@@ -68,6 +68,16 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         if (event.type === 'content_block_start') {
           const block = event.content_block;
           currentBlockType = block.type;
+
+          // Debug: Log tool_use block start
+          if (process.env.KODAX_DEBUG_TOOL_STREAM && block.type === 'tool_use') {
+            console.error('[ToolStream] content_block_start:', {
+              type: block.type,
+              id: (block as any).id,
+              name: (block as any).name
+            });
+          }
+
           if (block.type === 'thinking') {
             currentThinking = '';
             currentThinkingSignature = (block as any).signature ?? '';
@@ -107,11 +117,28 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           } else if (currentBlockType === 'text') {
             if (currentText) textBlocks.push({ type: 'text', text: currentText });
           } else if (currentBlockType === 'tool_use') {
-            try {
-              const input = currentToolInput ? JSON.parse(currentToolInput) : {};
-              toolBlocks.push({ type: 'tool_use', id: currentToolId, name: currentToolName, input });
-            } catch {
-              toolBlocks.push({ type: 'tool_use', id: currentToolId, name: currentToolName, input: {} });
+            // CRITICAL FIX: Validate tool_use has non-empty id and name
+            // Prevents "tool_call_id is not found" errors with empty id
+            if (!currentToolId || !currentToolName) {
+              console.error('[Tool Block Invalid] Missing tool id or name:', {
+                id: JSON.stringify(currentToolId),
+                name: JSON.stringify(currentToolName),
+                input: currentToolInput.slice(0, 100)
+              });
+              // Skip this invalid tool_use block - do not add to toolBlocks
+            } else {
+              try {
+                const input = currentToolInput ? JSON.parse(currentToolInput) : {};
+                toolBlocks.push({ type: 'tool_use', id: currentToolId, name: currentToolName, input });
+              } catch (parseError) {
+                console.error('[Tool Block Parse Error] Failed to parse input JSON:', {
+                  id: currentToolId,
+                  name: currentToolName,
+                  error: parseError
+                });
+                // Still add the tool_use with empty input to maintain consistency
+                toolBlocks.push({ type: 'tool_use', id: currentToolId, name: currentToolName, input: {} });
+              }
             }
           }
           currentBlockType = null;
@@ -128,7 +155,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return messages.filter(m => m.role !== 'system').map(m => {
       if (typeof m.content === 'string') return { role: m.role, content: m.content };
       const content: Anthropic.Messages.ContentBlockParam[] = [];
-      // thinking blocks 必须放在最前面
+
+      // CRITICAL: Anthropic requires tool_result to be FIRST in user messages
+      // Order must be: thinking -> tool_result -> tool_use -> text
+      // Reference: https://docs.anthropic.com/en/docs/build-with-claude/tool-use
+
+      // 1. thinking blocks (must be first for assistant messages)
       for (const b of m.content) {
         if (b.type === 'thinking') {
           content.push({ type: 'thinking', thinking: b.thinking, signature: b.signature ?? '' } as any);
@@ -136,13 +168,26 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           content.push({ type: 'redacted_thinking', data: b.data } as any);
         }
       }
+
+      // 2. tool_result MUST come before text in user messages
+      for (const b of m.content) {
+        if (b.type === 'tool_result' && m.role === 'user') {
+          content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: b.content });
+        }
+      }
+
+      // 3. tool_use in assistant messages
+      for (const b of m.content) {
+        if (b.type === 'tool_use' && m.role === 'assistant') {
+          content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
+        }
+      }
+
+      // 4. text blocks (must come after tool_result in user messages)
       for (const b of m.content) {
         if (b.type === 'text') content.push({ type: 'text', text: b.text });
       }
-      for (const b of m.content) {
-        if (b.type === 'tool_use' && m.role === 'assistant') content.push({ type: 'tool_use', id: b.id, name: b.name, input: b.input });
-        else if (b.type === 'tool_result' && m.role === 'user') content.push({ type: 'tool_result', tool_use_id: b.tool_use_id, content: b.content });
-      }
+
       return { role: m.role, content };
     }) as Anthropic.Messages.MessageParam[];
   }

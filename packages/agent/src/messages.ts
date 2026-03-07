@@ -11,22 +11,39 @@ import { estimateTokens } from './tokenizer.js';
 /**
  * 压缩消息历史
  * 当消息超过阈值时，保留最近的消息，压缩旧消息
+ * CRITICAL: 确保 assistant(tool_use) 和 user(tool_result) 不被拆开
  */
 export function compactMessages(messages: KodaXMessage[]): KodaXMessage[] {
   if (estimateTokens(messages) <= KODAX_COMPACT_THRESHOLD) {
     return messages;
   }
 
-  const recent = messages.slice(-KODAX_COMPACT_KEEP_RECENT);
-  const old = messages.slice(0, -KODAX_COMPACT_KEEP_RECENT);
+  // 计算保留条数
+  let keepCount = Math.min(KODAX_COMPACT_KEEP_RECENT, messages.length);
+  let cutIndex = messages.length - keepCount;
+
+  // 避免将 tool_result 和前面的 tool_use 拆散
+  if (cutIndex > 0 && cutIndex < messages.length) {
+    const msgAtCut = messages[cutIndex];
+    if (msgAtCut?.role === 'user' && typeof msgAtCut.content !== 'string') {
+      const hasToolResult = msgAtCut.content.some((b: any) => b.type === 'tool_result');
+      if (hasToolResult) {
+        // 如果切在 tool_result 上，往前多保留一条
+        cutIndex = Math.max(0, cutIndex - 1);
+      }
+    }
+  }
+
+  const recent = messages.slice(cutIndex);
+  const old = messages.slice(0, cutIndex);
 
   const summary = old.map(m => {
     const content = typeof m.content === 'string'
       ? m.content
       : (m.content as KodaXContentBlock[])
-          .filter((b): b is KodaXTextBlock => b.type === 'text')
-          .map(b => b.text)
-          .join(' ');
+        .filter((b): b is KodaXTextBlock => b.type === 'text')
+        .map(b => b.text)
+        .join(' ');
     return `- ${m.role}: ${content.slice(0, 100)}...`;
   }).join('\n');
 

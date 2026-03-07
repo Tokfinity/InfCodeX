@@ -24,6 +24,146 @@ import { withRetry } from './retry-handler.js';
 const execAsync = promisify(exec);
 
 /**
+ * 验证并修复整个工具调用历史 - Issue 072 enhanced fix
+ *
+ * 扫描整段消息历史，修复所有不合法的 tool_use/tool_result 配对：
+ * 1. 删除空 id 的 tool_use 和 tool_result
+ * 2. 删除孤立的 tool_result（没有匹配的前一个 tool_use）
+ * 3. 删除孤立的 tool_use（没有匹配的后一个 tool_result）
+ *
+ * @param messages - 消息列表
+ * @returns 修复后的消息列表
+ */
+function validateAndFixToolHistory(messages: KodaXMessage[]): KodaXMessage[] {
+  // Debug: 打印校验前的状态
+  if (process.env.KODAX_DEBUG_TOOL_HISTORY) {
+    console.error('[ToolHistory] Validating messages:', messages.length);
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (!msg || typeof msg.content === 'string' || !Array.isArray(msg.content)) continue;
+
+      const toolUses = msg.content.filter((b: any) => b?.type === 'tool_use');
+      const toolResults = msg.content.filter((b: any) => b?.type === 'tool_result');
+
+      if (toolUses.length > 0 || toolResults.length > 0) {
+        console.error(`  [${i}] ${msg.role}:`, {
+          toolUses: toolUses.map((t: any) => ({ id: t.id, name: t.name })),
+          toolResults: toolResults.map((t: any) => ({ tool_use_id: t.tool_use_id }))
+        });
+      }
+    }
+  }
+
+  const fixedMessages: KodaXMessage[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    // 只处理有 content 数组的消息
+    if (typeof msg.content === 'string' || !Array.isArray(msg.content)) {
+      fixedMessages.push(msg);
+      continue;
+    }
+
+    const content = msg.content;
+    const fixedContent: any[] = [];
+
+    if (msg.role === 'assistant') {
+      // 检查每个 tool_use 是否有匹配的 tool_result
+      const nextMsg = messages[i + 1];
+      const resultIds = new Set<string>();
+
+      if (nextMsg?.role === 'user' && Array.isArray(nextMsg.content)) {
+        for (const block of nextMsg.content) {
+          if (block?.type === 'tool_result' && block.tool_use_id) {
+            resultIds.add(block.tool_use_id);
+          }
+        }
+      }
+
+      // 过滤掉没有匹配 tool_result 的 tool_use
+      for (const block of content) {
+        if (!block || typeof block !== 'object') {
+          fixedContent.push(block);
+          continue;
+        }
+
+        if (block.type === 'tool_use') {
+          // 跳过空 id 或没有匹配 tool_result 的 tool_use
+          if (!block.id || typeof block.id !== 'string' || block.id.trim() === '') {
+            console.error('[ToolHistoryFix] Removed tool_use with empty id');
+            continue;
+          }
+
+          if (!resultIds.has(block.id)) {
+            console.error('[ToolHistoryFix] Removed orphaned tool_use:', block.id);
+            continue;
+          }
+
+          fixedContent.push(block);
+        } else {
+          fixedContent.push(block);
+        }
+      }
+    } else if (msg.role === 'user') {
+      // 获取前一条 assistant 中的 tool_use id
+      const prevMsg = messages[i - 1];
+      const toolUseIds = new Set<string>();
+
+      if (prevMsg?.role === 'assistant' && Array.isArray(prevMsg.content)) {
+        for (const block of prevMsg.content) {
+          if (block?.type === 'tool_use' && block.id) {
+            toolUseIds.add(block.id);
+          }
+        }
+      }
+
+      // 过滤掉孤立的或空 id 的 tool_result
+      for (const block of content) {
+        if (!block || typeof block !== 'object') {
+          fixedContent.push(block);
+          continue;
+        }
+
+        if (block.type === 'tool_result') {
+          // 跳过空 tool_use_id
+          if (!block.tool_use_id || typeof block.tool_use_id !== 'string' || block.tool_use_id.trim() === '') {
+            console.error('[ToolHistoryFix] Removed tool_result with empty tool_use_id');
+            continue;
+          }
+
+          // 跳过孤立 tool_result（没有匹配的前一个 tool_use）
+          if (!toolUseIds.has(block.tool_use_id)) {
+            console.error('[ToolHistoryFix] Removed orphaned tool_result:', block.tool_use_id);
+            continue;
+          }
+
+          fixedContent.push(block);
+        } else {
+          fixedContent.push(block);
+        }
+      }
+    } else {
+      // 其他角色（如 system）直接保留
+      fixedContent.push(...content);
+    }
+
+    // 只有当 fixedContent 不为空时才添加消息
+    if (fixedContent.length > 0) {
+      fixedMessages.push({ ...msg, content: fixedContent });
+    }
+  }
+
+  // Debug: 报告修复结果
+  if (process.env.KODAX_DEBUG_TOOL_HISTORY && fixedMessages.length !== messages.length) {
+    console.error('[ToolHistory] Fixed: removed', messages.length - fixedMessages.length, 'invalid messages');
+  }
+
+  return fixedMessages;
+}
+
+/**
  * 清理不完整的 tool_use 块 - Issue 072 fix
  *
  * 当流式中断时，assistant 消息可能包含 tool_use 但没有对应的 tool_result。
@@ -250,6 +390,10 @@ export async function runKodaX(
         }
       }
 
+      // CRITICAL FIX: Always validate and fix tool history before sending to API
+      // This prevents "tool_call_id is not found" errors caused by corrupted history
+      compacted = validateAndFixToolHistory(compacted);
+
       // 流式调用 Provider - with automatic retry for transient errors
       const result = await withRetry(
         () => provider.stream(compacted, KODAX_TOOLS, systemPrompt, options.thinking, {
@@ -444,9 +588,10 @@ export async function runKodaX(
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
 
-      // CRITICAL FIX: Always clean incomplete tool calls on ANY error
+      // CRITICAL FIX: Always clean incomplete tool calls AND validate entire history
       // This prevents "tool_call_id not found" errors on next API call
-      const cleanedMessages = cleanupIncompleteToolCalls(messages);
+      let cleanedMessages = cleanupIncompleteToolCalls(messages);
+      cleanedMessages = validateAndFixToolHistory(cleanedMessages);
 
       // Update error metadata - increment consecutive error count
       const updatedErrorMetadata: SessionErrorMetadata = {
@@ -532,4 +677,4 @@ async function getGitRoot(): Promise<string | null> {
 export { KodaXClient } from './client.js';
 
 // 导出工具函数
-export { cleanupIncompleteToolCalls };
+export { cleanupIncompleteToolCalls, validateAndFixToolHistory };
