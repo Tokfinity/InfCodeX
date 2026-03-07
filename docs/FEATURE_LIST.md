@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-07 14:30_
+_Last Updated: 2026-03-07 19:45_
 
 ---
 
@@ -8,8 +8,8 @@ _Last Updated: 2026-03-07 14:30_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.5.15 | 最新发布版本（仅供参考） |
-| **Planned Version** | v0.5.0 | 当前规划的版本 |
+| **Current Release** | v0.5.20 | 最新发布版本（仅供参考） |
+| **Planned Version** | v0.6.0 | 当前规划的版本 |
 
 ---
 
@@ -24,7 +24,7 @@ _Last Updated: 2026-03-07 14:30_
 | v0.5.5 | Released | 1 | 1/1 (100%) |
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Planned | 1 | 0/1 (0%) |
-| v0.6.0 | Planned | 2 | 0/2 (0%) |
+| v0.6.0 | Planned | 3 | 0/3 (0%) |
 
 ---
 
@@ -46,6 +46,7 @@ _Last Updated: 2026-03-07 14:30_
 | 012 | Enhancement | Completed | High | TUI 自动补全增强 | v0.5.0 | v0.5.13 | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | 2026-03-05 |
 | 013 | Refactor | Planned | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | - | - |
 | 014 | Refactor | Planned | High | Project Mode Enhancement | v0.5.20 | - | [Design](features/v0.5.20.md) | 2026-03-07 | - | - |
+| 015 | Enhancement | Planned | High | Project Mode 2.0 - AI-Driven Development Workflow | v0.6.0 | - | [Design](features/v0.6.0.md#015) | 2026-03-07 | - | - |
 
 ---
 
@@ -536,14 +537,61 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
+### 015: Project Mode 2.0 - AI-Driven Development Workflow (PLANNED)
+- **Category**: Enhancement
+- **Status**: Planned
+- **Priority**: High
+- **Planned**: v0.6.0
+- **Released**: -
+- **Design**: [v0.6.0.md#015](features/v0.6.0.md#015)
+- **Created**: 2026-03-07
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+将 Project 模式打造为 KodaX 的核心特色，提供完整的 AI-Driven 开发工作流。
+
+**Core Capabilities**:
+1. **多轮头脑风暴** (Brainstorming Mode)
+   - `/project brainstorm "需求"` - 启动多轮讨论
+   - AI 自动提出问题、质疑假设、探索方案
+   - 生成决策树和方案对比
+   - 记录讨论历史供后续参考
+
+2. **规划模式增强** (Enhanced Planning)
+   - `/project plan #n` - 为指定 feature 生成详细实施计划
+   - 自动拆解为 phases、milestones、tasks 三级结构
+   - 估算每个任务的时间和复杂度
+   - 生成甘特图式的依赖关系
+
+3. **长时间运行支持** (Long-Running Execution)
+   - `/project execute #n` - 启动长时间任务
+   - 任务可跨多个会话持续执行
+   - 自动保存进度，支持断点续传
+   - `/project checkpoint` - 手动保存检查点
+
+4. **质量闭环** (Quality Loop)
+   - 自动集成 coding → review → test 工作流
+   - 每个阶段自动生成报告
+   - 支持回退到任意阶段
+   - `/project quality` - 查看质量指标
+
+**Key Improvements**:
+- **智能分析**: 基于历史数据自动调整计划
+- **风险预警**: 提前识别潜在问题
+- **资源优化**: 自动分配和调度任务
+- **协作支持**: 支持多人协作的项目状态
+
+---
+
 **Inspired by**: [pi-mono Extension API](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/extensions/types.ts)
 
 ---
 
 ## Summary
-- Total: 14 (3 Planned, 0 In Progress, 11 Completed)
-- By Priority: Critical: 3, High: 7, Medium: 2, Low: 0
-- Current Version: v0.5.16
-- Next Release (v0.5.20): 1 feature planned (014)
-- Future Releases: v0.6.0 (007, 013)
-- Highest Priority Planned: 013 - Command System 2.0 (High)
+- Total: 15 (4 Planned, 0 In Progress, 11 Completed)
+- By Priority: Critical: 3, High: 8, Medium: 2, Low: 0
+- Current Version: v0.5.20
+- Next Release (v0.6.0): 3 features planned (007, 013, 015)
+- Future Releases: v0.7.0+ (TBD)
+- Highest Priority Planned: 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High)
