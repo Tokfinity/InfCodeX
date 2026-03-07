@@ -125,14 +125,21 @@ export function parseKeypress(sequence: string, inBracketedPaste: boolean = fals
     return key;
   }
 
-  // 1. Enter (CR) - 1. 回车 (CR)
+  // 1. CRLF sequence (CR+LF) - Windows paste newline (Issue 075) - 1. CRLF 序列 (CR+LF) - Windows 粘贴换行 (Issue 075)
+  // Must be checked before single CR/LF - 必须在单独的 CR/LF 之前检查
+  if (sequence === "\r\n") {
+    key.name = "newline";
+    return key;
+  }
+
+  // 2. Enter (CR) - 2. 回车 (CR)
   // During bracketed paste, treat CR as newline instead of return (Issue 075) - 粘贴模式中，将 CR 当作换行而非提交 (Issue 075)
   if (sequence === "\r") {
     key.name = inBracketedPaste ? "newline" : "return";
     return key;
   }
 
-  // 2. Line feed (LF) - Ctrl+J or terminal-sent newline - 2. 换行 (LF) - Ctrl+J 或终端发送的换行
+  // 3. Line feed (LF) - Ctrl+J or terminal-sent newline - 3. 换行 (LF) - Ctrl+J 或终端发送的换行
   // Reference Gemini CLI: Ctrl+J is used to insert newline - 参考 Gemini CLI: Ctrl+J 用于插入换行
   if (sequence === "\n") {
     key.name = "newline";  // Use "newline" to distinguish from "return" - 使用 "newline" 区分于 "return"
@@ -383,8 +390,17 @@ export class KeypressParser {
 
     const firstChar = this.buffer[0];
 
-    // Non-ESC character - single byte, return immediately - 非 ESC 字符 - 单字节，立即返回
+    // Non-ESC character - check for special sequences - 非 ESC 字符 - 检查特殊序列
     if (firstChar !== "\x1b") {
+      // CRLF handling (Issue 075) - extract \r\n as a single sequence - CRLF 处理 (Issue 075) - 将 \r\n 提取为单个序列
+      if (firstChar === "\r" && this.buffer.length >= 2 && this.buffer[1] === "\n") {
+        return {
+          sequence: this.buffer.slice(0, 2),
+          remaining: this.buffer.slice(2),
+        };
+      }
+
+      // Single character - 单个字符
       return {
         sequence: this.buffer[0]!,
         remaining: this.buffer.slice(1),
