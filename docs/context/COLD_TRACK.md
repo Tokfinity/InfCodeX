@@ -303,3 +303,186 @@ limitReached = true;
 
 ---
 *更新时间: 2026-03-06 21:15*
+
+---
+
+## Session: 2026-03-07 - Plan Mode Bash 权限精细化
+
+### 背景
+
+用户在使用 Plan 模式时发现连 `git` 都不能使用，觉得有问题。提出需求：Plan 模式不应该禁止所有 bash，应该只禁止有写行为的 bash 命令。
+
+### 实现过程
+
+#### Turn 1 - 00:00
+**User**: feature 011 和 012 已经完成，可以更新状态了
+
+**Assistant**: 确认 feature 011 和 012 已标记为完成状态
+
+#### Turn 2 - 00:10
+**User**: 我刚刚在使用 Plan 模式的时候发现连 git 都不能使用突然觉得有一些问题。我想改一下原来的设计。Plan 模型不应该禁止所有 bash，应该是禁止所有写行为的 bash 命令。
+
+**Assistant**: 
+1. 分析原有 Plan 模式权限逻辑
+2. 设计新的权限控制方案：
+   - 添加 `BASH_WRITE_COMMANDS` 黑名单
+   - 实现 `isBashWriteCommand()` 函数
+   - 修改 Plan mode 权限检查逻辑
+3. 实现并构建成功
+
+**Files Modified**:
+- `packages/repl/src/permission/types.ts` - 添加 `BASH_WRITE_COMMANDS`
+- `packages/repl/src/permission/permission.ts` - 添加 `isBashWriteCommand()`
+- `packages/repl/src/permission/index.ts` - 导出函数
+- `packages/repl/src/ui/InkREPL.tsx` - 修改 Plan mode 逻辑
+
+#### Turn 3 - 00:30
+**User**: 你刚刚好像构建和提交有问题，你看一下
+
+**Assistant**: 
+检查发现问题：代码修改已完成但未提交。修复流程：
+1. 暂存修改的文件
+2. 创建提交：feat(repl): plan mode allows read-only bash commands
+3. 版本号更新到 0.5.16
+4. 创建 tag v0.5.16
+5. 推送到远程
+6. 创建 GitHub Release v0.5.16
+
+#### Turn 4 - 01:00
+**User**: 我刚刚让另一个 AI review 了这次改动，它提了一个问题...
+
+**Assistant**: 
+分析另一个 AI 提出的 `includes()` 误报问题：
+
+**误报分析**：
+- `which git` → 不会误报（黑名单是 `git commit` 不是 `git`）
+- `cat file | grep test` → 不会误报（`grep` 不在黑名单）
+- **真实可能的误报**：管道命令包含敏感词（如 `git log | grep commit`）
+
+**决策**：保持现状
+- Plan 模式复杂操作少见
+- 保守策略更安全
+- 如需复杂操作，退出 Plan 模式
+
+**User 认可**: 保持现状就可以
+
+#### Turn 5 - 01:15
+**User**: Tag 0.5.16 同步所有版本，提交并推送。Release 0.5.16
+
+**Assistant**: 
+完成 Release 流程：
+1. ✅ 提交代码（commit 8b20e41）
+2. ✅ 版本号更新到 0.5.16（commit 896bd69）
+3. ✅ 创建 tag v0.5.16
+4. ✅ 推送到远程
+5. ✅ 创建 GitHub Release v0.5.16
+
+Release URL: https://github.com/icetomoyo/KodaX/releases/tag/v0.5.16
+
+### 技术细节
+
+#### BASH_WRITE_COMMANDS 黑名单
+
+```typescript
+export const BASH_WRITE_COMMANDS = new Set([
+  // Package managers
+  'npm install', 'npm i', 'npm uninstall', 'npm remove', 'npm update', 'npm ci',
+  'yarn add', 'yarn remove', 'yarn upgrade',
+  'pnpm add', 'pnpm remove', 'pnpm update',
+  
+  // Git write operations
+  'git clean', 'git reset', 'git checkout', 'git switch', 'git merge', 'git rebase',
+  'git cherry-pick', 'git revert', 'git commit', 'git push', 'git pull',
+  
+  // File operations
+  'rm', 'mv', 'cp', 'mkdir', 'rmdir', 'touch', 'chmod', 'chown',
+  
+  // Download/create
+  'curl', 'wget', 'dd', 'tar',
+  
+  // Process control
+  'kill', 'pkill', 'killall',
+]);
+```
+
+#### isBashWriteCommand() 函数
+
+检测策略：
+- `startsWith()` - 检查命令开头
+- `includes()` - 检查管道/重定向中的命令
+
+#### Plan Mode 权限逻辑
+
+**旧逻辑**：
+```typescript
+if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'bash' || tool === 'undo')) {
+  return false;  // 阻止所有 bash 命令
+}
+```
+
+**新逻辑**：
+```typescript
+// 阻止文件修改工具和 undo
+if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
+  return false;
+}
+
+// 对 bash，只阻止写操作
+if (mode === 'plan' && tool === 'bash') {
+  const command = (input.command as string) ?? '';
+  if (isBashWriteCommand(command)) {
+    return false;
+  }
+  // 允许只读命令
+}
+```
+
+### 行为对比
+
+| 命令 | 旧版本 (Plan) | 新版本 (Plan) |
+|------|-------------|-------------|
+| `git status` | ❌ 阻止 | ✅ 允许 |
+| `git log` | ❌ 阻止 | ✅ 允许 |
+| `git commit` | ❌ 预期阻止 | ❌ 预期阻止 |
+| `npm install` | ❌ 预期阻止 | ❌ 预期阻止 |
+| `ls`, `cat` | ❌ 阻止 | ✅ 允许 |
+
+### 关键决策
+
+1. **使用黑名单而非白名单**
+   - 更容易维护
+   - 新命令默认允许
+
+2. **includes() 检查管道命令**
+   - 防止 `echo test | git commit` 绕过检查
+   - 接受少量误报的代价
+
+3. **保守策略**
+   - Plan 模式复杂操作少见
+   - 安全优先
+   - 如需复杂操作，退出 Plan 模式
+
+4. **curl 全部阻止**
+   - 难以判断 GET/POST 意图
+   - 保守处理
+
+5. **暂不添加 pip/cargo 等包管理器**
+   - 黑名单已包含主流工具
+   - 可根据实际使用情况后续补充
+
+### 提交记录
+
+- **8b20e41**: feat(repl): plan mode allows read-only bash commands
+- **896bd69**: 0.5.16 (版本号更新)
+- **Tag**: v0.5.16
+- **Release**: v0.5.16
+
+### 成果
+
+✅ Plan 模式 bash 权限精细化控制已实现
+✅ v0.5.16 已成功发布
+✅ GitHub Release 已创建
+✅ 代码审查讨论已完成
+
+---
+
