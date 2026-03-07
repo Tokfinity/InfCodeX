@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.20] - 2026-03-07
+
+### Fixed
+- **Issue 075**: CRLF handling for Windows paste (Windows 粘贴换行处理)
+  - Add CRLF detection in parseKeypress() and extractNextSequence()
+  - Adopt Gemini CLI style immediate processing (no buffering/waiting)
+  - Update tests to match immediate processing behavior
+
 ## [0.5.15] - 2026-03-06
 
 ### Added
