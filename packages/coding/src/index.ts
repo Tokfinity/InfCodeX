@@ -162,6 +162,7 @@ export {
   checkPromiseSignal,
   KodaXClient,
   cleanupIncompleteToolCalls,
+  validateAndFixToolHistory,
 } from './agent.js';
 
 // Client alias

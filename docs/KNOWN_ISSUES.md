@@ -42,7 +42,7 @@ _Last Updated: 2026-03-05
 | 069 | Medium | Open | 缺少 LLM 交互式提问工具 | v0.5.4 | - | 2026-03-03 | - |
 | 070 | Low | Open | 流式输出可能丢失换行符 | v0.5.4 | - | 2026-03-03 | - |
 | 071 | High | Resolved | Session Resume 跨项目恢复错误 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
-| 072 | High | Resolved | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | v0.5.6 | 2026-03-03 | 2026-03-04 |
+| 072 | High | Resolved | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | v0.5.20 | 2026-03-03 | 2026-03-07 |
 | 073 | High | Resolved | /project auto 等子命令无流式进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 074 | Medium | Resolved | 多轮迭代时 Thinking 和 Response 内容混在一起显示 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 075 | Medium | Resolved | 粘贴多行文本到输入框时换行丢失 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
@@ -3338,6 +3338,8 @@ _Last Updated: 2026-03-05
   5. API 校验 tool_call_id 失败，返回 400 错误 "tool_call_id not found"
 
 - **Resolution**:
+
+  **第一次修复 (v0.5.6)**:
   在 `agent.ts` 的 AbortError 处理中添加 `cleanupIncompleteToolCalls()` 函数：
 
   1. 在返回中断结果之前，检查最后一条 assistant 消息是否包含 tool_use 块
@@ -3345,14 +3347,52 @@ _Last Updated: 2026-03-05
   3. 如果没有对应的 tool_result，移除 tool_use 块，保留 text/thinking 块
   4. 如果清理后内容为空，则移除整条 assistant 消息
 
-  这样确保中断后的消息不包含不完整的 tool_use，避免下次请求时 API 报错。
+  **第二次深度修复 (v0.5.20)**:
 
-- **Resolution Date**: 2026-03-04
+  发现第一次修复不够彻底，问题根源包括：
+
+  1. **空 tool_call_id**: 流式解析时，某些情况下 `currentToolId` 为空字符串，但仍被写入历史，导致 `tool_call_id is not found` 错误（id 为空）
+  2. **历史深处的损坏**: `cleanupIncompleteToolCalls()` 只清理最后一条 assistant 消息，无法修复历史深处的损坏
+  3. **tool_result 顺序错误**: user message 中 text 排在 tool_result 前面，违反 Anthropic 协议
+  4. **压缩拆散配对**: 上下文压缩时可能将 assistant(tool_use) 和 user(tool_result) 拆散
+
+  **增强修复措施**:
+
+  1. **Provider 层防护** (`packages/ai/src/providers/anthropic.ts`):
+     - 在 `content_block_stop` 时验证 `currentToolId` 和 `currentToolName` 非空
+     - 空 id 的 tool_use 块直接丢弃，不写入历史
+     - 确保 `convertMessages()` 中 tool_result 在 user message 的最前面
+
+  2. **全历史校验修复** (`packages/coding/src/agent.ts`):
+     - 新增 `validateAndFixToolHistory()` 函数，扫描整段消息历史
+     - 删除所有空 id 的 tool_use 和 tool_result
+     - 删除孤立的 tool_result（没有匹配的前一条 tool_use）
+     - 删除孤立的 tool_use（没有匹配的后一条 tool_result）
+     - 在每次发送 API 请求前执行校验
+     - 在错误恢复时也执行校验
+
+  3. **压缩原子化** (`packages/agent/src/compaction/compaction.ts`):
+     - 识别消息块为原子单元：普通消息独立，assistant(tool_use) + user(tool_result) 为不可分割的原子块
+     - 切割点只选择在原子块边界，确保 tool_use 和 tool_result 永不被拆散
+
+  4. **调试支持**:
+     - 环境变量 `KODAX_DEBUG_TOOL_HISTORY=1` 启用工具历史调试日志
+     - 环境变量 `KODAX_DEBUG_TOOL_STREAM=1` 启用流式事件调试日志
+
+  这样从源头防护、历史修复、压缩保护三个层面彻底解决问题。
+
+- **Resolution Date**: 2026-03-07 (Enhanced in v0.5.20)
 
 - **Files Changed**:
-  - `packages/coding/src/agent.ts` - 添加 `cleanupIncompleteToolCalls()` 函数，在 AbortError 处理中调用
+  - `packages/ai/src/providers/anthropic.ts` - 空工具 ID 防护，tool_result 顺序修复
+  - `packages/coding/src/agent.ts` - 全历史校验修复，错误恢复增强
+  - `packages/agent/src/compaction/compaction.ts` - 压缩时保护 tool_use/tool_result 原子块
 
 - **Tests Added**: 无（手动验证场景：中断正在执行工具的会话后继续交互）
+
+- **Debug Tools**:
+  - `KODAX_DEBUG_TOOL_HISTORY=1` - 启用工具历史校验调试日志
+  - `KODAX_DEBUG_TOOL_STREAM=1` - 启用流式事件调试日志
 
 ---
 

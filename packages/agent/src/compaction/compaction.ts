@@ -142,12 +142,12 @@ export async function compact(
  * 找到切割点
  *
  * 从最新消息往前累加，直到达到 keepRecentTokens
- * 确保不在 tool_result 处切割（必须与对应的 tool_use 在一起）
+ * CRITICAL: 确保 tool_use 和 tool_result 不被拆散
  *
- * 参考 pi-mono 的实现：
- * - 可以在 user 或 assistant 消息处切割
- * - 如果在 assistant 消息处切割，它的 tool_result 会跟随它
- * - 永远不在 tool_result 处切割
+ * 原子块规则：
+ * 1. 普通 user message = 独立块
+ * 2. 普通 assistant message = 独立块
+ * 3. assistant(含 tool_use) + 下一条 user(含 tool_result) = 原子块，不可拆分
  *
  * @param messages - 消息列表
  * @param keepRecentTokens - 保留的最近 token 数
@@ -158,39 +158,50 @@ function findCutPoint(
   keepRecentTokens: number
 ): number {
   let tokenCount = 0;
-  const validCutPoints: number[] = [];
 
-  // 1. 从后往前找到所有有效切割点
-  for (let i = messages.length - 1; i >= 0; i--) {
+  // 1. 识别所有原子块的边界
+  const atomicBlocks: Array<{ start: number; end: number; tokens: number }> = [];
+
+  for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (!msg) continue;
 
-    // user 和 assistant 消息是有效切割点
-    // 注意：system 消息通常在开头，不应该作为切割点
-    if (msg.role === 'user' || msg.role === 'assistant') {
-      validCutPoints.push(i);
+    // 检查当前 assistant 消息是否包含 tool_use
+    const hasToolUse = msg.role === 'assistant' &&
+      Array.isArray(msg.content) &&
+      msg.content.some((b: any) => b?.type === 'tool_use');
+
+    if (hasToolUse) {
+      // 检查下一条是否是 user 且包含 tool_result
+      const nextMsg = messages[i + 1];
+      const hasNextToolResult = nextMsg?.role === 'user' &&
+        Array.isArray(nextMsg.content) &&
+        nextMsg.content.some((b: any) => b?.type === 'tool_result');
+
+      if (hasNextToolResult) {
+        // assistant(tool_use) + user(tool_result) = 原子块
+        const tokens = estimateTokens([msg, nextMsg]);
+        atomicBlocks.push({ start: i, end: i + 1, tokens });
+        i++; // 跳过下一条
+        continue;
+      }
     }
+
+    // 普通消息 = 独立块
+    const tokens = estimateTokens([msg]);
+    atomicBlocks.push({ start: i, end: i, tokens });
   }
 
-  // 2. 从最新消息往前累加，找到第一个超过预算的位置
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg) continue;
+  // 2. 从后往前累加，找到第一个超过预算的原子块边界
+  for (let i = atomicBlocks.length - 1; i >= 0; i--) {
+    const block = atomicBlocks[i];
+    if (!block) continue;
 
-    tokenCount += estimateTokens([msg]);
+    tokenCount += block.tokens;
 
     if (tokenCount > keepRecentTokens) {
-      // 找到第一个 >= i 的有效切割点
-      const cutPoint = validCutPoints.find(cp => cp >= i);
-      if (cutPoint !== undefined) {
-        return cutPoint;
-      }
-      // 如果没有找到 >= i 的切割点，使用最大的（最靠前的）有效切割点
-      if (validCutPoints.length > 0) {
-        return validCutPoints[validCutPoints.length - 1];
-      }
-      // 如果完全没有有效切割点，返回 0（保留所有消息）
-      return 0;
+      // 返回这个原子块的起始位置作为切割点
+      return block.start;
     }
   }
 

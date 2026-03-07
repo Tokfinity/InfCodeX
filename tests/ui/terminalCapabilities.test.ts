@@ -109,6 +109,8 @@ describe("TerminalCapabilities", () => {
     it("should return false for basic xterm", () => {
       process.env.TERM = "xterm";
       delete process.env.COLORTERM;
+      delete process.env.TERM_PROGRAM;
+      delete process.env.WT_SESSION;
       expect(supports256Colors()).toBe(false);
     });
   });
