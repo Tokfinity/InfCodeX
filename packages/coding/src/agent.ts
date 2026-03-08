@@ -489,6 +489,7 @@ export async function runKodaX(
       const [signal, _reason] = checkPromiseSignal(lastText);
       if (signal) {
         if (signal === 'COMPLETE') {
+          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
           events.onComplete?.();
           return {
             success: true,
@@ -505,6 +506,7 @@ export async function runKodaX(
       messages.push({ role: 'assistant', content: assistantContent });
 
       if (result.toolBlocks.length === 0) {
+        events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
         events.onComplete?.();
         // limitReached 保持 false（初始值）
         break;
@@ -645,6 +647,9 @@ export async function runKodaX(
         const gitRoot = await getGitRoot();
         await options.session.storage.save(sessionId, { messages, title, gitRoot: gitRoot ?? '' });
       }
+
+      // Notify UI of context usage after each iteration
+      events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
 
