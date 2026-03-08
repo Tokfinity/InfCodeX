@@ -591,13 +591,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // 保存当前内容到历史，开始新一轮
       // Fix: Always call startNewIteration to ensure currentIteration is properly set
       // 修复：始终调用 startNewIteration 以确保正确设置 currentIteration
+
+      const prevThinking = iter > 1 ? getThinkingContent().trim() : "";
+      const prevResponse = iter > 1 ? getFullResponse().trim() : "";
+
+      // Always update iteration counter BEFORE adding to history 
+      // This implicitly clears the text buffer so we don't double-render the old streaming 
+      // content simultaneously with the new static HistoryItem!
+      startNewIteration(iter);
+      if (iter === 1) {
+        startThinking();
+      }
+
       if (iter > 1) {
         // Issue 076 fix: Save previous iteration content to persistent history BEFORE clearing
         // Issue 076 修复：在清空前将上一轮内容保存到持久历史记录
 
         // First, save thinking content (full content for history)
         // 首先保存 thinking 内容（完整内容用于历史记录）
-        const prevThinking = getThinkingContent().trim();
         if (prevThinking) {
           addHistoryItem({
             type: "thinking",
@@ -607,20 +618,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         // Then, save response content
         // 然后保存响应内容
-        const prevResponse = getFullResponse().trim();
         if (prevResponse) {
           addHistoryItem({
             type: "assistant",
             text: prevResponse,
           });
         }
-      }
-
-      // Always update iteration counter - this ensures proper count after user input
-      // 始终更新迭代计数器 - 这确保用户输入后能正确计数
-      startNewIteration(iter);
-      if (iter === 1) {
-        startThinking();
       }
     },
     // Permission hook - called before each tool execution
@@ -1280,6 +1283,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Issue 076 修复：将最后一轮内容保存到持久历史记录
         // 这处理了最后一轮没有触发 onIterationStart 的情况
         const finalThinking = getThinkingContent().trim();
+        const finalResponse = getFullResponse().trim();
+
+        // Clear UI streaming state immediately so it doesn't render alongside the new history item
+        clearThinkingContent();
+        clearResponse();
+
         if (finalThinking) {
           addHistoryItem({
             type: "thinking",
@@ -1287,7 +1296,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
         }
 
-        const finalResponse = getFullResponse().trim();
         if (finalResponse) {
           addHistoryItem({
             type: "assistant",

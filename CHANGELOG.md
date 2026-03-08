@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.26] - 2026-03-08
+
+### Fixed
+- **Message Rendering Issues**
+  - Fixed user messages appearing twice after tool confirmation (removed `filter()` that violated Ink `<Static>` append-only constraint)
+  - Fixed assistant messages disappearing after streaming ended (clear streaming state before adding to history)
+  - Clear `streamingResponse` and `thinkingContent` before `addHistoryItem()` to prevent duplicate display
+
 ## [0.5.25] - 2026-03-08
 
 ### Added

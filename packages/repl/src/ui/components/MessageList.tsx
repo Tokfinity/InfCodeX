@@ -400,50 +400,29 @@ export const MessageList: React.FC<MessageListProps> = ({
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
 
-  // When streaming, filter out the last assistant item to avoid double display
-  // (streamingResponse shows the live content, history item would show the final result)
-  const filteredItems = useMemo(() => {
-    if (!streamingResponse) return items;
-
-    // Find the last assistant item index
-    let lastAssistantIndex = -1;
-    for (let i = items.length - 1; i >= 0; i--) {
-      if (items[i]?.type === "assistant") {
-        lastAssistantIndex = i;
-        break;
-      }
-    }
-
-    // Filter out the last assistant item if found
-    if (lastAssistantIndex >= 0) {
-      return items.filter((_, index) => index !== lastAssistantIndex);
-    }
-    return items;
-  }, [items, streamingResponse]);
-
   // Find the last user prompt index for splitting static/dynamic content
   // 参考 Gemini CLI 的实现：将历史分为静态部分和最后响应部分
   const lastUserPromptIndex = useMemo(() => {
-    for (let i = filteredItems.length - 1; i >= 0; i--) {
-      const type = filteredItems[i]?.type;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const type = items[i]?.type;
       if (type === "user" || type === "system") {
         return i;
       }
     }
     return -1;
-  }, [filteredItems]);
+  }, [items]);
 
   // Split history into static and dynamic parts
   // 静态部分：最后一个用户输入之前的历史（使用 Static 包裹，不会重新渲染）
   const staticHistoryItems = useMemo(
-    () => filteredItems.slice(0, lastUserPromptIndex + 1),
-    [filteredItems, lastUserPromptIndex]
+    () => items.slice(0, lastUserPromptIndex + 1),
+    [items, lastUserPromptIndex]
   );
 
   // 最后响应部分：最后一个用户输入之后的响应（静态但会更新）
   const lastResponseHistoryItems = useMemo(
-    () => filteredItems.slice(lastUserPromptIndex + 1),
-    [filteredItems, lastUserPromptIndex]
+    () => items.slice(lastUserPromptIndex + 1),
+    [items, lastUserPromptIndex]
   );
 
   if (items.length === 0 && !isLoading) {
