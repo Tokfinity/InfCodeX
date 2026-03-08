@@ -57,6 +57,8 @@ export interface KodaXEvents {
   // 状态通知
   onSessionStart?: (info: { provider: string; sessionId: string }) => void;
   onIterationStart?: (iter: number, maxIter: number) => void;
+  /** Called after each iteration with current token count for UI updates */
+  onIterationEnd?: (info: { iter: number; maxIter: number; tokenCount: number }) => void;
   onCompact?: (estimatedTokens: number) => void;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
   onComplete?: () => void;

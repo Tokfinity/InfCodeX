@@ -349,6 +349,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [isRunning, setIsRunning] = useState(true);
   const [showBanner, setShowBanner] = useState(true); // Show banner in Ink UI
   const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
+  const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
 
   // Confirmation dialog state - 确认对话框状态
   const [confirmRequest, setConfirmRequest] = useState<{
@@ -365,14 +366,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!compactionInfo) return undefined;
 
     const { contextWindow, triggerPercent } = compactionInfo;
-    const currentTokens = estimateTokens(context.messages);
+    // Use live token count during streaming, otherwise calculate from messages
+    const currentTokens = liveTokenCount ?? estimateTokens(context.messages);
 
     return {
       currentTokens,
       contextWindow,
       triggerPercent,
     };
-  }, [context.messages, compactionInfo]);
+  }, [context.messages, compactionInfo, liveTokenCount]);
 
   // Refs for callbacks
   // Note: permissionMode and alwaysAllowTools are stored separately for permission checks
@@ -766,6 +768,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // 自动压缩在 agent 执行期间发生
       // UI 会在 context.messages 改变时自然更新
       // 不要在这里清空 UI 历史或打印消息 - 那由 /compact 命令处理
+    },
+    // Iteration end - update live token count for real-time context usage display
+    // 迭代结束 - 更新实时 token 计数用于上下文使用量显示
+    onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
+      setLiveTokenCount(info.tokenCount);
     },
   }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot]);
 
@@ -1381,6 +1388,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         stopStreaming();
         clearResponse(); // Fix: clear stale buffer to prevent ghost [Interrupted] on next submit
         clearThinkingContent();
+        setLiveTokenCount(null); // Reset live token count, use context.messages for final calculation
       }
     },
     [

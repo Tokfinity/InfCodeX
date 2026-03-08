@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.25] - 2026-03-08
+
+### Added
+- **Real-time Context Usage Updates**
+  - Context usage now updates after each LLM iteration, not just after all iterations complete
+  - Added `onIterationEnd` callback to `KodaXEvents` for iteration-level notifications
+
+### Changed
+- `contextUsage` useMemo now uses `liveTokenCount` during streaming for real-time display
+- Added `liveTokenCount` state for tracking token usage during agent execution
+
 ## [0.5.24] - 2026-03-08
 
 ### Added
