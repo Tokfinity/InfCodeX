@@ -50,6 +50,7 @@ export type {
   KodaXResult,
   KodaXSessionStorage,
   KodaXToolExecutionContext,
+  AskUserQuestionOptions,
   SessionErrorMetadata,
 } from './types.js';
 

@@ -674,6 +674,52 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       return true;
     },
+    // Issue 069: Ask user a question interactively - 交互式向用户提问
+    askUser: async (options: import("@kodax/coding").AskUserQuestionOptions): Promise<string> => {
+      // Display question and options
+      console.log('');
+      console.log(chalk.cyan('❓ ' + options.question));
+      console.log('');
+
+      options.options.forEach((opt, index) => {
+        const num = (index + 1).toString().padStart(2, ' ');
+        const desc = opt.description ? chalk.dim(` - ${opt.description}`) : '';
+        console.log(`  ${chalk.yellow(num)}${chalk.bold('.')} ${opt.label}${desc}`);
+      });
+
+      console.log('');
+
+      // Wait for user input using readline
+      return new Promise((resolve) => {
+        const readline = require('readline');
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        const defaultHint = options.default ? ` (default: ${options.default})` : '';
+        rl.question(chalk.dim(`Enter your choice [1-${options.options.length}]${defaultHint}: `), (answer: string) => {
+          rl.close();
+
+          // Handle default
+          if (!answer.trim() && options.default) {
+            resolve(options.default);
+            return;
+          }
+
+          // Parse number
+          const num = parseInt(answer.trim(), 10);
+          if (num >= 1 && num <= options.options.length) {
+            resolve(options.options[num - 1]!.value);
+            return;
+          }
+
+          // Invalid input - return first option as fallback
+          console.log(chalk.yellow(`Invalid choice. Using: ${options.options[0]!.label}`));
+          resolve(options.options[0]!.value);
+        });
+      });
+    },
     // Compaction event - notification only, do NOT clear UI history here
     // 压缩事件 - 仅通知，不要在这里清理 UI 历史记录
     onCompact: (_estimatedTokens: number) => {

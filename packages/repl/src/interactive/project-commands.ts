@@ -272,8 +272,7 @@ async function projectStatus(args: string[]): Promise<void> {
 
   if (next) {
     const desc = next.feature.description || next.feature.name || 'Unnamed';
-    const preview = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
-    console.log(chalk.cyan(`\nNext: #${next.index} - ${preview}`));
+    console.log(chalk.cyan(`\nNext: #${next.index} - ${desc}`));
   } else if (stats.pending === 0) {
     console.log(chalk.green('\n  ✓ All features completed or skipped'));
   }
@@ -624,9 +623,8 @@ async function projectList(): Promise<void> {
         : chalk.yellow('○');
 
     const desc = f.description || f.name || 'Unnamed';
-    const preview = desc.length > 60 ? desc.slice(0, 57) + '...' : desc;
 
-    console.log(`  ${status} ${chalk.dim(`${i}.`)} ${preview}`);
+    console.log(`  ${status} ${chalk.dim(`${i}.`)} ${desc}`);
   });
 
   console.log();
@@ -802,100 +800,93 @@ async function editSingleFeature(
     return;
   }
 
-  // 2. 标记为完成
-  if (lowerGuidance.includes('完成') || lowerGuidance.includes('complete') || lowerGuidance.includes('done')) {
-    const confirmed = await confirm(`Mark feature #${index} as completed?`);
-    if (confirmed) {
-      await storage.updateFeatureStatus(index, {
-        passes: true,
-        completedAt: new Date().toISOString(),
-      });
-      console.log(chalk.green(`✓ Marked feature #${index} as completed\n`));
-    } else {
-      console.log(chalk.dim('\nCancelled.\n'));
-    }
-    return;
-  }
+  // 2. 通用修改（使用 AI 辅助 + 智能确认）
+  // 移除所有预设关键词匹配，统一由 LLM 理解语义
+  // 这样可以避免关键词误判，充分发挥 LLM 的语义理解能力
+  console.log(chalk.cyan('Processing with AI assistance...\n'));
 
-  // 3. 标记为跳过
-  if (lowerGuidance.includes('跳过') || lowerGuidance.includes('skip')) {
-    const confirmed = await confirm(`Mark feature #${index} as skipped?`);
-    if (confirmed) {
-      await storage.updateFeatureStatus(index, {
-        skipped: true,
-      });
-      console.log(chalk.green(`✓ Marked feature #${index} as skipped\n`));
-    } else {
-      console.log(chalk.dim('\nCancelled.\n'));
-    }
-    return;
-  }
-
-  // 4. 修改描述
-  if (lowerGuidance.includes('描述') || lowerGuidance.includes('description')) {
-    // 提取新描述（去除"描述"、"修改"等关键词）
-    let newDesc = guidance
-      .replace(/修改|更改|更新|描述|description|为|to/gi, '')
-      .trim();
-
-    if (newDesc) {
-      const confirmed = await confirm(`Update description to: "${newDesc}"?`);
-      if (confirmed) {
-        await storage.updateFeatureStatus(index, {
-          description: newDesc,
-        });
-        console.log(chalk.green(`✓ Updated feature #${index} description\n`));
-      } else {
-        console.log(chalk.dim('\nCancelled.\n'));
-      }
-    } else {
-      console.log(chalk.yellow('\n[Error] Please specify the new description'));
-      console.log(chalk.dim('Example: /project edit #3 "修改描述为：新的功能描述"\n'));
-    }
-    return;
-  }
-
-  // 5. 添加步骤
-  if (lowerGuidance.includes('步骤') || lowerGuidance.includes('step')) {
-    const stepText = guidance
-      .replace(/添加|增加|步骤|step/gi, '')
-      .trim();
-
-    if (stepText) {
-      const newSteps = feature.steps ? [...feature.steps] : [];
-      newSteps.push(stepText);
-
-      const confirmed = await confirm(`Add step: "${stepText}"?`);
-      if (confirmed) {
-        await storage.updateFeatureStatus(index, {
-          steps: newSteps,
-        });
-        console.log(chalk.green(`✓ Added step to feature #${index}\n`));
-      } else {
-        console.log(chalk.dim('\nCancelled.\n'));
-      }
-    } else {
-      console.log(chalk.yellow('\n[Error] Please specify the step'));
-      console.log(chalk.dim('Example: /project edit #3 "添加步骤：编写单元测试"\n'));
-    }
-    return;
-  }
-
-  // 6. 通用修改（使用 AI 辅助）
-  console.log(chalk.cyan('Processing with AI assistance...'));
-
-  // 对于复杂的修改请求，调用 AI 来理解意图
+  // 对于复杂的修改请求，调用 AI 来理解意图并生成建议的更改
   const options = callbacks.createKodaXOptions?.();
-  if (options) {
-    const prompt = `Analyze this feature edit request and suggest changes:
+  if (!options) {
+    console.log(chalk.yellow('\n[Error] AI options not available'));
+    console.log(chalk.dim('Please edit feature_list.json manually.\n'));
+    return;
+  }
 
-Feature #${index}:
+  const prompt = `You are analyzing a feature edit request to suggest what fields should be changed.
+
+**Current Feature #${index}:**
 ${JSON.stringify(feature, null, 2)}
 
-User instruction: "${guidance}"
+**User Instruction:** "${guidance}"
 
-Please analyze the user's intent and suggest what fields should be updated.
-Format your response as a brief explanation of what you understood and what changes you recommend.`;
+---
+
+**Your Task:**
+1. Understand the user's intent semantically (not just keyword matching)
+2. Decide what fields should change based on common sense and context
+3. Determine if you need user confirmation
+
+**Guidelines for Semantic Understanding:**
+- "加个测试" / "add a test" → Add test step (NOT mark as completed)
+- "标记完成" / "mark done" → Set passes=true (confirm completion)
+- "改描述为xxx" → Update description field
+- "加个测试环节" → Add test step (same as "add a test")
+- "完成这个功能" → Could mean: mark as done OR just finish implementation (ambiguous!)
+
+**When to set needsConfirmation=true:**
+- The instruction has multiple possible interpretations
+- The changes are significant or irreversible
+- You're genuinely uncertain about user intent
+- Missing critical information (e.g., "改描述" without new description)
+
+**When to set needsConfirmation=false:**
+- The intent is clear from context
+- Simple additive changes (adding steps, updating fields)
+- You're confident you understood correctly
+
+---
+
+**Response Format (JSON):**
+{
+  "analysis": "Brief explanation of user intent",
+  "changes": {
+    "field1": "value1"
+  },
+  "needsConfirmation": true/false
+}
+
+**Examples:**
+
+User: "加个测试"
+→ {
+  "analysis": "User wants to add a test step",
+  "changes": {"steps": [...existing, "Add comprehensive tests"]},
+  "needsConfirmation": false
+}
+
+User: "标记完成"
+→ {
+  "analysis": "User wants to mark feature as completed",
+  "changes": {"passes": true, "completedAt": "${new Date().toISOString()}"},
+  "needsConfirmation": false
+}
+
+User: "完成这个"
+→ {
+  "analysis": "Ambiguous: could mean 'mark done' or 'finish implementation'",
+  "changes": {"passes": true},
+  "needsConfirmation": true
+}
+
+User: "改描述"
+→ {
+  "analysis": "User wants to change description but didn't provide new one",
+  "changes": {},
+  "needsConfirmation": true
+}
+
+Only include fields that should change. Omit unchanged fields. Think semantically, not literally.`;
 
     try {
       const result = await runKodaX(
@@ -909,25 +900,147 @@ Format your response as a brief explanation of what you understood and what chan
         prompt
       );
 
-      console.log(chalk.dim('\nAI Analysis:'));
+      // Extract AI response
       const lastMessage = result.messages[result.messages.length - 1];
-      if (lastMessage?.content) {
-        const content = typeof lastMessage.content === 'string'
-          ? lastMessage.content
-          : lastMessage.content.map(c => ('text' in c ? c.text : '') || '').join('');
-        console.log(chalk.dim(content));
+      if (!lastMessage?.content) {
+        console.log(chalk.yellow('\n[Warning] AI analysis failed - no response'));
+        console.log(chalk.dim('Please edit feature_list.json manually.\n'));
+        return;
       }
 
-      console.log(chalk.yellow('\nNote: Complex edits require manual feature_list.json editing.'));
-      console.log(chalk.dim('Simple operations (complete, skip, delete, description) are automated.\n'));
+      const content = typeof lastMessage.content === 'string'
+        ? lastMessage.content
+        : lastMessage.content.map(c => ('text' in c ? c.text : '') || '').join('');
+
+      // Parse JSON from AI response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.log(chalk.yellow('\n[Warning] AI analysis failed - invalid response format'));
+        console.log(chalk.dim('AI response:'));
+        console.log(chalk.dim(content));
+        console.log(chalk.dim('\nPlease edit feature_list.json manually.\n'));
+        return;
+      }
+
+      const aiResponse = JSON.parse(jsonMatch[0]);
+
+      // Display analysis
+      console.log(chalk.cyan('AI Analysis:'));
+      console.log(chalk.dim(aiResponse.analysis));
+      console.log();
+
+      // Display proposed changes
+      if (Object.keys(aiResponse.changes).length === 0) {
+        console.log(chalk.yellow('No changes suggested.\n'));
+        return;
+      }
+
+      console.log(chalk.cyan('Proposed changes:'));
+      const changesEntries = Object.entries(aiResponse.changes);
+      changesEntries.forEach(([field, value]) => {
+        const oldValue = JSON.stringify((feature as any)[field]);
+        const newValue = JSON.stringify(value);
+        console.log(chalk.dim(`  ${field}: ${oldValue} → ${newValue}`));
+      });
+      console.log();
+
+      // Check if AI thinks confirmation is needed
+      const shouldConfirm = aiResponse.needsConfirmation === true;
+
+      // Track whether changes were applied for context saving
+      let changesApplied = false;
+
+      if (shouldConfirm) {
+        // Use ask_user_question tool for ambiguous/significant changes
+        const askUser = options.events?.askUser;
+        if (!askUser) {
+          console.log(chalk.yellow('[Warning] Interactive mode not available'));
+          console.log(chalk.dim('Please edit feature_list.json manually.\n'));
+          return;
+        }
+
+        const userChoice = await askUser({
+          question: 'The instruction may be ambiguous. How would you like to proceed?',
+          options: [
+            {
+              label: 'Apply changes',
+              description: 'Apply the proposed changes to feature_list.json',
+              value: 'apply',
+            },
+            {
+              label: 'Manual edit',
+              description: 'Open feature_list.json in your editor',
+              value: 'manual',
+            },
+            {
+              label: 'Cancel',
+              description: 'Discard the proposed changes',
+              value: 'cancel',
+            },
+          ],
+        });
+
+        if (userChoice === 'apply') {
+          // Apply changes
+          const updateData: any = {};
+          changesEntries.forEach(([field, value]) => {
+            updateData[field] = value;
+          });
+
+          await storage.updateFeatureStatus(index, updateData);
+          console.log(chalk.green('\n✅ Changes applied successfully!\n'));
+          changesApplied = true;
+        } else if (userChoice === 'manual') {
+          console.log(chalk.dim('\nPlease edit feature_list.json manually.\n'));
+          // TODO: Could open editor here in the future
+        } else {
+          console.log(chalk.dim('\n✗ Changes cancelled.\n'));
+        }
+      } else {
+        // AI is confident - apply changes directly
+        const updateData: any = {};
+        changesEntries.forEach(([field, value]) => {
+          updateData[field] = value;
+        });
+
+        await storage.updateFeatureStatus(index, updateData);
+        console.log(chalk.green('✅ Changes applied successfully!\n'));
+        changesApplied = true;
+      }
+
+      // Save friendly summary to context for subsequent conversation
+      // Replace the raw JSON response with human-readable summary
+      if (changesApplied) {
+        const changesSummary = changesEntries
+          .map(([field, value]) => {
+            const oldValue = JSON.stringify((feature as any)[field]);
+            const newValue = JSON.stringify(value);
+            return `  - ${field}: ${oldValue} → ${newValue}`;
+          })
+          .join('\n');
+
+        const friendlySummary = `已处理 /project edit #${index} 请求：
+- 用户指令：${guidance}
+- 意图分析：${aiResponse.analysis}
+- 应用的更改：
+${changesSummary}`;
+
+        // Replace the last assistant message with friendly summary
+        const newMessages = [...result.messages];
+        const lastIdx = newMessages.length - 1;
+        if (newMessages[lastIdx]?.role === 'assistant') {
+          newMessages[lastIdx] = {
+            ...newMessages[lastIdx],
+            content: friendlySummary,
+          };
+        }
+        context.messages = newMessages;
+      }
     } catch (error) {
-      console.log(chalk.yellow('\n[Warning] AI analysis failed'));
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.log(chalk.yellow(`\n[Warning] AI analysis failed: ${errorMsg}`));
       console.log(chalk.dim('Please edit feature_list.json manually.\n'));
     }
-  } else {
-    console.log(chalk.yellow('\n[Error] AI options not available'));
-    console.log(chalk.dim('Please edit feature_list.json manually.\n'));
-  }
 }
 
 /**
@@ -950,40 +1063,8 @@ async function editGlobal(
     return;
   }
 
-  // 全局操作目前支持有限的几种
-  const lowerGuidance = guidance.toLowerCase();
-
-  // 1. 删除所有已完成的
-  if (lowerGuidance.includes('删除') && (lowerGuidance.includes('完成') || lowerGuidance.includes('completed'))) {
-    const completedCount = features.features.filter(f => f.passes).length;
-    const confirmed = await confirm(`Delete ${completedCount} completed features?`);
-
-    if (confirmed) {
-      features.features = features.features.filter(f => !f.passes);
-      await storage.saveFeatures(features);
-      console.log(chalk.green(`✓ Deleted ${completedCount} completed features\n`));
-    } else {
-      console.log(chalk.dim('\nCancelled.\n'));
-    }
-    return;
-  }
-
-  // 2. 删除所有已跳过的
-  if (lowerGuidance.includes('删除') && (lowerGuidance.includes('跳过') || lowerGuidance.includes('skipped'))) {
-    const skippedCount = features.features.filter(f => f.skipped).length;
-    const confirmed = await confirm(`Delete ${skippedCount} skipped features?`);
-
-    if (confirmed) {
-      features.features = features.features.filter(f => !f.skipped);
-      await storage.saveFeatures(features);
-      console.log(chalk.green(`✓ Deleted ${skippedCount} skipped features\n`));
-    } else {
-      console.log(chalk.dim('\nCancelled.\n'));
-    }
-    return;
-  }
-
-  // 3. 使用 AI 辅助复杂操作
+  // 使用 AI 辅助处理所有全局编辑请求
+  // 移除所有预设关键词匹配，统一由 LLM 理解语义
   console.log(chalk.cyan('Processing with AI assistance...'));
 
   const options = callbacks.createKodaXOptions?.();
@@ -1014,17 +1095,38 @@ Note: Complex operations like reordering, merging, or splitting features require
         prompt
       );
 
-      console.log(chalk.dim('\nAI Analysis:'));
       const lastMessage = result.messages[result.messages.length - 1];
       if (lastMessage?.content) {
         const content = typeof lastMessage.content === 'string'
           ? lastMessage.content
           : lastMessage.content.map(c => ('text' in c ? c.text : '') || '').join('');
-        console.log(chalk.dim(content));
-      }
 
-      console.log(chalk.yellow('\nNote: Global edits are complex and require manual feature_list.json editing.'));
-      console.log(chalk.dim('Automated operations: delete completed, delete skipped.\n'));
+        console.log(chalk.dim('\nAI Analysis:'));
+        console.log(chalk.dim(content));
+        console.log(chalk.yellow('\nNote: Global edits are complex and require manual feature_list.json editing.'));
+        console.log(chalk.dim('Automated operations: delete completed, delete skipped.\n'));
+
+        // Save friendly summary to context for subsequent conversation
+        const friendlySummary = `已处理 /project edit 全局编辑请求：
+- 用户指令：${guidance}
+- AI 分析：
+${content}
+
+注：全局编辑操作复杂，需要手动编辑 feature_list.json`;
+
+        const newMessages = [...result.messages];
+        const lastIdx = newMessages.length - 1;
+        if (newMessages[lastIdx]?.role === 'assistant') {
+          newMessages[lastIdx] = {
+            ...newMessages[lastIdx],
+            content: friendlySummary,
+          };
+        }
+        context.messages = newMessages;
+      } else {
+        console.log(chalk.yellow('\n[Warning] AI analysis failed - no response'));
+        console.log(chalk.dim('Please edit feature_list.json manually.\n'));
+      }
     } catch (error) {
       console.log(chalk.yellow('\n[Warning] AI analysis failed'));
       console.log(chalk.dim('Please edit feature_list.json manually.\n'));

@@ -65,6 +65,8 @@ export interface KodaXEvents {
   // 用户交互（可选，由 REPL 层实现）
   /** Tool execution hook - called before tool execution, return false to block - 工具执行前回调 */
   beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean>;
+  /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
+  askUser?: (options: AskUserQuestionOptions) => Promise<string>;
 }
 
 // ============== Agent 选项 ==============
@@ -120,9 +122,21 @@ export interface KodaXResult {
 // ============== 工具执行上下文 ==============
 // Simplified - no permission checks in core
 
+export interface AskUserQuestionOptions {
+  question: string;
+  options: Array<{
+    label: string;
+    description?: string;
+    value: string;
+  }>;
+  default?: string;
+}
+
 export interface KodaXToolExecutionContext {
   /** File backups for undo functionality - 文件备份用于撤销功能 */
   backups: Map<string, string>;
   /** Git root directory - Git 根目录 */
   gitRoot?: string;
+  /** Ask user a question interactively - 交互式向用户提问 (Issue 069) */
+  askUser?: (options: AskUserQuestionOptions) => Promise<string>;
 }

@@ -117,7 +117,7 @@ describe('Core Module Exports', () => {
 
   it('should export KODAX_TOOLS array', () => {
     expect(Array.isArray(KODAX_TOOLS)).toBe(true);
-    expect(KODAX_TOOLS.length).toBe(7);
+    expect(KODAX_TOOLS.length).toBe(8);
   });
 
   it('should export KODAX_TOOL_REQUIRED_PARAMS', () => {
@@ -966,7 +966,7 @@ describe('toolRead Detailed', () => {
   afterEach(async () => {
     try {
       await fs.rm(testFile);
-    } catch {}
+    } catch { }
   });
 
   it('should read file from offset 1 (first line)', async () => {
