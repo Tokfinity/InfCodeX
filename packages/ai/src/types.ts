@@ -86,6 +86,8 @@ export interface KodaXProviderStreamOptions {
   onThinkingDelta?: (text: string) => void;
   onThinkingEnd?: (thinking: string) => void;
   onToolInputDelta?: (toolName: string, partialJson: string) => void;
+  /** 会话标识，用于多轮对话上下文恢复 */
+  sessionId?: string;
   /** AbortSignal for cancelling the stream request */
   signal?: AbortSignal;
 }
