@@ -2,295 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.5.23] - 2026-03-08
+
+### Added
+- **CLI Events Module** (`packages/ai/src/cli-events/`)
+  - `types.ts` - Unified CLI event types (CLIEvent union)
+  - `executor.ts` - Base CLIExecutor class with subprocess management
+  - `gemini-parser.ts` - Gemini CLI JSON Lines parser
+  - `codex-parser.ts` - Codex CLI JSON Lines parser
+  - `session.ts` - CLISessionManager for KodaX↔CLI session mapping
+  - `prompt-utils.ts` - Shared prompt building utility
+  - `index.ts` - Barrel export
+
+### Changed
+- **gemini-cli provider** - Refactored to use CLI subprocess wrapper pattern
+- **codex-cli provider** - Refactored to use CLI subprocess wrapper pattern
+- Both providers now use `buildCLIPrompt()` shared utility
+- Added stderr collection for error diagnostics
+- Added `_installedCache` to avoid repeated spawn checks
+- Added `exited` flag to prevent duplicate `child.kill()`
+
+### Architecture
+- **Delegate Pattern**: Tools are executed by CLI, not KodaX agent
+- **Session Resume**: Multi-turn conversations via CLI session mapping
+- **Zero Maintenance**: No need to track token format changes
+
+### Documentation
+- Added `FEATURE_016_CLI_PROVIDERS_TEST_GUIDE.md`
+- Updated `v0.5.22.md` design document
+
+## [0.5.22] - 2026-03-08
+
+### Added
+- CLI-based OAuth providers (gemini-cli, codex-cli) initial implementation
+
+## [0.5.21] - 2026-03-08
+
+### Fixed
+- Chunked compression to avoid TPM rate limits
+- Loop logic in cleanupIncompleteToolCalls
+- Added ask-user-question tool
 
 ## [0.5.20] - 2026-03-07
 
-### Fixed
-- **Issue 075**: CRLF handling for Windows paste (Windows 粘贴换行处理)
-  - Add CRLF detection in parseKeypress() and extractNextSequence()
-  - Adopt Gemini CLI style immediate processing (no buffering/waiting)
-  - Update tests to match immediate processing behavior
-
-## [0.5.15] - 2026-03-06
-
 ### Added
-- **Feature 011**: Intelligent Context Compaction (智能上下文压缩)
-  - LLM-generated structured summaries instead of simple truncation
-  - Configurable thresholds and compaction settings
-  - Manual `/compact` command for user-triggered compaction
-  - File operation tracking (read/modified files)
-  - Multi-round compression with UI history preservation
-
-### Changed
-- Updated Feature 011 and 012 status to Completed in FEATURE_LIST.md
-- Synchronized all package versions to 0.5.15
-
-## [0.5.14] - 2026-03-06
-
-### Added
-- **Feature 011**: Intelligent Context Compaction (智能上下文压缩)
-  - Core compaction logic in `packages/agent/src/compaction/`
-  - LLM summary generation using Haiku model
-  - File tracking for read and modified files
-  - Configurable compaction settings in `~/.kodax/config.json`
-
-### Fixed
-- Session persistence after compaction
-- Multi-round compression with UI history display
-- Iteration limit tracking (limitReached flag)
-
-## [0.5.13] - 2026-03-05
-
-### Added
-- **Feature 012**: TUI Autocomplete Enhancement (TUI 自动补全增强) - Part 3
-  - Smart replacement for autocomplete suggestions
-  - Mid-line command trigger support
-
-### Fixed
-- Autocomplete suggestions jitter when appearing/disappearing
-- Double-ESC for clearing input and interrupting streaming
-
-## [0.5.12] - 2026-03-05
-
-### Fixed
-- Autocomplete Enter key now submits immediately
-- Autocomplete smart replacement and mid-line trigger support
-
-## [0.5.11] - 2026-03-05
-
-### Added
-- **Feature 012**: TUI Autocomplete Enhancement (TUI 自动补全增强) - Part 1-2
-  - Fuzzy matching algorithm with scoring
-  - Skill completer (`/skill:xxx` completion)
-  - Argument completer for command parameters
-  - Autocomplete UI with dropdown menu
-
-### Fixed
-- Input box jitter during autocomplete
-- Thinking content missing closing tags
-
-## [0.5.10] - 2026-03-05
-
-### Added
-- **Feature 006**: Agent Skills System (Skills 系统)
-  - Complete implementation of Agent Skills open standard
-  - Skills can be loaded from `.kodax/skills/` directory
-  - Built-in skills: code-review, git-workflow, tdd
-  - Skills can be triggered via `/skill-name` or natural language
-  - Progressive disclosure mechanism for context optimization
-
-### Changed
-- Marked Feature 006 as Completed
-- Moved Feature 007 to v0.6.0 planning
-
-## [0.5.9] - 2026-03-04
-
-### Fixed
-- Added memory limit for history records to prevent memory leaks
-- Closed Issue 080 - Long text input box fixed
-- Unified visual layout rendering for single and multi-line inputs
-
-### Changed
-- Updated project documentation to reflect latest architecture
-- Cleaned up KNOWN_ISSUES.md
-
-## [0.5.8] - 2026-03-04
-
-### Fixed
-- **Issue 080**: Fixed long text input wrapping and cursor positioning
-- Removed duplicate assistant message display
-
-## [0.5.7] - 2026-03-04
-
-### Fixed
-- Issue 074: Iteration history appearing twice in display during multi-turn conversations
-- Issue 079: Ink history rendering crashes due to infinite growth (limit to 20 conversation rounds)
-
-## [0.5.6] - 2026-03-04
-
-### Fixed
-- Issue 072: Tool call ID mismatch after stream interruption causes API errors
-
-## [0.5.5] - 2026-03-04
-
-### Added
-- **Natural Language Skill Triggering**: Skills can now be triggered by describing the task in natural language (e.g., "帮我审查代码") without needing explicit /skill command
-
-### Fixed
-- Issue 066: /project init command silently fails in InkREPL
-- Issue 068: Thinking indicator shows no progress for long time
-- Issue 071: Session resume cross-project recovery error
-- Issue 073: /project auto subcommand lacks streaming progress feedback
-- Issue 078: CLI --max-iter default overrides coding package default
-- CLI maxIter now correctly defaults to 200 (from coding package) instead of 50
-- **Session History**: Thinking content now restored when resuming session with `-c` flag
-
-## [0.5.4] - 2026-03-03
-
-### Added
-- Issue 054: Agent Skills system basic integration completed
-
-### Fixed
-- Issue 067: API rate limit retry mechanism ineffective
-- Issue 069: Missing LLM interactive question tool
-- Issue 070: Streaming output may lose newline characters
-
-## [0.4.7] - 2026-02-28
-
-### Added
-- **@kodax/ai Package**: New independent LLM abstraction layer extracted from core
-  - Can be reused by other projects
-  - Supports 7 providers: Anthropic, OpenAI, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding
-- **Pattern-based Permission Control**: Allow specific Bash commands in accept-edits mode
-  - Format: `Bash(npm install)`, `Bash(git commit:*)`
-  - Wildcard `*` is rejected for safety
-- **Protected Path Check for Bash**: Commands operating on `.kodax/`, `~/.kodax/`, or paths outside project root now correctly require confirmation without "always" option
-
-### Changed
-- **Architecture Refactoring**: 4-layer architecture (ai → core → repl → cli)
-  - `@kodax/ai`: Independent LLM abstraction layer
-  - `@kodax/core`: Pure Agent logic without permission checks
-  - `@kodax/repl`: UI + Permission control layer
-  - CLI: Simplified entry point
-
-### Fixed
-- Issue 051: No feedback shown when user rejects permission confirmation with 'n'
-- Issue 052: Protected path confirmation showing "always" option for bash commands
-
-## [0.4.6] - 2026-02-27
-
-### Added
-- **Permission Mode Auto-Switch**: Automatically switch to accept-edits mode when user selects "always" in default mode
-- **Plan Mode Context**: System prompt informs LLM about read-only constraints in plan mode
-- **Diff Display**: Show unified diff for write/edit operations
-- **Warp.dev Theme**: New dark theme inspired by Warp.dev terminal (cyan accent, deep dark backgrounds)
-
-### Changed
-- **Config Location**: "Always yes" now saves to project-level config (`.kodax/config.local.json`)
-- **Plan Mode Blocking**: Modification tools (write/edit/bash/undo) are directly blocked in plan mode without user confirmation dialog
-
-### Fixed
-- Permission mode persistence now correctly uses project-level configuration
-
-## [0.4.5] - 2026-02-26
-
-### Changed
-- **Code Style**: Implemented English-first bilingual comment style for repl package
-- Comments are primarily in English with selective Chinese brief notes for complex logic
-
-## [0.4.4] - 2026-02-26
-
-### Fixed
-- Issue 047: Streaming flicker during output
-- Issue 048: Message disorder in REPL display
-- Issue 001: Removed unused PLAN_GENERATION_PROMPT constant
-
-## [0.4.3] - 2026-02-25
-
-### Fixed
-- Issue 040: REPL display ordering - command output now renders in correct position (user message → command output)
-- Console.log capture mechanism to preserve chalk colors while fixing render order
-
-## [0.4.2] - 2026-02-25
-
-### Fixed
-- Issue 043: AbortSignal propagation for stream interruption
-- Issue 044: Ctrl+C delay during streaming output
-
-## [0.4.1] - 2026-02-24
-
-### Fixed
-- Issue 035, 041, 042: Keyboard input issues (Backspace, history navigation, Shift+Enter)
-
-## [0.4.0] - 2026-02-24
-
-### Changed
-- **Architecture Refactoring**: Monorepo with npm workspaces
-  - `@kodax/core`: Pure AI engine (7 providers, tools, session management)
-  - `@kodax/repl`: Complete interactive terminal experience
-  - Main entry `src/kodax_cli.ts` uses both packages
-- **Directory Structure**: Renamed `cli/` to `common/` for better semantics
-
-### Fixed
-- Issue 035, 041, 042: Keyboard input issues (Backspace, history navigation, Shift+Enter)
-- Issue 043: AbortSignal propagation for stream interruption
-- Issue 044: Ctrl+C delay during streaming output
-
-### Known Issues
-- Issue 040: REPL display issues (banner timing, duplicate messages, [Complex content] placeholder)
-
-## [0.2.0] - 2026-02-16
-
-### Changed
-- **Architecture Refactoring**: Split into Core + CLI modules
-  - `kodax_core.ts`: Pure library module (can be used as npm package)
-  - `kodax_cli.ts`: CLI entry with UI (spinner, colors, readline)
-  - `index.ts`: Package entry point
-  - Original `kodax.ts` kept as reference
-
-### Added
-- **Event-driven API**: `KodaXEvents` interface for streaming callbacks
-- **Library API**: Can now use KodaX as an npm package
-  - `runKodaX()` function for simple usage
-  - `KodaXClient` class for continuous sessions
-- **Session Storage Interface**: `KodaXSessionStorage` for custom storage backends
-- **Commands System**: `/xxx` commands in CLI layer (replaces previous "Skills" naming)
-- **Comprehensive Test Suite**: 135 tests across 3 test files
-  - `kodax_core.test.ts`: Core module tests (82 tests)
-  - `kodax_cli.test.ts`: CLI layer tests (20 tests)
-  - `prompts.test.ts`: Prompt content verification tests (33 tests)
-
-### Terminology
-- **Skills** = Model capabilities (KODAX_TOOLS: read, write, bash, etc.) - in Core
-- **Commands** = CLI shortcuts (/review, /test, etc.) - in CLI layer
-
-### Exports
-- `runKodaX` - Main function to run agent
-- `KodaXClient` - Class for continuous sessions
-- `KodaXEvents` - Event interface for streaming
-- `KodaXOptions` - Options interface
-- `KodaXResult` - Result interface
-- `KODAX_TOOLS` - Tool definitions
-- `getProvider` - Provider factory function
-- `executeTool` - Tool execution function
-- `compactMessages` - Context compression utility
-- `estimateTokens` - Token estimation utility
-
-## [0.1.0] - 2026-02-16
-
-### Added
-- Initial release of KodaX (TypeScript version of KodaXP)
-- Single-file implementation (~1800 LOC)
-- 7 LLM providers support: Anthropic, OpenAI, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding
-- Thinking mode for deep reasoning (anthropic, kimi-code, zhipu-coding)
-- Streaming output with real-time display
-- 7 tools: read, write, edit, bash, glob, grep, undo
-- Session management with JSONL format persistent storage
-- Cross-platform support: Windows/macOS/Linux
-- Long-running mode with `--init` and `--auto-continue`
-- Parallel tool execution with `--parallel`
-- Multi-agent team mode with `--team`
-- Skills system for custom extensions
-
-### TypeScript Improvements over Python Version
-- **Waiting Animation**: Uses `\r` to clear, no terminal traces
-- **Spinner Instant Render**: First frame renders immediately (no 80ms wait)
-- **Environment Context**: Includes Node version + platform-specific command hints
-- **Cross-Platform Commands**: Dynamic hints for Windows/Unix (mkdir, pwd, etc.)
-- **Working Directory**: Full path injected to avoid LLM guessing wrong paths
-- **read Tool**: Supports offset/limit parameters
-- **grep Tool**: Supports output_mode parameter (content/files_with_matches/count)
-- **edit Tool**: Supports replace_all parameter for batch replacement
-- **Type Safety**: Compile-time error checking
-- **Async/Await**: Cleaner asynchronous code structure
-
-### Fixed
-- Cross-platform mkdir command (Windows vs Unix)
-- Cross-platform pwd command (cd on Windows, pwd on Unix)
-- Working directory path injection for LLM context
-- Spinner visual feedback during tool execution
-- Multiple newline issue with spinner
-- Spinner not stopping when task completes
-- Frequent incomplete tool calls by increasing MAX_TOKENS to 32768
+- Project mode commands
+- Context snapshot functionality
+- Hot/cold track dual-track memory system
