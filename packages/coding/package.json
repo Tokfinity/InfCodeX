@@ -1,6 +1,6 @@
 {
   "name": "@kodax/coding",
-  "version": "0.5.25",
+  "version": "0.5.26",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
   "type": "module",
   "main": "dist/index.js",
@@ -19,8 +19,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/ai": "*",
     "@kodax/agent": "*",
+    "@kodax/ai": ">=0.5.0",
     "@kodax/skills": "*"
   },
   "devDependencies": {
