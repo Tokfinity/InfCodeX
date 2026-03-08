@@ -16,6 +16,7 @@ import { toolBash } from './bash.js';
 import { toolGlob } from './glob.js';
 import { toolGrep } from './grep.js';
 import { toolUndo } from './undo.js';
+import { toolAskUserQuestion } from './ask-user-question.js';
 
 // 工具注册表
 const TOOL_REGISTRY = new Map<string, ToolHandler>();
@@ -40,6 +41,7 @@ registerTool('bash', toolBash);
 registerTool('glob', toolGlob);
 registerTool('grep', toolGrep);
 registerTool('undo', toolUndo);
+registerTool('ask_user_question', toolAskUserQuestion);
 
 // 工具定义
 export const KODAX_TOOLS: KodaXToolDefinition[] = [
@@ -124,6 +126,31 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
     name: 'undo',
     description: 'Revert the last file modification.',
     input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'ask_user_question',
+    description: 'Ask the user a question with multiple choice options. Use this when you need the user to make a decision.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The question to ask the user' },
+        options: {
+          type: 'array',
+          description: 'Available options for the user to choose from',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Display label for this option' },
+              description: { type: 'string', description: 'Optional description of this option' },
+              value: { type: 'string', description: 'Optional value to return (defaults to label)' },
+            },
+            required: ['label'],
+          },
+        },
+        default: { type: 'string', description: 'Optional default choice' },
+      },
+      required: ['question', 'options'],
+    },
   },
 ];
 

@@ -19,3 +19,4 @@ export { toolBash } from './bash.js';
 export { toolGlob } from './glob.js';
 export { toolGrep } from './grep.js';
 export { toolUndo } from './undo.js';
+export { toolAskUserQuestion } from './ask-user-question.js';

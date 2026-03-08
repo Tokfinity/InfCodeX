@@ -36,4 +36,5 @@ export const KODAX_TOOL_REQUIRED_PARAMS: Record<string, string[]> = {
   glob: ['pattern'],
   grep: ['pattern', 'path'],
   undo: [],
+  ask_user_question: ['question', 'options'],
 };

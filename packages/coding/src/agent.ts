@@ -204,9 +204,9 @@ function cleanupIncompleteToolCalls(messages: KodaXMessage[]): KodaXMessage[] {
     // 如果没有 tool_use 块，无需清理
     if (toolUseIds.size === 0) return messages;
 
-    // 收集所有 tool_result 中出现的 tool_use_id（在后续的 user 消息中）
+    // 收集所有 tool_result 中出现的 tool_use_id（遍历所有消息）
     const toolResultIds = new Set<string>();
-    for (let i = messages.length - 1; i < messages.length; i++) {
+    for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (!msg || msg.role !== 'user') continue;
 
@@ -330,6 +330,7 @@ export async function runKodaX(
   const ctx: KodaXToolExecutionContext = {
     backups: new Map(),
     gitRoot: options.context?.gitRoot ?? undefined,
+    askUser: events.askUser, // Issue 069: Pass askUser callback from events
   };
 
   const systemPrompt = await buildSystemPrompt(options, messages.length === 1);
@@ -370,12 +371,40 @@ export async function runKodaX(
           // 改进的错误回退逻辑：告知用户并删除最老的10%消息
           console.error('[Compaction Error] LLM摘要失败，回退到简单截断:', error);
 
-          // 计算删除10%的消息
-          const removeCount = Math.ceil(messages.length * 0.1);
-          if (removeCount > 0 && messages.length > removeCount) {
-            compacted = messages.slice(removeCount);
-            console.warn(`[Compaction Fallback] 删除了最老的 ${removeCount} 条消息，保留 ${compacted.length} 条`);
-            events.onCompact?.(estimateTokens(messages));
+          // 确保至少删除1条，避免无限循环
+          const removeCount = Math.max(1, Math.ceil(messages.length * 0.1));
+
+          if (messages.length > removeCount + 1) {
+            let startIndex = removeCount;
+            let newCompacted: KodaXMessage[] = [];
+
+            // 如果有总结消息（系统消息或包含特定文本的用户消息），始终保留
+            const firstMsg = messages[0];
+            const isSummary = firstMsg && (firstMsg.role === 'system' || firstMsg.role === 'user')
+              && typeof firstMsg.content === 'string' && firstMsg.content.includes('[对话历史摘要]');
+
+            if (isSummary) {
+              newCompacted.push(firstMsg);
+              // 我们不想删掉摘要，而是想要删掉摘要后面的 removeCount 条消息，所以从 1 + removeCount 开始切
+              startIndex = 1 + removeCount;
+            }
+
+            // 避免截断包含 tool_result 的成对消息，如果切在了 tool_result 上就后移
+            while (startIndex < messages.length) {
+              const msgAtCut = messages[startIndex];
+              if (!msgAtCut) break;
+              if (msgAtCut.role === 'user' && Array.isArray(msgAtCut.content) &&
+                msgAtCut.content.some((b: any) => b?.type === 'tool_result')) {
+                startIndex++;
+                continue;
+              }
+              break;
+            }
+
+            newCompacted.push(...messages.slice(startIndex));
+            compacted = newCompacted;
+            console.warn(`[Compaction Fallback] 回退截断：删除了最旧的 ${startIndex - (isSummary ? 1 : 0)} 条消息，保留了 ${compacted.length} 条`);
+            events.onCompact?.(estimateTokens(compacted)); // 使用新的 compacted 估算
           } else {
             // 消息太少，不删除
             compacted = messages;
@@ -393,6 +422,10 @@ export async function runKodaX(
       // CRITICAL FIX: Always validate and fix tool history before sending to API
       // This prevents "tool_call_id is not found" errors caused by corrupted history
       compacted = validateAndFixToolHistory(compacted);
+
+      // CRITICAL FIX: Update the global session messages to the compacted version!
+      // This permanently applies the summary/truncation and prevents the session history from growing infinitely.
+      messages = compacted;
 
       // 流式调用 Provider - with automatic retry for transient errors
       const result = await withRetry(
