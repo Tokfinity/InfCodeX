@@ -104,18 +104,41 @@ export async function compact(
     };
   }
 
-  // 4. 提取文件操作
-  const fileOps = extractFileOps(toCompact);
+  // 4. 提取整体文件操作（用于最终返回和统计）
+  const totalFileOps = extractFileOps(toCompact);
 
   // 5. 生成 LLM 摘要（传入 systemPrompt 和 previousSummary 支持多轮压缩）
-  const summary = await generateSummary(
-    toCompact,
-    provider,
-    fileOps,
-    customInstructions,
-    systemPrompt,
-    previousSummary
-  );
+  // 引入分块逻辑，按 MAX_TOKENS_PER_CHUNK 拆分，避免单一请求过大触发 429 Rate Limit
+  const MAX_TOKENS_PER_CHUNK = 50000;
+  let summary = previousSummary || '';
+
+  if (toCompact.length > 0) {
+    const chunks = chunkMessages(toCompact, MAX_TOKENS_PER_CHUNK);
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      if (!chunk || chunk.length === 0) continue;
+
+      // 取出当前 chunk 的独立文件操作，以免向 LLM 传递属于未来 chunk 的剧透文件信息
+      const chunkFileOps = extractFileOps(chunk);
+
+      const chunkSummary = await generateSummary(
+        chunk,
+        provider,
+        chunkFileOps, // 传递当前被压缩片段的文件追踪
+        customInstructions,
+        systemPrompt,
+        summary !== '' ? summary : undefined
+      );
+
+      summary = chunkSummary;
+
+      // 非最后一块时，暂缓 2 秒以避免连续请求再次引发 TPM 限制
+      if (i < chunks.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+  }
 
   // 6. 构建新消息历史
   // 使用 'system' role 明确表示这是历史摘要，而非用户输入
@@ -134,7 +157,7 @@ export async function compact(
     tokensBefore,
     tokensAfter,
     entriesRemoved: toCompact.length,
-    details: fileOps,
+    details: totalFileOps,
   };
 }
 
@@ -207,5 +230,63 @@ function findCutPoint(
 
   // 所有消息都需要保留
   return 0;
+}
+
+/**
+ * 将消息按 Token 和原子块限制拆分为多个分块
+ * 这是为了避免一次性产生超长 payload 触发大模型 TPM Rate Limit (429)
+ *
+ * @param messages - 待分块的消息列表
+ * @param maxTokensPerChunk - 每个分块的最大 token 容量
+ * @returns 拆分后的分块数组
+ */
+function chunkMessages(messages: KodaXMessage[], maxTokensPerChunk: number): KodaXMessage[][] {
+  const chunks: KodaXMessage[][] = [];
+  let currentChunk: KodaXMessage[] = [];
+  let currentTokens = 0;
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    let group: KodaXMessage[] = [msg];
+
+    // 原子块检查逻辑（同 findCutPoint 保持一致）
+    const hasToolUse = msg.role === 'assistant' &&
+      Array.isArray(msg.content) &&
+      msg.content.some((b: any) => b?.type === 'tool_use');
+
+    if (hasToolUse) {
+      const nextMsg = messages[i + 1];
+      const hasNextToolResult = nextMsg?.role === 'user' &&
+        Array.isArray(nextMsg.content) &&
+        nextMsg.content.some((b: any) => b?.type === 'tool_result');
+
+      if (hasNextToolResult) {
+        group = [msg, nextMsg]; // 绑定为不可分割的原子块
+        i++; // 消耗下一条
+      }
+    }
+
+    const groupTokens = estimateTokens(group);
+
+    // 如果加入当前组会超过最大分块限制，并且当前 chunk 不为空，则新起一个 chunk
+    // 即使单个 group 超过了 maxSize，也只能硬着头皮放入新 chunk 中（不能拆散块）
+    if (currentTokens + groupTokens > maxTokensPerChunk && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = [...group];
+      currentTokens = groupTokens;
+    } else {
+      currentChunk.push(...group);
+      currentTokens += groupTokens;
+    }
+  }
+
+  // 推入最后一个 chunk
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks;
 }
 

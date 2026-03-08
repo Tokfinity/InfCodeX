@@ -486,3 +486,277 @@ if (mode === 'plan' && tool === 'bash') {
 
 ---
 
+## Session: 2026-03-08 - /project edit 意图理解和上下文保存修复
+
+### 背景
+
+用户使用 `/project edit #1 取消完成状态` 时，系统错误地将其理解为"标记为完成"。根本原因是关键词匹配 `lowerGuidance.includes('完成')` 匹配了"取消完成状态"中的"完成"。
+
+### 实现过程
+
+#### Turn 1 - 10:00
+**User**: 刚刚我想取消#1的完成状态，结果变成直接标记完成，而且我看过程好像没有过大模型，这什么情况？
+
+**Assistant**:
+1. 分析 project-commands.ts 中的关键词匹配逻辑
+2. 发现问题：第 803-816 行的 `lowerGuidance.includes('完成')` 匹配"取消完成状态"
+3. 初步修复：添加否定词检测列表
+
+#### Turn 2 - 10:10
+**User**: 咱们分析一下，直接用命令而不是用 LLM 来智能判断意图，会不会有很多潜在问题？
+
+**Assistant**: 分析潜在问题，用户确认统一交给 LLM 处理
+
+#### Turn 3 - 10:15
+**User**: 我觉得统一交给LLM处理就好，只要你预设，就有可能误判
+
+**Assistant**: 移除所有涉及 prompt 的关键词匹配，统一走 LLM
+
+#### Turn 4 - 10:20
+**User**: 昨天改动成功了，但是返回内容很奇怪，显示 JSON 格式
+
+**Assistant**: 发现 `context.messages = result.messages` 把原始 JSON 保存并显示了
+
+**User 关键约束**: 之前有修复就是因为没保存上下文导致后续对话"失忆"
+
+**最终方案**: 替换消息内容而不是删除
+
+### 墓碑区（本次新增）
+
+### T03: 简单否定词列表
+- **失败原因**: 复杂否定表达仍误判，只要预设就可能出错
+- **放弃日期**: 2026-03-08
+
+### T04: 删除 context.messages 赋值
+- **失败原因**: 后续对话会"失忆"
+- **放弃日期**: 2026-03-08
+
+### 关键决策
+
+1. **Prompt 统一走 LLM**: 子命令/参数无歧义可用关键词，prompt 必须用 LLM
+2. **替换消息而非删除**: 保留上下文，避免显示原始 JSON
+3. **保留删除操作关键词**: 破坏性操作需要明确意图
+
+### 成果
+
+✅ `/project edit #1 取消完成状态` 正确理解语义
+✅ 用户不再看到原始 JSON
+✅ 后续对话保留上下文（不会失忆）
+
+---
+
+*更新时间: 2026-03-08 10:35*
+
+---
+
+## Session: 2026-03-08 (续) - 循环逻辑 Bug 修复与 v0.5.21 发布
+
+### 背景
+
+用户让另一个 AI review 代码改动，发现了一个循环逻辑 bug。
+
+### 实现过程
+
+#### Turn 1 - 12:00
+**User**: 我让另一个 AI review 了当前代码改动，它提出了三个问题：
+1. 🔴 循环逻辑问题 - `for (let i = length-1; i < length; i++)` 只执行一次
+2. 🟡 动态 require - 建议改为静态 import
+3. 🟡 JSON.parse 缺少 try-catch
+
+**Assistant**:
+验证三个评论：
+1. ✅ 循环逻辑确实是 bug - 从 `length-1` 开始，条件 `i < length`，只执行一次
+2. ⚠️ 动态 require 是风格问题，非关键
+3. ⚠️ JSON.parse 加 try-catch 是防御性编程建议
+
+**关键发现**：
+```typescript
+// Bug 分析
+for (let i = messages.length - 1; i < messages.length; i++) {
+  // i = length - 1 → 条件为真 → 执行
+  // i++ → i = length → 条件为假 → 退出
+  // 结果：只执行一次
+}
+```
+
+#### Turn 2 - 12:05
+**User**: 请修复
+
+**Assistant**:
+修复循环逻辑：
+```diff
+- for (let i = messages.length - 1; i < messages.length; i++) {
++ for (let i = messages.length - 1; i >= 0; i--) {
+```
+
+**Tools**: Read, Edit
+
+#### Turn 3 - 12:10
+**User**: Tag 0.5.21 同步所有版本，提交代码并推送
+
+**Assistant**:
+完成发布流程：
+1. ✅ 版本号更新到 0.5.21（所有 6 个 package.json）
+2. ✅ 提交代码（commit 483f49c）
+3. ✅ 创建 tag v0.5.21
+4. ✅ 推送到远程
+
+**提交内容**：
+- 修复 `cleanupIncompleteToolCalls` 循环逻辑 bug
+- 添加 `ask-user-question` 工具
+- 增强 project-commands 和 InkREPL
+- 版本号升级到 0.5.21
+
+### 墓碑区（本次新增）
+
+### T05: 循环条件 `i < messages.length`
+- **失败原因**: 从 `length-1` 开始只执行一次循环
+- **发现方式**: 外部 AI 代码审查
+- **放弃日期**: 2026-03-08
+
+### 关键决策
+
+1. **外部代码审查**: 不同 AI 有不同视角，能发现单个 AI 遗漏的 bug
+2. **循环边界检查**: 写循环时需要验证实际执行次数
+
+### 成果
+
+✅ 循环逻辑 bug 已修复
+✅ v0.5.21 已发布
+✅ 代码已推送到远程
+
+---
+
+*更新时间: 2026-03-08 12:10*
+
+---
+
+## Session: 2026-03-08 (续) - Compaction 分块压缩优化
+
+### 背景
+
+在长会话中使用 compaction 功能时，一次性压缩大量消息可能触发 API 的 TPM (Tokens Per Minute) Rate Limit (429 错误)。
+
+### 实现过程
+
+#### Turn 1 - 14:00
+**User**: 请你 review 一下未提交的代码修改
+
+**Assistant**:
+Review 三个未提交文件：
+1. packages/agent/src/compaction/compaction.ts - 分块压缩逻辑
+2. docs/context/HOT_TRACK.md - 热轨快照更新
+3. docs/context/COLD_TRACK.md - 冷轨归档更新
+
+**识别的问题**：
+1. 🔴 CRITICAL: fileOps 传递问题 - 所有 chunk 传递相同的全量 fileOps
+2. 🟡 MEDIUM: 摘要累积逻辑 - 担心 `summary = chunkSummary` 会覆盖
+3. 🟡 MEDIUM: estimateTokens 函数缺失
+
+#### Turn 2 - 14:15
+**User**: 把 Gemini 的总结报告给你看一下...
+
+**Assistant**:
+验证 Gemini 的修复和分析：
+
+1. ✅ **fileOps 问题已修复** - 每个 chunk 独立提取 `chunkFileOps`
+2. ✅ **摘要逻辑正确** - `generateSummary` 内部使用 `UPDATE_SUMMARY_PROMPT`，LLM 会自动融合
+3. ✅ **estimateTokens 存在** - 从 `../tokenizer.js` 导入，使用 `@tiktoken/cl100k_base`
+
+确认修复完整，可以提交。
+
+### 技术细节
+
+#### Compaction 分块压缩架构
+
+**核心函数**：
+
+```typescript
+// chunkMessages() - 将消息拆分为多个分块
+function chunkMessages(
+  messages: KodaXMessage[],
+  maxTokensPerChunk: number
+): KodaXMessage[][] {
+  // 1. 原子块保护：tool_use + tool_result 不可拆分
+  // 2. 按累积 token 分块
+  // 3. 单个 group 超限时仍放入新 chunk（不能拆散）
+}
+
+// compact() - 主流程
+const MAX_TOKENS_PER_CHUNK = 50000;
+const chunks = chunkMessages(toCompact, MAX_TOKENS_PER_CHUNK);
+
+for (let i = 0; i < chunks.length; i++) {
+  const chunk = chunks[i];
+  const chunkFileOps = extractFileOps(chunk); // ✅ 每个 chunk 独立
+
+  const chunkSummary = await generateSummary(
+    chunk,
+    provider,
+    chunkFileOps,
+    customInstructions,
+    systemPrompt,
+    summary !== '' ? summary : undefined
+  );
+
+  summary = chunkSummary; // ✅ LLM 内部已融合
+
+  if (i < chunks.length - 1) {
+    await new Promise(resolve => setTimeout(resolve, 2000)); // 延迟 2 秒
+  }
+}
+```
+
+**关键设计**：
+
+1. **MAX_TOKENS_PER_CHUNK = 50,000**
+   - 平衡性能和安全性
+   - 远低于 API 上限，留有余量
+
+2. **原子块保护**
+   - tool_use 和 tool_result 必须在同一 chunk
+   - 避免上下文断裂
+
+3. **独立 fileOps**
+   - 每个 chunk 只包含自己的文件操作
+   - 避免向 LLM "剧透"未来的修改
+
+4. **2 秒延迟**
+   - 非最后一块时暂停
+   - 避免连续请求触发 rate limit
+
+5. **摘要累积**
+   - 通过 `previousSummary` 参数传递
+   - LLM 使用 `UPDATE_SUMMARY_PROMPT` 自动融合
+   - TypeScript 层面直接 `summary = chunkSummary`
+
+### 关键决策
+
+1. **使用分块而非单一请求**
+   - 解决 TPM Rate Limit 问题
+   - 提升长会话稳定性
+
+2. **每个 chunk 独立 fileOps**
+   - 避免信息泄露导致 LLM 幻觉
+   - 保持上下文一致性
+
+3. **LLM 层摘要融合**
+   - 不在 TypeScript 层拼接字符串
+   - 利用 LLM 的语义理解能力
+   - 生成更连贯的摘要
+
+4. **保留 totalFileOps**
+   - 用于返回值的 `details` 字段
+   - 记录整个压缩过程的完整文件操作
+
+### 成果
+
+✅ Compaction 分块压缩已实现
+✅ 文档已更新（热轨 + 冷轨）
+✅ 代码审查完成
+✅ 准备提交
+
+---
+
+*更新时间: 2026-03-08 14:30*
+
