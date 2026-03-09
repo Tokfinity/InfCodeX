@@ -86,6 +86,8 @@ export interface KodaXProviderStreamOptions {
   onThinkingDelta?: (text: string) => void;
   onThinkingEnd?: (thinking: string) => void;
   onToolInputDelta?: (toolName: string, partialJson: string) => void;
+  /** 当底层 API 遇到 Rate Limit 进行重试时触发 */
+  onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   /** 会话标识，用于多轮对话上下文恢复 */
   sessionId?: string;
   /** AbortSignal for cancelling the stream request */

@@ -360,6 +360,7 @@ export async function runKodaX(
       const needsBasicCompact = compactionConfig.enabled && currentTokens > 100000; // 基础安全水位，替代遗留 compactMessages
 
       if (needsIntelligentCompact || needsBasicCompact) {
+        events.onCompactStart?.();
         // 统一走智能压缩（分块 LLM 摘要 + 保留最近 10% 上下文）
         try {
           const result = await intelligentCompact(
@@ -460,6 +461,7 @@ export async function runKodaX(
             onThinkingDelta: (text) => events.onThinkingDelta?.(text),
             onThinkingEnd: (thinking) => events.onThinkingEnd?.(thinking),
             onToolInputDelta: (name, json) => events.onToolInputDelta?.(name, json),
+            onRateLimit: (attempt, max, delay) => events.onProviderRateLimit?.(attempt, max, delay),
             signal: retrySignal,
           }, retrySignal).finally(() => clearTimeout(retryTimer));
         },

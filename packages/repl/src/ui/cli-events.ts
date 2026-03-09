@@ -208,8 +208,12 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
       spinner = startWaitingDots();
     },
 
+    onCompactStart: () => {
+      console.log(chalk.dim(`\n[KodaX] Compacting context...`));
+    },
+
     onCompact: (tokens: number) => {
-      console.log(chalk.dim(`[KodaX] Compacting context (${tokens} tokens)...`));
+      console.log(chalk.dim(`[KodaX] Compaction finished (${tokens} tokens).`));
     },
 
     onRetry: (reason: string, attempt: number, maxAttempts: number) => {

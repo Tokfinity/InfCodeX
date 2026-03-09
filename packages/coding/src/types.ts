@@ -59,8 +59,10 @@ export interface KodaXEvents {
   onIterationStart?: (iter: number, maxIter: number) => void;
   /** Called after each iteration with current token count for UI updates */
   onIterationEnd?: (info: { iter: number; maxIter: number; tokenCount: number }) => void;
+  onCompactStart?: () => void;
   onCompact?: (estimatedTokens: number) => void;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
+  onProviderRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   onComplete?: () => void;
   onError?: (error: Error) => void;
 

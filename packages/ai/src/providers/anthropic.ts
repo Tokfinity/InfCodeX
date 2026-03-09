@@ -146,7 +146,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       }
 
       return { textBlocks, toolBlocks, thinkingBlocks };
-    }, signal);
+    }, signal, 3, streamOptions?.onRateLimit);
   }
 
   private convertMessages(messages: KodaXMessage[]): Anthropic.Messages.MessageParam[] {

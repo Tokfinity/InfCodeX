@@ -52,7 +52,8 @@ export abstract class KodaXBaseProvider {
   protected async withRateLimit<T>(
     fn: () => Promise<T>,
     signal?: AbortSignal,
-    retries = 3
+    retries = 3,
+    onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void
   ): Promise<T> {
     for (let i = 0; i < retries; i++) {
       try {
@@ -70,7 +71,11 @@ export abstract class KodaXBaseProvider {
           }
 
           // 显示重试信息
-          console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
+          if (onRateLimit) {
+            onRateLimit(i + 1, retries, delay);
+          } else {
+            console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
+          }
 
           // 检查是否已被取消
           if (signal?.aborted) {

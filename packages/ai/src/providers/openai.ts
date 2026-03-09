@@ -85,7 +85,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         }
       }
       return { textBlocks, toolBlocks, thinkingBlocks: [] };
-    }, signal);
+    }, signal, 3, streamOptions?.onRateLimit);
   }
 
   private convertMessages(messages: KodaXMessage[]): OpenAI.Chat.ChatCompletionMessageParam[] {

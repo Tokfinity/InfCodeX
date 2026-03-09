@@ -202,27 +202,7 @@ export const BUILTIN_COMMANDS: Command[] = [
           await callbacks.saveSession();
 
           // Display statistics
-          console.log(chalk.green('\n[Compaction complete]'));
-          console.log(chalk.bold('\nStatistics:'));
-          console.log(chalk.dim(`  Tokens:      ${result.tokensBefore.toLocaleString()} → ${result.tokensAfter.toLocaleString()} (${Math.round((1 - result.tokensAfter / result.tokensBefore) * 100)}% reduction)`));
-          console.log(chalk.dim(`  Messages:    Removed ${result.entriesRemoved} messages`));
-
-          if (result.details) {
-            const fileCount = result.details.readFiles.length + result.details.modifiedFiles.length;
-            if (fileCount > 0) {
-              console.log(chalk.dim(`  Files:       Tracked ${fileCount} files (${result.details.readFiles.length} read, ${result.details.modifiedFiles.length} modified)`));
-            }
-          }
-
-          console.log();
-          console.log(chalk.dim('Summary preview:'));
-          console.log(chalk.dim('─'.repeat(60)));
-          if (result.summary) {
-            // Show first 300 chars of summary
-            const preview = result.summary.slice(0, 300);
-            console.log(chalk.dim(preview + (result.summary.length > 300 ? '...' : '')));
-          }
-          console.log(chalk.dim('─'.repeat(60)));
+          console.log(chalk.green(`\n[Compaction complete: ${Math.round(result.tokensBefore / 1000)}k → ${Math.round(result.tokensAfter / 1000)}k tokens, ${Math.round((1 - result.tokensAfter / result.tokensBefore) * 100)}% reduced]`));
           console.log();
         } finally {
           // Stop compacting indicator
@@ -845,9 +825,9 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
     // 显示所有技能来源，project 级别不显示（默认）
     const sourceLabel = skill.source === 'builtin' ? ' [builtin]'
       : skill.source === 'user' ? ' [user]'
-      : skill.source === 'enterprise' ? ' [enterprise]'
-      : skill.source === 'plugin' ? ' [plugin]'
-      : '';
+        : skill.source === 'enterprise' ? ' [enterprise]'
+          : skill.source === 'plugin' ? ' [plugin]'
+            : '';
     // pi-mono style: /skill:name
     const desc = skill.description.length > 50
       ? skill.description.slice(0, 50) + '...'
