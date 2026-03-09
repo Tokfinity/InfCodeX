@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.27] - 2026-03-10
+
+### Fixed
+- **Rate Limit Message Display**
+  - Fixed rate limit retry messages appearing 3 times after task completion
+  - Changed from console.log to callback-based approach (`onRateLimit` callback)
+  - UI layer now controls rate limit message display instead of provider layer
+  - Added `onRateLimit` callback to `KodaXProviderStreamOptions` type
+
+### Added
+- **Auto-Compaction Notification**
+  - Status bar now shows "✨ Compacting..." indicator during context compaction
+  - Added `onCompactStart` callback to notify UI before compaction starts
+  - Info message displays after compaction: "Context auto-compacted (was ~Xk tokens)"
+  - Fixed StatusBar and MessageList state consistency for compaction indicator
+
 ## [0.5.26] - 2026-03-08
 
 ### Fixed

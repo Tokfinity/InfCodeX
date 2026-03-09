@@ -148,6 +148,8 @@ export interface StatusBarProps {
   };
   currentTool?: string;
   thinking?: boolean;
+  /** Is context currently compacting - 是否正在压缩上下文 */
+  isCompacting?: boolean;
   /** Thinking character count - Issue 068: 显示 thinking 进度 */
   thinkingCharCount?: number;
   /** Tool input character count - Issue 068: 显示 tool 输入进度 */

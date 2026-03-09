@@ -578,6 +578,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       console.log(chalk.gray(`   Retry attempt ${attempt}/${maxAttempts}`));
       console.log(''); // Empty line for readability
     },
+    onProviderRateLimit: (attempt: number, maxAttempts: number, delayMs: number) => {
+      addHistoryItem({
+        type: "info",
+        icon: "⏳",
+        text: `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`
+      });
+    },
     // Iteration start - called at the beginning of each agent iteration
     // 迭代开始 - 在每轮 agent 迭代开始时调用
     onIterationStart: (iter: number, maxIter: number) => {
@@ -762,22 +769,31 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         });
       });
     },
+    onCompactStart: () => {
+      // Trigger the compacting UI indicator before actual compaction begins
+      startCompacting();
+    },
     // Compaction event - notification only, do NOT clear UI history here
     // 压缩事件 - 仅通知，不要在这里清理 UI 历史记录
-    onCompact: (_estimatedTokens: number) => {
+    onCompact: (estimatedTokens: number) => {
+      // Stop the indicator now that it's complete
+      stopCompacting();
+
       // Auto-compaction happened during agent execution
-      // UI will be updated naturally when context.messages changes
-      // Do NOT clear UI history or print messages here - that's handled by /compact command
-      // 自动压缩在 agent 执行期间发生
-      // UI 会在 context.messages 改变时自然更新
-      // 不要在这里清空 UI 历史或打印消息 - 那由 /compact 命令处理
+      // Insert a minimal info message into the UI history
+      const prevK = Math.round(estimatedTokens / 1000);
+      addHistoryItem({
+        type: "info",
+        icon: "✨",
+        text: `Context auto-compacted (was ~${prevK}k tokens)`,
+      });
     },
     // Iteration end - update live token count for real-time context usage display
     // 迭代结束 - 更新实时 token 计数用于上下文使用量显示
     onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
       setLiveTokenCount(info.tokenCount);
     },
-  }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot]);
+  }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting]);
 
   // Helper function to show confirmation dialog
   // 显示确认对话框的辅助函数
@@ -1386,9 +1402,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         // Add captured console output to history as info items
         if (capturedOutput.length > 0) {
+          // Deduplicate identical captured log lines
+          const uniqueOutput = capturedOutput.filter((item, pos, self) => {
+            return self.indexOf(item) === pos;
+          });
+
           addHistoryItem({
             type: "info",
-            text: capturedOutput.join('\n'),
+            text: uniqueOutput.join('\n'),
           });
         }
 
@@ -1501,6 +1522,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             currentIteration={streamingState.currentIteration}
             maxIter={streamingState.maxIter}
             contextUsage={contextUsage}
+            isCompacting={streamingState.isCompacting}
           />
         </Box>
 

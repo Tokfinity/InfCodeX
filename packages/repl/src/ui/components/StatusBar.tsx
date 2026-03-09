@@ -57,6 +57,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   tokenUsage,
   currentTool,
   thinking,
+  isCompacting,
   thinkingCharCount,
   toolInputCharCount,
   toolInputContent,
@@ -106,14 +107,17 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }, [currentIteration, maxIter]);
 
   // Issue 068 Phase 4: Build tool display with parameter summary
-  // Priority: toolInputContent (parameter preview) > toolInputCharCount (char count) > none
-  const toolDisplay = currentTool
-    ? toolInputContent
-      ? `⏳ ${currentTool} (${toolInputContent}...)`
-      : toolInputCharCount
-        ? `⏳ ${currentTool} (${toolInputCharCount} chars)`
-        : `⏳ ${currentTool}`
-    : null;
+  // Issue 068 Phase 4: Build tool display with parameter summary
+  // Priority: compacting > toolInputContent (parameter preview) > toolInputCharCount (char count) > none
+  const toolDisplay = isCompacting
+    ? `✨ Compacting...`
+    : currentTool
+      ? toolInputContent
+        ? `⏳ ${currentTool} (${toolInputContent}...)`
+        : toolInputCharCount
+          ? `⏳ ${currentTool} (${toolInputCharCount} chars)`
+          : `⏳ ${currentTool}`
+      : null;
 
   // Issue 070: Build context usage display with color-coded progress
   const contextDisplay = useMemo(() => {
