@@ -788,6 +788,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         text: `Context auto-compacted (was ~${prevK}k tokens)`,
       });
     },
+    onCompactEnd: () => {
+      // Just stop the indicator if compaction was skipped/aborted without changing the context
+      stopCompacting();
+    },
     // Iteration end - update live token count for real-time context usage display
     // 迭代结束 - 更新实时 token 计数用于上下文使用量显示
     onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {

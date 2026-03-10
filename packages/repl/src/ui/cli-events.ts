@@ -216,6 +216,10 @@ export function createCliEvents(showSessionId = true): KodaXEvents {
       console.log(chalk.dim(`[KodaX] Compaction finished (${tokens} tokens).`));
     },
 
+    onCompactEnd: () => {
+      // Silently finish if compaction was aborted
+    },
+
     onRetry: (reason: string, attempt: number, maxAttempts: number) => {
       console.log(chalk.yellow(`[KodaX] Retry ${attempt}/${maxAttempts}: ${reason}`));
     },

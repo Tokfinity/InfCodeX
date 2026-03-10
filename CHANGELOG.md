@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.28] - 2026-03-10
+
+### Fixed
+- **Compaction Indicator Issues**
+  - Fixed thinking spinner incorrectly showing "Compacting" after compaction check
+  - Added `onCompactEnd` callback to properly stop spinner in all cases
+  - Removed redundant `needsBasicCompact` check (100k threshold) - now only uses intelligent compaction threshold (75%)
+  - Proper separation of concerns: `onCompact` for message display, `onCompactEnd` for spinner control
+
 ## [0.5.27] - 2026-03-10
 
 ### Fixed

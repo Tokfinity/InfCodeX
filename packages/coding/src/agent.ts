@@ -354,12 +354,12 @@ export async function runKodaX(
       // Compaction: 统一使用智能压缩，废除遗留的粗暴截断
       let compacted: KodaXMessage[];
 
-      // 判断是否需要压缩：优先检查智能压缩阈值 (75%)，其次检查基础安全水位 (100k)
+      // 判断是否需要压缩：只依据智能压缩阈值 (默认 75%)
       const currentTokens = estimateTokens(messages);
       const needsIntelligentCompact = compactionConfig.enabled && needsCompaction(messages, compactionConfig, contextWindow);
-      const needsBasicCompact = compactionConfig.enabled && currentTokens > 100000; // 基础安全水位，替代遗留 compactMessages
 
-      if (needsIntelligentCompact || needsBasicCompact) {
+      if (needsIntelligentCompact) {
+        // Only trigger UI indicator right before the heavy lifting
         events.onCompactStart?.();
         // 统一走智能压缩（分块 LLM 摘要 + 保留最近 10% 上下文）
         try {
@@ -377,8 +377,6 @@ export async function runKodaX(
             events.onCompact?.(result.tokensBefore);
           } else {
             compacted = result.messages;
-            // 即使没有实际压缩，也要停止 compacting 指示器
-            events.onCompact?.(estimateTokens(compacted));
           }
         } catch (error) {
           // 改进的错误回退逻辑：告知用户并删除最老的10%消息
@@ -423,6 +421,9 @@ export async function runKodaX(
             compacted = messages;
             console.warn('[Compaction Fallback] 消息数量太少，跳过删除');
           }
+        } finally {
+          // 总是确保停止 UI 的转圈状态
+          events.onCompactEnd?.();
         }
       } else {
         // 不需要压缩，直接使用原始消息

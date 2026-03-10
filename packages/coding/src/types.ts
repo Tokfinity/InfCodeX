@@ -60,7 +60,10 @@ export interface KodaXEvents {
   /** Called after each iteration with current token count for UI updates */
   onIterationEnd?: (info: { iter: number; maxIter: number; tokenCount: number }) => void;
   onCompactStart?: () => void;
+  /** Emitted when compaction finishes and actually changed the context */
   onCompact?: (estimatedTokens: number) => void;
+  /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
+  onCompactEnd?: () => void;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
   onProviderRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   onComplete?: () => void;
