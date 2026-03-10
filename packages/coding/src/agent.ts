@@ -377,6 +377,8 @@ export async function runKodaX(
             events.onCompact?.(result.tokensBefore);
           } else {
             compacted = result.messages;
+            // 即使没有实际压缩，也要停止 compacting 指示器
+            events.onCompact?.(estimateTokens(compacted));
           }
         } catch (error) {
           // 改进的错误回退逻辑：告知用户并删除最老的10%消息
