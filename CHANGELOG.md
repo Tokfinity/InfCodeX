@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.29] - 2026-03-11
+
+### Changed
+- **ACP Protocol Architecture Refactoring**
+  - Refactored Gemini CLI and Codex CLI providers to use new ACP (Agent Client Protocol) architecture
+  - Added `KodaXAcpProvider` base class for all ACP-based providers
+  - Added `AcpClient` for ACP protocol communication (supports both native process and in-memory streams)
+  - Added `createPseudoAcpServer` for in-memory ACP server simulation
+
+### Added
+- **New Files**
+  - `packages/ai/src/providers/acp-base.ts` - Base class for ACP providers
+  - `packages/ai/src/cli-events/acp-client.ts` - ACP client implementation
+  - `packages/ai/src/cli-events/pseudo-acp-server.ts` - In-memory ACP server
+
+### Improved
+- **Resource Management**
+  - Proper abort signal propagation through all layers
+  - Session mapping between KodaX and ACP session IDs
+  - Clean disconnect with resource cleanup
+- **Error Handling**
+  - Errors now properly propagated through ACP protocol
+  - CLI installation check before streaming
+- **Type Safety**
+  - Replaced `any` types with proper TypeScript types
+
 ## [0.5.28] - 2026-03-10
 
 ### Fixed
