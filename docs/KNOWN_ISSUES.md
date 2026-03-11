@@ -40,7 +40,7 @@ _Last Updated: 2026-03-11
 | 067 | Critical | Resolved | API 速率限制重试机制失效 | v0.5.4 | v0.5.27 | 2026-03-03 | 2026-03-11 |
 | 068 | High | Resolved | Thinking 指示器长时间无进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 069 | Medium | Resolved | 缺少 LLM 交互式提问工具 | v0.5.4 | v0.5.29 | 2026-03-03 | 2026-03-11 |
-| 070 | Low | Open | 流式输出可能丢失换行符 | v0.5.4 | - | 2026-03-03 | - |
+| 070 | Low | Resolved | 流式输出可能丢失换行符 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-11 |
 | 071 | High | Resolved | Session Resume 跨项目恢复错误 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
 | 072 | High | Resolved | 流式中断后 tool_call_id 不匹配导致 API 错误 | v0.5.4 | v0.5.20 | 2026-03-03 | 2026-03-07 |
 | 073 | High | Resolved | /project auto 等子命令无流式进度反馈 | v0.5.4 | v0.5.4 | 2026-03-03 | 2026-03-03 |
@@ -231,7 +231,7 @@ _Last Updated: 2026-03-11
 
 
 ## Summary
-- Total: 46 (11 Open, 31 Resolved, 1 Partially Resolved, 3 Won't Fix)
+- Total: 46 (10 Open, 32 Resolved, 1 Partially Resolved, 3 Won't Fix)
 - Highest Priority Open: 083 - 缺少快捷键系统 (Medium)
 - 43 issues archived to ISSUES_ARCHIVED.md
 
@@ -245,8 +245,9 @@ _Last Updated: 2026-03-11
 - **Issue 060**: Deferred → Resolved (定时器已同步：StreamingContext flush 80ms 与 Spinner 动画帧 80ms 同步)
 - **Issue 067**: Open → Resolved (v0.5.27 实现了正确的重试循环和回调式 UI 通知)
 - **Issue 069**: Open → Resolved (`toolAskUserQuestion` 工具已存在于 `packages/coding/src/tools/ask-user-question.ts`)
+- **Issue 070**: Open → Resolved (代码审查确认换行符在流式管道中被正确保留，非 KodaX 代码问题)
 - **Issue 081**: Open → Resolved (Provider 已使用 `useMemo` 记忆化，所有回调使用 `useCallback` 包装)
-- 更新 Summary 统计: 11 Open, 31 Resolved, 1 Partially Resolved, 3 Won't Fix
+- 更新 Summary 统计: 10 Open, 32 Resolved, 1 Partially Resolved, 3 Won't Fix
 
 ### 2026-02-28: Issue 052 修复
 - Resolved 052: 受保护路径确认对话框显示错误选项
@@ -3171,9 +3172,19 @@ _Last Updated: 2026-03-11
 
 ### 070: 流式输出可能丢失换行符
 - **Priority**: Low
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.4
+- **Fixed**: v0.5.29
 - **Created**: 2026-03-03
+- **Resolved**: 2026-03-11
+
+- **Resolution**:
+  代码审查确认换行符在整个流式处理管道中被正确保留：
+  - Provider 层：文本直接传递，无修改 (`delta.text ?? ''`)
+  - StreamingContext：批量更新使用字符串拼接 (`pendingResponseText += text`)
+  - MessageList：正确按 `\n` 分割渲染 (`streamingResponse.split("\n")`)
+  - CLI 模式：`process.stdout.write(text)` 直接输出
+  问题可能是 LLM 本身输出，非 KodaX 代码问题。
 
 - **Original Problem**:
   流式输出时，某些内容应该换行但没有换行：
