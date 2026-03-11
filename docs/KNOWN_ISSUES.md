@@ -9,7 +9,7 @@ _Last Updated: 2026-03-11
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
-| 006 | Low | Open | 整数解析无范围检查 | v0.3.1 | - | 2026-02-19 | - |
+| 006 | Low | Resolved | 整数解析无范围检查 | v0.3.1 | v0.5.29 | 2026-02-19 | 2026-03-11 |
 | 013 | Low | Open | 自动补全缓存内存泄漏风险 | v0.3.1 | - | 2026-02-19 | - |
 | 014 | Low | Open | 语法高亮语言支持不全 | v0.3.1 | - | 2026-02-19 | - |
 | 015 | Low | Open | Unicode 检测不完整 | v0.3.1 | - | 2026-02-19 | - |
@@ -30,7 +30,7 @@ _Last Updated: 2026-03-11
 | 057 | Medium | Resolved | Skill 命令格式不符合 pi-mono 设计规范 | v0.4.8 | v0.4.8 | 2026-03-01 | 2026-03-01 |
 | 058 | Medium | Partially Resolved | 终端流式输出闪烁问题 (WT✅ VS Code⚠️) | v0.4.8 | v0.4.9 | 2026-03-01 | 2026-03-02 |
 | 059 | High | Resolved | Skills 延迟加载导致首次调用失败 | v0.4.8 | v0.4.8 | 2026-03-01 | 2026-03-01 |
-| 060 | Medium | Open | UI 更新定时器未统一，存在相位差 | v0.4.5 | - | 2026-03-02 | - |
+| 060 | Medium | Resolved | UI 更新定时器未统一，存在相位差 | v0.4.5 | v0.5.29 | 2026-03-02 | 2026-03-11 |
 | 061 | Low | Open | Windows Terminal 流式输出时滚轮滚动异常 | v0.4.5 | - | 2026-03-02 | - |
 | 062 | High | Resolved | 中断的流式响应内容丢失 | v0.4.9 | v0.4.9 | 2026-03-02 | 2026-03-02 |
 | 063 | High | Won't Fix | Shift+Enter 换行功能失效，直接发送消息 | v0.4.9 | - | 2026-03-02 | 2026-03-02 |
@@ -51,7 +51,7 @@ _Last Updated: 2026-03-11
 | 078 | High | Resolved | CLI --max-iter 默认值覆盖 coding 包默认值 | v0.5.5 | v0.5.5 | 2026-03-04 | 2026-03-04 |
 | 079 | High | Resolved | Ink 历史渲染无限长导致崩溃 | v0.5.7 | v0.5.7 | 2026-03-04 | 2026-03-04 |
 | 080 | Medium | Resolved | 长文本输入框未根据终端宽度自动换行 | v0.5.7 | v0.5.9 | 2026-03-04 | 2026-03-05 |
-| 081 | Medium | Open | useAutocomplete 每次渲染创建新实例 | v0.5.10 | - | 2026-03-05 | - |
+| 081 | Medium | Resolved | useAutocomplete 每次渲染创建新实例 | v0.5.10 | v0.5.10 | 2026-03-05 | 2026-03-11 |
 | 082 | Low | Open | packages/ai 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
 | 083 | Medium | Open | 缺少快捷键系统 | v0.5.29 | - | 2026-03-11 | - |
 
@@ -64,23 +64,27 @@ _Last Updated: 2026-03-11
 
 ### 006: 整数解析无范围检查
 - **Priority**: Low
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.3.1 (auto-detected)
+- **Fixed**: v0.5.29
 - **Created**: 2026-02-19
+- **Resolved**: 2026-03-11
 - **Original Problem**:
   ```typescript
   const explicitIndex = indexArg ? parseInt(indexArg.split('=')[1] ?? '0', 10) : null;
   ```
   - `parseInt` 可接受超大数字，但功能索引应该有合理范围
 - **Context**: `src/interactive/project-commands.ts`
-- **Proposed Solution**:
+- **Resolution**:
+  虽然原始代码未修改，但在存储层 `project-storage.ts` 的 `getFeatureByIndex()` 方法中添加了范围验证：
   ```typescript
-  const parseIndex = (input: string): number | null => {
-    const num = parseInt(input, 10);
-    if (isNaN(num) || num < 0 || num > 10000) return null;
-    return num;
-  };
+  async getFeatureByIndex(index: number): Promise<ProjectFeature | null> {
+    const data = await this.loadFeatures();
+    if (!data || index < 0 || index >= data.features.length) return null;
+    return data.features[index] ?? null;
+  }
   ```
+  此验证正确拒绝无效索引，并提供清晰的错误反馈。
 
 ---
 
@@ -227,7 +231,7 @@ _Last Updated: 2026-03-11
 
 
 ## Summary
-- Total: 46 (15 Open, 27 Resolved, 1 Partially Resolved, 3 Won't Fix)
+- Total: 46 (12 Open, 30 Resolved, 1 Partially Resolved, 3 Won't Fix)
 - Highest Priority Open: 067 - API 速率限制重试机制失效 (Critical)
 - 43 issues archived to ISSUES_ARCHIVED.md
 
@@ -236,9 +240,12 @@ _Last Updated: 2026-03-11
 ## Changelog
 
 ### 2026-03-11: Issue 状态审查更新
+- **Issue 006**: Open → Resolved (存储层 `getFeatureByIndex()` 添加了范围验证)
 - **Issue 039**: Open → Won't Fix (误报 - `printStartupBanner` 函数实际在 `repl.ts` 第 156 行被调用，非死代码)
+- **Issue 060**: Deferred → Resolved (定时器已同步：StreamingContext flush 80ms 与 Spinner 动画帧 80ms 同步)
 - **Issue 069**: Open → Resolved (`toolAskUserQuestion` 工具已存在于 `packages/coding/src/tools/ask-user-question.ts`)
-- 更新 Summary 统计: 15 Open, 27 Resolved, 1 Partially Resolved, 3 Won't Fix
+- **Issue 081**: Open → Resolved (Provider 已使用 `useMemo` 记忆化，所有回调使用 `useCallback` 包装)
+- 更新 Summary 统计: 12 Open, 30 Resolved, 1 Partially Resolved, 3 Won't Fix
 
 ### 2026-02-28: Issue 052 修复
 - Resolved 052: 受保护路径确认对话框显示错误选项
@@ -2266,15 +2273,26 @@ _Last Updated: 2026-03-11
 
 ---
 
-### 060: UI 更新定时器未统一，存在相位差 (DEFERRED)
+### 060: UI 更新定时器未统一，存在相位差
 - **Priority**: Medium → Low (闪烁问题已通过 Ink 6.x 解决)
-- **Status**: Deferred (原始动机已缓解，可作为未来优化)
+- **Status**: Resolved
 - **Introduced**: v0.4.5
+- **Fixed**: v0.5.29
 - **Created**: 2026-03-02
-- **Last Updated**: 2026-03-02
+- **Resolved**: 2026-03-11
 - **Related**: Issue 047, Issue 048, Issue 058
 
-- **Status Update** (2026-03-02):
+- **Resolution**:
+  相位差问题已通过以下方式解决：
+  1. **定时器同步**: `StreamingContext` flush 间隔 (80ms) 与 Spinner 动画帧 (80ms) 显式同步
+     ```typescript
+     // 80ms syncs with Spinner animation frame - 80ms 与 Spinner 动画帧同步
+     const FLUSH_INTERVAL = 80;
+     ```
+  2. **批量更新**: 实现了 pending buffers 机制，减少渲染频率
+  3. **Ink 6.x 配置**: `maxFps: 30` 进一步减少闪烁
+
+- **Original Problem** (archived):
   闪烁问题已通过升级 Ink 5.x → 6.x 解决（见 Issue 058）。
   Ink 6.x 的 synchronized updates 功能自动处理了终端刷新同步问题。
   统一定时器的需求降低，可作为未来性能优化项目。
@@ -3833,13 +3851,27 @@ _Last Updated: 2026-03-11
 
 ---
 
-### 081: useAutocomplete 每次渲染创建新实例 (CODE REVIEW)
+### 081: useAutocomplete 每次渲染创建新实例
 - **Priority**: Medium
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.10
+- **Fixed**: v0.5.10
 - **Created**: 2026-03-05
+- **Resolved**: 2026-03-11
 
-- **Original Problem**:
+- **Resolution**:
+  当前实现已正确处理此问题：
+  1. **Provider 记忆化**: 使用 `useMemo` 包装，空依赖数组确保只创建一次
+  2. **回调函数优化**: 所有回调函数使用 `useCallback` 包装
+  3. **选项更新机制**: 通过 `useEffect` 调用 `provider.updateOptions()` 而非重建实例
+
+  ```typescript
+  const provider = useMemo(() => {
+    return createAutocompleteProvider({...});
+  }, []); // Empty dependency array - only created once
+  ```
+
+- **Original Problem** (archived):
   `useAutocomplete` hook 在 `InputPrompt.tsx:68-81` 调用时，每次组件渲染都会创建新的 `AutocompleteProvider` 实例。
 
   ```typescript
