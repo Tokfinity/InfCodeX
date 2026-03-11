@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-08
+_Last Updated: 2026-03-11
 
 ---
 
@@ -53,6 +53,7 @@ _Last Updated: 2026-03-08
 | 080 | Medium | Resolved | 长文本输入框未根据终端宽度自动换行 | v0.5.7 | v0.5.9 | 2026-03-04 | 2026-03-05 |
 | 081 | Medium | Open | useAutocomplete 每次渲染创建新实例 | v0.5.10 | - | 2026-03-05 | - |
 | 082 | Low | Open | packages/ai 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
+| 083 | Medium | Open | 缺少快捷键系统 | v0.5.29 | - | 2026-03-11 | - |
 
 ---
 
@@ -3909,6 +3910,44 @@ _Last Updated: 2026-03-08
   2. 为每个 provider 创建测试文件
   3. 优先覆盖关键路径：认证、消息转换、流式响应解析
   4. 使用 mock 避免真实 API 调用
+
+---
+
+### 083: 缺少快捷键系统
+- **Priority**: Medium
+- **Status**: Open
+- **Introduced**: v0.5.29
+- **Created**: 2026-03-11
+
+- **Original Problem**:
+  KodaX 目前缺少快捷键系统，用户需要完全依赖命令输入来改变程序行为，
+  例如切换工作模式等。这与 Gemini CLI 和 Claude Code 的用户体验有差距，
+  两者都提供了快捷键支持。
+
+- **Expected Behavior**:
+  - 支持常用快捷键，如：
+    - `Ctrl+O`: 切换工作模式（Project/Coding 等）
+    - `Ctrl+T`: 切换 Extended Thinking
+    - `Ctrl+C`: 中断当前操作
+    - `Ctrl+L`: 清屏
+    - `?`: 显示帮助
+  - 快捷键应该是可发现、可配置的
+  - 在流式输出或 LLM 响应期间也能响应快捷键
+
+- **Impact**: 中等
+  - 影响用户体验和操作效率
+  - 与竞品功能对齐有助于用户迁移
+
+- **Context**:
+  - 参考 Gemini CLI 的快捷键设计
+  - 参考 Claude Code 的快捷键设计
+  - 当前已有 `Ctrl+C` 中断功能，可扩展
+
+- **Proposed Solution**:
+  1. 设计统一的快捷键注册系统
+  2. 在 InkREPL 中集成键盘事件监听
+  3. 提供快捷键提示 UI
+  4. 支持用户自定义快捷键配置
 
 ---
 
