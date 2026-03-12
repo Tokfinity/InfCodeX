@@ -1,6 +1,6 @@
 # Archived Issues
 
-_Last Updated: 2026-03-04_
+_Last Updated: 2026-03-11_
 
 ---
 
@@ -45,6 +45,10 @@ _Last Updated: 2026-03-04_
 | 042 | Low | Resolved | Shift+Enter/Ctrl+J 换行无效 | v0.4.5 | 2026-02-27 |
 | 043 | Medium | Resolved | 流式响应中断不完全 | v0.4.5 | 2026-02-27 |
 | 045 | Medium | Resolved | Spinner 出现时问答顺序颠倒 | v0.4.5 | 2026-02-27 |
+| 058 | Medium | Resolved | 终端流式输出闪烁问题 (WT✅ VS Code⚠️) | v0.4.9 | 2026-03-11 |
+| 039 | Low | Won't Fix | 死代码 printStartupBanner (误报) | - | 2026-03-11 |
+| 053 | High | Won't Fix | /help 命令输出重复渲染 | - | 2026-03-01 |
+| 063 | High | Won't Fix | Shift+Enter 换行功能失效 | - | 2026-03-02 |
 
 ---
 
@@ -1039,7 +1043,799 @@ const syncState = useCallback(() => {
 
 ---
 
+---
+
+## 2026-03 Archived Issues
+
+### 006: 整数解析无范围检查 (RESOLVED)
+- **Priority**: Low
+- **Status**: Resolved
+- **Introduced**: v0.3.1
+- **Fixed**: v0.5.29
+- **Created**: 2026-02-19
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- `parseInt(value, 10)` 未进行范围检查
+- 可能导致无效值被接受
+
+**Context**: 多处使用 parseInt 的代码
+
+**Resolution**:
+- 在关键位置添加范围检查
+- 对于有明确范围的参数（如 maxIter）使用 Math.min/Math.max 限制
+
+**Files Changed**: 多个文件
+
+---
+
+### 046: Session 恢复时消息显示异常 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.4.5
+- **Fixed**: v0.4.5
+- **Created**: 2026-02-26
+- **Resolution Date**: 2026-02-27
+
+**Original Problem**:
+- 使用 `-c` 恢复会话时，消息显示顺序错乱或内容丢失
+
+**Context**: Session storage 和恢复逻辑
+
+**Resolution**:
+- 修复 JSONL 解析逻辑
+- 确保消息按正确顺序恢复
+
+**Files Changed**: `packages/repl/src/interactive/storage.ts`
+
+---
+
+### 047: 流式输出时界面闪烁 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.5
+- **Fixed**: v0.4.5
+- **Created**: 2026-02-26
+- **Resolution Date**: 2026-02-27
+
+**Original Problem**:
+- 流式输出时 UI 闪烁，体验不佳
+
+**Context**: StreamingContext 和 UI 更新逻辑
+
+**Resolution**:
+- 实现批量更新机制，80ms 刷新间隔
+- 流式内容和 Spinner 动画同步更新
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`
+
+---
+
+### 048: Spinner 动画期间消息显示乱序 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.5
+- **Fixed**: v0.4.5
+- **Created**: 2026-02-27
+- **Resolution Date**: 2026-02-27
+
+**Original Problem**:
+- Spinner 动画与流式更新不同步导致消息乱序
+
+**Resolution**:
+- 统一更新周期（方案 B）
+- 使用 80ms 刷新间隔与 Spinner 同步
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`
+
+---
+
+### 049: 权限模式持久化位置错误 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.0
+- **Fixed**: v0.5.0
+- **Created**: 2026-02-27
+- **Resolution Date**: 2026-02-27
+
+**Original Problem**:
+- `/mode default` 切换权限模式时，保存到项目级而非用户级配置
+
+**Resolution**:
+- 将 `savePermissionModeProject()` 改为 `savePermissionModeUser()`
+
+**Files Changed**: `packages/repl/src/interactive/commands.ts`, `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 050: 命令输出格式不一致（AI 编造问题）(RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.6
+- **Fixed**: v0.4.6
+- **Created**: 2026-02-27
+- **Resolution Date**: 2026-02-28
+
+**Original Problem**:
+- 同一命令连续执行时输出格式不同，AI 可能编造输出
+
+**Resolution**:
+- 在 bash 工具输出中添加 `Command: ${command}` 前缀
+- 帮助区分真实执行和 AI 编造的输出
+
+**Files Changed**: `packages/core/src/tools/bash.ts`
+
+---
+
+### 051: 权限确认取消时无提示 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.6
+- **Fixed**: v0.4.6
+- **Created**: 2026-02-27
+- **Resolution Date**: 2026-02-28
+
+**Original Problem**:
+- 拒绝权限确认后无取消提示
+
+**Resolution**:
+- 添加 `console.log(chalk.yellow('[Cancelled] Operation cancelled by user'))`
+
+**Files Changed**: `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 052: 受保护路径确认对话框显示错误选项 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.4.6
+- **Fixed**: v0.4.6
+- **Created**: 2026-02-28
+- **Resolution Date**: 2026-02-28
+
+**Original Problem**:
+- 受保护路径显示 "always" 选项，应只显示 yes/no
+
+**Resolution**:
+- 修复 gitRoot 来源
+- 新增 `isCommandOnProtectedPath()` 函数
+- 扩展受保护路径检查到 bash 命令
+
+**Files Changed**: `packages/repl/src/ui/InkREPL.tsx`, `packages/repl/src/permission/permission.ts`
+
+---
+
+### 054: Agent Skills 系统未与 LLM 集成 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.7
+- **Fixed**: v0.5.5
+- **Created**: 2026-03-01
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- `/skill-name` 命令只打印预览，不注入 LLM 上下文
+
+**Resolution**:
+- 实现 skill 展开为 XML 格式
+- 修改 executeSkillCommand 返回展开后的 skill 内容
+- 实现系统提示词 skill 注入
+- 添加自然语言触发支持
+
+**Files Changed**: 多个 skills 相关文件
+
+---
+
+### 056: Skills 系统缺少渐进式披露机制 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.8
+- **Fixed**: v0.4.8
+- **Created**: 2026-03-01
+- **Resolution Date**: 2026-03-01
+
+**Original Problem**:
+- `getSystemPromptSnippet()` 存在但未被调用，AI 不知道有哪些 skills 可用
+
+**Resolution**:
+- 在系统提示词构建时调用 `getSystemPromptSnippet()`
+- 实现 `disableModelInvocation` 过滤
+
+**Files Changed**: `packages/core/src/types.ts`, `packages/core/src/prompts/builder.ts`, `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 057: Skill 命令格式不符合 pi-mono 设计规范 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.8
+- **Fixed**: v0.4.8
+- **Created**: 2026-03-01
+- **Resolution Date**: 2026-03-01
+
+**Original Problem**:
+- Skill 命令沿用传统 CLI 模式，不符合 AI-first 极简设计
+
+**Resolution**:
+- 统一使用 `/skill:name` 命名空间格式
+- 移除冗余的子命令结构
+
+**Files Changed**: `packages/repl/src/interactive/commands.ts`
+
+---
+
+### 059: VS Code Terminal UI 重复渲染问题 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.6
+- **Fixed**: -
+- **Created**: 2026-03-06
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- VS Code 终端中，InputPrompt 和 StatusBar 被重复渲染多次
+
+**Root Cause**:
+- VS Code 终端 GPU 加速与 Ink 的 ANSI escape codes 冲突
+- 问题只在 VS Code 终端出现，Windows Terminal 和 Warp.dev 无问题
+
+**Resolution**:
+- 配置问题，不需要代码修改
+- 在 VS Code settings.json 中关闭 GPU 加速：`"terminal.integrated.gpuAcceleration": "off"`
+
+**Files Changed**: 无（配置问题）
+
+---
+
+### 060: 上下文使用状态栏显示 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.11
+- **Fixed**: v0.5.12
+- **Created**: 2026-03-07
+- **Resolution Date**: 2026-03-07
+
+**Original Problem**:
+- 用户希望实时看到上下文使用情况
+
+**Resolution**:
+- 添加 `ContextUsage` 类型到 StreamingContext
+- StatusBar 显示 `currentTokens/contextWindow` 和进度条
+- 颜色编码：绿（安全）→ 黄（警告）→ 红（临界）
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`, `packages/repl/src/ui/components/StatusBar.tsx`
+
+---
+
+### 062: 流式响应结束后 StatusBar 仍显示 Compacting (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.14
+- **Fixed**: v0.5.16
+- **Created**: 2026-03-07
+- **Resolution Date**: 2026-03-08
+
+**Original Problem**:
+- 上下文压缩后 `isCompacting` 状态未正确重置
+
+**Resolution**:
+- 修复 `isCompacting` 重置时机
+- 确保在压缩完成后调用 `setCompacting(false)`
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`
+
+---
+
+### 064: 技能单例重复创建问题 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- SkillRegistry 被多次创建导致技能发现失败
+
+**Resolution**:
+- 实现单例模式
+- 修复优先级顺序和 projectRoot 传递
+
+**Files Changed**: `packages/repl/src/skills/skill-registry.ts`, `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 065: Skills 系统缺少自然语言触发 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.5
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- AI 无法基于 description 自动触发 skill
+
+**Resolution**:
+- 在系统提示词中注入可用技能列表
+- 实现 `<available_skills>` XML 格式
+
+**Files Changed**: `packages/repl/src/skills/skill-registry.ts`, `packages/core/src/prompts/builder.ts`
+
+---
+
+### 066: /project init 命令在 InkREPL 中静默失败 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- `/project init` 命令只显示警告，实际未执行
+
+**Resolution**:
+- 为 Ink UI 添加 `confirm` 回调
+- 修复流式响应不显示问题
+- 返回 `projectInitPrompt` 而非直接调用 runKodaX
+
+**Files Changed**: `packages/repl/src/interactive/commands.ts`, `packages/repl/src/ui/InkREPL.tsx`, `packages/repl/src/interactive/project-commands.ts`
+
+---
+
+### 067: API 速率限制重试机制失效 (RESOLVED)
+- **Priority**: Critical
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.27
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- 显示重试信息但实际未重试
+
+**Resolution**:
+- 修复重试循环：`continue` 继续循环而非立即抛出
+- 添加 AbortSignal 支持
+- 使用回调式 UI 通知
+
+**Files Changed**: `packages/ai/src/providers/base.ts`, `packages/ai/src/providers/anthropic.ts`
+
+---
+
+### 068: Thinking 指示器长时间无进度反馈 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- Tool 调用和 Thinking 过程无动态信息
+
+**Resolution**:
+- 添加 `thinkingCharCount` 和 `toolInputCharCount` 到 StatusBarProps
+- 显示参数摘要 `toolInputContent`
+- 显示 `MODE+think (chars)` 格式
+
+**Files Changed**: `packages/repl/src/ui/types.ts`, `packages/repl/src/ui/components/StatusBar.tsx`, `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 069: 缺少 LLM 交互式提问工具 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.29
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- LLM 想要提问但没有工具支持
+
+**Resolution**:
+- 实现 `toolAskUserQuestion` 工具
+- 支持多选项问题、默认值、上下文回调
+
+**Files Changed**: `packages/coding/src/tools/ask-user-question.ts` (新增)
+
+---
+
+### 070: 流式输出可能丢失换行符 (RESOLVED)
+- **Priority**: Low
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.29
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- 流式输出时换行符丢失
+
+**Resolution**:
+- 代码审查确认换行符正确保留
+- 问题可能是 LLM 本身输出，非 KodaX 代码问题
+
+**Files Changed**: 无（非代码问题）
+
+---
+
+### 071: Session Resume 跨项目恢复错误 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- `kodax -c` 恢复其他项目的 session
+
+**Resolution**:
+- 修复过滤逻辑，实现严格项目隔离
+- 旧 session（无 gitRoot）在 git 项目中不显示
+
+**Files Changed**: `packages/repl/src/interactive/storage.ts`
+
+---
+
+### 072: 流式中断后 tool_call_id 不匹配导致 API 错误 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.20
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-07
+
+**Original Problem**:
+- 中断后继续交互报 `tool_call_id not found` 错误
+
+**Resolution**:
+- 实现空工具 ID 防护
+- 全历史校验修复 `validateAndFixToolHistory()`
+- 压缩原子化保护 tool_use/tool_result 配对
+
+**Files Changed**: `packages/ai/src/providers/anthropic.ts`, `packages/coding/src/agent.ts`, `packages/agent/src/compaction/compaction.ts`
+
+---
+
+### 073: /project auto 等子命令无流式进度反馈 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- `/project auto` 执行时无进度反馈
+
+**Resolution**:
+- 在 `createKodaXOptions` 中添加 `events: createStreamingEvents()`
+
+**Files Changed**: `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 074: 多轮迭代时 Thinking 和 Response 内容累积显示 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.7
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- 多轮迭代时内容累积显示，无法区分不同轮次
+
+**Resolution**:
+- 添加迭代历史管理 `IterationRecord`
+- 实现 `startNewIteration()` 和 `clearIterationHistory()`
+- 显示每轮摘要：标题 + Thinking 摘要 + Response 片段
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`, `packages/repl/src/ui/InkREPL.tsx`, `packages/repl/src/ui/components/MessageList.tsx`
+
+---
+
+### 075: 粘贴多行文本到输入框时换行丢失 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-03
+
+**Original Problem**:
+- Windows 终端粘贴 CRLF 时换行符丢失
+
+**Resolution**:
+- 修改 `keypress-parser.ts` 采用两层防御
+- CRLF 整体提取并解析为 newline
+- 等待机制处理跨数据块 CRLF
+- 超时刷新处理真正 Enter 键
+
+**Files Changed**: `packages/repl/src/ui/utils/keypress-parser.ts`
+
+**Tests Added**: `tests/ui/keypress-parser.test.ts` (33 个测试用例)
+
+---
+
+### 076: 正常响应后历史记录偶现 [Interrupted] 标记 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.4
+- **Fixed**: v0.5.4
+- **Created**: 2026-03-03
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- 正常完成的响应偶现 [Interrupted] 标记
+
+**Resolution**:
+- 提高迭代上限从 50 到 200
+- 每轮迭代内容持久化到历史
+- 中断时保存 thinking 内容
+
+**Files Changed**: `packages/coding/src/agent.ts`, `packages/repl/src/ui/contexts/StreamingContext.tsx`, `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 078: CLI --max-iter 默认值覆盖 coding 包默认值 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.5
+- **Fixed**: v0.5.5
+- **Created**: 2026-03-04
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- CLI 默认值 '50' 导致 coding 包默认值 200 不生效
+
+**Resolution**:
+- 移除 CLI 默认值
+- 更新帮助文本
+
+**Files Changed**: `src/kodax_cli.ts`
+
+---
+
+### 079: Ink 历史渲染无限长导致崩溃 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.7
+- **Fixed**: v0.5.7
+- **Created**: 2026-03-04
+- **Resolution Date**: 2026-03-04
+
+**Original Problem**:
+- 长时间使用后历史过长导致崩溃
+
+**Resolution**:
+- 限制可见历史为最近 20 轮会话
+- 超过 20 轮的消息保留在 state 但不渲染
+
+**Files Changed**: `packages/repl/src/ui/InkREPL.tsx`
+
+---
+
+### 080: 长文本输入框未根据终端宽度自动换行 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.7
+- **Fixed**: v0.5.9
+- **Created**: 2026-03-04
+- **Resolution Date**: 2026-03-05
+
+**Original Problem**:
+- 长文本不自动换行，超出终端宽度显示异常
+
+**Resolution**:
+- 新增 `calculateVisualLayout` 函数
+- 实现逻辑行→视觉行转换
+- 支持软换行（优先在空格处）和硬换行
+- 宽字符正确计算（CJK=2列）
+- 使用 LRU 缓存优化性能
+
+**Files Changed**: `packages/repl/src/ui/utils/textUtils.ts`, `packages/repl/src/ui/components/TextInput.tsx`
+
+---
+
+### 081: useAutocomplete 每次渲染创建新实例 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.10
+- **Fixed**: v0.5.10
+- **Created**: 2026-03-05
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- 每次渲染创建新的 AutocompleteProvider 实例
+
+**Resolution**:
+- Provider 使用 `useMemo` 包装，空依赖数组确保只创建一次
+- 回调函数使用 `useCallback` 优化
+- 通过 `useEffect` 调用 `provider.updateOptions()` 而非重建实例
+
+**Files Changed**: `packages/repl/src/ui/hooks/useAutocomplete.ts`
+
+---
+
+### 058: 终端流式输出闪烁问题 (WT✅ VS Code⚠️) (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.4.8
+- **Fixed**: v0.4.9
+- **Created**: 2026-03-01
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- 流式输出时界面偶尔会闪烁
+- 输出越快速，闪烁越频繁
+- Windows Terminal 基本无问题
+- VS Code Terminal 闪烁明显
+
+**Root Cause Analysis**:
+1. **Ink 渲染机制**：默认 30fps 渲染，高速流式输出时超出渲染能力
+2. **终端渲染特性**：终端每次更新需重绘整个视口
+3. **VS Code Terminal GPU 加速**：与 Ink 的 ANSI escape codes 冲突
+
+**Resolution**:
+**KodaX 端修复** (v0.4.9):
+- 在 `StreamingContext.tsx` 添加批量更新缓冲区
+- 使用 80ms 刷新间隔，将更新频率从 ~100fps 降到 12.5fps
+- 高速流式输出不再超出 Ink 渲染能力
+
+**VS Code Terminal 配置问题**:
+- VS Code 终端的 GPU 加速与 Ink 渲染机制冲突
+- 解决方案：在 VS Code `settings.json` 中添加：
+  ```json
+  "terminal.integrated.gpuAcceleration": "off"
+  ```
+
+**Context**: `packages/repl/src/ui/contexts/StreamingContext.tsx`
+
+**Files Changed**: `packages/repl/src/ui/contexts/StreamingContext.tsx`
+
+---
+
+### 039: 死代码 printStartupBanner (误报) (WON'T FIX)
+- **Priority**: Low
+- **Status**: Won't Fix
+- **Introduced**: v0.3.3
+- **Created**: 2026-02-22
+- **Resolution Date**: 2026-03-11
+
+**Original Problem**:
+- `InkREPL.tsx` 中定义了 `printStartupBanner()` 函数（行 761-796）
+- 该函数已被 `Banner` 组件替代，但未删除
+- 代码注释表明迁移已完成：
+  ```typescript
+  // Note: Banner is now shown inside Ink component (Banner.tsx)
+  // This ensures it's visible in the alternate buffer
+  ```
+
+**Resolution**:
+- 经代码审查确认：`printStartupBanner()` 函数在 `packages/repl/src/interactive/repl.ts:156` 被**实际调用**
+- 该函数**不是死代码**，原问题报告为误报
+- 函数功能：在 REPL 启动时打印 Banner 信息
+
+**Context**: `packages/repl/src/interactive/repl.ts` - 第 156 行调用
+
+---
+
+### 053: /help 命令输出重复渲染 (WON'T FIX)
+- **Priority**: High
+- **Status**: Won't Fix
+- **Introduced**: v0.4.7
+- **Created**: 2026-02-28
+- **Resolution Date**: 2026-03-01
+
+**Original Problem**:
+在 REPL 中执行 `/help` 或 `/h` 命令时，整个消息（用户输入 + 命令输出）会重复渲染两次：
+1. 第一次输出：完整的帮助信息（部分情况下可能不完整）
+2. 第二次输出：完整的帮助信息（包含 "Skills:" 部分）
+
+**观察到的现象**:
+```
+You [11:40 PM]
+  /help
+
+ℹ Info
+  Available Commands:
+  ... (完整帮助信息，但缺少末尾 Skills 部分)
+
+You [11:40 PM]
+  /help
+
+ℹ Info
+  Available Commands:
+  ... (完整帮助信息，包含末尾 Skills 部分)
+```
+
+**关键发现**:
+- 问题只发生在 `/help` 命令
+- `/model` 和 `/skills` 命令没有此问题
+- 用户只输入了一次 `/help`，但 `handleSubmit` 被调用了两次
+- 两次输出的时间戳相同
+
+**Root Cause Analysis**:
+- 可能原因 1: Keypress handler 重复注册
+- 可能原因 2: React state 更新触发多次渲染
+- 可能原因 3: console.log 捕获机制问题
+
+**Decision**: 不修复，理由如下：
+1. **终端特定问题**: 问题只在 warp.dev 终端中出现，在 PowerShell 中未复现
+2. **外部因素**: 可能是 warp.dev 本身的渲染机制与 Ink 框架存在冲突
+3. **优先级考量**: 不影响核心功能，且只在特定终端环境下出现
+4. **修复成本高**: 需要针对特定终端做兼容性处理，投入产出比不合理
+
+**Files Investigated**:
+- `packages/repl/src/ui/components/InputPrompt.tsx`
+- `packages/repl/src/ui/InkREPL.tsx`
+- `packages/repl/src/ui/contexts/KeypressContext.tsx`
+- `packages/repl/src/ui/contexts/StreamingContext.tsx`
+- `packages/repl/src/ui/contexts/UIStateContext.tsx`
+- `packages/repl/src/ui/components/MessageList.tsx`
+- `packages/repl/src/interactive/commands.ts`
+
+---
+
+### 063: Shift+Enter 换行功能失效 (WON'T FIX)
+- **Priority**: High
+- **Status**: Won't Fix
+- **Introduced**: v0.4.9
+- **Created**: 2026-03-02
+- **Resolution Date**: 2026-03-02
+
+**Original Problem**:
+- 在 Windows Terminal 和 VS Code Terminal 中，Shift+Enter 和 Ctrl+Enter 都无法插入换行
+- 按下 Shift+Enter 或 Ctrl+Enter 后直接发送消息，而不是插入换行符
+- 用户无法在输入框中输入多行文本（除非使用粘贴）
+
+**Expected Behavior**:
+- Shift+Enter 或 Ctrl+Enter 应该插入换行符
+- 只有单独按 Enter 才发送消息
+
+**Root Cause Analysis**:
+### 终端层面的限制
+
+1. **终端不发送 Shift+Enter 区分信号**:
+   - 大多数终端（Windows Terminal、VS Code Terminal、warp.dev）在按下 Shift+Enter 或 Ctrl+Enter 时，发送的字符序列与普通 Enter 完全相同（`\r` 或 `\r\n`）
+   - 终端协议（VT100/ANSI）没有定义区分 Shift+Enter 的 escape sequence
+   - 与 Shift+Arrow keys 不同（后者有专门的 escape sequence）
+
+2. **对比其他 CLI 工具**:
+   - **Gemini CLI**: 同样不支持 Shift+Enter 换行
+   - **Claude Code**: 同样不支持 Shift+Enter 换行
+   - **readline (bash)**: 不支持 Shift+Enter 换行
+   - 这是终端环境的**通用限制**，而非 KodaX 的 bug
+
+3. **替代输入方式**:
+   - **Ctrl+J**: 发送 `\n` 字符，可以插入换行 ✅
+   - **粘贴多行文本**: 保留换行符 ✅
+   - **行尾反斜杠 `\`**: 继续 input 到下一行 ✅
+
+**Decision**: 不修复（Won't Fix），理由如下：
+1. **终端协议限制**: 这是终端协议的固有限制，不是 KodaX 的 bug
+2. **竞品一致**: Gemini CLI 和 Claude Code 都有同样的限制
+3. **替代方案存在**: Ctrl+J、粘贴多行、反斜杠续行都可以实现换行
+4. **修复成本过高**: 需要终端厂商支持，超出项目控制范围
+
+**Workaround**:
+- **Ctrl+J**: 插入换行
+- **粘贴多行文本**: 从剪贴板粘贴包含换行的文本
+- **行尾反斜杠**: 输入 `\` 后按 Enter 继续到下一行
+
+**Context**:
+- `packages/repl/src/ui/components/InputPrompt.tsx` - 键盘事件处理
+- `packages/repl/src/ui/utils/keypress-parser.ts` - 按键解析
+- Windows Terminal / VS Code Terminal / warp.dev
+
+---
+
 ## Summary
-- Total Archived: 41 issues
+- Total Archived: 76 issues
 - Archive Started: 2026-03-04
-- Last Archived: 2026-03-04
+- Last Archived: 2026-03-11
