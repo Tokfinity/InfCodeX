@@ -3,6 +3,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "baseUrl": ".",
+    "paths": {
+      "@kodax/ai": ["../ai"]
+    },
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": "./src",
