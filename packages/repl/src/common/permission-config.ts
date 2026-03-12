@@ -12,7 +12,7 @@
  * Note: Bash(*) is REJECTED for safety. Use specific command patterns.
  * Note: Other tools don't need patterns:
  * - Read/Glob/Grep: Always allowed (project-external is enforced confirmation)
- * - Edit/Write: Auto-allowed in accept-edits, always-ask in default
+ * - Edit/Write: Auto-allowed in accept-edits, blocked in plan
  */
 
 import fsSync from 'fs';

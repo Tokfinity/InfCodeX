@@ -134,6 +134,8 @@ export interface InputPromptProps {
   prompt?: string;
   focus?: boolean;
   initialValue?: string;
+  /** Callback when input text changes - 输入文本变化时的回调 */
+  onInputChange?: (text: string) => void;
 }
 
 export interface StatusBarProps {

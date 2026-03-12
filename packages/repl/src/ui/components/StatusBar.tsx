@@ -79,11 +79,9 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const modeColor =
     permissionMode === "plan"
       ? "blue"
-      : permissionMode === "default"
-        ? "white"
-        : permissionMode === "accept-edits"
-          ? "cyan"
-          : "magenta"; // auto-in-project
+      : permissionMode === "accept-edits"
+        ? "cyan"
+        : "magenta"; // auto-in-project
 
   // Issue 068: Build iteration display with color gradient
   // Color gradient: Green (safe) -> Yellow (warning) -> Red (critical)

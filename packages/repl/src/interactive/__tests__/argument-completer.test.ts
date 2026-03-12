@@ -51,9 +51,8 @@ describe('ArgumentCompleter', () => {
         const completions = await completer.getCompletions('/mode ', 6);
 
         expect(completions.length).toBeGreaterThan(0);
-        // Check for known mode arguments
+        // Check for known mode arguments (default mode removed)
         expect(completions.some(c => c.display === 'plan')).toBe(true);
-        expect(completions.some(c => c.display === 'default')).toBe(true);
         expect(completions.some(c => c.display === 'accept-edits')).toBe(true);
         expect(completions.some(c => c.display === 'auto-in-project')).toBe(true);
       });

@@ -153,7 +153,7 @@ export const App: React.FC<AppProps> = ({ model, provider, onSubmit }) => {
       <Box flexShrink={0}>
         <StatusBar
           sessionId={state.sessionId}
-          permissionMode="default"
+          permissionMode="accept-edits"
           provider={provider}
           model={model}
           tokenUsage={tokenUsage ?? undefined}

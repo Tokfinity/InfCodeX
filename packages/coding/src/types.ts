@@ -62,6 +62,8 @@ export interface KodaXEvents {
   onCompactStart?: () => void;
   /** Emitted when compaction finishes and actually changed the context */
   onCompact?: (estimatedTokens: number) => void;
+  /** Emitted when compaction changes the context so UI can refresh token usage immediately */
+  onCompactStats?: (info: { tokensBefore: number; tokensAfter: number }) => void;
   /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
   onCompactEnd?: () => void;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;

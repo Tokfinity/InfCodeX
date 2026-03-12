@@ -31,6 +31,9 @@ const ESCAPE_SEQUENCE_MAP: Record<string, Partial<KeyInfo>> = {
   "[200~": { name: "paste_start" },  // Start of pasted content - 粘贴内容开始
   "[201~": { name: "paste_end" },    // End of pasted content - 粘贴内容结束
 
+  // Shift+Tab (common terminal sequence) - Shift+Tab (常见终端序列)
+  "[Z": { name: "tab", shift: true },
+
   // Shift+arrow keys (some terminals) - Shift+方向键 (某些终端)
   "[1;2A": { name: "up", shift: true },
   "[1;2B": { name: "down", shift: true },
