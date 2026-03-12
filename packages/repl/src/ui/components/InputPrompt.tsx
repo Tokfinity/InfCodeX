@@ -45,6 +45,7 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
   cwd,
   gitRoot,
   autocompleteEnabled = true,
+  onInputChange,
 }) => {
   const theme = getTheme("dark");
   const { exit } = useApp();
@@ -92,6 +93,13 @@ export const InputPrompt: React.FC<InputPromptAutocompleteProps> = ({
 
   // Track previous text to detect changes - 跟踪前一次文本以检测变化
   const prevTextRef = useRef(text);
+
+  // Notify parent of input changes - 通知父组件输入变化
+  useEffect(() => {
+    if (onInputChange) {
+      onInputChange(text);
+    }
+  }, [text, onInputChange]);
 
   // Calculate absolute cursor position from row/col - 从行/列计算绝对光标位置
   const getAbsoluteCursorPos = useCallback((): number => {

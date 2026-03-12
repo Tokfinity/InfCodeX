@@ -71,6 +71,11 @@ import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUse
 import { initializeSkillRegistry, getSkillRegistry } from "@kodax/skills";
 import { getTheme } from "./themes/index.js";
 import chalk from "chalk";
+import {
+  ShortcutsProvider,
+  useShortcutsContext,
+  GlobalShortcuts,
+} from "./shortcuts/index.js";
 
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
@@ -352,6 +357,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [showBanner, setShowBanner] = useState(true); // Show banner in Ink UI
   const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
+  const lastCompactionTokensBeforeRef = useRef<number | null>(null);
+  const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
+
+  // Shortcuts context - 快捷键上下文 (Issue 083)
+  const { showHelp, toggleHelp, setShowHelp } = useShortcutsContext();
+
+  // Handle input change - 跟踪输入状态
+  const handleInputChange = useCallback((text: string) => {
+    setIsInputEmpty(text.trim().length === 0);
+  }, []);
 
   // Confirmation dialog state - 确认对话框状态
   const [confirmRequest, setConfirmRequest] = useState<{
@@ -724,14 +739,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // Update ref for next tool calls in this session
             alwaysAllowToolsRef.current = loadAlwaysAllowTools();
           }
-          if (mode === 'default') {
-            // Switch to accept-edits mode
-            const newMode: PermissionMode = 'accept-edits';
-            setCurrentConfig((prev) => ({ ...prev, permissionMode: newMode }));
-            permissionModeRef.current = newMode;
-            savePermissionModeUser(newMode);
-            console.log(chalk.dim(`\n[Permission mode switched to: ${newMode}]`));
-          }
+          // In plan mode, we don't save always-allow patterns
         }
       }
 
@@ -787,6 +795,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Trigger the compacting UI indicator before actual compaction begins
       startCompacting();
     },
+    onCompactStats: (info: { tokensBefore: number; tokensAfter: number }) => {
+      lastCompactionTokensBeforeRef.current = info.tokensBefore;
+      setLiveTokenCount(info.tokensAfter);
+    },
     // Compaction event - notification only, do NOT clear UI history here
     // 压缩事件 - 仅通知，不要在这里清理 UI 历史记录
     onCompact: (estimatedTokens: number) => {
@@ -795,7 +807,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // Auto-compaction happened during agent execution
       // Insert a minimal info message into the UI history
-      const prevK = Math.round(estimatedTokens / 1000);
+      const tokensBefore = lastCompactionTokensBeforeRef.current ?? estimatedTokens;
+      lastCompactionTokensBeforeRef.current = null;
+      const prevK = Math.round(tokensBefore / 1000);
       addHistoryItem({
         type: "info",
         icon: "✨",
@@ -804,6 +818,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     onCompactEnd: () => {
       // Just stop the indicator if compaction was skipped/aborted without changing the context
+      lastCompactionTokensBeforeRef.current = null;
       stopCompacting();
     },
     // Iteration end - update live token count for real-time context usage display
@@ -889,6 +904,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Prevent concurrent execution: ignore input if agent is busy or waiting for tool confirmation
       // 防止并发执行：如果 Agent 正在执行或正在等待工具确认，则忽略新输入
       if (!input.trim() || !isRunning || isLoading || confirmRequest) return;
+
+      // Hide help panel when submitting - 发送时隐藏帮助面板
+      setShowHelp(false);
 
       // Banner remains visible - it will scroll up naturally as messages are added
       // (Removed showBanner toggle to keep layout stable)
@@ -1473,6 +1491,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   return (
     <Box flexDirection="column" width={terminalWidth} flexShrink={0} flexGrow={0}>
+      {/* Global Shortcuts - registers keyboard shortcuts (Issue 083) */}
+      <GlobalShortcuts
+        currentConfig={currentConfig}
+        setCurrentConfig={setCurrentConfig}
+        isLoading={isLoading}
+        abort={abort}
+        stopThinking={stopThinking}
+        clearThinkingContent={clearThinkingContent}
+        setCurrentTool={setCurrentTool}
+        setIsLoading={setIsLoading}
+        onToggleHelp={toggleHelp}
+        isInputEmpty={isInputEmpty}
+        onSavePermissionMode={savePermissionModeUser}
+      />
+
       {/* Banner - shown once at start, using Static to prevent re-rendering */}
       {showBanner && (
         <Static items={[1]}>
@@ -1530,12 +1563,31 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             focus={!isLoading}
             cwd={process.cwd()}
             gitRoot={options.context?.gitRoot || context.gitRoot}
+            onInputChange={handleInputChange}
           />
         </Box>
 
         {/* Autocomplete Suggestions - fixed 8-line container, expands downward */}
         {/* 自动补全建议 - 固定8行容器，向下扩展 */}
         <AutocompleteSuggestions submitCounter={submitCounter} />
+
+        {/* Keyboard Shortcuts Help Bar - shown when ? is pressed (Issue 083) */}
+        {/* 快捷键帮助栏 - 按 ? 显示 */}
+        {showHelp && (
+          <Box flexDirection="column" paddingX={1}>
+            <Text dimColor>
+              <Text bold>? toggle help</Text>
+              {'  '}
+              <Text>Ctrl+L clear</Text>
+              {'  '}
+              <Text>Ctrl+T thinking</Text>
+              {'  '}
+              <Text>Ctrl+O mode</Text>
+              {'  '}
+              <Text>Ctrl+C interrupt</Text>
+            </Text>
+          </Box>
+        )}
 
         {/* Status Bar */}
         <Box>
@@ -1592,6 +1644,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
  * KeypressProvider provides centralized keyboard handling.
  * InputPrompt uses useKeypress from this context.
  * AutocompleteContextProvider shares autocomplete state between InputPrompt and InkREPL.
+ * ShortcutsProvider provides centralized shortcuts management (Issue 083).
  */
 const InkREPL: React.FC<InkREPLProps> = (props) => {
   const cwd = process.cwd();
@@ -1601,9 +1654,11 @@ const InkREPL: React.FC<InkREPLProps> = (props) => {
     <UIStateProvider>
       <StreamingProvider>
         <KeypressProvider>
-          <AutocompleteContextProvider cwd={cwd} gitRoot={gitRoot}>
-            <InkREPLInner {...props} />
-          </AutocompleteContextProvider>
+          <ShortcutsProvider>
+            <AutocompleteContextProvider cwd={cwd} gitRoot={gitRoot}>
+              <InkREPLInner {...props} />
+            </AutocompleteContextProvider>
+          </ShortcutsProvider>
         </KeypressProvider>
       </StreamingProvider>
     </UIStateProvider>
@@ -1646,7 +1701,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // Load permission mode from config file (not from CLI options)
   // CLI is always YOLO mode; REPL uses config file for permission mode
   const initialPermissionMode: PermissionMode =
-    (config.permissionMode as PermissionMode | undefined) ?? 'default';
+    (config.permissionMode as PermissionMode | undefined) ?? 'accept-edits';
 
   const currentConfig: CurrentConfig = {
     provider: initialProvider,

@@ -270,14 +270,14 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'mode',
     aliases: ['m'],
-    description: 'Show or switch permission mode (plan/default/accept-edits/auto-in-project)',
-    usage: '/mode [plan|default|accept-edits|auto-in-project]',
+    description: 'Show or switch permission mode (plan/accept-edits/auto-in-project)',
+    usage: '/mode [plan|accept-edits|auto-in-project]',
     handler: async (args, _context, callbacks, currentConfig) => {
-      const VALID_MODES: PermissionMode[] = ['plan', 'default', 'accept-edits', 'auto-in-project'];
+      const VALID_MODES: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
       if (args.length === 0) {
         const m = currentConfig.permissionMode;
         console.log(chalk.dim(`\nCurrent mode: ${chalk.cyan(m)}`));
-        console.log(chalk.dim('Usage: /mode [plan|default|accept-edits|auto-in-project]'));
+        console.log(chalk.dim('Usage: /mode [plan|accept-edits|auto-in-project]'));
         return;
       }
       const newMode = args[0] as PermissionMode;
@@ -287,7 +287,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         savePermissionModeUser(newMode);
         console.log(chalk.cyan(`\n[Switched to ${newMode} mode] (saved)`));
       } else {
-        console.log(chalk.red(`\n[Unknown mode: ${args[0]}. Use: plan | default | accept-edits | auto-in-project]`));
+        console.log(chalk.red(`\n[Unknown mode: ${args[0]}. Use: plan | accept-edits | auto-in-project]`));
       }
     },
     detailedHelp: () => {
@@ -295,13 +295,11 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /mode                        ') + 'Show current permission mode');
       console.log(chalk.dim('  /mode plan                   ') + 'Read-only: blocks all modifications');
-      console.log(chalk.dim('  /mode default                ') + 'All tools require confirmation');
       console.log(chalk.dim('  /mode accept-edits           ') + 'File edits auto, bash requires confirmation');
       console.log(chalk.dim('  /mode auto-in-project        ') + 'Project-internal fully auto');
       console.log();
       console.log(chalk.bold('Permission Levels:'));
       console.log(chalk.yellow('  plan          ') + chalk.dim('- Read-only planning, no file/command modifications'));
-      console.log(chalk.cyan('  default       ') + chalk.dim('- All tools (write/edit/bash) require confirmation'));
       console.log(chalk.green('  accept-edits  ') + chalk.dim('- File edits auto-approved, bash still requires confirmation'));
       console.log(chalk.green('  auto-in-project') + chalk.dim('- All tools auto within project, outside requires confirmation'));
       console.log();

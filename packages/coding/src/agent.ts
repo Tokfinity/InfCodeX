@@ -374,6 +374,10 @@ export async function runKodaX(
 
           if (result.compacted) {
             compacted = result.messages;
+            events.onCompactStats?.({
+              tokensBefore: result.tokensBefore,
+              tokensAfter: result.tokensAfter,
+            });
             events.onCompact?.(result.tokensBefore);
           } else {
             compacted = result.messages;
@@ -414,6 +418,10 @@ export async function runKodaX(
 
             newCompacted.push(...messages.slice(startIndex));
             compacted = newCompacted;
+            events.onCompactStats?.({
+              tokensBefore: currentTokens,
+              tokensAfter: estimateTokens(compacted),
+            });
             console.warn(`[Compaction Fallback] 回退截断：删除了最旧的 ${startIndex - (isSummary ? 1 : 0)} 条消息，保留了 ${compacted.length} 条`);
             events.onCompact?.(estimateTokens(compacted)); // 使用新的 compacted 估算
           } else {

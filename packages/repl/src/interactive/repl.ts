@@ -113,7 +113,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const initialThinking = options.thinking ?? config.thinking ?? false;
   const initialPermissionMode: PermissionMode =
-    (config as { permissionMode?: PermissionMode }).permissionMode ?? 'default';
+    (config as { permissionMode?: PermissionMode }).permissionMode ?? 'accept-edits';
 
   // Apply theme (using default dark theme) - 应用主题 (使用默认 dark 主题)
   // TODO: Read theme setting from config file - TODO: 从配置文件读取主题设置
@@ -313,6 +313,7 @@ Keyboard Shortcuts:
     },
     setPermissionMode: (mode: PermissionMode) => {
       currentConfig.permissionMode = mode;
+      currentPermissionMode = mode; // Sync with local permission state
       // Note: permissionMode is no longer part of KodaXOptions
       // Permission control is handled locally via beforeToolExecute callback
     },
@@ -399,10 +400,6 @@ Keyboard Shortcuts:
                 if (mode === 'accept-edits') {
                   // Add to alwaysAllowTools
                   // TODO: Implement pattern generation
-                }
-                if (mode === 'default') {
-                  currentPermissionMode = 'accept-edits';
-                  currentConfig.permissionMode = 'accept-edits';
                 }
               }
             }

@@ -194,9 +194,6 @@ export async function executeWithPermission(
         if (mode === 'accept-edits') {
           permContext.saveAlwaysAllowTool?.(toolName, input, false);
         }
-        if (permContext.permissionMode === 'default' && permContext.switchPermissionMode) {
-          permContext.switchPermissionMode('accept-edits');
-        }
       }
     }
   }
@@ -217,7 +214,7 @@ export function createPermissionContext(options: {
   switchPermissionMode?: PermissionContext['switchPermissionMode'];
   beforeToolExecute?: PermissionContext['beforeToolExecute'];
 }): PermissionContext {
-  const mode = options.permissionMode ?? 'default';
+  const mode = options.permissionMode ?? 'accept-edits';
   return {
     permissionMode: mode,
     confirmTools: computeConfirmTools(mode),

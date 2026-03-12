@@ -760,3 +760,188 @@ for (let i = 0; i < chunks.length; i++) {
 
 *更新时间: 2026-03-08 14:30*
 
+---
+
+## Session: 2026-03-12 - Issue 083 键盘快捷键系统规划
+
+### 背景
+
+用户希望 KodaX 拥有和 Gemini CLI 以及 Claude Code 类似的快捷键系统，而不是纯粹依赖命令输入来改变程序行为（如切换工作模式等）。
+
+### 实现过程
+
+#### Turn 1 - 15:00
+**User**: `/archive-issues` 请你帮我把已经 won't fix 的 issue 也放到 ISSUES_ARCHIVED.md 中进行归档，包括详情
+
+**Assistant**:
+1. 读取 KNOWN_ISSUES.md 查找 Won't Fix 状态的 issues
+2. 找到 3 个 Won't Fix issues: 039, 053, 063
+3. 读取每个 issue 的完整详情
+4. 追加到 ISSUES_ARCHIVED.md，包含完整的 Original Problem、Context、Resolution 等字段
+5. 更新 KNOWN_ISSUES.md Summary 计数
+
+**Tools**: Read, Edit
+
+#### Turn 2 - 15:15
+**User**: `/resolve-next-issue 083` 这个 feature 需要详细的设计和规划，请你详细设计一下解决方案
+
+**Assistant**:
+1. 读取 Issue 083 详情
+2. 分析现有架构：
+   - KeypressContext.tsx: 优先级键盘事件分发
+   - InputPrompt.tsx: 硬编码输入快捷键
+   - InkREPL.tsx: 流式中断处理
+3. 识别差距：
+   - 无快捷键注册表
+   - 无用户配置支持
+   - 无帮助机制
+   - 无操作抽象层
+4. 设计 6 阶段实现计划：
+   - Phase 1: Core Infrastructure (types, registry)
+   - Phase 2: Registry & Hook
+   - Phase 3: Default Shortcuts
+   - Phase 4: Integration
+   - Phase 5: Help System
+   - Phase 6: User Configuration
+5. 写入计划文件 `plans/tranquil-exploring-boole.md`
+
+**Tools**: Read, Write, Grep, Glob
+
+#### Turn 3 - 15:30
+**User**: `/known-issues-tracker` 请把这些计划加到 issue 的详情中
+
+**Assistant**:
+1. 读取当前 Issue 083 内容
+2. 读取计划文件
+3. 更新 Issue 083 添加：
+   - 现有架构分析
+   - 差距分析
+   - 6 阶段详细实现计划
+   - Critical Files 表格
+   - Verification 测试用例
+   - Migration Strategy
+
+**Tools**: Read, Edit
+
+#### Turn 4 - 15:45
+**User**: `/context-snapshot`
+
+**Assistant**: 执行三步清洗法：
+1. 无损提取：提取快捷键系统类型定义和接口骨架
+2. 有损修剪：本次会话无失败尝试
+3. 生成快照：更新热轨和冷轨文档
+
+**Tools**: Read, Write
+
+### 技术细节
+
+#### 快捷键系统架构
+
+**文件结构**:
+```
+packages/repl/src/ui/shortcuts/
+  index.ts                    # Public exports
+  types.ts                    # 核心类型定义
+  ShortcutsRegistry.ts        # 集中式注册表单例
+  defaultShortcuts.ts         # 默认快捷键定义
+  useShortcut.ts              # React hook
+  shortcuts-config.ts         # 配置文件加载/保存
+```
+
+**核心类型**:
+```typescript
+type ShortcutActionId =
+  | 'interrupt' | 'clearScreen' | 'showHelp'
+  | 'toggleWorkMode' | 'toggleThinking'
+  | 'acceptCompletion' | 'submitInput' | 'historyUp' | 'historyDown'
+
+interface KeyBinding {
+  key: string;
+  ctrl?: boolean;
+  shift?: boolean;
+  meta?: boolean;
+}
+
+interface ShortcutDefinition {
+  id: ShortcutActionId;
+  name: string;
+  description: string;
+  defaultBindings: KeyBinding[];
+  context: 'global' | 'input' | 'streaming';
+  priority: number;
+  category: 'global' | 'navigation' | 'editing' | 'mode';
+}
+```
+
+**useShortcut Hook**:
+```typescript
+function useShortcut(
+  actionId: ShortcutActionId,
+  handler: () => boolean | void,
+  options?: { context?: ShortcutContext; isActive?: boolean }
+): void;
+```
+
+**Integration 示例 (InkREPL.tsx)**:
+```typescript
+useShortcut('toggleWorkMode', () => {
+  const newMode = currentConfig.workMode === 'project' ? 'coding' : 'project';
+  setCurrentConfig(prev => ({ ...prev, workMode: newMode }));
+  console.log(chalk.cyan(`\n[Switched to ${newMode} mode]`));
+  return true;
+});
+
+useShortcut('toggleThinking', () => {
+  const newThinking = !currentConfig.thinking;
+  setCurrentConfig(prev => ({ ...prev, thinking: newThinking }));
+  console.log(chalk.cyan(`\n[Extended Thinking ${newThinking ? 'ON' : 'OFF'}]`));
+  return true;
+});
+```
+
+**用户配置文件** (`~/.kodax/keybindings.json`):
+```json
+{
+  "version": 1,
+  "bindings": {
+    "toggleWorkMode": [{ "key": "o", "ctrl": true }],
+    "toggleThinking": [{ "key": "t", "ctrl": true }],
+    "clearScreen": [{ "key": "l", "ctrl": true }]
+  }
+}
+```
+
+### 关键决策
+
+1. **6 阶段渐进式实现**
+   - Phase 1-2: 创建新基础设施，不修改现有代码
+   - Phase 3-4: 逐步迁移，先 InkREPL 后 InputPrompt
+   - Phase 5-6: 添加帮助和配置功能
+   - 保持向后兼容
+
+2. **单例 Registry 模式**
+   - 集中管理所有快捷键
+   - 从配置文件加载用户自定义
+   - 提供上下文感知查询
+
+3. **上下文分离**
+   - global: 全局可用（如 Ctrl+L 清屏）
+   - input: 输入框激活时（如 Tab 补全）
+   - streaming: 流式输出时（如 Ctrl+C 中断）
+
+4. **复用现有架构**
+   - 集成 KeypressContext 优先级系统
+   - 不重复造轮子
+   - 渐进式迁移硬编码快捷键
+
+### 成果
+
+✅ Won't Fix issues (039, 053, 063) 已归档到 ISSUES_ARCHIVED.md
+✅ Issue 083 详细实现计划已完成
+✅ 计划已添加到 KNOWN_ISSUES.md
+✅ 热轨快照和冷轨归档已更新
+
+---
+
+*更新时间: 2026-03-12 15:45*
+

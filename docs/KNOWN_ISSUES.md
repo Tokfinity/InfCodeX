@@ -25,7 +25,7 @@ _Last Updated: 2026-03-12_
 | 061 | Low | Open | Windows Terminal 流式输出时滚轮滚动异常 | v0.4.5 | - | 2026-03-02 | - |
 | 077 | Low | Open | Skills 系统高级功能未完全实现 | v0.5.5 | - | 2026-03-04 | - |
 | 082 | Low | Open | packages/ai 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
-| 083 | Medium | Open | 缺少快捷键系统 | v0.5.29 | - | 2026-03-11 | - |
+| 083 | Medium | Resolved | 缺少快捷键系统 | v0.5.29 | v0.5.30 | 2026-03-11 | 2026-03-12 |
 
 ---
 
@@ -428,11 +428,13 @@ _Last Updated: 2026-03-12_
 
 ---
 
-### 083: 缺少快捷键系统
+### 083: 缺少快捷键系统 (RESOLVED)
 - **Priority**: Medium
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.5.29
+- **Fixed**: v0.5.30
 - **Created**: 2026-03-11
+- **Resolved**: 2026-03-12
 
 - **Original Problem**:
   KodaX 目前缺少快捷键系统，用户需要完全依赖命令输入来改变程序行为，
@@ -458,22 +460,230 @@ _Last Updated: 2026-03-12_
   - 参考 Claude Code 的快捷键设计
   - 当前已有 `Ctrl+C` 中断功能，可扩展
 
-- **Proposed Solution**:
-  1. 设计统一的快捷键注册系统
-  2. 在 InkREPL 中集成键盘事件监听
-  3. 提供快捷键提示 UI
-  4. 支持用户自定义快捷键配置
+- **现有架构**:
+  - `KeypressContext.tsx`: 已有优先级键盘事件分发系统
+  - `InputPrompt.tsx`: 硬编码的输入快捷键 (Tab, Esc, Ctrl+C, 方向键等)
+  - `InkREPL.tsx`: 流式中断处理 (Ctrl+C)
+
+- **差距分析**:
+  1. 无快捷键注册表 - 快捷键硬编码在各组件
+  2. 无用户配置支持
+  3. 无快捷键发现/帮助机制
+  4. 无操作抽象层
+
+- **Implementation Plan**:
+
+  **Phase 1: Core Infrastructure (2-3 files)**
+
+  创建文件结构:
+  ```
+  packages/repl/src/ui/shortcuts/
+    index.ts                    # Public exports
+    types.ts                    # 核心类型定义
+    ShortcutsRegistry.ts        # 集中式注册表单例
+    defaultShortcuts.ts         # 默认快捷键定义
+    useShortcut.ts              # React hook
+    shortcuts-config.ts         # 配置文件加载/保存
+  ```
+
+  核心类型 (types.ts):
+  ```typescript
+  type ShortcutActionId =
+    | 'interrupt'       // Ctrl+C - 中断
+    | 'clearScreen'     // Ctrl+L - 清屏
+    | 'showHelp'        // ? - 显示帮助
+    | 'toggleWorkMode'  // Ctrl+O - 切换模式
+    | 'toggleThinking'  // Ctrl+T - 切换思考
+    | 'acceptCompletion'| 'submitInput' | 'historyUp' | 'historyDown'
+    // ... 更多
+
+  interface KeyBinding {
+    key: string;
+    ctrl?: boolean;
+    shift?: boolean;
+    meta?: boolean;
+  }
+
+  interface ShortcutDefinition {
+    id: ShortcutActionId;
+    name: string;
+    description: string;
+    defaultBindings: KeyBinding[];
+    context: 'global' | 'input' | 'streaming';
+    priority: number;
+    category: 'global' | 'navigation' | 'editing' | 'mode';
+  }
+  ```
+
+  **Phase 2: Registry & Hook**
+
+  ShortcutsRegistry (ShortcutsRegistry.ts):
+  - 单例模式，存储所有注册的快捷键
+  - 从 `~/.kodax/keybindings.json` 加载用户配置
+  - 提供 `findMatchingShortcut(key, context)` 查询
+  - 支持上下文感知激活
+
+  useShortcut Hook (useShortcut.ts):
+  ```typescript
+  function useShortcut(
+    actionId: ShortcutActionId,
+    handler: () => boolean | void,
+    options?: { context?: ShortcutContext; isActive?: boolean }
+  ): void;
+  ```
+
+  **Phase 3: Default Shortcuts**
+
+  | Action | Key | Context | Description |
+  |--------|-----|---------|-------------|
+  | `interrupt` | Ctrl+C | streaming | 中断当前操作 |
+  | `clearScreen` | Ctrl+L | global | 清屏 |
+  | `showHelp` | ? | global | 显示帮助 |
+  | `toggleWorkMode` | Ctrl+O | global | 切换 Project/Coding 模式 |
+  | `toggleThinking` | Ctrl+T | global | 切换 Extended Thinking |
+  | `acceptCompletion` | Tab | input | 接受补全 |
+  | `submitInput` | Enter | input | 提交输入 |
+  | `historyUp` | Up | input | 历史上一条 |
+  | `historyDown` | Down | input | 历史下一条 |
+
+  **Phase 4: Integration**
+
+  修改 InkREPL.tsx:
+  1. 添加 `ShortcutsProvider` 包装
+  2. 追踪当前上下文 (input/streaming)
+  3. 注册全局快捷键 (toggleWorkMode, toggleThinking, clearScreen, showHelp)
+
+  修改 InputPrompt.tsx:
+  1. 移除硬编码的键处理
+  2. 使用 `useShortcut` 注册快捷键
+  3. 保留现有的输入逻辑，但通过快捷键触发
+
+  **Phase 5: Help System**
+
+  创建 ShortcutsHelp 组件:
+  - 按 `?` 显示帮助面板
+  - 按类别分组显示快捷键
+  - 显示当前键绑定和描述
+
+  **Phase 6: User Configuration**
+
+  配置文件结构 (`~/.kodax/keybindings.json`):
+  ```json
+  {
+    "version": 1,
+    "bindings": {
+      "toggleWorkMode": [{ "key": "o", "ctrl": true }],
+      "toggleThinking": [{ "key": "t", "ctrl": true }],
+      "clearScreen": [{ "key": "l", "ctrl": true }]
+    }
+  }
+  ```
+
+- **Critical Files**:
+
+  | File | Purpose |
+  |------|---------|
+  | `packages/repl/src/ui/contexts/KeypressContext.tsx` | 集成现有优先级系统 |
+  | `packages/repl/src/ui/InkREPL.tsx` | 添加全局快捷键注册 |
+  | `packages/repl/src/ui/components/InputPrompt.tsx` | 迁移硬编码快捷键 |
+  | `packages/repl/src/ui/types.ts` | 扩展快捷键类型 |
+
+- **Verification**:
+
+  1. 功能测试:
+     - Ctrl+O 切换工作模式
+     - Ctrl+T 切换 Extended Thinking
+     - Ctrl+L 清屏
+     - ? 显示帮助
+     - Ctrl+C 中断流式输出
+
+  2. 上下文测试:
+     - 流式输出时 Ctrl+C 中断有效
+     - 输入时 Tab 补全有效
+     - 全局快捷键在各上下文都可用
+
+  3. 配置测试:
+     - 用户配置文件正确加载
+     - 自定义键绑定覆盖默认值
+
+- **Migration Strategy**:
+  1. Phase 1-2: 创建新基础设施，不修改现有代码
+  2. Phase 3-4: 逐步迁移，先 InkREPL 后 InputPrompt
+  3. Phase 5-6: 添加帮助和配置功能
+  4. Backward compatibility: 保留所有现有快捷键行为
+
+- **Resolution**:
+  实现了完整的快捷键系统，包括以下组件：
+
+  1. **核心基础设施** (Phase 1-3 完成):
+     - `types.ts`: 定义 ShortcutActionId, KeyBinding, ShortcutDefinition 等核心类型
+     - `ShortcutsRegistry.ts`: 单例模式注册表
+     - `defaultShortcuts.ts`: 默认快捷键定义，涵盖全局、输入、导航、编辑类别
+     - `useShortcut.ts`: React Hook 集成 KeypressContext 优先级系统
+     - `ShortcutsProvider.tsx`: Context Provider 初始化注册表
+
+  2. **全局快捷键集成** (Phase 4 完成):
+     - `GlobalShortcuts.tsx`: 注册全局快捷键处理器
+     - `InkREPL.tsx`: 添加 ShortcutsProvider 和 GlobalShortcuts 组件
+     - 实现的快捷键：Ctrl+C (中断), Ctrl+L (清屏), ? (帮助), Ctrl+T (思考)
+     - 新增 `onInputChange` 回调追踪输入状态
+
+  3. **帮助面板** (Phase 5 完成):
+     - 按 ? 显示/隐藏帮助面板（仅当输入为空时，且消费 ? 字符不输入）
+     - 发送消息后自动隐藏帮助面板
+     - 显示已注册快捷键列表
+
+  4. **设计决策**（按用户要求简化）:
+     - **不实现用户配置文件**：用户明确表示不需要过度工程化
+     - interrupt 快捷键使用 'global' 上下文 + `isActive: isLoading` 控制触发时机
+     - **不实现模式切换快捷键**：原计划的 `toggleWorkMode` 语义有误（涉及安全敏感的权限模式），已移除
+
+  5. **GPT Review 问题处理**:
+     - ✅ `?` 快捷键优先级从 -10 提升到 150（高于 InputPrompt 的 100，确保能触发）
+     - ✅ 添加 Shift+Tab 转义序列支持 (`\x1b[Z`)
+     - ✅ 移除 `toggleWorkMode` 快捷键（语义错误，会切换包含 'plan' 在内的权限模式）
+     - ✅ 移除用户配置相关代码和类型
+
+- **Files Modified**:
+  - `packages/repl/src/ui/shortcuts/types.ts` - 核心类型定义
+  - `packages/repl/src/ui/shortcuts/ShortcutsRegistry.ts` - 注册表单例
+  - `packages/repl/src/ui/shortcuts/defaultShortcuts.ts` - 默认快捷键定义
+  - `packages/repl/src/ui/shortcuts/useShortcut.ts` - React Hook
+  - `packages/repl/src/ui/shortcuts/ShortcutsProvider.tsx` - Context Provider
+  - `packages/repl/src/ui/shortcuts/GlobalShortcuts.tsx` - 全局快捷键组件
+  - `packages/repl/src/ui/shortcuts/index.ts` - 导出入口
+  - `packages/repl/src/ui/InkREPL.tsx` - 集成快捷键系统
+  - `packages/repl/src/ui/types.ts` - 添加 onInputChange 回调类型
+  - `packages/repl/src/ui/components/InputPrompt.tsx` - 添加 onInputChange 支持
+  - `packages/repl/src/ui/utils/keypress-parser.ts` - 添加 Shift+Tab 转义序列支持
 
 ---
 
 ## Summary
-- Total: 12 (11 Open, 1 Resolved, 0 Partially Resolved, 0 Won't Fix)
-- Highest Priority Open: 083 - 缺少快捷键系统 (Medium)
+- Total: 12 (10 Open, 2 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Highest Priority Open: 082 - packages/ai 缺少单元测试 (Low)
 - 78 issues archived to ISSUES_ARCHIVED.md (43 previous + 32 resolved + 3 Won't Fix on 2026-03-11)
 
 ---
 
 ## Changelog
+
+### 2026-03-12: Issue 083 修复
+- Resolved 083: 缺少快捷键系统 (Medium Priority)
+- 实现内容：
+  1. 创建集中式快捷键注册表 (ShortcutsRegistry)
+  2. 创建 useShortcut React Hook 集成 KeypressContext
+  3. 定义默认快捷键（中断、清屏、帮助、思考等）
+  4. 添加 GlobalShortcuts 组件注册全局快捷键
+  5. 集成 ShortcutsProvider 到 InkREPL
+  6. 帮助面板仅在输入为空时显示，发送后自动隐藏
+- GPT Review 后修复：
+  1. `?` 快捷键优先级从 -10 提升到 150（高于 InputPrompt 的 100）
+  2. 添加 Shift+Tab 转义序列 `\x1b[Z` 支持
+  3. 移除 toggleWorkMode 快捷键（语义错误）
+  4. 移除用户配置相关代码（按用户要求不实现）
+- 修改文件：`packages/repl/src/ui/shortcuts/` 目录下 7 个文件 + `InkREPL.tsx` + `InputPrompt.tsx` + `keypress-parser.ts`
+- 设计决策：按用户要求不实现用户配置文件，保持简洁
 
 ### 2026-03-12: Issue 085 修复
 - Added & Resolved 085: 只读 Bash 命令白名单未在非 plan 模式复用 (Medium Priority)

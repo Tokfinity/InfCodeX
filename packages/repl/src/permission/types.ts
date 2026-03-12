@@ -9,11 +9,10 @@
 /**
  * Permission mode - 权限模式
  * - plan: Read-only planning, all modifications blocked - 只读规划，禁止所有修改操作
- * - default: All tools require confirmation - 全部需要确认
  * - accept-edits: File edits auto-approved, shell commands require confirmation - 文件自动，命令需确认
  * - auto-in-project: All tools auto-approved within project, outside requires confirmation - 项目内全自动，项目外需确认
  */
-export type PermissionMode = 'plan' | 'default' | 'accept-edits' | 'auto-in-project';
+export type PermissionMode = 'plan' | 'accept-edits' | 'auto-in-project';
 
 // ============== Confirm Result ==============
 
@@ -118,7 +117,6 @@ export interface PermissionContext {
  * | Mode             | confirmTools             |
  * |------------------|--------------------------|
  * | plan             | all modification tools   |
- * | default          | bash + write + edit      |
  * | accept-edits     | bash only                |
  * | auto-in-project  | empty (project-level guard applies) |
  */
@@ -126,8 +124,6 @@ export function computeConfirmTools(mode: PermissionMode): Set<string> {
   switch (mode) {
     case 'plan':
       return new Set(['bash', 'write', 'edit', 'undo']);
-    case 'default':
-      return new Set(['bash', 'write', 'edit']);
     case 'accept-edits':
       return new Set(['bash']);
     case 'auto-in-project':

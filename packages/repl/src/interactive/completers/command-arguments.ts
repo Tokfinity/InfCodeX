@@ -18,11 +18,6 @@ const MODE_ARGS: ArgumentDefinition[] = [
     type: 'enum',
   },
   {
-    name: 'default',
-    description: 'All tools require confirmation',
-    type: 'enum',
-  },
-  {
     name: 'accept-edits',
     description: 'File edits auto-approved, bash requires confirmation',
     type: 'enum',

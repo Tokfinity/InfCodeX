@@ -289,7 +289,7 @@ export function inferPermissionMode(opts: {
   if (opts.confirmTools && !opts.confirmTools.has('write') && !opts.confirmTools.has('edit')) {
     return 'accept-edits';
   }
-  return 'default';
+  return 'accept-edits';
 }
 
 // Re-export constants for convenience
