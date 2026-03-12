@@ -440,37 +440,74 @@ export async function runKodaX(
 
       // 流式调用 Provider - with automatic retry for transient errors
       // 注入 API 硬超时保护：防止大型 payload 导致 API 静默丢包引发无限等待
-      const API_HARD_TIMEOUT_MS = 180_000; // 3 分钟硬超时
-      const timeoutController = new AbortController();
-      const timeoutTimer = setTimeout(() => {
-        timeoutController.abort(new Error("API Hard Timeout (3 minutes)"));
-      }, API_HARD_TIMEOUT_MS);
-
-      // 合并用户中断信号和超时信号
-      const combinedSignal = options.abortSignal
-        ? AbortSignal.any([options.abortSignal, timeoutController.signal])
-        : timeoutController.signal;
+      const API_HARD_TIMEOUT_MS = 600_000; // Issue 084: 提升到 10 分钟硬超时
+      const API_IDLE_TIMEOUT_MS = 60_000;  // Issue 084: 60 秒空闲/停滞超时，如果有 delta 刷新则重置
 
       const result = await withRetry(
-        () => {
-          // 每次重试时重置超时计时器
-          clearTimeout(timeoutTimer);
+        async () => {
           const retryTimeoutController = new AbortController();
-          const retryTimer = setTimeout(() => {
-            retryTimeoutController.abort(new Error("API Hard Timeout (3 minutes)"));
+          
+          let hardTimer = setTimeout(() => {
+            retryTimeoutController.abort(new Error("API Hard Timeout (10 minutes)"));
           }, API_HARD_TIMEOUT_MS);
+          
+          let idleTimer = setTimeout(() => {
+            retryTimeoutController.abort(new Error("Stream stalled or delayed response (60s idle)"));
+          }, API_IDLE_TIMEOUT_MS);
+
+          const resetIdleTimer = () => {
+            clearTimeout(idleTimer);
+            if (!retryTimeoutController.signal.aborted) {
+              idleTimer = setTimeout(() => {
+                retryTimeoutController.abort(new Error("Stream stalled or delayed response (60s idle)"));
+              }, API_IDLE_TIMEOUT_MS);
+            }
+          };
+
           const retrySignal = options.abortSignal
             ? AbortSignal.any([options.abortSignal, retryTimeoutController.signal])
             : retryTimeoutController.signal;
 
-          return provider.stream(compacted, KODAX_TOOLS, systemPrompt, options.thinking, {
-            onTextDelta: (text) => events.onTextDelta?.(text),
-            onThinkingDelta: (text) => events.onThinkingDelta?.(text),
-            onThinkingEnd: (thinking) => events.onThinkingEnd?.(thinking),
-            onToolInputDelta: (name, json) => events.onToolInputDelta?.(name, json),
-            onRateLimit: (attempt, max, delay) => events.onProviderRateLimit?.(attempt, max, delay),
-            signal: retrySignal,
-          }, retrySignal).finally(() => clearTimeout(retryTimer));
+          try {
+            return await provider.stream(compacted, KODAX_TOOLS, systemPrompt, options.thinking, {
+              onTextDelta: (text) => {
+                resetIdleTimer();
+                events.onTextDelta?.(text);
+              },
+              onThinkingDelta: (text) => {
+                resetIdleTimer();
+                events.onThinkingDelta?.(text);
+              },
+              onThinkingEnd: (thinking) => {
+                resetIdleTimer();
+                events.onThinkingEnd?.(thinking);
+              },
+              onToolInputDelta: (name, json) => {
+                resetIdleTimer();
+                events.onToolInputDelta?.(name, json);
+              },
+              onRateLimit: (attempt, max, delay) => {
+                resetIdleTimer(); // 重试限制时也重置，因为底层 Provider 会自己等待
+                events.onProviderRateLimit?.(attempt, max, delay);
+              },
+              signal: retrySignal,
+            }, retrySignal);
+          } catch (e) {
+            // Issue 084 fix: Differentiate between user abort and our internal watchdog abort
+            if (e instanceof Error && e.name === 'AbortError') {
+              // If it's our internal watchdog that triggered the abort (idle or hard timeout)
+              if (retryTimeoutController.signal.aborted && !options.abortSignal?.aborted) {
+                const reason = retryTimeoutController.signal.reason?.message ?? "Stream stalled";
+                // Convert internal timeout to network error so it triggers automatic retry
+                const { KodaXNetworkError } = await import('@kodax/ai');
+                throw new KodaXNetworkError(reason, true);
+              }
+            }
+            throw e;
+          } finally {
+            clearTimeout(hardTimer);
+            clearTimeout(idleTimer);
+          }
         },
         // Default retry classification for provider calls
         {

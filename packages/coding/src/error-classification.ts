@@ -25,6 +25,17 @@ export interface ErrorClassification {
  * 分类错误以确定适当的恢复策略
  */
 export function classifyError(error: Error): ErrorClassification {
+  // Issue 084: Stream incomplete error - network disconnection during streaming
+  if (error.name === 'StreamIncompleteError' || error.message.includes('Stream incomplete')) {
+    return {
+      category: ErrorCategory.TRANSIENT,
+      retryable: true,
+      maxRetries: 3,
+      retryDelay: 2000,
+      shouldCleanup: true,
+    };
+  }
+
   // 用户中断
   if (error.name === 'AbortError') {
     return {

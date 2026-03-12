@@ -1331,13 +1331,25 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
         }
 
-        if (finalResponse) {
-          addHistoryItem({
-            type: "assistant",
-            text: finalResponse,
-          });
+        // Issue 084 fix: Handle interrupted generations properly
+        if (result.interrupted) {
+          if (finalResponse) {
+            addHistoryItem({
+              type: "assistant",
+              text: finalResponse + "\n\n[Interrupted]",
+            });
+            // CRITICAL FIX: The agent context.messages already has the interrupted blocks
+            // pushed by agent.ts's AbortError handler if it was an internal stream error.
+            // Ensure we don't duplicate them here, but we do need the visual indicator.
+          }
+        } else {
+          if (finalResponse) {
+            addHistoryItem({
+              type: "assistant",
+              text: finalResponse,
+            });
+          }
         }
-
 
         // Auto-save
         if (context.messages.length > 0) {

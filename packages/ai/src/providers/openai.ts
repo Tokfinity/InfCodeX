@@ -42,6 +42,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
       let textContent = '';
 
+      // Issue 084 fix: Track stream completion
+      let finishReason: string | null = null;
+      const streamStartTime = Date.now();
+
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       const stream = await this.client.chat.completions.create({
         model: this.config.model,
@@ -57,7 +61,18 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           throw new DOMException('Request aborted', 'AbortError');
         }
 
-        const delta = chunk.choices[0]?.delta;
+        const choice = chunk.choices[0];
+        const delta = choice?.delta;
+
+        // Issue 084 fix: Track finish_reason to detect stream completion
+        if (choice?.finish_reason) {
+          finishReason = choice.finish_reason;
+          if (process.env.KODAX_DEBUG_STREAM) {
+            const duration = Date.now() - streamStartTime;
+            console.error(`[Stream] finish_reason: ${finishReason} after ${duration}ms`);
+          }
+        }
+
         if (delta?.content) {
           textContent += delta.content;
           streamOptions?.onTextDelta?.(delta.content);
@@ -74,6 +89,24 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
             toolCallsMap.set(tc.index, existing);
           }
         }
+      }
+
+      // Issue 084 fix: Validate stream completed successfully
+      // If finish_reason was never received, the stream was likely interrupted
+      if (!finishReason) {
+        const duration = Date.now() - streamStartTime;
+        const error = new Error(
+          `Stream incomplete: finish_reason not received. ` +
+          `Duration: ${duration}ms. ` +
+          `This may indicate a network disconnection or API timeout.`
+        );
+        error.name = 'StreamIncompleteError';
+        console.error('[Stream] Incomplete stream detected:', {
+          duration,
+          textContentLength: textContent.length,
+          toolCallsCount: toolCallsMap.size
+        });
+        throw error;
       }
 
       const textBlocks: KodaXTextBlock[] = textContent ? [{ type: 'text', text: textContent }] : [];
