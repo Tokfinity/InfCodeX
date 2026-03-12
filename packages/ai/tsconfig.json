@@ -11,8 +11,10 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
+    "composite": true,
     "declarationMap": true,
     "sourceMap": true,
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],

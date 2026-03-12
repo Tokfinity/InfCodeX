@@ -12,10 +12,17 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
+    "composite": true,
     "sourceMap": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
+  "references": [
+    { "path": "../agent" },
+    { "path": "../coding" },
+    { "path": "../skills" }
+  ],
   "include": ["src/**/*.ts", "src/**/*.tsx"],
   "exclude": ["node_modules", "dist", "src/**/__tests__/**"]
 }

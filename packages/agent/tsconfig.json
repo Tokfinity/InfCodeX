@@ -11,9 +11,14 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
+    "composite": true,
     "declarationMap": true,
-    "sourceMap": true
+    "sourceMap": true,
+    "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
+  "references": [
+    { "path": "../ai" }
+  ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

@@ -20,7 +20,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:packages": "npm run build -w @kodax/ai -w @kodax/skills && npm run build -w @kodax/agent && npm run build -w @kodax/coding && npm run build -w @kodax/repl",
+    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax/skills",
     "dev": "tsx src/kodax_cli.ts",
     "dev:cli": "tsx src/kodax_cli.ts",
     "start": "node dist/kodax_cli.js",
