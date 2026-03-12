@@ -1,32 +1,36 @@
 /**
  * @kodax/agent Compaction Core
  *
- * 核心压缩逻辑 - 检测并执行上下文压缩
+ * Progressive compaction with lightweight tool-result pruning and rolling
+ * summarization to an internal low-water mark.
  */
 
 import type { KodaXMessage, KodaXBaseProvider, KodaXContentBlock } from '@kodax/ai';
 import type { CompactionConfig, CompactionResult } from './types.js';
-import { estimateTokens } from '../tokenizer.js';
+import { countTokens, estimateTokens } from '../tokenizer.js';
 import { extractFileOps } from './file-tracker.js';
 import { generateSummary } from './summary-generator.js';
 
-/**
- * 默认上下文窗口大小
- *
- * Claude 3.5 Sonnet: 200,000 tokens
- */
 const DEFAULT_CONTEXT_WINDOW = 200000;
+const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
+const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
+const PRUNE_PROTECTED_TOOLS = new Set(['skill']);
 
-/**
- * 检查是否需要压缩
- *
- * 触发条件: contextTokens > contextWindow * triggerPercent / 100
- *
- * @param messages - 消息列表
- * @param config - 压缩配置
- * @param contextWindow - 上下文窗口大小（默认 200k）
- * @returns 是否需要压缩
- */
+interface ToolContextInfo {
+  name: string;
+  preview: string;
+}
+
+interface PruneDecision {
+  idsToPrune: Set<string>;
+  prunableTokens: number;
+}
+
+interface PruneResult {
+  messages: KodaXMessage[];
+  hasPruned: boolean;
+}
+
 export function needsCompaction(
   messages: KodaXMessage[],
   config: CompactionConfig,
@@ -35,21 +39,10 @@ export function needsCompaction(
   if (!config.enabled) return false;
 
   const tokens = estimateTokens(messages);
-  const threshold = contextWindow * (config.triggerPercent / 100);
+  const threshold = getTriggerTokens(config, contextWindow);
   return tokens > threshold;
 }
 
-/**
- * 执行压缩 (V2 渐进式滚动压缩架构)
- *
- * @param messages - 消息列表
- * @param config - 压缩配置
- * @param provider - LLM Provider
- * @param contextWindow - 上下文窗口大小
- * @param customInstructions - 自定义指令（可选）
- * @param systemPrompt - 项目的系统提示（可选，用于生成更好的摘要）
- * @returns 压缩结果
- */
 export async function compact(
   messages: KodaXMessage[],
   config: CompactionConfig,
@@ -60,7 +53,6 @@ export async function compact(
 ): Promise<CompactionResult> {
   const tokensBefore = estimateTokens(messages);
 
-  // 检查是否需要压缩
   if (!needsCompaction(messages, config, contextWindow)) {
     return {
       compacted: false,
@@ -71,28 +63,28 @@ export async function compact(
     };
   }
 
-  // Phase 0: 寻找并分离已有的系统摘要
   let previousSummary: string | undefined;
   let remainingMessages = messages;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
-    if (msg?.role === 'system' && typeof msg.content === 'string' && msg.content.startsWith('[对话历史摘要]')) {
+    if (
+      msg?.role === 'system' &&
+      typeof msg.content === 'string' &&
+      msg.content.startsWith('[对话历史摘要]')
+    ) {
       previousSummary = msg.content.replace('[对话历史摘要]\n\n', '');
       remainingMessages = [...messages.slice(0, i), ...messages.slice(i + 1)];
       break;
     }
   }
 
-  // Phase 1: 绝对保护区
   const protectionPercent = config.protectionPercent ?? 20;
   const protectionTokens = Math.floor(contextWindow * (protectionPercent / 100));
   const protectCutIndex = findCutPoint(remainingMessages, protectionTokens);
-
   const toProcess = remainingMessages.slice(0, protectCutIndex);
   const toProtect = remainingMessages.slice(protectCutIndex);
 
-  // 如果待处理区为空（比如消息都特别长或者都挤在保护区），直接返回
   if (toProcess.length === 0) {
     return {
       compacted: false,
@@ -103,80 +95,27 @@ export async function compact(
     };
   }
 
-  // 全局收集文件操作跟踪（恢复：在修剪前收集，确保追踪不丢失任何工具调用意图）
   const totalFileOps = extractFileOps(toProcess);
 
-  // Phase 2: 静默修剪 (Silent Pruning)
-  const PRUNING_THRESHOLD = config.pruningThresholdTokens ?? 500;
-  let hasPruned = false;
-  const prunedMessages: KodaXMessage[] = [];
+  const pruningThresholdTokens = config.pruningThresholdTokens ?? 500;
+  const toolContextMap = buildToolContextMap(toProcess);
+  const structuredPrune = collectStructuredPruneIds(toProcess, toolContextMap);
+  const pruneResult = pruneToolResults(
+    toProcess,
+    toolContextMap,
+    structuredPrune,
+    pruningThresholdTokens
+  );
 
-  // 构建 tool_use_id -> 简短上下文摘要 的映射
-  const toolContextMap = new Map<string, string>();
-  for (const msg of toProcess) {
-    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
-      for (const block of msg.content) {
-        if (block.type === 'tool_use' && 'id' in block && typeof block.id === 'string') {
-          const name = String(block.name || 'tool');
-          const input = (block.input as Record<string, unknown>) || {};
-          let preview = name;
-
-          // 尝试提取最具代表性的短参数 (如执行的具体命令，或读写的文件名)
-          const cmdLine = input.command ?? input.CommandLine ?? input.command_line;
-          if (typeof cmdLine === 'string') {
-            const cmd = cmdLine.split(' ')[0]; // 只提取程序名，如 'ls', 'git'
-            preview = `${name} ${cmd}`;
-          } else {
-            const pathInfo = input.path ?? input.AbsolutePath ?? input.TargetFile ?? input.file;
-            if (typeof pathInfo === 'string') {
-               const file = pathInfo.split(/[\\/]/).pop(); // 仅保留文件 basename
-               preview = `${name} ${file}`;
-            }
-          }
-          toolContextMap.set(block.id, preview);
-        }
-      }
-    }
-  }
-
-  for (const msg of toProcess) {
-    if (msg.role === 'user' && Array.isArray(msg.content)) {
-      const hasToolResult = msg.content.some((b: KodaXContentBlock) => b.type === 'tool_result');
-      if (hasToolResult) {
-        const newContent = msg.content.map((block: KodaXContentBlock) => {
-          if (block.type === 'tool_result' && 'content' in block && typeof block.content === 'string') {
-            // 快速估算 (1 token ~ 4 chars)
-            if (block.content.length > PRUNING_THRESHOLD * 4) {
-              hasPruned = true;
-              const toolId = ('tool_use_id' in block && typeof block.tool_use_id === 'string') ? block.tool_use_id : undefined;
-              const hint = toolId ? toolContextMap.get(toolId) : undefined;
-              
-              const replacement = hint ? `[Pruned: ${hint}]` : '[Pruned]';
-              return {
-                ...block,
-                content: replacement
-              };
-            }
-          }
-          return block;
-        });
-        prunedMessages.push({ ...msg, content: newContent });
-        continue;
-      }
-    }
-    prunedMessages.push(msg);
-  }
-
+  const prunedMessages = pruneResult.messages;
   const prunedQueue = [...prunedMessages, ...toProtect];
-  const tokensAfterPrune = estimateTokens(prunedQueue);
-  const thresholdToken = contextWindow * (config.triggerPercent / 100);
+  const triggerTokens = getTriggerTokens(config, contextWindow);
 
-  // 如果仅仅通过修剪就回落到安全水位，无损提前收工
-  if (hasPruned && tokensAfterPrune <= thresholdToken) {
-    const finalMessages = previousSummary 
-       ? [{ role: 'system', content: `[对话历史摘要]\n\n${previousSummary}` } as KodaXMessage, ...prunedQueue] 
-       : prunedQueue;
-       
+  if (pruneResult.hasPruned && estimateTokens(prunedQueue) <= triggerTokens) {
+    const finalMessages = previousSummary
+      ? [createSummaryMessage(previousSummary), ...prunedQueue]
+      : prunedQueue;
+
     return {
       compacted: true,
       messages: finalMessages,
@@ -188,62 +127,246 @@ export async function compact(
     };
   }
 
-  // Phase 3: 滚动摘要 (Rolling Summarization)
   const rollingSummaryPercent = config.rollingSummaryPercent ?? 10;
-  const ROLLING_SUMMARIZE_TOKENS = Math.floor(contextWindow * (rollingSummaryPercent / 100));
-  // 确保至少切出1条可压缩
-  const summarizeCutIndex = Math.max(1, findForwardCutPoint(prunedMessages, ROLLING_SUMMARIZE_TOKENS));
-  
-  const toSummarize = prunedMessages.slice(0, summarizeCutIndex);
-  const stillKeptFromProcess = prunedMessages.slice(summarizeCutIndex);
+  const rollingSummaryTokens = Math.max(
+    1,
+    Math.floor(contextWindow * (rollingSummaryPercent / 100))
+  );
+  const targetTokens = getTargetTokens(config, contextWindow);
 
   let summary = previousSummary || '';
-  if (toSummarize.length > 0) {
-    const MAX_TOKENS_PER_CHUNK = 50000;
-    const chunks = chunkMessages(toSummarize, MAX_TOKENS_PER_CHUNK);
+  let workingProcess = prunedMessages;
+  let entriesRemoved = 0;
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      if (!chunk || chunk.length === 0) continue;
-      
-      const chunkFileOps = extractFileOps(chunk);
-      summary = await generateSummary(
-        chunk,
-        provider,
-        chunkFileOps,
-        customInstructions,
-        systemPrompt,
-        summary !== '' ? summary : undefined
-      );
-      
-      if (i < chunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
+  while (workingProcess.length > 0) {
+    const currentMessages = buildCompactedMessages(summary, workingProcess, toProtect);
+    if (estimateTokens(currentMessages) <= targetTokens) {
+      break;
     }
+
+    const summarizeCutIndex = Math.max(
+      1,
+      findForwardCutPoint(workingProcess, rollingSummaryTokens)
+    );
+    const toSummarize = workingProcess.slice(0, summarizeCutIndex);
+    const remainder = workingProcess.slice(summarizeCutIndex);
+
+    if (toSummarize.length === 0) {
+      break;
+    }
+
+    summary = await summarizeMessages(
+      toSummarize,
+      provider,
+      customInstructions,
+      systemPrompt,
+      summary
+    );
+
+    workingProcess = remainder;
+    entriesRemoved += toSummarize.length;
   }
 
-  const summaryMessage: KodaXMessage = {
-    role: 'system',
-    content: `[对话历史摘要]\n\n${summary}`,
-  };
+  const compactedMessages = buildCompactedMessages(summary, workingProcess, toProtect);
 
-  const compactedMessages = [summaryMessage, ...stillKeptFromProcess, ...toProtect];
-  
   return {
     compacted: true,
     messages: compactedMessages,
-    summary,
+    summary: summary || undefined,
     tokensBefore,
     tokensAfter: estimateTokens(compactedMessages),
-    entriesRemoved: toSummarize.length,
+    entriesRemoved,
     details: totalFileOps,
   };
 }
 
-/**
- * 提取原子块的核心逻辑（复用）
- * 保证 tool_use + tool_result 不被切散
- */
+async function summarizeMessages(
+  messages: KodaXMessage[],
+  provider: KodaXBaseProvider,
+  customInstructions: string | undefined,
+  systemPrompt: string | undefined,
+  previousSummary: string
+): Promise<string> {
+  let summary = previousSummary;
+  const maxTokensPerChunk = 50000;
+  const chunks = chunkMessages(messages, maxTokensPerChunk);
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    if (!chunk || chunk.length === 0) continue;
+
+    summary = await generateSummary(
+      chunk,
+      provider,
+      extractFileOps(chunk),
+      customInstructions,
+      systemPrompt,
+      summary || undefined
+    );
+
+    if (i < chunks.length - 1) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+  return summary;
+}
+
+function buildCompactedMessages(
+  summary: string,
+  messages: KodaXMessage[],
+  protectedMessages: KodaXMessage[]
+): KodaXMessage[] {
+  return summary
+    ? [createSummaryMessage(summary), ...messages, ...protectedMessages]
+    : [...messages, ...protectedMessages];
+}
+
+function createSummaryMessage(summary: string): KodaXMessage {
+  return {
+    role: 'system',
+    content: `[对话历史摘要]\n\n${summary}`,
+  };
+}
+
+function getTriggerTokens(config: CompactionConfig, contextWindow: number): number {
+  return contextWindow * (config.triggerPercent / 100);
+}
+
+function getTargetTokens(config: CompactionConfig, contextWindow: number): number {
+  const protectionPercent = config.protectionPercent ?? 20;
+  const triggerPercent = config.triggerPercent;
+
+  if (triggerPercent <= protectionPercent) {
+    return getTriggerTokens(config, contextWindow);
+  }
+
+  const targetPercent = protectionPercent + 0.4 * (triggerPercent - protectionPercent);
+  return Math.floor(contextWindow * (targetPercent / 100));
+}
+
+function buildToolContextMap(messages: KodaXMessage[]): Map<string, ToolContextInfo> {
+  const toolContextMap = new Map<string, ToolContextInfo>();
+
+  for (const msg of messages) {
+    if (msg.role !== 'assistant' || !Array.isArray(msg.content)) continue;
+
+    for (const block of msg.content) {
+      if (block.type !== 'tool_use' || typeof block.id !== 'string') continue;
+
+      const name = String(block.name || 'tool');
+      const input = (block.input as Record<string, unknown>) || {};
+      let preview = name;
+
+      const command = input.command ?? input.CommandLine ?? input.command_line;
+      if (typeof command === 'string' && command.trim()) {
+        preview = `${name} ${command.trim().split(/\s+/)[0]}`;
+      } else {
+        const pathInfo = input.path ?? input.AbsolutePath ?? input.TargetFile ?? input.file;
+        if (typeof pathInfo === 'string' && pathInfo.trim()) {
+          const basename = pathInfo.split(/[\\/]/).pop() ?? pathInfo;
+          preview = `${name} ${basename}`;
+        }
+      }
+
+      toolContextMap.set(block.id, { name, preview });
+    }
+  }
+
+  return toolContextMap;
+}
+
+function collectStructuredPruneIds(
+  messages: KodaXMessage[],
+  toolContextMap: Map<string, ToolContextInfo>
+): PruneDecision {
+  // Match the opencode-style pruning shape:
+  // skip the most recent user turn entirely, then keep walking backward while
+  // preserving a recent budget of tool-result tokens before marking older ones for pruning.
+  let protectedTurns = 0;
+  let protectedToolTokens = 0;
+  let prunableTokens = 0;
+  const idsToPrune = new Set<string>();
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    if (msg.role === 'user') {
+      protectedTurns++;
+    }
+
+    if (protectedTurns < 2 || msg.role !== 'user' || !Array.isArray(msg.content)) {
+      continue;
+    }
+
+    for (let j = msg.content.length - 1; j >= 0; j--) {
+      const block = msg.content[j];
+      if (block?.type !== 'tool_result' || typeof block.content !== 'string') continue;
+
+      const toolInfo = toolContextMap.get(block.tool_use_id);
+      if (toolInfo && PRUNE_PROTECTED_TOOLS.has(toolInfo.name)) continue;
+
+      const blockTokens = countToolResultTokens(block.content);
+      protectedToolTokens += blockTokens;
+
+      if (protectedToolTokens > STRUCTURED_PRUNE_PROTECT_TOKENS) {
+        idsToPrune.add(block.tool_use_id);
+        prunableTokens += blockTokens;
+      }
+    }
+  }
+
+  if (prunableTokens < STRUCTURED_PRUNE_MINIMUM_TOKENS) {
+    return { idsToPrune: new Set<string>(), prunableTokens: 0 };
+  }
+
+  return { idsToPrune, prunableTokens };
+}
+
+function pruneToolResults(
+  messages: KodaXMessage[],
+  toolContextMap: Map<string, ToolContextInfo>,
+  structuredPrune: PruneDecision,
+  pruningThresholdTokens: number
+): PruneResult {
+  let hasPruned = false;
+  const prunedMessages = messages.map(msg => {
+    if (msg.role !== 'user' || !Array.isArray(msg.content)) {
+      return msg;
+    }
+
+    let changed = false;
+    const newContent = msg.content.map(block => {
+      if (block.type !== 'tool_result' || typeof block.content !== 'string') {
+        return block;
+      }
+
+      const shouldStructuredPrune = structuredPrune.idsToPrune.has(block.tool_use_id);
+      const shouldOversizePrune = countTokens(block.content) > pruningThresholdTokens;
+      if (!shouldStructuredPrune && !shouldOversizePrune) {
+        return block;
+      }
+
+      changed = true;
+      hasPruned = true;
+      const toolInfo = toolContextMap.get(block.tool_use_id);
+      return {
+        ...block,
+        content: toolInfo ? `[Pruned: ${toolInfo.preview}]` : '[Pruned]',
+      };
+    });
+
+    return changed ? { ...msg, content: newContent } : msg;
+  });
+
+  return { messages: prunedMessages, hasPruned };
+}
+
+function countToolResultTokens(content: string): number {
+  return 4 + countTokens(content);
+}
+
 function getAtomicBlocks(messages: KodaXMessage[]): Array<{ start: number; end: number; tokens: number }> {
   const atomicBlocks: Array<{ start: number; end: number; tokens: number }> = [];
 
@@ -251,34 +374,37 @@ function getAtomicBlocks(messages: KodaXMessage[]): Array<{ start: number; end: 
     const msg = messages[i];
     if (!msg) continue;
 
-    const hasToolUse = msg.role === 'assistant' &&
-      Array.isArray(msg.content) &&
-      msg.content.some((b: KodaXContentBlock) => b.type === 'tool_use');
+    const hasToolUse = msg.role === 'assistant'
+      && Array.isArray(msg.content)
+      && msg.content.some((b: KodaXContentBlock) => b.type === 'tool_use');
 
     if (hasToolUse) {
       const nextMsg = messages[i + 1];
-      const hasNextToolResult = nextMsg?.role === 'user' &&
-        Array.isArray(nextMsg.content) &&
-        nextMsg.content.some((b: KodaXContentBlock) => b.type === 'tool_result');
+      const hasNextToolResult = nextMsg?.role === 'user'
+        && Array.isArray(nextMsg.content)
+        && nextMsg.content.some((b: KodaXContentBlock) => b.type === 'tool_result');
 
       if (hasNextToolResult) {
-        const tokens = estimateTokens([msg, nextMsg]);
-        atomicBlocks.push({ start: i, end: i + 1, tokens });
+        atomicBlocks.push({
+          start: i,
+          end: i + 1,
+          tokens: estimateTokens([msg, nextMsg]),
+        });
         i++;
         continue;
       }
     }
 
-    const tokens = estimateTokens([msg]);
-    atomicBlocks.push({ start: i, end: i, tokens });
+    atomicBlocks.push({
+      start: i,
+      end: i,
+      tokens: estimateTokens([msg]),
+    });
   }
 
   return atomicBlocks;
 }
 
-/**
- * 找到绝对保护区的切割点（逆向查找记录的最老位置）
- */
 function findCutPoint(messages: KodaXMessage[], keepRecentTokens: number): number {
   let tokenCount = 0;
   const atomicBlocks = getAtomicBlocks(messages);
@@ -288,7 +414,6 @@ function findCutPoint(messages: KodaXMessage[], keepRecentTokens: number): numbe
     if (!block) continue;
 
     tokenCount += block.tokens;
-
     if (tokenCount > keepRecentTokens) {
       return block.start;
     }
@@ -297,9 +422,6 @@ function findCutPoint(messages: KodaXMessage[], keepRecentTokens: number): numbe
   return 0;
 }
 
-/**
- * 从前往后寻找原子块切分点（用于提取最老的 X% tokens）
- */
 function findForwardCutPoint(messages: KodaXMessage[], targetTokens: number): number {
   let tokenCount = 0;
   const atomicBlocks = getAtomicBlocks(messages);
@@ -312,7 +434,7 @@ function findForwardCutPoint(messages: KodaXMessage[], targetTokens: number): nu
   for (let i = 0; i < atomicBlocks.length; i++) {
     const block = atomicBlocks[i];
     if (!block) continue;
-    
+
     tokenCount += block.tokens;
     cutEndIndex = block.end + 1;
     if (tokenCount >= targetTokens) {
@@ -327,12 +449,10 @@ function chunkMessages(messages: KodaXMessage[], maxTokensPerChunk: number): Kod
   const chunks: KodaXMessage[][] = [];
   let currentChunk: KodaXMessage[] = [];
   let currentTokens = 0;
-  
+
   const atomicBlocks = getAtomicBlocks(messages);
 
   for (const block of atomicBlocks) {
-    if (!block) continue;
-    
     const group = messages.slice(block.start, block.end + 1);
     const groupTokens = block.tokens;
 
@@ -340,10 +460,11 @@ function chunkMessages(messages: KodaXMessage[], maxTokensPerChunk: number): Kod
       chunks.push(currentChunk);
       currentChunk = [...group];
       currentTokens = groupTokens;
-    } else {
-      currentChunk.push(...group);
-      currentTokens += groupTokens;
+      continue;
     }
+
+    currentChunk.push(...group);
+    currentTokens += groupTokens;
   }
 
   if (currentChunk.length > 0) {
