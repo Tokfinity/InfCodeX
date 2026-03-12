@@ -1,135 +1,142 @@
 /**
  * @kodax/agent Compaction Summary Generator
  *
- * LLM 摘要生成器 - 使用 LLM 生成结构化摘要
+ * Generates continuation-oriented summaries for compacted conversations.
  */
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
 import type { CompactionDetails } from './types.js';
 import { serializeConversation } from './utils.js';
 
-/**
- * 系统提示 - 明确说明这是摘要任务，不是继续对话
- * 参考 pi-mono 的 SUMMARIZATION_SYSTEM_PROMPT
- */
-const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant.
+Read the conversation history and produce a compact continuation summary.
 
-Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
+Do not continue the conversation.
+Do not answer any user requests.
+Only output the requested structured summary.`;
 
-/**
- * 初始摘要 Prompt 模板
- */
-const SUMMARY_PROMPT = `请为以下对话生成结构化摘要。
+const SUMMARY_PROMPT = `Create a structured summary for the conversation below.
 
-**重要**: 这是一个历史对话摘要任务，不要继续对话，只生成摘要。
+This summary will be handed to another coding agent so it can continue the same task with minimal context.
+Keep only information that is still useful for continuing the work.
 
-输出格式 (必须严格遵循 markdown 格式):
+You may drop:
+- completed low-value micro-steps
+- repetitive thinking
+- stale intermediate plans
+- verbose tool output details
 
-## 目标
-[用户想要完成什么 - 1-2句话简洁描述]
+You must keep:
+- the current goal
+- user constraints and preferences
+- current progress and unfinished work
+- blockers or unresolved questions
+- the most important next steps
+- key files, code locations, and decisions
 
-## 约束与偏好
-- [用户提到的要求和偏好，每条一行]
-- [如果没有明确约束，写"无特殊约束"]
+Keep the summary concise and high-signal. Do not mechanically preserve every historical detail.
 
-## 进度
-### 已完成
-- [x] [已完成的任务列表，每条一行]
+Output format (strict markdown):
 
-### 进行中
-- [ ] [当前正在进行的工作]
+## Goal
+[1-2 sentences describing the active goal]
 
-### 阻塞
-- [遇到的问题，如果没有则写"无阻塞"]
+## Constraints & Preferences
+- [One item per line]
+- [Write "None" if there are no explicit constraints]
 
-## 关键决策
-- **[决策名称]**: [做出这个决策的理由]
+## Progress
+### Completed
+- [x] [Completed work that still matters for context]
 
-## 下一步
-1. [接下来应该做什么，按优先级排序]
+### In Progress
+- [ ] [Current work that is actively underway]
 
-## 关键上下文
-- [继续工作需要的代码片段、文件路径、配置等关键信息]
+### Blockers
+- [Current blockers, or "None"]
+
+## Key Decisions
+- **[Decision]**: [Short reason]
+
+## Next Steps
+1. [Highest-priority next action]
+
+## Key Context
+- [Critical context needed to continue]
 
 ---
 
 <read-files>
-[列出对话中读取过的文件路径，每行一个，如果没有则留空]
+[One path per line, leave empty if none]
 </read-files>
 
 <modified-files>
-[列出对话中修改过的文件路径，每行一个，如果没有则留空]
+[One path per line, leave empty if none]
 </modified-files>
 
----
-
-对话内容:
+Conversation:
 `;
 
-/**
- * 更新摘要 Prompt 模板 - 用于多轮压缩
- * 参考 pi-mono 的 UPDATE_SUMMARIZATION_PROMPT
- */
-const UPDATE_SUMMARY_PROMPT = `上面的消息是新的对话内容，需要合并到 <previous-summary> 中提供的现有摘要中。
+const UPDATE_SUMMARY_PROMPT = `Merge the new conversation content above into <previous-summary>.
 
-更新现有的结构化摘要。规则：
-- 保留所有现有信息
-- 添加新的进度、决策和上下文
-- 更新"进度"部分：完成时将项目从"进行中"移到"已完成"
-- 根据完成的工作更新"下一步"
-- 保留确切的文件路径、函数名和错误消息
-- 如果某些内容不再相关，可以删除
+Update the structured summary so another coding agent can continue the task immediately.
+Keep only the information needed to continue the work.
 
-输出格式 (必须严格遵循 markdown 格式):
+You may remove:
+- repetitive or superseded plans
+- completed low-value steps
+- outdated blockers
+- noisy tool output details
 
-## 目标
-[保留现有目标，如果任务扩展则添加新目标]
+You must preserve or update:
+- the current goal
+- user constraints and preferences
+- current progress and unfinished work
+- blockers that still matter
+- next steps based on the latest state
+- exact file paths, function names, and key decisions when they remain relevant
 
-## 约束与偏好
-- [保留现有的，添加新发现的]
+Do not accumulate every past detail. Compress aggressively while keeping continuation-critical context.
 
-## 进度
-### 已完成
-- [x] [包含之前完成的项目 AND 新完成的项目]
+Output format (strict markdown):
 
-### 进行中
-- [ ] [当前工作 - 根据进度更新]
+## Goal
+[Updated goal]
 
-### 阻塞
-- [当前阻塞 - 如果已解决则删除]
+## Constraints & Preferences
+- [Relevant constraints only]
 
-## 关键决策
-- **[决策]**: [简要理由] (保留所有之前的，添加新的)
+## Progress
+### Completed
+- [x] [Completed work that still matters]
 
-## 下一步
-1. [根据当前状态更新]
+### In Progress
+- [ ] [Active work in the latest state]
 
-## 关键上下文
-- [保留重要上下文，如果需要则添加新的]
+### Blockers
+- [Current blockers, or "None"]
+
+## Key Decisions
+- **[Decision]**: [Short reason]
+
+## Next Steps
+1. [Most relevant next action]
+
+## Key Context
+- [Critical context needed to continue]
 
 ---
 
 <read-files>
-[列出对话中读取过的文件路径，每行一个，如果没有则留空]
+[One path per line, leave empty if none]
 </read-files>
 
 <modified-files>
-[列出对话中修改过的文件路径，每行一个，如果没有则留空]
+[One path per line, leave empty if none]
 </modified-files>
 
-保持每个部分简洁。保留确切的文件路径、函数名和错误消息。`;
+Keep every section concise.`;
 
-/**
- * 生成结构化摘要
- *
- * @param messages - 待摘要的消息列表
- * @param provider - LLM Provider
- * @param details - 文件操作详情
- * @param customInstructions - 自定义指令（可选）
- * @param systemPrompt - 项目的系统提示（可选）
- * @param previousSummary - 之前的摘要（用于多轮压缩，可选）
- * @returns 生成的摘要文本
- */
 export async function generateSummary(
   messages: KodaXMessage[],
   provider: KodaXBaseProvider,
@@ -138,40 +145,31 @@ export async function generateSummary(
   systemPrompt?: string,
   previousSummary?: string
 ): Promise<string> {
-  // 序列化对话
   const conversationText = serializeConversation(messages);
 
-  // 选择合适的 prompt 模板
   let basePrompt = previousSummary ? UPDATE_SUMMARY_PROMPT : SUMMARY_PROMPT;
   if (customInstructions) {
-    basePrompt = `${basePrompt}\n\n额外关注: ${customInstructions}`;
+    basePrompt = `${basePrompt}\n\nAdditional instructions: ${customInstructions}`;
   }
 
-  // 构建完整的 prompt
   let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
   if (previousSummary) {
     promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
   }
   promptText += basePrompt;
 
-  // 添加文件追踪信息
-  promptText += `\n\n---\n文件追踪信息:\n`;
-  promptText += `读取过的文件: ${details.readFiles.length > 0 ? details.readFiles.join(', ') : '无'}\n`;
-  promptText += `修改过的文件: ${details.modifiedFiles.length > 0 ? details.modifiedFiles.join(', ') : '无'}\n`;
+  promptText += `\n\n---\nFile tracking:\n`;
+  promptText += `Read files: ${details.readFiles.length > 0 ? details.readFiles.join(', ') : 'None'}\n`;
+  promptText += `Modified files: ${details.modifiedFiles.length > 0 ? details.modifiedFiles.join(', ') : 'None'}\n`;
 
-  // 调用 LLM 生成摘要
-  // 使用空 tools 列表，禁用 thinking，使用默认 model
   const result = await provider.stream(
     [{ role: 'user', content: promptText }],
-    [], // no tools
-    systemPrompt || SUMMARIZATION_SYSTEM_PROMPT, // 使用传入的 system prompt 或默认
-    false, // no thinking
+    [],
+    systemPrompt || SUMMARIZATION_SYSTEM_PROMPT,
+    false,
     undefined,
     undefined
   );
 
-  // 提取文本
-  const summary = result.textBlocks.map(b => b.text).join('\n');
-
-  return summary;
+  return result.textBlocks.map(block => block.text).join('\n');
 }
