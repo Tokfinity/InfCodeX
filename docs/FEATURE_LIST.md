@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-13 13:05_
+_Last Updated: 2026-03-13 15:30_
 
 ---
 
@@ -25,9 +25,9 @@ _Last Updated: 2026-03-13 13:05_
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Released | 1 | 1/1 (100%) |
 | v0.5.22 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | Planned | 5 | 0/5 (0%) |
+| v0.6.0 | In Development | 4 | 0/4 (0%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
-| v0.8.0 | Planned | 1 | 0/1 (0%) |
+| v0.8.0 | Planned | 2 | 0/2 (0%) |
 
 ---
 
@@ -41,7 +41,7 @@ _Last Updated: 2026-03-13 13:05_
 | 004 | Enhancement | Completed | Medium | 交互式界面改进 | v0.3.3 | v0.3.3 | [Design](features/v0.3.3.md#004) | 2026-02-19 | 2026-02-19 | 2026-02-20 |
 | 005 | Refactor | Completed | High | v0.4.0 架构重构与模块解耦 | v0.4.0 | v0.4.0 | [Design](features/v0.4.0.md#005) | 2026-02-20 | 2026-02-24 | 2026-02-24 |
 | 006 | New | Completed | Critical | Skills 系统 | v0.5.0 | v0.5.10 | [Design](features/v0.5.0.md#006) | 2026-02-25 | 2026-02-28 | 2026-03-05 |
-| 007 | Enhancement | Planned | Medium | 主题系统完善 | v0.6.0 | - | [Design](features/v0.6.0.md#007) | 2026-02-25 | - | - |
+| 007 | Enhancement | Planned | Medium | 主题系统完善 | v0.8.0 | - | [Design](features/v0.8.0.md#007) | 2026-02-25 | - | - |
 | 008 | Enhancement | Completed | High | 权限控制体系改进 | v0.5.0 | v0.4.6 | [Design](features/v0.5.0.md#008) | 2026-02-26 | 2026-02-27 | 2026-02-27 |
 | 009 | Refactor | Completed | Critical | 架构重构：AI 层独立 + 权限层分离 | v0.5.0 | v0.5.0 | [Design](features/v0.5.0.md#009) | 2026-02-27 | 2026-02-27 | 2026-02-27 |
 | 010 | Refactor | Completed | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | v0.5.5 | [Design](features/v0.5.0.md#010) | 2026-03-02 | 2026-03-02 | 2026-03-02 |
@@ -53,7 +53,7 @@ _Last Updated: 2026-03-13 13:05_
 | 017 | Enhancement | Planned | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | - | - |
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
 | 019 | New | Planned | High | Session Tree & Rollback System | v0.7.0 | - | [Design](features/v0.7.0.md#019) | 2026-03-12 | - | - |
-| 020 | New | Planned | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | - | [Design](features/v0.6.0.md#020) | 2026-03-13 | - | - |
+| 020 | New | In Progress | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | - | [Design](features/v0.6.0.md#020) | 2026-03-13 | 2026-03-13 | - |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -283,9 +283,9 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 - **Category**: Enhancement
 - **Status**: Planned
 - **Priority**: Medium
-- **Planned**: v0.6.0
+- **Planned**: v0.8.0
 - **Released**: -
-- **Design**: [v0.6.0.md#007](features/v0.6.0.md#007)
+- **Design**: [v0.8.0.md#007](features/v0.8.0.md#007)
 - **Created**: 2026-02-25
 - **Started**: -
 - **Completed**: -
@@ -793,15 +793,15 @@ interface SessionEntryBase {
 
 ---
 
-### 020: AGENTS.md - 项目级 AI 上下文规则 (PLANNED)
+### 020: AGENTS.md - 项目级 AI 上下文规则 (IN PROGRESS)
 - **Category**: New
-- **Status**: Planned
+- **Status**: In Progress
 - **Priority**: High
 - **Planned**: v0.6.0
 - **Released**: -
 - **Design**: [v0.6.0.md#020](features/v0.6.0.md#020)
 - **Created**: 2026-03-13
-- **Started**: -
+- **Started**: 2026-03-13
 - **Completed**: -
 
 **Description**:
@@ -884,6 +884,6 @@ interface SessionEntryBase {
 - Total: 20 (6 Planned, 0 In Progress, 14 Completed)
 - By Priority: Critical: 3, High: 13, Medium: 2, Low: 0
 - Current Version: v0.5.33
-- Next Release (v0.6.0): 5 features planned (007, 013, 015, 017, 020)
-- Future Releases: v0.7.0 (019), v0.8.0 (018)
-- Highest Priority Planned: 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 019 - Session Tree & Rollback System (High), 020 - AGENTS.md - 项目级 AI 上下文规则 (High)
+- Next Release (v0.6.0): 4 features planned (013, 015, 017, 020)
+- Future Releases: v0.7.0 (019), v0.8.0 (007, 018)
+- Highest Priority Planned: 007 - 主题系统完善 (Medium), 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 018 - CodeWiki - 项目知识库系统 (High), 019 - Session Tree & Rollback System (High), 020 - AGENTS.md - 项目级 AI 上下文规则 (High)
