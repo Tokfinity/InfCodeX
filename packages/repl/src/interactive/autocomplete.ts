@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as readline from 'readline';
-import { BUILTIN_COMMANDS } from './commands.js';
+import { getCommandRegistry } from './commands.js';
 
 /**
  * Completion item - 补全项
@@ -143,7 +143,7 @@ export class CommandCompleter implements Completer {
 
   private loadCommands(): void {
     // Load commands from BUILTIN_COMMANDS - 从 BUILTIN_COMMANDS 加载命令
-    for (const cmd of BUILTIN_COMMANDS) {
+    for (const cmd of getCommandRegistry().getAll()) {
       this.commands.set(cmd.name, {
         description: cmd.description,
         aliases: cmd.aliases ?? [],
@@ -173,6 +173,9 @@ export class CommandCompleter implements Completer {
     const beforeCursor = input.slice(0, cursorPos);
     const lastSlashIndex = beforeCursor.lastIndexOf('/');
     if (lastSlashIndex === -1) return [];
+
+    this.commands.clear();
+    this.loadCommands();
 
     // Get text after the last /, excluding the / itself
     const partial = beforeCursor.slice(lastSlashIndex + 1).toLowerCase();
@@ -242,7 +245,7 @@ export function createCompleter(cwd?: string): (line: string) => Promise<[string
   return async (line: string): Promise<[string[], string]> => {
     // Check if completion is needed - 检查是否需要补全
     const hasAt = line.includes('@');
-    const hasSlash = line.startsWith('/');
+    const hasSlash = line.includes('/');
 
     if (!hasAt && !hasSlash) {
       return [[], line];

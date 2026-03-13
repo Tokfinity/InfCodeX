@@ -4,11 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **FEATURE_013**: Command System 2.0 - Core commands
+  - `/copy` - Copy last assistant message to clipboard
+  - `/new` - Start new conversation session with confirmation
+  - CommandRegistry pattern with dynamic registration support
+  - Source tracking for builtin/extension/skill/prompt commands
+
 ### Changed
-- Removed clear screen shortcut (Ctrl+L) to avoid display issues
-- Enhanced help panel with autocomplete hints (/ for commands, @ for files)
-- Help panel now auto-hides when using other shortcuts (Ctrl+T, Ctrl+O)
-- Removed console logs from mode/thinking toggle shortcuts
+- Reorganized test files from `__tests__/` directories to source-adjacent location
+  - Unit tests now placed next to source files (`*.test.ts`)
+  - Updated CLAUDE.md with test organization standards
+- Fixed fuzzy.test.ts TypeScript type error (TestCandidate extends ScoredCandidate)
 
 ---
 

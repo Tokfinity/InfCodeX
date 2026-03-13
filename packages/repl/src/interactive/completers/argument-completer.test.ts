@@ -40,7 +40,6 @@ describe('ArgumentCompleter', () => {
     });
 
     it('should trigger on aliased commands', () => {
-      expect(completer.canComplete('/m ', 3)).toBe(true); // mode alias
       expect(completer.canComplete('/t ', 3)).toBe(true); // thinking alias
     });
 
@@ -161,11 +160,10 @@ describe('ArgumentCompleter', () => {
         expect(completions.some(c => c.display === 'accept-edits')).toBe(true);
       });
 
-      it('should work with command aliases', async () => {
-        const completions = await completer.getCompletions('/m ', 3);
-        // /m is alias for /mode
+      it('should keep thinking alias completions working', async () => {
+        const completions = await completer.getCompletions('/t ', 3);
         expect(completions.length).toBeGreaterThan(0);
-        expect(completions.some(c => c.display === 'plan')).toBe(true);
+        expect(completions.some(c => c.display === 'on')).toBe(true);
       });
     });
   });

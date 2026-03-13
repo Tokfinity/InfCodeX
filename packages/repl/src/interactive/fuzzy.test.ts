@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { fuzzyMatch, sortCandidates, sortCandidatesCombined } from '../fuzzy.js';
+import {
+  fuzzyMatch,
+  sortCandidates,
+  sortCandidatesCombined,
+  type ScoredCandidate,
+} from './fuzzy.js';
 
 describe('fuzzyMatch', () => {
   it('should match exact string', () => {
@@ -124,9 +129,7 @@ describe('sortCandidates', () => {
 });
 
 describe('sortCandidatesCombined', () => {
-  interface TestCandidate {
-    text: string;
-    _fuzzyScore?: number;
+  interface TestCandidate extends ScoredCandidate {
     customField?: string;
   }
 

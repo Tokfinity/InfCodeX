@@ -26,7 +26,6 @@ import {
   KodaXRateLimitError,
   KodaXProviderError,
   KODAX_DEFAULT_PROVIDER,
-  generateSessionId,
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
@@ -37,6 +36,7 @@ import {
   InteractiveContext,
   InteractiveMode,
   createInteractiveContext,
+  generateSessionId as generateInteractiveSessionId,
   touchContext,
 } from './context.js';
 import {
@@ -269,6 +269,20 @@ Keyboard Shortcuts:
           gitRoot: gitRoot ?? '',
         });
       }
+    },
+    startNewSession: () => {
+      context.sessionId = generateInteractiveSessionId();
+      context.title = '';
+      context.createdAt = new Date().toISOString();
+      context.lastAccessed = context.createdAt;
+      currentOptions.session = {
+        ...currentOptions.session,
+        id: context.sessionId,
+      };
+      statusBar?.update({
+        sessionId: context.sessionId,
+        messageCount: 0,
+      });
     },
     loadSession: async (id: string) => {
       const loaded = await storage.load(id);
