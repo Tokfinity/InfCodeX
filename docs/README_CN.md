@@ -4,7 +4,7 @@
 
 **一个真正好用的轻量级 AI 编程助手（TypeScript 版本）。**
 
-5层模块化架构 • 7 个大模型 • 流式输出 • 并行执行 • 长运行模式 • 可作为库使用
+5层模块化架构 • 10 个大模型 • 流式输出 • 并行执行 • 长运行模式 • 可作为库使用
 
 [![Node.js 18+](https://img.shields.io/badge/node-18+-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -24,7 +24,7 @@ KodaX 是 KodaXP 的 TypeScript 版本，专为想要**理解**、**定制**和*
 | **架构** | 5层模块化，每层可独立使用 | 通常只能作为 CLI 使用 |
 | **代码** | 清晰分离，易于理解和定制 | 成千上万文件，难以理解 |
 | **类型** | TypeScript 原生类型安全 | 无类型或弱类型 |
-| **模型** | 7 个 LLM 供应商，随意切换 | 通常只支持单一供应商 |
+| **模型** | 10 个 LLM 供应商，随意切换 | 通常只支持单一供应商 |
 | **成本** | 可用便宜的国内模型（Kimi、智谱、通义） | 往往需要昂贵订阅 |
 | **长运行** | Feature 跟踪 + 自动继续 | 通常需要人工监督 |
 | **定制** | 直接修改代码即可 | 复杂的插件系统 |
@@ -48,7 +48,7 @@ KodaX 使用 **monorepo 架构**，基于 npm workspaces，由 5 个独立的包
 KodaX/
 ├── packages/
 │   ├── ai/                  # @kodax/ai - 独立的 LLM 抽象层
-│   │   └── providers/       # 7 个 LLM 提供商
+│   │   └── providers/       # 10 个 LLM 提供商 (Anthropic, OpenAI, etc.)
 │   │
 │   ├── agent/               # @kodax/agent - 通用 Agent 框架
 │   │   └── session/         # 会话管理、消息处理
@@ -400,6 +400,191 @@ await runKodaX({
 
 ---
 
+## 使用独立的 Package
+
+KodaX 采用模块化架构，每个 package 都可以独立使用：
+
+### @kodax/ai - LLM 抽象层
+
+独立的 LLM Provider 抽象，可在任何项目中复用：
+
+```typescript
+import { getProvider, KodaXBaseProvider } from '@kodax/ai';
+
+// 获取 provider 实例
+const provider = getProvider('anthropic');
+
+// 流式完成
+const stream = await provider.streamCompletion(
+  [{ role: 'user', content: '你好！' }],
+  { onTextDelta: (text) => process.stdout.write(text) }
+);
+
+for await (const result of stream) {
+  if (result.type === 'text') {
+    // 处理文本增量
+  } else if (result.type === 'tool_use') {
+    // 处理工具调用
+  }
+}
+```
+
+**核心特性**:
+- 10 个 LLM Provider，统一接口
+- 流式输出支持
+- 思考模式支持
+- 错误处理和重试逻辑
+- 零业务逻辑依赖
+
+### @kodax/agent - Agent 框架
+
+通用 Agent 框架，包含会话管理：
+
+```typescript
+import {
+  generateSessionId,
+  estimateTokens,
+  compactMessages,
+  type KodaXMessage
+} from '@kodax/agent';
+
+// 生成会话 ID
+const sessionId = generateSessionId();
+
+// 估算 tokens
+const tokens = estimateTokens(messages);
+
+// 当上下文过长时压缩消息
+if (tokens > 100000) {
+  const compacted = await compactMessages(messages, {
+    threshold: 75000,
+    keepRecent: 20
+  });
+}
+```
+
+**核心特性**:
+- 会话 ID 生成和标题提取
+- Token 估算（基于 tiktoken）
+- AI 辅助的消息压缩
+- 消息类型和常量
+
+### @kodax/skills - Skills 系统
+
+Agent Skills 标准实现，零外部依赖：
+
+```typescript
+import {
+  SkillRegistry,
+  discoverSkills,
+  executeSkill,
+  type SkillContext
+} from '@kodax/skills';
+
+// 从路径发现 skills
+const skills = await discoverSkills(['/path/to/skills']);
+
+// 初始化注册表
+const registry = getSkillRegistry();
+await registry.registerSkills(skills);
+
+// 执行 skill
+const context: SkillContext = {
+  skillId: 'code-review',
+  arguments: { target: 'src/' },
+  workingDirectory: process.cwd()
+};
+
+const result = await executeSkill(context);
+```
+
+**核心特性**:
+- 零外部依赖
+- 基于 Markdown 的 skill 文件
+- 自然语言触发
+- 变量解析
+- 包含内置 skills
+
+### @kodax/coding - Coding Agent
+
+完整的编程 Agent，包含工具和提示词：
+
+```typescript
+import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax/coding';
+
+// 使用 runKodaX 处理单次任务
+const result = await runKodaX({
+  provider: 'zhipu-coding',
+  thinking: true,
+  events: {
+    onTextDelta: (text) => process.stdout.write(text)
+  }
+}, '读取 package.json 并解释依赖');
+
+// 或使用 KodaXClient 进行连续会话
+const client = new KodaXClient({
+  provider: 'anthropic',
+  events: { ... }
+});
+
+await client.send('创建一个新文件');
+await client.send('添加一个函数'); // 有之前消息的上下文
+```
+
+**核心特性**:
+- 8 个内置工具（read, write, edit, bash, glob, grep, undo, diff）
+- 编程任务的系统提示词
+- Agent 循环实现
+- 会话管理
+- 自动继续模式
+
+### @kodax/repl - 交互式终端 UI
+
+完整的交互式 REPL，基于 Ink/React：
+
+```typescript
+// 通常作为 CLI 使用，但也可以集成
+import { InkREPL } from '@kodax/repl';
+
+// REPL package 提供：
+// - 交互式终端 UI
+// - 权限控制（4 种模式）
+// - 命令系统（/help, /mode 等）
+// - Skills 集成
+// - 主题支持
+```
+
+**核心特性**:
+- 基于 Ink 的 React 组件
+- 4 级权限控制
+- 内置命令
+- 实时流式显示
+- 上下文使用指示器
+
+### Package 依赖关系
+
+```
+@kodax/ai (零业务依赖)
+    ↓
+@kodax/agent (依赖 @kodax/ai)
+    ↓
+@kodax/skills (零外部依赖)  →  @kodax/coding (依赖 ai, agent, skills)
+                                        ↓
+                                  @kodax/repl (依赖 coding, ink, react)
+```
+
+**导入建议**:
+
+| 使用场景 | Package | 原因 |
+|---------|---------|------|
+| 只需要 LLM 抽象 | `@kodax/ai` | 最小依赖 |
+| 构建自定义 Agent | `@kodax/agent` | 会话 + 消息 + 分词 |
+| 使用 Skills 系统 | `@kodax/skills` | 零依赖，纯 skills |
+| 编程任务 | `@kodax/coding` | 完整的编程 Agent |
+| 终端应用 | `@kodax/repl` | 完整交互体验 |
+
+---
+
 ## 支持的模型
 
 | 模型 | API Key | 思考模式 | 说明 |
@@ -529,11 +714,11 @@ kodax --auto-continue --max-sessions 20 --max-hours 4.0
 # 开发模式
 npm run dev "你的任务"
 
-# 构建
-npm run build
-
 # 构建所有包
 npm run build:packages
+
+# 构建
+npm run build
 
 # 测试
 npm test
@@ -551,7 +736,7 @@ npm run clean
 - [测试指南](TESTING.md) - 如何测试所有功能
 - [test-guides/](test-guides/) - 功能专用测试指南
 - [更新日志](../CHANGELOG.md) - 版本历史
-- [Python 版本 (KodaXP)](https://github.com/icetomoyo/KodaXP) - Python 实现
+
 
 ---
 

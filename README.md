@@ -14,7 +14,7 @@ KodaX is a **modular, lightweight AI coding agent** built with TypeScript. It su
 |---------|-------|-------------|
 | **Architecture** | Modular (5 packages), can be used as library | Usually CLI-only |
 | **Code** | Clean separation, easy to understand and customize | Thousands of files, hard to navigate |
-| **Models** | 7 LLM providers, switch freely | Often single provider |
+| **Models** | 10 LLM providers, switch freely | Often single provider |
 | **Cost** | Use affordable models (Kimi, Zhipu, Qwen) | Expensive subscriptions |
 | **Type Safety** | Native TypeScript | No types or weak typing |
 | **Learning** | Perfect for understanding Agent principles | Black box |
@@ -90,8 +90,8 @@ KodaX/
 ## Features
 
 - **Modular Architecture** - Use as CLI or as a library
-- **7 LLM Providers** - Anthropic, OpenAI, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding
-- **Thinking Mode** - Deep reasoning support (anthropic, kimi-code, zhipu-coding)
+- **10 LLM Providers** - Anthropic, OpenAI, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, Gemini CLI, Codex CLI
+- **Thinking Mode** - Deep reasoning support (anthropic, kimi-code, zhipu-coding, minimax-coding)
 - **Streaming Output** - Real-time response display
 - **8 Tools** - read, write, edit, bash, glob, grep, undo, diff
 - **Session Management** - JSONL format persistent storage
@@ -237,7 +237,6 @@ KodaX provides 4-level permission modes for fine-grained control:
 ```bash
 # In REPL, use /mode command
 /mode plan          # Switch to plan mode (read-only)
-/mode default       # Switch to default mode
 /mode accept-edits  # Switch to accept-edits mode
 /mode auto          # Switch to auto-in-project mode
 
@@ -351,17 +350,205 @@ await runKodaX({
 | **Context** | Independent each time | Accumulates |
 | **Use Case** | Single tasks, batch processing | Interactive dialogue, multi-step tasks |
 
-### Providers
+---
+
+## Using Individual Packages
+
+KodaX is built with a modular architecture. Each package can be used independently:
+
+### @kodax/ai - LLM Abstraction Layer
+
+Independent LLM provider abstraction, reusable in any project:
+
+```typescript
+import { getProvider, KodaXBaseProvider } from '@kodax/ai';
+
+// Get a provider instance
+const provider = getProvider('anthropic');
+
+// Stream completion
+const stream = await provider.streamCompletion(
+  [{ role: 'user', content: 'Hello!' }],
+  { onTextDelta: (text) => process.stdout.write(text) }
+);
+
+for await (const result of stream) {
+  if (result.type === 'text') {
+    // Handle text delta
+  } else if (result.type === 'tool_use') {
+    // Handle tool call
+  }
+}
+```
+
+**Key Features**:
+- 10 LLM providers with unified interface
+- Streaming output support
+- Thinking mode support
+- Error handling and retry logic
+- Zero business logic dependencies
+
+### @kodax/agent - Agent Framework
+
+Generic agent framework with session management:
+
+```typescript
+import {
+  generateSessionId,
+  estimateTokens,
+  compactMessages,
+  type KodaXMessage
+} from '@kodax/agent';
+
+// Generate session ID
+const sessionId = generateSessionId();
+
+// Estimate tokens
+const tokens = estimateTokens(messages);
+
+// Compact messages when context is too long
+if (tokens > 100000) {
+  const compacted = await compactMessages(messages, {
+    threshold: 75000,
+    keepRecent: 20
+  });
+}
+```
+
+**Key Features**:
+- Session ID generation and title extraction
+- Token estimation (tiktoken-based)
+- Message compaction with AI summarization
+- Generic types for messages and tools
+
+### @kodax/skills - Skills System
+
+Agent Skills standard implementation with zero external dependencies:
+
+```typescript
+import {
+  SkillRegistry,
+  discoverSkills,
+  executeSkill,
+  type SkillContext
+} from '@kodax/skills';
+
+// Discover skills from paths
+const skills = await discoverSkills(['/path/to/skills']);
+
+// Initialize registry
+const registry = getSkillRegistry();
+await registry.registerSkills(skills);
+
+// Execute a skill
+const context: SkillContext = {
+  skillId: 'code-review',
+  arguments: { target: 'src/' },
+  workingDirectory: process.cwd()
+};
+
+const result = await executeSkill(context);
+```
+
+**Key Features**:
+- Zero external dependencies
+- Markdown-based skill files
+- Natural language triggering
+- Variable resolution
+- Built-in skills included
+
+### @kodax/coding - Coding Agent
+
+Complete coding agent with tools and prompts:
+
+```typescript
+import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax/coding';
+
+// Use runKodaX for single tasks
+const result = await runKodaX({
+  provider: 'zhipu-coding',
+  thinking: true,
+  events: {
+    onTextDelta: (text) => process.stdout.write(text)
+  }
+}, 'Read package.json and explain the dependencies');
+
+// Or use KodaXClient for continuous sessions
+const client = new KodaXClient({
+  provider: 'anthropic',
+  events: { ... }
+});
+
+await client.send('Create a new file');
+await client.send('Add a function to it'); // Has context from previous message
+```
+
+**Key Features**:
+- 8 built-in tools (read, write, edit, bash, glob, grep, undo, diff)
+- System prompts for coding tasks
+- Agent loop implementation
+- Session management
+- Auto-continue mode
+
+### @kodax/repl - Interactive Terminal UI
+
+Complete interactive REPL with Ink/React components:
+
+```typescript
+// Usually used as CLI, but can be integrated
+import { InkREPL } from '@kodax/repl';
+
+// The REPL package provides:
+// - Interactive terminal UI
+// - Permission control (4 modes)
+// - Command system (/help, /mode, etc.)
+// - Skills integration
+// - Theme support
+```
+
+**Key Features**:
+- Ink-based React components
+- 4-level permission control
+- Built-in commands
+- Real-time streaming display
+- Context usage indicator
+
+### Package Dependency Graph
+
+```
+@kodax/ai (零业务依赖)
+    ↓
+@kodax/agent (依赖 @kodax/ai)
+    ↓
+@kodax/skills (零外部依赖)  →  @kodax/coding (依赖 ai, agent, skills)
+                                        ↓
+                                  @kodax/repl (依赖 coding, ink, react)
+```
+
+**Import Recommendations**:
+
+| Use Case | Package | Why |
+|----------|---------|-----|
+| Only need LLM abstraction | `@kodax/ai` | Minimal dependencies |
+| Building custom agent | `@kodax/agent` | Session + messages + tokenization |
+| Using skills system | `@kodax/skills` | Zero deps, pure skills |
+| Coding tasks | `@kodax/coding` | Complete coding agent |
+| Terminal app | `@kodax/repl` | Full interactive experience |
+
+---
 
 | Provider | Environment Variable | Thinking | Default Model |
 |----------|---------------------|----------|---------------|
-| anthropic | `ANTHROPIC_API_KEY` | Yes | claude-sonnet-4-20250514 |
-| openai | `OPENAI_API_KEY` | No | gpt-4o |
+| anthropic | `ANTHROPIC_API_KEY` | Yes | claude-sonnet-4-6 |
+| openai | `OPENAI_API_KEY` | No | gpt-5.3-codex |
 | kimi | `KIMI_API_KEY` | No | moonshot-v1-128k |
-| kimi-code | `KIMI_API_KEY` | Yes | k2p5 |
-| qwen | `QWEN_API_KEY` | No | qwen-max |
-| zhipu | `ZHIPU_API_KEY` | No | glm-4-plus |
+| kimi-code | `KIMI_API_KEY` | Yes | k2.5 |
+| qwen | `QWEN_API_KEY` | No | qwen3.5-plus |
+| zhipu | `ZHIPU_API_KEY` | No | glm-5 |
 | zhipu-coding | `ZHIPU_API_KEY` | Yes | glm-5 |
+| minimax-coding | `MINIMAX_API_KEY` | Yes | MiniMax-M2.5 |
+| gemini-cli | `GOOGLE_APPLICATION_CREDENTIALS` | Yes | (via gemini CLI) |
+| codex-cli | `GOOGLE_APPLICATION_CREDENTIALS` | Yes | (via codex CLI) |
 
 ### Examples
 
@@ -418,7 +605,7 @@ kodax "写测试用例"             # Triggers tdd skill
 kodax "提交代码"               # Triggers git-workflow skill
 
 # Explicit skill command
-kodax /skill code-review
+kodax /skill:code-review
 ```
 
 Built-in skills include:
@@ -480,11 +667,11 @@ export {
 # Development mode (using tsx)
 npm run dev "your task"
 
-# Build
-npm run build
-
 # Build all packages
 npm run build:packages
+
+# Build
+npm run build
 
 # Run tests
 npm test
