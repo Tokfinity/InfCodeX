@@ -97,15 +97,18 @@ packages/ai/
 
 **支持的 Provider**:
 
-| Provider | Thinking | Default Model |
-|----------|----------|---------------|
-| anthropic | Yes | claude-sonnet-4-20250514 |
-| openai | No | gpt-4o |
-| kimi | No | moonshot-v1-128k |
-| kimi-code | Yes | k2p5 |
-| qwen | No | qwen-max |
-| zhipu | No | glm-4-plus |
-| zhipu-coding | Yes | glm-5 |
+| Provider | Thinking | Default Model | Context Window |
+|----------|----------|---------------|----------------|
+| anthropic | Yes | claude-sonnet-4-6 | 200K |
+| openai | No | gpt-5.3-codex | 400K |
+| kimi | No | moonshot-v1-128k | 128K |
+| kimi-code | Yes | k2.5 | 256K |
+| qwen | No | qwen3.5-plus | 256K |
+| zhipu | No | glm-5 | 200K |
+| zhipu-coding | Yes | glm-5 | 200K |
+| minimax-coding | Yes | MiniMax-M2.5 | 204.8K |
+| gemini-cli | Yes | (via gemini CLI) | Varies |
+| codex-cli | Yes | (via codex CLI) | Varies |
 
 ### 2.2 @kodax/agent - Agent 框架
 

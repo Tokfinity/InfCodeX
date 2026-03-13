@@ -2,6 +2,57 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.33] - 2026-03-12
+
+### Changed
+- Version bump release
+
+## [0.5.32] - 2026-03-12
+
+### Fixed
+- Build fixes and compilation errors
+
+## [0.5.31] - 2026-03-12
+
+### Fixed
+- Build errors related to @kodax/ai module
+- Import fixes for @kodax/ai package
+- Compaction build error fixes
+
+### Changed
+- Reviewed and refined readonly whitelist changes
+- Reviewed widened mode permissions
+
+## [0.5.30] - 2026-03-12
+
+### Fixed
+- **Issue 084**: Silent stream interruption with no error
+  - Added message_stop/finish_reason validation to detect incomplete responses
+  - Implemented dual timeout mechanism: 10min hard + 60s idle timeout
+  - Added StreamIncompleteError classification with 3 retries
+  - Added [Interrupted] indicator for interrupted generations
+- **Issue 085**: Read-only Bash command whitelist not reused in non-plan modes
+  - Implemented unified readonly whitelist across all modes
+- **Skill System**: Skill amnesia after compaction
+  - Fixed skill registry reset bug after context compaction
+  - Added APIUserAbortError handling
+- **Network Errors**: Retry "Request was aborted" errors from network issues
+  - Improved error classification for transient network failures
+
+### Added
+- **Tri-Layer Security for Plan Mode**
+  - Implemented comprehensive permission control for plan mode
+  - Fixed bash permission bugs across all layers
+  - Enhanced security boundaries between modes
+
+### Documentation
+- Resolved Issue 070: Streaming output newlines preserved
+- Resolved Issue 067: API rate limit retry mechanism fixed
+- Resolved Issues 006, 060, 081 after code review
+- Added FEATURE_017 design document
+- Added FEATURE_018 CodeWiki design document
+- Added Issue 083: Missing keyboard shortcuts system
+
 ## [0.5.29] - 2026-03-11
 
 ### Changed
