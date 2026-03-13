@@ -25,7 +25,7 @@ _Last Updated: 2026-03-13 15:30_
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Released | 1 | 1/1 (100%) |
 | v0.5.22 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | In Development | 4 | 0/4 (0%) |
+| v0.6.0 | In Development | 4 | 1/4 (25%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 2 | 0/2 (0%) |
 
@@ -53,7 +53,7 @@ _Last Updated: 2026-03-13 15:30_
 | 017 | Enhancement | Planned | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | - | - |
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
 | 019 | New | Planned | High | Session Tree & Rollback System | v0.7.0 | - | [Design](features/v0.7.0.md#019) | 2026-03-12 | - | - |
-| 020 | New | In Progress | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | - | [Design](features/v0.6.0.md#020) | 2026-03-13 | 2026-03-13 | - |
+| 020 | New | Completed | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | v0.5.34 | [Design](features/v0.6.0.md#020) | 2026-03-13 | 2026-03-13 | 2026-03-13 |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -793,25 +793,25 @@ interface SessionEntryBase {
 
 ---
 
-### 020: AGENTS.md - 项目级 AI 上下文规则 (IN PROGRESS)
+### 020: AGENTS.md - 项目级 AI 上下文规则 (COMPLETED)
 - **Category**: New
-- **Status**: In Progress
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.0
-- **Released**: -
+- **Released**: v0.5.34
 - **Design**: [v0.6.0.md#020](features/v0.6.0.md#020)
 - **Created**: 2026-03-13
 - **Started**: 2026-03-13
-- **Completed**: -
+- **Completed**: 2026-03-13
 
 **Description**:
 实现类似 pi-mono 的 `AGENTS.md` 机制，支持项目级别的 AI 上下文规则注入。允许项目在 `.kodax/AGENTS.md` 或项目根目录的 `AGENTS.md` 中定义项目特定的规则、命令、工作流程等，这些内容会自动注入到 AI 的系统提示中。
 
 **Goals**:
-1. **多层级规则** - 支持全局、项目、目录三级规则
-2. **自动发现** - 从当前目录向上遍历加载所有 AGENTS.md
-3. **兼容性** - 支持 `AGENTS.md`、`CLAUDE.md` 两种文件名（与 pi-mono 一致）
-4. **优先级控制** - 后加载的规则追加到系统提示末尾
+1. ✅ **多层级规则** - 支持全局、项目、目录三级规则
+2. ✅ **自动发现** - 从当前目录向上遍历加载所有 AGENTS.md
+3. ✅ **兼容性** - 支持 `AGENTS.md`、`CLAUDE.md` 两种文件名（与 pi-mono 一致）
+4. ✅ **优先级控制** - 后加载的规则追加到系统提示末尾
 
 **Key Features**:
 - 全局规则 (`~/.kodax/AGENTS.md`)
@@ -823,9 +823,13 @@ interface SessionEntryBase {
 **Inspired by**: [pi-mono AGENTS.md](https://github.com/badlogic/pi-mono)
 
 **Implementation Notes**:
-- 创建 `packages/coding/src/context/agents-loader.ts` - 文件发现和加载
+- 创建 `packages/coding/src/context/agents-loader.ts` - 文件发现和加载 (20 tests passing)
 - 修改 `packages/coding/src/prompts/builder.ts` - 系统提示注入
-- 支持 `/reload` 命令重新加载规则
+- 在 REPL 启动时加载并显示规则文件数量
+- 添加 `/reload` 命令重新加载规则
+- 支持 AGENTS.md、CLAUDE.md 文件名，优先级：AGENTS.md > CLAUDE.md
+- 规则优先级：全局 < 目录 < 项目(.kodax/)
+- Released in v0.5.34
 
 ---
 

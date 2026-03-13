@@ -28,6 +28,7 @@ import {
   KODAX_DEFAULT_PROVIDER,
   generateSessionId,
 } from '@kodax/coding';
+import type { AgentsFile } from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from '../permission/types.js';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashWriteCommand, isBashReadCommand } from '../permission/permission.js';
@@ -152,12 +153,22 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     ?? providerInstance.getContextWindow?.()
     ?? 200000;
 
+  // Load AGENTS.md files
+  const { loadAgentsFiles } = await import('@kodax/coding');
+  const reloadAgentsFiles = async (): Promise<AgentsFile[]> => {
+    return loadAgentsFiles({
+      cwd: process.cwd(),
+      projectRoot: gitRoot ?? undefined,
+    });
+  };
+  let agentsFiles = await reloadAgentsFiles();
+
   // Print startup Banner - 打印启动 Banner
   printStartupBanner(currentConfig, currentConfig.permissionMode, {
     contextWindow: effectiveContextWindow,
     triggerPercent: compactionConfig.triggerPercent,
     enabled: compactionConfig.enabled,
-  });
+  }, agentsFiles);
 
   // Detect and show project hint - 检测并显示项目提示
   await detectAndShowProjectHint();
@@ -410,6 +421,10 @@ Keyboard Shortcuts:
       };
     },
     // Pass readline interface for commands requiring user interaction - 传递 readline 接口供需要用户交互的命令使用
+    reloadAgentsFiles: async () => {
+      agentsFiles = await reloadAgentsFiles();
+      return agentsFiles;
+    },
     readline: rl,
   };
 
@@ -877,7 +892,7 @@ function extractTitle(messages: KodaXMessage[]): string {
 }
 
 // Print startup Banner (using theme colors) - 打印启动 Banner (使用主题颜色)
-function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean }): void {
+function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean }, agentsFiles?: AgentsFile[]): void {
   const theme = getCurrentTheme();
   const model = getProviderModel(config.provider) ?? config.provider;
 
@@ -905,6 +920,13 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
 
   console.log(chalk.hex(theme.colors.dim)('  ────────────────────────────────────────────────────────\n'));
 
+  // Show AGENTS.md loading status
+  if (agentsFiles) {
+    const totalFiles = agentsFiles.length;
+    console.log(chalk.hex(theme.colors.dim)('  Project Rules: ') + chalk.hex(theme.colors.success)(`${totalFiles} rule file(s) loaded`));
+    console.log(chalk.hex(theme.colors.dim)('  Use /reload to refresh rules\n'));
+  }
+
   console.log(chalk.hex(theme.colors.dim)('  Quick tips:'));
   console.log(chalk.hex(theme.colors.primary)('    /help      ') + chalk.hex(theme.colors.dim)('Show all commands'));
   console.log(chalk.hex(theme.colors.primary)('    /mode      ') + chalk.hex(theme.colors.dim)('Switch code/ask mode'));
@@ -913,4 +935,3 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
   console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run shell command'));
   console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+E (editor) | Ctrl+R (history)\n'));
 }
-
