@@ -51,6 +51,12 @@ export class ArgumentCompleter implements Completer {
     const lastSlashIndex = beforeCursor.lastIndexOf('/');
     if (lastSlashIndex === -1) return false;
 
+    // If / is not at the start, it must be preceded by whitespace
+    // 如果 / 不在开头，前面必须有空白字符
+    if (lastSlashIndex > 0 && !/\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')) {
+      return false;
+    }
+
     const afterSlash = beforeCursor.slice(lastSlashIndex);
 
     // Check if we're in argument position (after command + space)

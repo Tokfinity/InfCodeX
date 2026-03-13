@@ -99,8 +99,10 @@ export abstract class KodaXBaseProvider {
           // (包含标准的 AbortError 以及部分 SDK 特有的 APIUserAbortError)
           if ((e.name === 'AbortError' || e.name === 'APIUserAbortError') && signal?.aborted) {
             // 将其规范化为 AbortError 抛出，让分类器将其统一识别为 USER_ABORT
-            e.name = 'AbortError';
-            throw e; 
+            if (e.name === 'AbortError') {
+              throw e;
+            }
+            throw new DOMException(e.message || 'Request aborted', 'AbortError');
           }
           throw new KodaXProviderError(
             `${this.name} API error: ${e.message}`,

@@ -299,18 +299,20 @@ export class AutocompleteProvider {
     const beforeCursor = input.slice(0, cursorPos);
 
     // Check trigger conditions - 检查触发条件
-    // 1. Starts with / (command or skill at line start)
-    // 2. Contains /skill: anywhere (skill completion, supports mid-line)
-    // 3. Contains / anywhere (command or skill mid-line, e.g., "some text /help")
-    // 4. After command with space (arguments)
-    // 5. Contains @ (file path)
-    return (
-      beforeCursor.startsWith('/') ||
-      /\/skill:/.test(beforeCursor) ||      // /skill: pattern anywhere (mid-line support)
-      /\/\w*$/.test(beforeCursor) ||        // / followed by word chars at end (mid-line commands/skills)
-      /\/\w+\s/.test(beforeCursor) ||       // /word followed by space (arguments after mid-line command)
-      beforeCursor.includes('@')
-    );
+    // 1. / at start or preceded by whitespace (command/skill)
+    // 2. @ at start or preceded by whitespace (file path)
+
+    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    const hasValidSlash =
+      lastSlashIndex === 0 || // / at start
+      (lastSlashIndex > 0 && /\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')); // / preceded by whitespace
+
+    const lastAtIndex = beforeCursor.lastIndexOf('@');
+    const hasValidAt =
+      lastAtIndex === 0 || // @ at start
+      (lastAtIndex > 0 && /\s/.test(beforeCursor[lastAtIndex - 1] ?? '')); // @ preceded by whitespace
+
+    return hasValidSlash || hasValidAt;
   }
 
   /**

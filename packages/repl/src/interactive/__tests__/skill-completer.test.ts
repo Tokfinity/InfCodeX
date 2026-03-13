@@ -66,6 +66,10 @@ describe('SkillCompleter', () => {
       // Cursor in the middle of /skill: - should complete
       expect(completer.canComplete('/skill:feature', 7)).toBe(true);
     });
+
+    it('should trigger after a newline boundary', () => {
+      expect(completer.canComplete('hello\n/skill:feature', 20)).toBe(true);
+    });
   });
 
   describe('getCompletions', () => {
