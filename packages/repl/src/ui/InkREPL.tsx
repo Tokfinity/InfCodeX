@@ -38,7 +38,9 @@ import {
   KodaXTerminalError,
   classifyError,
   ErrorCategory,
+  loadAgentsFiles,
 } from "@kodax/coding";
+import type { AgentsFile } from "@kodax/coding";
 import { estimateTokens } from "@kodax/agent";
 import {
   PermissionMode,
@@ -1041,6 +1043,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             thinking: currentConfig.thinking,
             events: createStreamingEvents(), // Include streaming events for /project commands
           }),
+          reloadAgentsFiles: async (): Promise<AgentsFile[]> => {
+            return loadAgentsFiles({
+              cwd: process.cwd(),
+              projectRoot: context.gitRoot ?? undefined,
+            });
+          },
           // Start/stop compacting indicator - 开始/停止压缩指示器
           startCompacting: () => {
             startCompacting();

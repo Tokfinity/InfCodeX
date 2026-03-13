@@ -6,6 +6,7 @@ import * as readline from 'readline';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions, getProvider } from '@kodax/coding';
+import type { AgentsFile } from '@kodax/coding';
 import { PermissionMode } from '../permission/types.js';
 import { saveConfig } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
@@ -51,6 +52,7 @@ export interface CommandCallbacks {
   deleteAllSessions?: () => Promise<void>;
   setPlanMode?: (enabled: boolean) => void;
   createKodaXOptions?: () => KodaXOptions;
+  reloadAgentsFiles?: () => Promise<AgentsFile[]>;
   /** Confirm dialog callback for interactive commands - 确认对话框回调，用于交互式命令 */
   confirm?: (message: string) => Promise<boolean>;
   /** REPL readline interface for commands requiring user interaction - REPL 的 readline 接口，供需要用户交互的命令使用（已废弃，使用 confirm 替代） */
@@ -73,6 +75,14 @@ export interface Command {
 }
 
 // Built-in commands - 内置命令
+function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory: number; project: number } {
+  return {
+    global: files.filter(file => file.scope === 'global').length,
+    directory: files.filter(file => file.scope === 'directory').length,
+    project: files.filter(file => file.scope === 'project').length,
+  };
+}
+
 export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'help',
@@ -241,6 +251,58 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /compact focus on auth logic    ') + '# Emphasize authentication in summary');
       console.log();
       console.log(chalk.dim('  See also: /help status (shows token usage)'));
+      console.log();
+    },
+  },
+  {
+    name: 'reload',
+    description: 'Reload AGENTS.md project rules',
+    handler: async (_args, _context, callbacks, _currentConfig) => {
+      console.log(chalk.cyan('\nReloading project rule files...\n'));
+
+      try {
+        const files = await callbacks.reloadAgentsFiles?.() ?? [];
+        const result = summarizeAgentsFiles(files);
+
+        if (files.length > 0) {
+          console.log(chalk.green('✓ Rules reloaded successfully:\n'));
+          if (result.global > 0) {
+            console.log(chalk.dim(`  • Global: ${result.global} file(s)`));
+          }
+          if (result.directory > 0) {
+            console.log(chalk.dim(`  • Directory: ${result.directory} file(s)`));
+          }
+          if (result.project > 0) {
+            console.log(chalk.dim(`  • Project: ${result.project} file(s)`));
+          }
+          console.log(chalk.dim('  Updated rules will apply to subsequent requests in this session.'));
+          console.log();
+        } else {
+          console.log(chalk.yellow('No project rule files found.\n'));
+          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, or .kodax/AGENTS.md for project-wide overrides.'));
+          console.log();
+        }
+      } catch (error) {
+        console.log(chalk.red('Failed to reload rules.\n'));
+        console.log(chalk.dim(`  Error: ${error instanceof Error ? error.message : String(error)}`));
+        console.log();
+      }
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/reload - Reload Project Rules\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /reload            ') + 'Reload all discovered project rule files');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log('  Reloads project-level context rules from AGENTS.md, CLAUDE.md, and .kodax/AGENTS.md files.');
+      console.log();
+      console.log(chalk.bold('Rule Priority:'));
+      console.log(chalk.dim('  1. Global:   ') + '~/.kodax/AGENTS.md');
+      console.log(chalk.dim('  2. Directory: ') + 'AGENTS.md or CLAUDE.md from project root to current directory');
+      console.log(chalk.dim('  3. Project:  ') + '.kodax/AGENTS.md at the project root');
+      console.log();
+      console.log(chalk.bold('Examples:'));
+      console.log(chalk.dim('  /reload            ') + '# Reload and show loaded rules');
       console.log();
     },
   },
@@ -710,7 +772,7 @@ function printHelp(): void {
 
   // Group by category - 按类别分组
   const categories: Record<string, Command[]> = {
-    'General': BUILTIN_COMMANDS.filter(c => ['help', 'exit', 'clear', 'compact', 'status'].includes(c.name)),
+    'General': BUILTIN_COMMANDS.filter(c => ['help', 'exit', 'clear', 'compact', 'reload', 'status'].includes(c.name)),
     'Permission': BUILTIN_COMMANDS.filter(c => ['mode', 'auto'].includes(c.name)),
     'Session': BUILTIN_COMMANDS.filter(c => ['save', 'load', 'sessions', 'history', 'delete'].includes(c.name)),
     'Settings': BUILTIN_COMMANDS.filter(c => ['model', 'thinking', 'plan'].includes(c.name)),
