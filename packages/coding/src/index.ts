@@ -168,3 +168,16 @@ export {
 
 // Client alias
 export { KodaXClient as Client } from './client.js';
+
+// ============== Context Loaders ==============
+
+export {
+  loadAgentsFiles,
+  formatAgentsForPrompt,
+  getKodaxGlobalDir,
+} from './context/agents-loader.js';
+
+export type {
+  AgentsFile,
+  LoadAgentsOptions,
+} from './context/agents-loader.js';

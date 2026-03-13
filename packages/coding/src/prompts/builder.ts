@@ -12,6 +12,7 @@ import { SYSTEM_PROMPT } from './system.js';
 import { LONG_RUNNING_PROMPT } from './long-running.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
 
 const execAsync = promisify(exec);
 
@@ -51,6 +52,18 @@ export async function buildSystemPrompt(options: KodaXOptions, isNewSession: boo
   // 追加 skills 系统提示词用于渐进式披露
   if (options.context?.skillsPrompt) {
     prompt += '\n\n' + options.context.skillsPrompt;
+  }
+
+  // Append AGENTS.md content (Feature 020)
+  // 追加 AGENTS.md 项目上下文规则
+  const cwd = process.cwd();
+  const agentsFiles = loadAgentsFiles({
+    cwd,
+    projectRoot: options.context?.gitRoot ?? undefined,
+  });
+  const agentsContent = formatAgentsForPrompt(agentsFiles);
+  if (agentsContent) {
+    prompt += agentsContent;
   }
 
   return prompt;
