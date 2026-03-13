@@ -171,7 +171,6 @@ const DELETE_ARGS: ArgumentDefinition[] = [
  */
 export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['mode', MODE_ARGS],
-  ['m', MODE_ARGS], // alias
   ['thinking', THINKING_ARGS],
   ['think', THINKING_ARGS], // alias
   ['t', THINKING_ARGS], // alias

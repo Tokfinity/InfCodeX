@@ -47,7 +47,7 @@ _Last Updated: 2026-03-13 15:30_
 | 010 | Refactor | Completed | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | v0.5.5 | [Design](features/v0.5.0.md#010) | 2026-03-02 | 2026-03-02 | 2026-03-02 |
 | 011 | Enhancement | Completed | High | 智能上下文压缩 (Compact) | v0.5.0 | v0.5.14 | [Design](features/v0.5.0.md#011) | 2026-03-02 | 2026-03-05 | 2026-03-06 |
 | 012 | Enhancement | Completed | High | TUI 自动补全增强 | v0.5.0 | v0.5.13 | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | 2026-03-05 |
-| 013 | Refactor | Planned | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | - | - |
+| 013 | Refactor | In Progress | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | 2026-03-13 | - |
 | 014 | Refactor | Completed | High | Project Mode Enhancement | v0.5.20 | v0.5.20 | [Design](features/v0.5.20.md) | 2026-03-07 | 2026-03-07 | 2026-03-07 |
 | 016 | New | Completed | High | CLI-Based OAuth Providers | v0.5.22 | v0.5.22 | [Design](features/v0.5.22.md) | 2026-03-08 | 2026-03-08 | 2026-03-08 |
 | 017 | Enhancement | Planned | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | - | - |
@@ -514,15 +514,15 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
-### 013: Command System 2.0 (PLANNED)
+### 013: Command System 2.0 (IN PROGRESS)
 - **Category**: Refactor
-- **Status**: Planned
+- **Status**: In Progress
 - **Priority**: High
 - **Planned**: v0.6.0
 - **Released**: -
 - **Design**: [v0.6.0.md#013](features/v0.6.0.md#013)
 - **Created**: 2026-03-03
-- **Started**: -
+- **Started**: 2026-03-13
 - **Completed**: -
 
 **Description**:

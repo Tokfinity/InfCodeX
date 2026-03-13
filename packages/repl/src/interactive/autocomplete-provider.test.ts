@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { AutocompleteProvider, createAutocompleteProvider } from '../autocomplete-provider.js';
+import { AutocompleteProvider, createAutocompleteProvider } from './autocomplete-provider.js';
 
 // Mock completers
 vi.mock('../completers/skill-completer.js', () => ({

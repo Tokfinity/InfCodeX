@@ -2,7 +2,7 @@
  * KodaX Interactive Command System - 交互式命令系统
  */
 
-import * as readline from 'readline';
+import type * as readline from 'readline';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions, getProvider } from '@kodax/coding';
@@ -21,6 +21,10 @@ import {
   type SkillMetadata,
   type SkillContext,
 } from '@kodax/skills';
+import { CommandRegistry } from '../commands/registry.js';
+import { copyCommand } from '../commands/copy-command.js';
+import { newCommand } from '../commands/new-command.js';
+import { toCommandDefinition } from '../commands/types.js';
 
 // Current config state (passed from repl.ts) - 当前配置状态（由 repl.ts 传入）
 export interface CurrentConfig {
@@ -41,6 +45,7 @@ export type CommandHandler = (
 export interface CommandCallbacks {
   exit: () => void;
   saveSession: () => Promise<void>;
+  startNewSession?: () => void;
   loadSession: (id: string) => Promise<boolean>;
   listSessions: () => Promise<void>;
   clearHistory: () => void;
@@ -331,7 +336,6 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'mode',
-    aliases: ['m'],
     description: 'Show or switch permission mode (plan/accept-edits/auto-in-project)',
     usage: '/mode [plan|accept-edits|auto-in-project]',
     handler: async (args, _context, callbacks, currentConfig) => {
@@ -500,7 +504,6 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'model',
-    aliases: ['m'],
     description: 'Show or switch provider',
     usage: '/model [provider-name]',
     handler: async (args, _context, callbacks, currentConfig) => {
@@ -764,34 +767,84 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
     },
   },
+  copyCommand,
+  newCommand,
 ];
 
 // Print help - 打印帮助
+const COMMAND_CATEGORIES: Record<string, string[]> = {
+  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'status'],
+  Permission: ['mode', 'auto'],
+  Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
+  Settings: ['model', 'thinking', 'plan'],
+  Project: ['project'],
+  Skills: ['skill'],
+};
+
+function getCommandsForCategory(names: string[]) {
+  const registry = getCommandRegistry();
+  return names
+    .map((name) => registry.get(name))
+    .filter((cmd): cmd is NonNullable<ReturnType<CommandRegistry['get']>> => cmd !== undefined);
+}
+
+function printCommandSection(
+  title: string,
+  commands: Array<{ name: string; aliases?: string[]; description: string }>
+): void {
+  if (commands.length === 0) {
+    return;
+  }
+
+  console.log(chalk.dim(`${title}:`));
+  for (const cmd of commands) {
+    const aliasLabel = cmd.aliases?.length ? ` (${cmd.aliases.join(', ')})` : '';
+    console.log(`  ${chalk.cyan(`/${cmd.name}`)}${chalk.dim(aliasLabel)} ${cmd.description}`);
+  }
+  console.log();
+}
+
 function printHelp(): void {
   console.log(chalk.bold('\nAvailable Commands:\n'));
+  const registry = getCommandRegistry();
+  const categorizedNames = new Set<string>();
 
-  // Group by category - 按类别分组
-  const categories: Record<string, Command[]> = {
-    'General': BUILTIN_COMMANDS.filter(c => ['help', 'exit', 'clear', 'compact', 'reload', 'status'].includes(c.name)),
-    'Permission': BUILTIN_COMMANDS.filter(c => ['mode', 'auto'].includes(c.name)),
-    'Session': BUILTIN_COMMANDS.filter(c => ['save', 'load', 'sessions', 'history', 'delete'].includes(c.name)),
-    'Settings': BUILTIN_COMMANDS.filter(c => ['model', 'thinking', 'plan'].includes(c.name)),
-    'Project': BUILTIN_COMMANDS.filter(c => ['project'].includes(c.name)),
-    'Skills': BUILTIN_COMMANDS.filter(c => ['skill'].includes(c.name)),
-  };
-
-  for (const [category, commands] of Object.entries(categories)) {
+  for (const [category, names] of Object.entries(COMMAND_CATEGORIES)) {
+    const commands = getCommandsForCategory(names);
     if (commands.length === 0) continue;
-    console.log(chalk.dim(`${category}:`));
+
     for (const cmd of commands) {
-      const aliases = cmd.aliases ? chalk.dim(` (${cmd.aliases.join(', ')})`) : '';
-      console.log(`  ${chalk.cyan(`/${cmd.name}`)}${aliases.padEnd(20)} ${cmd.description}`);
+      categorizedNames.add(cmd.name.toLowerCase());
     }
-    // Add subcommand hint for Project category - 为 Project 类别添加子命令提示
+    printCommandSection(category, commands);
+
     if (category === 'Project') {
       console.log(chalk.dim('    Subcommands: init, status, next, auto, pause, list, mark, progress'));
+      console.log();
     }
-    console.log();
+  }
+
+  const dynamicSections = new Map<string, Array<{ name: string; aliases?: string[]; description: string }>>();
+  for (const cmd of registry.getAll()) {
+    if (categorizedNames.has(cmd.name.toLowerCase())) {
+      continue;
+    }
+
+    const sectionTitle = cmd.source === 'extension'
+      ? 'Extensions'
+      : cmd.source === 'skill'
+        ? 'Skill Commands'
+        : cmd.source === 'prompt'
+          ? 'Prompt Commands'
+          : 'Other Commands';
+
+    const commands = dynamicSections.get(sectionTitle) ?? [];
+    commands.push(cmd);
+    dynamicSections.set(sectionTitle, commands);
+  }
+
+  for (const sectionTitle of ['Extensions', 'Skill Commands', 'Prompt Commands', 'Other Commands']) {
+    printCommandSection(sectionTitle, dynamicSections.get(sectionTitle) ?? []);
   }
 
   console.log(chalk.dim('Special syntax:'));
@@ -902,18 +955,22 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
 }
 
 // Command registry - 命令注册表
-const commandRegistry = new Map<string, Command>();
+const commandRegistry = new CommandRegistry();
 
 // Initialize command registry - 初始化命令注册表
 function initCommandRegistry(): void {
-  for (const cmd of BUILTIN_COMMANDS) {
-    commandRegistry.set(cmd.name, cmd);
-    if (cmd.aliases) {
-      for (const alias of cmd.aliases) {
-        commandRegistry.set(alias, cmd);
-      }
-    }
+  if (commandRegistry.size > 0) {
+    return;
   }
+
+  for (const cmd of BUILTIN_COMMANDS) {
+    commandRegistry.register(toCommandDefinition(cmd, 'builtin'));
+  }
+}
+
+export function getCommandRegistry(): CommandRegistry {
+  initCommandRegistry();
+  return commandRegistry;
 }
 
 // Parse command - 解析命令
@@ -941,7 +998,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 }
 
 // Execute command - 执行命令
-export type CommandResult = boolean | { skillContent: string } | { projectInitPrompt: string };
+export type CommandResult = boolean | { skillContent?: string; projectInitPrompt?: string };
 
 export async function executeCommand(
   parsed: { command: string; args: string[]; skillInvocation?: { name: string } },
@@ -966,7 +1023,7 @@ export async function executeCommand(
   if (cmd) {
     const result = await cmd.handler(parsed.args, context, callbacks, currentConfig);
     // Handle project init prompt - 处理项目初始化提示
-    if (result && typeof result === 'object' && 'projectInitPrompt' in result) {
+    if (result && typeof result === 'object') {
       return result;
     }
     return true;

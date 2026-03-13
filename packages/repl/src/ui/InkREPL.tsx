@@ -58,6 +58,7 @@ import type { PermissionContext } from "../permission/types.js";
 import {
   InteractiveContext,
   createInteractiveContext,
+  generateSessionId,
   touchContext,
 } from "../interactive/context.js";
 import {
@@ -82,7 +83,7 @@ import {
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
 import { processSpecialSyntax, isShellCommandSuccess } from "./utils/shell-executor.js";
-import { extractTextContent, extractTitle } from "./utils/message-utils.js";
+import { extractTextContent, extractTitle, resolveAssistantHistoryText } from "./utils/message-utils.js";
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
 import { emitRetryHistoryItem } from "./utils/retry-history.js";
 
@@ -293,7 +294,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { history } = useUIState();
-  const { addHistoryItem, clearHistory: clearUIHistory } = useUIActions();
+  const { addHistoryItem, clearHistory: clearUIHistory, setSessionId } = useUIActions();
 
   // Get terminal dimensions for fixed layout - 获取终端尺寸用于固定布局
   const terminalHeight = stdout.rows || 24;
@@ -967,6 +968,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               });
             }
           },
+          startNewSession: () => {
+            const nextSessionId = generateSessionId();
+            const now = new Date().toISOString();
+            context.sessionId = nextSessionId;
+            context.title = "";
+            context.createdAt = now;
+            context.lastAccessed = now;
+            currentOptionsRef.current.session = {
+              ...currentOptionsRef.current.session,
+              id: nextSessionId,
+            };
+            setSessionId(nextSessionId);
+          },
           loadSession: async (id: string) => {
             const loaded = await storage.load(id);
             if (loaded) {
@@ -1343,7 +1357,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Issue 076 修复：将最后一轮内容保存到持久历史记录
         // 这处理了最后一轮没有触发 onIterationStart 的情况
         const finalThinking = getThinkingContent().trim();
-        const finalResponse = getFullResponse().trim();
+        const finalResponse = resolveAssistantHistoryText(context.messages, getFullResponse());
 
         // Clear UI streaming state immediately so it doesn't render alongside the new history item
         clearThinkingContent();

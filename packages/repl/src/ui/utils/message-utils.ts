@@ -7,6 +7,29 @@
 
 import type { KodaXMessage } from "@kodax/coding";
 
+function extractAssistantTextOnly(content: string | unknown[]): string {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const textParts = content
+    .filter(
+      (block): block is { type: "text"; text: string } =>
+        block != null &&
+        typeof block === "object" &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block
+    )
+    .map((block) => String(block.text));
+
+  return textParts.join("\n");
+}
+
 /**
  * Extract text content from message - 从消息中提取文本内容
  *
@@ -60,6 +83,36 @@ export function extractTextContent(content: string | unknown[]): string {
 
   // Unknown format returns empty string - 未知格式返回空字符串
   return "";
+}
+
+/**
+ * Extract the last assistant text from a message list.
+ */
+export function extractLastAssistantText(messages: KodaXMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg?.role !== "assistant") {
+      continue;
+    }
+
+    const content = extractAssistantTextOnly(msg.content);
+    if (content) {
+      return content;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * Prefer the final assistant message stored in context over the streamed buffer.
+ * This keeps UI history aligned with persisted messages and /copy output.
+ */
+export function resolveAssistantHistoryText(
+  messages: KodaXMessage[],
+  streamedText: string
+): string {
+  return extractLastAssistantText(messages) || streamedText.trim();
 }
 
 /**

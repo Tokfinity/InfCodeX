@@ -179,6 +179,11 @@ npm run start        # Production mode
 
 **Minimum Coverage**: 80%
 
+**File Organization**:
+- **Unit tests**: `packages/*/src/**/*.test.ts` (next to source files)
+- **E2E tests**: `tests/` (root directory)
+- **No `__tests__/` directories** - keep tests close to source
+
 **TDD Workflow**:
 1. Write test first (RED)
 2. Run test - should FAIL

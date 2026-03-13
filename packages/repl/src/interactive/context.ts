@@ -35,7 +35,7 @@ export async function createInteractiveContext(options: {
 }
 
 // Generate session ID - 生成会话 ID
-function generateSessionId(): string {
+export function generateSessionId(): string {
   const now = new Date();
   const date = now.toISOString().split('T')[0]!.replace(/-/g, '');
   const time = now.toTimeString().split(' ')[0]!.replace(/:/g, '');

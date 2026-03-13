@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { CommandCompleter, FileCompleter } from '../autocomplete.js';
+import { CommandCompleter, FileCompleter } from './autocomplete.js';
+import { getCommandRegistry } from './commands.js';
 
 describe('CommandCompleter boundaries', () => {
   const completer = new CommandCompleter();
@@ -14,6 +15,32 @@ describe('CommandCompleter boundaries', () => {
   it('does not trigger inside non-whitespace-delimited text', () => {
     expect(completer.canComplete('https://example.com', 19)).toBe(false);
     expect(completer.canComplete('foo/help', 8)).toBe(false);
+  });
+
+  it('includes newly registered builtin commands', async () => {
+    const completions = await completer.getCompletions('/n', 2);
+    expect(completions.some((item) => item.display === '/new')).toBe(true);
+  });
+
+  it('refreshes command completions after runtime registration', async () => {
+    const registry = getCommandRegistry();
+    registry.unregister('deploy');
+
+    registry.register({
+      name: 'deploy',
+      aliases: ['dep'],
+      description: 'Deploy the current project',
+      source: 'extension',
+      handler: async () => {},
+    });
+
+    try {
+      const completions = await completer.getCompletions('/dep', 4);
+      expect(completions.some((item) => item.display === '/deploy')).toBe(true);
+      expect(completions.some((item) => item.display === '/dep')).toBe(true);
+    } finally {
+      registry.unregister('deploy');
+    }
   });
 });
 
