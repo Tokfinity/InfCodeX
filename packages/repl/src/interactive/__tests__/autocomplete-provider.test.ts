@@ -152,6 +152,16 @@ describe('AutocompleteProvider', () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(listener).toHaveBeenCalled();
     });
+
+    it('should trigger after a newline boundary', () => {
+      expect((provider as any).shouldTrigger('hello\n/help', 11)).toBe(true);
+      expect((provider as any).shouldTrigger('hello\n@src', 10)).toBe(true);
+    });
+
+    it('should not trigger inside urls or email-like text', () => {
+      expect((provider as any).shouldTrigger('https://example.com', 19)).toBe(false);
+      expect((provider as any).shouldTrigger('name@example.com', 16)).toBe(false);
+    });
   });
 
   describe('keyboard navigation', () => {

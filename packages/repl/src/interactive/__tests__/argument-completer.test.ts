@@ -43,6 +43,10 @@ describe('ArgumentCompleter', () => {
       expect(completer.canComplete('/m ', 3)).toBe(true); // mode alias
       expect(completer.canComplete('/t ', 3)).toBe(true); // thinking alias
     });
+
+    it('should trigger after a newline boundary', () => {
+      expect(completer.canComplete('hello\n/mode ', 12)).toBe(true);
+    });
   });
 
   describe('getCompletions', () => {

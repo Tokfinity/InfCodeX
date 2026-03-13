@@ -95,6 +95,22 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       // If finish_reason was never received, the stream was likely interrupted
       if (!finishReason) {
         const duration = Date.now() - streamStartTime;
+
+        if (signal?.aborted) {
+          const reason = signal.reason instanceof Error
+            ? signal.reason.message
+            : typeof signal.reason === 'string'
+              ? signal.reason
+              : 'Request aborted';
+          console.error('[Stream] Stream ended after abort before finish_reason:', {
+            duration,
+            reason,
+            textContentLength: textContent.length,
+            toolCallsCount: toolCallsMap.size
+          });
+          throw new DOMException(reason, 'AbortError');
+        }
+
         const error = new Error(
           `Stream incomplete: finish_reason not received. ` +
           `Duration: ${duration}ms. ` +

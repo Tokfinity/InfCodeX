@@ -51,6 +51,7 @@ export class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
                     throw new DOMException('Request aborted', 'AbortError');
                 }
                 if (event.type === 'content_block_start') {
+                    lastEventTime = Date.now();
                     const block = event.content_block;
                     currentBlockType = block.type;
                     // Debug: Log tool_use block start
@@ -78,6 +79,7 @@ export class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
                     }
                 }
                 else if (event.type === 'content_block_delta') {
+                    lastEventTime = Date.now();
                     const delta = event.delta;
                     if (delta.type === 'thinking_delta') {
                         currentThinking += delta.thinking ?? '';
@@ -171,13 +173,33 @@ export class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             // If message_stop was never received, the stream was likely interrupted
             if (!messageStopReceived) {
                 const duration = Date.now() - streamStartTime;
+                const lastEventAge = Date.now() - lastEventTime;
+                // If our upstream caller already aborted the request, surface it as an abort
+                // instead of a generic incomplete stream so the retry classifier can distinguish
+                // watchdog/user cancellation from provider-side truncation.
+                if (signal?.aborted) {
+                    const reason = signal.reason instanceof Error
+                        ? signal.reason.message
+                        : typeof signal.reason === 'string'
+                            ? signal.reason
+                            : 'Request aborted';
+                    console.error('[Stream] Stream ended after abort before message_stop:', {
+                        duration,
+                        lastEventAge,
+                        reason,
+                        textBlocks: textBlocks.length,
+                        toolBlocks: toolBlocks.length,
+                        thinkingBlocks: thinkingBlocks.length
+                    });
+                    throw new DOMException(reason, 'AbortError');
+                }
                 const error = new Error(`Stream incomplete: message_stop event not received. ` +
-                    `Duration: ${duration}ms, Last event: ${Date.now() - lastEventTime}ms ago. ` +
+                    `Duration: ${duration}ms, Last event: ${lastEventAge}ms ago. ` +
                     `This may indicate a network disconnection or API timeout.`);
                 error.name = 'StreamIncompleteError';
                 console.error('[Stream] Incomplete stream detected:', {
                     duration,
-                    lastEventAge: Date.now() - lastEventTime,
+                    lastEventAge,
                     textBlocks: textBlocks.length,
                     toolBlocks: toolBlocks.length,
                     thinkingBlocks: thinkingBlocks.length

@@ -1,10 +1,10 @@
 # Known Issues
 
-_Last Updated: 2026-03-12_
+_Last Updated: 2026-03-13_
 
 ---
 
-> **Archive Notice**: 35 issues archived to `ISSUES_ARCHIVED.md` (31 resolved + 1 on 2026-03-11 + 3 Won't Fix on 2026-03-11).
+> **Archive Notice**: 36 issues archived to `ISSUES_ARCHIVED.md` (31 resolved + 1 on 2026-03-11 + 3 Won't Fix on 2026-03-11 + 1 resolved on 2026-03-13).
 > For historical issue records, please see `docs/ISSUES_ARCHIVED.md`.
 
 ---
@@ -14,6 +14,7 @@ _Last Updated: 2026-03-12_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 087 | Medium | Resolved | 自动补全触发冲突 - @文件路径中/错误触发命令补全 | v0.5.33 | v0.5.33 | 2026-03-13 | 2026-03-13 |
 | 086 | High | Resolved | 自动补全竞态条件导致快速输入时显示过期补全 | v0.5.32 | v0.5.32 | 2026-03-12 | 2026-03-12 |
 | 085 | Medium | Resolved | 只读 Bash 命令白名单未在非 plan 模式复用 | v0.5.29 | v0.5.30 | 2026-03-12 | 2026-03-12 |
 | 084 | High | Resolved | 流式响应长时间静默中断无任何提示 | v0.5.29 | v0.5.30 | 2026-03-12 | 2026-03-12 |
@@ -32,6 +33,97 @@ _Last Updated: 2026-03-12_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+
+### 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (RESOLVED)
+- **Priority**: Medium
+- **Status**: Resolved
+- **Introduced**: v0.5.33
+- **Fixed**: v0.5.33
+- **Created**: 2026-03-13
+- **Resolution Date**: 2026-03-13
+
+- **Original Problem**:
+  输入 `@.kodax/` 时，路径中的 `/` 错误地触发了命令补全，显示 `/help`、`/exit` 等命令选项。
+
+  **期望行为**：
+  - `@.kodax/` 应该只触发文件补全，不触发命令补全
+  - `/` 和 `@` 在输入中段时，前面必须有空格才能触发补全（参考 Claude Code 的实践）
+
+- **Root Cause Analysis**:
+  1. `CommandCompleter.canComplete()` 只检查最后一个 `/` 后是否有空格，没有检查 `/` 是否在有效的命令位置
+  2. `ArgumentCompleter.canComplete()` 有同样的问题
+  3. `SkillCompleter.canComplete()` 也有类似问题
+  4. `AutocompleteProvider.shouldTrigger()` 的触发条件不够严格
+  5. `FileCompleter.canComplete()` 对 `@` 的触发条件也不够严格
+
+- **Reproduction**:
+  1. 输入 `@.kodax/`
+  2. 观察到补全列表显示 `/help`、`/exit` 等命令（错误）
+  3. 预期只显示目录内容
+
+- **Resolution**:
+
+  **统一触发规则**：
+  - `/` 或 `@` 在输入开头（位置 0）→ 触发
+  - `/` 或 `@` 不在开头，但前面有空格 → 触发
+  - 其他情况 → 不触发
+
+  **修改的文件和逻辑**：
+
+  1. **`autocomplete.ts` - FileCompleter.canComplete()**
+     ```typescript
+     // If @ is not at the start, it must be preceded by a space
+     if (lastAtIndex > 0 && beforeCursor[lastAtIndex - 1] !== ' ') {
+       return false;
+     }
+     ```
+
+  2. **`autocomplete.ts` - CommandCompleter.canComplete()**
+     ```typescript
+     // If / is not at the start, it must be preceded by a space
+     if (lastSlashIndex > 0 && beforeCursor[lastSlashIndex - 1] !== ' ') {
+       return false;
+     }
+     ```
+
+  3. **`autocomplete-provider.ts` - shouldTrigger()**
+     ```typescript
+     const hasValidSlash =
+       lastSlashIndex === 0 || // / at start
+       (lastSlashIndex > 0 && beforeCursor[lastSlashIndex - 1] === ' ');
+
+     const hasValidAt =
+       lastAtIndex === 0 || // @ at start
+       (lastAtIndex > 0 && beforeCursor[lastAtIndex - 1] === ' ');
+     ```
+
+  4. **`argument-completer.ts` - ArgumentCompleter.canComplete()** - 同样的空格检查
+
+  5. **`skill-completer.ts` - SkillCompleter.canComplete()** - 同样的空格检查
+
+- **Verification**:
+  | 输入 | @文件补全 | /命令补全 | 预期 |
+  |------|:---------:|:---------:|:----:|
+  | `@.kodax/` | ✅ | ❌ | ✅ 原问题已解决 |
+  | `text @src/` | ✅ | ❌ | ✅ |
+  | `text@src/` | ❌ | ❌ | ✅ 防止误触发 |
+  | `/help` | ❌ | ✅ | ✅ |
+  | `text /help` | ❌ | ✅ | ✅ |
+  | `text/help` | ❌ | ❌ | ✅ 防止误触发 |
+  | `请看 @src/` | ✅ | ❌ | ✅ |
+  | `请看@src/` | ❌ | ❌ | ✅ |
+
+- **Files Modified**:
+  - `packages/repl/src/interactive/autocomplete.ts` - FileCompleter, CommandCompleter
+  - `packages/repl/src/interactive/autocomplete-provider.ts` - shouldTrigger
+  - `packages/repl/src/interactive/completers/argument-completer.ts` - ArgumentCompleter
+  - `packages/repl/src/interactive/completers/skill-completer.ts` - SkillCompleter
+
+- **Tests**:
+  - 所有 71 个现有测试通过
+  - TypeScript 编译成功
+
 ---
 
 ### 086: 自动补全竞态条件导致快速输入时显示过期补全 (RESOLVED)
@@ -774,13 +866,36 @@ _Last Updated: 2026-03-12_
 ---
 
 ## Summary
-- Total: 13 (11 Open, 2 Resolved, 0 Partially Resolved, 0 Won't Fix)
-- Highest Priority Open: 086 - 自动补全前缀匹配方向错误导致超长输入仍匹配短选项 (High)
-- 78 issues archived to ISSUES_ARCHIVED.md (43 previous + 32 resolved + 3 Won't Fix on 2026-03-11)
+- Total: 13 (10 Open, 3 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Highest Priority Open: 013 - 自动补全缓存内存泄漏风险 (Low)
+- 79 issues archived to ISSUES_ARCHIVED.md (43 previous + 32 resolved + 3 Won't Fix on 2026-03-11 + 1 resolved on 2026-03-13)
 
 ---
 
 ## Changelog
+
+### 2026-03-13: Issue 087 修复
+- Added & Resolved 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (Medium Priority)
+- 问题：输入 `@.kodax/` 时，路径中的 `/` 错误触发命令补全
+- 根因：多个 Completer 的 `canComplete()` 只检查触发符位置，未检查是否在有效触发位置（开头或空格后）
+- 解决方案：统一规则 - `/` 和 `@` 不在开头时，前面必须有空格才能触发补全
+- 修改文件：
+  - `packages/repl/src/interactive/autocomplete.ts` - FileCompleter, CommandCompleter
+  - `packages/repl/src/interactive/autocomplete-provider.ts` - shouldTrigger
+  - `packages/repl/src/interactive/completers/argument-completer.ts` - ArgumentCompleter
+  - `packages/repl/src/interactive/completers/skill-completer.ts` - SkillCompleter
+
+### 2026-03-13: Issue 087 修复
+- Added & Resolved 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (Medium Priority)
+- 问题：输入 `@.kodax/` 时，路径中的 `/` 错误地触发了命令补全
+- 根因：各 Completer 的 `canComplete()` 只检查最后一个 `/` 或 `@`，没有验证是否在有效的触发位置
+- 修复：统一触发规则 - `/` 和 `@` 在输入中段时，前面必须有空格才能触发
+- 修改文件：
+  - `packages/repl/src/interactive/autocomplete.ts`
+  - `packages/repl/src/interactive/autocomplete-provider.ts`
+  - `packages/repl/src/interactive/completers/argument-completer.ts`
+  - `packages/repl/src/interactive/completers/skill-completer.ts`
+- 测试：71 个测试全部通过，- 版本：v0.5.33
 
 ### 2026-03-12: Issue 086 新增
 - Added 086: 自动补全前缀匹配方向错误导致超长输入仍匹配短选项 (High Priority)

@@ -51,6 +51,12 @@ export class FileCompleter implements Completer {
     const lastAtIndex = beforeCursor.lastIndexOf('@');
     if (lastAtIndex === -1) return false;
 
+    // If @ is not at the start, it must be preceded by whitespace
+    // 如果 @ 不在开头，前面必须有空白字符
+    if (lastAtIndex > 0 && !/\s/.test(beforeCursor[lastAtIndex - 1] ?? '')) {
+      return false;
+    }
+
     // Check if content after @ is valid file path start - 检查 @ 后是否是有效的文件路径开始
     const afterAt = beforeCursor.slice(lastAtIndex + 1);
     // Disallow spaces (means @ is followed by a new word) - 不允许空格（意味着 @ 后是新词）
@@ -150,6 +156,12 @@ export class CommandCompleter implements Completer {
     const beforeCursor = input.slice(0, cursorPos);
     const lastSlashIndex = beforeCursor.lastIndexOf('/');
     if (lastSlashIndex === -1) return false;
+
+    // If / is not at the start, it must be preceded by whitespace
+    // 如果 / 不在开头，前面必须有空白字符
+    if (lastSlashIndex > 0 && !/\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')) {
+      return false;
+    }
 
     // Get text after the last /
     const afterSlash = beforeCursor.slice(lastSlashIndex);

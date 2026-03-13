@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-13 10:30_
+_Last Updated: 2026-03-13 13:05_
 
 ---
 
@@ -25,7 +25,7 @@ _Last Updated: 2026-03-13 10:30_
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Released | 1 | 1/1 (100%) |
 | v0.5.22 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | Planned | 4 | 0/4 (0%) |
+| v0.6.0 | Planned | 5 | 0/5 (0%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 1 | 0/1 (0%) |
 
@@ -53,6 +53,7 @@ _Last Updated: 2026-03-13 10:30_
 | 017 | Enhancement | Planned | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | - | - |
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
 | 019 | New | Planned | High | Session Tree & Rollback System | v0.7.0 | - | [Design](features/v0.7.0.md#019) | 2026-03-12 | - | - |
+| 020 | New | Planned | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | - | [Design](features/v0.6.0.md#020) | 2026-03-13 | - | - |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -792,6 +793,42 @@ interface SessionEntryBase {
 
 ---
 
+### 020: AGENTS.md - 项目级 AI 上下文规则 (PLANNED)
+- **Category**: New
+- **Status**: Planned
+- **Priority**: High
+- **Planned**: v0.6.0
+- **Released**: -
+- **Design**: [v0.6.0.md#020](features/v0.6.0.md#020)
+- **Created**: 2026-03-13
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+实现类似 pi-mono 的 `AGENTS.md` 机制，支持项目级别的 AI 上下文规则注入。允许项目在 `.kodax/AGENTS.md` 或项目根目录的 `AGENTS.md` 中定义项目特定的规则、命令、工作流程等，这些内容会自动注入到 AI 的系统提示中。
+
+**Goals**:
+1. **多层级规则** - 支持全局、项目、目录三级规则
+2. **自动发现** - 从当前目录向上遍历加载所有 AGENTS.md
+3. **兼容性** - 支持 `AGENTS.md`、`CLAUDE.md` 两种文件名（与 pi-mono 一致）
+4. **优先级控制** - 后加载的规则追加到系统提示末尾
+
+**Key Features**:
+- 全局规则 (`~/.kodax/AGENTS.md`)
+- 项目规则 (`.kodax/AGENTS.md`)
+- 目录规则 (`./AGENTS.md`)
+- 支持 `AGENTS.md` 和 `CLAUDE.md` 文件名（与 pi-mono 一致）
+- 从 pi-mono 和 Claude Code 平滑迁移
+
+**Inspired by**: [pi-mono AGENTS.md](https://github.com/badlogic/pi-mono)
+
+**Implementation Notes**:
+- 创建 `packages/coding/src/context/agents-loader.ts` - 文件发现和加载
+- 修改 `packages/coding/src/prompts/builder.ts` - 系统提示注入
+- 支持 `/reload` 命令重新加载规则
+
+---
+
 ### 015: Project Mode 2.0 - AI-Driven Development Workflow (PLANNED)
 - **Category**: Enhancement
 - **Status**: Planned
@@ -844,9 +881,9 @@ interface SessionEntryBase {
 ---
 
 ## Summary
-- Total: 18 (6 Planned, 0 In Progress, 12 Completed)
-- By Priority: Critical: 3, High: 11, Medium: 2, Low: 0
-- Current Version: v0.5.29
-- Next Release (v0.6.0): 4 features planned (007, 013, 015, 017)
+- Total: 20 (6 Planned, 0 In Progress, 14 Completed)
+- By Priority: Critical: 3, High: 13, Medium: 2, Low: 0
+- Current Version: v0.5.33
+- Next Release (v0.6.0): 5 features planned (007, 013, 015, 017, 020)
 - Future Releases: v0.7.0 (019), v0.8.0 (018)
-- Highest Priority Planned: 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 019 - Session Tree & Rollback System (High)
+- Highest Priority Planned: 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 019 - Session Tree & Rollback System (High), 020 - AGENTS.md - 项目级 AI 上下文规则 (High)

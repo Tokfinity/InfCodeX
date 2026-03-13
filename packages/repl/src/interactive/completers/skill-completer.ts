@@ -40,7 +40,16 @@ export class SkillCompleter implements Completer {
 
     // Match /skill:xxx pattern anywhere in the line (no spaces allowed in skill name)
     // 匹配任意位置的 /skill:xxx 模式（技能名称中不允许空格）
-    return /\/skill:[^\s]*$/.test(beforeCursor);
+    if (!/\/skill:[^\s]*$/.test(beforeCursor)) return false;
+
+    // If / is not at the start, it must be preceded by whitespace
+    // 如果 / 不在开头，前面必须有空白字符
+    const lastSlashIndex = beforeCursor.lastIndexOf('/skill:');
+    if (lastSlashIndex > 0 && !/\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')) {
+      return false;
+    }
+
+    return true;
   }
 
   /**
