@@ -24,6 +24,7 @@ import {
   compactMessages,
   executeTool,
   KodaXToolExecutionContext,
+  KodaXMessage,
   KODAX_DEFAULT_PROVIDER,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
@@ -776,35 +777,23 @@ Some text after`;
 describe('Session Initial Messages', () => {
   it('should accept initialMessages in session options', () => {
     // 测试接口定义是否正确
-    const options = {
-      provider: KODAX_DEFAULT_PROVIDER,
-      session: {
-        initialMessages: [
-          { role: 'user' as const, content: 'Hello' },
-          { role: 'assistant' as const, content: 'Hi there!' },
-        ],
-      },
-      events: {},
-    };
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'Hello' },
+      { role: 'assistant', content: 'Hi there!' },
+    ];
+    const options = { session: { initialMessages: messages } };
     expect(options.session.initialMessages).toHaveLength(2);
   });
 
   it('should handle empty initialMessages', () => {
-    const options = {
-      provider: KODAX_DEFAULT_PROVIDER,
-      session: {
-        initialMessages: [],
-      },
-      events: {},
-    };
+    const messages: KodaXMessage[] = [];
+    const options = { session: { initialMessages: messages } };
     expect(options.session.initialMessages).toHaveLength(0);
   });
 
   it('should handle undefined initialMessages', () => {
-    const options = {
-      provider: KODAX_DEFAULT_PROVIDER,
+    const options: { session: { initialMessages?: KodaXMessage[] } } = {
       session: {},
-      events: {},
     };
     expect(options.session.initialMessages).toBeUndefined();
   });

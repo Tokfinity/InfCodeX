@@ -75,7 +75,7 @@ describe('fuzzyMatch', () => {
 
 describe('sortCandidates', () => {
   it('should sort by fuzzy match score', () => {
-    const candidates = [
+    const candidates: ScoredCandidate[] = [
       { text: 'help' },
       { text: 'history' },
       { text: 'hint' },
@@ -103,7 +103,7 @@ describe('sortCandidates', () => {
   });
 
   it('should respect minimum score threshold', () => {
-    const candidates = [
+    const candidates: ScoredCandidate[] = [
       { text: 'help' },
       { text: 'hop' },
     ];

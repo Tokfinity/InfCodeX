@@ -18,29 +18,22 @@ import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE
 // ============== Pattern Parsing and Matching ==============
 
 /**
- * Check if a bash command is strictly a safe read-only operation (Whitelist).
- * It must not contain shell operators that could bypass safety (|, >, <, &, ;, `, $(), \\).
+ * Check if a single bash command (no &&) is a safe read-only operation.
+ * Used internally by isBashReadCommand for compound command validation.
  *
- * 检查一个 bash 命令是否是严格安全的只读操作（白名单）。
- * 必须不能包含可能绕过安全的 shell 操作符 (|, >, <, &, ;, `, $(), \\)。
+ * 检查单个 bash 命令（不含 &&）是否是安全的只读操作。
+ * 供 isBashReadCommand 内部用于复合命令验证。
  *
- * @param command - bash command string
+ * @param command - single bash command string (no &&)
  * @returns true if the command is a safe read operation
  */
-export function isBashReadCommand(command: string): boolean {
+function isSingleBashReadCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
   }
   const normalizedCommand = command.trim().toLowerCase();
 
-  // 1. Strict syntax validation: Reject any command containing shell operators,
-  // command substitution $() or line continuation \
-  const illegalSyntax = /[<>|&;`\\]|\$\(/;
-  if (illegalSyntax.test(command)) {
-    return false;
-  }
-
-  // 2. Base command validation: Must start with a whitelisted command
+  // 1. Base command validation: Must start with a whitelisted command
   // e.g. "git status -s" starts with "git status"
   for (const safeCmd of BASH_SAFE_READ_COMMANDS) {
     if (normalizedCommand === safeCmd || normalizedCommand.startsWith(safeCmd + ' ')) {
@@ -60,7 +53,7 @@ export function isBashReadCommand(command: string): boolean {
           return false;
         }
       }
-      
+
       // Block arbitrary code execution for language tools (version/info only)
       const languageTools = ['node', 'npm', 'yarn', 'pnpm', 'tsc', 'python', 'pip', 'go', 'cargo', 'rustc', 'ruby', 'perl'];
       if (languageTools.includes(safeCmd)) {
@@ -76,6 +69,64 @@ export function isBashReadCommand(command: string): boolean {
   }
 
   return false; // Default to denying (requiring confirmation)
+}
+
+/**
+ * Check if a bash command is strictly a safe read-only operation (Whitelist).
+ * Supports compound commands connected by && (all parts must be read-only).
+ * Rejects shell operators: |, >, <, &, ;, `, $(), \\
+ *
+ * 检查一个 bash 命令是否是严格安全的只读操作（白名单）。
+ * 支持 && 连接的复合命令（所有部分都必须是只读的）。
+ * 拒绝 shell 操作符: |, >, <, &, ;, `, $(), \\
+ *
+ * @param command - bash command string
+ * @returns true if the command is a safe read operation
+ */
+export function isBashReadCommand(command: string): boolean {
+  if (!command || !command.trim()) {
+    return false;
+  }
+
+  // 1. Strict syntax validation: Reject any command containing dangerous shell operators
+  // Note: && is explicitly allowed for compound read-only commands like "cd dir && git diff"
+  // We check for single & (background execution) separately from &&
+  const normalizedCommand = command.trim();
+
+  // Reject: |, <, >, single &, ;, `, $(), \
+  // But allow && (compound command)
+  const illegalSyntax = /[<>|;`\\]|\$\(|(?<!&)&(?!&)/;
+  if (illegalSyntax.test(normalizedCommand)) {
+    return false;
+  }
+
+  // 2. Split by && and check each sub-command
+  // Handle compound commands like "cd /path && git status"
+  const subCommands = normalizedCommand.split(/\s*&&\s*/);
+
+  // If no && found, this is a single command
+  if (subCommands.length === 1) {
+    return isSingleBashReadCommand(subCommands[0]!);
+  }
+
+  // 3. All sub-commands must be safe read operations
+  // Special case: 'cd' is allowed as a prefix in compound commands
+  for (const subCmd of subCommands) {
+    const trimmedCmd = subCmd?.trim();
+    if (!trimmedCmd) continue;
+
+    // Allow 'cd <path>' as a safe prefix command
+    if (/^cd\s+/.test(trimmedCmd.toLowerCase())) {
+      continue;
+    }
+
+    // All other sub-commands must pass the read-only check
+    if (!isSingleBashReadCommand(trimmedCmd)) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // Pre-compile regexes for BASH_WRITE_COMMANDS for performance

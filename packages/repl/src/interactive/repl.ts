@@ -64,6 +64,9 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
+import { ReadlineUIContext } from '../ui/readline-ui.js';
+import { extractLastAssistantText } from '../ui/utils/message-utils.js';
+import { prepareInvocationExecution } from './invocation-runtime.js';
 
 // Extended session storage interface (adds list method) - 扩展的会话存储接口（增加 list 方法）
 interface SessionStorage extends KodaXSessionStorage {
@@ -391,7 +394,10 @@ Keyboard Shortcuts:
             if (gitRoot && FILE_MODIFICATION_TOOLS.has(tool)) {
               const targetPath = input.path as string | undefined;
               if (targetPath && isAlwaysConfirmPath(targetPath, gitRoot)) {
-                const result = await confirmToolExecution(rl, tool, input, { isProtectedPath: true });
+                const result = await confirmToolExecution(rl, tool, input, {
+                  isProtectedPath: true,
+                  permissionMode: mode,
+                });
                 if (!result.confirmed) {
                   console.log(chalk.dim('[Cancelled] Operation on protected path requires confirmation'));
                   return false;
@@ -413,6 +419,7 @@ Keyboard Shortcuts:
               const result = await confirmToolExecution(rl, tool, input, {
                 isOutsideProject: input._outsideProject === true,
                 reason: input._reason as string | undefined,
+                permissionMode: mode,
               });
 
               if (!result.confirmed) {
@@ -440,6 +447,7 @@ Keyboard Shortcuts:
       return agentsFiles;
     },
     readline: rl,
+    ui: new ReadlineUIContext(rl),
   };
 
   // Handle Ctrl+C - 处理 Ctrl+C
@@ -456,6 +464,115 @@ Keyboard Shortcuts:
 
   process.on('exit', cleanup);
   process.on('SIGTERM', cleanup);
+
+  const handleCommandResult = async (
+    result: Awaited<ReturnType<typeof executeCommand>>,
+    rawInput: string
+  ): Promise<void> => {
+    if (!result || typeof result !== 'object') {
+      return;
+    }
+
+    if (result.projectInitPrompt) {
+      if (planMode) {
+        await runWithPlanMode(result.projectInitPrompt, {
+          ...currentOptions,
+          provider: currentConfig.provider,
+          thinking: currentConfig.thinking,
+        });
+      } else {
+        const runResult = await runAgentRound(
+          {
+            ...currentOptions,
+            provider: currentConfig.provider,
+            thinking: currentConfig.thinking,
+          },
+          context,
+          result.projectInitPrompt
+        );
+        context.messages = runResult.messages;
+        statusBar?.update({ messageCount: context.messages.length });
+        if (context.messages.length > 0) {
+          const title = extractTitle(context.messages);
+          context.title = title;
+          await storage.save(context.sessionId, {
+            messages: context.messages,
+            title,
+            gitRoot: gitRoot ?? '',
+          });
+        }
+      }
+    }
+
+    if (!result.invocation) {
+      return;
+    }
+
+    const prepared = await prepareInvocationExecution(
+      {
+        ...currentOptions,
+        provider: currentConfig.provider,
+        thinking: currentConfig.thinking,
+      },
+      result.invocation,
+      rawInput,
+      (message) => console.log(chalk.dim(`\n${message}`))
+    );
+
+    if (prepared.mode === 'manual') {
+      if (prepared.manualOutput) {
+        console.log(chalk.yellow(`\n${prepared.manualOutput}\n`));
+      }
+      await prepared.finalize();
+      return;
+    }
+
+    if (!prepared.prompt || !prepared.options) {
+      await prepared.finalize();
+      return;
+    }
+
+    try {
+      if (planMode) {
+        await runWithPlanMode(prepared.prompt, prepared.options);
+        await prepared.finalize();
+        return;
+      }
+
+      const initialMessages = prepared.mode === 'fork' ? [] : context.messages;
+      const runResult = await runAgentRound(
+        prepared.options,
+        context,
+        prepared.prompt,
+        initialMessages
+      );
+
+      if (prepared.mode === 'fork') {
+        const assistantText = extractLastAssistantText(runResult.messages);
+        if (assistantText.trim()) {
+          console.log(`\n${assistantText}\n`);
+          context.messages.push({ role: 'assistant', content: assistantText });
+        }
+      } else {
+        context.messages = runResult.messages;
+      }
+
+      statusBar?.update({ messageCount: context.messages.length });
+      if (context.messages.length > 0) {
+        const title = extractTitle(context.messages);
+        context.title = title;
+        await storage.save(context.sessionId, {
+          messages: context.messages,
+          title,
+          gitRoot: gitRoot ?? '',
+        });
+      }
+      await prepared.finalize();
+    } catch (error) {
+      await prepared.finalize(error instanceof Error ? error : new Error(String(error)));
+      throw error;
+    }
+  };
 
   // Main loop - 主循环
   while (isRunning) {
@@ -475,7 +592,8 @@ Keyboard Shortcuts:
         // Process command - 处理命令
         const parsed = parseCommand(trimmed);
         if (parsed) {
-          await executeCommand(parsed, context, callbacks, currentConfig);
+          const commandResult = await executeCommand(parsed, context, callbacks, currentConfig);
+          await handleCommandResult(commandResult, trimmed);
           continue;
         }
 
@@ -540,7 +658,8 @@ Keyboard Shortcuts:
     // Process command - 处理命令
     const parsed = parseCommand(trimmed);
     if (parsed) {
-      await executeCommand(parsed, context, callbacks, currentConfig);
+      const commandResult = await executeCommand(parsed, context, callbacks, currentConfig);
+      await handleCommandResult(commandResult, trimmed);
       continue;
     }
 
@@ -874,7 +993,8 @@ export async function processSpecialSyntax(input: string): Promise<string> {
 async function runAgentRound(
   options: KodaXOptions,
   context: InteractiveContext,
-  prompt: string
+  prompt: string,
+  initialMessages: KodaXMessage[] = context.messages
 ): Promise<KodaXResult> {
   // Create event callbacks - 创建事件回调
   const events = options.events ?? {};
@@ -886,7 +1006,7 @@ async function runAgentRound(
       events,
       session: {
         ...options.session,
-        initialMessages: context.messages,  // Pass existing messages - 传递已有消息
+        initialMessages,  // Pass existing messages - 传递已有消息
       },
     },
     prompt

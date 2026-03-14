@@ -30,13 +30,30 @@ export interface SkillFrontmatter {
   agent?: string;
   /** Argument hint for UI, e.g., "[file] [format]" */
   argumentHint?: string;
-  /** Model preference: haiku, sonnet, opus */
-  model?: 'haiku' | 'sonnet' | 'opus';
+  /** Model preference: haiku, sonnet, opus, or a provider-specific model id */
+  model?: string;
+  /** Hooks scoped to this skill's lifecycle */
+  hooks?: SkillHooks;
 
   // === Metadata fields ===
   license?: string;
   compatibility?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface SkillHook {
+  matcher?: string;
+  command: string;
+}
+
+export interface SkillHooks {
+  SessionStart?: SkillHook[];
+  UserPromptSubmit?: SkillHook[];
+  PreToolUse?: SkillHook[];
+  PostToolUse?: SkillHook[];
+  Stop?: SkillHook[];
+  SubagentStop?: SkillHook[];
+  Notification?: SkillHook[];
 }
 
 // === Skill Metadata (Level 1 - Preloaded) ===

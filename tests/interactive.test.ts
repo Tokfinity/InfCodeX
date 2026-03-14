@@ -176,7 +176,7 @@ describe('executeCommand', () => {
 
   beforeEach(async () => {
     context = await createInteractiveContext({});
-    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'default' };
+    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'accept-edits' };
     exitCalled = false;
     savedSession = null;
     loadedSessionId = null;
@@ -320,7 +320,7 @@ describe('Command Aliases', () => {
 
   beforeEach(async () => {
     context = await createInteractiveContext({});
-    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'default' };
+    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'accept-edits' };
     callbacks = {
       exit: () => {},
       saveSession: async () => {},
@@ -412,7 +412,7 @@ describe('Mode Switching Detailed', () => {
 
   beforeEach(async () => {
     context = await createInteractiveContext({});
-    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'default' };
+    currentConfig = { provider: 'test', thinking: false, auto: false, permissionMode: 'accept-edits' };
     callbacks = {
       exit: () => {},
       saveSession: async () => {},
@@ -424,7 +424,7 @@ describe('Mode Switching Detailed', () => {
   });
 
   it('should start in default mode by default', () => {
-    expect(currentConfig.permissionMode).toBe('default');
+    expect(currentConfig.permissionMode).toBe('accept-edits');
   });
 
   it('should switch to plan mode and back to default', async () => {
@@ -433,8 +433,8 @@ describe('Mode Switching Detailed', () => {
     await executeCommand({ command: 'mode', args: ['plan'] }, context, callbacks, currentConfig);
     expect(currentConfig.permissionMode).toBe('plan');
 
-    await executeCommand({ command: 'mode', args: ['default'] }, context, callbacks, currentConfig);
-    expect(currentConfig.permissionMode).toBe('default');
+    await executeCommand({ command: 'mode', args: ['accept-edits'] }, context, callbacks, currentConfig);
+    expect(currentConfig.permissionMode).toBe('accept-edits');
 
     consoleSpy.mockRestore();
   });
@@ -896,7 +896,8 @@ describe('New Commands', () => {
   it('should have model command', () => {
     const modelCmd = BUILTIN_COMMANDS.find(c => c.name === 'model');
     expect(modelCmd).toBeDefined();
-    expect(modelCmd.aliases).toContain('m');
+    expect(modelCmd?.aliases).toBeDefined();
+    expect(modelCmd?.aliases).toContain('m');
   });
 
   it('should have thinking command', () => {

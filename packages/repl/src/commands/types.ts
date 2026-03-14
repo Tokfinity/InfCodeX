@@ -6,10 +6,38 @@ import type { AgentsFile, KodaXOptions } from '@kodax/coding';
 import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
 import type { PermissionMode } from '../permission/types.js';
+import type { UIContext } from '../ui/context.js';
 
 export type CommandSource = 'builtin' | 'extension' | 'skill' | 'prompt';
 
 export type CommandPriority = 'critical' | 'high' | 'medium' | 'low';
+
+export interface CommandHook {
+  matcher?: string;
+  command: string;
+}
+
+export interface CommandHooks {
+  SessionStart?: CommandHook[];
+  UserPromptSubmit?: CommandHook[];
+  PreToolUse?: CommandHook[];
+  PostToolUse?: CommandHook[];
+  Stop?: CommandHook[];
+  SubagentStop?: CommandHook[];
+  Notification?: CommandHook[];
+}
+
+export interface CommandExecutionMetadata {
+  disableModelInvocation?: boolean;
+  userInvocable?: boolean;
+  allowedTools?: string;
+  context?: 'fork';
+  agent?: string;
+  argumentHint?: string;
+  model?: string;
+  hooks?: CommandHooks;
+  frontmatter?: Record<string, unknown>;
+}
 
 export interface CurrentConfig {
   provider: string;
@@ -37,6 +65,7 @@ export interface CommandCallbacks {
   readline?: readline.Interface;
   startCompacting?: () => void;
   stopCompacting?: () => void;
+  ui: UIContext;
 }
 
 export interface CommandResultData {
@@ -45,6 +74,14 @@ export interface CommandResultData {
   data?: unknown;
   skillContent?: string;
   projectInitPrompt?: string;
+  invocation?: CommandInvocationRequest;
+}
+
+export interface CommandInvocationRequest extends CommandExecutionMetadata {
+  prompt: string;
+  source: 'skill' | 'prompt';
+  displayName: string;
+  path?: string;
 }
 
 export type CommandResult = boolean | CommandResultData;
@@ -67,6 +104,15 @@ export interface CommandDefinition {
   priority?: CommandPriority;
   location?: 'user' | 'project' | 'path';
   path?: string;
+  userInvocable?: boolean;
+  disableModelInvocation?: boolean;
+  allowedTools?: string;
+  context?: 'fork';
+  agent?: string;
+  argumentHint?: string;
+  model?: string;
+  hooks?: CommandHooks;
+  frontmatter?: Record<string, unknown>;
 }
 
 export interface CommandInfo {
@@ -78,6 +124,13 @@ export interface CommandInfo {
   priority?: CommandPriority;
   location?: 'user' | 'project' | 'path';
   path?: string;
+  userInvocable?: boolean;
+  disableModelInvocation?: boolean;
+  allowedTools?: string;
+  context?: 'fork';
+  agent?: string;
+  argumentHint?: string;
+  model?: string;
 }
 
 /**

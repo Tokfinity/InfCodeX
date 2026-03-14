@@ -42,6 +42,26 @@ describe('CommandCompleter boundaries', () => {
       registry.unregister('deploy');
     }
   });
+
+  it('does not suggest non-user-invocable commands', async () => {
+    const registry = getCommandRegistry();
+    registry.unregister('internal-sync');
+
+    registry.register({
+      name: 'internal-sync',
+      description: 'Internal sync command',
+      source: 'extension',
+      userInvocable: false,
+      handler: async () => {},
+    });
+
+    try {
+      const completions = await completer.getCompletions('/internal', 9);
+      expect(completions.some((item) => item.display === '/internal-sync')).toBe(false);
+    } finally {
+      registry.unregister('internal-sync');
+    }
+  });
 });
 
 describe('FileCompleter boundaries', () => {

@@ -67,6 +67,7 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from "../interactive/commands.js";
+import type { CommandInvocationRequest } from "../commands/types.js";
 import { getProviderModel } from "../common/utils.js";
 import { KODAX_VERSION } from "../common/utils.js";
 import { runWithPlanMode } from "../common/plan-mode.js";
@@ -79,6 +80,7 @@ import {
   useShortcutsContext,
   GlobalShortcuts,
 } from "./shortcuts/index.js";
+import { prepareInvocationExecution } from "../interactive/invocation-runtime.js";
 
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
@@ -378,6 +380,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     prompt: string;
   } | null>(null);
   const confirmResolveRef = useRef<((result: ConfirmResult) => void) | null>(null);
+  const [uiRequest, setUiRequest] = useState<
+    | {
+        kind: "select";
+        title: string;
+        options: string[];
+        buffer: string;
+        error?: string;
+      }
+    | {
+        kind: "input";
+        prompt: string;
+        defaultValue?: string;
+        buffer: string;
+        error?: string;
+      }
+    | null
+  >(null);
+  const uiResolveRef = useRef<((value: string | undefined) => void) | null>(null);
 
   // Issue 070: Calculate context token usage for status bar display
   // Issue 070: Calculate context token usage for status bar display
@@ -468,13 +488,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       const answer = input.toLowerCase();
       const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
+      // "Always" option only available in accept-edits mode - "always" 选项只在 accept-edits 模式下可用
+      const canAlways = currentConfig.permissionMode === 'accept-edits' && !isProtectedPath;
 
       if (answer === 'y' || answer === 'yes') {
         setConfirmRequest(null);
         confirmResolveRef.current?.({ confirmed: true });
         confirmResolveRef.current = null;
-      } else if (!isProtectedPath && (answer === 'a' || answer === 'always')) {
-        // "Always" option not available for protected paths - 永久保护路径不提供 "always" 选项
+      } else if (canAlways && (answer === 'a' || answer === 'always')) {
         setConfirmRequest(null);
         confirmResolveRef.current?.({ confirmed: true, always: true });
         confirmResolveRef.current = null;
@@ -485,6 +506,120 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
     },
     { isActive: !!confirmRequest }
+  );
+
+  const resolveUIRequest = useCallback((value: string | undefined) => {
+    setUiRequest(null);
+    uiResolveRef.current?.(value);
+    uiResolveRef.current = null;
+  }, []);
+
+  const showSelectDialog = useCallback((title: string, options: string[]): Promise<string | undefined> => {
+    if (options.length === 0) {
+      return Promise.resolve(undefined);
+    }
+
+    return new Promise((resolve) => {
+      uiResolveRef.current = resolve;
+      setUiRequest({
+        kind: "select",
+        title,
+        options,
+        buffer: "",
+      });
+    });
+  }, []);
+
+  const showInputDialog = useCallback((prompt: string, defaultValue?: string): Promise<string | undefined> => {
+    return new Promise((resolve) => {
+      uiResolveRef.current = resolve;
+      setUiRequest({
+        kind: "input",
+        prompt,
+        defaultValue,
+        buffer: "",
+      });
+    });
+  }, []);
+
+  useInput(
+    (input, key) => {
+      if (!uiRequest) return;
+
+      if (key.escape) {
+        resolveUIRequest(undefined);
+        return;
+      }
+
+      if (uiRequest.kind === "select") {
+        if (key.return) {
+          const trimmed = uiRequest.buffer.trim();
+          if (trimmed === "" || trimmed === "0") {
+            resolveUIRequest(undefined);
+            return;
+          }
+
+          const index = Number.parseInt(trimmed, 10) - 1;
+          if (Number.isNaN(index) || index < 0 || index >= uiRequest.options.length) {
+            setUiRequest((prev) =>
+              prev && prev.kind === "select"
+                ? {
+                    ...prev,
+                    error: `Invalid choice. Enter 1-${prev.options.length}, or 0 to cancel.`,
+                  }
+                : prev
+            );
+            return;
+          }
+
+          resolveUIRequest(uiRequest.options[index]);
+          return;
+        }
+
+        if (key.backspace || key.delete) {
+          setUiRequest((prev) =>
+            prev && prev.kind === "select"
+              ? { ...prev, buffer: prev.buffer.slice(0, -1), error: undefined }
+              : prev
+          );
+          return;
+        }
+
+        if (/^[0-9]$/.test(input)) {
+          setUiRequest((prev) =>
+            prev && prev.kind === "select"
+              ? { ...prev, buffer: prev.buffer + input, error: undefined }
+              : prev
+          );
+        }
+
+        return;
+      }
+
+      if (key.return) {
+        const trimmed = uiRequest.buffer.trim();
+        resolveUIRequest(trimmed === "" ? uiRequest.defaultValue ?? undefined : trimmed);
+        return;
+      }
+
+      if (key.backspace || key.delete) {
+        setUiRequest((prev) =>
+          prev && prev.kind === "input"
+            ? { ...prev, buffer: prev.buffer.slice(0, -1), error: undefined }
+            : prev
+        );
+        return;
+      }
+
+      if (input && !key.ctrl && !key.meta) {
+        setUiRequest((prev) =>
+          prev && prev.kind === "input"
+            ? { ...prev, buffer: prev.buffer + input, error: undefined }
+            : prev
+        );
+      }
+    },
+    { isActive: !!uiRequest }
   );
 
   // Sync history from context to UI
@@ -873,7 +1008,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Run agent round
   const runAgentRound = async (
     opts: KodaXOptions,
-    prompt: string
+    prompt: string,
+    initialMessages: KodaXMessage[] = context.messages
   ): Promise<KodaXResult> => {
     const events = createStreamingEvents();
 
@@ -888,7 +1024,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         ...opts,
         session: {
           ...opts.session,
-          initialMessages: context.messages,
+          initialMessages,
         },
         context: {
           ...opts.context,
@@ -901,12 +1037,109 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     );
   };
 
+  const persistContextState = useCallback(async () => {
+    if (context.messages.length === 0) {
+      return;
+    }
+
+    const title = extractTitle(context.messages);
+    context.title = title;
+    await storage.save(context.sessionId, {
+      messages: context.messages,
+      title,
+      gitRoot: context.gitRoot ?? "",
+    });
+  }, [context, storage]);
+
+  const appendLastAssistantToHistory = useCallback((messages: KodaXMessage[]) => {
+    const lastAssistant = messages[messages.length - 1];
+    if (lastAssistant?.role !== "assistant") {
+      return;
+    }
+
+    const content = extractTextContent(lastAssistant.content);
+    if (content) {
+      addHistoryItem({
+        type: "assistant",
+        text: content,
+      });
+    }
+  }, [addHistoryItem]);
+
+  const executeInvocation = useCallback(async (
+    invocation: CommandInvocationRequest,
+    rawInput: string
+  ) => {
+    const prepared = await prepareInvocationExecution(
+      {
+        ...currentOptionsRef.current,
+        provider: currentConfig.provider,
+        thinking: currentConfig.thinking,
+      },
+      invocation,
+      rawInput,
+      (message) => addHistoryItem({ type: "info", text: message })
+    );
+
+    if (prepared.mode === "manual") {
+      if (prepared.manualOutput) {
+        addHistoryItem({ type: "info", text: prepared.manualOutput });
+      }
+      await prepared.finalize();
+      return;
+    }
+
+    if (!prepared.prompt || !prepared.options) {
+      await prepared.finalize();
+      return;
+    }
+
+    try {
+      if (planMode) {
+        await runWithPlanMode(prepared.prompt, prepared.options);
+        await prepared.finalize();
+        return;
+      }
+
+      const initialMessages = prepared.mode === "fork" ? [] : context.messages;
+      const result = await runAgentRound(prepared.options, prepared.prompt, initialMessages);
+
+      if (prepared.mode === "fork") {
+        const lastAssistant = result.messages.slice().reverse().find((msg) => msg.role === "assistant");
+        const assistantText = lastAssistant ? extractTextContent(lastAssistant.content) : "";
+        if (assistantText) {
+          context.messages.push({ role: "assistant", content: assistantText });
+          addHistoryItem({ type: "assistant", text: assistantText });
+        }
+      } else {
+        context.messages = result.messages;
+        appendLastAssistantToHistory(result.messages);
+      }
+
+      await persistContextState();
+      await prepared.finalize();
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      await prepared.finalize(error);
+      throw error;
+    }
+  }, [
+    addHistoryItem,
+    appendLastAssistantToHistory,
+    context,
+    currentConfig.provider,
+    currentConfig.thinking,
+    planMode,
+    persistContextState,
+    runAgentRound,
+  ]);
+
   // Handle user input submission
   const handleSubmit = useCallback(
     async (input: string) => {
       // Prevent concurrent execution: ignore input if agent is busy or waiting for tool confirmation
       // 防止并发执行：如果 Agent 正在执行或正在等待工具确认，则忽略新输入
-      if (!input.trim() || !isRunning || isLoading || confirmRequest) return;
+      if (!input.trim() || !isRunning || isLoading || confirmRequest || uiRequest) return;
 
       // Hide help panel when submitting - 发送时隐藏帮助面板
       setShowHelp(false);
@@ -1078,9 +1311,70 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             });
             return result.confirmed;
           },
-          readline: null as unknown as ReturnType<
-            typeof import("readline").createInterface
-          >,
+          // UI context for interactive dialogs - UI 交互上下文
+          ui: {
+            select: async (title: string, options: string[]): Promise<string | undefined> => {
+              // Route through Ink-managed dialog state instead of reading stdin directly.
+              return showSelectDialog(title, options);
+              // TODO: Implement Ink-based select dialog
+              // For now, use simple console-based selection
+              console.log(`\n${title}`);
+              console.log('─'.repeat(title.length));
+              options.forEach((option, index) => {
+                console.log(`  ${index + 1}. ${option}`);
+              });
+              console.log('  0. Cancel');
+              console.log('');
+
+              // Use Ink's input to get selection
+              return new Promise((resolve) => {
+                const handleInput = (data: string) => {
+                  const trimmed = data.trim();
+                  if (trimmed === '0' || trimmed === '') {
+                    resolve(undefined);
+                    return;
+                  }
+                  const index = parseInt(trimmed, 10) - 1;
+                  if (isNaN(index) || index < 0 || index >= options.length) {
+                    console.log('Invalid choice.');
+                    resolve(undefined);
+                    return;
+                  }
+                  resolve(options[index]);
+                };
+                // Note: This is a temporary implementation
+                // A proper implementation would use Ink components
+                process.stdin.once('data', handleInput);
+              });
+            },
+            confirm: async (message: string): Promise<boolean> => {
+              const result = await showConfirmDialog("confirm", {
+                _alwaysConfirm: true,
+                _message: message,
+              });
+              return result.confirmed;
+            },
+            input: async (prompt: string, defaultValue?: string): Promise<string | undefined> => {
+              // Route through Ink-managed dialog state instead of reading stdin directly.
+              return showInputDialog(prompt, defaultValue);
+              // TODO: Implement Ink-based input dialog
+              // For now, use simple console-based input
+              const promptText = defaultValue ? `${prompt} [${defaultValue}]: ` : `${prompt}: `;
+              console.log(promptText);
+
+              return new Promise((resolve) => {
+                const handleInput = (data: string) => {
+                  const trimmed = data.trim();
+                  if (trimmed === '' && defaultValue !== undefined) {
+                    resolve(defaultValue);
+                    return;
+                  }
+                  resolve(trimmed || undefined);
+                };
+                process.stdin.once('data', handleInput);
+              });
+            },
+          },
         };
 
         // Capture console.log output to add to history instead of
@@ -1094,15 +1388,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           capturedOutput.push(output);
         };
 
-        let skillContentToInject: string | undefined = undefined;
+        let invocationToExecute: CommandInvocationRequest | undefined = undefined;
         let projectInitPromptToInject: string | undefined = undefined;
 
         try {
           const result = await executeCommand(parsed, context, callbacks, currentConfig);
 
-          // Check if result contains skill content to inject
-          if (typeof result === 'object' && result !== null && 'skillContent' in result) {
-            skillContentToInject = result.skillContent;
+          // Check if result contains invocation metadata to execute
+          if (typeof result === 'object' && result !== null && 'invocation' in result) {
+            invocationToExecute = result.invocation;
           }
           // Check if result contains project init prompt to inject
           if (typeof result === 'object' && result !== null && 'projectInitPrompt' in result) {
@@ -1120,13 +1414,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
         }
 
-        // If skill was invoked, inject its content and run agent
-        if (skillContentToInject) {
+        // If a skill/prompt command returned an invocation request, execute it now
+        if (invocationToExecute) {
           setIsLoading(false);
           stopStreaming();
-
-          // Create enhanced prompt with skill content
-          const enhancedPrompt = `${skillContentToInject}\n\nUser request: ${input.trim()}`;
 
           // Re-start streaming for skill execution
           setIsLoading(true);
@@ -1134,33 +1425,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           startThinking();
 
           try {
-            const result = await runAgentRound(currentOptionsRef.current, enhancedPrompt);
-
-            // Update context
-            context.messages = result.messages;
-
-            // Add assistant response to UI history
-            const lastAssistant = result.messages[result.messages.length - 1];
-            if (lastAssistant?.role === "assistant") {
-              const content = extractTextContent(lastAssistant.content);
-              if (content) {
-                addHistoryItem({
-                  type: "assistant",
-                  text: content,
-                });
-              }
-            }
-
-            // Auto-save
-            if (context.messages.length > 0) {
-              const title = extractTitle(context.messages);
-              context.title = title;
-              await storage.save(context.sessionId, {
-                messages: context.messages,
-                title,
-                gitRoot: context.gitRoot ?? "",
-              });
-            }
+            await executeInvocation(invocationToExecute, input.trim());
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
 
@@ -1212,28 +1477,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // Update context
             context.messages = result.messages;
 
-            // Add assistant response to UI history
-            const lastAssistant = result.messages[result.messages.length - 1];
-            if (lastAssistant?.role === "assistant") {
-              const content = extractTextContent(lastAssistant.content);
-              if (content) {
-                addHistoryItem({
-                  type: "assistant",
-                  text: content,
-                });
-              }
-            }
-
-            // Auto-save
-            if (context.messages.length > 0) {
-              const title = extractTitle(context.messages);
-              context.title = title;
-              await storage.save(context.sessionId, {
-                messages: context.messages,
-                title,
-                gitRoot: context.gitRoot ?? "",
-              });
-            }
+            appendLastAssistantToHistory(result.messages);
+            await persistContextState();
           } catch (err) {
             const error = err instanceof Error ? err : new Error(String(err));
 
@@ -1496,6 +1741,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentConfig,
       planMode,
       storage,
+      confirmRequest,
+      uiRequest,
       exit,
       onExit,
       addHistoryItem,
@@ -1504,8 +1751,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       stopStreaming,
       clearResponse,
       createStreamingEvents,
+      executeInvocation,
       getSignal,
       getFullResponse,
+      appendLastAssistantToHistory,
+      persistContextState,
       startCompacting,
       stopCompacting,
     ]
@@ -1586,7 +1836,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           <InputPrompt
             onSubmit={handleSubmit}
             prompt=">"
-            focus={!isLoading}
+            focus={!isLoading && !confirmRequest && !uiRequest}
             cwd={process.cwd()}
             gitRoot={options.context?.gitRoot || context.gitRoot}
             onInputChange={handleInputChange}
@@ -1653,16 +1903,68 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             <Text color="yellow" bold>
               [Confirm] {confirmRequest.prompt}
             </Text>
-            {/* Don't show "always" option for protected paths - 永久保护路径不显示 "always" 选项 */}
-            {confirmRequest.input._alwaysConfirm ? (
-              <Text dimColor>
-                Press (y) to confirm, (n) to cancel (protected path)
-              </Text>
+            {(() => {
+              const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
+              const canAlways = currentConfig.permissionMode === 'accept-edits' && !isProtectedPath;
+
+              if (isProtectedPath) {
+                return (
+                  <Text dimColor>
+                    Press (y) to confirm, (n) to cancel (protected path)
+                  </Text>
+                );
+              } else if (canAlways) {
+                return (
+                  <Text dimColor>
+                    Press (y) yes, (a) always yes for this tool, (n) no
+                  </Text>
+                );
+              } else {
+                // plan mode or auto-in-project mode - no "always" option
+                return (
+                  <Text dimColor>
+                    Press (y) yes, (n) no
+                  </Text>
+                );
+              }
+            })()}
+          </Box>
+        )}
+
+        {uiRequest && (
+          <Box
+            flexDirection="column"
+            borderStyle="round"
+            borderColor="cyan"
+            paddingX={1}
+            marginTop={1}
+          >
+            {uiRequest.kind === "select" ? (
+              <>
+                <Text color="cyan" bold>
+                  [Select] {uiRequest.title}
+                </Text>
+                {uiRequest.options.map((option, index) => (
+                  <Text key={`${option}-${index}`} dimColor>
+                    {`${index + 1}. ${option}`}
+                  </Text>
+                ))}
+                <Text dimColor>{`Choice: ${uiRequest.buffer || "(type a number)"}`}</Text>
+                <Text dimColor>Press Enter to confirm, Esc to cancel</Text>
+              </>
             ) : (
-              <Text dimColor>
-                Press (y) yes, (a) always yes for this tool, (n) no
-              </Text>
+              <>
+                <Text color="cyan" bold>
+                  [Input] {uiRequest.prompt}
+                </Text>
+                {uiRequest.defaultValue !== undefined && (
+                  <Text dimColor>{`Default: ${uiRequest.defaultValue}`}</Text>
+                )}
+                <Text dimColor>{`Value: ${uiRequest.buffer || "(type your response)"}`}</Text>
+                <Text dimColor>Press Enter to confirm, Esc to cancel</Text>
+              </>
             )}
+            {uiRequest.error && <Text color="red">{uiRequest.error}</Text>}
           </Box>
         )}
       </Box>

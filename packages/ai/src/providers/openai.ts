@@ -48,7 +48,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       const stream = await this.client.chat.completions.create({
-        model: this.config.model,
+        model: streamOptions?.modelOverride ?? this.config.model,
         messages: fullMessages,
         tools: openaiTools,
         max_tokens: KODAX_MAX_TOKENS,

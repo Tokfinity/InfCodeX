@@ -7,7 +7,7 @@
 import * as readline from 'readline';
 import chalk from 'chalk';
 import { PREVIEW_MAX_LENGTH } from '../common/utils.js';
-import { ConfirmResult } from '../permission/types.js';
+import type { ConfirmResult, PermissionMode } from '../permission/types.js';
 
 /**
  * 确认选项定义
@@ -220,9 +220,15 @@ export async function confirmToolExecution(
     isOutsideProject?: boolean;
     reason?: string;
     isProtectedPath?: boolean;
+    permissionMode?: PermissionMode;
   }
 ): Promise<ConfirmResult> {
-  const { isOutsideProject = false, reason, isProtectedPath = false } = options ?? {};
+  const {
+    isOutsideProject = false,
+    reason,
+    isProtectedPath = false,
+    permissionMode = 'accept-edits',
+  } = options ?? {};
   const symbols = getSymbols();
 
   let message: string;
@@ -270,7 +276,12 @@ export async function confirmToolExecution(
     }
 
     // Normal confirmation includes "always" option - 普通确认包含 "always" 选项
-    promptOptions = SAFETY_CONFIRM_OPTIONS;
+    promptOptions = permissionMode === 'accept-edits'
+      ? SAFETY_CONFIRM_OPTIONS
+      : [
+          { key: 'y', label: 'Yes', description: '鏈鍏佽', value: 'yes' },
+          { key: 'n', label: 'No', description: '鍙栨秷', value: 'no' },
+        ];
   }
 
   const result = await confirmEnhanced(rl, {

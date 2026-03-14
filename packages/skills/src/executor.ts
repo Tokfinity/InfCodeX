@@ -23,7 +23,7 @@ export interface ExecutionOptions {
   /** Force a specific execution mode */
   mode?: ExecutionMode;
   /** Override model */
-  model?: 'haiku' | 'sonnet' | 'opus';
+  model?: string;
   /** Override agent type (for fork mode) */
   agent?: string;
   /** Override allowed tools */
