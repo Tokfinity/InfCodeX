@@ -90,6 +90,8 @@ export interface KodaXProviderStreamOptions {
   onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   /** 会话标识，用于多轮对话上下文恢复 */
   sessionId?: string;
+  /** Override the provider's default model for a single request */
+  modelOverride?: string;
   /** AbortSignal for cancelling the stream request */
   signal?: AbortSignal;
 }

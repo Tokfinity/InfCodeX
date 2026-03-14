@@ -2,8 +2,11 @@
  * Public command-system exports.
  */
 
+import * as path from 'path';
+import * as os from 'os';
 import type { CommandRegistry } from './registry.js';
 import { registerBuiltinCommands } from './builtin.js';
+import { discoverCommands, registerDiscoveredCommands } from './discovery.js';
 
 export type {
   CommandSource,
@@ -26,6 +29,29 @@ export { registerBuiltinCommands, getBuiltinCommandCount } from './builtin.js';
 export { copyCommand } from './copy-command.js';
 export { newCommand } from './new-command.js';
 
+export { discoverCommands, registerDiscoveredCommands } from './discovery.js';
+
+/**
+ * Register all commands (builtin + discovered)
+ * 注册所有命令（内置 + 发现的）
+ *
+ * @param registry - CommandRegistry instance
+ */
 export function registerAllCommands(registry: CommandRegistry): void {
+  // 1. Register builtin commands first
   registerBuiltinCommands(registry);
+
+  // 2. Discover and register user/project commands
+  try {
+    const userCommandsDir = path.join(os.homedir(), '.kodax', 'commands');
+    const projectCommandsDir = path.join(process.cwd(), '.kodax', 'commands');
+
+    const discovered = discoverCommands([
+      { path: userCommandsDir, location: 'user' },
+      { path: projectCommandsDir, location: 'project' },
+    ]);
+    registerDiscoveredCommands(discovered, registry);
+  } catch (error) {
+    console.error('Failed to discover commands:', error);
+  }
 }

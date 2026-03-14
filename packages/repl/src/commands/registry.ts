@@ -200,6 +200,13 @@ export class CommandRegistry {
           priority: def.priority,
           location: def.location,
           path: def.path,
+          userInvocable: def.userInvocable,
+          disableModelInvocation: def.disableModelInvocation,
+          allowedTools: def.allowedTools,
+          context: def.context,
+          agent: def.agent,
+          argumentHint: def.argumentHint,
+          model: def.model,
         });
       }
     }

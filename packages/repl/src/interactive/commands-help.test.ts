@@ -35,4 +35,24 @@ describe('help command output', () => {
     expect(output).toContain('Extensions:');
     expect(output).toContain('/deploy');
   });
+
+  it('hides non-user-invocable commands from top-level help', async () => {
+    const registry = getCommandRegistry();
+    registry.register({
+      name: 'internal-sync',
+      description: 'Internal sync command',
+      source: 'extension',
+      userInvocable: false,
+      handler: async () => {},
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const helpCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'help');
+
+    expect(helpCommand).toBeDefined();
+    await helpCommand!.handler([], {} as never, {} as never, {} as never);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).not.toContain('/internal-sync');
+  });
 });

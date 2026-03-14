@@ -7,8 +7,11 @@
 
 import { readFile, readdir, stat } from 'fs/promises';
 import { join, basename } from 'path';
+import YAML from 'yaml';
 import type {
   Skill,
+  SkillHook,
+  SkillHooks,
   SkillMetadata,
   SkillFile,
   SkillFrontmatter,
@@ -16,106 +19,6 @@ import type {
 } from './types.js';
 
 // === YAML Frontmatter Parsing ===
-
-/**
- * Simple YAML parser for frontmatter
- * Handles basic YAML structures used in skill definitions
- */
-function parseSimpleYaml(yamlStr: string): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  const lines = yamlStr.split('\n');
-  let currentKey: string | null = null;
-  let currentArray: string[] | null = null;
-  let inMetadata = false;
-  let metadataIndent = 0;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const trimmed = line.trim();
-
-    // Skip empty lines
-    if (!trimmed) continue;
-
-    // Handle nested metadata block
-    if (inMetadata) {
-      const indent = line.search(/\S/);
-      if (indent > metadataIndent && currentKey === 'metadata') {
-        // Still inside metadata block - for now, just store as string
-        continue;
-      }
-      inMetadata = false;
-    }
-
-    // Key: Value pattern
-    const colonIndex = trimmed.indexOf(':');
-    if (colonIndex > 0) {
-      const key = trimmed.slice(0, colonIndex).trim();
-      let value = trimmed.slice(colonIndex + 1).trim();
-
-      // Handle array values [item1, item2]
-      if (value.startsWith('[') && value.endsWith(']')) {
-        const arrayContent = value.slice(1, -1);
-        result[key] = arrayContent
-          .split(',')
-          .map((s) => s.trim().replace(/^["']|["']$/g, ''))
-          .filter(Boolean);
-        continue;
-      }
-
-      // Handle boolean
-      if (value === 'true') {
-        result[key] = true;
-        continue;
-      }
-      if (value === 'false') {
-        result[key] = false;
-        continue;
-      }
-
-      // Handle quoted strings
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
-        result[key] = value.slice(1, -1);
-        continue;
-      }
-
-      // Handle empty value (might be nested block)
-      if (!value) {
-        currentKey = key;
-        // Check if next line starts an array
-        if (i + 1 < lines.length) {
-          const nextLine = lines[i + 1]!;
-          if (nextLine.trim().startsWith('- ')) {
-            currentArray = [];
-            result[key] = currentArray;
-          }
-        }
-        // Handle metadata block
-        if (key === 'metadata') {
-          result[key] = {};
-          inMetadata = true;
-          metadataIndent = line.search(/\S/);
-        }
-        continue;
-      }
-
-      // Plain string value
-      result[key] = value;
-      currentKey = null;
-      currentArray = null;
-      continue;
-    }
-
-    // Array item
-    if (trimmed.startsWith('- ') && currentArray !== null) {
-      const item = trimmed.slice(2).trim().replace(/^["']|["']$/g, '');
-      currentArray.push(item);
-      continue;
-    }
-  }
-
-  return result;
-}
 
 /**
  * Sanitize YAML content that may contain non-standard formats
@@ -154,6 +57,76 @@ function sanitizeYaml(content: string): string {
   return result.join('\n');
 }
 
+function normalizeAllowedTools(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((item) => String(item).trim())
+      .filter((item) => item.length > 0);
+    return normalized.length > 0 ? normalized.join(', ') : undefined;
+  }
+
+  return undefined;
+}
+
+function normalizeHook(value: unknown): SkillHook | undefined {
+  if (typeof value === 'string') {
+    const command = value.trim();
+    return command ? { command } : undefined;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const command = typeof record.command === 'string' ? record.command.trim() : '';
+    if (!command) {
+      return undefined;
+    }
+
+    const matcher = typeof record.matcher === 'string' && record.matcher.trim()
+      ? record.matcher.trim()
+      : undefined;
+
+    return { command, matcher };
+  }
+
+  return undefined;
+}
+
+function normalizeHookList(value: unknown): SkillHook[] | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  const items = Array.isArray(value) ? value : [value];
+  const normalized = items
+    .map((item) => normalizeHook(item))
+    .filter((item): item is SkillHook => item !== undefined);
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeHooks(value: unknown): SkillHooks | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const hooks: SkillHooks = {};
+
+  for (const eventName of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop', 'SubagentStop', 'Notification'] as const) {
+    const normalized = normalizeHookList(record[eventName]);
+    if (normalized) {
+      hooks[eventName] = normalized;
+    }
+  }
+
+  return Object.keys(hooks).length > 0 ? hooks : undefined;
+}
+
 /**
  * Parse SKILL.md file with YAML frontmatter
  */
@@ -190,37 +163,45 @@ export function parseSkillMarkdown(content: string): {
   const body = normalizedContent.slice(closeIndex + 5).trim();
 
   // Try parsing with original content first
-  let parsed: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    parsed = parseSimpleYaml(yamlContent);
+    parsed = YAML.parse(yamlContent) ?? {};
   } catch {
     // Try with sanitized content
-    const sanitized = sanitizeYaml(yamlContent);
-    parsed = parseSimpleYaml(sanitized);
+    parsed = YAML.parse(sanitizeYaml(yamlContent)) ?? {};
   }
 
+  if (parsed == null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Invalid SKILL.md: YAML frontmatter must be an object');
+  }
+
+  const parsedRecord = parsed as Record<string, unknown>;
+
   // Validate required fields
-  if (!parsed.name || typeof parsed.name !== 'string') {
+  if (!parsedRecord.name || typeof parsedRecord.name !== 'string') {
     throw new Error('Invalid SKILL.md: missing required "name" field');
   }
-  if (!parsed.description || typeof parsed.description !== 'string') {
+  if (!parsedRecord.description || typeof parsedRecord.description !== 'string') {
     throw new Error('Invalid SKILL.md: missing required "description" field');
   }
 
   // Build frontmatter
   const frontmatter: SkillFrontmatter = {
-    name: parsed.name,
-    description: parsed.description,
-    disableModelInvocation: parsed['disable-model-invocation'] === true,
-    userInvocable: parsed['user-invocable'] !== false, // Default true
-    allowedTools: parsed['allowed-tools'] as string | undefined,
-    context: parsed.context as 'fork' | undefined,
-    agent: parsed.agent as string | undefined,
-    argumentHint: parsed['argument-hint'] as string | undefined,
-    model: parsed.model as 'haiku' | 'sonnet' | 'opus' | undefined,
-    license: parsed.license as string | undefined,
-    compatibility: parsed.compatibility as string | undefined,
-    metadata: parsed.metadata as Record<string, unknown> | undefined,
+    name: parsedRecord.name,
+    description: parsedRecord.description,
+    disableModelInvocation: parsedRecord['disable-model-invocation'] === true,
+    userInvocable: parsedRecord['user-invocable'] !== false, // Default true
+    allowedTools: normalizeAllowedTools(parsedRecord['allowed-tools']),
+    context: parsedRecord.context === 'fork' ? 'fork' : undefined,
+    agent: typeof parsedRecord.agent === 'string' ? parsedRecord.agent : undefined,
+    argumentHint: typeof parsedRecord['argument-hint'] === 'string' ? parsedRecord['argument-hint'] : undefined,
+    model: typeof parsedRecord.model === 'string' ? parsedRecord.model : undefined,
+    hooks: normalizeHooks(parsedRecord.hooks),
+    license: typeof parsedRecord.license === 'string' ? parsedRecord.license : undefined,
+    compatibility: typeof parsedRecord.compatibility === 'string' ? parsedRecord.compatibility : undefined,
+    metadata: parsedRecord.metadata && typeof parsedRecord.metadata === 'object' && !Array.isArray(parsedRecord.metadata)
+      ? parsedRecord.metadata as Record<string, unknown>
+      : undefined,
   };
 
   return { frontmatter, body };

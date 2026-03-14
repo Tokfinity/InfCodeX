@@ -144,6 +144,9 @@ export class CommandCompleter implements Completer {
   private loadCommands(): void {
     // Load commands from BUILTIN_COMMANDS - 从 BUILTIN_COMMANDS 加载命令
     for (const cmd of getCommandRegistry().getAll()) {
+      if (cmd.userInvocable === false) {
+        continue;
+      }
       this.commands.set(cmd.name, {
         description: cmd.description,
         aliases: cmd.aliases ?? [],

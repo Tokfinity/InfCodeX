@@ -101,6 +101,7 @@ export interface KodaXContextOptions {
 
 export interface KodaXOptions {
   provider: string;
+  modelOverride?: string;
   thinking?: boolean;
   maxIter?: number;
   parallel?: boolean;

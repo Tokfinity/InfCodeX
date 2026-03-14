@@ -11,6 +11,8 @@ export type {
   SkillMetadata,
   SkillFile,
   SkillFrontmatter,
+  SkillHook,
+  SkillHooks,
   SkillSource,
   SkillContext,
   SkillResult,

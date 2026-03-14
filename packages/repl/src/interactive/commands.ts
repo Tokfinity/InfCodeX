@@ -24,7 +24,11 @@ import {
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
 import { newCommand } from '../commands/new-command.js';
-import { toCommandDefinition } from '../commands/types.js';
+import { toCommandDefinition, type CommandCallbacks, type CommandInvocationRequest } from '../commands/types.js';
+import { registerAllCommands } from '../commands/index.js';
+
+// Re-export types needed by downstream modules - 重新导出下游模块需要的类型
+export type { CommandCallbacks } from '../commands/types.js';
 
 // Current config state (passed from repl.ts) - 当前配置状态（由 repl.ts 传入）
 export interface CurrentConfig {
@@ -40,33 +44,6 @@ export type CommandHandler = (
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig
 ) => Promise<CommandResult | void>;
-
-// Command callbacks - 命令回调
-export interface CommandCallbacks {
-  exit: () => void;
-  saveSession: () => Promise<void>;
-  startNewSession?: () => void;
-  loadSession: (id: string) => Promise<boolean>;
-  listSessions: () => Promise<void>;
-  clearHistory: () => void;
-  printHistory: () => void;
-  switchProvider?: (provider: string) => void;
-  setThinking?: (enabled: boolean) => void;
-  setPermissionMode?: (mode: PermissionMode) => void;
-  deleteSession?: (id: string) => Promise<void>;
-  deleteAllSessions?: () => Promise<void>;
-  setPlanMode?: (enabled: boolean) => void;
-  createKodaXOptions?: () => KodaXOptions;
-  reloadAgentsFiles?: () => Promise<AgentsFile[]>;
-  /** Confirm dialog callback for interactive commands - 确认对话框回调，用于交互式命令 */
-  confirm?: (message: string) => Promise<boolean>;
-  /** REPL readline interface for commands requiring user interaction - REPL 的 readline 接口，供需要用户交互的命令使用（已废弃，使用 confirm 替代） */
-  readline?: readline.Interface;
-  /** Start compacting context indicator - 开始压缩上下文指示器 */
-  startCompacting?: () => void;
-  /** Stop compacting context indicator - 停止压缩上下文指示器 */
-  stopCompacting?: () => void;
-}
 
 // Command definition - 命令定义
 export interface Command {
@@ -504,6 +481,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'model',
+    aliases: ['m'],
     description: 'Show or switch provider',
     usage: '/model [provider-name]',
     handler: async (args, _context, callbacks, currentConfig) => {
@@ -785,7 +763,8 @@ function getCommandsForCategory(names: string[]) {
   const registry = getCommandRegistry();
   return names
     .map((name) => registry.get(name))
-    .filter((cmd): cmd is NonNullable<ReturnType<CommandRegistry['get']>> => cmd !== undefined);
+    .filter((cmd): cmd is NonNullable<ReturnType<CommandRegistry['get']>> => cmd !== undefined)
+    .filter((cmd) => cmd.userInvocable !== false);
 }
 
 function printCommandSection(
@@ -826,6 +805,10 @@ function printHelp(): void {
 
   const dynamicSections = new Map<string, Array<{ name: string; aliases?: string[]; description: string }>>();
   for (const cmd of registry.getAll()) {
+    if (cmd.userInvocable === false) {
+      continue;
+    }
+
     if (categorizedNames.has(cmd.name.toLowerCase())) {
       continue;
     }
@@ -913,7 +896,7 @@ async function handleSkillNamespaceCommand(args: string[], context: InteractiveC
   }
 
   // /skill without :name shows the list - /skill 不带 :name 显示列表
-  printSkillsListPiMonoStyle(registry.list());
+  printSkillsListPiMonoStyle(registry.listUserInvocable());
 }
 
 // Print skills list in pi-mono style - 以 pi-mono 风格打印技能列表
@@ -963,9 +946,9 @@ function initCommandRegistry(): void {
     return;
   }
 
-  for (const cmd of BUILTIN_COMMANDS) {
-    commandRegistry.register(toCommandDefinition(cmd, 'builtin'));
-  }
+  // Register all commands (builtin + discovered user/project commands)
+  // 注册所有命令（内置 + 发现的用户/项目命令）
+  registerAllCommands(commandRegistry);
 }
 
 export function getCommandRegistry(): CommandRegistry {
@@ -998,7 +981,11 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 }
 
 // Execute command - 执行命令
-export type CommandResult = boolean | { skillContent?: string; projectInitPrompt?: string };
+export type CommandResult = boolean | {
+  skillContent?: string;
+  projectInitPrompt?: string;
+  invocation?: CommandInvocationRequest;
+};
 
 export async function executeCommand(
   parsed: { command: string; args: string[]; skillInvocation?: { name: string } },
@@ -1021,6 +1008,11 @@ export async function executeCommand(
 
   const cmd = commandRegistry.get(parsed.command);
   if (cmd) {
+    if (cmd.userInvocable === false) {
+      console.log(chalk.yellow(`\n[Command /${cmd.name} is not user-invocable]`));
+      return false;
+    }
+
     const result = await cmd.handler(parsed.args, context, callbacks, currentConfig);
     // Handle project init prompt - 处理项目初始化提示
     if (result && typeof result === 'object') {
@@ -1053,6 +1045,10 @@ async function executeSkillCommand(
       console.log(chalk.red(`\n[Skill not found: ${skillName}]`));
       return false;
     }
+    if (!skill.userInvocable) {
+      console.log(chalk.yellow(`\n[Skill "${skillName}" is not user-invocable]`));
+      return false;
+    }
 
     console.log(chalk.cyan(`\n[Invoking skill: ${skillName}]`));
     if (skill.argumentHint) {
@@ -1064,15 +1060,6 @@ async function executeSkillCommand(
     const fullSkill = await registry.loadFull(skillName);
 
     // Check if model invocation is disabled - 检查是否禁用模型调用
-    if (fullSkill.disableModelInvocation) {
-      console.log(chalk.yellow(`Note: This skill has model invocation disabled.`));
-      console.log(chalk.dim('The skill content is displayed below for manual use:'));
-      console.log(chalk.bold(`\n--- ${skillName} skill ---`));
-      console.log(fullSkill.content);
-      console.log(chalk.bold(`\n--- end ${skillName} ---\n`));
-      return true;
-    }
-
     // Create skill context for variable resolution - 创建变量解析上下文
     const skillContext: SkillContext = {
       workingDirectory: process.cwd(),
@@ -1089,7 +1076,22 @@ async function executeSkillCommand(
     console.log(chalk.dim('The skill context has been prepared for the AI.'));
     console.log();
 
-    return { skillContent: expanded.content };
+    return {
+      invocation: {
+        prompt: expanded.content,
+        source: 'skill',
+        displayName: skillName,
+        path: fullSkill.skillFilePath,
+        disableModelInvocation: expanded.disableModelInvocation,
+        userInvocable: fullSkill.userInvocable,
+        allowedTools: fullSkill.allowedTools,
+        context: fullSkill.context,
+        agent: fullSkill.agent,
+        argumentHint: fullSkill.argumentHint,
+        model: fullSkill.model,
+        hooks: fullSkill.hooks,
+      },
+    };
   } catch (error) {
     console.log(chalk.red(`\n[Error invoking skill: ${error instanceof Error ? error.message : String(error)}]`));
     return false;

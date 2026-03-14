@@ -498,6 +498,7 @@ export async function runKodaX(
                 resetIdleTimer(); // 重试限制时也重置，因为底层 Provider 会自己等待
                 events.onProviderRateLimit?.(attempt, max, delay);
               },
+              modelOverride: options.modelOverride,
               signal: retrySignal,
             }, retrySignal);
           } catch (e) {

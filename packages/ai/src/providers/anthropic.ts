@@ -29,7 +29,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   ): Promise<KodaXStreamResult> {
     return this.withRateLimit(async () => {
       const kwargs: Anthropic.Messages.MessageCreateParams = {
-        model: this.config.model,
+        model: streamOptions?.modelOverride ?? this.config.model,
         max_tokens: KODAX_MAX_TOKENS,
         system,
         messages: this.convertMessages(messages),

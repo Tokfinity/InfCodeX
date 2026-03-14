@@ -4,12 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.5.36] - 2026-03-14
+
 ### Added
 - **FEATURE_013**: Command System 2.0 - Core commands
   - `/copy` - Copy last assistant message to clipboard
   - `/new` - Start new conversation session with confirmation
   - CommandRegistry pattern with dynamic registration support
   - Source tracking for builtin/extension/skill/prompt commands
+
+### Fixed
+- TypeScript type error in Session Initial Messages tests (kodax_core.test.ts)
 
 ### Changed
 - Reorganized test files from `__tests__/` directories to source-adjacent location
