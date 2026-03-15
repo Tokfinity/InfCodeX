@@ -5,45 +5,139 @@
  */
 import OpenAI from 'openai';
 import { KodaXBaseProvider } from './base.js';
+import { KodaXProviderError } from '../errors.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
+import {
+    clampThinkingBudget,
+    isReasoningEnabled,
+    mapDepthToOpenAIReasoningEffort,
+    resolveThinkingBudget,
+} from '../reasoning.js';
 export class KodaXOpenAICompatProvider extends KodaXBaseProvider {
-    supportsThinking = false;
+    supportsThinking = true;
     client;
     initClient() {
         this.client = new OpenAI({ apiKey: this.getApiKey(), baseURL: this.config.baseUrl });
     }
-    async stream(messages, tools, system, _thinking = false, streamOptions, signal) {
+    applyReasoningCapability(createParams, capability, reasoning) {
+        // The OpenAI SDK types do not expose provider-specific extensions like
+        // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
+        // those fields on the raw request object here.
+        const params = createParams;
+        const maxOutputTokens = this.config.maxOutputTokens ?? KODAX_MAX_TOKENS;
+        const requestedBudget = clampThinkingBudget(resolveThinkingBudget(this.config, reasoning.depth, reasoning.taskType), maxOutputTokens);
+        switch (capability) {
+            case 'native-effort': {
+                const reasoningEffort = mapDepthToOpenAIReasoningEffort(reasoning.depth);
+                if (reasoningEffort) {
+                    params.reasoning_effort = reasoningEffort;
+                }
+                break;
+            }
+            case 'native-budget': {
+                if (this.name === 'qwen') {
+                    params.extra_body = {
+                        enable_thinking: true,
+                        thinking_budget: requestedBudget,
+                    };
+                }
+                else if (this.name === 'zhipu') {
+                    params.thinking = {
+                        type: 'enabled',
+                        budget_tokens: requestedBudget,
+                    };
+                }
+                break;
+            }
+            case 'native-toggle': {
+                if (this.name === 'qwen') {
+                    params.extra_body = {
+                        enable_thinking: true,
+                    };
+                }
+                else if (this.name === 'zhipu') {
+                    params.thinking = {
+                        type: 'enabled',
+                    };
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+    getFallbackTerms(capability) {
+        switch (capability) {
+            case 'native-budget':
+                return ['thinking_budget', 'budget_tokens', 'thinking'];
+            case 'native-effort':
+                return ['reasoning_effort'];
+            case 'native-toggle':
+                return ['enable_thinking', 'thinking'];
+            default:
+                return [];
+        }
+    }
+    async stream(messages, tools, system, reasoning = false, streamOptions, signal) {
         return this.withRateLimit(async () => {
             const fullMessages = [
                 { role: 'system', content: system },
                 ...this.convertMessages(messages),
             ];
             const openaiTools = tools.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }));
-            // 检查是否已被取消
             if (signal?.aborted) {
                 throw new DOMException('Request aborted', 'AbortError');
             }
             const toolCallsMap = new Map();
             let textContent = '';
-            // Issue 084 fix: Track stream completion
             let finishReason = null;
             const streamStartTime = Date.now();
-            // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
-            const stream = await this.client.chat.completions.create({
-                model: this.config.model,
+            const normalizedReasoning = this.normalizeReasoning(reasoning);
+            const model = streamOptions?.modelOverride ?? this.config.model;
+            const initialCapability = isReasoningEnabled(normalizedReasoning)
+                ? this.getReasoningCapability(model)
+                : 'none';
+            const attempts = isReasoningEnabled(normalizedReasoning)
+                ? this.getReasoningFallbackChain(initialCapability).filter((capability) => capability === 'native-budget' ||
+                    capability === 'native-effort' ||
+                    capability === 'native-toggle' ||
+                    capability === 'none')
+                : ['none'];
+            const createParams = {
+                model,
                 messages: fullMessages,
                 tools: openaiTools,
-                max_tokens: KODAX_MAX_TOKENS,
+                max_completion_tokens: this.config.maxOutputTokens ?? KODAX_MAX_TOKENS,
                 stream: true,
-            }, signal ? { signal } : {});
+            };
+            let stream;
+            let lastError;
+            for (const capability of attempts) {
+                const attemptParams = { ...createParams };
+                this.applyReasoningCapability(attemptParams, capability, normalizedReasoning);
+                try {
+                    stream = await this.client.chat.completions.create(attemptParams, signal ? { signal } : {});
+                    if (capability !== initialCapability) {
+                        this.persistReasoningCapabilityOverride(capability, model);
+                    }
+                    break;
+                }
+                catch (error) {
+                    lastError = error;
+                    if (!this.shouldFallbackForReasoningError(error, ...this.getFallbackTerms(capability))) {
+                        throw error;
+                    }
+                }
+            }
+            if (!stream) {
+                throw lastError ?? new KodaXProviderError('All reasoning capability attempts failed without a captured error', this.name);
+            }
             for await (const chunk of stream) {
-                // 检查是否被中断 (双重保险)
                 if (signal?.aborted) {
                     throw new DOMException('Request aborted', 'AbortError');
                 }
                 const choice = chunk.choices[0];
                 const delta = choice?.delta;
-                // Issue 084 fix: Track finish_reason to detect stream completion
                 if (choice?.finish_reason) {
                     finishReason = choice.finish_reason;
                     if (process.env.KODAX_DEBUG_STREAM) {
@@ -70,8 +164,6 @@ export class KodaXOpenAICompatProvider extends KodaXBaseProvider {
                     }
                 }
             }
-            // Issue 084 fix: Validate stream completed successfully
-            // If finish_reason was never received, the stream was likely interrupted
             if (!finishReason) {
                 const duration = Date.now() - streamStartTime;
                 if (signal?.aborted) {
@@ -123,4 +215,3 @@ export class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         });
     }
 }
-//# sourceMappingURL=openai.js.map

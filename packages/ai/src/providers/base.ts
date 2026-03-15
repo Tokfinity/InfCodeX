@@ -4,8 +4,28 @@
  * Provider 抽象基类 - 所有 Provider 的公共基础
  */
 
-import { KodaXProviderConfig, KodaXMessage, KodaXToolDefinition, KodaXProviderStreamOptions, KodaXStreamResult } from '../types.js';
+import {
+  KodaXProviderConfig,
+  KodaXMessage,
+  KodaXToolDefinition,
+  KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningOverride,
+  KodaXReasoningRequest,
+  KodaXStreamResult,
+} from '../types.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
+import {
+  getReasoningCapability,
+  normalizeReasoningRequest,
+} from '../reasoning.js';
+import {
+  buildReasoningOverrideKey,
+  loadReasoningOverride,
+  reasoningCapabilityToOverride,
+  reasoningOverrideToCapability,
+  saveReasoningOverride,
+} from '../reasoning-overrides.js';
 
 export abstract class KodaXBaseProvider {
   abstract readonly name: string;
@@ -16,7 +36,7 @@ export abstract class KodaXBaseProvider {
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
     system: string,
-    thinking?: boolean,
+    reasoning?: boolean | KodaXReasoningRequest,
     streamOptions?: KodaXProviderStreamOptions,
     signal?: AbortSignal
   ): Promise<KodaXStreamResult>;
@@ -27,6 +47,76 @@ export abstract class KodaXBaseProvider {
 
   getModel(): string {
     return this.config.model;
+  }
+
+  getBaseUrl(): string | undefined {
+    return this.config.baseUrl;
+  }
+
+  getConfiguredReasoningCapability(): KodaXReasoningCapability {
+    return getReasoningCapability(this.config);
+  }
+
+  getReasoningCapability(modelOverride?: string): KodaXReasoningCapability {
+    const override = loadReasoningOverride(this.name, this.config, modelOverride);
+    return override
+      ? reasoningOverrideToCapability(override)
+      : this.getConfiguredReasoningCapability();
+  }
+
+  getReasoningOverride(modelOverride?: string): KodaXReasoningOverride | undefined {
+    return loadReasoningOverride(this.name, this.config, modelOverride);
+  }
+
+  getReasoningOverrideKey(modelOverride?: string): string {
+    return buildReasoningOverrideKey(this.name, this.config, modelOverride);
+  }
+
+  protected persistReasoningCapabilityOverride(
+    capability: KodaXReasoningCapability,
+    modelOverride?: string,
+  ): void {
+    const override = reasoningCapabilityToOverride(capability);
+    if (!override) {
+      return;
+    }
+    saveReasoningOverride(this.name, this.config, override, modelOverride);
+  }
+
+  protected shouldFallbackForReasoningError(
+    error: unknown,
+    ...terms: string[]
+  ): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const normalizedTerms = terms.map(term => term.toLowerCase());
+    const matchesSpecificTerm = normalizedTerms.some((term) => message.includes(term));
+    const mentionsParameter =
+      message.includes('parameter') ||
+      matchesSpecificTerm;
+
+    return (
+      message.includes('unknown parameter') ||
+      message.includes('invalid parameter') ||
+      (message.includes('unsupported') && mentionsParameter)
+    );
+  }
+
+  protected getReasoningFallbackChain(
+    capability: KodaXReasoningCapability,
+  ): KodaXReasoningCapability[] {
+    switch (capability) {
+      case 'native-budget':
+        return ['native-budget', 'native-toggle', 'none'];
+      case 'native-effort':
+        return ['native-effort', 'none'];
+      case 'native-toggle':
+        return ['native-toggle', 'none'];
+      case 'none':
+      case 'prompt-only':
+      case 'unknown':
+      default:
+        return ['none'];
+    }
   }
 
   /**
@@ -41,6 +131,12 @@ export abstract class KodaXBaseProvider {
     const key = process.env[this.config.apiKeyEnv];
     if (!key) throw new Error(`${this.config.apiKeyEnv} not set`);
     return key;
+  }
+
+  protected normalizeReasoning(
+    reasoning?: boolean | KodaXReasoningRequest,
+  ): Required<KodaXReasoningRequest> {
+    return normalizeReasoningRequest(reasoning);
   }
 
   protected isRateLimitError(error: unknown): boolean {

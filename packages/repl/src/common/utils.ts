@@ -9,7 +9,14 @@ import os from 'os';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
-import { getProvider, KODAX_PROVIDERS } from '@kodax/coding';
+import {
+  getProviderConfiguredReasoningCapability,
+  getProvider,
+  KODAX_PROVIDERS,
+  type KodaXReasoningCapability,
+  type KodaXReasoningMode,
+  type KodaXReasoningOverride,
+} from '@kodax/coding';
 
 const execAsync = promisify(exec);
 
@@ -47,15 +54,97 @@ export function getProviderModel(name: string): string | null {
   }
 }
 
+export function getProviderReasoningCapability(
+  name: string,
+): KodaXReasoningCapability | 'unknown' {
+  try {
+    const provider = getProvider(name);
+    return provider.getReasoningCapability();
+  } catch {
+    return getProviderConfiguredReasoningCapability(name);
+  }
+}
+
+export function formatReasoningCapabilityShort(
+  capability: KodaXReasoningCapability | 'unknown',
+): string {
+  switch (capability) {
+    case 'native-budget':
+      return 'B';
+    case 'native-effort':
+      return 'E';
+    case 'native-toggle':
+      return 'T';
+    case 'none':
+    case 'prompt-only':
+    case 'unknown':
+    default:
+      return '-';
+  }
+}
+
+export function describeReasoningCapabilityControl(
+  capability: KodaXReasoningCapability | 'unknown',
+): string {
+  switch (capability) {
+    case 'native-budget':
+      return 'budget';
+    case 'native-effort':
+      return 'effort';
+    case 'native-toggle':
+      return 'toggle';
+    case 'none':
+    case 'prompt-only':
+    case 'unknown':
+    default:
+      return 'none';
+  }
+}
+
+export function describeReasoningExecution(
+  mode: KodaXReasoningMode,
+  capability: KodaXReasoningCapability | 'unknown',
+): string {
+  if (mode === 'off') {
+    return 'Reasoning disabled';
+  }
+
+  switch (capability) {
+    case 'native-budget':
+      return 'Uses native thinking budget control';
+    case 'native-effort':
+      return 'Uses native reasoning effort control';
+    case 'native-toggle':
+      return 'Uses provider-native thinking toggle only';
+    case 'none':
+      return 'Runs without native reasoning parameters';
+    case 'prompt-only':
+      return 'Uses prompt overlays only; no native reasoning parameter';
+    case 'unknown':
+    default:
+      return 'Runs without native reasoning parameters';
+  }
+}
+
 // Get list of all providers with their status
-export function getProviderList(): Array<{ name: string; model: string; configured: boolean }> {
-  const result: Array<{ name: string; model: string; configured: boolean }> = [];
+export function getProviderList(): Array<{ name: string; model: string; configured: boolean; reasoningCapability: string }> {
+  const result: Array<{ name: string; model: string; configured: boolean; reasoningCapability: string }> = [];
   for (const [name, factory] of Object.entries(KODAX_PROVIDERS)) {
     try {
       const p = factory();
-      result.push({ name, model: p.getModel(), configured: p.isConfigured() });
+      result.push({
+        name,
+        model: p.getModel(),
+        configured: p.isConfigured(),
+        reasoningCapability: p.getReasoningCapability(),
+      });
     } catch {
-      result.push({ name, model: 'unknown', configured: false });
+      result.push({
+        name,
+        model: 'unknown',
+        configured: false,
+        reasoningCapability: 'unknown',
+      });
     }
   }
   return result;
@@ -72,7 +161,13 @@ export function isProviderConfigured(name: string): boolean {
 }
 
 // Load config from ~/.kodax/config.json
-export function loadConfig(): { provider?: string; thinking?: boolean; permissionMode?: string } {
+export function loadConfig(): {
+  provider?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  permissionMode?: string;
+  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
+} {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
       return JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8'));
@@ -82,7 +177,13 @@ export function loadConfig(): { provider?: string; thinking?: boolean; permissio
 }
 
 // Save config to ~/.kodax/config.json
-export function saveConfig(config: { provider?: string; thinking?: boolean; permissionMode?: string }): void {
+export function saveConfig(config: {
+  provider?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  permissionMode?: string;
+  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
+}): void {
   const current = loadConfig();
   const merged = { ...current, ...config };
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });

@@ -23,7 +23,9 @@ import {
   KodaXClient,
   KodaXEvents,
   KodaXOptions,
+  KodaXReasoningMode,
   KodaXResult,
+  KODAX_REASONING_MODE_SEQUENCE,
   KODAX_DEFAULT_PROVIDER,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
@@ -163,6 +165,7 @@ export function parseCommandCall(input: string): [string, string?] | null {
 interface CliOptions {
   provider: string;
   thinking: boolean;
+  reasoningMode: KodaXReasoningMode;
   session?: string;
   parallel: boolean;
   team?: string;
@@ -180,12 +183,44 @@ interface CliOptions {
   print?: boolean;
 }
 
+function resolveCliReasoningMode(
+  program: Command,
+  opts: Record<string, unknown>,
+  config: { reasoningMode?: KodaXReasoningMode; thinking?: boolean },
+): KodaXReasoningMode {
+  const reasoningSource = program.getOptionValueSource('reasoning');
+  if (reasoningSource === 'cli' && typeof opts.reasoning === 'string') {
+    if (!KODAX_REASONING_MODE_SEQUENCE.includes(opts.reasoning as KodaXReasoningMode)) {
+      throw new Error(
+        `Invalid reasoning mode "${opts.reasoning}". Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}`,
+      );
+    }
+    return opts.reasoning as KodaXReasoningMode;
+  }
+
+  const thinkingSource = program.getOptionValueSource('thinking');
+  if (thinkingSource === 'cli' && opts.thinking === true) {
+    return 'auto';
+  }
+
+  if (config.reasoningMode) {
+    return config.reasoningMode;
+  }
+
+  if (config.thinking === true) {
+    return 'auto';
+  }
+
+  return 'auto';
+}
+
 // ============== CLI 选项转换 ==============
 
 function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false): KodaXOptions {
   return {
     provider: cliOptions.provider,
     thinking: cliOptions.thinking,
+    reasoningMode: cliOptions.reasoningMode,
     maxIter: cliOptions.maxIter,
     parallel: cliOptions.parallel,
     session: buildSessionOptions(cliOptions),
@@ -317,17 +352,18 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  /model                        ') + '# Switch in REPL (saves to config)\n');
   },
   thinking: () => {
-    console.log(chalk.cyan('\nThinking Mode\n'));
+    console.log(chalk.cyan('\nReasoning Modes\n'));
     console.log(chalk.bold('Overview:'));
-    console.log(chalk.dim('  Extended thinking allows the model to reason through complex'));
-    console.log(chalk.dim('  problems before responding. Useful for architectural decisions,'));
-    console.log(chalk.dim('  multi-step reasoning, and deep code analysis.\n'));
+    console.log(chalk.dim('  Reasoning controls how much deliberate analysis KodaX should apply.'));
+    console.log(chalk.dim('  Use off, auto, quick, balanced, or deep depending on the task.\n'));
     console.log(chalk.bold('Options:'));
-    console.log(chalk.dim('  -t, --thinking       ') + 'Enable extended thinking\n');
+    console.log(chalk.dim('  --reasoning <mode>   ') + 'Set reasoning mode: off, auto, quick, balanced, deep');
+    console.log(chalk.dim('  -t, --thinking       ') + 'Compatibility alias for --reasoning auto\n');
     console.log(chalk.bold('Examples:'));
-    console.log(chalk.dim('  kodax -t "design the architecture"  ') + '# Deep reasoning');
-    console.log(chalk.dim('  kodax -t -p "analyze this bug"      ') + '# Quick analysis');
-    console.log(chalk.dim('  /thinking on                        ') + '# Enable in REPL\n');
+    console.log(chalk.dim('  kodax --reasoning deep "design the architecture"   ') + '# High-depth reasoning');
+    console.log(chalk.dim('  kodax --reasoning balanced -p "analyze this bug"   ') + '# Medium-depth reasoning');
+    console.log(chalk.dim('  kodax -t "review this PR"                           ') + '# Alias for auto');
+    console.log(chalk.dim('  /reasoning balanced                                 ') + '# Set in REPL\n');
   },
   team: () => {
     console.log(chalk.cyan('\nTeam Mode (Parallel Agents)\n'));
@@ -339,7 +375,7 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  -j, --parallel      ') + 'Enable parallel tool execution\n');
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax --team "fix auth tests,update docs,clean logs"'));
-    console.log(chalk.dim('  kodax --team "task1,task2" -m anthropic -t\n'));
+    console.log(chalk.dim('  kodax --team "task1,task2" -m anthropic --reasoning balanced\n'));
   },
   print: () => {
     console.log(chalk.cyan('\nPrint Mode\n'));
@@ -350,7 +386,7 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --no-session        ') + 'Disable session saving\n');
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax -p "fix the bug in auth.ts"   ') + '# Quick fix');
-    console.log(chalk.dim('  kodax -p "generate tests" -t        ') + '# With thinking');
+    console.log(chalk.dim('  kodax -p "generate tests" --reasoning balanced') + ' # With reasoning');
     console.log(chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run');
     console.log(chalk.dim('  echo "task" | kodax -p -            ') + '# Pipe input\n');
   },
@@ -371,7 +407,7 @@ function showCliHelpTopics(): void {
   console.log(chalk.dim('  kodax -h init       ') + 'Project initialization (--init, --append)');
   console.log(chalk.dim('  kodax -h auto       ') + 'Auto mode and auto-continue');
   console.log(chalk.dim('  kodax -h provider   ') + 'LLM provider options');
-  console.log(chalk.dim('  kodax -h thinking   ') + 'Extended thinking mode');
+  console.log(chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control');
   console.log(chalk.dim('  kodax -h team       ') + 'Parallel agent execution');
   console.log(chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n');
 }
@@ -387,7 +423,8 @@ function showBasicHelp(): void {
   console.log('  -c, --continue          Continue most recent conversation');
   console.log('  -r, --resume [id]       Resume session by ID (no id = interactive picker)');
   console.log('  -m, --provider NAME     LLM provider (anthropic, kimi, kimi-code, qwen, zhipu, openai, zhipu-coding)');
-  console.log('  -t, --thinking          Enable thinking mode');
+  console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
+  console.log('  --reasoning MODE        Reasoning mode: off, auto, quick, balanced, deep');
   console.log('  -y, --auto              Auto mode: skip all confirmations');
   console.log('  -s, --session ID        Session management (list, delete <id>, delete-all)');
   console.log('  --no-session            Disable session persistence (print mode only)');
@@ -412,7 +449,7 @@ function showBasicHelp(): void {
   console.log('Examples:');
   console.log('  kodax                             # Enter interactive mode (auto-resume)');
   console.log('  kodax "create a component"        # Run single task (with session)');
-  console.log('  kodax -p "quick fix" -t           # Quick task with thinking');
+  console.log('  kodax -p "quick fix" --reasoning balanced  # Quick task with reasoning');
   console.log('  kodax -c                          # Continue recent conversation');
   console.log('  kodax -c "finish this"            # Continue with new task');
   console.log('  kodax -r                          # Pick session to resume');
@@ -436,7 +473,8 @@ async function main() {
     .option('-n, --new', 'Start a new session (do not auto-resume)')
     .option('-r, --resume <id>', 'Resume session by ID (no id = interactive picker)')
     .option('-m, --provider <name>', 'LLM provider')
-    .option('-t, --thinking', 'Enable thinking mode')
+    .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
+    .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
     .option('-y, --auto', 'Auto mode: skip all confirmations')
     .option('-s, --session <id>', 'Session management: list, delete <id>, delete-all')
     .option('-j, --parallel', 'Parallel tool execution')
@@ -456,12 +494,14 @@ async function main() {
   const opts = program.opts();
   // 加载配置文件（用于确定默认值）
   const config = loadConfig();
+  const reasoningMode = resolveCliReasoningMode(program, opts, config);
   // CLI 参数优先，否则用配置文件的值，最后用默认值
   // Note: -y/--auto is kept for backward compatibility but has no effect in CLI (YOLO mode is default)
   const options: CliOptions = {
     // 优先级：CLI 参数 > 配置文件 > 默认值
     provider: opts.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER,
-    thinking: opts.thinking ?? config.thinking ?? false,
+    thinking: reasoningMode !== 'off',
+    reasoningMode,
     session: opts.session,
     parallel: opts.parallel ?? false,
     team: opts.team,
@@ -696,7 +736,9 @@ New: {"features": [
     if (tasks.length === 0) { console.log('Error: No tasks specified for --team'); process.exit(1); }
 
     console.log(chalk.cyan(`[KodaX Team] Running ${tasks.length} tasks with ${options.provider}`));
-    if (options.thinking) console.log(chalk.cyan(`[KodaX Team] Thinking mode enabled`));
+    if (options.reasoningMode !== 'off') {
+      console.log(chalk.cyan(`[KodaX Team] Reasoning mode: ${options.reasoningMode}`));
+    }
 
     // 流式输出锁
     const streamLock = { locked: false, queue: [] as (() => void)[] };
@@ -731,6 +773,7 @@ New: {"features": [
       const kodaXOptions: KodaXOptions = {
         provider: options.provider,
         thinking: options.thinking,
+        reasoningMode: options.reasoningMode,
         maxIter: MAX_SUB_ROUNDS,
         events: subEvents,
       };
@@ -797,6 +840,7 @@ New: {"features": [
       await runInkInteractiveMode({
         provider: kodaXOptions.provider,
         thinking: kodaXOptions.thinking,
+        reasoningMode: kodaXOptions.reasoningMode,
         maxIter: kodaXOptions.maxIter,
         parallel: kodaXOptions.parallel,
         session: kodaXOptions.session,

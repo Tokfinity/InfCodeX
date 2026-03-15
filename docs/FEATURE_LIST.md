@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-13 15:30_
+_Last Updated: 2026-03-15 00:32_
 
 ---
 
@@ -25,7 +25,7 @@ _Last Updated: 2026-03-13 15:30_
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Released | 1 | 1/1 (100%) |
 | v0.5.22 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | In Development | 4 | 1/4 (25%) |
+| v0.6.0 | In Development | 5 | 1/5 (20%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 2 | 0/2 (0%) |
 
@@ -54,6 +54,7 @@ _Last Updated: 2026-03-13 15:30_
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
 | 019 | New | Planned | High | Session Tree & Rollback System | v0.7.0 | - | [Design](features/v0.7.0.md#019) | 2026-03-12 | - | - |
 | 020 | New | Completed | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | v0.5.34 | [Design](features/v0.6.0.md#020) | 2026-03-13 | 2026-03-13 | 2026-03-13 |
+| 021 | Enhancement | Planned | High | Provider-Aware Reasoning Budget Matrix | v0.6.0 | - | [Design](features/v0.6.0.md#021) | 2026-03-15 | - | - |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -96,6 +97,35 @@ _Last Updated: 2026-03-13 15:30_
 ---
 
 ### 015: Project Mode 2.0 - AI-Driven Development Workflow (PLANNED)
+
+---
+
+### 021: Provider-Aware Reasoning Budget Matrix (PLANNED)
+- **Category**: Enhancement
+- **Status**: Planned
+- **Priority**: High
+- **Planned**: v0.6.0
+- **Released**: -
+- **Design**: [v0.6.0.md#021](features/v0.6.0.md#021)
+- **Created**: 2026-03-15
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+将当前统一的 `low=6000 / medium=12000 / high=20000` 推理预算策略升级为按 **provider + task type** 细分的默认矩阵，并为不同 provider 的能力边界提供更真实的默认值和回退策略。
+
+**Goals**:
+1. **Provider 级默认预算** - 不再假设所有 provider 共用同一套 budget
+2. **Task Type 级别细分** - review / bugfix / plan / refactor 使用不同默认档位
+3. **Reasoning 科学化调参** - 让 `deep` 的默认值基于 provider 能力和任务场景，而不是单一全局常量
+4. **诚实降级** - 对 `native-effort` / `native-toggle` / `prompt-only` provider 给出一致但不虚假的默认行为
+5. **可观测性** - 在配置、状态和调试日志中明确“用户模式 -> 内部深度 -> provider 参数”的映射
+
+**Implementation Notes**:
+- 修改 `packages/ai/src/reasoning.ts`，支持 provider/task-aware budget 解析
+- 修改 `packages/ai/src/providers/registry.ts`，为各 provider 注入默认预算矩阵
+- 修改 `packages/coding/src/reasoning.ts`，让 auto 路由输出与 provider/task 默认表协同工作
+- 更新 `config.example.jsonc` 和相关帮助文档，说明默认行为与可配置项
 
 ---
 

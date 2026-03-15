@@ -31,6 +31,17 @@ export type {
   KodaXToolDefinition,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningOverride,
+  KodaXReasoningMode,
+  KodaXThinkingDepth,
+  KodaXTaskType,
+  KodaXExecutionMode,
+  KodaXRiskLevel,
+  KodaXTaskRoutingDecision,
+  KodaXThinkingBudgetMap,
+  KodaXTaskBudgetOverrides,
+  KodaXReasoningRequest,
 } from '@kodax/ai';
 
 export {
@@ -99,12 +110,20 @@ export {
   KodaXAnthropicCompatProvider,
   KodaXOpenAICompatProvider,
   KODAX_PROVIDERS,
+  KODAX_PROVIDER_SNAPSHOTS,
   KODAX_DEFAULT_PROVIDER,
   getProvider,
+  getProviderConfiguredReasoningCapability,
   isProviderConfigured,
   getProviderModel,
   getProviderList,
   isProviderName,
+  buildReasoningOverrideKey,
+  loadReasoningOverride,
+  saveReasoningOverride,
+  clearReasoningOverride,
+  reasoningCapabilityToOverride,
+  reasoningOverrideToCapability,
 } from './providers/index.js';
 export type { ProviderName } from './providers/index.js';
 
@@ -165,6 +184,17 @@ export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './agent.js';
+
+// ============== Reasoning ==============
+export {
+  KODAX_REASONING_MODE_SEQUENCE,
+  resolveReasoningMode,
+  reasoningModeToDepth,
+  inferTaskType,
+  buildFallbackRoutingDecision,
+  buildPromptOverlay,
+  createReasoningPlan,
+} from './reasoning.js';
 
 // Client alias
 export { KodaXClient as Client } from './client.js';

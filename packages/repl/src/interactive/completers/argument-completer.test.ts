@@ -22,8 +22,14 @@ describe('ArgumentCompleter', () => {
       expect(completer.canComplete('/thinking ', 10)).toBe(true);
     });
 
-    it('should not trigger on command without space', () => {
-      expect(completer.canComplete('/mode', 5)).toBe(false);
+    it('should trigger on /reasoning and /reason commands with space', () => {
+      expect(completer.canComplete('/reasoning ', 11)).toBe(true);
+      expect(completer.canComplete('/reason ', 8)).toBe(true);
+    });
+
+    it('should trigger on exact commands that support enum-style arguments', () => {
+      expect(completer.canComplete('/mode', 5)).toBe(true);
+      expect(completer.canComplete('/reasoning', 10)).toBe(true);
     });
 
     it('should trigger on any command with space (filtering happens in getCompletions)', () => {
@@ -99,9 +105,39 @@ describe('ArgumentCompleter', () => {
       it('should return thinking arguments', async () => {
         const completions = await completer.getCompletions('/thinking ', 10);
 
-        expect(completions.length).toBe(2);
+        expect(completions.length).toBe(6);
         expect(completions.some(c => c.display === 'on')).toBe(true);
         expect(completions.some(c => c.display === 'off')).toBe(true);
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'quick')).toBe(true);
+        expect(completions.some(c => c.display === 'balanced')).toBe(true);
+        expect(completions.some(c => c.display === 'deep')).toBe(true);
+      });
+    });
+
+    describe('/reasoning command', () => {
+      it('should return reasoning arguments for /reasoning with a space', async () => {
+        const completions = await completer.getCompletions('/reasoning ', 11);
+
+        expect(completions.some(c => c.display === 'off')).toBe(true);
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'quick')).toBe(true);
+        expect(completions.some(c => c.display === 'balanced')).toBe(true);
+        expect(completions.some(c => c.display === 'deep')).toBe(true);
+      });
+
+      it('should return reasoning arguments for /reasoning without a trailing space', async () => {
+        const completions = await completer.getCompletions('/reasoning', 10);
+
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'balanced')).toBe(true);
+      });
+
+      it('should return reasoning arguments for /reason alias', async () => {
+        const completions = await completer.getCompletions('/reason', 7);
+
+        expect(completions.some(c => c.display === 'auto')).toBe(true);
+        expect(completions.some(c => c.display === 'deep')).toBe(true);
       });
     });
 

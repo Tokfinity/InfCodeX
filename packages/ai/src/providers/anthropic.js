@@ -5,25 +5,51 @@
  */
 import Anthropic from '@anthropic-ai/sdk';
 import { KodaXBaseProvider } from './base.js';
+import { KodaXProviderError } from '../errors.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
+import { clampThinkingBudget, resolveThinkingBudget, } from '../reasoning.js';
 export class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     supportsThinking = true;
     client;
     initClient() {
         this.client = new Anthropic({ apiKey: this.getApiKey(), baseURL: this.config.baseUrl });
     }
-    async stream(messages, tools, system, thinking = false, streamOptions, signal) {
+    async stream(messages, tools, system, reasoning, streamOptions, signal) {
         return this.withRateLimit(async () => {
-            const kwargs = {
-                model: this.config.model,
-                max_tokens: KODAX_MAX_TOKENS,
-                system,
-                messages: this.convertMessages(messages),
-                tools: tools,
-                stream: true,
+            const normalizedReasoning = this.normalizeReasoning(reasoning);
+            const maxOutputTokens = this.config.maxOutputTokens ?? KODAX_MAX_TOKENS;
+            const model = streamOptions?.modelOverride ?? this.config.model;
+            const initialCapability = normalizedReasoning.enabled
+                ? this.getReasoningCapability(model)
+                : 'none';
+            const attempts = normalizedReasoning.enabled
+                ? this.getReasoningFallbackChain(initialCapability).filter((capability) => capability === 'native-budget' ||
+                    capability === 'native-toggle' ||
+                    capability === 'none')
+                : ['none'];
+            const buildRequest = (capability) => {
+                const kwargs = {
+                    model,
+                    max_tokens: maxOutputTokens,
+                    system,
+                    messages: this.convertMessages(messages),
+                    tools: tools,
+                    stream: true,
+                };
+                if (capability === 'native-budget') {
+                    const requestedBudget = resolveThinkingBudget(this.config, normalizedReasoning.depth, normalizedReasoning.taskType);
+                    kwargs.thinking = {
+                        type: 'enabled',
+                        budget_tokens: clampThinkingBudget(requestedBudget, maxOutputTokens),
+                    };
+                }
+                else if (capability === 'native-toggle') {
+                    kwargs.thinking = {
+                        type: 'enabled',
+                    };
+                }
+                return kwargs;
             };
-            if (thinking)
-                kwargs.thinking = { type: 'enabled', budget_tokens: 10000 };
             // 检查是否已被取消
             if (signal?.aborted) {
                 throw new DOMException('Request aborted', 'AbortError');
@@ -44,7 +70,31 @@ export class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             const streamStartTime = Date.now();
             // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
             // 参考: https://github.com/anthropics/anthropic-sdk-typescript
-            const response = await this.client.messages.create(kwargs, signal ? { signal } : {});
+            let response;
+            let lastError;
+            for (const capability of attempts) {
+                try {
+                    response = await this.client.messages.create(buildRequest(capability), signal ? { signal } : {});
+                    if (capability !== initialCapability) {
+                        this.persistReasoningCapabilityOverride(capability, model);
+                    }
+                    break;
+                }
+                catch (error) {
+                    lastError = error;
+                    const fallbackTerms = capability === 'native-budget'
+                        ? ['budget_tokens', 'thinking']
+                        : capability === 'native-toggle'
+                            ? ['thinking']
+                            : [];
+                    if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
+                        throw error;
+                    }
+                }
+            }
+            if (!response) {
+                throw lastError ?? new KodaXProviderError('All reasoning capability attempts failed without a captured error', this.name);
+            }
             for await (const event of response) {
                 // 检查是否被中断 (双重保险)
                 if (signal?.aborted) {

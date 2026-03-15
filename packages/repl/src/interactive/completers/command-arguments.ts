@@ -35,15 +35,43 @@ const MODE_ARGS: ArgumentDefinition[] = [
 const THINKING_ARGS: ArgumentDefinition[] = [
   {
     name: 'on',
-    description: 'Enable extended thinking mode',
+    description: 'Map to reasoning auto',
     type: 'enum',
   },
   {
     name: 'off',
-    description: 'Disable extended thinking mode',
+    description: 'Disable reasoning',
+    type: 'enum',
+  },
+  {
+    name: 'auto',
+    description: 'Use semantic routing with adaptive depth',
+    type: 'enum',
+  },
+  {
+    name: 'quick',
+    description: 'Low-depth reasoning mode',
+    type: 'enum',
+  },
+  {
+    name: 'balanced',
+    description: 'Medium-depth reasoning mode',
+    type: 'enum',
+  },
+  {
+    name: 'deep',
+    description: 'High-depth reasoning mode',
     type: 'enum',
   },
 ];
+
+const REASONING_ARGS = THINKING_ARGS.slice(2).concat([
+  {
+    name: 'off',
+    description: 'Disable reasoning',
+    type: 'enum',
+  },
+]);
 
 /**
  * Model command arguments - /model 命令参数
@@ -174,6 +202,8 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['thinking', THINKING_ARGS],
   ['think', THINKING_ARGS], // alias
   ['t', THINKING_ARGS], // alias
+  ['reasoning', REASONING_ARGS],
+  ['reason', REASONING_ARGS],
   ['model', MODEL_ARGS],
   ['plan', PLAN_ARGS],
   ['p', PLAN_ARGS], // alias

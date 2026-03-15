@@ -163,7 +163,7 @@ export function listProviders(): string[] {
 |----------|----------|---------------|----------------|
 | anthropic | Yes | claude-sonnet-4-6 | 200K |
 | openai | No | gpt-5.3-codex | 400K |
-| kimi | No | moonshot-v1-128k | 128K |
+| kimi | Yes | k2.5 | 256K |
 | kimi-code | Yes | k2.5 | 256K |
 | qwen | No | qwen3.5-plus | 256K |
 | zhipu | No | glm-5 | 200K |

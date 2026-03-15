@@ -19,6 +19,16 @@ import type {
   KodaXToolDefinition,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningMode,
+  KodaXThinkingDepth,
+  KodaXTaskType,
+  KodaXExecutionMode,
+  KodaXRiskLevel,
+  KodaXTaskRoutingDecision,
+  KodaXThinkingBudgetMap,
+  KodaXTaskBudgetOverrides,
+  KodaXReasoningRequest,
   KodaXSessionMeta,
   KodaXSessionStorage,
   SessionErrorMetadata,
@@ -37,6 +47,16 @@ export type {
   KodaXToolDefinition,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningMode,
+  KodaXThinkingDepth,
+  KodaXTaskType,
+  KodaXExecutionMode,
+  KodaXRiskLevel,
+  KodaXTaskRoutingDecision,
+  KodaXThinkingBudgetMap,
+  KodaXTaskBudgetOverrides,
+  KodaXReasoningRequest,
   KodaXSessionMeta,
   KodaXSessionStorage,
   SessionErrorMetadata,
@@ -97,12 +117,15 @@ export interface KodaXContextOptions {
   };
   /** Skills system prompt snippet for progressive disclosure - Skills 系统提示词片段（渐进式披露） */
   skillsPrompt?: string;
+  /** Internal execution-mode overlay appended to the system prompt */
+  promptOverlay?: string;
 }
 
 export interface KodaXOptions {
   provider: string;
   modelOverride?: string;
   thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
   maxIter?: number;
   parallel?: boolean;
   session?: KodaXSessionOptions;

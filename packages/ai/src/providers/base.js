@@ -3,13 +3,70 @@
  *
  * Provider 抽象基类 - 所有 Provider 的公共基础
  */
+import { getReasoningCapability, normalizeReasoningRequest, } from '../reasoning.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
+import {
+    buildReasoningOverrideKey,
+    loadReasoningOverride,
+    reasoningCapabilityToOverride,
+    reasoningOverrideToCapability,
+    saveReasoningOverride,
+} from '../reasoning-overrides.js';
 export class KodaXBaseProvider {
     isConfigured() {
         return !!process.env[this.config.apiKeyEnv];
     }
     getModel() {
         return this.config.model;
+    }
+    getBaseUrl() {
+        return this.config.baseUrl;
+    }
+    getConfiguredReasoningCapability() {
+        return getReasoningCapability(this.config);
+    }
+    getReasoningCapability(modelOverride) {
+        const override = loadReasoningOverride(this.name, this.config, modelOverride);
+        return override
+            ? reasoningOverrideToCapability(override)
+            : this.getConfiguredReasoningCapability();
+    }
+    getReasoningOverride(modelOverride) {
+        return loadReasoningOverride(this.name, this.config, modelOverride);
+    }
+    getReasoningOverrideKey(modelOverride) {
+        return buildReasoningOverrideKey(this.name, this.config, modelOverride);
+    }
+    persistReasoningCapabilityOverride(capability, modelOverride) {
+        const override = reasoningCapabilityToOverride(capability);
+        if (!override) {
+            return;
+        }
+        saveReasoningOverride(this.name, this.config, override, modelOverride);
+    }
+    shouldFallbackForReasoningError(error, ...terms) {
+        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        const normalizedTerms = terms.map(term => term.toLowerCase());
+        const matchesSpecificTerm = normalizedTerms.some((term) => message.includes(term));
+        const mentionsParameter = message.includes('parameter') || matchesSpecificTerm;
+        return (message.includes('unknown parameter') ||
+            message.includes('invalid parameter') ||
+            (message.includes('unsupported') && mentionsParameter));
+    }
+    getReasoningFallbackChain(capability) {
+        switch (capability) {
+            case 'native-budget':
+                return ['native-budget', 'native-toggle', 'none'];
+            case 'native-effort':
+                return ['native-effort', 'none'];
+            case 'native-toggle':
+                return ['native-toggle', 'none'];
+            case 'none':
+            case 'prompt-only':
+            case 'unknown':
+            default:
+                return ['none'];
+        }
     }
     /**
      * 获取模型的上下文窗口大小
@@ -23,6 +80,9 @@ export class KodaXBaseProvider {
         if (!key)
             throw new Error(`${this.config.apiKeyEnv} not set`);
         return key;
+    }
+    normalizeReasoning(reasoning) {
+        return normalizeReasoningRequest(reasoning);
     }
     isRateLimitError(error) {
         if (!(error instanceof Error))

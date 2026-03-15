@@ -9,7 +9,7 @@ import { KodaXAnthropicCompatProvider } from './anthropic.js';
 import { KodaXOpenAICompatProvider } from './openai.js';
 import { KodaXGeminiCliProvider } from './gemini-cli.js';
 import { KodaXCodexCliProvider } from './codex-cli.js';
-import { KodaXProviderConfig } from '../types.js';
+import { KodaXProviderConfig, KodaXReasoningCapability } from '../types.js';
 import { KodaXProviderError } from '../errors.js';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
@@ -28,6 +28,12 @@ export type ProviderName =
   | 'gemini-cli'
   | 'codex-cli';
 
+type ProviderSnapshot = {
+  model: string;
+  apiKeyEnv: string;
+  reasoningCapability: KodaXReasoningCapability;
+};
+
 // ============== 具体 Provider 实现 ==============
 
 class AnthropicProvider extends KodaXAnthropicCompatProvider {
@@ -36,7 +42,10 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     model: 'claude-sonnet-4-6',
     supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 200000,  // 200K tokens
+    maxOutputTokens: 32768,
+    thinkingBudgetCap: 28000,
   };
   constructor() { super(); this.client = new Anthropic({ apiKey: this.getApiKey() }); }
 }
@@ -48,7 +57,10 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     model: 'glm-5',
     supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 200000,
+    maxOutputTokens: 32768,
+    thinkingBudgetCap: 16000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -60,7 +72,9 @@ class KimiCodeProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://api.kimi.com/coding/',
     model: 'k2.5',
     supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 256000,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -72,7 +86,9 @@ class MiniMaxCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://api.minimaxi.com/anthropic',
     model: 'MiniMax-M2.5',
     supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 204800,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -82,8 +98,10 @@ class OpenAIProvider extends KodaXOpenAICompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'OPENAI_API_KEY',
     model: 'gpt-5.3-codex',
-    supportsThinking: false,
+    supportsThinking: true,
+    reasoningCapability: 'native-effort',
     contextWindow: 400000,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -93,9 +111,11 @@ class KimiProvider extends KodaXOpenAICompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'KIMI_API_KEY',
     baseUrl: 'https://api.moonshot.cn/v1',
-    model: 'moonshot-v1-128k',
-    supportsThinking: false,
-    contextWindow: 128000,
+    model: 'k2.5',
+    supportsThinking: true,
+    reasoningCapability: 'native-effort',
+    contextWindow: 256000,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -106,8 +126,10 @@ class QwenProvider extends KodaXOpenAICompatProvider {
     apiKeyEnv: 'QWEN_API_KEY',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen3.5-plus',
-    supportsThinking: false,
+    supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 256000,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -118,8 +140,10 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
     apiKeyEnv: 'ZHIPU_API_KEY',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-5',
-    supportsThinking: false,
+    supportsThinking: true,
+    reasoningCapability: 'native-budget',
     contextWindow: 200000,
+    maxOutputTokens: 32768,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -139,6 +163,59 @@ export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   'codex-cli': () => new KodaXCodexCliProvider(),
 };
 
+export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = {
+  anthropic: {
+    apiKeyEnv: 'ANTHROPIC_API_KEY',
+    model: 'claude-sonnet-4-6',
+    reasoningCapability: 'native-budget',
+  },
+  openai: {
+    apiKeyEnv: 'OPENAI_API_KEY',
+    model: 'gpt-5.3-codex',
+    reasoningCapability: 'native-effort',
+  },
+  kimi: {
+    apiKeyEnv: 'KIMI_API_KEY',
+    model: 'k2.5',
+    reasoningCapability: 'native-effort',
+  },
+  'kimi-code': {
+    apiKeyEnv: 'KIMI_API_KEY',
+    model: 'k2.5',
+    reasoningCapability: 'native-budget',
+  },
+  qwen: {
+    apiKeyEnv: 'QWEN_API_KEY',
+    model: 'qwen3.5-plus',
+    reasoningCapability: 'native-budget',
+  },
+  zhipu: {
+    apiKeyEnv: 'ZHIPU_API_KEY',
+    model: 'glm-5',
+    reasoningCapability: 'native-budget',
+  },
+  'zhipu-coding': {
+    apiKeyEnv: 'ZHIPU_API_KEY',
+    model: 'glm-5',
+    reasoningCapability: 'native-budget',
+  },
+  'minimax-coding': {
+    apiKeyEnv: 'MINIMAX_API_KEY',
+    model: 'MiniMax-M2.5',
+    reasoningCapability: 'native-budget',
+  },
+  'gemini-cli': {
+    apiKeyEnv: 'GEMINI_API_KEY',
+    model: 'gemini-cli',
+    reasoningCapability: 'none',
+  },
+  'codex-cli': {
+    apiKeyEnv: 'OPENAI_API_KEY',
+    model: 'codex-cli',
+    reasoningCapability: 'none',
+  },
+};
+
 export const KODAX_DEFAULT_PROVIDER = process.env.KODAX_PROVIDER ?? 'zhipu-coding';
 
 export function getProvider(name?: string): KodaXBaseProvider {
@@ -150,34 +227,38 @@ export function getProvider(name?: string): KodaXBaseProvider {
 
 // 检查 Provider 是否已配置 API Key
 export function isProviderConfigured(name: string): boolean {
-  try {
-    const provider = getProvider(name);
-    return provider.isConfigured();
-  } catch {
+  if (!isProviderName(name)) {
     return false;
   }
+  return !!process.env[KODAX_PROVIDER_SNAPSHOTS[name].apiKeyEnv];
 }
 
 // 获取 Provider 使用的模型名称
 export function getProviderModel(name: string): string | null {
-  try {
-    const provider = getProvider(name);
-    return provider.getModel();
-  } catch {
-    return null;
-  }
+  return isProviderName(name)
+    ? KODAX_PROVIDER_SNAPSHOTS[name].model
+    : null;
+}
+
+export function getProviderConfiguredReasoningCapability(
+  name: string,
+): KodaXReasoningCapability | 'unknown' {
+  return isProviderName(name)
+    ? KODAX_PROVIDER_SNAPSHOTS[name].reasoningCapability
+    : 'unknown';
 }
 
 // 获取所有可用的 Provider 列表（带配置状态）
-export function getProviderList(): Array<{ name: string; model: string; configured: boolean }> {
-  const result: Array<{ name: string; model: string; configured: boolean }> = [];
-  for (const [name, factory] of Object.entries(KODAX_PROVIDERS)) {
-    try {
-      const p = factory();
-      result.push({ name, model: p.getModel(), configured: p.isConfigured() });
-    } catch {
-      result.push({ name, model: 'unknown', configured: false });
-    }
+export function getProviderList(): Array<{ name: string; model: string; configured: boolean; reasoningCapability: KodaXReasoningCapability }> {
+  const result: Array<{ name: string; model: string; configured: boolean; reasoningCapability: KodaXReasoningCapability }> = [];
+  for (const name of Object.keys(KODAX_PROVIDERS) as ProviderName[]) {
+    const snapshot = KODAX_PROVIDER_SNAPSHOTS[name];
+    result.push({
+      name,
+      model: snapshot.model,
+      configured: !!process.env[snapshot.apiKeyEnv],
+      reasoningCapability: snapshot.reasoningCapability,
+    });
   }
   return result;
 }

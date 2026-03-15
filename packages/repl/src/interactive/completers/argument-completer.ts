@@ -62,7 +62,12 @@ export class ArgumentCompleter implements Completer {
     // Check if we're in argument position (after command + space)
     // 检查是否在参数位置（命令 + 空格之后）
     const parts = afterSlash.split(/\s+/);
-    return parts.length >= 2 && parts[0] !== '';
+    if (parts.length >= 2 && parts[0] !== '') {
+      return true;
+    }
+
+    const commandName = afterSlash.slice(1).toLowerCase();
+    return COMMAND_ARGUMENTS.has(commandName);
   }
 
   /**
@@ -82,10 +87,10 @@ export class ArgumentCompleter implements Completer {
     // Parse command and partial argument
     // 解析命令和部分参数
     const firstSpace = afterSlash.indexOf(' ');
-    if (firstSpace === -1) return [];
-
-    const commandName = afterSlash.slice(1, firstSpace).toLowerCase();
-    const afterCommand = afterSlash.slice(firstSpace + 1);
+    const commandName = (firstSpace === -1
+      ? afterSlash.slice(1)
+      : afterSlash.slice(1, firstSpace)).toLowerCase();
+    const afterCommand = firstSpace === -1 ? '' : afterSlash.slice(firstSpace + 1);
 
     // Get argument definitions for this command
     // 获取此命令的参数定义
@@ -96,7 +101,7 @@ export class ArgumentCompleter implements Completer {
 
     // Determine which argument position we're at
     // 确定当前在哪个参数位置
-    const argParts = afterCommand.split(/\s+/);
+    const argParts = afterCommand ? afterCommand.split(/\s+/) : [''];
     const argIndex = argParts.length - 1;
     const currentPartial = (argParts[argIndex] ?? '').toLowerCase();
 
