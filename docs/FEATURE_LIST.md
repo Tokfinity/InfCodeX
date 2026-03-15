@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-15 00:32_
+_Last Updated: 2026-03-16_
 
 ---
 
@@ -8,7 +8,7 @@ _Last Updated: 2026-03-15 00:32_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.5.33 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.5.38 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.6.0 | 当前规划的版本 |
 
 ---
@@ -25,7 +25,9 @@ _Last Updated: 2026-03-15 00:32_
 | v0.5.0 | Released | 7 | 7/7 (100%) |
 | v0.5.20 | Released | 1 | 1/1 (100%) |
 | v0.5.22 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | In Development | 5 | 1/5 (20%) |
+| v0.5.34 | Released | 1 | 1/1 (100%) |
+| v0.5.37 | Released | 1 | 1/1 (100%) |
+| v0.6.0 | In Development | 3 | 1/3 (33%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 2 | 0/2 (0%) |
 
@@ -54,7 +56,7 @@ _Last Updated: 2026-03-15 00:32_
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
 | 019 | New | Planned | High | Session Tree & Rollback System | v0.7.0 | - | [Design](features/v0.7.0.md#019) | 2026-03-12 | - | - |
 | 020 | New | Completed | High | AGENTS.md - 项目级 AI 上下文规则 | v0.6.0 | v0.5.34 | [Design](features/v0.6.0.md#020) | 2026-03-13 | 2026-03-13 | 2026-03-13 |
-| 021 | Enhancement | Planned | High | Provider-Aware Reasoning Budget Matrix | v0.6.0 | - | [Design](features/v0.6.0.md#021) | 2026-03-15 | - | - |
+| 021 | Enhancement | Completed | High | Provider-Aware Reasoning Budget Matrix | v0.6.0 | v0.5.37 | [Design](features/v0.6.0.md#021) | 2026-03-15 | 2026-03-15 | 2026-03-15 |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
