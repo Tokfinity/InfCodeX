@@ -112,4 +112,104 @@ describe("executeWithPermission", () => {
     expect(onConfirm).not.toHaveBeenCalled();
     expect(executeToolMock).toHaveBeenCalledTimes(1);
   });
+
+  it("blocks new temporary helper scripts outside .agent", async () => {
+    const permissionContext = createPermissionContext({
+      permissionMode: "auto-in-project",
+      gitRoot: process.cwd(),
+    });
+
+    const result = await executeWithPermission(
+      "write",
+      {
+        path: "tmp-helper.ps1",
+        content: "Write-Host 'hello'",
+      },
+      {} as never,
+      permissionContext,
+    );
+
+    expect(result).toContain("[Blocked] Avoid scattering temporary helper scripts outside the project scratch area");
+    expect(result).toContain(".agent");
+    expect(executeToolMock).not.toHaveBeenCalled();
+  });
+
+  it("allows helper scripts under .agent directory", async () => {
+    const permissionContext = createPermissionContext({
+      permissionMode: "auto-in-project",
+      gitRoot: process.cwd(),
+    });
+
+    const result = await executeWithPermission(
+      "write",
+      {
+        path: ".agent/update-changelog.ps1",
+        content: "Write-Host 'hello'",
+      },
+      {} as never,
+      permissionContext,
+    );
+
+    expect(result).toBe("[executed]");
+    expect(executeToolMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks bash commands that redirect temp helper scripts outside .agent", async () => {
+    const permissionContext = createPermissionContext({
+      permissionMode: "auto-in-project",
+      gitRoot: process.cwd(),
+    });
+
+    const result = await executeWithPermission(
+      "bash",
+      {
+        command: "echo test > tmp-helper.ps1",
+      },
+      {} as never,
+      permissionContext,
+    );
+
+    expect(result).toContain("[Blocked] Avoid scattering temporary helper scripts outside the project scratch area");
+    expect(executeToolMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks temp helper scripts even inside normal project subdirectories", async () => {
+    const permissionContext = createPermissionContext({
+      permissionMode: "auto-in-project",
+      gitRoot: process.cwd(),
+    });
+
+    const result = await executeWithPermission(
+      "write",
+      {
+        path: "scripts/tmp-helper.ps1",
+        content: "Write-Host 'hello'",
+      },
+      {} as never,
+      permissionContext,
+    );
+
+    expect(result).toContain("[Blocked] Avoid scattering temporary helper scripts outside the project scratch area");
+    expect(executeToolMock).not.toHaveBeenCalled();
+  });
+
+  it("allows normal project scripts that are not temp helpers", async () => {
+    const permissionContext = createPermissionContext({
+      permissionMode: "auto-in-project",
+      gitRoot: process.cwd(),
+    });
+
+    const result = await executeWithPermission(
+      "write",
+      {
+        path: "scripts/update.ps1",
+        content: "Write-Host 'hello'",
+      },
+      {} as never,
+      permissionContext,
+    );
+
+    expect(result).toBe("[executed]");
+    expect(executeToolMock).toHaveBeenCalledTimes(1);
+  });
 });

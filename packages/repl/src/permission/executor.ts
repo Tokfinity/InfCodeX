@@ -4,6 +4,8 @@
  * 工具执行权限包装器 - 在 REPL 层处理权限检查
  */
 
+import fsSync from 'fs';
+import os from 'os';
 import path from 'path';
 import { executeTool } from '@kodax/coding';
 import type { KodaXToolExecutionContext } from '@kodax/coding';
@@ -18,8 +20,35 @@ import {
   isAlwaysConfirmPath,
   isBashReadCommand,
   isBashWriteCommand,
+  extractPathsFromCommand,
 } from './permission.js';
 import { generateSavePattern } from './permission.js';
+
+const ROOT_TEMP_SCRIPT_EXTENSIONS = new Set([
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.ps1',
+  '.cmd',
+  '.bat',
+  '.js',
+  '.cjs',
+  '.mjs',
+  '.ts',
+  '.py',
+  '.rb',
+]);
+
+const TEMP_HELPER_SCRIPT_NAME = /(^|[-_.])(tmp|temp|scratch|helper|retry|debug|agent|kodax)([-_.]|$)/i;
+const BASH_FILE_WRITE_MARKERS = [
+  '>',
+  '>>',
+  'set-content',
+  'add-content',
+  'out-file',
+  'new-item',
+  'tee ',
+];
 
 // ============== Path Safety Checks ==============
 
@@ -95,6 +124,141 @@ function isBashCommandDangerousOutsideProject(command: string, projectRoot: stri
   return { dangerous: false };
 }
 
+function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
+  const resolvedTarget = path.resolve(targetPath);
+  const resolvedDirectory = path.resolve(directoryPath);
+  return resolvedTarget === resolvedDirectory || resolvedTarget.startsWith(resolvedDirectory + path.sep);
+}
+
+function isSystemTempReference(targetPath: string): boolean {
+  const normalized = targetPath.replace(/\\/g, '/').toLowerCase();
+  if (
+    normalized.includes('%temp%') ||
+    normalized.includes('%tmp%') ||
+    normalized.includes('$env:temp') ||
+    normalized.includes('$env:tmp') ||
+    normalized.includes('$temp') ||
+    normalized.includes('$tmp')
+  ) {
+    return true;
+  }
+
+  try {
+    return isPathInsideDirectory(path.resolve(targetPath), os.tmpdir());
+  } catch {
+    return false;
+  }
+}
+
+function isProjectScratchPath(targetPath: string, projectRoot: string): boolean {
+  return isPathInsideDirectory(targetPath, path.join(projectRoot, '.agent'));
+}
+
+function isLikelyTemporaryHelperScriptPath(targetPath: string, projectRoot: string): boolean {
+  const resolvedTarget = path.resolve(projectRoot, targetPath);
+  const extension = path.extname(resolvedTarget).toLowerCase();
+  if (!ROOT_TEMP_SCRIPT_EXTENSIONS.has(extension)) {
+    return false;
+  }
+
+  if (isProjectScratchPath(resolvedTarget, projectRoot) || isSystemTempReference(targetPath)) {
+    return false;
+  }
+
+  const basename = path.basename(resolvedTarget, extension);
+  return TEMP_HELPER_SCRIPT_NAME.test(basename);
+}
+
+function buildTemporaryHelperScriptWarning(targetPath: string, projectRoot: string): string {
+  const scratchDir = path.join(projectRoot, '.agent');
+  return `[Blocked] Avoid scattering temporary helper scripts outside the project scratch area: ${path.basename(targetPath)}. First try specialized tools (read/edit/write/glob/grep) or a simpler shell command. If a helper script is still necessary, place it under ${scratchDir} or use the system temp directory.`;
+}
+
+function getTemporaryHelperScriptWarning(
+  toolName: string,
+  input: Record<string, unknown>,
+  projectRoot?: string
+): string | null {
+  if (toolName !== 'write' || !projectRoot) {
+    return null;
+  }
+
+  const targetPath = input.path as string | undefined;
+  if (!targetPath) {
+    return null;
+  }
+
+  try {
+    const resolvedTarget = path.resolve(projectRoot, targetPath);
+
+    if (fsSync.existsSync(resolvedTarget)) {
+      return null;
+    }
+
+    if (!isLikelyTemporaryHelperScriptPath(resolvedTarget, projectRoot)) {
+      return null;
+    }
+
+    return buildTemporaryHelperScriptWarning(resolvedTarget, projectRoot);
+  } catch {
+    return null;
+  }
+}
+
+function collectBashWriteTargets(command: string): string[] {
+  const targets = new Set<string>();
+  const pushTarget = (value: string | undefined) => {
+    const trimmed = value?.trim().replace(/^['"]|['"]$/g, '');
+    if (trimmed) {
+      targets.add(trimmed);
+    }
+  };
+
+  for (const extractedPath of extractPathsFromCommand(command)) {
+    pushTarget(extractedPath);
+  }
+
+  const redirectPattern = />>?\s*([^\s;|&]+)/g;
+  let redirectMatch: RegExpExecArray | null;
+  while ((redirectMatch = redirectPattern.exec(command)) !== null) {
+    pushTarget(redirectMatch[1]);
+  }
+
+  const powershellWritePattern = /(?:set-content|add-content|out-file|new-item)\s+(?:-path\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
+  let powershellMatch: RegExpExecArray | null;
+  while ((powershellMatch = powershellWritePattern.exec(command)) !== null) {
+    pushTarget(powershellMatch[1] ?? powershellMatch[2] ?? powershellMatch[3]);
+  }
+
+  const teePattern = /\btee\b(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
+  let teeMatch: RegExpExecArray | null;
+  while ((teeMatch = teePattern.exec(command)) !== null) {
+    pushTarget(teeMatch[1] ?? teeMatch[2] ?? teeMatch[3]);
+  }
+
+  return Array.from(targets);
+}
+
+function getBashTemporaryHelperScriptWarning(command: string, projectRoot?: string): string | null {
+  if (!projectRoot) {
+    return null;
+  }
+
+  const normalizedCommand = command.toLowerCase();
+  const mayWriteFiles = BASH_FILE_WRITE_MARKERS.some(marker => normalizedCommand.includes(marker));
+  if (!mayWriteFiles) {
+    return null;
+  }
+
+  for (const targetPath of collectBashWriteTargets(command)) {
+    if (isLikelyTemporaryHelperScriptPath(targetPath, projectRoot)) {
+      return buildTemporaryHelperScriptWarning(path.resolve(projectRoot, targetPath), projectRoot);
+    }
+  }
+
+  return null;
+}
+
 // ============== Permission Executor ==============
 
 /**
@@ -120,12 +284,12 @@ export async function executeWithPermission(
   // === 1. Plan mode: block all modification tools ===
   if (mode === 'plan') {
     if (FILE_MODIFICATION_TOOLS.has(toolName) || toolName === 'undo') {
-      return `[Blocked] Tool '${toolName}' is not allowed in plan mode (read-only)`;
+      return `[Blocked] Tool '${toolName}' is not allowed in plan mode (read-only). If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
     }
     if (toolName === 'bash') {
       const command = (input.command as string) ?? '';
       if (isBashWriteCommand(command)) {
-        return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`;
+        return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
       }
     }
   }
@@ -136,6 +300,17 @@ export async function executeWithPermission(
     if (isBashReadCommand(command)) {
       return executeTool(toolName, input, coreContext);
     }
+
+    const bashTempScriptWarning = getBashTemporaryHelperScriptWarning(command, permContext.gitRoot);
+    if (bashTempScriptWarning) {
+      return bashTempScriptWarning;
+    }
+  }
+
+  // === 2.5. Guard against temporary helper scripts outside scratch area ===
+  const tempScriptWarning = getTemporaryHelperScriptWarning(toolName, input, permContext.gitRoot);
+  if (tempScriptWarning) {
+    return tempScriptWarning;
   }
 
   // === 3. Protected paths: always confirm ===

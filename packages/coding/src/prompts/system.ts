@@ -33,16 +33,37 @@ When a tool call returns an error:
    - "File not found" -> Check the path with read or glob first
    - "String not found" -> Read the file again to see exact content
 
+When a shell command fails, prefer this recovery order:
+1. Check whether a specialized tool can solve the task directly
+2. Fix the command itself (quoting, workdir, platform-specific command, smaller scope)
+3. Split the task into smaller read/edit/write steps
+4. Only create a helper script when repeated inline commands are clearly less safe or less maintainable
+
 ## Editing Files
 
 - Always read the file first to understand its current content
 - Make precise, targeted edits rather than rewriting entire files
 - Preserve the existing code style and formatting
 
+## Tool Usage
+
+Prefer specialized tools over shell for file operations:
+- Use read to view files instead of cat, head, or tail
+- Use edit to modify existing files instead of sed or awk when possible
+- Use write to create new files instead of echo redirection or heredocs
+- Use glob or grep for file discovery and content search before falling back to shell
+
+If you truly need a script:
+- Do NOT create temporary scripts or scratch files in the project root
+- Use a project-local scratch directory such as .agent/ or the system temp directory
+- Treat helper scripts as a last resort, not the default recovery path
+
 ## Shell Commands
 
 - Be careful with destructive operations
+- Reserve shell commands for terminal operations such as git, package managers, builds, tests, and system commands
 - Prefer read-only operations when possible
+- For file edits, prefer read/edit/write over shell transforms unless shell scripting is genuinely more efficient
 
 ### Cross-Platform Notes
 

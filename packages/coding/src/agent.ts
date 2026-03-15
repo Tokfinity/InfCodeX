@@ -705,8 +705,10 @@ export async function runKodaX(
             // Permission hook - allow REPL layer to control execution
             if (events.beforeToolExecute) {
               const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-              if (!allowed) {
+              if (allowed === false) {
                 return { id: tc.id, content: '[Cancelled] Operation cancelled by user' };
+              } else if (typeof allowed === 'string') {
+                return { id: tc.id, content: allowed };
               }
             }
             const r = await executeTool(tc.name, tc.input, ctx);
@@ -720,8 +722,11 @@ export async function runKodaX(
           // Permission hook - allow REPL layer to control execution
           if (events.beforeToolExecute) {
             const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-            if (!allowed) {
+            if (allowed === false) {
               resultMap.set(tc.id, '[Cancelled] Operation cancelled by user');
+              continue;
+            } else if (typeof allowed === 'string') {
+              resultMap.set(tc.id, allowed);
               continue;
             }
           }
@@ -741,8 +746,10 @@ export async function runKodaX(
           let content: string;
           if (events.beforeToolExecute) {
             const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-            if (!allowed) {
+            if (allowed === false) {
               content = '[Cancelled] Operation cancelled by user';
+            } else if (typeof allowed === 'string') {
+              content = allowed;
             } else {
               content = await executeTool(tc.name, tc.input, ctx);
             }
