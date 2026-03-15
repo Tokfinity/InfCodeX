@@ -31,7 +31,9 @@ function isSingleBashReadCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
   }
-  const normalizedCommand = command.trim().toLowerCase();
+  
+  // Normalize spaces for simpler matching (e.g., "git  status" -> "git status")
+  const normalizedCommand = command.trim().replace(/\s+/g, ' ').toLowerCase();
 
   // 1. Base command validation: Must start with a whitelisted command
   // e.g. "git status -s" starts with "git status"
@@ -74,11 +76,11 @@ function isSingleBashReadCommand(command: string): boolean {
 /**
  * Check if a bash command is strictly a safe read-only operation (Whitelist).
  * Supports compound commands connected by && (all parts must be read-only).
- * Rejects shell operators: |, >, <, &, ;, `, $(), \\
+ * Rejects dangerous shell operators: |, >, <, &, ;, `, $(), \\ (except path separators or spaces)
  *
  * 检查一个 bash 命令是否是严格安全的只读操作（白名单）。
  * 支持 && 连接的复合命令（所有部分都必须是只读的）。
- * 拒绝 shell 操作符: |, >, <, &, ;, `, $(), \\
+ * 拒绝危险的 shell 操作符: |, >, <, &, ;, `, $(), \\ (允许路径分隔符/转义空格)
  *
  * @param command - bash command string
  * @returns true if the command is a safe read operation
@@ -88,16 +90,31 @@ export function isBashReadCommand(command: string): boolean {
     return false;
   }
 
+  // Handle line continuations first (replace \ followed by newline with space)
+  let normalizedCommand = command.trim().replace(/\\\r?\n/g, ' ');
+
   // 1. Strict syntax validation: Reject any command containing dangerous shell operators
   // Note: && is explicitly allowed for compound read-only commands like "cd dir && git diff"
   // We check for single & (background execution) separately from &&
-  const normalizedCommand = command.trim();
-
-  // Reject: |, <, >, single &, ;, `, $(), \
-  // But allow && (compound command)
-  const illegalSyntax = /[<>|;`\\]|\$\(|(?<!&)&(?!&)/;
-  if (illegalSyntax.test(normalizedCommand)) {
+  
+  // Reject: |, <, >, single &, ;, `, $(), \ (conditionally)
+  // Base dangerous operators (removed \ from base set)
+  const baseIllegalSyntax = /[<>|;`]|\$\(|(?<!&)&(?!&)/;
+  if (baseIllegalSyntax.test(normalizedCommand)) {
     return false;
+  }
+
+  // Handle backslashes conditionally
+  if (normalizedCommand.includes('\\')) {
+    if (path.sep !== '\\') { // Not on Windows
+      // On Unix, \ is dangerous unless it's just escaping a space (e.g. My\ Folder)
+      const withoutEscapedSpaces = normalizedCommand.replace(/\\ /g, '');
+      // If there are any backslashes left after removing escaped spaces, it's dangerous
+      if (withoutEscapedSpaces.includes('\\')) {
+        return false;
+      }
+    }
+    // On Windows, \ is a path separator and generally safe in the context of these read-only commands
   }
 
   // 2. Split by && and check each sub-command

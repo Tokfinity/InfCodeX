@@ -58,15 +58,11 @@ function writeJsonFile(filePath: string, data: Record<string, unknown>): void {
 // ============== Config Load/Save - 配置加载/保存 ==============
 
 /**
- * Load effective permission mode (project-level overrides user-level)
- * 加载有效权限模式（项目级覆盖用户级）
+ * Load effective permission mode (user-level only)
+ * 加载有效权限模式（仅限用户级配置）
  */
 export function loadPermissionMode(): PermissionMode | undefined {
-  // Project-level config takes priority
-  const projectConfig = readJsonFile(getProjectConfigFile()) as PermissionConfigData;
-  if (projectConfig.permissionMode) return projectConfig.permissionMode;
-
-  // Fall back to user-level config
+  // Only use user-level config for permissionMode
   const userConfig = readJsonFile(USER_CONFIG_FILE) as PermissionConfigData;
   return userConfig.permissionMode;
 }
@@ -78,16 +74,6 @@ export function loadPermissionMode(): PermissionMode | undefined {
 export function savePermissionModeUser(mode: PermissionMode): void {
   const current = readJsonFile(USER_CONFIG_FILE);
   writeJsonFile(USER_CONFIG_FILE, { ...current, permissionMode: mode });
-}
-
-/**
- * Save permission mode to project-level config (.kodax/config.local.json)
- * 保存权限模式到项目级配置
- */
-export function savePermissionModeProject(mode: PermissionMode): void {
-  const projectConfigFile = getProjectConfigFile();
-  const current = readJsonFile(projectConfigFile);
-  writeJsonFile(projectConfigFile, { ...current, permissionMode: mode });
 }
 
 /**

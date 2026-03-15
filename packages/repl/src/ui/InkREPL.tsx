@@ -408,19 +408,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const confirmResolveRef = useRef<((result: ConfirmResult) => void) | null>(null);
   const [uiRequest, setUiRequest] = useState<
     | {
-        kind: "select";
-        title: string;
-        options: string[];
-        buffer: string;
-        error?: string;
-      }
+      kind: "select";
+      title: string;
+      options: string[];
+      buffer: string;
+      error?: string;
+    }
     | {
-        kind: "input";
-        prompt: string;
-        defaultValue?: string;
-        buffer: string;
-        error?: string;
-      }
+      kind: "input";
+      prompt: string;
+      defaultValue?: string;
+      buffer: string;
+      error?: string;
+    }
     | null
   >(null);
   const uiResolveRef = useRef<((value: string | undefined) => void) | null>(null);
@@ -592,9 +592,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             setUiRequest((prev) =>
               prev && prev.kind === "select"
                 ? {
-                    ...prev,
-                    error: `Invalid choice. Enter 1-${prev.options.length}, or 0 to cancel.`,
-                  }
+                  ...prev,
+                  error: `Invalid choice. Enter 1-${prev.options.length}, or 0 to cancel.`,
+                }
                 : prev
             );
             return;
@@ -821,7 +821,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // Permission hook - called before each tool execution
     // 权限钩子 - 在每个工具执行前调用
     beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean> => {
-      const mode = currentConfig.permissionMode;
+      const mode = permissionModeRef.current;  // 使用 ref 获取最新值，而非 currentConfig.permissionMode
       const confirmTools = computeConfirmTools(mode);
       const alwaysAllowTools = alwaysAllowToolsRef.current;
       // Issue 052 fix: Read gitRoot from context prop, not options.context - Issue 052 修复：从 context prop 读取 gitRoot
@@ -877,6 +877,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         if (isProtected) {
           const result = await showConfirmDialog(tool, { ...input, _alwaysConfirm: true });
+
+          // === RACE CONDITION FIX: Re-evaluate permission mode ===
+          if (permissionModeRef.current === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
+            console.log(chalk.yellow(`[Blocked] Tool '${tool}' blocked because mode was switched to 'plan' during confirmation`));
+            return false;
+          }
+
+          if (permissionModeRef.current === 'plan' && tool === 'bash') {
+            const command = (input.command as string) ?? '';
+            if (isBashWriteCommand(command)) {
+              console.log(chalk.yellow(`[Blocked] Bash write operation blocked because mode was switched to 'plan' during confirmation: ${command.slice(0, 50)}...`));
+              return false;
+            }
+          }
+
           return result.confirmed;
         }
       }
@@ -892,6 +907,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         // Show confirmation dialog
         const result = await showConfirmDialog(tool, input);
+
+        // === RACE CONDITION FIX: Re-evaluate permission mode ===
+        // The user might have pressed Ctrl+O to switch to 'plan' mode
+        // WHILE the confirmation dialog was open and waiting.
+        if (permissionModeRef.current === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
+          console.log(chalk.yellow(`[Blocked] Tool '${tool}' blocked because mode was switched to 'plan' during confirmation`));
+          return false;
+        }
+
+        if (permissionModeRef.current === 'plan' && tool === 'bash') {
+          const command = (input.command as string) ?? '';
+          if (isBashWriteCommand(command)) {
+            console.log(chalk.yellow(`[Blocked] Bash write operation blocked because mode was switched to 'plan' during confirmation: ${command.slice(0, 50)}...`));
+            return false;
+          }
+        }
+
         if (!result.confirmed) {
           // Issue 051 fix: Show cancellation feedback - Issue 051 修复：显示取消反馈
           console.log(chalk.yellow('[Cancelled] Operation cancelled by user'));
@@ -1828,6 +1860,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         onSetReasoningMode={(mode) => {
           currentOptionsRef.current.reasoningMode = mode;
           currentOptionsRef.current.thinking = mode !== 'off';
+        }}
+        onSetPermissionMode={(mode) => {
+          permissionModeRef.current = mode;
         }}
         isInputEmpty={isInputEmpty}
         onSavePermissionMode={savePermissionModeUser}
