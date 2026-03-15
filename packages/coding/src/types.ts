@@ -93,7 +93,7 @@ export interface KodaXEvents {
 
   // 用户交互（可选，由 REPL 层实现）
   /** Tool execution hook - called before tool execution, return false to block - 工具执行前回调 */
-  beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean>;
+  beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean | string>;
   /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
   askUser?: (options: AskUserQuestionOptions) => Promise<string>;
 }

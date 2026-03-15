@@ -108,7 +108,7 @@ export interface PermissionContext {
   /** Callback to switch permission mode - 切换权限模式的回调 */
   switchPermissionMode?: (mode: PermissionMode) => void;
   /** Pre-execution hook - 执行前钩子 */
-  beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean>;
+  beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean | string>;
 }
 
 /**

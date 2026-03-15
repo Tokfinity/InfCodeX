@@ -17,6 +17,7 @@ Thumbs.db
 
 # Project specific
 .kodax/
+.agent/
 .claude/
 
 # Logs

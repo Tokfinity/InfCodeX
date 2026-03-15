@@ -820,7 +820,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Permission hook - called before each tool execution
     // 权限钩子 - 在每个工具执行前调用
-    beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean> => {
+    beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean | string> => {
       const mode = permissionModeRef.current;  // 使用 ref 获取最新值，而非 currentConfig.permissionMode
       const confirmTools = computeConfirmTools(mode);
       const alwaysAllowTools = alwaysAllowToolsRef.current;
@@ -831,7 +831,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Block file modification tools and undo
       if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
         console.log(chalk.yellow(`[Blocked] Tool '${tool}' is not allowed in plan mode (read-only)`));
-        return false;
+        return `[Blocked] Tool '${tool}' is not allowed in plan mode (read-only). If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
       }
 
       // For bash in plan mode, only block write operations
@@ -839,7 +839,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const command = (input.command as string) ?? '';
         if (isBashWriteCommand(command)) {
           console.log(chalk.yellow(`[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`));
-          return false;
+          return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
         }
       }
 

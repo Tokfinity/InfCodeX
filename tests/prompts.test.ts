@@ -35,6 +35,8 @@ describe('SYSTEM_PROMPT Content Verification', () => {
     expect(content).toContain('"Missing required parameter \'X\'"');
     expect(content).toContain('"File not found"');
     expect(content).toContain('"String not found"');
+    expect(content).toContain('When a shell command fails, prefer this recovery order:');
+    expect(content).toContain('Only create a helper script');
   });
 
   it('should contain Editing Files section', async () => {
@@ -47,7 +49,11 @@ describe('SYSTEM_PROMPT Content Verification', () => {
 
   it('should contain Shell Commands section with Cross-Platform Notes', async () => {
     const content = await fs.readFile(systemPromptPath, 'utf-8');
+    expect(content).toContain('## Tool Usage');
+    expect(content).toContain('Prefer specialized tools over shell for file operations:');
+    expect(content).toContain('Do NOT create temporary scripts or scratch files in the project root');
     expect(content).toContain('## Shell Commands');
+    expect(content).toContain('Reserve shell commands for terminal operations');
     expect(content).toContain('### Cross-Platform Notes');
     // Check for platform-specific command hints
     expect(content).toContain('move');

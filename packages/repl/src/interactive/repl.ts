@@ -402,14 +402,14 @@ Keyboard Shortcuts:
         events: {
           ...currentOptions.events,
           // Permission control via beforeToolExecute hook - 通过 beforeToolExecute 钩子控制权限
-          beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean> => {
+          beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean | string> => {
             const mode = currentPermissionMode;
             const confirmTools = computeConfirmTools(mode);
 
             // Plan mode: block modification tools
             if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
               console.log(chalk.yellow(`[Blocked] Tool '${tool}' is not allowed in plan mode (read-only)`));
-              return false;
+              return `[Blocked] Tool '${tool}' is not allowed in plan mode (read-only). If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
             }
 
             // For bash in plan mode, block write operations
@@ -417,7 +417,7 @@ Keyboard Shortcuts:
               const command = (input.command as string) ?? '';
               if (isBashWriteCommand(command)) {
                 console.log(chalk.yellow(`[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`));
-                return false;
+                return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... If you have finished planning and need to write files, you can use the 'ask_user_question' tool to request changing the mode to 'accept-edits' for human permission. If you are still planning, file modifications are not allowed in plan mode, please think of other ways or explain your plan.`;
               }
             }
 

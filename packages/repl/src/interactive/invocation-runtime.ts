@@ -471,6 +471,7 @@ export async function prepareInvocationExecution(
         return false;
       }
 
+      // Propagate the result from baseEvents.beforeToolExecute (may be true, false, or a string message)
       return baseEvents.beforeToolExecute
         ? await baseEvents.beforeToolExecute(tool, input)
         : true;

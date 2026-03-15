@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **System Prompts Enhancement**: Improved tool usage guidance in system prompts
+  - Added shell command failure recovery order guidance
+  - Added tool usage preferences (prefer specialized tools over shell)
+  - Added temporary script handling guidelines
+
+### Fixed
+- **Permission Race Condition**: Fix race condition when switching permission mode during confirmation dialog
+  - User could press Ctrl+O to switch to 'plan' mode while confirmation dialog was pending
+  - Added re-evaluation of permission mode after user confirms tool execution
+  - Synced permission mode ref in GlobalShortcuts to keep it updated
+- **Temporary Helper Script Prevention**: Block creation of temp scripts outside project scratch area
+  - Detect temp helper script patterns (e.g., temp-*.sh, helper*.js, scratch*.py)
+  - Guide LLM to use specialized tools (read/edit/write) or .agent/ directory
+  - Support both write tool and bash redirect/tee commands
+- **Improved Plan Mode Error Messages**: Enhanced guidance when tools blocked in plan mode
+  - Suggest using `ask_user_question` tool to request mode change
+  - Clearer explanation of plan mode restrictions
+
 ---
 
 ## [0.5.37] - 2026-03-15
