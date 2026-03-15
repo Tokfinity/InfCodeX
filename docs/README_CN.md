@@ -129,7 +129,7 @@ KodaX/
 ## 特性
 
 - **5层模块化架构** - 每层可独立使用，可作为库
-- **7 个模型** - Anthropic, OpenAI, Kimi, Kimi Code, 智谱, 智谱 Coding, 通义千问
+- **10 个模型** - Anthropic, OpenAI, Gemini CLI, Codex CLI, Kimi, Kimi Code, 智谱, 智谱 Coding, 通义千问, Minimax
 - **思考模式** - 复杂任务的深度推理（部分模型支持）
 - **流式输出** - 实时显示，不用等待
 - **8 个工具** - read, write, edit, bash, glob, grep, undo, diff
