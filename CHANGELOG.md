@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+---
+
+## [0.5.38] - 2026-03-16
+
 ### Changed
 - **System Prompts Enhancement**: Improved tool usage guidance in system prompts
   - Added shell command failure recovery order guidance
