@@ -6,6 +6,7 @@
 
 import type { CursorPosition } from "./utils/text-buffer.js";
 import type { PermissionMode } from "../permission/types.js";
+import type { KodaXReasoningMode } from "@kodax/coding";
 
 // === Keyboard Events - 键盘事件 ===
 
@@ -150,6 +151,8 @@ export interface StatusBarProps {
   };
   currentTool?: string;
   thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  reasoningCapability?: string;
   /** Is context currently compacting - 是否正在压缩上下文 */
   isCompacting?: boolean;
   /** Thinking character count - Issue 068: 显示 thinking 进度 */

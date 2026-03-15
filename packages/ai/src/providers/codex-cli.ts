@@ -10,6 +10,7 @@ export class KodaXCodexCliProvider extends KodaXAcpProvider {
         apiKeyEnv: 'CODEX_CLI_API_KEY', // Dummy, not used but required by base
         model: 'codex',
         supportsThinking: false,
+        reasoningCapability: 'prompt-only',
         contextWindow: 128000,
     };
 

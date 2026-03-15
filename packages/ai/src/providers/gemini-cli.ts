@@ -10,6 +10,7 @@ export class KodaXGeminiCliProvider extends KodaXAcpProvider {
         apiKeyEnv: 'GEMINI_CLI_API_KEY', // Dummy, not used but required by base
         model: 'gemini-2.5-pro',
         supportsThinking: false,
+        reasoningCapability: 'prompt-only',
         contextWindow: 1048576, // Gemini 1M context
     };
 

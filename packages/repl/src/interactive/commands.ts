@@ -5,10 +5,24 @@
 import type * as readline from 'readline';
 import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
-import { estimateTokens, KODAX_PROVIDERS, getProviderList, KodaXOptions, getProvider } from '@kodax/coding';
+import {
+  estimateTokens,
+  KODAX_PROVIDERS,
+  KODAX_REASONING_MODE_SEQUENCE,
+  getProviderList,
+  type KodaXReasoningMode,
+  KodaXOptions,
+  getProvider,
+} from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import { PermissionMode } from '../permission/types.js';
-import { saveConfig } from '../common/utils.js';
+import {
+  describeReasoningCapabilityControl,
+  describeReasoningExecution,
+  formatReasoningCapabilityShort,
+  getProviderReasoningCapability,
+  saveConfig,
+} from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
 import { runWithPlanMode, listPlans, resumePlan, clearCompletedPlans } from '../common/plan-mode.js';
 import { handleProjectCommand, printProjectHelp } from './project-commands.js';
@@ -34,6 +48,7 @@ export type { CommandCallbacks } from '../commands/types.js';
 export interface CurrentConfig {
   provider: string;
   thinking: boolean;
+  reasoningMode: KodaXReasoningMode;
   permissionMode: PermissionMode;
 }
 
@@ -494,9 +509,9 @@ export const BUILTIN_COMMANDS: Command[] = [
           const paddedName = p.name.padEnd(maxNameLen);
           const configured = p.configured ? chalk.green('[已配置]') : chalk.red('[未配置]');
           const current = p.name === currentConfig.provider ? chalk.cyan(' *') : '';
-          console.log(`  ${paddedName} (${p.model}) ${configured}${current}`);
+          console.log(`  ${paddedName} (${p.model}) ${chalk.dim(`[${formatReasoningCapabilityShort(p.reasoningCapability as any)}]`)} ${configured}${current}`);
         }
-        console.log(chalk.dim(`\nCurrent: provider=${currentConfig.provider}, thinking=${currentConfig.thinking}, mode=${currentConfig.permissionMode}`));
+        console.log(chalk.dim(`\nCurrent: provider=${currentConfig.provider}, reasoning=${currentConfig.reasoningMode}, mode=${currentConfig.permissionMode}`));
         console.log(chalk.dim('Usage: /model <provider-name> to switch\n'));
         return;
       }
@@ -532,41 +547,95 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'thinking',
     aliases: ['think', 't'],
-    description: 'Show or toggle thinking mode',
-    usage: '/thinking [on|off]',
+    description: 'Show or change reasoning mode (compat alias)',
+    usage: '/thinking [on|off|auto|quick|balanced|deep]',
     handler: async (args, _context, callbacks, currentConfig) => {
       if (args.length === 0) {
+        const capability = getProviderReasoningCapability(currentConfig.provider);
         const status = currentConfig.thinking ? chalk.green('ON') : chalk.dim('OFF');
         console.log(chalk.dim(`\nThinking: ${status}`));
-        console.log(chalk.dim('Usage: /thinking on|off to toggle\n'));
+        console.log(chalk.dim(`Reasoning mode: ${chalk.cyan(currentConfig.reasoningMode)}`));
+        console.log(chalk.dim(`Effective control: ${chalk.cyan(describeReasoningCapabilityControl(capability))}`));
+        console.log(chalk.dim(`Actual execution: ${describeReasoningExecution(currentConfig.reasoningMode, capability)}`));
+        console.log(chalk.dim('Usage: /thinking on|off|auto|quick|balanced|deep\n'));
         return;
       }
 
       const value = args[0].toLowerCase();
-      if (value === 'on' || value === 'off') {
-        const enabled = value === 'on';
-        saveConfig({ thinking: enabled });
-        callbacks.setThinking?.(enabled);
-        console.log(chalk.cyan(`\n[Thinking ${enabled ? 'enabled' : 'disabled'}] (已保存)`));
-      } else {
-        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /thinking on|off\n'));
+      if (
+        value === 'on' ||
+        value === 'off' ||
+        KODAX_REASONING_MODE_SEQUENCE.includes(value as KodaXReasoningMode)
+      ) {
+        const mode: KodaXReasoningMode =
+          value === 'on'
+            ? 'auto'
+            : value === 'off'
+              ? 'off'
+              : value as KodaXReasoningMode;
+        applyReasoningMode(mode, callbacks, currentConfig);
+        console.log(chalk.cyan(`\n[Reasoning mode: ${mode}] (saved)`));
+        return;
       }
+
+      console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
+      console.log(chalk.dim('Usage: /thinking on|off|auto|quick|balanced|deep\n'));
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/thinking - Toggle Extended Thinking Mode\n'));
+      console.log(chalk.cyan('\n/thinking - Legacy Alias for Reasoning Mode\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /thinking          ') + 'Show current thinking status');
-      console.log(chalk.dim('  /thinking on       ') + 'Enable extended thinking');
-      console.log(chalk.dim('  /thinking off      ') + 'Disable extended thinking');
+      console.log(chalk.dim('  /thinking          ') + 'Show current reasoning status');
+      console.log(chalk.dim('  /thinking on       ') + 'Map to /reasoning auto');
+      console.log(chalk.dim('  /thinking off      ') + 'Map to /reasoning off');
+      console.log(chalk.dim('  /thinking auto     ') + 'Set reasoning mode to auto');
+      console.log(chalk.dim('  /thinking quick    ') + 'Set reasoning mode to quick');
+      console.log(chalk.dim('  /thinking balanced ') + 'Set reasoning mode to balanced');
+      console.log(chalk.dim('  /thinking deep     ') + 'Set reasoning mode to deep');
       console.log(chalk.dim('  /t                 ') + 'Alias for /thinking');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  Extended thinking allows the model to reason through'));
-      console.log(chalk.dim('  complex problems before responding. Useful for:'));
-      console.log(chalk.dim('  - Complex architectural decisions'));
-      console.log(chalk.dim('  - Multi-step reasoning tasks'));
-      console.log(chalk.dim('  - Deep code analysis'));
+      console.log(chalk.dim('  Compatibility command for the new unified reasoning modes.'));
+      console.log(chalk.dim('  Use /reasoning for the primary interface.'));
+      console.log();
+    },
+  },
+  {
+    name: 'reasoning',
+    aliases: ['reason'],
+    description: 'Show or set reasoning mode',
+    usage: '/reasoning [off|auto|quick|balanced|deep]',
+    handler: async (args, _context, callbacks, currentConfig) => {
+      if (args.length === 0) {
+        const capability = getProviderReasoningCapability(currentConfig.provider);
+        console.log(chalk.dim(`\nReasoning mode: ${chalk.cyan(currentConfig.reasoningMode)}`));
+        console.log(chalk.dim(`Thinking compatibility: ${currentConfig.thinking ? chalk.green('ON') : chalk.dim('OFF')}`));
+        console.log(chalk.dim(`Effective control: ${chalk.cyan(describeReasoningCapabilityControl(capability))}`));
+        console.log(chalk.dim(`Actual execution: ${describeReasoningExecution(currentConfig.reasoningMode, capability)}`));
+        console.log(chalk.dim('Usage: /reasoning off|auto|quick|balanced|deep\n'));
+        return;
+      }
+
+      const value = args[0].toLowerCase() as KodaXReasoningMode;
+      if (!KODAX_REASONING_MODE_SEQUENCE.includes(value)) {
+        console.log(chalk.red(`\n[Invalid reasoning mode: ${args[0]}]`));
+        console.log(chalk.dim('Usage: /reasoning off|auto|quick|balanced|deep\n'));
+        return;
+      }
+
+      applyReasoningMode(value, callbacks, currentConfig);
+      console.log(chalk.cyan(`\n[Reasoning mode: ${value}] (saved)`));
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/reasoning - Set Reasoning Mode\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /reasoning             ') + 'Show current reasoning mode');
+      console.log(chalk.dim('  /reasoning off         ') + 'Disable reasoning');
+      console.log(chalk.dim('  /reasoning auto        ') + 'Use semantic routing + adaptive depth');
+      console.log(chalk.dim('  /reasoning quick       ') + 'Low-depth reasoning');
+      console.log(chalk.dim('  /reasoning balanced    ') + 'Medium-depth reasoning');
+      console.log(chalk.dim('  /reasoning deep        ') + 'High-depth reasoning');
+      console.log(chalk.dim('  /reasoning:auto        ') + 'Inline form, equivalent to /reasoning auto');
+      console.log(chalk.dim('  /reason                ') + 'Alias for /reasoning');
       console.log();
     },
   },
@@ -754,7 +823,7 @@ const COMMAND_CATEGORIES: Record<string, string[]> = {
   General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'status'],
   Permission: ['mode', 'auto'],
   Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
-  Settings: ['model', 'thinking', 'plan'],
+  Settings: ['model', 'thinking', 'reasoning', 'plan'],
   Project: ['project'],
   Skills: ['skill'],
 };
@@ -765,6 +834,28 @@ function getCommandsForCategory(names: string[]) {
     .map((name) => registry.get(name))
     .filter((cmd): cmd is NonNullable<ReturnType<CommandRegistry['get']>> => cmd !== undefined)
     .filter((cmd) => cmd.userInvocable !== false);
+}
+
+function reasoningModeToLegacyThinking(mode: KodaXReasoningMode): boolean {
+  return mode !== 'off';
+}
+
+function applyReasoningMode(
+  mode: KodaXReasoningMode,
+  callbacks: CommandCallbacks,
+  currentConfig: CurrentConfig,
+): void {
+  currentConfig.reasoningMode = mode;
+  currentConfig.thinking = reasoningModeToLegacyThinking(mode);
+  saveConfig({
+    reasoningMode: mode,
+    thinking: currentConfig.thinking,
+  });
+  if (callbacks.setReasoningMode) {
+    callbacks.setReasoningMode(mode);
+  } else {
+    callbacks.setThinking?.(currentConfig.thinking);
+  }
 }
 
 function printCommandSection(
@@ -875,6 +966,7 @@ function printStatus(context: InteractiveContext, currentConfig: CurrentConfig):
   const tokens = estimateTokens(context.messages);
   console.log(chalk.bold('\nSession Status:\n'));
   console.log(chalk.dim(`  Permission:  ${chalk.cyan(currentConfig.permissionMode)}`));
+  console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(currentConfig.reasoningMode)}`));
   console.log(chalk.dim(`  Session ID:  ${context.sessionId}`));
   console.log(chalk.dim(`  Messages:    ${context.messages.length}`));
   console.log(chalk.dim(`  Tokens:      ~${tokens}`));
@@ -962,8 +1054,9 @@ export function parseCommand(input: string): { command: string; args: string[]; 
   if (!trimmed.startsWith('/')) return null;
 
   const parts = trimmed.slice(1).split(/\s+/);
-  const command = parts[0]?.toLowerCase();
-  const args = parts.slice(1).filter(Boolean);
+  const rawCommand = parts[0]?.toLowerCase();
+  let command = rawCommand;
+  let args = parts.slice(1).filter(Boolean);
 
   if (!command) return null;
 
@@ -975,6 +1068,13 @@ export function parseCommand(input: string): { command: string; args: string[]; 
     }
     // /skill: with no name - treat as /skill
     return { command: 'skill', args };
+  }
+
+  const colonIndex = command.indexOf(':');
+  if (colonIndex > 0) {
+    const inlineArg = command.slice(colonIndex + 1).trim();
+    command = command.slice(0, colonIndex);
+    args = inlineArg ? [inlineArg, ...args] : args;
   }
 
   return { command, args };

@@ -18,6 +18,16 @@ export type {
   KodaXToolDefinition,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningMode,
+  KodaXThinkingDepth,
+  KodaXTaskType,
+  KodaXExecutionMode,
+  KodaXRiskLevel,
+  KodaXTaskRoutingDecision,
+  KodaXThinkingBudgetMap,
+  KodaXTaskBudgetOverrides,
+  KodaXReasoningRequest,
 } from '@kodax/ai';
 
 // Import for local types

@@ -19,6 +19,7 @@ import {
   KodaXOptions,
   KodaXMessage,
   KodaXResult,
+  KodaXReasoningMode,
   runKodaX,
   estimateTokens,
   KodaXSessionStorage,
@@ -107,6 +108,22 @@ export interface RepLOptions extends KodaXOptions {
   storage?: SessionStorage;
 }
 
+function resolveInitialReasoningMode(
+  options: Pick<KodaXOptions, 'reasoningMode' | 'thinking'>,
+  config: { reasoningMode?: KodaXReasoningMode; thinking?: boolean },
+): KodaXReasoningMode {
+  if (options.reasoningMode) {
+    return options.reasoningMode;
+  }
+  if (config.reasoningMode) {
+    return config.reasoningMode;
+  }
+  if (options.thinking === true || config.thinking === true) {
+    return 'auto';
+  }
+  return 'auto';
+}
+
 // Run interactive mode - 运行交互式模式
 export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const gitRoot = await getGitRoot() ?? undefined;
@@ -115,7 +132,8 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // Load config (priority: CLI args > config file > defaults) - 加载配置（优先级：CLI参数 > 配置文件 > 默认值）
   const config = loadConfig();
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const initialThinking = options.thinking ?? config.thinking ?? false;
+  const initialReasoningMode = resolveInitialReasoningMode(options, config);
+  const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =
     (config as { permissionMode?: PermissionMode }).permissionMode ?? 'accept-edits';
 
@@ -127,6 +145,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   let currentConfig: CurrentConfig = {
     provider: initialProvider,
     thinking: initialThinking,
+    reasoningMode: initialReasoningMode,
     permissionMode: initialPermissionMode,
   };
 
@@ -202,7 +221,8 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
       context.sessionId,
       currentConfig.permissionMode,
       currentConfig.provider,
-      model
+      model,
+      currentConfig.reasoningMode,
     ));
   }
 
@@ -215,6 +235,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 Keyboard Shortcuts:
   Tab       Auto-complete (@files, /commands)
   Esc+Esc   Edit last message
+  Ctrl+T    Cycle reasoning mode
   Ctrl+E    Open external editor
   Ctrl+R    Search command history (built-in)
   Ctrl+C    Cancel current input
@@ -250,6 +271,8 @@ Keyboard Shortcuts:
   // Fix: Ensure session.id is set to reuse same session - 修复：确保 session.id 被设置以复用同一 session
   let currentOptions: RepLOptions = {
     ...options,
+    reasoningMode: initialReasoningMode,
+    thinking: initialThinking,
     session: {
       ...options.session,
       id: context.sessionId,
@@ -334,14 +357,30 @@ Keyboard Shortcuts:
     switchProvider: (provider: string) => {
       currentConfig.provider = provider;
       currentOptions.provider = provider;
+      statusBar?.update({
+        provider,
+        model: getProviderModel(provider) ?? provider,
+      });
     },
     setThinking: (enabled: boolean) => {
       currentConfig.thinking = enabled;
       currentOptions.thinking = enabled;
+      currentConfig.reasoningMode = enabled ? 'auto' : 'off';
+      currentOptions.reasoningMode = currentConfig.reasoningMode;
+      statusBar?.update({ reasoningMode: currentConfig.reasoningMode });
+    },
+    setReasoningMode: (mode: KodaXReasoningMode) => {
+      const thinking = mode !== 'off';
+      currentConfig.reasoningMode = mode;
+      currentConfig.thinking = thinking;
+      currentOptions.reasoningMode = mode;
+      currentOptions.thinking = thinking;
+      statusBar?.update({ reasoningMode: mode });
     },
     setPermissionMode: (mode: PermissionMode) => {
       currentConfig.permissionMode = mode;
       currentPermissionMode = mode; // Sync with local permission state
+      statusBar?.update({ permissionMode: mode });
       // Note: permissionMode is no longer part of KodaXOptions
       // Permission control is handled locally via beforeToolExecute callback
     },
@@ -359,6 +398,7 @@ Keyboard Shortcuts:
         ...currentOptions,
         provider: currentConfig.provider,
         thinking: currentConfig.thinking,
+        reasoningMode: currentConfig.reasoningMode,
         events: {
           ...currentOptions.events,
           // Permission control via beforeToolExecute hook - 通过 beforeToolExecute 钩子控制权限
@@ -479,6 +519,7 @@ Keyboard Shortcuts:
           ...currentOptions,
           provider: currentConfig.provider,
           thinking: currentConfig.thinking,
+          reasoningMode: currentConfig.reasoningMode,
         });
       } else {
         const runResult = await runAgentRound(
@@ -486,6 +527,7 @@ Keyboard Shortcuts:
             ...currentOptions,
             provider: currentConfig.provider,
             thinking: currentConfig.thinking,
+            reasoningMode: currentConfig.reasoningMode,
           },
           context,
           result.projectInitPrompt
@@ -513,6 +555,7 @@ Keyboard Shortcuts:
         ...currentOptions,
         provider: currentConfig.provider,
         thinking: currentConfig.thinking,
+        reasoningMode: currentConfig.reasoningMode,
       },
       result.invocation,
       rawInput,
@@ -610,6 +653,7 @@ Keyboard Shortcuts:
               ...currentOptions,
               provider: currentConfig.provider,
               thinking: currentConfig.thinking,
+              reasoningMode: currentConfig.reasoningMode,
             });
           } else {
             const result = await runKodaX(
@@ -617,6 +661,7 @@ Keyboard Shortcuts:
                 ...currentOptions,
                 provider: currentConfig.provider,
                 thinking: currentConfig.thinking,
+                reasoningMode: currentConfig.reasoningMode,
                 session: { ...currentOptions.session, initialMessages: context.messages },
               },
               processed
@@ -692,6 +737,7 @@ Keyboard Shortcuts:
           ...currentOptions,
           provider: currentConfig.provider,
           thinking: currentConfig.thinking,
+          reasoningMode: currentConfig.reasoningMode,
         });
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
@@ -764,15 +810,21 @@ function getPrompt(mode: string, config: CurrentConfig, planMode: boolean): stri
     return modeColor(`${modeIndicator} `);
   } else if (width < 100) {
     // Medium width: short prompt - 中等宽度：简短提示符
-    const flagChar = planMode ? 'P' : (config.thinking ? 'T' : '');
+    const flagChar = planMode
+      ? 'P'
+      : config.reasoningMode !== 'off'
+        ? config.reasoningMode[0]?.toUpperCase() ?? 'R'
+        : '';
     const flagPart = flagChar ? chalk.hex(theme.colors.dim)(`[${flagChar}]`) : '';
     return modeColor(`kodax:${mode}${flagPart}> `);
   }
 
   // Wide terminal: full prompt - 宽终端：完整提示符
-  const thinkingFlag = config.thinking ? chalk.hex(theme.colors.info)('[thinking]') : '';
+  const reasoningFlag = config.reasoningMode !== 'off'
+    ? chalk.hex(theme.colors.info)(`[reason:${config.reasoningMode}]`)
+    : '';
   const planFlag = planMode ? chalk.hex(theme.colors.accent)('[plan]') : '';
-  const flags = [thinkingFlag, planFlag].filter(Boolean).join('');
+  const flags = [reasoningFlag, planFlag].filter(Boolean).join('');
   return modeColor(`kodax:${mode} (${config.provider}:${model})${flags}> `);
 }
 
@@ -1042,7 +1094,14 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
   console.log(chalk.hex(theme.colors.text)(`\n  v${KODAX_VERSION}  |  AI Coding Agent  |  ${config.provider}:${model}`));
   console.log(chalk.hex(theme.colors.dim)('\n  ────────────────────────────────────────────────────────'));
-  console.log(chalk.hex(theme.colors.dim)('  Mode: ') + chalk.hex(theme.colors.primary)(mode) + chalk.hex(theme.colors.dim)('  |  Thinking: ') + (config.thinking ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.dim)('off')));
+  console.log(
+    chalk.hex(theme.colors.dim)('  Mode: ') +
+    chalk.hex(theme.colors.primary)(mode) +
+    chalk.hex(theme.colors.dim)('  |  Reasoning: ') +
+    (config.reasoningMode === 'off'
+      ? chalk.hex(theme.colors.dim)('off')
+      : chalk.hex(theme.colors.success)(config.reasoningMode))
+  );
 
   // Compaction info
   if (compactionInfo) {
@@ -1067,5 +1126,5 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
   console.log(chalk.hex(theme.colors.primary)('    /clear     ') + chalk.hex(theme.colors.dim)('Clear conversation'));
   console.log(chalk.hex(theme.colors.primary)('    @file      ') + chalk.hex(theme.colors.dim)('Add file to context'));
   console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run shell command'));
-  console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+E (editor) | Ctrl+R (history)\n'));
+  console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+T (reasoning) | Ctrl+E (editor) | Ctrl+R (history)\n'));
 }

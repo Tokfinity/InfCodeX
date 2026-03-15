@@ -6,6 +6,32 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.5.37] - 2026-03-15
+
+### Added
+- **FEATURE_021**: Provider-Aware Reasoning Budget Matrix
+  - Unified reasoning mode system: `off`, `auto`, `quick`, `balanced`, `deep`
+  - Provider capability detection with fallback chains (native-budget → native-toggle → none)
+  - Task routing with LLM-based and heuristic fallback
+  - Auto-reroute capabilities for depth escalation and task reclassification
+  - Reasoning mode persistence and configuration
+  - New `/reasoning` command with inline argument support (e.g., `/reasoning:auto`)
+  - Enhanced `/thinking` command as compatibility alias
+  - Ctrl+T keyboard shortcut to cycle reasoning modes
+
+### Changed
+- Refactored AI and Coding layers to support unified reasoning system
+- Enhanced provider registry with capability detection
+- Improved REPL command parsing for inline arguments
+- Updated StatusBar to display reasoning mode
+
+### Fixed
+- UI synchronization between React state and ref for reasoning mode
+- Error handling in auto-reroute logic
+- Configuration file save error handling
+
+---
+
 ## [0.5.36] - 2026-03-14
 
 ### Added

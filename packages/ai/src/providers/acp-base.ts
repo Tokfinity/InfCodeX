@@ -2,6 +2,7 @@ import { KodaXBaseProvider } from './base.js';
 import { AcpClient, AcpClientOptions } from '../cli-events/acp-client.js';
 import type {
     KodaXMessage,
+    KodaXReasoningRequest,
     KodaXStreamResult,
     KodaXProviderStreamOptions,
     KodaXToolDefinition,
@@ -37,7 +38,7 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         messages: KodaXMessage[],
         tools: KodaXToolDefinition[],
         system: string,
-        thinking: boolean,
+        _reasoning?: boolean | KodaXReasoningRequest,
         streamOptions?: KodaXProviderStreamOptions,
         signal?: AbortSignal
     ): Promise<KodaXStreamResult> {

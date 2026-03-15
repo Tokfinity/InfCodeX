@@ -2,7 +2,11 @@
  * Command system type definitions.
  */
 
-import type { AgentsFile, KodaXOptions } from '@kodax/coding';
+import type {
+  AgentsFile,
+  KodaXOptions,
+  KodaXReasoningMode,
+} from '@kodax/coding';
 import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
 import type { PermissionMode } from '../permission/types.js';
@@ -42,6 +46,7 @@ export interface CommandExecutionMetadata {
 export interface CurrentConfig {
   provider: string;
   thinking: boolean;
+  reasoningMode: KodaXReasoningMode;
   permissionMode: PermissionMode;
 }
 
@@ -55,6 +60,7 @@ export interface CommandCallbacks {
   printHistory: () => void;
   switchProvider?: (provider: string) => void;
   setThinking?: (enabled: boolean) => void;
+  setReasoningMode?: (mode: KodaXReasoningMode) => void;
   setPermissionMode?: (mode: PermissionMode) => void;
   deleteSession?: (id: string) => Promise<void>;
   deleteAllSessions?: () => Promise<void>;

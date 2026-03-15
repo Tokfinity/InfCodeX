@@ -6,8 +6,24 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { KodaXBaseProvider } from './base.js';
-import { KodaXProviderConfig, KodaXMessage, KodaXToolDefinition, KodaXProviderStreamOptions, KodaXStreamResult, KodaXTextBlock, KodaXToolUseBlock, KodaXThinkingBlock, KodaXRedactedThinkingBlock } from '../types.js';
+import { KodaXProviderError } from '../errors.js';
+import {
+  KodaXProviderConfig,
+  KodaXMessage,
+  KodaXToolDefinition,
+  KodaXProviderStreamOptions,
+  KodaXReasoningRequest,
+  KodaXStreamResult,
+  KodaXTextBlock,
+  KodaXToolUseBlock,
+  KodaXThinkingBlock,
+  KodaXRedactedThinkingBlock,
+} from '../types.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
+import {
+  clampThinkingBudget,
+  resolveThinkingBudget,
+} from '../reasoning.js';
 
 export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
@@ -23,20 +39,56 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
     system: string,
-    thinking = false,
+    reasoning?: boolean | KodaXReasoningRequest,
     streamOptions?: KodaXProviderStreamOptions,
     signal?: AbortSignal
   ): Promise<KodaXStreamResult> {
     return this.withRateLimit(async () => {
-      const kwargs: Anthropic.Messages.MessageCreateParams = {
-        model: streamOptions?.modelOverride ?? this.config.model,
-        max_tokens: KODAX_MAX_TOKENS,
-        system,
-        messages: this.convertMessages(messages),
-        tools: tools as Anthropic.Messages.Tool[],
-        stream: true,
+      const normalizedReasoning = this.normalizeReasoning(reasoning);
+      const maxOutputTokens = this.config.maxOutputTokens ?? KODAX_MAX_TOKENS;
+      const model = streamOptions?.modelOverride ?? this.config.model;
+      const initialCapability = normalizedReasoning.enabled
+        ? this.getReasoningCapability(model)
+        : 'none';
+      const attempts: Array<'native-budget' | 'native-toggle' | 'none'> = normalizedReasoning.enabled
+        ? this.getReasoningFallbackChain(initialCapability)
+            .filter((capability): capability is 'native-budget' | 'native-toggle' | 'none' =>
+              capability === 'native-budget' ||
+              capability === 'native-toggle' ||
+              capability === 'none',
+            )
+        : ['none'];
+
+      const buildRequest = (
+        capability: 'native-budget' | 'native-toggle' | 'none',
+      ): Anthropic.Messages.MessageCreateParams => {
+        const kwargs: Anthropic.Messages.MessageCreateParams = {
+          model,
+          max_tokens: maxOutputTokens,
+          system,
+          messages: this.convertMessages(messages),
+          tools: tools as Anthropic.Messages.Tool[],
+          stream: true,
+        };
+
+        if (capability === 'native-budget') {
+          const requestedBudget = resolveThinkingBudget(
+            this.config,
+            normalizedReasoning.depth,
+            normalizedReasoning.taskType,
+          );
+          kwargs.thinking = {
+            type: 'enabled',
+            budget_tokens: clampThinkingBudget(requestedBudget, maxOutputTokens),
+          };
+        } else if (capability === 'native-toggle') {
+          kwargs.thinking = {
+            type: 'enabled',
+          } as Anthropic.Messages.ThinkingConfigParam;
+        }
+
+        return kwargs;
       };
-      if (thinking) kwargs.thinking = { type: 'enabled', budget_tokens: 10000 };
 
       // 检查是否已被取消
       if (signal?.aborted) {
@@ -62,7 +114,40 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       // 参考: https://github.com/anthropics/anthropic-sdk-typescript
-      const response = await this.client.messages.create(kwargs, signal ? { signal } : {});
+      let response: Awaited<ReturnType<typeof this.client.messages.create>> | undefined;
+      let lastError: unknown;
+
+      for (const capability of attempts) {
+        try {
+          response = await this.client.messages.create(
+            buildRequest(capability),
+            signal ? { signal } : {},
+          );
+          if (capability !== initialCapability) {
+            this.persistReasoningCapabilityOverride(capability, model);
+          }
+          break;
+        } catch (error) {
+          lastError = error;
+          const fallbackTerms =
+            capability === 'native-budget'
+              ? ['budget_tokens', 'thinking']
+              : capability === 'native-toggle'
+                ? ['thinking']
+                : [];
+
+          if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
+            throw error;
+          }
+        }
+      }
+
+      if (!response) {
+        throw lastError ?? new KodaXProviderError(
+          'All reasoning capability attempts failed without a captured error',
+          this.name,
+        );
+      }
 
       for await (const event of response as AsyncIterable<Anthropic.Messages.RawMessageStreamEvent>) {
         // 检查是否被中断 (双重保险)

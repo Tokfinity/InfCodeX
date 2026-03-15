@@ -54,6 +54,10 @@ export async function buildSystemPrompt(options: KodaXOptions, isNewSession: boo
     prompt += '\n\n' + options.context.skillsPrompt;
   }
 
+  if (options.context?.promptOverlay) {
+    prompt += '\n\n' + options.context.promptOverlay;
+  }
+
   // Append AGENTS.md content (Feature 020)
   // 追加 AGENTS.md 项目上下文规则
   const cwd = process.cwd();

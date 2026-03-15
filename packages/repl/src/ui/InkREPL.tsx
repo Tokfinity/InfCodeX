@@ -32,6 +32,7 @@ import { StreamingState, type HistoryItem, KeypressHandlerPriority } from "./typ
 import {
   KodaXOptions,
   KodaXMessage,
+  KodaXReasoningMode,
   KodaXResult,
   runKodaX,
   KODAX_DEFAULT_PROVIDER,
@@ -68,7 +69,11 @@ import {
   CurrentConfig,
 } from "../interactive/commands.js";
 import type { CommandInvocationRequest } from "../commands/types.js";
-import { getProviderModel } from "../common/utils.js";
+import {
+  formatReasoningCapabilityShort,
+  getProviderModel,
+  getProviderReasoningCapability,
+} from "../common/utils.js";
 import { KODAX_VERSION } from "../common/utils.js";
 import { runWithPlanMode } from "../common/plan-mode.js";
 import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUser } from "../common/permission-config.js";
@@ -112,12 +117,30 @@ interface BannerProps {
   compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean };
 }
 
+function resolveInitialReasoningMode(
+  options: Pick<KodaXOptions, 'reasoningMode' | 'thinking'>,
+  config: { reasoningMode?: KodaXReasoningMode; thinking?: boolean },
+): KodaXReasoningMode {
+  if (options.reasoningMode) {
+    return options.reasoningMode;
+  }
+  if (config.reasoningMode) {
+    return config.reasoningMode;
+  }
+  if (options.thinking === true || config.thinking === true) {
+    return 'auto';
+  }
+  return 'off';
+}
+
 /**
  * Banner component - displayed inside Ink UI so it's part of the alternate buffer
  */
 const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compactionInfo }) => {
   const theme = getTheme("dark");
   const model = getProviderModel(config.provider) ?? config.provider;
+  const reasoningCapability = getProviderReasoningCapability(config.provider);
+  const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
   const terminalWidth = process.stdout.columns ?? 80;
   const dividerWidth = Math.min(60, terminalWidth - 4);
 
@@ -156,14 +179,17 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compacti
           {config.provider}/{model}
         </Text>
         <Text dimColor>
+          {` [${reasoningCapabilityShort}]`}
+        </Text>
+        <Text dimColor>
           {" | "}
         </Text>
         <Text color={theme.colors.accent}>
           {config.permissionMode}
         </Text>
-        {config.thinking && (
+        {config.reasoningMode !== 'off' && (
           <Text color={theme.colors.warning}>
-            {" +think"}
+            {` +reason:${config.reasoningMode}`}
           </Text>
         )}
       </Box>
@@ -420,6 +446,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Note: permissionMode and alwaysAllowTools are stored separately for permission checks
   const currentOptionsRef = useRef<InkREPLOptions>({
     ...options,
+    thinking: currentConfig.thinking,
+    reasoningMode: currentConfig.reasoningMode,
     session: {
       ...options.session,
       id: context.sessionId,
@@ -1075,6 +1103,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         ...currentOptionsRef.current,
         provider: currentConfig.provider,
         thinking: currentConfig.thinking,
+        reasoningMode: currentConfig.reasoningMode,
       },
       invocation,
       rawInput,
@@ -1268,8 +1297,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             currentOptionsRef.current.provider = provider;
           },
           setThinking: (enabled: boolean) => {
-            setCurrentConfig((prev) => ({ ...prev, thinking: enabled }));
+            const reasoningMode: KodaXReasoningMode = enabled ? 'auto' : 'off';
+            setCurrentConfig((prev) => ({
+              ...prev,
+              thinking: enabled,
+              reasoningMode,
+            }));
             currentOptionsRef.current.thinking = enabled;
+            currentOptionsRef.current.reasoningMode = reasoningMode;
+          },
+          setReasoningMode: (mode: KodaXReasoningMode) => {
+            const thinking = mode !== 'off';
+            setCurrentConfig((prev) => ({
+              ...prev,
+              thinking,
+              reasoningMode: mode,
+            }));
+            currentOptionsRef.current.thinking = thinking;
+            currentOptionsRef.current.reasoningMode = mode;
           },
           setPermissionMode: (mode: PermissionMode) => {
             setCurrentConfig((prev) => ({ ...prev, permissionMode: mode }));
@@ -1288,6 +1333,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             thinking: currentConfig.thinking,
+            reasoningMode: currentConfig.reasoningMode,
             events: createStreamingEvents(), // Include streaming events for /project commands
           }),
           reloadAgentsFiles: async (): Promise<AgentsFile[]> => {
@@ -1545,6 +1591,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             thinking: currentConfig.thinking,
+            reasoningMode: currentConfig.reasoningMode,
           });
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
@@ -1778,6 +1825,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         onSetThinking={(enabled) => {
           currentOptionsRef.current.thinking = enabled;
         }}
+        onSetReasoningMode={(mode) => {
+          currentOptionsRef.current.reasoningMode = mode;
+          currentOptionsRef.current.thinking = mode !== 'off';
+        }}
         isInputEmpty={isInputEmpty}
         onSavePermissionMode={savePermissionModeUser}
       />
@@ -1854,7 +1905,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             <Text dimColor>
               <Text bold>? toggle help</Text>
               {'  '}
-              <Text>Ctrl+T thinking</Text>
+              <Text>Ctrl+T reasoning</Text>
               {'  '}
               <Text>Ctrl+O mode</Text>
               {'  '}
@@ -1881,6 +1932,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             model={getProviderModel(currentConfig.provider) ?? currentConfig.provider}
             currentTool={streamingState.currentTool}
             thinking={currentConfig.thinking}
+            reasoningMode={currentConfig.reasoningMode}
+            reasoningCapability={formatReasoningCapabilityShort(
+              getProviderReasoningCapability(currentConfig.provider),
+            )}
             thinkingCharCount={streamingState.thinkingCharCount}
             toolInputCharCount={streamingState.toolInputCharCount}
             toolInputContent={streamingState.toolInputContent}
@@ -2032,7 +2087,8 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
 
   const config = loadConfig();
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
-  const initialThinking = options.thinking ?? config.thinking ?? false;
+  const initialReasoningMode = resolveInitialReasoningMode(options, config);
+  const initialThinking = initialReasoningMode !== 'off';
   // Load permission mode from config file (not from CLI options)
   // CLI is always YOLO mode; REPL uses config file for permission mode
   const initialPermissionMode: PermissionMode =
@@ -2041,6 +2097,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const currentConfig: CurrentConfig = {
     provider: initialProvider,
     thinking: initialThinking,
+    reasoningMode: initialReasoningMode,
     permissionMode: initialPermissionMode,
   };
 

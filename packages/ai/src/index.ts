@@ -18,6 +18,17 @@ export type {
   KodaXToolDefinition,
   KodaXProviderConfig,
   KodaXProviderStreamOptions,
+  KodaXReasoningCapability,
+  KodaXReasoningOverride,
+  KodaXReasoningMode,
+  KodaXThinkingDepth,
+  KodaXTaskType,
+  KodaXExecutionMode,
+  KodaXRiskLevel,
+  KodaXTaskRoutingDecision,
+  KodaXThinkingBudgetMap,
+  KodaXTaskBudgetOverrides,
+  KodaXReasoningRequest,
 } from './types.js';
 
 // ============== Errors ==============
@@ -32,14 +43,39 @@ export {
 // ============== Constants ==============
 export { KODAX_MAX_TOKENS, KODAX_API_MIN_INTERVAL } from './constants.js';
 
+// ============== Reasoning ==============
+export {
+  KODAX_REASONING_MODE_SEQUENCE,
+  KODAX_DEFAULT_THINKING_BUDGETS,
+  KODAX_REASONING_SAFETY_RESERVE,
+  getReasoningCapability,
+  isReasoningEnabled,
+  normalizeReasoningRequest,
+  getDefaultThinkingDepthForMode,
+  resolveThinkingBudget,
+  clampThinkingBudget,
+  mapDepthToOpenAIReasoningEffort,
+} from './reasoning.js';
+
+export {
+  buildReasoningOverrideKey,
+  loadReasoningOverride,
+  saveReasoningOverride,
+  clearReasoningOverride,
+  reasoningCapabilityToOverride,
+  reasoningOverrideToCapability,
+} from './reasoning-overrides.js';
+
 // ============== Providers ==============
 export {
   KodaXBaseProvider,
   KodaXAnthropicCompatProvider,
   KodaXOpenAICompatProvider,
   KODAX_PROVIDERS,
+  KODAX_PROVIDER_SNAPSHOTS,
   KODAX_DEFAULT_PROVIDER,
   getProvider,
+  getProviderConfiguredReasoningCapability,
   isProviderConfigured,
   getProviderModel,
   getProviderList,

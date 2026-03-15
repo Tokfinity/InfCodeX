@@ -9,8 +9,24 @@
     // 默认使用的 AI Provider
     // 可选值: "anthropic" | "openai" | "kimi" | "kimi-code" | "qwen" | "zhipu" | "zhipu-coding" | "minimax-coding" | "gemini-cli" | "codex-cli"
     "provider": "kimi-code",
-    // 是否启用 Thinking 模式 (仅部分 Provider 支持)
+    // 统一推理模式（推荐配置项）
+    // 可选值: "off" | "auto" | "quick" | "balanced" | "deep"
+    // - off: 关闭推理
+    // - auto: 先做任务路由，再自动选择深度
+    // - quick: 保守推理
+    // - balanced: 中等推理
+    // - deep: 高强度推理
+    "reasoningMode": "auto",
+    // 兼容旧版的 thinking 开关
+    // 新版本优先读取 reasoningMode；保留此项是为了兼容旧配置和旧脚本
     "thinking": true,
+    // Provider reasoning override 缓存
+    // 只有 provider 明确拒绝 budget / effort / toggle 参数后，才会自动写入这里
+    // key 格式: "provider|baseUrl|model"
+    // value 可选: "budget" | "effort" | "toggle" | "none"
+    "providerReasoningOverrides": {
+        // "zhipu-coding|https://open.bigmodel.cn/api/anthropic|glm-5": "toggle"
+    },
     // ── Compaction 压缩配置 ────────────────────────────────────
     // 智能上下文压缩：当对话历史过长时，自动使用 LLM 生成摘要
     "compaction": {
@@ -30,6 +46,6 @@
     },
     // ── Permission 权限配置 ────────────────────────────────────
     // 权限模式
-    // 可选值: "default" | "accept-edits" | "full-auto" | "plan"
-    "permissionMode": "default"
+    // 可选值: "plan" | "accept-edits" | "auto-in-project"
+    "permissionMode": "accept-edits"
 }

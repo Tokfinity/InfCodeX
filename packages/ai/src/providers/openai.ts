@@ -6,12 +6,29 @@
 
 import OpenAI from 'openai';
 import { KodaXBaseProvider } from './base.js';
-import { KodaXProviderConfig, KodaXMessage, KodaXToolDefinition, KodaXProviderStreamOptions, KodaXStreamResult, KodaXTextBlock, KodaXToolUseBlock } from '../types.js';
+import { KodaXProviderError } from '../errors.js';
+import {
+  KodaXReasoningCapability,
+  KodaXProviderConfig,
+  KodaXMessage,
+  KodaXToolDefinition,
+  KodaXProviderStreamOptions,
+  KodaXReasoningRequest,
+  KodaXStreamResult,
+  KodaXTextBlock,
+  KodaXToolUseBlock,
+} from '../types.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
+import {
+  clampThinkingBudget,
+  isReasoningEnabled,
+  mapDepthToOpenAIReasoningEffort,
+  resolveThinkingBudget,
+} from '../reasoning.js';
 
 export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
-  readonly supportsThinking = false;
+  readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
   protected client!: OpenAI;
 
@@ -19,11 +36,83 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     this.client = new OpenAI({ apiKey: this.getApiKey(), baseURL: this.config.baseUrl });
   }
 
+  private applyReasoningCapability(
+    createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming,
+    capability: KodaXReasoningCapability,
+    reasoning: Required<KodaXReasoningRequest>,
+  ): void {
+    // The OpenAI SDK types do not expose provider-specific extensions like
+    // Qwen's extra_body or Zhipu's thinking block, so we intentionally attach
+    // those fields on the raw request object here.
+    const params = createParams as unknown as Record<string, unknown>;
+    const maxOutputTokens =
+      this.config.maxOutputTokens ?? KODAX_MAX_TOKENS;
+    const requestedBudget = clampThinkingBudget(
+      resolveThinkingBudget(
+        this.config,
+        reasoning.depth,
+        reasoning.taskType,
+      ),
+      maxOutputTokens,
+    );
+
+    switch (capability) {
+      case 'native-effort': {
+        const reasoningEffort = mapDepthToOpenAIReasoningEffort(reasoning.depth);
+        if (reasoningEffort) {
+          params.reasoning_effort = reasoningEffort;
+        }
+        break;
+      }
+      case 'native-budget': {
+        if (this.name === 'qwen') {
+          params.extra_body = {
+            enable_thinking: true,
+            thinking_budget: requestedBudget,
+          };
+        } else if (this.name === 'zhipu') {
+          params.thinking = {
+            type: 'enabled',
+            budget_tokens: requestedBudget,
+          };
+        }
+        break;
+      }
+      case 'native-toggle': {
+        if (this.name === 'qwen') {
+          params.extra_body = {
+            enable_thinking: true,
+          };
+        } else if (this.name === 'zhipu') {
+          params.thinking = {
+            type: 'enabled',
+          };
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  private getFallbackTerms(capability: KodaXReasoningCapability): string[] {
+    switch (capability) {
+      case 'native-budget':
+        return ['thinking_budget', 'budget_tokens', 'thinking'];
+      case 'native-effort':
+        return ['reasoning_effort'];
+      case 'native-toggle':
+        return ['enable_thinking', 'thinking'];
+      default:
+        return [];
+    }
+  }
+
   async stream(
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
     system: string,
-    _thinking = false,
+    reasoning?: boolean | KodaXReasoningRequest,
     streamOptions?: KodaXProviderStreamOptions,
     signal?: AbortSignal
   ): Promise<KodaXStreamResult> {
@@ -47,13 +136,68 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const streamStartTime = Date.now();
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
-      const stream = await this.client.chat.completions.create({
-        model: streamOptions?.modelOverride ?? this.config.model,
+      const normalizedReasoning = this.normalizeReasoning(reasoning);
+      const model = streamOptions?.modelOverride ?? this.config.model;
+      const initialCapability =
+        isReasoningEnabled(normalizedReasoning)
+          ? this.getReasoningCapability(model)
+          : 'none';
+      const attempts: Array<'native-budget' | 'native-effort' | 'native-toggle' | 'none'> = isReasoningEnabled(normalizedReasoning)
+        ? this.getReasoningFallbackChain(initialCapability)
+            .filter((capability): capability is 'native-budget' | 'native-effort' | 'native-toggle' | 'none' =>
+              capability === 'native-budget' ||
+              capability === 'native-effort' ||
+              capability === 'native-toggle' ||
+              capability === 'none',
+            )
+        : ['none'];
+      const createParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+        model,
         messages: fullMessages,
         tools: openaiTools,
-        max_tokens: KODAX_MAX_TOKENS,
+        max_completion_tokens:
+          this.config.maxOutputTokens ?? KODAX_MAX_TOKENS,
         stream: true,
-      }, signal ? { signal } : {});
+      };
+
+      let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk> | undefined;
+      let lastError: unknown;
+
+      for (const capability of attempts) {
+        const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+          ...createParams,
+        };
+
+        this.applyReasoningCapability(attemptParams, capability, normalizedReasoning);
+
+        try {
+          stream = await this.client.chat.completions.create(
+            attemptParams,
+            signal ? { signal } : {},
+          );
+          if (capability !== initialCapability) {
+            this.persistReasoningCapabilityOverride(capability, model);
+          }
+          break;
+        } catch (error) {
+          lastError = error;
+          if (
+            !this.shouldFallbackForReasoningError(
+              error,
+              ...this.getFallbackTerms(capability),
+            )
+          ) {
+            throw error;
+          }
+        }
+      }
+
+      if (!stream) {
+        throw lastError ?? new KodaXProviderError(
+          'All reasoning capability attempts failed without a captured error',
+          this.name,
+        );
+      }
 
       for await (const chunk of stream) {
         // 检查是否被中断 (双重保险)

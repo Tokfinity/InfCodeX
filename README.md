@@ -541,7 +541,7 @@ import { InkREPL } from '@kodax/repl';
 |----------|---------------------|----------|---------------|
 | anthropic | `ANTHROPIC_API_KEY` | Yes | claude-sonnet-4-6 |
 | openai | `OPENAI_API_KEY` | No | gpt-5.3-codex |
-| kimi | `KIMI_API_KEY` | No | moonshot-v1-128k |
+| kimi | `KIMI_API_KEY` | Yes | k2.5 |
 | kimi-code | `KIMI_API_KEY` | Yes | k2.5 |
 | qwen | `QWEN_API_KEY` | No | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | No | glm-5 |

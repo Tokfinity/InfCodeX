@@ -1,54 +1,39 @@
 /**
  * GlobalShortcuts - Global Keyboard Shortcuts Handler
- * GlobalShortcuts - 全局键盘快捷键处理器
- *
- * Reference: Issue 083 - 键盘快捷键系统
  *
  * This component registers global shortcuts using the shortcuts system.
  * It should be placed inside the component tree where it can access
  * the necessary state and callbacks.
  */
 
+import type React from 'react';
 import chalk from 'chalk';
+import {
+  KODAX_REASONING_MODE_SEQUENCE,
+  type KodaXReasoningMode,
+} from '@kodax/coding';
 import { useShortcut } from './index.js';
 import type { CurrentConfig } from '../../interactive/commands.js';
 import type { PermissionMode } from '../../permission/types.js';
+import { saveConfig } from '../../common/utils.js';
 
-/**
- * GlobalShortcuts props
- */
 export interface GlobalShortcutsProps {
-  /** Current configuration state - 当前配置状态 */
   currentConfig: CurrentConfig;
-  /** Update configuration callback - 更新配置回调 */
   setCurrentConfig: React.Dispatch<React.SetStateAction<CurrentConfig>>;
-  /** Whether streaming is in progress - 是否正在 streaming */
   isLoading: boolean;
-  /** Abort streaming callback - 中断 streaming 回调 */
   abort: () => void;
-  /** Stop thinking indicator - 停止思考指示器 */
   stopThinking: () => void;
-  /** Clear thinking content - 清除思考内容 */
   clearThinkingContent: () => void;
-  /** Set current tool - 设置当前工具 */
   setCurrentTool: (tool: string | undefined) => void;
-  /** Set loading state - 设置加载状态 */
   setIsLoading: (loading: boolean) => void;
-  /** Toggle help panel - 切换帮助面板 */
   onToggleHelp: () => void;
-  /** Set help visibility - 设置帮助栏可见性 */
   setShowHelp: (visible: boolean) => void;
   onSetThinking?: (enabled: boolean) => void;
-  /** Whether input is empty (for ? shortcut) - 输入是否为空（用于 ? 快捷键） */
+  onSetReasoningMode?: (mode: KodaXReasoningMode) => void;
   isInputEmpty: boolean;
-  /** Save permission mode to config - 保存权限模式到配置 */
   onSavePermissionMode?: (mode: PermissionMode) => void;
 }
 
-/**
- * GlobalShortcuts component - registers global keyboard shortcuts
- * GlobalShortcuts 组件 - 注册全局键盘快捷键
- */
 export function GlobalShortcuts({
   currentConfig,
   setCurrentConfig,
@@ -61,11 +46,10 @@ export function GlobalShortcuts({
   onToggleHelp,
   setShowHelp,
   onSetThinking,
+  onSetReasoningMode,
   isInputEmpty,
   onSavePermissionMode,
 }: GlobalShortcutsProps): null {
-  // === Interrupt shortcut (Ctrl+C during streaming) ===
-  // This integrates with the existing interrupt handling
   useShortcut(
     'interrupt',
     () => {
@@ -80,45 +64,57 @@ export function GlobalShortcuts({
       }
       return false;
     },
-    { isActive: isLoading }
+    { isActive: isLoading },
   );
 
-  // === Show help shortcut (?) ===
-  // Only show help when input is empty - otherwise let ? be typed normally
-  // 只有输入为空时才显示帮助，否则允许正常输入 ? 字符
-  useShortcut('showHelp', () => {
-    if (isInputEmpty) {
-      onToggleHelp();
-      return true; // Consume the event, don't type ?
-    }
-    return false; // Let ? be typed normally
-  }, { isActive: isInputEmpty });
+  useShortcut(
+    'showHelp',
+    () => {
+      if (isInputEmpty) {
+        onToggleHelp();
+        return true;
+      }
+      return false;
+    },
+    { isActive: isInputEmpty },
+  );
 
-  // === Toggle thinking shortcut (Ctrl+T) ===
   useShortcut('toggleThinking', () => {
-    const newThinking = !currentConfig.thinking;
-    setCurrentConfig((prev: CurrentConfig) => ({ ...prev, thinking: newThinking }));
-    onSetThinking?.(newThinking);
-    // Hide help panel when using other shortcuts - 使用其他快捷键时隐藏帮助栏
+    const currentIndex = KODAX_REASONING_MODE_SEQUENCE.indexOf(
+      currentConfig.reasoningMode,
+    );
+    const nextMode =
+      KODAX_REASONING_MODE_SEQUENCE[
+        (currentIndex + 1) % KODAX_REASONING_MODE_SEQUENCE.length
+      ];
+    const thinking = nextMode !== 'off';
+
+    setCurrentConfig((prev) => ({
+      ...prev,
+      thinking,
+      reasoningMode: nextMode,
+    }));
+    saveConfig({
+      reasoningMode: nextMode,
+      thinking,
+    });
+    onSetReasoningMode?.(nextMode);
+    onSetThinking?.(thinking);
     setShowHelp(false);
     return true;
   });
 
-  // === Toggle permission mode shortcut (Ctrl+O / Shift+Tab) ===
-  // Cycles through: plan → accept-edits → auto-in-project → plan
   useShortcut('togglePermissionMode', () => {
-    const MODE_CYCLE: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
-    const currentIndex = MODE_CYCLE.indexOf(currentConfig.permissionMode);
-    const nextIndex = (currentIndex + 1) % MODE_CYCLE.length;
-    const newMode = MODE_CYCLE[nextIndex];
+    const modeCycle: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
+    const currentIndex = modeCycle.indexOf(currentConfig.permissionMode);
+    const nextIndex = (currentIndex + 1) % modeCycle.length;
+    const newMode = modeCycle[nextIndex];
 
-    setCurrentConfig((prev: CurrentConfig) => ({ ...prev, permissionMode: newMode }));
-    onSavePermissionMode?.(newMode); // Persist to config
-    // Hide help panel when using other shortcuts - 使用其他快捷键时隐藏帮助栏
+    setCurrentConfig((prev) => ({ ...prev, permissionMode: newMode }));
+    onSavePermissionMode?.(newMode);
     setShowHelp(false);
     return true;
   });
 
-  // This component doesn't render anything
   return null;
 }

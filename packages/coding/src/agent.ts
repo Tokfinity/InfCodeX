@@ -4,7 +4,17 @@
  * Agent 主循环 - Core 层核心入口
  */
 
-import { KodaXOptions, KodaXResult, KodaXToolResultBlock, KodaXToolExecutionContext, SessionErrorMetadata } from './types.js';
+import {
+  KodaXExecutionMode,
+  KodaXOptions,
+  KodaXReasoningMode,
+  KodaXResult,
+  KodaXTaskType,
+  KodaXThinkingDepth,
+  KodaXToolExecutionContext,
+  KodaXToolResultBlock,
+  SessionErrorMetadata,
+} from './types.js';
 import type { KodaXMessage } from '@kodax/ai';
 import { KodaXClient } from './client.js';
 import { getProvider } from './providers/index.js';
@@ -20,6 +30,11 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ErrorCategory } from './error-classification.js';
 import { withRetry } from './retry-handler.js';
+import {
+  createReasoningPlan,
+  maybeCreateAutoReroutePlan,
+  type ReasoningPlan,
+} from './reasoning.js';
 
 const execAsync = promisify(exec);
 
@@ -338,7 +353,19 @@ export async function runKodaX(
     askUser: events.askUser, // Issue 069: Pass askUser callback from events
   };
 
-  const systemPrompt = await buildSystemPrompt(options, messages.length === 1);
+  let reasoningPlan = await createReasoningPlan(options, prompt, provider, {
+    recentMessages: messages.slice(0, -1),
+    sessionErrorMetadata: errorMetadata,
+  });
+  let currentExecution = await buildReasoningExecutionState(
+    options,
+    reasoningPlan,
+    messages.length === 1,
+  );
+  let autoFollowUpCount = 0;
+  let autoDepthEscalationCount = 0;
+  let autoTaskRerouteCount = 0;
+  const autoFollowUpLimit = 2;
 
   // 通知会话开始
   events.onSessionStart?.({ provider: provider.name, sessionId });
@@ -369,7 +396,7 @@ export async function runKodaX(
             provider,
             contextWindow,
             undefined, // customInstructions
-            systemPrompt // 传入 systemPrompt 以生成更好的摘要
+            currentExecution.systemPrompt // 传入 systemPrompt 以生成更好的摘要
           );
 
           if (result.compacted) {
@@ -477,7 +504,7 @@ export async function runKodaX(
             : retryTimeoutController.signal;
 
           try {
-            return await provider.stream(compacted, KODAX_TOOLS, systemPrompt, options.thinking, {
+            return await provider.stream(compacted, KODAX_TOOLS, currentExecution.systemPrompt, currentExecution.providerReasoning, {
               onTextDelta: (text) => {
                 resetIdleTimer();
                 events.onTextDelta?.(text);
@@ -561,6 +588,56 @@ export async function runKodaX(
       messages.push({ role: 'assistant', content: assistantContent });
 
       if (result.toolBlocks.length === 0) {
+        if (
+          reasoningPlan.mode === 'auto' &&
+          autoFollowUpCount < autoFollowUpLimit &&
+          (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
+        ) {
+          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
+          try {
+            followUpPlan = await maybeCreateAutoReroutePlan(
+              provider,
+              options,
+              prompt,
+              reasoningPlan,
+              lastText,
+              {
+                allowDepthEscalation: autoDepthEscalationCount === 0,
+                allowTaskReroute: autoTaskRerouteCount === 0,
+              },
+              undefined,
+            );
+          } catch (rerouteError) {
+            if (process.env.KODAX_DEBUG_ROUTING) {
+              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
+            }
+          }
+          if (followUpPlan) {
+            autoFollowUpCount++;
+            if (followUpPlan.kind === 'depth-escalation') {
+              autoDepthEscalationCount++;
+            } else {
+              autoTaskRerouteCount++;
+            }
+            reasoningPlan = followUpPlan;
+            currentExecution = await buildReasoningExecutionState(
+              options,
+              reasoningPlan,
+              messages.length === 1,
+            );
+            messages.pop();
+            events.onRetry?.(
+              `${
+                followUpPlan.kind === 'depth-escalation'
+                  ? 'Auto depth escalation'
+                  : 'Auto reroute'
+              }: ${followUpPlan.decision.reason}`,
+              autoFollowUpCount,
+              autoFollowUpLimit,
+            );
+            continue;
+          }
+        }
         events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
         events.onComplete?.();
         // limitReached 保持 false（初始值）
@@ -697,6 +774,68 @@ export async function runKodaX(
 
       messages.push({ role: 'user', content: toolResults });
 
+      if (
+        reasoningPlan.mode === 'auto' &&
+        autoFollowUpCount < autoFollowUpLimit &&
+        (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
+      ) {
+        const toolEvidence = summarizeToolEvidence(result.toolBlocks, toolResults);
+        if (toolEvidence) {
+          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
+          try {
+            followUpPlan = await maybeCreateAutoReroutePlan(
+              provider,
+              options,
+              prompt,
+              reasoningPlan,
+              lastText,
+              {
+                allowDepthEscalation: autoDepthEscalationCount === 0,
+                allowTaskReroute: autoTaskRerouteCount === 0,
+              },
+              {
+                toolEvidence,
+              },
+            );
+          } catch (rerouteError) {
+            if (process.env.KODAX_DEBUG_ROUTING) {
+              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
+            }
+          }
+
+          if (followUpPlan) {
+            autoFollowUpCount++;
+            if (followUpPlan.kind === 'depth-escalation') {
+              autoDepthEscalationCount++;
+            } else {
+              autoTaskRerouteCount++;
+            }
+            reasoningPlan = followUpPlan;
+            currentExecution = await buildReasoningExecutionState(
+              options,
+              reasoningPlan,
+              false,
+            );
+
+            if (options.session?.storage) {
+              const gitRoot = await getGitRoot();
+              await options.session.storage.save(sessionId, { messages, title, gitRoot: gitRoot ?? '' });
+            }
+
+            events.onRetry?.(
+              `${
+                followUpPlan.kind === 'depth-escalation'
+                  ? 'Auto depth escalation'
+                  : 'Post-tool auto reroute'
+              }: ${followUpPlan.decision.reason}`,
+              autoFollowUpCount,
+              autoFollowUpLimit,
+            );
+            continue;
+          }
+        }
+      }
+
       // 保存会话
       if (options.session?.storage) {
         const gitRoot = await getGitRoot();
@@ -786,9 +925,97 @@ export async function runKodaX(
   };
 }
 
+async function buildReasoningExecutionState(
+  options: KodaXOptions,
+  reasoningPlan: ReasoningPlan,
+  isNewSession: boolean,
+): Promise<{
+  effectiveOptions: KodaXOptions;
+  systemPrompt: string;
+  providerReasoning: {
+    enabled: boolean;
+    mode: KodaXReasoningMode;
+    depth: KodaXThinkingDepth;
+    taskType: KodaXTaskType;
+    executionMode: KodaXExecutionMode;
+  };
+}> {
+  const effectiveOptions: KodaXOptions = {
+    ...options,
+    reasoningMode: reasoningPlan.mode,
+    context: {
+      ...options.context,
+      promptOverlay: [
+        options.context?.promptOverlay,
+        reasoningPlan.promptOverlay,
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    },
+  };
+
+  return {
+    effectiveOptions,
+    systemPrompt: await buildSystemPrompt(effectiveOptions, isNewSession),
+    providerReasoning: {
+      enabled: reasoningPlan.depth !== 'off',
+      mode: reasoningPlan.mode,
+      depth: reasoningPlan.depth,
+      taskType: reasoningPlan.decision.primaryTask,
+      executionMode: reasoningPlan.decision.recommendedMode,
+    },
+  };
+}
+
 /**
  * 获取 Git 根目录
  */
+function summarizeToolEvidence(
+  toolBlocks: Array<{ id: string; name: string }>,
+  toolResults: KodaXToolResultBlock[],
+): string {
+  const evidenceLines: string[] = [];
+
+  for (const result of toolResults) {
+    if (typeof result.content !== 'string') {
+      continue;
+    }
+
+    const toolName = toolBlocks.find((tool) => tool.id === result.tool_use_id)?.name ?? 'tool';
+    const content = result.content.replace(/\s+/g, ' ').trim();
+    if (!content || !looksLikeToolRuntimeEvidence(content)) {
+      continue;
+    }
+
+    const truncated =
+      content.length > 220 ? `${content.slice(0, 217)}...` : content;
+    evidenceLines.push(`- ${toolName}: ${truncated}`);
+  }
+
+  return Array.from(new Set(evidenceLines)).slice(0, 5).join('\n');
+}
+
+function looksLikeToolRuntimeEvidence(content: string): boolean {
+  const normalized = content.toLowerCase();
+  return (
+    normalized.includes('[tool error]') ||
+    normalized.includes('[stderr]') ||
+    normalized.includes('runtime error') ||
+    normalized.includes('exception') ||
+    normalized.includes('traceback') ||
+    normalized.includes('stack trace') ||
+    normalized.includes('failing test') ||
+    normalized.includes('tests failed') ||
+    normalized.includes('test failed') ||
+    normalized.includes('assertion failed') ||
+    normalized.includes('timeout') ||
+    normalized.includes('报错') ||
+    normalized.includes('错误') ||
+    normalized.includes('异常') ||
+    /\bexit:\s*[1-9]\d*\b/i.test(normalized)
+  );
+}
+
 async function getGitRoot(): Promise<string | null> {
   try { const { stdout } = await execAsync('git rev-parse --show-toplevel'); return stdout.trim(); } catch { return null; }
 }

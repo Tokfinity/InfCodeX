@@ -70,6 +70,81 @@ export interface KodaXToolDefinition {
   };
 }
 
+// ============== 推理策略类型 ==============
+
+export type KodaXReasoningCapability =
+  | 'native-effort'
+  | 'native-budget'
+  | 'native-toggle'
+  | 'none'
+  | 'prompt-only'
+  | 'unknown';
+
+export type KodaXReasoningOverride =
+  | 'budget'
+  | 'effort'
+  | 'toggle'
+  | 'none';
+
+export type KodaXReasoningMode =
+  | 'off'
+  | 'auto'
+  | 'quick'
+  | 'balanced'
+  | 'deep';
+
+export type KodaXThinkingDepth =
+  | 'off'
+  | 'low'
+  | 'medium'
+  | 'high';
+
+export type KodaXTaskType =
+  | 'review'
+  | 'bugfix'
+  | 'edit'
+  | 'refactor'
+  | 'plan'
+  | 'qa'
+  | 'unknown';
+
+export type KodaXExecutionMode =
+  | 'pr-review'
+  | 'strict-audit'
+  | 'implementation'
+  | 'planning'
+  | 'investigation';
+
+export type KodaXRiskLevel = 'low' | 'medium' | 'high';
+
+export interface KodaXTaskRoutingDecision {
+  primaryTask: KodaXTaskType;
+  secondaryTask?: KodaXTaskType;
+  confidence: number;
+  riskLevel: KodaXRiskLevel;
+  recommendedMode: KodaXExecutionMode;
+  recommendedThinkingDepth: KodaXThinkingDepth;
+  reason: string;
+}
+
+export interface KodaXThinkingBudgetMap {
+  low: number;
+  medium: number;
+  high: number;
+}
+
+export type KodaXTaskBudgetOverrides = Partial<
+  Record<KodaXTaskType, Partial<KodaXThinkingBudgetMap>>
+>;
+
+export interface KodaXReasoningRequest {
+  enabled?: boolean;
+  mode?: KodaXReasoningMode;
+  depth?: KodaXThinkingDepth;
+  taskType?: KodaXTaskType;
+  executionMode?: KodaXExecutionMode;
+}
+
 // ============== Provider 配置 ==============
 
 export interface KodaXProviderConfig {
@@ -77,8 +152,17 @@ export interface KodaXProviderConfig {
   baseUrl?: string;
   model: string;
   supportsThinking: boolean;
+  reasoningCapability?: KodaXReasoningCapability;
   /** 模型的上下文窗口大小 (tokens) */
   contextWindow?: number;
+  /** Provider 允许的最大输出 token */
+  maxOutputTokens?: number;
+  /** Provider thinking budget 上限 */
+  thinkingBudgetCap?: number;
+  /** Provider 默认 thinking budget 映射 */
+  defaultThinkingBudgets?: Partial<KodaXThinkingBudgetMap>;
+  /** 按任务类型覆盖默认 budget */
+  taskBudgetOverrides?: KodaXTaskBudgetOverrides;
 }
 
 export interface KodaXProviderStreamOptions {
