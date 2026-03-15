@@ -30,6 +30,7 @@ export interface GlobalShortcutsProps {
   setShowHelp: (visible: boolean) => void;
   onSetThinking?: (enabled: boolean) => void;
   onSetReasoningMode?: (mode: KodaXReasoningMode) => void;
+  onSetPermissionMode?: (mode: PermissionMode) => void;  // 新增：更新 ref
   isInputEmpty: boolean;
   onSavePermissionMode?: (mode: PermissionMode) => void;
 }
@@ -47,6 +48,7 @@ export function GlobalShortcuts({
   setShowHelp,
   onSetThinking,
   onSetReasoningMode,
+  onSetPermissionMode,  // 新增
   isInputEmpty,
   onSavePermissionMode,
 }: GlobalShortcutsProps): null {
@@ -111,6 +113,7 @@ export function GlobalShortcuts({
     const newMode = modeCycle[nextIndex];
 
     setCurrentConfig((prev) => ({ ...prev, permissionMode: newMode }));
+    onSetPermissionMode?.(newMode);  // 新增：更新 ref
     onSavePermissionMode?.(newMode);
     setShowHelp(false);
     return true;
