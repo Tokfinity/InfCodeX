@@ -1,12 +1,12 @@
 /**
- * MessageList - History message list component - 历史消息列表组件
+ * MessageList
  *
  * Reference Gemini CLI's message display architecture implementation.
- * Support HistoryItem types: user, assistant, tool_group, thinking, error, info, hint - 参考 Gemini CLI 的消息显示架构实现，支持 HistoryItem 类型：user, assistant, tool_group, thinking, error, info, hint
+ * Support HistoryItem types: user, assistant, tool_group, thinking, error, info, and hint.
  */
 
 import React, { useMemo, memo } from "react";
-import { Box, Text, Static } from "ink";
+import { Box, Text, useStdout } from "ink";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 import type { Theme } from "../types.js";
@@ -24,15 +24,21 @@ import {
   type ToolCall,
 } from "../types.js";
 import type { IterationRecord } from "../contexts/StreamingContext.js";
+import {
+  buildTranscriptRows,
+  getVisibleTranscriptRows,
+  resolveTranscriptColor,
+  type TranscriptRow,
+} from "../utils/transcript-layout.js";
 
 // === Types ===
 
 export interface MessageListProps {
-  /** History item list - 历史项列表 */
+  /** History item list */
   items: HistoryItem[];
-  /** Whether loading - 是否加载中 */
+  /** Whether loading */
   isLoading?: boolean;
-  /** Maximum display lines (default 1000, avoid truncation) - 最大显示行数 (默认 1000，避免截断) */
+  /** Maximum display lines before truncation */
   maxLines?: number;
   /** Whether thinking - 是否正在 thinking */
   isThinking?: boolean;
@@ -46,14 +52,18 @@ export interface MessageListProps {
   currentTool?: string;
   /** Tool input character count - 工具输入字符计数 */
   toolInputCharCount?: number;
-  /** Tool input content (truncated, for display) - 工具输入内容（截断，用于显示） */
+  /** Tool input content preview for display */
   toolInputContent?: string;
   /** Iteration history - 迭代历史 */
   iterationHistory?: IterationRecord[];
   /** Current iteration number - 当前迭代序号 */
   currentIteration?: number;
-  /** Whether compacting context - 是否正在压缩上下文 */
+  /** Whether context compaction is in progress */
   isCompacting?: boolean;
+  /** Visible viewport rows for transcript slicing */
+  viewportRows?: number;
+  /** Optional width override for deterministic transcript layout */
+  viewportWidth?: number;
 }
 
 export interface HistoryItemRendererProps {
@@ -65,7 +75,7 @@ export interface HistoryItemRendererProps {
 // === Helpers ===
 
 /**
- * Format timestamp - 格式化时间戳
+ * Format timestamp
  */
 function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
@@ -76,7 +86,7 @@ function formatTimestamp(timestamp: number): string {
 }
 
 /**
- * Truncate text to max lines - 截断文本到最大行数
+ * Truncate text to the configured maximum number of lines.
  */
 function truncateLines(text: string, maxLines: number): { lines: string[]; hasMore: boolean } {
   const lines = text.split("\n");
@@ -86,7 +96,7 @@ function truncateLines(text: string, maxLines: number): { lines: string[]; hasMo
 }
 
 /**
- * Format tool execution duration - 格式化工具执行时间
+ * Format tool execution duration.
  */
 function formatDuration(startTime: number, endTime?: number): string {
   if (!endTime) return "";
@@ -96,31 +106,31 @@ function formatDuration(startTime: number, endTime?: number): string {
 }
 
 /**
- * Get tool status icon - 获取工具状态图标
+ * Get the icon for a tool status.
  */
 function getToolStatusIcon(status: ToolCallStatus): string {
   switch (status) {
     case ToolCallStatus.Scheduled:
-      return "○";
+      return "\u25CB";
     case ToolCallStatus.Validating:
-      return "◐";
+      return "\u25D0";
     case ToolCallStatus.AwaitingApproval:
-      return "⏸";
+      return "\u23F8";
     case ToolCallStatus.Executing:
-      return "●";
+      return "\u25CF";
     case ToolCallStatus.Success:
-      return "✓";
+      return "\u2713";
     case ToolCallStatus.Error:
-      return "✗";
+      return "\u2717";
     case ToolCallStatus.Cancelled:
-      return "⊘";
+      return "\u2298";
     default:
       return "?";
   }
 }
 
 /**
- * Get tool status color - 获取工具状态颜色
+ * Get the color for a tool status.
  */
 function getToolStatusColor(status: ToolCallStatus, theme: Theme): string {
   switch (status) {
@@ -145,7 +155,7 @@ function getToolStatusColor(status: ToolCallStatus, theme: Theme): string {
 // === Sub-Components ===
 
 /**
- * User message renderer - 用户消息渲染器
+ * User message renderer.
  */
 const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
@@ -162,7 +172,7 @@ const UserItemRenderer: React.FC<{ item: HistoryItemUser; theme: Theme }> = memo
 ));
 
 /**
- * Assistant message renderer - 助手消息渲染器
+ * Assistant message renderer.
  */
 const AssistantItemRenderer: React.FC<{
   item: HistoryItemAssistant;
@@ -200,7 +210,7 @@ const AssistantItemRenderer: React.FC<{
 });
 
 /**
- * System message renderer - 系统消息渲染器
+ * System message renderer.
  */
 const SystemItemRenderer: React.FC<{ item: HistoryItemSystem; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
@@ -217,7 +227,7 @@ const SystemItemRenderer: React.FC<{ item: HistoryItemSystem; theme: Theme }> = 
 ));
 
 /**
- * Tool call renderer - 工具调用渲染器
+ * Tool call renderer.
  */
 const ToolCallRenderer: React.FC<{ tool: ToolCall; theme: Theme }> = memo(({ tool, theme }) => {
   const icon = getToolStatusIcon(tool.status);
@@ -259,7 +269,7 @@ const ToolCallRenderer: React.FC<{ tool: ToolCall; theme: Theme }> = memo(({ too
 });
 
 /**
- * Tool group renderer - 工具组渲染器
+ * Tool group renderer
  */
 const ToolGroupRenderer: React.FC<{ item: HistoryItemToolGroup; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
@@ -276,17 +286,17 @@ const ToolGroupRenderer: React.FC<{ item: HistoryItemToolGroup; theme: Theme }> 
 ));
 
 /**
- * Thinking content renderer - 思考内容渲染器
+ * Thinking content renderer
  */
 const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
-      <Text color={theme.colors.dim} italic>
+      <Text color={theme.colors.thinking} italic>
         Thinking
       </Text>
     </Box>
     <Box marginLeft={2}>
-      <Text dimColor italic>
+      <Text color={theme.colors.thinking} italic>
         {item.text}
       </Text>
     </Box>
@@ -294,13 +304,13 @@ const ThinkingItemRenderer: React.FC<{ item: HistoryItemThinking; theme: Theme }
 ));
 
 /**
- * Error message renderer - 错误消息渲染器
+ * Error message renderer.
  */
 const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.error} bold>
-        ✗ Error
+        {"\u2717"} Error
       </Text>
     </Box>
     <Box marginLeft={2}>
@@ -310,13 +320,13 @@ const ErrorItemRenderer: React.FC<{ item: HistoryItemError; theme: Theme }> = me
 ));
 
 /**
- * Info message renderer - 信息消息渲染器
+ * Info message renderer.
  */
 const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
     <Box>
       <Text color={theme.colors.info} bold>
-        {item.icon ?? "ℹ"} Info
+        {item.icon ?? "\u2139"} Info
       </Text>
     </Box>
     <Box marginLeft={2}>
@@ -326,7 +336,7 @@ const InfoItemRenderer: React.FC<{ item: HistoryItemInfo; theme: Theme }> = memo
 ));
 
 /**
- * Hint message renderer - 提示消息渲染器
+ * Hint message renderer.
  */
 const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = memo(({ item, theme }) => (
   <Box flexDirection="column" marginBottom={1}>
@@ -345,7 +355,7 @@ const HintItemRenderer: React.FC<{ item: HistoryItemHint; theme: Theme }> = memo
 
 /**
  * History item renderer
- * Dispatch to corresponding renderer based on type - 历史项渲染器，根据类型分发到对应的渲染器
+ * Dispatch to corresponding renderer based on type
  */
 export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
   item,
@@ -381,12 +391,30 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
 });
 
 /**
- * MessageList - Message list component - 消息列表组件
+ * MessageList
  */
+const TranscriptRowRenderer: React.FC<{ row: TranscriptRow; theme: Theme }> = memo(({ row, theme }) => {
+  const color = resolveTranscriptColor(theme, row.color);
+
+  return (
+    <Box marginLeft={row.indent ?? 0}>
+      {row.spinner && (
+        <>
+          <Spinner color={theme.colors.accent} theme={theme} />
+          <Text> </Text>
+        </>
+      )}
+      <Text color={color} bold={row.bold} italic={row.italic} dimColor={row.color === "dim"}>
+        {row.text || " "}
+      </Text>
+    </Box>
+  );
+});
+
 export const MessageList: React.FC<MessageListProps> = ({
   items,
   isLoading = false,
-  maxLines = 1000, // Increased from 20 to avoid truncation (Issue 046)
+  maxLines = 1000,
   isThinking = false,
   thinkingCharCount = 0,
   thinkingContent = "",
@@ -397,33 +425,12 @@ export const MessageList: React.FC<MessageListProps> = ({
   iterationHistory = [],
   currentIteration = 1,
   isCompacting = false,
+  viewportRows,
+  viewportWidth,
 }) => {
   const theme = useMemo(() => getTheme("dark"), []);
-
-  // Find the last user prompt index for splitting static/dynamic content
-  // 参考 Gemini CLI 的实现：将历史分为静态部分和最后响应部分
-  const lastUserPromptIndex = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const type = items[i]?.type;
-      if (type === "user" || type === "system") {
-        return i;
-      }
-    }
-    return -1;
-  }, [items]);
-
-  // Split history into static and dynamic parts
-  // 静态部分：最后一个用户输入之前的历史（使用 Static 包裹，不会重新渲染）
-  const staticHistoryItems = useMemo(
-    () => items.slice(0, lastUserPromptIndex + 1),
-    [items, lastUserPromptIndex]
-  );
-
-  // 最后响应部分：最后一个用户输入之后的响应（静态但会更新）
-  const lastResponseHistoryItems = useMemo(
-    () => items.slice(lastUserPromptIndex + 1),
-    [items, lastUserPromptIndex]
-  );
+  const { stdout } = useStdout();
+  const terminalWidth = viewportWidth ?? stdout?.columns ?? 80;
 
   if (items.length === 0 && !isLoading) {
     return (
@@ -433,152 +440,51 @@ export const MessageList: React.FC<MessageListProps> = ({
     );
   }
 
-  // Determine loading status text - 确定加载状态文本
-  // Issue 068 Phase 4: Priority: compacting > toolInputContent (parameter preview) > toolInputCharCount (char count) > none
-  let loadingText = "Thinking";
-  let prefix = "";
-  if (isCompacting) {
-    // Show "Compacting" when compacting context - 压缩上下文时显示 "Compacting"
-    loadingText = "Compacting";
-  } else if (currentTool) {
-    prefix = "[Tool] ";
-    loadingText = toolInputContent
-      ? `${currentTool} (${toolInputContent}...)`
-      : toolInputCharCount > 0
-        ? `${currentTool} (${toolInputCharCount} chars)`
-        : `Executing ${currentTool}...`;
-  } else if (isThinking) {
-    // Show [Thinking] prefix when in thinking mode (with or without char count)
-    prefix = "[Thinking] ";
-    loadingText = thinkingCharCount > 0
-      ? `(${thinkingCharCount} chars)`
-      : "processing...";
-  }
+  const transcriptRows = useMemo(
+    () => buildTranscriptRows({
+      items,
+      viewportWidth: terminalWidth,
+      isLoading,
+      maxLines,
+      isThinking,
+      thinkingCharCount,
+      thinkingContent,
+      streamingResponse,
+      currentTool,
+      toolInputCharCount,
+      toolInputContent,
+      iterationHistory,
+      currentIteration,
+      isCompacting,
+    }),
+    [
+      items,
+      terminalWidth,
+      isLoading,
+      maxLines,
+      isThinking,
+      thinkingCharCount,
+      thinkingContent,
+      streamingResponse,
+      currentTool,
+      toolInputCharCount,
+      toolInputContent,
+      iterationHistory,
+      currentIteration,
+      isCompacting,
+    ]
+  );
 
-  // Render pending items (streaming content, loading indicators, etc.)
-  // 待处理项目：流式内容、加载指示器等（不使用 Static，可以动态更新）
-  const pendingItems = (
-    <Box flexDirection="column">
-      {/* Iteration history display - 迭代历史显示 */}
-      {iterationHistory.length > 0 && (
-        <Box flexDirection="column" marginBottom={1}>
-          {iterationHistory.map((record) => (
-            <Box key={`iteration-${record.iteration}`} flexDirection="column" marginBottom={1}>
-              {/* Iteration header - 迭代标题 */}
-              <Box>
-                <Text color={theme.colors.dim} bold>
-                  ── Round {record.iteration} ──
-                </Text>
-              </Box>
-              {/* Thinking summary - Thinking 摘要 */}
-              {record.thinkingSummary && (
-                <Box marginLeft={1}>
-                  <Text color={theme.colors.dim} italic>
-                    💭 {record.thinkingSummary}
-                    {record.thinkingLength > 60 && <Text dimColor> ({record.thinkingLength} chars total)</Text>}
-                  </Text>
-                </Box>
-              )}
-              {/* Response snippet (first 200 chars) - 响应片段（前200字符） */}
-              {record.response && (
-                <Box marginLeft={1} flexDirection="column">
-                  {record.response.slice(0, 200).split("\n").map((line, idx) => (
-                    <Text key={idx} color={theme.colors.text} dimColor>{line || " "}</Text>
-                  ))}
-                  {record.response.length > 200 && (
-                    <Text dimColor>... ({record.response.length} chars total)</Text>
-                  )}
-                </Box>
-              )}
-            </Box>
-          ))}
-        </Box>
-      )}
-
-      {/* Current iteration header (if multiple iterations) - 当前迭代标题（如果是多轮） */}
-      {iterationHistory.length > 0 && (
-        <Box marginBottom={1}>
-          <Text color={theme.colors.accent} bold>
-            ── Round {currentIteration} (current) ──
-          </Text>
-        </Box>
-      )}
-
-      {/* Thinking content display - light gray - Thinking 内容显示 - 淡灰色 */}
-      {/* Display condition: response in progress + has thinking content - 显示条件：响应进行中 + 有 thinking 内容 */}
-      {isLoading && thinkingContent && (
-        <Box flexDirection="column" marginBottom={1}>
-          <Box>
-            <Text color={theme.colors.dim} italic>Thinking</Text>
-          </Box>
-          <Box marginLeft={2}>
-            <Text dimColor italic>{thinkingContent}</Text>
-          </Box>
-        </Box>
-      )}
-
-      {/* Streaming response display - 流式响应显示 */}
-      {streamingResponse && (
-        <Box flexDirection="column" marginBottom={1}>
-          <Box>
-            <Text color={theme.colors.secondary} bold>Assistant</Text>
-          </Box>
-          <Box marginLeft={2} flexDirection="column">
-            {streamingResponse.split("\n").map((line, index) => (
-              <Text key={index} color={theme.colors.text}>{line || " "}</Text>
-            ))}
-          </Box>
-        </Box>
-      )}
-
-      {/* Loading indicator - only show when no streaming content - 加载指示器 - 只在没有流式内容时显示 */}
-      {isLoading && !streamingResponse && !thinkingContent && (
-        <Box>
-          <Spinner theme={theme} />
-          {prefix && <Text color={theme.colors.dim}> {prefix}</Text>}
-          <Text color={theme.colors.accent}> {loadingText}…</Text>
-        </Box>
-      )}
-
-      {/* Show simplified loading indicator when has thinking content - 有 thinking 内容时显示简化的加载指示器 */}
-      {isLoading && (streamingResponse || thinkingContent) && (
-        <Box>
-          <Spinner theme={theme} />
-          {prefix && <Text color={theme.colors.dim}> {prefix}</Text>}
-          <Text color={theme.colors.accent}> {loadingText}…</Text>
-        </Box>
-      )}
-    </Box>
+  const visibleRows = useMemo(
+    () => getVisibleTranscriptRows(transcriptRows, viewportRows),
+    [transcriptRows, viewportRows]
   );
 
   return (
     <Box flexDirection="column" paddingY={1}>
-      {/* Static history items - won't re-render after initial render */}
-      {/* 静态历史项 - 初始渲染后不会重新渲染 */}
-      <Static items={staticHistoryItems}>
-        {(item) => (
-          <HistoryItemRenderer
-            key={item.id}
-            item={item}
-            theme={theme}
-            maxLines={maxLines}
-          />
-        )}
-      </Static>
-
-      {/* Latest response stays dynamic so it can reflow with footer/layout changes */}
-      {lastResponseHistoryItems.map((item) => (
-        <HistoryItemRenderer
-          key={item.id}
-          item={item}
-          theme={theme}
-          maxLines={maxLines}
-        />
+      {visibleRows.map((row) => (
+        <TranscriptRowRenderer key={row.key} row={row} theme={theme} />
       ))}
-
-      {/* Pending items - can update dynamically */}
-      {/* 待处理项目 - 可以动态更新 */}
-      {pendingItems}
     </Box>
   );
 };
@@ -614,7 +520,7 @@ export const LegacyMessageList: React.FC<LegacyMessageListProps> = ({ messages, 
 };
 
 /**
- * Simplified message display - 简化消息显示
+ * Simplified message display.
  */
 export const SimpleMessageDisplay: React.FC<{
   role: "user" | "assistant" | "system";

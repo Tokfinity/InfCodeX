@@ -15,7 +15,7 @@ import { render, Box, useApp, Text, Static, useInput, useStdout } from "ink";
 import { InputPrompt } from "./components/InputPrompt.js";
 import { MessageList } from "./components/MessageList.js";
 import { ThinkingIndicator } from "./components/LoadingIndicator.js";
-import { StatusBar } from "./components/StatusBar.js";
+import { StatusBar, getStatusBarText } from "./components/StatusBar.js";
 import { SuggestionsDisplay } from "./components/SuggestionsDisplay.js";
 import {
   UIStateProvider,
@@ -90,9 +90,15 @@ import { prepareInvocationExecution } from "../interactive/invocation-runtime.js
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
 import { processSpecialSyntax, isShellCommandSuccess } from "./utils/shell-executor.js";
-import { extractTextContent, extractTitle, resolveAssistantHistoryText } from "./utils/message-utils.js";
+import {
+  extractHistorySeedsFromMessage,
+  extractTextContent,
+  extractTitle,
+  resolveAssistantHistoryText,
+} from "./utils/message-utils.js";
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
 import { emitRetryHistoryItem } from "./utils/retry-history.js";
+import { calculateViewportBudget } from "./utils/viewport-budget.js";
 import {
   getAskUserDialogTitle,
   resolveAskUserDismissChoice,
@@ -100,6 +106,7 @@ import {
   toSelectOptions,
   type SelectOption,
 } from "./utils/ask-user.js";
+import { HELP_BAR_SEGMENTS } from "./constants/layout.js";
 
 // REPL options
 export interface InkREPLOptions extends KodaXOptions {
@@ -243,66 +250,29 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compacti
 /**
  * AutocompleteSuggestions - Renders autocomplete suggestions from context
  * Shows suggestions below input, reserves space after first appearance
- * 在输入框下方显示建议，首次出现后预留空间
+ * 在建议首次出现后继续预留固定高度，避免消息区和底部区来回跳动
+ *
  *
  * Behavior:
- * 1. No suggestions initially → no space reserved
- * 2. Suggestions appear → reserve 8 lines
- * 3. Suggestions disappear (Esc/input change) → keep 8 lines
- * 4. Message sent (submitCounter changes) → remove 8 lines
+ * 1. No suggestions initially -> no space reserved
+ * 2. Suggestions appear -> reserve 8 lines
+ * 3. Suggestions disappear (Esc/input change) -> keep 8 lines
+ * 4. Message sent (submitCounter changes) -> remove 8 lines
  */
-const AutocompleteSuggestions: React.FC<{ submitCounter: number }> = ({
-  submitCounter,
-}) => {
+const AutocompleteSuggestions: React.FC<{
+  reserveSpace: boolean;
+  width: number;
+}> = ({ reserveSpace, width }) => {
   const autocomplete = useAutocompleteContext();
 
-  // Track if we should reserve space (set true when suggestions first appear)
-  // 跟踪是否应该预留空间（建议首次出现时设为 true）
-  const [shouldReserveSpace, setShouldReserveSpace] = useState(false);
-
-  // Track last submit counter to detect changes
-  // 跟踪上次的提交计数器以检测变化
-  const lastSubmitCounterRef = useRef(submitCounter);
-
-  // Get suggestion state
-  // 获取建议状态
-  const hasSuggestions = useMemo(() => {
-    if (!autocomplete) return false;
-    const { state, suggestions } = autocomplete;
-    return state.visible && suggestions.length > 0;
-  }, [autocomplete]);
-
-  // Update reserve space when suggestions appear
-  // 当建议出现时更新预留空间
-  useEffect(() => {
-    if (hasSuggestions && !shouldReserveSpace) {
-      setShouldReserveSpace(true);
-    }
-  }, [hasSuggestions, shouldReserveSpace]);
-
-  // Clear space when message is sent (submitCounter changes)
-  // 发送消息时清除空间（submitCounter 变化）
-  useEffect(() => {
-    if (submitCounter !== lastSubmitCounterRef.current) {
-      lastSubmitCounterRef.current = submitCounter;
-      if (shouldReserveSpace) {
-        setShouldReserveSpace(false);
-      }
-    }
-  }, [submitCounter, shouldReserveSpace]);
-
-  // If context is not available, render nothing or placeholder
-  // 如果 context 不可用，不渲染或渲染占位符
   if (!autocomplete) {
-    return shouldReserveSpace ? <Box height={8} /> : null;
+    return reserveSpace ? <Box height={8} /> : null;
   }
 
   const { state, suggestions } = autocomplete;
-
-  // Render suggestions or empty placeholder
-  // 渲染建议或空占位符
+  const hasSuggestions = state.visible && suggestions.length > 0;
   if (!hasSuggestions) {
-    return shouldReserveSpace ? <Box height={8} /> : null;
+    return reserveSpace ? <Box height={8} /> : null;
   }
 
   return (
@@ -312,7 +282,7 @@ const AutocompleteSuggestions: React.FC<{ submitCounter: number }> = ({
         selectedIndex={state.selectedIndex}
         visible={state.visible}
         maxVisible={7}
-        width={80}
+        width={Math.max(20, width - 2)}
       />
     </Box>
   );
@@ -334,7 +304,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const { history } = useUIState();
   const { addHistoryItem, clearHistory: clearUIHistory, setSessionId } = useUIActions();
 
-  // Get terminal dimensions for fixed layout - 获取终端尺寸用于固定布局
+  // Get terminal dimensions for fixed layout.
   const terminalWidth = stdout.columns || 80;
 
   // Issue 079: Limit visible history to last 20 conversation rounds
@@ -399,16 +369,43 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const lastCompactionTokensBeforeRef = useRef<number | null>(null);
   const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
+  const [inputText, setInputText] = useState("");
 
-  // Shortcuts context - 快捷键上下文 (Issue 083)
+  // Shortcuts context.
   const { showHelp, toggleHelp, setShowHelp } = useShortcutsContext();
 
-  // Handle input change - 跟踪输入状态
+  // Handle input change and keep the latest text for viewport budgeting.
   const handleInputChange = useCallback((text: string) => {
+    setInputText(text);
     setIsInputEmpty(text.trim().length === 0);
   }, []);
 
-  // Confirmation dialog state - 确认对话框状态
+  const autocomplete = useAutocompleteContext();
+  const hasVisibleSuggestions = useMemo(() => {
+    if (!autocomplete) return false;
+    return autocomplete.state.visible && autocomplete.suggestions.length > 0;
+  }, [autocomplete]);
+  const [shouldReserveSuggestionsSpace, setShouldReserveSuggestionsSpace] = useState(false);
+  const lastSubmitCounterRef = useRef(submitCounter);
+
+  // 建议一旦出现，就持续预留 8 行，直到用户真正提交一条消息。
+  useEffect(() => {
+    if (hasVisibleSuggestions && !shouldReserveSuggestionsSpace) {
+      setShouldReserveSuggestionsSpace(true);
+    }
+  }, [hasVisibleSuggestions, shouldReserveSuggestionsSpace]);
+
+  // 提交后再释放预留空间，这样 Esc/输入变化不会让底部高度瞬间收缩。
+  useEffect(() => {
+    if (submitCounter !== lastSubmitCounterRef.current) {
+      lastSubmitCounterRef.current = submitCounter;
+      if (shouldReserveSuggestionsSpace) {
+        setShouldReserveSuggestionsSpace(false);
+      }
+    }
+  }, [submitCounter, shouldReserveSuggestionsSpace]);
+
+  // Confirmation dialog state.
   const [confirmRequest, setConfirmRequest] = useState<{
     tool: string;
     input: Record<string, unknown>;
@@ -436,7 +433,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Issue 070: Calculate context token usage for status bar display
   // Issue 070: Calculate context token usage for status bar display
-  // Issue 070: 计算上下文 token 使用量用于状态栏显示
+  // Issue 070: calculate context token usage for the status bar.
   const contextUsage = useMemo(() => {
     if (!compactionInfo) return undefined;
 
@@ -450,6 +447,102 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       triggerPercent,
     };
   }, [context.messages, compactionInfo, liveTokenCount]);
+
+  const confirmInstruction = useMemo(() => {
+    if (!confirmRequest) return undefined;
+    const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
+    const canAlways = currentConfig.permissionMode === "accept-edits" && !isProtectedPath;
+
+    if (isProtectedPath) {
+      return "Press (y) to confirm, (n) to cancel (protected path)";
+    }
+    if (canAlways) {
+      return "Press (y) yes, (a) always yes for this tool, (n) no";
+    }
+    return "Press (y) yes, (n) no";
+  }, [confirmRequest, currentConfig.permissionMode]);
+
+  const statusBarProps = useMemo(() => ({
+    sessionId: context.sessionId,
+    permissionMode: currentConfig.permissionMode,
+    provider: currentConfig.provider,
+    model: currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider,
+    currentTool: streamingState.currentTool,
+    thinking: currentConfig.thinking,
+    reasoningMode: currentConfig.reasoningMode,
+    reasoningCapability: formatReasoningCapabilityShort(
+      getProviderReasoningCapability(currentConfig.provider),
+    ),
+    thinkingCharCount: streamingState.thinkingCharCount,
+    toolInputCharCount: streamingState.toolInputCharCount,
+    toolInputContent: streamingState.toolInputContent,
+    currentIteration: streamingState.currentIteration,
+    maxIter: streamingState.maxIter,
+    contextUsage,
+    isCompacting: streamingState.isCompacting,
+  }), [
+    context.sessionId,
+    currentConfig.permissionMode,
+    currentConfig.provider,
+    currentConfig.model,
+    currentConfig.thinking,
+    currentConfig.reasoningMode,
+    streamingState.currentTool,
+    streamingState.thinkingCharCount,
+    streamingState.toolInputCharCount,
+    streamingState.toolInputContent,
+    streamingState.currentIteration,
+    streamingState.maxIter,
+    streamingState.isCompacting,
+    contextUsage,
+  ]);
+
+  const statusBarText = useMemo(() => getStatusBarText(statusBarProps), [statusBarProps]);
+  const terminalRows = stdout.rows || process.stdout.rows || 24;
+  const viewportBudget = useMemo(
+    // 统一预算所有底部区块占用的行数，消息区只拿剩余可见行，避免最后一行被布局副作用裁掉。
+    () => calculateViewportBudget({
+      terminalRows,
+      terminalWidth,
+      inputText,
+      suggestionsReserved: shouldReserveSuggestionsSpace,
+      showHelp,
+      statusBarText,
+      confirmPrompt: confirmRequest?.prompt,
+      confirmInstruction,
+      uiRequest: uiRequest
+        ? uiRequest.kind === "select"
+          ? {
+              kind: "select" as const,
+              title: uiRequest.title,
+              options: uiRequest.options.map((option) => ({
+                label: option.label,
+                description: option.description,
+              })),
+              buffer: uiRequest.buffer,
+              error: uiRequest.error,
+            }
+          : {
+              kind: "input" as const,
+              prompt: uiRequest.prompt,
+              defaultValue: uiRequest.defaultValue,
+              buffer: uiRequest.buffer,
+              error: uiRequest.error,
+            }
+        : null,
+    }),
+    [
+      terminalRows,
+      terminalWidth,
+      inputText,
+      shouldReserveSuggestionsSpace,
+      showHelp,
+      statusBarText,
+      confirmRequest,
+      confirmInstruction,
+      uiRequest,
+    ]
+  );
 
   // Refs for callbacks
   // Note: permissionMode and alwaysAllowTools are stored separately for permission checks
@@ -471,19 +564,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     permissionModeRef.current = mode;
   }, []);
 
-  // Double-ESC detection for interrupt - 双击 ESC 中断检测
+  // Double-ESC detection for interrupt handling.
   const lastEscPressRef = useRef<number>(0);
   const DOUBLE_ESC_INTERVAL = 500; // ms
 
-  // Global interrupt handler - using Gemini CLI style isActive pattern - 全局中断处理器 - 使用 Gemini CLI 风格的 isActive 模式
-  // Only subscribe during streaming to ensure keyboard events are captured correctly - 只在 streaming 期间订阅，确保键盘事件能被正确捕获
-  // Reference: Gemini CLI useGeminiStream.ts useKeypress usage - 参考: Gemini CLI useGeminiStream.ts 中的 useKeypress 使用方式
+  // Global interrupt handler using the Gemini CLI style isActive pattern.
+  // Only subscribe during streaming so keyboard events are captured correctly.
+  // Reference: Gemini CLI useGeminiStream.ts useKeypress usage.
   useKeypress(
     (key) => {
-      // Ctrl+C immediately interrupts - Ctrl+C 立即中断
+      // Ctrl+C immediately interrupts.
       if (key.ctrl && key.name === "c") {
         // Just abort - the catch block will handle saving the partial response
-        // 只需中止 - catch 块会处理保存部分响应
+
         abort();
         stopThinking();
         clearThinkingContent();
@@ -493,13 +586,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         return true;
       }
 
-      // ESC requires double-press to interrupt - ESC 需要双击才能中断
+      // ESC requires a double-press to interrupt.
       if (key.name === "escape") {
         const now = Date.now();
         const timeSinceLastEsc = now - lastEscPressRef.current;
 
         if (timeSinceLastEsc < DOUBLE_ESC_INTERVAL) {
-          // Double ESC: interrupt streaming - 双击 ESC：中断流
+          // Double ESC: interrupt streaming.
           lastEscPressRef.current = 0;
           abort();
           stopThinking();
@@ -509,7 +602,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           console.log(chalk.yellow("\n[Interrupted]"));
           return true;
         } else {
-          // First ESC: just record the time - 第一次 ESC：只记录时间
+          // First ESC: record the time only.
           lastEscPressRef.current = now;
           return true; // Consume the event to prevent InputPrompt from handling
         }
@@ -518,19 +611,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return false;
     },
     {
-      isActive: isLoading, // Only active during streaming - 只在 streaming 期间激活
-      priority: KeypressHandlerPriority.Critical, // Use highest priority to ensure interrupt is handled first - 使用最高优先级，确保中断优先处理
+      isActive: isLoading, // Only active during streaming.
+      priority: KeypressHandlerPriority.Critical, // Highest priority so interrupt wins first.
     }
   );
 
-  // Confirmation dialog keyboard handler - 确认对话框键盘处理
+  // Confirmation dialog keyboard handler.
   useInput(
     (input, _key) => {
       if (!confirmRequest) return;
 
       const answer = input.toLowerCase();
       const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
-      // "Always" option only available in accept-edits mode - "always" 选项只在 accept-edits 模式下可用
+      // "Always" is only available in accept-edits mode.
       const canAlways = currentConfig.permissionMode === 'accept-edits' && !isProtectedPath;
 
       if (answer === 'y' || answer === 'yes') {
@@ -676,32 +769,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Only sync if history is empty to avoid duplicates (Issue 046)
   useEffect(() => {
     if (context.messages.length > 0 && history.length === 0) {
-      // Convert messages to history items
-      // Skip messages with empty content (e.g., pure tool_result messages)
       for (const msg of context.messages) {
-        const content = extractTextContent(msg.content);
-        // Skip empty content to avoid showing blank or tool_result-only messages
-        if (!content) continue;
-        if (msg.role === "user") {
-          addHistoryItem({
-            type: "user",
-            text: content,
-          });
-        } else if (msg.role === "assistant") {
-          addHistoryItem({
-            type: "assistant",
-            text: content,
-          });
-        } else if (msg.role === "system") {
-          // Handle system role messages (e.g., compaction summaries)
-          addHistoryItem({
-            type: "system",
-            text: content,
-          });
+        const historySeeds = extractHistorySeedsFromMessage(msg);
+        for (const item of historySeeds) {
+          addHistoryItem(item);
         }
       }
     }
-  }, [context.messages.length, history.length, addHistoryItem]); // Re-run when messages or history changes
+  }, [context.messages, history.length, addHistoryItem]);
 
   // Preload skills on mount to ensure they're available for first /skill:xxx call
   // Issue 059: Skills lazy loading caused first skill invocation to fail
@@ -714,7 +789,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): import("@kodax/coding").KodaXEvents => ({
     onThinkingDelta: (text: string) => {
-      // UI layer stores thinking content for display - UI 层存储 thinking 内容用于显示
+      // The UI layer stores thinking content for display.
       appendThinkingContent(text);
     },
     onThinkingEnd: (_thinking: string) => {
@@ -729,7 +804,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     onToolInputDelta: (_toolName: string, partialJson: string) => {
       appendToolInputChars(partialJson.length);
-      appendToolInputContent(partialJson); // Issue 068 Phase 4: 追踪参数内容
+      appendToolInputContent(partialJson); // Issue 068 Phase 4: track tool input content.
     },
     onToolResult: () => {
       setCurrentTool(undefined);
@@ -745,23 +820,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       console.log(''); // Empty line for readability
 
-      // 对于用户主动取消，静默返回，因为快捷键处理函数已经打印了 [Interrupted]
+
       if (classification.category === ErrorCategory.USER_ABORT) {
         return;
       }
 
       // Show error type and message
       const categoryName = categoryNames[classification.category] || 'Unknown';
-      console.log(chalk.red(`❌ API Error (${categoryName}): ${error.message}`));
+      console.log(chalk.red(`\u274C API Error (${categoryName}): ${error.message}`));
 
       // Show what's being done to recover
       if (classification.shouldCleanup) {
-        console.log(chalk.cyan('   🧹 Cleaned incomplete tool calls'));
+        console.log(chalk.cyan('   \u{1F9F9} Cleaned incomplete tool calls'));
       }
 
       // Show next steps for user
       if (classification.category === ErrorCategory.PERMANENT) {
-        console.log(chalk.yellow('   💡 This error requires manual intervention. Please check:'));
+        console.log(chalk.yellow('   \u{1F4A1} This error requires manual intervention. Please check:'));
         if (error.message.includes('auth') || error.message.includes('401')) {
           console.log(chalk.yellow('      - Your API key is valid'));
           console.log(chalk.yellow('      - Run /config to check provider settings'));
@@ -773,10 +848,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
       } else if (classification.category === ErrorCategory.TRANSIENT) {
         if (classification.retryable) {
-          console.log(chalk.yellow(`   ⏳ Will automatically retry (up to ${classification.maxRetries} times)`));
+          console.log(chalk.yellow(`   \u23F3 Will automatically retry (up to ${classification.maxRetries} times)`));
         }
       } else if (classification.category === ErrorCategory.TOOL_CALL_ID) {
-        console.log(chalk.green('   ✅ Session cleaned, ready to continue'));
+        console.log(chalk.green('   \u2705 Session cleaned, ready to continue'));
       }
 
       console.log(''); // Empty line for readability
@@ -787,23 +862,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     onProviderRateLimit: (attempt: number, maxAttempts: number, delayMs: number) => {
       addHistoryItem({
         type: "info",
-        icon: "⏳",
+        icon: "\u23F3",
         text: `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`
       });
     },
     // Iteration start - called at the beginning of each agent iteration
-    // 迭代开始 - 在每轮 agent 迭代开始时调用
+    // Iteration start: called at the beginning of each agent iteration.
     onIterationStart: (iter: number, maxIter: number) => {
       // Update max iterations if provided
-      // 如果提供了最大迭代次数则更新
+
       if (maxIter) {
         setMaxIter(maxIter);
       }
 
       // Save current content to history and start fresh for new iteration
-      // 保存当前内容到历史，开始新一轮
+      // Save current content to history before starting the next round.
       // Fix: Always call startNewIteration to ensure currentIteration is properly set
-      // 修复：始终调用 startNewIteration 以确保正确设置 currentIteration
+      // Always call startNewIteration so currentIteration stays correct.
 
       const prevThinking = iter > 1 ? getThinkingContent().trim() : "";
       const prevResponse = iter > 1 ? getFullResponse().trim() : "";
@@ -818,10 +893,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       if (iter > 1) {
         // Issue 076 fix: Save previous iteration content to persistent history BEFORE clearing
-        // Issue 076 修复：在清空前将上一轮内容保存到持久历史记录
+        // Issue 076.
 
         // First, save thinking content (full content for history)
-        // 首先保存 thinking 内容（完整内容用于历史记录）
+
         if (prevThinking) {
           addHistoryItem({
             type: "thinking",
@@ -830,7 +905,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
 
         // Then, save response content
-        // 然后保存响应内容
+
         if (prevResponse) {
           addHistoryItem({
             type: "assistant",
@@ -840,18 +915,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
     },
     // Permission hook - called before each tool execution
-    // 权限钩子 - 在每个工具执行前调用
+
     beforeToolExecute: async (tool: string, input: Record<string, unknown>): Promise<boolean | string> => {
-      const mode = permissionModeRef.current;  // 使用 ref 获取最新值，而非 currentConfig.permissionMode
+      const mode = permissionModeRef.current; // Read the latest value from the ref, not currentConfig.permissionMode.
       const confirmTools = computeConfirmTools(mode);
       const alwaysAllowTools = alwaysAllowToolsRef.current;
-      // Issue 052 fix: Read gitRoot from context prop, not options.context - Issue 052 修复：从 context prop 读取 gitRoot
+      // Issue 052 fix: Read gitRoot from context prop, not options.context.
       const gitRoot = context.gitRoot;
 
       // === 1. Plan mode: block modification tools ===
       // Block file modification tools and undo
       if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
-        console.log(chalk.yellow(`[Blocked] Tool '${tool}' is not allowed in plan mode (read-only)`));
         return `[Blocked] Tool '${tool}' is not allowed in plan mode (read-only). ${PLAN_MODE_BLOCK_GUIDANCE}`;
       }
 
@@ -859,14 +933,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (mode === 'plan' && tool === 'bash') {
         const command = (input.command as string) ?? '';
         if (isBashWriteCommand(command)) {
-          console.log(chalk.yellow(`[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`));
           return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... ${PLAN_MODE_BLOCK_GUIDANCE}`;
         }
       }
 
       // === 2. Safe read-only bash commands: auto-allowed BEFORE protected path check ===
       // Issue 085: All modes should allow safe read commands without confirmation
-      // 安全的只读 bash 命令在受保护路径检查之前就自动放行
+      // Safe read-only bash commands are auto-allowed before protected path checks.
       if (tool === 'bash') {
         const command = (input.command as string) ?? '';
         if (isBashReadCommand(command)) {
@@ -901,14 +974,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
           // === RACE CONDITION FIX: Re-evaluate permission mode ===
           if (permissionModeRef.current === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
-            console.log(chalk.yellow(`[Blocked] Tool '${tool}' blocked because mode was switched to 'plan' during confirmation`));
             return false;
           }
 
           if (permissionModeRef.current === 'plan' && tool === 'bash') {
             const command = (input.command as string) ?? '';
             if (isBashWriteCommand(command)) {
-              console.log(chalk.yellow(`[Blocked] Bash write operation blocked because mode was switched to 'plan' during confirmation: ${command.slice(0, 50)}...`));
               return false;
             }
           }
@@ -933,20 +1004,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // The user might have pressed Ctrl+O to switch to 'plan' mode
         // WHILE the confirmation dialog was open and waiting.
         if (permissionModeRef.current === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
-          console.log(chalk.yellow(`[Blocked] Tool '${tool}' blocked because mode was switched to 'plan' during confirmation`));
           return false;
         }
 
         if (permissionModeRef.current === 'plan' && tool === 'bash') {
           const command = (input.command as string) ?? '';
           if (isBashWriteCommand(command)) {
-            console.log(chalk.yellow(`[Blocked] Bash write operation blocked because mode was switched to 'plan' during confirmation: ${command.slice(0, 50)}...`));
             return false;
           }
         }
 
         if (!result.confirmed) {
-          // Issue 051 fix: Show cancellation feedback - Issue 051 修复：显示取消反馈
+          // Issue 051: show cancellation feedback.
           console.log(chalk.yellow('[Cancelled] Operation cancelled by user'));
           return false;
         }
@@ -964,7 +1033,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       return true;
     },
-    // Issue 069: Ask user a question interactively - 交互式向用户提问
+    // Issue 069: Ask user a question interactively.
     askUser: async (options: import("@kodax/coding").AskUserQuestionOptions): Promise<string> => {
       const selectedValue = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
@@ -987,7 +1056,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       setLiveTokenCount(info.tokensAfter);
     },
     // Compaction event - notification only, do NOT clear UI history here
-    // 压缩事件 - 仅通知，不要在这里清理 UI 历史记录
+
     onCompact: (estimatedTokens: number) => {
       // Stop the indicator now that it's complete
       stopCompacting();
@@ -999,7 +1068,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const prevK = Math.round(tokensBefore / 1000);
       addHistoryItem({
         type: "info",
-        icon: "✨",
+        icon: "\u2728",
         text: `Context auto-compacted (was ~${prevK}k tokens)`,
       });
     },
@@ -1009,20 +1078,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       stopCompacting();
     },
     // Iteration end - update live token count for real-time context usage display
-    // 迭代结束 - 更新实时 token 计数用于上下文使用量显示
+
     onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
       setLiveTokenCount(info.tokenCount);
     },
   }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting, addHistoryItem]);
 
   // Helper function to show confirmation dialog
-  // 显示确认对话框的辅助函数
+
   const showConfirmDialog = (tool: string, input: Record<string, unknown>): Promise<ConfirmResult> => {
-    // Build confirmation prompt text - 构建确认提示文本
+    // Build confirmation prompt text.
     let promptText: string;
 
     // Handle simple confirm dialog (used by project commands, etc.)
-    // 处理简单确认对话框（用于 project 命令等）
+    // Handle the simple confirmation dialog used by project commands and similar flows.
     if (tool === "confirm" && input._message) {
       promptText = input._message as string;
     } else {
@@ -1047,7 +1116,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
     }
 
-    // Return promise that resolves when user answers - 返回一个 Promise，当用户回答时 resolve
+    // Return a promise that resolves when the user answers.
     return new Promise<ConfirmResult>((resolve) => {
       confirmResolveRef.current = resolve;
       setConfirmRequest({ tool, input, prompt: promptText });
@@ -1063,7 +1132,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const events = createStreamingEvents();
 
     // Get skills system prompt snippet for progressive disclosure (Issue 056)
-    // 获取 skills 系统提示词片段用于渐进式披露
+
     // Issue 064: Pass projectRoot to prevent singleton reset
     const skillRegistry = getSkillRegistry(context.gitRoot);
     const skillsPrompt = skillRegistry.getSystemPromptSnippet();
@@ -1106,12 +1175,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return;
     }
 
-    const content = extractTextContent(lastAssistant.content);
-    if (content) {
-      addHistoryItem({
-        type: "assistant",
-        text: content,
-      });
+    const historySeeds = extractHistorySeedsFromMessage(lastAssistant);
+    for (const item of historySeeds) {
+      addHistoryItem(item);
     }
   }, [addHistoryItem]);
 
@@ -1156,10 +1222,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       if (prepared.mode === "fork") {
         const lastAssistant = result.messages.slice().reverse().find((msg) => msg.role === "assistant");
-        const assistantText = lastAssistant ? extractTextContent(lastAssistant.content) : "";
-        if (assistantText) {
-          context.messages.push({ role: "assistant", content: assistantText });
-          addHistoryItem({ type: "assistant", text: assistantText });
+        if (lastAssistant) {
+          context.messages.push({
+            role: "assistant",
+            content: lastAssistant.content,
+          });
+          for (const item of extractHistorySeedsFromMessage(lastAssistant)) {
+            addHistoryItem(item);
+          }
         }
       } else {
         context.messages = result.messages;
@@ -1188,10 +1258,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const handleSubmit = useCallback(
     async (input: string) => {
       // Prevent concurrent execution: ignore input if agent is busy or waiting for tool confirmation
-      // 防止并发执行：如果 Agent 正在执行或正在等待工具确认，则忽略新输入
+      // Prevent concurrent execution while the agent is busy or awaiting confirmation.
       if (!input.trim() || !isRunning || isLoading || confirmRequest || uiRequest) return;
 
-      // Hide help panel when submitting - 发送时隐藏帮助面板
+      // Hide help panel when submitting.
       setShowHelp(false);
 
       // Banner remains visible - it will scroll up naturally as messages are added
@@ -1215,12 +1285,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       });
 
       // Clear autocomplete suggestions space when message is sent
-      // 发送消息时清除自动补全建议的预留空间
+      // Clear reserved autocomplete space once a message is sent.
       setSubmitCounter(prev => prev + 1);
 
       setIsLoading(true);
       clearResponse();
-      clearIterationHistory(); // Clear iteration history for new conversation - 清空迭代历史
+      clearIterationHistory(); // Clear iteration history for a new conversation.
       startStreaming();
 
       touchContext(context);
@@ -1364,14 +1434,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               projectRoot: context.gitRoot ?? undefined,
             });
           },
-          // Start/stop compacting indicator - 开始/停止压缩指示器
+          // Start and stop the compacting indicator.
           startCompacting: () => {
             startCompacting();
           },
           stopCompacting: () => {
             stopCompacting();
           },
-          // Confirm dialog callback for interactive commands - 交互式命令的确认对话框回调
+          // Confirmation callback for interactive commands.
           confirm: async (message: string): Promise<boolean> => {
             const result = await showConfirmDialog("confirm", {
               _alwaysConfirm: true,
@@ -1379,7 +1449,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             });
             return result.confirmed;
           },
-          // UI context for interactive dialogs - UI 交互上下文
+          // UI context for interactive dialogs.
           ui: {
             select: async (title: string, options: string[]): Promise<string | undefined> => {
               // Route through Ink-managed dialog state instead of reading stdin directly.
@@ -1387,7 +1457,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               // TODO: Implement Ink-based select dialog
               // For now, use simple console-based selection
               console.log(`\n${title}`);
-              console.log('─'.repeat(title.length));
+              console.log('\u2500'.repeat(title.length));
               options.forEach((option, index) => {
                 console.log(`  ${index + 1}. ${option}`);
               });
@@ -1668,8 +1738,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
         // Issue 076 fix: Save final iteration content to persistent history
         // This handles the case where the last iteration didn't trigger onIterationStart
-        // Issue 076 修复：将最后一轮内容保存到持久历史记录
-        // 这处理了最后一轮没有触发 onIterationStart 的情况
+        // Issue 076.
+        // This handles the case where the last iteration did not trigger onIterationStart.
         const finalThinking = getThinkingContent().trim();
         const finalResponse = resolveAssistantHistoryText(context.messages, getFullResponse());
 
@@ -1874,10 +1944,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       )}
 
       {/* Message History - flexGrow to fill remaining space */}
-      {/* 消息历史 - 使用 flexGrow 填充剩余空间 */}
+
       <Box flexDirection="column" flexGrow={1} overflowY="hidden">
         {history.length > 0 && (
           <Box flexDirection="column">
+            {/* 保留完整 transcript，避免响应结束后只剩最后一屏内容。 */}
             <MessageList
               items={renderHistory}
               isLoading={isLoading}
@@ -1891,6 +1962,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               iterationHistory={streamingState.iterationHistory}
               currentIteration={streamingState.currentIteration}
               isCompacting={streamingState.isCompacting}
+              viewportWidth={terminalWidth}
             />
           </Box>
         )}
@@ -1904,10 +1976,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       </Box>
 
       {/* Fixed bottom section: Input + Suggestions + Status */}
-      {/* 固定底部区域: 输入 + 建议 + 状态 */}
+      {/* Fixed bottom section: Input + Suggestions + Status */}
       <Box flexDirection="column" flexShrink={0}>
         {/* Input Area - always at fixed position */}
-        {/* 输入区域 - 始终在固定位置 */}
+        {/* Input area - always at a fixed position */}
         <Box>
           <InputPrompt
             onSubmit={handleSubmit}
@@ -1920,58 +1992,34 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         </Box>
 
         {/* Autocomplete Suggestions - fixed 8-line container, expands downward */}
-        {/* 自动补全建议 - 固定8行容器，向下扩展 */}
-        <AutocompleteSuggestions submitCounter={submitCounter} />
+
+        {/* 这里始终占据预算层计算出来的高度，不把消息区的裁切交给 Ink 自己“碰运气”。 */}
+        <AutocompleteSuggestions reserveSpace={shouldReserveSuggestionsSpace} width={terminalWidth} />
 
         {/* Keyboard Shortcuts Help Bar - shown when ? is pressed (Issue 083) */}
-        {/* 快捷键帮助栏 - 按 ? 显示 */}
+        {/* Keyboard shortcuts help bar - shown when ? is pressed */}
         {showHelp && (
           <Box flexDirection="column" paddingX={1}>
             <Text dimColor>
-              <Text bold>? toggle help</Text>
-              {'  '}
-              <Text>Ctrl+T reasoning</Text>
-              {'  '}
-              <Text>Ctrl+O mode</Text>
-              {'  '}
-              <Text>Ctrl+C interrupt</Text>
-              {'  '}
-              <Text color="cyan">/</Text>
-              <Text> commands</Text>
-              {'  '}
-              <Text color="cyan">@</Text>
-              <Text> files</Text>
+              {HELP_BAR_SEGMENTS.map((segment, index) => (
+                <Text key={`${segment.text}-${index}`} color={segment.color} bold={segment.bold}>
+                  {segment.text}
+                </Text>
+              ))}
             </Text>
           </Box>
         )}
 
-        {/* Spacer between help and status bar - 帮助栏和状态栏之间的空行 */}
+        {/* Spacer between help and status bar */}
         {showHelp && <Box><Text> </Text></Box>}
 
         {/* Status Bar */}
         <Box>
-          <StatusBar
-            sessionId={context.sessionId}
-            permissionMode={currentConfig.permissionMode}
-            provider={currentConfig.provider}
-            model={currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider}
-            currentTool={streamingState.currentTool}
-            thinking={currentConfig.thinking}
-            reasoningMode={currentConfig.reasoningMode}
-            reasoningCapability={formatReasoningCapabilityShort(
-              getProviderReasoningCapability(currentConfig.provider),
-            )}
-            thinkingCharCount={streamingState.thinkingCharCount}
-            toolInputCharCount={streamingState.toolInputCharCount}
-            toolInputContent={streamingState.toolInputContent}
-            currentIteration={streamingState.currentIteration}
-            maxIter={streamingState.maxIter}
-            contextUsage={contextUsage}
-            isCompacting={streamingState.isCompacting}
-          />
+          {/* 状态栏渲染和预算共用同一份文本格式化规则，尽量减少窄终端下的换行偏差。 */}
+          <StatusBar {...statusBarProps} />
         </Box>
 
-        {/* Confirmation Dialog - 确认对话框 */}
+        {/* Confirmation dialog */}
         {confirmRequest && (
           <Box
             flexDirection="column"
@@ -1983,31 +2031,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             <Text color="yellow" bold>
               [Confirm] {confirmRequest.prompt}
             </Text>
-            {(() => {
-              const isProtectedPath = !!confirmRequest.input._alwaysConfirm;
-              const canAlways = currentConfig.permissionMode === 'accept-edits' && !isProtectedPath;
-
-              if (isProtectedPath) {
-                return (
-                  <Text dimColor>
-                    Press (y) to confirm, (n) to cancel (protected path)
-                  </Text>
-                );
-              } else if (canAlways) {
-                return (
-                  <Text dimColor>
-                    Press (y) yes, (a) always yes for this tool, (n) no
-                  </Text>
-                );
-              } else {
-                // plan mode or auto-in-project mode - no "always" option
-                return (
-                  <Text dimColor>
-                    Press (y) yes, (n) no
-                  </Text>
-                );
-              }
-            })()}
+            {confirmInstruction && (
+              <Text dimColor>{confirmInstruction}</Text>
+            )}
           </Box>
         )}
 
@@ -2024,11 +2050,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                 <Text color="cyan" bold>
                   [Select] {uiRequest.title}
                 </Text>
-                {uiRequest.options.map((option, index) => (
+                {/* 选项列表按 viewport budget 截断，保证输入区和最新消息至少还能保住一部分可见。 */}
+                {uiRequest.options.slice(0, viewportBudget.visibleSelectOptions).map((option, index) => (
                   <Text key={`${option.value}-${index}`} dimColor>
                     {`${index + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`}
                   </Text>
                 ))}
+                {uiRequest.options.length > viewportBudget.visibleSelectOptions && (
+                  <Text dimColor>{`${uiRequest.options.length - viewportBudget.visibleSelectOptions} more choices...`}</Text>
+                )}
                 <Text dimColor>{`Choice: ${uiRequest.buffer || "(type a number)"}`}</Text>
                 <Text dimColor>Press Enter to confirm, Esc to cancel</Text>
               </>
@@ -2112,7 +2142,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
 
   const config = loadConfig();
 
-  // Initialize custom providers from config - 从配置初始化自定义 Provider
+  // Initialize custom providers from config.
   if (config.customProviders?.length) {
     registerCustomProviders(config.customProviders);
   }

@@ -1,39 +1,109 @@
 import { describe, expect, it } from "vitest";
+import type { KodaXMessage } from "@kodax/coding";
 import {
+  type HistorySeedSourceMessage,
+  extractHistorySeedsFromMessage,
   extractLastAssistantText,
+  extractTextContent,
   resolveAssistantHistoryText,
 } from "./message-utils.js";
 
 describe("message-utils", () => {
-  it("keeps thinking markup in extractTextContent for session restore", async () => {
-    const { extractTextContent } = await import("./message-utils.js");
-
+  it("keeps extractTextContent focused on plain text blocks", () => {
     const text = extractTextContent([
       { type: "thinking", thinking: "plan silently" },
       { type: "text", text: "final answer" },
     ]);
 
-    expect(text).toBe("[Thinking]\nplan silently\n[/Thinking]\nfinal answer");
+    expect(text).toBe("final answer");
+  });
+
+  it("restores structured assistant thinking blocks as separate history items", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "plan silently" },
+        { type: "text", text: "final answer" },
+      ],
+    };
+    const items = extractHistorySeedsFromMessage(message);
+
+    expect(items).toEqual([
+      { type: "thinking", text: "plan silently" },
+      { type: "assistant", text: "final answer" },
+    ]);
+  });
+
+  it("restores legacy tagged thinking blocks as separate history items", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "assistant",
+      content: "[Thinking]\nplan silently\n[/Thinking]\nfinal answer",
+    };
+    const items = extractHistorySeedsFromMessage(message);
+
+    expect(items).toEqual([
+      { type: "thinking", text: "plan silently" },
+      { type: "assistant", text: "final answer" },
+    ]);
+  });
+
+  it("restores multiple tagged thinking blocks in order", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "assistant",
+      content: "preface\n[Thinking]\nfirst\n[/Thinking]\nmiddle\n[Thinking]\nsecond\n[/Thinking]\nanswer",
+    };
+    const items = extractHistorySeedsFromMessage(message);
+
+    expect(items).toEqual([
+      { type: "assistant", text: "preface" },
+      { type: "thinking", text: "first" },
+      { type: "assistant", text: "middle" },
+      { type: "thinking", text: "second" },
+      { type: "assistant", text: "answer" },
+    ]);
+  });
+
+  it("does not treat inline thinking tags as legacy restore markers", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "assistant",
+      content: "Use [Thinking] and [/Thinking] literally in docs.",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      { type: "assistant", text: "Use [Thinking] and [/Thinking] literally in docs." },
+    ]);
+  });
+
+  it("ignores empty legacy thinking blocks", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "assistant",
+      content: "[Thinking]\n\n[/Thinking]\nfinal answer",
+    };
+
+    expect(extractHistorySeedsFromMessage(message)).toEqual([
+      { type: "assistant", text: "final answer" },
+    ]);
   });
 
   it("extracts the latest assistant text from structured content", () => {
-    const text = extractLastAssistantText([
+    const messages: KodaXMessage[] = [
       { role: "user", content: "hello" },
       {
         role: "assistant",
         content: [
           { type: "text", text: "line 1" },
-          { type: "tool_result", content: "ignored" },
+          { type: "tool_result", tool_use_id: "tool-1", content: "ignored" },
           { type: "text", text: "line 2" },
         ],
       },
-    ] as never);
+    ];
+    const text = extractLastAssistantText(messages);
 
     expect(text).toBe("line 1\nline 2");
   });
 
   it("extracts only assistant text blocks when thinking blocks are present", () => {
-    const text = extractLastAssistantText([
+    const messages: KodaXMessage[] = [
       { role: "user", content: "hello" },
       {
         role: "assistant",
@@ -43,7 +113,8 @@ describe("message-utils", () => {
           { type: "text", text: "line 2" },
         ],
       },
-    ] as never);
+    ];
+    const text = extractLastAssistantText(messages);
 
     expect(text).toBe("line 1\nline 2");
   });
@@ -56,7 +127,7 @@ describe("message-utils", () => {
           role: "assistant",
           content: "full response\n\nPlease tell me what you'd like to do next.",
         },
-      ] as never,
+      ] satisfies KodaXMessage[],
       "full response"
     );
 
@@ -65,7 +136,7 @@ describe("message-utils", () => {
 
   it("falls back to streamed text when assistant message content is unavailable", () => {
     const resolved = resolveAssistantHistoryText(
-      [{ role: "user", content: "hello" }] as never,
+      [{ role: "user", content: "hello" }] satisfies KodaXMessage[],
       "buffered response"
     );
 

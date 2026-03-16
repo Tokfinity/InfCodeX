@@ -1,11 +1,19 @@
 /**
- * Message Utils - Message processing utilities - 消息处理工具函数
- *
- * Provides message content extraction and formatting functions - 提供消息内容提取和格式化功能
- * Extracted from InkREPL.tsx to improve code organization - 从 InkREPL.tsx 提取以改善代码组织
+ * Utilities for extracting message content for history rendering, copy, and previews.
  */
 
-import type { KodaXMessage } from "@kodax/coding";
+import type { KodaXContentBlock, KodaXMessage } from "@kodax/coding";
+
+export type RestoredHistorySeed =
+  | { type: "user"; text: string }
+  | { type: "assistant"; text: string }
+  | { type: "system"; text: string }
+  | { type: "thinking"; text: string };
+
+const THINKING_OPEN_TAG = "[Thinking]";
+const THINKING_CLOSE_TAG = "[/Thinking]";
+const LEGACY_THINKING_BLOCK_RE =
+  /(^|\r?\n)\[Thinking\]\r?\n([\s\S]*?)\r?\n\[\/Thinking\](?=\r?\n|$)/g;
 
 function extractAssistantTextOnly(content: string | unknown[]): string {
   if (typeof content === "string") {
@@ -30,59 +38,164 @@ function extractAssistantTextOnly(content: string | unknown[]): string {
   return textParts.join("\n");
 }
 
+function pushSeed(
+  items: RestoredHistorySeed[],
+  type: RestoredHistorySeed["type"],
+  text: string
+): void {
+  if (text.trim().length === 0) {
+    return;
+  }
+
+  items.push({ type, text });
+}
+
+function stripLegacyTagBoundaryNewlines(text: string): string {
+  return text.replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
+function parseLegacyAssistantContent(content: string): RestoredHistorySeed[] {
+  if (!content.includes(THINKING_OPEN_TAG) || !content.includes(THINKING_CLOSE_TAG)) {
+    return content.trim().length > 0 ? [{ type: "assistant", text: content }] : [];
+  }
+
+  const items: RestoredHistorySeed[] = [];
+  let cursor = 0;
+
+  for (const match of content.matchAll(LEGACY_THINKING_BLOCK_RE)) {
+    const matchIndex = match.index ?? -1;
+    const boundaryPrefix = match[1] ?? "";
+    const thinkingContent = match[2] ?? "";
+
+    if (matchIndex < 0) {
+      continue;
+    }
+
+    const blockStart = matchIndex + boundaryPrefix.length;
+    pushSeed(
+      items,
+      "assistant",
+      stripLegacyTagBoundaryNewlines(content.slice(cursor, blockStart))
+    );
+    pushSeed(items, "thinking", thinkingContent);
+    cursor = matchIndex + match[0].length;
+  }
+
+  pushSeed(items, "assistant", stripLegacyTagBoundaryNewlines(content.slice(cursor)));
+  if (items.length === 0) {
+    return content.trim().length > 0 ? [{ type: "assistant", text: content }] : [];
+  }
+  return items;
+}
+
+function extractAssistantHistorySeeds(content: string | readonly unknown[]): RestoredHistorySeed[] {
+  if (typeof content === "string") {
+    return parseLegacyAssistantContent(content);
+  }
+
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const items: RestoredHistorySeed[] = [];
+  const textBuffer: string[] = [];
+
+  const flushAssistantBuffer = () => {
+    if (textBuffer.length === 0) {
+      return;
+    }
+
+    pushSeed(items, "assistant", textBuffer.join("\n"));
+    textBuffer.length = 0;
+  };
+
+  for (const block of content) {
+    if (!block || typeof block !== "object" || !("type" in block)) {
+      continue;
+    }
+
+    switch (block.type) {
+      case "text":
+        if ("text" in block) {
+          textBuffer.push(String(block.text));
+        }
+        break;
+      case "thinking":
+        flushAssistantBuffer();
+        if ("thinking" in block) {
+          pushSeed(items, "thinking", String(block.thinking));
+        }
+        break;
+      case "tool_use":
+      case "tool_result":
+      case "redacted_thinking":
+        break;
+      default:
+        break;
+    }
+  }
+
+  flushAssistantBuffer();
+  return items;
+}
+
 /**
- * Extract text content from message - 从消息中提取文本内容
- *
- * Handles string and array content formats: - 处理字符串和数组两种内容格式：
- * - String: returned directly - 字符串：直接返回
- * - Array: extracts only text blocks, ignores thinking/tool_use/tool_result/redacted_thinking - 数组：只提取 text 块，忽略 thinking/tool_use/tool_result/redacted_thinking
- *
- * @param content - Message content (string or content block array) - 消息内容（字符串或内容块数组）
- * @returns Extracted text content, returns empty string for pure tool_result/thinking messages - 提取的文本内容，对于纯 tool_result/thinking 消息返回空字符串
+ * Minimal message shape required to restore UI history items.
  */
-export function extractTextContent(content: string | unknown[]): string {
+export interface HistorySeedSourceMessage {
+  role: KodaXMessage["role"];
+  content: string | KodaXContentBlock[];
+}
+
+/**
+ * Extract UI history seeds from a persisted message.
+ * Assistant messages preserve thinking blocks as dedicated history items so
+ * restored sessions render with the same styling as live thinking output.
+ */
+export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage): RestoredHistorySeed[] {
+  switch (message.role) {
+    case "assistant":
+      return extractAssistantHistorySeeds(message.content);
+    case "user": {
+      const content = extractTextContent(message.content);
+      return content.trim().length > 0 ? [{ type: "user", text: content }] : [];
+    }
+    case "system": {
+      const content = extractTextContent(message.content);
+      return content.trim().length > 0 ? [{ type: "system", text: content }] : [];
+    }
+    default:
+      return [];
+  }
+}
+
+/**
+ * Extract plain text from message content.
+ * Thinking/tool blocks are omitted so callers get only visible assistant text.
+ */
+export function extractTextContent(content: string | readonly unknown[]): string {
   if (typeof content === "string") {
     return content;
   }
 
-  if (Array.isArray(content)) {
-    const textParts: string[] = [];
-    for (const block of content) {
-      if (block && typeof block === "object" && "type" in block) {
-        switch (block.type) {
-          case "text":
-            // Extract only text block content - 只提取 text 块的内容
-            if ("text" in block) {
-              textParts.push(String(block.text));
-            }
-            break;
-          case "thinking":
-            // Extract thinking content for session restore - 提取 thinking 内容用于会话恢复
-            // Add [/Thinking] end tag to distinguish from regular output - 添加结束标签以区分正式输出
-            if ("thinking" in block && block.thinking) {
-              textParts.push(`[Thinking]\n${block.thinking}\n[/Thinking]`);
-            }
-            break;
-          case "tool_use":
-          case "tool_result":
-          case "redacted_thinking":
-            // These block types are not displayed in message history - 这些块类型不显示在历史消息中
-            break;
-          default:
-            // Unknown types are also ignored - 未知类型也忽略
-            break;
-        }
-      }
-    }
-    if (textParts.length > 0) {
-      return textParts.join("\n");
-    }
-    // Pure tool_result/tool_use/thinking messages return empty string, let UI layer filter them out - 纯 tool_result/tool_use/thinking 消息返回空字符串，让 UI 层过滤掉
+  if (!Array.isArray(content)) {
     return "";
   }
 
-  // Unknown format returns empty string - 未知格式返回空字符串
-  return "";
+  const textParts: string[] = [];
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      "type" in block &&
+      block.type === "text" &&
+      "text" in block
+    ) {
+      textParts.push(String(block.text));
+    }
+  }
+
+  return textParts.join("\n");
 }
 
 /**
@@ -116,12 +229,7 @@ export function resolveAssistantHistoryText(
 }
 
 /**
- * Extract session title from message list - 从消息列表中提取会话标题
- *
- * Uses first 50 characters of first user message as title - 使用第一条用户消息的前 50 个字符作为标题
- *
- * @param messages - Message list - 消息列表
- * @returns Extracted title - 提取的标题
+ * Extract a session title from the first user message.
  */
 export function extractTitle(messages: KodaXMessage[]): string {
   const firstUser = messages.find((m) => m.role === "user");
@@ -134,11 +242,7 @@ export function extractTitle(messages: KodaXMessage[]): string {
 }
 
 /**
- * Format message preview - 格式化消息预览
- *
- * @param content - Message content - 消息内容
- * @param maxLength - Maximum length (default 60) - 最大长度（默认 60）
- * @returns Formatted preview text - 格式化后的预览文本
+ * Format a single-line preview for session lists.
  */
 export function formatMessagePreview(content: string, maxLength = 60): string {
   const preview = content.replace(/\n/g, " ");
