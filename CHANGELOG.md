@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.41] - 2026-03-16
+
+### Changed
+- **MessageList Static/Dynamic Split**: Completed conversation rounds now render via Ink `<Static>` (no re-render), while only the active round renders dynamically
+  - Added `splitMessageHistorySections()` to split history at the last user message boundary
+  - Added `buildStaticTranscriptSections()`, `buildDynamicTranscriptSection()`, `flattenTranscriptSections()` to `transcript-layout.ts`
+  - Added `TranscriptSection` type with `key` and `rows` fields
+  - Added `StaticTranscriptItemRenderer` component for stable rendering of completed rounds
+
+### Fixed
+- **Terminal Flicker**: Completed rounds no longer re-render on every keystroke or streaming token
+
+---
+
 ## [0.5.40] - 2026-03-16
 
 ### Added

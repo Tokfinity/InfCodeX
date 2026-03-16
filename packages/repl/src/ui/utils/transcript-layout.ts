@@ -25,6 +25,11 @@ export interface TranscriptRow {
   spinner?: boolean;
 }
 
+export interface TranscriptSection {
+  key: string;
+  rows: TranscriptRow[];
+}
+
 export interface TranscriptBuildOptions {
   items: HistoryItem[];
   viewportWidth: number;
@@ -443,6 +448,35 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
   }
 
   return rows;
+}
+
+export function buildStaticTranscriptSections(
+  items: HistoryItem[],
+  viewportWidth: number,
+  maxLines = 1000
+): TranscriptSection[] {
+  return items.map((item) => ({
+    key: item.id,
+    rows: buildTranscriptRows({
+      items: [item],
+      viewportWidth,
+      maxLines,
+    }),
+  }));
+}
+
+export function buildDynamicTranscriptSection(
+  key: string,
+  options: TranscriptBuildOptions
+): TranscriptSection {
+  return {
+    key,
+    rows: buildTranscriptRows(options),
+  };
+}
+
+export function flattenTranscriptSections(sections: TranscriptSection[]): TranscriptRow[] {
+  return sections.flatMap((section) => section.rows);
 }
 
 export function getVisibleTranscriptRows(rows: TranscriptRow[], viewportRows?: number): TranscriptRow[] {

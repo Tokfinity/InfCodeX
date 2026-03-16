@@ -25,6 +25,7 @@ import {
 import {
   MessageList,
   HistoryItemRenderer,
+  splitMessageHistorySections,
 } from "../../packages/repl/src/ui/components/MessageList.js";
 
 // === Test Helpers ===
@@ -337,6 +338,72 @@ describe("MessageList", () => {
       expect(lastFrame()).toContain("Updated latest line");
       expect(lastFrame()).toContain("Tail line");
       expect(lastFrame()).not.toContain("Old latest line");
+    });
+
+    it("keeps completed rounds stable while rerendering the active round", () => {
+      const firstUser = createUserItem("Round 1 prompt");
+      const firstAssistant = createAssistantItem("Round 1 answer");
+      const secondUser = createUserItem("Round 2 prompt");
+      const secondAssistant = createAssistantItem("Round 2 old");
+
+      const initialItems: HistoryItem[] = [
+        firstUser,
+        firstAssistant,
+        secondUser,
+        secondAssistant,
+      ];
+      const updatedItems: HistoryItem[] = [
+        firstUser,
+        firstAssistant,
+        secondUser,
+        { ...secondAssistant, text: "Round 2 new\nRound 2 tail" },
+      ];
+
+      const { lastFrame, rerender } = render(
+        <MessageList items={initialItems} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />
+      );
+
+      rerender(<MessageList items={updatedItems} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
+
+      const output = lastFrame() ?? "";
+      expect(output).toContain("Round 1 prompt");
+      expect(output).toContain("Round 1 answer");
+      expect(output).toContain("Round 2 prompt");
+      expect(output).toContain("Round 2 new");
+      expect(output).toContain("Round 2 tail");
+      expect(output).not.toContain("Round 2 old");
+      expect(output.match(/Round 1 answer/g)?.length ?? 0).toBe(1);
+    });
+
+    it("splits completed rounds from the active round at the last user message", () => {
+      const firstUser = createUserItem("Round 1 prompt");
+      const firstAssistant = createAssistantItem("Round 1 answer");
+      const secondUser = createUserItem("Round 2 prompt");
+      const secondThinking = createThinkingItem("Round 2 thinking");
+      const secondAssistant = createAssistantItem("Round 2 answer");
+
+      const sections = splitMessageHistorySections([
+        firstUser,
+        firstAssistant,
+        secondUser,
+        secondThinking,
+        secondAssistant,
+      ]);
+
+      expect(sections.activeRoundStartIndex).toBe(2);
+      expect(sections.staticItems).toEqual([firstUser, firstAssistant]);
+      expect(sections.activeItems).toEqual([secondUser, secondThinking, secondAssistant]);
+    });
+
+    it("keeps all items active when there is no user boundary", () => {
+      const thinking = createThinkingItem("Standalone thinking");
+      const assistant = createAssistantItem("Standalone answer");
+
+      const sections = splitMessageHistorySections([thinking, assistant]);
+
+      expect(sections.activeRoundStartIndex).toBe(0);
+      expect(sections.staticItems).toEqual([]);
+      expect(sections.activeItems).toEqual([thinking, assistant]);
     });
   });
 
