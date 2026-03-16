@@ -8,7 +8,7 @@ _Last Updated: 2026-03-16_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.5.38 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.5.42 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.6.0 | 当前规划的版本 |
 
 ---
@@ -27,7 +27,7 @@ _Last Updated: 2026-03-16_
 | v0.5.22 | Released | 1 | 1/1 (100%) |
 | v0.5.34 | Released | 1 | 1/1 (100%) |
 | v0.5.37 | Released | 1 | 1/1 (100%) |
-| v0.6.0 | In Development | 3 | 1/3 (33%) |
+| v0.6.0 | In Development | 5 | 3/5 (60%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 2 | 0/2 (0%) |
 
@@ -49,8 +49,9 @@ _Last Updated: 2026-03-16_
 | 010 | Refactor | Completed | Critical | 架构拆分：Agent Core + Skills 独立 | v0.5.0 | v0.5.5 | [Design](features/v0.5.0.md#010) | 2026-03-02 | 2026-03-02 | 2026-03-02 |
 | 011 | Enhancement | Completed | High | 智能上下文压缩 (Compact) | v0.5.0 | v0.5.14 | [Design](features/v0.5.0.md#011) | 2026-03-02 | 2026-03-05 | 2026-03-06 |
 | 012 | Enhancement | Completed | High | TUI 自动补全增强 | v0.5.0 | v0.5.13 | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | 2026-03-05 |
-| 013 | Refactor | In Progress | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | 2026-03-13 | - |
+| 013 | Refactor | Completed | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | 2026-03-13 | 2026-03-16 |
 | 014 | Refactor | Completed | High | Project Mode Enhancement | v0.5.20 | v0.5.20 | [Design](features/v0.5.20.md) | 2026-03-07 | 2026-03-07 | 2026-03-07 |
+| 015 | Enhancement | Planned | High | Project Mode 2.0 - AI-Driven Development Workflow | v0.6.0 | - | [Design](features/v0.6.0.md#015) | 2026-03-07 | - | - |
 | 016 | New | Completed | High | CLI-Based OAuth Providers | v0.5.22 | v0.5.22 | [Design](features/v0.5.22.md) | 2026-03-08 | 2026-03-08 | 2026-03-08 |
 | 017 | Enhancement | Planned | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | - | - |
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
@@ -102,16 +103,16 @@ _Last Updated: 2026-03-16_
 
 ---
 
-### 021: Provider-Aware Reasoning Budget Matrix (PLANNED)
+### 021: Provider-Aware Reasoning Budget Matrix (COMPLETED)
 - **Category**: Enhancement
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.0
-- **Released**: -
+- **Released**: v0.5.37
 - **Design**: [v0.6.0.md#021](features/v0.6.0.md#021)
 - **Created**: 2026-03-15
-- **Started**: -
-- **Completed**: -
+- **Started**: 2026-03-15
+- **Completed**: 2026-03-15
 
 **Description**:
 将当前统一的 `low=6000 / medium=12000 / high=20000` 推理预算策略升级为按 **provider + task type** 细分的默认矩阵，并为不同 provider 的能力边界提供更真实的默认值和回退策略。
@@ -546,16 +547,16 @@ REPL 中的长运行项目管理，通过 `/project` 命令组实现。
 
 ---
 
-### 013: Command System 2.0 (IN PROGRESS)
+### 013: Command System 2.0 (COMPLETED)
 - **Category**: Refactor
-- **Status**: In Progress
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.0
 - **Released**: -
 - **Design**: [v0.6.0.md#013](features/v0.6.0.md#013)
 - **Created**: 2026-03-03
 - **Started**: 2026-03-13
-- **Completed**: -
+- **Completed**: 2026-03-16
 
 **Description**:
 重构 KodaX 的 Command 系统，参考 pi-mono 的 Extension API 设计，实现动态命令注册、丰富的 UI 交互能力、统一的命令来源追踪。
@@ -917,9 +918,9 @@ interface SessionEntryBase {
 ---
 
 ## Summary
-- Total: 20 (6 Planned, 0 In Progress, 14 Completed)
-- By Priority: Critical: 3, High: 13, Medium: 2, Low: 0
-- Current Version: v0.5.33
-- Next Release (v0.6.0): 4 features planned (013, 015, 017, 020)
+- Total: 21 (5 Planned, 0 In Progress, 16 Completed)
+- By Priority: Critical: 3, High: 16, Medium: 2, Low: 0
+- Current Version: v0.5.42
+- Next Release (v0.6.0): 5 features (013, 015, 017, 020, 021), 3 completed and 2 planned
 - Future Releases: v0.7.0 (019), v0.8.0 (007, 018)
-- Highest Priority Planned: 007 - 主题系统完善 (Medium), 013 - Command System 2.0 (High), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 018 - CodeWiki - 项目知识库系统 (High), 019 - Session Tree & Rollback System (High), 020 - AGENTS.md - 项目级 AI 上下文规则 (High)
+- Highest Priority Planned: 007 - 主题系统完善 (Medium), 015 - Project Mode 2.0 (High), 017 - 运行时用户输入插队 (High), 018 - CodeWiki - 项目知识库系统 (High), 019 - Session Tree & Rollback System (High)
