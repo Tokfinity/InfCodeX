@@ -21,6 +21,7 @@ export const darkTheme: Theme = {
     // Text colors - soft but readable - 文本颜色 - 柔和但可读
     text: "#CCCCCC", // Light gray text - 浅灰色文本
     dim: "#666666", // Dimmed text - 暗淡文本
+    thinking: "#A3ADC2", // Brighter muted gray-blue for long thinking text
     success: "#19C37D", // Warp green - Warp 绿色
     warning: "#FF9F43", // Orange-yellow - 橙黄色
     error: "#FF5F56", // Soft red (like macOS buttons) - 柔和红色
@@ -47,6 +48,7 @@ export const minimalTheme: Theme = {
     accent: "#F59E0B",
     text: "#CCCCCC",
     dim: "#666666",
+    thinking: "#A3ADC2",
     success: "#19C37D",
     warning: "#FF9F43",
     error: "#FF5F56",

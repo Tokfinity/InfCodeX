@@ -31,6 +31,7 @@ import {
 
 let idCounter = 0;
 const uniqueId = () => `${Date.now()}-${++idCounter}`;
+const DEFAULT_VIEWPORT_ROWS = 100;
 
 const createUserItem = (text: string): HistoryItemUser => ({
   id: `user-${uniqueId()}`,
@@ -136,7 +137,7 @@ describe("MessageList", () => {
   describe("single items", () => {
     it("should render user message", () => {
       const items: HistoryItem[] = [createUserItem("Hello, world!")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("You");
       expect(lastFrame()).toContain("Hello, world!");
@@ -144,7 +145,7 @@ describe("MessageList", () => {
 
     it("should render assistant message", () => {
       const items: HistoryItem[] = [createAssistantItem("Hello! How can I help?")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Assistant");
       expect(lastFrame()).toContain("Hello! How can I help?");
@@ -154,14 +155,14 @@ describe("MessageList", () => {
       const items: HistoryItem[] = [
         createAssistantItem("## 验证\n\n```bash\nmysql -h 127.0.0.1 -P 13306\n```\n\n**关键**：最后一行必须能显示"),
       ];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("**关键**：最后一行必须能显示");
     });
 
     it("should render streaming indicator for assistant message", () => {
       const items: HistoryItem[] = [createAssistantItem("Thinking...", true)];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Assistant");
       expect(lastFrame()).toContain("Thinking...");
@@ -170,7 +171,7 @@ describe("MessageList", () => {
 
     it("should render thinking item with dim styling", () => {
       const items: HistoryItem[] = [createThinkingItem("Let me think about this...")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Thinking");
       expect(lastFrame()).toContain("Let me think about this");
@@ -178,7 +179,7 @@ describe("MessageList", () => {
 
     it("should render error item with error styling", () => {
       const items: HistoryItem[] = [createErrorItem("Something went wrong")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Error");
       expect(lastFrame()).toContain("Something went wrong");
@@ -186,7 +187,7 @@ describe("MessageList", () => {
 
     it("should render info item", () => {
       const items: HistoryItem[] = [createInfoItem("Session started")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Info");
       expect(lastFrame()).toContain("Session started");
@@ -194,7 +195,7 @@ describe("MessageList", () => {
 
     it("should render hint item", () => {
       const items: HistoryItem[] = [createHintItem("Press Ctrl+C to exit")];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("Hint");
       expect(lastFrame()).toContain("Press Ctrl+C to exit");
@@ -210,7 +211,7 @@ describe("MessageList", () => {
         startTime: Date.now(),
       };
       const items: HistoryItem[] = [createToolGroup([tool])];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("read_file");
     });
@@ -225,7 +226,7 @@ describe("MessageList", () => {
         startTime: Date.now(),
       };
       const items: HistoryItem[] = [createToolGroup([tool])];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("write_file");
       expect(lastFrame()).toContain("50%");
@@ -240,7 +241,7 @@ describe("MessageList", () => {
         endTime: Date.now() + 100,
       };
       const items: HistoryItem[] = [createToolGroup([tool])];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("read_file");
     });
@@ -254,7 +255,7 @@ describe("MessageList", () => {
         startTime: Date.now(),
       };
       const items: HistoryItem[] = [createToolGroup([tool])];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("delete_file");
       expect(lastFrame()).toContain("Permission denied");
@@ -277,7 +278,7 @@ describe("MessageList", () => {
         },
       ];
       const items: HistoryItem[] = [createToolGroup(tools)];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("read_file");
       expect(lastFrame()).toContain("write_file");
@@ -291,7 +292,7 @@ describe("MessageList", () => {
         createAssistantItem("Second"),
         createUserItem("Third"),
       ];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       const output = lastFrame() ?? "";
       const firstIndex = output.indexOf("First");
@@ -309,7 +310,7 @@ describe("MessageList", () => {
         createAssistantItem("Response"),
         createInfoItem("Done"),
       ];
-      const { lastFrame } = render(<MessageList items={items} />);
+      const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
       expect(lastFrame()).toContain("User input");
       expect(lastFrame()).toContain("Processing");
@@ -344,7 +345,7 @@ describe("MessageList", () => {
       const items: HistoryItem[] = [createUserItem("Hello")];
       const { lastFrame } = render(<MessageList items={items} isLoading={true} />);
 
-      expect(lastFrame()).toMatch(/Thinking|Loading|鈥?/);
+      expect(lastFrame()).toMatch(/Thinking|Loading/);
     });
   });
 
@@ -360,7 +361,7 @@ describe("MessageList", () => {
       const App = () => (
         <Box flexDirection="column" width={80} height={rows}>
           <Box flexDirection="column" flexGrow={1} overflowY="hidden">
-            <MessageList items={items} />
+            <MessageList items={items} viewportRows={rows - 3} viewportWidth={80} />
           </Box>
           <Box flexDirection="column" flexShrink={0}>
             <Text>{"> input"}</Text>

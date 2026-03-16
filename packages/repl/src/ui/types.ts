@@ -104,6 +104,7 @@ export interface ThemeColors {
   accent: string; // Accent color - 强调色
   text: string; // Text color - 文本颜色
   dim: string; // Dimmed text - 暗淡文本
+  thinking: string; // Thinking content - 思考内容
   success: string; // Success state - 成功状态
   warning: string; // Warning state - 警告状态
   error: string; // Error state - 错误状态

@@ -14,6 +14,7 @@ _Last Updated: 2026-03-16_
 
 | ID | Priority | Status | Title | Introduced | Fixed | Created | Resolved |
 |----|----------|--------|-------|------------|-------|---------|----------|
+| 088 | High | Resolved | 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 | v0.5.29 | v0.5.39 | 2026-03-16 | 2026-03-16 |
 | 087 | Medium | Resolved | 自动补全触发冲突 - @文件路径中/错误触发命令补全 | v0.5.33 | v0.5.33 | 2026-03-13 | 2026-03-13 |
 | 086 | High | Resolved | 自动补全竞态条件导致快速输入时显示过期补全 | v0.5.32 | v0.5.32 | 2026-03-12 | 2026-03-12 |
 | 085 | Medium | Resolved | 只读 Bash 命令白名单未在非 plan 模式复用 | v0.5.29 | v0.5.30 | 2026-03-12 | 2026-03-12 |
@@ -33,6 +34,90 @@ _Last Updated: 2026-03-16_
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+
+### 088: 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.5.29
+- **Fixed**: v0.5.39
+- **Created**: 2026-03-16
+- **Resolution Date**: 2026-03-16
+
+- **Original Problem**:
+  终端 REPL 界面存在多个布局不稳定问题：
+
+  1. **底部区域高度跳动**：自动补全建议显示/消失、帮助面板显示/隐藏时，消息区域高度会突然变化，导致内容上下跳动
+  2. **最后一行消息被裁剪**：消息列表最后一行经常被底部固定区域覆盖，不可见
+  3. **状态栏换行不可预测**：窄终端下状态栏文本的换行行数与实际渲染不一致，导致 viewport budget 计算偏差
+  4. **历史消息重渲染性能**：使用 Ink `<Static>` 分割历史/动态消息，但分割逻辑不够精确，长对话中仍然存在不必要的重渲染
+  5. **Select 对话框选项无限制**：选项过多时可能占满整个终端，把消息区和输入区全部挤出视口
+  6. **确认指令逻辑内嵌 JSX**：确认对话框的指令文本生成逻辑嵌套在 JSX 中，难以测试和复用
+
+- **Root Cause Analysis**:
+  1. 没有统一的视口行数预算机制，底部各区块高度变化无法被消息区感知
+  2. 消息区依赖 Ink 的 `overflowY="hidden"` 来裁剪，但实际行数计算不考虑底部区域
+  3. StatusBar 只渲染不导出纯文本格式化结果，无法在预算计算中复用
+  4. 历史消息的 Static/Dynamic 分割基于最后一个 user/system 索引，但该索引变化时会导致整块消息重新分配渲染方式
+
+- **Resolution**:
+
+  **核心变更：Viewport Budget + Transcript Layout 架构**
+
+  1. **新增 `viewport-budget.ts`** — 统一计算底部所有区块（输入框、补全建议、帮助栏、状态栏、确认对话框、UI 请求对话框）占用的行数，从中减去得到消息区可用行数
+     - `calculateInputPromptRows()`: 考虑输入文本换行后的实际行数
+     - `calculateViewportBudget()`: 汇总所有底部区块，输出 `messageRows` 和 `visibleSelectOptions`
+     - 使用 `calculateVisualLayout()` 与实际渲染使用相同的文本换行算法
+
+  2. **新增 `transcript-layout.ts`** — 将消息列表从嵌套 React 组件改为扁平的 `TranscriptRow[]` 数据模型
+     - `buildTranscriptRows()`: 将所有 HistoryItem 类型转换为统一的 TranscriptRow 数组
+     - `getVisibleTranscriptRows()`: 根据 viewportRows 从尾部切片，保证最新内容可见
+     - `resolveTranscriptColor()`: 将语义化颜色 token 映射到 theme 实际颜色值
+     - 所有文本换行使用 `calculateVisualLayout()` 与渲染保持一致
+
+  3. **StatusBar 导出 `getStatusBarText()`** — 纯函数返回状态栏文本，供 viewport budget 和渲染共用，确保换行计算一致
+
+  4. **重构 `MessageList`** — 移除 Static/Dynamic 分割，改为统一的 TranscriptRow 渲染
+     - 移除 `<Static>` 组件（简化架构，牺牲少量长对话性能）
+     - 新增 `TranscriptRowRenderer` 组件统一渲染所有行类型
+     - 新增 `viewportRows` 和 `viewportWidth` props
+
+  5. **重构 `AutocompleteSuggestions`** — 将预留空间的状态管理提升到 `InkREPLInner`
+     - 移除组件内部的 `useState`/`useEffect`，改为由父组件传入 `reserveSpace`
+     - `width` prop 从硬编码 80 改为动态 `terminalWidth - 2`
+
+  6. **提取 `confirmInstruction`** — 从 JSX 内联逻辑提取为 `useMemo`，便于测试和复用
+
+  7. **提取 `statusBarProps`** — StatusBar 的所有 props 合并为一个 `useMemo` 对象
+
+  8. **Select 对话框选项截断** — 根据 `viewportBudget.visibleSelectOptions` 截断选项列表，避免占满视口
+
+  9. **UI 清理** — 移除部分中文注释，emoji 改为 Unicode 转义
+
+- **Code Review 发现的遗留问题**（未修复，需后续处理）：
+  1. `model` 字段丢失 `currentConfig.model` 回退（statusBarProps 中 model fallback chain 不完整）
+  2. `MessageList` 的 `paddingY={1}` 未在 viewport budget 中扣除（实际可见行少 2 行）
+  3. 中文注释清理不彻底（新增了一些中文注释）
+  4. `getWrappedLogicalLines()` 不做 wrap 只按换行符切片（maxLines 截断不一致）
+  5. race condition 阻塞时移除了 `console.log` 无任何反馈
+
+- **Files Changed**:
+  - `packages/repl/src/ui/InkREPL.tsx` — viewport budget 集成、状态提升、props 提取
+  - `packages/repl/src/ui/components/MessageList.tsx` — TranscriptRow 渲染重构
+  - `packages/repl/src/ui/components/StatusBar.tsx` — 导出 getStatusBarText()
+  - `packages/repl/src/ui/themes/dark.ts` — 添加 thinking 颜色
+  - `packages/repl/src/ui/types.ts` — 添加 thinking 颜色到 ThemeColors
+  - `packages/repl/src/ui/utils/viewport-budget.ts` — **新增** 视口预算计算
+  - `packages/repl/src/ui/utils/viewport-budget.test.ts` — **新增** 预算计算测试
+  - `packages/repl/src/ui/utils/transcript-layout.ts` — **新增** Transcript 数据模型
+  - `packages/repl/src/ui/utils/transcript-layout.test.ts` — **新增** Transcript 测试
+  - `tests/ui/MessageList.test.tsx` — 更新测试用例适配新 props
+
+- **Tests**:
+  - viewport-budget: 3 个测试用例（输入换行、综合预算、select 截断）
+  - transcript-layout: 4 个测试用例（末行保留、viewport 切片、流式集成、工具进度）
+  - MessageList: 14 个现有测试用例适配新 props
+
 ---
 
 ### 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (RESOLVED)
@@ -866,13 +951,26 @@ _Last Updated: 2026-03-16_
 ---
 
 ## Summary
-- Total: 13 (10 Open, 3 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 14 (10 Open, 4 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 013 - 自动补全缓存内存泄漏风险 (Low)
 - 79 issues archived to ISSUES_ARCHIVED.md (43 previous + 32 resolved + 3 Won't Fix on 2026-03-11 + 1 resolved on 2026-03-13)
 
 ---
 
 ## Changelog
+
+### 2026-03-16: Issue 088 新增并修复
+- Added & Resolved 088: 消息列表视口布局不稳定 - 底部区域跳动/最后一行被裁剪 (High Priority)
+- 核心变更：引入 Viewport Budget + Transcript Layout 架构
+  1. 新增 `viewport-budget.ts` 统一计算底部区块行数
+  2. 新增 `transcript-layout.ts` 将消息渲染改为扁平 TranscriptRow[] 数据模型
+  3. StatusBar 导出 `getStatusBarText()` 纯函数供预算计算复用
+  4. MessageList 移除 Static/Dynamic 分割，改为统一 TranscriptRow 渲染
+  5. AutocompleteSuggestions 状态管理提升到父组件
+  6. Select 对话框选项根据 viewport budget 截断
+- Code Review 遗留 5 个未修复问题（model fallback、paddingY 未扣除等）
+- 新增 7 个测试用例（viewport-budget 3 + transcript-layout 4）
+- 版本：v0.5.39
 
 ### 2026-03-13: Issue 087 修复
 - Added & Resolved 087: 自动补全触发冲突 - @文件路径中/错误触发命令补全 (Medium Priority)

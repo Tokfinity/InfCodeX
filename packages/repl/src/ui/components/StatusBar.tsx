@@ -7,10 +7,11 @@ import { Box, Text } from 'ink';
 import { getTheme } from '../themes/index.js';
 import type { StatusBarProps } from '../types.js';
 
-const ITERATION_SYMBOL = '🔄';
-const SPINNER_SYMBOL = '⏳';
-const BAR_FILLED = '█'; // U+2588 Full Block
-const BAR_EMPTY = '▒'; // U+2592 Medium Shade
+const ITERATION_SYMBOL = '\u{1F504}';
+const SPINNER_SYMBOL = '\u23F3';
+const BAR_FILLED = '\u2588';
+const BAR_EMPTY = '\u2592';
+const TOKEN_ARROW = '\u2192';
 
 function formatReasoningModeShort(mode: string): string {
   switch (mode) {
@@ -96,6 +97,58 @@ function formatToolAction(currentTool: string): string {
   return currentTool;
 }
 
+export function getStatusBarText({
+  sessionId,
+  permissionMode,
+  provider,
+  model,
+  tokenUsage,
+  currentTool,
+  thinking,
+  reasoningMode = thinking ? 'auto' : 'off',
+  reasoningCapability,
+  isCompacting,
+  currentIteration,
+  maxIter,
+  contextUsage,
+}: StatusBarProps): string {
+  const parts: string[] = [];
+
+  parts.push('KodaX');
+  parts.push(permissionMode.toUpperCase());
+
+  const rModeShort = formatReasoningModeShort(reasoningMode);
+  const rCapShort = formatReasoningCapabilityShort(reasoningCapability);
+  parts.push(reasoningCapability ? `${rModeShort}/${rCapShort}` : rModeShort);
+
+  if (currentIteration && maxIter) {
+    parts.push(`${ITERATION_SYMBOL} ${currentIteration}/${maxIter}`);
+  }
+
+  let toolStr = '';
+  if (isCompacting) {
+    toolStr = `${SPINNER_SYMBOL} Compacting`;
+  } else if (currentTool) {
+    toolStr = `${SPINNER_SYMBOL} ${formatToolAction(currentTool)}`;
+  }
+  parts.push(`${sessionId}${toolStr ? ` ${toolStr}` : ''}`);
+  parts.push(`${provider}/${model}`);
+
+  if (contextUsage && contextUsage.contextWindow !== 0) {
+    const percent = Math.round((contextUsage.currentTokens / contextUsage.contextWindow) * 100);
+    const currentStr = formatTokenCount(contextUsage.currentTokens);
+    const windowStr = formatTokenCount(contextUsage.contextWindow);
+    const progressBar = createMiniProgressBar(percent);
+    parts.push(`${currentStr}/${windowStr} ${progressBar} ${percent}%`);
+  }
+
+  if (tokenUsage) {
+    parts.push(`${tokenUsage.input}${TOKEN_ARROW}${tokenUsage.output} (${tokenUsage.total})`);
+  }
+
+  return parts.join(' | ');
+}
+
 export const StatusBar: React.FC<StatusBarProps> = ({
   sessionId,
   permissionMode,
@@ -125,7 +178,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     switch (permissionMode.toLowerCase()) {
       case 'plan': return 'blue';
       case 'accept-edits': return 'green';
-      case 'auto-in-project': return theme.colors.warning; // Orange/Warning
+      case 'auto-in-project': return theme.colors.warning;
       default: return 'magenta';
     }
   }, [permissionMode, theme]);
@@ -138,7 +191,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   const reasoningColor = getReasoningColor(reasoningMode);
   const reasoningDisplay = <Text color={reasoningColor}>{reasoningCombined}</Text>;
 
-  // 4: Iteration (🔄 1/200)
+  // 4: Iteration (?? 1/200)
   const iterationDisplay = useMemo(() => {
     if (!currentIteration || !maxIter) return null;
     const ratio = currentIteration / maxIter;
@@ -149,7 +202,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }, [currentIteration, maxIter]);
 
   // 5: SessionID + Spinner Tool status
-  // e.g., "abcd123 ⏳ Bash"
+  // e.g., "abcd123 ? Bash"
   const sessionToolDisplay = useMemo(() => {
     let toolStr = '';
     if (isCompacting) {
@@ -168,7 +221,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   // 6: Provider/Model
   const providerModelDisplay = <Text color={theme.colors.secondary}>{provider}/{model}</Text>;
 
-  // 7: Context Usage "24.0k/200.0k █▒▒▒▒▒▒▒▒▒ 12%"
+  // 7: Context Usage "24.0k/200.0k ?????????? 12%"
   const contextDisplay = useMemo(() => {
     if (!contextUsage) return null;
     const { currentTokens, contextWindow, triggerPercent } = contextUsage;
@@ -192,7 +245,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     if (!tokenUsage) return null;
     return (
       <Text dimColor>
-        {tokenUsage.input}→{tokenUsage.output} ({tokenUsage.total})
+        {tokenUsage.input}{TOKEN_ARROW}{tokenUsage.output} ({tokenUsage.total})
       </Text>
     );
   }, [tokenUsage]);
@@ -204,14 +257,14 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       {/* 1. KodaX */}
       {kodaxDisplay}
       <Separator />
-      
+
       {/* 2. Permission Mode */}
       {modeDisplay}
       <Separator />
 
       {/* 3. Reasoning Mode */}
       {reasoningDisplay}
-      
+
       {/* 4. Iteration */}
       {iterationDisplay && (
         <>
@@ -227,7 +280,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
       {/* 6. Provider/Model */}
       {providerModelDisplay}
-      
+
       {/* 7. Context Usage */}
       {contextDisplay && (
         <>

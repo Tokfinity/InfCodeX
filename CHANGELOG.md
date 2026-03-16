@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.40] - 2026-03-16
+
+### Added
+- **Viewport Budget System**: Unified bottom-section row calculation to prevent layout instability
+  - `viewport-budget.ts` calculates reserved rows for input, suggestions, help bar, status bar, confirm dialog, and UI request dialogs
+  - `calculateViewportBudget()` returns `messageRows` (available for messages) and `visibleSelectOptions` (clamped for select dialogs)
+- **Transcript Layout System**: Replaced nested React components with flat `TranscriptRow[]` data model
+  - `transcript-layout.ts` converts all `HistoryItem` types into unified rows with semantic color tokens
+  - `getVisibleTranscriptRows()` slices from tail to keep latest content visible
+  - `resolveTranscriptColor()` maps semantic tokens to theme colors
+- **`getStatusBarText()` Export**: Pure function in StatusBar for reuse in viewport budget calculation, ensuring consistent line-wrapping
+- **Layout Constants**: Extracted help bar segments and padding values into `constants/layout.ts`
+- **Thinking Color**: New `thinking` color token in theme (`#A3ADC2`) for better readability of long thinking text
+
+### Fixed
+- **Message List Last Line Clipping**: Transcript now slices from tail based on viewport budget, ensuring the latest message line is always visible
+- **Bottom Section Height Jumping**: Autocomplete suggestions space reservation moved to parent component (`InkREPLInner`), preventing jarring height changes on show/hide
+- **Select Dialog Overflow**: Options now clamped to viewport budget limit with "X more choices..." indicator
+- **Status Bar Width**: `AutocompleteSuggestions` uses dynamic `terminalWidth - 2` instead of hardcoded 80
+
+### Changed
+- **MessageList Architecture**: Removed `<Static>` / dynamic split approach in favor of unified TranscriptRow rendering
+- **AutocompleteSuggestions**: State management (`reserveSpace`) lifted from component to parent; accepts `reserveSpace` and `width` props
+- **Confirm Dialog Instruction**: Extracted from inline JSX to `useMemo` for testability
+- **StatusBar Props**: Consolidated into single `useMemo` object in InkREPL
+- **Message Utils**: Enhanced `extractTextContent` with legacy thinking tag stripping, added `RestoredHistorySeed` type and `buildRestoredHistory` function
+- **Code Cleanup**: Removed most Chinese inline comments; emoji literals replaced with Unicode escapes
+
+---
+
 ## [0.5.39] - 2026-03-16
 
 ### Added
