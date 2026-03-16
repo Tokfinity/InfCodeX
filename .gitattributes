@@ -1,0 +1,3 @@
+packages/repl/src/ui/components/MessageList.tsx text eol=lf
+packages/repl/src/ui/utils/transcript-layout.ts text eol=lf
+packages/repl/src/ui/utils/transcript-layout.test.ts text eol=lf
