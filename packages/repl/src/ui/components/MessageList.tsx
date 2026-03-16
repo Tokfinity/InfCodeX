@@ -6,7 +6,7 @@
  */
 
 import React, { useMemo, memo } from "react";
-import { Box, Text, useStdout } from "ink";
+import { Box, Static, Text, useStdout } from "ink";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 import type { Theme } from "../types.js";
@@ -25,9 +25,13 @@ import {
 } from "../types.js";
 import type { IterationRecord } from "../contexts/StreamingContext.js";
 import {
+  buildDynamicTranscriptSection,
   buildTranscriptRows,
+  buildStaticTranscriptSections,
+  flattenTranscriptSections,
   getVisibleTranscriptRows,
   resolveTranscriptColor,
+  type TranscriptSection,
   type TranscriptRow,
 } from "../utils/transcript-layout.js";
 
@@ -411,6 +415,45 @@ const TranscriptRowRenderer: React.FC<{ row: TranscriptRow; theme: Theme }> = me
   );
 });
 
+function findActiveRoundStartIndex(items: HistoryItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (items[i]?.type === "user") {
+      return i;
+    }
+  }
+
+  return 0;
+}
+
+export interface MessageHistorySections {
+  activeRoundStartIndex: number;
+  staticItems: HistoryItem[];
+  activeItems: HistoryItem[];
+}
+
+export function splitMessageHistorySections(items: HistoryItem[]): MessageHistorySections {
+  const activeRoundStartIndex = findActiveRoundStartIndex(items);
+
+  return {
+    activeRoundStartIndex,
+    staticItems: items.slice(0, activeRoundStartIndex),
+    activeItems: items.slice(activeRoundStartIndex),
+  };
+}
+
+const StaticTranscriptItemRenderer: React.FC<{
+  section: TranscriptSection;
+  theme: Theme;
+}> = memo(({ section, theme }) => {
+  return (
+    <Box flexDirection="column">
+      {section.rows.map((row) => (
+        <TranscriptRowRenderer key={row.key} row={row} theme={theme} />
+      ))}
+    </Box>
+  );
+});
+
 export const MessageList: React.FC<MessageListProps> = ({
   items,
   isLoading = false,
@@ -431,6 +474,14 @@ export const MessageList: React.FC<MessageListProps> = ({
   const theme = useMemo(() => getTheme("dark"), []);
   const { stdout } = useStdout();
   const terminalWidth = viewportWidth ?? stdout?.columns ?? 80;
+  const { staticItems, activeItems } = useMemo(
+    () => splitMessageHistorySections(items),
+    [items]
+  );
+  const staticSections = useMemo(
+    () => buildStaticTranscriptSections(staticItems, terminalWidth, maxLines),
+    [staticItems, terminalWidth, maxLines]
+  );
 
   if (items.length === 0 && !isLoading) {
     return (
@@ -440,9 +491,9 @@ export const MessageList: React.FC<MessageListProps> = ({
     );
   }
 
-  const transcriptRows = useMemo(
-    () => buildTranscriptRows({
-      items,
+  const activeSection = useMemo(
+    () => buildDynamicTranscriptSection("active-round", {
+      items: activeItems,
       viewportWidth: terminalWidth,
       isLoading,
       maxLines,
@@ -458,7 +509,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       isCompacting,
     }),
     [
-      items,
+      activeItems,
       terminalWidth,
       isLoading,
       maxLines,
@@ -474,14 +525,29 @@ export const MessageList: React.FC<MessageListProps> = ({
       isCompacting,
     ]
   );
+  const activeTranscriptRows = useMemo(
+    () => flattenTranscriptSections([activeSection]),
+    [activeSection]
+  );
 
   const visibleRows = useMemo(
-    () => getVisibleTranscriptRows(transcriptRows, viewportRows),
-    [transcriptRows, viewportRows]
+    () => getVisibleTranscriptRows(activeTranscriptRows, viewportRows),
+    [activeTranscriptRows, viewportRows]
   );
 
   return (
     <Box flexDirection="column" paddingY={1}>
+      {staticSections.length > 0 && (
+        <Static items={staticSections}>
+          {(section) => (
+            <StaticTranscriptItemRenderer
+              key={section.key}
+              section={section}
+              theme={theme}
+            />
+          )}
+        </Static>
+      )}
       {visibleRows.map((row) => (
         <TranscriptRowRenderer key={row.key} row={row} theme={theme} />
       ))}

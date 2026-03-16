@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ToolCallStatus, type HistoryItem } from "../types.js";
 import {
+  buildDynamicTranscriptSection,
   buildTranscriptRows,
+  buildStaticTranscriptSections,
+  flattenTranscriptSections,
   getVisibleTranscriptRows,
 } from "./transcript-layout.js";
 
@@ -94,6 +97,31 @@ describe("transcript-layout", () => {
     expect(text).toContain("write_file");
     expect(text).toContain("Progress: 50%");
     expect(text).toContain("denied");
+  });
+
+  it("builds transcript sections that preserve row order when flattened", () => {
+    const staticSections = buildStaticTranscriptSections(
+      [
+        {
+          id: "user-1",
+          type: "user",
+          text: "prompt",
+          timestamp: Date.now(),
+        },
+      ],
+      80
+    );
+    const activeSection = buildDynamicTranscriptSection("active", {
+      items: [assistant("answer")],
+      viewportWidth: 80,
+    });
+
+    const rows = flattenTranscriptSections([...staticSections, activeSection]);
+    const text = rows.map((row) => row.text).join("\n");
+
+    expect(staticSections).toHaveLength(1);
+    expect(activeSection.rows.length).toBeGreaterThan(0);
+    expect(text.indexOf("prompt")).toBeLessThan(text.indexOf("answer"));
   });
 });
 
