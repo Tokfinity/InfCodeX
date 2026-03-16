@@ -11,11 +11,18 @@ import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import {
   getProviderConfiguredReasoningCapability,
-  getProvider,
+  getProviderModel as getBuiltInProviderModel,
+  getProviderModels,
+  getCustomProviderList,
+  getCustomProvider,
+  isKnownProvider,
+  isProviderConfigured as isBuiltInProviderConfigured,
+  getAvailableProviderNames,
   KODAX_PROVIDERS,
   type KodaXReasoningCapability,
   type KodaXReasoningMode,
   type KodaXReasoningOverride,
+  type KodaXCustomProviderConfig,
 } from '@kodax/coding';
 
 const execAsync = promisify(exec);
@@ -44,25 +51,72 @@ export function getVersion(): string {
 // Export for backwards compatibility
 export const KODAX_VERSION = getVersion();
 
-// Get provider model name
+// Get provider model name (snapshot-based, no API key needed)
 export function getProviderModel(name: string): string | null {
-  try {
-    const provider = getProvider(name);
-    return provider.getModel();
-  } catch {
-    return null;
+  return getBuiltInProviderModel(name);
+}
+
+/**
+ * Merge user-configured models with built-in provider models.
+ * Config entries come first (preserving user order), then built-in models
+ * not already present in the config list are appended (deduplicated, case-insensitive).
+ */
+function mergeModels(configModels: string[], builtInModels: string[]): string[] {
+  const configSet = new Set(configModels.map(m => m.toLowerCase()));
+  const merged = [...configModels];
+  for (const m of builtInModels) {
+    if (!configSet.has(m.toLowerCase())) {
+      merged.push(m);
+    }
   }
+  return merged;
+}
+
+// Get available models for a provider (respects config-level providerModels, merged with built-in)
+// Uses getProviderModels (snapshot-based, no API key required) for built-in providers,
+// falls back to getProvider() instantiation for custom providers.
+export function getProviderAvailableModels(name: string, providerModelsConfig?: Record<string, string[]>): string[] {
+  if (!providerModelsConfig) {
+    providerModelsConfig = loadConfig().providerModels;
+  }
+  const configModels = providerModelsConfig?.[name];
+  if (configModels && configModels.length > 0) {
+    // Merge config list with built-in models to avoid accidentally dropping models
+    try {
+      const builtInModels = getProviderModels(name);
+      if (builtInModels.length > 0) return mergeModels(configModels, builtInModels);
+    } catch { /* fall through */ }
+    try {
+      const custom = getCustomProvider(name);
+      if (custom) return mergeModels(configModels, custom.getAvailableModels());
+    } catch { /* ignore */ }
+    return configModels;
+  }
+  // No config override — use built-in models from snapshot
+  try {
+    const builtInModels = getProviderModels(name);
+    if (builtInModels.length > 0) return builtInModels;
+  } catch { /* fall through */ }
+  // Check custom providers
+  try {
+    const custom = getCustomProvider(name);
+    if (custom) return custom.getAvailableModels();
+  } catch { /* ignore */ }
+  return [];
 }
 
 export function getProviderReasoningCapability(
   name: string,
 ): KodaXReasoningCapability | 'unknown' {
+  // Try built-in provider snapshot first (no API key needed)
+  const capability = getProviderConfiguredReasoningCapability(name);
+  if (capability !== 'unknown') return capability;
+  // Fallback: check custom providers
   try {
-    const provider = getProvider(name);
-    return provider.getReasoningCapability();
-  } catch {
-    return getProviderConfiguredReasoningCapability(name);
-  }
+    const custom = getCustomProvider(name);
+    if (custom) return custom.getReasoningCapability();
+  } catch { /* ignore */ }
+  return 'unknown';
 }
 
 export function formatReasoningCapabilityShort(
@@ -127,14 +181,24 @@ export function describeReasoningExecution(
 }
 
 // Get list of all providers with their status
-export function getProviderList(): Array<{ name: string; model: string; configured: boolean; reasoningCapability: string }> {
-  const result: Array<{ name: string; model: string; configured: boolean; reasoningCapability: string }> = [];
+export function getProviderList(providerModelsConfig?: Record<string, string[]>): Array<{ name: string; model: string; models: string[]; configured: boolean; reasoningCapability: string; custom?: boolean }> {
+  const result: Array<{ name: string; model: string; models: string[]; configured: boolean; reasoningCapability: string; custom?: boolean }> = [];
+  if (!providerModelsConfig) {
+    providerModelsConfig = loadConfig().providerModels;
+  }
   for (const [name, factory] of Object.entries(KODAX_PROVIDERS)) {
     try {
       const p = factory();
+      const builtInModels = p.getAvailableModels();
+      // Merge config-level model list with built-in models
+      const configModels = providerModelsConfig?.[name];
+      const models = (configModels && configModels.length > 0)
+        ? mergeModels(configModels, builtInModels)
+        : builtInModels;
       result.push({
         name,
         model: p.getModel(),
+        models,
         configured: p.isConfigured(),
         reasoningCapability: p.getReasoningCapability(),
       });
@@ -142,19 +206,28 @@ export function getProviderList(): Array<{ name: string; model: string; configur
       result.push({
         name,
         model: 'unknown',
+        models: ['unknown'],
         configured: false,
         reasoningCapability: 'unknown',
       });
     }
   }
+  // Append custom providers - 追加自定义 Provider
+  try {
+    const customList = getCustomProviderList();
+    result.push(...customList);
+  } catch {
+    // Custom providers not initialized or unavailable
+  }
   return result;
 }
 
-// Check if provider is configured
+// Check if provider is configured (supports both built-in and custom)
 export function isProviderConfigured(name: string): boolean {
+  if (isBuiltInProviderConfigured(name)) return true;
   try {
-    const provider = getProvider(name);
-    return provider.isConfigured();
+    const custom = getCustomProvider(name);
+    return custom?.isConfigured() ?? false;
   } catch {
     return false;
   }
@@ -163,10 +236,13 @@ export function isProviderConfigured(name: string): boolean {
 // Load config from ~/.kodax/config.json
 export function loadConfig(): {
   provider?: string;
+  model?: string;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   permissionMode?: string;
   providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
+  providerModels?: Record<string, string[]>;
+  customProviders?: KodaXCustomProviderConfig[];
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -179,13 +255,22 @@ export function loadConfig(): {
 // Save config to ~/.kodax/config.json
 export function saveConfig(config: {
   provider?: string;
+  model?: string;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;
   permissionMode?: string;
   providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
+  providerModels?: Record<string, string[]>;
+  customProviders?: KodaXCustomProviderConfig[];
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };
+  // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
+  for (const key of Object.keys(config) as Array<keyof typeof config>) {
+    if (config[key] === undefined) {
+      delete (merged as Record<string, unknown>)[key];
+    }
+  }
   fsSync.mkdirSync(path.dirname(KODAX_CONFIG_FILE), { recursive: true });
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
 }

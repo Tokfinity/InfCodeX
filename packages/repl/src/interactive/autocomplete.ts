@@ -31,6 +31,29 @@ export interface Completer {
 }
 
 /**
+ * Find the last valid command prefix slash in the input.
+ * A valid command prefix slash is at position 0 or preceded by whitespace.
+ * This is needed to distinguish the command slash from slashes within arguments
+ * (e.g., "/model anthropic/cl" where the second slash separates provider from model).
+ * Returns -1 if no valid command prefix slash is found.
+ *
+ * 查找输入中最后一个有效的命令前缀斜杠。
+ * 有效命令前缀斜杠位于位置 0 或前面是空白字符。
+ * 需要区分命令斜杠和参数中的斜杠
+ * （如 "/model anthropic/cl" 中第二个斜杠分隔 provider 和 model）。
+ */
+export function findCommandSlashIndex(beforeCursor: string): number {
+  let idx = beforeCursor.lastIndexOf('/');
+  if (idx === -1) return -1;
+
+  while (idx > 0 && !/\s/.test(beforeCursor[idx - 1] ?? '')) {
+    idx = beforeCursor.lastIndexOf('/', idx - 1);
+    if (idx === -1) return -1;
+  }
+  return idx;
+}
+
+/**
  * File Path Completer - 文件路径补全器
  *
  * Trigger: Input contains @ followed by file path - 触发条件: 输入中包含 @ 后跟文件路径
@@ -157,14 +180,8 @@ export class CommandCompleter implements Completer {
   canComplete(input: string, cursorPos: number): boolean {
     // Must contain / and cursor in command part - 必须包含 / 且光标在命令部分
     const beforeCursor = input.slice(0, cursorPos);
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
     if (lastSlashIndex === -1) return false;
-
-    // If / is not at the start, it must be preceded by whitespace
-    // 如果 / 不在开头，前面必须有空白字符
-    if (lastSlashIndex > 0 && !/\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')) {
-      return false;
-    }
 
     // Get text after the last /
     const afterSlash = beforeCursor.slice(lastSlashIndex);
@@ -174,7 +191,7 @@ export class CommandCompleter implements Completer {
 
   async getCompletions(input: string, cursorPos: number): Promise<Completion[]> {
     const beforeCursor = input.slice(0, cursorPos);
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
     if (lastSlashIndex === -1) return [];
 
     this.commands.clear();

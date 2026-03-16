@@ -8,6 +8,8 @@
 import { describe, it, expect } from "vitest";
 import React from "react";
 import { render } from "ink-testing-library";
+import { render as renderInk, Box, Text } from "ink";
+import { EventEmitter } from "node:events";
 import {
   ToolCallStatus,
   type HistoryItem,
@@ -19,9 +21,11 @@ import {
   type HistoryItemInfo,
   type HistoryItemHint,
   type ToolCall,
+} from "../../packages/repl/src/ui/types.js";
+import {
   MessageList,
   HistoryItemRenderer,
-} from "@kodax/repl";
+} from "../../packages/repl/src/ui/components/MessageList.js";
 
 // === Test Helpers ===
 
@@ -78,6 +82,46 @@ const createHintItem = (text: string): HistoryItemHint => ({
   timestamp: Date.now(),
 });
 
+class MockStdout extends EventEmitter {
+  columns = 80;
+  rows: number;
+  frames: string[] = [];
+  private currentFrame = "";
+
+  constructor(rows: number) {
+    super();
+    this.rows = rows;
+  }
+
+  write = (frame: unknown) => {
+    const output = String(frame);
+    this.frames.push(output);
+    this.currentFrame = output;
+  };
+
+  lastFrame = (): string => this.currentFrame;
+}
+
+class MockStderr extends EventEmitter {
+  write = () => undefined;
+}
+
+class MockStdin extends EventEmitter {
+  isTTY = true;
+  setRawMode = () => undefined;
+  resume = () => undefined;
+  pause = () => undefined;
+  ref = () => undefined;
+  unref = () => undefined;
+  read = () => null;
+  setEncoding = () => undefined;
+}
+
+function getVisibleViewport(frame: string, rows: number): string {
+  const lines = frame.split(/\r?\n/);
+  return lines.slice(-rows).join("\n");
+}
+
 // === Tests ===
 
 describe("MessageList", () => {
@@ -106,13 +150,21 @@ describe("MessageList", () => {
       expect(lastFrame()).toContain("Hello! How can I help?");
     });
 
+    it("should keep the final assistant line visible without trailing newline", () => {
+      const items: HistoryItem[] = [
+        createAssistantItem("## 验证\n\n```bash\nmysql -h 127.0.0.1 -P 13306\n```\n\n**关键**：最后一行必须能显示"),
+      ];
+      const { lastFrame } = render(<MessageList items={items} />);
+
+      expect(lastFrame()).toContain("**关键**：最后一行必须能显示");
+    });
+
     it("should render streaming indicator for assistant message", () => {
       const items: HistoryItem[] = [createAssistantItem("Thinking...", true)];
       const { lastFrame } = render(<MessageList items={items} />);
 
       expect(lastFrame()).toContain("Assistant");
       expect(lastFrame()).toContain("Thinking...");
-      // Should show streaming indicator (spinner frames: ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏)
       expect(lastFrame()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
     });
 
@@ -264,6 +316,27 @@ describe("MessageList", () => {
       expect(lastFrame()).toContain("Response");
       expect(lastFrame()).toContain("Done");
     });
+
+    it("should rerender the latest response while keeping older history static", () => {
+      const initialItems: HistoryItem[] = [
+        createUserItem("Prompt"),
+        createAssistantItem("Old latest line"),
+      ];
+      const updatedItems: HistoryItem[] = [
+        initialItems[0],
+        { ...initialItems[1], text: "Updated latest line\nTail line" },
+      ];
+
+      const { lastFrame, rerender } = render(<MessageList items={initialItems} />);
+      expect(lastFrame()).toContain("Old latest line");
+
+      rerender(<MessageList items={updatedItems} />);
+
+      expect(lastFrame()).toContain("Prompt");
+      expect(lastFrame()).toContain("Updated latest line");
+      expect(lastFrame()).toContain("Tail line");
+      expect(lastFrame()).not.toContain("Old latest line");
+    });
   });
 
   describe("loading state", () => {
@@ -271,7 +344,50 @@ describe("MessageList", () => {
       const items: HistoryItem[] = [createUserItem("Hello")];
       const { lastFrame } = render(<MessageList items={items} isLoading={true} />);
 
-      expect(lastFrame()).toMatch(/Thinking|Loading|…/);
+      expect(lastFrame()).toMatch(/Thinking|Loading|鈥?/);
+    });
+  });
+
+  describe("fixed footer layout", () => {
+    it("keeps the latest assistant tail line visible above the footer in the viewport", async () => {
+      const rows = 12;
+      const stdout = new MockStdout(rows);
+      const items: HistoryItem[] = [
+        createUserItem("Prompt"),
+        createAssistantItem(["a", "b", "c", "d", "e", "f", "g", "tail line"].join("\n")),
+      ];
+
+      const App = () => (
+        <Box flexDirection="column" width={80} height={rows}>
+          <Box flexDirection="column" flexGrow={1} overflowY="hidden">
+            <MessageList items={items} />
+          </Box>
+          <Box flexDirection="column" flexShrink={0}>
+            <Text>{"> input"}</Text>
+            <Text>status</Text>
+            <Text>footer</Text>
+          </Box>
+        </Box>
+      );
+
+      const instance = renderInk(<App />, {
+        stdout: stdout as never,
+        stderr: new MockStderr() as never,
+        stdin: new MockStdin() as never,
+        debug: true,
+        patchConsole: false,
+        exitOnCtrlC: false,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const visibleFrame = getVisibleViewport(stdout.lastFrame(), rows);
+      expect(visibleFrame).toContain("tail line");
+      expect(visibleFrame).toContain("> input");
+      expect(visibleFrame).toContain("footer");
+
+      instance.unmount();
+      instance.cleanup();
     });
   });
 });
@@ -310,7 +426,7 @@ describe("HistoryItemRenderer", () => {
       id: "info-1",
       type: "info",
       text: "Info message",
-      icon: "ℹ",
+      icon: "i",
       timestamp: Date.now(),
     };
     const { lastFrame } = render(<HistoryItemRenderer item={item} />);

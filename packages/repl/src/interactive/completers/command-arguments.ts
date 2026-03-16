@@ -6,7 +6,8 @@
  */
 
 import type { ArgumentDefinition, CommandArgumentsRegistry } from './argument-completer.js';
-import { KODAX_PROVIDERS } from '@kodax/coding';
+import { getAvailableProviderNames, isKnownProvider } from '@kodax/coding';
+import { getProviderAvailableModels } from '../../common/utils.js';
 
 /**
  * Mode command arguments - /mode 命令参数
@@ -75,15 +76,39 @@ const REASONING_ARGS = THINKING_ARGS.slice(2).concat([
 
 /**
  * Model command arguments - /model 命令参数
- * Dynamically populated from available providers
+ * Dynamically populated from available providers (includes custom providers).
+ * Supports two-stage completion: provider names, then provider/model combinations.
  */
-const MODEL_ARGS: ArgumentDefinition[] = Object.keys(KODAX_PROVIDERS).map(
-  (provider) => ({
-    name: provider,
-    description: `Switch to ${provider} provider`,
-    type: 'enum' as const,
-  })
-);
+function getModelArgs(partial?: string): ArgumentDefinition[] {
+  // Two-stage: if partial contains a known provider followed by /, show models for that provider
+  if (partial && partial.includes('/')) {
+    const slashIdx = partial.indexOf('/');
+    const providerName = partial.slice(0, slashIdx);
+    const modelPartial = partial.slice(slashIdx + 1);
+    if (isKnownProvider(providerName)) {
+      try {
+        const models = getProviderAvailableModels(providerName);
+        return models
+          .filter(m => !modelPartial || m.toLowerCase().includes(modelPartial.toLowerCase()))
+          .map(m => ({
+            name: `${providerName}/${m}`,
+            description: m,
+            type: 'enum' as const,
+          }));
+      } catch { /* fall through */ }
+    }
+    // Unknown provider with / format — no completions
+    return [];
+  }
+  // Default: show provider names
+  return getAvailableProviderNames().map(
+    (provider) => ({
+      name: provider,
+      description: `Switch to ${provider} provider`,
+      type: 'enum' as const,
+    })
+  );
+}
 
 /**
  * Plan command arguments - /plan 命令参数
@@ -204,7 +229,7 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
   ['t', THINKING_ARGS], // alias
   ['reasoning', REASONING_ARGS],
   ['reason', REASONING_ARGS],
-  ['model', MODEL_ARGS],
+  // 'model' and 'm' handled dynamically in getCommandArguments()
   ['plan', PLAN_ARGS],
   ['p', PLAN_ARGS], // alias
   ['project', PROJECT_ARGS],
@@ -217,9 +242,17 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
 /**
  * Get argument definitions for a command
  * 获取命令的参数定义
+ * Returns dynamic list for /model (includes custom providers).
+ * For /model, supports two-stage completion when partial contains provider/.
  */
-export function getCommandArguments(commandName: string): ArgumentDefinition[] {
-  return COMMAND_ARGUMENTS.get(commandName.toLowerCase()) ?? [];
+const MODEL_COMMAND_NAMES = new Set(['model', 'm']);
+
+export function getCommandArguments(commandName: string, partial?: string): ArgumentDefinition[] {
+  const key = commandName.toLowerCase();
+  if (MODEL_COMMAND_NAMES.has(key)) {
+    return getModelArgs(partial);
+  }
+  return COMMAND_ARGUMENTS.get(key) ?? [];
 }
 
 /**
@@ -227,5 +260,7 @@ export function getCommandArguments(commandName: string): ArgumentDefinition[] {
  * 检查命令是否有参数补全
  */
 export function hasCommandArguments(commandName: string): boolean {
-  return COMMAND_ARGUMENTS.has(commandName.toLowerCase());
+  const key = commandName.toLowerCase();
+  if (COMMAND_ARGUMENTS.has(key)) return true;
+  return getCommandArguments(key).length > 0;
 }

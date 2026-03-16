@@ -149,6 +149,68 @@ describe('ArgumentCompleter', () => {
         // All completions should be provider names
         expect(completions.every(c => c.type === 'argument')).toBe(true);
       });
+
+      it('should return provider names (not provider/model) for bare /model input', async () => {
+        const completions = await completer.getCompletions('/model ', 7);
+
+        // Provider name completions should not contain "/"
+        expect(completions.every(c => !c.display.includes('/'))).toBe(true);
+      });
+
+      it('should activate canComplete for provider/model format input', () => {
+        // findCommandSlashIndex correctly identifies the command prefix /
+        // even when the argument contains / (e.g., provider/model)
+        expect(completer.canComplete('/model anthropic/cl', 20)).toBe(true);
+        expect(completer.canComplete('/model anthropic/', 19)).toBe(true);
+        expect(completer.canComplete('/model zhipu-coding/glm-5', 26)).toBe(true);
+      });
+
+      it('should return models for a known provider with / separator', async () => {
+        const completions = await completer.getCompletions('/model anthropic/', 18);
+
+        expect(completions.length).toBeGreaterThan(0);
+        // Two-stage: results should be in provider/model format
+        expect(completions.every(c => c.display.startsWith('anthropic/'))).toBe(true);
+        // Should include all known anthropic models
+        const modelNames = completions.map(c => c.display.replace('anthropic/', ''));
+        expect(modelNames).toContain('claude-sonnet-4-6');
+        expect(modelNames).toContain('claude-opus-4-6');
+        expect(modelNames).toContain('claude-haiku-4-5');
+      });
+
+      it('should filter models by partial text after provider/', async () => {
+        const completions = await completer.getCompletions('/model anthropic/cl', 20);
+
+        expect(completions.length).toBeGreaterThan(0);
+        // All results should be anthropic models containing "cl"
+        expect(completions.every(c => {
+          expect(c.display.startsWith('anthropic/')).toBe(true);
+          return c.display.toLowerCase().includes('cl');
+        })).toBe(true);
+        // Should match claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5
+        expect(completions.length).toBe(3);
+      });
+
+      it('should filter models by partial matching haiku', async () => {
+        const completions = await completer.getCompletions('/model anthropic/ha', 21);
+
+        expect(completions.length).toBe(1);
+        expect(completions[0]?.display).toBe('anthropic/claude-haiku-4-5');
+      });
+
+      it('should return empty for unknown provider after /', async () => {
+        const completions = await completer.getCompletions('/model nonexistent_xyz/', 24);
+
+        // Unknown provider with / format — no completions (user should backspace)
+        expect(completions.length).toBe(0);
+      });
+
+      it('should return empty for unknown provider with model partial', async () => {
+        const completions = await completer.getCompletions('/model nonexistent_xyz/cl', 26);
+
+        // Unknown provider with / format — no completions
+        expect(completions.length).toBe(0);
+      });
     });
 
     describe('/plan command', () => {

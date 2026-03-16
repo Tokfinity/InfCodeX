@@ -657,7 +657,7 @@ async function routeTaskWithLLM(
       ROUTER_SYSTEM_PROMPT,
       false,
       {
-        modelOverride: options.modelOverride,
+        modelOverride: options.modelOverride ?? options.model,
         signal: options.abortSignal,
       },
       options.abortSignal,
@@ -710,7 +710,7 @@ async function judgeAutoRerouteWithLLM(
       AUTO_REROUTE_SYSTEM_PROMPT,
       false,
       {
-        modelOverride: options.modelOverride,
+        modelOverride: options.modelOverride ?? options.model,
         signal: options.abortSignal,
       },
       options.abortSignal,

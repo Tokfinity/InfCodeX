@@ -11,7 +11,7 @@
  * - Keyboard navigation support - 键盘导航支持
  */
 
-import { FileCompleter, CommandCompleter, type Completer, type Completion } from './autocomplete.js';
+import { FileCompleter, CommandCompleter, findCommandSlashIndex, type Completer, type Completion } from './autocomplete.js';
 import { SkillCompleter } from './completers/skill-completer.js';
 import { ArgumentCompleter } from './completers/argument-completer.js';
 import { ProjectCompleter } from './completers/project-completer.js';
@@ -301,11 +301,9 @@ export class AutocompleteProvider {
     // Check trigger conditions - 检查触发条件
     // 1. / at start or preceded by whitespace (command/skill)
     // 2. @ at start or preceded by whitespace (file path)
-
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
-    const hasValidSlash =
-      lastSlashIndex === 0 || // / at start
-      (lastSlashIndex > 0 && /\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')); // / preceded by whitespace
+    // Use findCommandSlashIndex to handle arguments containing / (e.g., /model anthropic/cl)
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
+    const hasValidSlash = lastSlashIndex !== -1;
 
     const lastAtIndex = beforeCursor.lastIndexOf('@');
     const hasValidAt =
@@ -414,7 +412,7 @@ export class AutocompleteProvider {
 
     // Find the last / to support mid-line commands/skills
     // 找到最后一个 / 以支持行中命令/技能
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
 
     if (lastSlashIndex !== -1) {
       const afterSlash = beforeCursor.slice(lastSlashIndex);

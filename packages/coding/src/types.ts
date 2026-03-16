@@ -123,6 +123,7 @@ export interface KodaXContextOptions {
 
 export interface KodaXOptions {
   provider: string;
+  model?: string;
   modelOverride?: string;
   thinking?: boolean;
   reasoningMode?: KodaXReasoningMode;

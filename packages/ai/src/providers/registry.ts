@@ -30,6 +30,7 @@ export type ProviderName =
 
 type ProviderSnapshot = {
   model: string;
+  models?: readonly string[];
   apiKeyEnv: string;
   reasoningCapability: KodaXReasoningCapability;
 };
@@ -41,6 +42,10 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     model: 'claude-sonnet-4-6',
+    models: [
+      { id: 'claude-opus-4-6', displayName: 'Opus 4.6', thinkingBudgetCap: 28000 },
+      { id: 'claude-haiku-4-5', displayName: 'Haiku 4.5', thinkingBudgetCap: 10000 },
+    ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
     contextWindow: 200000,  // 200K tokens
@@ -56,6 +61,10 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     apiKeyEnv: 'ZHIPU_API_KEY',
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     model: 'glm-5',
+    models: [
+      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
+      { id: 'glm-4.7', displayName: 'GLM-4.7' },
+    ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
     contextWindow: 200000,
@@ -98,6 +107,10 @@ class OpenAIProvider extends KodaXOpenAICompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'OPENAI_API_KEY',
     model: 'gpt-5.3-codex',
+    models: [
+      { id: 'gpt-5.4', displayName: 'GPT-5.4' },
+      { id: 'gpt-5.3-codex-spark', displayName: 'GPT-5.3 Codex Spark' },
+    ],
     supportsThinking: true,
     reasoningCapability: 'native-effort',
     contextWindow: 400000,
@@ -140,6 +153,10 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
     apiKeyEnv: 'ZHIPU_API_KEY',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     model: 'glm-5',
+    models: [
+      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
+      { id: 'glm-4.7', displayName: 'GLM-4.7' },
+    ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
     contextWindow: 200000,
@@ -167,11 +184,13 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
   anthropic: {
     apiKeyEnv: 'ANTHROPIC_API_KEY',
     model: 'claude-sonnet-4-6',
+    models: ['claude-opus-4-6', 'claude-haiku-4-5'],
     reasoningCapability: 'native-budget',
   },
   openai: {
     apiKeyEnv: 'OPENAI_API_KEY',
     model: 'gpt-5.3-codex',
+    models: ['gpt-5.4', 'gpt-5.3-codex-spark'],
     reasoningCapability: 'native-effort',
   },
   kimi: {
@@ -192,11 +211,13 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
   zhipu: {
     apiKeyEnv: 'ZHIPU_API_KEY',
     model: 'glm-5',
+    models: ['glm-5-turbo', 'glm-4.7'],
     reasoningCapability: 'native-budget',
   },
   'zhipu-coding': {
     apiKeyEnv: 'ZHIPU_API_KEY',
     model: 'glm-5',
+    models: ['glm-5-turbo', 'glm-4.7'],
     reasoningCapability: 'native-budget',
   },
   'minimax-coding': {
@@ -249,18 +270,26 @@ export function getProviderConfiguredReasoningCapability(
 }
 
 // 获取所有可用的 Provider 列表（带配置状态）
-export function getProviderList(): Array<{ name: string; model: string; configured: boolean; reasoningCapability: KodaXReasoningCapability }> {
-  const result: Array<{ name: string; model: string; configured: boolean; reasoningCapability: KodaXReasoningCapability }> = [];
+export function getProviderList(): Array<{ name: string; model: string; models: string[]; configured: boolean; reasoningCapability: KodaXReasoningCapability }> {
+  const result: Array<{ name: string; model: string; models: string[]; configured: boolean; reasoningCapability: KodaXReasoningCapability }> = [];
   for (const name of Object.keys(KODAX_PROVIDERS) as ProviderName[]) {
     const snapshot = KODAX_PROVIDER_SNAPSHOTS[name];
     result.push({
       name,
       model: snapshot.model,
+      models: snapshot.models ? [snapshot.model, ...snapshot.models] : [snapshot.model],
       configured: !!process.env[snapshot.apiKeyEnv],
       reasoningCapability: snapshot.reasoningCapability,
     });
   }
   return result;
+}
+
+// 获取内置 Provider 的可用模型列表（不需要实例化 Provider，不依赖 API Key）
+export function getProviderModels(name: string): string[] {
+  const snapshot = KODAX_PROVIDER_SNAPSHOTS[name as ProviderName];
+  if (!snapshot) return [];
+  return snapshot.models ? [snapshot.model, ...snapshot.models] : [snapshot.model];
 }
 
 // 类型守卫函数：检查字符串是否为有效的 Provider 名称

@@ -15,7 +15,22 @@ export {
   getProviderConfiguredReasoningCapability,
   isProviderConfigured,
   getProviderModel,
+  getProviderModels,
   getProviderList,
   isProviderName,
 } from './registry.js';
 export type { ProviderName } from './registry.js';
+export { createCustomProvider } from './custom-provider.js';
+export {
+  registerCustomProviders,
+  getCustomProvider,
+  isCustomProviderName,
+  getCustomProviderNames,
+  getCustomProviderList,
+  getCustomProviderModels,
+} from './custom-registry.js';
+export {
+  resolveProvider,
+  isKnownProvider,
+  getAvailableProviderNames,
+} from './resolver.js';

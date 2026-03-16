@@ -45,6 +45,7 @@ export interface CommandExecutionMetadata {
 
 export interface CurrentConfig {
   provider: string;
+  model?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   permissionMode: PermissionMode;
@@ -58,7 +59,7 @@ export interface CommandCallbacks {
   listSessions: () => Promise<void>;
   clearHistory: () => void;
   printHistory: () => void;
-  switchProvider?: (provider: string) => void;
+  switchProvider?: (provider: string, model?: string) => void;
   setThinking?: (enabled: boolean) => void;
   setReasoningMode?: (mode: KodaXReasoningMode) => void;
   setPermissionMode?: (mode: PermissionMode) => void;

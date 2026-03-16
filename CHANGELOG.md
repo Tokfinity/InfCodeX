@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.39] - 2026-03-16
+
+### Added
+- **Custom Provider Support**: Users can define custom AI providers in `config.json` via `customProviders` array
+  - Supports OpenAI and Anthropic protocol families
+  - Per-provider configuration: `baseUrl`, `apiKeyEnv`, `model`, `models`, `supportsThinking`, `reasoningCapability`
+  - Unified provider resolution: `resolveProvider()` checks built-in first, then custom
+  - Name collision warning when custom provider shadows a built-in
+- **Multi-Model Support**: Built-in providers now expose available model lists
+  - `getAvailableModels()` and `getModelDescriptor()` methods on base provider
+  - Two-stage tab completion: `/model ant<TAB>` → provider names, `/model anthropic/cl<TAB>` → models
+  - Provider model lists: Anthropic (3 models), OpenAI (3 models), Zhipu/Zhipu-coding (3 models each)
+  - `providerModels` config field to override built-in model lists
+  - `model` config field to select model within current provider
+- **~/.agents/ Directory Support**: Skills and commands can now be discovered from `~/.agents/skills/` and `~/.agents/commands/` directories (AgentSkills standard)
+- **`/model` Command Enhancement**: New syntax for provider and model selection
+  - `/model <provider>` — switch provider
+  - `/model <provider>/<model>` — switch to specific model
+  - `/model /<model>` — switch model within current provider
+  - Displays all providers with their models, current selection marked with `>`
+
+### Fixed
+- **Argument Completer Double Filtering**: Fixed two-stage provider/model completion returning no results
+  - `getModelArgs()` pre-filters by model partial, but `getCompletions()` applied redundant filter with full `provider/modelPartial`
+  - Added skip logic for arg names containing `/`
+- **Unknown Provider Completion**: `/model unknown_provider/` now returns empty instead of falling back to provider names
+- **MessageList Footer Clipping**: Moved `lastResponseHistoryItems` out of Ink's `<Static>` component
+  - Items now reflow with footer/layout changes instead of being pinned permanently
+
+### Changed
+- **Skills/Commands Discovery Priority**: Adjusted directory priority order:
+  1. `<projectRoot>/.kodax/skills/` (or `commands/`) — project level (highest)
+  2. `~/.kodax/skills/` (or `commands/`) — user level
+  3. `~/.agents/skills/` (or `commands/`) — user level (AgentSkills standard)
+- **Removed Enterprise Paths**: Removed `~/.kodax/skills/enterprise/` directory (no longer needed)
+- **`/copy` Command**: Replaced local `getLastAssistantMessage` with shared `extractLastAssistantText` (DRY)
+- **Config Template**: Updated `config.example.jsonc` with full documentation for new fields (`model`, `providerModels`, `customProviders`)
+- **Effective Model Resolution**: Priority chain `modelOverride > options.model > provider.config.model`
+
+### Removed
+- **Build Artifacts**: Cleaned up 24 accidentally committed build output files (`*.d.ts`, `*.js`, `*.js.map`) from `packages/ai/src/`
+- **.gitignore Hardening**: Added rules to prevent build artifacts in source directories (`src/**/*.js`, `src/**/*.d.ts`, etc.)
+
+---
+
 ## [Unreleased]
 
 ---
