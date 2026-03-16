@@ -7,12 +7,12 @@ import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import {
   estimateTokens,
-  KODAX_PROVIDERS,
   KODAX_REASONING_MODE_SEQUENCE,
-  getProviderList,
+  isKnownProvider,
+  getAvailableProviderNames,
+  resolveProvider,
   type KodaXReasoningMode,
   KodaXOptions,
-  getProvider,
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import { PermissionMode } from '../permission/types.js';
@@ -21,6 +21,9 @@ import {
   describeReasoningExecution,
   formatReasoningCapabilityShort,
   getProviderReasoningCapability,
+  getProviderAvailableModels,
+  getProviderList,
+  loadConfig,
   saveConfig,
 } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
@@ -47,6 +50,7 @@ export type { CommandCallbacks } from '../commands/types.js';
 // Current config state (passed from repl.ts) - 当前配置状态（由 repl.ts 传入）
 export interface CurrentConfig {
   provider: string;
+  model?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   permissionMode: PermissionMode;
@@ -166,7 +170,7 @@ export const BUILTIN_COMMANDS: Command[] = [
 
         // Get provider instance
         const providerName = currentConfig.provider;
-        const provider = getProvider(providerName);
+        const provider = resolveProvider(providerName);
 
         if (!provider) {
           console.log(chalk.red(`\n[Provider not found: ${providerName}]`));
@@ -497,50 +501,112 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'model',
     aliases: ['m'],
-    description: 'Show or switch provider',
-    usage: '/model [provider-name]',
+    description: 'Show or switch provider/model',
+    usage: '/model [<provider>[/<model>] | /<model>]',
     handler: async (args, _context, callbacks, currentConfig) => {
+      // Read config once and pass providerModels to avoid repeated file I/O
+      const providerModels = loadConfig().providerModels;
+
       if (args.length === 0) {
-        // Show all providers with status - 显示所有 Provider 及状态
+        // Show all providers with their models - 显示所有 Provider 及模型
         console.log(chalk.bold('\nAvailable Providers:\n'));
-        const providers = getProviderList();
-        const maxNameLen = Math.max(...providers.map(p => p.name.length));
+        const providers = getProviderList(providerModels);
         for (const p of providers) {
-          const paddedName = p.name.padEnd(maxNameLen);
-          const configured = p.configured ? chalk.green('[已配置]') : chalk.red('[未配置]');
-          const current = p.name === currentConfig.provider ? chalk.cyan(' *') : '';
-          console.log(`  ${paddedName} (${p.model}) ${chalk.dim(`[${formatReasoningCapabilityShort(p.reasoningCapability as any)}]`)} ${configured}${current}`);
+          const configured = p.configured ? chalk.green('[configured]') : chalk.red('[not configured]');
+          const customTag = p.custom ? chalk.yellow(' [custom]') : '';
+          const currentProvider = p.name === currentConfig.provider;
+          const providerTag = currentProvider ? chalk.cyan(' *') : '';
+          console.log(`  ${chalk.bold(p.name)}${providerTag}  ${configured}${customTag}`);
+
+          const models = getProviderAvailableModels(p.name, providerModels);
+          const effectiveModel = currentProvider ? currentConfig.model : null;
+          for (const model of models) {
+            const isActive = currentProvider && (effectiveModel === model || (!effectiveModel && model === p.model));
+            const marker = isActive ? chalk.cyan('>') : ' ';
+            console.log(`  ${marker} ${model}`);
+          }
+          console.log();
         }
-        console.log(chalk.dim(`\nCurrent: provider=${currentConfig.provider}, reasoning=${currentConfig.reasoningMode}, mode=${currentConfig.permissionMode}`));
-        console.log(chalk.dim('Usage: /model <provider-name> to switch\n'));
+        console.log(chalk.dim(`Current: provider=${currentConfig.provider}${currentConfig.model ? `, model=${currentConfig.model}` : ''}`));
+        console.log(chalk.dim('Usage:'));
+        console.log(chalk.dim('  /model <provider>           Switch provider'));
+        console.log(chalk.dim('  /model <provider>/<model>  Switch to specific model'));
+        console.log(chalk.dim('  /model /<model>            Switch model within current provider\n'));
         return;
       }
 
-      const newProvider = args[0];
-      if (KODAX_PROVIDERS[newProvider]) {
-        // Save to config - 保存到配置
-        saveConfig({ provider: newProvider });
+      const input = (args[0] ?? '').trim();
+      if (!input) return;
+
+      // /model /<model-id> — switch model within current provider
+      if (input.startsWith('/')) {
+        const targetModel = input.slice(1);
+        if (!targetModel) {
+          console.log(chalk.red('\n[Missing model name after /]'));
+          return;
+        }
+        const models = getProviderAvailableModels(currentConfig.provider, providerModels);
+        if (!models.includes(targetModel)) {
+          console.log(chalk.red(`\n[Unknown model: ${targetModel}]`));
+          console.log(chalk.dim(`Available models for ${currentConfig.provider}: ${models.join(', ')}\n`));
+          return;
+        }
+        saveConfig({ model: targetModel });
+        callbacks.switchProvider?.(currentConfig.provider, targetModel);
+        console.log(chalk.cyan(`\n[Switched to ${targetModel}] (saved)`));
+        return;
+      }
+
+      // /model <provider>/<model-id> — switch provider and model
+      if (input.includes('/')) {
+        const slashIdx = input.indexOf('/');
+        const targetProvider = input.slice(0, slashIdx);
+        const targetModel = input.slice(slashIdx + 1);
+        if (!targetModel || !targetProvider) {
+          console.log(chalk.red('\n[Invalid format. Use: /model <provider>/<model>]'));
+          return;
+        }
+        if (!isKnownProvider(targetProvider)) {
+          console.log(chalk.red(`\n[Unknown provider: ${targetProvider}]`));
+          console.log(chalk.dim(`Available: ${getAvailableProviderNames().join(', ')}\n`));
+          return;
+        }
+        const models = getProviderAvailableModels(targetProvider, providerModels);
+        if (!models.includes(targetModel)) {
+          console.log(chalk.red(`\n[Unknown model: ${targetModel}]`));
+          console.log(chalk.dim(`Available models for ${targetProvider}: ${models.join(', ')}\n`));
+          return;
+        }
+        saveConfig({ provider: targetProvider, model: targetModel });
+        callbacks.switchProvider?.(targetProvider, targetModel);
+        console.log(chalk.cyan(`\n[Switched to ${targetProvider}/${targetModel}] (saved)`));
+        return;
+      }
+
+      // /model <provider> — switch provider (use default model)
+      const newProvider = input;
+      if (isKnownProvider(newProvider)) {
+        saveConfig({ provider: newProvider, model: undefined });
         callbacks.switchProvider?.(newProvider);
-        console.log(chalk.cyan(`\n[Switched to ${newProvider}] (已保存)`));
+        console.log(chalk.cyan(`\n[Switched to ${newProvider}] (saved)`));
       } else {
         console.log(chalk.red(`\n[Unknown provider: ${newProvider}]`));
-        console.log(chalk.dim(`Available: ${Object.keys(KODAX_PROVIDERS).join(', ')}\n`));
+        console.log(chalk.dim(`Available: ${getAvailableProviderNames().join(', ')}\n`));
       }
     },
     detailedHelp: () => {
-      console.log(chalk.cyan('\n/model - Switch LLM Provider\n'));
+      console.log(chalk.cyan('\n/model - Switch LLM Provider/Model\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /model             ') + 'List all available providers');
-      console.log(chalk.dim('  /model <name>      ') + 'Switch to a specific provider');
-      console.log();
-      console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  Switch between different LLM providers. The setting is'));
-      console.log(chalk.dim('  saved to config file and persists across sessions.'));
+      console.log(chalk.dim('  /model                       ') + 'List all providers with models');
+      console.log(chalk.dim('  /model <provider>            ') + 'Switch to a provider (default model)');
+      console.log(chalk.dim('  /model <provider>/<model>    ') + 'Switch to a specific model');
+      console.log(chalk.dim('  /model /<model>              ') + 'Switch model within current provider');
       console.log();
       console.log(chalk.bold('Examples:'));
-      console.log(chalk.dim('  /model             ') + '# See available providers');
-      console.log(chalk.dim('  /model anthropic   ') + '# Switch to Anthropic Claude');
-      console.log(chalk.dim('  /model openai      ') + '# Switch to OpenAI');
+      console.log(chalk.dim('  /model                       ') + '# See available providers & models');
+      console.log(chalk.dim('  /model anthropic             ') + '# Switch to Anthropic (default model)');
+      console.log(chalk.dim('  /model openai/gpt-5.4        ') + '# Switch to OpenAI GPT-5.4');
+      console.log(chalk.dim('  /model /claude-opus-4-6      ') + '# Switch to Opus within current provider');
       console.log();
     },
   },
@@ -965,6 +1031,7 @@ function printDetailedHelp(commandName: string): void {
 function printStatus(context: InteractiveContext, currentConfig: CurrentConfig): void {
   const tokens = estimateTokens(context.messages);
   console.log(chalk.bold('\nSession Status:\n'));
+  console.log(chalk.dim(`  Provider:    ${chalk.cyan(currentConfig.provider)}${currentConfig.model ? ` / ${chalk.cyan(currentConfig.model)}` : ''}`));
   console.log(chalk.dim(`  Permission:  ${chalk.cyan(currentConfig.permissionMode)}`));
   console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(currentConfig.reasoningMode)}`));
   console.log(chalk.dim(`  Session ID:  ${context.sessionId}`));

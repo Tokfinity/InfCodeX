@@ -5,47 +5,108 @@
     // 将此文件复制到 ~/.kodax/config.json 并按需修改
     // Copy this file to ~/.kodax/config.json and modify as needed
     // ═══════════════════════════════════════════════════════════
+
     // ── Provider 配置 ──────────────────────────────────────────
     // 默认使用的 AI Provider
-    // 可选值: "anthropic" | "openai" | "kimi" | "kimi-code" | "qwen" | "zhipu" | "zhipu-coding" | "minimax-coding" | "gemini-cli" | "codex-cli"
+    // 内置可选值: "anthropic" | "openai" | "kimi" | "kimi-code" | "qwen"
+    //           | "zhipu" | "zhipu-coding" | "minimax-coding" | "gemini-cli" | "codex-cli"
+    // 也可以填写 customProviders 中定义的自定义 provider 名称
     "provider": "kimi-code",
-    // 统一推理模式（推荐配置项）
+
+    // ── 模型选择 ───────────────────────────────────────────────
+    // 在当前 provider 中选择要使用的模型 (可选，默认使用 provider 的默认模型)
+    // 示例: "model": "glm-5-turbo"
+    //
+    // 内置 Provider 默认模型及可选模型:
+    //   anthropic:      [claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5]
+    //   openai:         [gpt-5.3-codex, gpt-5.4, gpt-5.3-codex-spark]
+    //   qwen:           [qwen3.5-plus]
+    //   zhipu:          [glm-5, glm-5-turbo, glm-4.7]
+    //   zhipu-coding:   [glm-5, glm-5-turbo, glm-4.7]
+    //   kimi:           [k2.5]
+    //   kimi-code:      [k2.5]
+    //   minimax-coding: [MiniMax-M2.5]
+    //   gemini-cli:     [gemini-cli]
+    //   codex-cli:      [codex-cli]
+    //
+    // "model": "glm-5-turbo",
+
+    // ── 内置 Provider 可选模型列表覆盖 (可选) ──────────────────
+    // 用于扩展内置 provider 的可选模型列表
+    // 配置的模型会排在前面（保持用户顺序），内置模型中不在列表里的会追加到后面
+    // 如果某个 provider 没有配置，则使用上方的内置默认模型列表
+    // 注意: 仅适用于内置 Provider，自定义 Provider 使用其自身的 models 字段
+    //
+    // "providerModels": {
+    //     "anthropic": ["claude-sonnet-4-6", "claude-opus-4-6", "claude-haiku-4-5"],
+    //     "openai": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"]
+    // },
+
+    // ── 自定义 Provider (可选) ─────────────────────────────────
+    // 定义自定义 provider，支持 OpenAI 协议和 Anthropic 协议两种协议族
+    // 每个 provider 有独立的 base URL、API Key 环境变量、模型列表等配置
+    // 自定义 provider 的名称可以在 "provider" 字段中引用
+    // 注意: 自定义 provider 名称不能与内置 provider 同名（内置优先）
+    //
+    // "customProviders": [
+    //     // ── OpenAI 协议族示例 ──
+    //     {
+    //         // 必填字段 (Required)
+    //         "name": "my-ollama",              // provider 唯一标识
+    //         "protocol": "openai",              // 协议族: "openai" | "anthropic"
+    //         "baseUrl": "http://localhost:11434/v1",  // API 基础地址
+    //         "apiKeyEnv": "OLLAMA_API_KEY",     // API Key 环境变量名
+    //         "model": "llama3",                 // 默认模型 ID
+    //
+    //         // 可选字段 (Optional)
+    //         "models": ["codellama", "mistral"],  // 可选模型列表 (不含默认模型)
+    //         "supportsThinking": false,         // 是否支持 thinking (默认: false)
+    //         "reasoningCapability": "none",     // 推理能力: "none"|"native-budget"|"native-effort"|"native-toggle"|"prompt-only" (默认: "none")
+    //         "contextWindow": 128000,           // 上下文窗口大小 (token 数)
+    //         "maxOutputTokens": 4096,           // 最大输出 token 数
+    //         "thinkingBudgetCap": 10000         // thinking budget 上限 (仅 native-budget 模式)
+    //     },
+    //     // ── Anthropic 协议族示例 ──
+    //     {
+    //         "name": "my-claude-proxy",
+    //         "protocol": "anthropic",
+    //         "baseUrl": "https://my-proxy.example.com",
+    //         "apiKeyEnv": "PROXY_API_KEY",
+    //         "model": "claude-sonnet-4-6",
+    //         "models": ["claude-opus-4-6", "claude-haiku-4-5"],
+    //         "supportsThinking": true,
+    //         "reasoningCapability": "native-budget",
+    //         "contextWindow": 200000,
+    //         "maxOutputTokens": 32768,
+    //         "thinkingBudgetCap": 16000
+    //     }
+    // ],
+
+    // ── /model 命令用法 ────────────────────────────────────────
+    // /model                    列出所有 Provider 及可选模型
+    // /model <provider>         切换到指定 Provider (使用默认模型)
+    // /model <provider>/<model> 切换到指定 Provider 的指定模型
+    // /model /<model>           在当前 Provider 内切换模型
+
+    // ── 统一推理模式 ───────────────────────────────────────────
     // 可选值: "off" | "auto" | "quick" | "balanced" | "deep"
-    // - off: 关闭推理
-    // - auto: 先做任务路由，再自动选择深度
-    // - quick: 保守推理
-    // - balanced: 中等推理
-    // - deep: 高强度推理
     "reasoningMode": "auto",
     // 兼容旧版的 thinking 开关
-    // 新版本优先读取 reasoningMode；保留此项是为了兼容旧配置和旧脚本
     "thinking": true,
-    // Provider reasoning override 缓存
-    // 只有 provider 明确拒绝 budget / effort / toggle 参数后，才会自动写入这里
+
+    // ── Provider reasoning override 缓存 ──────────────────────
     // key 格式: "provider|baseUrl|model"
     // value 可选: "budget" | "effort" | "toggle" | "none"
-    "providerReasoningOverrides": {
-        // "zhipu-coding|https://open.bigmodel.cn/api/anthropic|glm-5": "toggle"
-    },
+    "providerReasoningOverrides": {},
+
     // ── Compaction 压缩配置 ────────────────────────────────────
-    // 智能上下文压缩：当对话历史过长时，自动使用 LLM 生成摘要
     "compaction": {
-        // 是否启用自动压缩 (默认: true)
         "enabled": true,
-        // 触发压缩的阈值：当 Token 数超过 contextWindow 的此百分比时触发 (默认: 75)
-        // 例: contextWindow=256000, triggerPercent=75 → 超过 192,000 Token 时触发
         "triggerPercent": 75,
-        // 压缩时保留最近对话的比例 (默认: 10)
-        // 例: contextWindow=256000, keepRecentPercent=10 → 保留最近约 25,600 Token 的完整对话
         "keepRecentPercent": 10
-        // contextWindow: 不建议手动设置
-        // 如果不设置，系统会自动从 Provider 读取原生上下文窗口大小
-        // 例: kimi-code=256k, anthropic=200k, openai=400k
-        // 仅在需要手动覆盖时设置，例如:
-        // "contextWindow": 200000
     },
+
     // ── Permission 权限配置 ────────────────────────────────────
-    // 权限模式
     // 可选值: "plan" | "accept-edits" | "auto-in-project"
     "permissionMode": "accept-edits"
 }

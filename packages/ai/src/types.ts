@@ -147,10 +147,37 @@ export interface KodaXReasoningRequest {
 
 // ============== Provider 配置 ==============
 
+export interface KodaXModelDescriptor {
+  id: string;
+  displayName?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  thinkingBudgetCap?: number;
+  reasoningCapability?: KodaXReasoningCapability;
+}
+
+export type KodaXProtocolFamily = 'anthropic' | 'openai';
+
+export interface KodaXCustomProviderConfig {
+  name: string;
+  protocol: KodaXProtocolFamily;
+  baseUrl: string;
+  apiKeyEnv: string;
+  model: string;
+  models?: string[];
+  supportsThinking?: boolean;
+  reasoningCapability?: KodaXReasoningCapability;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  thinkingBudgetCap?: number;
+}
+
 export interface KodaXProviderConfig {
   apiKeyEnv: string;
   baseUrl?: string;
   model: string;
+  /** Additional available models beyond the default */
+  models?: readonly KodaXModelDescriptor[];
   supportsThinking: boolean;
   reasoningCapability?: KodaXReasoningCapability;
   /** 模型的上下文窗口大小 (tokens) */

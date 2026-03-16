@@ -1,6 +1,5 @@
 /**
  * /copy Command - Copy last message to clipboard
- * /copy 命令 - 复制最后消息到剪贴板
  *
  * Copies the last assistant message to the system clipboard.
  * This is a high-frequency utility command for quickly sharing
@@ -10,45 +9,17 @@
 import type { Command } from './types.js';
 import chalk from 'chalk';
 import clipboard from 'clipboardy';
-
-/**
- * Get the last assistant message from the conversation
- * 从对话中获取最后的助手消息
- */
-function getLastAssistantMessage(messages: Array<{ role: string; content: string | unknown[] }>): string | null {
-  // Iterate backwards to find the last assistant message
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg?.role === 'assistant') {
-      // Handle both string and array content
-      if (typeof msg.content === 'string') {
-        return msg.content;
-      }
-      // If content is an array, extract text blocks
-      if (Array.isArray(msg.content)) {
-        const textBlocks = msg.content
-          .filter((block): block is { type: 'text'; text: string } =>
-            block != null && typeof block === 'object' && 'type' in block && block.type === 'text' && 'text' in block
-          )
-          .map(block => String(block.text))
-          .join('\n');
-        return textBlocks || null;
-      }
-    }
-  }
-  return null;
-}
+import { extractLastAssistantText } from '../ui/utils/message-utils.js';
 
 /**
  * /copy command definition
- * /copy 命令定义
  */
 export const copyCommand: Command = {
   name: 'copy',
   description: 'Copy last assistant message to clipboard',
   usage: '/copy',
   handler: async (_args, context) => {
-    const lastMessage = getLastAssistantMessage(context.messages);
+    const lastMessage = extractLastAssistantText(context.messages as never);
 
     if (!lastMessage) {
       console.log(chalk.yellow('\nNo assistant message found to copy.'));
@@ -59,7 +30,7 @@ export const copyCommand: Command = {
     try {
       await clipboard.write(lastMessage);
       const preview = lastMessage.length > 50 ? lastMessage.slice(0, 50) + '...' : lastMessage;
-      console.log(chalk.green('\n✓ Copied to clipboard!'));
+      console.log(chalk.green('\nCopied to clipboard!'));
       console.log(chalk.dim(`Preview: ${preview}`));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -79,8 +50,8 @@ export const copyCommand: Command = {
     console.log(chalk.dim('  AI: [responds with explanation]'));
     console.log(chalk.cyan('  /copy') + chalk.dim(' - Copies the explanation to clipboard\n'));
     console.log('Notes:');
-    console.log('  • Only copies assistant messages, not user messages');
-    console.log('  • Works with both plain text and formatted responses');
-    console.log('  • Requires clipboard permissions on some systems');
+    console.log('  - Only copies assistant messages, not user messages');
+    console.log('  - Works with both plain text and formatted responses');
+    console.log('  - Requires clipboard permissions on some systems');
   },
 };

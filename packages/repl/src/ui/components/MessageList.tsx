@@ -5,7 +5,7 @@
  * Support HistoryItem types: user, assistant, tool_group, thinking, error, info, hint - 参考 Gemini CLI 的消息显示架构实现，支持 HistoryItem 类型：user, assistant, tool_group, thinking, error, info, hint
  */
 
-import React, { useMemo, memo, type ReactNode } from "react";
+import React, { useMemo, memo } from "react";
 import { Box, Text, Static } from "ink";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
@@ -555,7 +555,7 @@ export const MessageList: React.FC<MessageListProps> = ({
     <Box flexDirection="column" paddingY={1}>
       {/* Static history items - won't re-render after initial render */}
       {/* 静态历史项 - 初始渲染后不会重新渲染 */}
-      <Static items={[...staticHistoryItems, ...lastResponseHistoryItems]}>
+      <Static items={staticHistoryItems}>
         {(item) => (
           <HistoryItemRenderer
             key={item.id}
@@ -565,6 +565,16 @@ export const MessageList: React.FC<MessageListProps> = ({
           />
         )}
       </Static>
+
+      {/* Latest response stays dynamic so it can reflow with footer/layout changes */}
+      {lastResponseHistoryItems.map((item) => (
+        <HistoryItemRenderer
+          key={item.id}
+          item={item}
+          theme={theme}
+          maxLines={maxLines}
+        />
+      ))}
 
       {/* Pending items - can update dynamically */}
       {/* 待处理项目 - 可以动态更新 */}

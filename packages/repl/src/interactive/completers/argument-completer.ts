@@ -11,7 +11,8 @@
  */
 
 import type { Completer, Completion } from '../autocomplete.js';
-import { COMMAND_ARGUMENTS } from './command-arguments.js';
+import { findCommandSlashIndex } from '../autocomplete.js';
+import { COMMAND_ARGUMENTS, getCommandArguments } from './command-arguments.js';
 
 /**
  * Argument definition for autocomplete
@@ -46,16 +47,11 @@ export class ArgumentCompleter implements Completer {
   canComplete(input: string, cursorPos: number): boolean {
     const beforeCursor = input.slice(0, cursorPos);
 
-    // Find the last / to support mid-line commands
-    // 找到最后一个 / 以支持行中命令
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    // Find the last valid command prefix slash to support mid-line commands
+    // and arguments containing slashes (e.g., /model anthropic/cl)
+    // 找到最后一个有效的命令前缀斜杠，支持行中命令和包含斜杠的参数
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
     if (lastSlashIndex === -1) return false;
-
-    // If / is not at the start, it must be preceded by whitespace
-    // 如果 / 不在开头，前面必须有空白字符
-    if (lastSlashIndex > 0 && !/\s/.test(beforeCursor[lastSlashIndex - 1] ?? '')) {
-      return false;
-    }
 
     const afterSlash = beforeCursor.slice(lastSlashIndex);
 
@@ -67,7 +63,7 @@ export class ArgumentCompleter implements Completer {
     }
 
     const commandName = afterSlash.slice(1).toLowerCase();
-    return COMMAND_ARGUMENTS.has(commandName);
+    return COMMAND_ARGUMENTS.has(commandName) || getCommandArguments(commandName).length > 0;
   }
 
   /**
@@ -77,9 +73,9 @@ export class ArgumentCompleter implements Completer {
   async getCompletions(input: string, cursorPos: number): Promise<Completion[]> {
     const beforeCursor = input.slice(0, cursorPos);
 
-    // Find the last / to support mid-line commands
-    // 找到最后一个 / 以支持行中命令
-    const lastSlashIndex = beforeCursor.lastIndexOf('/');
+    // Find the last valid command prefix slash
+    // 找到最后一个有效的命令前缀斜杠
+    const lastSlashIndex = findCommandSlashIndex(beforeCursor);
     if (lastSlashIndex === -1) return [];
 
     const afterSlash = beforeCursor.slice(lastSlashIndex);
@@ -92,18 +88,21 @@ export class ArgumentCompleter implements Completer {
       : afterSlash.slice(1, firstSpace)).toLowerCase();
     const afterCommand = firstSpace === -1 ? '' : afterSlash.slice(firstSpace + 1);
 
-    // Get argument definitions for this command
-    // 获取此命令的参数定义
-    const argumentDefs = COMMAND_ARGUMENTS.get(commandName);
-    if (!argumentDefs || argumentDefs.length === 0) {
-      return [];
-    }
-
     // Determine which argument position we're at
     // 确定当前在哪个参数位置
     const argParts = afterCommand ? afterCommand.split(/\s+/) : [''];
     const argIndex = argParts.length - 1;
     const currentPartial = (argParts[argIndex] ?? '').toLowerCase();
+
+    // Get argument definitions for this command
+    // 获取此命令的参数定义
+    const staticArgs = COMMAND_ARGUMENTS.get(commandName);
+    const argumentDefs = (staticArgs && staticArgs.length > 0)
+      ? staticArgs
+      : getCommandArguments(commandName, currentPartial);
+    if (!argumentDefs || argumentDefs.length === 0) {
+      return [];
+    }
 
     // Get arguments that haven't been used yet
     // 获取尚未使用的参数
@@ -117,9 +116,14 @@ export class ArgumentCompleter implements Completer {
 
     // Filter by current partial input
     // 通过当前部分输入过滤
+    // Skip redundant filter for two-stage provider/model completions —
+    // getModelArgs already filtered by the model partial, and the full
+    // currentPartial (e.g. "anthropic/ha") is not a substring of the
+    // full arg name (e.g. "anthropic/claude-haiku-4-5").
     return availableArgs
       .filter((arg) => {
         if (!currentPartial) return true;
+        if (arg.name.includes('/')) return true;
         return arg.name.toLowerCase().includes(currentPartial);
       })
       .map((arg) => ({

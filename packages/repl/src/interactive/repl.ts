@@ -27,12 +27,14 @@ import {
   KodaXRateLimitError,
   KodaXProviderError,
   KODAX_DEFAULT_PROVIDER,
+  registerCustomProviders,
+  getCustomProvider,
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from '../permission/types.js';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashWriteCommand, isBashReadCommand } from '../permission/permission.js';
-import { getGitRoot, loadConfig, getProviderModel, KODAX_VERSION } from '../common/utils.js';
+import { getGitRoot, loadConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
 import {
   InteractiveContext,
   InteractiveMode,
@@ -131,7 +133,14 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   // Load config (priority: CLI args > config file > defaults) - 加载配置（优先级：CLI参数 > 配置文件 > 默认值）
   const config = loadConfig();
+
+  // Initialize custom providers from config - 从配置初始化自定义 Provider
+  if (config.customProviders?.length) {
+    registerCustomProviders(config.customProviders);
+  }
+
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
+  const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
   const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =
@@ -144,6 +153,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // Current config state - 当前配置状态
   let currentConfig: CurrentConfig = {
     provider: initialProvider,
+    model: initialModel,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
     permissionMode: initialPermissionMode,
@@ -169,8 +179,8 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   // Load compaction config for banner display
   const compactionConfig = await loadCompactionConfig(gitRoot ?? undefined);
-  const { getProvider } = await import('@kodax/coding');
-  const providerInstance = getProvider(currentConfig.provider);
+  const { resolveProvider } = await import('@kodax/coding');
+  const providerInstance = resolveProvider(currentConfig.provider);
   const effectiveContextWindow = compactionConfig.contextWindow
     ?? providerInstance.getContextWindow?.()
     ?? 200000;
@@ -214,14 +224,14 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   });
 
   // Initialize status bar (if terminal supports) - 初始化状态栏 (如果终端支持)
-  const model = getProviderModel(currentConfig.provider) ?? currentConfig.provider;
+  const effectiveModel = currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider;
   let statusBar: StatusBar | null = null;
   if (supportsStatusBar()) {
     statusBar = new StatusBar(createStatusBarState(
       context.sessionId,
       currentConfig.permissionMode,
       currentConfig.provider,
-      model,
+      effectiveModel,
       currentConfig.reasoningMode,
     ));
   }
@@ -354,12 +364,24 @@ Keyboard Shortcuts:
       }
       console.log();
     },
-    switchProvider: (provider: string) => {
+    switchProvider: (provider: string, model?: string) => {
       currentConfig.provider = provider;
+      currentConfig.model = model;
       currentOptions.provider = provider;
+      currentOptions.model = model;
+      let newModel = model ?? getProviderModel(provider);
+      if (!newModel) {
+        // Fallback for custom providers - 自定义 Provider 的后备
+        try {
+          const custom = getCustomProvider(provider);
+          newModel = custom?.getModel() ?? provider;
+        } catch {
+          newModel = provider;
+        }
+      }
       statusBar?.update({
         provider,
-        model: getProviderModel(provider) ?? provider,
+        model: newModel,
       });
     },
     setThinking: (enabled: boolean) => {
@@ -397,6 +419,7 @@ Keyboard Shortcuts:
       return {
         ...currentOptions,
         provider: currentConfig.provider,
+        model: currentConfig.model,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
         events: {
@@ -800,7 +823,7 @@ Keyboard Shortcuts:
 function getPrompt(mode: string, config: CurrentConfig, planMode: boolean): string {
   const theme = getCurrentTheme();
   const modeColor = mode === 'plan' ? chalk.hex(theme.colors.warning) : chalk.hex(theme.colors.success);
-  const model = getProviderModel(config.provider) ?? config.provider;
+  const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
   const width = getTerminalWidth();
 
   // Decide prompt detail level based on terminal width - 根据终端宽度决定提示符详细程度
@@ -1080,7 +1103,7 @@ function extractTitle(messages: KodaXMessage[]): string {
 // Print startup Banner (using theme colors) - 打印启动 Banner (使用主题颜色)
 function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean }, agentsFiles?: AgentsFile[]): void {
   const theme = getCurrentTheme();
-  const model = getProviderModel(config.provider) ?? config.provider;
+  const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
 
   // KODAX block character logo - KODAX 方块字符 logo
   const logo = `

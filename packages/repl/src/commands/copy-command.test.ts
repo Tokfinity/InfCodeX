@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import clipboard from 'clipboardy';
 import { copyCommand } from './copy-command.js';
+import { extractLastAssistantText } from '../ui/utils/message-utils.js';
 
 vi.mock('clipboardy', () => ({
   default: {
@@ -36,6 +37,37 @@ describe('copyCommand', () => {
     );
 
     expect(clipboard.write).toHaveBeenCalledWith('latest answer');
+  });
+
+  it('uses the same assistant text normalization as the UI history', async () => {
+    const context = {
+      messages: [
+        { role: 'user', content: 'hello' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'hidden' },
+            { type: 'text', text: '## 验证' },
+            { type: 'text', text: '' },
+            { type: 'text', text: '```bash' },
+            { type: 'text', text: 'mysql -h 127.0.0.1 -P 13306' },
+            { type: 'text', text: '```' },
+            { type: 'text', text: '' },
+            { type: 'text', text: '**关键**：最后一行必须能显示' },
+          ],
+        },
+      ],
+    };
+    const expected = extractLastAssistantText(context.messages as never);
+
+    await copyCommand.handler(
+      [],
+      context as never,
+      {} as never,
+      {} as never
+    );
+
+    expect(clipboard.write).toHaveBeenCalledWith(expected);
   });
 
   it('does nothing when there is no assistant message', async () => {

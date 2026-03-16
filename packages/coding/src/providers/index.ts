@@ -17,6 +17,7 @@ export {
   getProviderConfiguredReasoningCapability,
   isProviderConfigured,
   getProviderModel,
+  getProviderModels,
   getProviderList,
   isProviderName,
   buildReasoningOverrideKey,
@@ -25,5 +26,15 @@ export {
   clearReasoningOverride,
   reasoningCapabilityToOverride,
   reasoningOverrideToCapability,
+  createCustomProvider,
+  registerCustomProviders,
+  getCustomProvider,
+  isCustomProviderName,
+  getCustomProviderNames,
+  getCustomProviderList,
+  getCustomProviderModels,
+  resolveProvider,
+  isKnownProvider,
+  getAvailableProviderNames,
 } from '@kodax/ai';
 export type { ProviderName } from '@kodax/ai';

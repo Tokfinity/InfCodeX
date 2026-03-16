@@ -148,7 +148,7 @@ function resolveInitialReasoningMode(
  */
 const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compactionInfo }) => {
   const theme = getTheme("dark");
-  const model = getProviderModel(config.provider) ?? config.provider;
+  const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
   const reasoningCapability = getProviderReasoningCapability(config.provider);
   const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
   const terminalWidth = process.stdout.columns ?? 80;
@@ -335,7 +335,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const { addHistoryItem, clearHistory: clearUIHistory, setSessionId } = useUIActions();
 
   // Get terminal dimensions for fixed layout - 获取终端尺寸用于固定布局
-  const terminalHeight = stdout.rows || 24;
   const terminalWidth = stdout.columns || 80;
 
   // Issue 079: Limit visible history to last 20 conversation rounds
@@ -1314,9 +1313,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             }
             console.log();
           },
-          switchProvider: (provider: string) => {
-            setCurrentConfig((prev) => ({ ...prev, provider }));
+          switchProvider: (provider: string, model?: string) => {
+            setCurrentConfig((prev) => ({ ...prev, provider, model }));
             currentOptionsRef.current.provider = provider;
+            currentOptionsRef.current.model = model;
           },
           setThinking: (enabled: boolean) => {
             const reasoningMode: KodaXReasoningMode = enabled ? 'auto' : 'off';
@@ -1353,6 +1353,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           createKodaXOptions: () => ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
+            model: currentConfig.model,
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
             events: createStreamingEvents(), // Include streaming events for /project commands
@@ -1953,7 +1954,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             sessionId={context.sessionId}
             permissionMode={currentConfig.permissionMode}
             provider={currentConfig.provider}
-            model={getProviderModel(currentConfig.provider) ?? currentConfig.provider}
+            model={currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider}
             currentTool={streamingState.currentTool}
             thinking={currentConfig.thinking}
             reasoningMode={currentConfig.reasoningMode}
@@ -2107,10 +2108,17 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // Load config
   const { loadConfig, getGitRoot } = await import("../common/utils.js");
   const { loadCompactionConfig } = await import("../common/compaction-config.js");
-  const { getProvider } = await import("@kodax/coding");
+  const { resolveProvider, registerCustomProviders } = await import("@kodax/coding");
 
   const config = loadConfig();
+
+  // Initialize custom providers from config - 从配置初始化自定义 Provider
+  if (config.customProviders?.length) {
+    registerCustomProviders(config.customProviders);
+  }
+
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
+  const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
   const initialThinking = initialReasoningMode !== 'off';
   // Load permission mode from config file (not from CLI options)
@@ -2120,6 +2128,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
 
   const currentConfig: CurrentConfig = {
     provider: initialProvider,
+    model: initialModel,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
     permissionMode: initialPermissionMode,
@@ -2135,7 +2144,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   let compactionInfo: { contextWindow: number; triggerPercent: number; enabled: boolean } | undefined;
   try {
     const compConfig = await loadCompactionConfig(gitRoot);
-    const providerInstance = getProvider(initialProvider);
+    const providerInstance = resolveProvider(initialProvider);
     const effectiveContextWindow = compConfig.contextWindow
       ?? providerInstance.getContextWindow?.()
       ?? 200000;

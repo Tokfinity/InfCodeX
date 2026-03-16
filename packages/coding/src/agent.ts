@@ -17,7 +17,7 @@ import {
 } from './types.js';
 import type { KodaXMessage } from '@kodax/ai';
 import { KodaXClient } from './client.js';
-import { getProvider } from './providers/index.js';
+import { resolveProvider } from './providers/index.js';
 import { executeTool, KODAX_TOOLS } from './tools/index.js';
 import { buildSystemPrompt } from './prompts/index.js';
 import { generateSessionId, extractTitleFromMessages } from './session.js';
@@ -290,7 +290,7 @@ export async function runKodaX(
   options: KodaXOptions,
   prompt: string
 ): Promise<KodaXResult> {
-  const provider = getProvider(options.provider);
+  const provider = resolveProvider(options.provider);
   if (!provider.isConfigured()) {
     throw new Error(`Provider "${options.provider}" not configured. Set ${options.provider.toUpperCase().replace('-', '_')}_API_KEY`);
   }
@@ -525,7 +525,7 @@ export async function runKodaX(
                 resetIdleTimer(); // 重试限制时也重置，因为底层 Provider 会自己等待
                 events.onProviderRateLimit?.(attempt, max, delay);
               },
-              modelOverride: options.modelOverride,
+              modelOverride: options.modelOverride ?? options.model,
               signal: retrySignal,
             }, retrySignal);
           } catch (e) {

@@ -6,6 +6,7 @@
 
 import {
   KodaXProviderConfig,
+  KodaXModelDescriptor,
   KodaXMessage,
   KodaXToolDefinition,
   KodaXProviderStreamOptions,
@@ -47,6 +48,18 @@ export abstract class KodaXBaseProvider {
 
   getModel(): string {
     return this.config.model;
+  }
+
+  getAvailableModels(): string[] {
+    if (!this.config.models?.length) return [this.config.model];
+    return [...new Set([this.config.model, ...this.config.models.map(m => m.id)])];
+  }
+
+  getModelDescriptor(modelId?: string): KodaXModelDescriptor | undefined {
+    if (!modelId || modelId === this.config.model) {
+      return { id: this.config.model };
+    }
+    return this.config.models?.find(m => m.id === modelId);
   }
 
   getBaseUrl(): string | undefined {
