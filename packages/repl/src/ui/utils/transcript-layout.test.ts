@@ -72,6 +72,19 @@ describe("transcript-layout", () => {
     expect(text).toContain("read_file");
   });
 
+  it("shows thinking char counts while the model is still thinking", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 60,
+      isLoading: true,
+      isThinking: true,
+      thinkingCharCount: 42,
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("(42 chars)...");
+  });
+
   it("formats tool rows with progress and errors", () => {
     const rows = buildTranscriptRows({
       items: [

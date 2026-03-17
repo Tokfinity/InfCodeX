@@ -821,6 +821,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const createStreamingEvents = useCallback((): import("@kodax/coding").KodaXEvents => ({
     onThinkingDelta: (text: string) => {
       // The UI layer stores thinking content for display.
+      appendThinkingChars(text.length);
       appendThinkingContent(text);
     },
     onThinkingEnd: (_thinking: string) => {
@@ -919,9 +920,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // This implicitly clears the text buffer so we don't double-render the old streaming 
       // content simultaneously with the new static HistoryItem!
       startNewIteration(iter);
-      if (iter === 1) {
-        startThinking();
-      }
+      startThinking();
 
       if (iter > 1) {
         // Issue 076 fix: Save previous iteration content to persistent history BEFORE clearing
@@ -1114,7 +1113,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
       setLiveTokenCount(info.tokenCount);
     },
-  }), [appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting, addHistoryItem]);
+  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting, addHistoryItem]);
 
   // Helper function to show confirmation dialog
 
@@ -2043,6 +2042,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               iterationHistory={streamingState.iterationHistory}
               currentIteration={streamingState.currentIteration}
               isCompacting={streamingState.isCompacting}
+              viewportRows={viewportBudget.messageRows}
               viewportWidth={terminalWidth}
             />
           </Box>

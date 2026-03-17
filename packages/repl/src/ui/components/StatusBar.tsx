@@ -4,6 +4,7 @@
 
 import React, { useMemo } from 'react';
 import { Box, Text } from 'ink';
+import { Spinner } from './LoadingIndicator.js';
 import { getTheme } from '../themes/index.js';
 import type { StatusBarProps } from '../types.js';
 
@@ -97,6 +98,41 @@ function formatToolAction(currentTool: string): string {
   return currentTool;
 }
 
+function formatBusyStatus({
+  currentTool,
+  thinkingCharCount,
+  toolInputCharCount,
+  toolInputContent,
+  isCompacting,
+}: Pick<
+  StatusBarProps,
+  'currentTool' | 'thinkingCharCount' | 'toolInputCharCount' | 'toolInputContent' | 'isCompacting'
+>): string | undefined {
+  if (isCompacting) {
+    return 'Compacting';
+  }
+
+  if (currentTool) {
+    const actionName = formatToolAction(currentTool);
+    if (toolInputCharCount && toolInputCharCount > 0) {
+      return `${actionName} (${toolInputCharCount} chars)`;
+    }
+    if (toolInputContent) {
+      const preview = toolInputContent.length > 24
+        ? `${toolInputContent.slice(0, 24)}...`
+        : toolInputContent;
+      return `${actionName} (${preview})`;
+    }
+    return actionName;
+  }
+
+  if (thinkingCharCount && thinkingCharCount > 0) {
+    return `Thinking (${thinkingCharCount} chars)`;
+  }
+
+  return undefined;
+}
+
 export function getStatusBarText({
   sessionId,
   permissionMode,
@@ -108,6 +144,9 @@ export function getStatusBarText({
   reasoningMode = thinking ? 'auto' : 'off',
   reasoningCapability,
   isCompacting,
+  thinkingCharCount,
+  toolInputCharCount,
+  toolInputContent,
   currentIteration,
   maxIter,
   contextUsage,
@@ -125,12 +164,14 @@ export function getStatusBarText({
     parts.push(`${ITERATION_SYMBOL} ${currentIteration}/${maxIter}`);
   }
 
-  let toolStr = '';
-  if (isCompacting) {
-    toolStr = `${SPINNER_SYMBOL} Compacting`;
-  } else if (currentTool) {
-    toolStr = `${SPINNER_SYMBOL} ${formatToolAction(currentTool)}`;
-  }
+  const busyStatus = formatBusyStatus({
+    currentTool,
+    thinkingCharCount,
+    toolInputCharCount,
+    toolInputContent,
+    isCompacting,
+  });
+  const toolStr = busyStatus ? `${SPINNER_SYMBOL} ${busyStatus}` : '';
   parts.push(`${sessionId}${toolStr ? ` ${toolStr}` : ''}`);
   parts.push(`${provider}/${model}`);
 
@@ -202,21 +243,30 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }, [currentIteration, maxIter]);
 
   // 5: SessionID + Spinner Tool status
-  // e.g., "abcd123 ? Bash"
+  // e.g., "abcd123 <spinner> Bash (12 chars)"
   const sessionToolDisplay = useMemo(() => {
-    let toolStr = '';
-    if (isCompacting) {
-      toolStr = `${SPINNER_SYMBOL} Compacting`;
-    } else if (currentTool) {
-      const actionName = formatToolAction(currentTool);
-      toolStr = `${SPINNER_SYMBOL} ${actionName}`;
-    }
+    const busyStatus = formatBusyStatus({
+      currentTool,
+      thinkingCharCount,
+      toolInputCharCount,
+      toolInputContent,
+      isCompacting,
+    });
+
     return (
-      <Text dimColor>
-        {sessionId}{toolStr ? ` ${toolStr}` : ''}
-      </Text>
+      <Box>
+        <Text dimColor>{sessionId}</Text>
+        {busyStatus && (
+          <>
+            <Text dimColor> </Text>
+            <Spinner color={theme.colors.warning} theme={theme} />
+            <Text dimColor> </Text>
+            <Text dimColor>{busyStatus}</Text>
+          </>
+        )}
+      </Box>
     );
-  }, [sessionId, isCompacting, currentTool]);
+  }, [sessionId, currentTool, thinkingCharCount, toolInputCharCount, toolInputContent, isCompacting, theme]);
 
   // 6: Provider/Model
   const providerModelDisplay = <Text color={theme.colors.secondary}>{provider}/{model}</Text>;
