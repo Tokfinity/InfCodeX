@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3] - 2026-03-17
+
+### Added
+- **Skill Creator Eval Pipeline**: Full end-to-end skill evaluation workflow with `init-skill`, `run-eval`, `grade-evals`, `analyze-benchmark`, and `compare-runs` scripts; expert agent prompts in `agents/` (grader, analyzer, comparator)
+- **CLI `skill` Subcommands Expanded**: `init`, `eval`, `grade`, `analyze`, `compare` added to `kodax skill`; per-subcommand help via `printSkillSubcommandHelp`
+- **StatusBar Real-Time Busy Indicator**: Animated `<Spinner>` with live char counts for thinking and tool input (e.g. "Thinking (42 chars)", "Bash (12 chars)"); `formatBusyStatus` helper for unified display logic
+- **Thinking Char Tracking**: `appendThinkingChars(text.length)` accumulates character count during `onThinkingDelta`, displayed in transcript and status bar
+- **MessageList viewportRows Prop**: Viewport budget awareness passed through to `MessageList` component
+
+### Fixed
+- **CJK Cursor Placement**: New `splitAtVisualColumn` and `sliceByCodePoints` utilities correctly handle wide (CJK) characters in cursor positioning and text rendering
+- **Word Wrap Tracking**: `chunkEndInLogical` variable added to `calculateVisualLayout` ensuring `currentPosInLogical` advances by actual logical positions, not by chunk length after wide-char reordering
+- **Thinking Reset on Multi-Iteration**: `startThinking()` now called on every iteration instead of only iteration 1, preventing stale thinking state across iterations
+
+---
+
 ## [0.6.2] - 2026-03-17
 
 ### Added
