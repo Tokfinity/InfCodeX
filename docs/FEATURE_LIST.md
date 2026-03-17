@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-16_
+_Last Updated: 2026-03-17_
 
 ---
 
@@ -51,7 +51,7 @@ _Last Updated: 2026-03-16_
 | 012 | Enhancement | Completed | High | TUI 自动补全增强 | v0.5.0 | v0.5.13 | [Design](features/v0.5.0.md#012) | 2026-03-02 | 2026-03-05 | 2026-03-05 |
 | 013 | Refactor | Completed | High | Command System 2.0 | v0.6.0 | - | [Design](features/v0.6.0.md#013) | 2026-03-03 | 2026-03-13 | 2026-03-16 |
 | 014 | Refactor | Completed | High | Project Mode Enhancement | v0.5.20 | v0.5.20 | [Design](features/v0.5.20.md) | 2026-03-07 | 2026-03-07 | 2026-03-07 |
-| 015 | Enhancement | InProgress | High | Project Mode 2.0 - AI-Driven Development Workflow | v0.6.0 | - | [Design](features/v0.6.0.md#015) | 2026-03-07 | 2026-03-17 | - |
+| 015 | Enhancement | Completed | High | Project Mode 2.0 - AI-Driven Development Workflow | v0.6.0 | - | [Design](features/v0.6.0.md#015) | 2026-03-07 | 2026-03-17 | 2026-03-17 |
 | 016 | New | Completed | High | CLI-Based OAuth Providers | v0.5.22 | v0.5.22 | [Design](features/v0.5.22.md) | 2026-03-08 | 2026-03-08 | 2026-03-08 |
 | 017 | Enhancement | Completed | High | 运行时用户输入插队 | v0.6.0 | - | [Design](features/v0.6.0.md#017) | 2026-03-11 | 2026-03-17 | 2026-03-17 |
 | 018 | New | Planned | High | CodeWiki - 项目知识库系统 | v0.8.0 | - | [Design](features/v0.8.0.md#018) | 2026-03-11 | - | - |
@@ -99,7 +99,7 @@ _Last Updated: 2026-03-16_
 
 ---
 
-### 015: Project Mode 2.0 - AI-Driven Development Workflow (IN PROGRESS)
+### 015: Project Mode 2.0 - AI-Driven Development Workflow (COMPLETED)
 
 ---
 
@@ -866,19 +866,25 @@ interface SessionEntryBase {
 
 ---
 
-### 015: Project Mode 2.0 - AI-Driven Development Workflow (IN PROGRESS)
+### 015: Project Mode 2.0 - AI-Driven Development Workflow (COMPLETED)
 - **Category**: Enhancement
-- **Status**: InProgress
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.0
 - **Released**: -
 - **Design**: [v0.6.0.md#015](features/v0.6.0.md#015)
 - **Created**: 2026-03-07
 - **Started**: 2026-03-17
-- **Completed**: -
+- **Completed**: 2026-03-17
 
 **Description**:
 将 Project 模式打造为 KodaX 的核心特色，提供完整的 AI-Driven 开发工作流。
+
+**Current Progress (2026-03-17)**:
+- `/project quality` 和 `/project status "<question>"` 已提供可展示的质量闭环与引导式分析能力。
+- `/project brainstorm` 已支持启动、继续、结束多轮讨论，并把讨论历史持久化到 `.kodax/projects/<session>/brainstorm/`。
+- `/project plan` 已支持按 feature index 或自由主题生成结构化实施计划，并写入 `.kodax/session_plan.md`。
+- 对于 `v0.6.0`，该 feature 以“核心 workflow 完整可用”为完成标准；Graphviz/DAG、brainstorm 直接生成 feature、自动回退编排等更重增强项后移到后续 feature。
 
 **Core Capabilities**:
 1. **多轮头脑风暴** (Brainstorming Mode)
@@ -918,9 +924,9 @@ interface SessionEntryBase {
 ---
 
 ## Summary
-- Total: 21 (3 Planned, 1 In Progress, 17 Completed)
+- Total: 21 (3 Planned, 0 In Progress, 18 Completed)
 - By Priority: Critical: 3, High: 16, Medium: 2, Low: 0
 - Current Version: v0.5.42
-- Next Release (v0.6.0): 5 features (013, 015, 017, 020, 021), 4 completed and 1 in progress
+- Next Release (v0.6.0): 5 features (013, 015, 017, 020, 021), all 5 completed
 - Future Releases: v0.7.0 (019), v0.8.0 (007, 018)
 - Highest Priority Planned: 007 - 主题系统完善 (Medium), 018 - CodeWiki - 项目知识库系统 (High), 019 - Session Tree & Rollback System (High)

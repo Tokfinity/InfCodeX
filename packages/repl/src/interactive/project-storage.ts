@@ -1,7 +1,8 @@
 /**
- * KodaX 项目存储管理
+ * Project storage for /project workflows.
  *
- * 管理 feature_list.json、PROGRESS.md 和会话计划文件
+ * It owns the project management artifacts created in the current workspace
+ * and keeps file IO in one place so command handlers stay thin.
  */
 
 import * as path from 'path';
@@ -17,28 +18,37 @@ import {
   calculateStatistics,
   getNextPendingIndex,
 } from './project-state.js';
+import type { BrainstormSession } from './project-brainstorm.js';
 
-/**
- * 项目存储管理类
- *
- * 封装对项目文件的读写操作
- */
 export class ProjectStorage {
   private projectDir: string;
   private featuresPath: string;
   private progressPath: string;
   private sessionPlanPath: string;
+  private brainstormIndexPath: string;
+  private brainstormProjectsPath: string;
 
   constructor(projectDir: string) {
     this.projectDir = projectDir;
     this.featuresPath = path.join(projectDir, KODAX_FEATURES_FILE);
     this.progressPath = path.join(projectDir, KODAX_PROGRESS_FILE);
     this.sessionPlanPath = path.join(projectDir, '.kodax', 'session_plan.md');
+    this.brainstormIndexPath = path.join(projectDir, '.kodax', 'brainstorm-active.json');
+    this.brainstormProjectsPath = path.join(projectDir, '.kodax', 'projects');
   }
 
-  /**
-   * 检查项目是否存在
-   */
+  private getBrainstormSessionDir(sessionId: string): string {
+    return path.join(this.brainstormProjectsPath, sessionId, 'brainstorm');
+  }
+
+  private getBrainstormSessionPath(sessionId: string): string {
+    return path.join(this.getBrainstormSessionDir(sessionId), 'session.json');
+  }
+
+  private getBrainstormTranscriptPath(sessionId: string): string {
+    return path.join(this.getBrainstormSessionDir(sessionId), 'transcript.md');
+  }
+
   async exists(): Promise<boolean> {
     try {
       await fs.access(this.featuresPath);
@@ -48,131 +58,192 @@ export class ProjectStorage {
     }
   }
 
-  /**
-   * 加载功能列表
-   */
   async loadFeatures(): Promise<FeatureList | null> {
     try {
       const content = await fs.readFile(this.featuresPath, 'utf-8');
-      const data = JSON.parse(content);
-      return data as FeatureList;
+      return JSON.parse(content) as FeatureList;
     } catch (error) {
-      // 文件不存在是正常情况（项目未初始化）
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null;
       }
-      // 其他错误（权限、格式等）应该记录日志
       console.error(`[KodaX] Failed to load ${this.featuresPath}:`, error);
       return null;
     }
   }
 
-  /**
-   * 保存功能列表
-   */
   async saveFeatures(data: FeatureList): Promise<void> {
     await fs.writeFile(
       this.featuresPath,
       JSON.stringify(data, null, 2),
-      'utf-8'
+      'utf-8',
     );
   }
 
-  /**
-   * 读取进度文件
-   */
   async readProgress(): Promise<string> {
     try {
       return await fs.readFile(this.progressPath, 'utf-8');
     } catch (error) {
-      // 文件不存在是正常情况
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return '';
       }
-      // 其他错误应该记录日志
       console.error(`[KodaX] Failed to read ${this.progressPath}:`, error);
       return '';
     }
   }
 
-  /**
-   * 追加到进度文件
-   */
   async appendProgress(content: string): Promise<void> {
     const existing = await this.readProgress();
-    const newContent = existing ? existing + '\n' + content : content;
+    const newContent = existing ? `${existing}\n${content}` : content;
     await fs.writeFile(this.progressPath, newContent, 'utf-8');
   }
 
-  /**
-   * 读取会话计划
-   */
   async readSessionPlan(): Promise<string> {
     try {
       return await fs.readFile(this.sessionPlanPath, 'utf-8');
     } catch (error) {
-      // 文件不存在是正常情况
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return '';
       }
-      // 其他错误应该记录日志
       console.error(`[KodaX] Failed to read ${this.sessionPlanPath}:`, error);
       return '';
     }
   }
 
-  /**
-   * 写入会话计划
-   */
   async writeSessionPlan(content: string): Promise<void> {
-    // 确保 .kodax 目录存在
     const kodaxDir = path.dirname(this.sessionPlanPath);
     await fs.mkdir(kodaxDir, { recursive: true });
     await fs.writeFile(this.sessionPlanPath, content, 'utf-8');
   }
 
-  /**
-   * 获取下一个待完成功能
-   */
+  async saveBrainstormSession(
+    session: BrainstormSession,
+    transcript: string,
+  ): Promise<void> {
+    const sessionDir = this.getBrainstormSessionDir(session.id);
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      this.getBrainstormSessionPath(session.id),
+      JSON.stringify(session, null, 2),
+      'utf-8',
+    );
+    await fs.writeFile(
+      this.getBrainstormTranscriptPath(session.id),
+      transcript,
+      'utf-8',
+    );
+    if (session.status === 'active') {
+      await fs.writeFile(
+        this.brainstormIndexPath,
+        JSON.stringify(
+          {
+            sessionId: session.id,
+            topic: session.topic,
+            updatedAt: session.updatedAt,
+            status: session.status,
+          },
+          null,
+          2,
+        ),
+        'utf-8',
+      );
+    } else {
+      await this.clearActiveBrainstormSession();
+    }
+  }
+
+  async loadBrainstormSession(sessionId: string): Promise<BrainstormSession | null> {
+    try {
+      const content = await fs.readFile(this.getBrainstormSessionPath(sessionId), 'utf-8');
+      return JSON.parse(content) as BrainstormSession;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      console.error(`[KodaX] Failed to load brainstorm session ${sessionId}:`, error);
+      return null;
+    }
+  }
+
+  async readBrainstormTranscript(sessionId: string): Promise<string> {
+    try {
+      return await fs.readFile(this.getBrainstormTranscriptPath(sessionId), 'utf-8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return '';
+      }
+      console.error(`[KodaX] Failed to read brainstorm transcript for ${sessionId}:`, error);
+      return '';
+    }
+  }
+
+  async loadActiveBrainstormSession(): Promise<BrainstormSession | null> {
+    try {
+      const content = await fs.readFile(this.brainstormIndexPath, 'utf-8');
+      const data = JSON.parse(content) as { sessionId?: string };
+      if (!data.sessionId) {
+        return null;
+      }
+      return await this.loadBrainstormSession(data.sessionId);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      console.error('[KodaX] Failed to load active brainstorm session:', error);
+      return null;
+    }
+  }
+
+  async clearActiveBrainstormSession(): Promise<void> {
+    try {
+      await fs.unlink(this.brainstormIndexPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   async getNextPendingFeature(): Promise<{ feature: ProjectFeature; index: number } | null> {
     const data = await this.loadFeatures();
-    if (!data || !data.features.length) return null;
+    if (!data || !data.features.length) {
+      return null;
+    }
 
     const index = getNextPendingIndex(data.features);
-    if (index === -1) return null;
+    if (index === -1) {
+      return null;
+    }
 
     const feature = data.features[index];
-    if (!feature) return null;
+    if (!feature) {
+      return null;
+    }
+
     return { feature, index };
   }
 
-  /**
-   * 获取指定索引的功能
-   */
   async getFeatureByIndex(index: number): Promise<ProjectFeature | null> {
     const data = await this.loadFeatures();
-    if (!data || index < 0 || index >= data.features.length) return null;
+    if (!data || index < 0 || index >= data.features.length) {
+      return null;
+    }
     return data.features[index] ?? null;
   }
 
-  /**
-   * 更新功能状态
-   */
   async updateFeatureStatus(
     index: number,
-    updates: Partial<ProjectFeature>
+    updates: Partial<ProjectFeature>,
   ): Promise<boolean> {
     const data = await this.loadFeatures();
-    if (!data || index < 0 || index >= data.features.length) return false;
+    if (!data || index < 0 || index >= data.features.length) {
+      return false;
+    }
 
     data.features[index] = { ...data.features[index], ...updates };
     await this.saveFeatures(data);
     return true;
   }
 
-  /**
-   * 获取项目统计信息
-   */
   async getStatistics(): Promise<ProjectStatistics> {
     const data = await this.loadFeatures();
     if (!data) {
@@ -181,69 +252,58 @@ export class ProjectStorage {
     return calculateStatistics(data.features);
   }
 
-  /**
-   * 获取所有功能列表
-   */
   async listFeatures(): Promise<ProjectFeature[]> {
     const data = await this.loadFeatures();
     return data?.features ?? [];
   }
 
-  /**
-   * 获取功能路径信息
-   */
   getPaths(): {
     features: string;
     progress: string;
     sessionPlan: string;
+    brainstormIndex: string;
+    brainstormProjects: string;
   } {
     return {
       features: this.featuresPath,
       progress: this.progressPath,
       sessionPlan: this.sessionPlanPath,
+      brainstormIndex: this.brainstormIndexPath,
+      brainstormProjects: this.brainstormProjectsPath,
     };
   }
 
-  /**
-   * 清空进度文件
-   */
   async clearProgress(): Promise<void> {
     await fs.writeFile(this.progressPath, '', 'utf-8');
   }
 
-  /**
-   * 安全删除所有项目管理文件（只删除 3 个特定文件）
-   */
   async deleteProjectManagementFiles(): Promise<{ deleted: number; failed: number }> {
     let deleted = 0;
     let failed = 0;
 
-    // 1. 删除 feature_list.json
     try {
       await fs.unlink(this.featuresPath);
       deleted++;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         failed++;
       }
     }
 
-    // 2. 删除 PROGRESS.md
     try {
       await fs.unlink(this.progressPath);
       deleted++;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         failed++;
       }
     }
 
-    // 3. 只删除 .kodax/session_plan.md，不删除 .kodax/ 文件夹！
     try {
       await fs.unlink(this.sessionPlanPath);
       deleted++;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         failed++;
       }
     }

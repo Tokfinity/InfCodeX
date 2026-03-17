@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-03-17
+
+### Added
+- **Command System 2.0**: User-level `.md` command file discovery (`~/.kodax/commands/` + `.kodax/commands/`), generic `UIContext` interface for select/confirm/input, and LLM-callable user interaction tools (`ask_user`, `confirm_action`, `get_input`)
+- **Project Mode 2.0 - AI-Driven Workflow**: Brainstorm, plan, and quality subcommands for `/project`
+  - `project-brainstorm.ts`: Session-based brainstorming with AI-powered facilitator and fallback mode
+  - `project-planner.ts`: Structured plan generation with phases, tasks, estimates, and risk tracking
+  - `project-quality.ts`: Automated quality checks with scoring across completeness, testing, documentation, and architecture dimensions
+- **Streaming Context (`StreamingContext`)**: React context provider for streaming state, enabling child components to access pending inputs, mode, and iteration without prop drilling
+- **Pending Inputs Queue**: `pending-inputs.ts` utility with `MAX_PENDING_INPUTS=5` cap; `PendingInputsIndicator` component shows queued prompt count in status bar
+- **Queued Prompt Sequence**: `queued-prompt-sequence.ts` runs queued follow-up prompts sequentially after streaming completes, with ESC-to-cancel support
+- **Project Storage Enhancement**: Brainstorm session persistence (session JSON + transcript markdown) with active session index for resume support
+
+### Changed
+- **InkREPL ESC Behavior**: Single ESC on non-empty input now no-ops instead of triggering interrupt; double-ESC still interrupts
+- **InkREPL Prompt Queue**: `canQueueFollowUps` state gates the follow-up queue; `addPendingInput`/`removeLastPendingInput`/`shiftPendingInput` wired through `StreamingContext`
+- **Project Storage JSDoc**: Comments normalized to English; internal helper methods (`getBrainstormSessionDir`, etc.) extracted
+- **Feature List Stats**: v0.6.0 progress report with all 5 features marked Completed
+
+### Fixed
+- **Viewport Budget with Pending Inputs**: `pendingInputSummary` now included in budget calculation, preventing layout jump when pending inputs appear
+
+---
+
 ## [0.5.42] - 2026-03-16
 
 ### Changed

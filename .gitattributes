@@ -1,3 +1,11 @@
-packages/repl/src/ui/components/MessageList.tsx text eol=lf
-packages/repl/src/ui/utils/transcript-layout.ts text eol=lf
-packages/repl/src/ui/utils/transcript-layout.test.ts text eol=lf
+docs/FEATURE_LIST.md text eol=lf
+docs/features/v0.6.0.md text eol=lf
+packages/repl/src/interactive/commands.ts text eol=lf
+packages/repl/src/interactive/project-commands.test.ts text eol=lf
+packages/repl/src/interactive/project-commands.ts text eol=lf
+packages/repl/src/interactive/project-storage.ts text eol=lf
+packages/repl/src/interactive/project-brainstorm.ts text eol=lf
+packages/repl/src/interactive/project-brainstorm.test.ts text eol=lf
+packages/repl/src/interactive/project-planner.ts text eol=lf
+packages/repl/src/interactive/project-planner.test.ts text eol=lf
+packages/repl/src/interactive/project-storage.test.ts text eol=lf
