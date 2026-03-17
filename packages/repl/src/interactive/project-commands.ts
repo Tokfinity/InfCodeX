@@ -25,6 +25,18 @@ import {
   formatProjectQualityReport,
   type ProjectQualityReport,
 } from './project-quality.js';
+import {
+  buildProjectPlan,
+  formatProjectPlan,
+} from './project-planner.js';
+import {
+  buildFallbackBrainstormOpening,
+  buildFallbackBrainstormReply,
+  appendBrainstormExchange,
+  completeBrainstormSession,
+  createBrainstormSession,
+  formatBrainstormTranscript,
+} from './project-brainstorm.js';
 
 // ============== 运行时状态管理 ==============
 
@@ -218,6 +230,244 @@ function extractMessageText(message: KodaXMessage | undefined): string {
   return message.content
     .map(part => ('text' in part ? part.text : '') || '')
     .join('');
+}
+
+function buildBrainstormPrompt(topic: string): string {
+  return `You are helping a developer brainstorm a new project direction.
+
+Topic:
+${topic}
+
+Respond in concise markdown and do all of the following:
+1. Reframe the problem in 1 short paragraph
+2. Ask 4-6 concrete exploratory questions
+3. List 2-3 viable implementation directions with trade-offs
+4. End with a short suggestion for what the user should answer next
+
+Do not write code yet. Stay in brainstorming mode.`;
+}
+
+function buildBrainstormContinuePrompt(transcript: string, userInput: string): string {
+  return `You are continuing an active project brainstorm.
+
+Current transcript:
+${transcript}
+
+Latest user input:
+${userInput}
+
+Respond in concise markdown and do all of the following:
+1. React directly to the new information
+2. Ask 2-4 sharper follow-up questions
+3. Call out the most important trade-off or risk now visible
+4. Suggest the best next answer the user could provide
+
+Stay in brainstorming mode. Do not write code or implementation steps yet.`;
+}
+
+async function projectBrainstorm(
+  args: string[],
+  context: InteractiveContext,
+  callbacks: CommandCallbacks,
+): Promise<void> {
+  const storage = getProjectStorage();
+  const existingSession = await storage.loadActiveBrainstormSession();
+  const options = callbacks.createKodaXOptions?.();
+  const mode = args[0]?.toLowerCase();
+
+  if (mode === 'continue' || mode === 'c' || mode === '--continue') {
+    const userInput = args.slice(1).join(' ').trim();
+    if (!existingSession) {
+      console.log(chalk.yellow('\n[No active brainstorm session]'));
+      console.log(chalk.dim('Start one with /project brainstorm "<topic>" first.\n'));
+      return;
+    }
+    if (!userInput) {
+      console.log(chalk.yellow('\n[Usage: /project brainstorm continue "<reply>"]\n'));
+      return;
+    }
+
+    let reply = buildFallbackBrainstormReply(userInput);
+    if (options) {
+      try {
+        const result = await runKodaX(
+          {
+            ...options,
+            session: {
+              ...options.session,
+              initialMessages: context.messages,
+            },
+          },
+          buildBrainstormContinuePrompt(
+            formatBrainstormTranscript(existingSession),
+            userInput,
+          ),
+        );
+
+        const content = extractMessageText(result.messages[result.messages.length - 1]).trim();
+        if (content) {
+          reply = content;
+        }
+      } catch (error) {
+        console.log(chalk.yellow('\n[Warning] AI brainstorm follow-up failed, using fallback facilitator reply instead.\n'));
+        console.log(chalk.dim(error instanceof Error ? error.message : String(error)));
+        console.log();
+      }
+    }
+
+    const updatedSession = appendBrainstormExchange(existingSession, userInput, reply);
+    await storage.saveBrainstormSession(updatedSession, formatBrainstormTranscript(updatedSession));
+
+    console.log(chalk.cyan('\n/project brainstorm - Session Continued\n'));
+    console.log(chalk.dim(`Session: ${updatedSession.id}`));
+    console.log(chalk.dim(`Topic: ${updatedSession.topic}`));
+    console.log();
+    console.log(reply);
+    console.log();
+    return;
+  }
+
+  if (mode === 'done' || mode === 'finish' || mode === 'end') {
+    if (!existingSession) {
+      console.log(chalk.yellow('\n[No active brainstorm session]\n'));
+      return;
+    }
+
+    const completedSession = completeBrainstormSession(existingSession);
+    await storage.saveBrainstormSession(completedSession, formatBrainstormTranscript(completedSession));
+
+    console.log(chalk.cyan('\n/project brainstorm - Session Completed\n'));
+    console.log(chalk.dim(`Session: ${completedSession.id}`));
+    console.log(chalk.dim(`Topic: ${completedSession.topic}`));
+    console.log();
+    console.log(chalk.dim('The transcript remains on disk and the active brainstorm pointer has been cleared.'));
+    console.log();
+    return;
+  }
+
+  const topic = args.join(' ').trim();
+  if (!topic) {
+    if (existingSession) {
+      console.log(chalk.cyan('\n/project brainstorm - Active Session\n'));
+      console.log(chalk.dim(`Session: ${existingSession.id}`));
+      console.log(chalk.dim(`Topic: ${existingSession.topic}`));
+      console.log();
+      console.log(chalk.dim('Use /project brainstorm continue "<reply>" to keep going.'));
+      console.log(chalk.dim('Use /project brainstorm done to finish the current session.\n'));
+      return;
+    }
+
+    console.log(chalk.yellow('\n[Usage: /project brainstorm "<topic>"]\n'));
+    return;
+  }
+
+  if (existingSession) {
+    console.log(chalk.yellow('\n[Active brainstorm already in progress]'));
+    console.log(chalk.dim(`Topic: ${existingSession.topic}`));
+    console.log(chalk.dim('Use /project brainstorm continue "<reply>" to keep going, or /project brainstorm done to finish it.\n'));
+    return;
+  }
+
+  let opening = buildFallbackBrainstormOpening(topic);
+  if (options) {
+    try {
+      const result = await runKodaX(
+        {
+          ...options,
+          session: {
+            ...options.session,
+            initialMessages: context.messages,
+          },
+        },
+        buildBrainstormPrompt(topic),
+      );
+
+      const content = extractMessageText(result.messages[result.messages.length - 1]).trim();
+      if (content) {
+        opening = content;
+      }
+    } catch (error) {
+      console.log(chalk.yellow('\n[Warning] AI brainstorm kickoff failed, using fallback facilitator questions instead.\n'));
+      console.log(chalk.dim(error instanceof Error ? error.message : String(error)));
+      console.log();
+    }
+  }
+
+  const session = createBrainstormSession(topic, opening);
+  await storage.saveBrainstormSession(session, formatBrainstormTranscript(session));
+
+  console.log(chalk.cyan('\n/project brainstorm - Session Started\n'));
+  console.log(chalk.dim(`Session: ${session.id}`));
+  console.log(chalk.dim(`Topic: ${session.topic}`));
+  console.log();
+  console.log(opening);
+  console.log();
+  console.log(chalk.dim('Use /project brainstorm continue "<reply>" to keep going, or /project brainstorm done to finish.'));
+  console.log();
+}
+
+async function projectPlan(args: string[]): Promise<void> {
+  const storage = getProjectStorage();
+  const rawTarget = args.join(' ').trim();
+
+  let planInput:
+    | {
+        title: string;
+        steps?: string[];
+        contextNote?: string;
+      }
+    | null = null;
+  let targetLabel = '';
+
+  if (!rawTarget) {
+    const nextFeature = await storage.getNextPendingFeature();
+    if (!nextFeature) {
+      console.log(chalk.yellow('\n[Usage: /project plan #<index> | /project plan "<topic>"]\n'));
+      return;
+    }
+
+    const title = nextFeature.feature.description || nextFeature.feature.name || `Feature #${nextFeature.index}`;
+    planInput = {
+      title,
+      steps: nextFeature.feature.steps,
+      contextNote: `Generated from feature #${nextFeature.index}.`,
+    };
+    targetLabel = `feature #${nextFeature.index}`;
+  } else {
+    const featureIndex = /^#?\d+$/.test(rawTarget) ? parseFeatureIndex(rawTarget) : null;
+    if (featureIndex !== null) {
+      const feature = await storage.getFeatureByIndex(featureIndex);
+      if (!feature) {
+        console.log(chalk.red(`\n[Feature not found: ${rawTarget}]\n`));
+        return;
+      }
+
+      planInput = {
+        title: feature.description || feature.name || `Feature #${featureIndex}`,
+        steps: feature.steps,
+        contextNote: `Generated from feature #${featureIndex}.`,
+      };
+      targetLabel = `feature #${featureIndex}`;
+    } else {
+      planInput = {
+        title: rawTarget,
+      };
+      targetLabel = 'freeform request';
+    }
+  }
+
+  const plan = buildProjectPlan(planInput);
+  const planText = formatProjectPlan(plan);
+  await storage.writeSessionPlan(planText);
+
+  console.log(chalk.cyan('\n/project plan - Planning View\n'));
+  console.log(chalk.dim(`Source: ${targetLabel}`));
+  console.log(chalk.dim(`Plan ID: ${plan.id}`));
+  console.log();
+  console.log(planText);
+  console.log();
+  console.log(chalk.dim('The latest plan has been written to .kodax/session_plan.md for status and quality analysis.'));
+  console.log();
 }
 
 function printProjectQualitySection(report: ProjectQualityReport): void {
@@ -417,7 +667,9 @@ export function printProjectHelp(): void {
   console.log(chalk.bold('Commands:'));
   console.log(chalk.cyan('  init') + chalk.dim(' <task> [--append|--overwrite]') + '  Initialize project');
   console.log(chalk.cyan('  status') + chalk.dim(' [prompt] [--features|--progress]') + '  View status');
+  console.log(chalk.cyan('  plan') + chalk.dim(' [#index|topic]') + '            Generate a structured implementation plan');
   console.log(chalk.cyan('  quality') + '                         Review workflow quality and release readiness');
+  console.log(chalk.cyan('  brainstorm') + chalk.dim(' <topic>|continue|done') + '  Multi-turn AI-guided brainstorm');
   console.log(chalk.cyan('  next') + chalk.dim(' [prompt|#index] [--no-confirm]') + '  Run next/specific feature');
   console.log(chalk.cyan('  auto') + chalk.dim(' [prompt] [--max=N|--confirm]') + '  Auto-run all');
   console.log(chalk.cyan('  edit') + chalk.dim(' [#index] <prompt>') + '  AI-driven editing');
@@ -445,6 +697,11 @@ export function printProjectHelp(): void {
   console.log();
   console.log(chalk.bold('Quick Examples:'));
   console.log(chalk.dim('  /p init "Build API" -> /p status -> /p next -> /p auto'));
+  console.log(chalk.dim('  /p plan #1'));
+  console.log(chalk.dim('  /p plan "终端多轮 brainstorm"'));
+  console.log(chalk.dim('  /p brainstorm "权限系统设计"'));
+  console.log(chalk.dim('  /p brainstorm continue "先支持 RBAC，后续再加 ABAC"'));
+  console.log(chalk.dim('  /p brainstorm done'));
   console.log(chalk.dim('  /p quality  |  /p status "what is blocking release?"'));
   console.log(chalk.dim('  /p edit #3 "mark complete"  |  /p edit "delete skipped features"'));
   console.log(chalk.dim('  /p analyze  |  /p analyze "risk review"'));
@@ -1725,9 +1982,18 @@ export async function handleProjectCommand(
       await projectStatus(args.slice(1), context, callbacks);
       break;
 
+    case 'plan':
+      await projectPlan(args.slice(1));
+      break;
+
     case 'quality':
     case 'q':
       await projectQuality(context, callbacks);
+      break;
+
+    case 'brainstorm':
+    case 'bs':
+      await projectBrainstorm(args.slice(1), context, callbacks);
       break;
 
     case 'next':
