@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-17_
+_Last Updated: 2026-03-18_
 
 ---
 
@@ -28,6 +28,7 @@ _Last Updated: 2026-03-17_
 | v0.5.34 | Released | 1 | 1/1 (100%) |
 | v0.5.37 | Released | 1 | 1/1 (100%) |
 | v0.6.0 | In Development | 6 | 5/6 (83.3%) |
+| v0.6.10 | Planned | 1 | 0/1 (0%) |
 | v0.7.0 | Planned | 1 | 0/1 (0%) |
 | v0.8.0 | Planned | 2 | 0/2 (0%) |
 | v1.0.0 | Planned | 1 | 0/1 (0%) |
@@ -61,6 +62,7 @@ _Last Updated: 2026-03-17_
 | 021 | Enhancement | Completed | High | Provider-Aware Reasoning Budget Matrix | v0.6.0 | v0.5.37 | [Design](features/v0.6.0.md#021) | 2026-03-15 | 2026-03-15 | 2026-03-15 |
 | 022 | New | InProgress | High | Multi-Agent Orchestration Layer | v0.6.0 | - | [Design](features/v0.6.0.md#022) | 2026-03-17 | 2026-03-17 | - |
 | 023 | Enhancement | Planned | High | Dual-Mode Terminal UX (Inline + Fullscreen TUI) | v1.0.0 | - | [Design](features/v1.0.0.md#023) | 2026-03-17 | - | - |
+| 024 | Enhancement | InProgress | High | Project Harness - Action-Level Verified Execution | v0.6.10 | - | [Design](features/v0.6.10.md#feature_024-project-harness---action-level-verified-execution) | 2026-03-18 | 2026-03-18 | - |
 ### 014: Project Mode Enhancement (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -995,10 +997,47 @@ Introduce an explicit dual-mode terminal UX roadmap for KodaX: a scrollback-safe
 - Mid term: split mode-agnostic state from renderer-specific code
 - Long term: reevaluate Rezi/OpenTUI/Ratatui/Bubble Tea once the interaction model is proven
 
+---
+
+### 024: Project Harness - Action-Level Verified Execution (IN PROGRESS)
+- **Category**: Enhancement
+- **Status**: InProgress
+- **Priority**: High
+- **Planned**: v0.6.10
+- **Released**: -
+- **Design**: [v0.6.10.md#feature_024-project-harness---action-level-verified-execution](features/v0.6.10.md#feature_024-project-harness---action-level-verified-execution)
+- **Created**: 2026-03-18
+- **Started**: 2026-03-18
+- **Completed**: -
+
+**Description**:
+Add an action-level verifier layer to Project Mode so `/project next` and `/project auto` become proof-carrying, automatically verified execution flows instead of relying on the agent to mark a feature complete by editing `feature_list.json`.
+
+**Goals**:
+1. Make feature completion a command-layer decision instead of an agent self-declaration
+2. Keep successful `next/auto` runs fully automatic by running checks and evidence collection automatically
+3. Pause only on real verification failures, blocked states, or repeated repair failures
+4. Split project truth, project runtime artifacts, and KodaX control-plane files into clear storage boundaries
+5. Create a stable Phase 1 base for future CodeWiki, Session Tree, and harness search work
+
+**Key Changes**:
+- Add a deterministic Project Harness around `/project next` and `/project auto`
+- Add `/project verify [#index|--last]` as the only new Phase 1 Project command
+- Move Project runtime artifacts from `.kodax/` to `.agent/project/`, while keeping `feature_list.json` and `PROGRESS.md` in the repo root
+- Remove the instruction that tells the agent to directly mark a feature as done in `feature_list.json`
+- Require command-layer automatic verification, evidence writing, and completion gating before a feature is marked done
+
+**Design Decisions**:
+- `feature_list.json` and `PROGRESS.md` remain in the repository root as project truth and user-visible handoff files
+- `.agent/project/` stores machine-owned runtime artifacts such as `session_plan.md`, brainstorm transcripts, harness config, run logs, and evidence records
+- `.kodax/` remains the KodaX control plane and should not be used for Project runtime churn
+- Automatic verification is the default path: agent implementation, automatic checks, automatic evidence, optional automatic one-time self-repair, then either verified completion or pause for review
+- Agent writes do not directly complete a feature during `next/auto`; the command layer updates completion state only after verification passes
+
 ## Summary
-- Total: 23 (4 Planned, 1 In Progress, 18 Completed)
-- By Priority: Critical: 3, High: 17, Medium: 2, Low: 0
+- Total: 24 (4 Planned, 2 In Progress, 18 Completed)
+- By Priority: Critical: 3, High: 18, Medium: 2, Low: 0
 - Current Version: v0.5.42
 - Next Release (v0.6.0): 6 features (013, 015, 017, 020, 021, 022), 5 completed, 1 in progress
-- Future Releases: v0.7.0 (019), v0.8.0 (007, 018), v1.0.0 (023)
+- Future Releases: v0.6.10 (024), v0.7.0 (019), v0.8.0 (007, 018), v1.0.0 (023)
 - Highest Priority Planned: 018 - CodeWiki - 项目知识库系统 (High), 019 - Session Tree & Rollback System (High), 023 - Dual-Mode Terminal UX (High)

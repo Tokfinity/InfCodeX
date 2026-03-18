@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -43,6 +43,8 @@ describe('project-storage brainstorm persistence', () => {
     await expect(storage.readBrainstormTranscript(session.id)).resolves.toContain(
       '# Brainstorm: Observability roadmap',
     );
+    expect(existsSync(storage.getPaths().brainstormProjects)).toBe(true);
+    expect(storage.getPaths().brainstormProjects).toContain('.agent');
   });
 
   it('clears the active brainstorm pointer without deleting the session', async () => {
@@ -77,5 +79,21 @@ describe('project-storage brainstorm persistence', () => {
 
     await expect(storage.loadActiveBrainstormSession()).resolves.toBeNull();
     await expect(storage.loadBrainstormSession(completedSession.id)).resolves.toEqual(completedSession);
+  });
+
+  it('writes session plans to .agent/project and can read the legacy .kodax plan as a fallback', async () => {
+    const storage = new ProjectStorage(tempDir);
+    const legacyPlanPath = storage.getPaths().legacySessionPlan;
+
+    mkdirSync(join(tempDir, '.kodax'), { recursive: true });
+    writeFileSync(legacyPlanPath, '# Legacy Plan\n', 'utf-8');
+
+    await expect(storage.readSessionPlan()).resolves.toContain('# Legacy Plan');
+
+    await storage.writeSessionPlan('# New Plan\n');
+
+    await expect(storage.readSessionPlan()).resolves.toContain('# New Plan');
+    expect(existsSync(storage.getPaths().sessionPlan)).toBe(true);
+    expect(storage.getPaths().sessionPlan).toContain('.agent');
   });
 });

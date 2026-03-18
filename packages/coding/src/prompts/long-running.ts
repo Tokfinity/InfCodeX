@@ -13,12 +13,12 @@ You are in a long-running task mode. At the start of EACH session, follow these 
 1. Note the Working Directory from context. Use relative paths for file operations.
 2. Read git logs (\`git log --oneline -10\`) and PROGRESS.md to understand recent work
 3. Read feature_list.json and pick ONE incomplete feature (passes: false)
-4. **Write a session plan** to .kodax/session_plan.md (see Session Planning section below)
+4. **Write a session plan** to .agent/project/session_plan.md (see Session Planning section below)
 5. Execute the plan step by step, testing as you go
 6. End session with: git commit + update PROGRESS.md with plan summary
 
 IMPORTANT Rules:
-- Only change \`passes\` field in feature_list.json. NEVER remove or modify features.
+- Do NOT edit feature_list.json directly during implementation. The project command layer owns completion updates.
 - Leave codebase in clean state after each session (no half-implemented features).
 - Work on ONE feature at a time. Do not start new features until current one is complete.
 - Always verify features work end-to-end before marking as passing.
@@ -27,7 +27,7 @@ IMPORTANT Rules:
 
 Before writing ANY code in this session, you MUST create a plan file:
 
-1. **Write plan** to \`.kodax/session_plan.md\` with this structure (directory will be created automatically):
+1. **Write plan** to \`.agent/project/session_plan.md\` with this structure (directory will be created automatically):
 
 \`\`\`markdown
 # Session Plan

@@ -329,4 +329,115 @@ describe('project commands', () => {
     expect(activeSession).toBeNull();
     expect(storedSession?.status).toBe('completed');
   });
+
+  it('marks a feature complete only after harness verification passes', async () => {
+    mockRunKodaX.mockImplementation(async () => {
+      const storage = new ProjectStorage(process.cwd());
+      await storage.appendProgress('## Session 2\n\nCompleted guided status analysis.\n');
+      return {
+        messages: [
+          {
+            role: 'assistant',
+            content: `<project-harness>{"status":"complete","summary":"Finished the feature.","evidence":["Updated PROGRESS.md"],"tests":["manual"],"changedFiles":["src/project.ts"]}</project-harness>`,
+          },
+        ],
+      };
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const storage = new ProjectStorage(tempDir);
+
+    await handleProjectCommand(
+      ['next', '--no-confirm'],
+      context,
+      createCallbacks({
+        confirm: async () => true,
+        createKodaXOptions: () =>
+          ({
+            provider: 'zhipu-coding',
+            session: {},
+          }) as never,
+      }),
+      currentConfig,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    const feature = await storage.getFeatureByIndex(1);
+    const runs = await storage.readHarnessRuns();
+    const evidence = await storage.readHarnessEvidence<{ completionSource: string }>(1);
+
+    expect(feature?.passes).toBe(true);
+    expect(feature?.completedAt).toBeTruthy();
+    expect(output).toContain('Feature completed');
+    expect(output).toContain('Project Harness Verification');
+    expect(runs).toHaveLength(1);
+    expect(evidence?.completionSource).toBe('auto_verified');
+  });
+
+  it('keeps a feature pending when the harness report is missing and exposes /project verify output', async () => {
+    mockRunKodaX.mockImplementation(async () => {
+      const storage = new ProjectStorage(process.cwd());
+      await storage.appendProgress('## Session 2\n\nMade partial progress.\n');
+      return {
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Implemented part of the feature, but forgot the verifier block.',
+          },
+        ],
+      };
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const storage = new ProjectStorage(tempDir);
+
+    await handleProjectCommand(
+      ['next', '--no-confirm'],
+      context,
+      createCallbacks({
+        confirm: async () => true,
+        createKodaXOptions: () =>
+          ({
+            provider: 'zhipu-coding',
+            session: {},
+          }) as never,
+      }),
+      currentConfig,
+    );
+
+    const feature = await storage.getFeatureByIndex(1);
+    expect(feature?.passes).not.toBe(true);
+
+    logSpy.mockClear();
+
+    await handleProjectCommand(
+      ['verify', '--last'],
+      context,
+      createCallbacks(),
+      currentConfig,
+    );
+
+    const verifyOutput = logSpy.mock.calls.flat().join('\n');
+    expect(verifyOutput).toContain('/project verify - Latest Verification');
+    expect(verifyOutput).toContain('retryable_failure');
+  });
+
+  it('records manual override evidence for /project mark', async () => {
+    const context = await createInteractiveContext({});
+    const storage = new ProjectStorage(tempDir);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await handleProjectCommand(
+      ['mark', '1', 'done'],
+      context,
+      createCallbacks(),
+      currentConfig,
+    );
+
+    const evidence = await storage.readHarnessEvidence<{ completionSource: string; status: string }>(1);
+    expect(evidence?.completionSource).toBe('manual_override');
+    expect(evidence?.status).toBe('manual_override');
+  });
 });

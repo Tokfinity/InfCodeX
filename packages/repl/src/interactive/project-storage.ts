@@ -24,29 +24,90 @@ export class ProjectStorage {
   private projectDir: string;
   private featuresPath: string;
   private progressPath: string;
+  private projectArtifactsRoot: string;
   private sessionPlanPath: string;
+  private legacySessionPlanPath: string;
   private brainstormIndexPath: string;
+  private legacyBrainstormIndexPath: string;
   private brainstormProjectsPath: string;
+  private legacyBrainstormProjectsPath: string;
+  private harnessRootPath: string;
+  private harnessConfigPath: string;
+  private harnessRunsPath: string;
+  private harnessEvidencePath: string;
 
   constructor(projectDir: string) {
     this.projectDir = projectDir;
     this.featuresPath = path.join(projectDir, KODAX_FEATURES_FILE);
     this.progressPath = path.join(projectDir, KODAX_PROGRESS_FILE);
-    this.sessionPlanPath = path.join(projectDir, '.kodax', 'session_plan.md');
-    this.brainstormIndexPath = path.join(projectDir, '.kodax', 'brainstorm-active.json');
-    this.brainstormProjectsPath = path.join(projectDir, '.kodax', 'projects');
+    this.projectArtifactsRoot = path.join(projectDir, '.agent', 'project');
+    this.sessionPlanPath = path.join(this.projectArtifactsRoot, 'session_plan.md');
+    this.legacySessionPlanPath = path.join(projectDir, '.kodax', 'session_plan.md');
+    this.brainstormIndexPath = path.join(this.projectArtifactsRoot, 'brainstorm-active.json');
+    this.legacyBrainstormIndexPath = path.join(projectDir, '.kodax', 'brainstorm-active.json');
+    this.brainstormProjectsPath = path.join(this.projectArtifactsRoot, 'brainstorm');
+    this.legacyBrainstormProjectsPath = path.join(projectDir, '.kodax', 'projects');
+    this.harnessRootPath = path.join(this.projectArtifactsRoot, 'harness');
+    this.harnessConfigPath = path.join(this.harnessRootPath, 'config.generated.json');
+    this.harnessRunsPath = path.join(this.harnessRootPath, 'runs.jsonl');
+    this.harnessEvidencePath = path.join(this.harnessRootPath, 'evidence');
   }
 
-  private getBrainstormSessionDir(sessionId: string): string {
-    return path.join(this.brainstormProjectsPath, sessionId, 'brainstorm');
+  private getBrainstormSessionDir(sessionId: string, legacy = false): string {
+    return legacy
+      ? path.join(this.legacyBrainstormProjectsPath, sessionId, 'brainstorm')
+      : path.join(this.brainstormProjectsPath, sessionId);
   }
 
-  private getBrainstormSessionPath(sessionId: string): string {
-    return path.join(this.getBrainstormSessionDir(sessionId), 'session.json');
+  private getBrainstormSessionPath(sessionId: string, legacy = false): string {
+    return path.join(this.getBrainstormSessionDir(sessionId, legacy), 'session.json');
   }
 
-  private getBrainstormTranscriptPath(sessionId: string): string {
-    return path.join(this.getBrainstormSessionDir(sessionId), 'transcript.md');
+  private getBrainstormTranscriptPath(sessionId: string, legacy = false): string {
+    return path.join(this.getBrainstormSessionDir(sessionId, legacy), 'transcript.md');
+  }
+
+  private getHarnessEvidenceFilePath(featureIndex: number): string {
+    return path.join(this.harnessEvidencePath, `feature-${featureIndex}.json`);
+  }
+
+  private async readTextFileWithFallback(...paths: string[]): Promise<string> {
+    for (const candidate of paths) {
+      try {
+        return await fs.readFile(candidate, 'utf-8');
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.error(`[KodaX] Failed to read ${candidate}:`, error);
+          return '';
+        }
+      }
+    }
+
+    return '';
+  }
+
+  private async readJsonFile<T>(filePath: string): Promise<T | null> {
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(content) as T;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null;
+      }
+      console.error(`[KodaX] Failed to load ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  private async readJsonFileWithFallback<T>(...paths: string[]): Promise<T | null> {
+    for (const candidate of paths) {
+      const data = await this.readJsonFile<T>(candidate);
+      if (data) {
+        return data;
+      }
+    }
+
+    return null;
   }
 
   async exists(): Promise<boolean> {
@@ -98,20 +159,12 @@ export class ProjectStorage {
   }
 
   async readSessionPlan(): Promise<string> {
-    try {
-      return await fs.readFile(this.sessionPlanPath, 'utf-8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return '';
-      }
-      console.error(`[KodaX] Failed to read ${this.sessionPlanPath}:`, error);
-      return '';
-    }
+    return this.readTextFileWithFallback(this.sessionPlanPath, this.legacySessionPlanPath);
   }
 
   async writeSessionPlan(content: string): Promise<void> {
-    const kodaxDir = path.dirname(this.sessionPlanPath);
-    await fs.mkdir(kodaxDir, { recursive: true });
+    const artifactsDir = path.dirname(this.sessionPlanPath);
+    await fs.mkdir(artifactsDir, { recursive: true });
     await fs.writeFile(this.sessionPlanPath, content, 'utf-8');
   }
 
@@ -152,53 +205,38 @@ export class ProjectStorage {
   }
 
   async loadBrainstormSession(sessionId: string): Promise<BrainstormSession | null> {
-    try {
-      const content = await fs.readFile(this.getBrainstormSessionPath(sessionId), 'utf-8');
-      return JSON.parse(content) as BrainstormSession;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      console.error(`[KodaX] Failed to load brainstorm session ${sessionId}:`, error);
-      return null;
-    }
+    return this.readJsonFileWithFallback<BrainstormSession>(
+      this.getBrainstormSessionPath(sessionId),
+      this.getBrainstormSessionPath(sessionId, true),
+    );
   }
 
   async readBrainstormTranscript(sessionId: string): Promise<string> {
-    try {
-      return await fs.readFile(this.getBrainstormTranscriptPath(sessionId), 'utf-8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return '';
-      }
-      console.error(`[KodaX] Failed to read brainstorm transcript for ${sessionId}:`, error);
-      return '';
-    }
+    return this.readTextFileWithFallback(
+      this.getBrainstormTranscriptPath(sessionId),
+      this.getBrainstormTranscriptPath(sessionId, true),
+    );
   }
 
   async loadActiveBrainstormSession(): Promise<BrainstormSession | null> {
-    try {
-      const content = await fs.readFile(this.brainstormIndexPath, 'utf-8');
-      const data = JSON.parse(content) as { sessionId?: string };
-      if (!data.sessionId) {
-        return null;
-      }
-      return await this.loadBrainstormSession(data.sessionId);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      console.error('[KodaX] Failed to load active brainstorm session:', error);
+    const data = await this.readJsonFileWithFallback<{ sessionId?: string }>(
+      this.brainstormIndexPath,
+      this.legacyBrainstormIndexPath,
+    );
+    if (!data?.sessionId) {
       return null;
     }
+    return await this.loadBrainstormSession(data.sessionId);
   }
 
   async clearActiveBrainstormSession(): Promise<void> {
-    try {
-      await fs.unlink(this.brainstormIndexPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
+    for (const filePath of [this.brainstormIndexPath, this.legacyBrainstormIndexPath]) {
+      try {
+        await fs.unlink(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
+        }
       }
     }
   }
@@ -260,17 +298,73 @@ export class ProjectStorage {
   getPaths(): {
     features: string;
     progress: string;
+    projectArtifactsRoot: string;
     sessionPlan: string;
+    legacySessionPlan: string;
     brainstormIndex: string;
+    legacyBrainstormIndex: string;
     brainstormProjects: string;
+    legacyBrainstormProjects: string;
+    harnessRoot: string;
+    harnessConfig: string;
+    harnessRuns: string;
+    harnessEvidence: string;
   } {
     return {
       features: this.featuresPath,
       progress: this.progressPath,
+      projectArtifactsRoot: this.projectArtifactsRoot,
       sessionPlan: this.sessionPlanPath,
+      legacySessionPlan: this.legacySessionPlanPath,
       brainstormIndex: this.brainstormIndexPath,
+      legacyBrainstormIndex: this.legacyBrainstormIndexPath,
       brainstormProjects: this.brainstormProjectsPath,
+      legacyBrainstormProjects: this.legacyBrainstormProjectsPath,
+      harnessRoot: this.harnessRootPath,
+      harnessConfig: this.harnessConfigPath,
+      harnessRuns: this.harnessRunsPath,
+      harnessEvidence: this.harnessEvidencePath,
     };
+  }
+
+  async readHarnessConfig<T = unknown>(): Promise<T | null> {
+    return this.readJsonFile<T>(this.harnessConfigPath);
+  }
+
+  async writeHarnessConfig(config: unknown): Promise<void> {
+    await fs.mkdir(this.harnessRootPath, { recursive: true });
+    await fs.writeFile(this.harnessConfigPath, JSON.stringify(config, null, 2), 'utf-8');
+  }
+
+  async appendHarnessRun(record: unknown): Promise<void> {
+    await fs.mkdir(this.harnessRootPath, { recursive: true });
+    await fs.appendFile(this.harnessRunsPath, `${JSON.stringify(record)}\n`, 'utf-8');
+  }
+
+  async readHarnessRuns<T = unknown>(): Promise<T[]> {
+    const content = await this.readTextFileWithFallback(this.harnessRunsPath);
+    if (!content.trim()) {
+      return [];
+    }
+
+    return content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as T);
+  }
+
+  async writeHarnessEvidence(featureIndex: number, record: unknown): Promise<void> {
+    await fs.mkdir(this.harnessEvidencePath, { recursive: true });
+    await fs.writeFile(
+      this.getHarnessEvidenceFilePath(featureIndex),
+      JSON.stringify(record, null, 2),
+      'utf-8',
+    );
+  }
+
+  async readHarnessEvidence<T = unknown>(featureIndex: number): Promise<T | null> {
+    return this.readJsonFile<T>(this.getHarnessEvidenceFilePath(featureIndex));
   }
 
   async clearProgress(): Promise<void> {
@@ -299,12 +393,14 @@ export class ProjectStorage {
       }
     }
 
-    try {
-      await fs.unlink(this.sessionPlanPath);
-      deleted++;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        failed++;
+    for (const filePath of [this.sessionPlanPath, this.legacySessionPlanPath]) {
+      try {
+        await fs.unlink(filePath);
+        deleted++;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          failed++;
+        }
       }
     }
 

@@ -37,6 +37,14 @@ import {
   createBrainstormSession,
   formatBrainstormTranscript,
 } from './project-brainstorm.js';
+import {
+  createProjectHarnessAttempt,
+  formatProjectHarnessSummary,
+  readLatestHarnessRun,
+  recordManualHarnessOverride,
+  type ProjectHarnessRunRecord,
+  type ProjectHarnessVerificationResult,
+} from './project-harness.js';
 
 // ============== 运行时状态管理 ==============
 
@@ -466,7 +474,7 @@ async function projectPlan(args: string[]): Promise<void> {
   console.log();
   console.log(planText);
   console.log();
-  console.log(chalk.dim('The latest plan has been written to .kodax/session_plan.md for status and quality analysis.'));
+  console.log(chalk.dim('The latest plan has been written to .agent/project/session_plan.md for status and quality analysis.'));
   console.log();
 }
 
@@ -610,7 +618,12 @@ function displayFeatureInfo(feature: ProjectFeature, index: number): void {
  * @param steps - Feature 步骤（可选）
  * @param userPrompt - 用户提供的额外指导（可选）
  */
-function buildFeaturePrompt(desc: string, steps?: string[], userPrompt?: string): string {
+function buildFeaturePrompt(
+  desc: string,
+  steps?: string[],
+  userPrompt?: string,
+  repairPrompt?: string,
+): string {
   const stepsSection = steps?.length
     ? `\n\nPlanned steps:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
     : '';
@@ -619,11 +632,25 @@ function buildFeaturePrompt(desc: string, steps?: string[], userPrompt?: string)
     ? `\n\nAdditional requirements:\n${userPrompt}`
     : '';
 
+  const repairSection = repairPrompt
+    ? `\n\nVerifier feedback from the previous attempt:\n${repairPrompt}`
+    : '';
+
   return `Continue implementing the project. Focus on this feature:
 
-${desc}${stepsSection}${userSection}
+${desc}${stepsSection}${userSection}${repairSection}
 
-After completing this feature, update feature_list.json to mark it as passes: true.`;
+Rules:
+- Work only on this active feature.
+- Prefer minimal relevant edits.
+- Add or update tests when behavior changes.
+- Update PROGRESS.md with evidence and blockers from this attempt.
+- Do NOT edit feature_list.json. The command layer will decide completion after verification.
+
+At the end of the attempt, append exactly one JSON block wrapped in <project-harness> tags:
+<project-harness>
+{"status":"complete|needs_review|blocked","summary":"short summary","evidence":["proof item"],"tests":["test or check"],"changedFiles":["absolute/or/relative/path"],"blockers":["only when blocked"]}
+</project-harness>`;
 }
 
 /**
@@ -634,10 +661,11 @@ async function executeSingleFeature(
   index: number,
   context: InteractiveContext,
   options: KodaXOptions,
-  userPrompt?: string
+  userPrompt?: string,
+  repairPrompt?: string,
 ): Promise<{ success: boolean; messages: KodaXMessage[] }> {
   const desc = feature.description || feature.name || 'Unnamed';
-  const prompt = buildFeaturePrompt(desc, feature.steps, userPrompt);
+  const prompt = buildFeaturePrompt(desc, feature.steps, userPrompt, repairPrompt);
 
   const result = await runKodaX(
     {
@@ -656,6 +684,45 @@ async function executeSingleFeature(
   };
 }
 
+async function runVerifiedFeatureExecution(
+  storage: ProjectStorage,
+  feature: ProjectFeature,
+  index: number,
+  mode: 'next' | 'auto',
+  context: InteractiveContext,
+  options: KodaXOptions,
+  userPrompt?: string,
+): Promise<ProjectHarnessVerificationResult> {
+  let repairPrompt: string | undefined;
+  let attempt = 0;
+
+  while (attempt < 2) {
+    attempt += 1;
+    const harnessAttempt = await createProjectHarnessAttempt(storage, feature, index, mode, attempt);
+    const harnessedOptions = harnessAttempt.wrapOptions(options);
+    const result = await executeSingleFeature(feature, index, context, harnessedOptions, userPrompt, repairPrompt);
+    context.messages = result.messages;
+
+    const verification = await harnessAttempt.verify(result.messages);
+    if (verification.decision === 'verified_complete') {
+      await storage.updateFeatureStatus(index, {
+        passes: true,
+        completedAt: new Date().toISOString(),
+      });
+      return verification;
+    }
+
+    if (verification.decision === 'retryable_failure' && attempt < 2 && verification.repairPrompt) {
+      repairPrompt = verification.repairPrompt;
+      continue;
+    }
+
+    return verification;
+  }
+
+  throw new Error('project harness verification loop exited unexpectedly');
+}
+
 // ============== 命令处理函数 ==============
 
 /**
@@ -672,6 +739,7 @@ export function printProjectHelp(): void {
   console.log(chalk.cyan('  brainstorm') + chalk.dim(' <topic>|continue|done') + '  Multi-turn AI-guided brainstorm');
   console.log(chalk.cyan('  next') + chalk.dim(' [prompt|#index] [--no-confirm]') + '  Run next/specific feature');
   console.log(chalk.cyan('  auto') + chalk.dim(' [prompt] [--max=N|--confirm]') + '  Auto-run all');
+  console.log(chalk.cyan('  verify') + chalk.dim(' [#index|--last]') + '         Show latest harness verification');
   console.log(chalk.cyan('  edit') + chalk.dim(' [#index] <prompt>') + '  AI-driven editing');
   console.log(chalk.cyan('  reset') + chalk.dim(' [--all]') + '  Clear progress or delete files');
   console.log(chalk.cyan('  analyze') + chalk.dim(' [prompt]') + '  AI-powered analysis');
@@ -702,7 +770,8 @@ export function printProjectHelp(): void {
   console.log(chalk.dim('  /p brainstorm "权限系统设计"'));
   console.log(chalk.dim('  /p brainstorm continue "先支持 RBAC，后续再加 ABAC"'));
   console.log(chalk.dim('  /p brainstorm done'));
-  console.log(chalk.dim('  /p quality  |  /p status "what is blocking release?"'));
+  console.log(chalk.dim('  /p quality  |  /p verify --last'));
+  console.log(chalk.dim('  /p status "what is blocking release?"'));
   console.log(chalk.dim('  /p edit #3 "mark complete"  |  /p edit "delete skipped features"'));
   console.log(chalk.dim('  /p analyze  |  /p analyze "risk review"'));
 
@@ -999,21 +1068,23 @@ async function projectNext(
       return;
     }
 
-    // 执行功能
-    const result = await executeSingleFeature(feature, targetIndex, context, options, userPrompt);
-    context.messages = result.messages;
+    const verification = await runVerifiedFeatureExecution(
+      storage,
+      feature,
+      targetIndex,
+      'next',
+      context,
+      options,
+      userPrompt,
+    );
 
-    // 检查是否完成（通过读取更新后的 feature_list.json）
-    const updatedFeature = await storage.getFeatureByIndex(targetIndex);
-    if (updatedFeature?.passes) {
-      await storage.updateFeatureStatus(targetIndex, {
-        completedAt: new Date().toISOString(),
-      });
-      console.log(chalk.green('\n✓ Feature completed\n'));
+    if (verification.decision === 'verified_complete') {
+      console.log(chalk.green('\n✓ Feature completed'));
     } else {
-      console.log(chalk.yellow('\n⚠ Feature may not be fully completed'));
-      console.log(chalk.dim('Check the result and manually mark with /project mark <index> done\n'));
+      console.log(chalk.yellow(`\n⚠ Feature requires follow-up (${verification.decision})`));
     }
+    console.log(formatProjectHarnessSummary(verification.runRecord));
+    console.log();
 
     // 显示进度
     const stats = await storage.getStatistics();
@@ -1147,14 +1218,28 @@ async function projectAuto(
           console.log(chalk.red('\n[Error] KodaX options not available\n'));
           break;
         }
-        const result = await executeSingleFeature(next.feature, next.index, context, options, userPrompt);
-        context.messages = result.messages;
+        await storage.updateFeatureStatus(next.index, {
+          startedAt: next.feature.startedAt ?? new Date().toISOString(),
+        });
+        const verification = await runVerifiedFeatureExecution(
+          storage,
+          next.feature,
+          next.index,
+          'auto',
+          context,
+          options,
+          userPrompt,
+        );
 
-        const updatedFeature = await storage.getFeatureByIndex(next.index);
-        if (updatedFeature?.passes) {
-          console.log(chalk.green('  ✓ Completed\n'));
+        if (verification.decision === 'verified_complete') {
+          console.log(chalk.green('  ✓ Completed'));
+          console.log(chalk.dim(`  ${verification.runRecord.evidence.join(' | ')}`));
+          console.log();
         } else {
-          console.log(chalk.yellow('  ⚠ May need review\n'));
+          console.log(chalk.yellow(`  ⚠ Paused: ${verification.decision}`));
+          console.log(chalk.dim(`  ${verification.reasons.join(' | ') || 'Review the latest harness record.'}`));
+          console.log();
+          break;
         }
 
       } catch (error) {
@@ -1256,10 +1341,42 @@ async function projectMark(args: string[]): Promise<void> {
   }
 
   await storage.updateFeatureStatus(index, updates);
+  await recordManualHarnessOverride(storage, index, status as 'done' | 'skip');
 
   const desc = feature.description || feature.name || 'Unnamed';
   console.log(chalk.green(`\n✓ Marked feature ${index} as ${status}`));
   console.log(chalk.dim(`  ${desc}\n`));
+}
+
+async function projectVerify(args: string[]): Promise<void> {
+  const storage = getProjectStorage();
+
+  if (!(await storage.exists())) {
+    console.log(chalk.yellow('\n[No project found]\n'));
+    return;
+  }
+
+  const explicitIndexArg = args.find(arg => parseFeatureIndex(arg) !== null);
+  const explicitIndex = explicitIndexArg ? parseFeatureIndex(explicitIndexArg) : null;
+  const runs = await storage.readHarnessRuns<ProjectHarnessRunRecord>();
+
+  if (runs.length === 0) {
+    console.log(chalk.yellow('\n[No harness verification records found]\n'));
+    return;
+  }
+
+  const selectedRun = explicitIndex !== null
+    ? [...runs].reverse().find(run => run.featureIndex === explicitIndex) ?? null
+    : await readLatestHarnessRun(storage);
+
+  if (!selectedRun) {
+    console.log(chalk.yellow('\n[No matching harness verification record found]\n'));
+    return;
+  }
+
+  console.log(chalk.cyan('\n/project verify - Latest Verification\n'));
+  console.log(formatProjectHarnessSummary(selectedRun));
+  console.log();
 }
 
 /**
@@ -1894,9 +2011,9 @@ async function projectReset(
     console.log(chalk.cyan('Files to be deleted:'));
     console.log(chalk.dim('  📄 feature_list.json'));
     console.log(chalk.dim('  📄 PROGRESS.md'));
-    console.log(chalk.dim('  📄 .kodax/session_plan.md'));
+    console.log(chalk.dim('  📄 .agent/project/session_plan.md'));
     console.log();
-    console.log(chalk.green('✓ Safe: .kodax/ folder and other config files are preserved'));
+    console.log(chalk.green('✓ Safe: .kodax/ folder and other control-plane files are preserved'));
     console.log(chalk.green('✓ Your project code is SAFE (src/, package.json, etc.)'));
     console.log(chalk.red('✗ This action cannot be undone!'));
     console.log();
@@ -1922,7 +2039,7 @@ async function projectReset(
     // 默认：只清空 PROGRESS.md
     console.log(chalk.cyan('\nThis will clear the progress log (PROGRESS.md).'));
     console.log(chalk.dim('  ✓ feature_list.json will be preserved'));
-    console.log(chalk.dim('  ✓ .kodax/session_plan.md will be preserved'));
+    console.log(chalk.dim('  ✓ .agent/project/session_plan.md will be preserved'));
     console.log(chalk.dim('  ✓ All features will remain intact'));
     console.log();
 
@@ -2004,6 +2121,11 @@ export async function handleProjectCommand(
     case 'auto':
     case 'a':
       await projectAuto(args.slice(1), context, callbacks, currentConfig, confirm, question);
+      break;
+
+    case 'verify':
+    case 'v':
+      await projectVerify(args.slice(1));
       break;
 
     case 'pause':

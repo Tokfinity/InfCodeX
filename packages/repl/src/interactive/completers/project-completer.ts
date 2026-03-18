@@ -32,6 +32,7 @@ export class ProjectCompleter implements Completer {
     // Match patterns:
     // 1. /project edit #
     // 2. /project next #
+    // 3. /project verify #
     // 3. /project status --
     // 4. /project init --
     // 5. /project auto --
@@ -40,7 +41,7 @@ export class ProjectCompleter implements Completer {
     if (!projectPattern.test(beforeCursor)) return false;
 
     // Check for # (feature index) completion
-    if (/\/(?:project|proj|p)\s+(?:edit|next)\s+#?\w*$/.test(beforeCursor)) {
+    if (/\/(?:project|proj|p)\s+(?:edit|next|verify)\s+#?\w*$/.test(beforeCursor)) {
       return true;
     }
 
@@ -60,7 +61,7 @@ export class ProjectCompleter implements Completer {
     const beforeCursor = input.slice(0, cursorPos);
 
     // Pattern 1: Feature index completion (#0, #1, #2...)
-    const indexMatch = beforeCursor.match(/\/(?:project|proj|p)\s+(?:edit|next)\s+#?(\d*)$/);
+    const indexMatch = beforeCursor.match(/\/(?:project|proj|p)\s+(?:edit|next|verify)\s+#?(\d*)$/);
     if (indexMatch) {
       return await this.getFeatureIndexCompletions(indexMatch[1] ?? '');
     }
@@ -118,6 +119,7 @@ export class ProjectCompleter implements Completer {
       'status': ['--features', '--progress'],
       'next': ['--no-confirm'],
       'auto': ['--max=', '--confirm'],
+      'verify': ['--last'],
       'reset': ['--all'],
     };
 
@@ -136,6 +138,7 @@ export class ProjectCompleter implements Completer {
       '--no-confirm': 'Skip confirmation prompts',
       '--max=': 'Maximum number of auto-runs',
       '--confirm': 'Confirm each feature before execution',
+      '--last': 'Show the latest harness verification record',
       '--all': 'Delete all project management files',
     };
 
