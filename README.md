@@ -1,4 +1,4 @@
-# KodaX
+# InfCodeX (alias: KodaX)
 
 Extreme Lightweight Coding Agent - TypeScript Implementation
 
