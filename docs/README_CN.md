@@ -57,7 +57,7 @@ KodaX/
 │   │   └── builtin/         # 内置 skills (code-review, tdd, git-workflow)
 │   │
 │   ├── coding/              # @kodax/coding - Coding Agent（工具 + Prompts）
-│   │   └── tools/           # 8 个工具: read, write, edit, bash, glob, grep, undo, diff
+│   │   └── tools/           # 9 个工具: read, write, edit, bash, glob, grep, undo, diff, ask-user
 │   │
 │   └── repl/                # @kodax/repl - 完整的交互式终端
 │       ├── ui/              # Ink/React 组件、主题
@@ -132,7 +132,7 @@ KodaX/
 - **10 个模型** - Anthropic, OpenAI, Gemini CLI, Codex CLI, Kimi, Kimi Code, 智谱, 智谱 Coding, 通义千问, Minimax
 - **思考模式** - 复杂任务的深度推理（部分模型支持）
 - **流式输出** - 实时显示，不用等待
-- **8 个工具** - read, write, edit, bash, glob, grep, undo, diff
+- **9 个工具** - read, write, edit, bash, glob, grep, undo, diff, ask-user
 - **会话记忆** - 对话跨次保存
 - **Skills 系统** - 自然语言触发，可扩展
 - **权限控制** - 4 级模式，支持命令模式匹配
