@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-18_
+_Last Updated: 2026-03-19_
 
 ---
 
@@ -8,7 +8,7 @@ _Last Updated: 2026-03-18_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.6.10 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.6.11 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.7.0 | 当前规划的版本 |
 
 ---
@@ -29,6 +29,7 @@ _Last Updated: 2026-03-18_
 | v0.5.37 | Released | 1 | 1/1 (100%) |
 | v0.6.0 | Released | 6 | 6/6 (100%) |
 | v0.6.10 | Released | 1 | 1/1 (100%) |
+| v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.7.0 | Planned | 3 | 0/3 (0%) |
 | v0.8.0 | Planned | 5 | 0/5 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
@@ -1231,7 +1232,7 @@ Expand KodaX from a terminal-first tool into a consistent product across IDE, de
 ## Summary
 - Total: 30 (11 Planned, 0 In Progress, 19 Completed)
 - By Priority: Critical: 3, High: 25, Medium: 2, Low: 0
-- Current Version: v0.6.10
+- Current Version: v0.6.11
 - Next Release (v0.7.0): 3 features (019, 026, 029), 0 completed, 0 in progress
 - Future Releases: v0.8.0 (007, 018, 025, 027, 028), v1.0.0 (022, 023, 030)
 - Highest Priority Planned: 019 - Session Tree & Rollback System (High), 026 - Roadmap Integrity and Tracker Consistency Hardening (High), 029 - Provider Adapter Transparency and Semantic Compatibility (High)
