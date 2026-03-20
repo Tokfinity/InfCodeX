@@ -1347,8 +1347,8 @@ Expand KodaX from a terminal-first tool into a consistent product across IDE, de
 **Goals**:
 1. **零 MCP SDK 依赖** — 纯 Node.js `child_process` + JSON-RPC 实现客户端（~100 行）
 2. **持久化 Runtime** — REPL 启动时 spawn MCP server 子进程，session 期间保持活跃
-3. **单一 mcp_call 工具** — 通过 `mcp_call(server, tool, args)` 统一路由，不动态修改 KODAX_TOOLS
-4. **渐进式披露** — 工具定义写入 `.kodax/mcp-bridge/` 文件系统，LLM 按需 read 发现
+3. **单一 mcp_call 工具** — 固定描述，不随 server 配置变化，不动态修改 KODAX_TOOLS
+4. **渐进式披露** — 工具定义写入 `~/.kodax/mcp-bridge/` 用户级目录，LLM 按需 read 发现，智能在 LLM 推理而非启动时分析
 5. **配置驱动** — 用户在 `~/.kodax/config.json` 中配置 `mcpServers`
 6. **最小化实现** — 总计 ~325 行新增 + ~50 行修改，只做 `/mcp status` 命令
 
@@ -1358,6 +1358,10 @@ Expand KodaX from a terminal-first tool into a consistent product across IDE, de
 - 行业标准：Claude Code、Cline、Cursor、Goose、OpenCode 全部采用持久连接模式
 - 借鉴 Anthropic "Code Execution with MCP" 范式：工具定义按需加载，98.7% token 减少
 - 单一 mcp_call 模式避免动态修改 KODAX_TOOLS 数组和 KODAX_TOOL_REQUIRED_PARAMS 白名单
+- MCP 内容全部在用户级目录 `~/.kodax/`，不污染项目目录
+
+**Design Decisions**:
+- 固定描述 + tools.md 格式化 + LLM 推理（不做动态描述/label）
 
 **Implementation Plan**: 见 [v0.7.0.md#035](features/v0.7.0.md#035)
 
