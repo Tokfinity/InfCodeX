@@ -96,10 +96,9 @@ Documented built-in tool capabilities include:
 - diff
 
 ### 5. Permission-aware autonomy
-InfCodeX introduces four permission modes:
+InfCodeX introduces three permission modes:
 
 - `plan`
-- `default`
 - `accept-edits`
 - `auto-in-project`
 
@@ -127,20 +126,42 @@ This gives InfCodeX a credible path from "AI CLI" to "multi-agent engineering ru
 
 ```text
 InfCodeX
-├─ AI Layer        → provider abstraction, streaming, error handling
-├─ Agent Layer     → sessions, messages, token utilities
+├─ AI Layer        → provider abstraction, streaming, retry, capability handling
+├─ Agent Layer     → sessions, messages, token utilities, compaction
 ├─ Skills Layer    → skill discovery, registry, execution
-├─ Coding Layer    → tools, prompts, agent loop
-└─ REPL / CLI      → interactive UX, permission control, commands
+├─ Coding Layer    → tools, prompts, coding-agent loop, long-running workflows
+└─ REPL / CLI      → interactive UX, permission control, commands, project flows
 ```
 
 This design provides several advantages:
 
 - **Clear separation of concerns**
-- **No circular dependency mindset**
+- **Replaceable boundaries across provider, runtime, and UI layers**
 - **Better testability and replacement boundaries**
 - **Potential for independent package reuse**
 - **A stronger foundation for future enterprise orchestration**
+
+### Package Overview
+
+| Package | Responsibility | Notes |
+|---------|----------------|-------|
+| `@kodax/ai` | Provider abstraction and model adapters | Supports built-in providers and custom compatible endpoints |
+| `@kodax/agent` | Sessions, messages, tokens, and compaction | Reusable outside the coding workflow |
+| `@kodax/skills` | Skill discovery and execution | Lightweight specialization layer |
+| `@kodax/coding` | Tools, prompts, and coding-agent loop | Execution-oriented core runtime |
+| `@kodax/repl` | Terminal UI and slash commands | Permission UX and interactive workflow layer |
+
+### Dependency Shape
+
+```text
+kodax CLI entry
+├─ @kodax/repl
+│  └─ @kodax/coding
+│     ├─ @kodax/ai
+│     ├─ @kodax/agent
+│     └─ @kodax/skills
+└─ @kodax/coding
+```
 
 ---
 
@@ -181,7 +202,7 @@ That is why InfCodeX is not merely "another coding CLI". It is a practical bridg
 
 - single-developer AI assistance,
 - repository-level engineering execution,
-- and organization-level agent management.
+- organization-level agent management.
 
 ---
 
@@ -221,35 +242,139 @@ Organizations can adopt it incrementally with permission modes, scoped automatio
 
 ---
 
+## Project Mode
+
+The most distinctive workflow carried over from the KodaX branch is **Project Mode / harness engineering**.
+
+Instead of trusting the agent to simply declare success, Project Mode keeps project truth on disk and routes execution through verifier-gated steps. That makes long-running work more dependable on real repositories.
+
+Key ideas:
+
+- `kodax --init "<task>"` bootstraps project truth and planning artifacts
+- `/project brainstorm` aligns scope before execution
+- `/project plan` writes the active execution plan
+- `/project next` advances work through deterministic gates
+- `/project verify` and `/project quality` re-check outcomes before trust
+- `kodax --auto-continue` keeps progressing work across multiple sessions
+
+Typical flow:
+
+```bash
+kodax --init "Build a desktop app"
+kodax
+/project status
+/project brainstorm
+/project plan
+/project next
+/project verify --last
+/project quality
+```
+
+Non-REPL alternative:
+
+```bash
+kodax --init "Build a desktop app"
+kodax --auto-continue --max-hours 2
+```
+
+---
+
 ## Quick Start
 
 ### Requirements
 
-- Node.js `>=18.0.0` according to `package.json`
+- Node.js `>=18.0.0`
 - npm workspaces
 
-### Install and build
+### 1. Install and build
 
 ```bash
 npm install
 npm run build:packages
 npm run build
+npm link
 ```
 
-### Use via CLI
+### 2. Configure a provider
+
+Built-in providers read credentials from environment variables:
 
 ```bash
+# macOS / Linux
 export ZHIPU_API_KEY=your_api_key
-kodax "Help me understand this repository"
+
+# PowerShell
+$env:ZHIPU_API_KEY="your_api_key"
 ```
 
-### Use via node directly
+For CLI defaults, create `~/.kodax/config.json`:
+
+```json
+{
+  "provider": "zhipu-coding",
+  "reasoningMode": "auto"
+}
+```
+
+If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint:
+
+```json
+{
+  "provider": "my-openai-compatible",
+  "customProviders": [
+    {
+      "name": "my-openai-compatible",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_LLM_API_KEY",
+      "model": "my-model"
+    }
+  ]
+}
+```
+
+### 3. Start in REPL or run a one-shot task
 
 ```bash
-node dist/kodax_cli.js "your task"
+# Interactive REPL
+kodax
+
+# Then ask naturally inside the REPL
+Read package.json and summarize the architecture
+/mode
+/help
+
+# One-shot CLI usage
+kodax "Review this repository and summarize the architecture"
+kodax --session review "Find the riskiest parts of src/"
+kodax --session review "Give me concrete fix suggestions"
 ```
 
-### Examples
+### 4. Use it as a library
+
+```typescript
+import { registerCustomProviders, runKodaX } from 'kodax';
+
+registerCustomProviders([
+  {
+    name: 'my-openai-compatible',
+    protocol: 'openai',
+    baseUrl: 'https://example.com/v1',
+    apiKeyEnv: 'MY_LLM_API_KEY',
+    model: 'my-model',
+  },
+]);
+
+const result = await runKodaX(
+  {
+    provider: 'my-openai-compatible',
+    reasoningMode: 'auto',
+  },
+  'Explain this codebase'
+);
+```
+
+### Common examples
 
 ```bash
 # session memory
@@ -266,7 +391,7 @@ kodax --team "implement,review,test"
 kodax --init "deliver feature X"
 
 # auto-continue until complete
-kodax --auto-continue "finish remaining work"
+kodax --auto-continue --max-hours 2
 ```
 
 ---
@@ -276,11 +401,281 @@ kodax --auto-continue "finish remaining work"
 | Mode | Meaning |
 |------|---------|
 | `plan` | Read-only planning mode |
-| `default` | Safe default mode |
 | `accept-edits` | Automatically accept file edits; confirm bash |
 | `auto-in-project` | Full auto execution within project scope |
 
 These modes make InfCodeX more suitable for serious environments where safety, auditability, and trust calibration matter.
+
+---
+
+## Detailed Usage
+
+### REPL Quickstart
+
+Running `kodax` with no prompt starts the interactive REPL:
+
+```bash
+kodax
+```
+
+Inside the REPL you can mix natural-language requests with slash commands:
+
+```text
+Read package.json and summarize the architecture
+/model
+/mode
+/help
+```
+
+### CLI Quickstart
+
+```bash
+# Basic usage
+kodax "Help me create a TypeScript project"
+
+# Choose a provider explicitly
+kodax --provider openai --model gpt-5.4 "Create a REST API"
+
+# Use a deeper reasoning mode
+kodax --reasoning deep "Review this architecture"
+```
+
+### Session Workflows
+
+Use a session when you want memory across turns:
+
+```bash
+# No memory: two separate calls
+kodax "Read src/auth.ts"
+kodax "Summarize it"
+
+# With memory: same session
+kodax --session auth-review "Read src/auth.ts"
+kodax --session auth-review "Summarize it"
+kodax --session auth-review "How should I fix the first issue?"
+
+# Session management
+kodax --session list
+kodax --session resume "continue"
+```
+
+### Workflow Examples
+
+```bash
+# Code review
+kodax --session review "Review src/"
+kodax --session review "Focus on security issues"
+kodax --session review "Give me fix suggestions"
+
+# Project development
+kodax --session todo-app "Create a Todo application"
+kodax --session todo-app "Add delete functionality"
+kodax --session todo-app "Write tests"
+```
+
+### CLI Reference
+
+```text
+kodax                  Start the interactive REPL
+-h, --help [topic]     Show help or topic help
+-p, --print <text>     Run a single task and exit
+-c, --continue         Continue the most recent conversation in this directory
+-r, --resume [id]      Resume a session by ID, or the latest session
+-m, --provider         Provider to use
+--model <name>         Override the model
+--reasoning <mode>     off | auto | quick | balanced | deep
+-t, --thinking         Compatibility alias for --reasoning auto
+-s, --session <op>     Session ID or legacy session operation
+-j, --parallel         Enable parallel tool execution
+--team <tasks>         Run multiple sub-agents in parallel
+--init <task>          Initialize a long-running task
+--auto-continue        Continue long-running tasks until complete
+--max-iter <n>         Max iterations
+--max-sessions <n>     Max sessions for --auto-continue
+--max-hours <n>        Max runtime hours for --auto-continue
+```
+
+### Help Topics
+
+```bash
+kodax -h sessions
+kodax -h init
+kodax -h project
+kodax -h auto
+kodax -h provider
+kodax -h thinking
+kodax -h team
+kodax -h print
+```
+
+---
+
+## Advanced Library Usage
+
+### Simple Mode with `runKodaX`
+
+```typescript
+import { runKodaX, type KodaXEvents } from 'kodax';
+
+const events: KodaXEvents = {
+  onTextDelta: (text) => process.stdout.write(text),
+  onThinkingDelta: (text) => console.log(`Thinking delta: ${text.length} chars`),
+  onToolResult: (result) => console.log(`Tool ${result.name}`),
+  onComplete: () => console.log('\nDone!'),
+  onError: (e) => console.error(e.message),
+};
+
+const result = await runKodaX(
+  {
+    provider: 'zhipu-coding',
+    reasoningMode: 'auto',
+    events,
+  },
+  'What is 1+1?'
+);
+
+console.log(result.lastText);
+```
+
+### Continuous Session with `KodaXClient`
+
+```typescript
+import { KodaXClient } from 'kodax';
+
+const client = new KodaXClient({
+  provider: 'zhipu-coding',
+  reasoningMode: 'auto',
+  events: {
+    onTextDelta: (text) => process.stdout.write(text),
+  },
+});
+
+await client.send('Read package.json');
+await client.send('Summarize it');
+
+console.log(client.getSessionId());
+```
+
+### Custom Session Storage
+
+```typescript
+import { type KodaXMessage, type KodaXSessionStorage } from 'kodax';
+
+class MyDatabaseStorage implements KodaXSessionStorage {
+  async save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string }) {
+    // Save to your own storage
+  }
+
+  async load(id: string) {
+    return null;
+  }
+}
+```
+
+### Library Modes Comparison
+
+| Feature | `runKodaX` | `KodaXClient` |
+|---------|------------|---------------|
+| Message memory | No | Yes |
+| Call style | Function | Class instance |
+| Context | Independent each time | Accumulates |
+| Use case | Single tasks and batch work | Multi-step or interactive workflows |
+
+---
+
+## Using Individual Packages
+
+InfCodeX keeps the KodaX branch's modular package story intact. Each package can be used independently when you do not need the full CLI.
+
+### `@kodax/ai`
+
+Use when you only need provider abstraction, streaming, and reasoning compatibility.
+
+### `@kodax/agent`
+
+Use when you need sessions, message handling, token estimation, or compaction behavior.
+
+### `@kodax/skills`
+
+Use when you want markdown-based skill discovery and execution without pulling in the full coding runtime.
+
+### `@kodax/coding`
+
+Use when you want the complete coding-agent loop, tool execution, prompts, and session-aware task handling.
+
+### `@kodax/repl`
+
+Use when you want the interactive terminal UI, slash-command system, and permission UX.
+
+---
+
+## Supported Providers
+
+| Provider | Environment Variable | Reasoning Support | Default Model |
+|----------|----------------------|-------------------|---------------|
+| `anthropic` | `ANTHROPIC_API_KEY` | Native | `claude-sonnet-4-6` |
+| `openai` | `OPENAI_API_KEY` | Native | `gpt-5.3-codex` |
+| `kimi` | `KIMI_API_KEY` | Native | `k2.5` |
+| `kimi-code` | `KIMI_API_KEY` | Native | `k2.5` |
+| `qwen` | `QWEN_API_KEY` | Native | `qwen3.5-plus` |
+| `zhipu` | `ZHIPU_API_KEY` | Native | `glm-5` |
+| `zhipu-coding` | `ZHIPU_API_KEY` | Native | `glm-5` |
+| `minimax-coding` | `MINIMAX_API_KEY` | Native | `MiniMax-M2.5` |
+| `gemini-cli` | `GEMINI_API_KEY` | Prompt-only / CLI bridge | `gemini-2.5-pro` |
+| `codex-cli` | `OPENAI_API_KEY` | Prompt-only / CLI bridge | `codex` |
+
+---
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `read` | Read file contents with offset and limit support |
+| `write` | Write a file |
+| `edit` | Exact string replacement with `replace_all` support |
+| `bash` | Execute shell commands |
+| `glob` | File pattern matching |
+| `grep` | Content search |
+| `undo` | Revert the last modification |
+| `ask_user_question` | Ask the user to choose between options |
+
+---
+
+## Skills System
+
+The KodaX branch also introduced a more explicit skills story that remains relevant in InfCodeX.
+
+Examples:
+
+```bash
+kodax "Help me review this code"
+kodax "Write tests for this module"
+kodax /skill:code-review
+```
+
+Built-in skills include:
+
+- `code-review`
+- `tdd`
+- `git-workflow`
+
+Custom skills can live under `~/.kodax/skills/`.
+
+---
+
+## Commands
+
+Commands are `/xxx` shortcuts exposed through the CLI and REPL experience.
+
+```bash
+kodax /review src/auth.ts
+kodax /test
+```
+
+Command definitions live in `~/.kodax/commands/`:
+
+- `.md` files provide prompt commands
+- `.ts` / `.js` files provide programmable commands
 
 ---
 
@@ -303,6 +698,27 @@ The current documented config path is:
 ```
 
 See `config.example.jsonc` for the full template.
+
+---
+
+## Development
+
+```bash
+# Development mode
+npm run dev "your task"
+
+# Build all packages
+npm run build:packages
+
+# Build the root CLI
+npm run build
+
+# Run tests
+npm test
+
+# Clean generated artifacts
+npm run clean
+```
 
 ---
 
@@ -341,7 +757,7 @@ The repository is evolving quickly, and parts of the documentation still reflect
 - some docs mention 7 providers while newer docs/configs enumerate 10 built-in providers
 - package and command names currently remain `kodax`
 
-This README therefore emphasizes **stable architectural truths** and **strategic product characteristics**, while keeping volatile numeric details aligned as much as possible with the current public repository.
+This README therefore emphasizes **stable architectural truths** while also retaining the more detailed KodaX usage guidance that is still valuable for day-to-day development.
 
 ---
 
@@ -352,6 +768,16 @@ This README therefore emphasizes **stable architectural truths** and **strategic
 - [Architecture Overview (Chinese)](./docs/ARCHITECTURE_OVERVIEW_CN.md)
 - [InfCodeX + InfOne Positioning](./docs/PROJECT_POSITIONING.md)
 - [InfCodeX + InfOne Positioning (Chinese)](./docs/PROJECT_POSITIONING_CN.md)
+- [Feature List](./docs/FEATURE_LIST.md)
+- [Feature Release Notes Index](./docs/features/README.md)
+- [Contributing Guide](./CONTRIBUTING.md)
+- [Changelog](./CHANGELOG.md)
+
+---
+
+## License
+
+[Apache License 2.0](./LICENSE)
 
 ---
 
