@@ -6,9 +6,9 @@ Thank you for your interest in contributing to KodaX!
 
 ### Prerequisites
 
-- **Node.js** >= 18.0.0
+- **Node.js** >= 20.0.0
 - **npm** or **yarn**
-- **TypeScript** 5.7+
+- **TypeScript** >= 5.3.0
 
 ### Installation
 
@@ -66,7 +66,7 @@ npm test -- --coverage
 ### Writing Tests
 
 - Follow the TDD methodology: write tests first (RED), implement (GREEN), refactor
-- Place test files in `tests/` directory
+- Place test files next to source files: `packages/*/src/**/*.test.ts`
 - Use descriptive test names
 - Aim for 80%+ coverage
 
@@ -86,7 +86,7 @@ KodaX uses a **monorepo architecture** with npm workspaces:
 KodaX/
 ├── packages/
 │   ├── ai/                  # @kodax/ai - Independent LLM abstraction layer
-│   │   └── providers/       # 7 LLM providers (Anthropic, OpenAI, etc.)
+│   │   └── providers/       # 10 LLM providers (Anthropic, OpenAI, etc.)
 │   │
 │   ├── agent/               # @kodax/agent - Generic Agent framework
 │   │   └── session/         # Session management, message handling
@@ -95,7 +95,7 @@ KodaX/
 │   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
 │   │
 │   ├── coding/              # @kodax/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # 8 tools: read, write, edit, bash, glob, grep, undo, diff
+│   │   └── tools/           # 8 tools: read, write, edit, bash, glob, grep, undo, ask_user_question
 │   │
 │   └── repl/                # @kodax/repl - Interactive terminal UI
 │       ├── ui/              # Ink/React components, themes
@@ -109,7 +109,7 @@ KodaX/
 
 ## Pull Request Workflow
 
-1. Create a feature branch from `main`
+1. Create a feature branch from `KodaX`
 2. Write tests first (TDD)
 3. Implement the feature
 4. Ensure all tests pass
