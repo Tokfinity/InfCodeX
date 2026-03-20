@@ -6,6 +6,58 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.12] - 2026-03-19
+
+### Added
+- **Discovery-Driven Brainstorm Flow**: `/project brainstorm` replaced freeform continue/done subcommands with a structured UI-driven discovery flow that asks four alignment questions (outcome priority, constraints, non-goals, success criteria); supports pause/resume and free-form input via "Other" option
+- **Workflow State Machine**: `ProjectWorkflowState` with seven stages (`bootstrap` → `discovering` → `aligned` → `planned` → `executing` → `blocked` → `completed`) persisted to `.agent/project/project_state.json`; automatic stage inference from existing artifacts when state file is absent
+- **Project Alignment Model**: `ProjectAlignment` and `ProjectBrief` types with Markdown serialization/parsing; alignment captures confirmed requirements, constraints, non-goals, accepted tradeoffs, success criteria, and open questions; persisted to `.agent/project/alignment.md` and `.agent/project/project_brief.md`
+- **Change Request Support**: `/project init` on an existing project now offers change-request workflows (explore, draft plan, or record-only); change requests persisted as individual Markdown files under `.agent/project/change-requests/`
+- **Execution Stage Gating**: `/project next` and `/project auto` now verify the project is in a `planned`/`executing`/`blocked`/`completed` stage before proceeding; users are directed to run `/project plan` first when not ready
+- **Auto Session Plan Generation**: `ensureExecutionSessionPlan` automatically generates a `session_plan.md` from the current feature when execution begins without an existing plan
+- **Workflow-Aware Status**: `/project status` now displays workflow stage, scope, unresolved discovery count, session plan presence, and recommended next command based on current stage
+- **Stage-Aware Edit**: `/project edit` operates on alignment data during `discovering`/`aligned`/`bootstrap` stages; detects feature index from natural language input during execution stages
+- **`/project plan` Alignment Integration**: When no feature list exists, `/project plan` generates features from alignment data using AI or deterministic fallback; handles `change_request` scope by appending to existing features
+- **Expanded Project Hints**: `/project` startup hint now shows workflow stage, context-aware recommended next step, and diagnostic command suggestions
+- **`-h project` Help Topic**: New CLI help topic documenting the full Project Mode workflow across non-REPL bootstrap commands and REPL `/project` commands
+- **`/project plan` Tab Completion**: Added `plan` to feature-index auto-completion in project completer
+
+### Changed
+- **Init Workflow Redesign**: `/project init` now presents a three-way choice (start discovery, draft planning directly, initialize only) instead of delegating to `buildInitPrompt`; creates alignment and brief files immediately
+- **Legacy Subcommand Deprecation**: `/project brainstorm continue`/`done`, `/project init --append` gracefully print deprecation notices instead of executing
+- **`--init` Help Alignment**: Updated init help topic to reference REPL `/project` commands and `.agent/project/` artifact layout
+- **Session Help Clarity**: `-r` without ID documented as "list recent sessions, then resume the latest"; `-n/--new` documented as legacy no-op; `-s` documented as legacy session operations
+- **Print Mode Help**: Added `--model <name>` option and provider selection example
+- **Team Mode Description**: Updated to note experimental status and clarify it is not yet a fully shared-context multi-agent runtime
+- **Provider Help Caveat**: CLI bridge providers annotated as "latest-user-message only, MCP unavailable"
+- **Test Guide Naming Convention**: All 12 test guide files renamed to follow `FEATURE_{ID}_{VERSION}_TEST_GUIDE.md` standard
+
+### Removed
+- **`buildInitPrompt` Dependency**: Project init no longer delegates to `buildInitPrompt` from `common/utils.js`; REPL-side project management is fully self-contained
+
+---
+
+## [0.6.11] - 2026-03-19
+
+### Added
+- **Provider Capability Profiles**: `KodaXProviderCapabilityProfile` type distinguishing `native-api` vs `cli-bridge` transport, conversation semantics (`full-history` / `last-user-message`), and MCP support (`native` / `none`); all 10 providers now declare explicit capability metadata
+- **CLI `--model` Flag**: Override the default model for any provider via `--model <name>` (e.g. `kodax -m openai --model gpt-5.4 "task"`)
+- **Provider Capability Warnings**: `/providers` and `/status` now display yellow warnings for `cli-bridge` providers, alerting users to potential capability limitations
+- **`getProviderConfiguredCapabilityProfile` API**: New exported function in `@kodax/ai` for retrieving the capability profile of the active provider
+- **Tracker Consistency Test**: Automated validation test for `FEATURE_LIST.md` metadata (version counts, status aggregates, design doc cross-references)
+
+### Changed
+- **Provider Help Dynamic Rendering**: `--help provider` now generates the provider list dynamically from the registry instead of hardcoding names
+- **Auto Mode Clarification**: `-y, --auto` documented as backward-compat alias; non-REPL CLI already runs in auto mode by default
+
+### Documentation
+- **docs/features/README.md Full Rewrite**: Updated from v0.3.x to v0.6.10; 5-layer architecture diagram, 10 providers, 9 tools, complete feature index, reasoning mode table
+- **Provider/Tool Count Alignment**: Updated counts across PRD, HLD, CLAUDE.md, AGENTS.md, README_CN.md, GENERAL_TEST_GUIDE (7 → 10 providers, 8 → 9 tools)
+- **Path Migration**: Updated `.kodax/session_plan.md` and `.kodax/projects/` references to `.agent/project/` in FEATURE_LIST, DD, features/README
+- **Roadmap Expansion**: Added features 026-030 to FEATURE_LIST and version design docs (v0.7.0, v0.8.0, v1.0.0)
+
+---
+
 ## [0.6.10] - 2026-03-18
 
 ### Added
