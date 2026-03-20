@@ -268,7 +268,7 @@ function getBashTemporaryHelperScriptWarning(command: string, projectRoot?: stri
  * Permission logic:
  * 1. Plan mode: block modification tools
  * 2. Protected paths: always confirm (.kodax/, ~/.kodax/, out-of-project)
- * 3. Mode-based checks (default/accept-edits/auto-in-project)
+ * 3. Mode-based checks (plan/accept-edits/auto-in-project)
  * 4. alwaysAllowTools pattern matching (bash only, accept-edits only)
  * 5. Call onConfirm if needed
  * 6. Execute via core's executeTool()
@@ -349,7 +349,7 @@ export async function executeWithPermission(
     }
   }
 
-  // === 6. default / accept-edits / plan: standard confirmTools check ===
+  // === 6. plan / accept-edits / auto-in-project: standard confirmTools check ===
   if (permContext.confirmTools.has(toolName)) {
     let skipConfirmation = false;
 
