@@ -6,6 +6,24 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.13] - 2026-03-21
+
+### Added
+- **FEATURE_033: REPL Parallel Toggle (`/parallel`)**: New `/parallel [on|off|toggle]` command with `/pm` alias to dynamically switch between parallel and serial tool execution during REPL sessions; execution mode persisted to `~/.kodax/config.json` and synced across classic REPL, Ink REPL, status bar, and startup banner
+
+### Documentation
+- **FEATURE_037**: API Token Usage design — real usage value preferred with estimation fallback
+- **FEATURE_035**: MCP Bridge design with user-level paths
+- **FEATURE_034**: Extension + Capability Runtime design
+- **FEATURE_038**: Official Sandbox Extension design for `@kodax/sandbox` optional package
+- **README Language Switcher**: Added English/Chinese toggle link
+
+### Changed
+- Aligned legal and contributor metadata across documentation
+- Refreshed permission mode messaging and CLI help text
+
+---
+
 ## [0.6.12] - 2026-03-19
 
 ### Added
