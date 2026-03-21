@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-20_
+_Last Updated: 2026-03-21_
 
 ---
 
@@ -31,7 +31,7 @@ _Last Updated: 2026-03-20_
 | v0.6.10 | Released | 1 | 1/1 (100%) |
 | v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.6.15 | Planned | 2 | 0/2 (0%) |
-| v0.7.0 | Planned | 5 | 0/5 (0%) |
+| v0.7.0 | Planned | 6 | 0/6 (0%) |
 | v0.8.0 | Planned | 5 | 0/5 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
 | v0.9.0 | Planned | 1 | 0/1 (0%) |
@@ -77,6 +77,7 @@ _Last Updated: 2026-03-20_
 | 034 | Enhancement | Planned | High | Extension + Capability Runtime | v0.8.0 | - | [Design](features/v0.8.0.md#034) | 2026-03-20 | - | - |
 | 035 | New | Planned | High | MCP 能力 Provider | v0.7.0 | - | [Design](features/v0.7.0.md#035) | 2026-03-20 | - | - |
 | 036 | Enhancement | Planned | Medium | DeepSeek 内置 Provider 支持 | v0.6.15 | - | [Design](features/v0.6.15.md#036) | 2026-03-20 | - | - |
+| 037 | Enhancement | Planned | Medium | API Token Usage 真实值优先 + 估算回退 | v0.7.0 | - | [Design](features/v0.7.0.md#037) | 2026-03-21 | - | - |
 ### 014: 项目模式增强 (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -1411,10 +1412,62 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 最大输出: `deepseek-chat` 8K / `deepseek-reasoner` 64K
 - Reasoning: `native-effort`
 
+### 037: API Token Usage 真实值优先 + 估算回退 (PLANNED)
+- **Category**: Enhancement
+- **Status**: Planned
+- **Priority**: Medium
+- **Planned**: v0.7.0
+- **Released**: -
+- **Design**: [v0.7.0.md#037](features/v0.7.0.md#037)
+- **Created**: 2026-03-21
+- **Started**: -
+- **Completed**: -
+
+**Description**:
+建立统一的 Token Usage 获取策略：优先使用 API 返回的真实 token 用量，仅在 API 未返回有效 usage 时回退到客户端 `js-tiktoken` 估算。
+
+**背景**:
+- 所有 Provider API 均支持返回 usage 数据，但 KodaX 当前**零提取**
+- CLI bridge 解析器已提取 usage 但在 ACP 协议转换（`pseudo-acp-server.ts`）中被丢弃
+- compaction/context 管理完全依赖客户端估算（`estimateTokens()`），存在误差
+- `KodaXStreamResult` 接口没有 usage 字段，无法传播真实 token 数据
+
+**Goals**:
+1. **扩展 KodaXStreamResult** — 添加可选 `usage` 字段（`inputTokens`, `outputTokens`, `totalTokens`）
+2. **Anthropic 协议族提取** — 从 `message_start` 提取 `input_tokens`，从 `message_delta` 提取 `output_tokens`，合并输出
+3. **OpenAI 协议族提取** — 添加 `stream_options: { include_usage: true }` 参数，从最终 chunk 提取 usage
+4. **CLI Bridge 修复** — 修复 `pseudo-acp-server.ts` 丢失 usage 的问题，将 usage 数据传播至 provider 层
+5. **优先使用真实值** — compaction 等场景优先使用 `usage.totalTokens`，仅在缺失时回退到 `estimateTokens()`
+
+**Provider Usage 调研**:
+
+| Provider | 协议 | Usage 来源 | 当前状态 |
+|----------|------|-----------|---------|
+| Anthropic | Anthropic SSE | `message_start.input_tokens` + `message_delta.usage.output_tokens` | 忽略 |
+| Kimi-code (k2.5) | Anthropic 兼容 | 同上 | 忽略 |
+| MiniMax-coding | Anthropic 兼容 | 同上 | 忽略 |
+| Zhipu-coding | Anthropic 兼容 | 同上 | 忽略 |
+| OpenAI | OpenAI SSE | `stream_options.include_usage` → 最终 chunk | 未启用 |
+| Kimi (Moonshot) | OpenAI 兼容 | 同上 | 未启用 |
+| Qwen (通义) | OpenAI 兼容 | 同上 | 未启用 |
+| Zhipu (智谱 Paas) | OpenAI 兼容 | 同上 | 未启用 |
+| DeepSeek | OpenAI 兼容 | 同上 | 未启用 |
+| Gemini CLI | CLI bridge | `result` 事件 `stats` 字段 | 解析后在 pseudo-acp-server 丢失 |
+| Codex CLI | CLI bridge | `turn.completed` 事件 `usage` 字段 | 解析后在 pseudo-acp-server 丢失 |
+
+**Key Files**:
+- `packages/ai/src/types.ts` — `KodaXStreamResult` 接口扩展
+- `packages/ai/src/providers/anthropic.ts` — 提取 `message_start` + `message_delta` usage
+- `packages/ai/src/providers/openai.ts` — 添加 `stream_options`，提取 usage
+- `packages/ai/src/cli-events/pseudo-acp-server.ts` — 修复 usage 丢失
+- `packages/ai/src/cli-events/acp-base.ts` — 接收 usage 数据
+- `packages/agent/src/tokenizer.ts` — 添加 usage 优先 + fallback 逻辑
+- `packages/agent/src/compaction/compaction.ts` — 优先使用真实 usage
+
 ## Summary
-- Total: 35 (16 Planned, 0 In Progress, 19 Completed)
-- By Priority: Critical: 3, High: 27, Medium: 5, Low: 0
+- Total: 36 (17 Planned, 0 In Progress, 19 Completed)
+- By Priority: Critical: 3, High: 27, Medium: 6, Low: 0
 - Current Version: v0.6.11
 - Next Release (v0.6.15): 2 features (033, 036), 0 completed, 0 in progress
-- Future Releases: v0.7.0 (019, 026, 029, 032, 035), v0.8.0 (007, 018, 025, 028, 034), v0.9.0 (031), v1.0.0 (022, 023, 030)
+- Future Releases: v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034), v0.9.0 (031), v1.0.0 (022, 023, 030)
 - Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High)
