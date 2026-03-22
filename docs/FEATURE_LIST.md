@@ -8,7 +8,7 @@ _Last Updated: 2026-03-22_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.6.14 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.6.15 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.7.0 | 当前规划的版本 |
 
 ---
@@ -1588,7 +1588,7 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 ## Summary
 - Total: 40 (17 Planned, 0 In Progress, 23 Completed)
 - By Priority: Critical: 3, High: 30, Medium: 6, Low: 0
-- Current Version: v0.6.14
-- Next Release (v0.6.15): 4 features (033, 036, 039, 040), all completed
+- Current Version: v0.6.15
+- Next Release (v0.7.0): 6 features (019, 026, 029, 032, 035, 037)
 - Future Releases: v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
 - Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High)
