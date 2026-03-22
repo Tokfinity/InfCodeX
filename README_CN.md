@@ -77,7 +77,9 @@ CLI 默认配置可以写到 `~/.kodax/config.json`：
 ```json
 {
   "provider": "zhipu-coding",
-  "reasoningMode": "auto"
+  "reasoningMode": "auto",
+  "permissionMode": "accept-edits",
+  "parallel": false
 }
 ```
 
@@ -143,6 +145,10 @@ const result = await runKodaX(
   {
     provider: 'my-openai-compatible',
     reasoningMode: 'auto',
+    context: {
+      gitRoot: '/repo',
+      executionCwd: '/repo/packages/app',
+    },
   },
   '解释这个代码库'
 );
@@ -320,6 +326,10 @@ process.env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY ?? 'your_api_key';
 const result = await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/app',
+  },
   events: {
     onTextDelta: (text) => process.stdout.write(text),
   },
@@ -420,6 +430,20 @@ kodax
 kodax --auto-continue --max-hours 2
 ```
 
+### ACP Server
+
+KodaX 也可以作为基于 stdio 的 ACP Server 运行，方便编辑器和 IDE 接入：
+
+```bash
+kodax acp serve
+kodax acp serve --cwd /path/to/repo --permission-mode accept-edits
+kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
+```
+
+这个模式支持 ACP `initialize`、`sessions/new`、`chat/prompt`、`chat/cancel`、流式 session update，以及权限请求，同时复用 KodaX 原本的运行时和工具语义。
+
+ACP session 的 `cwd` 会显式传入 coding runtime 的 `executionCwd`。如果你在启动 server 时传了 `--cwd`，这个值会固定为所有 ACP session 的执行根目录。这样 prompt 上下文、相对路径工具和 shell 命令都会以显式目录为基准，而不会去修改 Node.js 进程级的全局工作目录。
+
 ### 权限控制
 
 KodaX 提供 3 种权限模式，支持精细控制：
@@ -481,6 +505,7 @@ kodax --help
 
 # 详细主题帮助
 kodax -h sessions      # 会话管理详解
+kodax -h acp           # ACP Server 模式
 kodax -h init          # 长时间运行任务初始化
 kodax -h project       # Project 模式 / Harness 工作流
 kodax -h auto          # 自动继续模式
@@ -512,6 +537,10 @@ const events: KodaXEvents = {
 const result = await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/service',
+  },
   events,
 }, '1+1等于几？');
 
@@ -564,6 +593,10 @@ class MyDatabaseStorage implements KodaXSessionStorage {
 await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo',
+  },
   session: {
     id: 'my-session-123',
     storage: new MyDatabaseStorage(),
@@ -580,6 +613,27 @@ await runKodaX({
 | **调用方式** | 函数 | 类实例 |
 | **上下文** | 每次独立 | 持续累积 |
 | **适用场景** | 单次任务、批处理 | 交互对话、多步骤任务 |
+
+### 工作目录语义
+
+`runKodaX()` 会区分两个相关但不完全相同的概念：
+
+- `context.gitRoot`: 用于项目范围 prompt、权限判断和项目级路径策略的项目根目录。
+- `context.executionCwd`: 用于 prompt 上下文、相对路径工具解析和 shell 执行的工作目录。
+
+如果没有显式传入 `executionCwd`，KodaX 会依次回退到 `gitRoot`，再回退到 `process.cwd()`。
+
+```typescript
+await runKodaX({
+  provider: 'zhipu-coding',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/web',
+  },
+}, '审查当前子包并运行本地检查');
+```
+
+这在 monorepo 里尤其有用，因为项目根和当前正在工作的 package 目录往往不是同一个位置。
 
 ---
 
@@ -699,6 +753,10 @@ import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax/coding';
 const result = await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/service',
+  },
   events: {
     onTextDelta: (text) => process.stdout.write(text)
   }

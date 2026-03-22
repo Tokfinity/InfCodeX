@@ -29,7 +29,7 @@ import {
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
-import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from '../permission/types.js';
+import { computeConfirmTools, FILE_MODIFICATION_TOOLS, normalizePermissionMode } from '../permission/types.js';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { getGitRoot, loadConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
 import {
@@ -143,7 +143,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialThinking = initialReasoningMode !== 'off';
   const initialParallel = options.parallel ?? (config as { parallel?: boolean }).parallel ?? false;
   const initialPermissionMode: PermissionMode =
-    (config as { permissionMode?: PermissionMode }).permissionMode ?? 'accept-edits';
+    normalizePermissionMode((config as { permissionMode?: string }).permissionMode, 'accept-edits') ?? 'accept-edits';
 
   // Apply theme (using default dark theme) - 应用主题 (使用默认 dark 主题)
   // TODO: Read theme setting from config file - TODO: 从配置文件读取主题设置
@@ -1081,7 +1081,7 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
     chalk.hex(theme.colors.dim)('  |  Execution: ') +
     (config.parallel
       ? chalk.hex(theme.colors.success)('parallel')
-      : chalk.hex(theme.colors.dim)('serial'))
+      : chalk.hex(theme.colors.dim)('sequential'))
   );
 
   // Compaction info
@@ -1103,7 +1103,7 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
 
   console.log(chalk.hex(theme.colors.dim)('  Quick tips:'));
   console.log(chalk.hex(theme.colors.primary)('    /help      ') + chalk.hex(theme.colors.dim)('Show all commands'));
-  console.log(chalk.hex(theme.colors.primary)('    /mode      ') + chalk.hex(theme.colors.dim)('Switch code/ask mode'));
+  console.log(chalk.hex(theme.colors.primary)('    /mode      ') + chalk.hex(theme.colors.dim)('Switch permission mode'));
   console.log(chalk.hex(theme.colors.primary)('    /parallel  ') + chalk.hex(theme.colors.dim)('Toggle parallel tool execution'));
   console.log(chalk.hex(theme.colors.primary)('    /clear     ') + chalk.hex(theme.colors.dim)('Clear conversation'));
   console.log(chalk.hex(theme.colors.primary)('    @file      ') + chalk.hex(theme.colors.dim)('Add file to context'));

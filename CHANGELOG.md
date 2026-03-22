@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.15] - 2026-03-22
+
+### Added
+- **FEATURE_040: ACP Server Support**: `acp serve` CLI command exposes KodaX as a standard ACP (Agent Client Protocol) agent runtime via stdio; `KodaXAcpServer` class with streaming, permission enforcement, cancel, and mode validation; `ACP_PERMISSION_MODE_IDS` mapping for ACP mode negotiation; fail-closed on unknown permission modes
+- **Execution CWD context**: `resolveExecutionCwd()` utility in `runtime-paths.ts` resolves deterministic working directory from `executionCwd > gitRoot > process.cwd()`; all tools (bash, read, edit, write, glob, grep) now use context-aware CWD instead of `process.cwd()`
+- **Permission mode helpers**: `normalizePermissionMode()` and `isPermissionMode()` with `PERMISSION_MODES` constant for safe mode validation throughout the codebase; `@kodax/repl` re-exports permission helpers for external consumers
+- **`onToolUseStart` input parameter**: Tool start events now include `input` field for full tool call context visibility
+- **`beforeToolExecute` tool ID**: Permission hook receives `toolId` in meta parameter for fine-grained tool tracking
+
+### Changed
+- **Deprecated `default` permission mode removed**: `default` mode migrated to `accept-edits` at runtime and persisted to config; `normalizePermissionMode()` used throughout REPL, executor, and permission context for safe handling
+- **Permission system refactoring**: Extracted `isPathInsideProject()` and `getBashOutsideProjectWriteRisk()` from executor to shared `permission.ts`; executor and ACP server now use shared helpers
+- **Prompt builder CWD-aware**: `buildSystemPrompt()` uses `executionCwd` for git context, project snapshot, and long-running context resolution; feature file paths resolved relative to project root
+- **Renamed "serial" to "sequential"**: Status bar, banner, `/parallel` help text, and all display surfaces now use "sequential" for non-parallel execution mode
+- **GlobalShortcuts parallel sync**: `onSetParallel` callback wired through to keep `currentOptionsRef` in sync when toggling parallel mode via keyboard
+- **`/mode` command**: Description updated from "Switch code/ask mode" to "Switch permission mode"; uses `PERMISSION_MODES` constant instead of hardcoded array
+- **InputPrompt Tab behavior**: Tab key handler no longer returns `true` in all branches, preventing double character insertion on unmatched tab completions
+
+### Documentation
+- Provider count updated to 11 across CLAUDE.md, AGENTS.md, HLD.md (DeepSeek)
+- Feature merge: v0.6.20 content consolidated into v0.6.15; v0.6.20.md deleted
+- docs/features/README.md comprehensive update (providers, commands, release history, feature index 026-040)
+- CHANGELOG.md reference fixed (v0.6.20 → v0.6.15)
+
+### Tests
+- New test files: `builder.test.ts`, `InputPrompt.test.tsx`, `GlobalShortcuts.test.ts`, `ShortcutsRegistry.test.ts`
+- Updated tool tests for `executionCwd` context parameter (grep, glob)
+- Updated status bar tests from "serial" to "sequential"
+- ACP server tests: streaming, permissions, cancel, mode validation, cwd handling, fail-closed
+
+---
+
 ## [0.6.14] - 2026-03-22
 
 ### Added
@@ -25,7 +57,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Clarified plan mode write allowance error messages with guidance on allowed locations
 - Updated permission system with `getPlanModeBlockReason` and `isPlanModeAllowedPath` for precise path-based write control
-- Updated FEATURE_LIST.md with features 039-040 design documents for v0.6.20
+- Updated FEATURE_LIST.md with features 039-040 design documents for v0.6.15
 - Expanded KNOWN_ISSUES.md with technical debt inventory
 
 ---

@@ -22,6 +22,9 @@ describe('toolGrep', () => {
     const result = await toolGrep({
       pattern: 'beta',
       path: filePath,
+    }, {
+      backups: new Map(),
+      executionCwd: tempDir,
     });
 
     expect(result).toContain('notes.txt:2: beta');
@@ -31,6 +34,8 @@ describe('toolGrep', () => {
     const result = await toolGrep({
       pattern: '(a+)+$',
       path: process.cwd(),
+    }, {
+      backups: new Map(),
     });
 
     expect(result).toContain('[Tool Error] grep: Pattern rejected as potentially unsafe');

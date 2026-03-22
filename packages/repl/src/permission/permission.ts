@@ -397,6 +397,31 @@ function isPathInsideDirectory(targetPath: string, directoryPath: string): boole
   return normalizedTarget === normalizedDirectory || normalizedTarget.startsWith(normalizedDirectory + path.sep);
 }
 
+/**
+ * Check whether a path stays inside the project root after resolution.
+ */
+export function isPathInsideProject(targetPath: string, projectRoot: string): boolean {
+  try {
+    const resolvedRoot = path.resolve(projectRoot);
+    const resolvedTarget = path.resolve(
+      resolvedRoot,
+      expandSystemTempAlias(expandHomeDirectory(targetPath)),
+    );
+    return isPathInsideDirectory(resolvedTarget, resolvedRoot);
+  } catch {
+    return false;
+  }
+}
+
+function collectAbsolutePathCandidates(command: string): string[] {
+  const matches = command.match(/[A-Za-z]:[\\/][^\s;|&<>(){}'"]+|\/[^\s;|&<>(){}'"]+/g);
+  if (!matches) {
+    return [];
+  }
+
+  return matches.filter(match => !/^(?:\/dev\/|\/proc\/)/i.test(match));
+}
+
 function resolveExistingPathPrefix(targetPath: string): string {
   const resolved = path.resolve(targetPath);
   if (fs.existsSync(resolved)) {
@@ -535,6 +560,31 @@ export function collectBashWriteTargets(command: string): string[] {
   }
 
   return Array.from(targets);
+}
+
+export function getBashOutsideProjectWriteRisk(
+  command: string,
+  projectRoot: string
+): { dangerous: boolean; reason?: string } {
+  if (!isBashWriteCommand(command)) {
+    return { dangerous: false };
+  }
+
+  const targets = new Set<string>([
+    ...collectBashWriteTargets(command),
+    ...collectAbsolutePathCandidates(command),
+  ]);
+
+  for (const targetPath of targets) {
+    if (!isPathInsideProject(targetPath, projectRoot)) {
+      return {
+        dangerous: true,
+        reason: `Command may modify file outside project: ${targetPath}`,
+      };
+    }
+  }
+
+  return { dangerous: false };
 }
 
 export function getPlanModeBlockReason(

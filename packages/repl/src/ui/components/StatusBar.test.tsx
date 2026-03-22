@@ -76,4 +76,17 @@ describe("StatusBar", () => {
 
     expect(text).toContain("parallel");
   });
+
+  it("shows sequential execution mode when parallel execution is disabled", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      parallel: false,
+      provider: "anthropic",
+      model: "sonnet",
+    });
+
+    expect(text).toContain("sequential");
+    expect(text).not.toContain("serial");
+  });
 });

@@ -69,8 +69,8 @@ function stripAnsi(str: string): string {
   return str.replace(ANSI_REGEX, '');
 }
 
-function formatExecutionMode(parallel = false): 'parallel' | 'serial' {
-  return parallel ? 'parallel' : 'serial';
+function formatExecutionMode(parallel = false): 'parallel' | 'sequential' {
+  return parallel ? 'parallel' : 'sequential';
 }
 
 export function buildStatusBarContent(state: StatusBarState, width = getTerminalWidth()): string {

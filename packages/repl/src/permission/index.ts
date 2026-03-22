@@ -6,7 +6,14 @@
 
 // Types
 export type { PermissionMode, ConfirmResult, PermissionContext } from './types.js';
-export { MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, computeConfirmTools } from './types.js';
+export {
+  MODIFICATION_TOOLS,
+  FILE_MODIFICATION_TOOLS,
+  PERMISSION_MODES,
+  computeConfirmTools,
+  isPermissionMode,
+  normalizePermissionMode,
+} from './types.js';
 
 // Permission utilities
 export {
@@ -20,6 +27,8 @@ export {
   isBashWriteCommand,
   isBashReadCommand,
   collectBashWriteTargets,
+  isPathInsideProject,
+  getBashOutsideProjectWriteRisk,
   getPlanModeAllowedWritablePaths,
   getPlanModeBlockReason,
   isPlanModeAllowedPath,
