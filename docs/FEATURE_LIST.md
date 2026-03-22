@@ -8,7 +8,7 @@ _Last Updated: 2026-03-22_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.6.11 | 最新发布版本（仅供参考） |
+| **Current Release** | v0.6.13 | 最新发布版本（仅供参考） |
 | **Planned Version** | v0.6.20 | 当前规划的版本 |
 
 ---
@@ -31,7 +31,7 @@ _Last Updated: 2026-03-22_
 | v0.6.10 | Released | 1 | 1/1 (100%) |
 | v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.6.15 | Completed | 2 | 2/2 (100%) |
-| v0.6.20 | Planned | 2 | 0/2 (0%) |
+| v0.6.20 | Planned | 2 | 1/2 (50%) |
 | v0.7.0 | Planned | 6 | 0/6 (0%) |
 | v0.8.0 | Planned | 6 | 0/6 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
@@ -80,7 +80,7 @@ _Last Updated: 2026-03-22_
 | 036 | Enhancement | Completed | Medium | DeepSeek 内置 Provider 支持 | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#036) | 2026-03-20 | 2026-03-21 | 2026-03-21 |
 | 037 | Enhancement | Planned | Medium | API Token Usage 真实值优先 + 估算回退 | v0.7.0 | - | [Design](features/v0.7.0.md#037) | 2026-03-21 | - | - |
 | 038 | New | Planned | High | Official Sandbox Extension | v0.8.0 | - | [Design](features/v0.8.0.md#feature_038-official-sandbox-extension) | 2026-03-21 | - | - |
-| 039 | Enhancement | Planned | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.20 | - | [Design](features/v0.6.20.md#039) | 2026-03-22 | - | - |
+| 039 | Enhancement | Completed | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.20 | v0.6.13 | [Design](features/v0.6.20.md#039) | 2026-03-22 | - | 2026-03-22 |
 | 040 | New | Planned | High | ACP Server 支持（供编辑器/IDE 直接调用） | v0.6.20 | - | [Design](features/v0.6.20.md#040) | 2026-03-22 | - | - |
 ### 014: 项目模式增强 (COMPLETED)
 - **Category**: Refactor
@@ -1523,16 +1523,16 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 事件总线在 038 中只用于初始化、状态和诊断，不承担主要 enforcement
 - REPL 仍可保留 plan / accept-edits / auto-in-project 等 UX 语义，但这些不再被描述为 sandbox 本体
 
-### 039: Plan 模式双写白名单（项目说明文档 + 系统临时目录） (PLANNED)
+### 039: Plan 模式双写白名单（项目说明文档 + 系统临时目录） (COMPLETED)
 - **Category**: Enhancement
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.20
-- **Released**: -
+- **Released**: v0.6.13
 - **Design**: [v0.6.20.md#039](features/v0.6.20.md#039)
 - **Created**: 2026-03-22
 - **Started**: -
-- **Completed**: -
+- **Completed**: 2026-03-22
 
 **Description**:
 在保持 Plan 模式“默认禁止写入”的主语义不变的前提下，增加一个严格受限的双写白名单：允许写入当前项目下的 `.agent/plan_mode_doc.md`，以及当前操作系统的系统临时目录，用于计划说明、阶段性草稿和临时产物落盘，但仍然禁止写入其他工作区文件与任意非临时系统路径。
@@ -1580,9 +1580,9 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - README / 集成文档需要新增“如何把 KodaX 作为 ACP agent 接入外部工具”的说明
 
 ## Summary
-- Total: 40 (18 Planned, 0 In Progress, 22 Completed)
+- Total: 40 (17 Planned, 0 In Progress, 23 Completed)
 - By Priority: Critical: 3, High: 30, Medium: 6, Low: 0
-- Current Version: v0.6.11
-- Next Release (v0.6.20): 2 features (039, 040), 0 completed, 0 in progress
+- Current Version: v0.6.13
+- Next Release (v0.6.20): 2 features (039, 040), 1 completed, 0 in progress
 - Future Releases: v0.6.20 (039, 040), v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
-- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High), 039 - Plan 模式双写白名单（项目说明文档 + 系统临时目录） (High), 040 - ACP Server 支持（供编辑器/IDE 直接调用） (High)
+- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High), 040 - ACP Server 支持（供编辑器/IDE 直接调用） (High)
