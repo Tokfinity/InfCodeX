@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.14] - 2026-03-22
+
+### Added
+- **FEATURE_039: Plan Mode Write Whitelist**: Allow writes to `.agent/plan_mode_doc.md` and system temp directory during plan mode; path normalization with symlink resolution; cross-platform temp directory expansion (`%TEMP%`, `$TMPDIR`, etc.); block writes to all other paths with clear error messages
+- **DeepSeek Built-in Provider**: Native provider support for DeepSeek AI with configuration via `DEEPSEEK_API_KEY` environment variable
+
+### Fixed
+- **Security: Shell injection in skill-resolver**: Replaced `execSync` with safe `child_process.execFile` API
+- **Security: Direct `!command` execution**: Restricted to safe read-only commands only; write operations now require explicit Bash tool usage
+- **Security: Shell-executor argument sanitization**: Hardened against command injection vectors
+- **ReDoS risk in grep tool**: Escaped user-provided RegExp patterns to prevent catastrophic backtracking
+- **Accidentally committed build artifacts**: Removed 27 compiled `.js`/`.js.map` files from `packages/ai/src/`; hardened `.gitignore` rules
+- **JSON.parse without validation**: Added schema validation in `storage.ts` and `project-storage.ts` to prevent silent data corruption
+- **Sync file I/O blocking**: Replaced `fs.readFileSync` calls in `reasoning-overrides.ts` with async alternatives
+- **Permission race condition**: Fixed mode switch during confirmation dialog causing incorrect permission evaluation
+
+### Changed
+- Clarified plan mode write allowance error messages with guidance on allowed locations
+- Updated permission system with `getPlanModeBlockReason` and `isPlanModeAllowedPath` for precise path-based write control
+- Updated FEATURE_LIST.md with features 039-040 design documents for v0.6.20
+- Expanded KNOWN_ISSUES.md with technical debt inventory
+
+---
+
 ## [0.6.13] - 2026-03-21
 
 ### Added
