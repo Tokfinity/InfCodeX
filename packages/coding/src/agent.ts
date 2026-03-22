@@ -36,6 +36,7 @@ import {
   maybeCreateAutoReroutePlan,
   type ReasoningPlan,
 } from './reasoning.js';
+import { resolveExecutionCwd } from './runtime-paths.js';
 
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
@@ -301,12 +302,13 @@ async function getToolExecutionOverride(
   events: KodaXEvents,
   name: string,
   input: Record<string, unknown>,
+  toolId?: string,
 ): Promise<string | undefined> {
   if (!events.beforeToolExecute) {
     return undefined;
   }
 
-  const allowed = await events.beforeToolExecute(name, input);
+  const allowed = await events.beforeToolExecute(name, input, { toolId });
   if (allowed === false) {
     return CANCELLED_TOOL_RESULT_MESSAGE;
   }
@@ -410,10 +412,13 @@ export async function runKodaX(
   }
   if (!title) title = prompt.slice(0, 50) + (prompt.length > 50 ? '...' : '');
 
+  const executionCwd = resolveExecutionCwd(options.context);
+
   // Simplified context - no permission fields (handled by REPL layer)
   const ctx: KodaXToolExecutionContext = {
     backups: new Map(),
     gitRoot: options.context?.gitRoot ?? undefined,
+    executionCwd,
     askUser: events.askUser, // Issue 069: Pass askUser callback from events
   };
 
@@ -778,11 +783,17 @@ export async function runKodaX(
 
         if (nonBashTools.length > 0) {
           const promises = nonBashTools.map(async tc => {
+            events.onToolUseStart?.({
+              name: tc.name,
+              id: tc.id,
+              input: tc.input as Record<string, unknown> | undefined,
+            });
             // Permission hook - allow REPL layer to control execution
             const override = await getToolExecutionOverride(
               events,
               tc.name,
               tc.input as Record<string, unknown>,
+              tc.id,
             );
             if (override !== undefined) {
               return { id: tc.id, content: override };
@@ -795,11 +806,17 @@ export async function runKodaX(
         }
 
         for (const tc of bashTools) {
+          events.onToolUseStart?.({
+            name: tc.name,
+            id: tc.id,
+            input: tc.input as Record<string, unknown> | undefined,
+          });
           // Permission hook - allow REPL layer to control execution
           const override = await getToolExecutionOverride(
             events,
             tc.name,
             tc.input as Record<string, unknown>,
+            tc.id,
           );
           if (override !== undefined) {
             resultMap.set(tc.id, override);
@@ -816,12 +833,17 @@ export async function runKodaX(
         }
       } else {
         for (const tc of result.toolBlocks) {
-          events.onToolUseStart?.({ name: tc.name, id: tc.id });
+          events.onToolUseStart?.({
+            name: tc.name,
+            id: tc.id,
+            input: tc.input as Record<string, unknown> | undefined,
+          });
           // Permission hook - allow REPL layer to control execution
           const override = await getToolExecutionOverride(
             events,
             tc.name,
             tc.input as Record<string, unknown>,
+            tc.id,
           );
           const content = override ?? await executeTool(tc.name, tc.input, ctx);
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
@@ -1023,6 +1045,7 @@ async function buildReasoningExecutionState(
     reasoningMode: reasoningPlan.mode,
     context: {
       ...options.context,
+      executionCwd: resolveExecutionCwd(options.context),
       promptOverlay: [
         options.context?.promptOverlay,
         reasoningPlan.promptOverlay,

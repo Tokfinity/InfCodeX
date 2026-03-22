@@ -45,7 +45,7 @@ const currentConfig: CurrentConfig = {
   thinking: true,
   reasoningMode: 'auto',
   parallel: false,
-  permissionMode: 'default' as never,
+  permissionMode: 'accept-edits' as never,
 };
 
 describe('project commands', () => {

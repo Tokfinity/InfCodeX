@@ -14,14 +14,15 @@ import {
   PermissionContext,
   FILE_MODIFICATION_TOOLS,
   computeConfirmTools,
+  normalizePermissionMode,
 } from './types.js';
 import {
   isToolCallAllowed,
   isAlwaysConfirmPath,
   isBashReadCommand,
-  isBashWriteCommand,
-  extractPathsFromCommand,
   collectBashWriteTargets,
+  getBashOutsideProjectWriteRisk,
+  isPathInsideProject,
   getPlanModeBlockReason,
 } from './permission.js';
 import { generateSavePattern } from './permission.js';
@@ -53,78 +54,6 @@ const BASH_FILE_WRITE_MARKERS = [
 ];
 
 // ============== Path Safety Checks ==============
-
-/**
- * Check if path is inside project directory
- */
-function isPathInsideProject(targetPath: string, projectRoot: string): boolean {
-  try {
-    const resolvedTarget = path.resolve(targetPath);
-    const resolvedRoot = path.resolve(projectRoot);
-    const normalizedTarget = resolvedTarget.toLowerCase();
-    const normalizedRoot = resolvedRoot.toLowerCase();
-    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if bash command is dangerous outside project
- */
-function isBashCommandDangerousOutsideProject(command: string, projectRoot: string): { dangerous: boolean; reason?: string } {
-  const DANGEROUS_COMMANDS = [
-    'rm ', 'rm -', 'rmdir', 'mv ', 'cp ', 'del ', 'rd ',
-    'shred', 'wipe', 'chmod', 'chown',
-    '>', '>>', '2>',
-  ];
-
-  const normalizedCmd = command.toLowerCase();
-  const hasDangerousCmd = DANGEROUS_COMMANDS.some(cmd => normalizedCmd.includes(cmd));
-  if (!hasDangerousCmd) {
-    return { dangerous: false };
-  }
-
-  const absPathPatterns = [
-    /\/[^\s;|&<>(){}'"]+/g,
-    /[A-Za-z]:[\\/][^\s;|&<>(){}'"]+/g,
-  ];
-
-  for (const pattern of absPathPatterns) {
-    const matches = command.match(pattern);
-    if (matches) {
-      for (const match of matches) {
-        if (match.startsWith('/dev/') || match.startsWith('/tmp/')) continue;
-        if (!isPathInsideProject(match, projectRoot)) {
-          return {
-            dangerous: true,
-            reason: `Command may modify file outside project: ${match}`
-          };
-        }
-      }
-    }
-  }
-
-  if (normalizedCmd.includes('>') || normalizedCmd.includes('>>')) {
-    const redirectMatch = command.match(/[>]>\s*([^\s;|&]+)/g);
-    if (redirectMatch) {
-      for (const match of redirectMatch) {
-        const targetPath = match.replace(/[>]>\s*/, '').trim();
-        if (targetPath && !targetPath.startsWith('/') && !targetPath.match(/^[A-Za-z]:/)) {
-          continue;
-        }
-        if (targetPath && !isPathInsideProject(targetPath, projectRoot)) {
-          return {
-            dangerous: true,
-            reason: `Redirect target outside project: ${targetPath}`
-          };
-        }
-      }
-    }
-  }
-
-  return { dangerous: false };
-}
 
 function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
   const resolvedTarget = path.resolve(targetPath);
@@ -302,7 +231,7 @@ export async function executeWithPermission(
   if (mode === 'auto-in-project' && permContext.gitRoot && toolName === 'bash') {
     const command = input.command as string;
     if (command) {
-      const dangerCheck = isBashCommandDangerousOutsideProject(command, permContext.gitRoot);
+      const dangerCheck = getBashOutsideProjectWriteRisk(command, permContext.gitRoot);
       if (dangerCheck.dangerous) {
         const result = permContext.onConfirm
           ? await permContext.onConfirm(toolName, { ...input, _outsideProject: true, _reason: dangerCheck.reason })
@@ -352,7 +281,7 @@ export function createPermissionContext(options: {
   switchPermissionMode?: PermissionContext['switchPermissionMode'];
   beforeToolExecute?: PermissionContext['beforeToolExecute'];
 }): PermissionContext {
-  const mode = options.permissionMode ?? 'accept-edits';
+  const mode = normalizePermissionMode(options.permissionMode, 'accept-edits') ?? 'accept-edits';
   return {
     permissionMode: mode,
     confirmTools: computeConfirmTools(mode),

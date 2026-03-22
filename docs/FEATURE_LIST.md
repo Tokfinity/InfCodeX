@@ -8,8 +8,8 @@ _Last Updated: 2026-03-22_
 
 | 字段 | 值 | 说明 |
 |------|-----|------|
-| **Current Release** | v0.6.13 | 最新发布版本（仅供参考） |
-| **Planned Version** | v0.6.20 | 当前规划的版本 |
+| **Current Release** | v0.6.14 | 最新发布版本（仅供参考） |
+| **Planned Version** | v0.7.0 | 当前规划的版本 |
 
 ---
 
@@ -30,8 +30,7 @@ _Last Updated: 2026-03-22_
 | v0.6.0 | Released | 6 | 6/6 (100%) |
 | v0.6.10 | Released | 1 | 1/1 (100%) |
 | v0.6.11 | Released | 0 | 0/0 (100%) |
-| v0.6.15 | Completed | 2 | 2/2 (100%) |
-| v0.6.20 | Planned | 2 | 1/2 (50%) |
+| v0.6.15 | Completed | 4 | 4/4 (100%) |
 | v0.7.0 | Planned | 6 | 0/6 (0%) |
 | v0.8.0 | Planned | 6 | 0/6 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
@@ -80,8 +79,8 @@ _Last Updated: 2026-03-22_
 | 036 | Enhancement | Completed | Medium | DeepSeek 内置 Provider 支持 | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#036) | 2026-03-20 | 2026-03-21 | 2026-03-21 |
 | 037 | Enhancement | Planned | Medium | API Token Usage 真实值优先 + 估算回退 | v0.7.0 | - | [Design](features/v0.7.0.md#037) | 2026-03-21 | - | - |
 | 038 | New | Planned | High | Official Sandbox Extension | v0.8.0 | - | [Design](features/v0.8.0.md#feature_038-official-sandbox-extension) | 2026-03-21 | - | - |
-| 039 | Enhancement | Completed | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.20 | v0.6.13 | [Design](features/v0.6.20.md#039) | 2026-03-22 | - | 2026-03-22 |
-| 040 | New | Planned | High | ACP Server 支持（供编辑器/IDE 直接调用） | v0.6.20 | - | [Design](features/v0.6.20.md#040) | 2026-03-22 | - | - |
+| 039 | Enhancement | Completed | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#039) | 2026-03-22 | - | 2026-03-22 |
+| 040 | New | Completed | High | ACP Server 支持（供编辑器/IDE 直接调用） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#040) | 2026-03-22 | 2026-03-22 | 2026-03-22 |
 ### 014: 项目模式增强 (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -1527,9 +1526,9 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - **Category**: Enhancement
 - **Status**: Completed
 - **Priority**: High
-- **Planned**: v0.6.20
-- **Released**: v0.6.13
-- **Design**: [v0.6.20.md#039](features/v0.6.20.md#039)
+- **Planned**: v0.6.15
+- **Released**: v0.6.15
+- **Design**: [v0.6.15.md#039](features/v0.6.15.md#039)
 - **Created**: 2026-03-22
 - **Started**: -
 - **Completed**: 2026-03-22
@@ -1550,16 +1549,16 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 工具报错信息需要明确提示允许的两个写入位置及当前系统识别到的临时目录
 - 文档中明确 Windows / macOS / Linux 的临时目录解析优先级，避免实现歧义
 
-### 040: ACP Server 支持（供编辑器/IDE 直接调用） (PLANNED)
+### 040: ACP Server 支持（供编辑器/IDE 直接调用） (COMPLETED)
 - **Category**: New
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: High
-- **Planned**: v0.6.20
-- **Released**: -
-- **Design**: [v0.6.20.md#040](features/v0.6.20.md#040)
+- **Planned**: v0.6.15
+- **Released**: v0.6.15
+- **Design**: [v0.6.15.md#040](features/v0.6.15.md#040)
 - **Created**: 2026-03-22
-- **Started**: -
-- **Completed**: -
+- **Started**: 2026-03-22
+- **Completed**: 2026-03-22
 
 **Description**:
 让 KodaX 从“能够桥接 ACP/CLI 的内部消费者”升级为“能够直接作为 ACP Server 暴露给外部编辑器、IDE 和其他宿主工具调用”的正式能力。外部工具可以通过 ACP 与 KodaX 建立会话、发送 prompt、接收流式文本与工具调用更新，并把 KodaX 当作一个标准 agent 运行时来接入，而不必依赖私有集成方式。
@@ -1570,6 +1569,13 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 4. **权限与工具语义保真** - 外部 ACP 调用必须沿用与 REPL 相同的权限模式、工具执行反馈和中断语义
 5. **权限模型不分叉** - ACP 只是接入协议，不引入独立于 REPL 的第二套权限系统；继续复用 `plan / default / accept-edits / auto-in-project`
 6. **公共集成契约清晰** - 文档化启动方式、握手、能力边界和推荐接入姿势，便于第三方宿主稳定集成
+
+**Implementation Notes**:
+- 新增 `src/acp_server.ts`，提供真实 ACP server runtime，并将 ACP session/prompt/cancel 映射到 `runKodaX`
+- 新增 `kodax acp serve` CLI 入口与帮助主题，支持 `cwd / provider / model / reasoning / permission-mode`
+- ACP session update 现已覆盖 assistant 文本流、tool call、tool result、current mode update 和 error 文本桥接
+- ACP 权限请求复用 REPL 的 `plan / default / accept-edits / auto-in-project` 语义，宿主不响应时 fail-closed
+- 增补 ACP 协议测试，覆盖流式事件、permission request、allow_always 模式切换与 cancel
 
 **Key Changes**:
 - 新增用户可见的 ACP server 启动入口，而不是只在 provider/bridge 内部使用 ACP
@@ -1582,7 +1588,7 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 ## Summary
 - Total: 40 (17 Planned, 0 In Progress, 23 Completed)
 - By Priority: Critical: 3, High: 30, Medium: 6, Low: 0
-- Current Version: v0.6.13
-- Next Release (v0.6.20): 2 features (039, 040), 1 completed, 0 in progress
-- Future Releases: v0.6.20 (039, 040), v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
-- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High), 040 - ACP Server 支持（供编辑器/IDE 直接调用） (High)
+- Current Version: v0.6.14
+- Next Release (v0.6.15): 4 features (033, 036, 039, 040), all completed
+- Future Releases: v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
+- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High)

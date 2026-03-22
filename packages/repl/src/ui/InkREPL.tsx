@@ -49,6 +49,7 @@ import {
   ConfirmResult,
   createPermissionContext,
   computeConfirmTools,
+  normalizePermissionMode,
   isToolCallAllowed,
   isAlwaysConfirmPath,
   isCommandOnProtectedPath,
@@ -227,7 +228,7 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compacti
           {" | "}
         </Text>
         <Text color={config.parallel ? theme.colors.success : theme.colors.dim}>
-          {config.parallel ? "parallel" : "serial"}
+          {config.parallel ? "parallel" : "sequential"}
         </Text>
         {config.reasoningMode !== 'off' && (
           <Text color={theme.colors.warning}>
@@ -2259,6 +2260,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         onSetPermissionMode={(mode) => {
           setSessionPermissionMode(mode);
         }}
+        onSetParallel={(enabled) => {
+          currentOptionsRef.current.parallel = enabled;
+        }}
         isInputEmpty={isInputEmpty}
         onSavePermissionMode={savePermissionModeUser}
       />
@@ -2512,7 +2516,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // Load permission mode from config file (not from CLI options)
   // CLI is always YOLO mode; REPL uses config file for permission mode
   const initialPermissionMode: PermissionMode =
-    (config.permissionMode as PermissionMode | undefined) ?? 'accept-edits';
+    normalizePermissionMode(config.permissionMode, 'accept-edits') ?? 'accept-edits';
 
   const currentConfig: CurrentConfig = {
     provider: initialProvider,

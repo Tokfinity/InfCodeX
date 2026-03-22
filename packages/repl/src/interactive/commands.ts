@@ -15,7 +15,11 @@ import {
   KodaXOptions,
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
-import { PermissionMode } from '../permission/types.js';
+import {
+  PermissionMode,
+  PERMISSION_MODES,
+  normalizePermissionMode,
+} from '../permission/types.js';
 import {
   describeProviderCapabilitySummary,
   describeReasoningCapabilityControl,
@@ -333,15 +337,14 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Show or switch permission mode (plan/accept-edits/auto-in-project)',
     usage: '/mode [plan|accept-edits|auto-in-project]',
     handler: async (args, _context, callbacks, currentConfig) => {
-      const VALID_MODES: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
       if (args.length === 0) {
-        const m = currentConfig.permissionMode;
+        const m = normalizePermissionMode(currentConfig.permissionMode, 'accept-edits') ?? 'accept-edits';
         console.log(chalk.dim(`\nCurrent mode: ${chalk.cyan(m)}`));
         console.log(chalk.dim('Usage: /mode [plan|accept-edits|auto-in-project]'));
         return;
       }
       const newMode = args[0] as PermissionMode;
-      if (VALID_MODES.includes(newMode)) {
+      if (PERMISSION_MODES.includes(newMode)) {
         currentConfig.permissionMode = newMode;
         callbacks.setPermissionMode?.(newMode);
         savePermissionModeUser(newMode);
@@ -746,11 +749,12 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /parallel          ') + 'Show the current execution mode');
       console.log(chalk.dim('  /parallel on       ') + 'Enable parallel tool execution');
       console.log(chalk.dim('  /parallel off      ') + 'Disable parallel tool execution');
-      console.log(chalk.dim('  /parallel toggle   ') + 'Switch between parallel and serial execution');
+      console.log(chalk.dim('  /parallel toggle   ') + 'Switch between parallel and sequential execution');
       console.log(chalk.dim('  /pm                ') + 'Alias for /parallel');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  When enabled, independent tool calls from a single agent turn can run concurrently.'));
+      console.log(chalk.dim('  When disabled, tool calls run sequentially.'));
       console.log(chalk.dim('  The current value is saved to your KodaX config and shown in the status bar.'));
       console.log();
     },
@@ -956,8 +960,8 @@ function reasoningModeToLegacyThinking(mode: KodaXReasoningMode): boolean {
   return mode !== 'off';
 }
 
-function describeParallelExecution(enabled: boolean): 'parallel' | 'serial' {
-  return enabled ? 'parallel' : 'serial';
+function describeParallelExecution(enabled: boolean): 'parallel' | 'sequential' {
+  return enabled ? 'parallel' : 'sequential';
 }
 
 type ConfigPersistenceResult =

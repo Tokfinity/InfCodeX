@@ -59,7 +59,9 @@ For CLI defaults, create `~/.kodax/config.json`:
 ```json
 {
   "provider": "zhipu-coding",
-  "reasoningMode": "auto"
+  "reasoningMode": "auto",
+  "permissionMode": "accept-edits",
+  "parallel": false
 }
 ```
 
@@ -125,6 +127,10 @@ const result = await runKodaX(
   {
     provider: 'my-openai-compatible',
     reasoningMode: 'auto',
+    context: {
+      gitRoot: '/repo',
+      executionCwd: '/repo/packages/app',
+    },
   },
   'Explain this codebase'
 );
@@ -426,6 +432,20 @@ kodax                    Start the interactive REPL
 --max-hours <n>      Max runtime hours for --auto-continue
 ```
 
+### ACP Server
+
+KodaX can also run as a stdio ACP server for editors and IDEs:
+
+```bash
+kodax acp serve
+kodax acp serve --cwd /path/to/repo --permission-mode accept-edits
+kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
+```
+
+This mode exposes ACP `initialize`, `sessions/new`, `chat/prompt`, `chat/cancel`, streaming session updates, and permission requests while reusing KodaX's normal runtime and tool semantics.
+
+ACP session `cwd` is passed into the coding runtime as an explicit `executionCwd`. If you start the server with `--cwd`, that value pins the execution root for every ACP session. Prompt context, relative file paths, and shell commands stay scoped to that explicit directory without mutating the Node.js process-global working directory.
+
 ### Permission Control
 
 KodaX provides 3 permission modes for fine-grained control:
@@ -465,6 +485,7 @@ kodax --help
 
 # Detailed topic help
 kodax -h sessions      # Session management details
+kodax -h acp           # ACP server mode
 kodax -h init          # Long-running project initialization
 kodax -h project       # Project mode / harness workflow
 kodax -h auto          # Auto-continue mode
@@ -492,6 +513,10 @@ const events: KodaXEvents = {
 const result = await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/service',
+  },
   events,
 }, 'What is 1+1?');
 
@@ -537,6 +562,10 @@ class MyDatabaseStorage implements KodaXSessionStorage {
 
 await runKodaX({
   provider: 'zhipu-coding',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo',
+  },
   session: {
     id: 'my-session-123',
     storage: new MyDatabaseStorage(),
@@ -553,6 +582,27 @@ await runKodaX({
 | **Call Style** | Function | Class instance |
 | **Context** | Independent each time | Accumulates |
 | **Use Case** | Single tasks, batch processing | Interactive dialogue, multi-step tasks |
+
+### Working Directory Semantics
+
+`runKodaX()` distinguishes between two related but different concepts:
+
+- `context.gitRoot`: the project root used for project-scoped prompts and permission logic.
+- `context.executionCwd`: the working directory used for prompt context, relative tool paths, and shell execution.
+
+If `executionCwd` is omitted, KodaX falls back to `gitRoot`, then `process.cwd()`.
+
+```typescript
+await runKodaX({
+  provider: 'zhipu-coding',
+  context: {
+    gitRoot: '/repo',
+    executionCwd: '/repo/packages/web',
+  },
+}, 'Review the current package and run local checks');
+```
+
+This is especially useful for monorepos where the project root and the active package directory are not the same.
 
 ---
 

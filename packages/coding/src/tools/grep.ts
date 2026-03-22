@@ -6,8 +6,9 @@
 
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import path from 'path';
 import { glob as globAsync } from 'glob';
+import type { KodaXToolExecutionContext } from '../types.js';
+import { resolveExecutionPathOrCwd } from '../runtime-paths.js';
 
 const MAX_GREP_PATTERN_LENGTH = 256;
 const INVALID_OUTPUT_MODES = new Set(['content', 'files_with_matches', 'count']);
@@ -58,12 +59,12 @@ function createSafeRegex(pattern: string, ignoreCase: boolean): RegExp {
   }
 }
 
-export async function toolGrep(input: Record<string, unknown>): Promise<string> {
+export async function toolGrep(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const pattern = input.pattern as string;
-  const searchPath = (input.path as string) ?? process.cwd();
+  const searchPath = (input.path as string) ?? ctx.executionCwd ?? ctx.gitRoot;
   const ignoreCase = (input.ignore_case as boolean) ?? false;
   const outputMode = (input.output_mode as string) ?? 'content';
-  const resolvedPath = path.resolve(searchPath);
+  const resolvedPath = resolveExecutionPathOrCwd(searchPath, ctx);
   const results: string[] = [];
   let regex: RegExp;
 

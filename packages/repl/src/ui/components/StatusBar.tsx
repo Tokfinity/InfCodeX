@@ -141,7 +141,7 @@ export function getStatusBarText({
 
   parts.push('KodaX');
   parts.push(permissionMode.toUpperCase());
-  parts.push(parallel ? 'parallel' : 'serial');
+  parts.push(parallel ? 'parallel' : 'sequential');
 
   const rModeShort = formatReasoningModeShort(reasoningMode);
   const rCapShort = formatReasoningCapabilityShort(reasoningCapability);
@@ -215,7 +215,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   // 3: Execution mode
   const executionDisplay = (
     <Text color={parallel ? 'green' : 'gray'}>
-      {parallel ? 'parallel' : 'serial'}
+      {parallel ? 'parallel' : 'sequential'}
     </Text>
   );
 

@@ -15,6 +15,7 @@ import { Command } from 'commander';
 import {
   loadCommands,
   parseCommandCall,
+  parsePermissionModeOption,
   processCommandCall,
   KODAX_COMMANDS_DIR,
   KodaXCommand,
@@ -293,6 +294,13 @@ describe('CLI Entry Point', () => {
   it('should not attach a bare action to the root skill subcommand', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).not.toContain('skillCommand.action(() =>');
+  });
+
+  it('should advertise ACP server help and register the ACP subcommand', async () => {
+    const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
+    expect(source).toContain("command('acp')");
+    expect(source).toContain('kodax -h acp');
+    expect(source).toContain('kodax acp serve');
   });
 
   it('should keep the root command executable when subcommands are registered', () => {
@@ -618,6 +626,10 @@ describe('CLI Behavior', () => {
 
   it('should reject unknown options', () => {
     const program = createTestCommand();
+    program.configureOutput({
+      writeOut: () => {},
+      writeErr: () => {},
+    });
     expect(() => {
       program.parse(['node', 'test', '--unknown-option']);
     }).toThrow();
@@ -647,5 +659,16 @@ describe('CLI Behavior', () => {
     program.parse(['node', 'test', '-j']);
 
     expect(resolveCliParallel(program, program.opts(), { parallel: false })).toBe(true);
+  });
+});
+
+describe('parsePermissionModeOption', () => {
+  it('accepts valid ACP permission modes', () => {
+    expect(parsePermissionModeOption('accept-edits')).toBe('accept-edits');
+    expect(parsePermissionModeOption('auto-in-project')).toBe('auto-in-project');
+  });
+
+  it('rejects invalid ACP permission modes', () => {
+    expect(() => parsePermissionModeOption('architect')).toThrow(/Expected one of: plan, accept-edits, auto-in-project/);
   });
 });
