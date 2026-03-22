@@ -38,6 +38,8 @@ import {
 } from './reasoning.js';
 
 const execAsync = promisify(exec);
+const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
+const CANCELLED_TOOL_RESULT_MESSAGE = `${CANCELLED_TOOL_RESULT_PREFIX} Operation cancelled by user`;
 
 /**
  * 验证并修复整个工具调用历史 - Issue 072 enhanced fix
@@ -285,6 +287,63 @@ export function checkPromiseSignal(text: string): [string, string] {
 
 function hasQueuedFollowUp(events: KodaXEvents): boolean {
   return events.hasPendingInputs?.() === true;
+}
+
+function isToolResultErrorContent(content: string): boolean {
+  return /^\[(?:Tool Error|Cancelled|Blocked|Error)\]/.test(content);
+}
+
+function isCancelledToolResultContent(content: string): boolean {
+  return content.startsWith(CANCELLED_TOOL_RESULT_PREFIX);
+}
+
+async function getToolExecutionOverride(
+  events: KodaXEvents,
+  name: string,
+  input: Record<string, unknown>,
+): Promise<string | undefined> {
+  if (!events.beforeToolExecute) {
+    return undefined;
+  }
+
+  const allowed = await events.beforeToolExecute(name, input);
+  if (allowed === false) {
+    return CANCELLED_TOOL_RESULT_MESSAGE;
+  }
+
+  return typeof allowed === 'string' ? allowed : undefined;
+}
+
+async function saveSessionSnapshot(
+  options: KodaXOptions,
+  sessionId: string,
+  data: {
+    messages: KodaXMessage[];
+    title: string;
+    gitRoot?: string;
+    errorMetadata?: SessionErrorMetadata;
+  },
+): Promise<void> {
+  if (!options.session?.storage) {
+    return;
+  }
+
+  const gitRoot = data.gitRoot ?? (await getGitRoot()) ?? '';
+  await options.session.storage.save(sessionId, {
+    messages: data.messages,
+    title: data.title,
+    gitRoot,
+    errorMetadata: data.errorMetadata,
+  });
+}
+
+function createToolResultBlock(toolUseId: string, content: string): KodaXToolResultBlock {
+  return {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content,
+    ...(isToolResultErrorContent(content) ? { is_error: true } : {}),
+  };
 }
 
 /**
@@ -697,7 +756,7 @@ export async function runKodaX(
             if (tc) {
               const errorMsg = `[Tool Error] ${tc.name}: Skipped due to missing required parameters after ${KODAX_MAX_INCOMPLETE_RETRIES} retries`;
               events.onToolResult?.({ id: tc.id, name: tc.name, content: errorMsg });
-              errorResults.push({ type: 'tool_result', tool_use_id: tc.id, content: errorMsg, is_error: true });
+              errorResults.push(createToolResultBlock(tc.id, errorMsg));
             }
           }
           messages.push({ role: 'user', content: errorResults });
@@ -720,13 +779,13 @@ export async function runKodaX(
         if (nonBashTools.length > 0) {
           const promises = nonBashTools.map(async tc => {
             // Permission hook - allow REPL layer to control execution
-            if (events.beforeToolExecute) {
-              const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-              if (allowed === false) {
-                return { id: tc.id, content: '[Cancelled] Operation cancelled by user' };
-              } else if (typeof allowed === 'string') {
-                return { id: tc.id, content: allowed };
-              }
+            const override = await getToolExecutionOverride(
+              events,
+              tc.name,
+              tc.input as Record<string, unknown>,
+            );
+            if (override !== undefined) {
+              return { id: tc.id, content: override };
             }
             const r = await executeTool(tc.name, tc.input, ctx);
             return { id: tc.id, content: r };
@@ -737,15 +796,14 @@ export async function runKodaX(
 
         for (const tc of bashTools) {
           // Permission hook - allow REPL layer to control execution
-          if (events.beforeToolExecute) {
-            const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-            if (allowed === false) {
-              resultMap.set(tc.id, '[Cancelled] Operation cancelled by user');
-              continue;
-            } else if (typeof allowed === 'string') {
-              resultMap.set(tc.id, allowed);
-              continue;
-            }
+          const override = await getToolExecutionOverride(
+            events,
+            tc.name,
+            tc.input as Record<string, unknown>,
+          );
+          if (override !== undefined) {
+            resultMap.set(tc.id, override);
+            continue;
           }
           const content = await executeTool(tc.name, tc.input, ctx);
           resultMap.set(tc.id, content);
@@ -754,33 +812,26 @@ export async function runKodaX(
         for (const tc of result.toolBlocks) {
           const content = resultMap.get(tc.id) ?? '[Error] No result';
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
-          toolResults.push({ type: 'tool_result', tool_use_id: tc.id, content });
+          toolResults.push(createToolResultBlock(tc.id, content));
         }
       } else {
         for (const tc of result.toolBlocks) {
           events.onToolUseStart?.({ name: tc.name, id: tc.id });
           // Permission hook - allow REPL layer to control execution
-          let content: string;
-          if (events.beforeToolExecute) {
-            const allowed = await events.beforeToolExecute(tc.name, tc.input as Record<string, unknown>);
-            if (allowed === false) {
-              content = '[Cancelled] Operation cancelled by user';
-            } else if (typeof allowed === 'string') {
-              content = allowed;
-            } else {
-              content = await executeTool(tc.name, tc.input, ctx);
-            }
-          } else {
-            content = await executeTool(tc.name, tc.input, ctx);
-          }
+          const override = await getToolExecutionOverride(
+            events,
+            tc.name,
+            tc.input as Record<string, unknown>,
+          );
+          const content = override ?? await executeTool(tc.name, tc.input, ctx);
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
-          toolResults.push({ type: 'tool_result', tool_use_id: tc.id, content });
+          toolResults.push(createToolResultBlock(tc.id, content));
         }
       }
 
       // Check if any tool was cancelled by user - 检查是否有工具被用户取消
       const hasCancellation = toolResults.some(r =>
-        typeof r.content === 'string' && r.content.startsWith('[Cancelled]')
+        typeof r.content === 'string' && isCancelledToolResultContent(r.content)
       );
 
       if (hasCancellation) {
@@ -857,10 +908,7 @@ export async function runKodaX(
               false,
             );
 
-            if (options.session?.storage) {
-              const gitRoot = await getGitRoot();
-              await options.session.storage.save(sessionId, { messages, title, gitRoot: gitRoot ?? '' });
-            }
+            await saveSessionSnapshot(options, sessionId, { messages, title });
 
             events.onRetry?.(
               `${
@@ -877,10 +925,7 @@ export async function runKodaX(
       }
 
       // 保存会话
-      if (options.session?.storage) {
-        const gitRoot = await getGitRoot();
-        await options.session.storage.save(sessionId, { messages, title, gitRoot: gitRoot ?? '' });
-      }
+      await saveSessionSnapshot(options, sessionId, { messages, title });
 
       // Notify UI of context usage after each iteration
       events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
@@ -900,15 +945,11 @@ export async function runKodaX(
       };
 
       // Save session with error metadata
-      if (options.session?.storage) {
-        const gitRoot = await getGitRoot();
-        await options.session.storage.save(sessionId, {
-          messages: cleanedMessages,
-          title,
-          gitRoot: gitRoot ?? '',
-          errorMetadata: updatedErrorMetadata,
-        });
-      }
+      await saveSessionSnapshot(options, sessionId, {
+        messages: cleanedMessages,
+        title,
+        errorMetadata: updatedErrorMetadata,
+      });
 
       // 检查是否为 AbortError（用户中断）
       // 参考 Gemini CLI: 静默处理中断，不报告为错误
@@ -944,10 +985,7 @@ export async function runKodaX(
   limitReached = true;
 
   // 最终保存
-  if (options.session?.storage) {
-    const gitRoot = await getGitRoot();
-    await options.session.storage.save(sessionId, { messages, title, gitRoot: gitRoot ?? '' });
-  }
+  await saveSessionSnapshot(options, sessionId, { messages, title });
 
   // 检查最终信号
   const [finalSignal, finalReason] = checkPromiseSignal(lastText);

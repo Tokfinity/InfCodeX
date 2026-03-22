@@ -9,17 +9,80 @@ import fsSync from 'fs';
 import path from 'path';
 import { glob as globAsync } from 'glob';
 
+const MAX_GREP_PATTERN_LENGTH = 256;
+const INVALID_OUTPUT_MODES = new Set(['content', 'files_with_matches', 'count']);
+
+function getUnsafeRegexReason(pattern: string): string | null {
+  if (!pattern.trim()) {
+    return 'Pattern must not be empty';
+  }
+
+  if (pattern.length > MAX_GREP_PATTERN_LENGTH) {
+    return `Pattern exceeds the ${MAX_GREP_PATTERN_LENGTH}-character safety limit`;
+  }
+
+  if (pattern.includes('\0')) {
+    return 'Pattern must not contain null bytes';
+  }
+
+  if (/\\[1-9]/.test(pattern)) {
+    return 'Backreferences are not allowed';
+  }
+
+  if (/\(\?<([=!])/.test(pattern) || /\(\?[=!]/.test(pattern)) {
+    return 'Lookaround assertions are not allowed';
+  }
+
+  if (/\((?:[^()\\]|\\.)*[+*{](?:[^()\\]|\\.)*\)[+*{]/.test(pattern)) {
+    return 'Nested quantifiers are not allowed';
+  }
+
+  if (/\{(?:\d{4,}|\d+,\d{4,}|\d{4,},\d*)\}/.test(pattern)) {
+    return 'Large repetition ranges are not allowed';
+  }
+
+  return null;
+}
+
+function createSafeRegex(pattern: string, ignoreCase: boolean): RegExp {
+  const unsafeReason = getUnsafeRegexReason(pattern);
+  if (unsafeReason) {
+    throw new Error(`Pattern rejected as potentially unsafe. ${unsafeReason}.`);
+  }
+
+  try {
+    return new RegExp(pattern, ignoreCase ? 'i' : '');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid regex pattern. ${message}`);
+  }
+}
+
 export async function toolGrep(input: Record<string, unknown>): Promise<string> {
   const pattern = input.pattern as string;
   const searchPath = (input.path as string) ?? process.cwd();
   const ignoreCase = (input.ignore_case as boolean) ?? false;
   const outputMode = (input.output_mode as string) ?? 'content';
-  const flags = ignoreCase ? 'gi' : 'g';
-  const regex = new RegExp(pattern, flags);
   const resolvedPath = path.resolve(searchPath);
   const results: string[] = [];
+  let regex: RegExp;
+
+  if (!INVALID_OUTPUT_MODES.has(outputMode)) {
+    return `[Tool Error] grep: Unsupported output mode "${outputMode}"`;
+  }
+
+  try {
+    regex = createSafeRegex(pattern, ignoreCase);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Tool Error] grep: ${message}`;
+  }
 
   const stat = fsSync.existsSync(resolvedPath) ? fsSync.statSync(resolvedPath) : null;
+  if (!stat) {
+    return `[Tool Error] grep: Path not found: ${searchPath}`;
+  }
+
   if (stat?.isFile()) {
     try {
       const content = await fs.readFile(resolvedPath, 'utf-8');
@@ -29,9 +92,10 @@ export async function toolGrep(input: Record<string, unknown>): Promise<string> 
           if (outputMode === 'files_with_matches') { results.push(resolvedPath); break; }
           else results.push(`${resolvedPath}:${i + 1}: ${lines[i]!.trim()}`);
         }
-        regex.lastIndex = 0;
       }
-    } catch { }
+    } catch {
+      // Skip unreadable files and continue with a best-effort search result.
+    }
   } else {
     const files = (await globAsync('**/*', { cwd: resolvedPath, nodir: true, absolute: true, ignore: ['**/node_modules/**', '**/.*'] })).slice(0, 100);
     for (const file of files) {
@@ -43,9 +107,10 @@ export async function toolGrep(input: Record<string, unknown>): Promise<string> 
             if (outputMode === 'files_with_matches') { results.push(file); break; }
             else results.push(`${file}:${i + 1}: ${lines[i]!.trim()}`);
           }
-          regex.lastIndex = 0;
         }
-      } catch { }
+      } catch {
+        // Skip unreadable files and continue with a best-effort search result.
+      }
     }
   }
   if (outputMode === 'count') return `${results.length} matches`;

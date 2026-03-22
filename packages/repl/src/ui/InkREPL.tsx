@@ -90,7 +90,7 @@ import { prepareInvocationExecution } from "../interactive/invocation-runtime.js
 
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
-import { processSpecialSyntax, isShellCommandSuccess } from "./utils/shell-executor.js";
+import { processSpecialSyntax, isShellCommandHandled } from "./utils/shell-executor.js";
 import {
   extractHistorySeedsFromMessage,
   extractTextContent,
@@ -2044,8 +2044,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Skip if shell command was executed successfully
       if (
         input.trim().startsWith("!") &&
-        (processed.startsWith("[Shell command executed:") ||
-          processed.startsWith("[Shell:"))
+        isShellCommandHandled(processed)
       ) {
         setIsLoading(false);
         stopStreaming();

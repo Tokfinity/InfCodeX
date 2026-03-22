@@ -233,6 +233,46 @@ export function resolveCliParallel(
   return config.parallel ?? false;
 }
 
+function parseOptionalNonNegativeInt(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeIntWithFallback(value: string | undefined, fallback: number): number {
+  return parseOptionalNonNegativeInt(value) ?? fallback;
+}
+
+function parsePositiveNumberWithFallback(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  const parsed = Number.parseFloat(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
 // ============== CLI 选项转换 ==============
 
 function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false): KodaXOptions {
@@ -1003,10 +1043,10 @@ async function main() {
     init: opts.init,
     append: opts.append ?? false,
     overwrite: opts.overwrite ?? false,
-    maxIter: opts.maxIter ? parseInt(opts.maxIter, 10) : undefined,
+    maxIter: parseOptionalNonNegativeInt(opts.maxIter),
     autoContinue: opts.autoContinue ?? false,
-    maxSessions: parseInt(opts.maxSessions ?? '50', 10),
-    maxHours: parseFloat(opts.maxHours ?? '2'),
+    maxSessions: parseNonNegativeIntWithFallback(opts.maxSessions, 50),
+    maxHours: parsePositiveNumberWithFallback(opts.maxHours, 2),
     prompt: opts.print ? [opts.print] : program.args,
     continue: opts.continue ?? false,
     resume: opts.resume,
