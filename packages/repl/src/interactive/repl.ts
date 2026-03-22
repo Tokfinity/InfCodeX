@@ -4,13 +4,10 @@
 
 import * as readline from 'readline';
 import * as childProcess from 'child_process';
-import * as util from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import chalk from 'chalk';
-
-const execAsync = util.promisify(childProcess.exec);
 
 // Export Ink UI version entry point - 导出 Ink UI 版本的入口
 export { runInkInteractiveMode } from '../ui/index.js';
@@ -33,7 +30,7 @@ import {
 import type { AgentsFile } from '@kodax/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import { computeConfirmTools, FILE_MODIFICATION_TOOLS } from '../permission/types.js';
-import { isToolCallAllowed, isAlwaysConfirmPath, isBashWriteCommand, isBashReadCommand } from '../permission/permission.js';
+import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { getGitRoot, loadConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
 import {
   InteractiveContext,
@@ -68,7 +65,8 @@ import {
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
-import { extractLastAssistantText } from '../ui/utils/message-utils.js';
+import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
+import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
 import { prepareInvocationExecution } from './invocation-runtime.js';
 
 // Extended session storage interface (adds list method) - 扩展的会话存储接口（增加 list 方法）
@@ -439,18 +437,11 @@ Keyboard Shortcuts:
             const mode = currentPermissionMode;
             const confirmTools = computeConfirmTools(mode);
 
-            // Plan mode: block modification tools
-            if (mode === 'plan' && (FILE_MODIFICATION_TOOLS.has(tool) || tool === 'undo')) {
-              console.log(chalk.yellow(`[Blocked] Tool '${tool}' is not allowed in plan mode (read-only)`));
-              return `[Blocked] Tool '${tool}' is not allowed in plan mode (read-only). Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
-            }
-
-            // For bash in plan mode, block write operations
-            if (mode === 'plan' && tool === 'bash') {
-              const command = (input.command as string) ?? '';
-              if (isBashWriteCommand(command)) {
-                console.log(chalk.yellow(`[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}...`));
-                return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
+            if (mode === 'plan') {
+              const planModeBlockReason = getPlanModeBlockReason(tool, input, gitRoot ?? process.cwd());
+              if (planModeBlockReason) {
+                console.log(chalk.yellow(planModeBlockReason));
+                return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
               }
             }
 
@@ -675,6 +666,9 @@ Keyboard Shortcuts:
 
         // Process special syntax and update lastUserMessage - 处理特殊语法并更新 lastUserMessage
         const processed = await processSpecialSyntax(trimmed);
+        if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
+          continue;
+        }
         context.messages.push({ role: 'user', content: processed });
         lastUserMessage = trimmed;
         statusBar?.update({ messageCount: context.messages.length });
@@ -749,7 +743,7 @@ Keyboard Shortcuts:
     // - Empty command → skip (user knows) - 空命令 → 跳过（用户知道）
     // - Failure/Error → send to LLM (needs smart help) - 失败/错误 → 发送给 LLM（需要智能帮助）
     if (trimmed.startsWith('!')) {
-      if (processed.startsWith('[Shell command executed:') || processed.startsWith('[Shell:')) {
+      if (isShellCommandHandled(processed)) {
         continue;
       }
     }
@@ -1025,50 +1019,7 @@ export async function processSpecialSyntax(input: string): Promise<string> {
   // !command syntax: execute shell command - !command 语法：执行 shell 命令
   if (input.startsWith('!')) {
     const command = input.slice(1).trim();
-    if (!command) {
-      return '[Shell: No command provided]';
-    }
-
-    try {
-      console.log(chalk.dim(`\n[Executing: ${command}]`));
-      const { stdout, stderr } = await execAsync(command, {
-        maxBuffer: 1024 * 1024, // 1MB buffer
-        timeout: 30000, // 30 second timeout
-      });
-
-      let result = '';
-      if (stdout) {
-        result += stdout;
-      }
-      if (stderr) {
-        result += (result ? '\n' : '') + `[stderr] ${stderr}`;
-      }
-
-      // Truncate if too long
-      const maxLength = 8000;
-      if (result.length > maxLength) {
-        result = result.slice(0, maxLength) + '\n...[output truncated]';
-      }
-
-      console.log(chalk.dim(result || '[No output]'));
-      console.log(); // Add blank line
-
-      return `[Shell command executed: ${command}]\n\nOutput:\n${result || '(no output)'}`;
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      let errorMessage = err.message;
-
-      // Truncate error if too long
-      const maxLength = 4000;
-      if (errorMessage.length > maxLength) {
-        errorMessage = errorMessage.slice(0, maxLength) + '\n...[error truncated]';
-      }
-
-      console.log(chalk.red(`\n[Shell Error: ${errorMessage}]`));
-      console.log(); // Add blank line
-
-      return `[Shell command failed: ${command}]\n\nError: ${errorMessage}`;
-    }
+    return executeShellCommand(command, { cwd: process.cwd() });
   }
 
   return input;
@@ -1100,14 +1051,7 @@ async function runAgentRound(
 
 // Extract title from messages - 从消息中提取标题
 function extractTitle(messages: KodaXMessage[]): string {
-  const firstUser = messages.find(m => m.role === 'user');
-  if (firstUser) {
-    const content = typeof firstUser.content === 'string'
-      ? firstUser.content
-      : '';
-    return content.slice(0, 50) + (content.length > 50 ? '...' : '');
-  }
-  return 'Untitled Session';
+  return extractSessionTitle(messages);
 }
 
 // Print startup Banner (using theme colors) - 打印启动 Banner (使用主题颜色)
@@ -1163,6 +1107,6 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
   console.log(chalk.hex(theme.colors.primary)('    /parallel  ') + chalk.hex(theme.colors.dim)('Toggle parallel tool execution'));
   console.log(chalk.hex(theme.colors.primary)('    /clear     ') + chalk.hex(theme.colors.dim)('Clear conversation'));
   console.log(chalk.hex(theme.colors.primary)('    @file      ') + chalk.hex(theme.colors.dim)('Add file to context'));
-  console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run shell command'));
+  console.log(chalk.hex(theme.colors.primary)('    !cmd       ') + chalk.hex(theme.colors.dim)('Run read-only shell command'));
   console.log(chalk.hex(theme.colors.dim)('\n  Keyboard: Tab (complete) | Esc+Esc (edit last) | Ctrl+T (reasoning) | Ctrl+E (editor) | Ctrl+R (history)\n'));
 }

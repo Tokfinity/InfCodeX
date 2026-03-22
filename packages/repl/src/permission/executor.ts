@@ -21,6 +21,8 @@ import {
   isBashReadCommand,
   isBashWriteCommand,
   extractPathsFromCommand,
+  collectBashWriteTargets,
+  getPlanModeBlockReason,
 } from './permission.js';
 import { generateSavePattern } from './permission.js';
 
@@ -205,40 +207,6 @@ function getTemporaryHelperScriptWarning(
   }
 }
 
-function collectBashWriteTargets(command: string): string[] {
-  const targets = new Set<string>();
-  const pushTarget = (value: string | undefined) => {
-    const trimmed = value?.trim().replace(/^['"]|['"]$/g, '');
-    if (trimmed) {
-      targets.add(trimmed);
-    }
-  };
-
-  for (const extractedPath of extractPathsFromCommand(command)) {
-    pushTarget(extractedPath);
-  }
-
-  const redirectPattern = />>?\s*([^\s;|&]+)/g;
-  let redirectMatch: RegExpExecArray | null;
-  while ((redirectMatch = redirectPattern.exec(command)) !== null) {
-    pushTarget(redirectMatch[1]);
-  }
-
-  const powershellWritePattern = /(?:set-content|add-content|out-file|new-item)\s+(?:-path\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let powershellMatch: RegExpExecArray | null;
-  while ((powershellMatch = powershellWritePattern.exec(command)) !== null) {
-    pushTarget(powershellMatch[1] ?? powershellMatch[2] ?? powershellMatch[3]);
-  }
-
-  const teePattern = /\btee\b(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let teeMatch: RegExpExecArray | null;
-  while ((teeMatch = teePattern.exec(command)) !== null) {
-    pushTarget(teeMatch[1] ?? teeMatch[2] ?? teeMatch[3]);
-  }
-
-  return Array.from(targets);
-}
-
 function getBashTemporaryHelperScriptWarning(command: string, projectRoot?: string): string | null {
   if (!projectRoot) {
     return null;
@@ -283,14 +251,9 @@ export async function executeWithPermission(
 
   // === 1. Plan mode: block all modification tools ===
   if (mode === 'plan') {
-    if (FILE_MODIFICATION_TOOLS.has(toolName) || toolName === 'undo') {
-      return `[Blocked] Tool '${toolName}' is not allowed in plan mode (read-only). Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
-    }
-    if (toolName === 'bash') {
-      const command = (input.command as string) ?? '';
-      if (isBashWriteCommand(command)) {
-        return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
-      }
+    const planModeBlockReason = getPlanModeBlockReason(toolName, input, permContext.gitRoot);
+    if (planModeBlockReason) {
+      return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
     }
   }
 

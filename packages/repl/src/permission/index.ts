@@ -16,8 +16,13 @@ export {
   isAlwaysConfirmPath,
   isCommandOnProtectedPath,
   inferPermissionMode,
+  getDirectShellBypassBlockReason,
   isBashWriteCommand,
   isBashReadCommand,
+  collectBashWriteTargets,
+  getPlanModeAllowedWritablePaths,
+  getPlanModeBlockReason,
+  isPlanModeAllowedPath,
 } from './permission.js';
 
 // Executor
