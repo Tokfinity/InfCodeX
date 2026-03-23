@@ -1,7 +1,7 @@
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   getDirectShellBypassBlockReason,
   getPlanModeBlockReason,
@@ -11,7 +11,7 @@ import {
 const createdRoots: string[] = [];
 
 function createProjectRoot(): string {
-  const root = fs.mkdtempSync(path.join(process.cwd(), 'kodax-plan-mode-'));
+  const root = createTempDirSync('kodax-plan-mode-', process.cwd());
   createdRoots.push(root);
   return root;
 }
@@ -19,9 +19,7 @@ function createProjectRoot(): string {
 afterEach(() => {
   while (createdRoots.length > 0) {
     const root = createdRoots.pop();
-    if (root) {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
+    removeTempDirSync(root);
   }
 });
 

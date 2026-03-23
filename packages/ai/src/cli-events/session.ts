@@ -1,25 +1,25 @@
 /**
- * 管理 KodaX Session 到 CLI Session 的映射
+ * Tracks the mapping between KodaX session ids and CLI-native session ids.
  */
 export class CLISessionManager {
     private mapping = new Map<string, string>();
 
     /**
-     * 获取 CLI Session ID
+     * Look up the CLI session id for a KodaX session.
      */
     get(kodaxSessionId: string): string | undefined {
         return this.mapping.get(kodaxSessionId);
     }
 
     /**
-     * 设置 CLI Session ID
+     * Record the CLI session id for a KodaX session.
      */
     set(kodaxSessionId: string, cliSessionId: string): void {
         this.mapping.set(kodaxSessionId, cliSessionId);
     }
 
     /**
-     * 清理 Session
+     * Remove the mapping for a KodaX session.
      */
     delete(kodaxSessionId: string): void {
         this.mapping.delete(kodaxSessionId);

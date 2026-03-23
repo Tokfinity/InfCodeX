@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   createProjectHarnessAttempt,
   loadOrCreateProjectHarnessConfig,
@@ -13,7 +13,7 @@ describe('project harness', () => {
   let tempDir = '';
 
   beforeEach(async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'kodax-project-harness-'));
+    tempDir = createTempDirSync('kodax-project-harness-');
     const storage = new ProjectStorage(tempDir);
     await storage.saveFeatures({
       features: [
@@ -25,9 +25,7 @@ describe('project harness', () => {
   });
 
   afterEach(() => {
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    removeTempDirSync(tempDir);
   });
 
   it('blocks direct writes to feature_list.json during harnessed execution', async () => {

@@ -11,7 +11,8 @@ export abstract class CLIExecutor {
     }
 
     /**
-     * 检测 CLI 是否安装（带缓存，避免每次 stream() 重复 spawn）
+     * Check whether the backing CLI is installed, with a small in-memory cache
+     * so repeated stream() calls do not respawn the probe process.
      */
     async isInstalled(): Promise<boolean> {
         if (this._installedCache !== null) return this._installedCache;
@@ -20,12 +21,12 @@ export abstract class CLIExecutor {
     }
 
     /**
-     * 子类实现的安装检测
+     * Provider-specific install probe implementation.
      */
     protected abstract checkInstalled(): Promise<boolean>;
 
     /**
-     * 执行 CLI 并流式返回事件
+     * Execute the CLI and stream normalized events back to the caller.
      */
     async *execute(options: CLIExecutionOptions): AsyncGenerator<CLIEvent> {
         const args = this.buildArgs(options);
@@ -40,23 +41,22 @@ export abstract class CLIExecutor {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
-        // 收集 stderr 用于错误诊断
+        // Capture stderr for diagnostics without interleaving it into stdout JSONL.
         let stderrOutput = '';
         child.stderr?.on('data', (chunk: Buffer) => {
             stderrOutput += chunk.toString();
         });
 
-        // 处理 abort 信号
+        // Forward abort requests to the child process.
         let exited = false;
         const abortHandler = () => { if (!exited) child.kill('SIGTERM'); };
         options.signal?.addEventListener('abort', abortHandler);
         child.on('exit', () => { exited = true; });
 
         try {
-            // 解析 JSON Lines 输出
+            // Parse JSONL output from stdout.
             yield* this.parseOutputStream(child.stdout!, options.signal);
 
-            // 如果 stderr 有内容且没有解析到任何有效事件，抛出错误
             if (stderrOutput.trim()) {
                 console.error(`[CLIExecutor] stderr: ${stderrOutput.trim()}`);
             }
@@ -67,12 +67,12 @@ export abstract class CLIExecutor {
     }
 
     /**
-     * 构建命令行参数
+     * Build the CLI argument list for a single execution.
      */
     protected abstract buildArgs(options: CLIExecutionOptions): string[];
 
     /**
-     * 解析输出流
+     * Parse the subprocess stdout stream as newline-delimited JSON.
      */
     protected async *parseOutputStream(
         stream: NodeJS.ReadableStream,
@@ -94,7 +94,7 @@ export abstract class CLIExecutor {
             }
         }
 
-        // 处理剩余 buffer
+        // Flush any remaining partial line after the stream ends.
         if (buffer.trim() && !signal?.aborted) {
             const event = this.parseLine(buffer.trim());
             if (event) yield event;
@@ -102,7 +102,7 @@ export abstract class CLIExecutor {
     }
 
     /**
-     * 解析单行 JSON
+     * Parse a single JSONL record into a normalized CLI event.
      */
     protected abstract parseLine(line: string): CLIEvent | null;
 }

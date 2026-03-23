@@ -1,5 +1,6 @@
 /**
- * CLI 执行事件 - 统一抽象层，屏蔽两个 CLI 的格式差异
+ * Unified event model for CLI-backed providers.
+ * This hides the wire-format differences between Codex CLI and Gemini CLI.
  */
 export type CLIEvent =
     | CLISessionStartEvent
@@ -23,7 +24,7 @@ export interface CLIMessageEvent {
     timestamp: number;
     role: 'user' | 'assistant';
     content: string;
-    delta?: boolean;  // 是否为增量输出
+    delta?: boolean; // Whether this chunk is streamed incrementally.
     raw: unknown;
 }
 
@@ -75,15 +76,15 @@ export interface CLICompleteEvent {
 }
 
 export interface CLIExecutorConfig {
-    command: string;              // 'codex' 或 'gemini'
-    baseArgs: string[];           // 基础参数
-    timeout?: number;             // 超时时间 (ms)，默认 5 分钟
-    cwd?: string;                 // 工作目录
-    env?: Record<string, string>; // 额外环境变量
+    command: string;              // e.g. "codex" or "gemini"
+    baseArgs: string[];           // Provider-specific base arguments
+    timeout?: number;             // Optional timeout in milliseconds
+    cwd?: string;                 // Working directory for the subprocess
+    env?: Record<string, string>; // Additional environment variables
 }
 
 export interface CLIExecutionOptions {
     prompt: string;
-    sessionId?: string;           // 恢复会话时提供
-    signal?: AbortSignal;         // 取消信号
+    sessionId?: string; // Session identifier for resume flows
+    signal?: AbortSignal; // Cancellation signal
 }
