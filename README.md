@@ -444,6 +444,8 @@ kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
 
 This mode exposes ACP `initialize`, `sessions/new`, `chat/prompt`, `chat/cancel`, streaming session updates, and permission requests while reusing KodaX's normal runtime and tool semantics.
 
+ACP lifecycle logs are written to `stderr` so they do not pollute ACP `stdout`. Use `KODAX_ACP_LOG=off|error|info|debug` to control verbosity. The default is `info`.
+
 ACP session `cwd` is passed into the coding runtime as an explicit `executionCwd`. If you start the server with `--cwd`, that value pins the execution root for every ACP session. Prompt context, relative file paths, and shell commands stay scoped to that explicit directory without mutating the Node.js process-global working directory.
 
 ### Permission Control
