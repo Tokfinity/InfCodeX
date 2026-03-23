@@ -4,22 +4,22 @@ import type { CLIExecutor } from './executor.js';
 import type { CLIEvent } from './types.js';
 
 /**
- * 创建一个伪装的 ACP Server 内存流对。
- * 它会在内部拦截客户端发来的 JSON-RPC 请求，
- * 并在收到 `prompt` 时启动传入的 CLIExecutor，将输出转换成 ACP 事件返回。
+ * Create an in-memory pseudo ACP server backed by a CLI executor.
+ * It accepts ACP JSON-RPC requests, forwards prompts into the executor, and
+ * converts emitted CLI events back into ACP session updates.
  */
-export function createPseudoAcpServer(executor: CLIExecutor, executorModel: string): {
+export function createPseudoAcpServer(executor: CLIExecutor): {
     inputStream: ReadableStream<Uint8Array>;
     outputStream: WritableStream<Uint8Array>;
     abort: () => void;
     executor: CLIExecutor;
 } {
-    // Client writes to reqStream.writable
-    // Server reads from reqStream.readable
+    type PromptCompletion = Promise<'end_turn' | 'cancelled'>;
+
+    // Client writes to reqStream.writable; server reads from reqStream.readable.
     const reqStream = new TransformStream<Uint8Array, Uint8Array>();
 
-    // Server writes to resStream.writable
-    // Client reads from resStream.readable
+    // Server writes to resStream.writable; client reads from resStream.readable.
     const resStream = new TransformStream<Uint8Array, Uint8Array>();
 
     const serverReader = reqStream.readable.getReader();
@@ -33,7 +33,7 @@ export function createPseudoAcpServer(executor: CLIExecutor, executorModel: stri
     const abortController = new AbortController();
     const activePrompts = new Map<string, AbortController>();
 
-    // 独立循环：接收来自 Client 的请求
+    // Background loop that reads JSON-RPC requests from the client side.
     (async () => {
         try {
             while (true) {
@@ -48,85 +48,97 @@ export function createPseudoAcpServer(executor: CLIExecutor, executorModel: stri
                     if (!line.trim()) continue;
                     try {
                         const message = JSON.parse(line);
-                        handleRequest(message);
-                    } catch (e) {
-                        console.error("[PseudoAcpServer] Failed to parse message:", line);
+                        void handleRequest(message).catch((error) => {
+                            console.error('[PseudoAcpServer] Failed to handle request:', error);
+                        });
+                    } catch {
+                        console.error('[PseudoAcpServer] Failed to parse message:', line);
                     }
                 }
             }
         } catch (err) {
-            console.error("[PseudoAcpServer] Stream read error:", err);
+            console.error('[PseudoAcpServer] Stream read error:', err);
         }
     })();
 
-    // 发送报文给 Client
+    // Send a JSON-RPC message back to the client.
     const sendMsg = async (msg: any) => {
         const payload = JSON.stringify(msg) + '\n';
         await serverWriter.write(encoder.encode(payload));
     };
 
-    // 分发请求
+    // Dispatch incoming ACP requests.
     async function handleRequest(req: any) {
         if (req.method === 'initialize') {
             await sendMsg({
-                jsonrpc: "2.0",
+                jsonrpc: '2.0',
                 id: req.id,
                 result: {
                     protocolVersion: req.params.protocolVersion,
-                    serverInfo: { name: "pseudo-acp-server", version: "1.0.0" },
+                    serverInfo: { name: 'pseudo-acp-server', version: '1.0.0' },
                     serverCapabilities: {}
                 }
             });
-        } else if (req.method === 'sessions/new') {
+        } else if (req.method === 'session/new' || req.method === 'sessions/new') {
             currentSessionId = req.params?.sessionId ?? randomUUID();
             await sendMsg({
-                jsonrpc: "2.0",
+                jsonrpc: '2.0',
                 id: req.id,
                 result: { sessionId: currentSessionId }
             });
-        } else if (req.method === 'chat/prompt') {
-            // ACK 请求
-            await sendMsg({
-                jsonrpc: "2.0",
-                id: req.id,
-                result: {}
-            });
-
+        } else if (req.method === 'session/prompt' || req.method === 'chat/prompt') {
             const controller = new AbortController();
             const sessionId = req.params.sessionId;
             activePrompts.set(sessionId, controller);
 
-            // 监听全局销毁事件
+            // Mirror global aborts into the per-prompt controller.
             const onGlobalAbort = () => controller.abort();
             abortController.signal.addEventListener('abort', onGlobalAbort);
 
-            // 启动 Executor 进行真实对话
-            executePrompt(sessionId, req.params.prompt, controller.signal).finally(() => {
+            // Kick off the backing CLI execution and only resolve the ACP prompt
+            // request once the backing turn has actually completed.
+            const promptCompletion: PromptCompletion = executePrompt(
+                sessionId,
+                req.params.prompt,
+                controller.signal,
+            ).finally(() => {
                 activePrompts.delete(sessionId);
                 abortController.signal.removeEventListener('abort', onGlobalAbort);
             });
-        } else if (req.method === 'chat/cancel') {
+
+            const stopReason = await promptCompletion;
+            await sendMsg({
+                jsonrpc: '2.0',
+                id: req.id,
+                result: { stopReason },
+            });
+        } else if (req.method === 'session/cancel' || req.method === 'chat/cancel') {
             const controller = activePrompts.get(req.params.sessionId);
             if (controller) {
                 controller.abort();
             }
             if (req.id !== undefined) {
-                await sendMsg({ jsonrpc: "2.0", id: req.id, result: {} });
+                await sendMsg({ jsonrpc: '2.0', id: req.id, result: {} });
             }
         } else {
-            // 其他尚未支持的协议调用，静默返回成功或忽略
+            // Silently succeed for unsupported methods so the pseudo server stays
+            // permissive enough for our bridge tests and adapters.
             if (req.id !== undefined) {
                 await sendMsg({
-                    jsonrpc: "2.0",
+                    jsonrpc: '2.0',
                     id: req.id,
                     result: {}
                 });
             }
         }
-    };
+    }
 
-    // 核心转换逻辑
-    const executePrompt = async (sessionId: string, promptBlocks: any[], signal: AbortSignal) => {
+    // Translate executor events into ACP notifications.
+    const executePrompt = async (
+        sessionId: string,
+        promptBlocks: any[],
+        signal: AbortSignal,
+    ): Promise<'end_turn' | 'cancelled'> => {
         const text = promptBlocks.find((b: any) => b.type === 'text')?.text ?? '';
 
         try {
@@ -140,28 +152,39 @@ export function createPseudoAcpServer(executor: CLIExecutor, executorModel: stri
                 const acpUpdate = mapToAcpNotification(cliEvent);
                 if (acpUpdate) {
                     await sendMsg({
-                        jsonrpc: "2.0",
-                        method: "notifications/session_update",
+                        jsonrpc: '2.0',
+                        method: 'session/update',
                         params: {
-                            sessionId: sessionId,
+                            sessionId,
                             update: acpUpdate
                         }
                     });
                 }
+
+                if (cliEvent.type === 'complete') {
+                    return signal.aborted ? 'cancelled' : 'end_turn';
+                }
             }
+
+            return signal.aborted ? 'cancelled' : 'end_turn';
         } catch (err) {
-            console.error("[PseudoAcpServer] Error executing prompt:", err);
+            if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
+                return 'cancelled';
+            }
+
+            console.error('[PseudoAcpServer] Error executing prompt:', err);
             await sendMsg({
-                jsonrpc: "2.0",
-                method: "notifications/session_update",
+                jsonrpc: '2.0',
+                method: 'session/update',
                 params: {
-                    sessionId: sessionId,
+                    sessionId,
                     update: {
                         sessionUpdate: 'agent_message_chunk',
                         content: { type: 'text', text: `\n[Fatal Error: ${err}]\n` }
                     }
                 }
             });
+            return 'end_turn';
         }
     };
 
@@ -179,6 +202,7 @@ export function createPseudoAcpServer(executor: CLIExecutor, executorModel: stri
                 return {
                     sessionUpdate: 'tool_call',
                     title: event.toolName,
+                    arguments: event.parameters,
                     status: 'running',
                     toolCallId: event.toolId || randomUUID()
                 };
@@ -194,15 +218,16 @@ export function createPseudoAcpServer(executor: CLIExecutor, executorModel: stri
                     content: { type: 'text', text: `\n[Error: ${event.message}]\n` }
                 };
             case 'complete':
-                // 暂时不映射结束原因，依靠流结束
+                // We currently rely on stream completion instead of emitting a
+                // dedicated ACP completion update.
                 break;
         }
         return null;
     };
 
     return {
-        inputStream: reqStream.readable,
-        outputStream: resStream.writable,
+        inputStream: resStream.readable,
+        outputStream: reqStream.writable,
         abort: () => {
             abortController.abort();
             reqStream.readable.cancel().catch(() => { });

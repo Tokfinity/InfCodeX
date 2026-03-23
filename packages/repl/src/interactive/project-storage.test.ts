@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   appendBrainstormExchange,
   completeBrainstormSession,
@@ -14,13 +14,11 @@ describe('project-storage brainstorm persistence', () => {
   let tempDir = '';
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'kodax-project-storage-'));
+    tempDir = createTempDirSync('kodax-project-storage-');
   });
 
   afterEach(() => {
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    removeTempDirSync(tempDir);
   });
 
   it('saves and loads brainstorm sessions with transcript files', async () => {

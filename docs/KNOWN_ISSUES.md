@@ -467,8 +467,12 @@ _Last Updated: 2026-03-23_
 
 - **Follow-up Progress (2026-03-23)**:
   - Added providers/custom-providers.test.ts, covering custom provider validation, registration, resolution, built-in shadowing, and capability-profile boundaries
-  - @kodax/ai provider/reasoning coverage now spans 10 test files and 46 test cases
-  - Issue remains Open; the main remaining gaps are `acp-base.ts` and more realistic streaming-provider contract scenarios
+  - Added providers/acp-base.test.ts and cli-events/pseudo-acp-server.test.ts, covering ACP session reuse, CLI-install fail-closed behavior, disconnect cleanup, pseudo-server tool-call mapping, and stream wiring
+  - Fixed a real ACP bridge bug: pseudo ACP server had client/server stream directions reversed, and tool-call arguments were not propagated consistently to `onToolInputDelta`
+  - Added cli-events/acp-client.test.ts, codex-parser.test.ts, gemini-parser.test.ts, and session.test.ts, covering ACP client wiring, parser argument shaping, event translation, and session-map behavior
+  - Fixed two more real ACP bridge protocol bugs: the pseudo server was still speaking legacy `sessions/chat` method names and `notifications/session_update`, which broke session creation and dropped session updates against the current ACP SDK
+  - `@kodax/ai` provider/reasoning coverage now spans 17 test files and 62 test cases
+  - Issue remains Open; the main remaining gaps are more realistic provider streaming contracts beyond current unit-level adapter coverage
 
 
 - **Proposed Solution**:
@@ -794,6 +798,12 @@ _Last Updated: 2026-03-23_
 - **Introduced**: v0.6.13
 - **Created**: 2026-03-22
 
+- **Follow-up Progress (2026-03-23)**:
+  - Consolidated duplicate CLI install probes into `packages/ai/src/cli-events/command-utils.ts` and locked the shared helper with `command-utils.test.ts`
+  - Cleaned and clarified the ACP/CLI bridge support layer comments and adapter surface so the bridge is easier to maintain without changing user-facing behavior
+  - Continued removing repeated temp-dir setup logic in REPL tests by extending `packages/repl/src/test-utils/temp-dir.ts` with sync helpers and migrating project/permission suites onto the shared utility
+  - Issue remains Open; broad cross-module duplicate helpers, placeholder exports, and string cleanup outside these high-signal slices still remain
+
 - **Original Problem**:
   缂傚倷绀佺换鎴濓耿閻楀牊濮滄い鏇楀亾闁逞屽墯閸旀牕顭囬鐐插唨缂佸顑欓崵鐘绘煕濮橆剚鎹ｉ柍銉︻焽閹峰濡惰箛鏇狀槷婵炲濮甸幐鍝ヨ姳闁秵鐓傞悘鐐跺亹閻繈鏌￠崼婵愭Ц妞わ附瀵у鍕礋椤掑倸顥愰棅?runtime 闂佸搫鍊稿ú锝呪枎閵忥紕鈻旈幖瀛樼箓閻︽粓鏌涢幋锝呅撻柡鍡欏枛楠炲秹骞愭惔鈽嗏偓鎾趁瑰鍐╊棥缂佽鍟鍕潩閸忓懏宕撻柣鐘冲姧缂嶅洨妲愬┑鍡╁晠闁肩⒈鍓涢惀鍛存煛閸曨偄顒㈡俊顖氼槺閹奸箖宕ㄩ鐐寸様闂佺偨鍎茬划灞界暦閻斿吋鍊烽梺顐ｇ⊕閸欏繘鎮跺☉鏍у姉闁逞屽墯缁诲倽銇愰弻銉ョ濞达綀娅ｉ弫鍓х磽娴ｅ摜鎽犲┑顔哄灲閹啴宕熼鑲╂Ш闂佹悶鍎查悾顏堝焵椤掆偓閸婅霉婢舵劕绀傞柛蹇撴噹閺佲晠鏌ｉ鑽ゎ槮闁诡喗鎹囧顕€鎳滄担鍐敍闂佸憡鑹鹃悧鍛姳閿熺姴鐭楅柛灞剧⊕濞堝爼鎮峰▎娆戠ɑ闁诲簼绮欐俊瀛樻媴閸濆嫅锕傛煙椤戣法鍔嶉悽顖濐潐濞艰鈽夐弽銈呬壕濞达綀顫夌紞鈧梻鍌氬閸旀洟宕规禒瀣妞ゆ挻澹曢崑鎾存媴妞嬪海鐛ラ柣鐘叉处缁烩偓缂佺粯姘ㄩ埀顒佺⊕鑿ч柍褜鍏涚粈浣瑰閹版澘绀傞柣銈庡灣濞堝爼骞栨潏鎹愮闁逞屽厸閸晿ovider 闂備緡鍋勯崐鍧楀储閵堝棛鈻?UI / harness 闂佸憡顨呯换妤呮儍閻斿吋鏅悘鐐电摂閸ゃ倝鏌ら柨瀣稇婵炲弶鐗為妵鎰板箳濡ゅ﹥顥栭梻鍌氬閺呯娀鎮甸鈧俊瀛樻媴闁垮寮块梺琛″亾鐟滅増甯楀銊ヮ熆閸棔璁查崑鎾存媴瀹勭増鏆曢梺娲诲枙濞村洭鎯佹惔锝傚亾閸忓澧查柛銊﹀哺瀵敻顢楁担鍝ユХ缂傚倷绶￠崢铏圭箔閸岀偛纭€闁搞儯鍎崑?
 - **Expected Behavior**:
@@ -831,6 +841,12 @@ _Last Updated: 2026-03-23_
 - **Status**: Open
 - **Introduced**: v0.6.13
 - **Created**: 2026-03-22
+
+- **Follow-up Progress (2026-03-23)**:
+  - Added direct CLI bridge tests for `acp-client`, `codex-parser`, `gemini-parser`, `prompt-utils`, `pseudo-acp-server`, and `session` to cover the adapter layer end to end
+  - Reused the shared REPL temp-dir helper in additional project and permission test suites to reduce repeated setup/teardown code
+  - Removed one brittle test assumption while doing this cleanup: `permission.test` now preserves its original workspace-root temp-directory semantics through the shared helper API
+  - Issue remains Open; there is still more test-helper consolidation and scratch/verification asset cleanup available in older suites
 
 - **Original Problem**:
   闂佹儳绻掗弲顐﹀礉瑜斿鐢割敆閸愵亝鐎悗瑙勭摃鐏忔瑧鍒掗垾鏂ユ闁割偆鍠庣粩鏉懨瑰鍐╊棛缂佹梹鎸抽弻鍫ュΩ閵夈儳鈧姊洪幓鎺斝㈡い锔界叀閺屽懘寮拌箛鏇炵闂佹寧绋戞總鏃傚緤?agent 婵?REPL 婵炴垶鎸剧划顖滅矈閿斿墽鐭欓悗锝庡枛濞呪€趁归悩鑼ｉ柣锝庡亰閹儳鈻庤箛锝嗏柤濠电偛鐗嗛悘姘櫠濠婂牆绀冩繛鍡樺灦閻ｉ亶鏌熺粭娑樻－閺€鐣岀磽閸屾稓澧悽顖涙尰缁傛帡鏁愰崶鈺佺仯闂佹寧绋戦懟顖溾偓鍨耿楠?reroute闂侀潧妫旈悞锕€顭囬崼銉︹挃闁归偊鍓欓·鍛磽閸愭儳鏋旈柍褜鍏涘鎺旀閹殿喗瀚氭繝闈涙噽缁犱粙鎮楀☉娅辨粓鍩€椤戝灝顔俰t / shell 闁荤姴顑呴崯顐も偓瑙勫▕瀹曨亜鐣濋埀顒€煤閸ф绠抽柕澶堝€栭崣蹇涙煛閳ь剛娑甸崨顖滎吋闁荤偞绋戦張顒€顪冮崒娑氣枖濠电姳鑳堕悷鎾绘煛閸屾碍宸濇繛鍫熷灩閹瑰嫰顢涘杈╃嵁闂侀潧妫楅崐鎼佹偩閻樺磭顩锋い鎺嗗亾婵犫偓椤忓棙鍋橀悘鐐跺缁€瀣槈閹剧韬柣婵愬枟閹棃鏁傞悙顒傘偛闂佺绻掗鑼濠靛纭€閻庢稒顭囧楣冩煛閸繍妲虹紒顔惧劋缁嬪鍩€椤掑嫬绠柛濠勫枙閺変粙鏌ㄥ☉妯垮闁诡喗顨堢槐鎺楊敇閻樺啿鐓曠紓鍌欑贰閸樼晫妲愰妸锔戒氦婵炴垶鐟﹂ˇ褏鈧灚婢橀悧鍡涱敊閹版澘鍙婇柟鎯у暱閺呮瑦绻涢崱蹇撳⒉缂佽鲸鎸剧划鏂啃ч崶锝呬壕?
