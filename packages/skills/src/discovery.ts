@@ -6,7 +6,7 @@
  */
 
 import { readdir, stat } from 'fs/promises';
-import { join, dirname, basename } from 'path';
+import { join, dirname } from 'path';
 import type { SkillMetadata, SkillSource, SkillPathsConfig } from './types.js';
 import { getDefaultSkillPaths, getSkillPathsFlat } from './types.js';
 import { loadSkillMetadata } from './skill-loader.js';

@@ -78,7 +78,7 @@ export function getVersion(): string {
   if (fsSync.existsSync(packageJsonPath)) {
     try {
       cachedVersion = JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version ?? '0.0.0';
-      return cachedVersion;
+      return cachedVersion ?? '0.0.0';
     } catch {
       // Fall through to the stable default version when package metadata is unavailable.
     }

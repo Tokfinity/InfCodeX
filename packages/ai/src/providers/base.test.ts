@@ -130,7 +130,7 @@ describe('KodaXBaseProvider', () => {
       if (typeof callback === 'function') {
         callback();
       }
-      return 0 as ReturnType<typeof setTimeout>;
+      return undefined as unknown as ReturnType<typeof setTimeout>;
     });
 
     try {

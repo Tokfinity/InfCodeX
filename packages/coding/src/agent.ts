@@ -41,6 +41,12 @@ import { resolveExecutionCwd } from './runtime-paths.js';
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
 const CANCELLED_TOOL_RESULT_MESSAGE = `${CANCELLED_TOOL_RESULT_PREFIX} Operation cancelled by user`;
+type AutoReroutePlan = Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>>;
+type RunnableToolCall = {
+  id: string;
+  name: string;
+  input: Record<string, unknown> | undefined;
+};
 
 /**
  * 验证并修复整个工具调用历史 - Issue 072 enhanced fix
@@ -346,6 +352,149 @@ function createToolResultBlock(toolUseId: string, content: string): KodaXToolRes
     content,
     ...(isToolResultErrorContent(content) ? { is_error: true } : {}),
   };
+}
+
+async function maybeBuildAutoReroutePlan(
+  provider: ReturnType<typeof resolveProvider>,
+  options: KodaXOptions,
+  prompt: string,
+  reasoningPlan: ReasoningPlan,
+  lastText: string,
+  allowances: {
+    allowDepthEscalation: boolean;
+    allowTaskReroute: boolean;
+  },
+  toolEvidence?: string,
+): Promise<AutoReroutePlan> {
+  try {
+    return await maybeCreateAutoReroutePlan(
+      provider,
+      options,
+      prompt,
+      reasoningPlan,
+      lastText,
+      allowances,
+      toolEvidence ? { toolEvidence } : undefined,
+    );
+  } catch (rerouteError) {
+    if (process.env.KODAX_DEBUG_ROUTING) {
+      console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
+    }
+    return null;
+  }
+}
+
+async function maybeAdvanceAutoReroute(params: {
+  provider: ReturnType<typeof resolveProvider>;
+  options: KodaXOptions;
+  prompt: string;
+  reasoningPlan: ReasoningPlan;
+  lastText: string;
+  autoFollowUpCount: number;
+  autoDepthEscalationCount: number;
+  autoTaskRerouteCount: number;
+  autoFollowUpLimit: number;
+  events: KodaXEvents;
+  isNewSession: boolean;
+  retryLabelPrefix: string;
+  toolEvidence?: string;
+  onApply?: () => Promise<void> | void;
+  persistSession?: {
+    sessionId: string;
+    messages: KodaXMessage[];
+    title: string;
+  };
+}): Promise<{
+  reasoningPlan: ReasoningPlan;
+  currentExecution: Awaited<ReturnType<typeof buildReasoningExecutionState>>;
+  autoFollowUpCount: number;
+  autoDepthEscalationCount: number;
+  autoTaskRerouteCount: number;
+} | null> {
+  if (
+    params.reasoningPlan.mode !== 'auto'
+    || params.autoFollowUpCount >= params.autoFollowUpLimit
+    || (params.autoDepthEscalationCount > 0 && params.autoTaskRerouteCount > 0)
+  ) {
+    return null;
+  }
+
+  const followUpPlan = await maybeBuildAutoReroutePlan(
+    params.provider,
+    params.options,
+    params.prompt,
+    params.reasoningPlan,
+    params.lastText,
+    {
+      allowDepthEscalation: params.autoDepthEscalationCount === 0,
+      allowTaskReroute: params.autoTaskRerouteCount === 0,
+    },
+    params.toolEvidence,
+  );
+
+  if (!followUpPlan) {
+    return null;
+  }
+
+  const autoFollowUpCount = params.autoFollowUpCount + 1;
+  const autoDepthEscalationCount = params.autoDepthEscalationCount + (followUpPlan.kind === 'depth-escalation' ? 1 : 0);
+  const autoTaskRerouteCount = params.autoTaskRerouteCount + (followUpPlan.kind === 'task-reroute' ? 1 : 0);
+  const currentExecution = await buildReasoningExecutionState(
+    params.options,
+    followUpPlan,
+    params.isNewSession,
+  );
+
+  await params.onApply?.();
+
+  if (params.persistSession) {
+    await saveSessionSnapshot(params.options, params.persistSession.sessionId, {
+      messages: params.persistSession.messages,
+      title: params.persistSession.title,
+    });
+  }
+
+  params.events.onRetry?.(
+    `${
+      followUpPlan.kind === 'depth-escalation'
+        ? `${params.retryLabelPrefix} depth escalation`
+        : `${params.retryLabelPrefix} reroute`
+    }: ${followUpPlan.decision.reason}`,
+    autoFollowUpCount,
+    params.autoFollowUpLimit,
+  );
+
+  return {
+    reasoningPlan: followUpPlan,
+    currentExecution,
+    autoFollowUpCount,
+    autoDepthEscalationCount,
+    autoTaskRerouteCount,
+  };
+}
+
+async function executeToolCall(
+  events: KodaXEvents,
+  toolCall: RunnableToolCall,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  events.onToolUseStart?.({
+    name: toolCall.name,
+    id: toolCall.id,
+    input: toolCall.input,
+  });
+
+  const override = await getToolExecutionOverride(
+    events,
+    toolCall.name,
+    toolCall.input ?? {},
+    toolCall.id,
+  );
+  if (override !== undefined) {
+    return override;
+  }
+
+  return executeTool(toolCall.name, toolCall.input ?? {}, ctx);
 }
 
 /**
@@ -674,48 +823,31 @@ export async function runKodaX(
           autoFollowUpCount < autoFollowUpLimit &&
           (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
         ) {
-          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
-          try {
-            followUpPlan = await maybeCreateAutoReroutePlan(
-              provider,
-              options,
-              prompt,
+          const rerouteState = await maybeAdvanceAutoReroute({
+            provider,
+            options,
+            prompt,
+            reasoningPlan,
+            lastText,
+            autoFollowUpCount,
+            autoDepthEscalationCount,
+            autoTaskRerouteCount,
+            autoFollowUpLimit,
+            events,
+            isNewSession: messages.length === 1,
+            retryLabelPrefix: 'Auto',
+            onApply: () => {
+              messages.pop();
+            },
+          });
+          if (rerouteState) {
+            ({
               reasoningPlan,
-              lastText,
-              {
-                allowDepthEscalation: autoDepthEscalationCount === 0,
-                allowTaskReroute: autoTaskRerouteCount === 0,
-              },
-              undefined,
-            );
-          } catch (rerouteError) {
-            if (process.env.KODAX_DEBUG_ROUTING) {
-              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
-            }
-          }
-          if (followUpPlan) {
-            autoFollowUpCount++;
-            if (followUpPlan.kind === 'depth-escalation') {
-              autoDepthEscalationCount++;
-            } else {
-              autoTaskRerouteCount++;
-            }
-            reasoningPlan = followUpPlan;
-            currentExecution = await buildReasoningExecutionState(
-              options,
-              reasoningPlan,
-              messages.length === 1,
-            );
-            messages.pop();
-            events.onRetry?.(
-              `${
-                followUpPlan.kind === 'depth-escalation'
-                  ? 'Auto depth escalation'
-                  : 'Auto reroute'
-              }: ${followUpPlan.decision.reason}`,
+              currentExecution,
               autoFollowUpCount,
-              autoFollowUpLimit,
-            );
+              autoDepthEscalationCount,
+              autoTaskRerouteCount,
+            } = rerouteState);
             continue;
           }
         }
@@ -782,47 +914,24 @@ export async function runKodaX(
         const resultMap = new Map<string, string>();
 
         if (nonBashTools.length > 0) {
-          const promises = nonBashTools.map(async tc => {
-            events.onToolUseStart?.({
-              name: tc.name,
+          const promises = nonBashTools.map(async tc => ({
+            id: tc.id,
+            content: await executeToolCall(events, {
               id: tc.id,
+              name: tc.name,
               input: tc.input as Record<string, unknown> | undefined,
-            });
-            // Permission hook - allow REPL layer to control execution
-            const override = await getToolExecutionOverride(
-              events,
-              tc.name,
-              tc.input as Record<string, unknown>,
-              tc.id,
-            );
-            if (override !== undefined) {
-              return { id: tc.id, content: override };
-            }
-            const r = await executeTool(tc.name, tc.input, ctx);
-            return { id: tc.id, content: r };
-          });
+            }, ctx),
+          }));
           const results = await Promise.all(promises);
           for (const r of results) resultMap.set(r.id, r.content);
         }
 
         for (const tc of bashTools) {
-          events.onToolUseStart?.({
-            name: tc.name,
+          const content = await executeToolCall(events, {
             id: tc.id,
+            name: tc.name,
             input: tc.input as Record<string, unknown> | undefined,
-          });
-          // Permission hook - allow REPL layer to control execution
-          const override = await getToolExecutionOverride(
-            events,
-            tc.name,
-            tc.input as Record<string, unknown>,
-            tc.id,
-          );
-          if (override !== undefined) {
-            resultMap.set(tc.id, override);
-            continue;
-          }
-          const content = await executeTool(tc.name, tc.input, ctx);
+          }, ctx);
           resultMap.set(tc.id, content);
         }
 
@@ -833,19 +942,11 @@ export async function runKodaX(
         }
       } else {
         for (const tc of result.toolBlocks) {
-          events.onToolUseStart?.({
-            name: tc.name,
+          const content = await executeToolCall(events, {
             id: tc.id,
+            name: tc.name,
             input: tc.input as Record<string, unknown> | undefined,
-          });
-          // Permission hook - allow REPL layer to control execution
-          const override = await getToolExecutionOverride(
-            events,
-            tc.name,
-            tc.input as Record<string, unknown>,
-            tc.id,
-          );
-          const content = override ?? await executeTool(tc.name, tc.input, ctx);
+          }, ctx);
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
           toolResults.push(createToolResultBlock(tc.id, content));
         }
@@ -894,53 +995,35 @@ export async function runKodaX(
       ) {
         const toolEvidence = summarizeToolEvidence(result.toolBlocks, toolResults);
         if (toolEvidence) {
-          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
-          try {
-            followUpPlan = await maybeCreateAutoReroutePlan(
-              provider,
-              options,
-              prompt,
+          const rerouteState = await maybeAdvanceAutoReroute({
+            provider,
+            options,
+            prompt,
+            reasoningPlan,
+            lastText,
+            autoFollowUpCount,
+            autoDepthEscalationCount,
+            autoTaskRerouteCount,
+            autoFollowUpLimit,
+            events,
+            isNewSession: false,
+            retryLabelPrefix: 'Post-tool auto',
+            toolEvidence,
+            persistSession: {
+              sessionId,
+              messages,
+              title,
+            },
+          });
+
+          if (rerouteState) {
+            ({
               reasoningPlan,
-              lastText,
-              {
-                allowDepthEscalation: autoDepthEscalationCount === 0,
-                allowTaskReroute: autoTaskRerouteCount === 0,
-              },
-              {
-                toolEvidence,
-              },
-            );
-          } catch (rerouteError) {
-            if (process.env.KODAX_DEBUG_ROUTING) {
-              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
-            }
-          }
-
-          if (followUpPlan) {
-            autoFollowUpCount++;
-            if (followUpPlan.kind === 'depth-escalation') {
-              autoDepthEscalationCount++;
-            } else {
-              autoTaskRerouteCount++;
-            }
-            reasoningPlan = followUpPlan;
-            currentExecution = await buildReasoningExecutionState(
-              options,
-              reasoningPlan,
-              false,
-            );
-
-            await saveSessionSnapshot(options, sessionId, { messages, title });
-
-            events.onRetry?.(
-              `${
-                followUpPlan.kind === 'depth-escalation'
-                  ? 'Auto depth escalation'
-                  : 'Post-tool auto reroute'
-              }: ${followUpPlan.decision.reason}`,
+              currentExecution,
               autoFollowUpCount,
-              autoFollowUpLimit,
-            );
+              autoDepthEscalationCount,
+              autoTaskRerouteCount,
+            } = rerouteState);
             continue;
           }
         }

@@ -47,6 +47,7 @@ import {
 } from './commands.js';
 import { runWithPlanMode } from '../common/plan-mode.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
+import { loadAlwaysAllowTools, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import { detectAndShowProjectHint } from './project-commands.js';
 import {
   confirmToolExecution,
@@ -145,8 +146,10 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialPermissionMode: PermissionMode =
     normalizePermissionMode((config as { permissionMode?: string }).permissionMode, 'accept-edits') ?? 'accept-edits';
 
-  // Apply theme (using default dark theme) - 应用主题 (使用默认 dark 主题)
-  // TODO: Read theme setting from config file - TODO: 从配置文件读取主题设置
+  const configuredTheme = (config as { theme?: string }).theme;
+  if (configuredTheme) {
+    setTheme(configuredTheme);
+  }
   const theme = getCurrentTheme();
 
   // Current config state - 当前配置状态
@@ -161,7 +164,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   // Local permission state - 本地权限状态
   let currentPermissionMode: PermissionMode = initialPermissionMode;
-  let alwaysAllowTools: string[] = [];
+  let alwaysAllowTools: string[] = loadAlwaysAllowTools();
 
   // Plan mode state - Plan mode 状态
   let planMode = false;
@@ -494,8 +497,8 @@ Keyboard Shortcuts:
               // Handle "always" selection
               if (result.always) {
                 if (mode === 'accept-edits') {
-                  // Add to alwaysAllowTools
-                  // TODO: Implement pattern generation
+                  saveAlwaysAllowToolPattern(tool, input, false);
+                  alwaysAllowTools = loadAlwaysAllowTools();
                 }
               }
             }

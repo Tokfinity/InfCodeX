@@ -1,14 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { loadFullSkill, parseSkillMarkdown } from './skill-loader.js';
+import { createTempDir, removeTempDir } from './test-utils/temp-dir.js';
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))
+    tempDirs.splice(0).map((dir) => removeTempDir(dir))
   );
 });
 
@@ -64,7 +64,7 @@ Body
   });
 
   it('loads support files from references/assets recursively', async () => {
-    const skillDir = await mkdtemp(join(tmpdir(), 'kodax-skill-'));
+    const skillDir = await createTempDir('kodax-skill-');
     tempDirs.push(skillDir);
 
     await mkdir(join(skillDir, 'scripts'), { recursive: true });

@@ -1,20 +1,38 @@
 #!/usr/bin/env node
 /**
- * KodaX CLI - 命令行入口
- *
- * UI 层：参数解析、Spinner、颜色输出、用户交互
- */
+ * KodaX CLI - 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁嶉崟顓犵厯闂佸湱鍎ら〃鍛村垂閸屾稓绡€闂傚牊渚楅崕蹇曠磼閻欌偓閸ｏ綁寮婚弴銏犻唶婵犻潧娲らˇ鈺呮⒑缁嬫鍎愰柨鏇樺灲楠炲啫顫滈埀顒勫箖濞嗘挻鍤嬫繛鍫熷椤ュ鏌ｆ惔銏╁晱闁哥姵顨嗙换娑欑節閸パ嗘憰? *
+ * UI 闂傚倸鍊峰ù鍥敋瑜忛幑銏ゅ箳濡も偓绾剧粯绻涢幋娆忕仼缁炬崘顕ч埞鎴︽偐閹绘帩浠惧銈庡亝濞叉牠婀侀梺绋跨箰閸氬绱為幋锔界厽妞ゆ挾鍣ュ▓婊堟煛鐏炲墽銆掑ù鐙呯畵瀹曟粏顦┑顔兼搐閳规垿鎮欓懠顒€顣洪梺缁樼墪閵堟悂鐛崘銊ф殝闁逛絻娅曢悗璇测攽閻愬弶顥為柛銊ь攰閹筋偊姊婚崒娆愮グ妞ゆ泦鍛板С闁兼祴鏅涢崹婵囩箾閸℃ê濮冪紒璇叉閹鈽夊▎妯煎姺闂佸磭绮鑽ゆ閹烘鐭楁俊顖濇瑜颁苟ner闂傚倸鍊搁崐椋庢濮橆剦鐒界憸宥堢亱闂佸搫鍟崐褰掝敃閼恒儲鍙忔俊顖濇婢瑰嫰姊洪崹顕呭剳闁荤喎缍婇弻宥堫檨闁告挾鍠栭悰顔界節閸屾鏂€闁诲函缍嗛崑鍕枔閵堝鈷戦柛娑橈攻鐏忣偊鏌ら崘鑼煟闁诡喗鐟╁鎾閳锯偓閹锋椽姊洪崨濠勨槈闁挎洏鍊濋幃姗€鏁冮埀顒勬箒濠电姴艌閸嬫挾绱掗鐣屾噰鐎规洘妞介崺鈧い鎺嶉檷娴滄粓鏌熸潏鍓у埌闁告梻鏁婚弻娑滅疀閹惧墎鍔梺鍝勫閸撴繈骞忛崨瀛橆棃婵炴垶甯掓禍鐐節闂堟侗鍎戠€规挷绶氶幃妤呮晲鎼粹剝鐏嶉梺鐟扮湴閸庣敻寮诲☉姘勃闁告挆鈧Σ鍫ユ⒑鐞涒€充壕濡炪倖鎸鹃崰鎾剁不? */
 
-import { Command, InvalidArgumentError } from 'commander';
+import { Command } from 'commander';
 import chalk from 'chalk';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
+import {
+  getDefaultCommandDir,
+  KODAX_COMMANDS_DIR,
+  loadCommands,
+  parseCommandCall,
+  processCommandCall,
+  type KodaXCommand,
+  type KodaXCommandContext,
+} from './cli_commands.js';
+import {
+  ACP_PERMISSION_MODES,
+  createKodaXOptions,
+  parseOptionalNonNegativeInt,
+  parseNonNegativeIntWithFallback,
+  parsePermissionModeOption,
+  parsePositiveNumberWithFallback,
+  resolveCliParallel,
+  resolveCliReasoningMode,
+  type CliOptions,
+} from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
 
-// 从 package.json 读取版本号
+// Read the CLI version from package.json.
 const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../package.json');
 const version = fsSync.existsSync(packageJsonPath)
   ? JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version
@@ -24,12 +42,9 @@ import {
   runKodaX,
   KodaXClient,
   KodaXEvents,
-  KodaXOptions,
   createKodaXTaskRunner,
   KodaXReasoningMode,
-  KodaXResult,
   runOrchestration,
-  KODAX_REASONING_MODE_SEQUENCE,
   KODAX_DEFAULT_PROVIDER,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
@@ -47,307 +62,22 @@ import {
   checkAllFeaturesComplete,
   rateLimitedCall,
   buildInitPrompt,
-  runInkInteractiveMode,
   FileSessionStorage,
-  createCliEvents,
+  runInkInteractiveMode,
   type PermissionMode,
 } from '@kodax/repl';
-
-import os from 'os';
-
-export const ACP_PERMISSION_MODES: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
-
-export function parsePermissionModeOption(value: string): PermissionMode {
-  if (ACP_PERMISSION_MODES.includes(value as PermissionMode)) {
-    return value as PermissionMode;
-  }
-
-  throw new InvalidArgumentError(
-    `Expected one of: ${ACP_PERMISSION_MODES.join(', ')}.`,
-  );
-}
-
-// ============== Commands 系统 (CLI 层) ==============
-// Commands 是 /xxx 形式的 CLI 快捷命令，不是 Core 的 Skills (KODAX_TOOLS)
-
-export const KODAX_COMMANDS_DIR = path.join(os.homedir(), '.kodax', 'commands');
-
-export interface KodaXCommand {
-  name: string;
-  description: string;
-  content: string;
-  type: 'prompt' | 'programmable';
-  execute?: (context: KodaXCommandContext) => Promise<string>;
-}
-
-export interface KodaXCommandContext {
-  args?: string;
-  runAgent: (prompt: string) => Promise<KodaXResult>;
-}
-
-export function getDefaultCommandDir(): string {
-  return KODAX_COMMANDS_DIR;
-}
-
-export async function loadCommands(commandDir?: string): Promise<Map<string, KodaXCommand>> {
-  const commands = new Map<string, KodaXCommand>();
-  const dir = commandDir ?? KODAX_COMMANDS_DIR;
-
-  try {
-    await fs.mkdir(dir, { recursive: true });
-    const files = await fs.readdir(dir);
-
-    for (const f of files) {
-      const ext = path.extname(f);
-      const commandName = f.replace(ext, '');
-
-      if (ext === '.md') {
-        // Markdown prompt command
-        try {
-          const content = await fs.readFile(path.join(dir, f), 'utf-8');
-          const firstLine = content.split('\n')[0]?.replace(/^#\s*/, '').trim() ?? '';
-          const desc = firstLine.slice(0, 60) || '(prompt command)';
-          commands.set(commandName, {
-            name: commandName,
-            description: desc,
-            content,
-            type: 'prompt',
-          });
-        } catch { }
-      } else if (ext === '.js' || ext === '.ts') {
-        // Programmable command
-        try {
-          const mod = await import(path.join(dir, f));
-          for (const [key, value] of Object.entries(mod)) {
-            if (key.startsWith('command_') && typeof value === 'function') {
-              const fnName = key.replace('command_', '');
-              const desc = (value as any).description ?? fnName;
-              commands.set(fnName, {
-                name: fnName,
-                description: String(desc).slice(0, 60),
-                content: `[Programmable command: ${fnName}]`,
-                type: 'programmable',
-                execute: value as (context: KodaXCommandContext) => Promise<string>,
-              });
-            }
-          }
-        } catch { }
-      }
-    }
-  } catch { }
-
-  return commands;
-}
-
-export async function processCommandCall(
-  commandName: string,
-  args: string | undefined,
-  commands: Map<string, KodaXCommand>,
-  runAgent: (prompt: string) => Promise<KodaXResult>
-): Promise<string | null> {
-  const command = commands.get(commandName);
-  if (!command) return null;
-
-  if (command.type === 'prompt') {
-    // Prompt command: 将 content 中的 {args} 替换为实际参数
-    let prompt = command.content;
-    if (args) {
-      prompt = prompt.replace(/{args}/g, args);
-    }
-    return prompt;
-  } else if (command.type === 'programmable' && command.execute) {
-    // Programmable command: 调用执行函数
-    const result = await command.execute({
-      args,
-      runAgent,
-    });
-    return result;
-  }
-
-  return null;
-}
-
-export function parseCommandCall(input: string): [string, string?] | null {
-  if (!input.startsWith('/')) return null;
-
-  const parts = input.slice(1).split(/\s+/, 2);
-  if (parts.length === 0) return null;
-
-  const commandName = parts[0];
-  const args = parts[1];
-
-  return commandName ? [commandName, args] : null;
-}
-
-// ============== CLI 选项 ==============
-
-interface CliOptions {
-  provider: string;
-  model?: string;
-  thinking: boolean;
-  reasoningMode: KodaXReasoningMode;
-  session?: string;
-  parallel: boolean;
-  team?: string;
-  init?: string;
-  append: boolean;
-  overwrite: boolean;
-  maxIter?: number;
-  autoContinue: boolean;
-  maxSessions: number;
-  maxHours: number;
-  prompt: string[];
-  continue?: boolean;
-  resume?: string;
-  noSession: boolean;
-  print?: boolean;
-}
-
-function resolveCliReasoningMode(
-  program: Command,
-  opts: Record<string, unknown>,
-  config: { reasoningMode?: KodaXReasoningMode; thinking?: boolean },
-): KodaXReasoningMode {
-  const reasoningSource = program.getOptionValueSource('reasoning');
-  if (reasoningSource === 'cli' && typeof opts.reasoning === 'string') {
-    if (!KODAX_REASONING_MODE_SEQUENCE.includes(opts.reasoning as KodaXReasoningMode)) {
-      throw new Error(
-        `Invalid reasoning mode "${opts.reasoning}". Expected one of: ${KODAX_REASONING_MODE_SEQUENCE.join(', ')}`,
-      );
-    }
-    return opts.reasoning as KodaXReasoningMode;
-  }
-
-  const thinkingSource = program.getOptionValueSource('thinking');
-  if (thinkingSource === 'cli' && opts.thinking === true) {
-    return 'auto';
-  }
-
-  if (config.reasoningMode) {
-    return config.reasoningMode;
-  }
-
-  if (config.thinking === true) {
-    return 'auto';
-  }
-
-  return 'auto';
-}
-
-export function resolveCliParallel(
-  program: Command,
-  opts: Record<string, unknown>,
-  config: { parallel?: boolean },
-): boolean {
-  const parallelSource = program.getOptionValueSource('parallel');
-  if (parallelSource === 'cli') {
-    return opts.parallel === true;
-  }
-
-  return config.parallel ?? false;
-}
-
-function parseOptionalNonNegativeInt(value: string | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return undefined;
-  }
-
-  return parsed;
-}
-
-function parseNonNegativeIntWithFallback(value: string | undefined, fallback: number): number {
-  return parseOptionalNonNegativeInt(value) ?? fallback;
-}
-
-function parsePositiveNumberWithFallback(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return fallback;
-  }
-
-  const parsed = Number.parseFloat(trimmed);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return fallback;
-  }
-
-  return parsed;
-}
-
-// ============== CLI 选项转换 ==============
-
-function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false): KodaXOptions {
-  return {
-    provider: cliOptions.provider,
-    model: cliOptions.model,
-    thinking: cliOptions.thinking,
-    reasoningMode: cliOptions.reasoningMode,
-    maxIter: cliOptions.maxIter,
-    parallel: cliOptions.parallel,
-    session: buildSessionOptions(cliOptions),
-    events: createCliEvents(!isPrintMode),
-  };
-}
-
-// 构建 session 选项
-function buildSessionOptions(cliOptions: CliOptions): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean } | undefined {
-  const storage = new FileSessionStorage();
-
-  // -p --no-session: 不启用 session（纯无状态）
-  if (cliOptions.print && cliOptions.noSession) {
-    return undefined;
-  }
-
-  // -r <id>: 恢复指定会话
-  if (cliOptions.resume) {
-    return { id: cliOptions.resume, storage };
-  }
-
-  // -c: 继续最近会话
-  if (cliOptions.continue) {
-    return { resume: true, storage };
-  }
-
-  // -s resume: 向后兼容
-  if (cliOptions.session === 'resume') {
-    return { resume: true, storage };
-  }
-
-  // -s <id>: 向后兼容
-  if (cliOptions.session && cliOptions.session !== 'list' && cliOptions.session !== 'delete-all' && !cliOptions.session.startsWith('delete ')) {
-    return { id: cliOptions.session, storage };
-  }
-
-  // -p 模式（不带 --no-session）: 启用 session 以便后续 -c 继续
-  if (cliOptions.print) {
-    return { storage };
-  }
-
-  // 纯交互模式（无参数）: 创建新会话（不自动恢复）
-  if (!cliOptions.prompt?.length) {
-    return { storage };
-  }
-
-  // 默认启用 session
-  return { storage };
-}
-
-// ============== 主函数 ==============
-
-// ============== CLI 详细帮助 ==============
+export {
+  ACP_PERMISSION_MODES,
+  getDefaultCommandDir,
+  KODAX_COMMANDS_DIR,
+  loadCommands,
+  parseCommandCall,
+  parsePermissionModeOption,
+  processCommandCall,
+  resolveCliParallel,
+};
+export type { KodaXCommand, KodaXCommandContext };
+// ============== CLI 闂傚倸鍊峰ù鍥х暦閸偅鍙忛柡澶嬪殮瑜版帒绀嬫い鎴ｆ硶缁犳岸姊洪幖鐐插姉闁哄懏鐩畷鐟扳攽鐎ｎ剙褰勯梺鎼炲劘閸斿秶绮堥崘顔界厸闁糕剝顭囬惌瀣煏閸パ冾伃鐎殿噮鍣ｅ畷鎺戭潩椤戣法甯涢梺?==============
 
 const CLI_HELP_TOPICS: Record<string, () => void> = {
   acp: () => {
@@ -711,7 +441,7 @@ function printSkillSubcommandHelp(name: string): boolean {
 
 function showBasicHelp(): void {
   const providerNames = getAvailableProviderNames().join(', ');
-  console.log('KodaX - 极致轻量化 Coding Agent\n');
+  console.log('KodaX - 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢敂缁樻櫈闂佸憡娲﹂崐瀣亹閹烘垹鍊炲銈嗗坊閸嬫捇鏌涘顒佽础闁规彃鎲￠幆鏃堝煡閸℃瑥濮烘俊鐐€曠换鎰板箠閹邦喖濮柍褜鍓欓埞鎴︻敊閺傘倓绶甸梺鍛婃尰瀹€鎼併€侀弮鍫熸櫢闁绘ɑ鏋奸幏?Coding Agent\n');
   console.log('Usage: kodax [options] [prompt]');
   console.log('       kodax "your task"');
   console.log('       kodax /command_name\n');
@@ -767,14 +497,13 @@ async function main() {
   const argv = process.argv.slice(2);
   const program = new Command()
     .name('kodax')
-    .description('KodaX - 极致轻量化 Coding Agent')
+    .description('KodaX - 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢敂缁樻櫈闂佸憡娲﹂崐瀣亹閹烘垹鍊炲銈嗗坊閸嬫捇鏌涘顒佽础闁规彃鎲￠幆鏃堝煡閸℃瑥濮烘俊鐐€曠换鎰板箠閹邦喖濮柍褜鍓欓埞鎴︻敊閺傘倓绶甸梺鍛婃尰瀹€鎼併€侀弮鍫熸櫢闁绘ɑ鏋奸幏?Coding Agent')
     .version(version)
-    // 禁用默认 help，使用自定义的
+    // Disable commander default help so the custom topic help can take over.
     .helpOption(false)
-    .argument('[prompt...]', 'Your task (optional, enters interactive mode if not provided)')
-    // 自定义 help 选项（支持可选参数）
+    // 闂傚倸鍊搁崐鐑芥嚄閸洖鍌ㄧ憸鏃堝Υ閸愨晜鍎熼柕蹇嬪焺濞茬鈹戦悩璇у伐闁绘锕畷鎴﹀煛閸涱喚鍘介梺閫涘嵆濞佳勬櫠娴煎瓨鐓?help 闂傚倸鍊搁崐鎼佸磹妞嬪孩顐介柨鐔哄Т绾惧鏌涢弴銊ョ€柛銉墯閸嬨劎绱掔€ｎ収鍤﹂柕澹偓閸嬫捇鐛崹顔煎濡炪倧缂氶崡鍐差嚕閺屻儺鏁嗛柛鏇ㄥ墰閸樺崬顪冮妶鍡楀闁稿﹥娲熷鎼佸箣閿旂晫鍘搁梺绯曞墲椤洭鎯岄幒妤佺厸鐎光偓閳ь剟宕伴弽褜娼栫憸鐗堝笒缁犳稒銇勯弴鐐村櫤鐞氾箓姊洪懡銈呮瀾缂侇喖瀛╅弲璺何旈崨顔间簵闂佽法鍠撴慨鎾嫅閻斿吋鐓曟繛鎴濆船閺嬫稓绱掗崜浣镐粶闁宠鍨块幃鈺呭箵閹哄棗浜剧憸鐗堝吹婢跺ň鏀介悗锝庡亐閹锋椽鏌℃径灞戒沪濠㈢懓妫濊棟闁挎洖鍊哥粻褰掓倵濞戞瑯鐒介柣顓炴湰娣?
     .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
-    // 短参数支持
+    // Short options.
     .option('-p, --print <text>', 'Print mode: run single task and exit')
     .option('-c, --continue', 'Continue most recent conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
@@ -787,7 +516,7 @@ async function main() {
     .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
     .option('-j, --parallel', 'Parallel tool execution')
     .option('--no-session', 'Disable session persistence (print mode only)')
-    // 长参数
+    // Long options.
     .option('--team <tasks>', 'Run multiple sub-agents in parallel (comma-separated)')
     .option('--init <task>', 'Initialize a long-running task')
     .option('--append', 'Deprecated compatibility alias for the old append flow')
@@ -1128,14 +857,13 @@ async function main() {
   }
 
   const opts = program.opts();
-  // 加载配置文件（用于确定默认值）
+  // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鍨鹃幇浣圭稁缂傚倷鐒﹁摫闁告瑥绻橀弻鐔碱敍閿濆洣姹楅悷婊呭鐢帡鎮欐繝鍐︿簻闁瑰搫绉烽崗宀勬煕濡濮嶉柟顔筋殜閻涱噣宕归鐓庮潛婵犵數鍋涢惇浼村礉閹存繍鍤曢柟闂寸绾惧ジ鏌ｉ幇顒夊殶闁告ɑ鎮傚铏圭矙閹稿孩鎷辩紒鐐緲缁夊綊骞嗙仦杞挎梹鎷呴搹璇″晭闂備胶纭堕崜婵嬪礉閺囥垺鍊堕柡灞诲劜閻撴稑霉閿濆懏鎲搁弫鍫ユ倵鐟欏嫭绀€闁靛牆鎲￠幈銊╁焵椤掑嫭鐓冮柍杞扮閺嗙偞銇勯幘鑸靛殌闁宠鍨块幃娆撴嚑椤掍焦鍠栫紓鍌欑贰閸犳牠鎳熼鐐寸畳闂備胶绮崹鐓幬涢崟顖涘€堕柧蹇ｅ亗缁诲棙銇勯弽銊︾殤婵絿鍋ら弻娑氣偓锝庡亝鐏忕敻鏌熼崣澶嬪唉鐎规洜鍠栭、鏇㈠閳╁啫娈樼紓鍌氬€搁崐椋庢閿熺姴闂い鏇楀亾鐎规洖缍婇獮搴ㄦ寠婢跺矈鍞甸梺璇插嚱缂嶅棝宕伴弽褎绾梻鍌欑閹测剝绗熷Δ浣侯洸婵犲﹤瀚々鏌ユ煕閹炬鎳忛敍蹇擃渻閵堝棙灏柛鈺佸铻為柟瀵稿Х绾惧ジ鏌?
   const config = loadConfig();
   const reasoningMode = resolveCliReasoningMode(program, opts, config);
   const parallel = resolveCliParallel(program, opts, config);
-  // CLI 参数优先，否则用配置文件的值，最后用默认值
-  // Note: -y/--auto is kept for backward compatibility but has no effect in CLI (YOLO mode is default)
+  // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
-    // 优先级：CLI 参数 > 配置文件 > 默认值
+    // Priority: CLI args > config file > defaults.
     provider: opts.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER,
     model: opts.model ?? config.model,
     thinking: reasoningMode !== 'off',
@@ -1157,7 +885,7 @@ async function main() {
     print: opts.print ? true : false,
   };
 
-  // 会话列表
+  // 婵犵數濮烽弫鎼佸磻閻愬樊鐒芥繛鍡樻尭鐟欙箓鎮楅敐搴′簽闁崇懓绉电换娑橆啅椤旇崵鍑归梺绋块閿曘倝婀侀梺缁樏Ο濠囧磿韫囨洜纾奸柍褜鍓熷畷鍗炍熼崷顓犵暰闂備線娼ч悧鍡涘箠鎼搭煈鏁傞柕澶嗘櫆閻?
   if (options.session === 'list') {
     const storage = new FileSessionStorage();
     const sessions = await storage.list();
@@ -1167,9 +895,8 @@ async function main() {
 
   let userPrompt = options.prompt.join(' ');
 
-  // -h / --help [topic]: 帮助（无参数显示基本帮助，有参数显示详细主题）
+  // -h / --help [topic]: show basic help or a detailed help topic
   if (opts.help !== undefined) {
-    // opts.help === true 表示没有参数，字符串表示有参数
     if (typeof opts.help === 'string') {
       const topic = opts.help.toLowerCase();
       if (showCliHelpTopic(topic)) {
@@ -1179,12 +906,12 @@ async function main() {
       showCliHelpTopics();
       return;
     }
-    // 无参数：显示基本帮助
+    // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢敃鈧悿顕€鏌ｅΔ鈧悧濠囧矗韫囨稒鐓涘璺侯儏閻掗箖鏌涢妶鍡樼闁靛洤瀚伴獮鎺楀箣濠垫劒鎮ｉ梻浣告惈椤戝嫮娆㈠璺虹畺濞寸姴顑愰弫宥夋煥濠靛棙鍣洪柣蹇旀尵缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏勵嚕婵犳碍鏅搁柣妯垮皺椤︽澘顪冮妶鍡楀闁瑰啿娲獮鎰板礃椤旇В鎷洪梻鍌氱墛缁嬫帗寰勯崟顓涘亾閸忓浜剧紓浣割儓濞夋洟寮抽敂鐣岀鐎瑰壊鍠曠花濂告煕婵犲嫮甯涘ǎ鍥э躬椤㈡稑顭ㄩ崨顓狀偧闂佽瀛╃喊宥嗙箾婵犲洤钃熼柨婵嗩槸椤懘鏌嶆潪鎷屽厡濞寸厧娲娲传閵夈儛锝夋煟濡や緡娈滄?
     showBasicHelp();
     return;
   }
 
-  // -r / --resume 不带 id: 交互式选择会话
+  // -r / --resume 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎹囬弻鐔虹磼閵忕姵鐏嶉梺?id: 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞炬櫅閸氬綊骞栧ǎ顒€濡肩痪鎯х秺閺岀喖鎮欓鈧崝璺衡攽椤旇棄鈻曢柡灞稿墲瀵板嫮鈧綁娼ч崝宀勬⒑閹肩偛鈧牕煤閻斿吋鍋傛い鎰剁畱閻愬﹪鏌曟繛褉鍋撻柡瀣濮婅櫣绮欏▎鎯у壉闂佽鐡曢褔顢氶妷鈺佺妞ゆ挻绋戞禍楣冩煥濠靛棛鍑归柟鍙夊劤闇夐柣妯垮皺閹界姷绱掔紒妯兼创鐎殿喖鐖奸獮瀣攽閸パ€鍋撻娑氱闁挎繂鎳忔径鍕繆閻愭壆鐭欐?
   if (opts.resume === true) {
     try {
       const storage = new FileSessionStorage();
@@ -1196,7 +923,7 @@ async function main() {
         sessions.forEach((s, i) => {
           console.log(`  ${i + 1}. ${s.id} [${s.msgCount} msgs] ${s.title}`);
         });
-        // 默认选择第一个（最近）
+        // 婵犵數濮甸鏍窗濡ゅ啯鏆滄俊銈呭暟閻瑩鏌熼悜妯镐粶闁逞屽墾缁犳挸鐣锋總绋课ㄦい鏃囧Г濞呭秴鈹戦悩鍨毄濠殿喚鏁搁崰濠傤吋婢跺鈧潡鎮归崶褎鈻曢柣鏂挎閹娼幏宀婂妳闂佺楠哥换鎴﹀Φ閸曨喚鐤€閻庯綆浜滄慨銏㈢磽娴ｄ粙鍝洪悽顖涘笩閻忓啯绻濋悽闈浶㈤柛濠冩倐閻涱噣骞囬鍓э紳婵炶揪缍€椤鎮￠妷鈺傜厽閹烘娊宕濇惔锝呭灊婵炲棙鍔曠欢鐐烘煙閺夎法浠涢柡鍛矒閺岀喖鎳濋悧鍫濇锭缂備焦褰冨陇妫熼梺鍐叉惈閹冲繘鍩涢幋锔界厱婵犻潧妫楅顐㈩熆瑜庨崝娆撳蓟濞戞埃鍋撻敐搴′簼鐎规洖鐬奸埀顒侇問閸犳牠鎮ユ總绋挎槬闁跨喓濮寸壕鍏兼叏濡搫鑸归悽顖氭捣缁?
         const selected = sessions[0]!;
         options.resume = selected.id;
         console.log(chalk.cyan(`\nResuming session: ${selected.id}`));
@@ -1206,7 +933,7 @@ async function main() {
     }
   }
 
-  // --auto-continue: 自动循环
+  // --auto-continue: 闂傚倸鍊搁崐鐑芥嚄閸洖鍌ㄧ憸鏃堝Υ閸愨晜鍎熼柕蹇嬪焺濞茬鈹戦悩璇у伐閻庢凹鍙冨畷锝堢疀濞戞瑧鍘撻柡澶屽仦婢瑰棛鎷规导瀛樼厱闁靛牆妫▓鏇㈡煏閸パ冾伂缂佺姵鐩獮姗€骞栭鐕佹＇缂?
   if (options.autoContinue) {
     if (!fsSync.existsSync(path.resolve(KODAX_FEATURES_FILE))) {
       console.log(chalk.red(`[Error] --auto-continue requires a long-running project.`));
@@ -1298,7 +1025,7 @@ async function main() {
     return;
   }
 
-  // --init: 初始化长时间运行任务
+  // --init: 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁嶉崟顒佹濠德板€曢崯顖氱暦閺屻儲鐓曠€光偓閳ь剟宕曢幋鐘电闁哄稁鍘介悡娆撴煟濡も偓閻楀﹦娆㈤懠顒傜＜闁逞屽墮閻ｆ繈宕熼鍌氬箰闁诲骸绠嶉崕杈殽閹间胶宓佹俊銈勭劍閸欏繘鏌ㄥ┑鍡橆棞濠殿喖绉归弻鈥崇暆鐎ｎ剛鐦堥悗瑙勬礃閿曘垺淇婂宀婃Щ闂佺粯鎸鹃崰搴ㄥ煘閹达箑鐓￠柛鈩冦仦缁ㄥジ鏌ｆ惔锝囨嚄闁告劕澧介崝閿嬬節閻㈤潧校闁肩懓澧界划璇测槈濞嗗秳绨婚梺鍝勭Ф閺佸摜绮欐繝姘厸闁稿本顨呮禍鎯р攽閻樺灚鏆╅柛瀣洴椤㈡岸顢橀悢绋垮伎婵°倧绲介崰姘跺极鐎ｎ剚鍠愰幖娣妼缁?
   if (options.init) {
     const currentDate = new Date().toISOString().split('T')[0];
     const currentOS = process.platform === 'win32' ? 'Windows' : 'Unix/Linux';
@@ -1369,7 +1096,7 @@ New: {"features": [
     }
   }
 
-  // --team: 并行子 Agent
+  // --team: 濠电姴鐥夐弶搴撳亾濡や焦鍙忛柣鎴ｆ绾惧鏌ｉ幇顒佹儓缁炬儳鐏濋埞鎴﹀磼濞戞瑥浠╅梺閫炲苯鍘哥紒鑸靛哺閻涱喚鈧綆鍠楅崑鎰亜閹板灚绶氬?Agent
   if (options.team) {
     const tasks = options.team.split(',').map(t => t.trim()).filter(Boolean);
     if (tasks.length === 0) { console.log('Error: No tasks specified for --team'); process.exit(1); }
@@ -1382,7 +1109,7 @@ New: {"features": [
     const workspaceDir = path.resolve('.kodax', 'orchestration', runId);
     console.log(chalk.dim(`[KodaX Team] Workspace: ${workspaceDir}`));
 
-    // 流式输出锁
+    // Serialize agent output to keep team-mode logs readable.
     const streamLock = { locked: false, queue: [] as (() => void)[] };
     const printedHeaders = new Set<string>();
     async function acquireStreamLock(): Promise<void> {
@@ -1479,7 +1206,7 @@ New: {"features": [
     return;
   }
 
-  // Command 检查
+  // Command dispatch for /command-style invocations.
   if (userPrompt.startsWith('/')) {
     const parsed = parseCommandCall(userPrompt);
     if (parsed) {
@@ -1500,13 +1227,11 @@ New: {"features": [
       }
     }
   }
-
-  // 无 prompt 且非 print 模式 → 进入交互式
+  // No prompt and not in print/init mode: enter interactive mode
   if (!userPrompt && !options.init && !options.print) {
     const kodaXOptions = createKodaXOptions(options, false);
-    // 传递 FileSessionStorage 以支持会话持久化
-    // 注意：不传递 CLI events，Ink 模式有自己的状态显示组件
-    // 注意：不传递 permissionMode/confirmTools，InkREPL 从配置文件加载
+    // Pass FileSessionStorage for persisted sessions.
+    // Avoid forwarding CLI events or permission settings because Ink manages its own UI state.
     try {
       await runInkInteractiveMode({
         provider: kodaXOptions.provider,
@@ -1516,7 +1241,7 @@ New: {"features": [
         parallel: kodaXOptions.parallel,
         session: kodaXOptions.session,
         storage: new FileSessionStorage(),
-        // 不传递 events，避免与 Ink UI 冲突
+        // 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎸鹃埀顒冾潐濞叉牕煤閿曞偊缍栭柡鍥ュ灪閻撴洘銇勯幇鍓佺ɑ缂佲偓閸愵喗鐓?events闂傚倸鍊搁崐鐑芥倿閿旈敮鍋撶粭娑樻噽閻瑩鏌熸潏楣冩闁稿孩顨婇弻娑氫沪閸撗€妲堝銈嗘礋娴滃爼寮诲澶婁紶闁告洦鍓欏▍锝囩磽娴ｆ彃浜鹃梺绋挎湰婢规洟宕戦幘鑽ゅ祦闁割煈鍠栨慨搴ㄦ煟鎼淬垹鍤柛锝忕秮楠?Ink UI 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁撻悩鑼槷濠碘槅鍨跺Λ鍧楁倿婵犲啰绠鹃柛鈩兩戠亸浼存煕?
       });
     } catch (error) {
       if (error instanceof KodaXTerminalError) {
@@ -1535,13 +1260,13 @@ New: {"features": [
     return;
   }
 
-  // 显示帮助（print 模式且无任务时）
+  // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢妶鍌氫壕婵鍘ф晶顖炴煛閸涙澘鐓愮紒鍌涘笧閳ь剨缍嗛埀顒夊弿闂勫嫰骞堥妸銉庣喖宕稿Δ鈧幗鐢告⒑閸濆嫭顥炵紒顔肩Ч婵＄敻宕熼姘辩潉闂佺鏈懝鐐濮椻偓閹泛顫濋崡鐐╂瀰濠殿喖锕ュ浠嬬嵁閹邦厽鍎熼柨婵嗗€归～宥嗙節閻㈤潧浠╅柛瀣姍閳ワ妇绮甸惃鈧瑃 濠电姷鏁告慨鐑姐€傞挊澹╋綁宕ㄩ弶鎴濈€銈呯箰閻楀棝鎮為崹顐犱簻闁瑰搫妫楁禍鍓х磼閸撗嗘闁告ɑ鍎抽埥澶愭偨缁嬭法鍔﹀銈嗗笂閼冲墎绮绘ィ鍐╃厵閻庣數顭堟禒锕傛倶韫囨洖顣奸柟渚垮妽缁绘繈宕熼鈧▓宀勬煣閼姐倕浠遍柡灞炬礋瀹曠厧鈹戦崶鑸碉骏婵＄偑鍊愰弲婵嬪礂濮椻偓楠炲啳銇愰幒鎴犲€為梺闈涱焾閸庡磭绮婂畡閭︽富闁靛牆楠告禍鏍煕婵犲啰绠炵€殿喖顭烽弫鎾绘偐閼碱剦妲版俊鐐€栭幐鍡涘礃閳哄倻褰庣紓?
   if (!userPrompt && !options.init && options.print) {
     showBasicHelp();
     return;
   }
 
-  // 正常运行
+  // 濠电姷鏁告慨鐢割敊閺嶎厼绐楁俊銈呭暞瀹曟煡鏌熼柇锕€鏋涚紒韬插€曢湁闁绘ê妯婇崕鎰版煕鐎ｎ亶妯€闁哄被鍊楃划娆戞崉閵娿倗椹冲┑鐐茬摠閸ゅ酣宕愬┑瀣摕闁绘柨鍚嬮悞浠嬫煥閺囨浜鹃梺璇茬箻娴滃爼寮婚敓鐘茬劦?
   const kodaXOptions = createKodaXOptions(options, options.print ?? false);
   await runKodaX(kodaXOptions, userPrompt);
 }
