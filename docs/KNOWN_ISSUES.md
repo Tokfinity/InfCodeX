@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-03-22_
+_Last Updated: 2026-03-23_
 
 ---
 
@@ -41,6 +41,7 @@ _Last Updated: 2026-03-22_
 | 097 | Medium | Open | 错误处理、阻塞式 I/O 与执行侧副作用清理仍不完整 | v0.6.13 | - | 2026-03-22 | - |
 | 098 | Low | Open | 重复 helper、兼容层导出、魔法数字与硬编码字符串需要收敛 | v0.6.13 | - | 2026-03-22 | - |
 | 099 | Low | Open | 测试辅助代码重复，局部验证资产需要收敛 | v0.6.13 | - | 2026-03-22 | - |
+| 100 | High | Resolved | ACP Server 缺少日志/可观测性输出 | v0.6.15 | v0.6.15 | 2026-03-23 | 2026-03-23 |
 
 ---
 
@@ -1396,14 +1397,113 @@ _Last Updated: 2026-03-22_
 
 ---
 
+### 100: ACP Server 缺少日志/可观测性输出 (RESOLVED)
+- **Priority**: High
+- **Status**: Resolved
+- **Introduced**: v0.6.15
+- **Fixed**: v0.6.15
+- **Created**: 2026-03-23
+- **Resolution Date**: 2026-03-23
+
+- **Original Problem**:
+  执行 `kodax acp serve` 启动 ACP Server 后，整个进程完全静默，无任何启动信息、运行状态或错误输出。与 REPL 模式（有 Banner、StatusBar、错误提示等丰富反馈）形成鲜明对比。
+
+  **缺失的日志场景**：
+
+  | 阶段 | 当前状态 |
+  |------|----------|
+  | 服务启动 | 无输出，不知道 provider/model/cwd/mode |
+  | initialize 握手 | 无日志 |
+  | newSession 创建 | 无日志（session ID、cwd、mode） |
+  | prompt 请求/响应 | 无日志（请求内容、stopReason、耗时） |
+  | 权限协商 | 无日志（工具名、决策结果） |
+  | 错误/异常 | 仅 1 处 console.error（L610 notification 发送失败） |
+  | 服务关闭 | 无日志 |
+
+  **根因分析**：
+  1. `runAcpServer()` 将 `process.stdin` 和 `process.stdout` 绑定给 `ndJsonStream`，stdout 被 ACP 协议占用
+  2. `console.log()` 写入 stdout 会污染 JSON Lines 输出，导致客户端解析错误
+  3. `console.error()` 是唯一安全的日志通道，但整份 `acp_server.ts` 仅在 L610 使用了一处
+  4. 无 `--verbose` / `KODAX_DEBUG` / `LOG_LEVEL` 等调试开关
+  5. 无结构化日志（JSON log line / timestamp / level）
+  6. 无启动信息摘要（provider、model、cwd、permission mode）
+
+- **Expected Behavior**:
+  - 启动时应输出启动摘要到 stderr（provider、model、cwd、mode、version）
+  - 关键生命周期事件应输出到 stderr（session 创建/关闭、prompt 开始/结束、权限请求）
+  - 错误应输出到 stderr，包含上下文信息（session ID、工具名、错误原因）
+  - 支持 `--verbose` 或环境变量控制日志级别（off / error / info / debug）
+
+- **Context**:
+  - `src/acp_server.ts` — `KodaXAcpServer` 类，622 行
+  - `src/kodax_cli.ts` — `acp serve` 子命令（L806-837）
+  - REPL 模式通过 `KodaXEvents` 回调实现丰富反馈，ACP 模式缺少等价机制
+
+- **Proposed Solution**:
+  1. 新增 `acp-logger.ts`，将所有日志输出到 `process.stderr`，避免污染 ACP stdout
+  2. 启动时输出摘要：`[ACP] KodaX v{version} | provider={provider} model={model} cwd={cwd} mode={mode}`
+  3. 在 `initialize`、`newSession`、`prompt`、`cancel`、`setSessionMode` 入口添加生命周期日志
+  4. 在 `evaluateToolPermission` 和 `requestPermissionFromClient` 添加权限决策日志
+  5. 支持 `KODAX_ACP_LOG=debug|info|error|off` 环境变量控制日志级别
+  6. 错误日志包含 session ID 和上下文，便于排查
+
+- **Resolution**:
+  1. 新增 `src/acp_logger.ts`，统一将 ACP 日志写入 `stderr`，并支持 `off / error / info / debug` 四级日志级别
+  2. `KodaXAcpServer` 现在会记录启动摘要、`initialize`、`newSession`、`setSessionMode`、`prompt start/finish`、`cancel` 等关键生命周期事件
+  3. 权限协商链路补上了请求、授权、拒绝、remembered allow、客户端断开等日志
+  4. 原来 notification 发送失败时零散的 `console.error` 已统一收口到 ACP logger
+  5. CLI 帮助和 README / README_CN 已补充 `KODAX_ACP_LOG` 说明，方便用户调节 ACP 日志详细度
+
+- **Follow-up Design Note**:
+  当前修复解决了“ACP 完全静默、无法排障”的发布阻塞问题，但实现仍偏务实：`acp_server.ts` 直接在生命周期节点里调用 logger，运行时事件与日志文案仍然耦合在一起。
+
+  **后续更优雅的重构方向**：
+  1. 引入 `acp_events.ts` 或等价模块，定义强类型 ACP 运行时事件，例如 `server_attached`、`session_created`、`prompt_started`、`prompt_finished`、`permission_requested`、`permission_granted`、`notification_failed`
+  2. `acp_server.ts` 只负责发出结构化事件，不直接拼接日志文案
+  3. `acp_logger.ts` 退化为一个 sink / formatter，专门负责把事件渲染到 `stderr`
+  4. 后续可以在不触碰 ACP 协议逻辑的前提下新增其他 sink，例如 JSON 日志、文件日志、IDE debug console、遥测上报
+  5. 测试层也可以从“断言字符串日志”进一步升级为“断言发出了哪些 runtime events”，让协议逻辑与展示逻辑解耦
+
+  **设计结论**：
+  - 当前版本适合作为可发版修复
+  - 后续应继续把 ACP 可观测性从“直接写日志”收敛到“运行时事件 + sink”架构
+  - 等进入下一轮 ACP 清理时，应优先按这一方案演进，而不是继续在 `acp_server.ts` 内追加零散日志调用
+
+- **Files Changed**:
+  - `src/acp_logger.ts`
+  - `src/acp_server.ts`
+  - `src/index.ts`
+  - `src/kodax_cli.ts`
+  - `README.md`
+  - `README_CN.md`
+  - `tests/acp_server.test.ts`
+  - `tests/kodax_cli.test.ts`
+
+- **Tests**:
+  - `npx vitest run tests/acp_server.test.ts tests/kodax_cli.test.ts`
+  - `npx tsc -p tsconfig.json --noEmit`
+
+---
+
 ## Summary
-- Total: 26 (18 Open, 8 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 27 (18 Open, 9 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ---
 
 ## Changelog
+
+### 2026-03-23: Issue 100 resolved
+- Resolved 100: ACP Server 缺少日志/可观测性输出 (High Priority)
+- 新增 `src/acp_logger.ts`，统一将 ACP 日志安全写入 `stderr`，避免污染 ACP `stdout` JSONL 协议流
+- 补充 ACP 启动摘要、会话生命周期、prompt 开始/结束、权限协商、取消和错误日志
+- 支持 `KODAX_ACP_LOG=off|error|info|debug` 控制 ACP 日志级别，并同步更新 CLI 帮助和 README 文档
+
+### 2026-03-23: Issue 100 added
+- Added 100: ACP Server 缺少日志/可观测性输出 (High Priority)
+- 问题确认：`kodax acp serve` 当前缺少启动摘要、会话生命周期、权限协商、错误与关闭日志，stdout 又被 ACP JSONL 协议占用，导致实际只能依赖 stderr 做安全日志输出
+- 后续修复方向：补充 stderr logger、启动摘要、关键生命周期日志，以及可控日志级别开关
 
 ### 2026-03-22: Technical debt audit merged into canonical issue tracker
 - Verified and landed the fix batch for `C10`, `H17`, `H18`, `H53`, `H59`, `M37`, `M57`, and `M69` during the cleanup pass

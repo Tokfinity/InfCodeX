@@ -363,7 +363,8 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  --model <name>               ') + 'Model override');
     console.log(chalk.dim('  --reasoning <mode>           ') + 'Reasoning mode: off, auto, quick, balanced, deep');
     console.log(chalk.dim('  -t, --thinking               ') + 'Compatibility alias for --reasoning auto');
-    console.log(chalk.dim('  --permission-mode <mode>     ') + 'Initial mode: plan, accept-edits, auto-in-project\n');
+    console.log(chalk.dim('  --permission-mode <mode>     ') + 'Initial mode: plan, accept-edits, auto-in-project');
+    console.log(chalk.dim('  KODAX_ACP_LOG=<level>        ') + 'stderr log level: off, error, info, debug\n');
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax acp serve'));
     console.log(chalk.dim('  kodax acp serve --cwd C:\\repo --permission-mode accept-edits'));
@@ -586,6 +587,7 @@ function printAcpSubcommandHelp(name: string): boolean {
     console.log('  -t, --thinking               Compatibility alias for --reasoning auto');
     console.log('  --reasoning <mode>           Reasoning mode: off, auto, quick, balanced, deep');
     console.log('  --permission-mode <mode>     Initial permission mode');
+    console.log('  KODAX_ACP_LOG=<level>        stderr log level: off, error, info, debug');
     return true;
   }
 
