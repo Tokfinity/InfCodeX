@@ -61,7 +61,7 @@ export function findCommandSlashIndex(beforeCursor: string): number {
  */
 export class FileCompleter implements Completer {
   private cwd: string;
-  private cache: Map<string, string[]> = new Map();
+  private cache = new Map<string, { entries: string[]; expiresAt: number }>();
   private cacheTimeout = 5000; // 5 second cache - 5 秒缓存
 
   constructor(cwd?: string) {
@@ -125,16 +125,24 @@ export class FileCompleter implements Completer {
   }
 
   private async readdir(dir: string): Promise<string[]> {
+    const now = Date.now();
     const cached = this.cache.get(dir);
-    if (cached) return cached;
+    if (cached && cached.expiresAt > now) {
+      return cached.entries;
+    }
+    if (cached) {
+      this.cache.delete(dir);
+    }
 
     return new Promise((resolve) => {
       fs.readdir(dir, (err, entries) => {
         if (err) {
           resolve([]);
         } else {
-          this.cache.set(dir, entries);
-          setTimeout(() => this.cache.delete(dir), this.cacheTimeout);
+          this.cache.set(dir, {
+            entries,
+            expiresAt: Date.now() + this.cacheTimeout,
+          });
           resolve(entries);
         }
       });

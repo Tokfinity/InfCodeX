@@ -1838,36 +1838,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             select: async (title: string, options: string[]): Promise<string | undefined> => {
               // Route through Ink-managed dialog state instead of reading stdin directly.
               return showSelectDialog(title, options);
-              // TODO: Implement Ink-based select dialog
-              // For now, use simple console-based selection
-              console.log(`\n${title}`);
-              console.log('\u2500'.repeat(title.length));
-              options.forEach((option, index) => {
-                console.log(`  ${index + 1}. ${option}`);
-              });
-              console.log('  0. Cancel');
-              console.log('');
-
-              // Use Ink's input to get selection
-              return new Promise((resolve) => {
-                const handleInput = (data: string) => {
-                  const trimmed = data.trim();
-                  if (trimmed === '0' || trimmed === '') {
-                    resolve(undefined);
-                    return;
-                  }
-                  const index = parseInt(trimmed, 10) - 1;
-                  if (isNaN(index) || index < 0 || index >= options.length) {
-                    console.log('Invalid choice.');
-                    resolve(undefined);
-                    return;
-                  }
-                  resolve(options[index]);
-                };
-                // Note: This is a temporary implementation
-                // A proper implementation would use Ink components
-                process.stdin.once('data', handleInput);
-              });
             },
             confirm: async (message: string): Promise<boolean> => {
               const result = await showConfirmDialog("confirm", {
@@ -1879,22 +1849,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             input: async (prompt: string, defaultValue?: string): Promise<string | undefined> => {
               // Route through Ink-managed dialog state instead of reading stdin directly.
               return showInputDialog(prompt, defaultValue);
-              // TODO: Implement Ink-based input dialog
-              // For now, use simple console-based input
-              const promptText = defaultValue ? `${prompt} [${defaultValue}]: ` : `${prompt}: `;
-              console.log(promptText);
-
-              return new Promise((resolve) => {
-                const handleInput = (data: string) => {
-                  const trimmed = data.trim();
-                  if (trimmed === '' && defaultValue !== undefined) {
-                    resolve(defaultValue);
-                    return;
-                  }
-                  resolve(trimmed || undefined);
-                };
-                process.stdin.once('data', handleInput);
-              });
             },
           },
         };

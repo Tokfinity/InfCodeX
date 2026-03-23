@@ -125,8 +125,8 @@ export type SkillSource =
  * Skill registry interface for managing discovered skills
  */
 export interface ISkillRegistry {
-  /** All discovered skill metadata */
-  skills: Map<string, SkillMetadata>;
+  /** Read-only view of discovered skill metadata */
+  readonly skills: ReadonlyMap<string, SkillMetadata>;
 
   /** Discover skills from all configured paths */
   discover(): Promise<void>;
@@ -142,6 +142,18 @@ export interface ISkillRegistry {
 
   /** Reload skills from disk */
   reload(): Promise<void>;
+
+  /** List all discovered skills */
+  list(): ReadonlyArray<SkillMetadata>;
+
+  /** List skills that can be invoked directly by users */
+  listUserInvocable(): ReadonlyArray<SkillMetadata>;
+
+  /** Check whether a skill exists */
+  has(name: string): boolean;
+
+  /** Number of discovered skills */
+  readonly size: number;
 }
 
 // === Skill Execution Context ===

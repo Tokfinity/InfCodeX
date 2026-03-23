@@ -12,10 +12,8 @@ import type {
     KodaXProviderStreamOptions,
     KodaXToolDefinition,
     KodaXTextBlock,
-    KodaXToolUseBlock,
-    KodaXToolResultBlock
+    KodaXToolUseBlock
 } from '../types.js';
-import { SessionNotification } from '@agentclientprotocol/sdk';
 
 interface ActiveStreamContext {
     streamOptions?: KodaXProviderStreamOptions;
@@ -173,6 +171,7 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
             this._client.disconnect();
             this._client = null;
         }
+        this._activeStreams.clear();
         this._sessionMap.clear();
     }
 }
