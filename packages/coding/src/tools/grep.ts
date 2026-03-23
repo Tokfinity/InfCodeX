@@ -5,7 +5,6 @@
  */
 
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import { glob as globAsync } from 'glob';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionPathOrCwd } from '../runtime-paths.js';
@@ -59,6 +58,19 @@ function createSafeRegex(pattern: string, ignoreCase: boolean): RegExp {
   }
 }
 
+async function getPathStat(
+  targetPath: string,
+): Promise<import('node:fs').Stats | null> {
+  try {
+    return await fs.stat(targetPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
 export async function toolGrep(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const pattern = input.pattern as string;
   const searchPath = (input.path as string) ?? ctx.executionCwd ?? ctx.gitRoot;
@@ -79,7 +91,13 @@ export async function toolGrep(input: Record<string, unknown>, ctx: KodaXToolExe
     return `[Tool Error] grep: ${message}`;
   }
 
-  const stat = fsSync.existsSync(resolvedPath) ? fsSync.statSync(resolvedPath) : null;
+  let stat;
+  try {
+    stat = await getPathStat(resolvedPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Tool Error] grep: Unable to access "${searchPath}". ${message}`;
+  }
   if (!stat) {
     return `[Tool Error] grep: Path not found: ${searchPath}`;
   }
