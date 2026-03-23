@@ -35,6 +35,15 @@ export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');
 // UI display constants
 export const PREVIEW_MAX_LENGTH = 60;
 
+let cachedVersion: string | null = null;
+type FeatureProgressSnapshot = {
+  completed: number;
+  total: number;
+  allComplete: boolean;
+  mtimeMs: number;
+};
+let cachedFeatureProgress: FeatureProgressSnapshot | null = null;
+
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(
   config: T,
 ): T {
@@ -61,13 +70,21 @@ function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string
 // Uses import.meta.url for path resolution, works regardless of cwd
 // 使用 import.meta.url 获取路径，无论用户在哪个目录运行都能正确读取
 export function getVersion(): string {
+  if (cachedVersion) {
+    return cachedVersion;
+  }
+
   const packageJsonPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../package.json');
   if (fsSync.existsSync(packageJsonPath)) {
     try {
-      return JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version ?? '0.0.0';
-    } catch { }
+      cachedVersion = JSON.parse(fsSync.readFileSync(packageJsonPath, 'utf-8')).version ?? '0.0.0';
+      return cachedVersion;
+    } catch {
+      // Fall through to the stable default version when package metadata is unavailable.
+    }
   }
-  return '0.0.0';
+  cachedVersion = '0.0.0';
+  return cachedVersion;
 }
 
 // Export for backwards compatibility
@@ -107,23 +124,31 @@ export function getProviderAvailableModels(name: string, providerModelsConfig?: 
     try {
       const builtInModels = getProviderModels(name);
       if (builtInModels.length > 0) return mergeModels(configModels, builtInModels);
-    } catch { /* fall through */ }
+    } catch {
+      // Built-in provider snapshots are optional here; custom providers may still supply models.
+    }
     try {
       const custom = getCustomProvider(name);
       if (custom) return mergeModels(configModels, custom.getAvailableModels());
-    } catch { /* ignore */ }
+    } catch {
+      // Ignore custom-provider lookup failures and fall back to user-configured models below.
+    }
     return configModels;
   }
   // No config override — use built-in models from snapshot
   try {
     const builtInModels = getProviderModels(name);
     if (builtInModels.length > 0) return builtInModels;
-  } catch { /* fall through */ }
+  } catch {
+    // Fall through to custom providers when a built-in snapshot is unavailable.
+  }
   // Check custom providers
   try {
     const custom = getCustomProvider(name);
     if (custom) return custom.getAvailableModels();
-  } catch { /* ignore */ }
+  } catch {
+    // Ignore custom-provider lookup failures and report no models.
+  }
   return [];
 }
 
@@ -138,7 +163,9 @@ export function getProviderReasoningCapability(
   try {
     const custom = getCustomProvider(name);
     if (custom) return custom.getReasoningCapability(model);
-  } catch { /* ignore */ }
+  } catch {
+    // Unknown custom providers should degrade to "unknown" without surfacing an exception.
+  }
   return 'unknown';
 }
 
@@ -324,7 +351,9 @@ export function loadConfig(): {
       };
       return migrateLegacyPermissionModeInConfig(parsed);
     }
-  } catch { }
+  } catch {
+    // Unreadable user config should fall back to defaults instead of breaking startup.
+  }
   return {};
 }
 
@@ -354,7 +383,12 @@ export function saveConfig(config: {
 
 // Get git root directory
 export async function getGitRoot(): Promise<string | null> {
-  try { const { stdout } = await execAsync('git rev-parse --show-toplevel'); return stdout.trim(); } catch { return null; }
+  try {
+    const { stdout } = await execAsync('git rev-parse --show-toplevel');
+    return stdout.trim();
+  } catch {
+    return null;
+  }
 }
 
 // Feature type definition
@@ -366,29 +400,47 @@ interface Feature {
   [key: string]: unknown;
 }
 
-// Get feature progress from feature_list.json
-export function getFeatureProgress(): [number, number] {
+function readFeatureProgressSnapshot(): FeatureProgressSnapshot | null {
   const featuresPath = path.resolve('feature_list.json');
-  if (!fsSync.existsSync(featuresPath)) return [0, 0];
+  if (!fsSync.existsSync(featuresPath)) {
+    cachedFeatureProgress = null;
+    return null;
+  }
+
   try {
+    const stat = fsSync.statSync(featuresPath);
+    if (cachedFeatureProgress && cachedFeatureProgress.mtimeMs === stat.mtimeMs) {
+      return cachedFeatureProgress;
+    }
+
     const features = JSON.parse(fsSync.readFileSync(featuresPath, 'utf-8'));
     const total = (features.features ?? []).length;
     const completed = (features.features ?? []).filter((f: Feature) => f.passes).length;
-    return [completed, total];
-  } catch { return [0, 0]; }
+
+    cachedFeatureProgress = {
+      completed,
+      total,
+      allComplete: total > 0 && completed === total,
+      mtimeMs: stat.mtimeMs,
+    };
+    return cachedFeatureProgress;
+  } catch {
+    // Invalid feature manifests should behave like missing progress data.
+    cachedFeatureProgress = null;
+    return null;
+  }
+}
+
+// Get feature progress from feature_list.json
+export function getFeatureProgress(): [number, number] {
+  const snapshot = readFeatureProgressSnapshot();
+  return snapshot ? [snapshot.completed, snapshot.total] : [0, 0];
 }
 
 // Check if all features are complete
 export function checkAllFeaturesComplete(): boolean {
-  const featuresPath = path.resolve('feature_list.json');
-  if (!fsSync.existsSync(featuresPath)) return false;
-  try {
-    const features = JSON.parse(fsSync.readFileSync(featuresPath, 'utf-8'));
-    for (const f of features.features ?? []) {
-      if (!f.passes) return false;
-    }
-    return true;
-  } catch { return false; }
+  const snapshot = readFeatureProgressSnapshot();
+  return snapshot?.allComplete ?? false;
 }
 
 // API rate limiting - API 速率限制

@@ -38,6 +38,7 @@ export class PlanStorage {
       const content = await fs.readFile(filePath, 'utf-8');
       return JSON.parse(content);
     } catch {
+      // Treat missing or malformed plan files as absent to keep plan-mode resilient.
       return null;
     }
   }
@@ -52,6 +53,7 @@ export class PlanStorage {
       );
       return plans.filter((p): p is ExecutionPlan => p !== null);
     } catch {
+      // Missing storage directory should behave like an empty plan list.
       return [];
     }
   }
@@ -65,7 +67,9 @@ export class PlanStorage {
 
   async delete(planId: string): Promise<void> {
     const filePath = path.join(this.dir, `${planId}.json`);
-    await fs.unlink(filePath).catch(() => {});
+    await fs.unlink(filePath).catch(() => {
+      // Ignore repeated deletes and already-removed plan files.
+    });
   }
 }
 

@@ -701,15 +701,14 @@ _Last Updated: 2026-03-23_
 - **Created**: 2026-03-08
 
 - **Original Problem**:
-  `packages/ai` 目录包含多个 AI Provider 实现，但完全没有单元测试覆盖。
+  `packages/ai` 已经补上了一批 provider / reasoning 相关单元测试，但覆盖仍不完整。当前 issue 已从“完全没有单元测试”收敛为“关键基础层测试覆盖仍然偏薄”。
 
-  当前缺少测试的模块：
-  - `providers/anthropic.ts` - Anthropic Claude API 集成
-  - `providers/openai.ts` - OpenAI API 集成
-  - `providers/gemini-cli.ts` - Gemini CLI 凭证提取和 API 集成
-  - `providers/codex-cli.ts` - Codex CLI 凭证提取和 API 集成
-  - `providers/registry.ts` - Provider 注册和工厂
-  - `providers/base.ts` - 基类实现
+  当前仍需继续补齐的模块：
+  - `providers/base.ts` - Provider 基类行为与回退链
+  - `providers/registry.ts` - Provider 注册、配置状态与默认快照
+  - `providers/gemini-cli.ts` - Gemini CLI 凭证提取和桥接边界
+  - `providers/codex-cli.ts` - Codex CLI 凭证提取和桥接边界
+  - `providers/anthropic.ts` / `providers/openai.ts` - 更贴近真实 stream 执行路径的契约测试
 
 - **Expected Behavior**:
   - 测试覆盖率应达到 80%+
@@ -720,9 +719,23 @@ _Last Updated: 2026-03-23_
   - 重构时容易引入 bug
   - 新增 provider 时缺乏参考模式
 
+- **Current Coverage**:
+  - 已有测试：`reasoning-overrides.test.ts`
+  - 已有测试：`providers/anthropic-message-serialization.test.ts`
+  - 已有测试：`providers/anthropic-reasoning-capability.test.ts`
+  - 已有测试：`providers/capability-profile.test.ts`
+  - 已有测试：`providers/openai-reasoning-capability.test.ts`
+  - 已有测试：`providers/streaming-robustness.test.ts`
+
 - **Context**:
   - 项目全局测试覆盖要求见 `~/.claude/rules/common/testing.md`
   - IMPROVEMENT_CLI_PROVIDERS.md 中也提到了此问题 (P0)
+
+- **Phase 1 Progress (2026-03-23)**:
+  - 新增 `providers/base.test.ts`
+  - 新增 `providers/registry.test.ts`
+  - 新增 `providers/cli-bridge-providers.test.ts`
+  - 问题仍保持 Open，后续继续补 CLI bridge 与真实 provider stream 契约测试
 
 - **Proposed Solution**:
   1. 创建 `tests/providers/` 目录
@@ -1093,8 +1106,9 @@ _Last Updated: 2026-03-23_
   3. 尚未建立 evidence-carrying result model
 
 - **Proposed Solution**:
-  - 实施 `FEATURE_027 Native MCP and Connector Runtime`
-  - 实施 `FEATURE_028 First-Class Search Retrieval and Evidence Tooling`
+  - 实施现有 `FEATURE_035 MCP 能力 Provider`
+  - 实施现有 `FEATURE_028 First-Class 搜索检索与证据工具`
+  - 以 `FEATURE_034 Extension + Capability Runtime` 作为连接器与能力运行时底座
 
 ---
 
@@ -1314,6 +1328,15 @@ _Last Updated: 2026-03-23_
   - 逐步替换热路径同步 I/O，并对保留的同步路径注明原因
   - 把 loader / discovery / permission 侧的 `console.*` 收敛到 logger
   - 继续收口剩余 command execution 分支到权限感知的执行抽象
+
+- **Phase 1 Progress (2026-03-23)**:
+  - `packages/coding/src/tools/read.ts` 改为基于 `fs.stat()` 的异步可访问性检查，移除了 `existsSync`
+  - `packages/coding/src/tools/grep.ts` 改为异步路径探测，并为不可访问路径补充明确错误信息
+  - `packages/repl/src/common/utils.ts` 为版本号与 `feature_list.json` 进度读取增加缓存，降低热路径同步 I/O 频率
+  - `packages/repl/src/common/permission-config.ts`、`packages/repl/src/common/plan-storage.ts` 为保留的 best-effort 静默失败补上显式注释
+  - `packages/repl/src/permission/executor.ts` 移除了临时脚本检查里的同步 `existsSync`
+  - `packages/repl/src/permission/permission.ts` 为路径 canonicalization 和系统 temp 目录解析增加缓存，减少重复同步文件系统探测
+  - 问题仍保持 Open，后续继续清理剩余权限路径解析同步逻辑与执行侧副作用
 
 ---
 

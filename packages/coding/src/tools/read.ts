@@ -5,13 +5,20 @@
  */
 
 import fs from 'fs/promises';
-import fsSync from 'fs';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 
 export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
-  if (!fsSync.existsSync(filePath)) return `[Tool Error] File not found: ${filePath}`;
+  try {
+    await fs.stat(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return `[Tool Error] File not found: ${filePath}`;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Tool Error] Unable to access file: ${filePath}. ${message}`;
+  }
   const content = await fs.readFile(filePath, 'utf-8');
   const lines = content.split('\n');
   // offset 是 1-indexed，0 表示从头开始（等同于 1）

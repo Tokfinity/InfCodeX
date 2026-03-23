@@ -47,7 +47,9 @@ function readJsonFile(filePath: string): Record<string, unknown> {
     if (fsSync.existsSync(filePath)) {
       return JSON.parse(fsSync.readFileSync(filePath, 'utf-8'));
     }
-  } catch { }
+  } catch {
+    // Invalid or unreadable config files should not crash permission loading.
+  }
   return {};
 }
 
