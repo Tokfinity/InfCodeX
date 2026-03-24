@@ -43,6 +43,7 @@ import {
   rebaseContextTokenSnapshot,
   resolveContextTokenCount,
 } from './token-accounting.js';
+import { applyToolResultGuardrail } from './tools/tool-result-policy.js';
 
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
@@ -960,22 +961,34 @@ export async function runKodaX(
         if (nonBashTools.length > 0) {
           const promises = nonBashTools.map(async tc => ({
             id: tc.id,
-            content: await executeToolCall(events, {
-              id: tc.id,
-              name: tc.name,
-              input: tc.input as Record<string, unknown> | undefined,
-            }, ctx),
+            content: (
+              await applyToolResultGuardrail(
+                tc.name,
+                await executeToolCall(events, {
+                  id: tc.id,
+                  name: tc.name,
+                  input: tc.input as Record<string, unknown> | undefined,
+                }, ctx),
+                ctx,
+              )
+            ).content,
           }));
           const results = await Promise.all(promises);
           for (const r of results) resultMap.set(r.id, r.content);
         }
 
         for (const tc of bashTools) {
-          const content = await executeToolCall(events, {
-            id: tc.id,
-            name: tc.name,
-            input: tc.input as Record<string, unknown> | undefined,
-          }, ctx);
+          const content = (
+            await applyToolResultGuardrail(
+              tc.name,
+              await executeToolCall(events, {
+                id: tc.id,
+                name: tc.name,
+                input: tc.input as Record<string, unknown> | undefined,
+              }, ctx),
+              ctx,
+            )
+          ).content;
           resultMap.set(tc.id, content);
         }
 
@@ -986,11 +999,17 @@ export async function runKodaX(
         }
       } else {
         for (const tc of result.toolBlocks) {
-          const content = await executeToolCall(events, {
-            id: tc.id,
-            name: tc.name,
-            input: tc.input as Record<string, unknown> | undefined,
-          }, ctx);
+          const content = (
+            await applyToolResultGuardrail(
+              tc.name,
+              await executeToolCall(events, {
+                id: tc.id,
+                name: tc.name,
+                input: tc.input as Record<string, unknown> | undefined,
+              }, ctx),
+              ctx,
+            )
+          ).content;
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
           toolResults.push(createToolResultBlock(tc.id, content));
         }

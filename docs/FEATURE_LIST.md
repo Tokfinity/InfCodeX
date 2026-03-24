@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-22_
+_Last Updated: 2026-03-24_
 
 ---
 
@@ -31,7 +31,7 @@ _Last Updated: 2026-03-22_
 | v0.6.10 | Released | 1 | 1/1 (100%) |
 | v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.6.15 | Completed | 4 | 4/4 (100%) |
-| v0.6.20 | Planned | 1 | 0/1 (0%) |
+| v0.6.20 | Completed | 1 | 1/1 (100%) |
 | v0.7.0 | Planned | 6 | 0/6 (0%) |
 | v0.8.0 | Planned | 6 | 0/6 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
@@ -82,7 +82,7 @@ _Last Updated: 2026-03-22_
 | 038 | New | Planned | High | Official Sandbox Extension | v0.8.0 | - | [Design](features/v0.8.0.md#feature_038-official-sandbox-extension) | 2026-03-21 | - | - |
 | 039 | Enhancement | Completed | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#039) | 2026-03-22 | - | 2026-03-22 |
 | 040 | New | Completed | High | ACP Server 支持（供编辑器/IDE 直接调用） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#040) | 2026-03-22 | 2026-03-22 | 2026-03-22 |
-| 041 | Enhancement | Planned | High | Tool Output Guardrails 与 Context Overflow Protection | v0.6.20 | - | [Design](features/v0.6.20.md#041) | 2026-03-24 | - | - |
+| 041 | Enhancement | Completed | High | Tool Output Guardrails 与 Context Overflow Protection | v0.6.20 | - | [Design](features/v0.6.20.md#041) | 2026-03-24 | 2026-03-24 | 2026-03-24 |
 ### 014: 项目模式增强 (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -1587,16 +1587,16 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 为编辑器/IDE 场景补齐稳定的启动参数、错误输出与能力声明
 - README / 集成文档需要新增“如何把 KodaX 作为 ACP agent 接入外部工具”的说明
 
-### 041: Tool Output Guardrails 与 Context Overflow Protection (PLANNED)
+### 041: Tool Output Guardrails 与 Context Overflow Protection (COMPLETED)
 - **Category**: Enhancement
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: High
 - **Planned**: v0.6.20
 - **Released**: -
 - **Design**: [v0.6.20.md#041](features/v0.6.20.md#041)
 - **Created**: 2026-03-24
-- **Started**: -
-- **Completed**: -
+- **Started**: 2026-03-24
+- **Completed**: 2026-03-24
 
 **Description**:
 为 KodaX 增加一套“工具输出边界保护 + 大文件读取预检 + 提示词/工具契约收敛 + 运行时观测”的完整防线，避免单次 `read`、`bash`、`write/edit` diff 或其他超大 tool result 直接把上下文打爆，并让模型在面对大文件、大输出时默认走更可持续的分段读取与搜索路径，而不是把 compaction 当作唯一补救机制。
@@ -1617,9 +1617,9 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 记录 tool result 大小、截断来源与 continuation 提示，为后续诊断“为何会到 1833k tokens”提供直接证据
 
 ## Summary
-- Total: 40 (17 Planned, 0 In Progress, 23 Completed)
+- Total: 40 (16 Planned, 0 In Progress, 24 Completed)
 - By Priority: Critical: 3, High: 31, Medium: 6, Low: 0
 - Current Version: v0.6.15
 - Next Release (v0.6.20): 1 feature (041)
 - Future Releases: v0.6.20 (041), v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
-- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High), 041 - Tool Output Guardrails 与 Context Overflow Protection (High)
+- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High)

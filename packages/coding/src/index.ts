@@ -172,6 +172,18 @@ export {
   toolGlob,
   toolGrep,
   toolUndo,
+  DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+  DEFAULT_TOOL_OUTPUT_MAX_LINES,
+  READ_DEFAULT_LIMIT,
+  READ_PREFLIGHT_SIZE_BYTES,
+  READ_MAX_LINE_CHARS,
+  formatSize,
+  truncateHead,
+  truncateTail,
+  truncateLine,
+  persistToolOutput,
+  applyToolResultGuardrail,
+  getToolResultPolicy,
 } from './tools/index.js';
 
 // ============== Prompts ==============
