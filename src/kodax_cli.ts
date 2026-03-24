@@ -24,11 +24,14 @@ import {
   createKodaXOptions,
   parseOptionalNonNegativeInt,
   parseNonNegativeIntWithFallback,
+  parseOutputModeOption,
   parsePermissionModeOption,
   parsePositiveNumberWithFallback,
   resolveCliParallel,
   resolveCliReasoningMode,
+  type CliOutputMode,
   type CliOptions,
+  validateCliModeSelection,
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
 
@@ -268,8 +271,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.cyan('\nPrint Mode\n'));
     console.log(chalk.bold('Overview:'));
     console.log(chalk.dim('  Run a single task and exit. Useful for scripting and CI/CD.\n'));
+    console.log(chalk.dim('  `--mode json` is a scripting surface, not the ACP server protocol.\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -p, --print <text>  ') + 'Run task and exit');
+    console.log(chalk.dim('  --mode json         ') + 'Emit newline-delimited JSON events to stdout for scripts/CI');
     console.log(chalk.dim('  --model <name>      ') + 'Override the selected provider model');
     console.log(chalk.dim('  --no-session        ') + 'Disable session saving\n');
     console.log(chalk.bold('Examples:'));
@@ -277,6 +282,7 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  kodax -p "generate tests" --reasoning balanced') + ' # With reasoning');
     console.log(chalk.dim('  kodax -p "task" -m openai --model gpt-5.4') + ' # Provider + model override');
     console.log(chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run');
+    console.log(chalk.dim('  kodax --mode json "inspect auth flow"') + ' # Structured JSONL output');
     console.log(chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
   },
 };
@@ -302,6 +308,39 @@ function showCliHelpTopics(): void {
   console.log(chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control');
   console.log(chalk.dim('  kodax -h team       ') + 'Parallel agent execution');
   console.log(chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n');
+}
+
+type CliRunResultEvent = {
+  type: 'run.result';
+  success: boolean;
+  signal?: 'COMPLETE' | 'BLOCKED' | 'DECIDE';
+  signalReason?: string;
+  sessionId: string;
+  interrupted?: boolean;
+  limitReached?: boolean;
+};
+
+function writeJsonStdout(value: CliRunResultEvent): void {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function emitJsonRunResultIfNeeded(
+  outputMode: CliOutputMode,
+  result: Awaited<ReturnType<typeof runKodaX>>,
+): void {
+  if (outputMode !== 'json') {
+    return;
+  }
+
+  writeJsonStdout({
+    type: 'run.result',
+    success: result.success,
+    signal: result.signal,
+    signalReason: result.signalReason,
+    sessionId: result.sessionId,
+    interrupted: result.interrupted,
+    limitReached: result.limitReached,
+  });
 }
 
 function printAcpSubcommandHelp(name: string): boolean {
@@ -448,6 +487,7 @@ function showBasicHelp(): void {
   console.log('Options:');
   console.log('  -h, --help [TOPIC]      Show help, or detailed help for a topic');
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
+  console.log('  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI');
   console.log('  -c, --continue          Continue most recent conversation');
   console.log('  -r, --resume [id]       Resume session by ID (no ID = list recent sessions, then resume the latest)');
   console.log('  -n, --new               Legacy no-op; current CLI already starts a fresh session by default');
@@ -505,6 +545,7 @@ async function main() {
     .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
     // Short options.
     .option('-p, --print <text>', 'Print mode: run single task and exit')
+    .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
     .option('-c, --continue', 'Continue most recent conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
     .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
@@ -868,6 +909,7 @@ async function main() {
     model: opts.model ?? config.model,
     thinking: reasoningMode !== 'off',
     reasoningMode,
+    outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
     session: opts.session,
     parallel,
     team: opts.team,
@@ -910,6 +952,8 @@ async function main() {
     showBasicHelp();
     return;
   }
+
+  validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
 
   // -r / --resume 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎹囬弻鐔虹磼閵忕姵鐏嶉梺?id: 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞炬櫅閸氬綊骞栧ǎ顒€濡肩痪鎯х秺閺岀喖鎮欓鈧崝璺衡攽椤旇棄鈻曢柡灞稿墲瀵板嫮鈧綁娼ч崝宀勬⒑閹肩偛鈧牕煤閻斿吋鍋傛い鎰剁畱閻愬﹪鏌曟繛褉鍋撻柡瀣濮婅櫣绮欏▎鎯у壉闂佽鐡曢褔顢氶妷鈺佺妞ゆ挻绋戞禍楣冩煥濠靛棛鍑归柟鍙夊劤闇夐柣妯垮皺閹界姷绱掔紒妯兼创鐎殿喖鐖奸獮瀣攽閸パ€鍋撻娑氱闁挎繂鎳忔径鍕繆閻愭壆鐭欐?
   if (opts.resume === true) {
@@ -990,6 +1034,7 @@ async function main() {
       }, false);
 
       const result = await runKodaX(kodaXOptions, prompt);
+      emitJsonRunResultIfNeeded(options.outputMode, result);
 
       if (!result.success) {
         console.log(chalk.red(`\n[KodaX Auto-Continue] Session failed, stopping`));
@@ -1221,7 +1266,8 @@ New: {"features": [
           (prompt: string) => runKodaX(kodaXOptions, prompt)
         );
         if (commandPrompt) {
-          await runKodaX(kodaXOptions, commandPrompt);
+          const result = await runKodaX(kodaXOptions, commandPrompt);
+          emitJsonRunResultIfNeeded(options.outputMode, result);
           return;
         }
       }
@@ -1268,7 +1314,8 @@ New: {"features": [
 
   // 濠电姷鏁告慨鐢割敊閺嶎厼绐楁俊銈呭暞瀹曟煡鏌熼柇锕€鏋涚紒韬插€曢湁闁绘ê妯婇崕鎰版煕鐎ｎ亶妯€闁哄被鍊楃划娆戞崉閵娿倗椹冲┑鐐茬摠閸ゅ酣宕愬┑瀣摕闁绘柨鍚嬮悞浠嬫煥閺囨浜鹃梺璇茬箻娴滃爼寮婚敓鐘茬劦?
   const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-  await runKodaX(kodaXOptions, userPrompt);
+  const result = await runKodaX(kodaXOptions, userPrompt);
+  emitJsonRunResultIfNeeded(options.outputMode, result);
 }
 
 /**

@@ -6,17 +6,21 @@ import {
 } from '@kodax/coding';
 import {
   createCliEvents,
+  createJsonEvents,
   FileSessionStorage,
   type PermissionMode,
 } from '@kodax/repl';
 
 export const ACP_PERMISSION_MODES: PermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
+export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
+export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
 
 export interface CliOptions {
   provider: string;
   model?: string;
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
+  outputMode: CliOutputMode;
   session?: string;
   parallel: boolean;
   team?: string;
@@ -32,6 +36,50 @@ export interface CliOptions {
   resume?: string;
   noSession: boolean;
   print?: boolean;
+}
+
+export function parseOutputModeOption(value: string): CliOutputMode {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'json') {
+    return normalized;
+  }
+
+  throw new InvalidArgumentError(
+    `Expected "json". Text mode is the default and does not need --mode.`,
+  );
+}
+
+export function validateCliModeSelection(
+  cliOptions: CliOptions,
+  extras: { resumeWithoutId?: boolean } = {},
+): void {
+  if (cliOptions.outputMode !== 'json') {
+    return;
+  }
+
+  if (cliOptions.print) {
+    throw new Error('`--mode json` cannot be combined with `-p/--print`. Pass the prompt as a positional argument instead.');
+  }
+
+  if (cliOptions.init || cliOptions.autoContinue || cliOptions.team) {
+    throw new Error('`--mode json` currently supports single non-interactive agent runs only.');
+  }
+
+  if (
+    cliOptions.session === 'list'
+    || cliOptions.session === 'delete-all'
+    || cliOptions.session?.startsWith('delete ')
+  ) {
+    throw new Error('`--mode json` does not support session management sub-modes.');
+  }
+
+  if (extras.resumeWithoutId) {
+    throw new Error('`--mode json` requires an explicit session id for `--resume`, or use `--continue`.');
+  }
+
+  if (!cliOptions.prompt?.length) {
+    throw new Error('`--mode json` requires a prompt as positional arguments.');
+  }
 }
 
 export function parsePermissionModeOption(value: string): PermissionMode {
@@ -137,7 +185,9 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
     maxIter: cliOptions.maxIter,
     parallel: cliOptions.parallel,
     session: buildSessionOptions(cliOptions),
-    events: createCliEvents(!isPrintMode),
+    events: cliOptions.outputMode === 'json'
+      ? createJsonEvents()
+      : createCliEvents(!isPrintMode),
   };
 }
 
@@ -146,7 +196,7 @@ export function buildSessionOptions(
 ): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean } | undefined {
   const storage = new FileSessionStorage();
 
-  if (cliOptions.print && cliOptions.noSession) {
+  if ((cliOptions.print || cliOptions.outputMode === 'json') && cliOptions.noSession) {
     return undefined;
   }
 
