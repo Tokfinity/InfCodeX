@@ -32,7 +32,7 @@ _Last Updated: 2026-03-24_
 | v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.6.15 | Completed | 4 | 4/4 (100%) |
 | v0.6.20 | Completed | 1 | 1/1 (100%) |
-| v0.7.0 | Planned | 7 | 0/7 (0%) |
+| v0.7.0 | Planned | 7 | 1/7 (14%) |
 | v0.8.0 | Planned | 5 | 0/5 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
 | v0.9.0 | Planned | 1 | 0/1 (0%) |
@@ -73,7 +73,7 @@ _Last Updated: 2026-03-24_
 | 029 | Enhancement | Planned | High | Provider Adapter 透明度与语义兼容性 | v0.7.0 | - | [Design](features/v0.7.0.md#feature_029-provider-adapter-transparency-and-semantic-compatibility) | 2026-03-18 | - | - |
 | 030 | Enhancement | Planned | High | 多端交付 | v1.0.0 | - | [Design](features/v1.0.0.md#feature_030-multi-surface-delivery) | 2026-03-18 | - | - |
 | 031 | New | Planned | High | 多模态图片上传支持 | v0.9.0 | - | [Design](features/v0.9.0.md#031) | 2026-03-19 | - | - |
-| 032 | Enhancement | Planned | Medium | JSON 输出模式 (--mode json) | v0.7.0 | - | [Design](features/v0.7.0.md#032) | 2026-03-19 | - | - |
+| 032 | Enhancement | Completed | Medium | JSON 输出模式 (--mode json) | v0.7.0 | - | [Design](features/v0.7.0.md#032) | 2026-03-19 | 2026-03-24 | 2026-03-24 |
 | 033 | Enhancement | Completed | Medium | REPL 并行切换 (/parallel) | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#033) | 2026-03-20 | 2026-03-21 | 2026-03-21 |
 | 034 | Enhancement | Planned | High | Extension + Capability Runtime | v0.7.0 | - | [Design](features/v0.7.0.md#034) | 2026-03-20 | - | - |
 | 035 | New | Planned | High | MCP 能力 Provider | v0.7.0 | - | [Design](features/v0.7.0.md#035) | 2026-03-20 | - | - |
@@ -1249,19 +1249,24 @@ Expand KodaX from a terminal-first tool into a consistent product across IDE, de
 
 ---
 
-### 032: JSON 输出模式 (--mode json) (PLANNED)
+### 032: JSON 输出模式 (--mode json) (COMPLETED)
 - **Category**: Enhancement
-- **Status**: Planned
+- **Status**: Completed
 - **Priority**: Medium
 - **Planned**: v0.7.0
 - **Released**: -
 - **Design**: [v0.7.0.md#032](features/v0.7.0.md#032)
 - **Created**: 2026-03-19
-- **Started**: -
-- **Completed**: -
+- **Started**: 2026-03-24
+- **Completed**: 2026-03-24
 
 **Description**:
 类比 pi-mono 的 `--mode json` 能力，为 KodaX 增加 JSON Lines 输出模式。将 agent 运行期间的所有事件以 JSONL 格式输出到 stdout，便于外部程序解析和集成。
+
+**Positioning**:
+- 这是 KodaX 面向 shell、脚本和 CI 的轻量 JSONL 输出模式
+- 它不承担 ACP/RPC 这类双向协议职责；编辑器和 IDE 集成继续使用 ACP Server（FEATURE_040）
+- 事件 schema 以脚本消费稳定性和可读性优先，而不是直接暴露内部运行时事件模型
 
 **Goals**:
 1. CLI 标志 `--mode json` 启用 JSON 输出模式
@@ -1274,9 +1279,16 @@ Expand KodaX from a terminal-first tool into a consistent product across IDE, de
 - CI/CD 流水线中解析 agent 输出
 - 外部脚本/程序集成 KodaX
 - 调试和审计 agent 行为
-- 与 Pi 的 JSON 模式对齐，方便迁移
+- 与 Pi 的 JSON 模式保持相近心智模型，但不追求协议级兼容
 
 **Inspired by**: [pi-mono --mode json](https://github.com/badlogic/pi-mono)
+
+**Implementation Notes**:
+- Added `--mode json` to the root CLI and validated it as a single-run, non-interactive mode
+- Enforced incompatibilities with `-p/--print`, `--init`, `--team`, `--auto-continue`, bare `--resume`, and session list/delete flows
+- Added a dedicated JSONL event emitter that serializes core `runKodaX` lifecycle events to stdout and sends structured error records to stderr
+- Added a terminal `run.result` JSON event so scripts can reliably detect completion metadata
+- Added focused tests for JSON event serialization and CLI mode validation
 
 ---
 
@@ -1617,7 +1629,7 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 记录 tool result 大小、截断来源与 continuation 提示，为后续诊断“为何会到 1833k tokens”提供直接证据
 
 ## Summary
-- Total: 40 (16 Planned, 0 In Progress, 24 Completed)
+- Total: 40 (15 Planned, 0 In Progress, 25 Completed)
 - By Priority: Critical: 3, High: 31, Medium: 6, Low: 0
 - Current Version: v0.6.15
 - Next Release (v0.6.20): 1 feature (041)
