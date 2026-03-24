@@ -6,6 +6,26 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.19] - 2026-03-24
+
+### Added
+- **Tool output guardrail**: `truncate.ts` with `truncateHead`, `truncateTail`, `formatSize`, `persistToolOutput`, and UTF-8-aware byte boundary handling
+- **Per-tool result policy**: `tool-result-policy.ts` with configurable `maxLines`, `maxBytes`, `direction` (head/tail) per tool; `applyToolResultGuardrail` wired into agent tool execution pipeline
+- **Streaming read**: Read tool now uses `readline` stream with byte budget, binary file detection, long line truncation, and preflight size warnings for large files
+- **Bash tail capture**: Bash tool uses `TailCollector` for bounded stdout/stderr (512KB) with truncation hints and GBK fallback on Windows
+- **Diff preview truncation**: Edit and write tools truncate large diffs with full-output spill to `~/.kodax/tool-results/`
+- **Grep result truncation**: Grep tool caps at 400 lines / 24KB with spill-to-file fallback
+- **System prompt guidance**: Added bounded output instructions for read, bash, grep, and diff tools
+- **New tests**: truncate, tool-result-policy, bash, read, client
+
+### Changed
+- Tool descriptions updated to signal bounded output behavior
+- Agent tool execution pipeline now wraps all tool results through `guardToolResult`
+- Guardrail utilities exported from `@kodax/coding` public API
+- FEATURE_LIST.md and v0.6.20 planning notes updated
+
+---
+
 ## [0.6.18] - 2026-03-23
 
 ### Added
