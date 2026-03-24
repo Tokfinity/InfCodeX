@@ -6,6 +6,23 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.21] - 2026-03-24
+
+### Added
+- **JSON mode**: `--json` CLI flag for structured machine-readable output; `JsonEventEmitter` streams typed events (tool_use, tool_result, text, error, complete) via `EventEmitter`; `JsonEventsLogger` serializes events as newline-delimited JSON to stdout; scripting contract documented in v0.7.0 feature design
+- **Runtime evidence module**: `runtime-evidence.ts` extracts `RUNTIME_EVIDENCE_MARKERS`, `TRANSIENT_RETRY_MARKERS`, and `EXIT_CODE_PATTERN` from reasoning.ts; exports `hasTransientRetryEvidence`, `hasNonTransientRuntimeEvidence`, `looksLikeActionableRuntimeEvidence` for shared use across agent and reasoning modules
+- **`createCompletedTurnTokenSnapshot`**: New token-accounting function using `totalTokens` (input + output) for post-turn context tracking
+- **Transient reroute guard**: Review tasks with transient-only evidence (timeouts, stream stalls) are no longer rerouted to investigation mode; early exit in `maybeCreateAutoReroutePlan` and defense-in-depth in `buildHeuristicAutoRerouteDecision`
+- **New tests**: runtime-evidence, retry-handler, token-accounting (completedTurn), reasoning (timeout-only evidence)
+
+### Changed
+- **Token snapshot two-phase model**: `agent.ts` refactored to use `preAssistantTokenSnapshot` (inputTokens) for retry/reroute paths where assistant message is removed, and `completedTurnTokenSnapshot` (totalTokens) for normal flow where assistant message is retained
+- **`looksLikeRuntimeEvidence` aligned**: Now delegates to `looksLikeActionableRuntimeEvidence` which filters transient markers, preventing timeout evidence from inflating routing risk levels
+- **Reasoning task-type keywords refined**: Chinese keywords adjusted for better task classification accuracy
+- **Feature 037 completed**: API Token Usage real-value-first + estimation fallback marked as Completed in FEATURE_LIST.md
+
+---
+
 ## [0.6.20] - 2026-03-24
 
 ### Documentation
