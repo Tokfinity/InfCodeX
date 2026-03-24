@@ -28,6 +28,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import {
   KODAX_DEFAULT_PROVIDER,
+  type KodaXContextTokenSnapshot,
   type KodaXOptions,
   type KodaXReasoningMode,
   runKodaX,
@@ -118,6 +119,7 @@ interface KodaXAcpSessionState {
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
   activeController: AbortController | null;
+  contextTokenSnapshot?: KodaXContextTokenSnapshot;
 }
 
 interface ToolPermissionDecision {
@@ -221,6 +223,22 @@ function isAbortLikeError(error: unknown): boolean {
     error.message.includes('aborted') ||
     error.message.includes('ABORTED')
   );
+}
+
+function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResponse['usage'] | undefined {
+  const usage = snapshot?.usage;
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    ...(usage.cachedReadTokens !== undefined ? { cachedReadTokens: usage.cachedReadTokens } : {}),
+    ...(usage.cachedWriteTokens !== undefined ? { cachedWriteTokens: usage.cachedWriteTokens } : {}),
+    ...(usage.thoughtTokens !== undefined ? { thoughtTokens: usage.thoughtTokens } : {}),
+  };
 }
 
 export class KodaXAcpServer implements Agent {
@@ -424,6 +442,7 @@ export class KodaXAcpServer implements Agent {
           this.buildKodaXOptions(session, abortController.signal),
           promptText,
         );
+        session.contextTokenSnapshot = result.contextTokenSnapshot;
         const interrupted = !!result.interrupted;
         const stopReason = abortController.signal.aborted || interrupted ? 'cancelled' : 'end_turn';
         this.events.emit({
@@ -437,6 +456,7 @@ export class KodaXAcpServer implements Agent {
         return {
           stopReason,
           userMessageId: params.messageId ?? undefined,
+          ...(toAcpUsage(result.contextTokenSnapshot) ? { usage: toAcpUsage(result.contextTokenSnapshot) } : {}),
         };
       } catch (error) {
         if (abortController.signal.aborted || isAbortLikeError(error)) {
@@ -506,6 +526,7 @@ export class KodaXAcpServer implements Agent {
       context: {
         gitRoot: session.cwd,
         executionCwd: session.cwd,
+        contextTokenSnapshot: session.contextTokenSnapshot,
       },
       events: {
         onTextDelta: (text) => {

@@ -11,7 +11,19 @@ const acpMockState = vi.hoisted(() => ({
   instances: [] as MockAcpClient[],
   nextSessionId: 1,
   promptImpl: undefined as
-    | ((client: MockAcpClient, text: string, sessionId: string, signal?: AbortSignal) => Promise<void> | void)
+    | ((client: MockAcpClient, text: string, sessionId: string, signal?: AbortSignal) => Promise<{
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+    } | void> | {
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        totalTokens: number;
+      };
+    } | void)
     | undefined,
 }));
 
@@ -20,7 +32,7 @@ class MockAcpClient {
   readonly createNewSession = vi.fn(async () => `acp-session-${acpMockState.nextSessionId++}`);
   readonly disconnect = vi.fn(() => {});
   readonly prompt = vi.fn(async (text: string, sessionId: string, signal?: AbortSignal) => {
-    await acpMockState.promptImpl?.(this, text, sessionId, signal);
+    return await acpMockState.promptImpl?.(this, text, sessionId, signal);
   });
 
   constructor(
@@ -148,6 +160,32 @@ describe('KodaXAcpProvider', () => {
     expect(firstClient.connect).toHaveBeenCalledTimes(1);
     expect(firstClient.createNewSession).toHaveBeenCalledTimes(1);
     expect(firstClient.prompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates ACP prompt usage when the prompt response includes it', async () => {
+    const provider = new TestAcpProvider();
+
+    acpMockState.promptImpl = async () => ({
+      usage: {
+        inputTokens: 90,
+        outputTokens: 15,
+        totalTokens: 105,
+      },
+    });
+
+    const result = await provider.stream(
+      [{ role: 'user', content: 'latest prompt' }],
+      [] as KodaXToolDefinition[],
+      'system',
+      undefined,
+      { sessionId: 'thread-usage' },
+    );
+
+    expect(result.usage).toEqual({
+      inputTokens: 90,
+      outputTokens: 15,
+      totalTokens: 105,
+    });
   });
 
   it('fails closed when the backing CLI executor is not installed', async () => {

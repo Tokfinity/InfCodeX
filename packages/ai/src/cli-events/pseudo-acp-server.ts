@@ -14,7 +14,10 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
     abort: () => void;
     executor: CLIExecutor;
 } {
-    type PromptCompletion = Promise<'end_turn' | 'cancelled'>;
+    type PromptCompletion = Promise<{
+        stopReason: 'end_turn' | 'cancelled';
+        usage?: Extract<CLIEvent, { type: 'complete' }>['usage'];
+    }>;
 
     // Client writes to reqStream.writable; server reads from reqStream.readable.
     const reqStream = new TransformStream<Uint8Array, Uint8Array>();
@@ -106,11 +109,13 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                 abortController.signal.removeEventListener('abort', onGlobalAbort);
             });
 
-            const stopReason = await promptCompletion;
+            const promptResult = await promptCompletion;
             await sendMsg({
                 jsonrpc: '2.0',
                 id: req.id,
-                result: { stopReason },
+                result: promptResult.usage
+                    ? { stopReason: promptResult.stopReason, usage: promptResult.usage }
+                    : { stopReason: promptResult.stopReason },
             });
         } else if (req.method === 'session/cancel' || req.method === 'chat/cancel') {
             const controller = activePrompts.get(req.params.sessionId);
@@ -138,7 +143,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
         sessionId: string,
         promptBlocks: any[],
         signal: AbortSignal,
-    ): Promise<'end_turn' | 'cancelled'> => {
+    ): Promise<{ stopReason: 'end_turn' | 'cancelled'; usage?: Extract<CLIEvent, { type: 'complete' }>['usage'] }> => {
         const text = promptBlocks.find((b: any) => b.type === 'text')?.text ?? '';
 
         try {
@@ -162,14 +167,19 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                 }
 
                 if (cliEvent.type === 'complete') {
-                    return signal.aborted ? 'cancelled' : 'end_turn';
+                    return {
+                        stopReason: signal.aborted ? 'cancelled' : 'end_turn',
+                        usage: cliEvent.usage,
+                    };
                 }
             }
 
-            return signal.aborted ? 'cancelled' : 'end_turn';
+            return {
+                stopReason: signal.aborted ? 'cancelled' : 'end_turn',
+            };
         } catch (err) {
             if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {
-                return 'cancelled';
+                return { stopReason: 'cancelled' };
             }
 
             console.error('[PseudoAcpServer] Error executing prompt:', err);
@@ -184,7 +194,7 @@ export function createPseudoAcpServer(executor: CLIExecutor): {
                     }
                 }
             });
-            return 'end_turn';
+            return { stopReason: 'end_turn' };
         }
     };
 

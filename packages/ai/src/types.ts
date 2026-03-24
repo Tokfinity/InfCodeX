@@ -52,10 +52,20 @@ export interface KodaXMessage {
 
 // ============== 流式结果类型 ==============
 
+export interface KodaXTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  thoughtTokens?: number;
+}
+
 export interface KodaXStreamResult {
   textBlocks: KodaXTextBlock[];
   toolBlocks: KodaXToolUseBlock[];
   thinkingBlocks: (KodaXThinkingBlock | KodaXRedactedThinkingBlock)[];
+  usage?: KodaXTokenUsage;
 }
 
 // ============== 工具定义 ==============

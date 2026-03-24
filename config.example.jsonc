@@ -106,9 +106,12 @@
 
     // ── Compaction 压缩配置 ────────────────────────────────────
     "compaction": {
-        "enabled": true,
-        "triggerPercent": 75,
-        "keepRecentPercent": 10
+        // "enabled": false,                // Optional: disable auto-compaction only; /compact still works
+        // "contextWindow": 200000,
+        // "protectionPercent": 20,
+        // "rollingSummaryPercent": 10,
+        // "pruningThresholdTokens": 500,
+        "triggerPercent": 75
     },
 
     // ── Permission 权限配置 ────────────────────────────────────

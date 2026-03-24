@@ -314,6 +314,7 @@ Keyboard Shortcuts:
     startNewSession: () => {
       context.sessionId = generateInteractiveSessionId();
       context.title = '';
+      context.contextTokenSnapshot = undefined;
       context.createdAt = new Date().toISOString();
       context.lastAccessed = context.createdAt;
       currentOptions.session = {
@@ -331,6 +332,7 @@ Keyboard Shortcuts:
         context.messages = loaded.messages;
         context.title = loaded.title;
         context.sessionId = id;
+        context.contextTokenSnapshot = undefined;
         console.log(chalk.green(`\n[Loaded session: ${id}]`));
         console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
         return true;
@@ -351,6 +353,7 @@ Keyboard Shortcuts:
     },
     clearHistory: () => {
       context.messages = [];
+      context.contextTokenSnapshot = undefined;
     },
     printHistory: () => {
       if (context.messages.length === 0) {
@@ -560,6 +563,7 @@ Keyboard Shortcuts:
           result.projectInitPrompt
         );
         context.messages = runResult.messages;
+        context.contextTokenSnapshot = runResult.contextTokenSnapshot;
         statusBar?.update({ messageCount: context.messages.length });
         if (context.messages.length > 0) {
           const title = extractTitle(context.messages);
@@ -625,6 +629,7 @@ Keyboard Shortcuts:
         }
       } else {
         context.messages = runResult.messages;
+        context.contextTokenSnapshot = runResult.contextTokenSnapshot;
       }
 
       statusBar?.update({ messageCount: context.messages.length });
@@ -697,6 +702,7 @@ Keyboard Shortcuts:
               processed
             );
             context.messages = result.messages;
+            context.contextTokenSnapshot = result.contextTokenSnapshot;
 
             // Auto save - 自动保存
             if (context.messages.length > 0) {
@@ -782,6 +788,7 @@ Keyboard Shortcuts:
 
       // Update context messages (runKodaX returns complete message list) - 更新上下文中的消息（runKodaX 返回完整的消息列表）
       context.messages = result.messages;
+      context.contextTokenSnapshot = result.contextTokenSnapshot;
 
       // Update status bar - 更新状态栏
       statusBar?.update({
@@ -1046,6 +1053,10 @@ async function runAgentRound(
       session: {
         ...options.session,
         initialMessages,  // Pass existing messages - 传递已有消息
+      },
+      context: {
+        ...options.context,
+        contextTokenSnapshot: context.contextTokenSnapshot,
       },
     },
     prompt

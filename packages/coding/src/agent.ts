@@ -1,4 +1,4 @@
-/**
+﻿/**
  * KodaX Agent
  *
  * Agent 主循环 - Core 层核心入口
@@ -37,6 +37,12 @@ import {
   type ReasoningPlan,
 } from './reasoning.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
+import {
+  createContextTokenSnapshot,
+  createEstimatedContextTokenSnapshot,
+  rebaseContextTokenSnapshot,
+  resolveContextTokenCount,
+} from './token-accounting.js';
 
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
@@ -570,6 +576,10 @@ export async function runKodaX(
     executionCwd,
     askUser: events.askUser, // Issue 069: Pass askUser callback from events
   };
+  let contextTokenSnapshot = rebaseContextTokenSnapshot(
+    messages,
+    options.context?.contextTokenSnapshot,
+  );
 
   let reasoningPlan = await createReasoningPlan(options, prompt, provider, {
     recentMessages: messages.slice(0, -1),
@@ -591,6 +601,24 @@ export async function runKodaX(
   let lastText = '';
   let incompleteRetryCount = 0;
   let limitReached = false; // Track if we exited due to iteration limit - 追踪是否因达到迭代上限而退出
+  const emitIterationEnd = (
+    iterNumber: number,
+    snapshotOverride?: typeof contextTokenSnapshot,
+  ): typeof contextTokenSnapshot => {
+    contextTokenSnapshot = rebaseContextTokenSnapshot(
+      messages,
+      snapshotOverride ?? contextTokenSnapshot,
+    );
+    events.onIterationEnd?.({
+      iter: iterNumber,
+      maxIter,
+      tokenCount: contextTokenSnapshot.currentTokens,
+      tokenSource: contextTokenSnapshot.source,
+      usage: contextTokenSnapshot.usage,
+      contextTokenSnapshot,
+    });
+    return contextTokenSnapshot;
+  };
 
   for (let iter = 0; iter < maxIter; iter++) {
     try {
@@ -598,10 +626,13 @@ export async function runKodaX(
 
       // Compaction: 统一使用智能压缩，废除遗留的粗暴截断
       let compacted: KodaXMessage[];
+      let didCompactMessages = false;
 
       // 判断是否需要压缩：只依据智能压缩阈值 (默认 75%)
-      const currentTokens = estimateTokens(messages);
-      const needsIntelligentCompact = compactionConfig.enabled && needsCompaction(messages, compactionConfig, contextWindow);
+      const currentTokens = resolveContextTokenCount(messages, contextTokenSnapshot);
+      const needsIntelligentCompact =
+        compactionConfig.enabled
+        && needsCompaction(messages, compactionConfig, contextWindow, currentTokens);
 
       if (needsIntelligentCompact) {
         // Only trigger UI indicator right before the heavy lifting
@@ -614,11 +645,13 @@ export async function runKodaX(
             provider,
             contextWindow,
             undefined, // customInstructions
-            currentExecution.systemPrompt // 传入 systemPrompt 以生成更好的摘要
+            currentExecution.systemPrompt, // 传入 systemPrompt 以生成更好的摘要
+            currentTokens,
           );
 
           if (result.compacted) {
             compacted = result.messages;
+            didCompactMessages = true;
             events.onCompactStats?.({
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
@@ -663,6 +696,7 @@ export async function runKodaX(
 
             newCompacted.push(...messages.slice(startIndex));
             compacted = newCompacted;
+            didCompactMessages = true;
             events.onCompactStats?.({
               tokensBefore: currentTokens,
               tokensAfter: estimateTokens(compacted),
@@ -690,6 +724,10 @@ export async function runKodaX(
       // CRITICAL FIX: Update the global session messages to the compacted version!
       // This permanently applies the summary/truncation and prevents the session history from growing infinitely.
       messages = compacted;
+      if (didCompactMessages) {
+        contextTokenSnapshot = createEstimatedContextTokenSnapshot(messages);
+        events.onCompactedMessages?.(messages);
+      }
 
       // 流式调用 Provider - with automatic retry for transient errors
       // 注入 API 硬超时保护：防止大型 payload 导致 API 静默丢包引发无限等待
@@ -784,12 +822,13 @@ export async function runKodaX(
       events.onStreamEnd?.();
 
       lastText = result.textBlocks.map(b => b.text).join(' ');
+      const providerTokenSnapshot = createContextTokenSnapshot(compacted, result.usage);
 
       // Promise 信号检测
       const [signal, _reason] = checkPromiseSignal(lastText);
       if (signal) {
         if (signal === 'COMPLETE') {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
           events.onComplete?.();
           return {
             success: true,
@@ -797,6 +836,7 @@ export async function runKodaX(
             signal: 'COMPLETE',
             messages,
             sessionId,
+            contextTokenSnapshot,
             limitReached: false,
           };
         }
@@ -804,16 +844,18 @@ export async function runKodaX(
 
       const assistantContent = [...result.thinkingBlocks, ...result.textBlocks, ...result.toolBlocks];
       messages.push({ role: 'assistant', content: assistantContent });
+      contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
 
       if (result.toolBlocks.length === 0) {
         const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
         if (shouldYieldToQueuedFollowUp) {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
           return {
             success: true,
             lastText,
             messages,
             sessionId,
+            contextTokenSnapshot,
             limitReached: false,
           };
         }
@@ -851,7 +893,7 @@ export async function runKodaX(
             continue;
           }
         }
-        events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+        emitIterationEnd(iter + 1, providerTokenSnapshot);
         events.onComplete?.();
         // limitReached 保持 false（初始值）
         break;
@@ -871,6 +913,7 @@ export async function runKodaX(
             retryPrompt = `⚠️ CRITICAL: Your response was TRUNCATED again. This is retry ${incompleteRetryCount}/${KODAX_MAX_INCOMPLETE_RETRIES}.\n\nMISSING PARAMETERS:\n${incomplete.map(i => `- ${i}`).join('\n')}\n\nYOU MUST:\n1. For 'write' tool: Keep content under 50 lines - write structure first, fill in later with 'edit'\n2. For 'edit' tool: Keep new_string under 30 lines - make smaller, focused changes\n3. Provide ALL required parameters in your tool call\n\nIf your response is truncated again, the task will FAIL.\nPROVIDE SHORT, COMPLETE PARAMETERS NOW.`;
           }
           messages.push({ role: 'user', content: retryPrompt });
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
           continue;
         } else {
           // 超过重试次数，过滤掉不完整的工具调用并添加错误结果
@@ -897,6 +940,7 @@ export async function runKodaX(
             }
           }
           messages.push({ role: 'user', content: errorResults });
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
           incompleteRetryCount = 0;
           continue;
         }
@@ -961,8 +1005,9 @@ export async function runKodaX(
         const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
         // User cancelled - add results and exit loop - 用户取消，添加结果并退出循环
         messages.push({ role: 'user', content: toolResults });
+        contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
         if (shouldYieldToQueuedFollowUp) {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
         }
         events.onStreamEnd?.();
         return {
@@ -970,20 +1015,23 @@ export async function runKodaX(
           lastText: 'Operation cancelled by user',
           messages,
           sessionId,
+          contextTokenSnapshot,
           interrupted: !shouldYieldToQueuedFollowUp,
         };
       }
 
       messages.push({ role: 'user', content: toolResults });
+      contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
 
       const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
       if (shouldYieldToQueuedFollowUp) {
-        events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+        emitIterationEnd(iter + 1, providerTokenSnapshot);
         return {
           success: true,
           lastText,
           messages,
           sessionId,
+          contextTokenSnapshot,
           limitReached: false,
         };
       }
@@ -1033,7 +1081,7 @@ export async function runKodaX(
       await saveSessionSnapshot(options, sessionId, { messages, title });
 
       // Notify UI of context usage after each iteration
-      events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+      emitIterationEnd(iter + 1, providerTokenSnapshot);
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
 
@@ -1055,6 +1103,7 @@ export async function runKodaX(
         title,
         errorMetadata: updatedErrorMetadata,
       });
+      contextTokenSnapshot = createEstimatedContextTokenSnapshot(cleanedMessages);
 
       // 检查是否为 AbortError（用户中断）
       // 参考 Gemini CLI: 静默处理中断，不报告为错误
@@ -1069,6 +1118,7 @@ export async function runKodaX(
           lastText,
           messages: cleanedMessages,
           sessionId,
+          contextTokenSnapshot,
           interrupted: true,
           errorMetadata: updatedErrorMetadata,
         };
@@ -1080,6 +1130,7 @@ export async function runKodaX(
         lastText,
         messages: cleanedMessages,  // ✅ Use cleaned messages to prevent error loop
         sessionId,
+        contextTokenSnapshot,
         errorMetadata: updatedErrorMetadata,
       };
     }
@@ -1104,6 +1155,7 @@ export async function runKodaX(
     signalReason: finalReason,
     messages,
     sessionId,
+    contextTokenSnapshot,
     limitReached,
   };
 }
