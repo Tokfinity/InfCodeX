@@ -21,15 +21,24 @@ export class KodaXClient {
   constructor(options: KodaXOptions) {
     this.options = options;
     this.sessionId = options.session?.id ?? '';
+    this.messages = options.session?.initialMessages
+      ? [...options.session.initialMessages]
+      : [];
+    this.contextTokenSnapshot = options.context?.contextTokenSnapshot;
   }
 
   async send(prompt: string): Promise<KodaXResult> {
+    const initialMessages = this.messages.length > 0
+      ? this.messages
+      : this.options.session?.initialMessages;
+
     const result = await runKodaX(
       {
         ...this.options,
         session: {
           ...this.options.session,
           id: this.sessionId || undefined,
+          initialMessages,
         },
         context: {
           ...this.options.context,
