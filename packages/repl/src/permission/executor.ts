@@ -4,7 +4,7 @@
  * 工具执行权限包装器 - 在 REPL 层处理权限检查
  */
 
-import fsSync from 'fs';
+import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { executeTool } from '@kodax/coding';
@@ -105,11 +105,11 @@ function buildTemporaryHelperScriptWarning(targetPath: string, projectRoot: stri
   return `[Blocked] Avoid scattering temporary helper scripts outside the project scratch area: ${path.basename(targetPath)}. First try specialized tools (read/edit/write/glob/grep) or a simpler shell command. If a helper script is still necessary, place it under ${scratchDir} or use the system temp directory.`;
 }
 
-function getTemporaryHelperScriptWarning(
+async function getTemporaryHelperScriptWarning(
   toolName: string,
   input: Record<string, unknown>,
   projectRoot?: string
-): string | null {
+): Promise<string | null> {
   if (toolName !== 'write' || !projectRoot) {
     return null;
   }
@@ -120,19 +120,24 @@ function getTemporaryHelperScriptWarning(
   }
 
   try {
-    const resolvedTarget = path.resolve(projectRoot, targetPath);
-
-    if (fsSync.existsSync(resolvedTarget)) {
-      return null;
-    }
-
-    if (!isLikelyTemporaryHelperScriptPath(resolvedTarget, projectRoot)) {
-      return null;
-    }
-
-    return buildTemporaryHelperScriptWarning(resolvedTarget, projectRoot);
-  } catch {
+    await fs.stat(path.resolve(projectRoot, targetPath));
     return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return null;
+    }
+
+    try {
+      const resolvedTarget = path.resolve(projectRoot, targetPath);
+
+      if (!isLikelyTemporaryHelperScriptPath(resolvedTarget, projectRoot)) {
+        return null;
+      }
+
+      return buildTemporaryHelperScriptWarning(resolvedTarget, projectRoot);
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -200,7 +205,7 @@ export async function executeWithPermission(
   }
 
   // === 2.5. Guard against temporary helper scripts outside scratch area ===
-  const tempScriptWarning = getTemporaryHelperScriptWarning(toolName, input, permContext.gitRoot);
+  const tempScriptWarning = await getTemporaryHelperScriptWarning(toolName, input, permContext.gitRoot);
   if (tempScriptWarning) {
     return tempScriptWarning;
   }

@@ -120,6 +120,19 @@ function buildToolPair(index: number, outputWords: number): KodaXMessage[] {
 }
 
 describe('compaction', () => {
+  it('prefers an explicit token count override when checking trigger thresholds', () => {
+    const config = {
+      enabled: true,
+      triggerPercent: 60,
+    };
+    const contextWindow = 1000;
+    const messages = [{ role: 'user' as const, content: 'short prompt' }];
+
+    expect(needsCompaction(messages, config, contextWindow)).toBe(false);
+    expect(needsCompaction(messages, config, contextWindow, 700)).toBe(true);
+    expect(needsCompaction(messages, config, contextWindow, 100)).toBe(false);
+  });
+
   it('compacts down to the internal low-water mark and avoids immediate re-compaction', async () => {
     const provider = new FakeSummaryProvider();
     const contextWindow = 4000;

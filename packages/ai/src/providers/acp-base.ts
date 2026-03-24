@@ -12,29 +12,59 @@ import type {
     KodaXProviderStreamOptions,
     KodaXToolDefinition,
     KodaXTextBlock,
-    KodaXToolUseBlock,
-    KodaXToolResultBlock
+    KodaXTokenUsage,
+    KodaXToolUseBlock
 } from '../types.js';
-import { SessionNotification } from '@agentclientprotocol/sdk';
 
 interface ActiveStreamContext {
     streamOptions?: KodaXProviderStreamOptions;
     output: { text: string };
 }
 
+function normalizeAcpUsage(usage: unknown): KodaXTokenUsage | undefined {
+  if (!usage || typeof usage !== 'object') {
+    return undefined;
+  }
+
+  const usageRecord = usage as Record<string, unknown>;
+
+  const inputTokens = typeof usageRecord.inputTokens === 'number' ? usageRecord.inputTokens : 0;
+  const outputTokens = typeof usageRecord.outputTokens === 'number' ? usageRecord.outputTokens : 0;
+  const totalTokens = typeof usageRecord.totalTokens === 'number' ? usageRecord.totalTokens : inputTokens + outputTokens;
+
+    if ([inputTokens, outputTokens, totalTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+        return undefined;
+    }
+
+    if (totalTokens < inputTokens || totalTokens < outputTokens) {
+        return undefined;
+    }
+
+    return {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cachedReadTokens:
+            typeof usageRecord.cachedReadTokens === 'number' ? usageRecord.cachedReadTokens : undefined,
+        cachedWriteTokens:
+            typeof usageRecord.cachedWriteTokens === 'number' ? usageRecord.cachedWriteTokens : undefined,
+        thoughtTokens:
+            typeof usageRecord.thoughtTokens === 'number' ? usageRecord.thoughtTokens : undefined,
+    };
+}
+
 /**
- * 通用的 ACP Provider 基类。
- * 通过传入 Client Options，它可以连接原生的 CLI 命令，
- * 也可以连接我们在内存中伪造的 PseudoAcpServer。
+ * Shared base class for ACP-backed providers.
+ * It can connect either to a native ACP server process or to our in-memory
+ * pseudo ACP bridge that adapts CLI executors into ACP session updates.
  */
 export abstract class KodaXAcpProvider extends KodaXBaseProvider {
     protected abstract readonly acpClientOptions: AcpClientOptions;
     private _client: AcpClient | null = null;
     private _sessionMap = new Map<string, string>();
-
     private _activeStreams = new Map<string, ActiveStreamContext>();
 
-    // 我们暂时不需要依赖真实的 API key，除非伪装层需要
+    // CLI-backed ACP adapters do not require a real API key.
     override isConfigured(): boolean {
         return true;
     }
@@ -52,11 +82,15 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         signal?: AbortSignal
     ): Promise<KodaXStreamResult> {
 
-        // 如果我们使用的是 Pseudo Server，在这里检查对应的 CLI 是否安装
+        void tools;
+        void system;
+
+        // Pseudo-server adapters expose their executor so we can fail closed when
+        // the required local CLI is missing.
         if (this.acpClientOptions.executor && typeof this.acpClientOptions.executor.isInstalled === 'function') {
             if (!await this.acpClientOptions.executor.isInstalled()) {
                 throw new Error(
-                    `${this.name} 所需的 CLI 环境未正确安装或配置，请检查终端日志或手册。`
+                    `${this.name} requires a local CLI environment, but the CLI was not found or is not configured correctly.`,
                 );
             }
         }
@@ -64,10 +98,8 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         const textBlocks: KodaXTextBlock[] = [];
         const toolBlocks: KodaXToolUseBlock[] = [];
 
-        // Flatten the KodaXMessages into a single string prompt since ACP `prompt`
-        // primarily takes an array of prompt blocks.
-        // For ACP session resumption, KodaX expects the CLI to maintain context via sessionId.
-        // We will send the LAST user message if streamOptions.sessionId matches our active session.
+        // Flatten the latest KodaX message into a string because ACP prompt()
+        // primarily accepts prompt blocks rather than full KodaX messages.
         const latestMessage = messages[messages.length - 1];
         let promptText = '';
         if (latestMessage && typeof latestMessage.content === 'string') {
@@ -79,12 +111,12 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
                 .join('\n');
         }
 
-        // 构造 Client 监听事件 (只需要初始化一次)
+        // Build client event hooks once and route updates into the active stream.
         const options: AcpClientOptions = {
             ...this.acpClientOptions,
             onSessionUpdate: (notification: any) => {
                 const update = notification.update;
-                const sessionId = notification.sessionId; // ACP SDK includes sessionId at root for session notifications
+                const sessionId = notification.sessionId;
                 if (!('sessionUpdate' in update)) return;
 
                 const activeCtx = sessionId ? this._activeStreams.get(sessionId) : undefined;
@@ -99,9 +131,11 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
                         }
                         break;
 
-                    case 'tool_call':
-                        let toolArgs = "{}";
-                        const rawArgs = (update as any).arguments;
+                    case 'tool_call': {
+                        let toolArgs = '{}';
+                        const rawArgs =
+                            (update as any).arguments ??
+                            (update as any).parameters;
                         if (rawArgs) {
                             toolArgs = typeof rawArgs === 'string' ? rawArgs : JSON.stringify(rawArgs);
                         }
@@ -111,6 +145,7 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
                         activeCtx.output.text += logEntry;
                         activeCtx.streamOptions?.onTextDelta?.(logEntry);
                         break;
+                    }
 
                     case 'tool_call_update':
                         if (update.status) {
@@ -142,11 +177,13 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
             output: localOutput
         });
 
+        let promptResponse: Awaited<ReturnType<AcpClient['prompt']>> | undefined;
+
         try {
-            await this._client.prompt(promptText, acpSessionId, signal);
+            promptResponse = await this._client.prompt(promptText, acpSessionId, signal);
         } catch (err) {
             if (err instanceof Error && err.name === 'AbortError') {
-                // User aborted, this is fine
+                // User cancellation is expected.
             } else {
                 throw err;
             }
@@ -161,18 +198,20 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         return {
             textBlocks,
             toolBlocks,
-            thinkingBlocks: []
+            thinkingBlocks: [],
+            usage: normalizeAcpUsage(promptResponse?.usage),
         };
     }
 
     /**
-     * 手动关闭并清理当前 Provider 维护的 ACP 连接
+     * Manually close and clear the ACP connection maintained by this provider.
      */
     disconnect(): void {
         if (this._client) {
             this._client.disconnect();
             this._client = null;
         }
+        this._activeStreams.clear();
         this._sessionMap.clear();
     }
 }

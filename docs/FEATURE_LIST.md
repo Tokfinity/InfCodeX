@@ -1,6 +1,6 @@
 # Feature List
 
-_Last Updated: 2026-03-22_
+_Last Updated: 2026-03-24_
 
 ---
 
@@ -9,7 +9,7 @@ _Last Updated: 2026-03-22_
 | 字段 | 值 | 说明 |
 |------|-----|------|
 | **Current Release** | v0.6.15 | 最新发布版本（仅供参考） |
-| **Planned Version** | v0.7.0 | 当前规划的版本 |
+| **Planned Version** | v0.6.20 | 当前规划的版本 |
 
 ---
 
@@ -31,8 +31,9 @@ _Last Updated: 2026-03-22_
 | v0.6.10 | Released | 1 | 1/1 (100%) |
 | v0.6.11 | Released | 0 | 0/0 (100%) |
 | v0.6.15 | Completed | 4 | 4/4 (100%) |
-| v0.7.0 | Planned | 6 | 0/6 (0%) |
-| v0.8.0 | Planned | 6 | 0/6 (0%) |
+| v0.6.20 | Completed | 1 | 1/1 (100%) |
+| v0.7.0 | Planned | 7 | 0/7 (0%) |
+| v0.8.0 | Planned | 5 | 0/5 (0%) |
 | v1.0.0 | Planned | 3 | 0/3 (0%) |
 | v0.9.0 | Planned | 1 | 0/1 (0%) |
 
@@ -74,13 +75,14 @@ _Last Updated: 2026-03-22_
 | 031 | New | Planned | High | 多模态图片上传支持 | v0.9.0 | - | [Design](features/v0.9.0.md#031) | 2026-03-19 | - | - |
 | 032 | Enhancement | Planned | Medium | JSON 输出模式 (--mode json) | v0.7.0 | - | [Design](features/v0.7.0.md#032) | 2026-03-19 | - | - |
 | 033 | Enhancement | Completed | Medium | REPL 并行切换 (/parallel) | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#033) | 2026-03-20 | 2026-03-21 | 2026-03-21 |
-| 034 | Enhancement | Planned | High | Extension + Capability Runtime | v0.8.0 | - | [Design](features/v0.8.0.md#034) | 2026-03-20 | - | - |
+| 034 | Enhancement | Planned | High | Extension + Capability Runtime | v0.7.0 | - | [Design](features/v0.7.0.md#034) | 2026-03-20 | - | - |
 | 035 | New | Planned | High | MCP 能力 Provider | v0.7.0 | - | [Design](features/v0.7.0.md#035) | 2026-03-20 | - | - |
 | 036 | Enhancement | Completed | Medium | DeepSeek 内置 Provider 支持 | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#036) | 2026-03-20 | 2026-03-21 | 2026-03-21 |
 | 037 | Enhancement | Planned | Medium | API Token Usage 真实值优先 + 估算回退 | v0.7.0 | - | [Design](features/v0.7.0.md#037) | 2026-03-21 | - | - |
 | 038 | New | Planned | High | Official Sandbox Extension | v0.8.0 | - | [Design](features/v0.8.0.md#feature_038-official-sandbox-extension) | 2026-03-21 | - | - |
 | 039 | Enhancement | Completed | High | Plan 模式双写白名单（项目说明文档 + 系统临时目录） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#039) | 2026-03-22 | - | 2026-03-22 |
 | 040 | New | Completed | High | ACP Server 支持（供编辑器/IDE 直接调用） | v0.6.15 | v0.6.15 | [Design](features/v0.6.15.md#040) | 2026-03-22 | 2026-03-22 | 2026-03-22 |
+| 041 | Enhancement | Completed | High | Tool Output Guardrails 与 Context Overflow Protection | v0.6.20 | - | [Design](features/v0.6.20.md#041) | 2026-03-24 | 2026-03-24 | 2026-03-24 |
 ### 014: 项目模式增强 (COMPLETED)
 - **Category**: Refactor
 - **Status**: Completed
@@ -1585,10 +1587,39 @@ The legacy draft below is retained temporarily for history. Implementation shoul
 - 为编辑器/IDE 场景补齐稳定的启动参数、错误输出与能力声明
 - README / 集成文档需要新增“如何把 KodaX 作为 ACP agent 接入外部工具”的说明
 
+### 041: Tool Output Guardrails 与 Context Overflow Protection (COMPLETED)
+- **Category**: Enhancement
+- **Status**: Completed
+- **Priority**: High
+- **Planned**: v0.6.20
+- **Released**: -
+- **Design**: [v0.6.20.md#041](features/v0.6.20.md#041)
+- **Created**: 2026-03-24
+- **Started**: 2026-03-24
+- **Completed**: 2026-03-24
+
+**Description**:
+为 KodaX 增加一套“工具输出边界保护 + 大文件读取预检 + 提示词/工具契约收敛 + 运行时观测”的完整防线，避免单次 `read`、`bash`、`write/edit` diff 或其他超大 tool result 直接把上下文打爆，并让模型在面对大文件、大输出时默认走更可持续的分段读取与搜索路径，而不是把 compaction 当作唯一补救机制。
+
+**Goals**:
+1. **单次工具结果不可直接打爆上下文** - 任意字符串型 tool result 在进入会话历史前都必须经过统一边界保护
+2. **大文件默认不整读** - `read` 在未显式分段时应优先拒绝不合理整读，并引导模型使用 `offset/limit` 或 `grep`
+3. **防护不依赖单一 provider/model** - 无论 token usage 来自 API 还是本地估算，都不能把“防爆”责任推给 compaction 阶段
+4. **保留可用性与可追溯性** - 被截断的输出仍要给出继续探索的路径，必要时保存完整输出位置，避免为防护牺牲可用性
+5. **可观测可验证** - 对异常大的 tool result、截断、拒绝整读与后续 token 跳变建立日志与测试覆盖
+
+**Key Changes**:
+- 新增共享 tool-output truncation 层，统一为 `read` / `bash` / `write` / `edit` / `grep` 等工具提供 `maxLines + maxBytes` 约束
+- `read` 改为带文件大小预检与流式/分段读取语义；未传 `limit` 且文件明显过大时，返回明确的 continuation 指引而不是整读
+- `bash` 正常成功路径也要截断输出，而不是仅 timeout 时处理；截断后为模型保留继续探索全量输出的方式
+- `write` / `edit` 的大型 diff 结果改为摘要化输出，避免一次大改动把 diff 整段塞回上下文
+- 工具 schema 与 system prompt 明确要求对大文件使用 `offset/limit`，优先 `grep/glob` 后 `read`，遇到截断后继续分段而不是重复整读
+- 记录 tool result 大小、截断来源与 continuation 提示，为后续诊断“为何会到 1833k tokens”提供直接证据
+
 ## Summary
-- Total: 40 (17 Planned, 0 In Progress, 23 Completed)
-- By Priority: Critical: 3, High: 30, Medium: 6, Low: 0
+- Total: 40 (16 Planned, 0 In Progress, 24 Completed)
+- By Priority: Critical: 3, High: 31, Medium: 6, Low: 0
 - Current Version: v0.6.15
-- Next Release (v0.7.0): 6 features (019, 026, 029, 032, 035, 037)
-- Future Releases: v0.7.0 (019, 026, 029, 032, 035, 037), v0.8.0 (007, 018, 025, 028, 034, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
-- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High)
+- Next Release (v0.6.20): 1 feature (041)
+- Future Releases: v0.6.20 (041), v0.7.0 (019, 026, 029, 032, 034, 035, 037), v0.8.0 (007, 018, 025, 028, 038), v0.9.0 (031), v1.0.0 (022, 023, 030)
+- Highest Priority Planned: 019 - 会话树与回滚系统 (High), 026 - Roadmap Integrity 与 Tracker Consistency 加固 (High), 029 - Provider Adapter 透明度与语义兼容性 (High), 031 - 多模态图片上传支持 (High), 034 - Extension + Capability Runtime (High), 035 - MCP 能力 Provider (High), 038 - Official Sandbox Extension (High)

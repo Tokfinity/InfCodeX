@@ -1,4 +1,4 @@
-/**
+﻿/**
  * KodaX Agent
  *
  * Agent 主循环 - Core 层核心入口
@@ -37,10 +37,23 @@ import {
   type ReasoningPlan,
 } from './reasoning.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
+import {
+  createContextTokenSnapshot,
+  createEstimatedContextTokenSnapshot,
+  rebaseContextTokenSnapshot,
+  resolveContextTokenCount,
+} from './token-accounting.js';
+import { applyToolResultGuardrail } from './tools/tool-result-policy.js';
 
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
 const CANCELLED_TOOL_RESULT_MESSAGE = `${CANCELLED_TOOL_RESULT_PREFIX} Operation cancelled by user`;
+type AutoReroutePlan = Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>>;
+type RunnableToolCall = {
+  id: string;
+  name: string;
+  input: Record<string, unknown> | undefined;
+};
 
 /**
  * 验证并修复整个工具调用历史 - Issue 072 enhanced fix
@@ -348,6 +361,149 @@ function createToolResultBlock(toolUseId: string, content: string): KodaXToolRes
   };
 }
 
+async function maybeBuildAutoReroutePlan(
+  provider: ReturnType<typeof resolveProvider>,
+  options: KodaXOptions,
+  prompt: string,
+  reasoningPlan: ReasoningPlan,
+  lastText: string,
+  allowances: {
+    allowDepthEscalation: boolean;
+    allowTaskReroute: boolean;
+  },
+  toolEvidence?: string,
+): Promise<AutoReroutePlan> {
+  try {
+    return await maybeCreateAutoReroutePlan(
+      provider,
+      options,
+      prompt,
+      reasoningPlan,
+      lastText,
+      allowances,
+      toolEvidence ? { toolEvidence } : undefined,
+    );
+  } catch (rerouteError) {
+    if (process.env.KODAX_DEBUG_ROUTING) {
+      console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
+    }
+    return null;
+  }
+}
+
+async function maybeAdvanceAutoReroute(params: {
+  provider: ReturnType<typeof resolveProvider>;
+  options: KodaXOptions;
+  prompt: string;
+  reasoningPlan: ReasoningPlan;
+  lastText: string;
+  autoFollowUpCount: number;
+  autoDepthEscalationCount: number;
+  autoTaskRerouteCount: number;
+  autoFollowUpLimit: number;
+  events: KodaXEvents;
+  isNewSession: boolean;
+  retryLabelPrefix: string;
+  toolEvidence?: string;
+  onApply?: () => Promise<void> | void;
+  persistSession?: {
+    sessionId: string;
+    messages: KodaXMessage[];
+    title: string;
+  };
+}): Promise<{
+  reasoningPlan: ReasoningPlan;
+  currentExecution: Awaited<ReturnType<typeof buildReasoningExecutionState>>;
+  autoFollowUpCount: number;
+  autoDepthEscalationCount: number;
+  autoTaskRerouteCount: number;
+} | null> {
+  if (
+    params.reasoningPlan.mode !== 'auto'
+    || params.autoFollowUpCount >= params.autoFollowUpLimit
+    || (params.autoDepthEscalationCount > 0 && params.autoTaskRerouteCount > 0)
+  ) {
+    return null;
+  }
+
+  const followUpPlan = await maybeBuildAutoReroutePlan(
+    params.provider,
+    params.options,
+    params.prompt,
+    params.reasoningPlan,
+    params.lastText,
+    {
+      allowDepthEscalation: params.autoDepthEscalationCount === 0,
+      allowTaskReroute: params.autoTaskRerouteCount === 0,
+    },
+    params.toolEvidence,
+  );
+
+  if (!followUpPlan) {
+    return null;
+  }
+
+  const autoFollowUpCount = params.autoFollowUpCount + 1;
+  const autoDepthEscalationCount = params.autoDepthEscalationCount + (followUpPlan.kind === 'depth-escalation' ? 1 : 0);
+  const autoTaskRerouteCount = params.autoTaskRerouteCount + (followUpPlan.kind === 'task-reroute' ? 1 : 0);
+  const currentExecution = await buildReasoningExecutionState(
+    params.options,
+    followUpPlan,
+    params.isNewSession,
+  );
+
+  await params.onApply?.();
+
+  if (params.persistSession) {
+    await saveSessionSnapshot(params.options, params.persistSession.sessionId, {
+      messages: params.persistSession.messages,
+      title: params.persistSession.title,
+    });
+  }
+
+  params.events.onRetry?.(
+    `${
+      followUpPlan.kind === 'depth-escalation'
+        ? `${params.retryLabelPrefix} depth escalation`
+        : `${params.retryLabelPrefix} reroute`
+    }: ${followUpPlan.decision.reason}`,
+    autoFollowUpCount,
+    params.autoFollowUpLimit,
+  );
+
+  return {
+    reasoningPlan: followUpPlan,
+    currentExecution,
+    autoFollowUpCount,
+    autoDepthEscalationCount,
+    autoTaskRerouteCount,
+  };
+}
+
+async function executeToolCall(
+  events: KodaXEvents,
+  toolCall: RunnableToolCall,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  events.onToolUseStart?.({
+    name: toolCall.name,
+    id: toolCall.id,
+    input: toolCall.input,
+  });
+
+  const override = await getToolExecutionOverride(
+    events,
+    toolCall.name,
+    toolCall.input ?? {},
+    toolCall.id,
+  );
+  if (override !== undefined) {
+    return override;
+  }
+
+  return executeTool(toolCall.name, toolCall.input ?? {}, ctx);
+}
+
 /**
  * 运行 KodaX Agent
  * 核心入口函数 - 极简 API
@@ -421,6 +577,10 @@ export async function runKodaX(
     executionCwd,
     askUser: events.askUser, // Issue 069: Pass askUser callback from events
   };
+  let contextTokenSnapshot = rebaseContextTokenSnapshot(
+    messages,
+    options.context?.contextTokenSnapshot,
+  );
 
   let reasoningPlan = await createReasoningPlan(options, prompt, provider, {
     recentMessages: messages.slice(0, -1),
@@ -442,6 +602,24 @@ export async function runKodaX(
   let lastText = '';
   let incompleteRetryCount = 0;
   let limitReached = false; // Track if we exited due to iteration limit - 追踪是否因达到迭代上限而退出
+  const emitIterationEnd = (
+    iterNumber: number,
+    snapshotOverride?: typeof contextTokenSnapshot,
+  ): typeof contextTokenSnapshot => {
+    contextTokenSnapshot = rebaseContextTokenSnapshot(
+      messages,
+      snapshotOverride ?? contextTokenSnapshot,
+    );
+    events.onIterationEnd?.({
+      iter: iterNumber,
+      maxIter,
+      tokenCount: contextTokenSnapshot.currentTokens,
+      tokenSource: contextTokenSnapshot.source,
+      usage: contextTokenSnapshot.usage,
+      contextTokenSnapshot,
+    });
+    return contextTokenSnapshot;
+  };
 
   for (let iter = 0; iter < maxIter; iter++) {
     try {
@@ -449,10 +627,13 @@ export async function runKodaX(
 
       // Compaction: 统一使用智能压缩，废除遗留的粗暴截断
       let compacted: KodaXMessage[];
+      let didCompactMessages = false;
 
       // 判断是否需要压缩：只依据智能压缩阈值 (默认 75%)
-      const currentTokens = estimateTokens(messages);
-      const needsIntelligentCompact = compactionConfig.enabled && needsCompaction(messages, compactionConfig, contextWindow);
+      const currentTokens = resolveContextTokenCount(messages, contextTokenSnapshot);
+      const needsIntelligentCompact =
+        compactionConfig.enabled
+        && needsCompaction(messages, compactionConfig, contextWindow, currentTokens);
 
       if (needsIntelligentCompact) {
         // Only trigger UI indicator right before the heavy lifting
@@ -465,11 +646,13 @@ export async function runKodaX(
             provider,
             contextWindow,
             undefined, // customInstructions
-            currentExecution.systemPrompt // 传入 systemPrompt 以生成更好的摘要
+            currentExecution.systemPrompt, // 传入 systemPrompt 以生成更好的摘要
+            currentTokens,
           );
 
           if (result.compacted) {
             compacted = result.messages;
+            didCompactMessages = true;
             events.onCompactStats?.({
               tokensBefore: result.tokensBefore,
               tokensAfter: result.tokensAfter,
@@ -514,6 +697,7 @@ export async function runKodaX(
 
             newCompacted.push(...messages.slice(startIndex));
             compacted = newCompacted;
+            didCompactMessages = true;
             events.onCompactStats?.({
               tokensBefore: currentTokens,
               tokensAfter: estimateTokens(compacted),
@@ -541,6 +725,10 @@ export async function runKodaX(
       // CRITICAL FIX: Update the global session messages to the compacted version!
       // This permanently applies the summary/truncation and prevents the session history from growing infinitely.
       messages = compacted;
+      if (didCompactMessages) {
+        contextTokenSnapshot = createEstimatedContextTokenSnapshot(messages);
+        events.onCompactedMessages?.(messages);
+      }
 
       // 流式调用 Provider - with automatic retry for transient errors
       // 注入 API 硬超时保护：防止大型 payload 导致 API 静默丢包引发无限等待
@@ -635,12 +823,13 @@ export async function runKodaX(
       events.onStreamEnd?.();
 
       lastText = result.textBlocks.map(b => b.text).join(' ');
+      const providerTokenSnapshot = createContextTokenSnapshot(compacted, result.usage);
 
       // Promise 信号检测
       const [signal, _reason] = checkPromiseSignal(lastText);
       if (signal) {
         if (signal === 'COMPLETE') {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
           events.onComplete?.();
           return {
             success: true,
@@ -648,6 +837,7 @@ export async function runKodaX(
             signal: 'COMPLETE',
             messages,
             sessionId,
+            contextTokenSnapshot,
             limitReached: false,
           };
         }
@@ -655,16 +845,18 @@ export async function runKodaX(
 
       const assistantContent = [...result.thinkingBlocks, ...result.textBlocks, ...result.toolBlocks];
       messages.push({ role: 'assistant', content: assistantContent });
+      contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
 
       if (result.toolBlocks.length === 0) {
         const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
         if (shouldYieldToQueuedFollowUp) {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
           return {
             success: true,
             lastText,
             messages,
             sessionId,
+            contextTokenSnapshot,
             limitReached: false,
           };
         }
@@ -674,52 +866,35 @@ export async function runKodaX(
           autoFollowUpCount < autoFollowUpLimit &&
           (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
         ) {
-          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
-          try {
-            followUpPlan = await maybeCreateAutoReroutePlan(
-              provider,
-              options,
-              prompt,
+          const rerouteState = await maybeAdvanceAutoReroute({
+            provider,
+            options,
+            prompt,
+            reasoningPlan,
+            lastText,
+            autoFollowUpCount,
+            autoDepthEscalationCount,
+            autoTaskRerouteCount,
+            autoFollowUpLimit,
+            events,
+            isNewSession: messages.length === 1,
+            retryLabelPrefix: 'Auto',
+            onApply: () => {
+              messages.pop();
+            },
+          });
+          if (rerouteState) {
+            ({
               reasoningPlan,
-              lastText,
-              {
-                allowDepthEscalation: autoDepthEscalationCount === 0,
-                allowTaskReroute: autoTaskRerouteCount === 0,
-              },
-              undefined,
-            );
-          } catch (rerouteError) {
-            if (process.env.KODAX_DEBUG_ROUTING) {
-              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
-            }
-          }
-          if (followUpPlan) {
-            autoFollowUpCount++;
-            if (followUpPlan.kind === 'depth-escalation') {
-              autoDepthEscalationCount++;
-            } else {
-              autoTaskRerouteCount++;
-            }
-            reasoningPlan = followUpPlan;
-            currentExecution = await buildReasoningExecutionState(
-              options,
-              reasoningPlan,
-              messages.length === 1,
-            );
-            messages.pop();
-            events.onRetry?.(
-              `${
-                followUpPlan.kind === 'depth-escalation'
-                  ? 'Auto depth escalation'
-                  : 'Auto reroute'
-              }: ${followUpPlan.decision.reason}`,
+              currentExecution,
               autoFollowUpCount,
-              autoFollowUpLimit,
-            );
+              autoDepthEscalationCount,
+              autoTaskRerouteCount,
+            } = rerouteState);
             continue;
           }
         }
-        events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+        emitIterationEnd(iter + 1, providerTokenSnapshot);
         events.onComplete?.();
         // limitReached 保持 false（初始值）
         break;
@@ -739,6 +914,7 @@ export async function runKodaX(
             retryPrompt = `⚠️ CRITICAL: Your response was TRUNCATED again. This is retry ${incompleteRetryCount}/${KODAX_MAX_INCOMPLETE_RETRIES}.\n\nMISSING PARAMETERS:\n${incomplete.map(i => `- ${i}`).join('\n')}\n\nYOU MUST:\n1. For 'write' tool: Keep content under 50 lines - write structure first, fill in later with 'edit'\n2. For 'edit' tool: Keep new_string under 30 lines - make smaller, focused changes\n3. Provide ALL required parameters in your tool call\n\nIf your response is truncated again, the task will FAIL.\nPROVIDE SHORT, COMPLETE PARAMETERS NOW.`;
           }
           messages.push({ role: 'user', content: retryPrompt });
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
           continue;
         } else {
           // 超过重试次数，过滤掉不完整的工具调用并添加错误结果
@@ -765,6 +941,7 @@ export async function runKodaX(
             }
           }
           messages.push({ role: 'user', content: errorResults });
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
           incompleteRetryCount = 0;
           continue;
         }
@@ -782,47 +959,36 @@ export async function runKodaX(
         const resultMap = new Map<string, string>();
 
         if (nonBashTools.length > 0) {
-          const promises = nonBashTools.map(async tc => {
-            events.onToolUseStart?.({
-              name: tc.name,
-              id: tc.id,
-              input: tc.input as Record<string, unknown> | undefined,
-            });
-            // Permission hook - allow REPL layer to control execution
-            const override = await getToolExecutionOverride(
-              events,
-              tc.name,
-              tc.input as Record<string, unknown>,
-              tc.id,
-            );
-            if (override !== undefined) {
-              return { id: tc.id, content: override };
-            }
-            const r = await executeTool(tc.name, tc.input, ctx);
-            return { id: tc.id, content: r };
-          });
+          const promises = nonBashTools.map(async tc => ({
+            id: tc.id,
+            content: (
+              await applyToolResultGuardrail(
+                tc.name,
+                await executeToolCall(events, {
+                  id: tc.id,
+                  name: tc.name,
+                  input: tc.input as Record<string, unknown> | undefined,
+                }, ctx),
+                ctx,
+              )
+            ).content,
+          }));
           const results = await Promise.all(promises);
           for (const r of results) resultMap.set(r.id, r.content);
         }
 
         for (const tc of bashTools) {
-          events.onToolUseStart?.({
-            name: tc.name,
-            id: tc.id,
-            input: tc.input as Record<string, unknown> | undefined,
-          });
-          // Permission hook - allow REPL layer to control execution
-          const override = await getToolExecutionOverride(
-            events,
-            tc.name,
-            tc.input as Record<string, unknown>,
-            tc.id,
-          );
-          if (override !== undefined) {
-            resultMap.set(tc.id, override);
-            continue;
-          }
-          const content = await executeTool(tc.name, tc.input, ctx);
+          const content = (
+            await applyToolResultGuardrail(
+              tc.name,
+              await executeToolCall(events, {
+                id: tc.id,
+                name: tc.name,
+                input: tc.input as Record<string, unknown> | undefined,
+              }, ctx),
+              ctx,
+            )
+          ).content;
           resultMap.set(tc.id, content);
         }
 
@@ -833,19 +999,17 @@ export async function runKodaX(
         }
       } else {
         for (const tc of result.toolBlocks) {
-          events.onToolUseStart?.({
-            name: tc.name,
-            id: tc.id,
-            input: tc.input as Record<string, unknown> | undefined,
-          });
-          // Permission hook - allow REPL layer to control execution
-          const override = await getToolExecutionOverride(
-            events,
-            tc.name,
-            tc.input as Record<string, unknown>,
-            tc.id,
-          );
-          const content = override ?? await executeTool(tc.name, tc.input, ctx);
+          const content = (
+            await applyToolResultGuardrail(
+              tc.name,
+              await executeToolCall(events, {
+                id: tc.id,
+                name: tc.name,
+                input: tc.input as Record<string, unknown> | undefined,
+              }, ctx),
+              ctx,
+            )
+          ).content;
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
           toolResults.push(createToolResultBlock(tc.id, content));
         }
@@ -860,8 +1024,9 @@ export async function runKodaX(
         const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
         // User cancelled - add results and exit loop - 用户取消，添加结果并退出循环
         messages.push({ role: 'user', content: toolResults });
+        contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
         if (shouldYieldToQueuedFollowUp) {
-          events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+          emitIterationEnd(iter + 1, providerTokenSnapshot);
         }
         events.onStreamEnd?.();
         return {
@@ -869,20 +1034,23 @@ export async function runKodaX(
           lastText: 'Operation cancelled by user',
           messages,
           sessionId,
+          contextTokenSnapshot,
           interrupted: !shouldYieldToQueuedFollowUp,
         };
       }
 
       messages.push({ role: 'user', content: toolResults });
+      contextTokenSnapshot = rebaseContextTokenSnapshot(messages, providerTokenSnapshot);
 
       const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
       if (shouldYieldToQueuedFollowUp) {
-        events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+        emitIterationEnd(iter + 1, providerTokenSnapshot);
         return {
           success: true,
           lastText,
           messages,
           sessionId,
+          contextTokenSnapshot,
           limitReached: false,
         };
       }
@@ -894,53 +1062,35 @@ export async function runKodaX(
       ) {
         const toolEvidence = summarizeToolEvidence(result.toolBlocks, toolResults);
         if (toolEvidence) {
-          let followUpPlan: Awaited<ReturnType<typeof maybeCreateAutoReroutePlan>> = null;
-          try {
-            followUpPlan = await maybeCreateAutoReroutePlan(
-              provider,
-              options,
-              prompt,
+          const rerouteState = await maybeAdvanceAutoReroute({
+            provider,
+            options,
+            prompt,
+            reasoningPlan,
+            lastText,
+            autoFollowUpCount,
+            autoDepthEscalationCount,
+            autoTaskRerouteCount,
+            autoFollowUpLimit,
+            events,
+            isNewSession: false,
+            retryLabelPrefix: 'Post-tool auto',
+            toolEvidence,
+            persistSession: {
+              sessionId,
+              messages,
+              title,
+            },
+          });
+
+          if (rerouteState) {
+            ({
               reasoningPlan,
-              lastText,
-              {
-                allowDepthEscalation: autoDepthEscalationCount === 0,
-                allowTaskReroute: autoTaskRerouteCount === 0,
-              },
-              {
-                toolEvidence,
-              },
-            );
-          } catch (rerouteError) {
-            if (process.env.KODAX_DEBUG_ROUTING) {
-              console.error('[AutoReroute] Failed, continuing without reroute:', rerouteError);
-            }
-          }
-
-          if (followUpPlan) {
-            autoFollowUpCount++;
-            if (followUpPlan.kind === 'depth-escalation') {
-              autoDepthEscalationCount++;
-            } else {
-              autoTaskRerouteCount++;
-            }
-            reasoningPlan = followUpPlan;
-            currentExecution = await buildReasoningExecutionState(
-              options,
-              reasoningPlan,
-              false,
-            );
-
-            await saveSessionSnapshot(options, sessionId, { messages, title });
-
-            events.onRetry?.(
-              `${
-                followUpPlan.kind === 'depth-escalation'
-                  ? 'Auto depth escalation'
-                  : 'Post-tool auto reroute'
-              }: ${followUpPlan.decision.reason}`,
+              currentExecution,
               autoFollowUpCount,
-              autoFollowUpLimit,
-            );
+              autoDepthEscalationCount,
+              autoTaskRerouteCount,
+            } = rerouteState);
             continue;
           }
         }
@@ -950,7 +1100,7 @@ export async function runKodaX(
       await saveSessionSnapshot(options, sessionId, { messages, title });
 
       // Notify UI of context usage after each iteration
-      events.onIterationEnd?.({ iter: iter + 1, maxIter, tokenCount: estimateTokens(messages) });
+      emitIterationEnd(iter + 1, providerTokenSnapshot);
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
 
@@ -972,6 +1122,7 @@ export async function runKodaX(
         title,
         errorMetadata: updatedErrorMetadata,
       });
+      contextTokenSnapshot = createEstimatedContextTokenSnapshot(cleanedMessages);
 
       // 检查是否为 AbortError（用户中断）
       // 参考 Gemini CLI: 静默处理中断，不报告为错误
@@ -986,6 +1137,7 @@ export async function runKodaX(
           lastText,
           messages: cleanedMessages,
           sessionId,
+          contextTokenSnapshot,
           interrupted: true,
           errorMetadata: updatedErrorMetadata,
         };
@@ -997,6 +1149,7 @@ export async function runKodaX(
         lastText,
         messages: cleanedMessages,  // ✅ Use cleaned messages to prevent error loop
         sessionId,
+        contextTokenSnapshot,
         errorMetadata: updatedErrorMetadata,
       };
     }
@@ -1021,6 +1174,7 @@ export async function runKodaX(
     signalReason: finalReason,
     messages,
     sessionId,
+    contextTokenSnapshot,
     limitReached,
   };
 }

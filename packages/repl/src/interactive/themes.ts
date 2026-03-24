@@ -1,45 +1,34 @@
-/**
- * KodaX 主题系统
- *
- * 支持多种主题配色方案，提供一致的视觉体验
- */
-
 import chalk from 'chalk';
+import {
+  supportsTrueColor as terminalSupportsTrueColor,
+  supportsUnicode as terminalSupportsUnicode,
+} from '../ui/utils/terminalCapabilities.js';
 
-/**
- * 主题颜色定义
- */
 export interface ThemeColors {
-  primary: string;             // 主色调
-  secondary: string;           // 次要颜色
-  accent: string;              // 强调色
-  text: string;                // 文本颜色
-  dim: string;                 // 暗淡文本
-  success: string;             // 成功状态
-  warning: string;             // 警告状态
-  error: string;               // 错误状态
-  info: string;                // 信息状态
+  primary: string;
+  secondary: string;
+  accent: string;
+  text: string;
+  dim: string;
+  success: string;
+  warning: string;
+  error: string;
+  info: string;
 }
 
-/**
- * 主题符号定义
- */
 export interface ThemeSymbols {
-  prompt: string;              // 提示符
-  success: string;             // 成功符号
-  error: string;               // 错误符号
-  warning: string;             // 警告符号
-  info: string;                // 信息符号
-  arrow: string;               // 箭头
-  bullet: string;              // 项目符号
-  check: string;               // 勾选
-  cross: string;               // 叉号
-  spinner: string[];           // Spinner 动画帧
+  prompt: string;
+  success: string;
+  error: string;
+  warning: string;
+  info: string;
+  arrow: string;
+  bullet: string;
+  check: string;
+  cross: string;
+  spinner: string[];
 }
 
-/**
- * 完整主题定义
- */
 export interface Theme {
   name: string;
   description: string;
@@ -51,27 +40,21 @@ export interface Theme {
   };
 }
 
-/**
- * 获取支持 Unicode 的符号
- */
 function getUnicodeSymbols(): ThemeSymbols {
   return {
-    prompt: '❯',
-    success: '✓',
-    error: '✗',
-    warning: '⚠',
-    info: 'ℹ',
-    arrow: '→',
-    bullet: '•',
-    check: '✔',
-    cross: '✘',
-    spinner: ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
+    prompt: '\u276F',
+    success: '\u2713',
+    error: '\u2717',
+    warning: '\u26A0',
+    info: '\u2139',
+    arrow: '\u2192',
+    bullet: '\u2022',
+    check: '\u2713',
+    cross: '\u2717',
+    spinner: ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u2826', '\u2827', '\u2807', '\u280F'],
   };
 }
 
-/**
- * 获取 ASCII 兼容的符号
- */
 function getAsciiSymbols(): ThemeSymbols {
   return {
     prompt: '>',
@@ -87,30 +70,6 @@ function getAsciiSymbols(): ThemeSymbols {
   };
 }
 
-/**
- * 检测终端是否支持 Unicode
- */
-function supportsUnicode(): boolean {
-  if (process.platform === 'win32') {
-    const env = process.env;
-    return env.WT_SESSION !== undefined ||
-           env.TERM_PROGRAM === 'vscode' ||
-           env.CI === 'true';
-  }
-  return true;
-}
-
-/**
- * 检测终端是否支持真彩色
- */
-function supportsTrueColor(): boolean {
-  const colorterm = process.env.COLORTERM ?? '';
-  return colorterm === 'truecolor' || colorterm === '24bit';
-}
-
-/**
- * Dark 主题 (默认)
- */
 const darkTheme: Theme = {
   name: 'dark',
   description: 'Dark theme with vibrant colors',
@@ -125,18 +84,15 @@ const darkTheme: Theme = {
     error: '#F44336',
     info: '#2196F3',
   },
-  symbols: supportsUnicode() ? getUnicodeSymbols() : getAsciiSymbols(),
+  symbols: terminalSupportsUnicode() ? getUnicodeSymbols() : getAsciiSymbols(),
   spinner: {
-    frames: supportsUnicode()
-      ? ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    frames: terminalSupportsUnicode()
+      ? ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u2826', '\u2827', '\u2807', '\u280F']
       : ['|', '/', '-', '\\', '|', '/', '-', '\\'],
     interval: 80,
   },
 };
 
-/**
- * Light 主题
- */
 const lightTheme: Theme = {
   name: 'light',
   description: 'Light theme for bright terminals',
@@ -151,21 +107,18 @@ const lightTheme: Theme = {
     error: '#CC0000',
     info: '#0066CC',
   },
-  symbols: supportsUnicode() ? getUnicodeSymbols() : getAsciiSymbols(),
+  symbols: terminalSupportsUnicode() ? getUnicodeSymbols() : getAsciiSymbols(),
   spinner: {
-    frames: supportsUnicode()
-      ? ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    frames: terminalSupportsUnicode()
+      ? ['\u280B', '\u2819', '\u2839', '\u2838', '\u283C', '\u2834', '\u2826', '\u2827', '\u2807', '\u280F']
       : ['|', '/', '-', '\\', '|', '/', '-', '\\'],
     interval: 80,
   },
 };
 
-/**
- * Minimal 主题 (无颜色)
- */
 const minimalTheme: Theme = {
   name: 'minimal',
-  description: 'Minimal theme without colors (for CI/limited terminals)',
+  description: 'Minimal theme without colors (for CI or limited terminals)',
   colors: {
     primary: '',
     secondary: '',
@@ -184,73 +137,50 @@ const minimalTheme: Theme = {
   },
 };
 
-/**
- * 所有可用主题
- */
 export const themes: Record<string, Theme> = {
   dark: darkTheme,
   light: lightTheme,
   minimal: minimalTheme,
 };
 
-/**
- * 当前活动主题
- */
 let currentTheme: Theme = darkTheme;
 
-/**
- * 获取当前主题
- */
 export function getCurrentTheme(): Theme {
   return currentTheme;
 }
 
-/**
- * 设置主题
- */
 export function setTheme(name: string): boolean {
   const theme = themes[name];
-  if (theme) {
-    currentTheme = theme;
-    return true;
+  if (!theme) {
+    return false;
   }
-  return false;
+
+  currentTheme = theme;
+  return true;
 }
 
-/**
- * 获取主题名称列表
- */
 export function getThemeNames(): string[] {
   return Object.keys(themes);
 }
 
-/**
- * 获取符号 (基于当前主题)
- */
 export function getThemeSymbols(): ThemeSymbols {
   return currentTheme.symbols;
 }
 
-/**
- * 获取 Spinner 配置 (基于当前主题)
- */
 export function getSpinnerConfig(): { frames: string[]; interval: number } {
   return currentTheme.spinner;
 }
 
-/**
- * 使用主题颜色格式化文本
- */
 export function colorize(text: string, colorType: keyof ThemeColors): string {
   const color = currentTheme.colors[colorType];
-  if (!color) return text;
+  if (!color) {
+    return text;
+  }
 
-  // 如果是真彩色终端，使用 hex 颜色
-  if (supportsTrueColor() && color.startsWith('#')) {
+  if (terminalSupportsTrueColor() && color.startsWith('#')) {
     return chalk.hex(color)(text);
   }
 
-  // 回退到命名颜色
   switch (colorType) {
     case 'primary':
       return chalk.cyan(text);
@@ -275,70 +205,46 @@ export function colorize(text: string, colorType: keyof ThemeColors): string {
   }
 }
 
-/**
- * 格式化成功消息
- */
 export function formatSuccess(message: string): string {
   const symbols = getThemeSymbols();
   return colorize(`${symbols.success} ${message}`, 'success');
 }
 
-/**
- * 格式化错误消息
- */
 export function formatError(message: string): string {
   const symbols = getThemeSymbols();
   return colorize(`${symbols.error} ${message}`, 'error');
 }
 
-/**
- * 格式化警告消息
- */
 export function formatWarning(message: string): string {
   const symbols = getThemeSymbols();
   return colorize(`${symbols.warning} ${message}`, 'warning');
 }
 
-/**
- * 格式化信息消息
- */
 export function formatInfo(message: string): string {
   const symbols = getThemeSymbols();
   return colorize(`${symbols.info} ${message}`, 'info');
 }
 
-/**
- * 格式化提示符
- */
 export function formatPrompt(mode: string, provider: string, flags: string[]): string {
   const symbols = getThemeSymbols();
   const modeColor = mode === 'ask' ? 'warning' : 'success';
   const flagStr = flags.length > 0 ? ` ${flags.join('')}` : '';
-
   return colorize(`kodax:${mode} (${provider})${flagStr}${symbols.prompt} `, modeColor);
 }
 
-/**
- * 根据终端环境自动选择主题
- */
 export function autoSelectTheme(): void {
-  // 无 TTY 时使用 minimal 主题
   if (!process.stdout.isTTY) {
     setTheme('minimal');
     return;
   }
 
-  // Windows Terminal 或 VS Code 终端使用 dark 主题
   const env = process.env;
   if (env.WT_SESSION !== undefined || env.TERM_PROGRAM === 'vscode') {
     setTheme('dark');
     return;
   }
 
-  // 检测背景色（如果可用）
-  // 目前默认使用 dark 主题
   setTheme('dark');
 }
 
-// 初始化时自动选择主题
 autoSelectTheme();

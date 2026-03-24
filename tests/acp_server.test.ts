@@ -1,6 +1,6 @@
 import { TransformStream } from 'node:stream/web';
 import path from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -9,6 +9,8 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
+import type { AcpLogLevel } from '../src/acp_logger.js';
+import type { AcpEventSink, AcpRuntimeEvent } from '../src/acp_events.js';
 
 const { runKodaXMock } = vi.hoisted(() => ({
   runKodaXMock: vi.fn(),
@@ -24,7 +26,8 @@ vi.mock('@kodax/coding', async (importOriginal) => {
 
 import { KodaXAcpServer } from '../src/acp_server.js';
 
-let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+let stderrWriteSpy: ReturnType<typeof vi.spyOn>;
+const stderrLines: string[] = [];
 
 function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>>> = {}) {
   return {
@@ -42,17 +45,27 @@ async function createHarness(options: {
   onSessionUpdate?: (notification: SessionNotification) => Promise<void>;
   serverCwd?: string;
   sessionCwd?: string;
+  logLevel?: AcpLogLevel;
+  eventSinks?: AcpEventSink[];
 } = {}) {
   const requestStream = new TransformStream<Uint8Array, Uint8Array>();
   const responseStream = new TransformStream<Uint8Array, Uint8Array>();
   const updates: SessionNotification[] = [];
   const permissionRequests: RequestPermissionRequest[] = [];
+  const events: AcpRuntimeEvent[] = [];
+  const recordingSink: AcpEventSink = {
+    handleEvent(event) {
+      events.push(event);
+    },
+  };
 
   const server = new KodaXAcpServer({
     ...(options.serverCwd ? { cwd: options.serverCwd } : {}),
     provider: 'openai',
     permissionMode: 'accept-edits',
     agentVersion: 'test',
+    logLevel: options.logLevel ?? 'off',
+    eventSinks: [recordingSink, ...(options.eventSinks ?? [])],
   });
   server.attach(requestStream.readable, responseStream.writable);
 
@@ -96,6 +109,7 @@ async function createHarness(options: {
     client,
     server,
     updates,
+    events,
     permissionRequests,
     sessionId: session.sessionId,
   };
@@ -104,7 +118,15 @@ async function createHarness(options: {
 describe('KodaXAcpServer', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    stderrLines.length = 0;
+    stderrWriteSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+      stderrLines.push(String(chunk).replace(/\r?\n$/, ''));
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    stderrWriteSpy.mockRestore();
   });
 
   it('streams assistant and tool events over ACP notifications', async () => {
@@ -185,6 +207,23 @@ describe('KodaXAcpServer', () => {
         rawInput: { command: 'echo test > README.md' },
       },
     });
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'permission_requested',
+          sessionId: harness.sessionId,
+          tool: 'bash',
+          toolId: 'tool-bash-write',
+        }),
+        expect.objectContaining({
+          type: 'tool_permission_resolved',
+          sessionId: harness.sessionId,
+          tool: 'bash',
+          toolId: 'tool-bash-write',
+          outcome: 'request_granted',
+        }),
+      ]),
+    );
   });
 
   it('keeps accept-edits mode aligned with REPL by not requesting permission for read tools', async () => {
@@ -284,36 +323,46 @@ describe('KodaXAcpServer', () => {
   });
 
   it('rejects invalid ACP session modes instead of silently coercing them', async () => {
-    const harness = await createHarness();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const harness = await createHarness();
 
-    await expect(
-      harness.client.setSessionMode({
-        sessionId: harness.sessionId,
-        modeId: 'architect',
-      }),
-    ).rejects.toMatchObject({
-      code: -32602,
-      message: expect.stringContaining('Invalid session mode'),
-      data: {
-        modeId: 'architect',
-      },
-    });
+      await expect(
+        harness.client.setSessionMode({
+          sessionId: harness.sessionId,
+          modeId: 'architect',
+        }),
+      ).rejects.toMatchObject({
+        code: -32602,
+        message: expect.stringContaining('Invalid session mode'),
+        data: {
+          modeId: 'architect',
+        },
+      });
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it('rejects empty ACP prompts before invoking the coding runtime', async () => {
-    const harness = await createHarness();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const harness = await createHarness();
 
-    await expect(
-      harness.client.prompt({
-        sessionId: harness.sessionId,
-        prompt: [{ type: 'text', text: '   ' }],
-      }),
-    ).rejects.toMatchObject({
-      code: -32602,
-      message: expect.stringContaining('Prompt must include at least one text or resource block with content'),
-    });
+      await expect(
+        harness.client.prompt({
+          sessionId: harness.sessionId,
+          prompt: [{ type: 'text', text: '   ' }],
+        }),
+      ).rejects.toMatchObject({
+        code: -32602,
+        message: expect.stringContaining('Prompt must include at least one text or resource block with content'),
+      });
 
-    expect(runKodaXMock).not.toHaveBeenCalled();
+      expect(runKodaXMock).not.toHaveBeenCalled();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it('passes the session cwd as explicit execution context without mutating process cwd', async () => {
@@ -333,6 +382,77 @@ describe('KodaXAcpServer', () => {
     });
 
     expect(process.cwd()).toBe(originalCwd);
+  });
+
+  it('returns prompt usage and reuses the latest token snapshot on the next ACP turn', async () => {
+    let callCount = 0;
+    runKodaXMock.mockImplementation(async (options) => {
+      callCount += 1;
+
+      if (callCount === 1) {
+        expect(options.context?.contextTokenSnapshot).toBeUndefined();
+        return createResult({
+          contextTokenSnapshot: {
+            currentTokens: 120,
+            baselineEstimatedTokens: 100,
+            source: 'api',
+            usage: {
+              inputTokens: 120,
+              outputTokens: 30,
+              totalTokens: 150,
+            },
+          },
+        });
+      }
+
+      expect(options.context?.contextTokenSnapshot).toEqual({
+        currentTokens: 120,
+        baselineEstimatedTokens: 100,
+        source: 'api',
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          totalTokens: 150,
+        },
+      });
+
+      return createResult({
+        contextTokenSnapshot: {
+          currentTokens: 140,
+          baselineEstimatedTokens: 120,
+          source: 'api',
+          usage: {
+            inputTokens: 140,
+            outputTokens: 20,
+            totalTokens: 160,
+          },
+        },
+      });
+    });
+
+    const harness = await createHarness();
+
+    const firstResponse = await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'First prompt' }],
+    });
+
+    expect(firstResponse.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+    });
+
+    const secondResponse = await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Second prompt' }],
+    });
+
+    expect(secondResponse.usage).toEqual({
+      inputTokens: 140,
+      outputTokens: 20,
+      totalTokens: 160,
+    });
   });
 
   it('uses the configured server cwd for ACP sessions when provided', async () => {
@@ -383,7 +503,7 @@ describe('KodaXAcpServer', () => {
       return createResult({ lastText: 'Hello from ACP' });
     });
 
-    const harness = await createHarness();
+    const harness = await createHarness({ logLevel: 'error' });
     vi.spyOn((harness.server as any).connection, 'sessionUpdate').mockRejectedValue(
       new Error('notification sink offline'),
     );
@@ -394,8 +514,159 @@ describe('KodaXAcpServer', () => {
     });
 
     expect(response.stopReason).toBe('end_turn');
-    expect(consoleErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[ACP] Failed to send assistant text chunk: notification sink offline'),
+    await Promise.resolve();
+    expect(stderrLines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Failed to send assistant text chunk'),
+        expect.stringContaining(`sessionId=${JSON.stringify(harness.sessionId)}`),
+      ]),
+    );
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'notification_failed',
+          sessionId: harness.sessionId,
+          label: 'assistant text chunk',
+          error: 'notification sink offline',
+        }),
+      ]),
+    );
+  });
+
+  it('treats abort-style runtime errors as cancellation without emitting ACP error text', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      options.abortSignal?.throwIfAborted?.();
+      throw new DOMException('This operation was aborted', 'AbortError');
+    });
+
+    const harness = await createHarness({ logLevel: 'info' });
+    const updatesBefore = harness.updates.length;
+
+    const response = await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Cancel me via abort error' }],
+    });
+
+    expect(response.stopReason).toBe('cancelled');
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'prompt_cancelled',
+          sessionId: harness.sessionId,
+        }),
+      ]),
+    );
+    expect(harness.events).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'prompt_failed',
+          sessionId: harness.sessionId,
+        }),
+      ]),
+    );
+    expect(harness.updates.slice(updatesBefore)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          update: expect.objectContaining({
+            sessionUpdate: 'agent_message_chunk',
+            content: expect.objectContaining({
+              text: expect.stringContaining('[ACP Server Error]'),
+            }),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it('emits ACP lifecycle runtime events and still writes stderr logs through the default sink', async () => {
+    runKodaXMock.mockResolvedValue(createResult({ lastText: 'done' }));
+
+    const harness = await createHarness({ logLevel: 'info' });
+    await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Review this repository' }],
+    });
+
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'server_attached' }),
+        expect.objectContaining({ type: 'initialize_completed' }),
+        expect.objectContaining({
+          type: 'session_created',
+          sessionId: harness.sessionId,
+        }),
+        expect.objectContaining({
+          type: 'prompt_started',
+          sessionId: harness.sessionId,
+        }),
+        expect.objectContaining({
+          type: 'prompt_finished',
+          sessionId: harness.sessionId,
+          stopReason: 'end_turn',
+        }),
+      ]),
+    );
+    expect(stderrLines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('ACP server attached'),
+        expect.stringContaining('ACP initialize completed'),
+        expect.stringContaining('ACP session created'),
+        expect.stringContaining('ACP prompt started'),
+        expect.stringContaining('ACP prompt finished'),
+      ]),
+    );
+  });
+
+  it('emits structured permission negotiation events', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      const decision = await options.events?.beforeToolExecute?.(
+        'bash',
+        { command: 'echo test > README.md' },
+        { toolId: 'tool-bash-write' },
+      );
+
+      expect(decision).toBe(true);
+      return createResult();
+    });
+
+    const harness = await createHarness({
+      logLevel: 'info',
+      onPermissionRequest: async () => ({
+        outcome: {
+          outcome: 'selected',
+          optionId: 'allow_once',
+        },
+      }),
+    });
+
+    await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Write a note' }],
+    });
+
+    expect(harness.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'tool_permission_evaluated',
+          sessionId: harness.sessionId,
+          tool: 'bash',
+          toolId: 'tool-bash-write',
+          permissionMode: 'accept-edits',
+        }),
+        expect.objectContaining({
+          type: 'permission_requested',
+          sessionId: harness.sessionId,
+          tool: 'bash',
+          toolId: 'tool-bash-write',
+        }),
+        expect.objectContaining({
+          type: 'tool_permission_resolved',
+          sessionId: harness.sessionId,
+          tool: 'bash',
+          toolId: 'tool-bash-write',
+          outcome: 'request_granted',
+        }),
+      ]),
     );
   });
 });

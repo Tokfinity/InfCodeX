@@ -19,6 +19,6 @@ export class KodaXGeminiCliProvider extends KodaXAcpProvider {
     constructor() {
         super();
         const executor = new GeminiCLIExecutor();
-        this.acpClientOptions = createPseudoAcpServer(executor, this.config.model);
+        this.acpClientOptions = createPseudoAcpServer(executor);
     }
 }

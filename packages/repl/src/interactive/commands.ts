@@ -36,6 +36,7 @@ import { savePermissionModeUser } from '../common/permission-config.js';
 import { runWithPlanMode, listPlans, resumePlan, clearCompletedPlans } from '../common/plan-mode.js';
 import { handleProjectCommand, printProjectHelp } from './project-commands.js';
 import { compact } from '@kodax/agent';
+import type { CompactionConfig } from '@kodax/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
@@ -83,6 +84,25 @@ function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory:
     global: files.filter(file => file.scope === 'global').length,
     directory: files.filter(file => file.scope === 'directory').length,
     project: files.filter(file => file.scope === 'project').length,
+  };
+}
+
+function createManualCompactionConfig(
+  config: CompactionConfig,
+  currentTokens: number,
+  contextWindow: number
+): CompactionConfig {
+  if (!Number.isFinite(currentTokens) || currentTokens <= 0 || contextWindow <= 0) {
+    return { ...config, enabled: true };
+  }
+
+  const currentUsagePercent = (currentTokens / contextWindow) * 100;
+  const forcedTriggerPercent = Math.max(1, Math.ceil(currentUsagePercent) - 1);
+
+  return {
+    ...config,
+    enabled: true,
+    triggerPercent: Math.min(config.triggerPercent, forcedTriggerPercent),
   };
 }
 
@@ -139,6 +159,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: 'Clear conversation history',
     handler: async (_args, context, callbacks) => {
       context.messages = [];  // Clear messages first
+      context.contextTokenSnapshot = undefined;
       callbacks.clearHistory();  // Then clear UI
       console.log(chalk.yellow('\n[Conversation cleared]'));
     },
@@ -164,12 +185,6 @@ export const BUILTIN_COMMANDS: Command[] = [
         // Load compaction config
         const config = await loadCompactionConfig(context.gitRoot);
 
-        if (!config.enabled) {
-          console.log(chalk.yellow('\n[Compaction is disabled in config]'));
-          console.log(chalk.dim('Enable it in ~/.kodax/config.json or .kodax/config.json\n'));
-          return;
-        }
-
         // Get provider instance
         const providerName = currentConfig.provider;
         const provider = resolveProvider(providerName);
@@ -186,6 +201,8 @@ export const BUILTIN_COMMANDS: Command[] = [
         const contextWindow = config.contextWindow
           ?? provider.getContextWindow?.()
           ?? 200000;
+        const currentTokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
+        const manualConfig = createManualCompactionConfig(config, currentTokens, contextWindow);
 
         console.log(chalk.dim('\n[Compacting conversation...]'));
 
@@ -193,8 +210,17 @@ export const BUILTIN_COMMANDS: Command[] = [
         callbacks.startCompacting?.();
 
         try {
-          // Perform compaction
-          const result = await compact(context.messages, config, provider, contextWindow, customInstructions);
+          // Manual compaction stays available even when auto-compaction is disabled
+          // or the automatic threshold has not been reached yet.
+          const result = await compact(
+            context.messages,
+            manualConfig,
+            provider,
+            contextWindow,
+            customInstructions,
+            undefined,
+            currentTokens
+          );
 
           if (!result.compacted) {
             console.log(chalk.green('\n[No compaction needed]'));
@@ -204,9 +230,14 @@ export const BUILTIN_COMMANDS: Command[] = [
 
           // Update context with compacted messages
           context.messages = result.messages;
+          context.contextTokenSnapshot = {
+            currentTokens: result.tokensAfter,
+            baselineEstimatedTokens: result.tokensAfter,
+            source: 'estimate',
+          };
 
           // Clear UI history - it will be re-created from the new context.messages
-          // This ensures the UI shows the summary + recent 10% messages
+          // This ensures the UI shows the summary + protected recent context.
           // 清除 UI 历史 - 它会从新的 context.messages 重新创建
           // 这确保 UI 显示摘要 + 最近的 10% 消息
           callbacks.clearHistory?.();
@@ -235,19 +266,21 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  Manually triggers context compaction using LLM-generated summaries.'));
       console.log(chalk.dim('  Older messages are replaced with a structured summary, keeping recent context.'));
+      console.log(chalk.dim('  /compact still works even if auto-compaction is disabled or the auto threshold is not reached.'));
       console.log();
       console.log(chalk.bold('What it does:'));
-      console.log(chalk.dim('  1. Keeps recent messages (based on keepRecentTokens config)'));
+      console.log(chalk.dim('  1. Protects a recent slice of context from pruning/summary'));
       console.log(chalk.dim('  2. Generates structured summary of older messages using LLM'));
       console.log(chalk.dim('  3. Tracks files that were read/modified in the conversation'));
       console.log(chalk.dim('  4. Replaces old messages with summary to save tokens'));
       console.log();
       console.log(chalk.bold('Configuration:'));
-      console.log(chalk.dim('  Config file: ~/.kodax/config.json or .kodax/config.json'));
+      console.log(chalk.dim('  Config file: ~/.kodax/config.json'));
       console.log(chalk.dim('  Settings:'));
-      console.log(chalk.dim('    - compaction.enabled: Enable/disable auto-compaction'));
-      console.log(chalk.dim('    - compaction.reserveTokens: Tokens to reserve for responses'));
-      console.log(chalk.dim('    - compaction.keepRecentTokens: Recent tokens to preserve'));
+      console.log(chalk.dim('    - compaction.triggerPercent: Usage percentage that triggers compaction'));
+      console.log(chalk.dim('    - compaction.enabled: Controls auto-compaction only; /compact always remains available'));
+      console.log(chalk.dim('    - compaction.contextWindow: Optional token-window override'));
+      console.log(chalk.dim('    - compaction.protectionPercent / rollingSummaryPercent / pruningThresholdTokens: Advanced tuning'));
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /compact                        ') + '# Compact with default instructions');
@@ -1137,7 +1170,8 @@ function printDetailedHelp(commandName: string): void {
 
 // Print status - 打印状态
 function printStatus(context: InteractiveContext, currentConfig: CurrentConfig): void {
-  const tokens = estimateTokens(context.messages);
+  const tokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
+  const tokenSource = context.contextTokenSnapshot?.source ?? 'estimate';
   const capabilityProfile = getProviderCapabilityProfile(currentConfig.provider);
   console.log(chalk.bold('\nSession Status:\n'));
   console.log(chalk.dim(`  Provider:    ${chalk.cyan(currentConfig.provider)}${currentConfig.model ? ` / ${chalk.cyan(currentConfig.model)}` : ''}`));
@@ -1153,7 +1187,7 @@ function printStatus(context: InteractiveContext, currentConfig: CurrentConfig):
   }
   console.log(chalk.dim(`  Session ID:  ${context.sessionId}`));
   console.log(chalk.dim(`  Messages:    ${context.messages.length}`));
-  console.log(chalk.dim(`  Tokens:      ~${tokens}`));
+  console.log(chalk.dim(`  Tokens:      ~${tokens} (${tokenSource})`));
   if (context.gitRoot) {
     console.log(chalk.dim(`  Git Root:    ${context.gitRoot}`));
   }

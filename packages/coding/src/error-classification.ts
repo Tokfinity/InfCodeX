@@ -88,9 +88,11 @@ export function classifyError(error: Error): ErrorClassification {
     const msg = error.message.toLowerCase();
     if (msg.includes('timeout') ||
         msg.includes('network') ||
+        msg.includes('connection error') ||
         msg.includes('econnrefused') ||
         msg.includes('etimedout') ||
         msg.includes('enotfound') ||
+        msg.includes('fetch failed') ||
         msg.includes('socket hang up') ||
         msg.includes('aborted')) {
       return {
@@ -116,6 +118,7 @@ export function classifyError(error: Error): ErrorClassification {
   const msg = error.message.toLowerCase();
   if (msg.includes('timeout') ||
       msg.includes('network') ||
+      msg.includes('connection error') ||
       msg.includes('econnrefused') ||
       msg.includes('etimedout') ||
       msg.includes('fetch failed') ||

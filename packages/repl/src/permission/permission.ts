@@ -17,6 +17,8 @@ import os from 'os';
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 
 const PLAN_MODE_PROJECT_DOC_RELATIVE_PATH = path.join('.agent', 'plan_mode_doc.md');
+const existingPathPrefixCache = new Map<string, string>();
+let cachedSystemTempDirectories: string[] | null = null;
 
 // ============== Pattern Parsing and Matching ==============
 
@@ -338,6 +340,7 @@ export function isAlwaysConfirmPath(targetPath: string, projectRoot: string): bo
 
     return false;
   } catch {
+    // Path parsing errors should degrade to "not protected" instead of crashing permission checks.
     return false;
   }
 }
@@ -424,8 +427,15 @@ function collectAbsolutePathCandidates(command: string): string[] {
 
 function resolveExistingPathPrefix(targetPath: string): string {
   const resolved = path.resolve(targetPath);
+  const cached = existingPathPrefixCache.get(resolved);
+  if (cached) {
+    return cached;
+  }
+
   if (fs.existsSync(resolved)) {
-    return fs.realpathSync.native(resolved);
+    const realPath = fs.realpathSync.native(resolved);
+    existingPathPrefixCache.set(resolved, realPath);
+    return realPath;
   }
 
   const segments: string[] = [];
@@ -434,6 +444,7 @@ function resolveExistingPathPrefix(targetPath: string): string {
   while (!fs.existsSync(current)) {
     const parent = path.dirname(current);
     if (parent === current) {
+      existingPathPrefixCache.set(resolved, resolved);
       return resolved;
     }
     segments.unshift(path.basename(current));
@@ -441,7 +452,9 @@ function resolveExistingPathPrefix(targetPath: string): string {
   }
 
   const resolvedPrefix = fs.realpathSync.native(current);
-  return path.join(resolvedPrefix, ...segments);
+  const fullPath = path.join(resolvedPrefix, ...segments);
+  existingPathPrefixCache.set(resolved, fullPath);
+  return fullPath;
 }
 
 function expandHomeDirectory(targetPath: string): string {
@@ -485,6 +498,10 @@ function resolvePermissionPath(targetPath: string, projectRoot?: string): string
 }
 
 function getSystemTempDirectories(): string[] {
+  if (cachedSystemTempDirectories) {
+    return cachedSystemTempDirectories;
+  }
+
   const tempDirs = new Set<string>();
   const candidates = [os.tmpdir(), process.env.TEMP, process.env.TMP, process.env.TMPDIR]
     .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
@@ -497,7 +514,8 @@ function getSystemTempDirectories(): string[] {
     }
   }
 
-  return Array.from(tempDirs);
+  cachedSystemTempDirectories = Array.from(tempDirs);
+  return cachedSystemTempDirectories;
 }
 
 export function getPlanModeAllowedWritablePaths(projectRoot?: string): {

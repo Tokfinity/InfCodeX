@@ -42,11 +42,12 @@ interface SummaryAttemptResult {
 export function needsCompaction(
   messages: KodaXMessage[],
   config: CompactionConfig,
-  contextWindow: number = DEFAULT_CONTEXT_WINDOW
+  contextWindow: number = DEFAULT_CONTEXT_WINDOW,
+  tokenCountOverride?: number
 ): boolean {
   if (!config.enabled) return false;
 
-  const tokens = estimateTokens(messages);
+  const tokens = tokenCountOverride ?? estimateTokens(messages);
   const threshold = getTriggerTokens(config, contextWindow);
   return tokens > threshold;
 }
@@ -57,11 +58,12 @@ export async function compact(
   provider: KodaXBaseProvider,
   contextWindow: number = DEFAULT_CONTEXT_WINDOW,
   customInstructions?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  tokenCountOverride?: number
 ): Promise<CompactionResult> {
-  const tokensBefore = estimateTokens(messages);
+  const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
 
-  if (!needsCompaction(messages, config, contextWindow)) {
+  if (!needsCompaction(messages, config, contextWindow, tokenCountOverride)) {
     return {
       compacted: false,
       messages,

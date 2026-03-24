@@ -16,6 +16,7 @@ import {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXTextBlock,
+  KodaXTokenUsage,
   KodaXToolUseBlock,
   KodaXThinkingBlock,
   KodaXRedactedThinkingBlock,
@@ -25,6 +26,63 @@ import {
   clampThinkingBudget,
   resolveThinkingBudget,
 } from '../reasoning.js';
+
+type AnthropicUsageLike = {
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+  cache_read_input_tokens?: number | null;
+} | null | undefined;
+
+function normalizeAnthropicUsage(
+  usage: AnthropicUsageLike,
+  previous?: KodaXTokenUsage,
+): KodaXTokenUsage | undefined {
+  if (!usage) {
+    return previous;
+  }
+
+  const hasInputUsage =
+    usage.input_tokens !== undefined && usage.input_tokens !== null
+    || usage.cache_creation_input_tokens !== undefined && usage.cache_creation_input_tokens !== null
+    || usage.cache_read_input_tokens !== undefined && usage.cache_read_input_tokens !== null;
+  const inputTokens = typeof usage.input_tokens === 'number'
+    ? usage.input_tokens
+    : hasInputUsage
+      ? 0
+      : previous?.inputTokens ?? 0;
+  const cachedWriteTokens =
+    typeof usage.cache_creation_input_tokens === 'number'
+      ? usage.cache_creation_input_tokens
+      : hasInputUsage
+        ? 0
+        : previous?.cachedWriteTokens ?? 0;
+  const cachedReadTokens =
+    typeof usage.cache_read_input_tokens === 'number'
+      ? usage.cache_read_input_tokens
+      : hasInputUsage
+        ? 0
+        : previous?.cachedReadTokens ?? 0;
+  const outputTokens =
+    typeof usage.output_tokens === 'number'
+      ? usage.output_tokens
+      : previous?.outputTokens ?? 0;
+  const totalInputTokens = hasInputUsage
+    ? inputTokens + cachedWriteTokens + cachedReadTokens
+    : previous?.inputTokens ?? 0;
+
+  if ([totalInputTokens, outputTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: totalInputTokens,
+    outputTokens,
+    totalTokens: totalInputTokens + outputTokens,
+    cachedReadTokens: cachedReadTokens || undefined,
+    cachedWriteTokens: cachedWriteTokens || undefined,
+  };
+}
 
 export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
@@ -99,6 +157,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const textBlocks: KodaXTextBlock[] = [];
       const toolBlocks: KodaXToolUseBlock[] = [];
       const thinkingBlocks: (KodaXThinkingBlock | KodaXRedactedThinkingBlock)[] = [];
+      let usage: KodaXTokenUsage | undefined;
 
       let currentBlockType: string | null = null;
       let currentText = '';
@@ -247,6 +306,10 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         } else if (event.type === 'message_delta') {
           // Issue 084 fix: Track message_delta events (contain stop_reason, usage)
           lastEventTime = Date.now();
+          usage = normalizeAnthropicUsage(
+            (event as Anthropic.Messages.RawMessageDeltaEvent).usage,
+            usage,
+          );
           if (process.env.KODAX_DEBUG_STREAM) {
             const delta = (event as any).delta;
             if (delta?.stop_reason) {
@@ -256,6 +319,10 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         } else if (event.type === 'message_start') {
           // Issue 084 fix: Track message start
           lastEventTime = Date.now();
+          usage = normalizeAnthropicUsage(
+            (event as Anthropic.Messages.RawMessageStartEvent).message?.usage as AnthropicUsageLike,
+            usage,
+          );
           if (process.env.KODAX_DEBUG_STREAM) {
             console.error('[Stream] message_start received');
           }
@@ -304,7 +371,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         throw error;
       }
 
-      return { textBlocks, toolBlocks, thinkingBlocks };
+      return { textBlocks, toolBlocks, thinkingBlocks, usage };
     }, signal, 3, streamOptions?.onRateLimit);
   }
 

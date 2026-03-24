@@ -20,3 +20,19 @@ export { toolGlob } from './glob.js';
 export { toolGrep } from './grep.js';
 export { toolUndo } from './undo.js';
 export { toolAskUserQuestion } from './ask-user-question.js';
+export {
+  DEFAULT_TOOL_OUTPUT_MAX_BYTES,
+  DEFAULT_TOOL_OUTPUT_MAX_LINES,
+  READ_DEFAULT_LIMIT,
+  READ_PREFLIGHT_SIZE_BYTES,
+  READ_MAX_LINE_CHARS,
+  formatSize,
+  truncateHead,
+  truncateTail,
+  truncateLine,
+  persistToolOutput,
+} from './truncate.js';
+export {
+  applyToolResultGuardrail,
+  getToolResultPolicy,
+} from './tool-result-policy.js';

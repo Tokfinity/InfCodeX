@@ -6,25 +6,26 @@ import {
     PROTOCOL_VERSION,
     ndJsonStream,
     type SessionNotification,
+    type PromptResponse,
     type RequestPermissionRequest,
     type RequestPermissionResponse
 } from '@agentclientprotocol/sdk';
 
 export interface AcpClientOptions {
-    /** 启动子进程的命令，如果是原生 ACP 则必填 */
+    /** Command used to launch a native ACP server process. */
     command?: string;
-    /** 启动子进程的参数，如果是原生 ACP 则必填 */
+    /** Arguments passed to the native ACP server process. */
     args?: string[];
-    /** 如果是内部模拟进程（Pseudo Server），直接传入 Web 标准的流 */
+    /** Readable side of an in-memory pseudo ACP server transport. */
     inputStream?: ReadableStream<Uint8Array>;
     outputStream?: WritableStream<Uint8Array>;
-    /** 当前工作目录 */
+    /** Working directory for spawned native ACP processes. */
     cwd?: string;
-    /** Session Update 回调 */
+    /** Session update callback forwarded from the ACP connection. */
     onSessionUpdate?: (update: SessionNotification) => void;
-    /** 模拟进程下用于关闭资源的钩子 */
+    /** Cleanup hook used by the in-memory pseudo server transport. */
     abort?: () => void;
-    /** 直接暴露的底层执行器，用于验证是否安装 */
+    /** Optional executor exposed for install checks in higher layers. */
     executor?: import('./executor.js').CLIExecutor;
 }
 
@@ -54,13 +55,13 @@ export class AcpClient {
             });
 
             if (!this.agentProcess.stdin || !this.agentProcess.stdout) {
-                throw new Error("Failed to create ACP stdio pipes");
+                throw new Error('Failed to create ACP stdio pipes');
             }
 
             outStream = Writable.toWeb(this.agentProcess.stdin);
             inStream = Readable.toWeb(this.agentProcess.stdout) as unknown as ReadableStream<Uint8Array>;
         } else {
-            throw new Error("AcpClient requires either a command or I/O streams");
+            throw new Error('AcpClient requires either a command or I/O streams');
         }
 
         const stream = ndJsonStream(outStream, inStream);
@@ -70,8 +71,8 @@ export class AcpClient {
                 sessionUpdate: async (params: SessionNotification) => {
                     this.options.onSessionUpdate?.(params);
                 },
-                requestPermission: async (_params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
-                    const options = _params.options ?? [];
+                requestPermission: async (params: RequestPermissionRequest): Promise<RequestPermissionResponse> => {
+                    const options = params.options ?? [];
                     const allowOption = options.find(o => o.kind === 'allow_once' || o.kind === 'allow_always') ?? options[0];
                     if (allowOption) {
                         return { outcome: { outcome: 'selected', optionId: allowOption.optionId } };
@@ -85,12 +86,12 @@ export class AcpClient {
         await this.client.initialize({
             protocolVersion: PROTOCOL_VERSION,
             clientCapabilities: {},
-            clientInfo: { name: "kodax-ai-acp-client", version: "1.0.0" }
+            clientInfo: { name: 'kodax-ai-acp-client', version: '1.0.0' }
         });
     }
 
     async createNewSession(): Promise<string> {
-        if (!this.client) throw new Error("Client not connected");
+        if (!this.client) throw new Error('Client not connected');
 
         const session = await this.client.newSession({
             cwd: this.options.cwd ?? process.cwd(),
@@ -100,12 +101,12 @@ export class AcpClient {
         return session.sessionId;
     }
 
-    async prompt(text: string, sessionId: string, signal?: AbortSignal): Promise<void> {
-        if (!this.client) throw new Error("Client not connected");
+    async prompt(text: string, sessionId: string, signal?: AbortSignal): Promise<PromptResponse> {
+        if (!this.client) throw new Error('Client not connected');
 
         let responsePromise = this.client.prompt({
             sessionId,
-            prompt: [{ type: "text", text }]
+            prompt: [{ type: 'text', text }]
         });
 
         if (signal) {
@@ -118,13 +119,13 @@ export class AcpClient {
             });
         }
 
-        await responsePromise;
+        return await responsePromise;
     }
 
     disconnect(): void {
         this.agentProcess?.kill();
-        this.options.abort?.(); // triggering cleanup in pseudo server
-        try { (this.client as any)?.close?.(); } catch (e) { }
+        this.options.abort?.();
+        try { (this.client as any)?.close?.(); } catch { }
         this.client = null;
     }
 }
