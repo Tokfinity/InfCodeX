@@ -6,6 +6,7 @@ import {
     PROTOCOL_VERSION,
     ndJsonStream,
     type SessionNotification,
+    type PromptResponse,
     type RequestPermissionRequest,
     type RequestPermissionResponse
 } from '@agentclientprotocol/sdk';
@@ -100,7 +101,7 @@ export class AcpClient {
         return session.sessionId;
     }
 
-    async prompt(text: string, sessionId: string, signal?: AbortSignal): Promise<void> {
+    async prompt(text: string, sessionId: string, signal?: AbortSignal): Promise<PromptResponse> {
         if (!this.client) throw new Error('Client not connected');
 
         let responsePromise = this.client.prompt({
@@ -118,7 +119,7 @@ export class AcpClient {
             });
         }
 
-        await responsePromise;
+        return await responsePromise;
     }
 
     disconnect(): void {

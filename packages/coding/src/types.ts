@@ -15,6 +15,7 @@ import type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,
   KodaXProviderConfig,
@@ -43,6 +44,7 @@ export type {
   KodaXRedactedThinkingBlock,
   KodaXContentBlock,
   KodaXMessage,
+  KodaXTokenUsage,
   KodaXStreamResult,
   KodaXToolDefinition,
   KodaXProviderConfig,
@@ -78,12 +80,21 @@ export interface KodaXEvents {
   onSessionStart?: (info: { provider: string; sessionId: string }) => void;
   onIterationStart?: (iter: number, maxIter: number) => void;
   /** Called after each iteration with current token count for UI updates */
-  onIterationEnd?: (info: { iter: number; maxIter: number; tokenCount: number }) => void;
+  onIterationEnd?: (info: {
+    iter: number;
+    maxIter: number;
+    tokenCount: number;
+    tokenSource: 'api' | 'estimate';
+    usage?: KodaXTokenUsage;
+    contextTokenSnapshot?: KodaXContextTokenSnapshot;
+  }) => void;
   onCompactStart?: () => void;
   /** Emitted when compaction finishes and actually changed the context */
   onCompact?: (estimatedTokens: number) => void;
   /** Emitted when compaction changes the context so UI can refresh token usage immediately */
   onCompactStats?: (info: { tokensBefore: number; tokensAfter: number }) => void;
+  /** Emitted with the rewritten message history when automatic compaction changes the context. */
+  onCompactedMessages?: (messages: KodaXMessage[]) => void;
   /** Emitted to silently dismiss the compaction UI if compaction aborted or completed without changes */
   onCompactEnd?: () => void;
   /** Whether the caller has queued follow-up input waiting for the next round */
@@ -114,6 +125,17 @@ export interface KodaXSessionOptions {
   initialMessages?: KodaXMessage[];
 }
 
+export interface KodaXContextTokenSnapshot {
+  /** Current best-known token count for the full conversation context. */
+  currentTokens: number;
+  /** Local estimate for the same message set, used to adjust later message deltas. */
+  baselineEstimatedTokens: number;
+  /** Whether the snapshot is based on provider/API usage or local estimation. */
+  source: 'api' | 'estimate';
+  /** Optional turn usage from the latest provider response. */
+  usage?: KodaXTokenUsage;
+}
+
 export interface KodaXContextOptions {
   /** Project root used for project-scoped prompts, permissions, and path policy. */
   gitRoot?: string | null;
@@ -122,6 +144,12 @@ export interface KodaXContextOptions {
    * and shell execution. Defaults to `gitRoot`, then `process.cwd()`.
    */
   executionCwd?: string;
+  /**
+   * Best-known token snapshot for the current conversation history.
+   * When present, the core will prefer it over local estimation and rebase it as
+   * messages change.
+   */
+  contextTokenSnapshot?: KodaXContextTokenSnapshot;
   projectSnapshot?: string;
   longRunning?: {
     featuresFile?: string;
@@ -157,6 +185,8 @@ export interface KodaXResult {
   signalReason?: string;
   messages: KodaXMessage[];
   sessionId: string;
+  /** Best-known token snapshot after the round completes. */
+  contextTokenSnapshot?: KodaXContextTokenSnapshot;
   /** 是否被用户中断 (Ctrl+C) */
   interrupted?: boolean;
   /** 是否达到迭代上限 */

@@ -12,12 +12,45 @@ import type {
     KodaXProviderStreamOptions,
     KodaXToolDefinition,
     KodaXTextBlock,
+    KodaXTokenUsage,
     KodaXToolUseBlock
 } from '../types.js';
 
 interface ActiveStreamContext {
     streamOptions?: KodaXProviderStreamOptions;
     output: { text: string };
+}
+
+function normalizeAcpUsage(usage: unknown): KodaXTokenUsage | undefined {
+  if (!usage || typeof usage !== 'object') {
+    return undefined;
+  }
+
+  const usageRecord = usage as Record<string, unknown>;
+
+  const inputTokens = typeof usageRecord.inputTokens === 'number' ? usageRecord.inputTokens : 0;
+  const outputTokens = typeof usageRecord.outputTokens === 'number' ? usageRecord.outputTokens : 0;
+  const totalTokens = typeof usageRecord.totalTokens === 'number' ? usageRecord.totalTokens : inputTokens + outputTokens;
+
+    if ([inputTokens, outputTokens, totalTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+        return undefined;
+    }
+
+    if (totalTokens < inputTokens || totalTokens < outputTokens) {
+        return undefined;
+    }
+
+    return {
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cachedReadTokens:
+            typeof usageRecord.cachedReadTokens === 'number' ? usageRecord.cachedReadTokens : undefined,
+        cachedWriteTokens:
+            typeof usageRecord.cachedWriteTokens === 'number' ? usageRecord.cachedWriteTokens : undefined,
+        thoughtTokens:
+            typeof usageRecord.thoughtTokens === 'number' ? usageRecord.thoughtTokens : undefined,
+    };
 }
 
 /**
@@ -144,8 +177,10 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
             output: localOutput
         });
 
+        let promptResponse: Awaited<ReturnType<AcpClient['prompt']>> | undefined;
+
         try {
-            await this._client.prompt(promptText, acpSessionId, signal);
+            promptResponse = await this._client.prompt(promptText, acpSessionId, signal);
         } catch (err) {
             if (err instanceof Error && err.name === 'AbortError') {
                 // User cancellation is expected.
@@ -163,7 +198,8 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         return {
             textBlocks,
             toolBlocks,
-            thinkingBlocks: []
+            thinkingBlocks: [],
+            usage: normalizeAcpUsage(promptResponse?.usage),
         };
     }
 

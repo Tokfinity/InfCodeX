@@ -19,12 +19,30 @@ const TEST_CONFIG_FILE = path.join(
   `kodax-reasoning-override-${Date.now()}.json`,
 );
 
-function createCompletedAnthropicStream(): AsyncIterable<unknown> {
+function createCompletedAnthropicStream(options?: {
+  startUsage?: {
+    input_tokens?: number | null;
+    cache_creation_input_tokens?: number | null;
+    cache_read_input_tokens?: number | null;
+  };
+  deltaUsage?: {
+    output_tokens?: number | null;
+  };
+}): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       let index = 0;
       const events = [
-        { type: 'message_start' },
+        {
+          type: 'message_start',
+          message: {
+            usage: options?.startUsage,
+          },
+        },
+        {
+          type: 'message_delta',
+          usage: options?.deltaUsage,
+        },
         { type: 'message_stop' },
       ];
       return {
@@ -112,6 +130,34 @@ describe('anthropic reasoning capability', () => {
         model: 'test-model',
       }),
     ).toBe('toggle');
+  });
+
+  it('merges input and output usage events into a single token snapshot', async () => {
+    const create = vi.fn().mockResolvedValue(
+      createCompletedAnthropicStream({
+        startUsage: {
+          input_tokens: 100,
+          cache_creation_input_tokens: 5,
+          cache_read_input_tokens: 20,
+        },
+        deltaUsage: {
+          output_tokens: 40,
+        },
+      }),
+    );
+    const provider = new TestAnthropicProvider('native-budget', {
+      messages: { create },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(result.usage).toEqual({
+      inputTokens: 125,
+      outputTokens: 40,
+      totalTokens: 165,
+      cachedReadTokens: 20,
+      cachedWriteTokens: 5,
+    });
   });
 
   it('sends budget_tokens only for native-budget providers', async () => {

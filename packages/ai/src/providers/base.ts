@@ -129,6 +129,25 @@ export abstract class KodaXBaseProvider {
     );
   }
 
+  protected shouldFallbackForSpecificReasoningError(
+    error: unknown,
+    ...terms: string[]
+  ): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const normalizedTerms = terms.map(term => term.toLowerCase());
+    const matchesSpecificTerm = normalizedTerms.some((term) => message.includes(term));
+
+    if (!matchesSpecificTerm) {
+      return false;
+    }
+
+    return (
+      message.includes('unknown parameter') ||
+      message.includes('invalid parameter') ||
+      message.includes('unsupported')
+    );
+  }
+
   protected getReasoningFallbackChain(
     capability: KodaXReasoningCapability,
   ): KodaXReasoningCapability[] {

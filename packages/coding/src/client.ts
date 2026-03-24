@@ -4,13 +4,19 @@
  * 高级模式 - 提供面向对象的 Agent 客户端
  */
 
-import { KodaXOptions, KodaXResult, KodaXMessage } from './types.js';
+import {
+  KodaXContextTokenSnapshot,
+  KodaXOptions,
+  KodaXResult,
+  KodaXMessage,
+} from './types.js';
 import { runKodaX } from './agent.js';
 
 export class KodaXClient {
   private options: KodaXOptions;
   private sessionId: string;
   private messages: KodaXMessage[] = [];
+  private contextTokenSnapshot: KodaXContextTokenSnapshot | undefined;
 
   constructor(options: KodaXOptions) {
     this.options = options;
@@ -25,12 +31,17 @@ export class KodaXClient {
           ...this.options.session,
           id: this.sessionId || undefined,
         },
+        context: {
+          ...this.options.context,
+          contextTokenSnapshot: this.contextTokenSnapshot,
+        },
       },
       prompt
     );
 
     this.sessionId = result.sessionId;
     this.messages = result.messages;
+    this.contextTokenSnapshot = result.contextTokenSnapshot;
     return result;
   }
 
@@ -45,5 +56,6 @@ export class KodaXClient {
   clear(): void {
     this.messages = [];
     this.sessionId = '';
+    this.contextTokenSnapshot = undefined;
   }
 }

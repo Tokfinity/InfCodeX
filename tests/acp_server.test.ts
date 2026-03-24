@@ -384,6 +384,77 @@ describe('KodaXAcpServer', () => {
     expect(process.cwd()).toBe(originalCwd);
   });
 
+  it('returns prompt usage and reuses the latest token snapshot on the next ACP turn', async () => {
+    let callCount = 0;
+    runKodaXMock.mockImplementation(async (options) => {
+      callCount += 1;
+
+      if (callCount === 1) {
+        expect(options.context?.contextTokenSnapshot).toBeUndefined();
+        return createResult({
+          contextTokenSnapshot: {
+            currentTokens: 120,
+            baselineEstimatedTokens: 100,
+            source: 'api',
+            usage: {
+              inputTokens: 120,
+              outputTokens: 30,
+              totalTokens: 150,
+            },
+          },
+        });
+      }
+
+      expect(options.context?.contextTokenSnapshot).toEqual({
+        currentTokens: 120,
+        baselineEstimatedTokens: 100,
+        source: 'api',
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          totalTokens: 150,
+        },
+      });
+
+      return createResult({
+        contextTokenSnapshot: {
+          currentTokens: 140,
+          baselineEstimatedTokens: 120,
+          source: 'api',
+          usage: {
+            inputTokens: 140,
+            outputTokens: 20,
+            totalTokens: 160,
+          },
+        },
+      });
+    });
+
+    const harness = await createHarness();
+
+    const firstResponse = await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'First prompt' }],
+    });
+
+    expect(firstResponse.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+    });
+
+    const secondResponse = await harness.client.prompt({
+      sessionId: harness.sessionId,
+      prompt: [{ type: 'text', text: 'Second prompt' }],
+    });
+
+    expect(secondResponse.usage).toEqual({
+      inputTokens: 140,
+      outputTokens: 20,
+      totalTokens: 160,
+    });
+  });
+
   it('uses the configured server cwd for ACP sessions when provided', async () => {
     const defaultCwd = process.cwd();
     const harness = await createHarness({

@@ -151,6 +151,10 @@ interface ReviewSnapshot {
   isCompacting: boolean;
 }
 
+type StreamingEvents = import("@kodax/coding").KodaXEvents & {
+  onCompactedMessages?: (messages: KodaXMessage[]) => void;
+};
+
 const PLAN_MODE_BLOCK_GUIDANCE =
   "Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent \"plan-handoff\" to ask whether this session should switch to accept-edits and continue.";
 
@@ -394,6 +398,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [canQueueFollowUps, setCanQueueFollowUps] = useState(false);
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const lastCompactionTokensBeforeRef = useRef<number | null>(null);
+  const persistContextStateRef = useRef<(() => Promise<void>) | null>(null);
   const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
   const [inputText, setInputText] = useState("");
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
@@ -467,15 +472,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!compactionInfo) return undefined;
 
     const { contextWindow, triggerPercent } = compactionInfo;
-    // Use live token count during streaming, otherwise calculate from messages
-    const currentTokens = liveTokenCount ?? estimateTokens(context.messages);
+    const currentTokens =
+      liveTokenCount ??
+      context.contextTokenSnapshot?.currentTokens ??
+      estimateTokens(context.messages);
 
     return {
       currentTokens,
       contextWindow,
       triggerPercent,
     };
-  }, [context.messages, compactionInfo, liveTokenCount]);
+  }, [context.messages, context.contextTokenSnapshot, compactionInfo, liveTokenCount]);
 
   const confirmInstruction = useMemo(() => {
     if (!confirmRequest) return undefined;
@@ -1064,7 +1071,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
-  const createStreamingEvents = useCallback((): import("@kodax/coding").KodaXEvents => ({
+  const createStreamingEvents = useCallback((): StreamingEvents => ({
     onThinkingDelta: (text: string) => {
       // The UI layer stores thinking content for display.
       appendThinkingChars(text.length);
@@ -1332,6 +1339,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       lastCompactionTokensBeforeRef.current = info.tokensBefore;
       setLiveTokenCount(info.tokensAfter);
     },
+    onCompactedMessages: (messages: KodaXMessage[]) => {
+      context.messages = messages;
+      const currentTokens = estimateTokens(messages);
+      context.contextTokenSnapshot = {
+        currentTokens,
+        baselineEstimatedTokens: currentTokens,
+        source: 'estimate',
+      };
+      touchContext(context);
+      setLiveTokenCount(currentTokens);
+      void persistContextStateRef.current?.().catch(() => {});
+    },
     // Compaction event - notification only, do NOT clear UI history here
 
     onCompact: (estimatedTokens: number) => {
@@ -1356,10 +1375,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Iteration end - update live token count for real-time context usage display
 
-    onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
+    onIterationEnd: (info: {
+      iter: number;
+      maxIter: number;
+      tokenCount: number;
+      contextTokenSnapshot?: import("@kodax/coding").KodaXContextTokenSnapshot;
+    }) => {
+      context.contextTokenSnapshot = info.contextTokenSnapshot;
       setLiveTokenCount(info.tokenCount);
     },
-  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting, addHistoryItem]);
+  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context, startCompacting, stopCompacting, addHistoryItem]);
 
   // Helper function to show confirmation dialog
 
@@ -1423,6 +1448,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         },
         context: {
           ...opts.context,
+          contextTokenSnapshot: context.contextTokenSnapshot,
           skillsPrompt, // Inject skills into system prompt
         },
         events,
@@ -1446,8 +1472,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     });
   }, [context, storage]);
 
+  useEffect(() => {
+    persistContextStateRef.current = persistContextState;
+    return () => {
+      persistContextStateRef.current = null;
+    };
+  }, [persistContextState]);
+
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
     context.messages = result.messages;
+    context.contextTokenSnapshot = result.contextTokenSnapshot;
 
     const finalThinking = getThinkingContent().trim();
     const finalResponse = resolveAssistantHistoryText(result.messages, getFullResponse());
@@ -1585,6 +1619,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
       } else {
         context.messages = result.messages;
+        context.contextTokenSnapshot = result.contextTokenSnapshot;
         appendLastAssistantToHistory(result.messages);
       }
 
@@ -1701,12 +1736,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             const now = new Date().toISOString();
             context.sessionId = nextSessionId;
             context.title = "";
+            context.contextTokenSnapshot = undefined;
             context.createdAt = now;
             context.lastAccessed = now;
             currentOptionsRef.current.session = {
               ...currentOptionsRef.current.session,
               id: nextSessionId,
             };
+            setLiveTokenCount(null);
             setSessionId(nextSessionId);
           },
           loadSession: async (id: string) => {
@@ -1715,6 +1752,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.messages = loaded.messages;
               context.title = loaded.title;
               context.sessionId = id;
+              context.contextTokenSnapshot = undefined;
+              setLiveTokenCount(null);
               console.log(chalk.green(`[Session loaded: ${id}]`));
               return true;
             }

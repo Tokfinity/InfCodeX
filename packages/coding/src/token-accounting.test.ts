@@ -1,0 +1,125 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { KodaXMessage, KodaXTokenUsage } from './types.js';
+import {
+  createApiContextTokenSnapshot,
+  createContextTokenSnapshot,
+  createEstimatedContextTokenSnapshot,
+  hasValidTokenUsage,
+  rebaseContextTokenSnapshot,
+  resolveContextTokenCount,
+} from './token-accounting.js';
+import * as tokenizer from './tokenizer.js';
+
+describe('token accounting', () => {
+  const messages: KodaXMessage[] = [
+    { role: 'user', content: 'hello' },
+    { role: 'assistant', content: 'world' },
+  ];
+
+  it('accepts only finite non-negative token usage', () => {
+    const valid: KodaXTokenUsage = {
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 15,
+    };
+
+    expect(hasValidTokenUsage(valid)).toBe(true);
+    expect(hasValidTokenUsage(undefined)).toBe(false);
+    expect(hasValidTokenUsage({
+      inputTokens: 10,
+      outputTokens: 5,
+      totalTokens: 4,
+    })).toBe(false);
+    expect(hasValidTokenUsage({
+      inputTokens: -1,
+      outputTokens: 5,
+      totalTokens: 5,
+    })).toBe(false);
+  });
+
+  it('prefers API usage when it is valid', () => {
+    const estimateSpy = vi.spyOn(tokenizer, 'estimateTokens').mockReturnValue(42);
+
+    const snapshot = createContextTokenSnapshot(messages, {
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+    });
+
+    expect(snapshot).toEqual({
+      currentTokens: 120,
+      baselineEstimatedTokens: 42,
+      source: 'api',
+      usage: {
+        inputTokens: 120,
+        outputTokens: 30,
+        totalTokens: 150,
+      },
+    });
+
+    estimateSpy.mockRestore();
+  });
+
+  it('falls back to local estimation when API usage is missing or invalid', () => {
+    const estimateSpy = vi.spyOn(tokenizer, 'estimateTokens').mockReturnValue(64);
+
+    expect(createEstimatedContextTokenSnapshot(messages)).toEqual({
+      currentTokens: 64,
+      baselineEstimatedTokens: 64,
+      source: 'estimate',
+    });
+
+    expect(createContextTokenSnapshot(messages, {
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 5,
+    })).toEqual({
+      currentTokens: 64,
+      baselineEstimatedTokens: 64,
+      source: 'estimate',
+    });
+
+    estimateSpy.mockRestore();
+  });
+
+  it('rebases API snapshots against local message growth', () => {
+    const estimateSpy = vi
+      .spyOn(tokenizer, 'estimateTokens')
+      .mockReturnValueOnce(40)
+      .mockReturnValueOnce(55)
+      .mockReturnValueOnce(55)
+      .mockReturnValueOnce(55);
+
+    const snapshot = createApiContextTokenSnapshot(messages, {
+      inputTokens: 100,
+      outputTokens: 10,
+      totalTokens: 110,
+    });
+
+    expect(resolveContextTokenCount(messages, snapshot)).toBe(115);
+    expect(rebaseContextTokenSnapshot(messages, snapshot)).toEqual({
+      currentTokens: 115,
+      baselineEstimatedTokens: 55,
+      source: 'api',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        totalTokens: 110,
+      },
+    });
+
+    estimateSpy.mockRestore();
+  });
+
+  it('falls back to the fresh estimate when the snapshot is malformed', () => {
+    const estimateSpy = vi.spyOn(tokenizer, 'estimateTokens').mockReturnValue(77);
+
+    expect(resolveContextTokenCount(messages, {
+      currentTokens: Number.NaN,
+      baselineEstimatedTokens: 20,
+      source: 'api',
+    })).toBe(77);
+
+    estimateSpy.mockRestore();
+  });
+});

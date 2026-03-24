@@ -87,6 +87,11 @@ describe('createPseudoAcpServer', () => {
         type: 'complete',
         timestamp: Date.now(),
         status: 'success',
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          totalTokens: 150,
+        },
         raw: null,
       };
     });
@@ -146,7 +151,14 @@ describe('createPseudoAcpServer', () => {
       expect(response).toEqual({
         jsonrpc: '2.0',
         id: 3,
-        result: { stopReason: 'end_turn' },
+        result: {
+          stopReason: 'end_turn',
+          usage: {
+            inputTokens: 120,
+            outputTokens: 30,
+            totalTokens: 150,
+          },
+        },
       });
     } finally {
       server.abort();
