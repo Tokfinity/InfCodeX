@@ -1,10 +1,3 @@
-/**
- * KodaX Tool Registry
- *
- * 工具注册表 - 统一管理所有工具
- * Pure execution - no permission checks (handled by REPL layer)
- */
-
 import { ToolHandler } from './types.js';
 import { KodaXToolExecutionContext } from '../types.js';
 import { KodaXToolDefinition } from '@kodax/ai';
@@ -18,7 +11,6 @@ import { toolGrep } from './grep.js';
 import { toolUndo } from './undo.js';
 import { toolAskUserQuestion } from './ask-user-question.js';
 
-// 工具注册表
 const TOOL_REGISTRY = new Map<string, ToolHandler>();
 
 export function registerTool(name: string, handler: ToolHandler): void {
@@ -33,7 +25,6 @@ export function listTools(): string[] {
   return Array.from(TOOL_REGISTRY.keys());
 }
 
-// 自动注册内置工具
 registerTool('read', toolRead);
 registerTool('write', toolWrite);
 registerTool('edit', toolEdit);
@@ -43,11 +34,10 @@ registerTool('grep', toolGrep);
 registerTool('undo', toolUndo);
 registerTool('ask_user_question', toolAskUserQuestion);
 
-// 工具定义
 export const KODAX_TOOLS: KodaXToolDefinition[] = [
   {
     name: 'read',
-    description: 'Read the contents of a file.',
+    description: 'Read a text file with bounded output. Large files are capped per call; use offset/limit to continue in smaller slices.',
     input_schema: {
       type: 'object',
       properties: {
@@ -60,7 +50,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
   },
   {
     name: 'write',
-    description: 'Write content to a file.',
+    description: 'Write content to a file. Large diffs may be summarized in the tool result.',
     input_schema: {
       type: 'object',
       properties: {
@@ -72,7 +62,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
   },
   {
     name: 'edit',
-    description: 'Perform exact string replacement in a file.',
+    description: 'Perform exact string replacement in a file. Large diff previews may be summarized.',
     input_schema: {
       type: 'object',
       properties: {
@@ -86,7 +76,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
   },
   {
     name: 'bash',
-    description: 'Execute a shell command.',
+    description: 'Execute a shell command. Large output may be truncated to the most relevant tail.',
     input_schema: {
       type: 'object',
       properties: {
@@ -110,7 +100,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
   },
   {
     name: 'grep',
-    description: 'Search for a pattern in files.',
+    description: 'Search for a pattern in files. Large result sets may be truncated; narrow the pattern or path when needed.',
     input_schema: {
       type: 'object',
       properties: {
@@ -174,47 +164,37 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
   },
 ];
 
-/**
- * Execute a tool - pure execution without permission checks
- * 执行工具 - 纯执行，无权限检查
- *
- * Permission checks are handled by the REPL layer's executeWithPermission()
- * 权限检查由 REPL 层的 executeWithPermission() 处理
- */
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
-  ctx: KodaXToolExecutionContext
+  ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  // Validate required parameters
   const required = KODAX_TOOL_REQUIRED_PARAMS[name] ?? [];
-  const missing = required.filter(p => input[p] === undefined || input[p] === null);
+  const missing = required.filter(param => input[param] === undefined || input[param] === null);
   if (missing.length > 0) {
     return `[Tool Error] ${name}: Missing required parameter(s): ${missing.join(', ')}`;
   }
 
-  // Check if tool exists
   if (!KODAX_TOOL_REQUIRED_PARAMS.hasOwnProperty(name)) {
     return `[Tool Error] Unknown tool: ${name}. Available tools: ${Object.keys(KODAX_TOOL_REQUIRED_PARAMS).join(', ')}`;
   }
 
-  // Get handler
   const handler = getTool(name);
   if (!handler) {
     return `[Tool Error] Unknown tool: ${name}`;
   }
 
-  // Execute
   try {
     return await handler(input, ctx);
-  } catch (e) {
-    const errorMsg = e instanceof Error ? e.message : String(e);
-    // 提供更详细的错误信息
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes('ENOENT')) {
       return `[Tool Error] ${name}: File or directory not found`;
-    } else if (errorMsg.includes('EACCES') || errorMsg.includes('EPERM')) {
+    }
+    if (errorMsg.includes('EACCES') || errorMsg.includes('EPERM')) {
       return `[Tool Error] ${name}: Permission denied`;
-    } else if (errorMsg.includes('ENOSPC')) {
+    }
+    if (errorMsg.includes('ENOSPC')) {
       return `[Tool Error] ${name}: No space left on device`;
     }
     return `[Tool Error] ${name}: ${errorMsg}`;

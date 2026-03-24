@@ -6,6 +6,7 @@ import {
   extractLastAssistantText,
   extractTitle,
   extractTextContent,
+  formatMessagePreview,
   resolveAssistantHistoryText,
 } from "./message-utils.js";
 
@@ -157,5 +158,20 @@ describe("message-utils", () => {
     ] satisfies KodaXMessage[]);
 
     expect(title).toBe("Triage failing tests before release");
+  });
+
+  it("falls back to an untitled session label when the first user content is blank", () => {
+    const title = extractTitle([
+      {
+        role: "user",
+        content: [{ type: "thinking", thinking: "ignore me" }],
+      },
+    ] satisfies KodaXMessage[]);
+
+    expect(title).toBe("Untitled Session");
+  });
+
+  it("formats previews with a shared truncation rule", () => {
+    expect(formatMessagePreview("line 1\nline 2", 8)).toBe("line 1 l...");
   });
 });

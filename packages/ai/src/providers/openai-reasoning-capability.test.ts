@@ -19,7 +19,11 @@ const TEST_CONFIG_FILE = path.join(
   `kodax-openai-reasoning-${Date.now()}.json`,
 );
 
-function createCompletedOpenAIStream(): AsyncIterable<unknown> {
+function createCompletedOpenAIStream(usage?: {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+}): AsyncIterable<unknown> {
   return {
     [Symbol.asyncIterator]() {
       let index = 0;
@@ -33,6 +37,7 @@ function createCompletedOpenAIStream(): AsyncIterable<unknown> {
           ],
         },
         {
+          usage,
           choices: [
             {
               delta: {},
@@ -168,6 +173,44 @@ describe('openai reasoning capability', () => {
     await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
 
     expect(create.mock.calls[0]?.[0].reasoning_effort).toBe('medium');
+  });
+
+  it('requests stream usage and prefers returned usage totals when available', async () => {
+    const create = vi.fn().mockResolvedValue(
+      createCompletedOpenAIStream({
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        total_tokens: 150,
+      }),
+    );
+    const provider = new TestOpenAIProvider('openai', 'native-effort', {
+      chat: { completions: { create } },
+    });
+
+    const result = await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create.mock.calls[0]?.[0].stream_options).toEqual({ include_usage: true });
+    expect(result.usage).toEqual({
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+    });
+  });
+
+  it('falls back cleanly when include_usage is not supported by the provider', async () => {
+    const create = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('unknown parameter: include_usage'))
+      .mockResolvedValueOnce(createCompletedOpenAIStream());
+    const provider = new TestOpenAIProvider('openai', 'native-effort', {
+      chat: { completions: { create } },
+    });
+
+    await provider.stream(MESSAGES, TOOLS, 'system', reasoning);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[0].stream_options).toEqual({ include_usage: true });
+    expect(create.mock.calls[1]?.[0]).not.toHaveProperty('stream_options');
   });
 
   it('sends budget controls for qwen-style providers', async () => {

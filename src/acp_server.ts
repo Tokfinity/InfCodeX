@@ -28,6 +28,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import {
   KODAX_DEFAULT_PROVIDER,
+  type KodaXContextTokenSnapshot,
   type KodaXOptions,
   type KodaXReasoningMode,
   runKodaX,
@@ -45,6 +46,15 @@ import {
   isToolCallAllowed,
   loadConfig,
 } from '@kodax/repl';
+import {
+  AcpLogger,
+  resolveAcpLogLevel,
+  type AcpLogLevel,
+} from './acp_logger.js';
+import {
+  AcpEventEmitter,
+  type AcpEventSink,
+} from './acp_events.js';
 
 export const ACP_PERMISSION_MODE_IDS = ['plan', 'accept-edits', 'auto-in-project'] as const;
 type AcpPermissionMode = (typeof ACP_PERMISSION_MODE_IDS)[number];
@@ -94,6 +104,9 @@ export interface KodaXAcpServerOptions {
    */
   cwd?: string;
   permissionMode?: AcpPermissionMode;
+  logLevel?: AcpLogLevel;
+  /** Additional sinks that receive structured ACP runtime events. */
+  eventSinks?: AcpEventSink[];
   agentName?: string;
   agentVersion?: string;
   storage?: FileSessionStorage;
@@ -106,6 +119,7 @@ interface KodaXAcpSessionState {
   mcpServers: McpServer[];
   alwaysAllowTools: string[];
   activeController: AbortController | null;
+  contextTokenSnapshot?: KodaXContextTokenSnapshot;
 }
 
 interface ToolPermissionDecision {
@@ -199,6 +213,34 @@ function isToolResultFailure(content: string): boolean {
   return /^\[(?:Tool Error|Cancelled|Blocked|Error)\]/.test(content);
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === 'AbortError' ||
+    error.message.includes('aborted') ||
+    error.message.includes('ABORTED')
+  );
+}
+
+function toAcpUsage(snapshot: KodaXContextTokenSnapshot | undefined): PromptResponse['usage'] | undefined {
+  const usage = snapshot?.usage;
+  if (!usage) {
+    return undefined;
+  }
+
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    ...(usage.cachedReadTokens !== undefined ? { cachedReadTokens: usage.cachedReadTokens } : {}),
+    ...(usage.cachedWriteTokens !== undefined ? { cachedWriteTokens: usage.cachedWriteTokens } : {}),
+    ...(usage.thoughtTokens !== undefined ? { thoughtTokens: usage.thoughtTokens } : {}),
+  };
+}
+
 export class KodaXAcpServer implements Agent {
   private readonly provider: string;
   private readonly model?: string;
@@ -210,6 +252,7 @@ export class KodaXAcpServer implements Agent {
   private readonly agentName: string;
   private readonly agentVersion: string;
   private readonly storage: FileSessionStorage;
+  private readonly events: AcpEventEmitter;
 
   private connection: AgentSideConnection | null = null;
   private readonly sessions = new Map<string, KodaXAcpSessionState>();
@@ -230,6 +273,14 @@ export class KodaXAcpServer implements Agent {
     this.agentName = options.agentName ?? 'kodax-acp-server';
     this.agentVersion = options.agentVersion ?? '0.0.0';
     this.storage = options.storage ?? new FileSessionStorage();
+    this.events = new AcpEventEmitter({
+      sinks: [
+        ...(options.eventSinks ?? []),
+        new AcpLogger({
+          level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
+        }),
+      ],
+    });
   }
 
   attach(
@@ -239,8 +290,24 @@ export class KodaXAcpServer implements Agent {
     const stream = ndJsonStream(output, input);
     const connection = new AgentSideConnection(() => this, stream);
     this.connection = connection;
+    this.events.emit({
+      type: 'server_attached',
+      agent: this.agentName,
+      version: this.agentVersion,
+      provider: this.provider,
+      model: this.model ?? '(default)',
+      cwd: this.defaultCwd,
+      permissionMode: this.defaultPermissionMode,
+      reasoningMode: this.reasoningMode,
+      thinking: this.thinking,
+      fixedCwd: this.hasFixedCwd,
+    });
     connection.signal.addEventListener('abort', () => {
       this.sessions.forEach((session) => session.activeController?.abort());
+      this.events.emit({
+        type: 'connection_closed',
+        activeSessions: this.sessions.size,
+      });
       this.sessions.clear();
       this.connection = null;
     });
@@ -252,6 +319,10 @@ export class KodaXAcpServer implements Agent {
   }
 
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
+    this.events.emit({
+      type: 'initialize_completed',
+      protocolVersion: PROTOCOL_VERSION,
+    });
     return {
       protocolVersion: PROTOCOL_VERSION,
       agentInfo: {
@@ -287,6 +358,13 @@ export class KodaXAcpServer implements Agent {
       activeController: null,
     };
     this.sessions.set(sessionId, session);
+    this.events.emit({
+      type: 'session_created',
+      sessionId,
+      cwd: session.cwd,
+      permissionMode: session.permissionMode,
+      mcpServers: session.mcpServers.length,
+    });
 
     return {
       sessionId,
@@ -300,8 +378,15 @@ export class KodaXAcpServer implements Agent {
 
   async setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse> {
     const session = this.requireSession(params.sessionId);
+    const previousMode = session.permissionMode;
     const nextMode = parseSessionMode(params.modeId);
     session.permissionMode = nextMode;
+    this.events.emit({
+      type: 'session_mode_changed',
+      sessionId: session.sessionId,
+      from: previousMode,
+      to: nextMode,
+    });
     await this.sendSessionUpdate({
       sessionId: session.sessionId,
       update: {
@@ -323,27 +408,76 @@ export class KodaXAcpServer implements Agent {
     }
     const abortController = new AbortController();
     session.activeController = abortController;
+    const promptQueuedAt = Date.now();
 
     const task = async (): Promise<PromptResponse> => {
       if (abortController.signal.aborted) {
+        this.events.emit({
+          type: 'prompt_skipped',
+          sessionId: session.sessionId,
+        });
         return {
           stopReason: 'cancelled',
           userMessageId: params.messageId ?? undefined,
         };
       }
 
+      const promptStartedAt = Date.now();
+      this.events.emit({
+        type: 'prompt_started',
+        sessionId: session.sessionId,
+        messageId: params.messageId ?? null,
+        chars: promptText.length,
+        cwd: session.cwd,
+        queueDelayMs: promptStartedAt - promptQueuedAt,
+      });
+      this.events.emit({
+        type: 'prompt_preview',
+        sessionId: session.sessionId,
+        prompt: promptText,
+      });
+
       try {
         const result = await runKodaX(
           this.buildKodaXOptions(session, abortController.signal),
           promptText,
         );
+        session.contextTokenSnapshot = result.contextTokenSnapshot;
+        const interrupted = !!result.interrupted;
+        const stopReason = abortController.signal.aborted || interrupted ? 'cancelled' : 'end_turn';
+        this.events.emit({
+          type: 'prompt_finished',
+          sessionId: session.sessionId,
+          stopReason,
+          interrupted,
+          durationMs: Date.now() - promptStartedAt,
+        });
 
         return {
-          stopReason: abortController.signal.aborted || result.interrupted ? 'cancelled' : 'end_turn',
+          stopReason,
           userMessageId: params.messageId ?? undefined,
+          ...(toAcpUsage(result.contextTokenSnapshot) ? { usage: toAcpUsage(result.contextTokenSnapshot) } : {}),
         };
       } catch (error) {
+        if (abortController.signal.aborted || isAbortLikeError(error)) {
+          this.events.emit({
+            type: 'prompt_cancelled',
+            sessionId: session.sessionId,
+            durationMs: Date.now() - promptStartedAt,
+          });
+          return {
+            stopReason: 'cancelled',
+            userMessageId: params.messageId ?? undefined,
+          };
+        }
+
         const message = error instanceof Error ? error.message : String(error);
+        this.events.emit({
+          type: 'prompt_failed',
+          sessionId: session.sessionId,
+          durationMs: Date.now() - promptStartedAt,
+          error: message,
+        });
         await this.sendTextChunk(session.sessionId, `\n[ACP Server Error] ${message}\n`);
         return {
           stopReason: abortController.signal.aborted ? 'cancelled' : 'end_turn',
@@ -361,6 +495,11 @@ export class KodaXAcpServer implements Agent {
 
   async cancel(params: { sessionId: string }): Promise<void> {
     const session = this.sessions.get(params.sessionId);
+    this.events.emit({
+      type: 'cancel_requested',
+      sessionId: params.sessionId,
+      active: !!session?.activeController,
+    });
     session?.activeController?.abort();
   }
 
@@ -387,49 +526,67 @@ export class KodaXAcpServer implements Agent {
       context: {
         gitRoot: session.cwd,
         executionCwd: session.cwd,
+        contextTokenSnapshot: session.contextTokenSnapshot,
       },
       events: {
         onTextDelta: (text) => {
-          this.dispatchNotification('assistant text chunk', this.sendTextChunk(session.sessionId, text));
+          this.dispatchNotification(
+            'assistant text chunk',
+            session.sessionId,
+            this.sendTextChunk(session.sessionId, text),
+          );
         },
         onThinkingDelta: (text) => {
-          this.dispatchNotification('thinking chunk', this.sendSessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'agent_thought_chunk',
-              content: { type: 'text', text },
-            },
-          }));
+          this.dispatchNotification(
+            'thinking chunk',
+            session.sessionId,
+            this.sendSessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: 'agent_thought_chunk',
+                content: { type: 'text', text },
+              },
+            }),
+          );
         },
         onToolUseStart: (tool) => {
-          this.dispatchNotification('tool call start', this.sendSessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'tool_call',
-              toolCallId: tool.id,
-              title: tool.name,
-              kind: inferToolKind(tool.name),
-              rawInput: tool.input,
-              locations: inferToolLocations(tool.name, tool.input ?? {}),
-              status: 'pending',
-            },
-          }));
+          this.dispatchNotification(
+            'tool call start',
+            session.sessionId,
+            this.sendSessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: 'tool_call',
+                toolCallId: tool.id,
+                title: tool.name,
+                kind: inferToolKind(tool.name),
+                rawInput: tool.input,
+                locations: inferToolLocations(tool.name, tool.input ?? {}),
+                status: 'pending',
+              },
+            }),
+          );
         },
         onToolResult: (result) => {
-          this.dispatchNotification('tool call update', this.sendSessionUpdate({
-            sessionId: session.sessionId,
-            update: {
-              sessionUpdate: 'tool_call_update',
-              toolCallId: result.id,
-              title: result.name,
-              status: isToolResultFailure(result.content) ? 'failed' : 'completed',
-              rawOutput: result.content,
-            },
-          }));
+          this.dispatchNotification(
+            'tool call update',
+            session.sessionId,
+            this.sendSessionUpdate({
+              sessionId: session.sessionId,
+              update: {
+                sessionUpdate: 'tool_call_update',
+                toolCallId: result.id,
+                title: result.name,
+                status: isToolResultFailure(result.content) ? 'failed' : 'completed',
+                rawOutput: result.content,
+              },
+            }),
+          );
         },
         onError: (error) => {
           this.dispatchNotification(
             'error text chunk',
+            session.sessionId,
             this.sendTextChunk(session.sessionId, `\n[Error] ${error.message}\n`),
           );
         },
@@ -450,13 +607,34 @@ export class KodaXAcpServer implements Agent {
     input: Record<string, unknown>,
     toolId?: string,
   ): Promise<ToolPermissionDecision> {
+    this.events.emit({
+      type: 'tool_permission_evaluated',
+      sessionId: session.sessionId,
+      tool: toolName,
+      toolId: toolId ?? null,
+      permissionMode: session.permissionMode,
+    });
     if (toolName === 'bash') {
       const command = typeof input.command === 'string' ? input.command : '';
       if (isBashReadCommand(command)) {
+        this.events.emit({
+          type: 'tool_permission_resolved',
+          sessionId: session.sessionId,
+          tool: toolName,
+          toolId: toolId ?? null,
+          outcome: 'auto_allowed_read_only_bash',
+        });
         return { allowed: true };
       }
 
       if (isToolCallAllowed(toolName, input, session.alwaysAllowTools)) {
+        this.events.emit({
+          type: 'tool_permission_resolved',
+          sessionId: session.sessionId,
+          tool: toolName,
+          toolId: toolId ?? null,
+          outcome: 'auto_allowed_remembered',
+        });
         return { allowed: true };
       }
     }
@@ -464,11 +642,25 @@ export class KodaXAcpServer implements Agent {
     if (session.permissionMode === 'plan') {
       const blockReason = getPlanModeBlockReason(toolName, input, session.cwd);
       if (blockReason) {
+        this.events.emit({
+          type: 'tool_permission_resolved',
+          sessionId: session.sessionId,
+          tool: toolName,
+          toolId: toolId ?? null,
+          outcome: 'blocked_plan_mode',
+        });
         return {
           allowed: false,
           override: `${blockReason} Do not try to modify files while planning. Finish the plan first, then hand off to a writable mode.`,
         };
       }
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolId ?? null,
+        outcome: 'auto_allowed_plan_mode',
+      });
       return { allowed: true };
     }
 
@@ -494,6 +686,13 @@ export class KodaXAcpServer implements Agent {
       !needsModeConfirmation &&
       !needsAutoOutsideProjectConfirmation
     ) {
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolId ?? null,
+        outcome: 'auto_allowed_policy',
+      });
       return { allowed: true };
     }
 
@@ -508,6 +707,13 @@ export class KodaXAcpServer implements Agent {
     toolId?: string,
   ): Promise<ToolPermissionDecision> {
     if (!this.connection) {
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolId ?? null,
+        outcome: 'request_failed_disconnected',
+      });
       return {
         allowed: false,
         override: '[Cancelled] ACP client is disconnected, so the permission request could not be completed.',
@@ -542,6 +748,12 @@ export class KodaXAcpServer implements Agent {
     };
 
     let response: RequestPermissionResponse;
+    this.events.emit({
+      type: 'permission_requested',
+      sessionId: session.sessionId,
+      tool: toolName,
+      toolId: toolCall.toolCallId,
+    });
     try {
       response = await this.connection.requestPermission({
         sessionId: session.sessionId,
@@ -549,6 +761,13 @@ export class KodaXAcpServer implements Agent {
         options: permissionOptions,
       });
     } catch {
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolCall.toolCallId,
+        outcome: 'request_failed_incomplete',
+      });
       return {
         allowed: false,
         override: '[Cancelled] ACP client did not complete the permission request. Operation failed closed.',
@@ -556,6 +775,13 @@ export class KodaXAcpServer implements Agent {
     }
 
     if (response.outcome.outcome !== 'selected') {
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolCall.toolCallId,
+        outcome: 'request_dismissed',
+      });
       return {
         allowed: false,
         override: '[Cancelled] Operation cancelled by user',
@@ -574,12 +800,27 @@ export class KodaXAcpServer implements Agent {
     }
 
     if (response.outcome.optionId === 'reject_once') {
+      this.events.emit({
+        type: 'tool_permission_resolved',
+        sessionId: session.sessionId,
+        tool: toolName,
+        toolId: toolCall.toolCallId,
+        outcome: 'request_rejected',
+      });
       return {
         allowed: false,
         override: '[Cancelled] Operation cancelled by user',
       };
     }
 
+    this.events.emit({
+      type: 'tool_permission_resolved',
+      sessionId: session.sessionId,
+      tool: toolName,
+      toolId: toolCall.toolCallId,
+      outcome: 'request_granted',
+      remember: response.outcome.optionId === 'allow_always',
+    });
     return { allowed: true };
   }
 
@@ -600,14 +841,19 @@ export class KodaXAcpServer implements Agent {
     await this.connection.sessionUpdate(notification);
   }
 
-  private dispatchNotification(label: string, operation: Promise<void>): void {
+  private dispatchNotification(label: string, sessionId: string, operation: Promise<void>): void {
     void operation.catch((error) => {
       if (!this.connection || this.connection.signal.aborted) {
         return;
       }
 
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`[ACP] Failed to send ${label}: ${message}`);
+      this.events.emit({
+        type: 'notification_failed',
+        sessionId,
+        label,
+        error: message,
+      });
     });
   }
 }

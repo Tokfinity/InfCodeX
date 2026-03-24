@@ -19,6 +19,7 @@ import {
   KodaXThinkingBlock,
   KodaXRedactedThinkingBlock,
   KodaXTextBlock,
+  KodaXTokenUsage,
   KodaXToolUseBlock,
 } from '../types.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
@@ -28,6 +29,39 @@ import {
   mapDepthToOpenAIReasoningEffort,
   resolveThinkingBudget,
 } from '../reasoning.js';
+
+type OpenAIUsageLike = {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+} | null | undefined;
+
+function normalizeOpenAIUsage(usage: OpenAIUsageLike): KodaXTokenUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  const inputTokens = typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0;
+  const outputTokens = typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0;
+  const totalTokens =
+    typeof usage.total_tokens === 'number'
+      ? usage.total_tokens
+      : inputTokens + outputTokens;
+
+  if ([inputTokens, outputTokens, totalTokens].some((value) => !Number.isFinite(value) || value < 0)) {
+    return undefined;
+  }
+
+  if (totalTokens < inputTokens || totalTokens < outputTokens) {
+    return undefined;
+  }
+
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens,
+  };
+}
 
 export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
@@ -51,6 +85,33 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       ...current,
       ...extraBody,
     };
+  }
+
+  private resetReasoningCapabilityParams(
+    params: Record<string, unknown>,
+  ): void {
+    delete params.reasoning_effort;
+    delete params.thinking;
+
+    const extraBody =
+      typeof params.extra_body === 'object' && params.extra_body !== null
+        ? { ...(params.extra_body as Record<string, unknown>) }
+        : undefined;
+
+    if (!extraBody) {
+      return;
+    }
+
+    delete extraBody.enable_thinking;
+    delete extraBody.thinking_budget;
+    delete extraBody.thinking;
+
+    if (Object.keys(extraBody).length === 0) {
+      delete params.extra_body;
+      return;
+    }
+
+    params.extra_body = extraBody;
   }
 
   private applyReasoningCapability(
@@ -157,6 +218,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
       let textContent = '';
       let thinkingContent = '';
+      let usage: KodaXTokenUsage | undefined;
+      let includeUsage = true;
 
       // Issue 084 fix: Track stream completion
       let finishReason: string | null = null;
@@ -191,31 +254,51 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let lastError: unknown;
 
       for (const capability of attempts) {
-        const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
-          ...createParams,
-        };
+        while (!stream) {
+          const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsStreaming = {
+            ...createParams,
+          };
 
-        this.applyReasoningCapability(attemptParams, capability, normalizedReasoning);
+          if (includeUsage) {
+            attemptParams.stream_options = { include_usage: true };
+          }
 
-        try {
-          stream = await this.client.chat.completions.create(
-            attemptParams,
-            signal ? { signal } : {},
+          this.resetReasoningCapabilityParams(
+            attemptParams as unknown as Record<string, unknown>,
           );
-          if (capability !== initialCapability) {
-            this.persistReasoningCapabilityOverride(capability, model);
+          this.applyReasoningCapability(attemptParams, capability, normalizedReasoning);
+
+          try {
+            stream = await this.client.chat.completions.create(
+              attemptParams,
+              signal ? { signal } : {},
+            );
+            if (capability !== initialCapability) {
+              this.persistReasoningCapabilityOverride(capability, model);
+            }
+          } catch (error) {
+            lastError = error;
+            if (
+              includeUsage &&
+              this.shouldFallbackForSpecificReasoningError(error, 'stream_options', 'include_usage')
+            ) {
+              includeUsage = false;
+              continue;
+            }
+            if (
+              !this.shouldFallbackForReasoningError(
+                error,
+                ...this.getFallbackTerms(capability),
+              )
+            ) {
+              throw error;
+            }
+            break;
           }
+        }
+
+        if (stream) {
           break;
-        } catch (error) {
-          lastError = error;
-          if (
-            !this.shouldFallbackForReasoningError(
-              error,
-              ...this.getFallbackTerms(capability),
-            )
-          ) {
-            throw error;
-          }
         }
       }
 
@@ -231,6 +314,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         if (signal?.aborted) {
           throw new DOMException('Request aborted', 'AbortError');
         }
+
+        usage = normalizeOpenAIUsage(chunk.usage as OpenAIUsageLike) ?? usage;
 
         const choice = chunk.choices[0];
         const delta = choice?.delta;
@@ -314,7 +399,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           catch { toolBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: {} }); }
         }
       }
-      return { textBlocks, toolBlocks, thinkingBlocks };
+      return { textBlocks, toolBlocks, thinkingBlocks, usage };
     }, signal, 3, streamOptions?.onRateLimit);
   }
 

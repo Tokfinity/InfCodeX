@@ -2,7 +2,7 @@
  * KodaX Interactive Context Management - 交互式上下文管理
  */
 
-import { KodaXMessage } from '@kodax/coding';
+import type { KodaXContextTokenSnapshot, KodaXMessage } from '@kodax/coding';
 
 // Interactive mode - 交互模式
 export type InteractiveMode = 'code' | 'ask';
@@ -10,6 +10,7 @@ export type InteractiveMode = 'code' | 'ask';
 // Interactive session context - 交互式会话上下文
 export interface InteractiveContext {
   messages: KodaXMessage[];
+  contextTokenSnapshot?: KodaXContextTokenSnapshot;
   sessionId: string;
   title: string;
   gitRoot?: string;

@@ -1,149 +1,129 @@
-/**
- * KodaX Markdown 渲染工具
- *
- * 为终端输出提供简单的 Markdown 渲染支持
- */
-
 import chalk from 'chalk';
-import { getSymbols, supportsUnicode } from './prompts.js';
+import { getSymbols } from './prompts.js';
 
-/**
- * 代码块信息
- */
 interface CodeBlock {
   language: string;
   code: string;
-  startLine: number;
-  endLine: number;
+  startIndex: number;
+  endIndex: number;
 }
 
-/**
- * 解析代码块
- */
+const LANGUAGE_KEYWORDS: Record<string, string[]> = {
+  javascript: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this', 'typeof', 'instanceof'],
+  js: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this', 'typeof', 'instanceof'],
+  typescript: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'interface', 'type', 'enum', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this', 'typeof', 'instanceof'],
+  ts: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'interface', 'type', 'enum', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this', 'typeof', 'instanceof'],
+  jsx: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this'],
+  tsx: ['const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while', 'class', 'interface', 'type', 'enum', 'import', 'export', 'from', 'async', 'await', 'try', 'catch', 'throw', 'new', 'this'],
+  python: ['def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'import', 'from', 'as', 'try', 'except', 'finally', 'raise', 'with', 'async', 'await', 'lambda', 'yield', 'pass', 'None', 'True', 'False'],
+  py: ['def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'import', 'from', 'as', 'try', 'except', 'finally', 'raise', 'with', 'async', 'await', 'lambda', 'yield', 'pass', 'None', 'True', 'False'],
+  bash: ['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac', 'function', 'export', 'local', 'readonly', 'return'],
+  sh: ['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac', 'function', 'export', 'local', 'readonly', 'return'],
+  shell: ['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac', 'function', 'export', 'local', 'readonly', 'return'],
+  zsh: ['if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'do', 'done', 'case', 'esac', 'function', 'export', 'local', 'readonly', 'return'],
+  json: ['true', 'false', 'null'],
+};
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function parseCodeBlocks(text: string): CodeBlock[] {
   const blocks: CodeBlock[] = [];
   const regex = /```(\w*)\n([\s\S]*?)```/g;
-  let match;
+  let match: RegExpExecArray | null;
 
   while ((match = regex.exec(text)) !== null) {
     blocks.push({
       language: match[1] ?? '',
       code: match[2] ?? '',
-      startLine: match.index,
-      endLine: match.index + match[0].length,
+      startIndex: match.index,
+      endIndex: match.index + match[0].length,
     });
   }
 
   return blocks;
 }
 
-/**
- * 简单的语法高亮
- */
-function highlightCode(code: string, _language: string): string {
-  // 简单的关键词高亮（不依赖外部库）
-  const keywords = /\b(const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|try|catch|throw|new|this|typeof|instanceof)\b/g;
+export function getHighlightKeywordPattern(language: string): RegExp | null {
+  const normalized = language.trim().toLowerCase();
+  const keywords = LANGUAGE_KEYWORDS[normalized];
+  if (!keywords || keywords.length === 0) {
+    return null;
+  }
+
+  return new RegExp(`\\b(${keywords.map(escapeRegex).join('|')})\\b`, 'g');
+}
+
+function highlightCode(code: string, language: string): string {
+  const keywordPattern = getHighlightKeywordPattern(language);
   const strings = /(["'`])(?:(?!\1)[^\\]|\\.)*\1/g;
   const comments = /(\/\/.*$|\/\*[\s\S]*?\*\/)/gm;
   const numbers = /\b(\d+\.?\d*)\b/g;
 
   let result = code;
-
-  // 注释
   result = result.replace(comments, chalk.dim('$1'));
-
-  // 字符串
   result = result.replace(strings, chalk.green('$&'));
-
-  // 关键词
-  result = result.replace(keywords, chalk.cyan('$1'));
-
-  // 数字
+  if (keywordPattern) {
+    result = result.replace(keywordPattern, chalk.cyan('$1'));
+  }
   result = result.replace(numbers, chalk.yellow('$1'));
 
   return result;
 }
 
-/**
- * 渲染 Markdown 文本到终端
- */
 export function renderMarkdown(text: string): string {
   const symbols = getSymbols();
   let result = text;
-
-  // 处理代码块
   const codeBlocks = parseCodeBlocks(text);
+
   for (let i = codeBlocks.length - 1; i >= 0; i--) {
     const block = codeBlocks[i];
-    if (!block) continue;
+    if (!block) {
+      continue;
+    }
 
     const highlighted = highlightCode(block.code, block.language);
     const header = block.language ? chalk.dim(`[${block.language}]`) : '';
-    const replacement = `\n${chalk.dim('─'.repeat(40))}\n${header}\n${highlighted}${chalk.dim('─'.repeat(40))}\n`;
-
-    result = result.slice(0, block.startLine) + replacement + result.slice(block.endLine);
+    const divider = chalk.dim('\u2500'.repeat(40));
+    const replacement = `\n${divider}\n${header}\n${highlighted}${divider}\n`;
+    result = result.slice(0, block.startIndex) + replacement + result.slice(block.endIndex);
   }
 
-  // 处理行内代码
   result = result.replace(/`([^`]+)`/g, (_, code: string) => chalk.bgGray.black(` ${code} `));
-
-  // 处理粗体
-  result = result.replace(/\*\*([^*]+)\*\*/g, (_, text: string) => chalk.bold(text));
-
-  // 处理斜体
-  result = result.replace(/\*([^*]+)\*/g, (_, text: string) => chalk.italic(text));
-
-  // 处理标题
+  result = result.replace(/\*\*([^*]+)\*\*/g, (_, content: string) => chalk.bold(content));
+  result = result.replace(/\*([^*]+)\*/g, (_, content: string) => chalk.italic(content));
   result = result.replace(/^### (.+)$/gm, (_, title: string) => chalk.bold.cyan(`### ${title}`));
   result = result.replace(/^## (.+)$/gm, (_, title: string) => chalk.bold.blue(`## ${title}`));
   result = result.replace(/^# (.+)$/gm, (_, title: string) => chalk.bold.white(`# ${title}`));
-
-  // 处理列表项
   result = result.replace(/^- (.+)$/gm, (_, item: string) => `  ${symbols.bullet} ${item}`);
   result = result.replace(/^\* (.+)$/gm, (_, item: string) => `  ${symbols.bullet} ${item}`);
   result = result.replace(/^(\d+)\. (.+)$/gm, (_, num: string, item: string) => `  ${chalk.dim(num)}. ${item}`);
-
-  // 处理链接
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text: string, url: string) =>
-    `${chalk.cyan(text)} ${chalk.dim(`(${url})`)}`
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, content: string, url: string) =>
+    `${chalk.cyan(content)} ${chalk.dim(`(${url})`)}`,
   );
 
   return result;
 }
 
-/**
- * 流式 Markdown 渲染器
- *
- * 用于逐步渲染流式输出的 Markdown 内容
- */
 export class StreamingMarkdownRenderer {
   private buffer = '';
   private inCodeBlock = false;
   private codeBlockLanguage = '';
   private lastRenderedLength = 0;
 
-  /**
-   * 添加文本到缓冲区
-   */
   append(text: string): void {
     this.buffer += text;
   }
 
-  /**
-   * 获取新内容并渲染
-   *
-   * @returns 自上次渲染以来的新渲染内容
-   */
   renderNew(): string {
     const newContent = this.buffer.slice(this.lastRenderedLength);
     this.lastRenderedLength = this.buffer.length;
 
-    // 检测代码块状态
     const codeBlockStart = newContent.indexOf('```');
     if (codeBlockStart !== -1) {
       this.inCodeBlock = !this.inCodeBlock;
       if (this.inCodeBlock) {
-        // 提取语言
         const afterStart = newContent.slice(codeBlockStart + 3);
         const newlineIndex = afterStart.indexOf('\n');
         if (newlineIndex !== -1) {
@@ -152,36 +132,21 @@ export class StreamingMarkdownRenderer {
       }
     }
 
-    // 代码块内不渲染 Markdown
     if (this.inCodeBlock) {
       return newContent;
     }
 
-    // 渲染行内 Markdown
     return this.renderInline(newContent);
   }
 
-  /**
-   * 渲染行内 Markdown（不包含代码块）
-   */
   private renderInline(text: string): string {
     let result = text;
-
-    // 行内代码
     result = result.replace(/`([^`\n]+)`/g, (_, code: string) => chalk.bgGray.black(` ${code} `));
-
-    // 粗体
-    result = result.replace(/\*\*([^*\n]+)\*\*/g, (_, t: string) => chalk.bold(t));
-
-    // 斜体
-    result = result.replace(/\*([^*\n]+)\*/g, (_, t: string) => chalk.italic(t));
-
+    result = result.replace(/\*\*([^*\n]+)\*\*/g, (_, content: string) => chalk.bold(content));
+    result = result.replace(/\*([^*\n]+)\*/g, (_, content: string) => chalk.italic(content));
     return result;
   }
 
-  /**
-   * 重置渲染器
-   */
   reset(): void {
     this.buffer = '';
     this.lastRenderedLength = 0;
@@ -189,79 +154,55 @@ export class StreamingMarkdownRenderer {
     this.codeBlockLanguage = '';
   }
 
-  /**
-   * 获取完整缓冲区
-   */
   getBuffer(): string {
     return this.buffer;
   }
 
-  /**
-   * 是否在代码块内
-   */
   isInCodeBlock(): boolean {
     return this.inCodeBlock;
   }
 }
 
-/**
- * 格式化工具输出
- */
 export function formatToolOutput(toolName: string, result: string): string {
   const symbols = getSymbols();
-
-  // 截断过长的输出
   const maxLength = 2000;
   const truncated = result.length > maxLength
-    ? result.slice(0, maxLength) + '\n...[output truncated]'
+    ? `${result.slice(0, maxLength)}\n...[output truncated]`
     : result;
 
-  const header = chalk.dim(`${symbols.arrow} ${toolName}`);
-  const content = chalk.dim(truncated);
-
-  return `${header}\n${content}`;
+  return `${chalk.dim(`${symbols.arrow} ${toolName}`)}\n${chalk.dim(truncated)}`;
 }
 
-/**
- * 格式化工具执行状态
- */
 export function formatToolStatus(
   toolName: string,
   status: 'running' | 'success' | 'error',
-  duration?: number
+  duration?: number,
 ): string {
   const symbols = getSymbols();
 
   switch (status) {
     case 'running':
       return chalk.cyan(`${symbols.arrow} ${toolName}...`);
-    case 'success':
+    case 'success': {
       const durationStr = duration !== undefined ? ` (${duration}ms)` : '';
       return chalk.green(`${symbols.success} ${toolName}${durationStr}`);
+    }
     case 'error':
       return chalk.red(`${symbols.error} ${toolName}`);
   }
 }
 
-/**
- * 创建进度指示器
- */
 export function createProgressIndicator(
   current: number,
   total: number,
-  label: string = ''
+  label: string = '',
 ): string {
-  const symbols = getSymbols();
   const percent = total > 0 ? Math.round((current / total) * 100) : 0;
   const barWidth = 20;
   const filled = Math.round((percent / 100) * barWidth);
   const empty = barWidth - filled;
-
-  const bar = chalk.green('█'.repeat(filled)) + chalk.dim('░'.repeat(empty));
+  const bar = chalk.green('\u2588'.repeat(filled)) + chalk.dim('\u2591'.repeat(empty));
   const percentStr = chalk.dim(`${percent.toString().padStart(3)}%`);
 
-  if (label) {
-    return `${bar} ${percentStr} ${chalk.dim(label)}`;
-  }
-  return `${bar} ${percentStr}`;
+  return label ? `${bar} ${percentStr} ${chalk.dim(label)}` : `${bar} ${percentStr}`;
 }

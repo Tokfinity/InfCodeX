@@ -129,7 +129,7 @@ docs/features/
 | qwen | qwen3.5-plus | native-budget | 256K |
 | zhipu | glm-5 | native-budget | 200K |
 | zhipu-coding | glm-5 | native-budget | 200K |
-| minimax-coding | MiniMax-M2.5 | native-budget | 204K |
+| minimax-coding | MiniMax-M2.7 | native-budget | 204K |
 | gemini-cli | Gemini (CLI) | native-budget | varies |
 | codex-cli | Codex (CLI) | native-budget | varies |
 | deepseek | deepseek-chat | native-toggle | 128K |
@@ -225,7 +225,7 @@ docs/features/
 | 031 | 多模态图片上传 | v0.9.0 | 图片文件路径与粘贴支持 |
 | 032 | JSON 输出模式 | v0.7.0 | `--mode json` 结构化事件输出 |
 | 033 | REPL 并行切换 | v0.6.15 | `/parallel` 运行时动态切换 |
-| 034 | Extension + Capability Runtime | v0.8.0 | 统一扩展接口与能力运行时 |
+| 034 | Extension + Capability Runtime | v0.7.0 | 统一扩展接口与能力运行时 |
 | 035 | MCP 能力 Provider | v0.7.0 | MCP 生态工具访问 |
 | 036 | DeepSeek 内置 Provider | v0.6.15 | 第 11 个内置 provider |
 | 037 | API Token Usage 优先 | v0.7.0 | 真实 usage 优先 + 估算回退 |
@@ -239,8 +239,8 @@ docs/features/
 
 | 版本 | 特性数 | 设计文档 |
 |------|--------|----------|
-| **v0.7.0** | 6 | [v0.7.0.md](./v0.7.0.md) |
-| **v0.8.0** | 6 | [v0.8.0.md](./v0.8.0.md) |
+| **v0.7.0** | 7 | [v0.7.0.md](./v0.7.0.md) |
+| **v0.8.0** | 5 | [v0.8.0.md](./v0.8.0.md) |
 | **v0.9.0** | 1 | [v0.9.0.md](./v0.9.0.md) |
 | **v1.0.0** | 3 | [v1.0.0.md](./v1.0.0.md) |
 

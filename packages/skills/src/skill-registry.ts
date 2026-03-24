@@ -15,7 +15,6 @@ import type {
   ISkillRegistry,
   SkillPathsConfig,
 } from './types.js';
-import { getDefaultSkillPaths } from './types.js';
 import { discoverSkills } from './discovery.js';
 import { loadFullSkill } from './skill-loader.js';
 import { resolveSkillContent } from './skill-resolver.js';
@@ -24,10 +23,10 @@ import { resolveSkillContent } from './skill-resolver.js';
  * Skill Registry implementation
  */
 export class SkillRegistry implements ISkillRegistry {
-  skills: Map<string, SkillMetadata> = new Map();
-  private fullSkills: Map<string, Skill> = new Map();
-  private projectRoot?: string;
-  private customPaths?: Partial<SkillPathsConfig>;
+  private readonly skillsByName = new Map<string, SkillMetadata>();
+  private readonly fullSkillsByName = new Map<string, Skill>();
+  private readonly projectRoot?: string;
+  private readonly customPaths?: Readonly<Partial<SkillPathsConfig>>;
 
   constructor(projectRoot?: string, customPaths?: Partial<SkillPathsConfig>) {
     this.projectRoot = projectRoot;
@@ -39,7 +38,10 @@ export class SkillRegistry implements ISkillRegistry {
    */
   async discover(): Promise<void> {
     const result = await discoverSkills(this.projectRoot, this.customPaths);
-    this.skills = result.skills;
+    this.skillsByName.clear();
+    for (const [name, metadata] of result.skills) {
+      this.skillsByName.set(name, metadata);
+    }
 
     // Log any discovery errors
     if (result.errors.length > 0) {
@@ -52,8 +54,15 @@ export class SkillRegistry implements ISkillRegistry {
   /**
    * Get skill metadata by name
    */
+  get skills(): ReadonlyMap<string, SkillMetadata> {
+    return this.skillsByName;
+  }
+
+  /**
+   * Get skill metadata by name
+   */
   get(name: string): SkillMetadata | undefined {
-    return this.skills.get(name);
+    return this.skillsByName.get(name);
   }
 
   /**
@@ -61,11 +70,11 @@ export class SkillRegistry implements ISkillRegistry {
    */
   async loadFull(name: string): Promise<Skill> {
     // Check cache
-    const cached = this.fullSkills.get(name);
+    const cached = this.fullSkillsByName.get(name);
     if (cached) return cached;
 
     // Get metadata
-    const metadata = this.skills.get(name);
+    const metadata = this.skillsByName.get(name);
     if (!metadata) {
       throw new Error(`Skill not found: ${name}`);
     }
@@ -77,7 +86,7 @@ export class SkillRegistry implements ISkillRegistry {
     }
 
     // Cache and return
-    this.fullSkills.set(name, skill);
+    this.fullSkillsByName.set(name, skill);
     return skill;
   }
 
@@ -123,8 +132,8 @@ export class SkillRegistry implements ISkillRegistry {
    */
   async reload(): Promise<void> {
     // Clear caches
-    this.skills.clear();
-    this.fullSkills.clear();
+    this.skillsByName.clear();
+    this.fullSkillsByName.clear();
 
     // Re-discover
     await this.discover();
@@ -134,7 +143,7 @@ export class SkillRegistry implements ISkillRegistry {
    * List all available skills
    */
   list(): SkillMetadata[] {
-    return Array.from(this.skills.values());
+    return Array.from(this.skillsByName.values());
   }
 
   /**
@@ -182,14 +191,14 @@ export class SkillRegistry implements ISkillRegistry {
    * Check if a name is a valid skill
    */
   has(name: string): boolean {
-    return this.skills.has(name);
+    return this.skillsByName.has(name);
   }
 
   /**
    * Get the count of discovered skills
    */
   get size(): number {
-    return this.skills.size;
+    return this.skillsByName.size;
   }
 }
 

@@ -5,7 +5,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import {
   parseCommandFile,
   discoverCommands,
@@ -13,18 +12,19 @@ import {
   type CommandDiscoveryPath,
 } from './discovery.js';
 import { CommandRegistry } from './registry.js';
+import { createTempDir, removeTempDir } from '../test-utils/temp-dir.js';
 
 describe('Command Discovery', () => {
   let tempDir: string;
   let registry: CommandRegistry;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kodax-test-'));
+  beforeEach(async () => {
+    tempDir = await createTempDir('kodax-test-');
     registry = new CommandRegistry();
   });
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  afterEach(async () => {
+    await removeTempDir(tempDir);
   });
 
   describe('parseCommandFile', () => {

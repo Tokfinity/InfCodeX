@@ -19,6 +19,6 @@ export class KodaXCodexCliProvider extends KodaXAcpProvider {
     constructor() {
         super();
         const executor = new CodexCLIExecutor();
-        this.acpClientOptions = createPseudoAcpServer(executor, this.config.model);
+        this.acpClientOptions = createPseudoAcpServer(executor);
     }
 }

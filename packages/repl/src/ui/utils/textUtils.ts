@@ -84,6 +84,10 @@ export class LRUCache<K, V> {
   }
 }
 
+const NARROW_CHAR_WIDTH = 1;
+const WIDE_CHAR_WIDTH = 2;
+const VISUAL_WIDTH_CACHE_CAPACITY = 1000;
+
 let graphemeSegmenter: Intl.Segmenter | undefined;
 
 function getGraphemeSegmenter(): Intl.Segmenter | undefined {
@@ -173,12 +177,12 @@ export function getVisualWidth(str: string): number {
   const segmenter = getGraphemeSegmenter();
   if (segmenter) {
     for (const segment of segmenter.segment(str)) {
-      width += isWideChar(segment.segment) ? 2 : 1;
+      width += isWideChar(segment.segment) ? WIDE_CHAR_WIDTH : NARROW_CHAR_WIDTH;
     }
   } else {
     // Fallback
     for (const char of str) {
-      width += isWideChar(char) ? 2 : 1;
+      width += isWideChar(char) ? WIDE_CHAR_WIDTH : NARROW_CHAR_WIDTH;
     }
   }
 
@@ -249,7 +253,7 @@ export function splitAtVisualColumn(
   let currentWidth = 0;
 
   while (cursorIndex < chars.length) {
-    const charWidth = isWideChar(chars[cursorIndex]!) ? 2 : 1;
+    const charWidth = isWideChar(chars[cursorIndex]!) ? WIDE_CHAR_WIDTH : NARROW_CHAR_WIDTH;
     if (currentWidth + charWidth > safeVisualCol) {
       break;
     }
@@ -310,7 +314,7 @@ export function truncateByVisualWidth(
 /**
  * Visual width calculation cache - 视觉宽度计算缓存
  */
-export const visualWidthCache = new LRUCache<string, number>(1000);
+export const visualWidthCache = new LRUCache<string, number>(VISUAL_WIDTH_CACHE_CAPACITY);
 
 /**
  * Cached version of visual width calculation - 缓存版本的视觉宽度计算

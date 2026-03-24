@@ -442,6 +442,8 @@ kodax acp serve -m openai --model gpt-5.4 --reasoning balanced
 
 这个模式支持 ACP `initialize`、`sessions/new`、`chat/prompt`、`chat/cancel`、流式 session update，以及权限请求，同时复用 KodaX 原本的运行时和工具语义。
 
+ACP 的生命周期日志会写到 `stderr`，不会污染 ACP `stdout` 协议输出。可以通过 `KODAX_ACP_LOG=off|error|info|debug` 控制日志级别，默认是 `info`。
+
 ACP session 的 `cwd` 会显式传入 coding runtime 的 `executionCwd`。如果你在启动 server 时传了 `--cwd`，这个值会固定为所有 ACP session 的执行根目录。这样 prompt 上下文、相对路径工具和 shell 命令都会以显式目录为基准，而不会去修改 Node.js 进程级的全局工作目录。
 
 ### 权限控制
@@ -839,7 +841,7 @@ import { InkREPL } from '@kodax/repl';
 | `openai` | `OPENAI_API_KEY` | 原生 | `gpt-5.3-codex` |
 | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` 原生 toggle；`deepseek-reasoner` 按模型切换推理 | `deepseek-chat` |
 | `qwen` | `QWEN_API_KEY` | 原生 | `qwen3.5-plus` |
-| `minimax-coding` | `MINIMAX_API_KEY` | 原生 | `MiniMax-M2.5` |
+| `minimax-coding` | `MINIMAX_API_KEY` | 原生 | `MiniMax-M2.7` |
 | `gemini-cli` | `GEMINI_API_KEY` | prompt-only / CLI bridge | `gemini-cli` |
 | `codex-cli` | `OPENAI_API_KEY` | prompt-only / CLI bridge | `codex-cli` |
 
