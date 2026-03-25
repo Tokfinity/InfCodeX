@@ -15,6 +15,8 @@ const DEFAULT_CONTEXT_WINDOW = 200000;
 const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
 const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
 const PRUNE_PROTECTED_TOOLS = new Set(['skill']);
+const MAX_SUMMARIZATION_TOKENS_PER_CHUNK = 50000;
+const SUMMARIZATION_RETRY_DELAY_MS = 2000;
 
 interface ToolContextInfo {
   name: string;
@@ -31,14 +33,21 @@ interface PruneResult {
   hasPruned: boolean;
 }
 
+interface SummaryAttemptResult {
+  summary: string;
+  summarizedMessages: number;
+  failed: boolean;
+}
+
 export function needsCompaction(
   messages: KodaXMessage[],
   config: CompactionConfig,
-  contextWindow: number = DEFAULT_CONTEXT_WINDOW
+  contextWindow: number = DEFAULT_CONTEXT_WINDOW,
+  tokenCountOverride?: number
 ): boolean {
   if (!config.enabled) return false;
 
-  const tokens = estimateTokens(messages);
+  const tokens = tokenCountOverride ?? estimateTokens(messages);
   const threshold = getTriggerTokens(config, contextWindow);
   return tokens > threshold;
 }
@@ -49,11 +58,12 @@ export async function compact(
   provider: KodaXBaseProvider,
   contextWindow: number = DEFAULT_CONTEXT_WINDOW,
   customInstructions?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  tokenCountOverride?: number
 ): Promise<CompactionResult> {
-  const tokensBefore = estimateTokens(messages);
+  const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
 
-  if (!needsCompaction(messages, config, contextWindow)) {
+  if (!needsCompaction(messages, config, contextWindow, tokenCountOverride)) {
     return {
       compacted: false,
       messages,
@@ -149,13 +159,11 @@ export async function compact(
       findForwardCutPoint(workingProcess, rollingSummaryTokens)
     );
     const toSummarize = workingProcess.slice(0, summarizeCutIndex);
-    const remainder = workingProcess.slice(summarizeCutIndex);
-
     if (toSummarize.length === 0) {
       break;
     }
 
-    summary = await summarizeMessages(
+    const summaryAttempt = await summarizeMessages(
       toSummarize,
       provider,
       customInstructions,
@@ -163,8 +171,30 @@ export async function compact(
       summary
     );
 
-    workingProcess = remainder;
-    entriesRemoved += toSummarize.length;
+    if (summaryAttempt.summarizedMessages === 0) {
+      break;
+    }
+
+    summary = summaryAttempt.summary;
+    workingProcess = workingProcess.slice(summaryAttempt.summarizedMessages);
+    entriesRemoved += summaryAttempt.summarizedMessages;
+
+    if (summaryAttempt.failed) {
+      break;
+    }
+  }
+
+  const summaryChanged = summary !== (previousSummary || '');
+  const didCompact = pruneResult.hasPruned || entriesRemoved > 0 || summaryChanged;
+  if (!didCompact) {
+    return {
+      compacted: false,
+      messages,
+      tokensBefore,
+      tokensAfter: tokensBefore,
+      entriesRemoved: 0,
+      details: totalFileOps,
+    };
   }
 
   const compactedMessages = buildCompactedMessages(summary, workingProcess, toProtect);
@@ -186,30 +216,38 @@ async function summarizeMessages(
   customInstructions: string | undefined,
   systemPrompt: string | undefined,
   previousSummary: string
-): Promise<string> {
+): Promise<SummaryAttemptResult> {
   let summary = previousSummary;
-  const maxTokensPerChunk = 50000;
-  const chunks = chunkMessages(messages, maxTokensPerChunk);
+  let summarizedMessages = 0;
+  const chunks = chunkMessages(messages, MAX_SUMMARIZATION_TOKENS_PER_CHUNK);
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
     if (!chunk || chunk.length === 0) continue;
 
-    summary = await generateSummary(
-      chunk,
-      provider,
-      extractFileOps(chunk),
-      customInstructions,
-      systemPrompt,
-      summary || undefined
-    );
+    try {
+      summary = await generateSummary(
+        chunk,
+        provider,
+        extractFileOps(chunk),
+        customInstructions,
+        systemPrompt,
+        summary || undefined
+      );
+      summarizedMessages += chunk.length;
+    } catch (error) {
+      if (process.env.KODAX_DEBUG_COMPACTION) {
+        console.warn('[Compaction] Summary chunk failed, keeping partial summary progress.', error);
+      }
+      return { summary, summarizedMessages, failed: true };
+    }
 
     if (i < chunks.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, SUMMARIZATION_RETRY_DELAY_MS));
     }
   }
 
-  return summary;
+  return { summary, summarizedMessages, failed: false };
 }
 
 function buildCompactedMessages(

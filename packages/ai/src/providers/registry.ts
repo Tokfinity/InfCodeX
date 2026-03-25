@@ -28,6 +28,7 @@ import OpenAI from 'openai';
 export type ProviderName =
   | 'anthropic'
   | 'openai'
+  | 'deepseek'
   | 'kimi'
   | 'kimi-code'
   | 'qwen'
@@ -42,6 +43,7 @@ type ProviderSnapshot = {
   models?: readonly string[];
   apiKeyEnv: string;
   reasoningCapability: KodaXReasoningCapability;
+  modelReasoningCapabilities?: Partial<Record<string, KodaXReasoningCapability>>;
   capabilityProfile: KodaXProviderCapabilityProfile;
 };
 
@@ -103,7 +105,15 @@ class MiniMaxCodingProvider extends KodaXAnthropicCompatProvider {
   protected readonly config: KodaXProviderConfig = {
     apiKeyEnv: 'MINIMAX_API_KEY',
     baseUrl: 'https://api.minimaxi.com/anthropic',
-    model: 'MiniMax-M2.5',
+    model: 'MiniMax-M2.7',
+    models: [
+      { id: 'MiniMax-M2.7-highspeed', displayName: 'MiniMax M2.7 Highspeed' },
+      { id: 'MiniMax-M2.5', displayName: 'MiniMax M2.5' },
+      { id: 'MiniMax-M2.5-highspeed', displayName: 'MiniMax M2.5 Highspeed' },
+      { id: 'MiniMax-M2.1', displayName: 'MiniMax M2.1' },
+      { id: 'MiniMax-M2.1-highspeed', displayName: 'MiniMax M2.1 Highspeed' },
+      { id: 'MiniMax-M2', displayName: 'MiniMax M2' },
+    ],
     supportsThinking: true,
     reasoningCapability: 'native-budget',
     contextWindow: 204800,
@@ -125,6 +135,27 @@ class OpenAIProvider extends KodaXOpenAICompatProvider {
     reasoningCapability: 'native-effort',
     contextWindow: 400000,
     maxOutputTokens: 32768,
+  };
+  constructor() { super(); this.initClient(); }
+}
+
+class DeepSeekProvider extends KodaXOpenAICompatProvider {
+  readonly name = 'deepseek';
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
+    models: [
+      {
+        id: 'deepseek-reasoner',
+        displayName: 'DeepSeek Reasoner',
+        reasoningCapability: 'none',
+      },
+    ],
+    supportsThinking: true,
+    reasoningCapability: 'native-toggle',
+    contextWindow: 128000,
+    maxOutputTokens: 64000,
   };
   constructor() { super(); this.initClient(); }
 }
@@ -180,6 +211,7 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
 export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   anthropic: () => new AnthropicProvider(),
   openai: () => new OpenAIProvider(),
+  deepseek: () => new DeepSeekProvider(),
   kimi: () => new KimiProvider(),
   'kimi-code': () => new KimiCodeProvider(),
   qwen: () => new QwenProvider(),
@@ -203,6 +235,17 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     model: 'gpt-5.3-codex',
     models: ['gpt-5.4', 'gpt-5.3-codex-spark'],
     reasoningCapability: 'native-effort',
+    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+  },
+  deepseek: {
+    apiKeyEnv: 'DEEPSEEK_API_KEY',
+    model: 'deepseek-chat',
+    models: ['deepseek-reasoner'],
+    reasoningCapability: 'native-toggle',
+    modelReasoningCapabilities: {
+      'deepseek-chat': 'native-toggle',
+      'deepseek-reasoner': 'none',
+    },
     capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   kimi: {
@@ -239,7 +282,15 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
   },
   'minimax-coding': {
     apiKeyEnv: 'MINIMAX_API_KEY',
-    model: 'MiniMax-M2.5',
+    model: 'MiniMax-M2.7',
+    models: [
+      'MiniMax-M2.7-highspeed',
+      'MiniMax-M2.5',
+      'MiniMax-M2.5-highspeed',
+      'MiniMax-M2.1',
+      'MiniMax-M2.1-highspeed',
+      'MiniMax-M2',
+    ],
     reasoningCapability: 'native-budget',
     capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
@@ -283,10 +334,17 @@ export function getProviderModel(name: string): string | null {
 
 export function getProviderConfiguredReasoningCapability(
   name: string,
+  modelOverride?: string,
 ): KodaXReasoningCapability | 'unknown' {
-  return isProviderName(name)
-    ? KODAX_PROVIDER_SNAPSHOTS[name].reasoningCapability
-    : 'unknown';
+  if (!isProviderName(name)) {
+    return 'unknown';
+  }
+
+  const snapshot = KODAX_PROVIDER_SNAPSHOTS[name];
+  const effectiveModel = modelOverride ?? snapshot.model;
+
+  return snapshot.modelReasoningCapabilities?.[effectiveModel]
+    ?? snapshot.reasoningCapability;
 }
 
 export function getProviderConfiguredCapabilityProfile(

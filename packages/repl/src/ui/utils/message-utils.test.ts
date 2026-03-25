@@ -4,7 +4,9 @@ import {
   type HistorySeedSourceMessage,
   extractHistorySeedsFromMessage,
   extractLastAssistantText,
+  extractTitle,
   extractTextContent,
+  formatMessagePreview,
   resolveAssistantHistoryText,
 } from "./message-utils.js";
 
@@ -141,5 +143,35 @@ describe("message-utils", () => {
     );
 
     expect(resolved).toBe("buffered response");
+  });
+
+  it("builds session titles from structured user text blocks", () => {
+    const title = extractTitle([
+      {
+        role: "user",
+        content: [
+          { type: "thinking", thinking: "ignore me" },
+          { type: "text", text: "Triage failing tests" },
+          { type: "text", text: "before release" },
+        ],
+      },
+    ] satisfies KodaXMessage[]);
+
+    expect(title).toBe("Triage failing tests before release");
+  });
+
+  it("falls back to an untitled session label when the first user content is blank", () => {
+    const title = extractTitle([
+      {
+        role: "user",
+        content: [{ type: "thinking", thinking: "ignore me" }],
+      },
+    ] satisfies KodaXMessage[]);
+
+    expect(title).toBe("Untitled Session");
+  });
+
+  it("formats previews with a shared truncation rule", () => {
+    expect(formatMessagePreview("line 1\nline 2", 8)).toBe("line 1 l...");
   });
 });

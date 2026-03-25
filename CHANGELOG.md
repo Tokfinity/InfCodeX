@@ -6,6 +6,182 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.20] - 2026-03-24
+
+### Documentation
+- Moved Feature 034 (Extension + Capability Runtime) from v0.8.0 to v0.7.0
+- Updated v0.7.0 feature count to 7, v0.8.0 to 5
+- Synced feature index in FEATURE_LIST.md and features/README.md
+
+---
+
+## [0.6.19] - 2026-03-24
+
+### Added
+- **Tool output guardrail**: `truncate.ts` with `truncateHead`, `truncateTail`, `formatSize`, `persistToolOutput`, and UTF-8-aware byte boundary handling
+- **Per-tool result policy**: `tool-result-policy.ts` with configurable `maxLines`, `maxBytes`, `direction` (head/tail) per tool; `applyToolResultGuardrail` wired into agent tool execution pipeline
+- **Streaming read**: Read tool now uses `readline` stream with byte budget, binary file detection, long line truncation, and preflight size warnings for large files
+- **Bash tail capture**: Bash tool uses `TailCollector` for bounded stdout/stderr (512KB) with truncation hints and GBK fallback on Windows
+- **Diff preview truncation**: Edit and write tools truncate large diffs with full-output spill to `~/.kodax/tool-results/`
+- **Grep result truncation**: Grep tool caps at 400 lines / 24KB with spill-to-file fallback
+- **System prompt guidance**: Added bounded output instructions for read, bash, grep, and diff tools
+- **New tests**: truncate, tool-result-policy, bash, read, client
+
+### Changed
+- Tool descriptions updated to signal bounded output behavior
+- Agent tool execution pipeline now wraps all tool results through `guardToolResult`
+- Guardrail utilities exported from `@kodax/coding` public API
+- FEATURE_LIST.md and v0.6.20 planning notes updated
+
+---
+
+## [0.6.18] - 2026-03-23
+
+### Added
+- **7 new cli-events test files**: acp-client, codex-parser, command-utils, gemini-parser, prompt-utils, pseudo-acp-server, session
+- **Provider test coverage**: New tests for acp-base, base, custom-providers, cli-bridge-providers, registry
+- **Test infrastructure**: Shared `temp-dir` test helpers in `@kodax/repl` and `@kodax/skills` with auto-cleanup
+- **Project workflow extraction**: `project-harness-core.ts` and `project-workflow.ts` extracted from monolithic `project-harness.ts`
+- **CLI option extraction**: `cli_option_helpers.ts` and `cli_commands.ts` extracted from `kodax_cli.ts`
+- **command-utils module**: Shared argument escaping/splitting helpers for CLI event parsers
+- **skill-registry tests**: New unit tests for skill registry
+
+### Changed
+- **cli-events i18n**: All Chinese comments converted to English across types.ts, acp-client, codex-parser, gemini-parser, executor, prompt-utils, pseudo-acp-server, session
+- **pseudo-acp-server refactoring**: Better separation of concerns and code organization
+- **markdown-render**: Significant refactoring of markdown rendering logic
+- **themes refactoring**: Theme system cleanup
+- **terminalCapabilities refactoring**: Simplified terminal capability detection
+- **project-commands slimmed**: Moved logic to project-harness-core and project-workflow
+- **prompts cleanup**: Removed ~246 lines from interactive prompts module
+- **ACP base provider**: Reliability improvements
+- **Permission system**: Minor fixes in executor and permission modules
+- **message-utils refactoring**: Simplified message rendering utilities
+- **KNOWN_ISSUES.md**: Major cleanup, synced resolution status
+
+### Removed
+- **11 stale `.d.ts.map` files**: Removed compiled declaration map artifacts from `packages/ai/src/`
+- **test-retry.ts**: Removed scratch test file
+
+---
+
+## [0.6.17] - 2026-03-23
+
+### Added
+- **ACP Runtime Event Architecture**: `src/acp_events.ts` introduces typed ACP lifecycle, prompt, permission, and notification-failure events plus the shared `AcpEventEmitter` / `AcpEventSink` abstraction
+- **ACP Event Sink Hook**: `KodaXAcpServerOptions.eventSinks` lets external callers attach custom sinks without touching ACP protocol flow
+- **MiniMax M2.7 Provider**: Default MiniMax model upgraded from M2.5 to M2.7; added model list including M2.7-highspeed, M2.5, M2.5-highspeed, M2.1, M2.1-highspeed, M2
+
+### Changed
+- **ACP server event-driven logging**: `KodaXAcpServer` now emits runtime events via `AcpEventEmitter` instead of composing log strings inside protocol handlers
+- **AcpLogger as event sink**: `AcpLogger` implements `AcpEventSink` and acts as the default `stderr` sink for ACP runtime events
+- **dispatchNotification uses event emission**: Failed notification dispatch emits structured `notification_failed` events
+
+### Documentation
+- README/README_CN and KNOWN_ISSUES issue 100 updated to describe the runtime-events-plus-sink architecture
+- Fixed stale version references across docs (DD.md, config.example.jsonc, docs/features/README.md, test guides)
+
+### Tests
+- ACP tests now assert structured runtime events directly, with a smaller stderr integration surface for the default sink
+
+---
+
+## [0.6.16] - 2026-03-23
+
+### Added
+- **ACP Runtime Event Architecture (Issue 100)**: Added `src/acp_events.ts` with typed ACP lifecycle, prompt, permission, and notification-failure events, plus `AcpEventEmitter` / `AcpEventSink`
+- **ACP Event Sink Logging**: `AcpLogger` now acts as the default `stderr` sink for ACP runtime events; configurable via `KODAX_ACP_LOG=off|error|info|debug` and `KodaXAcpServerOptions.logLevel`
+- **ACP log level control**: `KODAX_ACP_LOG` environment variable and `logLevel` option on `KodaXAcpServerOptions` for runtime log level configuration
+- **CLI help for ACP logging**: `KODAX_ACP_LOG=<level>` documented in both `--help acp` and `--help acp serve` output
+
+### Changed
+- **ACP server logging flow**: `KodaXAcpServer` now emits runtime events instead of directly composing human-readable log lines inside protocol handlers
+- **`dispatchNotification` uses event emission**: Failed notification dispatch now emits structured `notification_failed` events, which the default logger sink renders to `stderr`
+- **Test infrastructure**: ACP tests now record runtime events directly, keep `stderr` assertions for sink integration only, and silence SDK invalid-request noise only in the two error-path tests that need it
+
+### Documentation
+- README/README_CN: Added ACP lifecycle logging section explaining `stderr` vs `stdout` separation and `KODAX_ACP_LOG` usage
+- KNOWN_ISSUES.md: Issue 100 now documents the landed runtime-events-plus-sink architecture and updated file inventory
+
+### Tests
+- Updated ACP tests assert emitted lifecycle and permission events directly while still verifying default `stderr` sink output
+
+---
+
+## [0.6.15] - 2026-03-22
+
+### Added
+- **FEATURE_040: ACP Server Support**: `acp serve` CLI command exposes KodaX as a standard ACP (Agent Client Protocol) agent runtime via stdio; `KodaXAcpServer` class with streaming, permission enforcement, cancel, and mode validation; `ACP_PERMISSION_MODE_IDS` mapping for ACP mode negotiation; fail-closed on unknown permission modes
+- **Execution CWD context**: `resolveExecutionCwd()` utility in `runtime-paths.ts` resolves deterministic working directory from `executionCwd > gitRoot > process.cwd()`; all tools (bash, read, edit, write, glob, grep) now use context-aware CWD instead of `process.cwd()`
+- **Permission mode helpers**: `normalizePermissionMode()` and `isPermissionMode()` with `PERMISSION_MODES` constant for safe mode validation throughout the codebase; `@kodax/repl` re-exports permission helpers for external consumers
+- **`onToolUseStart` input parameter**: Tool start events now include `input` field for full tool call context visibility
+- **`beforeToolExecute` tool ID**: Permission hook receives `toolId` in meta parameter for fine-grained tool tracking
+
+### Changed
+- **Deprecated `default` permission mode removed**: `default` mode migrated to `accept-edits` at runtime and persisted to config; `normalizePermissionMode()` used throughout REPL, executor, and permission context for safe handling
+- **Permission system refactoring**: Extracted `isPathInsideProject()` and `getBashOutsideProjectWriteRisk()` from executor to shared `permission.ts`; executor and ACP server now use shared helpers
+- **Prompt builder CWD-aware**: `buildSystemPrompt()` uses `executionCwd` for git context, project snapshot, and long-running context resolution; feature file paths resolved relative to project root
+- **Renamed "serial" to "sequential"**: Status bar, banner, `/parallel` help text, and all display surfaces now use "sequential" for non-parallel execution mode
+- **GlobalShortcuts parallel sync**: `onSetParallel` callback wired through to keep `currentOptionsRef` in sync when toggling parallel mode via keyboard
+- **`/mode` command**: Description updated from "Switch code/ask mode" to "Switch permission mode"; uses `PERMISSION_MODES` constant instead of hardcoded array
+- **InputPrompt Tab behavior**: Tab key handler no longer returns `true` in all branches, preventing double character insertion on unmatched tab completions
+
+### Documentation
+- Provider count updated to 11 across CLAUDE.md, AGENTS.md, HLD.md (DeepSeek)
+- Feature merge: v0.6.20 content consolidated into v0.6.15; v0.6.20.md deleted
+- docs/features/README.md comprehensive update (providers, commands, release history, feature index 026-040)
+- CHANGELOG.md reference fixed (v0.6.20 → v0.6.15)
+
+### Tests
+- New test files: `builder.test.ts`, `InputPrompt.test.tsx`, `GlobalShortcuts.test.ts`, `ShortcutsRegistry.test.ts`
+- Updated tool tests for `executionCwd` context parameter (grep, glob)
+- Updated status bar tests from "serial" to "sequential"
+- ACP server tests: streaming, permissions, cancel, mode validation, cwd handling, fail-closed
+
+---
+
+## [0.6.14] - 2026-03-22
+
+### Added
+- **FEATURE_039: Plan Mode Write Whitelist**: Allow writes to `.agent/plan_mode_doc.md` and system temp directory during plan mode; path normalization with symlink resolution; cross-platform temp directory expansion (`%TEMP%`, `$TMPDIR`, etc.); block writes to all other paths with clear error messages
+- **DeepSeek Built-in Provider**: Native provider support for DeepSeek AI with configuration via `DEEPSEEK_API_KEY` environment variable
+
+### Fixed
+- **Security: Shell injection in skill-resolver**: Replaced `execSync` with safe `child_process.execFile` API
+- **Security: Direct `!command` execution**: Restricted to safe read-only commands only; write operations now require explicit Bash tool usage
+- **Security: Shell-executor argument sanitization**: Hardened against command injection vectors
+- **ReDoS risk in grep tool**: Escaped user-provided RegExp patterns to prevent catastrophic backtracking
+- **Accidentally committed build artifacts**: Removed 27 compiled `.js`/`.js.map` files from `packages/ai/src/`; hardened `.gitignore` rules
+- **JSON.parse without validation**: Added schema validation in `storage.ts` and `project-storage.ts` to prevent silent data corruption
+- **Sync file I/O blocking**: Replaced `fs.readFileSync` calls in `reasoning-overrides.ts` with async alternatives
+- **Permission race condition**: Fixed mode switch during confirmation dialog causing incorrect permission evaluation
+
+### Changed
+- Clarified plan mode write allowance error messages with guidance on allowed locations
+- Updated permission system with `getPlanModeBlockReason` and `isPlanModeAllowedPath` for precise path-based write control
+- Updated FEATURE_LIST.md with features 039-040 design documents for v0.6.15
+- Expanded KNOWN_ISSUES.md with technical debt inventory
+
+---
+
+## [0.6.13] - 2026-03-21
+
+### Added
+- **FEATURE_033: REPL Parallel Toggle (`/parallel`)**: New `/parallel [on|off|toggle]` command with `/pm` alias to dynamically switch between parallel and serial tool execution during REPL sessions; execution mode persisted to `~/.kodax/config.json` and synced across classic REPL, Ink REPL, status bar, and startup banner
+
+### Documentation
+- **FEATURE_037**: API Token Usage design — real usage value preferred with estimation fallback
+- **FEATURE_035**: MCP Bridge design with user-level paths
+- **FEATURE_034**: Extension + Capability Runtime design
+- **FEATURE_038**: Official Sandbox Extension design for `@kodax/sandbox` optional package
+- **README Language Switcher**: Added English/Chinese toggle link
+
+### Changed
+- Aligned legal and contributor metadata across documentation
+- Refreshed permission mode messaging and CLI help text
+
+---
+
 ## [0.6.12] - 2026-03-19
 
 ### Added

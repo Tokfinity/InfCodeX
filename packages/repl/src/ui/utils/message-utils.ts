@@ -12,10 +12,32 @@ export type RestoredHistorySeed =
 
 const THINKING_OPEN_TAG = "[Thinking]";
 const THINKING_CLOSE_TAG = "[/Thinking]";
+const UNTITLED_SESSION_TITLE = "Untitled Session";
+const SESSION_TITLE_MAX_LENGTH = 50;
+const MESSAGE_PREVIEW_MAX_LENGTH = 60;
+const TRUNCATION_SUFFIX = "...";
 const LEGACY_THINKING_BLOCK_RE =
   /(^|\r?\n)\[Thinking\]\r?\n([\s\S]*?)\r?\n\[\/Thinking\](?=\r?\n|$)/g;
 
-function extractAssistantTextOnly(content: string | unknown[]): string {
+function collectTextBlocks(content: readonly unknown[]): string[] {
+  const textParts: string[] = [];
+
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      "type" in block &&
+      block.type === "text" &&
+      "text" in block
+    ) {
+      textParts.push(String(block.text));
+    }
+  }
+
+  return textParts;
+}
+
+function extractAssistantTextOnly(content: string | readonly unknown[]): string {
   if (typeof content === "string") {
     return content;
   }
@@ -24,18 +46,7 @@ function extractAssistantTextOnly(content: string | unknown[]): string {
     return "";
   }
 
-  const textParts = content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        block != null &&
-        typeof block === "object" &&
-        "type" in block &&
-        block.type === "text" &&
-        "text" in block
-    )
-    .map((block) => String(block.text));
-
-  return textParts.join("\n");
+  return collectTextBlocks(content).join("\n");
 }
 
 function pushSeed(
@@ -182,20 +193,18 @@ export function extractTextContent(content: string | readonly unknown[]): string
     return "";
   }
 
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (
-      block &&
-      typeof block === "object" &&
-      "type" in block &&
-      block.type === "text" &&
-      "text" in block
-    ) {
-      textParts.push(String(block.text));
-    }
+  return collectTextBlocks(content).join("\n");
+}
+
+function formatSessionTitle(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return UNTITLED_SESSION_TITLE;
   }
 
-  return textParts.join("\n");
+  return normalized.length > SESSION_TITLE_MAX_LENGTH
+    ? `${normalized.slice(0, SESSION_TITLE_MAX_LENGTH)}${TRUNCATION_SUFFIX}`
+    : normalized;
 }
 
 /**
@@ -233,19 +242,18 @@ export function resolveAssistantHistoryText(
  */
 export function extractTitle(messages: KodaXMessage[]): string {
   const firstUser = messages.find((m) => m.role === "user");
-  if (firstUser) {
-    const content =
-      typeof firstUser.content === "string" ? firstUser.content : "";
-    return content.slice(0, 50) + (content.length > 50 ? "..." : "");
-  }
-  return "Untitled Session";
+  const content = firstUser ? extractTextContent(firstUser.content) : "";
+  return formatSessionTitle(content);
 }
 
 /**
  * Format a single-line preview for session lists.
  */
-export function formatMessagePreview(content: string, maxLength = 60): string {
+export function formatMessagePreview(
+  content: string,
+  maxLength = MESSAGE_PREVIEW_MAX_LENGTH
+): string {
   const preview = content.replace(/\n/g, " ");
-  const ellipsis = preview.length > maxLength ? "..." : "";
+  const ellipsis = preview.length > maxLength ? TRUNCATION_SUFFIX : "";
   return preview.slice(0, maxLength) + ellipsis;
 }

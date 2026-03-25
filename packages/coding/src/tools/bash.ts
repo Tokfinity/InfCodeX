@@ -1,46 +1,161 @@
-/**
- * KodaX Bash Tool
- *
- * 命令执行工具
- */
-
 import { spawn } from 'child_process';
 import iconv from 'iconv-lite';
 import { KODAX_DEFAULT_TIMEOUT, KODAX_HARD_TIMEOUT } from '../constants.js';
+import type { KodaXToolExecutionContext } from '../types.js';
+import { resolveExecutionCwd } from '../runtime-paths.js';
+import {
+  BASH_CAPTURE_LIMIT_BYTES,
+  formatSize,
+  trimBufferStartToUtf8Boundary,
+  truncateTail,
+} from './truncate.js';
 
-export async function toolBash(input: Record<string, unknown>): Promise<string> {
+type TailCollector = {
+  chunks: Buffer[];
+  keptBytes: number;
+  totalBytes: number;
+  droppedBytes: number;
+};
+
+function createCollector(): TailCollector {
+  return {
+    chunks: [],
+    keptBytes: 0,
+    totalBytes: 0,
+    droppedBytes: 0,
+  };
+}
+
+function appendTailChunk(collector: TailCollector, chunk: Buffer, maxBytes: number): void {
+  collector.totalBytes += chunk.length;
+  collector.keptBytes += chunk.length;
+  collector.chunks.push(chunk);
+
+  while (collector.keptBytes > maxBytes && collector.chunks.length > 0) {
+    const overflow = collector.keptBytes - maxBytes;
+    const first = collector.chunks[0]!;
+    if (overflow >= first.length) {
+      collector.chunks.shift();
+      collector.keptBytes -= first.length;
+      collector.droppedBytes += first.length;
+      continue;
+    }
+
+    const trimmed = trimBufferStartToUtf8Boundary(first, overflow);
+    const removedBytes = first.length - trimmed.length;
+    if (trimmed.length === 0) {
+      collector.chunks.shift();
+    } else {
+      collector.chunks[0] = trimmed;
+    }
+    collector.keptBytes -= removedBytes;
+    collector.droppedBytes += removedBytes;
+    break;
+  }
+}
+
+function decodeCollector(collector: TailCollector): string {
+  const buffer = Buffer.concat(collector.chunks);
+  if (buffer.length === 0) {
+    return '';
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const text = buffer.toString('utf-8');
+      if (!/[\uFFFD]/.test(text)) {
+        return text;
+      }
+    } catch {
+      // Fall through to GBK decoding on Windows.
+    }
+    return iconv.decode(buffer, 'gbk');
+  }
+
+  return buffer.toString('utf-8');
+}
+
+export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const command = input.command as string;
   const userTimeout = input.timeout as number | undefined;
   const timeout = userTimeout ? Math.min(KODAX_HARD_TIMEOUT, userTimeout) : KODAX_DEFAULT_TIMEOUT;
   const capped = userTimeout && userTimeout > KODAX_HARD_TIMEOUT;
+  const cwd = resolveExecutionCwd(ctx);
 
   return new Promise(resolve => {
-    const proc = spawn(command, [], { shell: true, windowsHide: true, cwd: process.cwd() });
-    let stdout = Buffer.alloc(0);
-    let stderr = Buffer.alloc(0);
+    const proc = spawn(command, [], { shell: true, windowsHide: true, cwd });
+    const stdout = createCollector();
+    const stderr = createCollector();
     const timer = setTimeout(() => {
       proc.kill();
-      const partial = stdout.length ? stdout.toString('utf-8').slice(0, 2000) : '';
-      resolve(`Command: ${command}\n[Timeout] Command interrupted after ${timeout}s\n\nPartial output:\n${partial}\n\n[Suggestion] The command took too long. Consider:\n- Is this a watch/dev server? Run in a separate terminal.\n- Can the task be broken into smaller steps?\n- Is there an error causing it to hang?`);
+      const partialStdout = decodeCollector(stdout);
+      const partialStderr = decodeCollector(stderr);
+      let partial = partialStdout;
+      if (partialStderr) {
+        partial += `${partial ? '\n' : ''}[stderr]\n${partialStderr}`;
+      }
+      const timeoutPreview = partial
+        ? truncateTail(partial, { maxLines: 400, maxBytes: 24 * 1024 }).content
+        : '';
+      const captureNotes = [];
+      if (stdout.droppedBytes > 0) {
+        captureNotes.push(`stdout omitted ${formatSize(stdout.droppedBytes)}`);
+      }
+      if (stderr.droppedBytes > 0) {
+        captureNotes.push(`stderr omitted ${formatSize(stderr.droppedBytes)}`);
+      }
+      const captureNote = captureNotes.length > 0
+        ? `\n[Output capture capped; ${captureNotes.join('; ')}.]`
+        : '';
+      resolve(`Command: ${command}\n[Timeout] Command interrupted after ${timeout}s${captureNote}\n\nPartial output (tail):\n${timeoutPreview}\n\n[Suggestion] The command took too long. Consider:\n- Is this a watch/dev server? Run in a separate terminal.\n- Can the task be broken into smaller steps?\n- Is there an error causing it to hang?`);
     }, timeout * 1000);
 
-    proc.stdout?.on('data', (d: Buffer) => { stdout = Buffer.concat([stdout, d]); });
-    proc.stderr?.on('data', (d: Buffer) => { stderr = Buffer.concat([stderr, d]); });
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      appendTailChunk(stdout, chunk, BASH_CAPTURE_LIMIT_BYTES);
+    });
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      appendTailChunk(stderr, chunk, BASH_CAPTURE_LIMIT_BYTES);
+    });
     proc.on('close', code => {
       clearTimeout(timer);
-      const decode = (b: Buffer) => {
-        if (process.platform === 'win32') {
-          try { const s = b.toString('utf-8'); if (!/[\uFFFD]/.test(s)) return s; } catch { }
-          return iconv.decode(b, 'gbk');
-        }
-        return b.toString('utf-8');
-      };
-      // Issue 050 fix: Include command in output for better attribution - Issue 050 修复：在输出中包含命令以便更好地归因
-      let out = `Command: ${command}\nExit: ${code}\n${decode(stdout)}`;
-      if (stderr.length) out += `\n[stderr]\n${decode(stderr)}`;
-      if (capped) out += `\n[Note] Timeout capped at ${KODAX_HARD_TIMEOUT}s`;
-      resolve(out);
+      const stdoutText = decodeCollector(stdout);
+      const stderrText = decodeCollector(stderr);
+
+      let out = `Command: ${command}\nExit: ${code}\n${stdoutText}`;
+      if (stdout.droppedBytes > 0) {
+        out += `\n[stdout capture capped: earlier ${formatSize(stdout.droppedBytes)} omitted]`;
+      }
+      if (stderrText) {
+        out += `\n[stderr]\n${stderrText}`;
+      }
+      if (stderr.droppedBytes > 0) {
+        out += `\n[stderr capture capped: earlier ${formatSize(stderr.droppedBytes)} omitted]`;
+      }
+      if (capped) {
+        out += `\n[Note] Timeout capped at ${KODAX_HARD_TIMEOUT}s`;
+      }
+
+      const preview = truncateTail(out, { maxLines: 600, maxBytes: 32 * 1024 });
+      if (!preview.truncated) {
+        resolve(out);
+        return;
+      }
+
+      const captureNotes = [];
+      if (stdout.totalBytes > stdout.keptBytes) {
+        captureNotes.push(`stdout kept last ${formatSize(stdout.keptBytes)} of ${formatSize(stdout.totalBytes)}`);
+      }
+      if (stderr.totalBytes > stderr.keptBytes) {
+        captureNotes.push(`stderr kept last ${formatSize(stderr.keptBytes)} of ${formatSize(stderr.totalBytes)}`);
+      }
+      const note = captureNotes.length > 0
+        ? `\n\n[Bash output truncated to the tail. ${captureNotes.join('; ')}. Narrow the command or redirect output to a file if you need more context.]`
+        : `\n\n[Bash output truncated to the tail. Narrow the command or redirect output to a file if you need more context.]`;
+      resolve(`${preview.content}${note}`);
     });
-    proc.on('error', e => { clearTimeout(timer); resolve(`Command: ${command}\n[Error] ${e.message}`); });
+    proc.on('error', error => {
+      clearTimeout(timer);
+      resolve(`Command: ${command}\n[Error] ${error.message}`);
+    });
   });
 }

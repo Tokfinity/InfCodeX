@@ -1,10 +1,9 @@
-import { spawn } from 'node:child_process';
-import process from 'node:process';
 import { CLIExecutor } from './executor.js';
+import { checkCliCommandInstalled } from './command-utils.js';
 import type { CLIEvent, CLIExecutorConfig, CLIExecutionOptions } from './types.js';
 
 /**
- * Gemini CLI 原始事件类型
+ * Raw event shape emitted by Gemini CLI JSON streaming mode.
  */
 interface GeminiRawEvent {
     type: 'init' | 'message' | 'tool_use' | 'tool_result' | 'error' | 'result';
@@ -33,7 +32,8 @@ export class GeminiCLIExecutor extends CLIExecutor {
     constructor(config?: Partial<CLIExecutorConfig> & { model?: string }) {
         super({
             command: 'gemini',
-            // ⚠️ --approval-mode yolo: 自动批准所有工具调用。生产环境应考虑替换为更安全的模式
+            // `--approval-mode yolo` keeps the CLI non-interactive for the bridge.
+            // If this provider becomes user-facing, revisit this default carefully.
             baseArgs: ['--output-format', 'stream-json', '--approval-mode', 'yolo'],
             timeout: 300000,
             ...config,
@@ -42,22 +42,13 @@ export class GeminiCLIExecutor extends CLIExecutor {
     }
 
     protected async checkInstalled(): Promise<boolean> {
-        try {
-            const isWin = process.platform === 'win32';
-            const child = spawn(isWin ? 'gemini.cmd' : 'gemini', ['--version']);
-            return new Promise((resolve) => {
-                child.on('close', (code) => resolve(code === 0));
-                child.on('error', () => resolve(false));
-            });
-        } catch {
-            return false;
-        }
+        return checkCliCommandInstalled('gemini');
     }
 
     protected buildArgs(options: CLIExecutionOptions): string[] {
         const args = ['-m', this.model];
 
-        // 如果有会话恢复，使用 -r；否则传 -p
+        // Resume uses `-r`; fresh prompts use `-p`.
         if (options.sessionId) {
             args.push('-r', options.sessionId);
             args.push(options.prompt);

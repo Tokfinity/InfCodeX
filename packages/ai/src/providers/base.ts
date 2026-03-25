@@ -77,7 +77,11 @@ export abstract class KodaXBaseProvider {
     );
   }
 
-  getConfiguredReasoningCapability(): KodaXReasoningCapability {
+  getConfiguredReasoningCapability(modelOverride?: string): KodaXReasoningCapability {
+    const descriptor = this.getModelDescriptor(modelOverride);
+    if (descriptor?.reasoningCapability) {
+      return descriptor.reasoningCapability;
+    }
     return getReasoningCapability(this.config);
   }
 
@@ -85,7 +89,7 @@ export abstract class KodaXBaseProvider {
     const override = loadReasoningOverride(this.name, this.config, modelOverride);
     return override
       ? reasoningOverrideToCapability(override)
-      : this.getConfiguredReasoningCapability();
+      : this.getConfiguredReasoningCapability(modelOverride);
   }
 
   getReasoningOverride(modelOverride?: string): KodaXReasoningOverride | undefined {
@@ -122,6 +126,25 @@ export abstract class KodaXBaseProvider {
       message.includes('unknown parameter') ||
       message.includes('invalid parameter') ||
       (message.includes('unsupported') && mentionsParameter)
+    );
+  }
+
+  protected shouldFallbackForSpecificReasoningError(
+    error: unknown,
+    ...terms: string[]
+  ): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const normalizedTerms = terms.map(term => term.toLowerCase());
+    const matchesSpecificTerm = normalizedTerms.some((term) => message.includes(term));
+
+    if (!matchesSpecificTerm) {
+      return false;
+    }
+
+    return (
+      message.includes('unknown parameter') ||
+      message.includes('invalid parameter') ||
+      message.includes('unsupported')
     );
   }
 

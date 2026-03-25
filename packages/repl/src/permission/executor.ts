@@ -4,7 +4,7 @@
  * 工具执行权限包装器 - 在 REPL 层处理权限检查
  */
 
-import fsSync from 'fs';
+import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { executeTool } from '@kodax/coding';
@@ -14,13 +14,16 @@ import {
   PermissionContext,
   FILE_MODIFICATION_TOOLS,
   computeConfirmTools,
+  normalizePermissionMode,
 } from './types.js';
 import {
   isToolCallAllowed,
   isAlwaysConfirmPath,
   isBashReadCommand,
-  isBashWriteCommand,
-  extractPathsFromCommand,
+  collectBashWriteTargets,
+  getBashOutsideProjectWriteRisk,
+  isPathInsideProject,
+  getPlanModeBlockReason,
 } from './permission.js';
 import { generateSavePattern } from './permission.js';
 
@@ -51,78 +54,6 @@ const BASH_FILE_WRITE_MARKERS = [
 ];
 
 // ============== Path Safety Checks ==============
-
-/**
- * Check if path is inside project directory
- */
-function isPathInsideProject(targetPath: string, projectRoot: string): boolean {
-  try {
-    const resolvedTarget = path.resolve(targetPath);
-    const resolvedRoot = path.resolve(projectRoot);
-    const normalizedTarget = resolvedTarget.toLowerCase();
-    const normalizedRoot = resolvedRoot.toLowerCase();
-    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(normalizedRoot + path.sep);
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Check if bash command is dangerous outside project
- */
-function isBashCommandDangerousOutsideProject(command: string, projectRoot: string): { dangerous: boolean; reason?: string } {
-  const DANGEROUS_COMMANDS = [
-    'rm ', 'rm -', 'rmdir', 'mv ', 'cp ', 'del ', 'rd ',
-    'shred', 'wipe', 'chmod', 'chown',
-    '>', '>>', '2>',
-  ];
-
-  const normalizedCmd = command.toLowerCase();
-  const hasDangerousCmd = DANGEROUS_COMMANDS.some(cmd => normalizedCmd.includes(cmd));
-  if (!hasDangerousCmd) {
-    return { dangerous: false };
-  }
-
-  const absPathPatterns = [
-    /\/[^\s;|&<>(){}'"]+/g,
-    /[A-Za-z]:[\\/][^\s;|&<>(){}'"]+/g,
-  ];
-
-  for (const pattern of absPathPatterns) {
-    const matches = command.match(pattern);
-    if (matches) {
-      for (const match of matches) {
-        if (match.startsWith('/dev/') || match.startsWith('/tmp/')) continue;
-        if (!isPathInsideProject(match, projectRoot)) {
-          return {
-            dangerous: true,
-            reason: `Command may modify file outside project: ${match}`
-          };
-        }
-      }
-    }
-  }
-
-  if (normalizedCmd.includes('>') || normalizedCmd.includes('>>')) {
-    const redirectMatch = command.match(/[>]>\s*([^\s;|&]+)/g);
-    if (redirectMatch) {
-      for (const match of redirectMatch) {
-        const targetPath = match.replace(/[>]>\s*/, '').trim();
-        if (targetPath && !targetPath.startsWith('/') && !targetPath.match(/^[A-Za-z]:/)) {
-          continue;
-        }
-        if (targetPath && !isPathInsideProject(targetPath, projectRoot)) {
-          return {
-            dangerous: true,
-            reason: `Redirect target outside project: ${targetPath}`
-          };
-        }
-      }
-    }
-  }
-
-  return { dangerous: false };
-}
 
 function isPathInsideDirectory(targetPath: string, directoryPath: string): boolean {
   const resolvedTarget = path.resolve(targetPath);
@@ -174,11 +105,11 @@ function buildTemporaryHelperScriptWarning(targetPath: string, projectRoot: stri
   return `[Blocked] Avoid scattering temporary helper scripts outside the project scratch area: ${path.basename(targetPath)}. First try specialized tools (read/edit/write/glob/grep) or a simpler shell command. If a helper script is still necessary, place it under ${scratchDir} or use the system temp directory.`;
 }
 
-function getTemporaryHelperScriptWarning(
+async function getTemporaryHelperScriptWarning(
   toolName: string,
   input: Record<string, unknown>,
   projectRoot?: string
-): string | null {
+): Promise<string | null> {
   if (toolName !== 'write' || !projectRoot) {
     return null;
   }
@@ -189,54 +120,25 @@ function getTemporaryHelperScriptWarning(
   }
 
   try {
-    const resolvedTarget = path.resolve(projectRoot, targetPath);
-
-    if (fsSync.existsSync(resolvedTarget)) {
-      return null;
-    }
-
-    if (!isLikelyTemporaryHelperScriptPath(resolvedTarget, projectRoot)) {
-      return null;
-    }
-
-    return buildTemporaryHelperScriptWarning(resolvedTarget, projectRoot);
-  } catch {
+    await fs.stat(path.resolve(projectRoot, targetPath));
     return null;
-  }
-}
-
-function collectBashWriteTargets(command: string): string[] {
-  const targets = new Set<string>();
-  const pushTarget = (value: string | undefined) => {
-    const trimmed = value?.trim().replace(/^['"]|['"]$/g, '');
-    if (trimmed) {
-      targets.add(trimmed);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      return null;
     }
-  };
 
-  for (const extractedPath of extractPathsFromCommand(command)) {
-    pushTarget(extractedPath);
+    try {
+      const resolvedTarget = path.resolve(projectRoot, targetPath);
+
+      if (!isLikelyTemporaryHelperScriptPath(resolvedTarget, projectRoot)) {
+        return null;
+      }
+
+      return buildTemporaryHelperScriptWarning(resolvedTarget, projectRoot);
+    } catch {
+      return null;
+    }
   }
-
-  const redirectPattern = />>?\s*([^\s;|&]+)/g;
-  let redirectMatch: RegExpExecArray | null;
-  while ((redirectMatch = redirectPattern.exec(command)) !== null) {
-    pushTarget(redirectMatch[1]);
-  }
-
-  const powershellWritePattern = /(?:set-content|add-content|out-file|new-item)\s+(?:-path\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let powershellMatch: RegExpExecArray | null;
-  while ((powershellMatch = powershellWritePattern.exec(command)) !== null) {
-    pushTarget(powershellMatch[1] ?? powershellMatch[2] ?? powershellMatch[3]);
-  }
-
-  const teePattern = /\btee\b(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let teeMatch: RegExpExecArray | null;
-  while ((teeMatch = teePattern.exec(command)) !== null) {
-    pushTarget(teeMatch[1] ?? teeMatch[2] ?? teeMatch[3]);
-  }
-
-  return Array.from(targets);
 }
 
 function getBashTemporaryHelperScriptWarning(command: string, projectRoot?: string): string | null {
@@ -283,14 +185,9 @@ export async function executeWithPermission(
 
   // === 1. Plan mode: block all modification tools ===
   if (mode === 'plan') {
-    if (FILE_MODIFICATION_TOOLS.has(toolName) || toolName === 'undo') {
-      return `[Blocked] Tool '${toolName}' is not allowed in plan mode (read-only). Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
-    }
-    if (toolName === 'bash') {
-      const command = (input.command as string) ?? '';
-      if (isBashWriteCommand(command)) {
-        return `[Blocked] Bash write operation not allowed in plan mode: ${command.slice(0, 50)}... Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
-      }
+    const planModeBlockReason = getPlanModeBlockReason(toolName, input, permContext.gitRoot);
+    if (planModeBlockReason) {
+      return `${planModeBlockReason} Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent "plan-handoff" to ask whether this session should switch to accept-edits and continue.`;
     }
   }
 
@@ -308,7 +205,7 @@ export async function executeWithPermission(
   }
 
   // === 2.5. Guard against temporary helper scripts outside scratch area ===
-  const tempScriptWarning = getTemporaryHelperScriptWarning(toolName, input, permContext.gitRoot);
+  const tempScriptWarning = await getTemporaryHelperScriptWarning(toolName, input, permContext.gitRoot);
   if (tempScriptWarning) {
     return tempScriptWarning;
   }
@@ -339,7 +236,7 @@ export async function executeWithPermission(
   if (mode === 'auto-in-project' && permContext.gitRoot && toolName === 'bash') {
     const command = input.command as string;
     if (command) {
-      const dangerCheck = isBashCommandDangerousOutsideProject(command, permContext.gitRoot);
+      const dangerCheck = getBashOutsideProjectWriteRisk(command, permContext.gitRoot);
       if (dangerCheck.dangerous) {
         const result = permContext.onConfirm
           ? await permContext.onConfirm(toolName, { ...input, _outsideProject: true, _reason: dangerCheck.reason })
@@ -389,7 +286,7 @@ export function createPermissionContext(options: {
   switchPermissionMode?: PermissionContext['switchPermissionMode'];
   beforeToolExecute?: PermissionContext['beforeToolExecute'];
 }): PermissionContext {
-  const mode = options.permissionMode ?? 'accept-edits';
+  const mode = normalizePermissionMode(options.permissionMode, 'accept-edits') ?? 'accept-edits';
   return {
     permissionMode: mode,
     confirmTools: computeConfirmTools(mode),

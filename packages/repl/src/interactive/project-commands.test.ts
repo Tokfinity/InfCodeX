@@ -1,7 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 
 const { mockRunKodaX } = vi.hoisted(() => ({
   mockRunKodaX: vi.fn(),
@@ -44,7 +42,8 @@ const currentConfig: CurrentConfig = {
   provider: 'zhipu-coding',
   thinking: true,
   reasoningMode: 'auto',
-  permissionMode: 'default' as never,
+  parallel: false,
+  permissionMode: 'accept-edits' as never,
 };
 
 describe('project commands', () => {
@@ -52,7 +51,7 @@ describe('project commands', () => {
   let tempDir = '';
 
   beforeEach(async () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'kodax-project-commands-'));
+    tempDir = createTempDirSync('kodax-project-commands-');
     process.chdir(tempDir);
 
     const storage = new ProjectStorage(tempDir);
@@ -78,9 +77,7 @@ describe('project commands', () => {
 
   afterEach(() => {
     process.chdir(originalCwd);
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    removeTempDirSync(tempDir);
     vi.restoreAllMocks();
   });
 

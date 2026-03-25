@@ -25,7 +25,7 @@
     //   zhipu-coding:   [glm-5, glm-5-turbo, glm-4.7]
     //   kimi:           [k2.5]
     //   kimi-code:      [k2.5]
-    //   minimax-coding: [MiniMax-M2.5]
+    //   minimax-coding: [MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed, MiniMax-M2.1, MiniMax-M2.1-highspeed, MiniMax-M2]
     //   gemini-cli:     [gemini-cli]
     //   codex-cli:      [codex-cli]
     //
@@ -99,11 +99,19 @@
     // value 可选: "budget" | "effort" | "toggle" | "none"
     "providerReasoningOverrides": {},
 
+    // Tool execution mode
+    // false = sequential execution (default)
+    // true  = parallel execution when independent tools can run concurrently
+    "parallel": false,
+
     // ── Compaction 压缩配置 ────────────────────────────────────
     "compaction": {
-        "enabled": true,
-        "triggerPercent": 75,
-        "keepRecentPercent": 10
+        // "enabled": false,                // Optional: disable auto-compaction only; /compact still works
+        // "contextWindow": 200000,
+        // "protectionPercent": 20,
+        // "rollingSummaryPercent": 10,
+        // "pruningThresholdTokens": 500,
+        "triggerPercent": 75
     },
 
     // ── Permission 权限配置 ────────────────────────────────────

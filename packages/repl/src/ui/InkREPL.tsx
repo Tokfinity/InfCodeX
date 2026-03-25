@@ -49,6 +49,7 @@ import {
   ConfirmResult,
   createPermissionContext,
   computeConfirmTools,
+  normalizePermissionMode,
   isToolCallAllowed,
   isAlwaysConfirmPath,
   isCommandOnProtectedPath,
@@ -90,7 +91,7 @@ import { prepareInvocationExecution } from "../interactive/invocation-runtime.js
 
 // Extracted modules
 import { MemorySessionStorage, type SessionStorage } from "./utils/session-storage.js";
-import { processSpecialSyntax, isShellCommandSuccess } from "./utils/shell-executor.js";
+import { processSpecialSyntax, isShellCommandHandled } from "./utils/shell-executor.js";
 import {
   extractHistorySeedsFromMessage,
   extractTextContent,
@@ -150,6 +151,10 @@ interface ReviewSnapshot {
   isCompacting: boolean;
 }
 
+type StreamingEvents = import("@kodax/coding").KodaXEvents & {
+  onCompactedMessages?: (messages: KodaXMessage[]) => void;
+};
+
 const PLAN_MODE_BLOCK_GUIDANCE =
   "Do not try to modify files while planning. Finish the plan first, then use ask_user_question with intent \"plan-handoff\" to ask whether this session should switch to accept-edits and continue.";
 
@@ -175,7 +180,7 @@ function resolveInitialReasoningMode(
 const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compactionInfo }) => {
   const theme = getTheme("dark");
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
-  const reasoningCapability = getProviderReasoningCapability(config.provider);
+  const reasoningCapability = getProviderReasoningCapability(config.provider, config.model);
   const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
   const terminalWidth = process.stdout.columns ?? 80;
   const dividerWidth = Math.min(60, terminalWidth - 4);
@@ -222,6 +227,12 @@ const Banner: React.FC<BannerProps> = ({ config, sessionId, workingDir, compacti
         </Text>
         <Text color={theme.colors.accent}>
           {config.permissionMode}
+        </Text>
+        <Text dimColor>
+          {" | "}
+        </Text>
+        <Text color={config.parallel ? theme.colors.success : theme.colors.dim}>
+          {config.parallel ? "parallel" : "sequential"}
         </Text>
         {config.reasoningMode !== 'off' && (
           <Text color={theme.colors.warning}>
@@ -387,6 +398,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [canQueueFollowUps, setCanQueueFollowUps] = useState(false);
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const lastCompactionTokensBeforeRef = useRef<number | null>(null);
+  const persistContextStateRef = useRef<(() => Promise<void>) | null>(null);
   const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
   const [inputText, setInputText] = useState("");
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
@@ -460,15 +472,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (!compactionInfo) return undefined;
 
     const { contextWindow, triggerPercent } = compactionInfo;
-    // Use live token count during streaming, otherwise calculate from messages
-    const currentTokens = liveTokenCount ?? estimateTokens(context.messages);
+    const currentTokens =
+      liveTokenCount ??
+      context.contextTokenSnapshot?.currentTokens ??
+      estimateTokens(context.messages);
 
     return {
       currentTokens,
       contextWindow,
       triggerPercent,
     };
-  }, [context.messages, compactionInfo, liveTokenCount]);
+  }, [context.messages, context.contextTokenSnapshot, compactionInfo, liveTokenCount]);
 
   const confirmInstruction = useMemo(() => {
     if (!confirmRequest) return undefined;
@@ -553,14 +567,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const statusBarProps = useMemo(() => ({
     sessionId: context.sessionId,
     permissionMode: currentConfig.permissionMode,
+    parallel: currentConfig.parallel,
     provider: currentConfig.provider,
     model: currentConfig.model ?? getProviderModel(currentConfig.provider) ?? currentConfig.provider,
     currentTool: displayStreamingState.currentTool,
     thinking: currentConfig.thinking,
     reasoningMode: currentConfig.reasoningMode,
-    reasoningCapability: formatReasoningCapabilityShort(
-      getProviderReasoningCapability(currentConfig.provider),
-    ),
+            reasoningCapability: formatReasoningCapabilityShort(
+              getProviderReasoningCapability(currentConfig.provider, currentConfig.model),
+            ),
     isThinkingActive: displayStreamingState.isThinking,
     thinkingCharCount: displayStreamingState.thinkingCharCount,
     toolInputCharCount: displayStreamingState.toolInputCharCount,
@@ -573,6 +588,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }), [
     context.sessionId,
     currentConfig.permissionMode,
+    currentConfig.parallel,
     currentConfig.provider,
     currentConfig.model,
     currentConfig.thinking,
@@ -686,6 +702,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Note: permissionMode and alwaysAllowTools are stored separately for permission checks
   const currentOptionsRef = useRef<InkREPLOptions>({
     ...options,
+    parallel: currentConfig.parallel,
     thinking: currentConfig.thinking,
     reasoningMode: currentConfig.reasoningMode,
     session: {
@@ -1054,7 +1071,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates
-  const createStreamingEvents = useCallback((): import("@kodax/coding").KodaXEvents => ({
+  const createStreamingEvents = useCallback((): StreamingEvents => ({
     onThinkingDelta: (text: string) => {
       // The UI layer stores thinking content for display.
       appendThinkingChars(text.length);
@@ -1322,6 +1339,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       lastCompactionTokensBeforeRef.current = info.tokensBefore;
       setLiveTokenCount(info.tokensAfter);
     },
+    onCompactedMessages: (messages: KodaXMessage[]) => {
+      context.messages = messages;
+      const currentTokens = estimateTokens(messages);
+      context.contextTokenSnapshot = {
+        currentTokens,
+        baselineEstimatedTokens: currentTokens,
+        source: 'estimate',
+      };
+      touchContext(context);
+      setLiveTokenCount(currentTokens);
+      void persistContextStateRef.current?.().catch(() => {});
+    },
     // Compaction event - notification only, do NOT clear UI history here
 
     onCompact: (estimatedTokens: number) => {
@@ -1346,10 +1375,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Iteration end - update live token count for real-time context usage display
 
-    onIterationEnd: (info: { iter: number; maxIter: number; tokenCount: number }) => {
+    onIterationEnd: (info: {
+      iter: number;
+      maxIter: number;
+      tokenCount: number;
+      contextTokenSnapshot?: import("@kodax/coding").KodaXContextTokenSnapshot;
+    }) => {
+      context.contextTokenSnapshot = info.contextTokenSnapshot;
       setLiveTokenCount(info.tokenCount);
     },
-  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context.gitRoot, startCompacting, stopCompacting, addHistoryItem]);
+  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context, startCompacting, stopCompacting, addHistoryItem]);
 
   // Helper function to show confirmation dialog
 
@@ -1413,6 +1448,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         },
         context: {
           ...opts.context,
+          contextTokenSnapshot: context.contextTokenSnapshot,
           skillsPrompt, // Inject skills into system prompt
         },
         events,
@@ -1436,8 +1472,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     });
   }, [context, storage]);
 
+  useEffect(() => {
+    persistContextStateRef.current = persistContextState;
+    return () => {
+      persistContextStateRef.current = null;
+    };
+  }, [persistContextState]);
+
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
     context.messages = result.messages;
+    context.contextTokenSnapshot = result.contextTokenSnapshot;
 
     const finalThinking = getThinkingContent().trim();
     const finalResponse = resolveAssistantHistoryText(result.messages, getFullResponse());
@@ -1530,6 +1574,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       {
         ...currentOptionsRef.current,
         provider: currentConfig.provider,
+        parallel: currentConfig.parallel,
         thinking: currentConfig.thinking,
         reasoningMode: currentConfig.reasoningMode,
       },
@@ -1574,6 +1619,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
       } else {
         context.messages = result.messages;
+        context.contextTokenSnapshot = result.contextTokenSnapshot;
         appendLastAssistantToHistory(result.messages);
       }
 
@@ -1690,12 +1736,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             const now = new Date().toISOString();
             context.sessionId = nextSessionId;
             context.title = "";
+            context.contextTokenSnapshot = undefined;
             context.createdAt = now;
             context.lastAccessed = now;
             currentOptionsRef.current.session = {
               ...currentOptionsRef.current.session,
               id: nextSessionId,
             };
+            setLiveTokenCount(null);
             setSessionId(nextSessionId);
           },
           loadSession: async (id: string) => {
@@ -1704,6 +1752,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.messages = loaded.messages;
               context.title = loaded.title;
               context.sessionId = id;
+              context.contextTokenSnapshot = undefined;
+              setLiveTokenCount(null);
               console.log(chalk.green(`[Session loaded: ${id}]`));
               return true;
             }
@@ -1772,6 +1822,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             currentOptionsRef.current.thinking = thinking;
             currentOptionsRef.current.reasoningMode = mode;
           },
+          setParallel: (enabled: boolean) => {
+            // Persistence is handled by the command layer; this callback only syncs runtime state and UI.
+            setCurrentConfig((prev) => ({
+              ...prev,
+              parallel: enabled,
+            }));
+            currentOptionsRef.current.parallel = enabled;
+          },
           setPermissionMode: (mode: PermissionMode) => {
             setSessionPermissionMode(mode);
           },
@@ -1788,6 +1846,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
             model: currentConfig.model,
+            parallel: currentConfig.parallel,
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
             events: createStreamingEvents(), // Include streaming events for /project commands
@@ -1818,36 +1877,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             select: async (title: string, options: string[]): Promise<string | undefined> => {
               // Route through Ink-managed dialog state instead of reading stdin directly.
               return showSelectDialog(title, options);
-              // TODO: Implement Ink-based select dialog
-              // For now, use simple console-based selection
-              console.log(`\n${title}`);
-              console.log('\u2500'.repeat(title.length));
-              options.forEach((option, index) => {
-                console.log(`  ${index + 1}. ${option}`);
-              });
-              console.log('  0. Cancel');
-              console.log('');
-
-              // Use Ink's input to get selection
-              return new Promise((resolve) => {
-                const handleInput = (data: string) => {
-                  const trimmed = data.trim();
-                  if (trimmed === '0' || trimmed === '') {
-                    resolve(undefined);
-                    return;
-                  }
-                  const index = parseInt(trimmed, 10) - 1;
-                  if (isNaN(index) || index < 0 || index >= options.length) {
-                    console.log('Invalid choice.');
-                    resolve(undefined);
-                    return;
-                  }
-                  resolve(options[index]);
-                };
-                // Note: This is a temporary implementation
-                // A proper implementation would use Ink components
-                process.stdin.once('data', handleInput);
-              });
             },
             confirm: async (message: string): Promise<boolean> => {
               const result = await showConfirmDialog("confirm", {
@@ -1859,22 +1888,6 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             input: async (prompt: string, defaultValue?: string): Promise<string | undefined> => {
               // Route through Ink-managed dialog state instead of reading stdin directly.
               return showInputDialog(prompt, defaultValue);
-              // TODO: Implement Ink-based input dialog
-              // For now, use simple console-based input
-              const promptText = defaultValue ? `${prompt} [${defaultValue}]: ` : `${prompt}: `;
-              console.log(promptText);
-
-              return new Promise((resolve) => {
-                const handleInput = (data: string) => {
-                  const trimmed = data.trim();
-                  if (trimmed === '' && defaultValue !== undefined) {
-                    resolve(defaultValue);
-                    return;
-                  }
-                  resolve(trimmed || undefined);
-                };
-                process.stdin.once('data', handleInput);
-              });
             },
           },
         };
@@ -2025,8 +2038,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Skip if shell command was executed successfully
       if (
         input.trim().startsWith("!") &&
-        (processed.startsWith("[Shell command executed:") ||
-          processed.startsWith("[Shell:"))
+        isShellCommandHandled(processed)
       ) {
         setIsLoading(false);
         stopStreaming();
@@ -2043,6 +2055,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           await runWithPlanMode(processed, {
             ...currentOptionsRef.current,
             provider: currentConfig.provider,
+            parallel: currentConfig.parallel,
             thinking: currentConfig.thinking,
             reasoningMode: currentConfig.reasoningMode,
           });
@@ -2239,6 +2252,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }}
         onSetPermissionMode={(mode) => {
           setSessionPermissionMode(mode);
+        }}
+        onSetParallel={(enabled) => {
+          currentOptionsRef.current.parallel = enabled;
         }}
         isInputEmpty={isInputEmpty}
         onSavePermissionMode={savePermissionModeUser}
@@ -2489,16 +2505,18 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
   const initialThinking = initialReasoningMode !== 'off';
+  const initialParallel = options.parallel ?? config.parallel ?? false;
   // Load permission mode from config file (not from CLI options)
   // CLI is always YOLO mode; REPL uses config file for permission mode
   const initialPermissionMode: PermissionMode =
-    (config.permissionMode as PermissionMode | undefined) ?? 'accept-edits';
+    normalizePermissionMode(config.permissionMode, 'accept-edits') ?? 'accept-edits';
 
   const currentConfig: CurrentConfig = {
     provider: initialProvider,
     model: initialModel,
     thinking: initialThinking,
     reasoningMode: initialReasoningMode,
+    parallel: initialParallel,
     permissionMode: initialPermissionMode,
   };
 

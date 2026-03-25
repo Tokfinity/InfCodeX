@@ -1,10 +1,9 @@
-import { spawn } from 'node:child_process';
-import process from 'node:process';
 import { CLIExecutor } from './executor.js';
+import { checkCliCommandInstalled } from './command-utils.js';
 import type { CLIEvent, CLIExecutorConfig, CLIExecutionOptions } from './types.js';
 
 /**
- * Codex CLI 原始事件类型
+ * Raw event shape emitted by Codex CLI JSON mode.
  */
 interface CodexRawEvent {
     type: string;
@@ -38,34 +37,25 @@ export class CodexCLIExecutor extends CLIExecutor {
     }
 
     protected async checkInstalled(): Promise<boolean> {
-        try {
-            const isWin = process.platform === 'win32';
-            const child = spawn(isWin ? 'codex.cmd' : 'codex', ['--version']);
-            return new Promise((resolve) => {
-                child.on('close', (code) => resolve(code === 0));
-                child.on('error', () => resolve(false));
-            });
-        } catch {
-            return false;
-        }
+        return checkCliCommandInstalled('codex');
     }
 
     protected buildArgs(options: CLIExecutionOptions): string[] {
-        // Codex CLI 格式:
-        //   首次: codex exec --json --full-auto "prompt"
-        //   恢复: codex exec resume <session_id> "prompt" --json --full-auto
-        // 注意: resume 是 exec 的子命令，flags 必须在子命令之后
+        // Codex CLI shapes:
+        //   first prompt: codex exec --json --full-auto "prompt"
+        //   resume flow:  codex exec resume <session_id> "prompt" --json --full-auto
+        // Note that `resume` is a subcommand of `exec`, so flags must follow it.
 
         if (options.sessionId) {
-            // 恢复会话: exec resume <id> <prompt> <flags>
+            // Resume an existing Codex session.
             return [
                 'exec', 'resume', options.sessionId,
                 options.prompt,
-                ...this.config.baseArgs.filter(a => a !== 'exec'), // exec 已手动插入
+                ...this.config.baseArgs.filter(a => a !== 'exec'), // `exec` was inserted manually above.
             ];
         }
 
-        // 首次执行: exec <flags> <prompt>
+        // Fresh execution.
         return [...this.config.baseArgs, options.prompt];
     }
 
@@ -103,7 +93,6 @@ export class CodexCLIExecutor extends CLIExecutor {
                         raw,
                     };
                 }
-                // command_execution
                 if (raw.item?.type === 'command_execution') {
                     return {
                         type: 'tool_use',

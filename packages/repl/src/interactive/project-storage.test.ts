@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 import {
   appendBrainstormExchange,
   completeBrainstormSession,
@@ -14,13 +14,11 @@ describe('project-storage brainstorm persistence', () => {
   let tempDir = '';
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'kodax-project-storage-'));
+    tempDir = createTempDirSync('kodax-project-storage-');
   });
 
   afterEach(() => {
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    removeTempDirSync(tempDir);
   });
 
   it('saves and loads brainstorm sessions with transcript files', async () => {
@@ -108,6 +106,24 @@ describe('project-storage brainstorm persistence', () => {
 
     const runs = await storage.readHarnessRuns<{ featureIndex: number }>();
     expect(runs).toEqual([{ featureIndex: 1 }, { featureIndex: 2 }]);
+  });
+
+  it('rejects malformed brainstorm session JSON instead of blindly casting it', async () => {
+    const storage = new ProjectStorage(tempDir);
+    const sessionPath = join(storage.getPaths().brainstormProjects, 'bad-session', 'session.json');
+    mkdirSync(dirname(sessionPath), { recursive: true });
+    writeFileSync(
+      sessionPath,
+      JSON.stringify({
+        id: 'bad-session',
+        topic: 'Bad session',
+        status: 'active',
+        turns: 'not-an-array',
+      }),
+      'utf-8',
+    );
+
+    await expect(storage.loadBrainstormSession('bad-session')).resolves.toBeNull();
   });
 
   it('persists checkpoint and session-tree records under .agent/project', async () => {
