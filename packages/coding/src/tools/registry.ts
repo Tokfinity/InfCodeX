@@ -1,7 +1,13 @@
-import { ToolHandler } from './types.js';
-import { KodaXToolExecutionContext } from '../types.js';
-import { KodaXToolDefinition } from '@kodax/ai';
-import { KODAX_TOOL_REQUIRED_PARAMS } from '../constants.js';
+import type { KodaXToolDefinition } from '@kodax/ai';
+import type { KodaXToolExecutionContext } from '../types.js';
+import type {
+  LocalToolDefinition,
+  RegisteredToolDefinition,
+  ToolDefinitionSource,
+  ToolHandler,
+  ToolRegistry,
+  ToolRegistrationOptions,
+} from './types.js';
 import { toolRead } from './read.js';
 import { toolWrite } from './write.js';
 import { toolEdit } from './edit.js';
@@ -11,30 +17,85 @@ import { toolGrep } from './grep.js';
 import { toolUndo } from './undo.js';
 import { toolAskUserQuestion } from './ask-user-question.js';
 
-const TOOL_REGISTRY = new Map<string, ToolHandler>();
+const TOOL_REGISTRY: ToolRegistry = new Map();
+let nextToolRegistrationId = 0;
 
-export function registerTool(name: string, handler: ToolHandler): void {
-  TOOL_REGISTRY.set(name, handler);
+function extractRequiredParams(
+  inputSchema: KodaXToolDefinition['input_schema'] | undefined,
+): string[] {
+  if (
+    !inputSchema
+    || typeof inputSchema !== 'object'
+    || !('required' in inputSchema)
+    || !Array.isArray(inputSchema.required)
+  ) {
+    return [];
+  }
+
+  return inputSchema.required.filter(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0,
+  );
 }
 
-export function getTool(name: string): ToolHandler | undefined {
-  return TOOL_REGISTRY.get(name);
+function toToolDefinition(definition: RegisteredToolDefinition): KodaXToolDefinition {
+  const { handler: _handler, registrationId: _registrationId, requiredParams: _requiredParams, source: _source, ...tool } = definition;
+  return tool;
 }
 
-export function listTools(): string[] {
-  return Array.from(TOOL_REGISTRY.keys());
+function getActiveToolRegistration(name: string): RegisteredToolDefinition | undefined {
+  const registrations = TOOL_REGISTRY.get(name);
+  if (!registrations || registrations.length === 0) {
+    return undefined;
+  }
+  return registrations[registrations.length - 1];
 }
 
-registerTool('read', toolRead);
-registerTool('write', toolWrite);
-registerTool('edit', toolEdit);
-registerTool('bash', toolBash);
-registerTool('glob', toolGlob);
-registerTool('grep', toolGrep);
-registerTool('undo', toolUndo);
-registerTool('ask_user_question', toolAskUserQuestion);
+function removeToolRegistration(registrationId: string): void {
+  for (const [name, registrations] of TOOL_REGISTRY) {
+    const nextRegistrations = registrations.filter(
+      (registration) => registration.registrationId !== registrationId,
+    );
 
-export const KODAX_TOOLS: KodaXToolDefinition[] = [
+    if (nextRegistrations.length === registrations.length) {
+      continue;
+    }
+
+    if (nextRegistrations.length === 0) {
+      TOOL_REGISTRY.delete(name);
+    } else {
+      TOOL_REGISTRY.set(name, nextRegistrations);
+    }
+    return;
+  }
+}
+
+function registerToolInternal(
+  definition: LocalToolDefinition,
+  options: ToolRegistrationOptions = {},
+): () => void {
+  const registrationId = `tool:${++nextToolRegistrationId}`;
+  const source: ToolDefinitionSource = options.source ?? {
+    kind: 'extension',
+    id: registrationId,
+    label: definition.name,
+  };
+
+  const registration: RegisteredToolDefinition = {
+    ...definition,
+    registrationId,
+    requiredParams: extractRequiredParams(definition.input_schema),
+    source,
+  };
+
+  const existing = TOOL_REGISTRY.get(definition.name) ?? [];
+  TOOL_REGISTRY.set(definition.name, [...existing, registration]);
+
+  return () => {
+    removeToolRegistration(registrationId);
+  };
+}
+
+const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'read',
     description: 'Read a text file with bounded output. Large files are capped per call; use offset/limit to continue in smaller slices.',
@@ -47,6 +108,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['path'],
     },
+    handler: toolRead,
   },
   {
     name: 'write',
@@ -59,6 +121,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['path', 'content'],
     },
+    handler: toolWrite,
   },
   {
     name: 'edit',
@@ -73,6 +136,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['path', 'old_string', 'new_string'],
     },
+    handler: toolEdit,
   },
   {
     name: 'bash',
@@ -85,6 +149,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['command'],
     },
+    handler: toolBash,
   },
   {
     name: 'glob',
@@ -97,6 +162,7 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['pattern'],
     },
+    handler: toolGlob,
   },
   {
     name: 'grep',
@@ -111,11 +177,13 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['pattern', 'path'],
     },
+    handler: toolGrep,
   },
   {
     name: 'undo',
     description: 'Revert the last file modification.',
     input_schema: { type: 'object', properties: {} },
+    handler: toolUndo,
   },
   {
     name: 'ask_user_question',
@@ -161,31 +229,141 @@ export const KODAX_TOOLS: KodaXToolDefinition[] = [
       },
       required: ['question', 'options'],
     },
+    handler: toolAskUserQuestion,
   },
 ];
+
+for (const definition of BUILTIN_TOOL_DEFINITIONS) {
+  registerToolInternal(definition, {
+    source: {
+      kind: 'builtin',
+      id: `builtin:${definition.name}`,
+      label: definition.name,
+    },
+  });
+}
+
+export const KODAX_TOOLS: KodaXToolDefinition[] = BUILTIN_TOOL_DEFINITIONS.map((definition) => {
+  const { handler: _handler, ...tool } = definition;
+  return tool;
+});
+
+export function registerTool(
+  definition: LocalToolDefinition,
+  options: ToolRegistrationOptions = {},
+): () => void {
+  return registerToolInternal(definition, options);
+}
+
+export function getTool(name: string): ToolHandler | undefined {
+  return getActiveToolRegistration(name)?.handler;
+}
+
+export function getToolDefinition(name: string): KodaXToolDefinition | undefined {
+  const registration = getActiveToolRegistration(name);
+  return registration ? toToolDefinition(registration) : undefined;
+}
+
+export function getRegisteredToolDefinition(name: string): RegisteredToolDefinition | undefined {
+  return getActiveToolRegistration(name);
+}
+
+export function getToolRegistrations(name: string): RegisteredToolDefinition[] {
+  return [...(TOOL_REGISTRY.get(name) ?? [])];
+}
+
+export function getBuiltinToolDefinition(name: string): KodaXToolDefinition | undefined {
+  const definition = BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!definition) {
+    return undefined;
+  }
+  const { handler: _handler, ...tool } = definition;
+  return tool;
+}
+
+export function getBuiltinRegisteredToolDefinition(
+  name: string,
+): RegisteredToolDefinition | undefined {
+  const definition = BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!definition) {
+    return undefined;
+  }
+
+  return {
+    ...definition,
+    registrationId: `builtin:${definition.name}`,
+    requiredParams: extractRequiredParams(definition.input_schema),
+    source: {
+      kind: 'builtin',
+      id: `builtin:${definition.name}`,
+      label: definition.name,
+    },
+  };
+}
+
+export function createBuiltinToolDefinition(
+  name: string,
+): LocalToolDefinition | undefined {
+  const definition = BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!definition) {
+    return undefined;
+  }
+  return {
+    ...definition,
+    input_schema: definition.input_schema
+      ? JSON.parse(JSON.stringify(definition.input_schema))
+      : definition.input_schema,
+  };
+}
+
+export function listBuiltinToolDefinitions(): RegisteredToolDefinition[] {
+  return BUILTIN_TOOL_DEFINITIONS.map((definition) => ({
+    ...definition,
+    registrationId: `builtin:${definition.name}`,
+    requiredParams: extractRequiredParams(definition.input_schema),
+    source: {
+      kind: 'builtin',
+      id: `builtin:${definition.name}`,
+      label: definition.name,
+    },
+  }));
+}
+
+export function getRequiredToolParams(name: string): string[] {
+  return getActiveToolRegistration(name)?.requiredParams ?? [];
+}
+
+export function listTools(): string[] {
+  return Array.from(TOOL_REGISTRY.keys())
+    .filter((name) => getActiveToolRegistration(name) !== undefined)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function listToolDefinitions(): KodaXToolDefinition[] {
+  return listTools()
+    .map((name) => getToolDefinition(name))
+    .filter((definition): definition is KodaXToolDefinition => definition !== undefined);
+}
 
 export async function executeTool(
   name: string,
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const required = KODAX_TOOL_REQUIRED_PARAMS[name] ?? [];
-  const missing = required.filter(param => input[param] === undefined || input[param] === null);
+  const definition = getRegisteredToolDefinition(name);
+  if (!definition) {
+    return `[Tool Error] Unknown tool: ${name}. Available tools: ${listTools().join(', ')}`;
+  }
+
+  const missing = definition.requiredParams.filter(
+    (param) => input[param] === undefined || input[param] === null,
+  );
   if (missing.length > 0) {
     return `[Tool Error] ${name}: Missing required parameter(s): ${missing.join(', ')}`;
   }
 
-  if (!KODAX_TOOL_REQUIRED_PARAMS.hasOwnProperty(name)) {
-    return `[Tool Error] Unknown tool: ${name}. Available tools: ${Object.keys(KODAX_TOOL_REQUIRED_PARAMS).join(', ')}`;
-  }
-
-  const handler = getTool(name);
-  if (!handler) {
-    return `[Tool Error] Unknown tool: ${name}`;
-  }
-
   try {
-    return await handler(input, ctx);
+    return await definition.handler(input, ctx);
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes('ENOENT')) {

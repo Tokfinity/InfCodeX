@@ -1,0 +1,44 @@
+import { describe, expect, it } from 'vitest';
+import {
+  executeTool,
+  getTool,
+  getRequiredToolParams,
+  registerTool,
+} from './index.js';
+import type { KodaXToolExecutionContext } from '../types.js';
+
+const TEST_CONTEXT: KodaXToolExecutionContext = {
+  backups: new Map(),
+  executionCwd: process.cwd(),
+};
+
+describe('tool registry', () => {
+  it('derives required params from the active tool schema', () => {
+    expect(getRequiredToolParams('read')).toEqual(['path']);
+    expect(getRequiredToolParams('ask_user_question')).toEqual(['question', 'options']);
+  });
+
+  it('supports same-name override and restore via disposer', async () => {
+    const originalHandler = getTool('read');
+    const dispose = registerTool({
+      name: 'read',
+      description: 'Test override',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+        },
+        required: ['path'],
+      },
+      handler: async (input) => `override:${String(input.path)}`,
+    });
+
+    await expect(
+      executeTool('read', { path: '/tmp/demo.txt' }, TEST_CONTEXT),
+    ).resolves.toBe('override:/tmp/demo.txt');
+
+    dispose();
+
+    expect(getTool('read')).toBe(originalHandler);
+  });
+});

@@ -88,7 +88,7 @@ export interface CommandResultData {
 
 export interface CommandInvocationRequest extends CommandExecutionMetadata {
   prompt: string;
-  source: 'skill' | 'prompt';
+  source: 'skill' | 'prompt' | 'extension';
   displayName: string;
   path?: string;
 }

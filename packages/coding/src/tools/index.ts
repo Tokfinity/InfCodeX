@@ -4,12 +4,28 @@
  * 工具模块统一导出
  */
 
-export type { ToolHandler, ToolRegistry } from './types.js';
+export type {
+  ToolHandler,
+  ToolRegistry,
+  LocalToolDefinition,
+  RegisteredToolDefinition,
+  ToolDefinitionSource,
+  ToolRegistrationOptions,
+} from './types.js';
 export {
   KODAX_TOOLS,
   registerTool,
   getTool,
+  getToolDefinition,
+  getRegisteredToolDefinition,
+  getToolRegistrations,
+  getBuiltinToolDefinition,
+  getBuiltinRegisteredToolDefinition,
+  createBuiltinToolDefinition,
+  listBuiltinToolDefinitions,
+  getRequiredToolParams,
   listTools,
+  listToolDefinitions,
   executeTool,
 } from './registry.js';
 export { toolRead } from './read.js';

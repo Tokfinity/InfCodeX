@@ -1076,9 +1076,15 @@ InfCodeX 体现出一套相对清晰的设计哲学：
 
 当前仓库仍处于快速演进阶段，因此存在一些文档与实现前后不完全一致的地方，例如：
 
-- `InfCodeX` 与 `KodaX` 命名并存
-- 有些文档还写 7 个 provider，但更新后的 README / config 已展示 10 个内置 provider
-- 包名和 CLI 命令仍是 `kodax`
+- [README.md](README.md) - 英文文档
+- [docs/ADR.md](docs/ADR.md) - 架构决策记录
+- [docs/HLD.md](docs/HLD.md) - 高层设计
+- [docs/DD.md](docs/DD.md) - 详细设计
+- [docs/PRD.md](docs/PRD.md) - 产品需求文档
+- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature 跟踪与路线图索引
+- [docs/features/README.md](docs/features/README.md) - Feature Design 索引
+- [docs/test-guides/](docs/test-guides/) - 功能专用测试指南
+- [CHANGELOG.md](CHANGELOG.md) - 版本历史
 
 因此，这份 README 更强调 **稳定的架构事实**，同时保留了 KodaX 分支中对日常使用非常有价值的详细说明。
 

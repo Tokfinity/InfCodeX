@@ -2,12 +2,14 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax/coding';
 import { CommandCompleter, FileCompleter, findCommandSlashIndex } from './autocomplete.js';
 import { getCommandRegistry } from './commands.js';
 
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  setActiveExtensionRuntime(null);
 });
 
 describe('CommandCompleter boundaries', () => {
@@ -68,6 +70,39 @@ describe('CommandCompleter boundaries', () => {
       expect(completions.some((item) => item.display === '/internal-sync')).toBe(false);
     } finally {
       registry.unregister('internal-sync');
+    }
+  });
+
+  it('includes active extension runtime commands in completions', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-autocomplete-ext-'));
+    const extensionPath = path.join(tempDir, 'ext.mjs');
+    await fs.writeFile(
+      extensionPath,
+      `
+        export default function(api) {
+          api.registerCommand({
+            name: 'show-ext-state',
+            aliases: ['ses'],
+            description: 'Show extension state',
+            handler: async () => ({ message: 'ok' }),
+          });
+        }
+      `,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    try {
+      await runtime.loadExtension(extensionPath);
+      const completions = await completer.getCompletions('/show', 5);
+      expect(completions.some((item) => item.display === '/show-ext-state')).toBe(true);
+
+      const aliasCompletions = await completer.getCompletions('/ses', 4);
+      expect(aliasCompletions.some((item) => item.display === '/ses')).toBe(true);
+    } finally {
+      await runtime.dispose();
+      setActiveExtensionRuntime(null);
+      await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 });

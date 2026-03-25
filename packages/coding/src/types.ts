@@ -30,10 +30,17 @@ import type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  KodaXJsonValue,
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
+  KodaXExtensionStoreEntry,
+  KodaXExtensionStore,
+  KodaXSessionData,
   KodaXSessionMeta,
   KodaXSessionStorage,
   SessionErrorMetadata,
 } from '@kodax/agent';
+import type { KodaXExtensionRuntime } from './extensions/runtime.js';
 
 // Re-export all types from @kodax/agent
 export type {
@@ -59,6 +66,12 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  KodaXJsonValue,
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
+  KodaXExtensionStoreEntry,
+  KodaXExtensionStore,
+  KodaXSessionData,
   KodaXSessionMeta,
   KodaXSessionStorage,
   SessionErrorMetadata,
@@ -172,6 +185,7 @@ export interface KodaXOptions {
   session?: KodaXSessionOptions;
   context?: KodaXContextOptions;
   events?: KodaXEvents;
+  extensionRuntime?: KodaXExtensionRuntime;
   /** AbortSignal for cancelling the API request */
   abortSignal?: AbortSignal;
 }
