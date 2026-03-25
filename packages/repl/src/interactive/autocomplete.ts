@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as readline from 'readline';
+import { getActiveExtensionRuntime } from '@kodax/coding';
 import { getCommandRegistry } from './commands.js';
 
 /**
@@ -181,6 +182,18 @@ export class CommandCompleter implements Completer {
       this.commands.set(cmd.name, {
         description: cmd.description,
         aliases: cmd.aliases ?? [],
+      });
+    }
+
+    const runtime = getActiveExtensionRuntime();
+    for (const command of runtime?.listCommands() ?? []) {
+      if (command.metadata?.userInvocable === false) {
+        continue;
+      }
+
+      this.commands.set(command.name, {
+        description: command.description,
+        aliases: command.aliases ?? [],
       });
     }
   }

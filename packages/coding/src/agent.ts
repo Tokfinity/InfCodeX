@@ -5,8 +5,11 @@
  */
 
 import {
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
   KodaXExecutionMode,
   KodaXEvents,
+  KodaXJsonValue,
   KodaXOptions,
   KodaXReasoningMode,
   KodaXResult,
@@ -19,14 +22,18 @@ import {
 import type { KodaXMessage } from '@kodax/ai';
 import { KodaXClient } from './client.js';
 import { resolveProvider } from './providers/index.js';
-import { executeTool, KODAX_TOOLS } from './tools/index.js';
+import {
+  executeTool,
+  getRequiredToolParams,
+  listToolDefinitions,
+} from './tools/index.js';
 import { buildSystemPrompt } from './prompts/index.js';
 import { generateSessionId, extractTitleFromMessages } from './session.js';
 import { checkIncompleteToolCalls } from './messages.js';
 import { compact as intelligentCompact, needsCompaction, type CompactionConfig } from '@kodax/agent';
 import { loadCompactionConfig } from './compaction-config.js';
 import { estimateTokens } from './tokenizer.js';
-import { KODAX_MAX_INCOMPLETE_RETRIES, PROMISE_PATTERN, KODAX_TOOL_REQUIRED_PARAMS } from './constants.js';
+import { KODAX_MAX_INCOMPLETE_RETRIES, PROMISE_PATTERN } from './constants.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { ErrorCategory } from './error-classification.js';
@@ -34,6 +41,7 @@ import { withRetry } from './retry-handler.js';
 import {
   createReasoningPlan,
   maybeCreateAutoReroutePlan,
+  reasoningModeToDepth,
   type ReasoningPlan,
 } from './reasoning.js';
 import { looksLikeActionableRuntimeEvidence } from './runtime-evidence.js';
@@ -46,6 +54,12 @@ import {
   resolveContextTokenCount,
 } from './token-accounting.js';
 import { applyToolResultGuardrail } from './tools/tool-result-policy.js';
+import {
+  emitActiveExtensionEvent,
+  getActiveExtensionRuntime,
+  runActiveExtensionHook,
+  setActiveExtensionRuntime,
+} from './extensions/runtime.js';
 
 const execAsync = promisify(exec);
 const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
@@ -57,6 +71,26 @@ type RunnableToolCall = {
   input: Record<string, unknown> | undefined;
 };
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
+
+interface RuntimeSessionState {
+  queuedMessages: KodaXMessage[];
+  extensionState: Map<string, Map<string, KodaXJsonValue>>;
+  extensionRecords: KodaXExtensionSessionRecord[];
+  activeTools: string[];
+  modelSelection: {
+    provider?: string;
+    model?: string;
+  };
+  thinkingLevel?: KodaXReasoningMode;
+}
+
+interface ProviderPrepareState {
+  provider: string;
+  model?: string;
+  reasoningMode?: KodaXReasoningMode;
+  systemPrompt: string;
+  blockedReason?: string;
+}
 
 function isTypedContentBlock(block: unknown): block is MessageContentBlock {
   return block !== null && typeof block === 'object' && 'type' in block;
@@ -72,6 +106,184 @@ function isToolResultContentBlock(
   block: unknown,
 ): block is Extract<MessageContentBlock, { type: 'tool_result' }> {
   return isTypedContentBlock(block) && block.type === 'tool_result';
+}
+
+function normalizeQueuedRuntimeMessage(message: string | KodaXMessage): KodaXMessage {
+  return typeof message === 'string'
+    ? { role: 'user', content: message }
+    : message;
+}
+
+function normalizeRuntimeModelSelection(
+  next: { provider?: string; model?: string },
+): { provider?: string; model?: string } {
+  const normalized: { provider?: string; model?: string } = {};
+  if (next.provider?.trim()) {
+    normalized.provider = next.provider.trim();
+  }
+  if (next.model?.trim()) {
+    normalized.model = next.model.trim();
+  }
+  return normalized;
+}
+
+function createRuntimeExtensionState(
+  persisted?: KodaXExtensionSessionState,
+): Map<string, Map<string, KodaXJsonValue>> {
+  const state = new Map<string, Map<string, KodaXJsonValue>>();
+  if (!persisted) {
+    return state;
+  }
+
+  for (const [extensionId, values] of Object.entries(persisted)) {
+    state.set(extensionId, new Map(Object.entries(values)));
+  }
+
+  return state;
+}
+
+function snapshotRuntimeExtensionState(
+  state: RuntimeSessionState['extensionState'],
+): KodaXExtensionSessionState | undefined {
+  const snapshot: KodaXExtensionSessionState = {};
+
+  for (const [extensionId, values] of state.entries()) {
+    if (values.size === 0) {
+      continue;
+    }
+
+    snapshot[extensionId] = Object.fromEntries(values.entries());
+  }
+
+  return Object.keys(snapshot).length > 0 ? snapshot : undefined;
+}
+
+function getExtensionStateBucket(
+  state: RuntimeSessionState['extensionState'],
+  extensionId: string,
+): Map<string, KodaXJsonValue> {
+  const existing = state.get(extensionId);
+  if (existing) {
+    return existing;
+  }
+
+  const next = new Map<string, KodaXJsonValue>();
+  state.set(extensionId, next);
+  return next;
+}
+
+function createSessionRecordId(): string {
+  return `extrec_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function createExtensionRuntimeSessionController(
+  state: RuntimeSessionState,
+) {
+  return {
+    queueUserMessage: (message: KodaXMessage) => {
+      state.queuedMessages.push(normalizeQueuedRuntimeMessage(message));
+    },
+    getSessionState: <T = KodaXJsonValue>(extensionId: string, key: string) =>
+      state.extensionState.get(extensionId)?.get(key) as T | undefined,
+    setSessionState: (extensionId: string, key: string, value: KodaXJsonValue | undefined) => {
+      const bucket = getExtensionStateBucket(state.extensionState, extensionId);
+      if (value === undefined) {
+        bucket.delete(key);
+        if (bucket.size === 0) {
+          state.extensionState.delete(extensionId);
+        }
+        return;
+      }
+      bucket.set(key, value);
+    },
+    getSessionStateSnapshot: (extensionId: string) =>
+      Object.fromEntries((state.extensionState.get(extensionId) ?? new Map()).entries()),
+    appendSessionRecord: (
+      extensionId: string,
+      type: string,
+      data?: KodaXJsonValue,
+      options?: { dedupeKey?: string },
+    ) => {
+      const normalizedType = type.trim();
+      const dedupeKey = options?.dedupeKey?.trim() || undefined;
+      const record: KodaXExtensionSessionRecord = {
+        id: createSessionRecordId(),
+        extensionId,
+        type: normalizedType,
+        ts: Date.now(),
+        ...(data === undefined ? {} : { data }),
+        ...(dedupeKey ? { dedupeKey } : {}),
+      };
+
+      if (dedupeKey) {
+        const existingIndex = state.extensionRecords.findIndex((entry) =>
+          entry.extensionId === extensionId
+          && entry.type === normalizedType
+          && entry.dedupeKey === dedupeKey,
+        );
+        if (existingIndex >= 0) {
+          state.extensionRecords.splice(existingIndex, 1, record);
+          return record;
+        }
+      }
+
+      state.extensionRecords.push(record);
+      return record;
+    },
+    listSessionRecords: (extensionId: string, type?: string) =>
+      state.extensionRecords
+        .filter((record) =>
+          record.extensionId === extensionId
+          && (type === undefined || record.type === type),
+        )
+        .map((record) => ({ ...record })),
+    clearSessionRecords: (extensionId: string, type?: string) => {
+      const before = state.extensionRecords.length;
+      state.extensionRecords = state.extensionRecords.filter((record) =>
+        record.extensionId !== extensionId
+        || (type !== undefined && record.type !== type),
+      );
+      return before - state.extensionRecords.length;
+    },
+    getActiveTools: () => [...state.activeTools],
+    setActiveTools: (toolNames: string[]) => {
+      state.activeTools = Array.from(
+        new Set(toolNames.map((name) => name.trim()).filter(Boolean)),
+      );
+    },
+    getModelSelection: () => ({ ...state.modelSelection }),
+    setModelSelection: (next: { provider?: string; model?: string }) => {
+      state.modelSelection = normalizeRuntimeModelSelection(next);
+    },
+    getThinkingLevel: () => state.thinkingLevel,
+    setThinkingLevel: (level: KodaXReasoningMode) => {
+      state.thinkingLevel = level;
+    },
+  };
+}
+
+function getActiveToolDefinitions(
+  activeToolNames: string[],
+): ReturnType<typeof listToolDefinitions> {
+  const allTools = listToolDefinitions();
+  if (activeToolNames.length === 0) {
+    return [];
+  }
+
+  const allowed = new Set(activeToolNames);
+  return allTools.filter((tool) => allowed.has(tool.name));
+}
+
+function appendQueuedRuntimeMessages(
+  messages: KodaXMessage[],
+  runtimeSessionState: RuntimeSessionState,
+): boolean {
+  if (runtimeSessionState.queuedMessages.length === 0) {
+    return false;
+  }
+
+  messages.push(...runtimeSessionState.queuedMessages.splice(0));
+  return true;
 }
 
 /**
@@ -335,17 +547,32 @@ async function getToolExecutionOverride(
   name: string,
   input: Record<string, unknown>,
   toolId?: string,
+  executionCwd?: string,
+  gitRoot?: string,
 ): Promise<string | undefined> {
-  if (!events.beforeToolExecute) {
-    return undefined;
+  if (events.beforeToolExecute) {
+    const allowed = await events.beforeToolExecute(name, input, { toolId });
+    if (allowed === false) {
+      return CANCELLED_TOOL_RESULT_MESSAGE;
+    }
+
+    if (typeof allowed === 'string') {
+      return allowed;
+    }
   }
 
-  const allowed = await events.beforeToolExecute(name, input, { toolId });
-  if (allowed === false) {
+  const extensionOverride = await runActiveExtensionHook('tool:before', {
+    name,
+    input,
+    toolId,
+    executionCwd,
+    gitRoot,
+  });
+  if (extensionOverride === false) {
     return CANCELLED_TOOL_RESULT_MESSAGE;
   }
 
-  return typeof allowed === 'string' ? allowed : undefined;
+  return typeof extensionOverride === 'string' ? extensionOverride : undefined;
 }
 
 async function saveSessionSnapshot(
@@ -356,6 +583,7 @@ async function saveSessionSnapshot(
     title: string;
     gitRoot?: string;
     errorMetadata?: SessionErrorMetadata;
+    runtimeSessionState?: RuntimeSessionState;
   },
 ): Promise<void> {
   if (!options.session?.storage) {
@@ -368,6 +596,10 @@ async function saveSessionSnapshot(
     title: data.title,
     gitRoot,
     errorMetadata: data.errorMetadata,
+    extensionState: data.runtimeSessionState
+      ? snapshotRuntimeExtensionState(data.runtimeSessionState.extensionState)
+      : undefined,
+    extensionRecords: data.runtimeSessionState?.extensionRecords.map((record) => ({ ...record })),
   });
 }
 
@@ -429,6 +661,7 @@ async function maybeAdvanceAutoReroute(params: {
     sessionId: string;
     messages: KodaXMessage[];
     title: string;
+    runtimeSessionState?: RuntimeSessionState;
   };
 }): Promise<{
   reasoningPlan: ReasoningPlan;
@@ -477,6 +710,7 @@ async function maybeAdvanceAutoReroute(params: {
     await saveSessionSnapshot(params.options, params.persistSession.sessionId, {
       messages: params.persistSession.messages,
       title: params.persistSession.title,
+      runtimeSessionState: params.persistSession.runtimeSessionState,
     });
   }
 
@@ -499,11 +733,75 @@ async function maybeAdvanceAutoReroute(params: {
   };
 }
 
+async function applyProviderPrepareHook(
+  state: ProviderPrepareState,
+): Promise<ProviderPrepareState> {
+  const mutableState: ProviderPrepareState = { ...state };
+
+  await runActiveExtensionHook('provider:before', {
+    provider: mutableState.provider,
+    model: mutableState.model,
+    reasoningMode: mutableState.reasoningMode,
+    systemPrompt: mutableState.systemPrompt,
+    block: (reason) => {
+      mutableState.blockedReason = reason;
+    },
+    replaceProvider: (provider) => {
+      mutableState.provider = provider;
+    },
+    replaceModel: (model) => {
+      mutableState.model = model;
+    },
+    replaceSystemPrompt: (systemPrompt) => {
+      mutableState.systemPrompt = systemPrompt;
+    },
+    setThinkingLevel: (level) => {
+      mutableState.reasoningMode = level;
+    },
+  });
+
+  return mutableState;
+}
+
+async function settleExtensionTurn(
+  sessionId: string,
+  lastText: string,
+  runtimeSessionState: RuntimeSessionState,
+  options: {
+    hadToolCalls: boolean;
+    success: boolean;
+    signal?: 'COMPLETE' | 'BLOCKED' | 'DECIDE';
+  },
+): Promise<void> {
+  await runActiveExtensionHook('turn:settle', {
+    sessionId,
+    lastText,
+    hadToolCalls: options.hadToolCalls,
+    success: options.success,
+    signal: options.signal,
+    queueUserMessage: (message) => {
+      runtimeSessionState.queuedMessages.push(normalizeQueuedRuntimeMessage(message));
+    },
+    setModelSelection: (next) => {
+      runtimeSessionState.modelSelection = normalizeRuntimeModelSelection(next);
+    },
+    setThinkingLevel: (level) => {
+      runtimeSessionState.thinkingLevel = level;
+    },
+  });
+}
+
 async function executeToolCall(
   events: KodaXEvents,
   toolCall: RunnableToolCall,
   ctx: KodaXToolExecutionContext,
+  activeToolNames?: string[],
 ): Promise<string> {
+  await emitActiveExtensionEvent('tool:start', {
+    name: toolCall.name,
+    id: toolCall.id,
+    input: toolCall.input,
+  });
   events.onToolUseStart?.({
     name: toolCall.name,
     id: toolCall.id,
@@ -515,9 +813,15 @@ async function executeToolCall(
     toolCall.name,
     toolCall.input ?? {},
     toolCall.id,
+    ctx.executionCwd,
+    ctx.gitRoot,
   );
   if (override !== undefined) {
     return override;
+  }
+
+  if (activeToolNames && !activeToolNames.includes(toolCall.name)) {
+    return `[Tool Error] ${toolCall.name}: Tool is not active in the current runtime.`;
   }
 
   return executeTool(toolCall.name, toolCall.input ?? {}, ctx);
@@ -531,21 +835,26 @@ export async function runKodaX(
   options: KodaXOptions,
   prompt: string
 ): Promise<KodaXResult> {
-  const provider = resolveProvider(options.provider);
-  if (!provider.isConfigured()) {
-    throw new Error(`Provider "${options.provider}" not configured. Set ${options.provider.toUpperCase().replace('-', '_')}_API_KEY`);
+  const previousActiveRuntime = getActiveExtensionRuntime();
+  const runtime = options.extensionRuntime ?? previousActiveRuntime;
+  if (options.extensionRuntime && options.extensionRuntime !== previousActiveRuntime) {
+    setActiveExtensionRuntime(options.extensionRuntime);
   }
-
+  let releaseRuntimeBinding: (() => void) | undefined;
+  try {
   const maxIter = options.maxIter ?? 200;
   const events = options.events ?? {};
+  const runtimeDefaults = runtime?.getDefaults();
+  let currentProviderName = runtimeDefaults?.modelSelection.provider ?? options.provider;
+  let currentModelOverride = runtimeDefaults?.modelSelection.model ?? options.modelOverride ?? options.model;
+  let runtimeThinkingLevel = runtimeDefaults?.thinkingLevel;
 
   // Load compaction config
   const compactionConfig = await loadCompactionConfig(options.context?.gitRoot ?? undefined);
-
-  // Get contextWindow: user config > provider > default 200k
-  const contextWindow = compactionConfig.contextWindow
-    ?? provider.getContextWindow?.()
-    ?? 200000;
+  const initialProvider = resolveProvider(currentProviderName);
+  if (!initialProvider.isConfigured()) {
+    throw new Error(`Provider "${currentProviderName}" not configured. Set ${currentProviderName.toUpperCase().replace('-', '_')}_API_KEY`);
+  }
 
   // 处理 autoResume/resume：自动加载当前目录最近会话
   let resolvedSessionId = options.session?.id;
@@ -565,6 +874,8 @@ export async function runKodaX(
   let messages: KodaXMessage[] = [];
   let title = '';
   let errorMetadata: SessionErrorMetadata | undefined;
+  let loadedExtensionState: KodaXExtensionSessionState | undefined;
+  let loadedExtensionRecords: KodaXExtensionSessionRecord[] | undefined;
 
   // 优先使用 initialMessages（用于交互式模式的多轮对话）
   if (options.session?.initialMessages && options.session.initialMessages.length > 0) {
@@ -576,6 +887,8 @@ export async function runKodaX(
       messages = loaded.messages;
       title = loaded.title;
       errorMetadata = loaded.errorMetadata;
+      loadedExtensionState = loaded.extensionState;
+      loadedExtensionRecords = loaded.extensionRecords;
     }
   }
 
@@ -600,23 +913,51 @@ export async function runKodaX(
     messages,
     options.context?.contextTokenSnapshot,
   );
+  const runtimeSessionState: RuntimeSessionState = {
+    queuedMessages: [],
+    extensionState: createRuntimeExtensionState(loadedExtensionState),
+    extensionRecords: loadedExtensionRecords?.map((record) => ({ ...record })) ?? [],
+    activeTools: runtimeDefaults?.activeTools ?? listToolDefinitions().map((tool) => tool.name),
+    modelSelection: {
+      provider: currentProviderName,
+      model: currentModelOverride,
+    },
+    thinkingLevel: runtimeThinkingLevel,
+  };
+  releaseRuntimeBinding = runtime?.bindController(
+    createExtensionRuntimeSessionController(runtimeSessionState),
+  );
 
-  let reasoningPlan = await createReasoningPlan(options, prompt, provider, {
+  await runtime?.hydrateSession(sessionId);
+
+  let reasoningPlan = await createReasoningPlan({
+    ...options,
+    provider: currentProviderName,
+    modelOverride: currentModelOverride,
+  }, prompt, initialProvider, {
     recentMessages: messages.slice(0, -1),
     sessionErrorMetadata: errorMetadata,
   });
   let currentExecution = await buildReasoningExecutionState(
-    options,
-    reasoningPlan,
+    {
+      ...options,
+      provider: currentProviderName,
+      modelOverride: currentModelOverride,
+      reasoningMode: runtimeThinkingLevel ?? options.reasoningMode,
+    },
+    runtimeThinkingLevel
+      ? {
+        ...reasoningPlan,
+        mode: runtimeThinkingLevel,
+        depth: reasoningModeToDepth(runtimeThinkingLevel),
+      }
+      : reasoningPlan,
     messages.length === 1,
   );
   let autoFollowUpCount = 0;
   let autoDepthEscalationCount = 0;
   let autoTaskRerouteCount = 0;
   const autoFollowUpLimit = 2;
-
-  // 通知会话开始
-  events.onSessionStart?.({ provider: provider.name, sessionId });
 
   let lastText = '';
   let incompleteRetryCount = 0;
@@ -639,9 +980,44 @@ export async function runKodaX(
     });
     return contextTokenSnapshot;
   };
+    events.onSessionStart?.({ provider: initialProvider.name, sessionId });
+    await emitActiveExtensionEvent('session:start', { provider: initialProvider.name, sessionId });
 
-  for (let iter = 0; iter < maxIter; iter++) {
+    for (let iter = 0; iter < maxIter; iter++) {
     try {
+      currentProviderName = runtimeSessionState.modelSelection.provider ?? options.provider;
+      currentModelOverride = runtimeSessionState.modelSelection.model ?? options.modelOverride ?? options.model;
+      runtimeThinkingLevel = runtimeSessionState.thinkingLevel;
+      const provider = resolveProvider(currentProviderName);
+      if (!provider.isConfigured()) {
+        throw new Error(`Provider "${currentProviderName}" not configured. Set ${currentProviderName.toUpperCase().replace('-', '_')}_API_KEY`);
+      }
+      const contextWindow = compactionConfig.contextWindow
+        ?? provider.getContextWindow?.()
+        ?? 200000;
+      const effectiveReasoningPlan = runtimeThinkingLevel
+        ? {
+          ...reasoningPlan,
+          mode: runtimeThinkingLevel,
+          depth: reasoningModeToDepth(runtimeThinkingLevel),
+        }
+        : reasoningPlan;
+      currentExecution = await buildReasoningExecutionState(
+        {
+          ...options,
+          provider: currentProviderName,
+          modelOverride: currentModelOverride,
+          reasoningMode: runtimeThinkingLevel ?? options.reasoningMode,
+        },
+        effectiveReasoningPlan,
+        messages.length === 1,
+      );
+
+      await emitActiveExtensionEvent('turn:start', {
+        sessionId,
+        iteration: iter + 1,
+        maxIter,
+      });
       events.onIterationStart?.(iter + 1, maxIter);
 
       // Compaction: 统一使用智能压缩，废除遗留的粗暴截断
@@ -749,6 +1125,39 @@ export async function runKodaX(
         events.onCompactedMessages?.(messages);
       }
 
+      const preparedProviderState = await applyProviderPrepareHook({
+        provider: currentProviderName,
+        model: currentModelOverride,
+        reasoningMode: effectiveReasoningPlan.mode,
+        systemPrompt: currentExecution.systemPrompt,
+      });
+      if (preparedProviderState.blockedReason) {
+        throw new Error(preparedProviderState.blockedReason);
+      }
+      currentProviderName = preparedProviderState.provider;
+      currentModelOverride = preparedProviderState.model;
+      runtimeSessionState.modelSelection.provider = currentProviderName;
+      runtimeSessionState.modelSelection.model = currentModelOverride;
+      runtimeThinkingLevel = preparedProviderState.reasoningMode;
+      runtimeSessionState.thinkingLevel = runtimeThinkingLevel;
+      const effectiveProviderReasoningMode = runtimeThinkingLevel ?? effectiveReasoningPlan.mode;
+      const effectiveProviderReasoning = {
+        ...currentExecution.providerReasoning,
+        enabled: effectiveProviderReasoningMode !== 'off',
+        mode: effectiveProviderReasoningMode,
+        depth: reasoningModeToDepth(effectiveProviderReasoningMode),
+      };
+
+      const streamProvider = resolveProvider(currentProviderName);
+      if (!streamProvider.isConfigured()) {
+        throw new Error(`Provider "${currentProviderName}" not configured. Set ${currentProviderName.toUpperCase().replace('-', '_')}_API_KEY`);
+      }
+
+      await emitActiveExtensionEvent('provider:selected', {
+        provider: currentProviderName,
+        model: currentModelOverride,
+      });
+
       // 流式调用 Provider - with automatic retry for transient errors
       // 注入 API 硬超时保护：防止大型 payload 导致 API 静默丢包引发无限等待
       const API_HARD_TIMEOUT_MS = 600_000; // Issue 084: 提升到 10 分钟硬超时
@@ -780,17 +1189,20 @@ export async function runKodaX(
             : retryTimeoutController.signal;
 
           try {
-            return await provider.stream(compacted, KODAX_TOOLS, currentExecution.systemPrompt, currentExecution.providerReasoning, {
+            return await streamProvider.stream(compacted, getActiveToolDefinitions(runtimeSessionState.activeTools), preparedProviderState.systemPrompt, effectiveProviderReasoning, {
               onTextDelta: (text) => {
                 resetIdleTimer();
+                void emitActiveExtensionEvent('text:delta', { text });
                 events.onTextDelta?.(text);
               },
               onThinkingDelta: (text) => {
                 resetIdleTimer();
+                void emitActiveExtensionEvent('thinking:delta', { text });
                 events.onThinkingDelta?.(text);
               },
               onThinkingEnd: (thinking) => {
                 resetIdleTimer();
+                void emitActiveExtensionEvent('thinking:end', { thinking });
                 events.onThinkingEnd?.(thinking);
               },
               onToolInputDelta: (name, json) => {
@@ -799,9 +1211,15 @@ export async function runKodaX(
               },
               onRateLimit: (attempt, max, delay) => {
                 resetIdleTimer(); // 重试限制时也重置，因为底层 Provider 会自己等待
+                void emitActiveExtensionEvent('provider:rate-limit', {
+                  provider: currentProviderName,
+                  attempt,
+                  maxRetries: max,
+                  delayMs: delay,
+                });
                 events.onProviderRateLimit?.(attempt, max, delay);
               },
-              modelOverride: options.modelOverride ?? options.model,
+              modelOverride: currentModelOverride,
               signal: retrySignal,
             }, retrySignal);
           } catch (e) {
@@ -840,6 +1258,7 @@ export async function runKodaX(
 
       // 流式输出结束，通知 CLI 层
       events.onStreamEnd?.();
+      await emitActiveExtensionEvent('stream:end', undefined);
 
       lastText = result.textBlocks.map(b => b.text).join(' ');
       const preAssistantTokenSnapshot = createContextTokenSnapshot(compacted, result.usage);
@@ -847,9 +1266,34 @@ export async function runKodaX(
       // Promise 信号检测
       const [signal, _reason] = checkPromiseSignal(lastText);
       if (signal) {
+        await settleExtensionTurn(sessionId, lastText, runtimeSessionState, {
+          hadToolCalls: false,
+          success: true,
+          signal: signal as 'COMPLETE' | 'BLOCKED' | 'DECIDE',
+        });
+        const appendedQueuedMessages = appendQueuedRuntimeMessages(messages, runtimeSessionState);
+        if (appendedQueuedMessages) {
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, preAssistantTokenSnapshot);
+          await emitActiveExtensionEvent('turn:end', {
+            sessionId,
+            iteration: iter + 1,
+            lastText,
+            hadToolCalls: false,
+            signal: signal as 'COMPLETE' | 'BLOCKED' | 'DECIDE',
+          });
+          continue;
+        }
         if (signal === 'COMPLETE') {
           emitIterationEnd(iter + 1, preAssistantTokenSnapshot);
+          await emitActiveExtensionEvent('turn:end', {
+            sessionId,
+            iteration: iter + 1,
+            lastText,
+            hadToolCalls: false,
+            signal: 'COMPLETE',
+          });
           events.onComplete?.();
+          await emitActiveExtensionEvent('complete', { success: true, signal: 'COMPLETE' });
           return {
             success: true,
             lastText,
@@ -868,9 +1312,31 @@ export async function runKodaX(
       contextTokenSnapshot = completedTurnTokenSnapshot;
 
       if (result.toolBlocks.length === 0) {
+        await settleExtensionTurn(sessionId, lastText, runtimeSessionState, {
+          hadToolCalls: false,
+          success: true,
+        });
+        if (appendQueuedRuntimeMessages(messages, runtimeSessionState)) {
+          contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
+          await emitActiveExtensionEvent('turn:end', {
+            sessionId,
+            iteration: iter + 1,
+            lastText,
+            hadToolCalls: false,
+            signal: undefined,
+          });
+          continue;
+        }
         const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
         if (shouldYieldToQueuedFollowUp) {
           emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
+          await emitActiveExtensionEvent('turn:end', {
+            sessionId,
+            iteration: iter + 1,
+            lastText,
+            hadToolCalls: false,
+            signal: undefined,
+          });
           return {
             success: true,
             lastText,
@@ -882,7 +1348,7 @@ export async function runKodaX(
         }
 
         if (
-          reasoningPlan.mode === 'auto' &&
+          effectiveReasoningPlan.mode === 'auto' &&
           autoFollowUpCount < autoFollowUpLimit &&
           (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
         ) {
@@ -890,7 +1356,7 @@ export async function runKodaX(
             provider,
             options,
             prompt,
-            reasoningPlan,
+            reasoningPlan: effectiveReasoningPlan,
             lastText,
             autoFollowUpCount,
             autoDepthEscalationCount,
@@ -916,7 +1382,15 @@ export async function runKodaX(
           }
         }
         emitIterationEnd(iter + 1, completedTurnTokenSnapshot);
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText,
+          hadToolCalls: false,
+          signal: undefined,
+        });
         events.onComplete?.();
+        await emitActiveExtensionEvent('complete', { success: true, signal: undefined });
         // limitReached 保持 false（初始值）
         break;
       }
@@ -942,7 +1416,7 @@ export async function runKodaX(
           events.onRetry?.(`Max retries exceeded for incomplete tool calls. Skipping: ${incomplete.join(', ')}`, incompleteRetryCount, KODAX_MAX_INCOMPLETE_RETRIES);
           const incompleteIds = new Set<string>();
           for (const tc of result.toolBlocks) {
-            const required = KODAX_TOOL_REQUIRED_PARAMS[tc.name] ?? [];
+            const required = getRequiredToolParams(tc.name);
             const input = (tc.input ?? {}) as Record<string, unknown>;
             for (const param of required) {
               if (input[param] === undefined || input[param] === null || input[param] === '') {
@@ -957,6 +1431,11 @@ export async function runKodaX(
             const tc = result.toolBlocks.find(t => t.id === id);
             if (tc) {
               const errorMsg = `[Tool Error] ${tc.name}: Skipped due to missing required parameters after ${KODAX_MAX_INCOMPLETE_RETRIES} retries`;
+              await emitActiveExtensionEvent('tool:result', {
+                id: tc.id,
+                name: tc.name,
+                content: errorMsg,
+              });
               events.onToolResult?.({ id: tc.id, name: tc.name, content: errorMsg });
               errorResults.push(createToolResultBlock(tc.id, errorMsg));
             }
@@ -989,7 +1468,7 @@ export async function runKodaX(
                   id: tc.id,
                   name: tc.name,
                   input: tc.input as Record<string, unknown> | undefined,
-                }, ctx),
+                }, ctx, runtimeSessionState.activeTools),
                 ctx,
               )
             ).content,
@@ -1006,7 +1485,7 @@ export async function runKodaX(
                 id: tc.id,
                 name: tc.name,
                 input: tc.input as Record<string, unknown> | undefined,
-              }, ctx),
+              }, ctx, runtimeSessionState.activeTools),
               ctx,
             )
           ).content;
@@ -1015,6 +1494,11 @@ export async function runKodaX(
 
         for (const tc of result.toolBlocks) {
           const content = resultMap.get(tc.id) ?? '[Error] No result';
+          await emitActiveExtensionEvent('tool:result', {
+            id: tc.id,
+            name: tc.name,
+            content,
+          });
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
           toolResults.push(createToolResultBlock(tc.id, content));
         }
@@ -1027,10 +1511,15 @@ export async function runKodaX(
                 id: tc.id,
                 name: tc.name,
                 input: tc.input as Record<string, unknown> | undefined,
-              }, ctx),
+              }, ctx, runtimeSessionState.activeTools),
               ctx,
             )
           ).content;
+          await emitActiveExtensionEvent('tool:result', {
+            id: tc.id,
+            name: tc.name,
+            content,
+          });
           events.onToolResult?.({ id: tc.id, name: tc.name, content });
           toolResults.push(createToolResultBlock(tc.id, content));
         }
@@ -1050,7 +1539,15 @@ export async function runKodaX(
         if (shouldYieldToQueuedFollowUp) {
           emitIterationEnd(iter + 1, contextTokenSnapshot);
         }
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText: 'Operation cancelled by user',
+          hadToolCalls: true,
+          signal: undefined,
+        });
         events.onStreamEnd?.();
+        await emitActiveExtensionEvent('stream:end', undefined);
         return {
           success: true,
           lastText: 'Operation cancelled by user',
@@ -1064,10 +1561,32 @@ export async function runKodaX(
       messages.push({ role: 'user', content: toolResults });
       // Keep UI/context accounting aligned with the tool-result message we just appended.
       contextTokenSnapshot = rebaseContextTokenSnapshot(messages, completedTurnTokenSnapshot);
+      await settleExtensionTurn(sessionId, lastText, runtimeSessionState, {
+        hadToolCalls: true,
+        success: true,
+      });
+      if (appendQueuedRuntimeMessages(messages, runtimeSessionState)) {
+        contextTokenSnapshot = rebaseContextTokenSnapshot(messages, contextTokenSnapshot);
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText,
+          hadToolCalls: true,
+          signal: undefined,
+        });
+        continue;
+      }
 
       const shouldYieldToQueuedFollowUp = hasQueuedFollowUp(events);
       if (shouldYieldToQueuedFollowUp) {
         emitIterationEnd(iter + 1, contextTokenSnapshot);
+        await emitActiveExtensionEvent('turn:end', {
+          sessionId,
+          iteration: iter + 1,
+          lastText,
+          hadToolCalls: true,
+          signal: undefined,
+        });
         return {
           success: true,
           lastText,
@@ -1079,7 +1598,7 @@ export async function runKodaX(
       }
 
       if (
-        reasoningPlan.mode === 'auto' &&
+        effectiveReasoningPlan.mode === 'auto' &&
         autoFollowUpCount < autoFollowUpLimit &&
         (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
       ) {
@@ -1089,7 +1608,7 @@ export async function runKodaX(
             provider,
             options,
             prompt,
-            reasoningPlan,
+            reasoningPlan: effectiveReasoningPlan,
             lastText,
             autoFollowUpCount,
             autoDepthEscalationCount,
@@ -1103,6 +1622,7 @@ export async function runKodaX(
               sessionId,
               messages,
               title,
+              runtimeSessionState,
             },
           });
 
@@ -1120,10 +1640,21 @@ export async function runKodaX(
       }
 
       // 保存会话
-      await saveSessionSnapshot(options, sessionId, { messages, title });
+      await saveSessionSnapshot(options, sessionId, {
+        messages,
+        title,
+        runtimeSessionState,
+      });
 
       // Notify UI of context usage after each iteration
       emitIterationEnd(iter + 1, contextTokenSnapshot);
+      await emitActiveExtensionEvent('turn:end', {
+        sessionId,
+        iteration: iter + 1,
+        lastText,
+        hadToolCalls: true,
+        signal: undefined,
+      });
     } catch (e) {
       const error = e instanceof Error ? e : new Error(String(e));
 
@@ -1144,6 +1675,7 @@ export async function runKodaX(
         messages: cleanedMessages,
         title,
         errorMetadata: updatedErrorMetadata,
+        runtimeSessionState,
       });
       contextTokenSnapshot = createEstimatedContextTokenSnapshot(cleanedMessages);
 
@@ -1151,6 +1683,7 @@ export async function runKodaX(
       // 参考 Gemini CLI: 静默处理中断，不报告为错误
       if (error.name === 'AbortError') {
         events.onStreamEnd?.();
+        await emitActiveExtensionEvent('stream:end', undefined);
 
         // Issue 072 fix: 清理不完整的 tool_use 块
         // 当流式中断时，assistant 消息可能包含 tool_use 但没有对应的 tool_result
@@ -1166,6 +1699,7 @@ export async function runKodaX(
         };
       }
 
+      await emitActiveExtensionEvent('error', { error });
       events.onError?.(error);
       return {
         success: false,
@@ -1183,7 +1717,11 @@ export async function runKodaX(
   limitReached = true;
 
   // 最终保存
-  await saveSessionSnapshot(options, sessionId, { messages, title });
+  await saveSessionSnapshot(options, sessionId, {
+    messages,
+    title,
+    runtimeSessionState,
+  });
 
   // 检查最终信号
   const [finalSignal, finalReason] = checkPromiseSignal(lastText);
@@ -1200,6 +1738,12 @@ export async function runKodaX(
     contextTokenSnapshot,
     limitReached,
   };
+  } finally {
+    releaseRuntimeBinding?.();
+    if (options.extensionRuntime && options.extensionRuntime !== previousActiveRuntime) {
+      setActiveExtensionRuntime(previousActiveRuntime);
+    }
+  }
 }
 
 async function buildReasoningExecutionState(

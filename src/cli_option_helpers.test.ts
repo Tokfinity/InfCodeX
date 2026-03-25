@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildSessionOptions,
+  mergeConfiguredExtensions,
   parseOutputModeOption,
   validateCliModeSelection,
   type CliOptions,
@@ -70,5 +71,20 @@ describe('buildSessionOptions', () => {
     );
 
     expect(options).toBeUndefined();
+  });
+});
+
+describe('mergeConfiguredExtensions', () => {
+  it('merges configured and CLI extension lists with deduplication', () => {
+    expect(
+      mergeConfiguredExtensions(
+        ['  ./local-ext.mjs  ', './shared-ext.mjs'],
+        ['./shared-ext.mjs', './config-ext.mjs', ''],
+      ),
+    ).toEqual([
+      './shared-ext.mjs',
+      './config-ext.mjs',
+      './local-ext.mjs',
+    ]);
   });
 });

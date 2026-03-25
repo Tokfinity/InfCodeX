@@ -206,6 +206,7 @@ import { homedir } from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { listPluginSkillPaths } from './plugin-paths.js';
 
 // ESM-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -238,8 +239,8 @@ export function getDefaultSkillPaths(projectRoot?: string): SkillPathsConfig {
       path.join(home, '.agents', 'skills'),
     ],
 
-    // Plugin-level (to be configured)
-    pluginPaths: [],
+    // Plugin-level (runtime-provided)
+    pluginPaths: listPluginSkillPaths(),
 
     // Built-in skills
     builtinPath: path.join(__dirname, 'builtin'),
