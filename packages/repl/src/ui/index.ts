@@ -14,6 +14,7 @@ export type { InkREPLOptions } from "./InkREPL.js";
 
 // CLI event handler - CLI 事件处理器
 export { createCliEvents } from "./cli-events.js";
+export { createJsonEvents } from "./json-events.js";
 
 // Contexts - 上下文 (unique exports not in hooks)
 export {

@@ -22,13 +22,17 @@ import {
 import {
   ACP_PERMISSION_MODES,
   createKodaXOptions,
+  mergeConfiguredExtensions,
   parseOptionalNonNegativeInt,
   parseNonNegativeIntWithFallback,
+  parseOutputModeOption,
   parsePermissionModeOption,
   parsePositiveNumberWithFallback,
   resolveCliParallel,
   resolveCliReasoningMode,
+  type CliOutputMode,
   type CliOptions,
+  validateCliModeSelection,
 } from './cli_option_helpers.js';
 import { runSkillCreatorTool } from './skill_cli.js';
 
@@ -45,6 +49,7 @@ import {
   createKodaXTaskRunner,
   KodaXReasoningMode,
   runOrchestration,
+  createExtensionRuntime,
   KODAX_DEFAULT_PROVIDER,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
@@ -63,6 +68,7 @@ import {
   rateLimitedCall,
   buildInitPrompt,
   FileSessionStorage,
+  KODAX_CONFIG_FILE,
   runInkInteractiveMode,
   type PermissionMode,
 } from '@kodax/repl';
@@ -268,8 +274,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.cyan('\nPrint Mode\n'));
     console.log(chalk.bold('Overview:'));
     console.log(chalk.dim('  Run a single task and exit. Useful for scripting and CI/CD.\n'));
+    console.log(chalk.dim('  `--mode json` is a scripting surface, not the ACP server protocol.\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  -p, --print <text>  ') + 'Run task and exit');
+    console.log(chalk.dim('  --mode json         ') + 'Emit newline-delimited JSON events to stdout for scripts/CI');
     console.log(chalk.dim('  --model <name>      ') + 'Override the selected provider model');
     console.log(chalk.dim('  --no-session        ') + 'Disable session saving\n');
     console.log(chalk.bold('Examples:'));
@@ -277,9 +285,14 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  kodax -p "generate tests" --reasoning balanced') + ' # With reasoning');
     console.log(chalk.dim('  kodax -p "task" -m openai --model gpt-5.4') + ' # Provider + model override');
     console.log(chalk.dim('  kodax -p "task" --no-session        ') + '# Stateless run');
+    console.log(chalk.dim('  kodax --mode json "inspect auth flow"') + ' # Structured JSONL output');
     console.log(chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
   },
 };
+
+function collectRepeatedOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 function showCliHelpTopic(topic: string): boolean {
   const helpFn = CLI_HELP_TOPICS[topic.toLowerCase()];
@@ -302,6 +315,39 @@ function showCliHelpTopics(): void {
   console.log(chalk.dim('  kodax -h thinking   ') + 'Reasoning modes and depth control');
   console.log(chalk.dim('  kodax -h team       ') + 'Parallel agent execution');
   console.log(chalk.dim('  kodax -h print      ') + 'Print mode for scripting\n');
+}
+
+type CliRunResultEvent = {
+  type: 'run.result';
+  success: boolean;
+  signal?: 'COMPLETE' | 'BLOCKED' | 'DECIDE';
+  signalReason?: string;
+  sessionId: string;
+  interrupted?: boolean;
+  limitReached?: boolean;
+};
+
+function writeJsonStdout(value: CliRunResultEvent): void {
+  process.stdout.write(`${JSON.stringify(value)}\n`);
+}
+
+function emitJsonRunResultIfNeeded(
+  outputMode: CliOutputMode,
+  result: Awaited<ReturnType<typeof runKodaX>>,
+): void {
+  if (outputMode !== 'json') {
+    return;
+  }
+
+  writeJsonStdout({
+    type: 'run.result',
+    success: result.success,
+    signal: result.signal,
+    signalReason: result.signalReason,
+    sessionId: result.sessionId,
+    interrupted: result.interrupted,
+    limitReached: result.limitReached,
+  });
 }
 
 function printAcpSubcommandHelp(name: string): boolean {
@@ -448,6 +494,7 @@ function showBasicHelp(): void {
   console.log('Options:');
   console.log('  -h, --help [TOPIC]      Show help, or detailed help for a topic');
   console.log('  -p, --print TEXT        Print mode: run single task and exit');
+  console.log('  --mode json             Emit newline-delimited JSON events to stdout for scripts/CI');
   console.log('  -c, --continue          Continue most recent conversation');
   console.log('  -r, --resume [id]       Resume session by ID (no ID = list recent sessions, then resume the latest)');
   console.log('  -n, --new               Legacy no-op; current CLI already starts a fresh session by default');
@@ -505,6 +552,7 @@ async function main() {
     .option('-h, --help [topic]', 'Show help, or detailed help for a topic')
     // Short options.
     .option('-p, --print <text>', 'Print mode: run single task and exit')
+    .option('--mode <mode>', 'Output mode: json', parseOutputModeOption)
     .option('-c, --continue', 'Continue most recent conversation in current directory')
     .option('-n, --new', 'Legacy no-op; current CLI already starts a fresh session by default')
     .option('-r, --resume [id]', 'Resume session by ID (no ID = list recent sessions, then resume the latest)')
@@ -515,6 +563,7 @@ async function main() {
     .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
     .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
     .option('-j, --parallel', 'Parallel tool execution')
+    .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
     .option('--no-session', 'Disable session persistence (print mode only)')
     // Long options.
     .option('--team <tasks>', 'Run multiple sub-agents in parallel (comma-separated)')
@@ -859,8 +908,25 @@ async function main() {
   const opts = program.opts();
   // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鍨鹃幇浣圭稁缂傚倷鐒﹁摫闁告瑥绻橀弻鐔碱敍閿濆洣姹楅悷婊呭鐢帡鎮欐繝鍐︿簻闁瑰搫绉烽崗宀勬煕濡濮嶉柟顔筋殜閻涱噣宕归鐓庮潛婵犵數鍋涢惇浼村礉閹存繍鍤曢柟闂寸绾惧ジ鏌ｉ幇顒夊殶闁告ɑ鎮傚铏圭矙閹稿孩鎷辩紒鐐緲缁夊綊骞嗙仦杞挎梹鎷呴搹璇″晭闂備胶纭堕崜婵嬪礉閺囥垺鍊堕柡灞诲劜閻撴稑霉閿濆懏鎲搁弫鍫ユ倵鐟欏嫭绀€闁靛牆鎲￠幈銊╁焵椤掑嫭鐓冮柍杞扮閺嗙偞銇勯幘鑸靛殌闁宠鍨块幃娆撴嚑椤掍焦鍠栫紓鍌欑贰閸犳牠鎳熼鐐寸畳闂備胶绮崹鐓幬涢崟顖涘€堕柧蹇ｅ亗缁诲棙銇勯弽銊︾殤婵絿鍋ら弻娑氣偓锝庡亝鐏忕敻鏌熼崣澶嬪唉鐎规洜鍠栭、鏇㈠閳╁啫娈樼紓鍌氬€搁崐椋庢閿熺姴闂い鏇楀亾鐎规洖缍婇獮搴ㄦ寠婢跺矈鍞甸梺璇插嚱缂嶅棝宕伴弽褎绾梻鍌欑閹测剝绗熷Δ浣侯洸婵犲﹤瀚々鏌ユ煕閹炬鎳忛敍蹇擃渻閵堝棙灏柛鈺佸铻為柟瀵稿Х绾惧ジ鏌?
   const config = loadConfig();
+  const configWithExtensions = config as typeof config & { extensions?: string[] };
   const reasoningMode = resolveCliReasoningMode(program, opts, config);
   const parallel = resolveCliParallel(program, opts, config);
+  const configuredExtensions = Array.isArray(configWithExtensions.extensions)
+    ? configWithExtensions.extensions
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => path.isAbsolute(value) ? value : path.resolve(path.dirname(KODAX_CONFIG_FILE), value))
+    : [];
+  const cliExtensions = Array.isArray(opts.extension)
+    ? opts.extension
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => path.resolve(value))
+    : [];
+  const dedupedConfiguredExtensions = mergeConfiguredExtensions([], configuredExtensions);
+  const dedupedCliExtensions = mergeConfiguredExtensions(cliExtensions, []);
+  const configuredOnlyExtensions = dedupedConfiguredExtensions.filter(
+    (value) => !dedupedCliExtensions.includes(value),
+  );
+  const activeExtensions = mergeConfiguredExtensions(dedupedCliExtensions, configuredOnlyExtensions);
   // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
     // Priority: CLI args > config file > defaults.
@@ -868,6 +934,8 @@ async function main() {
     model: opts.model ?? config.model,
     thinking: reasoningMode !== 'off',
     reasoningMode,
+    outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
+    extensions: activeExtensions,
     session: opts.session,
     parallel,
     team: opts.team,
@@ -909,6 +977,28 @@ async function main() {
     // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炴牠顢曢敃鈧悿顕€鏌ｅΔ鈧悧濠囧矗韫囨稒鐓涘璺侯儏閻掗箖鏌涢妶鍡樼闁靛洤瀚伴獮鎺楀箣濠垫劒鎮ｉ梻浣告惈椤戝嫮娆㈠璺虹畺濞寸姴顑愰弫宥夋煥濠靛棙鍣洪柣蹇旀尵缁辨挻鎷呴悷鏉款潔濡炪們鍔岄敃顏勵嚕婵犳碍鏅搁柣妯垮皺椤︽澘顪冮妶鍡楀闁瑰啿娲獮鎰板礃椤旇В鎷洪梻鍌氱墛缁嬫帗寰勯崟顓涘亾閸忓浜剧紓浣割儓濞夋洟寮抽敂鐣岀鐎瑰壊鍠曠花濂告煕婵犲嫮甯涘ǎ鍥э躬椤㈡稑顭ㄩ崨顓狀偧闂佽瀛╃喊宥嗙箾婵犲洤钃熼柨婵嗩槸椤懘鏌嶆潪鎷屽厡濞寸厧娲娲传閵夈儛锝夋煟濡や緡娈滄?
     showBasicHelp();
     return;
+  }
+
+  validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
+
+  if ((options.extensions?.length ?? 0) > 0) {
+    const extensionRuntime = createExtensionRuntime({ config });
+    const extensionLoader = extensionRuntime as typeof extensionRuntime & {
+      loadExtensions: (
+        paths: string[],
+        options?: { continueOnError?: boolean; loadSource?: 'config' | 'cli' | 'api' },
+      ) => Promise<void>;
+    };
+    await extensionLoader.loadExtensions(configuredOnlyExtensions, {
+      continueOnError: true,
+      loadSource: 'config',
+    });
+    await extensionLoader.loadExtensions(dedupedCliExtensions, {
+      continueOnError: true,
+      loadSource: 'cli',
+    });
+    options.extensionRuntime = extensionRuntime;
+    extensionRuntime.activate();
   }
 
   // -r / --resume 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎹囬弻鐔虹磼閵忕姵鐏嶉梺?id: 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞炬櫅閸氬綊骞栧ǎ顒€濡肩痪鎯х秺閺岀喖鎮欓鈧崝璺衡攽椤旇棄鈻曢柡灞稿墲瀵板嫮鈧綁娼ч崝宀勬⒑閹肩偛鈧牕煤閻斿吋鍋傛い鎰剁畱閻愬﹪鏌曟繛褉鍋撻柡瀣濮婅櫣绮欏▎鎯у壉闂佽鐡曢褔顢氶妷鈺佺妞ゆ挻绋戞禍楣冩煥濠靛棛鍑归柟鍙夊劤闇夐柣妯垮皺閹界姷绱掔紒妯兼创鐎殿喖鐖奸獮瀣攽閸パ€鍋撻娑氱闁挎繂鎳忔径鍕繆閻愭壆鐭欐?
@@ -990,6 +1080,7 @@ async function main() {
       }, false);
 
       const result = await runKodaX(kodaXOptions, prompt);
+      emitJsonRunResultIfNeeded(options.outputMode, result);
 
       if (!result.success) {
         console.log(chalk.red(`\n[KodaX Auto-Continue] Session failed, stopping`));
@@ -1221,7 +1312,8 @@ New: {"features": [
           (prompt: string) => runKodaX(kodaXOptions, prompt)
         );
         if (commandPrompt) {
-          await runKodaX(kodaXOptions, commandPrompt);
+          const result = await runKodaX(kodaXOptions, commandPrompt);
+          emitJsonRunResultIfNeeded(options.outputMode, result);
           return;
         }
       }
@@ -1235,10 +1327,12 @@ New: {"features": [
     try {
       await runInkInteractiveMode({
         provider: kodaXOptions.provider,
+        model: kodaXOptions.model,
         thinking: kodaXOptions.thinking,
         reasoningMode: kodaXOptions.reasoningMode,
         maxIter: kodaXOptions.maxIter,
         parallel: kodaXOptions.parallel,
+        extensionRuntime: kodaXOptions.extensionRuntime,
         session: kodaXOptions.session,
         storage: new FileSessionStorage(),
         // 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎸鹃埀顒冾潐濞叉牕煤閿曞偊缍栭柡鍥ュ灪閻撴洘銇勯幇鍓佺ɑ缂佲偓閸愵喗鐓?events闂傚倸鍊搁崐鐑芥倿閿旈敮鍋撶粭娑樻噽閻瑩鏌熸潏楣冩闁稿孩顨婇弻娑氫沪閸撗€妲堝銈嗘礋娴滃爼寮诲澶婁紶闁告洦鍓欏▍锝囩磽娴ｆ彃浜鹃梺绋挎湰婢规洟宕戦幘鑽ゅ祦闁割煈鍠栨慨搴ㄦ煟鎼淬垹鍤柛锝忕秮楠?Ink UI 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁撻悩鑼槷濠碘槅鍨跺Λ鍧楁倿婵犲啰绠鹃柛鈩兩戠亸浼存煕?
@@ -1268,7 +1362,8 @@ New: {"features": [
 
   // 濠电姷鏁告慨鐢割敊閺嶎厼绐楁俊銈呭暞瀹曟煡鏌熼柇锕€鏋涚紒韬插€曢湁闁绘ê妯婇崕鎰版煕鐎ｎ亶妯€闁哄被鍊楃划娆戞崉閵娿倗椹冲┑鐐茬摠閸ゅ酣宕愬┑瀣摕闁绘柨鍚嬮悞浠嬫煥閺囨浜鹃梺璇茬箻娴滃爼寮婚敓鐘茬劦?
   const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-  await runKodaX(kodaXOptions, userPrompt);
+  const result = await runKodaX(kodaXOptions, userPrompt);
+  emitJsonRunResultIfNeeded(options.outputMode, result);
 }
 
 /**

@@ -6,6 +6,65 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.7.0] - 2026-03-25
+
+### Added
+- **Extension Runtime (FEATURE_034)**: Headless programmable runtime with four layers — Extension Runtime (loading, lifecycle, hot reload, provenance), Capability Runtime (discovery, execution, structured result transport), Runtime Control Surface (session state, queued follow-ups, active tools, model/thinking overrides), and Host Adapters (CLI `--extension`, config-based loading, REPL commands)
+- **Extension API**: `registerTool`, `registerCapabilityProvider`, `registerModelProvider`, `registerCommand`, `registerSkillPath`, typed `on(event)`, explicit `hook(...)` for `session:hydrate`, `provider:before`, `tool:before`, `turn:settle`
+- **Definition-first tool registry**: Tools registered through atomic `LocalToolDefinition` with schema-derived required params; same-name tool override with provenance tracking; removed `KODAX_TOOL_REQUIRED_PARAMS` parallel truth source
+- **Runtime model provider registry**: Dynamic model provider registration in `@kodax/ai` with same-name override and `registerModelProvider` API
+- **Extension persistence store**: JSONL-backed key-value store in `@kodax/agent` for extension session state, scoped per extension identity with versioned entries
+- **Extension commands in REPL**: `/extensions` command to list loaded extensions and `/reload` command to hot-reload extensions
+- **`--extension` CLI flag**: Load extensions from CLI invocation
+- **Extension command registration**: Extensions can register custom REPL commands via `registerCommand`
+- **JSON mode type guards**: `JsonEventsLogger` and `JsonEventEmitter` type guards for structured event streaming
+- **Extension types in `@kodax/agent`**: `KodaXExtensionSessionRecord`, `KodaXExtensionSessionState`, `KodaXExtensionStore`, `KodaXJsonValue` types
+- **New tests**: extension runtime, agent extension integration, persistence store, tool registry, REPL extension commands, storage, autocomplete extension paths, CLI option helpers
+
+### Changed
+- **Agent loop extension integration**: Extension runtime wired into `agent.ts` at `session:hydrate`, `provider:before`, `tool:before`, and `turn:settle` hook points
+- **Tool registry rewritten**: Multi-registration per tool name with active-selection semantics, `getRegisteredToolDefinition`, `getBuiltinRegisteredToolDefinition`, `listToolDefinitions` exported API
+- **REPL commands refactored**: Chinese comments converted to English; extension-aware command dispatch; `getActiveExtensionRuntime` and `emitActiveExtensionEvent` wired into REPL commands
+- **Storage module enhanced**: Extension session state and records persistence integrated into session storage
+- **`@kodax/coding` public API expanded**: Extension runtime exports, capability types, tool definition types, extension store API
+- **`@kodax/agent` public API expanded**: Extension store factory, extension types
+- **`@kodax/ai` public API expanded**: Runtime model provider registration and resolver integration
+- **`@kodax/skills` public API expanded**: `registerPluginSkillPath` for extension skill path registration
+- **v0.7.0 feature design updated**: FEATURE_034 marked as Completed; roadmap dependency documentation finalized
+
+### Documentation
+- **Design document restructure**: Major cleanup of v0.7.0 feature design doc, removing redundant historical drafts while preserving key implementation decisions
+- **Feature boundary documentation**: Updated boundary sections for 034 across dependent features (019, 022, 029, 035, 038)
+
+---
+
+## [0.6.22] - 2026-03-25
+
+### Changed
+- **tsconfig paths**: `@kodax/*` path aliases in agent, coding, repl packages now resolve to `src/index.ts` for dev-time TypeScript source resolution instead of dist root
+- **`isTypedContentBlock` null-safety**: `Boolean(block)` replaced with `block !== null` for stricter null exclusion
+- **FEATURE_034 design upgrade**: Major scope expansion — headless programmable runtime with four layers (Extension Runtime, Capability Runtime, Runtime Control Surface, Host Adapters), explicit mutable hook contracts, hot reload support, provenance tracking, and boundary documentation with 8 dependent features (019, 022, 028, 029, 030, 035, 038)
+- **Feature boundary docs**: Added 034 boundary sections to features 019, 029, 035, 018, 028, 038, 022, 030
+
+---
+
+## [0.6.21] - 2026-03-24
+
+### Added
+- **JSON mode**: `--json` CLI flag for structured machine-readable output; `JsonEventEmitter` streams typed events (tool_use, tool_result, text, error, complete) via `EventEmitter`; `JsonEventsLogger` serializes events as newline-delimited JSON to stdout; scripting contract documented in v0.7.0 feature design
+- **Runtime evidence module**: `runtime-evidence.ts` extracts `RUNTIME_EVIDENCE_MARKERS`, `TRANSIENT_RETRY_MARKERS`, and `EXIT_CODE_PATTERN` from reasoning.ts; exports `hasTransientRetryEvidence`, `hasNonTransientRuntimeEvidence`, `looksLikeActionableRuntimeEvidence` for shared use across agent and reasoning modules
+- **`createCompletedTurnTokenSnapshot`**: New token-accounting function using `totalTokens` (input + output) for post-turn context tracking
+- **Transient reroute guard**: Review tasks with transient-only evidence (timeouts, stream stalls) are no longer rerouted to investigation mode; early exit in `maybeCreateAutoReroutePlan` and defense-in-depth in `buildHeuristicAutoRerouteDecision`
+- **New tests**: runtime-evidence, retry-handler, token-accounting (completedTurn), reasoning (timeout-only evidence)
+
+### Changed
+- **Token snapshot two-phase model**: `agent.ts` refactored to use `preAssistantTokenSnapshot` (inputTokens) for retry/reroute paths where assistant message is removed, and `completedTurnTokenSnapshot` (totalTokens) for normal flow where assistant message is retained
+- **`looksLikeRuntimeEvidence` aligned**: Now delegates to `looksLikeActionableRuntimeEvidence` which filters transient markers, preventing timeout evidence from inflating routing risk levels
+- **Reasoning task-type keywords refined**: Chinese keywords adjusted for better task classification accuracy
+- **Feature 037 completed**: API Token Usage real-value-first + estimation fallback marked as Completed in FEATURE_LIST.md
+
+---
+
 ## [0.6.20] - 2026-03-24
 
 ### Documentation

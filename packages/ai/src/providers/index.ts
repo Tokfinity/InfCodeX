@@ -31,6 +31,13 @@ export {
   getCustomProviderModels,
 } from './custom-registry.js';
 export {
+  registerModelProvider,
+  getRuntimeModelProvider,
+  isRuntimeModelProviderName,
+  getRuntimeModelProviderNames,
+  clearRuntimeModelProviders,
+} from './runtime-registry.js';
+export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
