@@ -175,7 +175,11 @@ function hookMatches(hook: CommandHook, target: string): boolean {
 }
 
 function formatManualOutput(request: CommandInvocationRequest): string {
-  const label = request.source === 'skill' ? 'skill' : 'command';
+  const label = request.source === 'skill'
+    ? 'skill'
+    : request.source === 'extension'
+      ? 'extension command'
+      : 'command';
   return [
     `Note: ${request.displayName} has model invocation disabled.`,
     `The ${label} content is shown below for manual use:`,

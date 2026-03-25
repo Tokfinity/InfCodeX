@@ -68,6 +68,10 @@ export {
 // ============== Core Types ==============
 
 export type {
+  KodaXJsonValue,
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
+  KodaXSessionData,
   KodaXSessionMeta,
   KodaXEvents,
   KodaXSessionOptions,
@@ -116,7 +120,6 @@ export {
   PROMISE_PATTERN,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
-  KODAX_TOOL_REQUIRED_PARAMS,
 } from './constants.js';
 
 // ============== Provider (re-export from @kodax/ai) ==============
@@ -149,6 +152,11 @@ export {
   getCustomProviderNames,
   getCustomProviderList,
   getCustomProviderModels,
+  registerModelProvider,
+  getRuntimeModelProvider,
+  isRuntimeModelProviderName,
+  getRuntimeModelProviderNames,
+  clearRuntimeModelProviders,
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
@@ -160,10 +168,23 @@ export type { ProviderName } from './providers/index.js';
 export {
   type ToolHandler,
   type ToolRegistry,
+  type LocalToolDefinition,
+  type RegisteredToolDefinition,
+  type ToolDefinitionSource,
+  type ToolRegistrationOptions,
   KODAX_TOOLS,
   registerTool,
   getTool,
+  getToolDefinition,
+  getRegisteredToolDefinition,
+  getToolRegistrations,
+  getBuiltinToolDefinition,
+  getBuiltinRegisteredToolDefinition,
+  createBuiltinToolDefinition,
+  listBuiltinToolDefinitions,
+  getRequiredToolParams,
   listTools,
+  listToolDefinitions,
   executeTool,
   toolRead,
   toolWrite,
@@ -224,6 +245,42 @@ export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './agent.js';
+
+export type {
+  CapabilityKind,
+  CapabilityResult,
+  CapabilityProvider,
+  ModelProviderRegistration,
+  ExtensionCommandDefinition,
+  ExtensionCommandContext,
+  ExtensionCommandInvocation,
+  ExtensionCommandResult,
+  ExtensionContributionSource,
+  ExtensionLoadSource,
+  ExtensionLogger,
+  ExtensionToolBeforeHookContext,
+  ExtensionEventMap,
+  ExtensionHookMap,
+  ExtensionRuntimeController,
+  LoadedExtensionDiagnostic,
+  RegisteredCapabilityProviderDiagnostic,
+  RegisteredCommandDiagnostic,
+  RegisteredHookDiagnostic,
+  RegisteredToolDiagnostic,
+  ExtensionFailureStage,
+  ExtensionFailureDiagnostic,
+  ExtensionRuntimeDiagnostics,
+  KodaXExtensionAPI,
+  KodaXExtensionActivationResult,
+  KodaXExtensionModule,
+} from './extensions/index.js';
+
+export {
+  KodaXExtensionRuntime,
+  createExtensionRuntime,
+  setActiveExtensionRuntime,
+  getActiveExtensionRuntime,
+} from './extensions/index.js';
 
 // ============== Orchestration ==============
 export {

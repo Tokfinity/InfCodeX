@@ -27,6 +27,13 @@ export {
   getSkillPathsFlat,
 } from './types.js';
 
+export {
+  registerPluginSkillPath,
+  unregisterPluginSkillPath,
+  listPluginSkillPaths,
+  clearPluginSkillPaths,
+} from './plugin-paths.js';
+
 // Skill Loader
 export {
   parseSkillMarkdown,

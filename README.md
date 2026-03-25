@@ -1008,38 +1008,15 @@ This is what makes the project valuable not only as a CLI, but as a foundation f
 
 Based on the existing repo structure and internal documents, the natural forward path includes:
 
-- richer multi-agent teamwork
-- more built-in skills
-- stronger plugin / extension capabilities
-- deeper SDLC integration
-- future IDE or web integrations
-- tighter coupling with upper-layer agent platforms such as InfOne
-
----
-
-## Repository Notes
-
-The repository is evolving quickly, and parts of the documentation still reflect earlier naming and counting conventions. For example:
-
-- `InfCodeX` and `KodaX` are both present in the docs
-- some docs mention 7 providers while newer docs/configs enumerate 10 built-in providers
-- package and command names currently remain `kodax`
-
-This README therefore emphasizes **stable architectural truths** while also retaining the more detailed KodaX usage guidance that is still valuable for day-to-day development.
-
----
-
-## Related Documents
-
-- [Chinese README](./README_CN.md)
-- [Architecture Overview](./docs/ARCHITECTURE_OVERVIEW.md)
-- [Architecture Overview (Chinese)](./docs/ARCHITECTURE_OVERVIEW_CN.md)
-- [InfCodeX + InfOne Positioning](./docs/PROJECT_POSITIONING.md)
-- [InfCodeX + InfOne Positioning (Chinese)](./docs/PROJECT_POSITIONING_CN.md)
-- [Feature List](./docs/FEATURE_LIST.md)
-- [Feature Release Notes Index](./docs/features/README.md)
-- [Contributing Guide](./CONTRIBUTING.md)
-- [Changelog](./CHANGELOG.md)
+- [README_CN.md](README_CN.md) - Chinese documentation
+- [docs/ADR.md](docs/ADR.md) - Architecture decision records
+- [docs/HLD.md](docs/HLD.md) - High-level design
+- [docs/DD.md](docs/DD.md) - Detailed design
+- [docs/PRD.md](docs/PRD.md) - Product requirements
+- [docs/FEATURE_LIST.md](docs/FEATURE_LIST.md) - Feature tracker and roadmap
+- [docs/features/README.md](docs/features/README.md) - Feature design index
+- [docs/test-guides/](docs/test-guides/) - Feature-specific test guides
+- [CHANGELOG.md](CHANGELOG.md) - Version history
 
 ---
 

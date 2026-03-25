@@ -34,6 +34,12 @@ export type {
 // Import for local types
 import type { KodaXMessage } from '@kodax/ai';
 
+export type KodaXJsonPrimitive = string | number | boolean | null;
+export type KodaXJsonValue =
+  | KodaXJsonPrimitive
+  | KodaXJsonValue[]
+  | { [key: string]: KodaXJsonValue };
+
 // ============== 会话元数据 ==============
 
 /**
@@ -49,21 +55,104 @@ export interface SessionErrorMetadata {
   consecutiveErrors: number;
 }
 
+export interface KodaXExtensionSessionRecord {
+  id: string;
+  extensionId: string;
+  type: string;
+  ts: number;
+  data?: KodaXJsonValue;
+  dedupeKey?: string;
+}
+
+export type KodaXExtensionSessionState = Record<string, Record<string, KodaXJsonValue>>;
+
+export interface KodaXSessionData {
+  messages: KodaXMessage[];
+  title: string;
+  gitRoot: string;
+  errorMetadata?: SessionErrorMetadata;
+  extensionState?: KodaXExtensionSessionState;
+  extensionRecords?: KodaXExtensionSessionRecord[];
+}
+
 export interface KodaXSessionMeta {
   _type: 'meta';
   title: string;
   id: string;
   gitRoot: string;
   createdAt: string;
+  extensionState?: KodaXExtensionSessionState;
+  extensionRecordCount?: number;
   /** Error metadata for recovery - 错误元数据用于恢复 */
   errorMetadata?: SessionErrorMetadata;
+}
+
+// ============== Extension Persistence Store (FEATURE_034) ==============
+
+/**
+ * Extension-scoped persistence entry.
+ *
+ * Each entry belongs to a namespace (extensionId) and carries
+ * a string key, a JSON-safe value, and an opaque version tag
+ * used for optimistic concurrency control.
+ */
+export interface KodaXExtensionStoreEntry {
+  key: string;
+  value: KodaXJsonValue;
+  version: string;
+  updatedAt: number;
+}
+
+/**
+ * Extension persistence store interface (FEATURE_034 manual persistence).
+ *
+ * Implementations provide a durable key-value store scoped to a single
+ * extension identity.  The store is independent of session lifecycle —
+ * data survives across sessions and restarts.
+ */
+export interface KodaXExtensionStore {
+  /**
+   * Read a single key.
+   * Returns `undefined` when the key does not exist.
+   */
+  get(key: string): Promise<KodaXExtensionStoreEntry | undefined>;
+
+  /**
+   * Write a key-value pair.
+   *
+   * When `expectedVersion` is provided the write only succeeds when the
+   * stored entry's version still matches (optimistic concurrency).
+   * Returns the new entry on success, or `false` on version mismatch.
+   */
+  put(
+    key: string,
+    value: KodaXJsonValue,
+    options?: { expectedVersion?: string },
+  ): Promise<KodaXExtensionStoreEntry | false>;
+
+  /**
+   * Remove a key.
+   * Returns `true` when the key existed and was removed.
+   */
+  delete(key: string): Promise<boolean>;
+
+  /**
+   * List all keys (optionally filtered by prefix).
+   */
+  list(options?: { prefix?: string }): Promise<string[]>;
+
+  /**
+   * Clear all keys (optionally filtered by prefix).
+   * Returns the number of entries removed.
+   */
+  clear(options?: { prefix?: string }): Promise<number>;
 }
 
 // ============== 会话存储接口 ==============
 
 export interface KodaXSessionStorage {
-  save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string; errorMetadata?: SessionErrorMetadata }): Promise<void>;
-  load(id: string): Promise<{ messages: KodaXMessage[]; title: string; gitRoot: string; errorMetadata?: SessionErrorMetadata } | null>;
+  save(id: string, data: KodaXSessionData): Promise<void>;
+  load(id: string): Promise<KodaXSessionData | null>;
   list?(gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>>;
   delete?(id: string): Promise<void>;
   deleteAll?(gitRoot?: string): Promise<void>;
