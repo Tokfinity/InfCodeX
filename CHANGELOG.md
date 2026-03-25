@@ -6,6 +6,16 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.6.22] - 2026-03-25
+
+### Changed
+- **tsconfig paths**: `@kodax/*` path aliases in agent, coding, repl packages now resolve to `src/index.ts` for dev-time TypeScript source resolution instead of dist root
+- **`isTypedContentBlock` null-safety**: `Boolean(block)` replaced with `block !== null` for stricter null exclusion
+- **FEATURE_034 design upgrade**: Major scope expansion — headless programmable runtime with four layers (Extension Runtime, Capability Runtime, Runtime Control Surface, Host Adapters), explicit mutable hook contracts, hot reload support, provenance tracking, and boundary documentation with 8 dependent features (019, 022, 028, 029, 030, 035, 038)
+- **Feature boundary docs**: Added 034 boundary sections to features 019, 029, 035, 018, 028, 038, 022, 030
+
+---
+
 ## [0.6.21] - 2026-03-24
 
 ### Added
