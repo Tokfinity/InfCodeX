@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.7.0] - 2026-03-25
+
+### Added
+- **Extension Runtime (FEATURE_034)**: Headless programmable runtime with four layers — Extension Runtime (loading, lifecycle, hot reload, provenance), Capability Runtime (discovery, execution, structured result transport), Runtime Control Surface (session state, queued follow-ups, active tools, model/thinking overrides), and Host Adapters (CLI `--extension`, config-based loading, REPL commands)
+- **Extension API**: `registerTool`, `registerCapabilityProvider`, `registerModelProvider`, `registerCommand`, `registerSkillPath`, typed `on(event)`, explicit `hook(...)` for `session:hydrate`, `provider:before`, `tool:before`, `turn:settle`
+- **Definition-first tool registry**: Tools registered through atomic `LocalToolDefinition` with schema-derived required params; same-name tool override with provenance tracking; removed `KODAX_TOOL_REQUIRED_PARAMS` parallel truth source
+- **Runtime model provider registry**: Dynamic model provider registration in `@kodax/ai` with same-name override and `registerModelProvider` API
+- **Extension persistence store**: JSONL-backed key-value store in `@kodax/agent` for extension session state, scoped per extension identity with versioned entries
+- **Extension commands in REPL**: `/extensions` command to list loaded extensions and `/reload` command to hot-reload extensions
+- **`--extension` CLI flag**: Load extensions from CLI invocation
+- **Extension command registration**: Extensions can register custom REPL commands via `registerCommand`
+- **JSON mode type guards**: `JsonEventsLogger` and `JsonEventEmitter` type guards for structured event streaming
+- **Extension types in `@kodax/agent`**: `KodaXExtensionSessionRecord`, `KodaXExtensionSessionState`, `KodaXExtensionStore`, `KodaXJsonValue` types
+- **New tests**: extension runtime, agent extension integration, persistence store, tool registry, REPL extension commands, storage, autocomplete extension paths, CLI option helpers
+
+### Changed
+- **Agent loop extension integration**: Extension runtime wired into `agent.ts` at `session:hydrate`, `provider:before`, `tool:before`, and `turn:settle` hook points
+- **Tool registry rewritten**: Multi-registration per tool name with active-selection semantics, `getRegisteredToolDefinition`, `getBuiltinRegisteredToolDefinition`, `listToolDefinitions` exported API
+- **REPL commands refactored**: Chinese comments converted to English; extension-aware command dispatch; `getActiveExtensionRuntime` and `emitActiveExtensionEvent` wired into REPL commands
+- **Storage module enhanced**: Extension session state and records persistence integrated into session storage
+- **`@kodax/coding` public API expanded**: Extension runtime exports, capability types, tool definition types, extension store API
+- **`@kodax/agent` public API expanded**: Extension store factory, extension types
+- **`@kodax/ai` public API expanded**: Runtime model provider registration and resolver integration
+- **`@kodax/skills` public API expanded**: `registerPluginSkillPath` for extension skill path registration
+- **v0.7.0 feature design updated**: FEATURE_034 marked as Completed; roadmap dependency documentation finalized
+
+### Documentation
+- **Design document restructure**: Major cleanup of v0.7.0 feature design doc, removing redundant historical drafts while preserving key implementation decisions
+- **Feature boundary documentation**: Updated boundary sections for 034 across dependent features (019, 022, 029, 035, 038)
+
+---
+
 ## [0.6.22] - 2026-03-25
 
 ### Changed

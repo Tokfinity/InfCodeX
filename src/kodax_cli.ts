@@ -22,6 +22,7 @@ import {
 import {
   ACP_PERMISSION_MODES,
   createKodaXOptions,
+  mergeConfiguredExtensions,
   parseOptionalNonNegativeInt,
   parseNonNegativeIntWithFallback,
   parseOutputModeOption,
@@ -48,6 +49,7 @@ import {
   createKodaXTaskRunner,
   KodaXReasoningMode,
   runOrchestration,
+  createExtensionRuntime,
   KODAX_DEFAULT_PROVIDER,
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
@@ -66,6 +68,7 @@ import {
   rateLimitedCall,
   buildInitPrompt,
   FileSessionStorage,
+  KODAX_CONFIG_FILE,
   runInkInteractiveMode,
   type PermissionMode,
 } from '@kodax/repl';
@@ -286,6 +289,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  kodax -p "task" -m anthropic --reasoning deep') + ' # Explicit provider selection\n');
   },
 };
+
+function collectRepeatedOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
 
 function showCliHelpTopic(topic: string): boolean {
   const helpFn = CLI_HELP_TOPICS[topic.toLowerCase()];
@@ -556,6 +563,7 @@ async function main() {
     .option('-y, --auto', 'Backward-compat alias; no effect in non-REPL CLI')
     .option('-s, --session <op>', 'Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID')
     .option('-j, --parallel', 'Parallel tool execution')
+    .option('--extension <path>', 'Load local extension module (.js/.mjs/.cjs/.ts/.mts/.cts)', collectRepeatedOption, [])
     .option('--no-session', 'Disable session persistence (print mode only)')
     // Long options.
     .option('--team <tasks>', 'Run multiple sub-agents in parallel (comma-separated)')
@@ -900,8 +908,25 @@ async function main() {
   const opts = program.opts();
   // 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鍨鹃幇浣圭稁缂傚倷鐒﹁摫闁告瑥绻橀弻鐔碱敍閿濆洣姹楅悷婊呭鐢帡鎮欐繝鍐︿簻闁瑰搫绉烽崗宀勬煕濡濮嶉柟顔筋殜閻涱噣宕归鐓庮潛婵犵數鍋涢惇浼村礉閹存繍鍤曢柟闂寸绾惧ジ鏌ｉ幇顒夊殶闁告ɑ鎮傚铏圭矙閹稿孩鎷辩紒鐐緲缁夊綊骞嗙仦杞挎梹鎷呴搹璇″晭闂備胶纭堕崜婵嬪礉閺囥垺鍊堕柡灞诲劜閻撴稑霉閿濆懏鎲搁弫鍫ユ倵鐟欏嫭绀€闁靛牆鎲￠幈銊╁焵椤掑嫭鐓冮柍杞扮閺嗙偞銇勯幘鑸靛殌闁宠鍨块幃娆撴嚑椤掍焦鍠栫紓鍌欑贰閸犳牠鎳熼鐐寸畳闂備胶绮崹鐓幬涢崟顖涘€堕柧蹇ｅ亗缁诲棙銇勯弽銊︾殤婵絿鍋ら弻娑氣偓锝庡亝鐏忕敻鏌熼崣澶嬪唉鐎规洜鍠栭、鏇㈠閳╁啫娈樼紓鍌氬€搁崐椋庢閿熺姴闂い鏇楀亾鐎规洖缍婇獮搴ㄦ寠婢跺矈鍞甸梺璇插嚱缂嶅棝宕伴弽褎绾梻鍌欑閹测剝绗熷Δ浣侯洸婵犲﹤瀚々鏌ユ煕閹炬鎳忛敍蹇擃渻閵堝棙灏柛鈺佸铻為柟瀵稿Х绾惧ジ鏌?
   const config = loadConfig();
+  const configWithExtensions = config as typeof config & { extensions?: string[] };
   const reasoningMode = resolveCliReasoningMode(program, opts, config);
   const parallel = resolveCliParallel(program, opts, config);
+  const configuredExtensions = Array.isArray(configWithExtensions.extensions)
+    ? configWithExtensions.extensions
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => path.isAbsolute(value) ? value : path.resolve(path.dirname(KODAX_CONFIG_FILE), value))
+    : [];
+  const cliExtensions = Array.isArray(opts.extension)
+    ? opts.extension
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .map((value) => path.resolve(value))
+    : [];
+  const dedupedConfiguredExtensions = mergeConfiguredExtensions([], configuredExtensions);
+  const dedupedCliExtensions = mergeConfiguredExtensions(cliExtensions, []);
+  const configuredOnlyExtensions = dedupedConfiguredExtensions.filter(
+    (value) => !dedupedCliExtensions.includes(value),
+  );
+  const activeExtensions = mergeConfiguredExtensions(dedupedCliExtensions, configuredOnlyExtensions);
   // -y/--auto is kept for backward compatibility but has no effect in CLI.
   const options: CliOptions = {
     // Priority: CLI args > config file > defaults.
@@ -910,6 +935,7 @@ async function main() {
     thinking: reasoningMode !== 'off',
     reasoningMode,
     outputMode: (opts.mode as CliOutputMode | undefined) ?? 'text',
+    extensions: activeExtensions,
     session: opts.session,
     parallel,
     team: opts.team,
@@ -954,6 +980,26 @@ async function main() {
   }
 
   validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
+
+  if ((options.extensions?.length ?? 0) > 0) {
+    const extensionRuntime = createExtensionRuntime({ config });
+    const extensionLoader = extensionRuntime as typeof extensionRuntime & {
+      loadExtensions: (
+        paths: string[],
+        options?: { continueOnError?: boolean; loadSource?: 'config' | 'cli' | 'api' },
+      ) => Promise<void>;
+    };
+    await extensionLoader.loadExtensions(configuredOnlyExtensions, {
+      continueOnError: true,
+      loadSource: 'config',
+    });
+    await extensionLoader.loadExtensions(dedupedCliExtensions, {
+      continueOnError: true,
+      loadSource: 'cli',
+    });
+    options.extensionRuntime = extensionRuntime;
+    extensionRuntime.activate();
+  }
 
   // -r / --resume 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎹囬弻鐔虹磼閵忕姵鐏嶉梺?id: 婵犵數濮烽弫鎼佸磻濞戙垺鍋ら柕濞炬櫅閸氬綊骞栧ǎ顒€濡肩痪鎯х秺閺岀喖鎮欓鈧崝璺衡攽椤旇棄鈻曢柡灞稿墲瀵板嫮鈧綁娼ч崝宀勬⒑閹肩偛鈧牕煤閻斿吋鍋傛い鎰剁畱閻愬﹪鏌曟繛褉鍋撻柡瀣濮婅櫣绮欏▎鎯у壉闂佽鐡曢褔顢氶妷鈺佺妞ゆ挻绋戞禍楣冩煥濠靛棛鍑归柟鍙夊劤闇夐柣妯垮皺閹界姷绱掔紒妯兼创鐎殿喖鐖奸獮瀣攽閸パ€鍋撻娑氱闁挎繂鎳忔径鍕繆閻愭壆鐭欐?
   if (opts.resume === true) {
@@ -1281,10 +1327,12 @@ New: {"features": [
     try {
       await runInkInteractiveMode({
         provider: kodaXOptions.provider,
+        model: kodaXOptions.model,
         thinking: kodaXOptions.thinking,
         reasoningMode: kodaXOptions.reasoningMode,
         maxIter: kodaXOptions.maxIter,
         parallel: kodaXOptions.parallel,
+        extensionRuntime: kodaXOptions.extensionRuntime,
         session: kodaXOptions.session,
         storage: new FileSessionStorage(),
         // 婵犵數濮烽弫鎼佸磻閻愬搫鍨傞柛顐ｆ礀缁犱即鏌涘┑鍕姢闁活厽鎸鹃埀顒冾潐濞叉牕煤閿曞偊缍栭柡鍥ュ灪閻撴洘銇勯幇鍓佺ɑ缂佲偓閸愵喗鐓?events闂傚倸鍊搁崐鐑芥倿閿旈敮鍋撶粭娑樻噽閻瑩鏌熸潏楣冩闁稿孩顨婇弻娑氫沪閸撗€妲堝銈嗘礋娴滃爼寮诲澶婁紶闁告洦鍓欏▍锝囩磽娴ｆ彃浜鹃梺绋挎湰婢规洟宕戦幘鑽ゅ祦闁割煈鍠栨慨搴ㄦ煟鎼淬垹鍤柛锝忕秮楠?Ink UI 闂傚倸鍊搁崐椋庣矆娓氣偓楠炲鏁撻悩鑼槷濠碘槅鍨跺Λ鍧楁倿婵犲啰绠鹃柛鈩兩戠亸浼存煕?

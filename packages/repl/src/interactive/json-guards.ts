@@ -1,5 +1,8 @@
 import type {
   KodaXContentBlock,
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
+  KodaXJsonValue,
   KodaXMessage,
   SessionErrorMetadata,
 } from '@kodax/coding';
@@ -26,6 +29,60 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === 'string');
+}
+
+export function isKodaXJsonValue(value: unknown): value is KodaXJsonValue {
+  if (
+    value === null
+    || typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+  ) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isKodaXJsonValue);
+  }
+
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+
+  return Object.values(value).every(isKodaXJsonValue);
+}
+
+export function isKodaXExtensionSessionRecord(
+  value: unknown,
+): value is KodaXExtensionSessionRecord {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.extensionId === 'string'
+    && typeof value.type === 'string'
+    && typeof value.ts === 'number'
+    && (value.data === undefined || isKodaXJsonValue(value.data))
+    && (value.dedupeKey === undefined || typeof value.dedupeKey === 'string');
+}
+
+export function isKodaXExtensionSessionState(
+  value: unknown,
+): value is KodaXExtensionSessionState {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  return Object.values(value).every((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+
+    return Object.values(entry).every(isKodaXJsonValue);
+  });
 }
 
 function isKodaXContentBlock(value: unknown): value is KodaXContentBlock {

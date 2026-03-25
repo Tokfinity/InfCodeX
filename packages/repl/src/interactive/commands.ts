@@ -1,5 +1,5 @@
 /**
- * KodaX Interactive Command System - 交互式命令系统
+ * KodaX Interactive Command System
  */
 
 import type * as readline from 'readline';
@@ -7,10 +7,14 @@ import chalk from 'chalk';
 import { InteractiveContext, InteractiveMode } from './context.js';
 import {
   estimateTokens,
+  type ExtensionRuntimeDiagnostics,
   KODAX_REASONING_MODE_SEQUENCE,
+  getActiveExtensionRuntime,
   isKnownProvider,
   getAvailableProviderNames,
   resolveProvider,
+  type ExtensionCommandDefinition,
+  type ExtensionCommandResult,
   type KodaXReasoningMode,
   KodaXOptions,
 } from '@kodax/coding';
@@ -56,10 +60,10 @@ import {
 } from '../commands/types.js';
 import { registerAllCommands } from '../commands/index.js';
 
-// Re-export types needed by downstream modules - 重新导出下游模块需要的类型
+// Re-export types needed by downstream modules.
 export type { CommandCallbacks, CurrentConfig } from '../commands/types.js';
 
-// Command handler type - 命令处理器类型
+// Command handler type.
 export type CommandHandler = (
   args: string[],
   context: InteractiveContext,
@@ -67,18 +71,18 @@ export type CommandHandler = (
   currentConfig: CurrentConfig
 ) => Promise<CommandResult | void>;
 
-// Command definition - 命令定义
+// Command definition.
 export interface Command {
   name: string;
   aliases?: string[];
   description: string;
   usage?: string;
   handler: CommandHandler;
-  /** Detailed help function returning multi-line help text - 详细帮助函数，返回多行帮助文本 */
+  /** Detailed help function returning multi-line help text. */
   detailedHelp?: () => void;
 }
 
-// Built-in commands - 内置命令
+// Built-in commands.
 function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory: number; project: number } {
   return {
     global: files.filter(file => file.scope === 'global').length,
@@ -114,7 +118,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     usage: '/help [command]',
     handler: async (args) => {
       if (args.length > 0) {
-        // Show detailed help for specific command - 显示特定命令的详细帮助
+        // Show detailed help for a specific command.
         printDetailedHelp(args[0]!);
       } else {
         printHelp();
@@ -238,15 +242,15 @@ export const BUILTIN_COMMANDS: Command[] = [
 
           // Clear UI history - it will be re-created from the new context.messages
           // This ensures the UI shows the summary + protected recent context.
-          // 清除 UI 历史 - 它会从新的 context.messages 重新创建
-          // 这确保 UI 显示摘要 + 最近的 10% 消息
+          // Clear UI history so it can be rebuilt from the compacted messages.
+          // This keeps the summary and protected recent context visible.
           callbacks.clearHistory?.();
 
           // Save compacted messages to session storage
           await callbacks.saveSession();
 
           // Display statistics
-          console.log(chalk.green(`\n[Compaction complete: ${Math.round(result.tokensBefore / 1000)}k → ${Math.round(result.tokensAfter / 1000)}k tokens, ${Math.round((1 - result.tokensAfter / result.tokensBefore) * 100)}% reduced]`));
+          console.log(chalk.green(`\n[Compaction complete: ${Math.round(result.tokensBefore / 1000)}k -> ${Math.round(result.tokensAfter / 1000)}k tokens, ${Math.round((1 - result.tokensAfter / result.tokensBefore) * 100)}% reduced]`));
           console.log();
         } finally {
           // Stop compacting indicator
@@ -292,32 +296,56 @@ export const BUILTIN_COMMANDS: Command[] = [
   },
   {
     name: 'reload',
-    description: 'Reload AGENTS.md project rules',
+    description: 'Reload project rules and active extensions',
     handler: async (_args, _context, callbacks, _currentConfig) => {
-      console.log(chalk.cyan('\nReloading project rule files...\n'));
+      console.log(chalk.cyan('\nReloading project rule files and runtime extensions...\n'));
 
       try {
         const files = await callbacks.reloadAgentsFiles?.() ?? [];
         const result = summarizeAgentsFiles(files);
+        const extensionRuntime = getActiveExtensionRuntime();
+        const extensionCount = extensionRuntime
+          ? getExtensionRuntimeDiagnostics(extensionRuntime).loadedExtensions.length
+          : 0;
+        const previousFailureCount = extensionRuntime
+          ? getExtensionRuntimeDiagnostics(extensionRuntime).failures.length
+          : 0;
+        let reloadedExtensions = 0;
+        let reloadFailures = 0;
 
-        if (files.length > 0) {
-          console.log(chalk.green('✓ Rules reloaded successfully:\n'));
-          if (result.global > 0) {
-            console.log(chalk.dim(`  • Global: ${result.global} file(s)`));
-          }
-          if (result.directory > 0) {
-            console.log(chalk.dim(`  • Directory: ${result.directory} file(s)`));
-          }
-          if (result.project > 0) {
-            console.log(chalk.dim(`  • Project: ${result.project} file(s)`));
-          }
-          console.log(chalk.dim('  Updated rules will apply to subsequent requests in this session.'));
-          console.log();
-        } else {
-          console.log(chalk.yellow('No project rule files found.\n'));
-          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, or .kodax/AGENTS.md for project-wide overrides.'));
-          console.log();
+        if (extensionRuntime) {
+          await extensionRuntime.reloadExtensions({ continueOnError: true });
+          const diagnostics = getExtensionRuntimeDiagnostics(extensionRuntime);
+          reloadedExtensions = extensionCount || diagnostics.loadedExtensions.length;
+          reloadFailures = Math.max(0, diagnostics.failures.length - previousFailureCount);
         }
+
+        if (files.length === 0 && reloadedExtensions === 0) {
+          console.log(chalk.yellow('No project rule files or active extensions found.\n'));
+          console.log(chalk.dim('  Create AGENTS.md or CLAUDE.md in your project, or load extensions with --extension.'));
+          console.log();
+          return;
+        }
+
+        console.log(chalk.green('Rules reloaded successfully:\n'));
+        if (result.global > 0) {
+          console.log(chalk.dim(`  - Global: ${result.global} file(s)`));
+        }
+        if (result.directory > 0) {
+          console.log(chalk.dim(`  - Directory: ${result.directory} file(s)`));
+        }
+        if (result.project > 0) {
+          console.log(chalk.dim(`  - Project: ${result.project} file(s)`));
+        }
+        if (reloadedExtensions > 0) {
+          console.log(chalk.dim(`  - Extensions: ${reloadedExtensions} module(s)`));
+        }
+        if (reloadFailures > 0) {
+          console.log(chalk.yellow(`  - Failures: ${reloadFailures} recorded (run /extensions for details)`));
+        }
+        console.log(chalk.dim('  Updated rules will apply to subsequent requests in this session.'));
+        console.log();
+        return;
       } catch (error) {
         console.log(chalk.red('Failed to reload rules.\n'));
         console.log(chalk.dim(`  Error: ${error instanceof Error ? error.message : String(error)}`));
@@ -327,10 +355,11 @@ export const BUILTIN_COMMANDS: Command[] = [
     detailedHelp: () => {
       console.log(chalk.cyan('\n/reload - Reload Project Rules\n'));
       console.log(chalk.bold('Usage:'));
-      console.log(chalk.dim('  /reload            ') + 'Reload all discovered project rule files');
+      console.log(chalk.dim('  /reload            ') + 'Reload project rule files and active extensions');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log('  Reloads project-level context rules from AGENTS.md, CLAUDE.md, and .kodax/AGENTS.md files.');
+      console.log('  If a runtime extension host is active, it also hot-reloads loaded extensions.');
       console.log();
       console.log(chalk.bold('Rule Priority:'));
       console.log(chalk.dim('  1. Global:   ') + '~/.kodax/AGENTS.md');
@@ -340,6 +369,92 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /reload            ') + '# Reload and show loaded rules');
       console.log();
+    },
+  },
+  {
+    name: 'extensions',
+    aliases: ['ext'],
+    description: 'Show active extension runtime diagnostics',
+    usage: '/extensions',
+    handler: async () => {
+      const runtime = getActiveExtensionRuntime();
+      if (!runtime) {
+        console.log(chalk.yellow('\n[No active extension runtime]\n'));
+        return;
+      }
+
+      const diagnostics = getExtensionRuntimeDiagnostics(runtime);
+      const extensionTools = diagnostics.tools.filter((tool) => tool.source.kind === 'extension');
+
+      console.log(chalk.bold('\nExtension Runtime:\n'));
+      console.log(chalk.dim(`  Loaded:          ${diagnostics.loadedExtensions.length}`));
+      console.log(chalk.dim(`  Capabilities:    ${diagnostics.capabilityProviders.length}`));
+      console.log(chalk.dim(`  Commands:        ${diagnostics.commands.length}`));
+      console.log(chalk.dim(`  Hooks:           ${diagnostics.hooks.length}`));
+      console.log(chalk.dim(`  Failures:        ${diagnostics.failures.length}`));
+      console.log(chalk.dim(`  Extension Tools: ${extensionTools.length}`));
+      if (diagnostics.defaults.activeTools !== undefined) {
+        console.log(chalk.dim(`  Active Tools:    ${diagnostics.defaults.activeTools.join(', ') || '(none)'}`));
+      }
+      if (diagnostics.defaults.modelSelection.provider || diagnostics.defaults.modelSelection.model) {
+        console.log(chalk.dim(`  Model Override:  ${diagnostics.defaults.modelSelection.provider ?? '(inherit)'} / ${diagnostics.defaults.modelSelection.model ?? '(inherit)'}`));
+      }
+      if (diagnostics.defaults.thinkingLevel) {
+        console.log(chalk.dim(`  Thinking:        ${diagnostics.defaults.thinkingLevel}`));
+      }
+      console.log();
+
+      if (diagnostics.loadedExtensions.length > 0) {
+        console.log(chalk.bold('Loaded Extensions:'));
+        for (const loaded of diagnostics.loadedExtensions) {
+          console.log(chalk.dim(`  - ${loaded.label} [${loaded.loadSource}] (${loaded.path})`));
+        }
+        console.log();
+      }
+
+      if (diagnostics.commands.length > 0) {
+        console.log(chalk.bold('Extension Commands:'));
+        for (const command of diagnostics.commands) {
+          const aliases = command.aliases?.length ? ` [${command.aliases.join(', ')}]` : '';
+          console.log(chalk.dim(`  - /${command.name}${aliases}  ${command.description}`));
+        }
+        console.log();
+      }
+
+      if (diagnostics.capabilityProviders.length > 0) {
+        console.log(chalk.bold('Capability Providers:'));
+        for (const provider of diagnostics.capabilityProviders) {
+          console.log(chalk.dim(`  - ${provider.id} [${provider.kinds.join(', ')}]`));
+        }
+        console.log();
+      }
+
+      if (extensionTools.length > 0) {
+        console.log(chalk.bold('Extension Tools:'));
+        for (const tool of extensionTools) {
+          const overrideNote = tool.shadowedSources.length > 0
+            ? `  overrides: ${tool.shadowedSources.map((source) => source.label ?? source.id ?? source.kind).join(', ')}`
+            : '';
+          console.log(chalk.dim(`  - ${tool.name}${overrideNote}`));
+        }
+        console.log();
+      }
+
+      if (diagnostics.hooks.length > 0) {
+        console.log(chalk.bold('Hook Participation:'));
+        for (const hook of diagnostics.hooks) {
+          console.log(chalk.dim(`  - ${hook.hook} [#${hook.order}] ${hook.source.label}`));
+        }
+        console.log();
+      }
+
+      if (diagnostics.failures.length > 0) {
+        console.log(chalk.bold('Recent Failures:'));
+        for (const failure of diagnostics.failures.slice(-10)) {
+          console.log(chalk.dim(`  - [${failure.stage}] ${failure.source.label}: ${failure.target} -> ${failure.message}`));
+        }
+        console.log();
+      }
     },
   },
   {
@@ -542,7 +657,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       const providerModels = loadConfig().providerModels;
 
       if (args.length === 0) {
-        // Show all providers with their models - 显示所有 Provider 及模型
+        // Show all providers with their models.
         console.log(chalk.bold('\nAvailable Providers:\n'));
         const providers = getProviderList(providerModels);
         for (const p of providers) {
@@ -575,7 +690,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       const input = (args[0] ?? '').trim();
       if (!input) return;
 
-      // /model /<model-id> — switch model within current provider
+      // /model /<model-id>: switch model within current provider
       if (input.startsWith('/')) {
         const targetModel = input.slice(1);
         if (!targetModel) {
@@ -594,7 +709,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         return;
       }
 
-      // /model <provider>/<model-id> — switch provider and model
+      // /model <provider>/<model-id>: switch provider and model
       if (input.includes('/')) {
         const slashIdx = input.indexOf('/');
         const targetProvider = input.slice(0, slashIdx);
@@ -620,7 +735,7 @@ export const BUILTIN_COMMANDS: Command[] = [
         return;
       }
 
-      // /model <provider> — switch provider (use default model)
+      // /model <provider>: switch provider using its default model
       const newProvider = input;
       if (isKnownProvider(newProvider)) {
         saveConfig({ provider: newProvider, model: undefined });
@@ -927,7 +1042,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     description: '(Deprecated) Use /skill instead',
     usage: '/skill',
     handler: async (args, context) => {
-      // Redirect to /skill namespace command - 重定向到 /skill 命名空间命令
+      // Redirect to the /skill namespace command.
       console.log(chalk.dim('\n[/skills is deprecated. Use /skill instead]'));
       await handleSkillNamespaceCommand(args, context);
     },
@@ -971,9 +1086,9 @@ export const BUILTIN_COMMANDS: Command[] = [
   newCommand,
 ];
 
-// Print help - 打印帮助
+// Print help.
 const COMMAND_CATEGORIES: Record<string, string[]> = {
-  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'status'],
+  General: ['help', 'copy', 'exit', 'clear', 'compact', 'reload', 'extensions', 'status'],
   Permission: ['mode', 'auto'],
   Session: ['new', 'save', 'load', 'sessions', 'history', 'delete'],
   Settings: ['model', 'thinking', 'reasoning', 'parallel', 'plan'],
@@ -1124,6 +1239,20 @@ function printHelp(): void {
     dynamicSections.set(sectionTitle, commands);
   }
 
+  for (const cmd of getActiveExtensionCommands()) {
+    if (categorizedNames.has(cmd.name.toLowerCase())) {
+      continue;
+    }
+
+    const commands = dynamicSections.get('Extensions') ?? [];
+    commands.push({
+      name: cmd.name,
+      aliases: cmd.aliases,
+      description: cmd.description,
+    });
+    dynamicSections.set('Extensions', commands);
+  }
+
   for (const sectionTitle of ['Extensions', 'Skill Commands', 'Prompt Commands', 'Other Commands']) {
     printCommandSection(sectionTitle, dynamicSections.get(sectionTitle) ?? []);
   }
@@ -1138,24 +1267,36 @@ function printHelp(): void {
   console.log();
 }
 
-// Print detailed help for specific command - 打印特定命令的详细帮助
+// Print detailed help for a specific command.
 function printDetailedHelp(commandName: string): void {
-  // Lazy initialization - 延迟初始化
+  // Lazy initialization.
   if (commandRegistry.size === 0) {
     initCommandRegistry();
   }
 
   const cmd = commandRegistry.get(commandName.toLowerCase());
   if (!cmd) {
-    console.log(chalk.yellow(`\n[Unknown command: /${commandName}. Type /help for available commands]`));
+    const extensionCommand = getActiveExtensionCommand(commandName);
+    if (!extensionCommand) {
+      console.log(chalk.yellow(`\n[Unknown command: /${commandName}. Type /help for available commands]`));
+      return;
+    }
+
+    console.log(chalk.cyan(`\n/${extensionCommand.name}`));
+    if (extensionCommand.aliases?.length) {
+      console.log(chalk.dim(`Aliases: ${extensionCommand.aliases.join(', ')}`));
+    }
+    console.log(chalk.dim(`\n${extensionCommand.description}`));
+    console.log(chalk.dim(`\nUsage: ${formatExtensionCommandUsage(extensionCommand)}`));
+    console.log();
     return;
   }
 
-  // If command has detailed help function, call it - 如果命令有详细帮助函数，调用它
+  // If the command has a detailed help function, call it.
   if (cmd.detailedHelp) {
     cmd.detailedHelp();
   } else {
-    // Otherwise show basic info - 否则显示基本信息
+    // Otherwise show basic info.
     console.log(chalk.cyan(`\n/${cmd.name}`));
     if (cmd.aliases?.length) {
       console.log(chalk.dim(`Aliases: ${cmd.aliases.join(', ')}`));
@@ -1168,7 +1309,7 @@ function printDetailedHelp(commandName: string): void {
   }
 }
 
-// Print status - 打印状态
+// Print status.
 function printStatus(context: InteractiveContext, currentConfig: CurrentConfig): void {
   const tokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
   const tokenSource = context.contextTokenSnapshot?.source ?? 'estimate';
@@ -1196,20 +1337,20 @@ function printStatus(context: InteractiveContext, currentConfig: CurrentConfig):
   console.log();
 }
 
-// Handle /skill namespace command (pi-mono style) - 处理 /skill 命名空间命令
+// Handle /skill namespace command (pi-mono style).
 async function handleSkillNamespaceCommand(args: string[], context: InteractiveContext): Promise<void> {
   const registry = getSkillRegistry(context.gitRoot);
 
-  // Ensure skills are discovered - 确保已发现技能
+  // Ensure skills are discovered.
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
 
-  // /skill without :name shows the list - /skill 不带 :name 显示列表
+  // /skill without :name shows the list.
   printSkillsListPiMonoStyle(registry.listUserInvocable());
 }
 
-// Print skills list in pi-mono style - 以 pi-mono 风格打印技能列表
+// Print skills list in pi-mono style.
 function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
   console.log(chalk.bold('\nAvailable Skills:\n'));
 
@@ -1224,15 +1365,14 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
   const maxNameLen = Math.max(...skills.map(s => s.name.length));
 
   for (const skill of skills) {
-    // Pad first, then color - 避免 ANSI 码影响 padEnd 计算
+    // Pad first, then color so ANSI escapes do not affect width calculation.
     const paddedName = skill.name.padEnd(maxNameLen);
     const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
-    // Show source for all skills except project level (which is the default)
-    // 显示所有技能来源，project 级别不显示（默认）
+    // Show source for all skills except project level, which is the default.
     const sourceLabel = skill.source === 'builtin' ? ' [builtin]'
       : skill.source === 'user' ? ' [user]'
       : skill.source === 'plugin' ? ' [plugin]'
-            : '';
+      : '';
     // pi-mono style: /skill:name
     const desc = skill.description.length > 50
       ? skill.description.slice(0, 50) + '...'
@@ -1246,17 +1386,16 @@ function printSkillsListPiMonoStyle(skills: SkillMetadata[]): void {
   console.log();
 }
 
-// Command registry - 命令注册表
+// Command registry.
 const commandRegistry = new CommandRegistry();
 
-// Initialize command registry - 初始化命令注册表
+// Initialize command registry.
 function initCommandRegistry(projectRoot?: string): void {
   if (commandRegistry.size > 0) {
     return;
   }
 
-  // Register all commands (builtin + discovered user/project commands)
-  // 注册所有命令（内置 + 发现的用户/项目命令）
+  // Register all commands: built-in plus discovered user/project commands.
   registerAllCommands(commandRegistry, projectRoot);
 }
 
@@ -1265,7 +1404,148 @@ export function getCommandRegistry(projectRoot?: string): CommandRegistry {
   return commandRegistry;
 }
 
-// Parse command - 解析命令
+// Parse command.
+function getActiveExtensionCommands(): ExtensionCommandDefinition[] {
+  const runtime = getActiveExtensionRuntime();
+  return runtime?.listCommands().filter((command) => command.metadata?.userInvocable !== false) ?? [];
+}
+
+function getActiveExtensionCommand(name: string): ExtensionCommandDefinition | undefined {
+  const runtime = getActiveExtensionRuntime();
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  const command = runtime?.listCommands().find((candidate) =>
+    candidate.name.trim().toLowerCase() === normalized
+    || (candidate.aliases ?? []).some((alias) => alias.trim().toLowerCase() === normalized),
+  );
+  if (!command) {
+    return undefined;
+  }
+  return command.metadata?.userInvocable === false ? undefined : command;
+}
+
+function formatExtensionCommandUsage(command: ExtensionCommandDefinition): string {
+  return command.usage ?? `/${command.name}`;
+}
+
+function getExtensionRuntimeDiagnostics(runtime: NonNullable<ReturnType<typeof getActiveExtensionRuntime>>): ExtensionRuntimeDiagnostics {
+  const diagnosticsGetter = (runtime as {
+    getDiagnostics?: () => ExtensionRuntimeDiagnostics;
+  }).getDiagnostics;
+
+  if (typeof diagnosticsGetter === 'function') {
+    return diagnosticsGetter.call(runtime);
+  }
+
+  const defaultsGetter = (runtime as {
+    getDefaults?: () => {
+      activeTools?: string[];
+      modelSelection?: { provider?: string; model?: string };
+      thinkingLevel?: KodaXReasoningMode;
+    };
+  }).getDefaults;
+  const defaults = typeof defaultsGetter === 'function'
+    ? defaultsGetter.call(runtime)
+    : undefined;
+
+  return {
+    loadedExtensions: [],
+    capabilityProviders: runtime.listCapabilityProviders().map((provider) => ({
+      id: provider.id,
+      kinds: [...provider.kinds],
+      source: {
+        kind: 'extension',
+        id: `extension:${provider.id}`,
+        label: provider.id,
+        path: '(runtime)',
+      },
+    })),
+    commands: runtime.listCommands().map((command) => ({
+      name: command.name,
+      aliases: command.aliases,
+      description: command.description,
+      usage: command.usage,
+      metadata: command.metadata,
+      source: {
+        kind: 'extension',
+        id: `extension-command:${command.name}`,
+        label: command.name,
+        path: '(runtime)',
+      },
+    })),
+    tools: [],
+    hooks: [],
+    failures: [],
+    defaults: {
+      activeTools: defaults?.activeTools,
+      modelSelection: defaults?.modelSelection ?? {},
+      thinkingLevel: defaults?.thinkingLevel,
+    },
+  };
+}
+
+function toExtensionInvocationRequest(
+  command: ExtensionCommandDefinition,
+  result: ExtensionCommandResult,
+): CommandInvocationRequest | undefined {
+  if (!result.invocation) {
+    return undefined;
+  }
+
+  return {
+    prompt: result.invocation.prompt,
+    source: 'extension',
+    displayName: result.invocation.displayName ?? `/${command.name}`,
+    disableModelInvocation: result.invocation.disableModelInvocation,
+    allowedTools: result.invocation.allowedTools,
+    context: result.invocation.context,
+    model: result.invocation.model,
+  };
+}
+
+async function executeExtensionCommand(
+  command: ExtensionCommandDefinition,
+  args: string[],
+  context: InteractiveContext,
+): Promise<CommandResult> {
+  const runtime = getActiveExtensionRuntime();
+  if (!runtime) {
+    console.log(chalk.yellow(`\n[Extension runtime is not active for /${command.name}]`));
+    return false;
+  }
+
+  const result = await command.handler(args, {
+    sessionId: context.sessionId,
+    gitRoot: context.gitRoot,
+    workingDirectory: context.gitRoot ?? process.cwd(),
+    reloadExtensions: () => runtime.reloadExtensions(),
+    getDiagnostics: () => getExtensionRuntimeDiagnostics(runtime),
+    logger: {
+      debug: (...parts) => console.debug(`[kodax:extension-command:${command.name}]`, ...parts),
+      info: (...parts) => console.info(`[kodax:extension-command:${command.name}]`, ...parts),
+      warn: (...parts) => console.warn(`[kodax:extension-command:${command.name}]`, ...parts),
+      error: (...parts) => console.error(`[kodax:extension-command:${command.name}]`, ...parts),
+    },
+  });
+
+  if (!result) {
+    return true;
+  }
+
+  if (result.message) {
+    console.log(result.message);
+  }
+
+  const invocation = toExtensionInvocationRequest(command, result);
+  if (invocation) {
+    return { invocation };
+  }
+
+  return true;
+}
+
 export function parseCommand(input: string): { command: string; args: string[]; skillInvocation?: { name: string } } | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;
@@ -1277,7 +1557,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
 
   if (!command) return null;
 
-  // Check for /skill:name format (pi-mono style) - 检查 /skill:name 格式
+  // Check for /skill:name format (pi-mono style).
   if (command.startsWith('skill:')) {
     const skillName = command.slice(6); // Remove 'skill:' prefix
     if (skillName) {
@@ -1297,7 +1577,7 @@ export function parseCommand(input: string): { command: string; args: string[]; 
   return { command, args };
 }
 
-// Execute command - 执行命令
+// Execute command.
 export type CommandResult = boolean | {
   skillContent?: string;
   projectInitPrompt?: string;
@@ -1310,12 +1590,12 @@ export async function executeCommand(
   callbacks: CommandCallbacks,
   currentConfig: CurrentConfig
 ): Promise<CommandResult> {
-  // Lazy initialization - 延迟初始化
+  // Lazy initialization.
   if (commandRegistry.size === 0) {
     initCommandRegistry(context.gitRoot);
   }
 
-  // Handle /skill:name format (pi-mono style) - 处理 /skill:name 格式
+  // Handle /skill:name format (pi-mono style).
   if (parsed.skillInvocation) {
     return await executeSkillCommand(
       { command: parsed.skillInvocation.name, args: parsed.args },
@@ -1332,7 +1612,7 @@ export async function executeCommand(
 
     try {
       const result = await cmd.handler(parsed.args, context, callbacks, currentConfig);
-      // Handle project init prompt - 处理项目初始化提示
+      // Handle project init prompt.
       if (result && typeof result === 'object') {
         return result;
       }
@@ -1343,11 +1623,21 @@ export async function executeCommand(
     }
   }
 
+  const extensionCommand = getActiveExtensionCommand(parsed.command);
+  if (extensionCommand) {
+    try {
+      return await executeExtensionCommand(extensionCommand, parsed.args, context);
+    } catch (error) {
+      console.log(chalk.red(`\n[Extension command failed: ${error instanceof Error ? error.message : String(error)}]`));
+      return false;
+    }
+  }
+
   console.log(chalk.yellow(`\n[Unknown command: /${parsed.command}. Type /help for available commands]`));
   return false;
 }
 
-// Execute skill command - 执行技能命令
+// Execute skill command.
 async function executeSkillCommand(
   parsed: { command: string; args: string[] },
   context: InteractiveContext
@@ -1356,7 +1646,7 @@ async function executeSkillCommand(
   const skillName = parsed.command;
   const skillArgs = parsed.args.join(' ');
 
-  // Ensure skills are discovered - 确保已发现技能
+  // Ensure skills are discovered.
   if (registry.size === 0) {
     await initializeSkillRegistry(context.gitRoot);
   }
@@ -1378,11 +1668,10 @@ async function executeSkillCommand(
     }
     console.log();
 
-    // Load full skill and get resolved content - 加载完整技能并获取解析后的内容
+    // Load the full skill and get its resolved content.
     const fullSkill = await registry.loadFull(skillName);
 
-    // Check if model invocation is disabled - 检查是否禁用模型调用
-    // Create skill context for variable resolution - 创建变量解析上下文
+    // Create skill context for variable resolution.
     const skillContext: SkillContext = {
       workingDirectory: process.cwd(),
       projectRoot: context.gitRoot ?? undefined,
@@ -1390,10 +1679,10 @@ async function executeSkillCommand(
       environment: {},
     };
 
-    // Expand skill for LLM injection - 展开技能以注入 LLM
+    // Expand the skill content for LLM injection.
     const expanded = await expandSkillForLLM(fullSkill, skillArgs, skillContext);
 
-    // Show skill activation message - 显示技能激活消息
+    // Show skill activation message.
     console.log(chalk.green(`Skill activated: ${skillName}`));
     console.log(chalk.dim('The skill context has been prepared for the AI.'));
     console.log();

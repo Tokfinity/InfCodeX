@@ -10,15 +10,16 @@
 |---|---|
 | Tracked feature IDs | `001-041` (`027` unused) |
 | Total tracked features | `40` |
-| Completed | `26` |
-| Planned | `14` |
+| Completed | `27` |
+| InProgress | `0` |
+| Planned | `12` |
 | Current released version | `v0.6.15` |
 
 ### Planned version distribution
 
 | Version | Planned features |
 |---|---|
-| `v0.7.0` | `6` |
+| `v0.7.0` | `4` |
 | `v0.8.0` | `5` |
 | `v0.9.0` | `1` |
 | `v1.0.0` | `2` |
@@ -40,7 +41,6 @@
 | `029` | Provider Capability Transparency and Harness Policy | Enhancement | High | `v0.7.0` | [v0.7.0](features/v0.7.0.md#feature_029-provider-capability-transparency-and-harness-policy) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_030-multi-surface-delivery) |
 | `031` | Multimodal Artifact Inputs | New | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_031-multimodal-artifact-inputs) |
-| `034` | Extension and Capability Runtime | Enhancement | High | `v0.7.0` | [v0.7.0](features/v0.7.0.md#feature_034-extension-and-capability-runtime) |
 | `035` | MCP Capability Provider | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_035-mcp-capability-provider) |
 | `038` | Official Sandbox Extension | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_038-official-sandbox-extension) |
 
@@ -77,6 +77,7 @@
 | `024` | Project Harness | `v0.6.10` | [v0.6.10](features/v0.6.10.md) |
 | `032` | JSON Output Mode | `v0.6.20` (unreleased) | [v0.6.20](features/v0.6.20.md) |
 | `033` | REPL Parallel Toggle | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |
+| `034` | Extension and Capability Runtime | `v0.7.0` (unreleased) | [v0.7.0](features/v0.7.0.md#feature_034-extension-and-capability-runtime) |
 | `036` | DeepSeek Built-in Provider | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |
 | `037` | API Token Usage Priority and Estimation Fallback | `v0.6.20` (unreleased) | [v0.6.20](features/v0.6.20.md) |
 | `039` | Plan-Mode Dual-Write Allowlist | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |

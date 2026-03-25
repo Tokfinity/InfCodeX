@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander';
 import {
   KodaXOptions,
+  KodaXExtensionRuntime,
   KodaXReasoningMode,
   KODAX_REASONING_MODE_SEQUENCE,
 } from '@kodax/coding';
@@ -21,6 +22,8 @@ export interface CliOptions {
   thinking: boolean;
   reasoningMode: KodaXReasoningMode;
   outputMode: CliOutputMode;
+  extensions?: string[];
+  extensionRuntime?: KodaXExtensionRuntime;
   session?: string;
   parallel: boolean;
   team?: string;
@@ -136,6 +139,23 @@ export function resolveCliParallel(
   return config.parallel ?? false;
 }
 
+export function mergeConfiguredExtensions(
+  cliExtensions: string[] = [],
+  configExtensions: string[] = [],
+): string[] {
+  const merged: string[] = [];
+
+  for (const value of [...configExtensions, ...cliExtensions]) {
+    const normalized = value.trim();
+    if (!normalized || merged.includes(normalized)) {
+      continue;
+    }
+    merged.push(normalized);
+  }
+
+  return merged;
+}
+
 export function parseOptionalNonNegativeInt(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -184,6 +204,7 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
     reasoningMode: cliOptions.reasoningMode,
     maxIter: cliOptions.maxIter,
     parallel: cliOptions.parallel,
+    extensionRuntime: cliOptions.extensionRuntime,
     session: buildSessionOptions(cliOptions),
     events: cliOptions.outputMode === 'json'
       ? createJsonEvents()

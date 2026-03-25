@@ -34,6 +34,12 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  KodaXJsonValue,
+  KodaXExtensionSessionRecord,
+  KodaXExtensionSessionState,
+  KodaXExtensionStoreEntry,
+  KodaXExtensionStore,
+  KodaXSessionData,
   KodaXSessionMeta,
   KodaXSessionStorage,
   SessionErrorMetadata,
@@ -96,3 +102,9 @@ export {
   needsCompaction,
   compact,
 } from './compaction/compaction.js';
+
+// ============== Extension Persistence (FEATURE_034) ==============
+export {
+  FileExtensionStore,
+  createExtensionStore,
+} from './persistence.js';

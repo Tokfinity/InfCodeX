@@ -1,0 +1,331 @@
+import os from 'os';
+import path from 'path';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type {
+  KodaXMessage,
+  KodaXProviderConfig,
+  KodaXProviderStreamOptions,
+  KodaXReasoningRequest,
+  KodaXStreamResult,
+  KodaXToolDefinition,
+} from '@kodax/ai';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax/agent';
+import { KodaXBaseProvider } from '@kodax/ai';
+import { clearRuntimeModelProviders } from '@kodax/ai';
+import { runKodaX } from './agent.js';
+import { createExtensionRuntime, getActiveExtensionRuntime } from './extensions/index.js';
+
+const TEST_PROVIDER_NAME = 'feature-034-test-provider';
+const TEST_PROVIDER_API_KEY_ENV = 'FEATURE_034_TEST_PROVIDER_API_KEY';
+
+class Feature034TestProvider extends KodaXBaseProvider {
+  static calls: Array<{
+    messages: KodaXMessage[];
+    tools: KodaXToolDefinition[];
+    reasoning?: boolean | KodaXReasoningRequest;
+    streamOptions?: KodaXProviderStreamOptions;
+  }> = [];
+
+  readonly name = TEST_PROVIDER_NAME;
+  readonly supportsThinking = true;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: TEST_PROVIDER_API_KEY_ENV,
+    model: 'baseline-model',
+    supportsThinking: true,
+  };
+
+  async stream(
+    messages: KodaXMessage[],
+    tools: KodaXToolDefinition[],
+    _system: string,
+    reasoning?: boolean | KodaXReasoningRequest,
+    streamOptions?: KodaXProviderStreamOptions,
+    _signal?: AbortSignal,
+  ): Promise<KodaXStreamResult> {
+    Feature034TestProvider.calls.push({
+      messages,
+      tools,
+      reasoning,
+      streamOptions,
+    });
+
+    const lastMessage = messages[messages.length - 1];
+    const text = lastMessage?.role === 'user' && typeof lastMessage.content === 'string' && lastMessage.content.includes('extension follow up')
+      ? 'second pass complete'
+      : 'first pass pending';
+
+    return {
+      textBlocks: [{ type: 'text', text }],
+      toolBlocks: [],
+      thinkingBlocks: [],
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+      },
+    };
+  }
+}
+
+describe('runKodaX extension runtime integration', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-034-'));
+    process.env[TEST_PROVIDER_API_KEY_ENV] = 'test-key';
+    Feature034TestProvider.calls = [];
+  });
+
+  afterEach(async () => {
+    clearRuntimeModelProviders();
+    delete process.env[TEST_PROVIDER_API_KEY_ENV];
+    delete (globalThis as typeof globalThis & {
+      __feature034ProviderClass?: typeof Feature034TestProvider;
+    }).__feature034ProviderClass;
+    const runtime = getActiveExtensionRuntime();
+    if (runtime) {
+      await runtime.dispose();
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('lets extensions drive tools, model selection, thinking level, and queued follow-ups', async () => {
+    const extensionPath = path.join(tempDir, 'feature-034-extension.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.registerModelProvider({
+          name: '${TEST_PROVIDER_NAME}',
+          factory: () => new (globalThis.__feature034ProviderClass)(),
+        });
+        api.runtime.setActiveTools(['read']);
+        api.runtime.setModelSelection({ model: 'extension-default-model' });
+        api.runtime.setThinkingLevel('deep');
+        api.hook('provider:before', (context) => {
+          context.replaceModel('hooked-model');
+        });
+        api.hook('turn:settle', (context) => {
+          if (!api.runtime.getSessionState('queued')) {
+            api.runtime.setSessionState('queued', true);
+            context.queueUserMessage('extension follow up');
+          }
+        });
+      }`,
+      'utf8',
+    );
+
+    (globalThis as typeof globalThis & {
+      __feature034ProviderClass?: typeof Feature034TestProvider;
+    }).__feature034ProviderClass = Feature034TestProvider;
+
+    const runtime = createExtensionRuntime();
+    await runtime.loadExtension(extensionPath);
+
+    const result = await runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        extensionRuntime: runtime,
+      },
+      'start feature 034',
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.lastText).toBe('second pass complete');
+    expect(Feature034TestProvider.calls).toHaveLength(2);
+    expect(Feature034TestProvider.calls[0]?.tools.map((tool) => tool.name)).toEqual(['read']);
+    expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('hooked-model');
+    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({ mode: 'deep', depth: 'high' });
+    expect(
+      Feature034TestProvider.calls[1]?.messages.some(
+        (message) => message.role === 'user'
+          && typeof message.content === 'string'
+          && message.content.includes('extension follow up'),
+      ),
+    ).toBe(true);
+
+    await runtime.dispose();
+  });
+
+  it('respects empty active tool sets and provider hook reasoning overrides', async () => {
+    const extensionPath = path.join(tempDir, 'feature-034-empty-tools.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.registerModelProvider({
+          name: '${TEST_PROVIDER_NAME}',
+          factory: () => new (globalThis.__feature034ProviderClass)(),
+        });
+        api.runtime.setActiveTools([]);
+        api.hook('provider:before', (context) => {
+          context.setThinkingLevel('off');
+        });
+      }`,
+      'utf8',
+    );
+
+    (globalThis as typeof globalThis & {
+      __feature034ProviderClass?: typeof Feature034TestProvider;
+    }).__feature034ProviderClass = Feature034TestProvider;
+
+    const runtime = createExtensionRuntime();
+    await runtime.loadExtension(extensionPath);
+
+    const result = await runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        extensionRuntime: runtime,
+      },
+      'start feature 034 with no tools',
+    );
+
+    expect(result.success).toBe(true);
+    expect(Feature034TestProvider.calls).toHaveLength(1);
+    expect(Feature034TestProvider.calls[0]?.tools).toEqual([]);
+    expect(Feature034TestProvider.calls[0]?.reasoning).toMatchObject({
+      enabled: false,
+      mode: 'off',
+      depth: 'off',
+    });
+
+    await runtime.dispose();
+  });
+
+  it('persists extension session state and records across session resume', async () => {
+    const extensionPath = path.join(tempDir, 'feature-034-persisted-runtime.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.registerModelProvider({
+          name: '${TEST_PROVIDER_NAME}',
+          factory: () => new (globalThis.__feature034ProviderClass)(),
+        });
+        api.hook('session:hydrate', (context) => {
+          const visits = (context.getState('visits') ?? 0) + 1;
+          context.setState('visits', visits);
+          context.appendRecord('hydrate', { visits }, { dedupeKey: 'latest' });
+        });
+        api.hook('provider:before', (context) => {
+          if ((api.runtime.getSessionState('visits') ?? 0) > 1) {
+            context.replaceModel('resumed-model');
+          }
+        });
+        api.hook('turn:settle', (context) => {
+          api.runtime.appendSessionRecord('turn', { lastText: context.lastText });
+        });
+      }`,
+      'utf8',
+    );
+
+    (globalThis as typeof globalThis & {
+      __feature034ProviderClass?: typeof Feature034TestProvider;
+    }).__feature034ProviderClass = Feature034TestProvider;
+
+    const storage: KodaXSessionStorage & { snapshots: Map<string, KodaXSessionData> } = {
+      snapshots: new Map<string, KodaXSessionData>(),
+      async save(id: string, data: KodaXSessionData) {
+        this.snapshots.set(id, structuredClone(data));
+      },
+      async load(id: string): Promise<KodaXSessionData | null> {
+        return structuredClone(this.snapshots.get(id) ?? null);
+      },
+    };
+
+    const runtime = createExtensionRuntime();
+    await runtime.loadExtension(extensionPath);
+
+    Feature034TestProvider.calls = [];
+    await runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        extensionRuntime: runtime,
+        session: {
+          id: 'feature-034-persisted-session',
+          storage,
+        },
+      },
+      'first persisted run',
+    );
+
+    const extensionId = `api:extension:${extensionPath}`;
+    const firstSaved = storage.snapshots.get('feature-034-persisted-session') as {
+      extensionState?: Record<string, Record<string, unknown>>;
+      extensionRecords?: Array<{ type: string; data?: Record<string, unknown> }>;
+    };
+    expect(firstSaved.extensionState?.[extensionId]?.visits).toBe(1);
+    expect(firstSaved.extensionRecords).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          extensionId,
+          type: 'hydrate',
+          data: { visits: 1 },
+        }),
+        expect.objectContaining({
+          extensionId,
+          type: 'turn',
+          data: { lastText: 'first pass pending' },
+        }),
+      ]),
+    );
+
+    Feature034TestProvider.calls = [];
+    await runKodaX(
+      {
+        provider: TEST_PROVIDER_NAME,
+        extensionRuntime: runtime,
+        session: {
+          id: 'feature-034-persisted-session',
+          storage,
+          resume: true,
+        },
+      },
+      'second persisted run',
+    );
+
+    const secondSaved = storage.snapshots.get('feature-034-persisted-session') as {
+      extensionState?: Record<string, Record<string, unknown>>;
+      extensionRecords?: Array<{
+        extensionId: string;
+        type: string;
+        data?: Record<string, unknown>;
+        dedupeKey?: string;
+      }>;
+    };
+    expect(secondSaved.extensionState?.[extensionId]?.visits).toBe(2);
+    expect(secondSaved.extensionRecords?.filter((record) => record.type === 'hydrate')).toEqual([
+      expect.objectContaining({
+        extensionId,
+        type: 'hydrate',
+        dedupeKey: 'latest',
+        data: { visits: 2 },
+      }),
+    ]);
+    expect(secondSaved.extensionRecords?.filter((record) => record.type === 'turn')).toHaveLength(2);
+    expect(Feature034TestProvider.calls).toHaveLength(1);
+    expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('resumed-model');
+
+    await runtime.dispose();
+  });
+
+  it('restores the previously active runtime when startup fails', async () => {
+    delete process.env.ANTHROPIC_API_KEY;
+
+    const previousRuntime = createExtensionRuntime().activate();
+    const requestedRuntime = createExtensionRuntime();
+
+    await expect(
+      runKodaX(
+        {
+          provider: 'anthropic',
+          extensionRuntime: requestedRuntime,
+        },
+        'this should fail early',
+      ),
+    ).rejects.toThrow('ANTHROPIC_API_KEY not set');
+
+    expect(getActiveExtensionRuntime()).toBe(previousRuntime);
+
+    await previousRuntime.dispose();
+    await requestedRuntime.dispose();
+  });
+});

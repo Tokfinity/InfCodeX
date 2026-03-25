@@ -44,6 +44,19 @@ type FeatureProgressSnapshot = {
 };
 let cachedFeatureProgress: FeatureProgressSnapshot | null = null;
 
+function normalizeConfiguredExtensions(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  const normalized = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  return normalized.length > 0 ? normalized : [];
+}
+
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(
   config: T,
 ): T {
@@ -335,6 +348,7 @@ export function loadConfig(): {
   providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
   providerModels?: Record<string, string[]>;
   customProviders?: KodaXCustomProviderConfig[];
+  extensions?: string[];
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -348,8 +362,12 @@ export function loadConfig(): {
         providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
         providerModels?: Record<string, string[]>;
         customProviders?: KodaXCustomProviderConfig[];
+        extensions?: unknown;
       };
-      return migrateLegacyPermissionModeInConfig(parsed);
+      return migrateLegacyPermissionModeInConfig({
+        ...parsed,
+        extensions: normalizeConfiguredExtensions(parsed.extensions),
+      });
     }
   } catch {
     // Unreadable user config should fall back to defaults instead of breaking startup.
@@ -368,9 +386,14 @@ export function saveConfig(config: {
   providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
   providerModels?: Record<string, string[]>;
   customProviders?: KodaXCustomProviderConfig[];
+  extensions?: string[];
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };
+  const normalizedExtensions = normalizeConfiguredExtensions(merged.extensions);
+  if (normalizedExtensions !== undefined) {
+    merged.extensions = normalizedExtensions;
+  }
   // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
   for (const key of Object.keys(config) as Array<keyof typeof config>) {
     if (config[key] === undefined) {
