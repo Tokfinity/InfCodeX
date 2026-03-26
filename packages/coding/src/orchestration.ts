@@ -101,6 +101,7 @@ export interface OrchestrationRunOptions<TTask extends OrchestrationWorkerSpec =
   runner: OrchestrationWorkerRunner<TTask, TOutput>;
   runId?: string;
   maxParallel?: number;
+  signal?: AbortSignal;
   events?: OrchestrationRunEvents<TTask, TOutput>;
 }
 
@@ -130,6 +131,16 @@ export interface CreateKodaXTaskRunnerOptions<TTask extends KodaXAgentWorkerSpec
   rateLimit?: <T>(operation: () => Promise<T>) => Promise<T>;
   buildPrompt?: (task: TTask, context: OrchestrationTaskContext<TTask, string>) => string;
   createEvents?: (task: TTask, context: OrchestrationTaskContext<TTask, string>) => KodaXEvents;
+  createOptions?: (
+    task: TTask,
+    context: OrchestrationTaskContext<TTask, string>,
+    defaultOptions: KodaXOptions,
+  ) => KodaXOptions;
+  onResult?: (
+    task: TTask,
+    context: OrchestrationTaskContext<TTask, string>,
+    result: KodaXResult,
+  ) => void | Promise<void>;
 }
 
 interface InternalTaskRecord<TTask extends OrchestrationWorkerSpec> {
@@ -246,6 +257,54 @@ async function appendTrace(filePath: string, event: OrchestrationTraceEvent): Pr
   await appendFile(filePath, `${JSON.stringify(event)}\n`, 'utf8');
 }
 
+function mergeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === 'function') {
+    return AbortSignal.any(activeSignals);
+  }
+
+  const controller = new AbortController();
+  const listeners: Array<{ signal: AbortSignal; listener: () => void }> = [];
+  const abortWithReason = (signal: AbortSignal): void => {
+    if (controller.signal.aborted) {
+      return;
+    }
+    controller.abort(signal.reason ?? new Error('Operation aborted.'));
+    for (const entry of listeners) {
+      entry.signal.removeEventListener('abort', entry.listener);
+    }
+  };
+
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abortWithReason(signal);
+      break;
+    }
+    const listener = () => abortWithReason(signal);
+    listeners.push({ signal, listener });
+    signal.addEventListener('abort', listener, { once: true });
+  }
+
+  return controller.signal;
+}
+
+function formatAbortMessage(signal: AbortSignal | undefined): string {
+  const reason = signal?.reason;
+  if (reason instanceof Error && reason.message.trim()) {
+    return `Orchestration cancelled: ${reason.message}`;
+  }
+  if (typeof reason === 'string' && reason.trim()) {
+    return `Orchestration cancelled: ${reason}`;
+  }
+  return 'Orchestration cancelled by user.';
+}
+
 async function withTimeout<T>(
   operation: () => Promise<T>,
   timeoutMs: number | undefined,
@@ -295,6 +354,34 @@ function buildBlockedTaskResult<TTask extends OrchestrationWorkerSpec, TOutput>(
       summary: error,
       metadata: {
         blockedBy: dependencyFailures,
+      },
+    },
+  };
+}
+
+function buildCancelledTaskResult<TTask extends OrchestrationWorkerSpec, TOutput>(
+  record: InternalTaskRecord<TTask>,
+  startedAt: string,
+  completedAt: string,
+  message: string,
+): OrchestrationCompletedTask<TTask, TOutput> {
+  return {
+    id: record.task.id,
+    title: record.task.title,
+    task: record.task,
+    status: 'blocked',
+    taskDir: record.taskDir,
+    startedAt,
+    completedAt,
+    durationMs: Math.max(0, new Date(completedAt).getTime() - new Date(startedAt).getTime()),
+    result: {
+      success: false,
+      error: message,
+      summary: message,
+      metadata: {
+        signal: 'BLOCKED',
+        signalReason: message,
+        cancelled: true,
       },
     },
   };
@@ -399,6 +486,7 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
   };
 
   const controller = new AbortController();
+  const executionSignal = mergeAbortSignals(options.signal, controller.signal);
   let normalizedResult: OrchestrationWorkerResult<TOutput>;
   let status: OrchestrationTaskStatus;
 
@@ -412,7 +500,7 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
           taskDir: record.taskDir,
           dependencyResults,
           emit,
-          signal: controller.signal,
+          signal: executionSignal,
         }),
         record.task.timeoutMs,
         controller
@@ -495,6 +583,36 @@ export async function runOrchestration<TTask extends OrchestrationWorkerSpec, TO
   const completed = new Map<string, OrchestrationCompletedTask<TTask, TOutput>>();
 
   while (pending.size > 0) {
+    if (options.signal?.aborted) {
+      const message = formatAbortMessage(options.signal);
+      for (const record of records) {
+        if (!pending.has(record.task.id)) {
+          continue;
+        }
+        const startedAt = new Date().toISOString();
+        const blocked = buildCancelledTaskResult<TTask, TOutput>(
+          record,
+          startedAt,
+          new Date().toISOString(),
+          message,
+        );
+        await writeJsonFile(path.join(record.taskDir, 'result.json'), blocked);
+        await writeFile(path.join(record.taskDir, 'summary.md'), `${blocked.result.summary}\n`, 'utf8');
+        await appendTrace(tracePath, {
+          type: 'task_blocked',
+          timestamp: blocked.completedAt,
+          runId,
+          taskId: record.task.id,
+          status: 'blocked',
+          message: blocked.result.summary,
+        });
+        await options.events?.onTaskComplete?.(record.task, blocked);
+        completed.set(record.task.id, blocked);
+        pending.delete(record.task.id);
+      }
+      break;
+    }
+
     let blockedAny = false;
 
     for (const record of records) {
@@ -681,6 +799,7 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       `Launching worker with reasoning=${task.budget?.reasoningMode ?? options.baseOptions.reasoningMode ?? 'auto'} maxIter=${task.budget?.maxIter ?? options.baseOptions.maxIter ?? 'default'}`
     );
 
+    const effectiveAbortSignal = mergeAbortSignals(options.baseOptions.abortSignal, context.signal);
     const mergedEvents: KodaXEvents = {
       ...baseEvents,
       ...taskEvents,
@@ -700,14 +819,36 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       parallel: task.parallelTools ?? options.baseOptions.parallel,
       thinking: task.budget?.thinking ?? options.baseOptions.thinking,
       reasoningMode: task.budget?.reasoningMode ?? options.baseOptions.reasoningMode,
-      abortSignal: context.signal,
+      abortSignal: effectiveAbortSignal,
       events: mergedEvents,
     };
+    const preparedRunOptions = options.createOptions
+      ? options.createOptions(task, context, runOptions)
+      : runOptions;
 
-    const execute = () => runAgent(runOptions, prompt);
+    const execute = () => runAgent(preparedRunOptions, prompt);
     const result = options.rateLimit
       ? await options.rateLimit(execute)
       : await execute();
+    await options.onResult?.(task, context, result);
+
+    if (result.interrupted && effectiveAbortSignal?.aborted) {
+      const message = formatAbortMessage(effectiveAbortSignal);
+      await context.emit(message);
+      return {
+        success: false,
+        output: result.lastText,
+        summary: message,
+        error: message,
+        metadata: {
+          sessionId: result.sessionId,
+          signal: 'BLOCKED',
+          signalReason: message,
+          interrupted: true,
+          limitReached: result.limitReached ?? false,
+        },
+      };
+    }
 
     await context.emit(
       result.signal

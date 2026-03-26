@@ -1,59 +1,86 @@
-# KodaX High-Level Design
+# KodaX 高层设计（HLD）
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 >
-> This document reflects the architecture reset carried by `FEATURE_022`, which turns KodaX from a command-led coding CLI into an adaptive multi-agent task engine.
+> 这份文档描述 `FEATURE_022` 推动的架构重置：
+> KodaX 正从“命令驱动的 coding CLI”转向“以 `task` 为中心、默认支持多智能体协作的执行引擎”。
+
+## 中文导读
+
+这份 HLD 主要回答 3 个问题：
+
+1. KodaX 的产品形态为什么要从“单 agent CLI + 若干 mode”转成“以 `task` 为中心的执行引擎”。
+2. 为什么对非简单任务，系统默认要走 `planner / generator / evaluator` 这类多角色协作，而不是让一个 agent 自己计划、自己实现、自己验收。
+3. `user session` 和 `managed-task worker session` 必须分层。
+   `kodax -c` 恢复的是用户会话；planner / evaluator 的内部运行上下文属于 managed task 内部，不应直接暴露为用户恢复入口。
+
+阅读时可以先把下面这些关键词按对应中文含义理解：
+
+- `task`：任务单元
+- `managed task`：带持久化状态的任务
+- `control plane`：任务控制面
+- `user session`：用户可恢复会话
+- `managed-task worker session`：内部 worker 会话
+- `observability`：可观测性，也就是用户能看到验证和检查过程
 
 ---
 
-## 1. Product Thesis
+## 1. 产品主张
 
-KodaX should no longer be modeled as:
+KodaX 不应再被理解为：
 
-- a single coding agent with optional long-running modes
-- a CLI where the user must decide up front whether to enter "project mode"
-- a product whose multi-agent story is a visible `--team` flag
+- 一个“单 agent + 若干可选长流程 mode”的工具
+- 一个要求用户先决定要不要进 `project mode` 的 CLI
+- 一个把多智能体能力暴露成显式 `--team` 开关的产品
 
-KodaX should instead be modeled as:
+更准确的理解应该是：
 
-- an adaptive task engine
-- with native multi-agent execution for non-trivial work
-- evidence-driven completion
-- durable task state
-- host-agnostic runtime contracts
+- 一个自适应的 `task engine`
+- 对非简单任务原生支持 multi-agent execution
+- 以 `evidence` 驱动完成判定
+- 拥有可持续的任务状态
+- 具备跨宿主表面的 runtime contract
 
-The user experience goal is simple:
+对应的用户体验目标其实很简单：
 
-- ask for work in natural language
-- let KodaX decide whether the task needs routing, planning, multiple agents, or verification
-- expose controls only when the user wants to inspect, steer, or override the system
+- 用户直接用自然语言提出工作请求
+- 由 KodaX 判断这次任务是否需要 routing、planning、多 agent、verification
+- 只有在用户想查看、干预或覆盖系统判断时，才暴露控制入口
 
----
+### 1.1 快速术语
 
-## 2. Design Goals
-
-### 2.1 Primary goals
-
-1. Make task complexity routing invisible by default.
-2. Separate planning, generation, and evaluation responsibilities.
-3. Treat completion as evidence, not self-report.
-4. Preserve state across long-running and interrupted work.
-5. Keep the runtime reusable across CLI, REPL, ACP, and future surfaces.
-6. Keep the product minimal even as orchestration becomes more powerful.
-
-### 2.2 Non-goals
-
-1. Do not force heavyweight multi-agent execution on trivial prompts.
-2. Do not make `/project` the primary product abstraction.
-3. Do not present `--team` as the future orchestration model.
-4. Do not let the generator also be the final judge of completion.
-5. Do not tie the architecture to one provider or one harness shape.
+- `task`：面向产品语义的工作单元
+- `managed task`：带 `contract / evidence / verdict` 的持久化任务
+- `user session`：用户可恢复的会话表面，例如 `kodax -c`
+- `managed-task worker session`：`planner / generator / evaluator` 这类内部角色的运行上下文，不等于用户会话
+- `observability`：用户能看到验证、检查和推进行为，而不是只看到最终结果
 
 ---
 
-## 3. System Overview
+## 2. 设计目标
 
-KodaX is organized around six conceptual layers:
+### 2.1 核心目标
+
+1. 默认把复杂度路由隐藏起来，不要求用户先做模式判断。
+2. 把 planning、generation、evaluation 的职责明确拆开。
+3. 把“是否完成”建立在 `evidence` 上，而不是执行者自报完成。
+4. 在长任务和中断恢复场景下保留可持续状态。
+5. 让 runtime 能复用于 CLI、REPL、ACP 以及未来表面。
+6. 即使 orchestration 更强，产品外观仍尽量保持简单。
+
+### 2.2 非目标
+
+1. 不要把重量级 multi-agent 强塞给简单请求。
+2. 不要让 `/project` 重新变成产品的一等抽象。
+3. 不要把 `--team` 当成未来的主编排模型。
+4. 不要让 generator 同时担任最终验收者。
+5. 不要把架构绑死在单一 provider 或单一 harness 形态上。
+
+---
+
+## 3. 系统概览
+
+KodaX 当前可以按 6 层概念结构来理解：
 
 ```text
 Surfaces
@@ -111,6 +138,13 @@ This layer provides:
 - checkpoint and event plumbing
 
 This substrate should remain host-agnostic and reusable.
+
+Session handling needs two layers / 会话处理需要双层分工:
+
+- product-facing `user sessions` for resume and history
+- internal `managed-task worker sessions` for role isolation inside one managed run
+
+The second layer should not leak into ordinary `kodax -c` recovery semantics.
 
 ### 3.5 Provider and Execution Adapters
 
@@ -399,8 +433,8 @@ The architecture reset changes planned feature ownership.
 ### 10.2 v0.8.0 enrichment
 
 - `FEATURE_007` Theme System Consolidation
-- `FEATURE_018` CodeWiki and Task Knowledge Substrate
-- `FEATURE_028` First-Class Search, Retrieval, and Evidence Tooling
+- `FEATURE_018` Task-Aware Repository Intelligence Substrate
+- `FEATURE_028` First-Class Retrieval, Context, and Evidence Tooling
 - `FEATURE_035` MCP Capability Provider
 - `FEATURE_038` Official Sandbox Extension
 

@@ -52,6 +52,7 @@ export type {
   KodaXSessionMessageEntry,
   KodaXSessionNavigationOptions,
   KodaXSessionMeta,
+  KodaXSessionScope,
   KodaXSessionStorage,
   KodaXSessionTreeNode,
   SessionErrorMetadata,

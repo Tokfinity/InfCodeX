@@ -1,6 +1,6 @@
 import os from 'os';
 import path from 'path';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 describe('FileSessionStorage', () => {
@@ -65,6 +65,7 @@ describe('FileSessionStorage', () => {
       messages: [{ role: 'user', content: 'hello persisted runtime' }],
       title: 'Persisted Runtime',
       gitRoot,
+      scope: 'user',
       errorMetadata: undefined,
       extensionState: {
         'api:extension:C:/repo/extensions/sample.mjs': {
@@ -171,5 +172,64 @@ describe('FileSessionStorage', () => {
         { role: 'assistant', content: 'second pass' },
       ],
     });
+  });
+
+  it('hides managed-task worker sessions from default session listing and sorts by createdAt', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260326_100000', {
+      messages: [{ role: 'user', content: 'older user session' }],
+      title: 'Older User',
+      gitRoot,
+      scope: 'user',
+    });
+    await storage.save('managed-task-worker-task-abc-evaluator', {
+      messages: [{ role: 'assistant', content: 'internal evaluator session' }],
+      title: 'Internal Worker',
+      gitRoot,
+      scope: 'managed-task-worker',
+    });
+    await storage.save('custom-user-session', {
+      messages: [{ role: 'user', content: 'newer user session' }],
+      title: 'Newer User',
+      gitRoot,
+      scope: 'user',
+    });
+
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const olderPath = path.join(sessionsDir, '20260326_100000.jsonl');
+    const newerPath = path.join(sessionsDir, 'custom-user-session.jsonl');
+    const olderContent = await readFile(olderPath, 'utf8');
+    const newerContent = await readFile(newerPath, 'utf8');
+    const newerCreatedAt = '2026-03-26T11:00:00.000Z';
+    const olderCreatedAt = '2026-03-26T10:00:00.000Z';
+
+    await Promise.all([
+      writeFile(
+        olderPath,
+        olderContent.replace(/\"createdAt\":\"[^\"]+\"/, `"createdAt":"${olderCreatedAt}"`),
+        'utf8',
+      ),
+      writeFile(
+        newerPath,
+        newerContent.replace(/\"createdAt\":\"[^\"]+\"/, `"createdAt":"${newerCreatedAt}"`),
+        'utf8',
+      ),
+    ]);
+
+    await expect(storage.list(gitRoot)).resolves.toEqual([
+      {
+        id: 'custom-user-session',
+        title: 'Newer User',
+        msgCount: 1,
+      },
+      {
+        id: '20260326_100000',
+        title: 'Older User',
+        msgCount: 1,
+      },
+    ]);
   });
 });

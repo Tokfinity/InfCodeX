@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTempDirSync, removeTempDirSync } from '../test-utils/temp-dir.js';
 
-const { mockRunKodaX } = vi.hoisted(() => ({
-  mockRunKodaX: vi.fn(),
+const { mockRunManagedTask } = vi.hoisted(() => ({
+  mockRunManagedTask: vi.fn(),
 }));
 
 vi.mock('@kodax/coding', async () => {
   const actual = await vi.importActual<typeof import('@kodax/coding')>('@kodax/coding');
   return {
     ...actual,
-    runKodaX: mockRunKodaX,
+    runManagedTask: mockRunManagedTask,
   };
 });
 
@@ -72,7 +72,7 @@ describe('project commands', () => {
     await storage.writeSessionPlan('- Finish release validation\n- Deploy after checks');
     await storage.clearActiveBrainstormSession();
 
-    mockRunKodaX.mockReset();
+    mockRunManagedTask.mockReset();
   });
 
   afterEach(() => {
@@ -129,7 +129,7 @@ describe('project commands', () => {
   });
 
   it('uses AI for guided status questions when model execution is available', async () => {
-    mockRunKodaX.mockResolvedValue({
+    mockRunManagedTask.mockResolvedValue({
       messages: [
         {
           role: 'assistant',
@@ -154,7 +154,7 @@ describe('project commands', () => {
     );
 
     const output = logSpy.mock.calls.flat().join('\n');
-    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(mockRunManagedTask).toHaveBeenCalledTimes(1);
     expect(output).toContain('/project status - Guided Analysis');
     expect(output).toContain('## Project Quality Report');
     expect(output).toContain('Release looks close, but validate the pending feature first.');
@@ -276,7 +276,7 @@ describe('project commands', () => {
     const output = logSpy.mock.calls.flat().join('\n');
     const state = await storage.loadWorkflowState();
 
-    expect(mockRunKodaX).not.toHaveBeenCalled();
+    expect(mockRunManagedTask).not.toHaveBeenCalled();
     expect(output).toContain('Discovery is aligned.');
     expect(state?.stage).toBe('aligned');
   });
@@ -696,10 +696,13 @@ describe('project commands', () => {
   });
 
   it('marks a feature complete only after harness verification passes', async () => {
-    mockRunKodaX.mockImplementation(async () => {
+    mockRunManagedTask.mockImplementation(async () => {
       const storage = new ProjectStorage(process.cwd());
       await storage.appendProgress('## Session 2\n\nCompleted guided status analysis.\n');
       return {
+        success: true,
+        lastText: '<project-harness>{"status":"complete","summary":"Finished the feature.","evidence":["Updated PROGRESS.md"],"tests":["manual"],"changedFiles":["src/project.ts"]}</project-harness>',
+        sessionId: 'managed-task-1',
         messages: [
           {
             role: 'assistant',
@@ -741,10 +744,13 @@ describe('project commands', () => {
   });
 
   it('keeps a feature pending when the harness report is missing and exposes /project verify output', async () => {
-    mockRunKodaX.mockImplementation(async () => {
+    mockRunManagedTask.mockImplementation(async () => {
       const storage = new ProjectStorage(process.cwd());
       await storage.appendProgress('## Session 2\n\nMade partial progress.\n');
       return {
+        success: true,
+        lastText: 'Implemented part of the feature, but forgot the verifier block.',
+        sessionId: 'managed-task-2',
         messages: [
           {
             role: 'assistant',
@@ -790,10 +796,13 @@ describe('project commands', () => {
   });
 
   it('reruns deterministic checks during /project verify against the current workspace state', async () => {
-    mockRunKodaX.mockImplementation(async () => {
+    mockRunManagedTask.mockImplementation(async () => {
       const storage = new ProjectStorage(process.cwd());
       await storage.appendProgress('## Session 3\n\nCompleted verifier wiring.\n');
       return {
+        success: true,
+        lastText: '<project-harness>{"status":"complete","summary":"Finished the feature.","evidence":["Updated PROGRESS.md"],"tests":["manual"],"changedFiles":["src/project.ts"]}</project-harness>',
+        sessionId: 'managed-task-3',
         messages: [
           {
             role: 'assistant',

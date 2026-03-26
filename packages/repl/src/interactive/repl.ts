@@ -18,7 +18,7 @@ import {
   KodaXResult,
   KodaXReasoningMode,
   KodaXSessionData,
-  runKodaX,
+  runManagedTask,
   appendSessionLineageLabel,
   buildSessionTree,
   countActiveLineageMessages,
@@ -102,6 +102,7 @@ class MemorySessionStorage implements SessionStorage {
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       data: {
         ...structuredClone(data),
+        scope: data.scope ?? existing?.data.scope ?? 'user',
         extensionState: data.extensionState ?? existing?.data.extensionState,
         extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
         lineage,
@@ -180,6 +181,7 @@ class MemorySessionStorage implements SessionStorage {
       messages: getSessionMessagesFromLineage(lineage),
       title: options?.title ?? current.data.title,
       gitRoot: current.data.gitRoot,
+      scope: current.data.scope ?? 'user',
       extensionState: current.data.extensionState
         ? structuredClone(current.data.extensionState)
         : undefined,
@@ -199,13 +201,15 @@ class MemorySessionStorage implements SessionStorage {
   }
 
   async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>> {
-    return Array.from(this.sessions.entries()).map(([id, session]) => ({
-      id,
-      title: session.data.title,
-      msgCount: session.data.lineage
-        ? countActiveLineageMessages(session.data.lineage)
-        : session.data.messages.length,
-    }));
+    return Array.from(this.sessions.entries())
+      .filter(([, session]) => (session.data.scope ?? 'user') === 'user')
+      .map(([id, session]) => ({
+        id,
+        title: session.data.title,
+        msgCount: session.data.lineage
+          ? countActiveLineageMessages(session.data.lineage)
+          : session.data.messages.length,
+      }));
   }
 
   async delete(id: string): Promise<void> {
@@ -902,13 +906,17 @@ Keyboard Shortcuts:
               reasoningMode: currentConfig.reasoningMode,
             });
           } else {
-            const result = await runKodaX(
+            const result = await runManagedTask(
               {
                 ...currentOptions,
                 provider: currentConfig.provider,
                 thinking: currentConfig.thinking,
                 reasoningMode: currentConfig.reasoningMode,
                 session: { ...currentOptions.session, initialMessages: context.messages },
+                context: {
+                  ...currentOptions.context,
+                  taskSurface: 'repl',
+                },
               },
               processed
             );
@@ -1257,7 +1265,7 @@ async function runAgentRound(
   const events = options.events ?? {};
 
   // Pass existing conversation history for multi-turn dialogue - 传递已有的对话历史，实现多轮对话
-  return runKodaX(
+  return runManagedTask(
     {
       ...options,
       events,
@@ -1268,6 +1276,7 @@ async function runAgentRound(
       context: {
         ...options.context,
         contextTokenSnapshot: context.contextTokenSnapshot,
+        taskSurface: 'repl',
       },
     },
     prompt

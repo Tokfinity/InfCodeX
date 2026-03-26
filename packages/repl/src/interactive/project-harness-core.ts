@@ -3,7 +3,13 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { exec as execCallback } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { KodaXEvents, KodaXMessage, KodaXOptions } from '@kodax/coding';
+import type {
+  KodaXEvents,
+  KodaXMessage,
+  KodaXOptions,
+  KodaXTaskCapabilityHint,
+  KodaXTaskVerificationContract,
+} from '@kodax/coding';
 import type { ProjectFeature } from './project-state.js';
 import { isRecord, isStringArray } from './json-guards.js';
 import { ProjectStorage } from './project-storage.js';
@@ -42,6 +48,20 @@ function isProjectHarnessCompletionReport(value: unknown): value is ProjectHarne
     && (value.blockers === undefined || isStringArray(value.blockers));
 }
 
+function dedupeCapabilityHints(hints: KodaXTaskCapabilityHint[]): KodaXTaskCapabilityHint[] {
+  const seen = new Set<string>();
+  const result: KodaXTaskCapabilityHint[] = [];
+  for (const hint of hints) {
+    const key = `${hint.kind}:${hint.name}`.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(hint);
+  }
+  return result;
+}
+
 const execAsync = promisify(execCallback);
 const TEST_EVIDENCE_PATTERNS = [
   /tdd first/i,
@@ -65,6 +85,7 @@ const LAYER_INDEPENDENCE_PATTERNS = [
   /package dependenc/i,
 ] as const;
 const DEFAULT_PACKAGE_LAYER_ORDER = ['ai', 'agent', 'skills', 'coding', 'repl', 'cli'] as const;
+const FRONTEND_VERIFICATION_PATTERN = /\b(frontend|front-end|ui|browser|page|screen|playwright|e2e|webapp|visual)\b/i;
 const REPAIR_PLAYBOOKS: Array<{
   id: string;
   matches: Array<string | RegExp>;
@@ -103,6 +124,64 @@ const REPAIR_PLAYBOOKS: Array<{
     ],
   },
 ];
+
+function buildVerificationCapabilityHints(
+  feature: ProjectFeature,
+  config: ProjectHarnessConfig,
+): KodaXTaskCapabilityHint[] {
+  const hints: KodaXTaskCapabilityHint[] = [];
+  const combinedText = [
+    feature.name,
+    feature.description,
+    ...(feature.steps ?? []),
+  ].filter(Boolean).join(' ');
+
+  if (FRONTEND_VERIFICATION_PATTERN.test(combinedText)) {
+    hints.push(
+      {
+        kind: 'skill',
+        name: 'agent-browser',
+        details: 'Use browser automation when the evaluator needs to inspect the real frontend flow.',
+      },
+      {
+        kind: 'tool',
+        name: 'playwright',
+        details: 'Preferred browser runner for end-to-end evaluator verification.',
+      },
+      {
+        kind: 'workflow',
+        name: 'frontend-verification',
+        details: 'Open the app, exercise the critical path, and reject completion on visible or console failures.',
+      },
+    );
+  }
+
+  for (const check of config.checks) {
+    hints.push({
+      kind: 'command',
+      name: check.id,
+      details: check.command,
+    });
+
+    if (/playwright|cypress|e2e/i.test(check.command)) {
+      hints.push(
+        {
+          kind: 'skill',
+          name: 'agent-browser',
+          details: `Support the "${check.id}" check with browser automation evidence.`,
+        },
+        {
+          kind: 'tool',
+          name: 'playwright',
+          details: `Run or inspect the browser suite required by "${check.id}".`,
+        },
+      );
+    }
+  }
+
+  return dedupeCapabilityHints(hints);
+}
+
 const FEATURE_KEYWORD_STOP_WORDS = new Set([
   'add',
   'build',
@@ -1319,6 +1398,38 @@ export class ProjectHarnessAttempt {
     return {
       ...options,
       events: wrappedEvents,
+    };
+  }
+
+  describeVerificationContract(): KodaXTaskVerificationContract {
+    const requiredEvidence = [
+      'Return a valid <project-harness>{...}</project-harness> completion block.',
+      'Provide concrete changedFiles and evidence items for the completed work.',
+    ];
+    if (this.config.completionRules.requireProgressUpdate) {
+      requiredEvidence.push('Update PROGRESS.md with fresh execution evidence.');
+    }
+    if (this.config.invariants?.requireTestEvidenceOnComplete) {
+      requiredEvidence.push('Report the exact tests, checks, or browser validation that were executed.');
+    }
+    if (this.config.invariants?.requireDocUpdateOnArchitectureChange) {
+      requiredEvidence.push('Include doc or ADR evidence when the change affects architecture or boundaries.');
+    }
+
+    const requiredChecks = this.config.checks
+      .filter(check => check.required)
+      .map(check => `${check.id}: ${check.command}`);
+
+    return {
+      summary: `Project Harness verification for feature #${this.featureIndex} in ${this.mode} mode.`,
+      instructions: [
+        'The evaluator must independently verify the result instead of trusting generator claims.',
+        'Reject completion if any required evidence or deterministic check is missing.',
+        'Do not edit feature_list.json or .agent/project/harness/** directly during verification.',
+      ],
+      requiredEvidence,
+      requiredChecks,
+      capabilityHints: buildVerificationCapabilityHints(this.feature, this.config),
     };
   }
 

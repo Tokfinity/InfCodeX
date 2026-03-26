@@ -1,20 +1,43 @@
-# KodaX Feature Design Index
+# KodaX Feature 设计索引
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 >
-> The current roadmap centers on `FEATURE_022`, which now carries the shift to an adaptive task engine with native multi-agent execution.
+> 当前 roadmap 以 `FEATURE_022` 为中心。
+> 它承载的是从旧执行模型转向 `adaptive task engine + native multi-agent execution` 的架构变化。
+
+> 阅读提示：
+> 这里保留英文 feature 名称，是为了避免术语漂移。
+> 但文档解释会尽量以中文为主。
+> `FEATURE_022` 不只是控制面升级，也代表执行模型升级。
+
+## 中文导读
+
+这份文档是 feature design 的总索引，也是当前 feature 文档的阅读入口。
+
+你可以这样理解：
+
+- `README.md` 负责告诉你“哪份 feature 文档是当前 source of truth”
+- `v0.7.0.md / v0.8.0.md / v0.9.0.md / v1.0.0.md` 是当前规划阶段最值得看的设计文档
+- 更早的 release 文档更多是历史记录，不一定代表 current architecture
+
+如果你只想快速找当前主线，请优先看：
+
+1. `FEATURE_022`
+2. `FEATURE_025`
+3. `FEATURE_029`
+4. `FEATURE_034`
 
 ---
 
-## 1. How to read this directory
+## 1. 这个目录怎么读
 
-- Released design docs remain historical records.
-- Planned design docs below are the current source of truth.
-- Planned features were reorganized to match the new architecture.
-- `FEATURE_022` is the umbrella feature for the current execution-model shift.
-- `FEATURE_034` remains the runtime substrate and does not conflict with the new control plane design.
+- 已发布版本的设计文档主要是历史记录。
+- 下面这些规划中的设计文档，才是当前 source of truth。
+- 计划中的 features 已按新架构重新整理。
+- `FEATURE_022` 是当前执行模型转向的 umbrella feature。
+- `FEATURE_034` 仍然负责 runtime substrate，与新的 control plane 设计并不冲突。
 
-### Directory structure
+### 目录结构
 
 ```text
 docs/features/
@@ -37,23 +60,23 @@ docs/features/
 
 ---
 
-## 2. Current release state
+## 2. 当前发布状态
 
 | Item | Value |
 |---|---|
-| Current release | `v0.6.15` |
+| Current release | `v0.7.4` |
 | Roadmap reset date | `2026-03-25` |
 | Main architectural direction | `FEATURE_022` -> adaptive task engine + native multi-agent control plane |
 
-### Current capability snapshot
+### 当前能力快照
 
-The repo already ships a substantial baseline that should remain visible in this index:
+这个仓库已经具备一套比较完整的基础能力，这些能力应该在索引里持续保持可见：
 
-- layered monorepo architecture
-- CLI, REPL, and ACP entry surfaces
-- provider abstraction with native and bridge-backed models
-- built-in coding tools, prompts, sessions, permissions, and skills
-- Project Harness, `AGENTS.md`, pending user inputs, and provider-aware reasoning behavior
+- 分层 monorepo 架构
+- CLI、REPL、ACP 三类入口表面
+- 同时支持 native provider 和 bridge-backed model 的 provider abstraction
+- 内建 coding tools、prompts、sessions、permissions、skills
+- Project Harness、`AGENTS.md`、pending user inputs、provider-aware reasoning 等基础工作流能力
 
 | Area | Current baseline |
 |---|---|
@@ -63,7 +86,7 @@ The repo already ships a substantial baseline that should remain visible in this
 | Workflow | Project Harness, `AGENTS.md`, reasoning budget policy |
 | Extensibility | custom providers, skills, commands, early orchestration plumbing |
 
-### Architecture snapshot
+### 当前架构快照
 
 ```text
 CLI Layer
@@ -85,12 +108,12 @@ AI Layer
   skill discovery | skill execution | natural-language triggers
 ```
 
-### Core functionality snapshot
+### 核心能力快照
 
 | Capability | Current baseline |
 |---|---|
 | Agent loop | `runKodaX()` core loop with up to 200 iterations |
-| Session management | JSONL persistence with git-aware workspace context |
+| Session management | JSONL persistence with git-aware workspace context; `user session` vs internal worker scope are now separated |
 | Compaction | token-threshold-based message compaction |
 | Prompting | dynamic system prompt and platform-aware shell guidance |
 | Parallel tools | non-bash tool calls can execute in parallel |
@@ -250,8 +273,8 @@ Focus:
 Features:
 
 - [FEATURE_007](v0.8.0.md#feature_007-theme-system-consolidation)
-- [FEATURE_018](v0.8.0.md#feature_018-codewiki-and-task-knowledge-substrate)
-- [FEATURE_028](v0.8.0.md#feature_028-first-class-search-retrieval-and-evidence-tooling)
+- [FEATURE_018](v0.8.0.md#feature_018-task-aware-repository-intelligence-substrate)
+- [FEATURE_028](v0.8.0.md#feature_028-first-class-retrieval-context-and-evidence-tooling)
 - [FEATURE_035](v0.8.0.md#feature_035-mcp-capability-provider)
 - [FEATURE_038](v0.8.0.md#feature_038-official-sandbox-extension)
 
@@ -327,7 +350,7 @@ The current source of truth for planning is [FEATURE_LIST.md](../FEATURE_LIST.md
 | `015` | Project Mode 2.0 | `v0.6.0` | brainstorm, plan, quality workflows |
 | `016` | CLI-based OAuth providers | `v0.5.22` | OAuth-authenticated providers |
 | `017` | Pending Inputs Queue | `v0.6.0` | runtime user-input interruption |
-| `018` | CodeWiki / task knowledge substrate | `v0.8.0` | durable project knowledge |
+| `018` | task-aware repo intelligence substrate | `v0.8.0` | durable repository intelligence for the task engine |
 | `019` | Session tree, checkpoints, rewindable task runs | `v0.7.0` | task-aware lineage and rollback-friendly state |
 | `020` | `AGENTS.md` | `v0.5.34` | project-level AI context rules |
 | `021` | Provider-aware reasoning budget | `v0.5.37` | provider-aware reasoning matrix |
@@ -336,7 +359,7 @@ The current source of truth for planning is [FEATURE_LIST.md](../FEATURE_LIST.md
 | `024` | Project Harness | `v0.6.10` | action-level verification execution |
 | `025` | Adaptive task intelligence and harness router | `v0.7.0` | task intake and harness selection |
 | `026` | Roadmap integrity and planning hygiene | `v0.7.0` | tracker and metadata consistency |
-| `028` | Search, retrieval, evidence tooling | `v0.8.0` | web/code search and evidence |
+| `028` | Retrieval, context, evidence tooling | `v0.8.0` | progressive local/external retrieval and evidence |
 | `029` | Provider capability transparency and harness policy | `v0.7.0` | native vs bridge capability truth |
 | `030` | Multi-surface delivery | `v1.0.0` | IDE / desktop / web surface strategy |
 | `031` | Multimodal artifact inputs | `v0.9.0` | image and artifact input support |

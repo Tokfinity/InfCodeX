@@ -49,6 +49,65 @@ describe('project harness', () => {
     expect(String(allowed)).toContain('Blocked by Project Harness');
   });
 
+  it('describes a verification contract that exposes browser-testing hints for frontend work', async () => {
+    const storage = new ProjectStorage(tempDir);
+    await storage.writeHarnessConfig({
+      version: 1,
+      generatedAt: '2026-03-26T10:00:00.000Z',
+      protectedArtifacts: ['feature_list.json', '.agent/project/harness'],
+      checks: [
+        {
+          id: 'playwright-e2e',
+          command: 'npx playwright test',
+          required: true,
+        },
+      ],
+      completionRules: {
+        requireProgressUpdate: true,
+        requireChecksPass: true,
+        requireCompletionReport: true,
+      },
+      advisoryRules: {
+        warnOnLargeUnrelatedDiff: true,
+        warnOnRepeatedFailure: true,
+      },
+      invariants: {
+        requireTestEvidenceOnComplete: true,
+        requireDocUpdateOnArchitectureChange: false,
+        enforcePackageBoundaryImports: false,
+        requireDeclaredWorkspaceDependencies: false,
+        requireFeatureChecklistCoverageOnComplete: false,
+        requireSessionPlanChecklistCoverage: false,
+        checklistCoverageMinimum: 0,
+        sourceNotes: [],
+      },
+      exceptions: {
+        allowedImportSpecifiers: [],
+        skipChecklistFeaturePatterns: [],
+      },
+      repairPolicy: {
+        codeOverrides: {},
+        customPlaybooks: [],
+      },
+    });
+    await storage.saveFeatures({
+      features: [
+        {
+          description: 'Add frontend signup UI flow',
+          steps: ['Verify the browser path with Playwright'],
+        },
+      ],
+    });
+
+    const feature = await storage.getFeatureByIndex(0);
+    const attempt = await createProjectHarnessAttempt(storage, feature!, 0, 'next', 1);
+    const contract = attempt.describeVerificationContract();
+
+    expect(contract.requiredChecks).toContain('playwright-e2e: npx playwright test');
+    expect(contract.requiredEvidence).toContain('Report the exact tests, checks, or browser validation that were executed.');
+    expect(contract.capabilityHints?.map((hint) => hint.name)).toEqual(expect.arrayContaining(['agent-browser', 'playwright']));
+  });
+
   it('blocks shell commands that try to modify feature_list.json', async () => {
     const storage = new ProjectStorage(tempDir);
     const feature = await storage.getFeatureByIndex(0);

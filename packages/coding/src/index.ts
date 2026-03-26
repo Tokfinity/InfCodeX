@@ -81,12 +81,27 @@ export type {
   KodaXSessionMessageEntry,
   KodaXSessionNavigationOptions,
   KodaXSessionMeta,
+  KodaXSessionScope,
   KodaXEvents,
   KodaXSessionOptions,
   KodaXContextTokenSnapshot,
   KodaXContextOptions,
+  KodaXTaskCapabilityHint,
   KodaXOptions,
   KodaXResult,
+  KodaXTaskSurface,
+  KodaXTaskStatus,
+  KodaXTaskRole,
+  KodaXTaskContract,
+  KodaXTaskRoleAssignment,
+  KodaXTaskWorkItem,
+  KodaXTaskEvidenceArtifact,
+  KodaXTaskEvidenceEntry,
+  KodaXTaskEvidenceBundle,
+  KodaXTaskToolPolicy,
+  KodaXTaskVerificationContract,
+  KodaXOrchestrationVerdict,
+  KodaXManagedTask,
   KodaXSessionStorage,
   KodaXSessionTreeNode,
   KodaXToolExecutionContext,
@@ -264,6 +279,10 @@ export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './agent.js';
+
+export {
+  runManagedTask,
+} from './task-engine.js';
 
 export type {
   CapabilityKind,

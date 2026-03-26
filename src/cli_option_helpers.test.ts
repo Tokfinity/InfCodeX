@@ -72,6 +72,17 @@ describe('buildSessionOptions', () => {
 
     expect(options).toBeUndefined();
   });
+
+  it('marks persisted CLI sessions as user-scoped', () => {
+    const options = buildSessionOptions(
+      createCliOptions({ continue: true }),
+    );
+
+    expect(options).toMatchObject({
+      resume: true,
+      scope: 'user',
+    });
+  });
 });
 
 describe('mergeConfiguredExtensions', () => {
