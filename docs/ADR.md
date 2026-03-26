@@ -1,7 +1,13 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 > This ADR set reflects the architecture reset carried by `FEATURE_022`, which promotes KodaX from a command-led coding CLI into an adaptive multi-agent task engine.
+
+> Reader note / 阅读提示:
+> In these ADRs, `task` means the product-level unit of work（产品层的工作单元）.
+> `user session` means the resumable conversation surfaced by `kodax -c`（用户可恢复会话）.
+> `managed-task worker session` means an internal role-agent execution scope（内部角色 agent 执行作用域）, not a user-facing recovery target.
+> `FEATURE_022` now also assumes visible planner/evaluator progress for non-terminal workers（非终态 worker 的验证过程应该可见）.
 
 ---
 
@@ -74,6 +80,8 @@ Consequence:
 
 - Single-agent execution remains only as a low-complexity fallback.
 - KodaX should reason in terms of role separation even when the runtime chooses a minimal harness profile.
+- Non-terminal workers should expose prefixed text/thinking/tool progress so verification remains inspectable（验证过程可观测）.
+- Internal worker sessions should stay isolated from ordinary user-session recovery semantics（内部 worker session 不应污染 `kodax -c`）.
 
 ---
 

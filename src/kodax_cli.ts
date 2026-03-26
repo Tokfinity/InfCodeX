@@ -44,6 +44,7 @@ const version = fsSync.existsSync(packageJsonPath)
 
 import {
   runKodaX,
+  runManagedTask,
   KodaXClient,
   KodaXEvents,
   createKodaXTaskRunner,
@@ -1079,7 +1080,13 @@ async function main() {
         session: sessionCount === 1 ? firstSessionId : undefined,
       }, false);
 
-      const result = await runKodaX(kodaXOptions, prompt);
+      const result = await runManagedTask({
+        ...kodaXOptions,
+        context: {
+          ...kodaXOptions.context,
+          taskSurface: 'cli',
+        },
+      }, prompt);
       emitJsonRunResultIfNeeded(options.outputMode, result);
 
       if (!result.success) {
@@ -1309,10 +1316,22 @@ New: {"features": [
           commandName,
           args,
           commands,
-          (prompt: string) => runKodaX(kodaXOptions, prompt)
+          (prompt: string) => runManagedTask({
+            ...kodaXOptions,
+            context: {
+              ...kodaXOptions.context,
+              taskSurface: 'cli',
+            },
+          }, prompt)
         );
         if (commandPrompt) {
-          const result = await runKodaX(kodaXOptions, commandPrompt);
+          const result = await runManagedTask({
+            ...kodaXOptions,
+            context: {
+              ...kodaXOptions.context,
+              taskSurface: 'cli',
+            },
+          }, commandPrompt);
           emitJsonRunResultIfNeeded(options.outputMode, result);
           return;
         }
@@ -1362,7 +1381,13 @@ New: {"features": [
 
   // 濠电姷鏁告慨鐢割敊閺嶎厼绐楁俊銈呭暞瀹曟煡鏌熼柇锕€鏋涚紒韬插€曢湁闁绘ê妯婇崕鎰版煕鐎ｎ亶妯€闁哄被鍊楃划娆戞崉閵娿倗椹冲┑鐐茬摠閸ゅ酣宕愬┑瀣摕闁绘柨鍚嬮悞浠嬫煥閺囨浜鹃梺璇茬箻娴滃爼寮婚敓鐘茬劦?
   const kodaXOptions = createKodaXOptions(options, options.print ?? false);
-  const result = await runKodaX(kodaXOptions, userPrompt);
+  const result = await runManagedTask({
+    ...kodaXOptions,
+    context: {
+      ...kodaXOptions.context,
+      taskSurface: 'cli',
+    },
+  }, userPrompt);
   emitJsonRunResultIfNeeded(options.outputMode, result);
 }
 

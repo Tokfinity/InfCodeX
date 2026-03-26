@@ -61,6 +61,7 @@ export class MemorySessionStorage implements SessionStorage {
     const existing = this.sessions.get(id);
     this.sessions.set(id, {
       ...structuredClone(data),
+      scope: data.scope ?? existing?.scope ?? 'user',
       extensionState: data.extensionState ?? existing?.extensionState,
       extensionRecords: data.extensionRecords ?? existing?.extensionRecords,
       lineage: createSessionLineage(
@@ -157,13 +158,15 @@ export class MemorySessionStorage implements SessionStorage {
   }
 
   async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>> {
-    return Array.from(this.sessions.entries()).map(([id, data]) => ({
-      id,
-      title: data.title,
-      msgCount: data.lineage
-        ? countActiveLineageMessages(data.lineage)
-        : data.messages.length,
-    }));
+    return Array.from(this.sessions.entries())
+      .filter(([, data]) => (data.scope ?? 'user') === 'user')
+      .map(([id, data]) => ({
+        id,
+        title: data.title,
+        msgCount: data.lineage
+          ? countActiveLineageMessages(data.lineage)
+          : data.messages.length,
+      }));
   }
 
   async delete(id: string): Promise<void> {

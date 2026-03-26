@@ -13,6 +13,7 @@ import type {
   KodaXSessionEntry,
   KodaXSessionLineage,
   KodaXSessionMeta,
+  KodaXSessionScope,
   KodaXSessionStorage,
 } from '@kodax/coding';
 import {
@@ -180,6 +181,7 @@ function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSn
         : snapshot.legacyMessages.map((message) => structuredClone(message)),
       title: snapshot.meta?.title ?? '',
       gitRoot: snapshot.meta?.gitRoot ?? '',
+      scope: snapshot.meta?.scope ?? 'user',
       errorMetadata: isSessionErrorMetadata(snapshot.meta?.errorMetadata)
         ? snapshot.meta?.errorMetadata
         : undefined,
@@ -204,6 +206,7 @@ function createSessionMeta(
     id,
     gitRoot: data.gitRoot,
     createdAt: createdAt ?? new Date().toISOString(),
+    scope: data.scope ?? 'user',
     errorMetadata: data.errorMetadata,
     extensionState: data.extensionState,
     extensionRecordCount: data.extensionRecords?.length ?? 0,
@@ -324,6 +327,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const existing = await this.readSession(id);
     const merged: SessionData = {
       ...data,
+      scope: data.scope ?? existing?.data.scope ?? 'user',
       extensionState: data.extensionState ?? existing?.data.extensionState,
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       lineage: createSessionLineage(
@@ -464,7 +468,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     await fs.mkdir(KODAX_SESSIONS_DIR, { recursive: true });
     const currentGitRoot = gitRoot ?? await getGitRoot();
     const files = (await fs.readdir(KODAX_SESSIONS_DIR)).filter((file) => file.endsWith('.jsonl'));
-    const sessions: Array<{ id: string; title: string; msgCount: number }> = [];
+    const sessions: Array<{
+      id: string;
+      title: string;
+      msgCount: number;
+      createdAt?: string;
+    }> = [];
 
     for (const file of files) {
       try {
@@ -477,10 +486,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
         const first = JSON.parse(firstLine);
         if (isRecord(first) && first._type === 'meta') {
           const sessionGitRoot = typeof first.gitRoot === 'string' ? first.gitRoot : '';
+          const scope: KodaXSessionScope = first.scope === 'managed-task-worker'
+            ? 'managed-task-worker'
+            : 'user';
           if (currentGitRoot) {
             if (!sessionGitRoot || sessionGitRoot !== currentGitRoot) {
               continue;
             }
+          }
+          if (scope !== 'user') {
+            continue;
           }
 
           const lineCount = content.split('\n').length;
@@ -496,6 +511,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
             id: file.replace('.jsonl', ''),
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
+            createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
           });
         } else {
           const lineCount = content.split('\n').length;
@@ -506,7 +522,23 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
     }
 
-    return sessions.sort((left, right) => right.id.localeCompare(left.id)).slice(0, 10);
+    return sessions
+      .sort((left, right) => {
+        const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
+        const rightTime = right.createdAt ? Date.parse(right.createdAt) : Number.NaN;
+        if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+          return rightTime - leftTime;
+        }
+        if (Number.isFinite(rightTime) && !Number.isFinite(leftTime)) {
+          return 1;
+        }
+        if (Number.isFinite(leftTime) && !Number.isFinite(rightTime)) {
+          return -1;
+        }
+        return right.id.localeCompare(left.id);
+      })
+      .slice(0, 10)
+      .map(({ id, title, msgCount }) => ({ id, title, msgCount }));
   }
 
   async delete(id: string): Promise<void> {

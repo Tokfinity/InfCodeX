@@ -214,7 +214,7 @@ export function createKodaXOptions(cliOptions: CliOptions, isPrintMode = false):
 
 export function buildSessionOptions(
   cliOptions: CliOptions,
-): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean } | undefined {
+): { id?: string; resume?: boolean; storage: FileSessionStorage; autoResume?: boolean; scope: 'user' } | undefined {
   const storage = new FileSessionStorage();
 
   if ((cliOptions.print || cliOptions.outputMode === 'json') && cliOptions.noSession) {
@@ -222,15 +222,15 @@ export function buildSessionOptions(
   }
 
   if (cliOptions.resume) {
-    return { id: cliOptions.resume, storage };
+    return { id: cliOptions.resume, storage, scope: 'user' };
   }
 
   if (cliOptions.continue) {
-    return { resume: true, storage };
+    return { resume: true, storage, scope: 'user' };
   }
 
   if (cliOptions.session === 'resume') {
-    return { resume: true, storage };
+    return { resume: true, storage, scope: 'user' };
   }
 
   if (
@@ -239,16 +239,16 @@ export function buildSessionOptions(
     && cliOptions.session !== 'delete-all'
     && !cliOptions.session.startsWith('delete ')
   ) {
-    return { id: cliOptions.session, storage };
+    return { id: cliOptions.session, storage, scope: 'user' };
   }
 
   if (cliOptions.print) {
-    return { storage };
+    return { storage, scope: 'user' };
   }
 
   if (!cliOptions.prompt?.length) {
-    return { storage };
+    return { storage, scope: 'user' };
   }
 
-  return { storage };
+  return { storage, scope: 'user' };
 }

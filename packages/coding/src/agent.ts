@@ -600,6 +600,7 @@ async function saveSessionSnapshot(
     messages: data.messages,
     title: data.title,
     gitRoot,
+    scope: options.session.scope ?? 'user',
     errorMetadata: data.errorMetadata,
     extensionState: data.runtimeSessionState
       ? snapshotRuntimeExtensionState(data.runtimeSessionState.extensionState)

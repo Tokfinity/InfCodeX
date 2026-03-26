@@ -1,71 +1,96 @@
-# KodaX Product Requirements
+# KodaX 产品需求文档（PRD）
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 >
-> This PRD captures the product shift tracked by `FEATURE_022`: from "CLI plus Project Mode" to "adaptive task engine with native multi-agent execution."
+> 本 PRD 描述 `FEATURE_022` 所承载的产品转向：
+> KodaX 正从“CLI + Project Mode”转向“以 `task` 为中心、默认支持多智能体协作的执行引擎”。
+
+## 中文导读
+
+这份 PRD 关注的是“产品为什么这样设计”，不是代码细节。
+
+建议先抓住这几个核心判断：
+
+- 用户不应该先选 mode，再决定怎么提问；应该直接提出工作请求，由系统决定 execution shape。
+- 对简单任务，`H0_DIRECT` 仍然可以成立；对复杂任务，multi-agent 和 verification 是默认路径。
+- 产品层最重要的是 `task`，不是旧的 `Project Mode`。
+- `kodax -c` 这种恢复语义属于 `user session`；内部 planner / evaluator 的 worker session 不应混进产品层恢复入口。
+
+如果你想快速理解产品语义，优先看：
+
+1. `User Promise`
+2. `Product Principles`
+3. `Primary User Journeys`
 
 ---
 
-## 1. Product Position
+## 1. 产品定位
 
-KodaX is a coding system for people who want:
+KodaX 面向这样一类用户：
 
-- a lightweight and inspectable codebase
-- strong provider flexibility
-- reliable long-running execution
-- minimal user-facing mode switching
-- a path from terminal use to embedded and multi-surface use
+- 希望代码库保持轻量、可检查
+- 希望 provider 选择足够灵活
+- 希望 long-running task 可靠执行
+- 希望用户侧尽量少做 mode 切换
+- 希望产品能从 terminal 逐步走向 embedded 和 multi-surface
 
-The product should feel simple, but its internal execution model should be sophisticated.
+产品外在应该尽量简单，但内部 execution model 必须足够强。
 
-The key shift is:
+关键变化是：
 
-- old model: a single agent plus optional project workflows
-- new model: a task engine that decides when planning, multiple agents, and verification are needed
+- 旧模型：single agent + optional project workflow
+- 新模型：由 task engine 自动判断何时需要 planning、multiple agents、verification
 
----
+阅读辅助：
 
-## 2. User Promise
-
-When a user asks KodaX to do work, KodaX should:
-
-1. understand whether the task is simple or complex
-2. choose the right execution shape automatically
-3. preserve task truth when the work is long-running
-4. avoid trusting the executor's self-report
-5. give the user inspection and override tools without forcing upfront mode decisions
-
-In short:
-
-- minimal on the outside
-- intelligent in the middle
-- reliable at the end
+- `task engine` = 系统自动决定执行形态
+- `user session` = 用户通过 `kodax -c` 恢复的会话
+- `managed-task worker session` = planner / generator / evaluator 的内部执行上下文
+- `evidence` = tests、deterministic checks、browser verification、reviewer judgment 等可验证证据
 
 ---
 
-## 3. Product Principles
+## 2. 用户承诺
 
-### 3.1 Invisible mode selection
+当用户要求 KodaX 完成一项工作时，KodaX 应该：
 
-Users should not have to decide whether they are in "project mode", "brainstorm mode", or "multi-agent mode" before they can ask for work.
+1. 判断任务是简单还是复杂
+2. 自动选择合适的 execution shape
+3. 在 long-running work 中保留 task truth
+4. 不盲信 executor 的自我汇报
+5. 提供 inspection / override 能力，但不强迫用户先选 mode
 
-### 3.2 Native multi-agent for non-trivial work
+一句话总结：
 
-Non-trivial tasks should default to role separation:
+- 外面尽量简单
+- 中间足够智能
+- 最终结果足够可靠
+
+---
+
+## 3. 产品原则
+
+### 3.1 隐形的 mode 选择
+
+用户在提出请求之前，不应该先决定自己是不是处于 `project mode`、`brainstorm mode` 或 `multi-agent mode`。
+
+### 3.2 非平凡任务默认走 native multi-agent
+
+对于 non-trivial task，系统默认应该采用 role separation：
 
 - planning
 - execution
 - evaluation
 
-Single-agent execution is a fallback, not the main architecture.
+`single-agent execution` 只是 fallback，不是主架构。
 
-### 3.3 Evidence over optimism
+### 3.3 证据优先于乐观自报
 
-Completion should depend on evidence and evaluator judgment, not the executor saying "done".
+任务是否完成，应由 `evidence` 与 `evaluator` 判断，而不是由 executor 说“done”。
 
 ### 3.4 Durable task state
 
-Long-running work needs persisted truth:
+对于 long-running work，必须保存可持续的事实状态：
 
 - task envelope
 - contract
@@ -313,8 +338,8 @@ Goals:
 Features:
 
 - `007` Theme System Consolidation
-- `018` CodeWiki and Task Knowledge Substrate
-- `028` First-Class Search, Retrieval, and Evidence Tooling
+- `018` Task-Aware Repository Intelligence Substrate
+- `028` First-Class Retrieval, Context, and Evidence Tooling
 - `035` MCP Capability Provider
 - `038` Official Sandbox Extension
 

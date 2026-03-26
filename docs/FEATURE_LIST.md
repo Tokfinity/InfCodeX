@@ -1,41 +1,45 @@
-# Feature List
+# Feature 总表
 
 > Last updated: 2026-03-26
 
+> 中文阅读说明：
+> 这份 `FEATURE_LIST` 是 roadmap 的总索引。
+> 除了 feature 名称本身保留英文外，其余内容尽量用中文来说明“现在做到哪了、接下来做什么、该去哪里看设计”。
+> `FEATURE_022` 是当前架构转向的总 feature，`019/025/029/034` 是它下面的关键支撑切片。
+
 ---
 
-## Summary
+## 当前概况
 
 | Item | Value |
 |---|---|
 | Tracked feature IDs | `001-041` (`027` unused) |
 | Total tracked features | `40` |
-| Completed | `31` |
+| Completed | `32` |
 | InProgress | `0` |
-| Planned | `9` |
-| Current released version | `v0.7.3` |
+| Planned | `8` |
+| Current released version | `v0.7.4` |
 
-### Planned version distribution
+### 各版本待做分布
 
 | Version | Planned features |
 |---|---|
-| `v0.7.0` | `2` |
+| `v0.7.0` | `1` |
 | `v0.8.0` | `5` |
 | `v0.9.0` | `1` |
 | `v1.0.0` | `2` |
 
 ---
 
-## Planned Features
+## 计划中的 Feature
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_007-theme-system-consolidation) |
-| `018` | CodeWiki and Task Knowledge Substrate | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_018-codewiki-and-task-knowledge-substrate) |
-| `022` | Adaptive Task Engine and Native Multi-Agent Control Plane | New | High | `v0.7.0` | [v0.7.0](features/v0.7.0.md#feature_022-adaptive-task-engine-and-native-multi-agent-control-plane) |
+| `018` | Task-Aware Repository Intelligence Substrate | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_018-task-aware-repository-intelligence-substrate) |
 | `023` | Dual-Mode Terminal UX | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_023-dual-mode-terminal-ux) |
 | `026` | Roadmap Integrity and Planning Hygiene | Internal | High | `v0.7.0` | [v0.7.0](features/v0.7.0.md#feature_026-roadmap-integrity-and-planning-hygiene) |
-| `028` | First-Class Search, Retrieval, and Evidence Tooling | Enhancement | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_028-first-class-search-retrieval-and-evidence-tooling) |
+| `028` | First-Class Retrieval, Context, and Evidence Tooling | Enhancement | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_028-first-class-retrieval-context-and-evidence-tooling) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_030-multi-surface-delivery) |
 | `031` | Multimodal Artifact Inputs | New | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_031-multimodal-artifact-inputs) |
 | `035` | MCP Capability Provider | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_035-mcp-capability-provider) |
@@ -43,13 +47,15 @@
 
 ---
 
-## Notes
+## 阅读说明
 
-- `FEATURE_022` is the umbrella feature for the current architecture shift. `FEATURE_019`, `FEATURE_025`, `FEATURE_029`, and `FEATURE_034` are enabling slices beneath it.
+- `FEATURE_022` 是当前架构转向的 umbrella feature，`FEATURE_019`、`FEATURE_025`、`FEATURE_029`、`FEATURE_034` 是它下面的关键支撑切片。
+- `FEATURE_022` 现在同时覆盖可见的 task-control plane 和内部的多角色 execution model。
+- `kodax -c` 属于 `user session` 恢复语义，不属于 internal worker-session recovery。
 
 ---
 
-## Completed Features
+## 已完成 Feature
 
 | ID | Title | Released | Design |
 |---|---|---|---|
@@ -72,6 +78,7 @@
 | `019` | Session Tree, Checkpoints, and Rewindable Task Runs | `v0.7.2` | [v0.7.0](features/v0.7.0.md#feature_019-session-tree-checkpoints-and-rewindable-task-runs) |
 | `020` | AGENTS.md Workspace Rules | `v0.5.34` | [v0.6.0](features/v0.6.0.md) |
 | `021` | Provider-Aware Reasoning Budget | `v0.5.37` | [v0.6.0](features/v0.6.0.md) |
+| `022` | Adaptive Task Engine and Native Multi-Agent Control Plane | `v0.7.4` | [v0.7.0](features/v0.7.0.md#feature_022-adaptive-task-engine-and-native-multi-agent-control-plane) |
 | `024` | Project Harness | `v0.6.10` | [v0.6.10](features/v0.6.10.md) |
 | `025` | Adaptive Task Intelligence and Harness Router | `v0.7.4` | [v0.7.0](features/v0.7.0.md#feature_025-adaptive-task-intelligence-and-harness-router) |
 | `029` | Provider Capability Transparency and Harness Policy | `v0.7.1` | [v0.7.0](features/v0.7.0.md#feature_029-provider-capability-transparency-and-harness-policy) |
@@ -86,9 +93,9 @@
 
 ---
 
-## Related Documents
+## 相关文档入口
 
-- [Feature Design Index](features/README.md)
+- [Feature 设计索引](features/README.md)
 - [ADR](ADR.md)
 - [HLD](HLD.md)
 - [DD](DD.md)

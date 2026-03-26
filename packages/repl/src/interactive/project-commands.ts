@@ -6,19 +6,28 @@
 
 import * as readline from 'readline';
 import chalk from 'chalk';
-import { runKodaX, KodaXOptions, KodaXMessage } from '@kodax/coding';
+import {
+  runManagedTask,
+  KodaXOptions,
+  KodaXMessage,
+  type KodaXJsonValue,
+  type KodaXManagedTask,
+  type KodaXTaskStatus,
+  type KodaXTaskVerificationContract,
+} from '@kodax/coding';
 import { ProjectStorage } from './project-storage.js';
 import {
   ProjectFeature,
   ProjectStatistics,
   type ProjectAlignment,
   type ProjectBrief,
+  type ProjectControlState,
   type ProjectWorkflowScope,
   type ProjectWorkflowStage,
   type ProjectWorkflowState,
   createProjectAlignment,
   createProjectBrief,
-  createProjectWorkflowState,
+  createProjectControlState,
 } from './project-state.js';
 import {
   DISCOVERY_QUESTIONS,
@@ -257,12 +266,8 @@ async function ensureExecutionSessionPlan(
     contextNote: `Auto-generated for feature #${index}.`,
   });
   await storage.writeSessionPlan(formatProjectPlan(plan));
-  await storage.saveWorkflowState({
-    ...state,
-    stage: state.stage === 'aligned' ? 'planned' : state.stage,
-    currentFeatureIndex: index,
+  await saveProjectControlState(storage, state, {
     lastPlannedAt: new Date().toISOString(),
-    lastUpdated: new Date().toISOString(),
   });
 }
 
@@ -307,6 +312,122 @@ function extractMessageText(message: KodaXMessage | undefined): string {
   return message.content
     .map(part => ('text' in part ? part.text : '') || '')
     .join('');
+}
+
+function buildProjectTaskOptions(
+  options: KodaXOptions,
+  context: InteractiveContext,
+  metadata?: Record<string, KodaXJsonValue>,
+  managedTaskWorkspaceDir?: string,
+  verification?: KodaXTaskVerificationContract,
+): KodaXOptions {
+  return {
+    ...options,
+    session: {
+      ...options.session,
+      initialMessages: context.messages,
+    },
+    context: {
+      ...options.context,
+      taskSurface: 'project',
+      managedTaskWorkspaceDir: managedTaskWorkspaceDir ?? options.context?.managedTaskWorkspaceDir,
+      taskMetadata: metadata
+        ? {
+            ...(options.context?.taskMetadata ?? {}),
+            ...metadata,
+          }
+        : options.context?.taskMetadata,
+      taskVerification: verification ?? options.context?.taskVerification,
+    },
+  };
+}
+
+async function saveProjectControlState(
+  storage: ProjectStorage,
+  state: ProjectWorkflowState,
+  overrides: Partial<ProjectControlState> = {},
+): Promise<void> {
+  const timestamp = overrides.lastUpdated ?? new Date().toISOString();
+  const hasScopeOverride = Object.prototype.hasOwnProperty.call(overrides, 'scope');
+  const hasActiveRequestOverride = Object.prototype.hasOwnProperty.call(overrides, 'activeRequestId');
+  const hasLastPlannedOverride = Object.prototype.hasOwnProperty.call(overrides, 'lastPlannedAt');
+  const hasLatestExecutionSummaryOverride = Object.prototype.hasOwnProperty.call(overrides, 'latestExecutionSummary');
+  const resolvedDiscoveryStepIndex = overrides.discoveryStepIndex
+    ?? (state.stage === 'discovering'
+      ? state.discoveryStepIndex
+      : DISCOVERY_QUESTIONS.length);
+  const nextState: ProjectControlState = {
+    ...createProjectControlState(state.scope, timestamp),
+    scope: hasScopeOverride ? (overrides.scope ?? 'project') : state.scope,
+    activeRequestId: hasActiveRequestOverride ? overrides.activeRequestId : state.activeRequestId,
+    discoveryStepIndex: resolvedDiscoveryStepIndex,
+    lastUpdated: timestamp,
+    lastPlannedAt: hasLastPlannedOverride ? overrides.lastPlannedAt : state.lastPlannedAt,
+    latestExecutionSummary: hasLatestExecutionSummaryOverride
+      ? overrides.latestExecutionSummary
+      : state.latestExecutionSummary,
+  };
+
+  await storage.saveControlState(nextState);
+}
+
+function mapVerificationDecisionToTaskStatus(
+  decision: ProjectHarnessVerificationResult['decision'],
+): KodaXTaskStatus {
+  return decision === 'verified_complete' ? 'completed' : 'blocked';
+}
+
+function applyProjectVerificationToManagedTask(
+  task: KodaXManagedTask,
+  verification: ProjectHarnessVerificationResult,
+  metadata: {
+    featureIndex: number;
+    mode: 'next' | 'auto';
+    attempt: number;
+  },
+): KodaXManagedTask {
+  const status = mapVerificationDecisionToTaskStatus(verification.decision);
+  const summary = verification.runRecord.completionReport?.summary
+    ?? verification.reasons[0]
+    ?? task.verdict.summary;
+  const updatedAt = new Date().toISOString();
+
+  return {
+    ...task,
+    contract: {
+      ...task.contract,
+      status,
+      updatedAt,
+      metadata: {
+        ...(task.contract.metadata ?? {}),
+        featureIndex: metadata.featureIndex,
+        projectMode: metadata.mode,
+        projectHarnessDecision: verification.decision,
+        projectHarnessAttempt: metadata.attempt,
+      },
+    },
+    evidence: {
+      ...task.evidence,
+      entries: task.evidence.entries.map((entry) =>
+        entry.assignmentId === task.verdict.decidedByAssignmentId
+          ? {
+              ...entry,
+              status,
+              summary,
+              signal: status === 'completed' ? 'COMPLETE' : 'BLOCKED',
+              signalReason: verification.reasons[0],
+            }
+          : entry
+      ),
+    },
+    verdict: {
+      ...task.verdict,
+      status,
+      summary,
+      signal: status === 'completed' ? 'COMPLETE' : 'BLOCKED',
+      signalReason: verification.reasons[0],
+    },
+  };
 }
 
 function buildBrainstormPrompt(topic: string): string {
@@ -399,12 +520,8 @@ async function projectBrainstorm(
     if (!customAnswer?.trim()) {
       await storage.saveBrainstormSession(session, formatBrainstormTranscript(session));
       await storage.writeAlignment(normalizeAlignment(alignment));
-      await storage.saveWorkflowState({
-        ...state,
-        stage: 'discovering',
-        unresolvedQuestionCount: alignment.openQuestions.length,
+      await saveProjectControlState(storage, state, {
         discoveryStepIndex: DISCOVERY_QUESTIONS.length,
-        lastUpdated: new Date().toISOString(),
       });
       console.log(chalk.dim('\nDiscovery paused. Run /project brainstorm again to continue.\n'));
       return;
@@ -436,12 +553,8 @@ async function projectBrainstorm(
         ...alignment,
         openQuestions: DISCOVERY_QUESTIONS.slice(index).map(item => item.prompt),
       }));
-      await storage.saveWorkflowState({
-        ...state,
-        stage: 'discovering',
-        unresolvedQuestionCount: DISCOVERY_QUESTIONS.length - index,
+      await saveProjectControlState(storage, state, {
         discoveryStepIndex: index,
-        lastUpdated: new Date().toISOString(),
       });
       console.log(chalk.dim('\nDiscovery paused. Run /project brainstorm again to continue.\n'));
       return;
@@ -463,12 +576,8 @@ async function projectBrainstorm(
   const completedSession = completeBrainstormSession(session);
   await storage.saveBrainstormSession(completedSession, formatBrainstormTranscript(completedSession));
   await storage.writeAlignment(alignment);
-  await storage.saveWorkflowState({
-    ...state,
-    stage: 'aligned',
-    unresolvedQuestionCount: 0,
+  await saveProjectControlState(storage, state, {
     discoveryStepIndex: DISCOVERY_QUESTIONS.length,
-    lastUpdated: new Date().toISOString(),
   });
 
   console.log(chalk.green('Discovery is aligned.'));
@@ -488,12 +597,8 @@ async function projectBrainstorm(
         })
       : alignment;
     await storage.writeAlignment(nextAlignment);
-    await storage.saveWorkflowState({
-      ...state,
-      stage: 'discovering',
-      unresolvedQuestionCount: extraDetail?.trim() ? nextAlignment.openQuestions.length : 1,
+    await saveProjectControlState(storage, state, {
       discoveryStepIndex: DISCOVERY_QUESTIONS.length,
-      lastUpdated: new Date().toISOString(),
     });
     console.log(chalk.dim('\nAdded one more discovery thread. Run /project brainstorm again when you are ready.\n'));
     return;
@@ -584,14 +689,8 @@ async function projectPlan(
 
     if (options) {
       try {
-        const result = await runKodaX(
-          {
-            ...options,
-            session: {
-              ...options.session,
-              initialMessages: context.messages,
-            },
-          },
+        const result = await runManagedTask(
+          buildProjectTaskOptions(options, context),
           `You are generating feature_list.json for Project Mode.
 
 Active scope: ${state.scope}
@@ -663,14 +762,10 @@ If the active scope is a change request, preserve unrelated existing features an
     targetLabel = state.scope === 'change_request' ? 'change request alignment' : 'project alignment';
     plannedFeatureIndex = targetIndex;
 
-    await storage.saveWorkflowState({
-      ...state,
-      stage: 'planned',
+    await saveProjectControlState(storage, state, {
       scope: 'project',
       activeRequestId: undefined,
-      currentFeatureIndex: targetIndex,
       lastPlannedAt: new Date().toISOString(),
-      lastUpdated: new Date().toISOString(),
     });
   } else if (!rawTarget) {
     const nextFeature = await storage.getNextPendingFeature();
@@ -698,14 +793,10 @@ If the active scope is a change request, preserve unrelated existing features an
   const planText = formatProjectPlan(plan);
   await storage.writeSessionPlan(planText);
   const nextFeature = await storage.getNextPendingFeature();
-  await storage.saveWorkflowState({
-    ...state,
-    stage: 'planned',
+  await saveProjectControlState(storage, state, {
     scope: shouldGenerateProjectTruth ? 'project' : state.scope,
     activeRequestId: shouldGenerateProjectTruth ? undefined : state.activeRequestId,
-    currentFeatureIndex: plannedFeatureIndex ?? nextFeature?.index,
     lastPlannedAt: new Date().toISOString(),
-    lastUpdated: new Date().toISOString(),
   });
 
   console.log(chalk.cyan('\n/project plan - Planning View\n'));
@@ -802,16 +893,7 @@ async function runProjectAnalysis(
   context: InteractiveContext,
   prompt: string,
 ): Promise<string> {
-  const result = await runKodaX(
-    {
-      ...options,
-      session: {
-        ...options.session,
-        initialMessages: context.messages,
-      },
-    },
-    prompt,
-  );
+  const result = await runManagedTask(buildProjectTaskOptions(options, context), prompt);
 
   return extractMessageText(result.messages[result.messages.length - 1]);
 }
@@ -904,24 +986,16 @@ async function executeSingleFeature(
   options: KodaXOptions,
   userPrompt?: string,
   repairPrompt?: string,
-): Promise<{ success: boolean; messages: KodaXMessage[] }> {
+): Promise<{ success: boolean; messages: KodaXMessage[]; managedTask?: KodaXManagedTask }> {
   const desc = feature.description || feature.name || 'Unnamed';
   const prompt = buildFeaturePrompt(desc, feature.steps, userPrompt, repairPrompt);
 
-  const result = await runKodaX(
-    {
-      ...options,
-      session: {
-        ...options.session,
-        initialMessages: context.messages,
-      },
-    },
-    prompt
-  );
+  const result = await runManagedTask(buildProjectTaskOptions(options, context), prompt);
 
   return {
     success: true,
     messages: result.messages,
+    managedTask: result.managedTask,
   };
 }
 
@@ -941,10 +1015,34 @@ async function runVerifiedFeatureExecution(
     attempt += 1;
     const harnessAttempt = await createProjectHarnessAttempt(storage, feature, index, mode, attempt);
     const harnessedOptions = harnessAttempt.wrapOptions(options);
-    const result = await executeSingleFeature(feature, index, context, harnessedOptions, userPrompt, repairPrompt);
+    const verificationContract = harnessAttempt.describeVerificationContract();
+    const taskOptions: KodaXOptions = {
+      ...harnessedOptions,
+      context: {
+        ...harnessedOptions.context,
+        managedTaskWorkspaceDir: storage.getPaths().managedTasksRoot,
+        taskMetadata: {
+          ...(harnessedOptions.context?.taskMetadata ?? {}),
+          featureIndex: index,
+          projectMode: mode,
+          projectHarnessAttempt: attempt,
+        },
+        taskVerification: verificationContract,
+      },
+    };
+    const result = await executeSingleFeature(feature, index, context, taskOptions, userPrompt, repairPrompt);
     context.messages = result.messages;
 
     const verification = await harnessAttempt.verify(result.messages);
+    if (result.managedTask) {
+      await storage.saveManagedTask(
+        applyProjectVerificationToManagedTask(result.managedTask, verification, {
+          featureIndex: index,
+          mode,
+          attempt,
+        }),
+      );
+    }
     if (verification.decision === 'verified_complete') {
       await storage.updateFeatureStatus(index, {
         passes: true,
@@ -1095,7 +1193,13 @@ async function projectStatus(
   const state = await getWorkflowState(storage);
   const alignment = await storage.readAlignment();
   const sessionPlan = await storage.readSessionPlan();
+  const managedTask = await storage.loadManagedTask();
   const stats = snapshot?.stats ?? { total: 0, completed: 0, pending: 0, skipped: 0, percentage: 0 };
+  const recommendedCommand = managedTask && managedTask.contract.status !== 'completed'
+    ? (managedTask.contract.status === 'blocked' || managedTask.contract.status === 'failed'
+      ? '/project verify'
+      : '/project auto')
+    : getRecommendedNextStep(state, stats.total > 0, sessionPlan.trim().length > 0);
 
   if (guidance && snapshot) {
     const report = buildProjectQualityReport(
@@ -1141,7 +1245,18 @@ async function projectStatus(
   console.log(`Unresolved discovery items: ${state.unresolvedQuestionCount}`);
   console.log(`Features: ${stats.completed}/${stats.total} completed (${stats.percentage}%)`);
   console.log(`Session plan: ${sessionPlan.trim() ? 'present' : 'missing'}`);
-  console.log(`Next recommended command: ${getRecommendedNextStep(state, stats.total > 0, sessionPlan.trim().length > 0)}`);
+  if (managedTask) {
+    const featureIndex = typeof managedTask.contract.metadata?.featureIndex === 'number'
+      ? managedTask.contract.metadata.featureIndex
+      : undefined;
+    console.log(`Managed task: ${managedTask.contract.taskId} (${managedTask.contract.status})`);
+    console.log(`Managed harness: ${managedTask.contract.harnessProfile}`);
+    if (featureIndex !== undefined) {
+      console.log(`Managed feature: #${featureIndex}`);
+    }
+    console.log(`Managed summary: ${managedTask.verdict.summary}`);
+  }
+  console.log(`Next recommended command: ${recommendedCommand}`);
   if (alignment?.openQuestions.length) {
     console.log();
     console.log(chalk.dim('Open discovery threads:'));
@@ -1265,12 +1380,16 @@ async function projectInit(
           confirmedRequirements: [task],
           openQuestions: [],
         }, timestamp)
-      : alignment;
+      : stage === 'bootstrap'
+        ? normalizeAlignment({
+            ...alignment,
+            openQuestions: [],
+          }, timestamp)
+        : alignment;
 
     await storage.writeAlignment(initializedAlignment);
-    await storage.saveWorkflowState({
-      ...createProjectWorkflowState(stage, timestamp, 'project'),
-      unresolvedQuestionCount: stage === 'discovering' ? DISCOVERY_QUESTIONS.length : 0,
+    await storage.saveControlState({
+      ...createProjectControlState('project', timestamp),
       discoveryStepIndex: stage === 'discovering' ? 0 : DISCOVERY_QUESTIONS.length,
       lastUpdated: timestamp,
     });
@@ -1309,13 +1428,17 @@ async function projectInit(
         confirmedRequirements: [task],
         openQuestions: [],
       }, timestamp)
-    : alignment;
+    : nextStage === 'discovering'
+      ? alignment
+      : normalizeAlignment({
+          ...alignment,
+          openQuestions: [],
+        }, timestamp);
 
   await storage.writeAlignment(nextAlignment);
-  await storage.saveWorkflowState({
-    ...createProjectWorkflowState(nextStage, timestamp, 'change_request'),
+  await storage.saveControlState({
+    ...createProjectControlState('change_request', timestamp),
     activeRequestId: changeRequest.id,
-    unresolvedQuestionCount: nextStage === 'discovering' ? DISCOVERY_QUESTIONS.length : 0,
     discoveryStepIndex: nextStage === 'discovering' ? 0 : DISCOVERY_QUESTIONS.length,
     lastUpdated: timestamp,
   });
@@ -1441,12 +1564,8 @@ async function projectNext(
 
     // 显示进度
     const stats = await storage.getStatistics();
-    await storage.saveWorkflowState({
-      ...state,
-      stage: stats.pending === 0 ? 'completed' : verification.decision === 'verified_complete' ? 'executing' : 'blocked',
-      currentFeatureIndex: (await storage.getNextPendingFeature())?.index,
+    await saveProjectControlState(storage, state, {
       latestExecutionSummary: verification.runRecord.completionReport?.summary ?? verification.reasons[0] ?? 'No summary available',
-      lastUpdated: new Date().toISOString(),
     });
     console.log(chalk.dim(`Progress: ${stats.completed}/${stats.total} [${stats.percentage}%]\n`));
 
@@ -1605,23 +1724,15 @@ async function projectAuto(
           console.log(chalk.green('  ✓ Completed'));
           console.log(chalk.dim(`  ${verification.runRecord.evidence.join(' | ')}`));
           const updatedStats = await storage.getStatistics();
-          await storage.saveWorkflowState({
-            ...currentState,
-            stage: updatedStats.pending === 0 ? 'completed' : 'executing',
-            currentFeatureIndex: (await storage.getNextPendingFeature())?.index,
+          await saveProjectControlState(storage, currentState, {
             latestExecutionSummary: verification.runRecord.completionReport?.summary ?? 'Feature completed',
-            lastUpdated: new Date().toISOString(),
           });
           console.log();
         } else {
           console.log(chalk.yellow(`  ⚠ Paused: ${verification.decision}`));
           console.log(chalk.dim(`  ${verification.reasons.join(' | ') || 'Review the latest harness record.'}`));
-          await storage.saveWorkflowState({
-            ...currentState,
-            stage: 'blocked',
-            currentFeatureIndex: next.index,
+          await saveProjectControlState(storage, currentState, {
             latestExecutionSummary: verification.runRecord.completionReport?.summary ?? verification.reasons[0] ?? 'No summary available',
-            lastUpdated: new Date().toISOString(),
           });
           console.log();
           break;
@@ -1880,10 +1991,8 @@ async function editAlignment(
 
   await storage.writeAlignment(normalizeAlignment(alignment));
   const state = await getWorkflowState(storage);
-  await storage.saveWorkflowState({
-    ...state,
-    stage: state.stage === 'bootstrap' ? 'discovering' : state.stage,
-    lastUpdated: new Date().toISOString(),
+  await saveProjectControlState(storage, state, {
+    discoveryStepIndex: state.stage === 'bootstrap' ? 0 : state.discoveryStepIndex,
   });
 
   console.log(chalk.cyan('\n/project edit - Alignment Updated\n'));
@@ -2046,14 +2155,8 @@ User: "改描述"
 Only include fields that should change. Omit unchanged fields. Think semantically, not literally.`;
 
     try {
-      const result = await runKodaX(
-        {
-          ...options,
-          session: {
-            ...options.session,
-            initialMessages: context.messages,
-          },
-        },
+      const result = await runManagedTask(
+        buildProjectTaskOptions(options, context),
         prompt
       );
 
@@ -2241,14 +2344,8 @@ Please analyze what changes are needed and provide:
 Note: Complex operations like reordering, merging, or splitting features require manual editing of feature_list.json.`;
 
     try {
-      const result = await runKodaX(
-        {
-          ...options,
-          session: {
-            ...options.session,
-            initialMessages: context.messages,
-          },
-        },
+      const result = await runManagedTask(
+        buildProjectTaskOptions(options, context),
         prompt
       );
 
@@ -2372,14 +2469,8 @@ Please provide:
 Keep your analysis concise and actionable.`;
 
     try {
-      const result = await runKodaX(
-        {
-          ...options,
-          session: {
-            ...options.session,
-            initialMessages: context.messages,
-          },
-        },
+      const result = await runManagedTask(
+        buildProjectTaskOptions(options, context),
         prompt
       );
 
@@ -2423,14 +2514,8 @@ User's question: "${guidance}"
 Please provide a detailed and helpful analysis addressing the user's specific question.`;
 
   try {
-    const result = await runKodaX(
-      {
-        ...options,
-        session: {
-          ...options.session,
-          initialMessages: context.messages,
-        },
-      },
+    const result = await runManagedTask(
+      buildProjectTaskOptions(options, context),
       prompt
     );
 
@@ -2635,11 +2720,19 @@ export async function detectAndShowProjectHint(): Promise<boolean> {
   const state = await getWorkflowState(storage);
   const stats = await storage.getStatistics();
   const hasSessionPlan = (await storage.readSessionPlan()).trim().length > 0;
-  const nextStep = getRecommendedNextStep(state, stats.total > 0, hasSessionPlan);
+  const managedTask = await storage.loadManagedTask();
+  const nextStep = managedTask && managedTask.contract.status !== 'completed'
+    ? (managedTask.contract.status === 'blocked' || managedTask.contract.status === 'failed'
+      ? '/project verify'
+      : '/project auto')
+    : getRecommendedNextStep(state, stats.total > 0, hasSessionPlan);
 
   console.log(chalk.cyan('  📁 Long-running project detected'));
   console.log(chalk.dim(`    ${stats.completed}/${stats.total} features completed [${stats.percentage}%]`));
   console.log(chalk.dim(`    Stage: ${formatStage(state.stage)}`));
+  if (managedTask) {
+    console.log(chalk.dim(`    Managed task: ${managedTask.contract.taskId} (${managedTask.contract.status})`));
+  }
   console.log(chalk.dim('    Use /project status to view progress'));
   console.log(chalk.dim(`    Recommended next step: ${nextStep}`));
   console.log(chalk.dim('    Use /project quality or /project verify when you need diagnostic help'));

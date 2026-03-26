@@ -10,6 +10,7 @@ import * as fs from 'fs/promises';
 import {
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
+  type KodaXManagedTask,
 } from '@kodax/coding';
 import {
   ProjectFeature,
@@ -17,9 +18,11 @@ import {
   ProjectStatistics,
   calculateStatistics,
   getNextPendingIndex,
+  type ProjectControlState,
   type ProjectWorkflowState,
   type ProjectBrief,
   type ProjectAlignment,
+  DEFAULT_DISCOVERY_OPEN_QUESTIONS,
   createProjectWorkflowState,
   parseProjectBriefMarkdown,
   parseProjectAlignmentMarkdown,
@@ -28,8 +31,10 @@ import {
 } from './project-state.js';
 import type { BrainstormSession } from './project-brainstorm.js';
 import {
+  isKodaXManagedTask,
   isBrainstormSession,
   isFeatureList,
+  isProjectControlState,
   isProjectWorkflowState,
   isRecord,
 } from './json-guards.js';
@@ -44,6 +49,7 @@ export class ProjectStorage {
   private progressPath: string;
   private projectArtifactsRoot: string;
   private projectStatePath: string;
+  private projectControlStatePath: string;
   private projectBriefPath: string;
   private alignmentPath: string;
   private changeRequestsPath: string;
@@ -53,6 +59,8 @@ export class ProjectStorage {
   private legacyBrainstormIndexPath: string;
   private brainstormProjectsPath: string;
   private legacyBrainstormProjectsPath: string;
+  private managedTasksRootPath: string;
+  private managedTaskStatePath: string;
   private harnessRootPath: string;
   private harnessConfigPath: string;
   private harnessRunsPath: string;
@@ -67,6 +75,7 @@ export class ProjectStorage {
     this.progressPath = path.join(projectDir, KODAX_PROGRESS_FILE);
     this.projectArtifactsRoot = path.join(projectDir, '.agent', 'project');
     this.projectStatePath = path.join(this.projectArtifactsRoot, 'project_state.json');
+    this.projectControlStatePath = path.join(this.projectArtifactsRoot, 'control-state.json');
     this.projectBriefPath = path.join(this.projectArtifactsRoot, 'project_brief.md');
     this.alignmentPath = path.join(this.projectArtifactsRoot, 'alignment.md');
     this.changeRequestsPath = path.join(this.projectArtifactsRoot, 'change-requests');
@@ -76,6 +85,8 @@ export class ProjectStorage {
     this.legacyBrainstormIndexPath = path.join(projectDir, '.kodax', 'brainstorm-active.json');
     this.brainstormProjectsPath = path.join(this.projectArtifactsRoot, 'brainstorm');
     this.legacyBrainstormProjectsPath = path.join(projectDir, '.kodax', 'projects');
+    this.managedTasksRootPath = path.join(this.projectArtifactsRoot, 'managed-tasks');
+    this.managedTaskStatePath = path.join(this.projectArtifactsRoot, 'managed-task.json');
     this.harnessRootPath = path.join(this.projectArtifactsRoot, 'harness');
     this.harnessConfigPath = path.join(this.harnessRootPath, 'config.generated.json');
     this.harnessRunsPath = path.join(this.harnessRootPath, 'runs.jsonl');
@@ -227,6 +238,7 @@ export class ProjectStorage {
       this.featuresPath,
       this.progressPath,
       this.projectStatePath,
+      this.projectControlStatePath,
       this.projectBriefPath,
       this.alignmentPath,
     ];
@@ -301,38 +313,181 @@ export class ProjectStorage {
     await fs.writeFile(this.sessionPlanPath, content, 'utf-8');
   }
 
-  async loadWorkflowState(): Promise<ProjectWorkflowState | null> {
-    return this.readJsonFile<ProjectWorkflowState>(this.projectStatePath, isProjectWorkflowState);
+  private parseManagedTaskFeatureIndex(task: KodaXManagedTask | null): number | undefined {
+    const featureIndex = task?.contract.metadata?.featureIndex;
+    return typeof featureIndex === 'number' ? featureIndex : undefined;
   }
 
-  async inferWorkflowState(): Promise<ProjectWorkflowState> {
+  private resolveWorkflowLastUpdated(
+    fallback: string,
+    values: Array<string | undefined>,
+  ): string {
+    const timestamps = values
+      .filter((value): value is string => Boolean(value))
+      .map((value) => Date.parse(value))
+      .filter((value) => !Number.isNaN(value));
+
+    if (timestamps.length === 0) {
+      return fallback;
+    }
+
+    return new Date(Math.max(...timestamps)).toISOString();
+  }
+
+  private hasAlignedTruth(alignment: ProjectAlignment | null): boolean {
+    if (!alignment) {
+      return false;
+    }
+
+    return alignment.confirmedRequirements.length > 0
+      || alignment.constraints.length > 0
+      || alignment.nonGoals.length > 0
+      || alignment.acceptedTradeoffs.length > 0
+      || alignment.successCriteria.length > 0;
+  }
+
+  private async deriveWorkflowState(
+    controlState: ProjectControlState | null,
+    legacyState: ProjectWorkflowState | null,
+  ): Promise<ProjectWorkflowState | null> {
     const timestamp = new Date().toISOString();
     const featureList = await this.loadFeatures();
     const sessionPlan = await this.readSessionPlan();
     const activeSession = await this.loadActiveBrainstormSession();
+    const alignment = await this.readAlignment();
+    const managedTask = await this.loadManagedTask();
     const stats = featureList ? calculateStatistics(featureList.features) : null;
 
+    const hasAnyWorkflowSignal = Boolean(
+      controlState
+      || legacyState
+      || featureList?.features.length
+      || sessionPlan.trim()
+      || activeSession
+      || alignment
+      || managedTask,
+    );
+    if (!hasAnyWorkflowSignal) {
+      return null;
+    }
+
+    const scope = controlState?.scope ?? legacyState?.scope ?? 'project';
+    const activeRequestId = controlState?.activeRequestId ?? legacyState?.activeRequestId;
+    const discoveryStepIndex = controlState?.discoveryStepIndex ?? legacyState?.discoveryStepIndex ?? 0;
+    const defaultDiscoveryQuestionCount = DEFAULT_DISCOVERY_OPEN_QUESTIONS.length;
+    const controlSuggestsDiscovery = Boolean(
+      controlState
+      && discoveryStepIndex < defaultDiscoveryQuestionCount
+    );
+    const hasPlanningMarker = Boolean(
+      controlState?.lastPlannedAt
+      || legacyState?.lastPlannedAt
+      || managedTask,
+    );
+    const managedTaskFeatureIndex = this.parseManagedTaskFeatureIndex(managedTask);
+    const nextPendingIndex = featureList ? getNextPendingIndex(featureList.features) : -1;
+    const currentFeatureIndex = managedTask?.contract.status === 'blocked' || managedTask?.contract.status === 'failed'
+      ? managedTaskFeatureIndex
+      : nextPendingIndex >= 0
+        ? nextPendingIndex
+        : managedTaskFeatureIndex;
+
     let stage: ProjectWorkflowState['stage'] = 'bootstrap';
-    if (activeSession) {
+    if (activeSession || (alignment?.openQuestions.length ?? 0) > 0 || controlSuggestsDiscovery) {
       stage = 'discovering';
-    } else if (featureList?.features.length) {
-      if (stats && stats.pending === 0) {
+    } else if (this.hasAlignedTruth(alignment) && !hasPlanningMarker) {
+      stage = 'aligned';
+    } else if (sessionPlan.trim() && hasPlanningMarker) {
+      if (managedTask?.contract.status === 'blocked' || managedTask?.contract.status === 'failed') {
+        stage = 'blocked';
+      } else if (stats && stats.total > 0 && stats.pending === 0) {
         stage = 'completed';
+      } else if (managedTask?.contract.status === 'completed' || managedTask?.contract.status === 'running') {
+        stage = 'executing';
       } else {
         stage = 'planned';
       }
+    } else if (featureList?.features.length) {
+      stage = stats && stats.pending === 0 ? 'completed' : 'planned';
     }
 
-    const inferred = createProjectWorkflowState(stage, timestamp);
-    inferred.unresolvedQuestionCount = activeSession ? 1 : 0;
-    inferred.currentFeatureIndex = featureList ? getNextPendingIndex(featureList.features) : undefined;
-    if (inferred.currentFeatureIndex === -1) {
-      inferred.currentFeatureIndex = undefined;
+    const unresolvedQuestionCount = activeSession
+      ? Math.max(1, alignment?.openQuestions.length ?? defaultDiscoveryQuestionCount - discoveryStepIndex)
+      : (alignment?.openQuestions.length ?? 0) > 0
+        ? alignment?.openQuestions.length ?? 0
+        : controlSuggestsDiscovery
+          ? Math.max(0, defaultDiscoveryQuestionCount - discoveryStepIndex)
+          : 0;
+    const latestExecutionSummary = managedTask?.verdict.summary
+      ?? controlState?.latestExecutionSummary
+      ?? legacyState?.latestExecutionSummary;
+    const lastUpdated = this.resolveWorkflowLastUpdated(timestamp, [
+      controlState?.lastUpdated,
+      legacyState?.lastUpdated,
+      alignment?.updatedAt,
+      activeSession?.updatedAt,
+      managedTask?.contract.updatedAt,
+    ]);
+
+    return {
+      stage,
+      scope,
+      activeRequestId,
+      unresolvedQuestionCount,
+      currentFeatureIndex,
+      lastPlannedAt: controlState?.lastPlannedAt ?? legacyState?.lastPlannedAt,
+      latestExecutionSummary,
+      lastUpdated,
+      discoveryStepIndex,
+    };
+  }
+
+  async loadControlState(): Promise<ProjectControlState | null> {
+    return this.readJsonFile<ProjectControlState>(this.projectControlStatePath, isProjectControlState);
+  }
+
+  async saveControlState(state: ProjectControlState): Promise<void> {
+    await this.ensureProjectArtifactsRoot();
+    await fs.writeFile(this.projectControlStatePath, JSON.stringify(state, null, 2), 'utf-8');
+    try {
+      await fs.unlink(this.projectStatePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
     }
-    if (sessionPlan.trim()) {
-      inferred.lastPlannedAt = timestamp;
+  }
+
+  async loadWorkflowState(): Promise<ProjectWorkflowState | null> {
+    const [controlState, legacyState] = await Promise.all([
+      this.loadControlState(),
+      this.readJsonFile<ProjectWorkflowState>(this.projectStatePath, isProjectWorkflowState),
+    ]);
+    return this.deriveWorkflowState(controlState, legacyState);
+  }
+
+  async loadManagedTask(): Promise<KodaXManagedTask | null> {
+    return this.readJsonFile<KodaXManagedTask>(this.managedTaskStatePath, isKodaXManagedTask);
+  }
+
+  async saveManagedTask(task: KodaXManagedTask): Promise<void> {
+    await this.ensureProjectArtifactsRoot();
+    await fs.mkdir(this.managedTasksRootPath, { recursive: true });
+    await fs.writeFile(this.managedTaskStatePath, JSON.stringify(task, null, 2), 'utf-8');
+  }
+
+  async clearManagedTask(): Promise<void> {
+    try {
+      await fs.unlink(this.managedTaskStatePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
     }
-    return inferred;
+  }
+
+  async inferWorkflowState(): Promise<ProjectWorkflowState> {
+    return (await this.loadWorkflowState()) ?? createProjectWorkflowState('bootstrap', new Date().toISOString());
   }
 
   async loadOrInferWorkflowState(): Promise<ProjectWorkflowState> {
@@ -340,8 +495,16 @@ export class ProjectStorage {
   }
 
   async saveWorkflowState(state: ProjectWorkflowState): Promise<void> {
-    await this.ensureProjectArtifactsRoot();
-    await fs.writeFile(this.projectStatePath, JSON.stringify(state, null, 2), 'utf-8');
+    await this.saveControlState({
+      scope: state.scope,
+      activeRequestId: state.activeRequestId,
+      discoveryStepIndex: state.stage === 'discovering'
+        ? state.discoveryStepIndex
+        : DEFAULT_DISCOVERY_OPEN_QUESTIONS.length,
+      lastUpdated: state.lastUpdated,
+      lastPlannedAt: state.lastPlannedAt,
+      latestExecutionSummary: state.latestExecutionSummary,
+    });
   }
 
   async readProjectBrief(): Promise<ProjectBrief | null> {
@@ -556,6 +719,7 @@ export class ProjectStorage {
     progress: string;
     projectArtifactsRoot: string;
     projectState: string;
+    projectControl: string;
     projectBrief: string;
     alignment: string;
     changeRequests: string;
@@ -565,6 +729,8 @@ export class ProjectStorage {
     legacyBrainstormIndex: string;
     brainstormProjects: string;
     legacyBrainstormProjects: string;
+    managedTasksRoot: string;
+    managedTaskState: string;
     harnessRoot: string;
     harnessConfig: string;
     harnessRuns: string;
@@ -580,6 +746,7 @@ export class ProjectStorage {
       progress: this.progressPath,
       projectArtifactsRoot: this.projectArtifactsRoot,
       projectState: this.projectStatePath,
+      projectControl: this.projectControlStatePath,
       projectBrief: this.projectBriefPath,
       alignment: this.alignmentPath,
       changeRequests: this.changeRequestsPath,
@@ -589,6 +756,8 @@ export class ProjectStorage {
       legacyBrainstormIndex: this.legacyBrainstormIndexPath,
       brainstormProjects: this.brainstormProjectsPath,
       legacyBrainstormProjects: this.legacyBrainstormProjectsPath,
+      managedTasksRoot: this.managedTasksRootPath,
+      managedTaskState: this.managedTaskStatePath,
       harnessRoot: this.harnessRootPath,
       harnessConfig: this.harnessConfigPath,
       harnessRuns: this.harnessRunsPath,

@@ -36,7 +36,7 @@ import {
   KodaXMessage,
   KodaXReasoningMode,
   KodaXResult,
-  runKodaX,
+  runManagedTask,
   KODAX_DEFAULT_PROVIDER,
   KodaXTerminalError,
   classifyError,
@@ -1453,7 +1453,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const skillRegistry = getSkillRegistry(context.gitRoot);
     const skillsPrompt = skillRegistry.getSystemPromptSnippet();
 
-    return runKodaX(
+    return runManagedTask(
       {
         ...opts,
         session: {
@@ -1463,6 +1463,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         context: {
           ...opts.context,
           contextTokenSnapshot: context.contextTokenSnapshot,
+          taskSurface: 'repl',
           skillsPrompt, // Inject skills into system prompt
         },
         events,

@@ -1,35 +1,63 @@
-# KodaX Detailed Design
+# KodaX 详细设计（DD）
 
-> Last updated: 2026-03-25
+> Last updated: 2026-03-26
 >
-> This document defines the target internal model for the architecture shift carried by `FEATURE_022`: the adaptive task engine, native multi-agent control plane, and runtime substrate.
+> 这份文档定义 `FEATURE_022` 对应的目标内部模型：
+> 包括 `adaptive task engine`、`native multi-agent control plane` 以及相关 runtime substrate。
+
+## 中文导读
+
+这份 DD 是内部模型说明，你可以把它理解成“`FEATURE_022` 在代码里到底应该落成什么样”。
+
+当前最重要的理解点是：
+
+- `TaskContract / RoleAssignment / EvidenceBundle / OrchestrationVerdict` 是一套正式的数据模型，不再只是 prompt 里的隐含概念。
+- `planner / generator / evaluator` 是运行时角色，不只是文案角色。
+- `non-terminal worker` 的输出需要可观测，验证过程不能黑盒化。
+- `user session` 与 `managed-task worker session` 是两层不同的 session：
+  前者是产品层恢复语义，后者是内部执行隔离语义。
+
+如果你只想快速读懂这份 DD，建议优先看：
+
+1. `Core Domain Model`
+2. `Session tree and checkpoints`
+3. `Storage Layout`
+4. `Intake and Routing Pipeline`
 
 ---
 
-## 1. Scope
+## 1. 范围说明
 
-This document covers:
+这份文档覆盖：
 
 - task-first persistence
-- intent classification and harness routing
-- native multi-agent role boundaries
+- intent classification 和 harness routing
+- native multi-agent 的角色边界
 - evidence-driven completion
 - provider-aware harness policy
-- the boundary between the new control plane and `FEATURE_034`
+- 新 control plane 与 `FEATURE_034` 的边界
 
-This document does not define:
+这份文档不打算展开：
 
-- full UI behavior for every surface
-- every built-in command syntax
-- implementation details for every future capability package
+- 每个 surface 的完整 UI 细节
+- 每条内建命令的具体语法
+- 所有未来 capability package 的实现细节
+
+### 1.1 术语桥接
+
+- `task envelope`：标准化后的请求外壳
+- `task contract`：任务局部的 source of truth
+- `user session`：用户可恢复会话，例如 `kodax -c`
+- `managed-task worker session`：内部角色运行作用域
+- `evidence-driven completion`：由 `evidence + evaluator` 决定任务是否完成，而不是 executor 自报完成
 
 ---
 
-## 2. Core Domain Model
+## 2. 核心领域模型
 
-### 2.1 Task envelope
+### 2.1 `TaskEnvelope`
 
-Every incoming request that survives intake becomes a normalized task envelope.
+所有通过 intake 的请求，都会先被整理成标准化的 `task envelope`。
 
 ```ts
 type TaskKind =
@@ -73,7 +101,7 @@ interface TaskEnvelope {
 }
 ```
 
-### 2.2 Harness profile
+### 2.2 `HarnessProfile`
 
 ```ts
 type HarnessProfile =
@@ -210,6 +238,13 @@ interface TaskDecision {
 ### 2.7 Session tree and checkpoints
 
 `FEATURE_019` expands the old session model into task-aware lineage.
+
+Important clarification / 重要说明:
+
+- session lineage remains useful, but it no longer means every runtime session is a user-facing session
+- `user session` and `managed-task worker session` are related but different scopes
+- internal worker sessions should stay inside managed-task execution and should not become the default resume target for `kodax -c`
+- non-terminal worker progress should remain observable so checkpoints and evaluator reasoning can be inspected
 
 ```ts
 interface SessionNode {
