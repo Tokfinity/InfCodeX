@@ -173,6 +173,11 @@ export type KodaXHarnessProfile =
   | 'H2_PLAN_EXECUTE_EVAL'
   | 'H3_MULTI_WORKER';
 
+export type KodaXReviewScale =
+  | 'small'
+  | 'large'
+  | 'massive';
+
 export interface KodaXTaskRoutingDecision {
   primaryTask: KodaXTaskType;
   secondaryTask?: KodaXTaskType;
@@ -184,6 +189,9 @@ export interface KodaXTaskRoutingDecision {
   workIntent: KodaXTaskWorkIntent;
   requiresBrainstorm: boolean;
   harnessProfile: KodaXHarnessProfile;
+  upgradeCeiling?: KodaXHarnessProfile;
+  reviewScale?: KodaXReviewScale;
+  reviewTarget?: 'general' | 'current-worktree' | 'compare-range';
   soloBoundaryConfidence?: number;
   needsIndependentQA?: boolean;
   routingSource?: 'model' | 'fallback' | 'retried-model' | 'retried-fallback';

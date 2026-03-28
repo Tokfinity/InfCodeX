@@ -7,8 +7,10 @@ import {
   extractTitle,
   extractTextContent,
   formatMessagePreview,
+  isControlPlaneOnlyAssistantText,
   resolveAssistantHistoryText,
   resolveCompletedAssistantText,
+  sanitizeUserFacingAssistantText,
 } from "./message-utils.js";
 
 describe("message-utils", () => {
@@ -199,5 +201,32 @@ describe("message-utils", () => {
 
   it("formats previews with a shared truncation rule", () => {
     expect(formatMessagePreview("line 1\nline 2", 8)).toBe("line 1 l...");
+  });
+
+  it("strips managed-task prompt scaffolding from assistant text", () => {
+    const text = [
+      "You are the Evaluator role for a managed KodaX task.",
+      "",
+      "Primary task: review",
+      "Work intent: new",
+      "Harness: H1_EXECUTE_EVAL",
+      "",
+      "Tool policy:",
+      "Allowed shell patterns:",
+    ].join("\n");
+
+    expect(sanitizeUserFacingAssistantText(text)).toBe("");
+    expect(isControlPlaneOnlyAssistantText(text)).toBe(true);
+  });
+
+  it("keeps user-facing text before control-plane scaffolding", () => {
+    const text = [
+      "Here are the final findings.",
+      "",
+      "You are the Evaluator role for a managed KodaX task.",
+      "Primary task: review",
+    ].join("\n");
+
+    expect(sanitizeUserFacingAssistantText(text)).toBe("Here are the final findings.");
   });
 });

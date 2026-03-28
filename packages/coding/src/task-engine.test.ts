@@ -36,6 +36,7 @@ vi.mock('./reasoning.js', async () => {
 });
 
 import { runManagedTask } from './task-engine.js';
+import type { KodaXManagedTaskStatusEvent } from './types.js';
 
 const tempDirs: string[] = [];
 
@@ -85,6 +86,54 @@ function createRepoFixture(workspaceRoot: string): void {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildAdmissionResponse(
+  summary = 'Admission confirmed the current harness.',
+  confirmedHarness?: 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL' | 'H3_MULTI_WORKER',
+  reviewFilesOrAreas?: string[],
+  evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read',
+): string {
+  return [
+    summary,
+    '```kodax-task-admission',
+    `summary: ${summary}`,
+    confirmedHarness ? `confirmed_harness: ${confirmedHarness}` : undefined,
+    evidenceAcquisitionMode ? `evidence_acquisition_mode: ${evidenceAcquisitionMode}` : undefined,
+    'scope:',
+    '- Review the changed scope and evidence surface.',
+    'required_evidence:',
+    '- Concrete evidence from inspected files or checks.',
+    reviewFilesOrAreas?.length ? 'review_files_or_areas:' : undefined,
+    ...(reviewFilesOrAreas ?? []).map((item) => `- ${item}`),
+    '```',
+  ].filter(Boolean).join('\n');
+}
+
+function buildHandoffResponse(
+  visibleText: string,
+  options?: {
+    status?: 'ready' | 'incomplete' | 'blocked';
+    summary?: string;
+    evidence?: string[];
+    followup?: string[];
+  },
+): string {
+  const status = options?.status ?? 'ready';
+  const summary = options?.summary ?? visibleText;
+  const evidence = options?.evidence ?? ['Reviewed the assigned slice and gathered evidence.'];
+  const followup = options?.followup ?? ['none'];
+  return [
+    visibleText,
+    '```kodax-task-handoff',
+    `status: ${status}`,
+    `summary: ${summary}`,
+    'evidence:',
+    ...evidence.map((item) => `- ${item}`),
+    'followup:',
+    ...followup.map((item) => `- ${item}`),
+    '```',
+  ].join('\n');
 }
 
 afterEach(async () => {
@@ -167,8 +216,419 @@ describe('runManagedTask', () => {
     );
   });
 
+  it('records raw and final routing decisions for a small current-worktree review that stays in H0', async () => {
+    const workspaceRoot = await createTempDir('kodax-task-engine-');
+    const statusEvents: KodaXManagedTaskStatusEvent[] = [];
+    mockCreateReasoningPlan.mockResolvedValue({
+      mode: 'auto',
+      depth: 'low',
+      promptOverlay: '[Routing] current-small',
+      decision: {
+        primaryTask: 'review',
+        confidence: 0.86,
+        riskLevel: 'low',
+        recommendedMode: 'pr-review',
+        recommendedThinkingDepth: 'low',
+        complexity: 'simple',
+        workIntent: 'overwrite',
+        requiresBrainstorm: false,
+        harnessProfile: 'H0_DIRECT',
+        reviewScale: 'small',
+        routingSource: 'model',
+        routingAttempts: 1,
+        reason: 'Small current review should stay direct.',
+      },
+    });
+    mockRunDirectKodaX.mockResolvedValue({
+      success: true,
+      lastText: 'Small review completed directly.',
+      messages: [{ role: 'assistant', content: 'Small review completed directly.' }],
+      sessionId: 'session-current-small',
+    });
+
+    const result = await runManagedTask(
+      {
+        provider: 'anthropic',
+        events: {
+          onManagedTaskStatus: (status) => statusEvents.push(status),
+        },
+        context: {
+          taskSurface: 'repl',
+          managedTaskWorkspaceDir: workspaceRoot,
+          repoRoutingSignals: {
+            changedFileCount: 2,
+            changedLineCount: 40,
+            addedLineCount: 30,
+            deletedLineCount: 10,
+            touchedModuleCount: 1,
+            changedModules: ['packages/repl'],
+            crossModule: false,
+            reviewScale: 'small',
+            riskHints: [],
+            plannerBias: false,
+            investigationBias: false,
+            lowConfidence: false,
+          },
+        },
+      },
+      '请review下当前代码改动'
+    );
+
+    expect(result.managedTask?.runtime?.rawRoutingDecision).toEqual(
+      expect.objectContaining({
+        harnessProfile: 'H0_DIRECT',
+        reviewTarget: 'current-worktree',
+        reviewScale: 'small',
+        routingSource: 'model',
+      }),
+    );
+    expect(result.managedTask?.runtime?.finalRoutingDecision).toEqual(
+      expect.objectContaining({
+        harnessProfile: 'H0_DIRECT',
+        reviewTarget: 'current-worktree',
+        reviewScale: 'small',
+      }),
+    );
+    expect(statusEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'routing',
+          note: expect.stringContaining('AMA H0'),
+        }),
+        expect.objectContaining({
+          phase: 'routing',
+          note: expect.stringContaining('small current-diff review'),
+        }),
+      ]),
+    );
+    expect(String(mockRunDirectKodaX.mock.calls[0]?.[0]?.context?.promptOverlay ?? '')).toContain(
+      '[Managed Task Routing] AMA routing: raw=H0_DIRECT(model) -> final=H0_DIRECT',
+    );
+  });
+
+  it('floors a large current-worktree review to H2 and exposes the routing override', async () => {
+    const workspaceRoot = await createTempDir('kodax-task-engine-');
+    const statusEvents: KodaXManagedTaskStatusEvent[] = [];
+    mockCreateReasoningPlan.mockResolvedValue({
+      mode: 'auto',
+      depth: 'medium',
+      promptOverlay: '[Routing] current-large',
+      decision: {
+        primaryTask: 'review',
+        confidence: 0.72,
+        riskLevel: 'medium',
+        recommendedMode: 'pr-review',
+        recommendedThinkingDepth: 'medium',
+        complexity: 'moderate',
+        workIntent: 'overwrite',
+        requiresBrainstorm: false,
+        harnessProfile: 'H0_DIRECT',
+        reviewScale: 'large',
+        routingSource: 'model',
+        routingAttempts: 1,
+        reason: 'Provider suggested a direct review path.',
+      },
+    });
+
+    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed a large current-diff review and selected diff-bundle evidence gathering.',
+          'H2_PLAN_EXECUTE_EVAL',
+          ['packages/coding/src/task-engine.ts', 'packages/repl/src/ui/InkREPL.tsx'],
+          'diff-bundle',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-large-current',
+        };
+      }
+
+      if (prompt.includes('Planner role')) {
+        const content = [
+          'Planner prepared the large review contract.',
+          '```kodax-task-contract',
+          'summary: Review the large current diff with a batched evidence pass first.',
+          'success_criteria:',
+          '- Must-fix findings are evidence-backed.',
+          'required_evidence:',
+          '- changed_scope summary.',
+          '- changed_diff_bundle batch evidence.',
+          'constraints:',
+          '- Do not skip suspicious files after the bundle sweep.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-planner-large-current',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        const content = [
+          'The contract is concrete enough for execution.',
+          '```kodax-task-contract-review',
+          'status: approve',
+          'reason: The large diff is scoped and evidence-backed.',
+          'followup:',
+          '- Proceed with the bundled review execution.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-contract-review-large-current',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Generator completed the first-pass large review.', {
+          summary: 'Generator completed the first-pass large review.',
+          evidence: ['Batched diff evidence collected before drilling into suspicious files.'],
+          followup: ['Evaluator should verify the findings and the evidence path.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-generator-large-current',
+        };
+      }
+
+      const content = [
+        'Evaluator accepted the large current-diff review.',
+        '```kodax-task-verdict',
+        'status: accept',
+        'reason: The large review satisfied the scoped H2 contract.',
+        'followup:',
+        '- Deliver the final review.',
+        '```',
+      ].join('\n');
+      return {
+        success: true,
+        lastText: content,
+        messages: [{ role: 'assistant', content }],
+        sessionId: 'session-evaluator-large-current',
+        signal: 'COMPLETE',
+      };
+    });
+
+    const result = await runManagedTask(
+      {
+        provider: 'anthropic',
+        events: {
+          onManagedTaskStatus: (status) => statusEvents.push(status),
+        },
+        context: {
+          taskSurface: 'repl',
+          managedTaskWorkspaceDir: workspaceRoot,
+          repoRoutingSignals: {
+            changedFileCount: 12,
+            changedLineCount: 1500,
+            addedLineCount: 1200,
+            deletedLineCount: 300,
+            touchedModuleCount: 3,
+            changedModules: ['packages/coding', 'packages/repl', 'docs'],
+            crossModule: false,
+            reviewScale: 'large',
+            riskHints: ['large-current-diff'],
+            plannerBias: false,
+            investigationBias: false,
+            lowConfidence: false,
+          },
+        },
+      },
+      '请review下所有当前代码改动'
+    );
+
+    expect(result.managedTask?.contract.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    expect(result.managedTask?.runtime?.rawRoutingDecision).toEqual(
+      expect.objectContaining({
+        harnessProfile: 'H0_DIRECT',
+        reviewTarget: 'current-worktree',
+        reviewScale: 'large',
+      }),
+    );
+    expect(result.managedTask?.runtime?.finalRoutingDecision).toEqual(
+      expect.objectContaining({
+        harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
+        reviewTarget: 'current-worktree',
+        reviewScale: 'large',
+      }),
+    );
+    expect(result.managedTask?.runtime?.routingOverrideReason).toContain('large current-diff review');
+    expect(result.managedTask?.runtime?.evidenceAcquisitionMode).toBe('diff-bundle');
+    expect(statusEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'routing',
+          note: expect.stringContaining('AMA H2'),
+        }),
+        expect.objectContaining({
+          phase: 'routing',
+          note: expect.stringContaining('raw H0 -> H2'),
+        }),
+      ]),
+    );
+  });
+
+  it('floors a massive current-worktree review to H2 with an H3 ceiling before execution', async () => {
+    const workspaceRoot = await createTempDir('kodax-task-engine-');
+    mockCreateReasoningPlan.mockResolvedValue({
+      mode: 'auto',
+      depth: 'medium',
+      promptOverlay: '[Routing] current-massive',
+      decision: {
+        primaryTask: 'review',
+        confidence: 0.68,
+        riskLevel: 'high',
+        recommendedMode: 'pr-review',
+        recommendedThinkingDepth: 'high',
+        complexity: 'complex',
+        workIntent: 'overwrite',
+        requiresBrainstorm: false,
+        harnessProfile: 'H0_DIRECT',
+        reviewScale: 'massive',
+        routingSource: 'model',
+        routingAttempts: 1,
+        reason: 'Provider suggested a direct review path for the current diff.',
+      },
+    });
+
+    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the review is massive and should start at H2 with H3 available.',
+          'H2_PLAN_EXECUTE_EVAL',
+          ['packages/coding/src/task-engine.ts'],
+          'diff-bundle',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-massive-current',
+        };
+      }
+
+      if (prompt.includes('Planner role')) {
+        const content = [
+          'Planner prepared the initial massive-review contract.',
+          '```kodax-task-contract',
+          'summary: Start the massive review on H2 and keep H3 available if coverage widens.',
+          'success_criteria:',
+          '- Initial high-risk areas are covered.',
+          'required_evidence:',
+          '- changed_diff_bundle across the first review batch.',
+          'constraints:',
+          '- Preserve the option to upgrade to H3 if the review widens.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-planner-massive-current',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        const content = [
+          'The initial H2 review contract is approved with an H3 upgrade path.',
+          '```kodax-task-contract-review',
+          'status: approve',
+          'reason: The task can start at H2 while preserving the H3 escape hatch.',
+          'followup:',
+          '- Proceed with the initial batched review pass.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-contract-review-massive-current',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Generator completed the initial batched pass.', {
+          summary: 'Generator completed the initial batched pass.',
+          evidence: ['Initial batched diff evidence collected for the massive review.'],
+          followup: ['Evaluator should decide whether the initial H2 pass is sufficient.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-generator-massive-current',
+        };
+      }
+
+      const content = [
+        'Evaluator completed the initial massive review pass.',
+        '```kodax-task-verdict',
+        'status: accept',
+        'reason: The initial H2 pass completed successfully.',
+        'followup:',
+        '- Deliver the final review.',
+        '```',
+      ].join('\n');
+      return {
+        success: true,
+        lastText: content,
+        messages: [{ role: 'assistant', content }],
+        sessionId: 'session-evaluator-massive-current',
+        signal: 'COMPLETE',
+      };
+    });
+
+    const result = await runManagedTask(
+      {
+        provider: 'anthropic',
+        context: {
+          taskSurface: 'repl',
+          managedTaskWorkspaceDir: workspaceRoot,
+          repoRoutingSignals: {
+            changedFileCount: 34,
+            changedLineCount: 4600,
+            addedLineCount: 4100,
+            deletedLineCount: 500,
+            touchedModuleCount: 4,
+            changedModules: ['packages/coding', 'packages/repl', 'packages/ai', 'docs'],
+            crossModule: false,
+            reviewScale: 'massive',
+            riskHints: ['massive-current-diff'],
+            plannerBias: true,
+            investigationBias: false,
+            lowConfidence: false,
+          },
+        },
+      },
+      '请review下所有当前代码改动'
+    );
+
+    expect(result.managedTask?.contract.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    expect(result.managedTask?.runtime?.finalRoutingDecision).toEqual(
+      expect.objectContaining({
+        harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
+        reviewTarget: 'current-worktree',
+        reviewScale: 'massive',
+        upgradeCeiling: 'H3_MULTI_WORKER',
+      }),
+    );
+    expect(result.managedTask?.runtime?.routingOverrideReason).toContain('massive current-diff review');
+  });
+
   it('runs planner, contract review, generator, and evaluator roles for H2 managed tasks', async () => {
     const workspaceRoot = await createTempDir('kodax-task-engine-');
+    let contractReviewReadError: string | undefined;
+    let contractReviewContractTaskId: string | undefined;
+    let contractReviewRuntimeGuide: string | undefined;
     mockCreateReasoningPlan.mockResolvedValue({
       mode: 'auto',
       depth: 'medium',
@@ -187,7 +647,91 @@ describe('runManagedTask', () => {
       },
     });
 
-    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+    mockRunDirectKodaX.mockImplementation(async (runOptions, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const lastText = buildAdmissionResponse('Admission confirmed the planning-heavy scope and current H2 harness.');
+        return {
+          success: true,
+          lastText,
+          messages: [{ role: 'assistant', content: lastText }],
+          sessionId: 'session-admission',
+        };
+      }
+
+      if (prompt.includes('Lead role')) {
+        return {
+          success: true,
+          lastText: [
+            'Lead split the review into high-risk and surface tracks.',
+            '```kodax-task-contract',
+            'summary: Split the massive review into high-risk and surface tracks.',
+            'success_criteria:',
+            '- High-risk blockers are reviewed independently.',
+            '- Surface regressions and test gaps are reviewed independently.',
+            'required_evidence:',
+            '- High-risk findings with evidence.',
+            '- Surface findings with evidence.',
+            'constraints:',
+            '- Keep the review user-facing and evidence-backed.',
+            '```',
+          ].join('\n'),
+          messages: [{
+            role: 'assistant',
+            content: [
+              'Lead split the review into high-risk and surface tracks.',
+              '```kodax-task-contract',
+              'summary: Split the massive review into high-risk and surface tracks.',
+              'success_criteria:',
+              '- High-risk blockers are reviewed independently.',
+              '- Surface regressions and test gaps are reviewed independently.',
+              'required_evidence:',
+              '- High-risk findings with evidence.',
+              '- Surface findings with evidence.',
+              'constraints:',
+              '- Keep the review user-facing and evidence-backed.',
+              '```',
+            ].join('\n'),
+          }],
+          sessionId: 'session-review-lead',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        const managedTaskWorkspaceDir = runOptions.context?.managedTaskWorkspaceDir;
+        try {
+          const contract = JSON.parse(
+            await readFile(path.join(managedTaskWorkspaceDir!, 'contract.json'), 'utf8'),
+          );
+          const runtimeGuide = await readFile(path.join(managedTaskWorkspaceDir!, 'runtime-execution.md'), 'utf8');
+          contractReviewContractTaskId = typeof contract.taskId === 'string' ? contract.taskId : undefined;
+          contractReviewRuntimeGuide = runtimeGuide;
+        } catch (error) {
+          contractReviewReadError = error instanceof Error ? error.message : String(error);
+        }
+        return {
+          success: true,
+          lastText: [
+            'The contract is concrete enough to execute.',
+            '```kodax-task-contract-review',
+            'status: approve',
+            'reason: The planned work is specific and verifiable.',
+            'followup:',
+            '- Proceed with implementation against the agreed contract.',
+            '```',
+          ].join('\n'),
+          messages: [{ role: 'assistant', content: [
+            'The contract is concrete enough to execute.',
+            '```kodax-task-contract-review',
+            'status: approve',
+            'reason: The planned work is specific and verifiable.',
+            'followup:',
+            '- Proceed with implementation against the agreed contract.',
+            '```',
+          ].join('\n') }],
+          sessionId: 'session-contract-review',
+        };
+      }
+
       if (prompt.includes('Planner role')) {
         return {
           success: true,
@@ -219,36 +763,18 @@ describe('runManagedTask', () => {
         };
       }
 
-      if (prompt.includes('Contract Reviewer role')) {
-        return {
-          success: true,
-          lastText: [
-            'The contract is concrete enough to execute.',
-            '```kodax-task-contract-review',
-            'status: approve',
-            'reason: The planned work is specific and verifiable.',
-            'followup:',
-            '- Proceed with implementation against the agreed contract.',
-            '```',
-          ].join('\n'),
-          messages: [{ role: 'assistant', content: [
-            'The contract is concrete enough to execute.',
-            '```kodax-task-contract-review',
-            'status: approve',
-            'reason: The planned work is specific and verifiable.',
-            'followup:',
-            '- Proceed with implementation against the agreed contract.',
-            '```',
-          ].join('\n') }],
-          sessionId: 'session-contract-review',
-        };
-      }
-
       if (prompt.includes('Generator role')) {
+        const lastText = buildHandoffResponse(
+          'Implementation complete with updated tests.',
+          {
+            summary: 'Implementation is ready for evaluator review.',
+            evidence: ['Updated tests and implementation changes are complete.'],
+          },
+        );
         return {
           success: true,
-          lastText: 'Implementation complete with updated tests.',
-          messages: [{ role: 'assistant', content: 'Implementation complete with updated tests.' }],
+          lastText,
+          messages: [{ role: 'assistant', content: lastText }],
           sessionId: 'session-generator',
         };
       }
@@ -292,29 +818,41 @@ describe('runManagedTask', () => {
       'Design and implement the new release checklist flow.'
     );
 
-    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(4);
+    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(5);
     expect(result.lastText).toBe('Evaluator accepted the result.');
+    expect(contractReviewReadError).toBeUndefined();
+    expect(contractReviewContractTaskId).toBeTruthy();
+    expect(contractReviewRuntimeGuide).toContain('No explicit runtime-under-test contract.');
     expect(result.managedTask?.contract.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
     expect(result.managedTask?.roleAssignments.map((assignment) => assignment.role)).toEqual([
+      'admission',
       'planner',
       'validator',
       'generator',
       'evaluator',
     ]);
     expect(result.managedTask?.evidence.entries).toEqual([
+      expect.objectContaining({ assignmentId: 'admission', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'planner', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'contract-review', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'generator', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'evaluator', status: 'completed', signal: 'COMPLETE' }),
     ]);
     expect(result.managedTask?.roleAssignments).toEqual([
+      expect.objectContaining({ id: 'admission', agent: 'AdmissionAgent' }),
       expect.objectContaining({ id: 'planner', agent: 'PlanningAgent' }),
       expect.objectContaining({ id: 'contract-review', agent: 'ContractReviewAgent' }),
       expect.objectContaining({ id: 'generator', agent: 'ExecutionAgent' }),
       expect.objectContaining({ id: 'evaluator', agent: 'EvaluationAgent' }),
     ]);
-    expect(String(mockRunDirectKodaX.mock.calls[1]?.[1])).toContain('Dependency handoff artifacts:');
-    expect(String(mockRunDirectKodaX.mock.calls[2]?.[1])).toContain('Dependency handoff artifacts:');
+    const contractReviewerPrompt = String(
+      mockRunDirectKodaX.mock.calls.find((call) => String(call[1]).includes('Contract Reviewer role'))?.[1] ?? ''
+    );
+    const generatorPrompt = String(
+      mockRunDirectKodaX.mock.calls.find((call) => String(call[1]).includes('Generator role'))?.[1] ?? ''
+    );
+    expect(contractReviewerPrompt).toContain('Dependency handoff artifacts:');
+    expect(generatorPrompt).toContain('Dependency handoff artifacts:');
   });
 
   it('preserves the full terminal evaluator output instead of replacing it with the managed-task summary', async () => {
@@ -344,11 +882,28 @@ describe('runManagedTask', () => {
     ].join('\n');
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
-      if (prompt.includes('Generator role')) {
+      if (prompt.includes('Admission role')) {
+        const lastText = buildAdmissionResponse('Admission confirmed that this review should begin in H1.');
         return {
           success: true,
-          lastText: 'Generator draft review.',
-          messages: [{ role: 'assistant', content: 'Generator draft review.' }],
+          lastText,
+          messages: [{ role: 'assistant', content: lastText }],
+          sessionId: 'session-admission',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const lastText = buildHandoffResponse(
+          'Generator draft review.',
+          {
+            summary: 'Draft review is ready for evaluator validation.',
+            evidence: ['Initial review draft captured the notable findings.'],
+          },
+        );
+        return {
+          success: true,
+          lastText,
+          messages: [{ role: 'assistant', content: lastText }],
           sessionId: 'session-generator',
         };
       }
@@ -419,6 +974,24 @@ describe('runManagedTask', () => {
     });
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        return {
+          success: true,
+          lastText: buildAdmissionResponse(
+            'Admission confirmed the scoped implementation can stay on the current harness.',
+            'H2_PLAN_EXECUTE_EVAL',
+          ),
+          messages: [{
+            role: 'assistant',
+            content: buildAdmissionResponse(
+              'Admission confirmed the scoped implementation can stay on the current harness.',
+              'H2_PLAN_EXECUTE_EVAL',
+            ),
+          }],
+          sessionId: 'session-admission-optional-qa',
+        };
+      }
+
       if (prompt.includes('Planner role')) {
         return {
           success: true,
@@ -499,11 +1072,12 @@ describe('runManagedTask', () => {
       'Implement the small enhancement and keep the rest of the workflow unchanged.'
     );
 
-    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(3);
+    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(4);
     expect(mockRunDirectKodaX.mock.calls.some((call) => String(call[1]).includes('Evaluator role'))).toBe(false);
-    expect(textDeltas.join('')).toContain('quality assurance mode=optional');
+    expect(result.managedTask?.runtime?.qualityAssuranceMode).toBe('optional');
     expect(result.success).toBe(true);
     expect(result.managedTask?.roleAssignments.map((assignment) => assignment.role)).toEqual([
+      'admission',
       'planner',
       'validator',
       'generator',
@@ -586,60 +1160,90 @@ describe('runManagedTask', () => {
       },
     });
 
-    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => ({
-      success: true,
-      lastText: prompt.includes('Evaluator role')
-        ? [
-            'Evaluator finished after browser verification.',
-            '```kodax-task-verdict',
-            'status: accept',
-            'reason: Browser verification is complete.',
-            'followup:',
-            '- Deliver the validated result.',
-            '```',
-          ].join('\n')
-        : prompt.includes('Contract Reviewer role')
-          ? [
-              'The contract is ready for browser verification work.',
-              '```kodax-task-contract-review',
-              'status: approve',
-              'reason: The verification scope and evidence are explicit.',
-              'followup:',
-              '- Proceed with implementation and validation.',
-              '```',
-            ].join('\n')
-          : 'Intermediate worker finished.',
-      messages: [{
-        role: 'assistant',
-        content: prompt.includes('Evaluator role')
-          ? [
-              'Evaluator finished after browser verification.',
-              '```kodax-task-verdict',
-              'status: accept',
-              'reason: Browser verification is complete.',
-              'followup:',
-              '- Deliver the validated result.',
-              '```',
-            ].join('\n')
-          : prompt.includes('Contract Reviewer role')
-            ? [
-                'The contract is ready for browser verification work.',
-                '```kodax-task-contract-review',
-                'status: approve',
-                'reason: The verification scope and evidence are explicit.',
-                'followup:',
-                '- Proceed with implementation and validation.',
-                '```',
-              ].join('\n')
-            : 'Intermediate worker finished.',
-      }],
-      sessionId: prompt.includes('Evaluator role')
-        ? 'session-evaluator'
-        : prompt.includes('Contract Reviewer role')
-          ? 'session-contract-review'
-          : 'session-worker',
-      signal: prompt.includes('Evaluator role') ? 'COMPLETE' : undefined,
-    }));
+    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the browser-verification scope and kept the task on H2.',
+          'H2_PLAN_EXECUTE_EVAL',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-verify',
+        };
+      }
+
+      if (prompt.includes('Planner role')) {
+        const content = [
+          'Planner prepared the verification contract.',
+          '```kodax-task-contract',
+          'summary: Verify the signup flow with browser evidence before accepting.',
+          'success_criteria:',
+          '- The signup flow is exercised end-to-end.',
+          'required_evidence:',
+          '- Browser evidence and console findings are captured.',
+          'constraints:',
+          '- Do not accept without runtime validation.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-planner-verify',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        const content = [
+          'The contract is ready for browser verification work.',
+          '```kodax-task-contract-review',
+          'status: approve',
+          'reason: The verification scope and evidence are explicit.',
+          'followup:',
+          '- Proceed with implementation and validation.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-contract-review',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Intermediate worker finished.', {
+          summary: 'Implementation work is ready for validation.',
+          evidence: ['Prepared the verification setup and supporting evidence.'],
+          followup: ['Proceed with the evaluator verification pass.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-worker',
+        };
+      }
+
+      const content = [
+        'Evaluator finished after browser verification.',
+        '```kodax-task-verdict',
+        'status: accept',
+        'reason: Browser verification is complete.',
+        'followup:',
+        '- Deliver the validated result.',
+        '```',
+      ].join('\n');
+      return {
+        success: true,
+        lastText: content,
+        messages: [{ role: 'assistant', content }],
+        sessionId: 'session-evaluator',
+        signal: 'COMPLETE',
+      };
+    });
 
     const result = await runManagedTask(
       {
@@ -751,11 +1355,29 @@ describe('runManagedTask', () => {
     });
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
-      if (prompt.includes('Generator role')) {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission kept the review on H1 with a compact worker memory strategy.',
+          'H1_EXECUTE_EVAL',
+        );
         return {
           success: true,
-          lastText: 'Compact-memory generator draft.',
-          messages: [{ role: 'assistant', content: 'Compact-memory generator draft.' }],
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-compact',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Compact-memory generator draft.', {
+          summary: 'Compact-memory generator draft.',
+          evidence: ['Focused draft review prepared from compacted memory.'],
+          followup: ['Evaluator should validate the focused findings.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
           sessionId: 'session-generator-compact',
         };
       }
@@ -959,6 +1581,19 @@ describe('runManagedTask', () => {
           await delay(5);
         }
 
+        if (prompt.includes('Admission role')) {
+          const content = buildAdmissionResponse(
+            'Admission confirmed the task should start directly on H3 for split execution and validation.',
+            'H3_MULTI_WORKER',
+          );
+          return {
+            success: true,
+            lastText: content,
+            messages: [{ role: 'assistant', content }],
+            sessionId: 'session-admission',
+          };
+        }
+
         if (prompt.includes('Lead role')) {
           return {
             success: true,
@@ -1049,19 +1684,29 @@ describe('runManagedTask', () => {
         }
 
         if (overlay.includes('worker=worker-implementation')) {
+          const content = buildHandoffResponse('Implementation worker updated the feature.', {
+            summary: 'Implementation worker updated the feature.',
+            evidence: ['Implementation changes were applied to the assigned slice.'],
+            followup: ['Evaluator should combine this with validation evidence.'],
+          });
           return {
             success: true,
-            lastText: 'Implementation worker updated the feature.',
-            messages: [{ role: 'assistant', content: 'Implementation worker updated the feature.' }],
+            lastText: content,
+            messages: [{ role: 'assistant', content }],
             sessionId: 'session-implementation',
           };
         }
 
         if (overlay.includes('worker=worker-validation')) {
+          const content = buildHandoffResponse('Validation worker checked the flow.', {
+            summary: 'Validation worker checked the flow.',
+            evidence: ['Validation checks for the release flow completed.'],
+            followup: ['Evaluator should merge implementation and validation evidence.'],
+          });
           return {
             success: true,
-            lastText: 'Validation worker checked the flow.',
-            messages: [{ role: 'assistant', content: 'Validation worker checked the flow.' }],
+            lastText: content,
+            messages: [{ role: 'assistant', content }],
             sessionId: 'session-validation',
           };
         }
@@ -1108,11 +1753,12 @@ describe('runManagedTask', () => {
       'Implement the release workflow and validate it before accepting.'
     );
 
-    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(6);
+    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(7);
     expect(maxConcurrent).toBeGreaterThanOrEqual(2);
     expect(result.success).toBe(true);
     expect(result.managedTask?.contract.harnessProfile).toBe('H3_MULTI_WORKER');
     expect(result.managedTask?.roleAssignments.map((assignment) => assignment.role)).toEqual([
+      'admission',
       'lead',
       'planner',
       'validator',
@@ -1126,7 +1772,8 @@ describe('runManagedTask', () => {
     );
     expect(String(evaluatorCall?.[1])).toContain('Implementation Worker');
     expect(String(evaluatorCall?.[1])).toContain('Validation Worker');
-    expect(result.managedTask?.evidence.entries).toEqual([
+  expect(result.managedTask?.evidence.entries).toEqual([
+      expect.objectContaining({ assignmentId: 'admission', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'lead', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'planner', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'contract-review', status: 'completed' }),
@@ -1134,6 +1781,168 @@ describe('runManagedTask', () => {
       expect.objectContaining({ assignmentId: 'worker-validation', status: 'completed' }),
       expect.objectContaining({ assignmentId: 'evaluator', status: 'completed', signal: 'COMPLETE' }),
     ]);
+  });
+
+  it('uses contract summaries for lead and planner even when they only emit structured blocks', async () => {
+    const workspaceRoot = await createTempDir('kodax-task-engine-');
+
+    mockCreateReasoningPlan.mockResolvedValue({
+      mode: 'auto',
+      depth: 'high',
+      promptOverlay: '[Routing] h3-contract-summary',
+      decision: {
+        primaryTask: 'review',
+        confidence: 0.9,
+        riskLevel: 'high',
+        recommendedMode: 'review',
+        recommendedThinkingDepth: 'high',
+        complexity: 'complex',
+        workIntent: 'new',
+        requiresBrainstorm: false,
+        harnessProfile: 'H3_MULTI_WORKER',
+        reason: 'Massive review needs split coverage.',
+      },
+    });
+
+    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the H3 review should begin with preflight evidence gathering.',
+          'H3_MULTI_WORKER',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-contract-summary',
+        };
+      }
+
+      if (prompt.includes('Lead role')) {
+        const content = [
+          '```kodax-task-contract',
+          'summary: Coordinate high-risk and surface review lanes.',
+          'success_criteria:',
+          '- High-risk coverage is explicit.',
+          'required_evidence:',
+          '- Evidence plan for both review lanes.',
+          'constraints:',
+          '- Preserve review completeness.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-lead-contract-summary',
+        };
+      }
+
+      if (prompt.includes('Planner role')) {
+        const content = [
+          '```kodax-task-contract',
+          'summary: Review task-engine and REPL changes with explicit worker coverage.',
+          'success_criteria:',
+          '- Review findings are evidence-backed.',
+          'required_evidence:',
+          '- Concrete diff evidence for both review lanes.',
+          'constraints:',
+          '- Do not miss cross-cutting regressions.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-planner-contract-summary',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        const content = [
+          '```kodax-task-contract-review',
+          'status: approve',
+          'reason: The H3 review split is concrete enough.',
+          'followup:',
+          '- Proceed with review execution.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-contract-review-contract-summary',
+        };
+      }
+
+      if (prompt.includes('High-Risk Review Worker role')) {
+        const content = buildHandoffResponse('', {
+          summary: 'High-risk review worker completed the runtime pass.',
+          evidence: ['Runtime-sensitive paths were reviewed.'],
+          followup: ['Evaluator should merge runtime findings.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-high-risk-contract-summary',
+        };
+      }
+
+      if (prompt.includes('Surface Review Worker role')) {
+        const content = buildHandoffResponse('', {
+          summary: 'Surface review worker completed the regression pass.',
+          evidence: ['Regression-sensitive UI paths were reviewed.'],
+          followup: ['Evaluator should merge regression findings.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-surface-contract-summary',
+        };
+      }
+
+      const content = [
+        'Final review completed.',
+        '```kodax-task-verdict',
+        'status: accept',
+        'reason: The review coverage is complete.',
+        'followup:',
+        '- Deliver the review.',
+        '```',
+      ].join('\n');
+      return {
+        success: true,
+        lastText: content,
+        messages: [{ role: 'assistant', content }],
+        sessionId: 'session-evaluator-contract-summary',
+      };
+    });
+
+    const result = await runManagedTask(
+      {
+        provider: 'anthropic',
+        context: {
+          taskSurface: 'project',
+          managedTaskWorkspaceDir: workspaceRoot,
+        },
+      },
+      'Review the current changes.'
+    );
+
+    expect(result.managedTask?.evidence.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assignmentId: 'lead',
+        summary: 'Coordinate high-risk and surface review lanes.',
+        output: 'Coordinate high-risk and surface review lanes.',
+      }),
+      expect.objectContaining({
+        assignmentId: 'planner',
+        summary: 'Review task-engine and REPL changes with explicit worker coverage.',
+        output: 'Review task-engine and REPL changes with explicit worker coverage.',
+      }),
+    ]));
   });
 
   it('runs an explicit evaluator-to-generator refinement loop before accepting AMA tasks', async () => {
@@ -1159,18 +1968,37 @@ describe('runManagedTask', () => {
 
     let evaluatorRound = 0;
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
-      if (prompt.includes('Generator role')) {
-        const isRefinement = prompt.includes('Evaluator feedback after round 1:');
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the review should start on H1 with an independent evaluator.',
+          'H1_EXECUTE_EVAL',
+        );
         return {
           success: true,
-          lastText: isRefinement
-            ? 'Must Fix #1: switch to dynamic import and add guardrails around the index build.'
-            : 'Must Fix #1: switch to dynamic import.',
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-review',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const isRefinement = prompt.includes('Evaluator feedback after round 1:');
+        const visibleText = isRefinement
+          ? 'Must Fix #1: switch to dynamic import and add guardrails around the index build.'
+          : 'Must Fix #1: switch to dynamic import.';
+        const content = buildHandoffResponse(visibleText, {
+          summary: visibleText,
+          evidence: isRefinement
+            ? ['Dynamic import issue and index-build resilience issue both documented.']
+            : ['Dynamic import issue documented.'],
+          followup: ['Evaluator should validate the review coverage.'],
+        });
+        return {
+          success: true,
+          lastText: content,
           messages: [{
             role: 'assistant',
-            content: isRefinement
-              ? 'Must Fix #1: switch to dynamic import and add guardrails around the index build.'
-              : 'Must Fix #1: switch to dynamic import.',
+            content,
           }],
           sessionId: isRefinement ? 'session-generator-round-2' : 'session-generator-round-1',
         };
@@ -1250,7 +2078,7 @@ describe('runManagedTask', () => {
       'Review the repo-intelligence changes and deliver the final code review.'
     );
 
-    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(4);
+    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(5);
     expect(result.success).toBe(true);
     expect(result.lastText).toContain('Final code review: 2 must-fix findings are confirmed');
     expect(result.messages.at(-1)?.content).not.toContain('```kodax-task-verdict');
@@ -1258,6 +2086,7 @@ describe('runManagedTask', () => {
       assignmentId: entry.assignmentId,
       round: entry.round,
     }))).toEqual([
+      { assignmentId: 'admission', round: 0 },
       { assignmentId: 'generator', round: 1 },
       { assignmentId: 'evaluator', round: 1 },
       { assignmentId: 'generator', round: 2 },
@@ -1276,7 +2105,8 @@ describe('runManagedTask', () => {
     const roundHistory = JSON.parse(
       await readFile(path.join(result.managedTask!.evidence.workspaceDir, 'round-history.json'), 'utf8')
     );
-    expect(roundHistory).toHaveLength(2);
+    expect(roundHistory).toHaveLength(3);
+    expect(roundHistory.map((entry: { round: number }) => entry.round)).toEqual([0, 1, 2]);
     expect(result.managedTask?.evidence.artifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1311,11 +2141,29 @@ describe('runManagedTask', () => {
     });
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
-      if (prompt.includes('Generator role')) {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the current review harness and large-context budget.',
+          'H1_EXECUTE_EVAL',
+        );
         return {
           success: true,
-          lastText: 'Draft review still needs another pass.',
-          messages: [{ role: 'assistant', content: 'Draft review still needs another pass.' }],
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-budget',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Draft review still needs another pass.', {
+          summary: 'Draft review still needs another pass.',
+          evidence: ['A preliminary review draft is available.'],
+          followup: ['Evaluator should decide whether another round is required.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
           sessionId: 'session-generator-budget',
         };
       }
@@ -1368,8 +2216,8 @@ describe('runManagedTask', () => {
       'Review the code changes and keep iterating until the review is complete.'
     );
 
-    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(4);
-    expect(textDeltas.join('')).toContain('adaptive round budget=2');
+    expect(mockRunDirectKodaX).toHaveBeenCalledTimes(5);
+    expect(result.managedTask?.runtime?.budget?.plannedRounds).toBe(2);
     expect(result.success).toBe(false);
     expect(result.signal).toBe('BLOCKED');
     expect(result.signalReason).toContain('One more review pass is still requested');
@@ -1403,6 +2251,19 @@ describe('runManagedTask', () => {
     });
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the project-scoped long-running review should stay on H2.',
+          'H2_PLAN_EXECUTE_EVAL',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-project',
+        };
+      }
+
       if (prompt.includes('Planner role')) {
         return {
           success: true,
@@ -1458,10 +2319,15 @@ describe('runManagedTask', () => {
         };
       }
       if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Project review draft ready.', {
+          summary: 'Project review draft ready.',
+          evidence: ['Project-scoped review draft prepared.'],
+          followup: ['Evaluator should validate the project review draft.'],
+        });
         return {
           success: true,
-          lastText: 'Project review draft ready.',
-          messages: [{ role: 'assistant', content: 'Project review draft ready.' }],
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
           sessionId: 'session-generator-project',
         };
       }
@@ -1489,7 +2355,7 @@ describe('runManagedTask', () => {
       };
     });
 
-    await runManagedTask(
+    const result = await runManagedTask(
       {
         provider: 'anthropic',
         context: {
@@ -1509,7 +2375,10 @@ describe('runManagedTask', () => {
       'Review the project implementation until the managed task concludes.'
     );
 
-    expect(textDeltas.join('')).toContain('adaptive round budget=11');
+    expect(textDeltas.join('')).not.toContain('quality assurance mode=');
+    expect(textDeltas.join('')).not.toContain('adaptive round budget=');
+    expect(textDeltas.join('')).not.toContain('[Managed Task Routing] mode=');
+    expect(result.managedTask?.runtime?.budget?.plannedRounds).toBe(11);
   });
 
   it('blocks managed tasks when the evaluator omits the required verdict block', async () => {
@@ -1533,11 +2402,29 @@ describe('runManagedTask', () => {
     });
 
     mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
-      if (prompt.includes('Generator role')) {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the review should start on H1.',
+          'H1_EXECUTE_EVAL',
+        );
         return {
           success: true,
-          lastText: 'Draft review with one finding.',
-          messages: [{ role: 'assistant', content: 'Draft review with one finding.' }],
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-blocked',
+        };
+      }
+
+      if (prompt.includes('Generator role')) {
+        const content = buildHandoffResponse('Draft review with one finding.', {
+          summary: 'Draft review with one finding.',
+          evidence: ['One review finding is documented.'],
+          followup: ['Evaluator should assess whether the review is complete.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
           sessionId: 'session-generator',
         };
       }
@@ -1592,6 +2479,19 @@ describe('runManagedTask', () => {
 
     let plannerRound = 0;
     mockRunDirectKodaX.mockImplementation(async (options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the release workflow edit should start on H2.',
+          'H2_PLAN_EXECUTE_EVAL',
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-h2-refinement',
+        };
+      }
+
       if (prompt.includes('Planner role')) {
         plannerRound += 1;
         if (plannerRound === 1) {
@@ -1723,16 +2623,22 @@ describe('runManagedTask', () => {
 
       if (prompt.includes('Generator role')) {
         const overlay = String(options.context?.promptOverlay ?? '');
+        const visibleText = overlay.includes('Rollback path is explicitly covered.')
+          ? 'Generator implemented the workflow with rollback coverage.'
+          : 'Generator implemented the workflow.';
+        const content = buildHandoffResponse(visibleText, {
+          summary: visibleText,
+          evidence: overlay.includes('Rollback path is explicitly covered.')
+            ? ['Implementation covers the rollback path explicitly.']
+            : ['Implementation covers the primary workflow.'],
+          followup: ['Evaluator should validate the implementation against the updated contract.'],
+        });
         return {
           success: true,
-          lastText: overlay.includes('Rollback path is explicitly covered.')
-            ? 'Generator implemented the workflow with rollback coverage.'
-            : 'Generator implemented the workflow.',
+          lastText: content,
           messages: [{
             role: 'assistant',
-            content: overlay.includes('Rollback path is explicitly covered.')
-              ? 'Generator implemented the workflow with rollback coverage.'
-              : 'Generator implemented the workflow.',
+            content,
           }],
           sessionId: overlay.includes('Rollback path is explicitly covered.')
             ? 'session-generator-round-2'
@@ -1801,6 +2707,266 @@ describe('runManagedTask', () => {
       await readFile(path.join(result.managedTask!.evidence.workspaceDir, 'contract.json'), 'utf8')
     );
     expect(persistedContract.successCriteria).toContain('Rollback path is explicitly covered.');
+  });
+
+  it('rebuilds a massive AMA review into review-specific H3 at a round boundary', async () => {
+    const workspaceRoot = await createTempDir('kodax-task-engine-');
+    let contractReviewRound = 0;
+    mockCreateReasoningPlan.mockResolvedValue({
+      mode: 'auto',
+      depth: 'high',
+      promptOverlay: '[Routing] review-upgrade',
+      decision: {
+        primaryTask: 'review',
+        confidence: 0.95,
+        riskLevel: 'high',
+        recommendedMode: 'pr-review',
+        recommendedThinkingDepth: 'high',
+        complexity: 'complex',
+        workIntent: 'overwrite',
+        requiresBrainstorm: false,
+        harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
+        upgradeCeiling: 'H3_MULTI_WORKER',
+        reviewScale: 'massive',
+        reason: 'Massive review starts at H2 and can upgrade if contract review needs more parallel coverage.',
+      },
+    });
+
+    mockRunDirectKodaX.mockImplementation(async (_options, prompt: string) => {
+      if (prompt.includes('Admission role')) {
+        const content = buildAdmissionResponse(
+          'Admission confirmed the massive review should start on H2 and may upgrade to H3.',
+          'H2_PLAN_EXECUTE_EVAL',
+          ['packages/coding/src/task-engine.ts', 'packages/repl/src/ui/InkREPL.tsx'],
+        );
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-admission-review-upgrade',
+        };
+      }
+
+      if (prompt.includes('Lead role')) {
+        const content = [
+          'Lead aligned the upgraded H3 review strategy.',
+          '```kodax-task-contract',
+          'summary: Coordinate high-risk and surface review lanes for the massive review.',
+          'success_criteria:',
+          '- High-risk and surface findings are both covered.',
+          'required_evidence:',
+          '- Parallel review evidence from both review workers.',
+          'constraints:',
+          '- Do not miss cross-cutting regressions.',
+          '```',
+        ].join('\n');
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-lead-review-upgrade',
+        };
+      }
+
+      if (prompt.includes('Planner role')) {
+        return {
+          success: true,
+          lastText: [
+            'Initial review contract is ready.',
+            '```kodax-task-contract',
+            'summary: Validate a massive cross-cutting review surface safely.',
+            'success_criteria:',
+            '- Identify all must-fix blockers with evidence.',
+            'required_evidence:',
+            '- Cross-surface review evidence.',
+            'constraints:',
+            '- Do not miss runtime blockers.',
+            '```',
+          ].join('\n'),
+          messages: [{
+            role: 'assistant',
+            content: [
+              'Initial review contract is ready.',
+              '```kodax-task-contract',
+              'summary: Validate a massive cross-cutting review surface safely.',
+              'success_criteria:',
+              '- Identify all must-fix blockers with evidence.',
+              'required_evidence:',
+              '- Cross-surface review evidence.',
+              'constraints:',
+              '- Do not miss runtime blockers.',
+              '```',
+            ].join('\n'),
+          }],
+          sessionId: 'session-planner-review-upgrade',
+        };
+      }
+
+      if (prompt.includes('Contract Reviewer role')) {
+        contractReviewRound += 1;
+        if (contractReviewRound > 1) {
+          return {
+            success: true,
+            lastText: [
+              'The stronger review harness has enough coverage now.',
+              '```kodax-task-contract-review',
+              'status: approve',
+              'reason: The H3 review worker split covers the massive review surface.',
+              'followup:',
+              '- Proceed with review execution.',
+              '```',
+            ].join('\n'),
+            messages: [{
+              role: 'assistant',
+              content: [
+                'The stronger review harness has enough coverage now.',
+                '```kodax-task-contract-review',
+                'status: approve',
+                'reason: The H3 review worker split covers the massive review surface.',
+                'followup:',
+                '- Proceed with review execution.',
+                '```',
+              ].join('\n'),
+            }],
+            sessionId: 'session-contract-review-upgraded',
+          };
+        }
+
+        return {
+          success: true,
+          lastText: [
+            'This review needs a stronger harness before execution.',
+            '```kodax-task-contract-review',
+            'status: revise',
+            'reason: The review surface is too broad for a single generator pass.',
+            'next_harness: H3_MULTI_WORKER',
+            'followup:',
+            '- Split into high-risk and surface review workers.',
+            '```',
+          ].join('\n'),
+          messages: [{
+            role: 'assistant',
+            content: [
+              'This review needs a stronger harness before execution.',
+              '```kodax-task-contract-review',
+              'status: revise',
+              'reason: The review surface is too broad for a single generator pass.',
+              'next_harness: H3_MULTI_WORKER',
+              'followup:',
+              '- Split into high-risk and surface review workers.',
+              '```',
+            ].join('\n'),
+          }],
+          sessionId: 'session-contract-review-review-upgrade',
+        };
+      }
+
+      if (prompt.includes('High-Risk Review Worker role')) {
+        const content = buildHandoffResponse('High-risk review worker found the runtime blocker.', {
+          summary: 'High-risk review worker found the runtime blocker.',
+          evidence: ['Runtime blocker documented with supporting evidence.'],
+          followup: ['Evaluator should merge the high-risk finding into the final review.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-review-high-risk',
+        };
+      }
+
+      if (prompt.includes('Surface Review Worker role')) {
+        const content = buildHandoffResponse('Surface review worker found the regression and test gap.', {
+          summary: 'Surface review worker found the regression and test gap.',
+          evidence: ['Regression surface and test gap documented.'],
+          followup: ['Evaluator should merge the surface finding into the final review.'],
+        });
+        return {
+          success: true,
+          lastText: content,
+          messages: [{ role: 'assistant', content }],
+          sessionId: 'session-review-surface',
+        };
+      }
+
+      if (prompt.includes('Evaluator role')) {
+        return {
+          success: true,
+          lastText: [
+            'Final code review is complete with merged high-risk and surface findings.',
+            '```kodax-task-verdict',
+            'status: accept',
+            'reason: The upgraded H3 review harness produced complete review coverage.',
+            'followup:',
+            '- Deliver the final review.',
+            '```',
+          ].join('\n'),
+          messages: [{
+            role: 'assistant',
+            content: [
+              'Final code review is complete with merged high-risk and surface findings.',
+              '```kodax-task-verdict',
+              'status: accept',
+              'reason: The upgraded H3 review harness produced complete review coverage.',
+              'followup:',
+              '- Deliver the final review.',
+              '```',
+            ].join('\n'),
+          }],
+          sessionId: 'session-review-evaluator-upgraded',
+          signal: 'COMPLETE',
+        };
+      }
+
+      throw new Error(`Unexpected prompt: ${prompt}`);
+    });
+
+    const result = await runManagedTask(
+      {
+        provider: 'anthropic',
+        context: {
+          taskSurface: 'cli',
+          managedTaskWorkspaceDir: workspaceRoot,
+        },
+      },
+      'Review this 50 file / 7000 line change set and deliver a final code review.'
+    );
+
+    expect(result.managedTask?.contract.harnessProfile).toBe('H3_MULTI_WORKER');
+    expect(result.managedTask?.runtime?.reviewFilesOrAreas).toEqual(
+      expect.arrayContaining([
+        'packages/coding/src/task-engine.ts',
+        'packages/repl/src/ui/InkREPL.tsx',
+      ]),
+    );
+    expect(result.managedTask?.runtime?.harnessTransitions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: 'H2_PLAN_EXECUTE_EVAL',
+          to: 'H3_MULTI_WORKER',
+          approved: true,
+          source: 'contract-review',
+        }),
+      ]),
+    );
+
+    const assignmentIds = result.managedTask?.roleAssignments.map((assignment) => assignment.id) ?? [];
+    expect(assignmentIds).toEqual(
+      expect.arrayContaining([
+        'review-worker-high-risk',
+        'review-worker-surface',
+      ]),
+    );
+    const admissionPrompt = String(
+      mockRunDirectKodaX.mock.calls.find((call) => String(call[1]).includes('Admission role'))?.[1] ?? ''
+    );
+    const highRiskPrompt = String(
+      mockRunDirectKodaX.mock.calls.find((call) => String(call[1]).includes('High-Risk Review Worker'))?.[1] ?? ''
+    );
+    expect(admissionPrompt).toContain('changed_scope -> repo_overview (only when needed) -> changed_diff_bundle');
+    expect(admissionPrompt).toContain('review_files_or_areas:');
+    expect(highRiskPrompt).toContain('changed_scope -> repo_overview (only when needed) -> changed_diff_bundle');
+
   });
 
   it('falls back to heuristic routing when provider-backed routing is unavailable', async () => {

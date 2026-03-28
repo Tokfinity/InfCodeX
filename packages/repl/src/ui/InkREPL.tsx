@@ -31,14 +31,17 @@ import {
 import { AutocompleteContextProvider, useAutocompleteContext } from "./hooks/index.js";
 import {
   StreamingState,
+  ToolCallStatus,
   type CreatableHistoryItem,
   type HistoryItem,
+  type ToolCall,
   KeypressHandlerPriority,
 } from "./types.js";
 import {
   buildSessionTree,
   KodaXOptions,
   KodaXMessage,
+  KodaXManagedTaskStatusEvent,
   KodaXReasoningMode,
   KodaXResult,
   KodaXSessionUiHistoryItem,
@@ -106,11 +109,19 @@ import { processSpecialSyntax, isShellCommandHandled } from "./utils/shell-execu
 import {
   extractHistorySeedsFromMessage,
   resolveCompletedAssistantText,
+  sanitizeUserFacingAssistantText,
+  isControlPlaneOnlyAssistantText,
   extractTextContent,
   extractTitle,
 } from "./utils/message-utils.js";
 import { withCapture, ConsoleCapturer } from "./utils/console-capturer.js";
 import { emitRetryHistoryItem } from "./utils/retry-history.js";
+import {
+  formatManagedTaskBreadcrumb,
+  mergeLiveThinkingContent,
+} from "./utils/live-streaming.js";
+import { buildManagedRunContext } from "./utils/managed-run-context.js";
+import { formatToolCallInlineText } from "./utils/tool-display.js";
 import { calculateViewportBudget } from "./utils/viewport-budget.js";
 import { formatPendingInputsSummary, MAX_PENDING_INPUTS } from "./utils/pending-inputs.js";
 import { runQueuedPromptSequence } from "./utils/queued-prompt-sequence.js";
@@ -122,7 +133,7 @@ import {
   toSelectOptions,
   type SelectOption,
 } from "./utils/ask-user.js";
-import { HELP_BAR_SEGMENTS } from "./constants/layout.js";
+import { buildHelpBarSegments } from "./constants/layout.js";
 
 // REPL options
 export interface InkREPLOptions extends KodaXOptions {
@@ -157,6 +168,7 @@ interface ReviewSnapshot {
   currentTool?: string;
   toolInputCharCount: number;
   toolInputContent: string;
+  lastLiveActivityLabel?: string;
   iterationHistory: import("./contexts/StreamingContext.js").IterationRecord[];
   currentIteration: number;
   isCompacting: boolean;
@@ -191,6 +203,24 @@ function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
     return [];
   }
 
+  const isInterruptedCancellation = (entry: NonNullable<KodaXResult["managedTask"]>["evidence"]["entries"][number]): boolean => {
+    if (!result.interrupted && !task.verdict.signalReason?.includes("Orchestration cancelled")) {
+      return false;
+    }
+    const signalReason = entry.signalReason?.trim() ?? "";
+    const summary = entry.summary?.trim() ?? "";
+    const output = entry.output?.trim() ?? "";
+    const cancelledSignal = signalReason.includes("Orchestration cancelled");
+    const cancelledSummary = summary.includes("Orchestration cancelled");
+    const emptyOrPlaceholderOutput = !output || summary === "No textual output produced.";
+    return (
+      (entry.status !== "completed" && (cancelledSignal || cancelledSummary || emptyOrPlaceholderOutput))
+      || ((cancelledSignal || cancelledSummary) && emptyOrPlaceholderOutput)
+    );
+  };
+
+  const routingTranscript = buildManagedTaskRoutingTranscript(task);
+
   const orderByAssignment = new Map(
     task.roleAssignments.map((assignment, index) => [assignment.id, index]),
   );
@@ -202,8 +232,7 @@ function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
       .map((entry) => entry.round ?? 1),
   );
 
-  return task.evidence.entries
-    .filter((entry) => entry.output?.trim())
+  const evidenceTranscripts = [...task.evidence.entries]
     .sort((left, right) => {
       const roundDelta = (left.round ?? 1) - (right.round ?? 1);
       if (roundDelta !== 0) {
@@ -211,14 +240,92 @@ function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
       }
       return (orderByAssignment.get(left.assignmentId) ?? 0) - (orderByAssignment.get(right.assignmentId) ?? 0);
     })
+    .filter((entry) => !isInterruptedCancellation(entry))
     .filter((entry) => !(
       entry.assignmentId === finalAssignmentId
       && (entry.round ?? 1) === finalRound
     ))
     .map((entry) => {
-      const roundLabel = (entry.round ?? 1) > 1 ? ` · Round ${entry.round}` : '';
-      return `[${entry.title ?? entry.assignmentId}${roundLabel}]\n${entry.output!.trim()}`;
+      const rawOutput = entry.output?.trim() ?? "";
+      const rawSummary = entry.summary?.trim() ?? "";
+      const sanitizedOutput = rawOutput ? sanitizeUserFacingAssistantText(rawOutput) : "";
+      const sanitizedSummary = rawSummary ? sanitizeUserFacingAssistantText(rawSummary) : "";
+      const fallbackText = entry.role === 'admission'
+        ? sanitizedSummary
+          ? `Admission completed: ${sanitizedSummary}`
+          : 'Admission completed.'
+        : sanitizedSummary;
+      return {
+        entry,
+        text: sanitizedOutput || fallbackText,
+      };
+    })
+    .filter(({ text }) => Boolean(text))
+    .map(({ entry, text }) => {
+      const labelSuffix = entry.role === "admission"
+        ? " Preflight"
+        : (entry.round ?? 1) > 1
+          ? ` Round ${entry.round}`
+          : "";
+      return `[${entry.title ?? entry.assignmentId}${labelSuffix}]\n${text}`;
     });
+  return [
+    ...(routingTranscript ? [routingTranscript] : []),
+    ...evidenceTranscripts,
+  ];
+}
+
+function buildManagedTaskRoutingTranscript(task: NonNullable<KodaXResult["managedTask"]>): string | undefined {
+  const raw = task.runtime?.rawRoutingDecision;
+  const final = task.runtime?.finalRoutingDecision;
+  if (!raw || !final) {
+    return undefined;
+  }
+
+  const lines = [
+    "[Routing]",
+    `AMA routing: raw=${raw.harnessProfile}(${raw.routingSource ?? "unknown"}) -> final=${final.harnessProfile}`,
+    `Primary task: ${raw.primaryTask}`,
+    `Review target: ${final.reviewTarget ?? "general"}`,
+    `Review scale: ${final.reviewScale ?? "unknown"}`,
+    `Solo boundary: ${raw.soloBoundaryConfidence?.toFixed(2) ?? "n/a"}`,
+    `Independent QA: ${raw.needsIndependentQA ? "yes" : "no"}`,
+    task.runtime?.qualityAssuranceMode
+      ? `Quality assurance: ${task.runtime.qualityAssuranceMode}`
+      : undefined,
+    task.runtime?.budget
+      ? `Adaptive budget: rounds=${task.runtime.budget.plannedRounds} total=${task.runtime.budget.totalBudget} reserve=${task.runtime.budget.reserveBudget}`
+      : undefined,
+    task.runtime?.routingOverrideReason
+      ? `Override reason: ${task.runtime.routingOverrideReason}`
+      : undefined,
+    final.upgradeCeiling ? `Upgrade ceiling: ${final.upgradeCeiling}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.join("\n");
+}
+
+function truncateToolPreview(value: string, maxLength = 100): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 3)}...` : trimmed;
+}
+
+function truncateToolOutputPreview(value: string, maxLength = 800): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 3)}...` : trimmed;
+}
+
+function sanitizeInterruptedAssistantText(text: string): string {
+  if (isControlPlaneOnlyAssistantText(text)) {
+    return "";
+  }
+  return sanitizeUserFacingAssistantText(text).trim();
 }
 
 function toPersistedUiHistoryItem(
@@ -469,6 +576,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     setCurrentTool,
     appendToolInputChars,
     appendToolInputContent,
+    clearToolInputContent,
     clearResponse,
     appendResponse,
     getSignal,
@@ -500,6 +608,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
   const [historyScrollOffset, setHistoryScrollOffset] = useState(0);
   const [reviewSnapshot, setReviewSnapshot] = useState<ReviewSnapshot | null>(null);
+  const [managedTaskStatus, setManagedTaskStatus] = useState<KodaXManagedTaskStatusEvent | null>(null);
+  const [lastLiveActivityLabel, setLastLiveActivityLabel] = useState<string | undefined>(undefined);
+  const managedTaskStatusRef = useRef<KodaXManagedTaskStatusEvent | null>(null);
+  const managedTaskBreadcrumbRef = useRef<string | null>(null);
+  const iterationToolsRef = useRef<string[]>([]);
+  const iterationToolCallsRef = useRef<ToolCall[]>([]);
+  const activeToolCallRef = useRef<ToolCall | null>(null);
+
+  const syncActiveToolCall = useCallback((updater: (tool: ToolCall) => ToolCall) => {
+    const current = activeToolCallRef.current;
+    if (!current) {
+      return;
+    }
+    const next = updater(current);
+    activeToolCallRef.current = next;
+    iterationToolCallsRef.current = iterationToolCallsRef.current.map((tool) => (
+      tool.id === next.id ? next : tool
+    ));
+  }, []);
+
+  const finalizeActiveToolCall = useCallback((status: ToolCallStatus, error?: string, output?: unknown) => {
+    let finalizedTool: ToolCall | null = null;
+    syncActiveToolCall((tool) => {
+      finalizedTool = {
+        ...tool,
+        status,
+        endTime: Date.now(),
+        error,
+        output,
+      };
+      return finalizedTool;
+    });
+    activeToolCallRef.current = null;
+    return finalizedTool;
+  }, [syncActiveToolCall]);
 
   // Shortcuts context.
   const { showHelp, toggleHelp, setShowHelp } = useShortcutsContext();
@@ -608,6 +751,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     currentTool: streamingState.currentTool,
     toolInputCharCount: streamingState.toolInputCharCount,
     toolInputContent: streamingState.toolInputContent,
+    lastLiveActivityLabel,
     iterationHistory: streamingState.iterationHistory,
     currentIteration: streamingState.currentIteration,
     isCompacting: streamingState.isCompacting,
@@ -623,6 +767,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     streamingState.currentTool,
     streamingState.toolInputCharCount,
     streamingState.toolInputContent,
+    lastLiveActivityLabel,
     streamingState.iterationHistory,
     streamingState.currentIteration,
     streamingState.isCompacting,
@@ -650,6 +795,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     currentTool: displaySnapshot?.currentTool ?? streamingState.currentTool,
     toolInputCharCount: displaySnapshot?.toolInputCharCount ?? streamingState.toolInputCharCount,
     toolInputContent: displaySnapshot?.toolInputContent ?? streamingState.toolInputContent,
+    lastLiveActivityLabel: displaySnapshot?.lastLiveActivityLabel ?? lastLiveActivityLabel,
     iterationHistory: displaySnapshot?.iterationHistory ?? streamingState.iterationHistory,
     currentIteration: displaySnapshot?.currentIteration ?? streamingState.currentIteration,
     isCompacting: displaySnapshot?.isCompacting ?? streamingState.isCompacting,
@@ -682,6 +828,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     contextUsage,
     isCompacting: displayStreamingState.isCompacting,
     showBusyStatus: !isLivePaused,
+    managedHarnessProfile: displayIsLoading ? managedTaskStatus?.harnessProfile : undefined,
+    managedWorkerTitle: displayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined,
+    managedRound: displayIsLoading ? managedTaskStatus?.currentRound : undefined,
+    managedMaxRounds: displayIsLoading ? managedTaskStatus?.maxRounds : undefined,
   }), [
     context.sessionId,
     currentConfig.permissionMode,
@@ -701,6 +851,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     displayStreamingState.isCompacting,
     contextUsage,
     isLivePaused,
+    displayIsLoading,
+    managedTaskStatus,
   ]);
 
   const statusBarText = useMemo(() => getStatusBarText(statusBarProps), [statusBarProps]);
@@ -1182,33 +1334,118 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Create KodaXEvents for streaming updates
   const createStreamingEvents = useCallback((): StreamingEvents => ({
     onThinkingDelta: (text: string) => {
+      if (streamingState.currentTool) {
+        setCurrentTool(undefined);
+        clearToolInputContent();
+      }
+      setLastLiveActivityLabel(
+        managedTaskStatusRef.current?.activeWorkerTitle
+          ? `[${managedTaskStatusRef.current.activeWorkerTitle}] thinking`
+          : "thinking",
+      );
       // The UI layer stores thinking content for display.
       appendThinkingChars(text.length);
       appendThinkingContent(text);
     },
-    onThinkingEnd: (_thinking: string) => {
+    onThinkingEnd: (thinking: string) => {
+      const currentThinking = getThinkingContent();
+      const mergedThinking = mergeLiveThinkingContent(currentThinking, thinking);
+      if (mergedThinking && mergedThinking !== currentThinking) {
+        clearThinkingContent();
+        startThinking();
+        appendThinkingChars(mergedThinking.length);
+        appendThinkingContent(mergedThinking);
+      }
       stopThinking();
     },
     onTextDelta: (text: string) => {
+      if (streamingState.currentTool) {
+        setCurrentTool(undefined);
+        clearToolInputContent();
+      }
       stopThinking();
+      setLastLiveActivityLabel(undefined);
       appendResponse(text);
     },
     onToolUseStart: (tool: { name: string; id: string }) => {
+      if (!iterationToolsRef.current.includes(tool.name)) {
+        iterationToolsRef.current = [...iterationToolsRef.current, tool.name];
+      }
+      const rolePrefix = managedTaskStatusRef.current?.activeWorkerTitle
+        ? `[${managedTaskStatusRef.current.activeWorkerTitle}] `
+        : "";
+      const toolCall: ToolCall = {
+        id: tool.id,
+        name: `${rolePrefix}${tool.name}`,
+        status: ToolCallStatus.Executing,
+        startTime: Date.now(),
+      };
+      activeToolCallRef.current = toolCall;
+      iterationToolCallsRef.current = [...iterationToolCallsRef.current, toolCall];
       setCurrentTool(tool.name);
+      setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(toolCall)}`);
     },
     onToolInputDelta: (_toolName: string, partialJson: string) => {
       appendToolInputChars(partialJson.length);
       appendToolInputContent(partialJson); // Issue 068 Phase 4: track tool input content.
+      syncActiveToolCall((tool) => {
+        const currentPreview = typeof tool.input?.preview === "string"
+          ? tool.input.preview
+          : "";
+        const preview = truncateToolPreview(`${currentPreview}${partialJson}`);
+        return {
+          ...tool,
+          input: preview ? { preview } : undefined,
+        };
+      });
+      if (activeToolCallRef.current) {
+        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(activeToolCallRef.current)}`);
+      }
     },
-    onToolResult: () => {
-      setCurrentTool(undefined);
+    onToolResult: (result) => {
+      const content = typeof result.content === "string" ? result.content : String(result.content ?? "");
+      const trimmedContent = truncateToolOutputPreview(content);
+      if (/^\[(?:Tool Error|Error)\]/.test(content)) {
+        const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Error, trimmedContent, trimmedContent);
+        if (finalizedTool) {
+          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+        }
+        return;
+      }
+      if (/^\[(?:Cancelled|Blocked)\]/.test(content)) {
+        const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Cancelled, undefined, trimmedContent);
+        if (finalizedTool) {
+          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+        }
+        return;
+      }
+      const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Success, undefined, trimmedContent || undefined);
+      if (finalizedTool) {
+        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+      }
     },
     onStreamEnd: () => {
+      if (activeToolCallRef.current?.status === ToolCallStatus.Executing) {
+        const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Cancelled, "Stream ended before the tool completed.");
+        if (finalizedTool) {
+          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+        }
+      }
       stopThinking();
+      clearToolInputContent();
       setCurrentTool(undefined);
     },
     hasPendingInputs: () => pendingInputsRef.current.length > 0,
     onError: (error: Error) => {
+      if (activeToolCallRef.current?.name) {
+        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(activeToolCallRef.current)}`);
+      }
+      if (activeToolCallRef.current?.status === ToolCallStatus.Executing) {
+        const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Error, error.message);
+        if (finalizedTool) {
+          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+        }
+      }
       // Classify error to provide better user feedback
       const classification = classifyError(error);
       const categoryNames = ['Transient', 'Permanent', 'Tool Call ID', 'User Abort'];
@@ -1254,6 +1491,32 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     onRetry: (reason: string, attempt: number, maxAttempts: number) => {
       emitRetryHistoryItem(addHistoryItem, reason, attempt, maxAttempts);
     },
+    onManagedTaskStatus: (status) => {
+      managedTaskStatusRef.current = status;
+      setManagedTaskStatus(status);
+      if (status.activeWorkerTitle) {
+        const harnessShort = status.harnessProfile
+          ?.replace('H0_DIRECT', 'H0')
+          .replace('H1_EXECUTE_EVAL', 'H1')
+          .replace('H2_PLAN_EXECUTE_EVAL', 'H2')
+          .replace('H3_MULTI_WORKER', 'H3');
+        const workerLabel = status.phase === "preflight"
+          ? `${status.activeWorkerTitle} (Preflight)`
+          : status.activeWorkerTitle;
+        setLastLiveActivityLabel(`[Phase] ${status.agentMode.toUpperCase()} ${harnessShort ?? status.harnessProfile}${workerLabel ? ` - ${workerLabel}` : ""}`);
+      } else if (status.phase === "routing" && status.note) {
+        setLastLiveActivityLabel(`[Routing] ${status.note}`);
+      }
+      const breadcrumb = formatManagedTaskBreadcrumb(status);
+      if (breadcrumb && breadcrumb !== managedTaskBreadcrumbRef.current) {
+        addHistoryItem({
+          type: "info",
+          icon: ">",
+          text: breadcrumb,
+        });
+        managedTaskBreadcrumbRef.current = breadcrumb;
+      }
+    },
     onProviderRateLimit: (attempt: number, maxAttempts: number, delayMs: number) => {
       addHistoryItem({
         type: "info",
@@ -1276,12 +1539,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Always call startNewIteration so currentIteration stays correct.
 
       const prevThinking = iter > 1 ? getThinkingContent().trim() : "";
-      const prevResponse = iter > 1 ? getFullResponse().trim() : "";
+      const prevResponse = iter > 1 ? sanitizeInterruptedAssistantText(getFullResponse()) : "";
+      const prevTools = iter > 1 ? [...iterationToolsRef.current] : [];
+      const prevToolCalls = iter > 1 ? [...iterationToolCallsRef.current] : [];
 
       // Always update iteration counter BEFORE adding to history 
       // This implicitly clears the text buffer so we don't double-render the old streaming 
       // content simultaneously with the new static HistoryItem!
       startNewIteration(iter);
+      iterationToolsRef.current = [];
+      iterationToolCallsRef.current = [];
+      activeToolCallRef.current = null;
+      clearToolInputContent();
+      setCurrentTool(undefined);
+      setLastLiveActivityLabel(
+        managedTaskStatusRef.current?.activeWorkerTitle
+          ? `[Thinking] [${managedTaskStatusRef.current.activeWorkerTitle}]`
+          : undefined,
+      );
       startThinking();
 
       if (iter > 1) {
@@ -1303,6 +1578,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           addHistoryItem({
             type: "assistant",
             text: prevResponse,
+          });
+        }
+
+        if (!prevThinking && !prevResponse && prevToolCalls.length > 0) {
+          addHistoryItem({
+            type: "tool_group",
+            tools: prevToolCalls,
+          });
+        } else if (!prevThinking && !prevResponse && prevTools.length > 0) {
+          addHistoryItem({
+            type: "info",
+            icon: "*",
+            text: `Iter ${iter - 1} tools: ${prevTools.join(", ")}`,
           });
         }
       }
@@ -1493,7 +1781,30 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       context.contextTokenSnapshot = info.contextTokenSnapshot;
       setLiveTokenCount(info.tokenCount);
     },
-  }), [appendThinkingChars, appendThinkingContent, stopThinking, appendResponse, setCurrentTool, appendToolInputChars, appendToolInputContent, startNewIteration, startThinking, currentConfig, context, startCompacting, stopCompacting, addHistoryItem]);
+  }), [
+    appendThinkingChars,
+    appendThinkingContent,
+    stopThinking,
+    appendResponse,
+    setCurrentTool,
+    appendToolInputChars,
+    appendToolInputContent,
+    clearToolInputContent,
+    startNewIteration,
+    startThinking,
+    currentConfig,
+    context,
+    startCompacting,
+    stopCompacting,
+    addHistoryItem,
+    clearThinkingContent,
+    getThinkingContent,
+    getFullResponse,
+    setLastLiveActivityLabel,
+    syncActiveToolCall,
+    finalizeActiveToolCall,
+    streamingState.currentTool,
+  ]);
 
   // Helper function to show confirmation dialog
 
@@ -1547,6 +1858,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // Issue 064: Pass projectRoot to prevent singleton reset
     const skillRegistry = getSkillRegistry(context.gitRoot);
     const skillsPrompt = skillRegistry.getSystemPromptSnippet();
+    const managedRunContext = buildManagedRunContext(
+      opts.context,
+      context.gitRoot,
+      context.contextTokenSnapshot,
+      skillsPrompt,
+    );
 
     return runManagedTask(
       {
@@ -1555,12 +1872,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           ...opts.session,
           initialMessages,
         },
-        context: {
-          ...opts.context,
-          contextTokenSnapshot: context.contextTokenSnapshot,
-          taskSurface: 'repl',
-          skillsPrompt, // Inject skills into system prompt
-        },
+        context: managedRunContext,
         events,
         abortSignal: getSignal(),
       },
@@ -1604,8 +1916,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       result.lastText,
     );
     const managedTranscriptItems = buildManagedTaskTranscriptItems(result);
+    const silentIterationToolGroup = !finalThinking && !finalResponse && iterationToolCallsRef.current.length > 0
+      ? {
+          type: "tool_group" as const,
+          tools: [...iterationToolCallsRef.current],
+        }
+      : undefined;
     const persistedAdditions: CreatableHistoryItem[] = [
       ...(finalThinking ? [{ type: "thinking" as const, text: finalThinking }] : []),
+      ...(silentIterationToolGroup
+        ? [silentIterationToolGroup]
+        : []),
       ...managedTranscriptItems.map((text) => ({ type: "assistant" as const, text })),
       ...(finalResponse
         ? [{
@@ -1629,6 +1950,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       });
     }
 
+    if (silentIterationToolGroup) {
+      addHistoryItem(silentIterationToolGroup);
+    }
+
     for (const transcript of managedTranscriptItems) {
       addHistoryItem({
         type: "assistant",
@@ -1643,9 +1968,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         });
     }
 
+    iterationToolsRef.current = [];
+    iterationToolCallsRef.current = [];
+    activeToolCallRef.current = null;
+    clearToolInputContent();
+    setCurrentTool(undefined);
+    setLastLiveActivityLabel(undefined);
+
     await persistContextState(nextUiHistory);
   }, [
     addHistoryItem,
+    clearToolInputContent,
     clearResponse,
     clearThinkingContent,
     context,
@@ -1653,6 +1986,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     getThinkingContent,
     history,
     persistContextState,
+    setCurrentTool,
+    setLastLiveActivityLabel,
+    streamingState.currentIteration,
   ]);
 
   const stageQueuedPrompt = useCallback(async (prompt: string) => {
@@ -1830,7 +2166,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Preserve interrupted streaming response before clearing
       // Use getFullResponse() to include buffered content not yet flushed to currentResponse
       // Issue: When user sends new message during streaming, partial content was lost
-      const currentFullResponse = getFullResponse().trim();
+      const currentFullResponse = sanitizeInterruptedAssistantText(getFullResponse());
       if (currentFullResponse) {
         addHistoryItem({
           type: "assistant",
@@ -1852,7 +2188,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       setIsLoading(true);
       userInterruptedRef.current = false;
+      setManagedTaskStatus(null);
+      managedTaskStatusRef.current = null;
+      managedTaskBreadcrumbRef.current = null;
+      setLastLiveActivityLabel(undefined);
+      iterationToolsRef.current = [];
+      iterationToolCallsRef.current = [];
+      activeToolCallRef.current = null;
       clearResponse();
+      clearToolInputContent();
+      setCurrentTool(undefined);
       clearIterationHistory(); // Clear iteration history for a new conversation.
       startStreaming();
 
@@ -2216,7 +2561,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             if (isAbortError) {
               // Save any unsaved streaming content
-              const unsavedResponse = getFullResponse().trim();
+              const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
               if (unsavedResponse) {
                 addHistoryItem({
                   type: "assistant",
@@ -2266,7 +2611,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
             if (isAbortError) {
               // Save any unsaved streaming content
-              const unsavedResponse = getFullResponse().trim();
+              const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
               if (unsavedResponse) {
                 addHistoryItem({
                   type: "assistant",
@@ -2333,7 +2678,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
           if (isAbortError) {
             // Save any unsaved streaming content
-            const unsavedResponse = getFullResponse().trim();
+            const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
             if (unsavedResponse) {
               addHistoryItem({
                 type: "assistant",
@@ -2394,7 +2739,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               text: unsavedThinking,
             });
           }
-          const unsavedResponse = getFullResponse().trim();
+          const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
           if (unsavedResponse) {
             addHistoryItem({
               type: "assistant",
@@ -2561,6 +2906,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               iterationHistory={displayStreamingState.iterationHistory}
               currentIteration={displayStreamingState.currentIteration}
               isCompacting={displayStreamingState.isCompacting}
+              agentMode={currentConfig.agentMode}
+              managedHarnessProfile={
+                displayIsLoading ? managedTaskStatus?.harnessProfile : undefined
+              }
+              managedWorkerTitle={displayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined}
+              managedRound={displayIsLoading ? managedTaskStatus?.currentRound : undefined}
+              managedMaxRounds={displayIsLoading ? managedTaskStatus?.maxRounds : undefined}
+              lastLiveActivityLabel={displayStreamingState.lastLiveActivityLabel}
               viewportRows={viewportBudget.messageRows}
               viewportWidth={terminalWidth}
               scrollOffset={historyScrollOffset}
@@ -2615,12 +2968,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         {/* Keyboard shortcuts help bar - shown when ? is pressed */}
         {showHelp && (
           <Box flexDirection="column" paddingX={1}>
-            <Text dimColor>
-              {HELP_BAR_SEGMENTS.map((segment, index) => (
-                <Text key={`${segment.text}-${index}`} color={segment.color} bold={segment.bold}>
-                  {segment.text}
-                </Text>
-              ))}
+              <Text dimColor>
+                {buildHelpBarSegments().map((segment, index) => (
+                  <Text key={`${segment.text}-${index}`} color={segment.color} bold={segment.bold}>
+                    {segment.text}
+                  </Text>
+                ))}
             </Text>
           </Box>
         )}

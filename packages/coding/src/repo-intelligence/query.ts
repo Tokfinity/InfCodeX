@@ -2548,19 +2548,57 @@ export interface ImpactEstimateResult {
 
 function deriveRoutingComplexity(
   changedFileCount: number,
+  changedLineCount: number,
   touchedModuleCount: number,
   impactedModuleCount: number,
 ): KodaXRepoRoutingSignals['suggestedComplexity'] {
-  if (changedFileCount >= 20 || touchedModuleCount >= 5 || impactedModuleCount >= 5) {
+  if (
+    changedFileCount >= 20
+    || changedLineCount >= 4000
+    || touchedModuleCount >= 5
+    || impactedModuleCount >= 5
+  ) {
     return 'systemic';
   }
-  if (changedFileCount >= 8 || touchedModuleCount >= 3 || impactedModuleCount >= 3) {
+  if (
+    changedFileCount >= 8
+    || changedLineCount >= 1200
+    || touchedModuleCount >= 3
+    || impactedModuleCount >= 3
+  ) {
     return 'complex';
   }
-  if (changedFileCount >= 3 || touchedModuleCount >= 2 || impactedModuleCount >= 2) {
+  if (
+    changedFileCount >= 3
+    || changedLineCount >= 250
+    || touchedModuleCount >= 2
+    || impactedModuleCount >= 2
+  ) {
     return 'moderate';
   }
   return 'simple';
+}
+
+function deriveReviewScale(
+  changedFileCount: number,
+  changedLineCount: number,
+  touchedModuleCount: number,
+): KodaXRepoRoutingSignals['reviewScale'] {
+  if (
+    changedFileCount >= 30
+    || changedLineCount >= 4000
+    || touchedModuleCount >= 5
+  ) {
+    return 'massive';
+  }
+  if (
+    changedFileCount >= 10
+    || changedLineCount >= 1200
+    || touchedModuleCount >= 3
+  ) {
+    return 'large';
+  }
+  return 'small';
 }
 
 function buildFreshnessLabel(index: RepoIntelligenceIndex): string {
@@ -2900,12 +2938,21 @@ export async function getRepoRoutingSignals(
 
   const changedModules = changedScope?.areasTouched.map((area) => area.areaId).slice(0, 8) ?? [];
   const changedFileCount = changedScope?.totalChangedFiles ?? 0;
+  const changedLineCount = changedScope?.changedLineCount ?? 0;
+  const addedLineCount = changedScope?.addedLineCount ?? 0;
+  const deletedLineCount = changedScope?.deletedLineCount ?? 0;
   const touchedModuleCount = changedScope?.areasTouched.length ?? 0;
   const impactedModuleCount = impactResult?.impactedModules.length ?? (moduleResult ? 1 : 0);
   const suggestedComplexity = deriveRoutingComplexity(
     changedFileCount,
+    changedLineCount,
     touchedModuleCount,
     impactedModuleCount,
+  );
+  const reviewScale = deriveReviewScale(
+    changedFileCount,
+    changedLineCount,
+    touchedModuleCount,
   );
   const moduleConfidence = moduleResult?.confidence;
   const impactConfidence = impactResult?.confidence;
@@ -2926,9 +2973,13 @@ export async function getRepoRoutingSignals(
   return {
     workspaceRoot: index.workspaceRoot,
     changedFileCount,
+    changedLineCount,
+    addedLineCount,
+    deletedLineCount,
     touchedModuleCount,
     changedModules,
     crossModule: touchedModuleCount > 1 || impactedModuleCount > 1,
+    reviewScale,
     riskHints: dedupeStrings([
       ...(changedScope?.riskHints ?? []),
       ...(impactResult?.changedScope?.riskHints ?? []),

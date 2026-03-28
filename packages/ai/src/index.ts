@@ -42,6 +42,7 @@ export type {
   KodaXTaskComplexity,
   KodaXTaskWorkIntent,
   KodaXHarnessProfile,
+  KodaXReviewScale,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,

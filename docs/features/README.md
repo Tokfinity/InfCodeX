@@ -284,10 +284,12 @@ Focus:
 - capability providers
 - sandbox safety
 - theme cleanup
+- durable compaction, artifact recall, and low-cost long-history continuity
 
 Features:
 
 - [FEATURE_007](v0.8.0.md#feature_007-theme-system-consolidation)
+- [FEATURE_044](v0.8.0.md#feature_044-durable-compression-anchors-and-artifact-recall)
 - [FEATURE_035](v0.8.0.md#feature_035-mcp-capability-provider)
 - [FEATURE_038](v0.8.0.md#feature_038-official-sandbox-extension)
 
@@ -392,6 +394,7 @@ The current source of truth for planning is [FEATURE_LIST.md](../FEATURE_LIST.md
 | `040` | ACP server support | `v0.6.15` | ACP server for editors and IDEs |
 | `041` | TODO dependency tree integration | `v0.6.20` | TODO graph and dependency awareness |
 | `043` | Harness calibration, pivoting, profiling, and safe checkpoints | `v0.9.0` | Phase 2 maturation for the adaptive project / AMA harness |
+| `044` | Durable compression anchors and artifact recall | `v0.8.0` | first-class compaction anchors, artifact recall, and target-aware pruned tool previews |
 
 ---
 

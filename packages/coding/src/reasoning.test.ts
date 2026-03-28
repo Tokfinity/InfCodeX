@@ -472,6 +472,9 @@ describe('reasoning reroute', () => {
       {
         repoSignals: {
           changedFileCount: 9,
+          changedLineCount: 1480,
+          addedLineCount: 910,
+          deletedLineCount: 570,
           touchedModuleCount: 3,
           changedModules: ['packages/app', 'packages/shared', 'packages/core'],
           crossModule: true,
@@ -581,6 +584,9 @@ describe('reasoning reroute', () => {
       {
         repoSignals: {
           changedFileCount: 6,
+          changedLineCount: 1320,
+          addedLineCount: 740,
+          deletedLineCount: 580,
           touchedModuleCount: 2,
           changedModules: ['packages/app', 'packages/shared'],
           crossModule: true,
@@ -604,6 +610,52 @@ describe('reasoning reroute', () => {
     expect(routerPrompt).toContain('crossModule=yes');
     expect(routerPrompt).toContain('active module: packages/app');
     expect(routerPrompt).toContain('repo risk hint: Changed scope crosses package boundaries.');
+  });
+
+  it('routes massive reviews to H2 with an H3 upgrade ceiling before systemic evidence is confirmed', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Please review this change set for merge blockers.',
+      undefined,
+      {
+        repoSignals: {
+          changedFileCount: 52,
+          changedLineCount: 7241,
+          addedLineCount: 4810,
+          deletedLineCount: 2431,
+          touchedModuleCount: 4,
+          changedModules: ['packages/app', 'packages/shared', 'packages/repl', 'src'],
+          crossModule: false,
+          riskHints: ['Large review surface.'],
+          activeModuleId: 'packages/app',
+          activeModuleConfidence: 0.64,
+          activeImpactConfidence: 0.61,
+          impactedModuleCount: 4,
+          impactedSymbolCount: 21,
+          predominantCapabilityTier: 'high',
+          suggestedComplexity: 'complex',
+          plannerBias: true,
+          investigationBias: false,
+          lowConfidence: false,
+          reviewScale: 'massive',
+        },
+      },
+    );
+
+    expect(decision.primaryTask).toBe('review');
+    expect(decision.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    expect(decision.upgradeCeiling).toBe('H3_MULTI_WORKER');
+    expect(decision.reviewScale).toBe('massive');
+  });
+
+  it('routes prompt-declared massive reviews to H2 with an H3 upgrade ceiling', () => {
+    const decision = buildFallbackRoutingDecision(
+      'Please review this 50 file, 7000 lines change set and call out merge blockers.',
+    );
+
+    expect(decision.primaryTask).toBe('review');
+    expect(decision.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    expect(decision.upgradeCeiling).toBe('H3_MULTI_WORKER');
+    expect(decision.reviewScale).toBe('massive');
   });
 
   it('prefers explicit review language when review and planning signals are tied', () => {

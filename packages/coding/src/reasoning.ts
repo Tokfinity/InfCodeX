@@ -316,6 +316,13 @@ export interface ReasoningFollowUpPlan extends ReasoningPlan {
   kind: ReasoningFollowUpKind;
 }
 
+const REVIEW_LARGE_FILE_THRESHOLD = 10;
+const REVIEW_LARGE_LINE_THRESHOLD = 1200;
+const REVIEW_LARGE_MODULE_THRESHOLD = 3;
+const REVIEW_MASSIVE_FILE_THRESHOLD = 30;
+const REVIEW_MASSIVE_LINE_THRESHOLD = 4000;
+const REVIEW_MASSIVE_MODULE_THRESHOLD = 5;
+
 export function resolveReasoningMode(options: KodaXOptions): KodaXReasoningMode {
   if (options.reasoningMode) {
     return options.reasoningMode;
@@ -677,7 +684,7 @@ export function buildPromptOverlay(
   return [
     EXECUTION_MODE_OVERLAYS[decision.recommendedMode],
     HARNESS_PROFILE_OVERLAYS[decision.harnessProfile],
-    `[Task Routing] primary=${decision.primaryTask}; risk=${decision.riskLevel}; complexity=${decision.complexity}; intent=${decision.workIntent}; brainstorm=${decision.requiresBrainstorm ? 'yes' : 'no'}; harness=${decision.harnessProfile}; confidence=${decision.confidence.toFixed(2)}.`,
+    `[Task Routing] primary=${decision.primaryTask}; risk=${decision.riskLevel}; complexity=${decision.complexity}; intent=${decision.workIntent}; brainstorm=${decision.requiresBrainstorm ? 'yes' : 'no'}; harness=${decision.harnessProfile}; upgradeCeiling=${decision.upgradeCeiling ?? 'none'}; reviewScale=${decision.reviewScale ?? 'unknown'}; confidence=${decision.confidence.toFixed(2)}.`,
     decision.soloBoundaryConfidence !== undefined
       ? `[Task Routing Signals] soloBoundaryConfidence=${decision.soloBoundaryConfidence.toFixed(2)}; needsIndependentQA=${decision.needsIndependentQA ? 'yes' : 'no'}; source=${decision.routingSource ?? 'unknown'}; attempts=${decision.routingAttempts ?? 1}.`
       : undefined,
@@ -1068,10 +1075,12 @@ async function retryStructuredDecision<T>(
       }
     }
 
-    if (attempts < STRUCTURED_DECISION_MAX_ATTEMPTS) {
-      options.events?.onRetry?.(`${label} structured decision retry`, attempts, STRUCTURED_DECISION_MAX_ATTEMPTS);
-      await waitForStructuredDecisionBackoff(attempts, options.abortSignal);
-    }
+      if (attempts < STRUCTURED_DECISION_MAX_ATTEMPTS) {
+        if (process.env.KODAX_DEBUG_ROUTING) {
+          options.events?.onRetry?.(`${label} structured decision retry`, attempts, STRUCTURED_DECISION_MAX_ATTEMPTS);
+        }
+        await waitForStructuredDecisionBackoff(attempts, options.abortSignal);
+      }
   }
 
   logRoutingDebug(label, lastError);
@@ -1167,6 +1176,15 @@ function parseRoutingDecision(
       typeof parsed.needsIndependentQA === 'boolean'
         ? parsed.needsIndependentQA
         : undefined;
+    const reviewScale =
+      parsed.reviewScale === 'small'
+      || parsed.reviewScale === 'large'
+      || parsed.reviewScale === 'massive'
+        ? parsed.reviewScale
+        : undefined;
+    const upgradeCeiling = isHarnessProfile(parsed.upgradeCeiling)
+      ? parsed.upgradeCeiling
+      : undefined;
 
     if (
       !primaryTask ||
@@ -1199,6 +1217,8 @@ function parseRoutingDecision(
       harnessProfile: isHarnessProfile(parsed.harnessProfile)
         ? parsed.harnessProfile
         : 'H1_EXECUTE_EVAL',
+      upgradeCeiling,
+      reviewScale,
       soloBoundaryConfidence,
       needsIndependentQA,
       routingSource: parsed.routingSource === 'model'
@@ -1653,12 +1673,26 @@ function selectHarnessProfile(
   providerPolicy?: KodaXProviderPolicyDecision,
 ): {
   harnessProfile: KodaXHarnessProfile;
+  upgradeCeiling?: KodaXHarnessProfile;
   notes: string[];
 } {
   const normalized = ` ${prompt.toLowerCase()} `;
   let harnessProfile: KodaXHarnessProfile;
+  let upgradeCeiling = decision.upgradeCeiling;
 
-  if (
+  if (decision.primaryTask === 'review' && decision.reviewScale === 'massive') {
+    if (
+      decision.complexity === 'systemic'
+      || textHasKeyword(normalized, 'multi-agent')
+      || textHasKeyword(normalized, 'parallel')
+      || textHasKeyword(normalized, 'across the monorepo')
+    ) {
+      harnessProfile = 'H3_MULTI_WORKER';
+    } else {
+      harnessProfile = 'H2_PLAN_EXECUTE_EVAL';
+      upgradeCeiling = 'H3_MULTI_WORKER';
+    }
+  } else if (
     textHasKeyword(normalized, 'multi-agent') ||
     textHasKeyword(normalized, 'parallel') ||
     textHasKeyword(normalized, 'across the monorepo') ||
@@ -1666,6 +1700,7 @@ function selectHarnessProfile(
   ) {
     harnessProfile = 'H3_MULTI_WORKER';
   } else if (
+    (decision.primaryTask === 'review' && decision.reviewScale === 'large') ||
     decision.requiresBrainstorm ||
     decision.primaryTask === 'plan' ||
     decision.complexity === 'complex' ||
@@ -1694,6 +1729,7 @@ function selectHarnessProfile(
       snapshot.evidenceSupport === 'none'
     ) {
       harnessProfile = 'H1_EXECUTE_EVAL';
+      upgradeCeiling = harnessProfile;
       notes.push('Downgraded from H3 to H1 because provider semantics are too lossy for multi-worker coordination.');
     } else if (
       snapshot.toolCallingFidelity === 'limited' ||
@@ -1701,12 +1737,16 @@ function selectHarnessProfile(
       snapshot.transport === 'cli-bridge'
     ) {
       harnessProfile = 'H2_PLAN_EXECUTE_EVAL';
+      if (upgradeCeiling === 'H3_MULTI_WORKER') {
+        upgradeCeiling = 'H2_PLAN_EXECUTE_EVAL';
+      }
       notes.push('Downgraded from H3 to H2 because provider semantics may lose coordination or evidence fidelity.');
     }
   }
 
   return {
     harnessProfile,
+    upgradeCeiling,
     notes,
   };
 }
@@ -1782,7 +1822,7 @@ function computeSoloBoundaryConfidence(
   prompt: string,
   decision: Pick<
     KodaXTaskRoutingDecision,
-    'primaryTask' | 'complexity' | 'riskLevel' | 'requiresBrainstorm' | 'workIntent'
+    'primaryTask' | 'complexity' | 'riskLevel' | 'requiresBrainstorm' | 'workIntent' | 'reviewScale'
   >,
   repoSignals?: KodaXRepoRoutingSignals,
 ): number {
@@ -1791,6 +1831,11 @@ function computeSoloBoundaryConfidence(
 
   if (decision.primaryTask === 'review') {
     score -= 0.12;
+    if (decision.reviewScale === 'large') {
+      score -= 0.16;
+    } else if (decision.reviewScale === 'massive') {
+      score -= 0.28;
+    }
   } else if (decision.primaryTask === 'bugfix') {
     score -= 0.08;
   } else if (decision.primaryTask === 'plan') {
@@ -1828,6 +1873,12 @@ function computeSoloBoundaryConfidence(
     if (repoSignals.changedFileCount >= 3) {
       score -= 0.12;
     }
+    if (repoSignals.changedLineCount >= REVIEW_LARGE_LINE_THRESHOLD) {
+      score -= 0.14;
+    }
+    if (repoSignals.changedLineCount >= REVIEW_MASSIVE_LINE_THRESHOLD) {
+      score -= 0.14;
+    }
     if (repoSignals.touchedModuleCount >= 2) {
       score -= 0.16;
     }
@@ -1849,7 +1900,7 @@ function computeNeedsIndependentQA(
   prompt: string,
   decision: Pick<
     KodaXTaskRoutingDecision,
-    'primaryTask' | 'complexity' | 'riskLevel' | 'requiresBrainstorm'
+    'primaryTask' | 'complexity' | 'riskLevel' | 'requiresBrainstorm' | 'reviewScale'
   >,
   repoSignals?: KodaXRepoRoutingSignals,
 ): boolean {
@@ -1871,11 +1922,18 @@ function computeNeedsIndependentQA(
     return true;
   }
 
+  if (decision.primaryTask === 'review' && (decision.reviewScale === 'large' || decision.reviewScale === 'massive')) {
+    return true;
+  }
+
   if (repoSignals) {
     if (repoSignals.crossModule || repoSignals.lowConfidence) {
       return true;
     }
     if ((repoSignals.impactedModuleCount ?? 0) >= 2 || repoSignals.touchedModuleCount >= 2) {
+      return true;
+    }
+    if (repoSignals.changedLineCount >= REVIEW_LARGE_LINE_THRESHOLD) {
       return true;
     }
   }
@@ -2003,6 +2061,66 @@ function applyRepoSignalsToDecision(
   };
 }
 
+function parsePromptInteger(prompt: string, regex: RegExp): number | undefined {
+  const match = regex.exec(prompt);
+  if (!match?.[1]) {
+    return undefined;
+  }
+
+  const rawValue = match[1].replace(/,/g, '').toLowerCase();
+  const multiplier = rawValue.endsWith('k') ? 1000 : 1;
+  const numeric = rawValue.endsWith('k') ? rawValue.slice(0, -1) : rawValue;
+  const value = Number.parseFloat(numeric);
+  if (!Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.round(value * multiplier);
+}
+
+function inferPromptReviewScale(prompt: string): {
+  changedFileCount?: number;
+  changedLineCount?: number;
+  reviewScale?: KodaXTaskRoutingDecision['reviewScale'];
+} {
+  const changedFileCount = parsePromptInteger(
+    prompt,
+    /(?:^|[\s(,])(\d[\d,]*(?:\.\d+)?k?)\s*(?:changed\s+)?files?\b/i,
+  );
+  const changedLineCount = parsePromptInteger(
+    prompt,
+    /(?:^|[\s(,])(\d[\d,]*(?:\.\d+)?k?)\s*(?:changed\s+)?lines?\b/i,
+  );
+
+  let reviewScale: KodaXTaskRoutingDecision['reviewScale'];
+  if (
+    (changedFileCount ?? 0) >= REVIEW_MASSIVE_FILE_THRESHOLD
+    || (changedLineCount ?? 0) >= REVIEW_MASSIVE_LINE_THRESHOLD
+  ) {
+    reviewScale = 'massive';
+  } else if (
+    (changedFileCount ?? 0) >= REVIEW_LARGE_FILE_THRESHOLD
+    || (changedLineCount ?? 0) >= REVIEW_LARGE_LINE_THRESHOLD
+  ) {
+    reviewScale = 'large';
+  }
+
+  return {
+    changedFileCount,
+    changedLineCount,
+    reviewScale,
+  };
+}
+
+function deriveReviewScaleFromSignals(
+  repoSignals?: KodaXRepoRoutingSignals,
+  prompt?: string,
+): KodaXTaskRoutingDecision['reviewScale'] | undefined {
+  if (repoSignals?.reviewScale) {
+    return repoSignals.reviewScale;
+  }
+  return inferPromptReviewScale(prompt ?? '').reviewScale;
+}
+
 function stabilizeRoutingDecision(
   prompt: string,
   decision: KodaXTaskRoutingDecision,
@@ -2055,12 +2173,14 @@ function stabilizeRoutingDecision(
     inferredComplexity,
     repoSignals?.suggestedComplexity,
   );
+  const reviewScale = decision.reviewScale ?? deriveReviewScaleFromSignals(repoSignals, prompt);
   const requiresBrainstorm = inferRequiresBrainstorm(
     prompt,
     {
       ...stabilized,
       workIntent,
       complexity,
+      reviewScale,
     },
     complexity,
   ) || Boolean(
@@ -2077,6 +2197,7 @@ function stabilizeRoutingDecision(
           riskLevel: stabilized.riskLevel,
           requiresBrainstorm,
           workIntent,
+          reviewScale,
         },
         repoSignals,
       ),
@@ -2090,6 +2211,7 @@ function stabilizeRoutingDecision(
         complexity,
         riskLevel: stabilized.riskLevel,
         requiresBrainstorm,
+        reviewScale,
       },
       repoSignals,
     );
@@ -2100,6 +2222,7 @@ function stabilizeRoutingDecision(
       workIntent,
       complexity,
       requiresBrainstorm,
+      reviewScale,
       soloBoundaryConfidence,
       needsIndependentQA,
     },
@@ -2123,9 +2246,11 @@ function stabilizeRoutingDecision(
     workIntent,
     complexity,
     requiresBrainstorm,
+    reviewScale,
     soloBoundaryConfidence,
     needsIndependentQA,
     harnessProfile: harnessDecision.harnessProfile,
+    upgradeCeiling: harnessDecision.upgradeCeiling,
     routingSource: stabilized.routingSource ?? 'fallback',
     routingAttempts: stabilized.routingAttempts ?? 1,
     routingNotes: [
@@ -2147,12 +2272,14 @@ function summarizeRepoRoutingSignals(
     [
       '- repo intelligence:',
       `changedFiles=${signals.changedFileCount}`,
+      `changedLines=${signals.changedLineCount}`,
       `touchedModules=${signals.touchedModuleCount}`,
       `crossModule=${signals.crossModule ? 'yes' : 'no'}`,
       `plannerBias=${signals.plannerBias ? 'yes' : 'no'}`,
       `investigationBias=${signals.investigationBias ? 'yes' : 'no'}`,
       `lowConfidence=${signals.lowConfidence ? 'yes' : 'no'}`,
       signals.suggestedComplexity ? `suggestedComplexity=${signals.suggestedComplexity}` : null,
+      signals.reviewScale ? `reviewScale=${signals.reviewScale}` : null,
       signals.predominantCapabilityTier ? `capability=${signals.predominantCapabilityTier}` : null,
     ]
       .filter(Boolean)

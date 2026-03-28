@@ -141,6 +141,36 @@ function normalizeRuntimeModelSelection(
   return normalized;
 }
 
+function describeTransientProviderRetry(error: Error): string {
+  const message = error.message.toLowerCase();
+  if (error.name === 'StreamIncompleteError' || message.includes('stream incomplete')) {
+    return 'Stream interrupted before completion';
+  }
+  if (message.includes('stream stalled') || message.includes('delayed response') || message.includes('60s idle')) {
+    return 'Stream stalled';
+  }
+  if (message.includes('hard timeout') || message.includes('10 minutes')) {
+    return 'Provider response timed out';
+  }
+  if (
+    message.includes('socket hang up')
+    || message.includes('connection error')
+    || message.includes('econnrefused')
+    || message.includes('enotfound')
+    || message.includes('fetch failed')
+    || message.includes('network')
+  ) {
+    return 'Provider connection error';
+  }
+  if (message.includes('timeout') || message.includes('etimedout')) {
+    return 'Provider request timed out';
+  }
+  if (message.includes('aborted')) {
+    return 'Provider stream aborted';
+  }
+  return 'Transient provider error';
+}
+
 function createRuntimeExtensionState(
   persisted?: KodaXExtensionSessionState,
 ): Map<string, Map<string, KodaXJsonValue>> {
@@ -657,6 +687,56 @@ async function maybeBuildAutoReroutePlan(
   }
 }
 
+function looksLikeReviewProgressUpdate(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return [
+    'now let me',
+    'let me look',
+    'let me check',
+    'let me inspect',
+    'now i will',
+    '现在让我',
+    '让我看看',
+    '让我检查',
+    '我现在来',
+    '接下来我',
+    '下面我来',
+  ].some((prefix) => normalized.startsWith(prefix));
+}
+
+function isReviewFinalAnswerCandidate(
+  prompt: string,
+  reasoningPlan: ReasoningPlan,
+  lastText: string,
+): boolean {
+  if (reasoningPlan.decision.primaryTask !== 'review') {
+    return true;
+  }
+
+  const normalizedPrompt = prompt.toLowerCase();
+  const normalizedText = lastText.trim();
+  if (!normalizedText || looksLikeReviewProgressUpdate(normalizedText)) {
+    return false;
+  }
+
+  if (normalizedText.length >= 600) {
+    return true;
+  }
+
+  return /\b(must fix|finding|optional improvements|final assessment|verdict)\b/i.test(normalizedText)
+    || /(必须修复|问题|建议|结论|评审报告|最终评审)/.test(normalizedText)
+    || /^\s*(?:[-*]|\d+\.)\s+/m.test(normalizedText)
+    || /\b(must[- ]fix|strict review|pr review|code review)\b/i.test(normalizedPrompt);
+}
+
+function hasStrongToolFailureEvidence(toolEvidence: string): boolean {
+  return /\b(fail(?:ed|ure)?|error|blocked|exception|traceback|assert|regression|not found|timeout|console error|permission denied)\b/i
+    .test(toolEvidence);
+}
+
 async function maybeAdvanceAutoReroute(params: {
   provider: ReturnType<typeof resolveProvider>;
   options: KodaXOptions;
@@ -671,6 +751,7 @@ async function maybeAdvanceAutoReroute(params: {
   isNewSession: boolean;
   retryLabelPrefix: string;
   toolEvidence?: string;
+  allowTaskReroute?: boolean;
   onApply?: () => Promise<void> | void;
   persistSession?: {
     sessionId: string;
@@ -701,7 +782,7 @@ async function maybeAdvanceAutoReroute(params: {
     params.lastText,
     {
       allowDepthEscalation: params.autoDepthEscalationCount === 0,
-      allowTaskReroute: params.autoTaskRerouteCount === 0,
+      allowTaskReroute: (params.allowTaskReroute ?? true) && params.autoTaskRerouteCount === 0,
     },
     params.toolEvidence,
   );
@@ -986,6 +1067,8 @@ export async function runKodaX(
   let autoDepthEscalationCount = 0;
   let autoTaskRerouteCount = 0;
   const autoFollowUpLimit = 2;
+  let preAnswerJudgeConsumed = false;
+  let postToolJudgeConsumed = false;
 
   let lastText = '';
   let incompleteRetryCount = 0;
@@ -1296,9 +1379,9 @@ export async function runKodaX(
           retryDelay: 1000,
           shouldCleanup: true,
         },
-        (attempt, maxRetries, delay) => {
+        (attempt, maxRetries, delay, error) => {
           events.onRetry?.(
-            `API error, retrying in ${Math.round(delay / 1000)}s (${attempt}/${maxRetries})`,
+            `${describeTransientProviderRetry(error)} · retry ${attempt}/${maxRetries} in ${Math.round(delay / 1000)}s`,
             attempt,
             maxRetries
           );
@@ -1401,8 +1484,11 @@ export async function runKodaX(
         if (
           effectiveReasoningPlan.mode === 'auto' &&
           autoFollowUpCount < autoFollowUpLimit &&
-          (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
+          (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0) &&
+          !preAnswerJudgeConsumed &&
+          isReviewFinalAnswerCandidate(prompt, effectiveReasoningPlan, lastText)
         ) {
+          preAnswerJudgeConsumed = true;
           const rerouteState = await maybeAdvanceAutoReroute({
             provider,
             options,
@@ -1416,6 +1502,7 @@ export async function runKodaX(
             events,
             isNewSession: messages.length === 1,
             retryLabelPrefix: 'Auto',
+            allowTaskReroute: !options.context?.disableAutoTaskReroute,
             onApply: () => {
               messages.pop();
             },
@@ -1653,10 +1740,12 @@ export async function runKodaX(
       if (
         effectiveReasoningPlan.mode === 'auto' &&
         autoFollowUpCount < autoFollowUpLimit &&
-        (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0)
+        (autoDepthEscalationCount === 0 || autoTaskRerouteCount === 0) &&
+        !postToolJudgeConsumed
       ) {
         const toolEvidence = summarizeToolEvidence(result.toolBlocks, toolResults);
-        if (toolEvidence) {
+        if (toolEvidence && hasStrongToolFailureEvidence(toolEvidence)) {
+          postToolJudgeConsumed = true;
           const rerouteState = await maybeAdvanceAutoReroute({
             provider,
             options,
@@ -1671,6 +1760,7 @@ export async function runKodaX(
             isNewSession: false,
             retryLabelPrefix: 'Post-tool auto',
             toolEvidence,
+            allowTaskReroute: !options.context?.disableAutoTaskReroute,
             persistSession: {
               sessionId,
               messages,
