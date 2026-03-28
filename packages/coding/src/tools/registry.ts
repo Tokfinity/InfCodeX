@@ -18,6 +18,7 @@ import { toolUndo } from './undo.js';
 import { toolAskUserQuestion } from './ask-user-question.js';
 import { toolRepoOverview } from './repo-overview.js';
 import { toolChangedScope } from './changed-scope.js';
+import { toolChangedDiff, toolChangedDiffBundle } from './changed-diff.js';
 import { toolModuleContext } from './module-context.js';
 import { toolSymbolContext } from './symbol-context.js';
 import { toolProcessContext } from './process-context.js';
@@ -266,6 +267,46 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolChangedScope,
+  },
+  {
+    name: 'changed_diff',
+    description: 'Read a paged diff slice for a specific changed file. Prefer this over broad git diff output during large reviews.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
+        base_ref: { type: 'string', description: 'Optional base git ref for compare-range review' },
+        target_ref: { type: 'string', description: 'Optional target git ref for compare-range review (defaults to HEAD when base_ref is provided)' },
+        path: { type: 'string', description: 'Changed file path to inspect, relative to the workspace root or absolute inside it' },
+        offset: { type: 'number', description: '1-based diff line offset for pagination' },
+        limit: { type: 'number', description: 'Maximum diff lines to return in this slice' },
+        context_lines: { type: 'number', description: 'Unified diff context lines to request' },
+      },
+      required: ['path'],
+    },
+    handler: toolChangedDiff,
+  },
+  {
+    name: 'changed_diff_bundle',
+    description: 'Read diff slices for multiple changed files in one call. Prefer this for large reviews before drilling down with changed_diff.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        target_path: { type: 'string', description: 'Optional path inside the workspace to resolve the repository root from' },
+        base_ref: { type: 'string', description: 'Optional base git ref for compare-range review' },
+        target_ref: { type: 'string', description: 'Optional target git ref for compare-range review (defaults to HEAD when base_ref is provided)' },
+        paths: {
+          type: 'array',
+          description: 'Changed file paths to inspect in one bundle, relative to the workspace root or absolute inside it',
+          items: { type: 'string' },
+        },
+        offset: { type: 'number', description: '1-based diff line offset applied to each path in the bundle' },
+        limit_per_path: { type: 'number', description: 'Maximum diff lines to return per path in this bundle' },
+        context_lines: { type: 'number', description: 'Unified diff context lines to request' },
+      },
+      required: ['paths'],
+    },
+    handler: toolChangedDiffBundle,
   },
   {
     name: 'module_context',

@@ -38,6 +38,7 @@ export { toolUndo } from './undo.js';
 export { toolAskUserQuestion } from './ask-user-question.js';
 export { toolRepoOverview } from './repo-overview.js';
 export { toolChangedScope } from './changed-scope.js';
+export { toolChangedDiff, toolChangedDiffBundle } from './changed-diff.js';
 export { toolModuleContext } from './module-context.js';
 export { toolSymbolContext } from './symbol-context.js';
 export { toolProcessContext } from './process-context.js';

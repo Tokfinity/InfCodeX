@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Harness transitions and upgrade ceiling (task-engine v2)**: Managed tasks now support runtime harness upgrades (`KodaXManagedTaskHarnessTransition`) with admission, contract-review, and evaluator sources; `upgradeCeiling` on routing decisions caps maximum harness level; `ManagedTaskAdmissionDirective` and `ManagedTaskHandoffDirective` govern scope admission and worker handoff
+- **Review scale detection**: `KodaXReviewScale` (`small`/`large`/`massive`) derived from file count, line count, and module count thresholds in routing signals; surfaced in prompt overlay and status bar
+- **Live streaming for managed tasks**: `formatManagedTaskBreadcrumb()` and `mergeLiveThinkingContent()` in `packages/repl/src/ui/utils/live-streaming.ts` for real-time task phase, harness, and thinking display
+- **Tool display formatting**: `formatToolCallInlineText()` and `ToolSummaryGroup` in `packages/repl/src/ui/utils/tool-display.ts` for compact tool call rendering in message list
+- **Managed run context builder**: `buildManagedRunContext()` in `packages/repl/src/ui/utils/managed-run-context.ts` consolidating git root, execution cwd, token snapshot, and task surface
+- **Changed-diff tool**: `changed-diff.ts` in `packages/coding/src/tools/` for scoped git diff retrieval with configurable context lines, diff limits, and bundle mode
+- **Transient provider retry descriptions**: `describeTransientProviderRetry()` in `agent.ts` mapping stream/connection/timeout errors to user-facing messages
+- **Managed task status events**: `KodaXManagedTaskStatusEvent` type with phase (`starting`/`routing`/`preflight`/`round`/`worker`/`upgrade`/`completed`), active worker, and harness profile
+- **Routing signal enrichment**: `KodaXRepoRoutingSignals` now includes `changedLineCount`, `addedLineCount`, `deletedLineCount`, and `reviewScale` for finer-grained routing decisions
+- **Budget upgrade reserves**: `upgradeReserveBudget` and `upgradeReserveRemaining` on `KodaXManagedBudgetSnapshot` for harness upgrade token allocation
+- **Dynamic help bar**: `buildHelpBarSegments()` replaces static `HELP_BARSegments` for context-sensitive status bar segments
+- **FEATURE_044**: Durable Compression Anchors and Artifact Recall spec added to v0.8.0 feature docs
+
+### Changed
+- **Task engine expanded**: `task-engine.ts` (+2381 lines) with harness transition approval, admission directives, handoff protocols, terminal authority, evidence acquisition modes, and multi-round budget controller
+- **Reasoning pipeline updated**: Review scale thresholds, upgrade ceiling parsing, conditional debug logging for structured decision retries
+- **Status bar enhanced**: Harness profile short labels (H0–H3), managed task phase display, live activity indicator, dynamic segment construction
+- **Message rendering improved**: Control-plane-only assistant text detection, user-facing text sanitization, interrupted-task evidence filtering
+- **Orchestration refined**: Worker-sourced verdict directives, harness profile propagation through round execution
+
+### Fixed
+- Interrupted managed tasks now filter empty/placeholder evidence entries from transcript rendering
+
+### Tests
+- New tests: `changed-diff.test.ts`, `live-streaming.test.ts`, `managed-run-context.test.ts`, `retry-history.test.ts`, `tool-display.test.ts`
+- Expanded tests: `task-engine.test.ts` (+1508 lines), `reasoning.test.ts`, `orchestration.test.ts`, `StatusBar.test.ts`, `transcript-layout.test.ts`, `message-utils.test.ts`, `layout.test.ts`
+
 <!-- last-sync: HEAD -->
 
 ---

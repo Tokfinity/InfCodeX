@@ -18,7 +18,7 @@ describe("StatusBar", () => {
     });
 
     expect(text).toContain("Thinking");
-    expect(text).not.toContain("42 chars");
+    expect(text).toContain("42 chars");
   });
 
   it("includes tool char counts in budget text", () => {
@@ -33,7 +33,7 @@ describe("StatusBar", () => {
     });
 
     expect(text).toContain("Bash");
-    expect(text).not.toContain("12 chars");
+    expect(text).toContain("12 chars");
   });
 
   it("renders the visible busy status", () => {
@@ -106,5 +106,46 @@ describe("StatusBar", () => {
     });
 
     expect(text).toContain("KodaX - SA");
+  });
+
+  it("shows managed AMA harness and worker in busy status text while showing outer and inner counters", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      isThinkingActive: true,
+      thinkingCharCount: 42,
+      currentIteration: 14,
+      maxIter: 24,
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
+      managedRound: 2,
+      managedMaxRounds: 6,
+    });
+
+    expect(text).toContain("AMA H2 - Planner");
+    expect(text).toContain("42 chars");
+    expect(text).toContain("Round 2/6");
+    expect(text).toContain("Iter 14/24");
+    expect(text).not.toContain("r2/6");
+  });
+
+  it("shows managed tool progress together with the active role", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      currentTool: "shell_command",
+      toolInputCharCount: 12,
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
+    });
+
+    expect(text).toContain("AMA H2 - Planner");
+    expect(text).toContain("Bash (12 chars)");
   });
 });

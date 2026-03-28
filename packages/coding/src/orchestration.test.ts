@@ -151,6 +151,51 @@ describe('runOrchestration', () => {
     expect(result.taskResults.prepare?.result.metadata?.signal).toBe('BLOCKED');
     expect(result.taskResults.publish?.result.summary).toContain('user cancelled');
   });
+
+  it('suppresses downstream lifecycle events after the orchestration signal is aborted', async () => {
+    const workspaceDir = await createTempDir('kodax-orch-');
+    const controller = new AbortController();
+    const started: string[] = [];
+    const completed: string[] = [];
+
+    const result = await runOrchestration({
+      workspaceDir,
+      signal: controller.signal,
+      tasks: [
+        { id: 'lead', title: 'Lead' },
+        { id: 'planner', title: 'Planner', dependsOn: ['lead'] },
+      ],
+      runner: async (task) => {
+        if (task.id === 'lead') {
+          controller.abort(new Error('user cancelled'));
+          await delay(5);
+          return {
+            success: false,
+            error: 'cancelled',
+            summary: 'cancelled',
+          };
+        }
+        return {
+          success: true,
+          output: 'should-not-run',
+          summary: 'should-not-run',
+        };
+      },
+      events: {
+        onTaskStart: async (task) => {
+          started.push(task.id);
+        },
+        onTaskComplete: async (task) => {
+          completed.push(task.id);
+        },
+      },
+    });
+
+    expect(result.taskResults.lead?.status).toBe('failed');
+    expect(result.taskResults.planner?.status).toBe('blocked');
+    expect(started).toEqual(['lead']);
+    expect(completed).toEqual([]);
+  });
 });
 
 describe('createKodaXTaskRunner', () => {

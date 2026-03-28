@@ -170,6 +170,9 @@ export interface ChangedScopeReport {
   baseRef?: string;
   overviewGeneratedAt?: string;
   totalChangedFiles: number;
+  changedLineCount: number;
+  addedLineCount: number;
+  deletedLineCount: number;
   categories: Record<'source' | 'docs' | 'tests' | 'config' | 'other', number>;
   areasTouched: ChangedScopeAreaSummary[];
   files: ChangedFileEntry[];
@@ -185,6 +188,12 @@ interface GitSummary {
 interface ChangedFileCandidate {
   path: string;
   status: ChangedFileStatus;
+}
+
+interface ChangedLineStats {
+  changedLineCount: number;
+  addedLineCount: number;
+  deletedLineCount: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -809,6 +818,56 @@ async function collectChangedFiles(
   return Array.from(deduped.values());
 }
 
+async function collectChangedLineStats(
+  workspaceRoot: string,
+  scope: 'unstaged' | 'staged' | 'all' | 'compare',
+  baseRef?: string,
+): Promise<ChangedLineStats> {
+  let output = '';
+  if (scope === 'compare') {
+    const compareBase = baseRef?.trim() || 'HEAD~1';
+    output = await runGit(['diff', '--numstat', `${compareBase}...HEAD`], workspaceRoot);
+  } else if (scope === 'staged') {
+    output = await runGit(['diff', '--cached', '--numstat'], workspaceRoot);
+  } else if (scope === 'unstaged') {
+    output = await runGit(['diff', '--numstat'], workspaceRoot);
+  } else {
+    output = await runGit(['diff', '--numstat', 'HEAD'], workspaceRoot);
+  }
+
+  let addedLineCount = 0;
+  let deletedLineCount = 0;
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const match = line.match(/^(\d+|-)\s+(\d+|-)\s+(.+)$/);
+    if (!match) {
+      continue;
+    }
+    const [, addedRaw, deletedRaw, filePathRaw] = match;
+    const normalizedPath = normalizeRelativePath(filePathRaw.split(' -> ').pop() ?? filePathRaw);
+    if (isManagedMetadataPath(normalizedPath)) {
+      continue;
+    }
+    const added = addedRaw === '-' ? 0 : Number.parseInt(addedRaw, 10);
+    const deleted = deletedRaw === '-' ? 0 : Number.parseInt(deletedRaw, 10);
+    if (Number.isFinite(added)) {
+      addedLineCount += added;
+    }
+    if (Number.isFinite(deleted)) {
+      deletedLineCount += deleted;
+    }
+  }
+
+  return {
+    changedLineCount: addedLineCount + deletedLineCount,
+    addedLineCount,
+    deletedLineCount,
+  };
+}
+
 export async function analyzeChangedScope(
   context: Pick<KodaXToolExecutionContext, 'executionCwd' | 'gitRoot'>,
   options: {
@@ -829,6 +888,15 @@ export async function analyzeChangedScope(
   }
 
   const changedCandidates = await collectChangedFiles(overview.workspaceRoot, scope, options.baseRef);
+  const changedLineStats = await collectChangedLineStats(overview.workspaceRoot, scope, options.baseRef)
+    .catch((error) => {
+      debugLogRepoIntelligence('Changed scope could not load line stats.', error);
+      return {
+        changedLineCount: 0,
+        addedLineCount: 0,
+        deletedLineCount: 0,
+      } satisfies ChangedLineStats;
+    });
   const changedFiles: ChangedFileEntry[] = changedCandidates.map((candidate) => {
     const area = findAreaForFile(candidate.path, overview.areas);
     return {
@@ -878,6 +946,9 @@ export async function analyzeChangedScope(
     baseRef: scope === 'compare' ? (options.baseRef?.trim() || 'HEAD~1') : undefined,
     overviewGeneratedAt: overview.generatedAt,
     totalChangedFiles: changedFiles.length,
+    changedLineCount: changedLineStats.changedLineCount,
+    addedLineCount: changedLineStats.addedLineCount,
+    deletedLineCount: changedLineStats.deletedLineCount,
     categories,
     areasTouched: Array.from(areasTouchedMap.values()).sort((left, right) => {
       if (right.fileCount !== left.fileCount) {
@@ -901,6 +972,7 @@ export function renderChangedScope(report: ChangedScopeReport): string {
     `Scope: ${report.scope}${report.baseRef ? ` vs ${report.baseRef}` : ''}`,
     `Snapshot: ${report.analyzedAt}`,
     `Changed files: ${report.totalChangedFiles}`,
+    `Changed lines: ${report.changedLineCount} (+${report.addedLineCount} / -${report.deletedLineCount})`,
     `Categories: source=${report.categories.source} docs=${report.categories.docs} tests=${report.categories.tests} config=${report.categories.config} other=${report.categories.other}`,
   ];
 

@@ -404,6 +404,10 @@ function formatAbortMessage(signal: AbortSignal | undefined): string {
   return 'Orchestration cancelled by user.';
 }
 
+function shouldSuppressLifecycleEvents(signal: AbortSignal | undefined): boolean {
+  return Boolean(signal?.aborted);
+}
+
 async function withTimeout<T>(
   operation: () => Promise<T>,
   timeoutMs: number | undefined,
@@ -548,6 +552,28 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
   tracePath: string,
   completed: Map<string, OrchestrationCompletedTask<TTask, TOutput>>
 ): Promise<OrchestrationCompletedTask<TTask, TOutput>> {
+  if (options.signal?.aborted) {
+    const startedAt = new Date().toISOString();
+    const blocked = buildCancelledTaskResult<TTask, TOutput>(
+      record,
+      startedAt,
+      new Date().toISOString(),
+      formatAbortMessage(options.signal),
+    );
+    await writeDependencyHandoffArtifacts(record.taskDir, {});
+    await writeJsonFile(path.join(record.taskDir, 'result.json'), blocked);
+    await writeFile(path.join(record.taskDir, 'summary.md'), `${blocked.result.summary}\n`, 'utf8');
+    await appendTrace(tracePath, {
+      type: 'task_blocked',
+      timestamp: blocked.completedAt,
+      runId,
+      taskId: record.task.id,
+      status: 'blocked',
+      message: blocked.result.summary,
+    });
+    return blocked;
+  }
+
   const startedAt = new Date().toISOString();
   const dependencyResults = Object.fromEntries(
     (record.task.dependsOn ?? [])
@@ -569,7 +595,9 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
       execution: record.task.execution ?? 'serial',
     },
   });
-  await options.events?.onTaskStart?.(record.task);
+  if (!shouldSuppressLifecycleEvents(options.signal)) {
+    await options.events?.onTaskStart?.(record.task);
+  }
 
   const emit = async (message: string): Promise<void> => {
     const timestamp = new Date().toISOString();
@@ -581,7 +609,9 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
       taskId: record.task.id,
       message,
     });
-    await options.events?.onTaskMessage?.(record.task, message);
+    if (!shouldSuppressLifecycleEvents(options.signal)) {
+      await options.events?.onTaskMessage?.(record.task, message);
+    }
   };
 
   const controller = new AbortController();
@@ -643,7 +673,9 @@ async function executeTaskRecord<TTask extends OrchestrationWorkerSpec, TOutput>
     status,
     message: normalizedResult.summary ?? normalizedResult.error,
   });
-  await options.events?.onTaskComplete?.(record.task, finished);
+  if (!shouldSuppressLifecycleEvents(options.signal)) {
+    await options.events?.onTaskComplete?.(record.task, finished);
+  }
   return finished;
 }
 
@@ -705,7 +737,9 @@ export async function runOrchestration<TTask extends OrchestrationWorkerSpec, TO
           status: 'blocked',
           message: blocked.result.summary,
         });
-        await options.events?.onTaskComplete?.(record.task, blocked);
+        if (!shouldSuppressLifecycleEvents(options.signal)) {
+          await options.events?.onTaskComplete?.(record.task, blocked);
+        }
         completed.set(record.task.id, blocked);
         pending.delete(record.task.id);
       }
@@ -752,7 +786,9 @@ export async function runOrchestration<TTask extends OrchestrationWorkerSpec, TO
         status: 'blocked',
         message: blocked.result.summary,
       });
-      await options.events?.onTaskComplete?.(record.task, blocked);
+      if (!shouldSuppressLifecycleEvents(options.signal)) {
+        await options.events?.onTaskComplete?.(record.task, blocked);
+      }
       completed.set(record.task.id, blocked);
       pending.delete(record.task.id);
       blockedAny = true;
@@ -776,6 +812,10 @@ export async function runOrchestration<TTask extends OrchestrationWorkerSpec, TO
     const batch = parallelReady.length > 0 && maxParallel > 1
       ? parallelReady.slice(0, maxParallel)
       : [ready[0]!];
+
+    if (options.signal?.aborted) {
+      continue;
+    }
 
     const results = await Promise.all(
       batch.map((record) => executeTaskRecord(record, options, runId, tracePath, completed))
@@ -924,7 +964,6 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
       onToolResult: (result) => {
         baseEvents.onToolResult?.(result);
         taskEvents.onToolResult?.(result);
-        void context.emit(`Tool ${result.name} finished: ${truncateText(result.content, 240)}`);
       },
     };
 
@@ -954,7 +993,6 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
 
     if (transformedResult.interrupted && effectiveAbortSignal?.aborted) {
       const message = formatAbortMessage(effectiveAbortSignal);
-      await context.emit(message);
       return {
         success: false,
         output: transformedResult.lastText,
@@ -979,7 +1017,11 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
     return {
       success: transformedResult.success,
       output: transformedResult.lastText,
-      summary: truncateText(transformedResult.lastText || 'No textual output produced.'),
+      summary: truncateText(
+        transformedResult.lastText
+          || transformedResult.signalReason
+          || (transformedResult.interrupted ? 'Worker interrupted before producing a textual result.' : 'No textual output produced.'),
+      ),
       metadata: {
         sessionId: transformedResult.sessionId,
         signal: transformedResult.signal ?? null,

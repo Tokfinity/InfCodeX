@@ -13,11 +13,11 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-043` |
-| Total tracked features | `43` |
+| Tracked feature IDs | `001-044` |
+| Total tracked features | `44` |
 | Completed | `34` |
 | InProgress | `0` |
-| Planned | `9` |
+| Planned | `10` |
 | Current released version | `v0.7.4` |
 
 ### 各版本待做分布
@@ -26,7 +26,7 @@
 |---|---|
 | `v0.7.0` | `1` |
 | `v0.7.20` | `1` |
-| `v0.8.0` | `3` |
+| `v0.8.0` | `4` |
 | `v0.9.0` | `3` |
 | `v1.0.0` | `2` |
 
@@ -41,6 +41,7 @@
 | `026` | Roadmap Integrity and Planning Hygiene | Internal | High | `v0.7.20` | [v0.7.20](features/v0.7.20.md#feature_026-roadmap-integrity-and-planning-hygiene) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_030-multi-surface-delivery) |
 | `031` | Multimodal Artifact Inputs | New | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_031-multimodal-artifact-inputs) |
+| `044` | Durable Compression Anchors and Artifact Recall | Enhancement | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_044-durable-compression-anchors-and-artifact-recall) |
 | `042` | Incremental Repository Intelligence Refresh and Java/C++ Structural Semantics | Enhancement | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_042-incremental-repository-intelligence-refresh-and-javac-structural-semantics) |
 | `043` | Harness Calibration, Pivoting, Profiling, and Safe Checkpoints | Enhancement | High | `v0.9.0` | [v0.9.0](features/v0.9.0.md#feature_043-harness-calibration-pivoting-profiling-and-safe-checkpoints) |
 | `035` | MCP Capability Provider | New | High | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_035-mcp-capability-provider) |

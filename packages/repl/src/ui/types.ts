@@ -182,6 +182,10 @@ export interface StatusBarProps {
   };
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;
+  managedHarnessProfile?: string;
+  managedWorkerTitle?: string;
+  managedRound?: number;
+  managedMaxRounds?: number;
 }
 
 /**
