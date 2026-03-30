@@ -1,3 +1,11 @@
+# Protected files: always keep main branch version during merges
+README.md merge=infcodeX-protect
+README_CN.md merge=infcodeX-protect
+docs/ARCHITECTURE_OVERVIEW.md merge=infcodeX-protect
+docs/ARCHITECTURE_OVERVIEW_CN.md merge=infcodeX-protect
+docs/PROJECT_POSITIONING.md merge=infcodeX-protect
+docs/PROJECT_POSITIONING_CN.md merge=infcodeX-protect
+
 docs/FEATURE_LIST.md text eol=lf
 docs/features/v0.6.0.md text eol=lf
 packages/repl/src/interactive/commands.ts text eol=lf
