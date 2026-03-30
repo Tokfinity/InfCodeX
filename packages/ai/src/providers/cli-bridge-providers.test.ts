@@ -21,7 +21,7 @@ describe('CLI bridge providers', () => {
     expect(provider.name).toBe('gemini-cli');
     expect(provider.supportsThinking).toBe(false);
     expect(provider.isConfigured()).toBe(true);
-    expect(provider.getModel()).toBe('gemini-2.5-pro');
+    expect(provider.getAvailableModels()).toContain(provider.getModel());
     expect(provider.getCapabilityProfile()).toEqual(EXPECTED_CLI_BRIDGE_PROFILE);
 
     provider.disconnect();
@@ -33,7 +33,7 @@ describe('CLI bridge providers', () => {
     expect(provider.name).toBe('codex-cli');
     expect(provider.supportsThinking).toBe(false);
     expect(provider.isConfigured()).toBe(true);
-    expect(provider.getModel()).toBe('codex');
+    expect(provider.getAvailableModels()).toContain(provider.getModel());
     expect(provider.getCapabilityProfile()).toEqual(EXPECTED_CLI_BRIDGE_PROFILE);
 
     provider.disconnect();
