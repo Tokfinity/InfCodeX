@@ -5,32 +5,38 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Harness transitions and upgrade ceiling (task-engine v2)**: Managed tasks now support runtime harness upgrades (`KodaXManagedTaskHarnessTransition`) with admission, contract-review, and evaluator sources; `upgradeCeiling` on routing decisions caps maximum harness level; `ManagedTaskAdmissionDirective` and `ManagedTaskHandoffDirective` govern scope admission and worker handoff
-- **Review scale detection**: `KodaXReviewScale` (`small`/`large`/`massive`) derived from file count, line count, and module count thresholds in routing signals; surfaced in prompt overlay and status bar
-- **Live streaming for managed tasks**: `formatManagedTaskBreadcrumb()` and `mergeLiveThinkingContent()` in `packages/repl/src/ui/utils/live-streaming.ts` for real-time task phase, harness, and thinking display
-- **Tool display formatting**: `formatToolCallInlineText()` and `ToolSummaryGroup` in `packages/repl/src/ui/utils/tool-display.ts` for compact tool call rendering in message list
-- **Managed run context builder**: `buildManagedRunContext()` in `packages/repl/src/ui/utils/managed-run-context.ts` consolidating git root, execution cwd, token snapshot, and task surface
-- **Changed-diff tool**: `changed-diff.ts` in `packages/coding/src/tools/` for scoped git diff retrieval with configurable context lines, diff limits, and bundle mode
-- **Transient provider retry descriptions**: `describeTransientProviderRetry()` in `agent.ts` mapping stream/connection/timeout errors to user-facing messages
-- **Managed task status events**: `KodaXManagedTaskStatusEvent` type with phase (`starting`/`routing`/`preflight`/`round`/`worker`/`upgrade`/`completed`), active worker, and harness profile
-- **Routing signal enrichment**: `KodaXRepoRoutingSignals` now includes `changedLineCount`, `addedLineCount`, `deletedLineCount`, and `reviewScale` for finer-grained routing decisions
-- **Budget upgrade reserves**: `upgradeReserveBudget` and `upgradeReserveRemaining` on `KodaXManagedBudgetSnapshot` for harness upgrade token allocation
-- **Dynamic help bar**: `buildHelpBarSegments()` replaces static `HELP_BARSegments` for context-sensitive status bar segments
+- **Skill-aware AMA role projection**: skill invocations now carry `skillInvocation` metadata into managed execution, `Scout` emits a `skill-map`, and AMA roles consume role-specific skill views instead of sharing the same raw skill prompt
+- **Skill artifacts for managed tasks**: managed workspaces now persist `skill-execution.md`, `skill-map.json`, and `skill-map.md`
+- **Same-role round summaries for non-generator roles**: `Scout`, `Planner`, and `Evaluator` now persist a compact previous-round summary that is re-injected on later rounds without restoring full private chat history
+- **Global work-budget approval loop**: AMA runs use a unified `globalWorkBudget` with repeated `+200` approval extensions near the 90% threshold
+- **Improved tool disclosure**: REPL tool summaries now prefer target path/scope/cmd details, including explicit `bash` command display
+- **Interrupted-response persistence test coverage**: new UI regression coverage for Ctrl+C persistence queuing
 - **FEATURE_044**: Durable Compression Anchors and Artifact Recall spec added to v0.8.0 feature docs
 
 ### Changed
-- **Task engine expanded**: `task-engine.ts` (+2381 lines) with harness transition approval, admission directives, handoff protocols, terminal authority, evidence acquisition modes, and multi-round budget controller
-- **Reasoning pipeline updated**: Review scale thresholds, upgrade ceiling parsing, conditional debug logging for structured decision retries
-- **Status bar enhanced**: Harness profile short labels (H0–H3), managed task phase display, live activity indicator, dynamic segment construction
-- **Message rendering improved**: Control-plane-only assistant text detection, user-facing text sanitization, interrupted-task evidence filtering
-- **Orchestration refined**: Worker-sourced verdict directives, harness profile propagation through round execution
+- **AMA simplified**: `H3_MULTI_WORKER`, default `Admission`, `Lead`, and `Contract Reviewer` were removed from the main runtime graph; AMA now operates with `H0_DIRECT`, `H1_EXECUTE_EVAL`, and `H2_PLAN_EXECUTE_EVAL`
+- **Routing ceilings tightened**: `read-only` and `docs-only` work now stay on `SA/H0` by default, may use `H1` only when the user explicitly asks for stronger checking, and can no longer enter `H2_PLAN_EXECUTE_EVAL`
+- **Repo scale semantics narrowed**: `reviewScale`, repo size, and changed-scope signals now shape evidence strategy only instead of forcing a heavier harness
+- **H2 default pass count reduced**: coordinated mutation work now starts with a single main pass and opens extra passes only after structured evaluator failure
+- **SA semantics clarified**: `SA` now bypasses AMA entirely and runs through the direct single-agent path
+- **Project + SA continuity clarified**: project-aware direct runs now persist a lightweight run record for status, latest summary, and next-step guidance without entering the managed-task graph
+- **Intent-first routing**: lightweight `conversation` / `lookup` inputs short-circuit before dirty-repo complexity can escalate them
+- **Scout and Planner evidence boundaries tightened**: Scout stays pre-harness, Planner is restricted to scope facts plus overview evidence, and Generator owns deep evidence passes
+- **Pre-Scout routing notes neutralized**: live AMA routing notes now stay provisional until Scout confirms the final harness
+- **Status bar semantics updated**: `Work used/total` is the primary AMA budget signal; `Round` appears only when a real extra pass exists; AMA no longer falls back to user-visible `Iter x/y`
+- **Evaluator public-answer contract tightened**: review answers are written directly for the user instead of narrating evaluator-vs-generator meta-review
+- **Command metadata parity improved**: builtin commands now align more closely with discovered command metadata fields
+- **Core docs refreshed**: HLD, DD, ADR, PRD, feature designs, and roadmap notes now match the current SA/AMA/skill architecture
 
 ### Fixed
-- Interrupted managed tasks now filter empty/placeholder evidence entries from transcript rendering
+- Interrupted managed tasks now filter empty/control-plane placeholder evidence from transcript rendering and queue the last visible response for background persistence
+- Mixed lookup/actionable prompts no longer short-circuit onto the pure lookup path
+- H1 revise no longer auto-escalates on the first evaluator retry
+- H1 read-only Generator now receives both runtime write guards and explicit prompt guidance to stay non-mutating
+- Scout downshifts now complete as Scout-owned `H0_DIRECT` runs instead of handing off to a second direct agent or leaking scout-flavored output
 
 ### Tests
-- New tests: `changed-diff.test.ts`, `live-streaming.test.ts`, `managed-run-context.test.ts`, `retry-history.test.ts`, `tool-display.test.ts`
-- Expanded tests: `task-engine.test.ts` (+1508 lines), `reasoning.test.ts`, `orchestration.test.ts`, `StatusBar.test.ts`, `transcript-layout.test.ts`, `message-utils.test.ts`, `layout.test.ts`
+- Added / expanded tests for `task-engine`, `reasoning`, `tool-display`, `live-streaming`, `StatusBar`, `invocation-runtime`, `types-legacy`, and `InkREPL.interrupted`
 
 <!-- last-sync: HEAD -->
 

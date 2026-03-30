@@ -197,7 +197,7 @@ function resolveInitialReasoningMode(
   return 'off';
 }
 
-function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
+export function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
   const task = result.managedTask;
   if (!task) {
     return [];
@@ -241,7 +241,7 @@ function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
       return (orderByAssignment.get(left.assignmentId) ?? 0) - (orderByAssignment.get(right.assignmentId) ?? 0);
     })
     .filter((entry) => !isInterruptedCancellation(entry))
-    .filter((entry) => !(
+    .filter((entry) => result.interrupted || !(
       entry.assignmentId === finalAssignmentId
       && (entry.round ?? 1) === finalRound
     ))
@@ -250,19 +250,19 @@ function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
       const rawSummary = entry.summary?.trim() ?? "";
       const sanitizedOutput = rawOutput ? sanitizeUserFacingAssistantText(rawOutput) : "";
       const sanitizedSummary = rawSummary ? sanitizeUserFacingAssistantText(rawSummary) : "";
-      const fallbackText = entry.role === 'admission'
+      const fallbackText = entry.role === 'scout'
         ? sanitizedSummary
-          ? `Admission completed: ${sanitizedSummary}`
-          : 'Admission completed.'
+          ? `Scout completed: ${sanitizedSummary}`
+          : 'Scout completed.'
         : sanitizedSummary;
       return {
         entry,
-        text: sanitizedOutput || fallbackText,
+        text: sanitizedSummary || sanitizedOutput || fallbackText,
       };
     })
     .filter(({ text }) => Boolean(text))
     .map(({ entry, text }) => {
-      const labelSuffix = entry.role === "admission"
+      const labelSuffix = entry.role === "scout"
         ? " Preflight"
         : (entry.round ?? 1) > 1
           ? ` Round ${entry.round}`
@@ -321,11 +321,136 @@ function truncateToolOutputPreview(value: string, maxLength = 800): string {
   return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 3)}...` : trimmed;
 }
 
+function formatManagedLiveActivityLabel(label: string | undefined, workerTitle?: string): string | undefined {
+  if (!label || !workerTitle) {
+    return label;
+  }
+  const escapedWorkerTitle = workerTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return label
+    .replace(new RegExp(`^\\[Tools\\]\\s+\\[${escapedWorkerTitle}\\]\\s+`, "i"), "[Tools] ")
+    .replace(new RegExp(`^\\[Thinking\\]\\s+\\[${escapedWorkerTitle}\\]\\s*`, "i"), "[Thinking] ")
+    .replace(new RegExp(`^\\[${escapedWorkerTitle}\\]\\s+thinking\\b`, "i"), "[Thinking]")
+    .trim();
+}
+
+function formatManagedLiveToolLabel(tool: ToolCall, workerTitle?: string): string {
+  return formatManagedLiveActivityLabel(
+    `[Tools] ${formatToolCallInlineText(tool)}`,
+    workerTitle,
+  ) ?? `[Tools] ${formatToolCallInlineText(tool)}`;
+}
+
 function sanitizeInterruptedAssistantText(text: string): string {
   if (isControlPlaneOnlyAssistantText(text)) {
     return "";
   }
   return sanitizeUserFacingAssistantText(text).trim();
+}
+
+export function buildInterruptedPersistenceItems(
+  thinking: string,
+  fullResponse: string,
+  options?: {
+    toolCalls?: readonly ToolCall[];
+    toolNames?: readonly string[];
+    infoItems?: readonly string[];
+  },
+): CreatableHistoryItem[] {
+  const items: CreatableHistoryItem[] = [];
+  const infoItems = options?.infoItems ?? [];
+  const interruptedRoundItems = buildRoundHistoryItems({
+    thinking,
+    toolCalls: options?.toolCalls,
+    toolNames: options?.toolNames,
+  });
+
+  for (const infoText of infoItems) {
+    const normalized = infoText.trim();
+    if (!normalized) {
+      continue;
+    }
+    items.push({
+      type: "info",
+      text: normalized,
+    });
+  }
+
+  items.push(...interruptedRoundItems);
+
+  const unsavedResponse = sanitizeInterruptedAssistantText(fullResponse);
+  if (unsavedResponse) {
+    items.push({
+      type: "assistant",
+      text: `${unsavedResponse}\n\n[Interrupted]`,
+    });
+  }
+
+  return items;
+}
+
+export function buildRoundHistoryItems({
+  thinking,
+  response,
+  toolCalls,
+  toolNames,
+}: {
+  thinking?: string;
+  response?: string;
+  toolCalls?: readonly ToolCall[];
+  toolNames?: readonly string[];
+}): CreatableHistoryItem[] {
+  const items: CreatableHistoryItem[] = [];
+  const normalizedThinking = thinking?.trim() ?? "";
+  const normalizedResponse = response?.trim() ?? "";
+  const normalizedToolCalls = toolCalls && toolCalls.length > 0 ? [...toolCalls] : [];
+  const normalizedToolNames = toolNames && toolNames.length > 0 ? [...toolNames] : [];
+
+  if (normalizedThinking) {
+    items.push({
+      type: "thinking",
+      text: normalizedThinking,
+    });
+  }
+
+  if (normalizedToolCalls.length > 0) {
+    items.push({
+      type: "tool_group",
+      tools: normalizedToolCalls,
+    });
+  } else if (!normalizedThinking && !normalizedResponse && normalizedToolNames.length > 0) {
+    items.push({
+      type: "info",
+      icon: "*",
+      text: `Tools: ${normalizedToolNames.join(", ")}`,
+    });
+  }
+
+  if (normalizedResponse) {
+    items.push({
+      type: "assistant",
+      text: normalizedResponse,
+    });
+  }
+
+  return items;
+}
+
+export function shouldShowStatusBarBusyStatus({
+  agentMode,
+  isLivePaused,
+  isLoading,
+}: {
+  agentMode: string;
+  isLivePaused: boolean;
+  isLoading: boolean;
+}): boolean {
+  if (isLivePaused) {
+    return false;
+  }
+  if (agentMode === "ama" && isLoading) {
+    return false;
+  }
+  return true;
 }
 
 function toPersistedUiHistoryItem(
@@ -541,6 +666,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const { stdout } = useStdout();
   const { history } = useUIState();
   const { addHistoryItem, clearHistory: clearUIHistory, setSessionId } = useUIActions();
+  const historyRef = useRef(history);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   // Get terminal dimensions for fixed layout.
   const terminalWidth = stdout.columns || 80;
@@ -603,6 +733,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
   const lastCompactionTokensBeforeRef = useRef<number | null>(null);
   const persistContextStateRef = useRef<((uiHistoryOverride?: KodaXSessionUiHistoryItem[]) => Promise<void>) | null>(null);
+  const persistContextStateQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const appendHistoryItemsWithPersistenceRef = useRef<((items: readonly CreatableHistoryItem[]) => void) | null>(null);
+  const interruptPersistenceQueuedRef = useRef(false);
   const [isInputEmpty, setIsInputEmpty] = useState(true); // Track if input is empty for ? shortcut
   const [inputText, setInputText] = useState("");
   const [isReviewingHistory, setIsReviewingHistory] = useState(false);
@@ -827,11 +960,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     maxIter: streamingState.maxIter,
     contextUsage,
     isCompacting: displayStreamingState.isCompacting,
-    showBusyStatus: !isLivePaused,
+    showBusyStatus: shouldShowStatusBarBusyStatus({
+      agentMode: currentConfig.agentMode,
+      isLivePaused,
+      isLoading: displayIsLoading,
+    }),
+    managedPhase: displayIsLoading ? managedTaskStatus?.phase : undefined,
     managedHarnessProfile: displayIsLoading ? managedTaskStatus?.harnessProfile : undefined,
     managedWorkerTitle: displayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined,
     managedRound: displayIsLoading ? managedTaskStatus?.currentRound : undefined,
     managedMaxRounds: displayIsLoading ? managedTaskStatus?.maxRounds : undefined,
+    managedGlobalWorkBudget: displayIsLoading ? managedTaskStatus?.globalWorkBudget : undefined,
+    managedBudgetUsage: displayIsLoading ? managedTaskStatus?.budgetUsage : undefined,
+    managedBudgetApprovalRequired: displayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
   }), [
     context.sessionId,
     currentConfig.permissionMode,
@@ -972,6 +1113,37 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const pendingInputsRef = useRef<string[]>(streamingState.pendingInputs);
   const userInterruptedRef = useRef(false);
 
+  const queueInterruptedPersistence = useCallback(() => {
+    if (interruptPersistenceQueuedRef.current) {
+      return;
+    }
+    const latestBreadcrumb = managedTaskBreadcrumbRef.current?.trim();
+    const lastHistoryItem = historyRef.current.length > 0
+      ? historyRef.current[historyRef.current.length - 1]
+      : undefined;
+    const lastHistoryText = lastHistoryItem && "text" in lastHistoryItem && typeof lastHistoryItem.text === "string"
+      ? lastHistoryItem.text.trim()
+      : undefined;
+    const interruptedItems = buildInterruptedPersistenceItems(
+      getThinkingContent(),
+      getFullResponse(),
+      {
+        toolCalls: iterationToolCallsRef.current,
+        toolNames: iterationToolsRef.current,
+        infoItems: latestBreadcrumb && latestBreadcrumb !== lastHistoryText
+          ? [latestBreadcrumb]
+          : [],
+      },
+    );
+
+    if (interruptedItems.length === 0) {
+      return;
+    }
+
+    interruptPersistenceQueuedRef.current = true;
+    appendHistoryItemsWithPersistenceRef.current?.(interruptedItems);
+  }, [getFullResponse, getThinkingContent]);
+
   useEffect(() => {
     pendingInputsRef.current = streamingState.pendingInputs;
   }, [streamingState.pendingInputs]);
@@ -992,8 +1164,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // Ctrl+C immediately interrupts.
       if (key.ctrl && key.name === "c") {
-        // Just abort - the catch block will handle saving the partial response
-
+        queueInterruptedPersistence();
         userInterruptedRef.current = true;
         abort();
         stopThinking();
@@ -1026,6 +1197,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         if (timeSinceLastEsc < DOUBLE_ESC_INTERVAL) {
           // Double ESC: interrupt streaming.
           lastEscPressRef.current = 0;
+          queueInterruptedPersistence();
           userInterruptedRef.current = true;
           abort();
           stopThinking();
@@ -1050,6 +1222,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       isInputEmpty,
       streamingState.pendingInputs.length,
       removeLastPendingInput,
+      queueInterruptedPersistence,
       abort,
       stopThinking,
       clearThinkingContent,
@@ -1339,9 +1512,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         clearToolInputContent();
       }
       setLastLiveActivityLabel(
-        managedTaskStatusRef.current?.activeWorkerTitle
-          ? `[${managedTaskStatusRef.current.activeWorkerTitle}] thinking`
-          : "thinking",
+        formatManagedLiveActivityLabel(
+          managedTaskStatusRef.current?.activeWorkerTitle
+            ? `[${managedTaskStatusRef.current.activeWorkerTitle}] [Thinking]`
+            : "[Thinking]",
+          managedTaskStatusRef.current?.activeWorkerTitle,
+        ),
       );
       // The UI layer stores thinking content for display.
       appendThinkingChars(text.length);
@@ -1367,7 +1543,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       setLastLiveActivityLabel(undefined);
       appendResponse(text);
     },
-    onToolUseStart: (tool: { name: string; id: string }) => {
+    onToolUseStart: (tool: { name: string; id: string; input?: Record<string, unknown> }) => {
       if (!iterationToolsRef.current.includes(tool.name)) {
         iterationToolsRef.current = [...iterationToolsRef.current, tool.name];
       }
@@ -1379,27 +1555,33 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         name: `${rolePrefix}${tool.name}`,
         status: ToolCallStatus.Executing,
         startTime: Date.now(),
+        input: tool.input,
       };
       activeToolCallRef.current = toolCall;
       iterationToolCallsRef.current = [...iterationToolCallsRef.current, toolCall];
       setCurrentTool(tool.name);
-      setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(toolCall)}`);
+      setLastLiveActivityLabel(
+        formatManagedLiveToolLabel(toolCall, managedTaskStatusRef.current?.activeWorkerTitle),
+      );
     },
     onToolInputDelta: (_toolName: string, partialJson: string) => {
       appendToolInputChars(partialJson.length);
       appendToolInputContent(partialJson); // Issue 068 Phase 4: track tool input content.
       syncActiveToolCall((tool) => {
-        const currentPreview = typeof tool.input?.preview === "string"
-          ? tool.input.preview
-          : "";
+        const currentPreview = tool.preview ?? "";
         const preview = truncateToolPreview(`${currentPreview}${partialJson}`);
         return {
           ...tool,
-          input: preview ? { preview } : undefined,
+          preview: preview || undefined,
+          input: tool.input
+            ? (preview ? { ...tool.input, preview } : { ...tool.input })
+            : (preview ? { preview } : undefined),
         };
       });
       if (activeToolCallRef.current) {
-        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(activeToolCallRef.current)}`);
+        setLastLiveActivityLabel(
+          formatManagedLiveToolLabel(activeToolCallRef.current, managedTaskStatusRef.current?.activeWorkerTitle),
+        );
       }
     },
     onToolResult: (result) => {
@@ -1408,27 +1590,35 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (/^\[(?:Tool Error|Error)\]/.test(content)) {
         const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Error, trimmedContent, trimmedContent);
         if (finalizedTool) {
-          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+          setLastLiveActivityLabel(
+            formatManagedLiveToolLabel(finalizedTool, managedTaskStatusRef.current?.activeWorkerTitle),
+          );
         }
         return;
       }
       if (/^\[(?:Cancelled|Blocked)\]/.test(content)) {
         const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Cancelled, undefined, trimmedContent);
         if (finalizedTool) {
-          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+          setLastLiveActivityLabel(
+            formatManagedLiveToolLabel(finalizedTool, managedTaskStatusRef.current?.activeWorkerTitle),
+          );
         }
         return;
       }
       const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Success, undefined, trimmedContent || undefined);
       if (finalizedTool) {
-        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+        setLastLiveActivityLabel(
+          formatManagedLiveToolLabel(finalizedTool, managedTaskStatusRef.current?.activeWorkerTitle),
+        );
       }
     },
     onStreamEnd: () => {
       if (activeToolCallRef.current?.status === ToolCallStatus.Executing) {
         const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Cancelled, "Stream ended before the tool completed.");
         if (finalizedTool) {
-          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+          setLastLiveActivityLabel(
+            formatManagedLiveToolLabel(finalizedTool, managedTaskStatusRef.current?.activeWorkerTitle),
+          );
         }
       }
       stopThinking();
@@ -1438,12 +1628,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     hasPendingInputs: () => pendingInputsRef.current.length > 0,
     onError: (error: Error) => {
       if (activeToolCallRef.current?.name) {
-        setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(activeToolCallRef.current)}`);
+        setLastLiveActivityLabel(
+          formatManagedLiveToolLabel(activeToolCallRef.current, managedTaskStatusRef.current?.activeWorkerTitle),
+        );
       }
       if (activeToolCallRef.current?.status === ToolCallStatus.Executing) {
         const finalizedTool = finalizeActiveToolCall(ToolCallStatus.Error, error.message);
         if (finalizedTool) {
-          setLastLiveActivityLabel(`[Tools] ${formatToolCallInlineText(finalizedTool)}`);
+          setLastLiveActivityLabel(
+            formatManagedLiveToolLabel(finalizedTool, managedTaskStatusRef.current?.activeWorkerTitle),
+          );
         }
       }
       // Classify error to provide better user feedback
@@ -1498,22 +1692,29 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const harnessShort = status.harnessProfile
           ?.replace('H0_DIRECT', 'H0')
           .replace('H1_EXECUTE_EVAL', 'H1')
-          .replace('H2_PLAN_EXECUTE_EVAL', 'H2')
-          .replace('H3_MULTI_WORKER', 'H3');
-        const workerLabel = status.phase === "preflight"
-          ? `${status.activeWorkerTitle} (Preflight)`
-          : status.activeWorkerTitle;
-        setLastLiveActivityLabel(`[Phase] ${status.agentMode.toUpperCase()} ${harnessShort ?? status.harnessProfile}${workerLabel ? ` - ${workerLabel}` : ""}`);
+          .replace('H2_PLAN_EXECUTE_EVAL', 'H2');
+        if (status.phase === "preflight") {
+          setLastLiveActivityLabel("[Phase] Scout preflight");
+        } else if (status.phase === "routing") {
+          setLastLiveActivityLabel("[Routing]");
+        } else {
+          setLastLiveActivityLabel(`[Phase] ${status.agentMode.toUpperCase()} ${harnessShort ?? status.harnessProfile}${status.activeWorkerTitle ? ` - ${status.activeWorkerTitle}` : ""}`);
+        }
       } else if (status.phase === "routing" && status.note) {
         setLastLiveActivityLabel(`[Routing] ${status.note}`);
       }
-      const breadcrumb = formatManagedTaskBreadcrumb(status);
-      if (breadcrumb && breadcrumb !== managedTaskBreadcrumbRef.current) {
-        addHistoryItem({
+        const breadcrumb = formatManagedTaskBreadcrumb(status);
+        if (breadcrumb && breadcrumb !== managedTaskBreadcrumbRef.current) {
+        const breadcrumbItem: CreatableHistoryItem = {
           type: "info",
           icon: ">",
           text: breadcrumb,
-        });
+        };
+        if (appendHistoryItemsWithPersistenceRef.current) {
+          appendHistoryItemsWithPersistenceRef.current([breadcrumbItem]);
+        } else {
+          addHistoryItem(breadcrumbItem);
+        }
         managedTaskBreadcrumbRef.current = breadcrumb;
       }
     },
@@ -1531,6 +1732,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       if (maxIter) {
         setMaxIter(maxIter);
+      }
+
+      if (managedTaskStatusRef.current?.globalWorkBudget) {
+        const nextManagedStatus: KodaXManagedTaskStatusEvent = {
+          ...managedTaskStatusRef.current,
+          budgetUsage: Math.min(
+            managedTaskStatusRef.current.globalWorkBudget,
+            (managedTaskStatusRef.current.budgetUsage ?? 0) + 1,
+          ),
+        };
+        managedTaskStatusRef.current = nextManagedStatus;
+        setManagedTaskStatus(nextManagedStatus);
       }
 
       // Save current content to history and start fresh for new iteration
@@ -1553,45 +1766,30 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       clearToolInputContent();
       setCurrentTool(undefined);
       setLastLiveActivityLabel(
-        managedTaskStatusRef.current?.activeWorkerTitle
-          ? `[Thinking] [${managedTaskStatusRef.current.activeWorkerTitle}]`
-          : undefined,
+        formatManagedLiveActivityLabel(
+          managedTaskStatusRef.current?.activeWorkerTitle
+            ? `[Thinking] [${managedTaskStatusRef.current.activeWorkerTitle}]`
+            : undefined,
+          managedTaskStatusRef.current?.activeWorkerTitle,
+        ),
       );
       startThinking();
 
       if (iter > 1) {
         // Issue 076 fix: Save previous iteration content to persistent history BEFORE clearing
         // Issue 076.
-
-        // First, save thinking content (full content for history)
-
-        if (prevThinking) {
-          addHistoryItem({
-            type: "thinking",
-            text: prevThinking,
-          });
-        }
-
-        // Then, save response content
-
-        if (prevResponse) {
-          addHistoryItem({
-            type: "assistant",
-            text: prevResponse,
-          });
-        }
-
-        if (!prevThinking && !prevResponse && prevToolCalls.length > 0) {
-          addHistoryItem({
-            type: "tool_group",
-            tools: prevToolCalls,
-          });
-        } else if (!prevThinking && !prevResponse && prevTools.length > 0) {
-          addHistoryItem({
-            type: "info",
-            icon: "*",
-            text: `Iter ${iter - 1} tools: ${prevTools.join(", ")}`,
-          });
+        const previousRoundItems = buildRoundHistoryItems({
+          thinking: prevThinking,
+          response: prevResponse,
+          toolCalls: prevToolCalls,
+          toolNames: prevTools,
+        });
+        if (appendHistoryItemsWithPersistenceRef.current) {
+          appendHistoryItemsWithPersistenceRef.current(previousRoundItems);
+        } else {
+          for (const item of previousRoundItems) {
+            addHistoryItem(item);
+          }
         }
       }
     },
@@ -1897,12 +2095,57 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     });
   }, [context, history, storage]);
 
+  const persistContextStateInBackground = useCallback((uiHistoryOverride?: KodaXSessionUiHistoryItem[]) => {
+    const queuedSave = persistContextStateQueueRef.current
+      .catch(() => {})
+      .then(() => persistContextState(uiHistoryOverride));
+    persistContextStateQueueRef.current = queuedSave.catch(() => {});
+    return queuedSave;
+  }, [persistContextState]);
+
+  const requestGracefulExit = useCallback(() => {
+    void (async () => {
+      await persistContextStateQueueRef.current.catch(() => {});
+      setIsRunning(false);
+      onExit();
+      exit();
+    })();
+  }, [exit, onExit]);
+
   useEffect(() => {
-    persistContextStateRef.current = persistContextState;
+    persistContextStateRef.current = persistContextStateInBackground;
     return () => {
       persistContextStateRef.current = null;
     };
-  }, [persistContextState]);
+  }, [persistContextStateInBackground]);
+
+  const persistHistoryAdditionsInBackground = useCallback((items: readonly CreatableHistoryItem[]) => {
+    if (items.length === 0) {
+      return;
+    }
+    const nextUiHistory = [
+      ...serializeUiHistorySnapshot(historyRef.current),
+      ...serializeCreatableHistoryItems(items),
+    ];
+    void persistContextStateInBackground(nextUiHistory);
+  }, [persistContextStateInBackground]);
+
+  const appendHistoryItemsWithPersistence = useCallback((items: readonly CreatableHistoryItem[]) => {
+    if (items.length === 0) {
+      return;
+    }
+    for (const item of items) {
+      addHistoryItem(item);
+    }
+    persistHistoryAdditionsInBackground(items);
+  }, [addHistoryItem, persistHistoryAdditionsInBackground]);
+
+  useEffect(() => {
+    appendHistoryItemsWithPersistenceRef.current = appendHistoryItemsWithPersistence;
+    return () => {
+      appendHistoryItemsWithPersistenceRef.current = null;
+    };
+  }, [appendHistoryItemsWithPersistence]);
 
   const recordCompletedAgentRound = useCallback(async (result: KodaXResult) => {
     context.messages = result.messages;
@@ -1916,18 +2159,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       result.lastText,
     );
     const managedTranscriptItems = buildManagedTaskTranscriptItems(result);
-    const silentIterationToolGroup = !finalThinking && !finalResponse && iterationToolCallsRef.current.length > 0
-      ? {
-          type: "tool_group" as const,
-          tools: [...iterationToolCallsRef.current],
-        }
-      : undefined;
+    const roundHistoryItems = buildRoundHistoryItems({
+      thinking: finalThinking,
+      response: undefined,
+      toolCalls: iterationToolCallsRef.current,
+      toolNames: iterationToolsRef.current,
+    });
     const persistedAdditions: CreatableHistoryItem[] = [
-      ...(finalThinking ? [{ type: "thinking" as const, text: finalThinking }] : []),
-      ...(silentIterationToolGroup
-        ? [silentIterationToolGroup]
-        : []),
-      ...managedTranscriptItems.map((text) => ({ type: "assistant" as const, text })),
+      ...roundHistoryItems,
+      ...managedTranscriptItems.map((text) => ({ type: "info" as const, text })),
       ...(finalResponse
         ? [{
             type: "assistant" as const,
@@ -1943,20 +2183,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearThinkingContent();
     clearResponse();
 
-    if (finalThinking) {
-      addHistoryItem({
-        type: "thinking",
-        text: finalThinking,
-      });
-    }
-
-    if (silentIterationToolGroup) {
-      addHistoryItem(silentIterationToolGroup);
+    for (const item of roundHistoryItems) {
+      addHistoryItem(item);
     }
 
     for (const transcript of managedTranscriptItems) {
       addHistoryItem({
-        type: "assistant",
+        type: "info",
         text: transcript,
       });
     }
@@ -1974,10 +2207,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearToolInputContent();
     setCurrentTool(undefined);
     setLastLiveActivityLabel(undefined);
+    clearIterationHistory();
 
-    await persistContextState(nextUiHistory);
+    // Persist session state off the critical UI path so the spinner can stop
+    // as soon as the final answer is on screen.
+    void persistContextStateInBackground(nextUiHistory).catch(() => {});
   }, [
     addHistoryItem,
+    clearIterationHistory,
     clearToolInputContent,
     clearResponse,
     clearThinkingContent,
@@ -1985,7 +2222,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     getFullResponse,
     getThinkingContent,
     history,
-    persistContextState,
+    persistContextStateInBackground,
     setCurrentTool,
     setLastLiveActivityLabel,
     streamingState.currentIteration,
@@ -2011,6 +2248,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     runRound: (prompt: string) => Promise<KodaXResult>,
   ) => {
     userInterruptedRef.current = false;
+    interruptPersistenceQueuedRef.current = false;
     setCanQueueFollowUps(true);
     try {
       return await runQueuedPromptSequence({
@@ -2022,6 +2260,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         },
         onBeforeQueuedRound: async (prompt) => {
           userInterruptedRef.current = false;
+          interruptPersistenceQueuedRef.current = false;
           await stageQueuedPrompt(prompt);
         },
         shouldContinue: (result) => !userInterruptedRef.current && result.success !== false,
@@ -2188,6 +2427,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       setIsLoading(true);
       userInterruptedRef.current = false;
+      interruptPersistenceQueuedRef.current = false;
       setManagedTaskStatus(null);
       managedTaskStatusRef.current = null;
       managedTaskBreadcrumbRef.current = null;
@@ -2214,9 +2454,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // Create command callbacks
         const callbacks: CommandCallbacks = {
           exit: () => {
-            setIsRunning(false);
-            onExit();
-            exit();
+            requestGracefulExit();
           },
           saveSession: async () => {
             if (context.messages.length > 0) {
@@ -2560,20 +2798,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             console.log = originalLog;
 
             if (isAbortError) {
-              // Save any unsaved streaming content
-              const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
-              if (unsavedResponse) {
-                addHistoryItem({
-                  type: "assistant",
-                  text: unsavedResponse + "\n\n[Interrupted]",
-                });
-              }
+              queueInterruptedPersistence();
             } else {
               console.log(chalk.red(error.message));
-              addHistoryItem({
+              appendHistoryItemsWithPersistence([{
                 type: "error",
                 text: error.message,
-              });
+              }]);
             }
           } finally {
             setIsLoading(false);
@@ -2610,20 +2841,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             console.log = originalLog;
 
             if (isAbortError) {
-              // Save any unsaved streaming content
-              const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
-              if (unsavedResponse) {
-                addHistoryItem({
-                  type: "assistant",
-                  text: unsavedResponse + "\n\n[Interrupted]",
-                });
-              }
+              queueInterruptedPersistence();
             } else {
               console.log(chalk.red(error.message));
-              addHistoryItem({
+              appendHistoryItemsWithPersistence([{
                 type: "error",
                 text: error.message,
-              });
+              }]);
             }
           } finally {
             setIsLoading(false);
@@ -2677,14 +2901,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             error.message.includes('ABORTED');
 
           if (isAbortError) {
-            // Save any unsaved streaming content
-            const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
-            if (unsavedResponse) {
-              addHistoryItem({
-                type: "assistant",
-                text: unsavedResponse + "\n\n[Interrupted]",
-              });
-            }
+            queueInterruptedPersistence();
           } else {
             console.log(chalk.red(`[Plan Mode Error] ${error.message}`));
             addHistoryItem({
@@ -2722,30 +2939,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const error = err instanceof Error ? err : new Error(String(err));
 
         // Check if this is an abort error (user pressed Ctrl+C)
-        // Abort errors should not be added to history - the Ctrl+C handler already saved the partial response
+        // Abort errors themselves should not be added to history.
         const isAbortError = error.name === 'AbortError' ||
           error.message.includes('aborted') ||
           error.message.includes('ABORTED');
 
         if (isAbortError) {
-          // Don't add abort error to history - already handled by Ctrl+C handler
           console.log = originalLog;
-          // Still need to save any unsaved streaming content
-          // Issue 076: Also save thinking content before it's cleared
-          const unsavedThinking = getThinkingContent().trim();
-          if (unsavedThinking) {
-            addHistoryItem({
-              type: "thinking",
-              text: unsavedThinking,
-            });
-          }
-          const unsavedResponse = sanitizeInterruptedAssistantText(getFullResponse());
-          if (unsavedResponse) {
-            addHistoryItem({
-              type: "assistant",
-              text: unsavedResponse + "\n\n[Interrupted]",
-            });
-          }
+          queueInterruptedPersistence();
         } else {
           // Note: No need to pop from context.messages here anymore.
           // Since we removed the pre-push (Issue 046 fix), context.messages
@@ -2779,10 +2980,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           console.log(chalk.red(errorContent));
 
           // Add error to UI history
-          addHistoryItem({
+          appendHistoryItemsWithPersistence([{
             type: "error",
             text: errorContent,
-          });
+          }]);
         }
       } finally {
         // Restore console.log
@@ -2907,12 +3108,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               currentIteration={displayStreamingState.currentIteration}
               isCompacting={displayStreamingState.isCompacting}
               agentMode={currentConfig.agentMode}
+              managedPhase={displayIsLoading ? managedTaskStatus?.phase : undefined}
               managedHarnessProfile={
                 displayIsLoading ? managedTaskStatus?.harnessProfile : undefined
               }
               managedWorkerTitle={displayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined}
               managedRound={displayIsLoading ? managedTaskStatus?.currentRound : undefined}
               managedMaxRounds={displayIsLoading ? managedTaskStatus?.maxRounds : undefined}
+              managedGlobalWorkBudget={displayIsLoading ? managedTaskStatus?.globalWorkBudget : undefined}
+              managedBudgetUsage={displayIsLoading ? managedTaskStatus?.budgetUsage : undefined}
+              managedBudgetApprovalRequired={displayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined}
               lastLiveActivityLabel={displayStreamingState.lastLiveActivityLabel}
               viewportRows={viewportBudget.messageRows}
               viewportWidth={terminalWidth}

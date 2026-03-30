@@ -20,12 +20,12 @@ describe("live-streaming", () => {
     expect(formatManagedTaskBreadcrumb({
       agentMode: "ama",
       harnessProfile: "H2_PLAN_EXECUTE_EVAL",
-      activeWorkerTitle: "Admission",
+      activeWorkerTitle: "Scout",
       currentRound: 0,
       maxRounds: 4,
       phase: "preflight",
-      note: "Admission preflight starting",
-    })).toBe("AMA H2 - Admission preflight starting");
+      note: "Scout preflight starting",
+    })).toBe("AMA Scout - Scout preflight starting");
   });
 
   it("formats managed-task worker breadcrumbs", () => {
@@ -36,7 +36,18 @@ describe("live-streaming", () => {
       currentRound: 1,
       maxRounds: 4,
       phase: "worker",
-    })).toBe("AMA H2 - Planner starting - Round 1/4");
+    })).toBe("AMA H2 - Planner starting");
+  });
+
+  it("shows round info only after an actual additional pass starts", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      activeWorkerTitle: "Generator",
+      currentRound: 2,
+      maxRounds: 4,
+      phase: "worker",
+    })).toBe("AMA H2 - Generator starting - Round 2/4");
   });
 
   it("formats managed-task routing breadcrumbs", () => {
@@ -45,7 +56,7 @@ describe("live-streaming", () => {
       harnessProfile: "H2_PLAN_EXECUTE_EVAL",
       phase: "routing",
       note: "AMA routing: raw=H0_DIRECT(model) -> final=H2_PLAN_EXECUTE_EVAL reason=large current-diff review",
-    })).toBe("AMA routing: raw=H0_DIRECT(model) -> final=H2_PLAN_EXECUTE_EVAL reason=large current-diff review");
+    })).toBe("AMA Routing - Routing ready");
   });
 
   it("formats silent tool-only iteration summaries", () => {

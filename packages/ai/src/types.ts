@@ -142,6 +142,8 @@ export type KodaXThinkingDepth =
   | 'high';
 
 export type KodaXTaskType =
+  | 'conversation'
+  | 'lookup'
   | 'review'
   | 'bugfix'
   | 'edit'
@@ -151,6 +153,8 @@ export type KodaXTaskType =
   | 'unknown';
 
 export type KodaXExecutionMode =
+  | 'conversation'
+  | 'lookup'
   | 'pr-review'
   | 'strict-audit'
   | 'implementation'
@@ -167,11 +171,39 @@ export type KodaXTaskComplexity =
 
 export type KodaXTaskWorkIntent = 'append' | 'overwrite' | 'new';
 
+export type KodaXTaskFamily =
+  | 'conversation'
+  | 'lookup'
+  | 'review'
+  | 'implementation'
+  | 'investigation'
+  | 'planning'
+  | 'ambiguous';
+
+export type KodaXTaskActionability =
+  | 'non_actionable'
+  | 'actionable'
+  | 'ambiguous';
+
+export type KodaXExecutionPattern =
+  | 'direct'
+  | 'checked-direct'
+  | 'coordinated';
+
+export type KodaXMutationSurface =
+  | 'read-only'
+  | 'docs-only'
+  | 'code'
+  | 'system';
+
+export type KodaXAssuranceIntent =
+  | 'default'
+  | 'explicit-check';
+
 export type KodaXHarnessProfile =
   | 'H0_DIRECT'
   | 'H1_EXECUTE_EVAL'
-  | 'H2_PLAN_EXECUTE_EVAL'
-  | 'H3_MULTI_WORKER';
+  | 'H2_PLAN_EXECUTE_EVAL';
 
 export type KodaXReviewScale =
   | 'small'
@@ -181,6 +213,11 @@ export type KodaXReviewScale =
 export interface KodaXTaskRoutingDecision {
   primaryTask: KodaXTaskType;
   secondaryTask?: KodaXTaskType;
+  taskFamily?: KodaXTaskFamily;
+  actionability?: KodaXTaskActionability;
+  executionPattern?: KodaXExecutionPattern;
+  mutationSurface?: KodaXMutationSurface;
+  assuranceIntent?: KodaXAssuranceIntent;
   confidence: number;
   riskLevel: KodaXRiskLevel;
   recommendedMode: KodaXExecutionMode;
@@ -189,6 +226,7 @@ export interface KodaXTaskRoutingDecision {
   workIntent: KodaXTaskWorkIntent;
   requiresBrainstorm: boolean;
   harnessProfile: KodaXHarnessProfile;
+  topologyCeiling?: KodaXHarnessProfile;
   upgradeCeiling?: KodaXHarnessProfile;
   reviewScale?: KodaXReviewScale;
   reviewTarget?: 'general' | 'current-worktree' | 'compare-range';

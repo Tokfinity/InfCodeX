@@ -161,6 +161,59 @@ describe('project commands', () => {
     expect(output).toContain('Release looks close, but validate the pending feature first.');
   });
 
+  it('persists and surfaces lightweight project run records for SA project runs', async () => {
+    mockRunManagedTask.mockResolvedValue({
+      success: true,
+      lastText: '## Direct assessment\nRelease looks close, but validate the pending feature first.',
+      sessionId: 'sa-project-run',
+      messages: [
+        {
+          role: 'assistant',
+          content: '## Direct assessment\nRelease looks close, but validate the pending feature first.',
+        },
+      ],
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const storage = new ProjectStorage(tempDir);
+
+    await handleProjectCommand(
+      ['status', 'what', 'is', 'blocking', 'release?'],
+      context,
+      createCallbacks({
+        createKodaXOptions: () =>
+          ({
+            provider: 'zhipu-coding',
+            agentMode: 'sa',
+            session: {},
+          }) as never,
+      }),
+      currentConfig,
+    );
+
+    const record = await storage.loadLightweightRunRecord();
+    expect(record).toEqual(expect.objectContaining({
+      sessionId: 'sa-project-run',
+      taskSurface: 'project',
+      executionMode: 'direct',
+      summary: 'Release looks close, but validate the pending feature first.',
+    }));
+
+    logSpy.mockClear();
+
+    await handleProjectCommand(
+      ['status'],
+      context,
+      createCallbacks(),
+      currentConfig,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Direct run: sa-project-run (completed)');
+    expect(output).toContain('Direct summary: Release looks close, but validate the pending feature first.');
+  });
+
   it('replaces the old placeholder with a fallback guided summary when AI is unavailable', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const context = await createInteractiveContext({});

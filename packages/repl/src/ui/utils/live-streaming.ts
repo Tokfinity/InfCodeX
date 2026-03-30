@@ -8,8 +8,6 @@ function formatHarnessProfileShort(harnessProfile?: string): string | undefined 
       return "H1";
     case "H2_PLAN_EXECUTE_EVAL":
       return "H2";
-    case "H3_MULTI_WORKER":
-      return "H3";
     default:
       return harnessProfile;
   }
@@ -42,17 +40,19 @@ export function formatManagedTaskBreadcrumb(
 ): string | undefined {
   const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
   const prefix = `${status.agentMode.toUpperCase()} ${harness}`;
-  const roundSuffix = status.currentRound && status.maxRounds
+  const scoutPrefix = `${status.agentMode.toUpperCase()} Scout`;
+  const routingPrefix = `${status.agentMode.toUpperCase()} Routing`;
+  const roundSuffix = status.currentRound && status.maxRounds && status.currentRound > 1
     ? ` - Round ${status.currentRound}/${status.maxRounds}`
     : "";
 
   switch (status.phase) {
     case "routing":
-      return status.note ?? `${prefix} - Routing ready`;
+      return `${routingPrefix} - Routing ready`;
     case "starting":
       return status.note ? `${prefix} - ${status.note}` : `${prefix} - Managed task starting`;
     case "preflight":
-      return status.note ? `${prefix} - ${status.note}` : `${prefix} - Admission preflight starting`;
+      return status.note ? `${scoutPrefix} - ${status.note}` : `${scoutPrefix} - Scout preflight starting`;
     case "worker":
       return `${prefix} - ${status.activeWorkerTitle ?? "Worker"} starting${roundSuffix}`;
     case "upgrade":

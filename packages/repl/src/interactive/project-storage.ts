@@ -11,6 +11,7 @@ import {
   KODAX_FEATURES_FILE,
   KODAX_PROGRESS_FILE,
   type KodaXManagedTask,
+  type KodaXTaskStatus,
 } from '@kodax/coding';
 import {
   ProjectFeature,
@@ -43,6 +44,49 @@ function hasSessionIdField(value: unknown): value is { sessionId?: string } {
   return isRecord(value) && (value.sessionId === undefined || typeof value.sessionId === 'string');
 }
 
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+export interface ProjectLightweightRunRecord {
+  status: KodaXTaskStatus;
+  summary: string;
+  sessionId: string;
+  taskSurface: 'project';
+  agentMode: 'sa' | 'ama';
+  executionMode: 'direct';
+  featureIndex?: number;
+  requestId?: string;
+  projectMetadata?: Record<string, unknown>;
+  changedFiles: string[];
+  checks: string[];
+  evidence: string[];
+  blockers: string[];
+  nextStep?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function isProjectLightweightRunRecord(value: unknown): value is ProjectLightweightRunRecord {
+  return isRecord(value)
+    && (value.status === 'planned' || value.status === 'running' || value.status === 'blocked' || value.status === 'failed' || value.status === 'completed')
+    && typeof value.summary === 'string'
+    && typeof value.sessionId === 'string'
+    && value.taskSurface === 'project'
+    && (value.agentMode === 'sa' || value.agentMode === 'ama')
+    && value.executionMode === 'direct'
+    && (value.featureIndex === undefined || typeof value.featureIndex === 'number')
+    && (value.requestId === undefined || typeof value.requestId === 'string')
+    && (value.projectMetadata === undefined || isRecord(value.projectMetadata))
+    && isStringArray(value.changedFiles)
+    && isStringArray(value.checks)
+    && isStringArray(value.evidence)
+    && isStringArray(value.blockers)
+    && (value.nextStep === undefined || typeof value.nextStep === 'string')
+    && typeof value.createdAt === 'string'
+    && typeof value.updatedAt === 'string';
+}
+
 export class ProjectStorage {
   private projectDir: string;
   private featuresPath: string;
@@ -61,6 +105,7 @@ export class ProjectStorage {
   private legacyBrainstormProjectsPath: string;
   private managedTasksRootPath: string;
   private managedTaskStatePath: string;
+  private lightweightRunRecordPath: string;
   private harnessRootPath: string;
   private harnessConfigPath: string;
   private harnessRunsPath: string;
@@ -87,6 +132,7 @@ export class ProjectStorage {
     this.legacyBrainstormProjectsPath = path.join(projectDir, '.kodax', 'projects');
     this.managedTasksRootPath = path.join(this.projectArtifactsRoot, 'managed-tasks');
     this.managedTaskStatePath = path.join(this.projectArtifactsRoot, 'managed-task.json');
+    this.lightweightRunRecordPath = path.join(this.projectArtifactsRoot, 'lightweight-run.json');
     this.harnessRootPath = path.join(this.projectArtifactsRoot, 'harness');
     this.harnessConfigPath = path.join(this.harnessRootPath, 'config.generated.json');
     this.harnessRunsPath = path.join(this.harnessRootPath, 'runs.jsonl');
@@ -241,6 +287,7 @@ export class ProjectStorage {
       this.projectControlStatePath,
       this.projectBriefPath,
       this.alignmentPath,
+      this.lightweightRunRecordPath,
     ];
 
     for (const candidate of candidates) {
@@ -356,6 +403,7 @@ export class ProjectStorage {
     const activeSession = await this.loadActiveBrainstormSession();
     const alignment = await this.readAlignment();
     const managedTask = await this.loadManagedTask();
+    const lightweightRun = await this.loadLightweightRunRecord();
     const stats = featureList ? calculateStatistics(featureList.features) : null;
 
     const hasAnyWorkflowSignal = Boolean(
@@ -365,7 +413,8 @@ export class ProjectStorage {
       || sessionPlan.trim()
       || activeSession
       || alignment
-      || managedTask,
+      || managedTask
+      || lightweightRun
     );
     if (!hasAnyWorkflowSignal) {
       return null;
@@ -382,15 +431,19 @@ export class ProjectStorage {
     const hasPlanningMarker = Boolean(
       controlState?.lastPlannedAt
       || legacyState?.lastPlannedAt
-      || managedTask,
+      || managedTask
+      || lightweightRun
     );
     const managedTaskFeatureIndex = this.parseManagedTaskFeatureIndex(managedTask);
+    const lightweightRunFeatureIndex = typeof lightweightRun?.featureIndex === 'number'
+      ? lightweightRun.featureIndex
+      : undefined;
     const nextPendingIndex = featureList ? getNextPendingIndex(featureList.features) : -1;
     const currentFeatureIndex = managedTask?.contract.status === 'blocked' || managedTask?.contract.status === 'failed'
       ? managedTaskFeatureIndex
       : nextPendingIndex >= 0
         ? nextPendingIndex
-        : managedTaskFeatureIndex;
+        : managedTaskFeatureIndex ?? lightweightRunFeatureIndex;
 
     let stage: ProjectWorkflowState['stage'] = 'bootstrap';
     if (activeSession || (alignment?.openQuestions.length ?? 0) > 0 || controlSuggestsDiscovery) {
@@ -398,11 +451,21 @@ export class ProjectStorage {
     } else if (this.hasAlignedTruth(alignment) && !hasPlanningMarker) {
       stage = 'aligned';
     } else if (sessionPlan.trim() && hasPlanningMarker) {
-      if (managedTask?.contract.status === 'blocked' || managedTask?.contract.status === 'failed') {
+      if (
+        managedTask?.contract.status === 'blocked'
+        || managedTask?.contract.status === 'failed'
+        || lightweightRun?.status === 'blocked'
+        || lightweightRun?.status === 'failed'
+      ) {
         stage = 'blocked';
       } else if (stats && stats.total > 0 && stats.pending === 0) {
         stage = 'completed';
-      } else if (managedTask?.contract.status === 'completed' || managedTask?.contract.status === 'running') {
+      } else if (
+        managedTask?.contract.status === 'completed'
+        || managedTask?.contract.status === 'running'
+        || lightweightRun?.status === 'completed'
+        || lightweightRun?.status === 'running'
+      ) {
         stage = 'executing';
       } else {
         stage = 'planned';
@@ -419,6 +482,7 @@ export class ProjectStorage {
           ? Math.max(0, defaultDiscoveryQuestionCount - discoveryStepIndex)
           : 0;
     const latestExecutionSummary = managedTask?.verdict.summary
+      ?? lightweightRun?.summary
       ?? controlState?.latestExecutionSummary
       ?? legacyState?.latestExecutionSummary;
     const lastUpdated = this.resolveWorkflowLastUpdated(timestamp, [
@@ -427,6 +491,7 @@ export class ProjectStorage {
       alignment?.updatedAt,
       activeSession?.updatedAt,
       managedTask?.contract.updatedAt,
+      lightweightRun?.updatedAt,
     ]);
 
     return {
@@ -470,15 +535,37 @@ export class ProjectStorage {
     return this.readJsonFile<KodaXManagedTask>(this.managedTaskStatePath, isKodaXManagedTask);
   }
 
+  async loadLightweightRunRecord(): Promise<ProjectLightweightRunRecord | null> {
+    return this.readJsonFile<ProjectLightweightRunRecord>(
+      this.lightweightRunRecordPath,
+      isProjectLightweightRunRecord,
+    );
+  }
+
   async saveManagedTask(task: KodaXManagedTask): Promise<void> {
     await this.ensureProjectArtifactsRoot();
     await fs.mkdir(this.managedTasksRootPath, { recursive: true });
     await fs.writeFile(this.managedTaskStatePath, JSON.stringify(task, null, 2), 'utf-8');
   }
 
+  async saveLightweightRunRecord(record: ProjectLightweightRunRecord): Promise<void> {
+    await this.ensureProjectArtifactsRoot();
+    await fs.writeFile(this.lightweightRunRecordPath, JSON.stringify(record, null, 2), 'utf-8');
+  }
+
   async clearManagedTask(): Promise<void> {
     try {
       await fs.unlink(this.managedTaskStatePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
+  async clearLightweightRunRecord(): Promise<void> {
+    try {
+      await fs.unlink(this.lightweightRunRecordPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error;
@@ -731,6 +818,7 @@ export class ProjectStorage {
     legacyBrainstormProjects: string;
     managedTasksRoot: string;
     managedTaskState: string;
+    lightweightRunRecord: string;
     harnessRoot: string;
     harnessConfig: string;
     harnessRuns: string;
@@ -758,6 +846,7 @@ export class ProjectStorage {
       legacyBrainstormProjects: this.legacyBrainstormProjectsPath,
       managedTasksRoot: this.managedTasksRootPath,
       managedTaskState: this.managedTaskStatePath,
+      lightweightRunRecord: this.lightweightRunRecordPath,
       harnessRoot: this.harnessRootPath,
       harnessConfig: this.harnessConfigPath,
       harnessRuns: this.harnessRunsPath,

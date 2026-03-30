@@ -182,6 +182,59 @@ describe("transcript-layout", () => {
     expect(text).toContain("[AMA H2 - Planner] 42 chars round 2/6...");
   });
 
+  it("uses a neutral Scout prefix during preflight instead of leaking the final harness", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 80,
+      isLoading: true,
+      isThinking: true,
+      thinkingCharCount: 42,
+      managedAgentMode: "ama",
+      managedPhase: "preflight",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Scout",
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("[AMA Scout] 42 chars...");
+    expect(text).not.toContain("[AMA H2");
+  });
+
+  it("uses a neutral routing prefix before Scout confirms the final harness", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 100,
+      isLoading: true,
+      currentTool: "changed_scope",
+      managedAgentMode: "ama",
+      managedPhase: "routing",
+      managedHarnessProfile: "H1_EXECUTE_EVAL",
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("[AMA Routing] [Tools] changed_scope...");
+    expect(text).not.toContain("[AMA H1");
+  });
+
+  it("does not leak round 1/2 in the initial AMA live thinking row", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 80,
+      isLoading: true,
+      isThinking: true,
+      thinkingCharCount: 42,
+      managedAgentMode: "ama",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
+      managedRound: 1,
+      managedMaxRounds: 2,
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("[AMA H2 - Planner] 42 chars...");
+    expect(text).not.toContain("round 1/2");
+  });
+
   it("falls back to the last live activity label when thinking has no visible chars yet", () => {
     const rows = buildTranscriptRows({
       items: [],
@@ -334,14 +387,66 @@ describe("transcript-layout", () => {
       isLoading: true,
       currentTool: "changed_diff_bundle",
       toolInputContent: "{\"paths\":[\"packages/coding/src/task-engine.ts\"],\"limit_per_path\":120}",
-      lastLiveActivityLabel: "[Tools] [Lead] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)",
+      lastLiveActivityLabel: "[Tools] [Planner] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)",
       managedAgentMode: "ama",
-      managedHarnessProfile: "H3_MULTI_WORKER",
-      managedWorkerTitle: "Lead",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
     });
 
     const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
-    expect(text).toContain("[AMA H3 - Lead] [Tools] [Lead] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)...");
+    expect(text).toContain("[AMA H2 - Planner] [Tools] changed_diff_bundle - 4 files - packages/repl/src/ui/utils/message-utils.ts (107ms)...");
+    expect(text).not.toContain("[AMA H2 - Planner] [Tools] [Planner]");
+  });
+
+  it("does not repeat the active worker in AMA live tool labels", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 140,
+      isLoading: true,
+      currentTool: "changed_diff",
+      lastLiveActivityLabel: "[Tools] [Generator] changed_diff - packages/coding/src/task-engine.ts - offset=1775 - limit=480",
+      managedAgentMode: "ama",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Generator",
+    });
+
+    const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
+    expect(text).toContain("[AMA H2 - Generator] [Tools] changed_diff - packages/coding/src/task-engine.ts - offset=1775 - limit=480...");
+    expect(text).not.toContain("[AMA H2 - Generator] [Tools] [Generator]");
+  });
+
+  it("does not repeat the active worker in AMA live thinking labels", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 120,
+      isLoading: true,
+      isThinking: true,
+      lastLiveActivityLabel: "[Thinking] [Planner]",
+      managedAgentMode: "ama",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
+    });
+
+    const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
+    expect(text).toContain("[AMA H2 - Planner] [Thinking]...");
+    expect(text).not.toContain("[AMA H2 - Planner] [Thinking] [Planner]");
+  });
+
+  it("normalizes lowercase thinking activity labels to [Thinking]", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 120,
+      isLoading: true,
+      isThinking: true,
+      lastLiveActivityLabel: "[Planner] thinking",
+      managedAgentMode: "ama",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Planner",
+    });
+
+    const text = rows.map((row) => row.text).join("\n").replace(/\n/g, " ");
+    expect(text).toContain("[AMA H2 - Planner] [Thinking]...");
+    expect(text).not.toContain("[AMA H2 - Planner] thinking...");
   });
 
   it("builds transcript sections that preserve row order when flattened", () => {

@@ -28,6 +28,11 @@ import type {
   KodaXRiskLevel,
   KodaXTaskComplexity,
   KodaXTaskWorkIntent,
+  KodaXTaskFamily,
+  KodaXTaskActionability,
+  KodaXExecutionPattern,
+  KodaXMutationSurface,
+  KodaXAssuranceIntent,
   KodaXHarnessProfile,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
@@ -80,6 +85,11 @@ export type {
   KodaXRiskLevel,
   KodaXTaskComplexity,
   KodaXTaskWorkIntent,
+  KodaXTaskFamily,
+  KodaXTaskActionability,
+  KodaXExecutionPattern,
+  KodaXMutationSurface,
+  KodaXAssuranceIntent,
   KodaXHarnessProfile,
   KodaXReviewScale,
   KodaXTaskRoutingDecision,
@@ -256,11 +266,43 @@ export interface KodaXTaskVerificationContract {
   runtime?: KodaXRuntimeVerificationContract;
 }
 
+export type KodaXSkillProjectionConfidence = 'high' | 'medium' | 'low';
+
+export interface KodaXSkillInvocationContext {
+  name: string;
+  path: string;
+  description?: string;
+  arguments?: string;
+  allowedTools?: string;
+  context?: 'fork';
+  agent?: string;
+  argumentHint?: string;
+  model?: string;
+  hookEvents?: string[];
+  expandedContent: string;
+}
+
+export interface KodaXSkillMap {
+  skillSummary: string;
+  executionObligations: string[];
+  verificationObligations: string[];
+  requiredEvidence: string[];
+  ambiguities: string[];
+  projectionConfidence: KodaXSkillProjectionConfidence;
+  rawSkillFallbackAllowed: boolean;
+  allowedTools?: string;
+  preferredAgent?: string;
+  preferredModel?: string;
+  invocationContext?: 'fork';
+  hookEvents?: string[];
+}
+
 export interface KodaXTaskToolPolicy {
   summary: string;
   allowedTools?: string[];
   blockedTools?: string[];
   allowedShellPatterns?: string[];
+  allowedWritePathPatterns?: string[];
 }
 
 export type KodaXAgentMode = 'ama' | 'sa';
@@ -271,7 +313,7 @@ export interface KodaXManagedTaskHarnessTransition {
   from: KodaXHarnessProfile;
   to: KodaXHarnessProfile;
   round: number;
-  source: 'admission' | 'contract-review' | 'evaluator';
+  source: 'scout' | 'evaluator';
   reason?: string;
   approved: boolean;
   denialReason?: string;
@@ -287,6 +329,9 @@ export interface KodaXManagedTaskStatusEvent {
   phase?: 'starting' | 'routing' | 'preflight' | 'round' | 'worker' | 'upgrade' | 'completed';
   note?: string;
   upgradeCeiling?: KodaXHarnessProfile;
+  globalWorkBudget?: number;
+  budgetUsage?: number;
+  budgetApprovalRequired?: boolean;
 }
 
 export interface KodaXVerificationScorecardCriterion {
@@ -308,6 +353,18 @@ export interface KodaXVerificationScorecard {
   criteria: KodaXVerificationScorecardCriterion[];
   trend?: 'improving' | 'flat' | 'regressing';
   summary?: string;
+}
+
+export interface KodaXRoleRoundSummary {
+  role: KodaXTaskRole;
+  round: number;
+  objective: string;
+  confirmedConclusions: string[];
+  unresolvedQuestions: string[];
+  nextFocus: string[];
+  summary: string;
+  sourceWorkerId?: string;
+  updatedAt: string;
 }
 
 export interface KodaXBudgetExtensionRequest {
@@ -369,6 +426,8 @@ export interface KodaXContextOptions {
   disableAutoTaskReroute?: boolean;
   /** Skills system prompt snippet for progressive disclosure - Skills 系统提示词片段（渐进式披露） */
   skillsPrompt?: string;
+  rawUserInput?: string;
+  skillInvocation?: KodaXSkillInvocationContext;
   /** Optional repository-intelligence snapshot injected into the system prompt. */
   repoIntelligenceContext?: string;
   /** Internal execution-mode overlay appended to the system prompt */
@@ -404,7 +463,7 @@ export interface KodaXOptions {
 
 export type KodaXTaskSurface = 'cli' | 'repl' | 'project' | 'plan';
 export type KodaXTaskStatus = 'planned' | 'running' | 'blocked' | 'failed' | 'completed';
-export type KodaXTaskRole = 'direct' | 'admission' | 'lead' | 'planner' | 'generator' | 'worker' | 'validator' | 'evaluator';
+export type KodaXTaskRole = 'direct' | 'scout' | 'planner' | 'generator' | 'evaluator';
 
 export interface KodaXTaskContract {
   taskId: string;
@@ -493,12 +552,27 @@ export interface KodaXManagedTaskRuntimeState {
   qualityAssuranceMode?: 'required' | 'optional';
   memoryStrategies?: Record<string, KodaXMemoryStrategy>;
   memoryNotes?: Record<string, string>;
+  roleRoundSummaries?: Partial<Record<KodaXTaskRole, KodaXRoleRoundSummary>>;
   routingAttempts?: number;
   routingSource?: KodaXTaskRoutingDecision['routingSource'];
   currentHarness?: KodaXHarnessProfile;
   upgradeCeiling?: KodaXHarnessProfile;
   harnessTransitions?: KodaXManagedTaskHarnessTransition[];
-  admissionSummary?: string;
+  scoutDecision?: {
+    summary: string;
+    recommendedHarness: KodaXHarnessProfile;
+    readyForUpgrade: boolean;
+    scope?: string[];
+    requiredEvidence?: string[];
+    reviewFilesOrAreas?: string[];
+    evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read';
+    skillSummary?: string;
+    executionObligations?: string[];
+    verificationObligations?: string[];
+    ambiguities?: string[];
+    projectionConfidence?: KodaXSkillProjectionConfidence;
+  };
+  skillMap?: KodaXSkillMap;
   completionContractStatus?: Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'>;
   rawRoutingDecision?: KodaXTaskRoutingDecision;
   finalRoutingDecision?: KodaXTaskRoutingDecision;
@@ -513,6 +587,9 @@ export interface KodaXManagedTaskRuntimeState {
   toolOutputTruncationNotes?: string[];
   evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read';
   consecutiveEvidenceOnlyIterations?: number;
+  globalWorkBudget?: number;
+  budgetUsage?: number;
+  budgetApprovalRequired?: boolean;
 }
 
 export interface KodaXManagedTask {

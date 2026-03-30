@@ -182,10 +182,14 @@ export interface StatusBarProps {
   };
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
   managedHarnessProfile?: string;
   managedWorkerTitle?: string;
   managedRound?: number;
   managedMaxRounds?: number;
+  managedGlobalWorkBudget?: number;
+  managedBudgetUsage?: number;
+  managedBudgetApprovalRequired?: boolean;
 }
 
 /**
@@ -274,6 +278,7 @@ export interface ToolCall {
   name: string;
   status: ToolCallStatus;
   input?: Record<string, unknown>;
+  preview?: string;
   output?: unknown;
   error?: string;
   progress?: number; // 0-100

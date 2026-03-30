@@ -19,7 +19,7 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:packages && tsc",
     "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax/skills",
     "dev": "tsx src/kodax_cli.ts",
     "dev:cli": "tsx src/kodax_cli.ts",

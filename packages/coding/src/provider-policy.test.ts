@@ -152,28 +152,6 @@ describe('provider policy', () => {
     );
   });
 
-  it('blocks multi-worker harness selection on lossy bridge providers', () => {
-    const decision = evaluateProviderPolicy({
-      providerName: 'gemini-cli',
-      capabilityProfile: CLI_BRIDGE_PROFILE,
-      reasoningCapability: 'prompt-only',
-      hints: {
-        harnessProfile: 'H3_MULTI_WORKER',
-      },
-      reasoningMode: 'balanced',
-    });
-
-    expect(decision.status).toBe('block');
-    expect(decision.issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        'multi-worker-harness-blocked',
-      ]),
-    );
-    expect(decision.issues.map((issue) => issue.code)).not.toContain(
-      'long-running-blocked',
-    );
-  });
-
   it('warns rather than blocks plan-execute-eval routing on bridge providers', () => {
     const decision = evaluateProviderPolicy({
       providerName: 'gemini-cli',

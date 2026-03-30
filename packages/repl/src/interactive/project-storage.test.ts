@@ -9,7 +9,7 @@ import {
   createBrainstormSession,
   formatBrainstormTranscript,
 } from './project-brainstorm.js';
-import { ProjectStorage } from './project-storage.js';
+import { ProjectStorage, type ProjectLightweightRunRecord } from './project-storage.js';
 
 describe('project-storage brainstorm persistence', () => {
   let tempDir = '';
@@ -265,6 +265,35 @@ describe('project-storage brainstorm persistence', () => {
     await expect(storage.loadManagedTask()).resolves.toEqual(managedTask);
     expect(storage.getPaths().managedTaskState).toContain('.agent');
     expect(storage.getPaths().managedTasksRoot).toContain('.agent');
+  });
+
+  it('persists lightweight direct run records and uses them for workflow summaries when managed tasks are absent', async () => {
+    const storage = new ProjectStorage(tempDir);
+    const record: ProjectLightweightRunRecord = {
+      status: 'completed',
+      summary: 'Direct project analysis completed without the managed harness.',
+      sessionId: 'session-direct-project',
+      taskSurface: 'project',
+      agentMode: 'sa',
+      executionMode: 'direct',
+      featureIndex: 2,
+      changedFiles: ['packages/repl/src/interactive/project-commands.ts'],
+      checks: ['Confirm status output'],
+      evidence: ['Reviewed direct analysis output'],
+      blockers: [],
+      nextStep: '/project next --no-confirm',
+      createdAt: '2026-03-29T10:00:00.000Z',
+      updatedAt: '2026-03-29T10:05:00.000Z',
+    };
+
+    await storage.saveLightweightRunRecord(record);
+
+    await expect(storage.loadLightweightRunRecord()).resolves.toEqual(record);
+
+    const state = await storage.loadWorkflowState();
+    expect(state?.latestExecutionSummary).toBe(record.summary);
+    expect(state?.currentFeatureIndex).toBe(2);
+    expect(storage.getPaths().lightweightRunRecord).toContain('.agent');
   });
 
   it('deletes project runtime artifacts under .agent/project on full reset', async () => {

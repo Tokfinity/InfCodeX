@@ -15,6 +15,7 @@ import {
   buildPromptOverlay,
   buildProviderPolicyHintsForDecision,
   createReasoningPlan,
+  inferIntentGate,
   reasoningModeToDepth,
   resolveReasoningMode,
   type ReasoningPlan,
@@ -38,16 +39,21 @@ import type {
   KodaXBudgetDisclosureZone,
   KodaXBudgetExtensionRequest,
   KodaXEvents,
+  KodaXHarnessProfile,
   KodaXJsonValue,
   KodaXManagedTaskHarnessTransition,
   KodaXManagedTask,
   KodaXManagedBudgetSnapshot,
+  KodaXManagedTaskStatusEvent,
   KodaXMemoryStrategy,
   KodaXOptions,
   KodaXRepoRoutingSignals,
   KodaXResult,
+  KodaXRoleRoundSummary,
   KodaXSessionData,
   KodaXSessionStorage,
+  KodaXSkillInvocationContext,
+  KodaXSkillMap,
   KodaXRuntimeVerificationContract,
   KodaXTaskCapabilityHint,
   KodaXTaskEvidenceArtifact,
@@ -85,7 +91,7 @@ interface ManagedTaskRepoIntelligenceSnapshot {
 }
 
 interface ManagedTaskVerdictDirective {
-  source: 'contract-review' | 'evaluator' | 'worker';
+  source: 'evaluator' | 'worker';
   status: 'accept' | 'revise' | 'blocked';
   reason?: string;
   followups: string[];
@@ -94,13 +100,21 @@ interface ManagedTaskVerdictDirective {
   nextHarness?: KodaXTaskRoutingDecision['harnessProfile'];
 }
 
-interface ManagedTaskAdmissionDirective {
+interface ManagedTaskScoutDirective {
   summary?: string;
   scope: string[];
   requiredEvidence: string[];
   reviewFilesOrAreas?: string[];
   evidenceAcquisitionMode?: ManagedEvidenceAcquisitionMode;
   confirmedHarness?: KodaXTaskRoutingDecision['harnessProfile'];
+  userFacingText?: string;
+  skillMap?: {
+    skillSummary?: string;
+    executionObligations: string[];
+    verificationObligations: string[];
+    ambiguities: string[];
+    projectionConfidence?: KodaXSkillMap['projectionConfidence'];
+  };
 }
 
 interface ManagedTaskContractDirective {
@@ -123,6 +137,7 @@ interface ManagedTaskRoundExecution {
   workerResults: Map<string, KodaXResult>;
   contractDirectives: Map<string, ManagedTaskContractDirective>;
   orchestrationResult: OrchestrationRunResult<ManagedTaskWorkerSpec, string>;
+  taskSnapshot: KodaXManagedTask;
   workspaceDir: string;
   directive?: ManagedTaskVerdictDirective;
   budgetRequest?: KodaXBudgetExtensionRequest;
@@ -142,6 +157,7 @@ interface ManagedTaskBudgetController {
   spentBudget: number;
   currentHarness: KodaXTaskRoutingDecision['harnessProfile'];
   upgradeCeiling?: KodaXTaskRoutingDecision['harnessProfile'];
+  lastApprovalBudgetTotal?: number;
 }
 
 function truncateText(value: string, maxLength = 400): string {
@@ -149,6 +165,118 @@ function truncateText(value: string, maxLength = 400): string {
     return value;
   }
   return `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function resolveManagedOriginalTask(
+  context: KodaXOptions['context'] | undefined,
+  prompt: string,
+): string {
+  return context?.rawUserInput?.trim() || prompt;
+}
+
+function splitAllowedToolList(value: string | undefined): string[] {
+  return value
+    ?.split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    ?? [];
+}
+
+function getManagedSkillArtifactPaths(workspaceDir: string): {
+  rawSkillPath: string;
+  skillMapJsonPath: string;
+  skillMapMarkdownPath: string;
+} {
+  return {
+    rawSkillPath: path.join(workspaceDir, 'skill-execution.md'),
+    skillMapJsonPath: path.join(workspaceDir, 'skill-map.json'),
+    skillMapMarkdownPath: path.join(workspaceDir, 'skill-map.md'),
+  };
+}
+
+function withManagedSkillArtifactPromptPaths(
+  rolePromptContext: ManagedRolePromptContext | undefined,
+  workspaceDir: string,
+): ManagedRolePromptContext | undefined {
+  if (!rolePromptContext) {
+    return undefined;
+  }
+  const artifactPaths = getManagedSkillArtifactPaths(workspaceDir);
+  return {
+    ...rolePromptContext,
+    skillExecutionArtifactPath: artifactPaths.rawSkillPath,
+    skillMapArtifactPath: artifactPaths.skillMapMarkdownPath,
+  };
+}
+
+function formatOptionalListSection(title: string, items: string[] | undefined): string | undefined {
+  const cleaned = items?.map((item) => item.trim()).filter(Boolean) ?? [];
+  if (cleaned.length === 0) {
+    return undefined;
+  }
+  return [title, ...cleaned.map((item) => `- ${item}`)].join('\n');
+}
+
+function formatSkillInvocationSummary(
+  skillInvocation: KodaXSkillInvocationContext,
+  rawSkillPath?: string,
+): string {
+  return [
+    'Active skill invocation:',
+    `- Name: ${skillInvocation.name}`,
+    `- Path: ${skillInvocation.path}`,
+    skillInvocation.arguments ? `- Arguments: ${skillInvocation.arguments}` : undefined,
+    skillInvocation.description ? `- Description: ${skillInvocation.description}` : undefined,
+    skillInvocation.allowedTools ? `- Allowed tools: ${skillInvocation.allowedTools}` : undefined,
+    skillInvocation.agent ? `- Preferred agent: ${skillInvocation.agent}` : undefined,
+    skillInvocation.model ? `- Preferred model: ${skillInvocation.model}` : undefined,
+    skillInvocation.context ? `- Invocation context: ${skillInvocation.context}` : undefined,
+    skillInvocation.hookEvents?.length ? `- Hook events: ${skillInvocation.hookEvents.join(', ')}` : undefined,
+    rawSkillPath ? `- Raw skill artifact: ${rawSkillPath}` : undefined,
+  ].filter((line): line is string => Boolean(line)).join('\n');
+}
+
+function formatSkillMapSection(
+  skillMap: KodaXSkillMap,
+  skillMapArtifactPath?: string,
+): string {
+  return [
+    'Skill map:',
+    `- Summary: ${skillMap.skillSummary}`,
+    `- Projection confidence: ${skillMap.projectionConfidence}`,
+    skillMap.allowedTools ? `- Allowed tools: ${skillMap.allowedTools}` : undefined,
+    skillMap.preferredAgent ? `- Preferred agent: ${skillMap.preferredAgent}` : undefined,
+    skillMap.preferredModel ? `- Preferred model: ${skillMap.preferredModel}` : undefined,
+    skillMap.invocationContext ? `- Invocation context: ${skillMap.invocationContext}` : undefined,
+    skillMap.hookEvents?.length ? `- Hook events: ${skillMap.hookEvents.join(', ')}` : undefined,
+    skillMap.rawSkillFallbackAllowed ? '- Raw skill fallback: allowed when the map is incomplete or claims conflict.' : undefined,
+    skillMapArtifactPath ? `- Skill map artifact: ${skillMapArtifactPath}` : undefined,
+    formatOptionalListSection('Execution obligations:', skillMap.executionObligations),
+    formatOptionalListSection('Verification obligations:', skillMap.verificationObligations),
+    formatOptionalListSection('Required evidence:', skillMap.requiredEvidence),
+    formatOptionalListSection('Ambiguities:', skillMap.ambiguities),
+  ].filter((line): line is string => Boolean(line)).join('\n');
+}
+
+function formatFullSkillSection(skillInvocation: KodaXSkillInvocationContext): string {
+  return [
+    'Full expanded skill (authoritative execution reference):',
+    '```markdown',
+    skillInvocation.expandedContent.trim(),
+    '```',
+  ].join('\n');
+}
+
+function formatRoleRoundSummarySection(summary: KodaXRoleRoundSummary): string {
+  return [
+    'Previous same-role summary:',
+    `- Round: ${summary.round}`,
+    `- Objective: ${summary.objective}`,
+    `- Summary: ${summary.summary}`,
+    formatOptionalListSection('Confirmed conclusions:', summary.confirmedConclusions),
+    formatOptionalListSection('Unresolved questions:', summary.unresolvedQuestions),
+    formatOptionalListSection('Next focus:', summary.nextFocus),
+  ].filter((line): line is string => Boolean(line)).join('\n');
 }
 
 type ManagedEvidenceAcquisitionMode = NonNullable<KodaXManagedTask['runtime']>['evidenceAcquisitionMode'];
@@ -169,21 +297,31 @@ interface ManagedPlanningResult {
   routingOverrideReason?: string;
 }
 
+interface ManagedRolePromptContext {
+  originalTask: string;
+  skillInvocation?: KodaXSkillInvocationContext;
+  skillMap?: KodaXSkillMap;
+  skillExecutionArtifactPath?: string;
+  skillMapArtifactPath?: string;
+  previousRoleSummaries?: Partial<Record<KodaXTaskRole, KodaXRoleRoundSummary>>;
+}
+
 const MANAGED_TASK_CONTRACT_BLOCK = 'kodax-task-contract';
-const MANAGED_TASK_CONTRACT_REVIEW_BLOCK = 'kodax-task-contract-review';
 const MANAGED_TASK_VERDICT_BLOCK = 'kodax-task-verdict';
-const MANAGED_TASK_ADMISSION_BLOCK = 'kodax-task-admission';
+const MANAGED_TASK_SCOUT_BLOCK = 'kodax-task-scout';
 const MANAGED_TASK_HANDOFF_BLOCK = 'kodax-task-handoff';
 const MANAGED_TASK_BUDGET_REQUEST_BLOCK = 'kodax-budget-request';
-const MANAGED_TASK_MAX_REFINEMENT_ROUND_CAP = 12;
-const MANAGED_TASK_MIN_REFINEMENT_ROUNDS = 2;
-const MANAGED_TASK_ROUTER_MAX_RETRIES = 3;
+const MANAGED_TASK_MAX_REFINEMENT_ROUND_CAP = 2;
+const MANAGED_TASK_MIN_REFINEMENT_ROUNDS = 1;
+const MANAGED_TASK_ROUTER_MAX_RETRIES = 2;
 const EVIDENCE_ONLY_ITERATION_THRESHOLD = 3;
+const GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD = 0.9;
+const GLOBAL_WORK_BUDGET_INCREMENT = 200;
+const DEFAULT_MANAGED_WORK_BUDGET = 200;
 const MANAGED_TASK_BUDGET_BASE: Record<KodaXTaskRoutingDecision['harnessProfile'], number> = {
   H0_DIRECT: 50,
-  H1_EXECUTE_EVAL: 100,
-  H2_PLAN_EXECUTE_EVAL: 200,
-  H3_MULTI_WORKER: 350,
+  H1_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
+  H2_PLAN_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
 };
 
 function getManagedTaskSurface(options: KodaXOptions): KodaXTaskSurface {
@@ -211,54 +349,132 @@ function applyAgentModeToPlan(
   plan: ReasoningPlan,
   agentMode: KodaXAgentMode,
 ): ReasoningPlan {
-  if (agentMode !== 'sa') {
-    return {
-      ...plan,
-      promptOverlay: [
-        plan.promptOverlay,
-        '[Agent Mode: AMA] Adaptive multi-agent harness selection is enabled.',
-      ].filter(Boolean).join('\n\n'),
-    };
-  }
-
-  if (plan.decision.harnessProfile === 'H0_DIRECT') {
-    return {
-      ...plan,
-      promptOverlay: [
-        plan.promptOverlay,
-        '[Agent Mode: SA] Single-agent execution is pinned for this run.',
-      ].filter(Boolean).join('\n\n'),
-    };
+  if (agentMode === 'sa') {
+    return plan;
   }
 
   return {
     ...plan,
-    decision: {
-      ...plan.decision,
-      harnessProfile: 'H0_DIRECT',
-      reason: `${plan.decision.reason} Agent mode SA forced single-agent execution to reduce token usage.`,
-      routingNotes: [
-        ...(plan.decision.routingNotes ?? []),
-        'Agent mode SA disabled adaptive multi-agent role split for this run.',
-      ],
-    },
+    promptOverlay: [
+      plan.promptOverlay,
+      '[Agent Mode: AMA] Single-agent-first harness escalation is enabled.',
+    ].filter(Boolean).join('\n\n'),
+  };
+}
+
+function applyDirectPathTaskFamilyShaping(
+  plan: ReasoningPlan,
+  promptOverlayPrefix?: string,
+): string {
+  return buildDirectPathTaskFamilyPromptOverlay(
+    plan.decision.taskFamily,
+    [promptOverlayPrefix, plan.promptOverlay],
+  );
+}
+
+function buildDirectPathTaskFamilyPromptOverlay(
+  family: KodaXTaskRoutingDecision['taskFamily'] | undefined,
+  sections: Array<string | undefined>,
+): string {
+  const familyRule = family === 'review'
+    ? '[Direct Path Rule] Return a review report, not a plan. Findings first when issues exist; otherwise explicitly say no findings.'
+    : family === 'lookup'
+      ? '[Direct Path Rule] Return a concise factual answer with the relevant file path(s) and only the minimum supporting detail.'
+      : family === 'planning'
+        ? '[Direct Path Rule] Return a concrete plan, not an implementation report.'
+        : family === 'investigation'
+          ? '[Direct Path Rule] Return diagnosis, evidence, and next steps.'
+          : undefined;
+
+  return [...sections, familyRule].filter(Boolean).join('\n\n');
+}
+
+function applyScoutDecisionToPlan(
+  plan: ReasoningPlan,
+  scout: ManagedTaskScoutDirective | undefined,
+): ReasoningPlan {
+  if (!scout?.confirmedHarness) {
+    return plan;
+  }
+
+  const topologyCeiling = plan.decision.topologyCeiling ?? plan.decision.upgradeCeiling;
+  const confirmedHarness = topologyCeiling
+    ? clampHarnessToCeiling(scout.confirmedHarness, topologyCeiling)
+    : scout.confirmedHarness;
+  const ceilingNote = confirmedHarness !== scout.confirmedHarness
+    ? `Scout requested ${scout.confirmedHarness} but runtime ceiling kept the task at ${confirmedHarness}.`
+    : undefined;
+  if (
+    confirmedHarness === plan.decision.harnessProfile
+    && !scout.summary
+    && !ceilingNote
+  ) {
+    return plan;
+  }
+
+  const decision: KodaXTaskRoutingDecision = {
+    ...plan.decision,
+    harnessProfile: confirmedHarness,
+    reason: scout.summary
+      ? `${plan.decision.reason} Scout confirmed ${confirmedHarness}: ${scout.summary}`
+      : plan.decision.reason,
+    routingNotes: [
+      ...(plan.decision.routingNotes ?? []),
+      ...(scout.summary ? [`Scout decision: ${scout.summary}`] : []),
+      ...(ceilingNote ? [ceilingNote] : []),
+    ],
+  };
+
+  return {
+    ...plan,
+    decision,
     promptOverlay: buildPromptOverlay(
-      {
-        ...plan.decision,
-        harnessProfile: 'H0_DIRECT',
-        reason: `${plan.decision.reason} Agent mode SA forced single-agent execution to reduce token usage.`,
-        routingNotes: [
-          ...(plan.decision.routingNotes ?? []),
-          'Agent mode SA disabled adaptive multi-agent role split for this run.',
-        ],
-      },
-      [
-        ...(plan.providerPolicy?.routingNotes ?? []),
-        '[Agent Mode: SA] Single-agent execution is pinned for this run.',
-      ],
+      decision,
+      plan.providerPolicy?.routingNotes,
       plan.providerPolicy,
     ),
   };
+}
+
+function clampHarnessToCeiling(
+  harness: KodaXHarnessProfile,
+  topologyCeiling: KodaXHarnessProfile,
+): KodaXHarnessProfile {
+  return getHarnessRank(harness) > getHarnessRank(topologyCeiling)
+    ? topologyCeiling
+    : harness;
+}
+
+function shouldBypassScoutForManagedH0(
+  decision: Pick<KodaXTaskRoutingDecision, 'primaryTask' | 'taskFamily' | 'actionability' | 'harnessProfile'>,
+): boolean {
+  if (decision.harnessProfile !== 'H0_DIRECT') {
+    return false;
+  }
+
+  const taskFamily = decision.taskFamily ?? (
+    decision.primaryTask === 'conversation'
+      ? 'conversation'
+      : decision.primaryTask === 'lookup'
+        ? 'lookup'
+        : decision.primaryTask === 'review'
+          ? 'review'
+          : decision.primaryTask === 'plan'
+            ? 'planning'
+            : decision.primaryTask === 'bugfix'
+              ? 'investigation'
+              : decision.primaryTask === 'edit' || decision.primaryTask === 'refactor'
+                ? 'implementation'
+                : 'ambiguous'
+  );
+  const actionability = decision.actionability ?? (
+    taskFamily === 'conversation'
+      ? 'non_actionable'
+      : taskFamily === 'ambiguous'
+        ? 'ambiguous'
+        : 'actionable'
+  );
+  return actionability !== 'actionable' || taskFamily === 'conversation' || taskFamily === 'lookup';
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -509,14 +725,12 @@ const HARNESS_ORDER: KodaXTaskRoutingDecision['harnessProfile'][] = [
   'H0_DIRECT',
   'H1_EXECUTE_EVAL',
   'H2_PLAN_EXECUTE_EVAL',
-  'H3_MULTI_WORKER',
 ];
 
 const HARNESS_UPGRADE_COST: Record<KodaXTaskRoutingDecision['harnessProfile'], number> = {
   H0_DIRECT: 0,
   H1_EXECUTE_EVAL: 16,
   H2_PLAN_EXECUTE_EVAL: 24,
-  H3_MULTI_WORKER: 40,
 };
 
 function getHarnessRank(harness: KodaXTaskRoutingDecision['harnessProfile']): number {
@@ -544,7 +758,7 @@ function getHarnessUpgradeCost(
 }
 
 function createManagedBudgetController(
-  options: KodaXOptions,
+  _options: KodaXOptions,
   plan: ReasoningPlan,
   agentMode: KodaXAgentMode,
 ): ManagedTaskBudgetController {
@@ -562,52 +776,13 @@ function createManagedBudgetController(
     };
   }
 
-  let totalBudget = MANAGED_TASK_BUDGET_BASE[plan.decision.harnessProfile];
-  const primaryTask = String(plan.decision.primaryTask);
-  const tokenCount = options.context?.contextTokenSnapshot?.currentTokens ?? 0;
-  const longRunning = Boolean(
-    options.context?.taskSurface === 'project'
-    || options.context?.providerPolicyHints?.longRunning
-    || options.context?.longRunning
-  );
-
-  if (longRunning) {
-    totalBudget = Math.round(totalBudget * 1.25);
-  }
-  if (
-    primaryTask === 'review'
-    || primaryTask === 'verify'
-    || primaryTask === 'debug'
-    || primaryTask === 'investigate'
-  ) {
-    totalBudget = Math.round(totalBudget * 1.15);
-  }
-  if (plan.decision.requiresBrainstorm || plan.decision.complexity === 'systemic') {
-    totalBudget = Math.round(totalBudget * 1.2);
-  }
-  if (tokenCount >= 120_000) {
-    totalBudget = Math.round(totalBudget * 0.65);
-  } else if (tokenCount >= 60_000) {
-    totalBudget = Math.round(totalBudget * 0.8);
-  }
-
-  totalBudget = clampNumber(totalBudget, 50, 500);
+  const totalBudget = MANAGED_TASK_BUDGET_BASE[plan.decision.harnessProfile];
   const reserveBudget = clampNumber(Math.round(totalBudget * 0.2), 0, Math.max(0, totalBudget - 25));
   const hasUpgradePath = isHarnessUpgrade(plan.decision.harnessProfile, plan.decision.upgradeCeiling);
   const upgradeReserveBudget = hasUpgradePath
     ? clampNumber(Math.round(reserveBudget * 0.6), 8, reserveBudget)
     : 0;
-  const executableBudget = Math.max(1, totalBudget - reserveBudget);
-  const roundDivisor = plan.decision.harnessProfile === 'H3_MULTI_WORKER'
-    ? 35
-    : plan.decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-      ? 26
-      : 30;
-  const plannedRounds = clampNumber(
-    Math.ceil(executableBudget / roundDivisor),
-    MANAGED_TASK_MIN_REFINEMENT_ROUNDS,
-    MANAGED_TASK_MAX_REFINEMENT_ROUND_CAP,
-  );
+  const plannedRounds = 1;
 
   return {
     totalBudget,
@@ -628,7 +803,7 @@ function resolveBudgetZone(
   role: KodaXTaskRole,
 ): KodaXBudgetDisclosureZone {
   const ratio = plannedRounds <= 0 ? 1 : round / plannedRounds;
-  const earlyConvergeRole = role === 'admission' || role === 'planner' || role === 'validator' || role === 'evaluator';
+  const earlyConvergeRole = role === 'scout' || role === 'planner' || role === 'evaluator';
   const yellowThreshold = earlyConvergeRole ? 0.5 : 0.6;
   const orangeThreshold = earlyConvergeRole ? 0.78 : 0.85;
   const redThreshold = earlyConvergeRole ? 0.9 : 0.95;
@@ -654,23 +829,14 @@ function resolveWorkerIterLimits(
       direct: { soft: 18, hard: 24 },
     },
     H1_EXECUTE_EVAL: {
-      admission: { soft: 6, hard: 8 },
+      scout: { soft: 6, hard: 10 },
       generator: { soft: 24, hard: 30 },
       evaluator: { soft: 12, hard: 16 },
     },
     H2_PLAN_EXECUTE_EVAL: {
-      admission: { soft: 6, hard: 8 },
+      scout: { soft: 6, hard: 10 },
       planner: { soft: 8, hard: 12 },
-      validator: { soft: 6, hard: 10 },
       generator: { soft: 28, hard: 36 },
-      evaluator: { soft: 14, hard: 18 },
-    },
-    H3_MULTI_WORKER: {
-      admission: { soft: 6, hard: 8 },
-      lead: { soft: 6, hard: 8 },
-      planner: { soft: 10, hard: 14 },
-      validator: { soft: 8, hard: 12 },
-      worker: { soft: 24, hard: 32 },
       evaluator: { soft: 14, hard: 18 },
     },
   };
@@ -679,17 +845,11 @@ function resolveWorkerIterLimits(
     return explicit;
   }
 
-  if (role === 'validator') {
-    return harness === 'H3_MULTI_WORKER' ? { soft: 8, hard: 12 } : { soft: 6, hard: 10 };
-  }
-
-  return harness === 'H3_MULTI_WORKER'
-    ? { soft: 24, hard: 32 }
-    : harness === 'H2_PLAN_EXECUTE_EVAL'
-      ? { soft: 28, hard: 36 }
-      : harness === 'H1_EXECUTE_EVAL'
-        ? { soft: 24, hard: 30 }
-        : { soft: 18, hard: 24 };
+  return harness === 'H2_PLAN_EXECUTE_EVAL'
+    ? { soft: 28, hard: 36 }
+    : harness === 'H1_EXECUTE_EVAL'
+      ? { soft: 24, hard: 30 }
+      : { soft: 18, hard: 24 };
 }
 
 function createBudgetSnapshot(
@@ -699,10 +859,11 @@ function createBudgetSnapshot(
   role: KodaXTaskRole | undefined,
   workerId?: string,
 ): KodaXManagedBudgetSnapshot {
-  const zone = resolveBudgetZone(round, controller.plannedRounds, role ?? 'worker');
+  const effectiveRole = role ?? 'direct';
+  const zone = resolveBudgetZone(round, controller.plannedRounds, effectiveRole);
   const iterLimits = resolveWorkerIterLimits(
     harness,
-    role ?? 'worker',
+    effectiveRole,
   );
   return {
     totalBudget: controller.totalBudget,
@@ -727,6 +888,111 @@ function createBudgetSnapshot(
   };
 }
 
+function applyManagedBudgetRuntimeState(
+  runtime: KodaXManagedTask['runtime'] | undefined,
+  controller: ManagedTaskBudgetController,
+  budgetApprovalRequired = false,
+): NonNullable<KodaXManagedTask['runtime']> {
+  return {
+    ...(runtime ?? {}),
+    currentHarness: controller.currentHarness,
+    upgradeCeiling: controller.upgradeCeiling,
+    globalWorkBudget: controller.totalBudget,
+    budgetUsage: controller.spentBudget,
+    budgetApprovalRequired,
+  };
+}
+
+function buildManagedStatusBudgetFields(
+  controller: ManagedTaskBudgetController | undefined,
+  budgetApprovalRequired = false,
+): Pick<KodaXManagedTaskStatusEvent, 'globalWorkBudget' | 'budgetUsage' | 'budgetApprovalRequired'> {
+  return {
+    globalWorkBudget: controller?.totalBudget,
+    budgetUsage: controller?.spentBudget,
+    budgetApprovalRequired,
+  };
+}
+
+function incrementManagedBudgetUsage(
+  controller: ManagedTaskBudgetController,
+  amount = 1,
+): void {
+  controller.spentBudget = Math.max(0, controller.spentBudget + amount);
+}
+
+function resolveRemainingManagedWorkBudget(controller: ManagedTaskBudgetController): number {
+  return Math.max(1, controller.totalBudget - controller.spentBudget);
+}
+
+function extendManagedWorkBudget(
+  controller: ManagedTaskBudgetController,
+  additionalUnits = GLOBAL_WORK_BUDGET_INCREMENT,
+): void {
+  const reserveAdd = clampNumber(Math.round(additionalUnits * 0.2), 0, additionalUnits);
+  controller.totalBudget += additionalUnits;
+  controller.reserveBudget += reserveAdd;
+  controller.reserveRemaining += reserveAdd;
+
+  if (isHarnessUpgrade(controller.currentHarness, controller.upgradeCeiling)) {
+    const upgradeReserveAdd = clampNumber(Math.round(reserveAdd * 0.6), 8, reserveAdd);
+    controller.upgradeReserveBudget += upgradeReserveAdd;
+    controller.upgradeReserveRemaining += upgradeReserveAdd;
+  }
+}
+
+async function maybeRequestAdditionalWorkBudget(
+  events: KodaXEvents | undefined,
+  controller: ManagedTaskBudgetController,
+  context: {
+    summary: string;
+    currentRound: number;
+    maxRounds: number;
+  },
+): Promise<'approved' | 'denied' | 'skipped'> {
+  if (!events?.askUser) {
+    return 'skipped';
+  }
+
+  const threshold = Math.ceil(controller.totalBudget * GLOBAL_WORK_BUDGET_APPROVAL_THRESHOLD);
+  if (controller.spentBudget < threshold) {
+    return 'skipped';
+  }
+  if (controller.lastApprovalBudgetTotal === controller.totalBudget) {
+    return 'skipped';
+  }
+
+  const usedPercent = Math.min(100, Math.round((controller.spentBudget / Math.max(1, controller.totalBudget)) * 100));
+  const choice = await events.askUser({
+    question: `This AMA run has used ${controller.spentBudget}/${controller.totalBudget} work units (${usedPercent}%) and needs more work. Add ${GLOBAL_WORK_BUDGET_INCREMENT} more work units?`,
+    options: [
+      {
+        label: `Continue (+${GLOBAL_WORK_BUDGET_INCREMENT})`,
+        value: 'continue',
+        description: `Grant ${GLOBAL_WORK_BUDGET_INCREMENT} more work units and continue from round ${context.currentRound}/${context.maxRounds}.`,
+      },
+      {
+        label: 'Stop here',
+        value: 'stop',
+        description: `Finish now with the current best result. Latest note: ${truncateText(context.summary, 80)}`,
+      },
+    ],
+    default: 'continue',
+    intent: 'generic',
+    scope: 'session',
+    resumeBehavior: 'continue',
+  });
+
+  const promptedBudgetTotal = controller.totalBudget;
+  if (choice === 'continue') {
+    controller.lastApprovalBudgetTotal = promptedBudgetTotal;
+    extendManagedWorkBudget(controller, GLOBAL_WORK_BUDGET_INCREMENT);
+    return 'approved';
+  }
+  controller.lastApprovalBudgetTotal = promptedBudgetTotal;
+  return 'denied';
+}
+
 function formatBudgetAdvisory(snapshot: KodaXManagedBudgetSnapshot | undefined): string | undefined {
   if (!snapshot) {
     return undefined;
@@ -749,18 +1015,11 @@ function formatBudgetAdvisory(snapshot: KodaXManagedBudgetSnapshot | undefined):
   const lines = [
     'Budget advisory:',
     `- Current round: ${snapshot.currentRound}/${snapshot.plannedRounds}`,
-    `- Worker iteration budget: target=${snapshot.softMaxIter ?? 'n/a'}, safety-cap=${snapshot.hardMaxIter ?? 'n/a'}`,
+    `- Global work budget: used=${snapshot.spentBudget}/${snapshot.totalBudget}, remaining=${snapshot.remainingBudget}.`,
     snapshot.zone === 'red'
-      ? '- Final completion window: return a complete result, a blocked verdict, or a budget extension request.'
+      ? '- Final completion window: return a complete result, a blocked verdict, or a clear continuation summary.'
       : '- You are approaching the execution boundary. Do not open new exploration branches.',
   ];
-
-  if (snapshot.allowExtensionRequest) {
-    lines.push(
-      `- If you are close to completion, append a \`\`\`${MANAGED_TASK_BUDGET_REQUEST_BLOCK}\` block requesting 1-3 additional iterations.`,
-      '- Block shape: requested_iters: 1|2|3, reason: <why>, completion_expectation: <what finishes>, confidence_to_finish: <0..1>, fallback_if_denied: <best incomplete result plan>.',
-    );
-  }
 
   return lines.join('\n');
 }
@@ -775,7 +1034,7 @@ function resolveManagedMemoryStrategy(
   if (previousDirective?.status === 'revise' && previousDirective.nextHarness) {
     return 'reset-handoff';
   }
-  if (role === 'planner' || role === 'validator' || role === 'evaluator') {
+  if (role === 'planner' || role === 'evaluator' || role === 'scout') {
     return 'reset-handoff';
   }
 
@@ -888,6 +1147,111 @@ function buildManagedWorkerMemoryNote(
   return lines.join('\n');
 }
 
+function buildRoleRoundSummaryObjective(
+  task: KodaXManagedTask,
+  worker: ManagedTaskWorkerSpec,
+): string {
+  switch (worker.role) {
+    case 'scout':
+      return `Decide whether "${task.contract.objective}" should stay direct or escalate, and identify the next evidence path.`;
+    case 'planner':
+      return `Turn "${task.contract.objective}" into a workable contract, risks, and evidence checklist.`;
+    case 'evaluator':
+      return `Judge whether the current execution satisfies the contract for "${task.contract.objective}".`;
+    default:
+      return task.contract.objective;
+  }
+}
+
+function buildManagedWorkerRoundSummary(
+  task: KodaXManagedTask,
+  worker: ManagedTaskWorkerSpec,
+  result: KodaXResult,
+  round: number,
+  directive: ManagedTaskScoutDirective | ManagedTaskContractDirective | ManagedTaskVerdictDirective | undefined,
+): KodaXRoleRoundSummary | undefined {
+  if (worker.role !== 'scout' && worker.role !== 'planner' && worker.role !== 'evaluator') {
+    return undefined;
+  }
+
+  const visibleText = sanitizeManagedUserFacingText(extractMessageText(result) || result.lastText).trim();
+  const fallbackSummary = truncateText(visibleText || 'No prior visible summary captured.', 320);
+  const summary: KodaXRoleRoundSummary = {
+    role: worker.role,
+    round,
+    objective: buildRoleRoundSummaryObjective(task, worker),
+    confirmedConclusions: [],
+    unresolvedQuestions: [],
+    nextFocus: [],
+    summary: fallbackSummary,
+    sourceWorkerId: worker.id,
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (worker.role === 'scout') {
+    const scoutDirective = directive as ManagedTaskScoutDirective | undefined;
+    summary.summary = truncateText(scoutDirective?.summary || fallbackSummary, 320);
+    summary.confirmedConclusions = [
+      scoutDirective?.summary,
+      scoutDirective?.confirmedHarness ? `Recommended harness: ${scoutDirective.confirmedHarness}` : undefined,
+    ].filter((item): item is string => Boolean(item)).slice(0, 3);
+    summary.unresolvedQuestions = (scoutDirective?.requiredEvidence ?? []).slice(0, 4);
+    summary.nextFocus = [
+      ...(scoutDirective?.reviewFilesOrAreas ?? []),
+      ...(scoutDirective?.scope ?? []),
+    ].filter(Boolean).slice(0, 4);
+    return summary;
+  }
+
+  if (worker.role === 'planner') {
+    const contractDirective = directive as ManagedTaskContractDirective | undefined;
+    summary.summary = truncateText(contractDirective?.summary || fallbackSummary, 320);
+    summary.confirmedConclusions = [
+      contractDirective?.summary,
+      ...(contractDirective?.successCriteria ?? []),
+    ].filter((item): item is string => Boolean(item)).slice(0, 4);
+    summary.unresolvedQuestions = (contractDirective?.requiredEvidence ?? []).slice(0, 4);
+    summary.nextFocus = (contractDirective?.constraints ?? []).slice(0, 4);
+    return summary;
+  }
+
+  const verdictDirective = directive as ManagedTaskVerdictDirective | undefined;
+  summary.summary = truncateText(verdictDirective?.reason || fallbackSummary, 320);
+  summary.confirmedConclusions = [
+    verdictDirective?.status ? `Verdict: ${verdictDirective.status}` : undefined,
+    verdictDirective?.reason,
+  ].filter((item): item is string => Boolean(item)).slice(0, 3);
+  summary.unresolvedQuestions = verdictDirective?.status === 'accept'
+    ? []
+    : (verdictDirective?.followups ?? []).slice(0, 4);
+  summary.nextFocus = (verdictDirective?.followups ?? []).slice(0, 4);
+  return summary;
+}
+
+function buildProtocolRetryRoleSummary(
+  worker: ManagedTaskWorkerSpec,
+  result: KodaXResult | undefined,
+  round: number,
+  reason: string,
+): KodaXRoleRoundSummary | undefined {
+  if (!result) {
+    return undefined;
+  }
+
+  const visibleText = sanitizeManagedUserFacingText(extractMessageText(result) || result.lastText).trim();
+  return {
+    role: worker.role,
+    round,
+    objective: `Retry the ${worker.title} role after a protocol formatting failure.`,
+    confirmedConclusions: visibleText ? [truncateText(visibleText, 200)] : [],
+    unresolvedQuestions: [reason],
+    nextFocus: [`Re-run ${worker.title} and append the required closing block exactly once.`],
+    summary: truncateText(visibleText || `Previous ${worker.title} output could not be consumed.`, 320),
+    sourceWorkerId: worker.id,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 function buildCompactInitialMessages(
   task: KodaXManagedTask,
   worker: ManagedTaskWorkerSpec,
@@ -920,6 +1284,10 @@ function resolveManagedTaskQualityAssuranceMode(
   options: KodaXOptions,
   plan: ReasoningPlan,
 ): ManagedTaskQualityAssuranceMode {
+  if (plan.decision.harnessProfile === 'H1_EXECUTE_EVAL' || plan.decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL') {
+    return 'required';
+  }
+
   const primaryTask = String(plan.decision.primaryTask);
   const verification = options.context?.taskVerification;
   const explicitVerification = Boolean(
@@ -928,10 +1296,18 @@ function resolveManagedTaskQualityAssuranceMode(
     || verification?.requiredEvidence?.length
     || verification?.capabilityHints?.length
   );
+  const readOnlyLike =
+    plan.decision.mutationSurface === 'read-only'
+    || plan.decision.mutationSurface === 'docs-only';
+
+  if (readOnlyLike) {
+    return explicitVerification || plan.decision.assuranceIntent === 'explicit-check' || primaryTask === 'verify'
+      ? 'required'
+      : 'optional';
+  }
 
   if (
-    plan.decision.harnessProfile === 'H3_MULTI_WORKER'
-    || plan.decision.needsIndependentQA
+    plan.decision.needsIndependentQA
     || plan.decision.riskLevel === 'high'
     || plan.decision.requiresBrainstorm
     || options.context?.taskSurface === 'project'
@@ -1192,6 +1568,7 @@ const WRITE_ONLY_TOOLS = new Set([
 ]);
 
 const SHELL_PATTERN_CACHE = new Map<string, RegExp>();
+const WRITE_PATH_PATTERN_CACHE = new Map<string, RegExp>();
 
 const INSPECTION_SHELL_PATTERNS = [
   '^(?:git\\s+(?:status|diff|show|log|branch|rev-parse|ls-files))\\b',
@@ -1199,6 +1576,50 @@ const INSPECTION_SHELL_PATTERNS = [
   '^(?:findstr|where|pwd|cd)\\b',
   '^(?:node|npm|pnpm|yarn|bun)\\s+(?:run\\s+)?(?:lint|typecheck|check|list|why)\\b',
 ];
+
+const DOCS_ONLY_WRITE_PATH_PATTERNS = [
+  '\\.(?:md|mdx|txt|rst|adoc)$',
+  '(?:^|/)(?:docs?|documentation|design|requirements?|specs?|plans?|notes?|reports?)(?:/|$)',
+  '(?:^|/)(?:README|CHANGELOG|FEATURE_LIST|KNOWN_ISSUES|PRD|ADR|HLD|DD)(?:\\.[^/]+)?$',
+] as const;
+
+const SCOUT_ALLOWED_TOOLS = [
+  'changed_scope',
+  'repo_overview',
+  'changed_diff_bundle',
+  'glob',
+  'grep',
+  'read',
+] as const;
+
+const PLANNER_ALLOWED_TOOLS = [
+  'changed_scope',
+  'repo_overview',
+  'changed_diff_bundle',
+  'glob',
+  'grep',
+  'read',
+] as const;
+
+const H1_EVALUATOR_ALLOWED_TOOLS = [
+  'changed_scope',
+  'repo_overview',
+  'changed_diff_bundle',
+  'changed_diff',
+  'glob',
+  'grep',
+  'read',
+] as const;
+
+const H1_READONLY_GENERATOR_ALLOWED_TOOLS = [
+  'changed_scope',
+  'repo_overview',
+  'changed_diff_bundle',
+  'changed_diff',
+  'glob',
+  'grep',
+  'read',
+] as const;
 
 const VERIFICATION_SHELL_PATTERNS = [
   ...INSPECTION_SHELL_PATTERNS,
@@ -1340,8 +1761,6 @@ function formatHarnessProfileShort(
       return 'H1';
     case 'H2_PLAN_EXECUTE_EVAL':
       return 'H2';
-    case 'H3_MULTI_WORKER':
-      return 'H3';
     default:
       return harnessProfile;
   }
@@ -1369,8 +1788,6 @@ function createLiveRoutingNote(
   repoSignals?: KodaXRepoRoutingSignals,
   reason?: string,
 ): string {
-  const finalHarness = formatHarnessProfileShort(finalDecision.harnessProfile) ?? finalDecision.harnessProfile;
-  const rawHarness = formatHarnessProfileShort(rawDecision.harnessProfile) ?? rawDecision.harnessProfile;
   const detailParts: string[] = [];
   const reviewLabel = formatManagedReviewTargetLabel(finalDecision.reviewTarget, finalDecision.reviewScale);
 
@@ -1393,24 +1810,16 @@ function createLiveRoutingNote(
     rawDecision.harnessProfile !== finalDecision.harnessProfile
     || rawDecision.upgradeCeiling !== finalDecision.upgradeCeiling
   ) {
-    detailParts.push(`raw ${rawHarness} -> ${finalHarness}`);
+    detailParts.push('override applied');
   }
 
   if (reason && !reviewLabel) {
     detailParts.push(reason);
-  } else if (
-    reason
-    && (
-      rawDecision.harnessProfile !== finalDecision.harnessProfile
-      || rawDecision.upgradeCeiling !== finalDecision.upgradeCeiling
-    )
-  ) {
-    detailParts.push('override applied');
   }
 
   return detailParts.length > 0
-    ? `AMA ${finalHarness} · ${detailParts.join(' · ')}`
-    : `AMA ${finalHarness}`;
+    ? `AMA routing · ${detailParts.join(' · ')}`
+    : 'AMA routing';
 }
 
 function createRoutingBreadcrumb(
@@ -1436,23 +1845,6 @@ function createRoutingBreadcrumb(
     return `${base} reason=compare-range review (scale unavailable)`;
   }
   return base;
-}
-
-function buildRoutingOverrideReason(
-  reviewTarget: ManagedReviewTarget,
-  reviewScale: KodaXTaskRoutingDecision['reviewScale'],
-  nextHarness: KodaXTaskRoutingDecision['harnessProfile'],
-): string | undefined {
-  if (reviewTarget === 'general' || !reviewScale) {
-    return undefined;
-  }
-  if (reviewScale === 'large') {
-    return `${reviewTarget === 'current-worktree' ? 'large current-diff review' : 'large compare-range review'} forced a minimum ${nextHarness} harness.`;
-  }
-  if (reviewScale === 'massive') {
-    return `${reviewTarget === 'current-worktree' ? 'massive current-diff review' : 'massive compare-range review'} forced a minimum ${nextHarness} harness.`;
-  }
-  return undefined;
 }
 
 function applyCurrentDiffReviewRoutingFloor(
@@ -1495,53 +1887,15 @@ function applyCurrentDiffReviewRoutingFloor(
     };
   }
 
-  const likelySystemic = Boolean(
-    repoSignals?.crossModule
-    || (repoSignals?.touchedModuleCount ?? 0) >= REVIEW_MASSIVE_MODULE_THRESHOLD
-    || rawDecision.complexity === 'systemic',
-  );
-
-  let nextHarness = rawDecision.harnessProfile;
-  let nextUpgradeCeiling = rawDecision.upgradeCeiling;
-
-  if (reviewScale === 'massive') {
-    nextHarness = likelySystemic ? 'H3_MULTI_WORKER' : 'H2_PLAN_EXECUTE_EVAL';
-    nextUpgradeCeiling = likelySystemic ? undefined : 'H3_MULTI_WORKER';
-  } else if (reviewScale === 'large') {
-    nextHarness = 'H2_PLAN_EXECUTE_EVAL';
-    nextUpgradeCeiling = rawDecision.upgradeCeiling;
-  }
-
-  if (getHarnessRank(rawDecision.harnessProfile) >= getHarnessRank(nextHarness)) {
-    const finalDecision = {
-      ...rawDecision,
-      reviewScale,
-    };
-    return {
-      plan: {
-        ...plan,
-        decision: finalDecision,
-        promptOverlay: buildPromptOverlay(finalDecision, plan.providerPolicy?.routingNotes, plan.providerPolicy),
-      },
-      rawDecision,
-      reviewTarget,
-    };
-  }
-
-  const routingOverrideReason = buildRoutingOverrideReason(reviewTarget, reviewScale, nextHarness);
   const finalDecision: KodaXTaskRoutingDecision = {
     ...rawDecision,
     primaryTask: 'review',
     reviewScale,
-    harnessProfile: nextHarness,
-    upgradeCeiling: nextUpgradeCeiling,
     routingNotes: [
       ...(rawDecision.routingNotes ?? []),
-      routingOverrideReason ?? `Routing floor raised the harness to ${nextHarness}.`,
+      `Diff-driven review surface was classified as ${reviewScale}; use it to shape evidence acquisition, not to force a heavier harness.`,
     ],
-    reason: routingOverrideReason
-      ? `${rawDecision.reason} ${routingOverrideReason}`
-      : rawDecision.reason,
+    reason: `${rawDecision.reason} Diff-driven review scope was recorded for evidence strategy without forcing a heavier harness.`,
   };
 
   return {
@@ -1552,7 +1906,6 @@ function applyCurrentDiffReviewRoutingFloor(
     },
     rawDecision,
     reviewTarget,
-    routingOverrideReason,
   };
 }
 
@@ -1565,127 +1918,17 @@ function inferFallbackDecision(
   });
   const normalized = ` ${prompt.toLowerCase()} `;
   const reviewScale = deriveFallbackReviewScale(prompt, repoSignals);
-  const asksForBrainstorm =
-    /\b(brainstorm|options?|trade[\s-]?offs?|explore|compare approaches?)\b/.test(normalized);
   const appendIntent = /\b(append|continue|extend|follow[- ]up|iterate)\b/.test(normalized);
   const overwriteIntent = /\b(overwrite|rewrite|replace|migrate|refactor)\b/.test(normalized);
-  const likelySystemic = Boolean(
-    repoSignals?.crossModule
-    || (repoSignals?.touchedModuleCount ?? 0) >= REVIEW_MASSIVE_MODULE_THRESHOLD
-    || /\b(multi-agent|parallel|across the monorepo|systemic|cross-cutting)\b/.test(normalized),
-  );
-
-  if (base.primaryTask === 'review' && reviewScale === 'massive') {
-    return {
-      ...base,
-      complexity: likelySystemic ? 'systemic' : 'complex',
-      harnessProfile: likelySystemic ? 'H3_MULTI_WORKER' : 'H2_PLAN_EXECUTE_EVAL',
-      upgradeCeiling: likelySystemic ? undefined : 'H3_MULTI_WORKER',
-      riskLevel: likelySystemic ? 'high' : 'medium',
-      reviewScale,
-      requiresBrainstorm: asksForBrainstorm,
-      workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-      reason: `${base.reason} Fallback task-engine routing treated the review as massive and started with ${likelySystemic ? 'H3' : 'H2'}${likelySystemic ? '' : ' plus an H3 upgrade ceiling'}.`,
-      soloBoundaryConfidence: likelySystemic ? 0.12 : 0.26,
-      needsIndependentQA: true,
-      routingNotes: [
-        ...(base.routingNotes ?? []),
-        likelySystemic
-          ? 'Task-engine fallback routing started in H3 because repo signals showed a massive, systemic review surface.'
-          : 'Task-engine fallback routing started in H2 with an H3 upgrade ceiling because repo signals showed a massive review surface.',
-      ],
-    };
-  }
-
-  if (base.primaryTask === 'review' && reviewScale === 'large') {
-    return {
-      ...base,
-      complexity: 'complex',
-      harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
-      riskLevel: base.riskLevel === 'low' ? 'medium' : base.riskLevel,
-      reviewScale,
-      requiresBrainstorm: asksForBrainstorm,
-      workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-      reason: `${base.reason} Fallback task-engine routing treated the review as large and started in H2.`,
-      soloBoundaryConfidence: 0.38,
-      needsIndependentQA: true,
-      routingNotes: [
-        ...(base.routingNotes ?? []),
-        'Task-engine fallback routing escalated the review to H2 because repo signals showed a large review surface.',
-      ],
-    };
-  }
-
-  if (
-    /\b(multi-agent|parallel|across the monorepo|systemic|cross-cutting)\b/.test(normalized)
-  ) {
-    return {
-      ...base,
-      complexity: 'systemic',
-      harnessProfile: 'H3_MULTI_WORKER',
-      riskLevel: 'high',
-      requiresBrainstorm: asksForBrainstorm,
-      workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-      reviewScale,
-      reason: `${base.reason} Fallback task-engine routing selected H3 for cross-cutting scope.`,
-      soloBoundaryConfidence: 0.18,
-      needsIndependentQA: true,
-      routingNotes: [
-        ...(base.routingNotes ?? []),
-        'Task-engine fallback routing escalated to H3 because the prompt looked cross-cutting or multi-worker.',
-      ],
-    };
-  }
-
-  if (
-    asksForBrainstorm
-    || /\b(plan|design|architecture|proposal|refactor|migration)\b/.test(normalized)
-  ) {
-    return {
-      ...base,
-      complexity: 'complex',
-      harnessProfile: 'H2_PLAN_EXECUTE_EVAL',
-      requiresBrainstorm: asksForBrainstorm,
-      workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-      reviewScale,
-      reason: `${base.reason} Fallback task-engine routing selected H2 for planning-heavy scope.`,
-      soloBoundaryConfidence: 0.38,
-      needsIndependentQA: true,
-      routingNotes: [
-        ...(base.routingNotes ?? []),
-        'Task-engine fallback routing escalated to H2 because the prompt looked planning-heavy or exploratory.',
-      ],
-    };
-  }
-
-  if (
-    /\b(review|verify|test|fix|bug|debug|investigate|audit)\b/.test(normalized)
-    || prompt.trim().length > 280
-  ) {
-    return {
-      ...base,
-      complexity: 'moderate',
-      harnessProfile: 'H1_EXECUTE_EVAL',
-      workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-      requiresBrainstorm: asksForBrainstorm,
-      reviewScale,
-      reason: `${base.reason} Fallback task-engine routing selected H1 for non-trivial execution.`,
-      soloBoundaryConfidence: /\b(review|bug|fix)\b/.test(normalized) ? 0.72 : 0.58,
-      needsIndependentQA: /\b(verify|test|audit|must[- ]fix|independent)\b/.test(normalized),
-    };
-  }
-
   return {
     ...base,
-    complexity: 'simple',
-    harnessProfile: 'H0_DIRECT',
-    riskLevel: 'low',
     workIntent: overwriteIntent ? 'overwrite' : appendIntent ? 'append' : base.workIntent,
-    requiresBrainstorm: asksForBrainstorm,
-    reviewScale,
-    reason: `${base.reason} Fallback task-engine routing kept the task in H0 direct mode.`,
-    soloBoundaryConfidence: 0.9,
-    needsIndependentQA: false,
+    reviewScale: reviewScale ?? base.reviewScale,
+    reason: `${base.reason} Task-engine fallback preserved the core lightweight routing policy and only refined evidence hints.`,
+    routingNotes: [
+      ...(base.routingNotes ?? []),
+      'Task-engine fallback avoided repo-size topology escalation and only adjusted evidence hints.',
+    ],
   };
 }
 
@@ -1693,9 +1936,13 @@ async function createManagedReasoningPlan(
   options: KodaXOptions,
   prompt: string,
 ): Promise<ManagedPlanningResult> {
+  const intentGate = inferIntentGate(prompt);
+  const shouldLoadRepoSignals = intentGate.shouldUseRepoSignals && Boolean(
+    options.context?.executionCwd || options.context?.gitRoot,
+  );
   const repoRoutingSignals = options.context?.repoRoutingSignals
     ?? (
-      (options.context?.executionCwd || options.context?.gitRoot)
+      shouldLoadRepoSignals
         ? await getRepoRoutingSignals({
           executionCwd: options.context?.executionCwd,
           gitRoot: options.context?.gitRoot ?? undefined,
@@ -1769,25 +2016,15 @@ async function createManagedReasoningPlan(
 }
 
 function buildManagedWorkerAgent(role: KodaXTaskRole, workerId?: string): string {
-  if (workerId === 'contract-review') {
-    return 'ContractReviewAgent';
-  }
-
   switch (role) {
-    case 'admission':
-      return 'AdmissionAgent';
-    case 'lead':
-      return 'LeadAgent';
+    case 'scout':
+      return 'ScoutAgent';
     case 'planner':
       return 'PlanningAgent';
     case 'generator':
       return 'ExecutionAgent';
-    case 'validator':
-      return 'VerificationAgent';
     case 'evaluator':
       return 'EvaluationAgent';
-    case 'worker':
-      return 'SpecialistWorker';
     case 'direct':
     default:
       return 'DirectAgent';
@@ -1797,18 +2034,59 @@ function buildManagedWorkerAgent(role: KodaXTaskRole, workerId?: string): string
 function buildManagedWorkerToolPolicy(
   role: KodaXTaskRole,
   verification: KodaXTaskVerificationContract | undefined,
+  harnessProfile?: KodaXTaskRoutingDecision['harnessProfile'],
+  mutationSurface?: KodaXTaskRoutingDecision['mutationSurface'],
 ): KodaXTaskToolPolicy | undefined {
   switch (role) {
-    case 'admission':
-    case 'lead':
-    case 'planner':
+    case 'scout':
       return {
-        summary: 'Admission and planning agents must stay read-only and may inspect repository state or design context, but must not mutate files or execute implementation steps.',
+        summary: 'Scout is a pre-harness guide. It may inspect scope facts and a small amount of overview evidence, but must not deep-page raw diffs, verify claims file-by-file, mutate files, or execute implementation steps.',
         blockedTools: [...WRITE_ONLY_TOOLS],
+        allowedTools: [...SCOUT_ALLOWED_TOOLS],
         allowedShellPatterns: INSPECTION_SHELL_PATTERNS,
       };
-    case 'validator':
+    case 'planner':
+      return {
+        summary: 'Planner may inspect scope facts and overview evidence to produce a sprint contract, but must not linearly page raw diffs, perform deep claim verification, mutate files, or execute implementation steps.',
+        blockedTools: [...WRITE_ONLY_TOOLS],
+        allowedTools: [...PLANNER_ALLOWED_TOOLS],
+        allowedShellPatterns: INSPECTION_SHELL_PATTERNS,
+      };
+    case 'generator':
+      if (harnessProfile === 'H1_EXECUTE_EVAL' && mutationSurface === 'read-only') {
+        return {
+          summary: 'H1 read-only Generator must stay non-mutating. It may inspect scoped evidence and run only limited inspection or explicitly required verification commands, but it must not edit files, rewrite artifacts, or perform mutating shell actions.',
+          blockedTools: [...WRITE_ONLY_TOOLS],
+          allowedTools: [...H1_READONLY_GENERATOR_ALLOWED_TOOLS],
+          allowedShellPatterns: Array.from(new Set([
+            ...INSPECTION_SHELL_PATTERNS,
+            ...buildRuntimeVerificationShellPatterns(verification),
+          ])),
+        };
+      }
+      if (harnessProfile === 'H1_EXECUTE_EVAL' && mutationSurface === 'docs-only') {
+        return {
+          summary: 'H1 docs-only Generator may edit documentation artifacts, but only when the target paths are clearly documentation files. It must not modify source code, configuration, build outputs, or system state.',
+          allowedWritePathPatterns: [...DOCS_ONLY_WRITE_PATH_PATTERNS],
+          allowedShellPatterns: Array.from(new Set([
+            ...INSPECTION_SHELL_PATTERNS,
+            ...buildRuntimeVerificationShellPatterns(verification),
+          ])),
+        };
+      }
+      return undefined;
     case 'evaluator':
+      if (harnessProfile === 'H1_EXECUTE_EVAL') {
+        return {
+          summary: 'H1 Evaluator is a lightweight checker. It may only do targeted spot-checks against the Generator handoff and must not broad-scan the repo, deep-page large diffs, or run broad test sweeps unless the verification contract explicitly requires them.',
+          blockedTools: [...WRITE_ONLY_TOOLS],
+          allowedTools: [...H1_EVALUATOR_ALLOWED_TOOLS],
+          allowedShellPatterns: Array.from(new Set([
+            ...INSPECTION_SHELL_PATTERNS,
+            ...buildRuntimeVerificationShellPatterns(verification),
+          ])),
+        };
+      }
       return {
         summary: 'Verification agents may inspect the repo and run verification commands, including browser, startup, API, and runtime checks declared by the verification contract, but must not edit project files or mutate control-plane artifacts.',
         blockedTools: [...WRITE_ONLY_TOOLS],
@@ -1922,6 +2200,9 @@ function formatToolPolicy(policy: KodaXTaskToolPolicy | undefined): string | und
     policy.allowedShellPatterns?.length
       ? ['Allowed shell patterns:', ...policy.allowedShellPatterns.map((pattern) => `- ${pattern}`)].join('\n')
       : undefined,
+    policy.allowedWritePathPatterns?.length
+      ? ['Allowed write path patterns:', ...policy.allowedWritePathPatterns.map((pattern) => `- ${pattern}`)].join('\n')
+      : undefined,
   ].filter((line): line is string => Boolean(line));
 
   return lines.length > 1 ? lines.join('\n') : undefined;
@@ -1939,6 +2220,9 @@ function formatManagedPromptOverlay(
       ? `[Managed Task Memory] strategy=${worker.memoryStrategy}.`
       : undefined,
     `Managed task artifacts: contract=${path.join(task.evidence.workspaceDir, 'contract.json')}; rounds=${path.join(task.evidence.workspaceDir, 'round-history.json')}; runtimeGuide=${path.join(task.evidence.workspaceDir, 'runtime-execution.md')}.`,
+    worker.role !== 'scout'
+      ? formatManagedScoutDecision(task.runtime)
+      : undefined,
     formatManagedEvidenceRuntime(task.runtime),
     formatBudgetAdvisory(worker.budgetSnapshot),
     formatTaskContract(task.contract),
@@ -1948,6 +2232,29 @@ function formatManagedPromptOverlay(
   ]
     .filter((section): section is string => Boolean(section && section.trim()))
     .join('\n\n');
+}
+
+function formatManagedScoutDecision(
+  runtime: KodaXManagedTask['runtime'],
+): string | undefined {
+  const scoutDecision = runtime?.scoutDecision;
+  if (!scoutDecision) {
+    return undefined;
+  }
+
+  const lines = [
+    'Scout handoff:',
+    `Summary: ${scoutDecision.summary}`,
+    `Confirmed harness: ${scoutDecision.recommendedHarness}`,
+    scoutDecision.evidenceAcquisitionMode
+      ? `Evidence acquisition mode: ${scoutDecision.evidenceAcquisitionMode}`
+      : undefined,
+    formatOptionalListSection('Scope facts:', scoutDecision.scope),
+    formatOptionalListSection('Required evidence:', scoutDecision.requiredEvidence),
+    formatOptionalListSection('Priority files or areas:', scoutDecision.reviewFilesOrAreas),
+  ].filter((line): line is string => Boolean(line));
+
+  return lines.length > 1 ? lines.join('\n') : undefined;
 }
 
 function matchesShellPattern(command: string, patterns: readonly string[] | undefined): boolean {
@@ -1965,6 +2272,66 @@ function matchesShellPattern(command: string, patterns: readonly string[] | unde
   });
 }
 
+function matchesWritePathPattern(filePath: string, patterns: readonly string[] | undefined): boolean {
+  if (!patterns || patterns.length === 0) {
+    return false;
+  }
+
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return patterns.some((pattern) => {
+    let compiled = WRITE_PATH_PATTERN_CACHE.get(pattern);
+    if (!compiled) {
+      compiled = new RegExp(pattern, 'i');
+      WRITE_PATH_PATTERN_CACHE.set(pattern, compiled);
+    }
+    return compiled.test(normalizedPath);
+  });
+}
+
+function isPathLikeToolInputKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return normalized === 'path'
+    || normalized === 'paths'
+    || normalized.endsWith('path')
+    || normalized.endsWith('paths')
+    || normalized.endsWith('_path')
+    || normalized.endsWith('_paths');
+}
+
+function collectToolInputPaths(
+  value: unknown,
+  keyHint?: string,
+  seen?: Set<object>,
+): string[] {
+  if (typeof value === 'string') {
+    return keyHint && isPathLikeToolInputKey(keyHint) ? [value] : [];
+  }
+
+  if (Array.isArray(value)) {
+    const paths: string[] = [];
+    for (const item of value) {
+      paths.push(...collectToolInputPaths(item, keyHint, seen));
+    }
+    return paths;
+  }
+
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  const nextSeen = seen ?? new Set<object>();
+  if (nextSeen.has(value)) {
+    return [];
+  }
+  nextSeen.add(value);
+
+  const paths: string[] = [];
+  for (const [childKey, childValue] of Object.entries(value)) {
+    paths.push(...collectToolInputPaths(childValue, childKey, nextSeen));
+  }
+  return paths;
+}
+
 function createToolPolicyHook(
   worker: ManagedTaskWorkerSpec,
 ): KodaXEvents['beforeToolExecute'] | undefined {
@@ -1977,6 +2344,17 @@ function createToolPolicyHook(
     const normalizedTool = tool.toLowerCase();
     if (toolPolicy.blockedTools?.some((blocked) => blocked.toLowerCase() === normalizedTool)) {
       return `[Managed Task ${worker.title}] Tool "${tool}" is blocked for this role. ${toolPolicy.summary}`;
+    }
+
+    if (WRITE_ONLY_TOOLS.has(normalizedTool) && toolPolicy.allowedWritePathPatterns?.length) {
+      const targetPaths = Array.from(new Set(collectToolInputPaths(input)));
+      if (targetPaths.length === 0) {
+        return `[Managed Task ${worker.title}] Tool "${tool}" is blocked because the target path could not be verified against the docs-only boundary. ${toolPolicy.summary}`;
+      }
+      const disallowedPath = targetPaths.find((targetPath) => !matchesWritePathPattern(targetPath, toolPolicy.allowedWritePathPatterns));
+      if (disallowedPath) {
+        return `[Managed Task ${worker.title}] Tool "${tool}" is blocked because "${disallowedPath}" is outside the allowed docs-only write boundary. ${toolPolicy.summary}`;
+      }
     }
 
     if (normalizedTool === 'bash' && typeof input.command === 'string') {
@@ -2013,15 +2391,20 @@ function createRolePrompt(
   toolPolicy: KodaXTaskToolPolicy | undefined,
   agent: string,
   metadata: Record<string, KodaXJsonValue> | undefined,
+  rolePromptContext: ManagedRolePromptContext | undefined,
   workerId?: string,
   isTerminalAuthority = false,
 ): string {
+  const originalTask = rolePromptContext?.originalTask || prompt;
   const decisionSummary = [
     `Primary task: ${decision.primaryTask}`,
+    `Mutation surface: ${decision.mutationSurface ?? 'unknown'}`,
+    `Assurance intent: ${decision.assuranceIntent ?? 'default'}`,
     `Work intent: ${decision.workIntent}`,
     `Complexity: ${decision.complexity}`,
     `Risk: ${decision.riskLevel}`,
     `Harness: ${decision.harnessProfile}`,
+    `Topology ceiling: ${decision.topologyCeiling ?? decision.upgradeCeiling ?? 'none'}`,
     `Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
 
@@ -2030,11 +2413,15 @@ function createRolePrompt(
     'Do not claim completion authority unless your role explicitly owns final judgment.',
     'When proposing shell commands or command examples, match the current host OS and shell. Do not assume Unix-only tools such as head on Windows.',
   ].join('\n');
+  const originalTaskSection = `Original user request:\n${originalTask}`;
+  const roundInstructionSection = prompt !== originalTask
+    ? `Current round instructions:\n${prompt}`
+    : undefined;
 
   const contractSection = formatTaskContract({
     taskId: 'preview',
     surface: 'cli',
-    objective: prompt,
+    objective: originalTask,
     createdAt: '',
     updatedAt: '',
     status: 'running',
@@ -2057,19 +2444,124 @@ function createRolePrompt(
   const verificationSection = formatVerificationContract(verification);
   const toolPolicySection = formatToolPolicy(toolPolicy);
   const agentSection = `Assigned native agent identity: ${agent}`;
-  const isContractReview = workerId === 'contract-review';
-  const isReviewHighRiskWorker = workerId === 'review-worker-high-risk';
-  const isReviewSurfaceWorker = workerId === 'review-worker-surface';
+  const skillInvocation = rolePromptContext?.skillInvocation;
+  const skillMap = rolePromptContext?.skillMap;
+  const previousRoleSummary = role === 'generator'
+    ? undefined
+    : rolePromptContext?.previousRoleSummaries?.[role];
+  const scoutSkillSection = skillInvocation
+    ? [
+      formatSkillInvocationSummary(skillInvocation),
+      'You own the first intelligent skill decomposition pass. Read the full expanded skill below, then map it into summary/obligations/ambiguities for the downstream harness.',
+      formatFullSkillSection(skillInvocation),
+    ].filter((section): section is string => Boolean(section)).join('\n\n')
+    : undefined;
+  const plannerSkillSection = skillMap
+    ? [
+      formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath),
+      'Use the skill map as the planning view of the skill. Do not rely on the raw skill workflow unless the map explicitly says it is low-confidence and missing critical obligations.',
+    ].join('\n\n')
+    : undefined;
+  const generatorSkillSection = skillInvocation
+    ? [
+      skillMap ? formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath) : undefined,
+      formatSkillInvocationSummary(skillInvocation, rolePromptContext?.skillExecutionArtifactPath),
+      decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
+        ? 'You own execution. Treat the raw skill as the authoritative execution reference and the skill map as the coordination surface shared with Planner/Evaluator.'
+        : 'You own execution. Treat the raw skill as the authoritative execution reference and the skill map as the lightweight coordination surface shared with Scout/Evaluator.',
+      formatFullSkillSection(skillInvocation),
+    ].filter((section): section is string => Boolean(section)).join('\n\n')
+    : undefined;
+  const evaluatorSkillSection = skillMap
+    ? [
+      formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath),
+      skillMap.rawSkillFallbackAllowed && rolePromptContext?.skillExecutionArtifactPath
+        ? `Only if the skill map is incomplete or the Generator's claims conflict with it, reopen the raw skill artifact at ${rolePromptContext.skillExecutionArtifactPath}.`
+        : undefined,
+    ].filter((section): section is string => Boolean(section)).join('\n\n')
+    : undefined;
+  const previousRoleSummarySection = previousRoleSummary
+    ? formatRoleRoundSummarySection(previousRoleSummary)
+    : undefined;
   const reviewLikeTask = isReviewEvidenceTask(decision);
   const reviewPresentationRule = decision.primaryTask === 'review'
     ? 'When the task is review or audit, speak directly to the user about the final review findings. Do not frame the answer as grading or critiquing the Generator.'
     : undefined;
-  const reviewEvidenceGuidance = reviewLikeTask
+  const evaluatorPublicAnswerRule = decision.primaryTask === 'review'
     ? [
-      'For large or history-based reviews, collect evidence in this order: changed_scope -> repo_overview (only when needed) -> changed_diff_bundle for a batch of high-priority files -> changed_diff slices for suspicious files/areas -> read for current-file context.',
-      'Do not start with broad bash git diff/git show output unless you are using it as a narrow fallback after changed_scope/changed_diff_bundle.',
-      'When a tool reports truncated output, narrow the follow-up by path or offset, or switch from changed_diff to changed_diff_bundle instead of repeating the same broad request.',
+      'Your public answer must read like the final review report itself.',
+      'Do not say that you verified, evaluated, graded, or judged the Generator, its handoff, or its findings.',
+      'Do not mention the Planner, Generator, contract, or verdict process in the user-facing answer.',
+      'Keep evaluator-only reasoning inside the final verdict block and supporting artifacts.',
     ].join('\n')
+    : [
+      'Speak directly to the user in the public answer.',
+      'Do not describe yourself as reviewing or judging another role.',
+      'Keep evaluator-only reasoning inside the final verdict block and supporting artifacts.',
+    ].join('\n');
+  const scoutReviewEvidenceGuidance = reviewLikeTask
+    ? [
+      'For large or history-based reviews, stay at the scope-facts level first: changed_scope -> repo_overview (only when needed) -> a small amount of changed_diff_bundle for high-priority files.',
+      'Do not linearly page changed_diff slices or verify individual claims. You are only deciding whether the task should stay direct or move into a heavier harness.',
+      'When one file dominates the diff, summarize the risk and first-inspection areas instead of paging through the whole file.',
+    ].join('\n')
+    : undefined;
+  const plannerReviewEvidenceGuidance = reviewLikeTask
+    ? [
+      'Plan from scope facts plus overview evidence only: changed_scope -> repo_overview (only when needed) -> changed_diff_bundle for high-priority files.',
+      'Do not linearly page changed_diff slices for large files. If a bundle flags a critical entrypoint or type, use at most a small pinpoint read to anchor the contract.',
+      'If overview evidence is still incomplete, record the missing proof in required_evidence or constraints instead of omitting the contract.',
+    ].join('\n')
+    : undefined;
+  const generatorReviewEvidenceGuidance = reviewLikeTask
+    ? (
+        decision.harnessProfile === 'H1_EXECUTE_EVAL'
+          ? [
+            'Consume the Scout handoff before collecting more evidence.',
+            'Own the focused deep-evidence pass: use changed_diff/read only on the handoff\'s priority files, suspicious areas, and unresolved claims.',
+            'Do not restart whole-repo evidence gathering unless the Scout handoff explicitly leaves critical scope unresolved.',
+            'When one file dominates the diff, prefer fewer larger changed_diff slices (roughly limit=360-480) over repeated 100-150 line paging.',
+          ]
+          : [
+            'Consume the Scout handoff and Planner contract before collecting more evidence.',
+            'Own the deep evidence pass: use changed_diff/read to inspect the contract\'s flagged files, suspicious areas, and unresolved claims.',
+            'Do not restart whole-repo evidence gathering unless the contract explicitly leaves critical scope unresolved.',
+            'When one file dominates the diff, prefer fewer larger changed_diff slices (roughly limit=360-480) over repeated 100-150 line paging.',
+          ]
+      ).join('\n')
+    : undefined;
+  const h1GeneratorExecutionGuidance = decision.harnessProfile === 'H1_EXECUTE_EVAL'
+    ? [
+      'This is lightweight H1 checked-direct execution, not mini-H2.',
+      'Start from the Scout handoff. Reuse its cheap-facts summary, scope notes, and evidence-acquisition hints instead of rebuilding them from scratch.',
+      'Gather only the minimum deep evidence needed to answer well or to support one short revise pass.',
+      'Do not create a planner-style execution plan, contract, or broad repo survey.',
+      'Converge quickly on the user-facing answer and a crisp evidence handoff for the lightweight evaluator.',
+    ].join('\n')
+    : undefined;
+  const h1MutationGuardance = decision.harnessProfile === 'H1_EXECUTE_EVAL'
+    ? (
+        decision.mutationSurface === 'read-only'
+          ? 'This H1 run is read-only. Do not mutate files, code, or system state. If a tool or shell command would write or cause side effects, switch to a read-only inspection or verification alternative.'
+          : decision.mutationSurface === 'docs-only'
+            ? 'This H1 run is docs-only. Restrict any edits to documentation artifacts. Do not mutate code or system state.'
+            : undefined
+      )
+    : undefined;
+  const evaluatorReviewEvidenceGuidance = reviewLikeTask
+    ? (
+        decision.harnessProfile === 'H1_EXECUTE_EVAL'
+          ? [
+            'Start from the Scout handoff and Generator handoff.',
+            'Use targeted spot-checks on the highest-risk claims with changed_diff/read. Do not repeat the Generator\'s full deep-evidence pass unless the handoff is contradictory or structurally incomplete.',
+            'When a tool reports truncated output, narrow the follow-up by path or offset, or switch from changed_diff to changed_diff_bundle instead of repeating the same broad request.',
+          ]
+          : [
+            'Start from the Planner contract and Generator handoff.',
+            'Use targeted spot-checks on the highest-risk claims with changed_diff/read. Do not repeat the full deep-evidence pass unless the handoff is contradictory or structurally incomplete.',
+            'When a tool reports truncated output, narrow the follow-up by path or offset, or switch from changed_diff to changed_diff_bundle instead of repeating the same broad request.',
+          ]
+      ).join('\n')
     : undefined;
   const handoffBlockInstructions = [
     `Append a final fenced block named \`\`\`${MANAGED_TASK_HANDOFF_BLOCK}\` with this exact shape:`,
@@ -2084,23 +2576,31 @@ function createRolePrompt(
   ].join('\n');
 
   switch (role) {
-    case 'admission':
+    case 'scout':
       return [
-        'You are the Admission role for a managed KodaX task.',
+        'You are the Scout role for a managed KodaX task.',
         decisionSummary,
-        `Original task:\n${prompt}`,
+        originalTaskSection,
+        roundInstructionSection,
         agentSection,
         contractSection,
         metadataSection,
         verificationSection,
         toolPolicySection,
-        'Define the initial scope before execution begins. Clarify the evidence surface, likely change radius, and whether the proposed harness is sufficient.',
-        'Prefer cheap facts: changed scope, module spread, diff size, verification requirements, and any explicit task constraints already present.',
-        reviewEvidenceGuidance,
+        scoutSkillSection,
+        previousRoleSummarySection,
+        'Decide whether this task should stay direct or escalate to H1/H2. Prefer a direct answer whenever the task can be completed safely without heavier coordination.',
+        'You are a pre-harness guide only. Prefer scope facts first: changed scope, module spread, diff size, verification requirements, and any explicit task constraints already present.',
+        'If you confirm H0_DIRECT and already have enough evidence, finish the task yourself and give the final user-facing answer.',
+        'If you confirm H1 or H2, stop after the cheap-facts pass. Do not keep exploring just to make the handoff more complete.',
+        decision.mutationSurface === 'read-only' || decision.mutationSurface === 'docs-only'
+          ? 'This task is capped below H2. Do not recommend H2 for read-only or docs-only work.'
+          : undefined,
+        scoutReviewEvidenceGuidance,
         [
-          `Append a final fenced block named \`\`\`${MANAGED_TASK_ADMISSION_BLOCK}\` with this exact shape:`,
-          'summary: <one-line admission summary>',
-          'confirmed_harness: <optional H1_EXECUTE_EVAL|H2_PLAN_EXECUTE_EVAL|H3_MULTI_WORKER>',
+          `Append a final fenced block named \`\`\`${MANAGED_TASK_SCOUT_BLOCK}\` with this exact shape:`,
+          'summary: <one-line scout summary>',
+          'confirmed_harness: <required H0_DIRECT|H1_EXECUTE_EVAL|H2_PLAN_EXECUTE_EVAL>',
           'evidence_acquisition_mode: <optional overview|diff-bundle|diff-slice|file-read>',
           'scope:',
           '- <scope item>',
@@ -2108,47 +2608,36 @@ function createRolePrompt(
           '- <evidence item>',
           'review_files_or_areas:',
           '- <path or area to inspect first>',
-          'Keep the admission analysis above the block.',
+          'skill_summary: <optional one-line meaning of the skill in this request>',
+          'projection_confidence: <optional high|medium|low>',
+          'execution_obligations:',
+          '- <optional execution obligation>',
+          'verification_obligations:',
+          '- <optional verification obligation>',
+          'ambiguities:',
+          '- <optional ambiguity or missing skill detail>',
+          'Keep any user-facing answer or scout analysis above the block.',
         ].join('\n'),
         sharedClosingRule,
-      ].join('\n\n');
-    case 'lead':
-      return [
-        'You are the Lead role for a managed KodaX task.',
-        decisionSummary,
-        `Original task:\n${prompt}`,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        reviewEvidenceGuidance,
-        'Break the work into clear ownership boundaries and success criteria.',
-        'Call out the evidence the evaluator should require before accepting the task.',
-        [
-          `Append a final fenced block named \`\`\`${MANAGED_TASK_CONTRACT_BLOCK}\` with this exact shape:`,
-          'summary: <one-line contract summary>',
-          'success_criteria:',
-          '- <criterion>',
-          'required_evidence:',
-          '- <evidence item>',
-          'constraints:',
-          '- <constraint or leave empty>',
-        ].join('\n'),
-        sharedClosingRule,
-      ].join('\n\n');
+      ].filter((section): section is string => Boolean(section)).join('\n\n');
     case 'planner':
       return [
         'You are the Planner role for a managed KodaX task.',
         decisionSummary,
-        `Original task:\n${prompt}`,
+        originalTaskSection,
+        roundInstructionSection,
         agentSection,
         contractSection,
         metadataSection,
         verificationSection,
         toolPolicySection,
-        reviewEvidenceGuidance,
+        plannerSkillSection,
+        previousRoleSummarySection,
+        plannerReviewEvidenceGuidance,
         'Produce a concise execution plan, the critical risks, and the evidence checklist.',
+        `Your output is invalid unless it ends with a final \`\`\`${MANAGED_TASK_CONTRACT_BLOCK}\`\`\` fenced block.`,
+        'Even if evidence is still incomplete, produce the best current contract and record the missing proof in required_evidence or constraints rather than omitting the block.',
+        'Do not linearly page large raw diffs or perform file-by-file claim verification. Stop at overview evidence and hand deep inspection to the Generator.',
         'Do not perform the work yet and do not self-certify completion.',
         [
           `Append a final fenced block named \`\`\`${MANAGED_TASK_CONTRACT_BLOCK}\` with this exact shape:`,
@@ -2161,19 +2650,23 @@ function createRolePrompt(
           '- <constraint or leave empty>',
         ].join('\n'),
         sharedClosingRule,
-      ].join('\n\n');
+      ].filter((section): section is string => Boolean(section)).join('\n\n');
     case 'generator':
       return [
         'You are the Generator role for a managed KodaX task.',
         decisionSummary,
-        `Original task:\n${prompt}`,
+        originalTaskSection,
+        roundInstructionSection,
         agentSection,
         contractSection,
         metadataSection,
         verificationSection,
         toolPolicySection,
+        generatorSkillSection,
         reviewPresentationRule,
-        reviewEvidenceGuidance,
+        generatorReviewEvidenceGuidance,
+        h1GeneratorExecutionGuidance,
+        h1MutationGuardance,
         'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
         'Execute the task or produce the requested deliverable.',
         isTerminalAuthority
@@ -2182,108 +2675,54 @@ function createRolePrompt(
         isTerminalAuthority ? undefined : handoffBlockInstructions,
         sharedClosingRule,
       ].filter(Boolean).join('\n\n');
-    case 'worker':
-      return [
-        isReviewHighRiskWorker
-          ? 'You are the High-Risk Review Worker for a managed KodaX task.'
-          : isReviewSurfaceWorker
-            ? 'You are the Surface Review Worker for a managed KodaX task.'
-            : 'You are a specialist Worker role for a managed KodaX task.',
-        decisionSummary,
-        `Original task:\n${prompt}`,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        reviewEvidenceGuidance,
-        'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
-        isReviewHighRiskWorker
-          ? 'Own the highest-risk review slice: correctness, security, runtime failures, and merge blockers. Produce evidence-backed findings only.'
-          : isReviewSurfaceWorker
-            ? 'Own the review surface slice: API regressions, maintainability, test gaps, and broader regression risk. Produce evidence-backed findings only.'
-            : 'Own the implementation work for your assigned slice and report evidence, changed areas, and residual risks.',
-        'Do not overstep into evaluator judgment.',
-        handoffBlockInstructions,
-        sharedClosingRule,
-      ].join('\n\n');
-    case 'validator':
-      if (isContractReview) {
-        return [
-          'You are the Contract Reviewer role for a managed KodaX task.',
-          decisionSummary,
-          `Original task:\n${prompt}`,
-          agentSection,
-          contractSection,
-          metadataSection,
-          verificationSection,
-          toolPolicySection,
-          reviewEvidenceGuidance,
-          'Review the proposed task contract before implementation begins.',
-          'Read the dependency handoff artifacts first, especially the structured handoff bundle and any contract files produced by planner or lead.',
-          'Approve only if the planned scope, success criteria, required evidence, and constraints are concrete enough to verify.',
-          'Use status=revise when the contract needs replanning or tighter success criteria before implementation should start.',
-          'Use status=blocked when the task cannot responsibly proceed because key information is missing or contradictory.',
-          [
-            `Append a final fenced block named \`\`\`${MANAGED_TASK_CONTRACT_REVIEW_BLOCK}\` with this exact shape:`,
-            'status: approve|revise|blocked',
-            'reason: <one-line reason>',
-            'next_harness: <optional H2_PLAN_EXECUTE_EVAL|H3_MULTI_WORKER when revise requires a stronger harness>',
-            'followup:',
-            '- <required next step>',
-            '- <optional second next step>',
-            'Keep the contract review above the block.',
-          ].join('\n'),
-          sharedClosingRule,
-        ].join('\n\n');
-      }
-
-      return [
-        'You are the Validator role for a managed KodaX task.',
-        decisionSummary,
-        `Original task:\n${prompt}`,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        reviewEvidenceGuidance,
-        'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
-        'Independently look for gaps, missing evidence, risky assumptions, and verification needs.',
-        'Execute the verification contract directly when it calls for tests, browser checks, or other validation tools.',
-        'Treat implementation outputs as suspect until supported by concrete evidence.',
-        handoffBlockInstructions,
-        sharedClosingRule,
-      ].join('\n\n');
     case 'evaluator':
       return [
         'You are the Evaluator role for a managed KodaX task.',
         decisionSummary,
-        `Original task:\n${prompt}`,
+        originalTaskSection,
+        roundInstructionSection,
         agentSection,
         contractSection,
         metadataSection,
         verificationSection,
         toolPolicySection,
+        evaluatorSkillSection,
+        previousRoleSummarySection,
         reviewPresentationRule,
-        reviewEvidenceGuidance,
+        evaluatorReviewEvidenceGuidance,
         'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
         'Judge whether the dependency handoff satisfies the original task and whether the evidence is strong enough.',
-        'You own the final verification pass and must personally execute any required checks or browser validation before accepting the task.',
+        decision.harnessProfile === 'H1_EXECUTE_EVAL'
+          ? [
+            'You are the lightweight H1 evaluator, not a second full executor.',
+            'Only check whether the answer is on target, whether it misses obvious requested work, whether key claims have evidence, and whether the answer sounds obviously overconfident.',
+            'Do not broad-scan the repo, do not linearly page large diffs, and do not rerun the Generator\'s whole analysis.',
+            'Only run a limited spot-check when the task explicitly requires verification or the Generator claimed a concrete test/check that needs confirmation.',
+            'Do not request a stronger harness. H1 must stay lightweight; if the answer is still incomplete after one short revise pass, return the best supported answer with explicit limits instead of escalating to H2.',
+            'When status=revise, keep the user-facing text short and specific: list the missing items, evidence gaps, or overconfident claims that the Generator must fix next.',
+            'Do not write a full polished final report when status=revise. Reserve the full final-report style for accept, or for blocked when you must return the best supported answer with explicit limits.',
+          ].join('\n')
+          : 'You own the final verification pass and must personally execute any required checks or browser validation before accepting the task.',
         'Evaluate the task against the verification criteria and thresholds. If any hard threshold is not met, do not accept the task.',
+        evaluatorPublicAnswerRule,
+        decision.topologyCeiling && decision.topologyCeiling !== 'H2_PLAN_EXECUTE_EVAL'
+          ? `Do not request a stronger harness than ${decision.topologyCeiling}. If the task is still incomplete at that ceiling, return the best supported user-facing answer with explicit limits instead of escalating further.`
+          : undefined,
         'Return the final user-facing answer. If the task is not ready, explain the blocker or missing evidence clearly.',
         'If the original task requires an exact closing block, include it in your final answer when you conclude.',
         [
           `Append a final fenced block named \`\`\`${MANAGED_TASK_VERDICT_BLOCK}\` with this exact shape:`,
           `status: accept|revise|blocked`,
           'reason: <one-line reason>',
-          'next_harness: <optional H2_PLAN_EXECUTE_EVAL|H3_MULTI_WORKER when revise requires a stronger harness>',
+          decision.harnessProfile === 'H1_EXECUTE_EVAL'
+            ? undefined
+            : 'next_harness: <optional stronger harness when revise requires it>',
           'followup:',
           '- <required next step>',
           '- <optional second next step>',
           'Keep the user-facing answer above the block. Use status=revise when more execution should happen before acceptance.',
         ].join('\n'),
-      ].join('\n\n');
+      ].filter((section): section is string => Boolean(section)).join('\n\n');
     case 'direct':
     default:
       return prompt;
@@ -2296,10 +2735,13 @@ function buildManagedTaskWorkers(
   metadata: Record<string, KodaXJsonValue> | undefined,
   verification: KodaXTaskVerificationContract | undefined,
   qualityAssuranceMode: ManagedTaskQualityAssuranceMode,
+  rolePromptContext: ManagedRolePromptContext | undefined,
   phase: 'initial' | 'refinement' = 'initial',
 ): { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] } {
-  const evaluatorRequired = qualityAssuranceMode === 'required' || decision.harnessProfile === 'H3_MULTI_WORKER';
-  const isReviewH3 = decision.primaryTask === 'review' && decision.harnessProfile === 'H3_MULTI_WORKER';
+  const evaluatorRequired = qualityAssuranceMode === 'required';
+  const runPlanner = decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
+    ? phase === 'initial'
+    : false;
   const createWorker = (
     id: string,
     title: string,
@@ -2309,7 +2751,7 @@ function buildManagedTaskWorkers(
     execution?: ManagedTaskWorkerSpec['execution'],
   ): ManagedTaskWorkerSpec => {
     const agent = buildManagedWorkerAgent(role, id);
-    const toolPolicy = buildManagedWorkerToolPolicy(role, verification);
+    const toolPolicy = buildManagedWorkerToolPolicy(role, verification, decision.harnessProfile, decision.mutationSurface);
     const worker: ManagedTaskWorkerSpec = {
       id,
       title,
@@ -2323,113 +2765,28 @@ function buildManagedTaskWorkers(
         role,
         agent,
       },
-      prompt: createRolePrompt(role, prompt, decision, verification, toolPolicy, agent, metadata, id, isTerminalAuthority),
+      prompt: createRolePrompt(
+        role,
+        prompt,
+        decision,
+        verification,
+        toolPolicy,
+        agent,
+        metadata,
+        rolePromptContext,
+        id,
+        isTerminalAuthority,
+      ),
     };
     worker.beforeToolExecute = createToolPolicyHook(worker);
     return worker;
   };
 
-  if (phase === 'refinement') {
-    if (decision.harnessProfile === 'H3_MULTI_WORKER') {
-      return {
-        terminalWorkerId: 'evaluator',
-        workers: [
-          createWorker('lead', 'Lead', 'lead', false),
-          createWorker('planner', 'Planner', 'planner', false, ['lead']),
-          createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['lead', 'planner']),
-          ...(isReviewH3
-            ? [
-              createWorker('review-worker-high-risk', 'High-Risk Review Worker', 'worker', false, ['contract-review'], 'parallel'),
-              createWorker('review-worker-surface', 'Surface Review Worker', 'worker', false, ['contract-review'], 'parallel'),
-            ]
-            : [
-              createWorker('worker-implementation', 'Implementation Worker', 'worker', false, ['contract-review'], 'parallel'),
-              createWorker('worker-validation', 'Validation Worker', 'validator', false, ['contract-review'], 'parallel'),
-            ]),
-          createWorker(
-            'evaluator',
-            'Evaluator',
-            'evaluator',
-            true,
-            isReviewH3
-              ? ['lead', 'planner', 'contract-review', 'review-worker-high-risk', 'review-worker-surface']
-              : ['lead', 'planner', 'contract-review', 'worker-implementation', 'worker-validation'],
-          ),
-        ],
-      };
-    }
-
-    if (!evaluatorRequired) {
-      return {
-        terminalWorkerId: 'generator',
-        workers: [
-          ...(decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-            ? [createWorker('planner', 'Planner', 'planner', false)]
-            : []),
-          ...(decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-            ? [createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['planner'])]
-            : []),
-          createWorker(
-            'generator',
-            'Generator',
-            'generator',
-            true,
-            decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL' ? ['contract-review'] : undefined,
-          ),
-        ],
-      };
-    }
-
-    return {
-      terminalWorkerId: 'evaluator',
-      workers: [
-        ...(decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-          ? [createWorker('planner', 'Planner', 'planner', false)]
-          : []),
-        ...(decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-          ? [createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['planner'])]
-          : []),
-        createWorker(
-          'generator',
-          'Generator',
-          'generator',
-          false,
-          decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL' ? ['contract-review'] : undefined,
-        ),
-        createWorker(
-          'evaluator',
-          'Evaluator',
-          'evaluator',
-          true,
-          decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
-            ? ['planner', 'contract-review', 'generator']
-            : ['generator'],
-        ),
-      ],
-    };
-  }
-
   if (decision.harnessProfile === 'H1_EXECUTE_EVAL') {
-    if (!evaluatorRequired) {
-      const admission = createWorker('admission', 'Admission', 'admission', false);
-      const generator = createWorker('generator', 'Generator', 'generator', true, ['admission']);
-      return {
-        terminalWorkerId: 'generator',
-        workers: [
-          ...(phase === 'initial' ? [admission] : []),
-          phase === 'initial'
-            ? generator
-            : createWorker('generator', 'Generator', 'generator', true),
-        ],
-      };
-    }
-
-    const admission = createWorker('admission', 'Admission', 'admission', false);
     return {
       terminalWorkerId: 'evaluator',
       workers: [
-        ...(phase === 'initial' ? [admission] : []),
-        createWorker('generator', 'Generator', 'generator', false, phase === 'initial' ? ['admission'] : undefined),
+        createWorker('generator', 'Generator', 'generator', false),
         createWorker('evaluator', 'Evaluator', 'evaluator', true, ['generator']),
       ],
     };
@@ -2437,117 +2794,52 @@ function buildManagedTaskWorkers(
 
   if (decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL') {
     if (!evaluatorRequired) {
-      const admissionDependsOn = phase === 'initial' ? ['admission'] : undefined;
       return {
         terminalWorkerId: 'generator',
         workers: [
-          ...(phase === 'initial' ? [createWorker('admission', 'Admission', 'admission', false)] : []),
-          createWorker('planner', 'Planner', 'planner', false, admissionDependsOn),
-          createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['planner']),
-          createWorker('generator', 'Generator', 'generator', true, ['contract-review']),
+          ...(runPlanner ? [createWorker('planner', 'Planner', 'planner', false)] : []),
+          createWorker('generator', 'Generator', 'generator', true, runPlanner ? ['planner'] : undefined),
         ],
       };
     }
 
-    const admissionDependsOn = phase === 'initial' ? ['admission'] : undefined;
     return {
       terminalWorkerId: 'evaluator',
       workers: [
-        ...(phase === 'initial' ? [createWorker('admission', 'Admission', 'admission', false)] : []),
-        createWorker('planner', 'Planner', 'planner', false, admissionDependsOn),
-        createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['planner']),
-        createWorker('generator', 'Generator', 'generator', false, ['contract-review']),
-        createWorker('evaluator', 'Evaluator', 'evaluator', true, ['planner', 'contract-review', 'generator']),
+        ...(runPlanner ? [createWorker('planner', 'Planner', 'planner', false)] : []),
+        createWorker('generator', 'Generator', 'generator', false, runPlanner ? ['planner'] : undefined),
+        createWorker(
+          'evaluator',
+          'Evaluator',
+          'evaluator',
+          true,
+          runPlanner ? ['planner', 'generator'] : ['generator'],
+        ),
       ],
     };
   }
 
-  const admissionDependsOn = phase === 'initial' ? ['admission'] : undefined;
   return {
     terminalWorkerId: 'evaluator',
     workers: [
-      ...(phase === 'initial' ? [createWorker('admission', 'Admission', 'admission', false)] : []),
-      createWorker('lead', 'Lead', 'lead', false, admissionDependsOn),
-      createWorker('planner', 'Planner', 'planner', false, ['lead']),
-      createWorker('contract-review', 'Contract Reviewer', 'validator', false, ['lead', 'planner']),
-      ...(isReviewH3
-        ? [
-          createWorker('review-worker-high-risk', 'High-Risk Review Worker', 'worker', false, ['contract-review'], 'parallel'),
-          createWorker('review-worker-surface', 'Surface Review Worker', 'worker', false, ['contract-review'], 'parallel'),
-        ]
-        : [
-          createWorker('worker-implementation', 'Implementation Worker', 'worker', false, ['contract-review'], 'parallel'),
-          createWorker('worker-validation', 'Validation Worker', 'validator', false, ['contract-review'], 'parallel'),
-        ]),
-      createWorker(
-        'evaluator',
-        'Evaluator',
-        'evaluator',
-        true,
-        isReviewH3
-          ? ['lead', 'planner', 'contract-review', 'review-worker-high-risk', 'review-worker-surface']
-          : ['lead', 'planner', 'contract-review', 'worker-implementation', 'worker-validation'],
-      ),
+      createWorker('planner', 'Planner', 'planner', false),
+      createWorker('generator', 'Generator', 'generator', false, ['planner']),
+      createWorker('evaluator', 'Evaluator', 'evaluator', true, ['planner', 'generator']),
     ],
-  };
-}
-
-function stripAdmissionFromWorkerSet(
-  workerSet: { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] },
-): { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] } {
-  return {
-    terminalWorkerId: workerSet.terminalWorkerId,
-    workers: workerSet.workers
-      .filter((worker) => worker.role !== 'admission')
-      .map((worker) => ({
-        ...worker,
-        dependsOn: worker.dependsOn?.filter((dependency) => dependency !== 'admission'),
-      })),
-  };
-}
-
-function applyAdmissionDirective(
-  task: KodaXManagedTask,
-  directive: ManagedTaskAdmissionDirective | undefined,
-): KodaXManagedTask {
-  if (!directive) {
-    return task;
-  }
-
-  const mergedEvidence = directive.requiredEvidence.length > 0
-    ? Array.from(new Set([...task.contract.requiredEvidence, ...directive.requiredEvidence]))
-    : task.contract.requiredEvidence;
-  const reviewFilesOrAreas = directive.reviewFilesOrAreas?.filter(Boolean) ?? [];
-
-  return {
-    ...task,
-    contract: {
-      ...task.contract,
-      contractSummary: directive.summary ?? task.contract.contractSummary,
-      requiredEvidence: mergedEvidence,
-      updatedAt: new Date().toISOString(),
-    },
-    runtime: {
-      ...task.runtime,
-      admissionSummary: directive.summary,
-      reviewFilesOrAreas: reviewFilesOrAreas.length > 0
-        ? Array.from(new Set([...(task.runtime?.reviewFilesOrAreas ?? []), ...reviewFilesOrAreas]))
-        : task.runtime?.reviewFilesOrAreas,
-      evidenceAcquisitionMode: directive.evidenceAcquisitionMode
-        ? mergeEvidenceAcquisitionMode(task.runtime?.evidenceAcquisitionMode, directive.evidenceAcquisitionMode)
-        : task.runtime?.evidenceAcquisitionMode ?? 'overview',
-    },
   };
 }
 
 function createTaskShape(
   options: KodaXOptions,
   prompt: string,
+  originalTask: string,
   plan: ReasoningPlan,
+  rolePromptContext?: ManagedRolePromptContext,
 ): ManagedTaskShape {
   const taskId = `task-${randomUUID()}`;
   const surface = getManagedTaskSurface(options);
   const workspaceDir = path.join(getManagedTaskWorkspaceRoot(options, surface), taskId);
+  const workerRolePromptContext = withManagedSkillArtifactPromptPaths(rolePromptContext, workspaceDir);
   const createdAt = new Date().toISOString();
   const qualityAssuranceMode = resolveManagedTaskQualityAssuranceMode(options, plan);
   const normalizedVerification = options.context?.taskVerification
@@ -2564,7 +2856,7 @@ function createTaskShape(
       contract: {
         taskId,
         surface,
-        objective: prompt,
+        objective: originalTask,
         createdAt,
         updatedAt: createdAt,
         status: 'running',
@@ -2617,6 +2909,7 @@ function createTaskShape(
         currentHarness: plan.decision.harnessProfile,
         upgradeCeiling: plan.decision.upgradeCeiling,
         harnessTransitions: [],
+        skillMap: workerRolePromptContext?.skillMap,
       },
     };
 
@@ -2626,7 +2919,7 @@ function createTaskShape(
       workers: [],
       workspaceDir,
       routingPromptOverlay: plan.promptOverlay,
-      qualityAssuranceMode: 'required',
+      qualityAssuranceMode,
       providerPolicy: plan.providerPolicy,
     };
   }
@@ -2637,12 +2930,13 @@ function createTaskShape(
     options.context?.taskMetadata,
     normalizedVerification,
     qualityAssuranceMode,
+    workerRolePromptContext,
   );
   const task: KodaXManagedTask = {
     contract: {
       taskId,
       surface,
-      objective: prompt,
+      objective: originalTask,
       createdAt,
       updatedAt: createdAt,
       status: 'running',
@@ -2693,6 +2987,7 @@ function createTaskShape(
       currentHarness: plan.decision.harnessProfile,
       upgradeCeiling: plan.decision.upgradeCeiling,
       harnessTransitions: [],
+      skillMap: workerRolePromptContext?.skillMap,
     },
   };
 
@@ -2704,6 +2999,91 @@ function createTaskShape(
     routingPromptOverlay: plan.promptOverlay,
     qualityAssuranceMode,
     providerPolicy: plan.providerPolicy,
+  };
+}
+
+function createScoutCompleteTaskShape(
+  options: KodaXOptions,
+  prompt: string,
+  originalTask: string,
+  plan: ReasoningPlan,
+  rolePromptContext?: ManagedRolePromptContext,
+): ManagedTaskShape {
+  const baseShape = createTaskShape(
+    options,
+    prompt,
+    originalTask,
+    {
+      ...plan,
+      decision: {
+        ...plan.decision,
+        harnessProfile: 'H0_DIRECT',
+      },
+    },
+    rolePromptContext,
+  );
+  const scoutToolPolicy = buildManagedWorkerToolPolicy('scout', baseShape.task.contract.verification, 'H0_DIRECT');
+  const scoutAgent = buildManagedWorkerAgent('scout', 'scout');
+
+  return {
+    ...baseShape,
+    terminalWorkerId: 'scout',
+    workers: [
+      {
+        id: 'scout',
+        role: 'scout',
+        title: 'Scout',
+        dependsOn: [],
+        agent: scoutAgent,
+        toolPolicy: scoutToolPolicy,
+        memoryStrategy: 'reset-handoff',
+        terminalAuthority: true,
+        prompt: createRolePrompt(
+          'scout',
+          prompt,
+          plan.decision,
+          baseShape.task.contract.verification,
+          scoutToolPolicy,
+          scoutAgent,
+          {
+            role: 'scout',
+            agent: scoutAgent,
+          },
+          rolePromptContext,
+        ),
+      },
+    ],
+    task: {
+      ...baseShape.task,
+      roleAssignments: [
+        {
+          id: 'scout',
+          role: 'scout',
+          title: 'Scout',
+          dependsOn: [],
+          status: 'running',
+          agent: scoutAgent,
+          toolPolicy: scoutToolPolicy,
+        },
+      ],
+      workItems: [
+        {
+          id: 'scout',
+          assignmentId: 'scout',
+          description: 'Scout completes the task directly after preflight classification.',
+          execution: 'serial',
+        },
+      ],
+      verdict: {
+        ...baseShape.task.verdict,
+        decidedByAssignmentId: 'scout',
+        summary: 'Scout is completing the task directly after preflight.',
+      },
+      runtime: {
+        ...baseShape.task.runtime,
+        currentHarness: 'H0_DIRECT',
+      },
+    },
   };
 }
 
@@ -2784,20 +3164,86 @@ function sanitizeManagedUserFacingText(text: string): string {
   return (cutIndex > 0 ? trimmed.slice(0, cutIndex) : trimmed).trim();
 }
 
-function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionDirective | undefined {
-  const match = text.match(new RegExp(String.raw`(?:\r?\n)?\`\`\`${MANAGED_TASK_ADMISSION_BLOCK}\s*([\s\S]*?)\`\`\`\s*$`, 'i'));
+function sanitizeEvaluatorPublicAnswer(text: string): string {
+  const sanitized = sanitizeManagedUserFacingText(text).trim();
+  if (!sanitized) {
+    return '';
+  }
+
+  const paragraphs = sanitized.split(/\n\s*\n/);
+  const remaining = [...paragraphs];
+  let removedInternalFraming = false;
+
+  const evaluatorFramingPattern = /\b(generator|planner|evaluator|verdict|contract|handoff|managed task)\b/i;
+  const evaluatorActionPattern = /\b(confirm|confirmed|verify|verified|verification|evaluate|evaluated|evaluation|judge|judged|judging|grade|graded|grading|spot-check|spot check|inspect|inspected|checking)\b/i;
+  const explicitProcessLeadPattern = /^(confirmed:|i now have sufficient evidence\b|let me (?:verify|check|double-check|review)\b|now let me\b|good\.\s*now let me\b|from the code i(?:'ve| have)? already (?:read|checked|reviewed)\b|here is my final evaluation\b)/i;
+
+  while (remaining.length > 0) {
+    const paragraph = remaining[0]?.trim() ?? '';
+    if (!paragraph) {
+      remaining.shift();
+      removedInternalFraming = true;
+      continue;
+    }
+
+    const isDivider = /^-{3,}$/.test(paragraph);
+    if (isDivider && removedInternalFraming) {
+      remaining.shift();
+      continue;
+    }
+
+    const mentionsInternalRole = evaluatorFramingPattern.test(paragraph);
+    const mentionsEvaluationAction = evaluatorActionPattern.test(paragraph);
+    const isGenericEvaluationLead = /^here is my final evaluation\b/i.test(paragraph)
+      || (/^i(?:'ve| have)? completed\b/i.test(paragraph) && mentionsEvaluationAction);
+    const isExplicitProcessLead = explicitProcessLeadPattern.test(paragraph);
+    const isFirstPersonProcessLead = /^i\b/i.test(paragraph) && mentionsEvaluationAction;
+
+    if (
+      isExplicitProcessLead
+      || isGenericEvaluationLead
+      || (mentionsInternalRole && mentionsEvaluationAction)
+      || isFirstPersonProcessLead
+    ) {
+      remaining.shift();
+      removedInternalFraming = true;
+      continue;
+    }
+
+    break;
+  }
+
+  const cleaned = remaining.join('\n\n').trim();
+  return cleaned || sanitized;
+}
+
+function parseManagedTaskScoutDirective(text: string): ManagedTaskScoutDirective | undefined {
+  const match = text.match(new RegExp(String.raw`(?:\r?\n)?\`\`\`${MANAGED_TASK_SCOUT_BLOCK}\s*([\s\S]*?)\`\`\`\s*$`, 'i'));
   if (!match) {
     return undefined;
   }
 
   const body = match[1]?.trim() ?? '';
+  const visibleText = sanitizeManagedUserFacingText(text.slice(0, match.index ?? text.length).trim());
   let summary: string | undefined;
-  let confirmedHarness: ManagedTaskAdmissionDirective['confirmedHarness'];
-  let evidenceAcquisitionMode: ManagedTaskAdmissionDirective['evidenceAcquisitionMode'];
+  let confirmedHarness: ManagedTaskScoutDirective['confirmedHarness'];
+  let evidenceAcquisitionMode: ManagedTaskScoutDirective['evidenceAcquisitionMode'];
   const scope: string[] = [];
   const requiredEvidence: string[] = [];
   const reviewFilesOrAreas: string[] = [];
-  let currentList: 'scope' | 'evidence' | 'review-files' | undefined;
+  let skillSummary: string | undefined;
+  let projectionConfidence: KodaXSkillMap['projectionConfidence'] | undefined;
+  const executionObligations: string[] = [];
+  const verificationObligations: string[] = [];
+  const ambiguities: string[] = [];
+  let currentList:
+    | 'scope'
+    | 'evidence'
+    | 'review-files'
+    | 'execution-obligations'
+    | 'verification-obligations'
+    | 'ambiguities'
+    | undefined;
 
   for (const rawLine of body.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -2812,7 +3258,7 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
     }
     if (normalized.startsWith('confirmed_harness:')) {
       const candidate = line.slice('confirmed_harness:'.length).trim();
-      if (candidate === 'H1_EXECUTE_EVAL' || candidate === 'H2_PLAN_EXECUTE_EVAL' || candidate === 'H3_MULTI_WORKER') {
+      if (candidate === 'H0_DIRECT' || candidate === 'H1_EXECUTE_EVAL' || candidate === 'H2_PLAN_EXECUTE_EVAL') {
         confirmedHarness = candidate;
       }
       currentList = undefined;
@@ -2822,6 +3268,19 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
       const candidate = line.slice('evidence_acquisition_mode:'.length).trim();
       if (candidate === 'overview' || candidate === 'diff-bundle' || candidate === 'diff-slice' || candidate === 'file-read') {
         evidenceAcquisitionMode = candidate;
+      }
+      currentList = undefined;
+      continue;
+    }
+    if (normalized.startsWith('skill_summary:')) {
+      skillSummary = line.slice('skill_summary:'.length).trim();
+      currentList = undefined;
+      continue;
+    }
+    if (normalized.startsWith('projection_confidence:')) {
+      const candidate = line.slice('projection_confidence:'.length).trim().toLowerCase();
+      if (candidate === 'high' || candidate === 'medium' || candidate === 'low') {
+        projectionConfidence = candidate;
       }
       currentList = undefined;
       continue;
@@ -2838,6 +3297,18 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
       currentList = 'review-files';
       continue;
     }
+    if (normalized.startsWith('execution_obligations:')) {
+      currentList = 'execution-obligations';
+      continue;
+    }
+    if (normalized.startsWith('verification_obligations:')) {
+      currentList = 'verification-obligations';
+      continue;
+    }
+    if (normalized.startsWith('ambiguities:')) {
+      currentList = 'ambiguities';
+      continue;
+    }
 
     const item = line.replace(/^-+\s*/, '').trim();
     if (!item || !currentList) {
@@ -2847,8 +3318,14 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
       scope.push(item);
     } else if (currentList === 'evidence') {
       requiredEvidence.push(item);
-    } else {
+    } else if (currentList === 'review-files') {
       reviewFilesOrAreas.push(item);
+    } else if (currentList === 'execution-obligations') {
+      executionObligations.push(item);
+    } else if (currentList === 'verification-obligations') {
+      verificationObligations.push(item);
+    } else if (currentList === 'ambiguities') {
+      ambiguities.push(item);
     }
   }
 
@@ -2859,6 +3336,12 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
     && reviewFilesOrAreas.length === 0
     && !confirmedHarness
     && !evidenceAcquisitionMode
+    && !skillSummary
+    && executionObligations.length === 0
+    && verificationObligations.length === 0
+    && ambiguities.length === 0
+    && !projectionConfidence
+    && !visibleText
   ) {
     return undefined;
   }
@@ -2870,6 +3353,58 @@ function parseManagedTaskAdmissionDirective(text: string): ManagedTaskAdmissionD
     reviewFilesOrAreas: reviewFilesOrAreas.filter(Boolean),
     evidenceAcquisitionMode,
     confirmedHarness,
+    userFacingText: visibleText,
+    skillMap: skillSummary || executionObligations.length > 0 || verificationObligations.length > 0 || ambiguities.length > 0 || projectionConfidence
+      ? {
+          skillSummary,
+          executionObligations: executionObligations.filter(Boolean),
+          verificationObligations: verificationObligations.filter(Boolean),
+          ambiguities: ambiguities.filter(Boolean),
+          projectionConfidence,
+        }
+      : undefined,
+  };
+}
+
+function buildSkillMap(
+  skillInvocation: KodaXSkillInvocationContext | undefined,
+  scoutDirective: ManagedTaskScoutDirective | undefined,
+): KodaXSkillMap | undefined {
+  if (!skillInvocation) {
+    return undefined;
+  }
+
+  const scoutSkillMap = scoutDirective?.skillMap;
+  const requiredEvidence = Array.from(new Set([
+    ...(scoutDirective?.requiredEvidence ?? []),
+  ].map((item) => item.trim()).filter(Boolean)));
+  const projectionConfidence = scoutSkillMap?.projectionConfidence
+    ?? (scoutSkillMap?.skillSummary || scoutSkillMap?.executionObligations.length || scoutSkillMap?.verificationObligations.length
+      ? 'medium'
+      : 'low');
+  const ambiguities = [
+    ...(scoutSkillMap?.ambiguities ?? []),
+  ].map((item) => item.trim()).filter(Boolean);
+
+  if (projectionConfidence === 'low' && ambiguities.length === 0) {
+    ambiguities.push('Scout did not provide a confident skill decomposition. Use the raw skill as the authority when obligations or evidence requirements are unclear.');
+  }
+
+  return {
+    skillSummary: scoutSkillMap?.skillSummary
+      ?? skillInvocation.description
+      ?? `Use the ${skillInvocation.name} skill in the context of the current user request.`,
+    executionObligations: [...(scoutSkillMap?.executionObligations ?? [])].map((item) => item.trim()).filter(Boolean),
+    verificationObligations: [...(scoutSkillMap?.verificationObligations ?? [])].map((item) => item.trim()).filter(Boolean),
+    requiredEvidence,
+    ambiguities,
+    projectionConfidence,
+    rawSkillFallbackAllowed: projectionConfidence === 'low',
+    allowedTools: skillInvocation.allowedTools,
+    preferredAgent: skillInvocation.agent,
+    preferredModel: skillInvocation.model,
+    invocationContext: skillInvocation.context,
+    hookEvents: skillInvocation.hookEvents,
   };
 }
 
@@ -2973,7 +3508,7 @@ function parseManagedTaskVerdictDirective(text: string): ManagedTaskVerdictDirec
       }
       if (line.toLowerCase().startsWith('next_harness:')) {
         const candidate = line.slice('next_harness:'.length).trim();
-        if (candidate === 'H1_EXECUTE_EVAL' || candidate === 'H2_PLAN_EXECUTE_EVAL' || candidate === 'H3_MULTI_WORKER') {
+        if (candidate === 'H1_EXECUTE_EVAL' || candidate === 'H2_PLAN_EXECUTE_EVAL') {
           nextHarness = candidate;
         }
         inFollowups = false;
@@ -2994,76 +3529,6 @@ function parseManagedTaskVerdictDirective(text: string): ManagedTaskVerdictDirec
 
   return {
     source: 'evaluator',
-      status,
-      reason,
-      nextHarness,
-      followups: followups.filter(Boolean),
-      userFacingText: visibleText,
-    };
-  }
-
-function parseManagedTaskContractReviewDirective(
-  text: string,
-): ManagedTaskVerdictDirective | undefined {
-  const match = text.match(new RegExp(String.raw`(?:\r?\n)?\`\`\`${MANAGED_TASK_CONTRACT_REVIEW_BLOCK}\s*([\s\S]*?)\`\`\`\s*$`, 'i'));
-  if (!match) {
-    return undefined;
-  }
-
-  const body = match[1]?.trim() ?? '';
-  const visibleText = sanitizeManagedUserFacingText(text.replace(match[0], '').trim());
-  let status: ManagedTaskVerdictDirective['status'] = 'blocked';
-  let reason: string | undefined;
-  let nextHarness: ManagedTaskVerdictDirective['nextHarness'];
-  const followups: string[] = [];
-  let inFollowups = false;
-
-  for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-
-    const normalized = line.toLowerCase();
-    if (normalized.startsWith('status:')) {
-      const value = line.slice('status:'.length).trim().toLowerCase();
-      if (value === 'approve' || value === 'accept') {
-        status = 'accept';
-      } else if (value === 'revise') {
-        status = 'revise';
-      } else {
-        status = 'blocked';
-      }
-      inFollowups = false;
-      continue;
-    }
-      if (normalized.startsWith('reason:')) {
-        reason = line.slice('reason:'.length).trim();
-        inFollowups = false;
-        continue;
-      }
-      if (normalized.startsWith('next_harness:')) {
-        const candidate = line.slice('next_harness:'.length).trim();
-        if (candidate === 'H1_EXECUTE_EVAL' || candidate === 'H2_PLAN_EXECUTE_EVAL' || candidate === 'H3_MULTI_WORKER') {
-          nextHarness = candidate;
-        }
-        inFollowups = false;
-        continue;
-      }
-      if (normalized.startsWith('followup:')) {
-        inFollowups = true;
-        continue;
-      }
-    if (inFollowups) {
-      const item = line.replace(/^-+\s*/, '').trim();
-      if (item) {
-        followups.push(item);
-      }
-    }
-  }
-
-  return {
-      source: 'contract-review',
       status,
       reason,
       nextHarness,
@@ -3280,7 +3745,7 @@ function sanitizeManagedWorkerResult(
     return { result };
   }
 
-  const sanitizedText = directive.userFacingText || text;
+  const sanitizedText = sanitizeEvaluatorPublicAnswer(directive.userFacingText || text) || (directive.userFacingText || text);
   return {
     directive,
     result: {
@@ -3311,13 +3776,13 @@ function sanitizeContractResult(
   };
 }
 
-function sanitizeAdmissionResult(
+function sanitizeScoutResult(
   result: KodaXResult,
-): { result: KodaXResult; directive?: ManagedTaskAdmissionDirective } {
+): { result: KodaXResult; directive?: ManagedTaskScoutDirective } {
   const text = extractMessageText(result) || result.lastText;
-  const directive = parseManagedTaskAdmissionDirective(text);
+  const directive = parseManagedTaskScoutDirective(text);
   if (!directive) {
-    const reason = `Admission response omitted required ${MANAGED_TASK_ADMISSION_BLOCK} block.`;
+    const reason = `Scout response omitted required ${MANAGED_TASK_SCOUT_BLOCK} block.`;
     return {
       directive: undefined,
       result: {
@@ -3333,8 +3798,8 @@ function sanitizeAdmissionResult(
     directive,
     result: {
       ...result,
-      lastText: directive.summary || text,
-      messages: replaceLastAssistantMessage(result.messages, directive.summary || text),
+      lastText: directive.userFacingText || directive.summary || text,
+      messages: replaceLastAssistantMessage(result.messages, directive.userFacingText || directive.summary || text),
     },
   };
 }
@@ -3378,61 +3843,6 @@ function sanitizeHandoffResult(
   };
 }
 
-function sanitizeContractReviewResult(
-  result: KodaXResult,
-): { result: KodaXResult; directive?: ManagedTaskVerdictDirective } {
-  const text = extractMessageText(result) || result.lastText;
-  const directive = parseManagedTaskContractReviewDirective(text);
-  if (!directive) {
-    const reason = `Contract review response omitted required ${MANAGED_TASK_CONTRACT_REVIEW_BLOCK} block.`;
-    return {
-      directive: {
-        source: 'contract-review',
-        status: 'blocked',
-        reason,
-        followups: [
-          `Re-run contract review and require a final ${MANAGED_TASK_CONTRACT_REVIEW_BLOCK} fenced block with approve, revise, or blocked.`,
-        ],
-        userFacingText: text,
-      },
-      result: {
-        ...result,
-        success: false,
-        signal: 'BLOCKED',
-        signalReason: reason,
-      },
-    };
-  }
-
-  const sanitizedText = directive.userFacingText || text;
-  const baseResult: KodaXResult = {
-    ...result,
-    lastText: sanitizedText,
-    messages: replaceLastAssistantMessage(result.messages, sanitizedText),
-  };
-  if (directive.status === 'accept') {
-    return {
-      directive,
-      result: {
-        ...baseResult,
-        success: true,
-        signal: result.signal === 'BLOCKED' ? undefined : result.signal,
-        signalReason: result.signal === 'BLOCKED' ? undefined : result.signalReason,
-      },
-    };
-  }
-
-  return {
-    directive,
-    result: {
-      ...baseResult,
-      success: false,
-      signal: directive.status === 'blocked' ? 'BLOCKED' : result.signal,
-      signalReason: directive.reason ?? result.signalReason,
-    },
-  };
-}
-
 function buildManagedRoundPrompt(
   prompt: string,
   round: number,
@@ -3444,7 +3854,7 @@ function buildManagedRoundPrompt(
 
   const sections = [
     prompt,
-    `${feedback.source === 'contract-review' ? 'Contract review' : 'Evaluator'} feedback after round ${round - 1}:`,
+    `${feedback.source === 'worker' ? 'Worker' : 'Evaluator'} feedback after round ${round - 1}:`,
     feedback.artifactPath
       ? `Previous round feedback artifact: ${feedback.artifactPath}`
       : undefined,
@@ -3459,6 +3869,25 @@ function buildManagedRoundPrompt(
   ].filter((section): section is string => Boolean(section && section.trim()));
 
   return sections.join('\n\n');
+}
+
+function shouldReplanManagedRound(
+  directive: ManagedTaskVerdictDirective | undefined,
+): boolean {
+  if (!directive || directive.source !== 'worker') {
+    return false;
+  }
+
+  const combined = [
+    directive.reason,
+    directive.userFacingText,
+    ...directive.followups,
+  ]
+    .filter((item): item is string => Boolean(item))
+    .join('\n')
+    .toLowerCase();
+
+  return combined.includes('planner') || combined.includes('contract');
 }
 
 async function persistManagedTaskDirectiveArtifact(
@@ -3482,7 +3911,7 @@ async function persistManagedTaskDirectiveArtifact(
   await writeFile(
     markdownPath,
     [
-      `# ${directive.source === 'contract-review' ? 'Contract Review' : directive.source === 'worker' ? 'Worker Handoff' : 'Evaluator'} Feedback`,
+      `# ${directive.source === 'worker' ? 'Worker Handoff' : 'Evaluator'} Feedback`,
       '',
       `- Status: ${directive.status}`,
       directive.reason ? `- Reason: ${directive.reason}` : undefined,
@@ -3506,12 +3935,9 @@ function createWorkerEvents(
   baseEvents: KodaXEvents | undefined,
   worker: ManagedTaskWorkerSpec,
   forwardStream: boolean,
+  controller?: ManagedTaskBudgetController,
 ): KodaXEvents | undefined {
-  if (!baseEvents) {
-    return undefined;
-  }
-
-  if (forwardStream) {
+  if (!baseEvents && !worker.beforeToolExecute && !controller) {
     return undefined;
   }
 
@@ -3521,51 +3947,72 @@ function createWorkerEvents(
   const thinkingPrefix = `[${worker.title} thinking] `;
 
   return {
-    askUser: baseEvents.askUser,
+    askUser: baseEvents?.askUser,
+    beforeToolExecute: async (tool, input) => {
+      const workerDecision = await worker.beforeToolExecute?.(tool, input);
+      if (workerDecision !== undefined && workerDecision !== true) {
+        return workerDecision;
+      }
+      const baseDecision = await baseEvents?.beforeToolExecute?.(tool, input);
+      return baseDecision ?? true;
+    },
+    onIterationStart: (iter, maxIter) => {
+      if (controller) {
+        incrementManagedBudgetUsage(controller);
+      }
+      baseEvents?.onIterationStart?.(iter, maxIter);
+    },
+    onIterationEnd: (info) => {
+      baseEvents?.onIterationEnd?.(info);
+    },
     onTextDelta: (text) => {
       if (!text) {
         return;
       }
-      const rendered = textPrefixed ? text : `${prefix}${text}`;
-      textPrefixed = true;
-      baseEvents.onTextDelta?.(rendered);
+      const rendered = forwardStream
+        ? text
+        : textPrefixed ? text : `${prefix}${text}`;
+      textPrefixed = !forwardStream;
+      baseEvents?.onTextDelta?.(rendered);
     },
     onThinkingDelta: (text) => {
       if (!text) {
         return;
       }
-      const rendered = thinkingPrefixed ? text : `${thinkingPrefix}${text}`;
-      thinkingPrefixed = true;
-      baseEvents.onThinkingDelta?.(rendered);
+      const rendered = forwardStream
+        ? text
+        : thinkingPrefixed ? text : `${thinkingPrefix}${text}`;
+      thinkingPrefixed = !forwardStream;
+      baseEvents?.onThinkingDelta?.(rendered);
     },
     onThinkingEnd: (thinking) => {
-      baseEvents.onThinkingEnd?.(`${prefix}${thinking}`);
+      baseEvents?.onThinkingEnd?.(forwardStream ? thinking : `${prefix}${thinking}`);
       thinkingPrefixed = false;
     },
     onToolUseStart: (tool) => {
-      baseEvents.onToolUseStart?.({
+      baseEvents?.onToolUseStart?.({
         ...tool,
-        name: `${worker.title}:${tool.name}`,
+        name: forwardStream ? tool.name : `${worker.title}:${tool.name}`,
       });
     },
     onToolResult: (result) => {
-      baseEvents.onToolResult?.({
+      baseEvents?.onToolResult?.({
         ...result,
-        name: `${worker.title}:${result.name}`,
+        name: forwardStream ? result.name : `${worker.title}:${result.name}`,
       });
     },
     onToolInputDelta: (toolName, partialJson) => {
-      baseEvents.onToolInputDelta?.(`${worker.title}:${toolName}`, partialJson);
+      baseEvents?.onToolInputDelta?.(forwardStream ? toolName : `${worker.title}:${toolName}`, partialJson);
     },
-    onRetry: baseEvents.onRetry,
-    onProviderRateLimit: baseEvents.onProviderRateLimit,
-    onError: baseEvents.onError,
+    onRetry: baseEvents?.onRetry,
+    onProviderRateLimit: baseEvents?.onProviderRateLimit,
+    onError: baseEvents?.onError,
     onStreamEnd: () => {
       if (textPrefixed) {
-        baseEvents.onTextDelta?.('\n');
+        baseEvents?.onTextDelta?.('\n');
       }
       if (thinkingPrefixed) {
-        baseEvents.onThinkingDelta?.('\n');
+        baseEvents?.onThinkingDelta?.('\n');
       }
       textPrefixed = false;
       thinkingPrefixed = false;
@@ -3802,6 +4249,71 @@ function buildManagedTaskArtifactRecords(workspaceDir: string): KodaXTaskEvidenc
   ];
 }
 
+async function writeManagedSkillArtifacts(
+  workspaceDir: string,
+  skillInvocation: KodaXSkillInvocationContext | undefined,
+  skillMap: KodaXSkillMap | undefined,
+): Promise<KodaXTaskEvidenceArtifact[]> {
+  if (!skillInvocation) {
+    return [];
+  }
+
+  const { rawSkillPath, skillMapJsonPath, skillMapMarkdownPath } = getManagedSkillArtifactPaths(workspaceDir);
+  const artifacts: KodaXTaskEvidenceArtifact[] = [];
+
+  await writeFile(
+    rawSkillPath,
+    `${skillInvocation.expandedContent.trim()}\n`,
+    'utf8',
+  );
+  artifacts.push({
+    kind: 'markdown',
+    path: rawSkillPath,
+    description: 'Expanded skill content used as the authoritative execution reference',
+  });
+
+  if (skillMap) {
+    await writeFile(
+      skillMapJsonPath,
+      `${JSON.stringify(skillMap, null, 2)}\n`,
+      'utf8',
+    );
+    await writeFile(
+      skillMapMarkdownPath,
+      [
+        `# Skill Map: ${skillInvocation.name}`,
+        '',
+        `- Summary: ${skillMap.skillSummary}`,
+        `- Projection confidence: ${skillMap.projectionConfidence}`,
+        skillMap.allowedTools ? `- Allowed tools: ${skillMap.allowedTools}` : undefined,
+        skillMap.preferredAgent ? `- Preferred agent: ${skillMap.preferredAgent}` : undefined,
+        skillMap.preferredModel ? `- Preferred model: ${skillMap.preferredModel}` : undefined,
+        skillMap.invocationContext ? `- Invocation context: ${skillMap.invocationContext}` : undefined,
+        skillMap.hookEvents?.length ? `- Hook events: ${skillMap.hookEvents.join(', ')}` : undefined,
+        formatOptionalListSection('## Execution obligations', skillMap.executionObligations),
+        formatOptionalListSection('## Verification obligations', skillMap.verificationObligations),
+        formatOptionalListSection('## Required evidence', skillMap.requiredEvidence),
+        formatOptionalListSection('## Ambiguities', skillMap.ambiguities),
+      ].filter((line): line is string => Boolean(line)).join('\n') + '\n',
+      'utf8',
+    );
+    artifacts.push(
+      {
+        kind: 'json',
+        path: skillMapJsonPath,
+        description: 'Scout-generated skill map used by managed-task roles',
+      },
+      {
+        kind: 'markdown',
+        path: skillMapMarkdownPath,
+        description: 'Readable skill map summary for managed-task roles',
+      },
+    );
+  }
+
+  return artifacts;
+}
+
 function buildManagedTaskRoundHistory(task: KodaXManagedTask): Array<{
   round: number;
   entries: Array<{
@@ -3860,16 +4372,17 @@ function buildWorkerRunOptions(
   sessionStorage: KodaXSessionStorage | undefined,
   memoryStrategy: KodaXMemoryStrategy,
   budgetSnapshot: KodaXManagedBudgetSnapshot | undefined,
+  controller: ManagedTaskBudgetController,
 ): KodaXOptions {
   worker.memoryStrategy = memoryStrategy;
   worker.budgetSnapshot = budgetSnapshot;
   const compactInitialMessages = memoryStrategy === 'compact' && sessionStorage instanceof ManagedWorkerSessionStorage
     ? buildCompactInitialMessages(task, worker, sessionStorage, budgetSnapshot?.currentRound ?? 1)
     : undefined;
-  const roleEvents = createWorkerEvents(defaultOptions.events, worker, worker.id === terminalWorkerId);
+  const roleEvents = createWorkerEvents(defaultOptions.events, worker, worker.id === terminalWorkerId, controller);
   return {
     ...defaultOptions,
-    maxIter: budgetSnapshot?.softMaxIter ?? defaultOptions.maxIter,
+    maxIter: resolveRemainingManagedWorkBudget(controller),
     session: createWorkerSession(defaultOptions.session, task, worker, sessionStorage, memoryStrategy, compactInitialMessages),
     context: {
       ...defaultOptions.context,
@@ -3911,175 +4424,104 @@ function buildWorkerRunOptions(
   };
 }
 
-async function runManagedAdmissionStage(
+async function runManagedScoutStage(
   options: KodaXOptions,
-  task: KodaXManagedTask,
   prompt: string,
-  initialWorkerSet: { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] },
-  routingPromptOverlay: string | undefined,
-  qualityAssuranceMode: ManagedTaskQualityAssuranceMode,
-  controller: ManagedTaskBudgetController,
   plan: ReasoningPlan,
-  sessionStorage: KodaXSessionStorage | undefined,
-): Promise<{
-  task: KodaXManagedTask;
-  initialWorkerSet: { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] };
-}> {
-  const admissionWorker = initialWorkerSet.workers.find((worker) => worker.role === 'admission');
-  if (!admissionWorker) {
-    return {
-      task,
-      initialWorkerSet: initialWorkerSet,
-    };
-  }
-
-  const admissionWorkspaceDir = path.join(task.evidence.workspaceDir, 'rounds', 'round-00', 'tasks', '00-admission');
-  await mkdir(admissionWorkspaceDir, { recursive: true });
-
-  const preparedOptions = buildWorkerRunOptions(
-    options,
-    task,
-    admissionWorker,
-    admissionWorker.id,
-    routingPromptOverlay,
-    qualityAssuranceMode,
-    sessionStorage,
-    resolveManagedMemoryStrategy(options, plan, admissionWorker.role, 1),
-    createBudgetSnapshot(controller, task.contract.harnessProfile, 1, admissionWorker.role, admissionWorker.id),
-  );
-  const execution = await runManagedWorkerTask(
-    admissionWorker,
-    preparedOptions,
-    admissionWorker.prompt,
-    () => runDirectKodaX(preparedOptions, admissionWorker.prompt),
-    controller,
-  );
-  const sanitized = sanitizeAdmissionResult(execution.result);
-  const completionStatus = sanitized.directive ? 'ready' : 'missing';
-  const status: KodaXTaskStatus = sanitized.result.success
-    ? 'completed'
-    : sanitized.result.signal === 'BLOCKED'
-      ? 'blocked'
-      : 'failed';
-  let nextTask = applyAdmissionDirective(task, sanitized.directive);
-  nextTask = applyManagedToolTelemetry(nextTask, sanitized.result);
-  nextTask = {
-    ...nextTask,
-    roleAssignments: nextTask.roleAssignments.map((assignment) => assignment.id === admissionWorker.id
-      ? {
-          ...assignment,
-          status,
-          summary: sanitized.directive?.summary ?? truncateText(extractMessageText(sanitized.result) || sanitized.result.signalReason || 'Admission finished without a summary.'),
-          sessionId: sanitized.result.sessionId,
-        }
-      : assignment),
-    evidence: {
-      ...nextTask.evidence,
-      entries: [
-        ...nextTask.evidence.entries,
-        {
-          assignmentId: admissionWorker.id,
-          title: admissionWorker.title,
-          role: admissionWorker.role,
-          round: 0,
-          status,
-          summary: sanitized.directive?.summary ?? truncateText(extractMessageText(sanitized.result) || sanitized.result.signalReason || 'Admission finished without a summary.'),
-          output: extractMessageText(sanitized.result),
-          sessionId: sanitized.result.sessionId,
-          signal: sanitized.result.signal,
-          signalReason: sanitized.result.signalReason,
-        },
-      ],
+  controller: ManagedTaskBudgetController,
+): Promise<{ result: KodaXResult; directive: ManagedTaskScoutDirective }> {
+  const toolPolicy = buildManagedWorkerToolPolicy('scout', options.context?.taskVerification, plan.decision.harnessProfile);
+  const agent = buildManagedWorkerAgent('scout', 'scout');
+  const originalTask = resolveManagedOriginalTask(options.context, prompt);
+  const basePrompt = createRolePrompt(
+    'scout',
+    prompt,
+    plan.decision,
+    options.context?.taskVerification,
+    toolPolicy,
+    agent,
+    options.context?.taskMetadata,
+    {
+      originalTask,
+      skillInvocation: options.context?.skillInvocation,
     },
-    runtime: {
-      ...nextTask.runtime,
-      completionContractStatus: {
-        ...(nextTask.runtime?.completionContractStatus ?? {}),
-        [admissionWorker.id]: completionStatus,
-      },
-      budget: createBudgetSnapshot(controller, task.contract.harnessProfile, 0, admissionWorker.role, admissionWorker.id),
+    'scout',
+  );
+  const scoutWorker: ManagedTaskWorkerSpec = {
+    id: 'scout',
+    title: 'Scout',
+    role: 'scout',
+    terminalAuthority: false,
+    execution: 'serial',
+    agent,
+    prompt: basePrompt,
+    toolPolicy,
+  };
+  scoutWorker.beforeToolExecute = createToolPolicyHook(scoutWorker);
+  const scoutEvents = createWorkerEvents(options.events, scoutWorker, true, controller);
+  const scoutOptions: KodaXOptions = {
+    ...options,
+    maxIter: resolveRemainingManagedWorkBudget(controller),
+    events: scoutEvents
+      ? {
+          ...options.events,
+          ...scoutEvents,
+        }
+      : options.events,
+    context: {
+      ...options.context,
+      promptOverlay: [
+        options.context?.promptOverlay,
+        plan.promptOverlay,
+        '[Scout Phase] Prefer direct completion when the task can be safely answered without a heavier harness.',
+      ].filter(Boolean).join('\n\n'),
     },
   };
 
-  let nextWorkerSet = stripAdmissionFromWorkerSet(initialWorkerSet);
-  const currentHarness = nextTask.contract.harnessProfile;
-  const requestedHarness = sanitized.directive?.confirmedHarness;
-  if (requestedHarness && isHarnessUpgrade(currentHarness, requestedHarness)) {
-    const denialReason =
-      !canProviderSatisfyHarness(requestedHarness, plan.providerPolicy)
-        ? `Admission suggested ${requestedHarness}, but provider policy cannot safely satisfy it in this run.`
-        : controller.upgradeCeiling && getHarnessRank(requestedHarness) > getHarnessRank(controller.upgradeCeiling)
-          ? `Admission suggested ${requestedHarness}, but it exceeds the configured upgrade ceiling ${controller.upgradeCeiling}.`
-          : undefined;
-
-    if (denialReason) {
-      nextTask = withHarnessTransition(nextTask, {
-        from: currentHarness,
-        to: requestedHarness,
-        round: 0,
-        source: 'admission',
-        reason: sanitized.directive?.summary,
-        approved: false,
-        denialReason,
-      });
-      nextTask = {
-        ...nextTask,
-        runtime: {
-          ...nextTask.runtime,
-          degradedContinue: true,
-          providerRuntimeBehavior: {
-            downgraded: true,
-            reasons: [...(nextTask.runtime?.providerRuntimeBehavior?.reasons ?? []), denialReason],
-          },
+  let currentPrompt = basePrompt;
+  let lastResult: KodaXResult | undefined;
+  for (let attempt = 1; attempt <= MANAGED_TASK_ROUTER_MAX_RETRIES; attempt += 1) {
+    const result = await runDirectKodaX(scoutOptions, currentPrompt);
+    lastResult = result;
+    const sanitized = sanitizeScoutResult(result);
+    if (sanitized.directive) {
+      return { result: sanitized.result, directive: sanitized.directive };
+    }
+    if (attempt < MANAGED_TASK_ROUTER_MAX_RETRIES) {
+      currentPrompt = buildProtocolRetryPrompt(
+        basePrompt,
+        {
+          id: 'scout',
+          title: 'Scout',
+          role: 'scout',
+          terminalAuthority: false,
+          execution: 'serial',
+          agent,
+          prompt: basePrompt,
+          toolPolicy,
         },
-      };
-    } else {
-      controller.currentHarness = requestedHarness;
-      if (controller.upgradeCeiling && getHarnessRank(requestedHarness) >= getHarnessRank(controller.upgradeCeiling)) {
-        controller.upgradeCeiling = undefined;
-      }
-      nextTask = withHarnessTransition(nextTask, {
-        from: currentHarness,
-        to: requestedHarness,
-        round: 0,
-        source: 'admission',
-        reason: sanitized.directive?.summary,
-        approved: true,
-      });
-      nextTask = {
-        ...nextTask,
-        contract: {
-          ...nextTask.contract,
-          harnessProfile: requestedHarness,
-          updatedAt: new Date().toISOString(),
-        },
-        runtime: {
-          ...nextTask.runtime,
-          currentHarness: requestedHarness,
-          upgradeCeiling: controller.upgradeCeiling,
-        },
-      };
-      nextWorkerSet = stripAdmissionFromWorkerSet(
-        buildManagedTaskWorkers(
-          prompt,
-          {
-            ...plan.decision,
-            harnessProfile: requestedHarness,
-            upgradeCeiling: controller.upgradeCeiling,
-          },
-          options.context?.taskMetadata,
-          nextTask.contract.verification,
-          qualityAssuranceMode,
-          'initial',
+        `missing ${MANAGED_TASK_SCOUT_BLOCK}`,
+        buildProtocolRetryRoleSummary(
+          scoutWorker,
+          sanitized.result,
+          attempt,
+          `missing ${MANAGED_TASK_SCOUT_BLOCK}`,
         ),
       );
     }
   }
 
-  await writeManagedTaskSnapshotArtifacts(task.evidence.workspaceDir, nextTask);
   return {
-    task: nextTask,
-    initialWorkerSet: nextWorkerSet,
+    result: lastResult!,
+    directive: {
+      summary: truncateText(extractMessageText(lastResult) || plan.decision.reason || 'Scout completed without a structured summary.'),
+      scope: [],
+      requiredEvidence: [],
+      reviewFilesOrAreas: [],
+      evidenceAcquisitionMode: 'overview',
+      confirmedHarness: plan.decision.harnessProfile,
+      userFacingText: sanitizeManagedUserFacingText(extractMessageText(lastResult) || ''),
+    },
   };
 }
 
@@ -4139,6 +4581,71 @@ function applyDirectResultToTask(task: KodaXManagedTask, result: KodaXResult): K
   };
 }
 
+function applyScoutTerminalResultToTask(
+  task: KodaXManagedTask,
+  result: KodaXResult,
+  directive: ManagedTaskScoutDirective,
+): KodaXManagedTask {
+  const status: KodaXTaskStatus = result.success ? 'completed' : (result.signal === 'BLOCKED' ? 'blocked' : 'failed');
+  const output = directive.userFacingText || extractMessageText(result) || result.lastText || '';
+  const summary = truncateText(
+    directive.summary
+    || output
+    || result.signalReason
+    || 'Scout completed without a textual summary.',
+  );
+
+  return {
+    ...task,
+    contract: {
+      ...task.contract,
+      status,
+      updatedAt: new Date().toISOString(),
+    },
+    roleAssignments: task.roleAssignments.map((assignment) => ({
+      ...assignment,
+      status,
+      summary,
+      sessionId: result.sessionId,
+    })),
+    evidence: {
+      ...task.evidence,
+      artifacts: mergeEvidenceArtifacts(
+        task.evidence.artifacts,
+        buildManagedTaskArtifactRecords(task.evidence.workspaceDir),
+      ),
+      entries: [
+        ...task.evidence.entries,
+        {
+          assignmentId: 'scout',
+          title: 'Scout',
+          role: 'scout',
+          round: 1,
+          status,
+          summary,
+          output: output || undefined,
+          sessionId: result.sessionId,
+          signal: result.signal,
+          signalReason: result.signalReason,
+        },
+      ],
+    },
+    verdict: {
+      status,
+      decidedByAssignmentId: 'scout',
+      summary,
+      signal: result.signal,
+      signalReason: result.signalReason,
+      disposition: status === 'completed'
+        ? 'complete'
+        : status === 'blocked'
+          ? 'blocked'
+          : 'needs_continuation',
+      continuationSuggested: status !== 'completed',
+    },
+  };
+}
+
 function applyOrchestrationResultToTask(
   task: KodaXManagedTask,
   terminalWorkerId: string,
@@ -4154,7 +4661,7 @@ function applyOrchestrationResultToTask(
     newEntries.push({
       assignmentId: completed.id,
       title: completed.title,
-      role: task.roleAssignments.find((item) => item.id === completed.id)?.role ?? 'worker',
+      role: task.roleAssignments.find((item) => item.id === completed.id)?.role ?? 'direct',
       round,
       status: completed.status === 'completed'
         ? 'completed'
@@ -4488,18 +4995,6 @@ function canProviderSatisfyHarness(
   }
 
   const snapshot = providerPolicy.snapshot;
-  if (harness === 'H3_MULTI_WORKER') {
-    return !(
-      snapshot.contextFidelity === 'lossy'
-      || snapshot.sessionSupport === 'stateless'
-      || snapshot.toolCallingFidelity === 'none'
-      || snapshot.evidenceSupport === 'none'
-      || snapshot.toolCallingFidelity === 'limited'
-      || snapshot.evidenceSupport === 'limited'
-      || snapshot.transport === 'cli-bridge'
-    );
-  }
-
   if (harness === 'H2_PLAN_EXECUTE_EVAL') {
     return !(
       snapshot.contextFidelity === 'lossy'
@@ -4521,16 +5016,21 @@ function consumeHarnessUpgradeBudget(
   if (cost <= 0) {
     return { granted: false, cost: 0, reason: 'Requested harness is not stronger than the current harness.' };
   }
-  if (controller.upgradeReserveRemaining < cost) {
+  const availableReserve = controller.upgradeReserveRemaining > 0
+    ? controller.upgradeReserveRemaining
+    : controller.reserveRemaining;
+  if (availableReserve < cost) {
     return {
       granted: false,
       cost,
-      reason: `Upgrade to ${toHarness} needs ${cost} reserve units, but only ${controller.upgradeReserveRemaining} remain.`,
+      reason: `Upgrade to ${toHarness} needs ${cost} reserve units, but only ${availableReserve} remain.`,
     };
   }
 
-  controller.upgradeReserveRemaining -= cost;
-  controller.reserveRemaining = Math.max(controller.reserveRemaining - cost, controller.upgradeReserveRemaining);
+  if (controller.upgradeReserveRemaining > 0) {
+    controller.upgradeReserveRemaining = Math.max(0, controller.upgradeReserveRemaining - cost);
+  }
+  controller.reserveRemaining = Math.max(0, controller.reserveRemaining - cost);
   controller.currentHarness = toHarness;
   return { granted: true, cost };
 }
@@ -4553,15 +5053,34 @@ function buildProtocolRetryPrompt(
   prompt: string,
   worker: ManagedTaskWorkerSpec,
   reason: string,
+  previousRoleSummary?: KodaXRoleRoundSummary,
 ): string {
+  const roleSpecificReminder = worker.role === 'planner'
+    ? `Do not stop until you append a valid \`\`\`${MANAGED_TASK_CONTRACT_BLOCK}\`\`\` block; a Planner response without that block cannot be consumed.`
+    : undefined;
   return [
     prompt,
     [
       '[Managed Task Protocol Retry]',
       `Previous ${worker.title} output could not be safely consumed: ${reason}`,
       'Re-run the same role, keep the user-facing content, and append the required structured closing block exactly once at the end.',
+      roleSpecificReminder,
     ].join('\n'),
+    previousRoleSummary ? formatRoleRoundSummarySection(previousRoleSummary) : undefined,
   ].join('\n\n');
+}
+
+function markMissingManagedBlockResult(
+  result: KodaXResult,
+  worker: ManagedTaskWorkerSpec,
+  reason: string,
+): KodaXResult {
+  return {
+    ...result,
+    success: false,
+    signal: 'BLOCKED',
+    signalReason: `${worker.title} output could not be consumed: ${reason}.`,
+  };
 }
 
 function shouldGrantBudgetExtension(
@@ -4610,7 +5129,7 @@ function resolveHarnessUpgrade(
 
   const requestedHarness = directive.nextHarness;
   const currentHarness = task.contract.harnessProfile;
-  const transitionSource = directive.source === 'worker' ? 'evaluator' : directive.source;
+  const transitionSource = 'evaluator';
   const baseTransition: KodaXManagedTaskHarnessTransition = {
     from: currentHarness,
     to: requestedHarness,
@@ -4665,6 +5184,11 @@ function resolveHarnessUpgrade(
   if (currentHarness === 'H0_DIRECT') {
     return ignoreInvalidUpgrade('Harness upgrades are not supported for H0 direct execution.');
   }
+  if (currentHarness === 'H1_EXECUTE_EVAL') {
+    return continueOnDeniedUpgrade(
+      'H1 checked-direct runs must stay lightweight. Return the best supported answer with explicit limits instead of escalating to H2.',
+    );
+  }
   if (!isHarnessUpgrade(currentHarness, requestedHarness)) {
     return ignoreInvalidUpgrade(`Requested harness ${requestedHarness} is not stronger than the current harness ${currentHarness}.`);
   }
@@ -4711,7 +5235,6 @@ async function runManagedWorkerTask(
   let attempts = 0;
   let currentPrompt = prompt;
   let lastResult: KodaXResult | undefined;
-  let extensionUsed = false;
 
   while (attempts < MANAGED_TASK_ROUTER_MAX_RETRIES) {
     attempts += 1;
@@ -4724,13 +5247,11 @@ async function runManagedWorkerTask(
     const requiredBlockReason =
       worker.role === 'evaluator'
         ? (!parseManagedTaskVerdictDirective(text) ? `missing ${MANAGED_TASK_VERDICT_BLOCK}` : undefined)
-        : worker.id === 'contract-review'
-          ? (!parseManagedTaskContractReviewDirective(text) ? `missing ${MANAGED_TASK_CONTRACT_REVIEW_BLOCK}` : undefined)
-          : worker.role === 'planner' || worker.role === 'lead'
-            ? (!parseManagedTaskContractDirective(text) ? `missing ${MANAGED_TASK_CONTRACT_BLOCK}` : undefined)
-            : worker.role === 'admission'
-              ? (!parseManagedTaskAdmissionDirective(text) ? `missing ${MANAGED_TASK_ADMISSION_BLOCK}` : undefined)
-              : (worker.role === 'generator' || worker.role === 'worker' || worker.role === 'validator') && !worker.terminalAuthority
+        : worker.role === 'planner'
+          ? (!parseManagedTaskContractDirective(text) ? `missing ${MANAGED_TASK_CONTRACT_BLOCK}` : undefined)
+          : worker.role === 'scout'
+            ? (!parseManagedTaskScoutDirective(text) ? `missing ${MANAGED_TASK_SCOUT_BLOCK}` : undefined)
+            : worker.role === 'generator' && !worker.terminalAuthority
                 ? (!parseManagedTaskHandoffDirective(text) ? `missing ${MANAGED_TASK_HANDOFF_BLOCK}` : undefined)
                 : undefined;
 
@@ -4739,43 +5260,44 @@ async function runManagedWorkerTask(
         prompt,
         worker,
         requiredBlockReason,
+        buildProtocolRetryRoleSummary(worker, result, attempts, requiredBlockReason),
       );
       continue;
     }
 
     const budgetRequest = parseBudgetExtensionRequest(text);
-    if (budgetRequest && !extensionUsed) {
-      const extension = shouldGrantBudgetExtension(controller, worker, budgetRequest);
-      if (extension.granted > 0 && attempts < MANAGED_TASK_ROUTER_MAX_RETRIES) {
-        extensionUsed = true;
-        controller.reserveRemaining -= extension.granted;
-        currentPrompt = [
-          prompt,
-          '[Managed Task Budget Extension Approved]',
-          `You were granted ${extension.granted} additional iterations. Finish the task now and avoid opening new exploration branches.`,
-        ].join('\n\n');
-        preparedOptions.maxIter = (preparedOptions.maxIter ?? worker.budgetSnapshot?.softMaxIter ?? 8) + extension.granted;
-        worker.budgetSnapshot = {
-          ...(worker.budgetSnapshot ?? createBudgetSnapshot(controller, controller.currentHarness, 1, worker.role, worker.id)),
-          extensionGrantedIters: extension.granted,
-          reserveRemaining: controller.reserveRemaining,
-          upgradeReserveRemaining: controller.upgradeReserveRemaining,
-        };
-        continue;
-      }
+    if (budgetRequest) {
       return {
         result,
         budgetRequest,
-        budgetExtensionGranted: extension.granted,
-        budgetExtensionReason: extension.reason,
+        budgetExtensionGranted: 0,
+        budgetExtensionReason: 'Per-worker iteration extensions are deprecated; rely on the global AMA work budget instead.',
       };
     }
 
-    return { result };
+    return {
+      result: requiredBlockReason
+        ? markMissingManagedBlockResult(result, worker, requiredBlockReason)
+        : result,
+    };
   }
 
   return {
-    result: lastResult ?? await executeDefault(),
+    result: lastResult
+      ? markMissingManagedBlockResult(
+        lastResult,
+        worker,
+        worker.role === 'evaluator'
+          ? `missing ${MANAGED_TASK_VERDICT_BLOCK}`
+          : worker.role === 'planner'
+            ? `missing ${MANAGED_TASK_CONTRACT_BLOCK}`
+            : worker.role === 'scout'
+              ? `missing ${MANAGED_TASK_SCOUT_BLOCK}`
+              : worker.role === 'generator' && !worker.terminalAuthority
+                ? `missing ${MANAGED_TASK_HANDOFF_BLOCK}`
+                : 'missing required managed-task block',
+      )
+      : await executeDefault(),
   };
 }
 
@@ -4785,6 +5307,7 @@ function createManagedOrchestrationEvents(
   harnessProfile: KodaXTaskRoutingDecision['harnessProfile'],
   currentRound: number,
   maxRounds: number,
+  controller: ManagedTaskBudgetController,
   upgradeCeiling?: KodaXTaskRoutingDecision['harnessProfile'],
 ): OrchestrationRunEvents<ManagedTaskWorkerSpec, string> | undefined {
   if (!baseEvents?.onTextDelta && !baseEvents?.onManagedTaskStatus) {
@@ -4803,6 +5326,7 @@ function createManagedOrchestrationEvents(
         maxRounds,
         phase: 'worker',
         upgradeCeiling,
+        ...buildManagedStatusBudgetFields(controller),
       });
     },
     onTaskMessage: async (task, message) => {
@@ -4820,6 +5344,7 @@ function createManagedOrchestrationEvents(
         phase: 'worker',
         note: `${task.title} ${completed.status}`,
         upgradeCeiling,
+        ...buildManagedStatusBudgetFields(controller),
       });
     },
   };
@@ -4861,6 +5386,7 @@ async function executeManagedTaskRound(
       sessionStorage,
       resolveManagedMemoryStrategy(options, plan, worker.role, round, previousDirective),
       createBudgetSnapshot(controller, task.contract.harnessProfile, round, worker.role, worker.id),
+      controller,
     ),
     runTask: async (worker, _context, preparedOptions, prompt, executeDefault) => {
       const execution = await runManagedWorkerTask(
@@ -4880,26 +5406,19 @@ async function executeManagedTaskRound(
     onResult: async (worker, _context, result) => {
       const sanitized = worker.role === 'evaluator'
         ? sanitizeManagedWorkerResult(result, { enforceVerdictBlock: true })
-        : worker.id === 'contract-review'
-          ? sanitizeContractReviewResult(result)
-          : worker.role === 'lead' || worker.role === 'planner'
+        : worker.role === 'planner'
             ? sanitizeContractResult(result)
-          : worker.role === 'admission'
-            ? sanitizeAdmissionResult(result)
-            : (worker.role === 'generator' || worker.role === 'worker' || worker.role === 'validator') && !worker.terminalAuthority
+          : worker.role === 'scout'
+            ? sanitizeScoutResult(result)
+            : worker.role === 'generator' && !worker.terminalAuthority
               ? sanitizeHandoffResult(result, worker.title)
               : { result };
       workerResults.set(worker.id, sanitized.result);
       let completionStatus: 'ready' | 'incomplete' | 'blocked' | 'missing' = 'missing';
-      if (worker.role === 'admission') {
-        completionStatus = (sanitized.directive as ManagedTaskAdmissionDirective | undefined) ? 'ready' : 'missing';
-      } else if (worker.id === 'contract-review') {
-        const reviewDirective = sanitized.directive as ManagedTaskVerdictDirective | undefined;
-        completionStatus = reviewDirective?.status === 'accept'
-          ? 'ready'
-          : reviewDirective?.status === 'revise'
-            ? 'incomplete'
-            : reviewDirective?.status ?? 'missing';
+      if (worker.role === 'scout') {
+        completionStatus = (sanitized.directive as ManagedTaskScoutDirective | undefined) ? 'ready' : 'missing';
+      } else if (worker.role === 'planner') {
+        completionStatus = (sanitized.directive as ManagedTaskContractDirective | undefined) ? 'ready' : 'missing';
       } else if (worker.role === 'evaluator') {
         const verdictDirective = sanitized.directive as ManagedTaskVerdictDirective | undefined;
         completionStatus = verdictDirective?.status === 'accept'
@@ -4934,7 +5453,7 @@ async function executeManagedTaskRound(
           buildManagedWorkerMemoryNote(task, worker, sanitized.result, round),
         );
       }
-      if (worker.role === 'lead' || worker.role === 'planner') {
+      if (worker.role === 'planner') {
         const contractDirective = (sanitized.directive as ManagedTaskContractDirective | undefined)
           ?? parseManagedTaskContractDirective(
             extractMessageText(sanitized.result) || sanitized.result.lastText,
@@ -4948,14 +5467,27 @@ async function executeManagedTaskRound(
           await writeManagedTaskSnapshotArtifacts(taskSnapshot.evidence.workspaceDir, taskSnapshot);
         }
       }
+      const roleRoundSummary = buildManagedWorkerRoundSummary(
+        taskSnapshot,
+        worker,
+        sanitized.result,
+        round,
+        sanitized.directive as ManagedTaskScoutDirective | ManagedTaskContractDirective | ManagedTaskVerdictDirective | undefined,
+      );
+      if (roleRoundSummary) {
+        taskSnapshot = {
+          ...taskSnapshot,
+          runtime: {
+            ...taskSnapshot.runtime,
+            roleRoundSummaries: {
+              ...(taskSnapshot.runtime?.roleRoundSummaries ?? {}),
+              [worker.role]: roleRoundSummary,
+            },
+          },
+        };
+      }
       if (worker.id === workerSet.terminalWorkerId && worker.role === 'evaluator') {
         directive = sanitized.directive as ManagedTaskVerdictDirective | undefined;
-      }
-      if (worker.id === 'contract-review') {
-        const reviewDirective = sanitized.directive as ManagedTaskVerdictDirective | undefined;
-        if (reviewDirective?.status && reviewDirective.status !== 'accept') {
-          directive = reviewDirective;
-        }
       }
       return sanitized.result;
     },
@@ -4964,7 +5496,7 @@ async function executeManagedTaskRound(
   const orchestrationResult = await runOrchestration<ManagedTaskWorkerSpec, string>({
     runId,
     workspaceDir,
-    maxParallel: task.contract.harnessProfile === 'H3_MULTI_WORKER' ? 2 : 1,
+    maxParallel: 1,
     tasks: workerSet.workers,
     signal: options.abortSignal,
     runner: async (worker, context) => {
@@ -4977,6 +5509,7 @@ async function executeManagedTaskRound(
       task.contract.harnessProfile,
       round,
       maxRounds,
+      controller,
       task.runtime?.upgradeCeiling,
     ),
   });
@@ -4987,7 +5520,22 @@ async function executeManagedTaskRound(
       if (!result) {
         continue;
       }
-      if (worker.role === 'generator' || worker.role === 'worker' || (worker.role === 'validator' && worker.id !== 'contract-review')) {
+      if (worker.role === 'planner') {
+        const contractDirective = parseManagedTaskContractDirective(extractMessageText(result) || result.lastText);
+        if (!contractDirective) {
+          directive = {
+            source: 'worker',
+            status: 'revise',
+            reason: result.signalReason || `${worker.title} did not produce a consumable sprint contract.`,
+            followups: [
+              `Re-run ${worker.title} and require a final ${MANAGED_TASK_CONTRACT_BLOCK} fenced block before execution proceeds.`,
+            ],
+            userFacingText: sanitizeManagedUserFacingText(extractMessageText(result) || result.lastText),
+          };
+          break;
+        }
+      }
+      if (worker.role === 'generator') {
         const handoff = parseManagedTaskHandoffDirective(extractMessageText(result) || result.lastText);
         if (handoff && handoff.status !== 'ready') {
           directive = {
@@ -5018,6 +5566,7 @@ async function executeManagedTaskRound(
     workerResults,
     contractDirectives,
     orchestrationResult,
+    taskSnapshot,
     workspaceDir,
     directive,
     budgetRequest,
@@ -5077,9 +5626,7 @@ function applyManagedTaskContractDirectives(
 
   const selectedAssignmentId = directives.has('planner')
     ? 'planner'
-    : directives.has('lead')
-      ? 'lead'
-      : undefined;
+    : undefined;
   const selected = selectedAssignmentId ? directives.get(selectedAssignmentId) : Array.from(directives.values()).at(-1);
   if (!selected) {
     return task;
@@ -5114,8 +5661,6 @@ function synchronizeManagedTaskGraph(
   upgradeCeiling?: KodaXTaskRoutingDecision['harnessProfile'],
 ): KodaXManagedTask {
   const previousAssignments = new Map(task.roleAssignments.map((assignment) => [assignment.id, assignment]));
-  const admissionAssignment = previousAssignments.get('admission');
-  const admissionWorkItem = task.workItems.find((item) => item.assignmentId === 'admission');
   return {
     ...task,
     contract: {
@@ -5124,7 +5669,6 @@ function synchronizeManagedTaskGraph(
       updatedAt: new Date().toISOString(),
     },
     roleAssignments: [
-      ...(admissionAssignment ? [admissionAssignment] : []),
       ...workerSet.workers.map((worker) => {
         const existing = previousAssignments.get(worker.id);
         return {
@@ -5141,7 +5685,6 @@ function synchronizeManagedTaskGraph(
       }),
     ],
     workItems: [
-      ...(admissionWorkItem ? [admissionWorkItem] : []),
       ...workerSet.workers.map((worker) => ({
         id: worker.id,
         assignmentId: worker.id,
@@ -5166,6 +5709,23 @@ export async function runManagedTask(
   prompt: string,
 ): Promise<KodaXResult> {
   const agentMode = resolveManagedAgentMode(options);
+  if (agentMode === 'sa') {
+    const intentGate = inferIntentGate(prompt);
+    return runDirectKodaX(
+      {
+        ...options,
+        context: {
+          ...options.context,
+          promptOverlay: buildDirectPathTaskFamilyPromptOverlay(
+            intentGate.taskFamily,
+            [options.context?.promptOverlay],
+          ),
+        },
+      },
+      prompt,
+    );
+  }
+
   const managedPlanning = await createManagedReasoningPlan(options, prompt);
   const managedOptions: KodaXOptions = managedPlanning.repoRoutingSignals
     ? {
@@ -5176,151 +5736,246 @@ export async function runManagedTask(
       },
     }
     : options;
-  const plan = applyAgentModeToPlan(managedPlanning.plan, agentMode);
+  const managedOriginalTask = resolveManagedOriginalTask(managedOptions.context, prompt);
+  let plan = applyAgentModeToPlan(managedPlanning.plan, agentMode);
   const rawRoutingDecision = managedPlanning.rawDecision;
-  const finalRoutingDecision = cloneRoutingDecisionWithReviewTarget(
+  let finalRoutingDecision = cloneRoutingDecisionWithReviewTarget(
     plan.decision,
     managedPlanning.reviewTarget,
   );
-  const routingOverrideReason = managedPlanning.routingOverrideReason
-    ?? (
-      agentMode === 'sa'
-      && (
-        rawRoutingDecision.harnessProfile !== finalRoutingDecision.harnessProfile
-        || rawRoutingDecision.upgradeCeiling !== finalRoutingDecision.upgradeCeiling
-      )
-        ? 'agent mode SA forced single-agent execution'
-        : undefined
-    );
-  const routingBreadcrumb = createRoutingBreadcrumb(
-    rawRoutingDecision,
-    finalRoutingDecision,
-    routingOverrideReason,
-  );
-  const liveRoutingNote = createLiveRoutingNote(
+  let routingOverrideReason = managedPlanning.routingOverrideReason;
+  let liveRoutingNote = createLiveRoutingNote(
     rawRoutingDecision,
     finalRoutingDecision,
     managedPlanning.repoRoutingSignals,
     routingOverrideReason,
   );
-  const shape = createTaskShape(managedOptions, prompt, plan);
+  const initialBudgetController = createManagedBudgetController(managedOptions, plan, agentMode);
+
+  managedOptions.events?.onManagedTaskStatus?.({
+    agentMode,
+    harnessProfile: finalRoutingDecision.harnessProfile,
+    phase: 'routing',
+    note: liveRoutingNote,
+    upgradeCeiling: finalRoutingDecision.upgradeCeiling,
+    ...buildManagedStatusBudgetFields(initialBudgetController),
+  });
+
+  if (shouldBypassScoutForManagedH0(finalRoutingDecision)) {
+    return runDirectKodaX(
+      {
+        ...managedOptions,
+        context: {
+          ...managedOptions.context,
+          promptOverlay: applyDirectPathTaskFamilyShaping(
+            plan,
+            [
+              managedOptions.context?.promptOverlay,
+              `[Managed Task Routing] ${createRoutingBreadcrumb(rawRoutingDecision, finalRoutingDecision, routingOverrideReason)}`,
+            ].filter(Boolean).join('\n\n'),
+          ),
+        },
+      },
+      prompt,
+    );
+  }
+
+  managedOptions.events?.onManagedTaskStatus?.({
+    agentMode,
+    harnessProfile: finalRoutingDecision.harnessProfile,
+    activeWorkerId: 'scout',
+    activeWorkerTitle: 'Scout',
+    phase: 'preflight',
+    note: 'Scout analyzing task complexity',
+    upgradeCeiling: finalRoutingDecision.upgradeCeiling,
+    ...buildManagedStatusBudgetFields(initialBudgetController),
+  });
+  const scoutBudgetController = initialBudgetController;
+  const scoutExecution = await runManagedScoutStage(managedOptions, prompt, plan, scoutBudgetController);
+  plan = applyScoutDecisionToPlan(plan, scoutExecution.directive);
+  const skillMap = buildSkillMap(managedOptions.context?.skillInvocation, scoutExecution.directive);
+  finalRoutingDecision = cloneRoutingDecisionWithReviewTarget(
+    plan.decision,
+    managedPlanning.reviewTarget,
+  );
+  if (scoutExecution.directive.confirmedHarness === 'H0_DIRECT') {
+    const scoutShape = createScoutCompleteTaskShape(
+      managedOptions,
+      managedOriginalTask,
+      managedOriginalTask,
+      plan,
+      {
+        originalTask: managedOriginalTask,
+        skillInvocation: managedOptions.context?.skillInvocation,
+        skillMap,
+      },
+    );
+    const scoutCompleteBudgetController = createManagedBudgetController(managedOptions, plan, agentMode);
+    scoutCompleteBudgetController.spentBudget = Math.max(
+      scoutCompleteBudgetController.spentBudget,
+      scoutBudgetController.spentBudget,
+    );
+    await mkdir(scoutShape.workspaceDir, { recursive: true });
+    const scoutSkillArtifacts = await writeManagedSkillArtifacts(
+      scoutShape.workspaceDir,
+      managedOptions.context?.skillInvocation,
+      skillMap,
+    );
+    scoutShape.task = await attachManagedTaskRepoIntelligence(managedOptions, scoutShape.task);
+    const scoutRoleRoundSummary = buildManagedWorkerRoundSummary(
+      scoutShape.task,
+      scoutShape.workers[0]!,
+      scoutExecution.result,
+      1,
+      scoutExecution.directive,
+    );
+    scoutShape.task = {
+      ...scoutShape.task,
+      runtime: {
+        ...applyManagedBudgetRuntimeState(scoutShape.task.runtime, scoutCompleteBudgetController),
+        budget: createBudgetSnapshot(scoutCompleteBudgetController, 'H0_DIRECT', 1, 'scout'),
+        routingAttempts: plan.decision.routingAttempts,
+        routingSource: plan.decision.routingSource,
+        rawRoutingDecision,
+        finalRoutingDecision,
+        routingOverrideReason,
+        qualityAssuranceMode: scoutShape.qualityAssuranceMode,
+        scorecard: createVerificationScorecard(scoutShape.task, undefined),
+        scoutDecision: {
+          summary: scoutExecution.directive.summary ?? 'Scout completed the task directly.',
+          recommendedHarness: 'H0_DIRECT',
+          readyForUpgrade: false,
+          scope: scoutExecution.directive.scope,
+          requiredEvidence: scoutExecution.directive.requiredEvidence,
+          reviewFilesOrAreas: scoutExecution.directive.reviewFilesOrAreas,
+          evidenceAcquisitionMode: scoutExecution.directive.evidenceAcquisitionMode,
+          skillSummary: scoutExecution.directive.skillMap?.skillSummary,
+          executionObligations: scoutExecution.directive.skillMap?.executionObligations,
+          verificationObligations: scoutExecution.directive.skillMap?.verificationObligations,
+          ambiguities: scoutExecution.directive.skillMap?.ambiguities,
+          projectionConfidence: scoutExecution.directive.skillMap?.projectionConfidence,
+        },
+        skillMap,
+        evidenceAcquisitionMode: scoutExecution.directive.evidenceAcquisitionMode ?? 'overview',
+        reviewFilesOrAreas: scoutExecution.directive.reviewFilesOrAreas,
+        roleRoundSummaries: scoutRoleRoundSummary
+          ? { scout: scoutRoleRoundSummary }
+          : undefined,
+      },
+      evidence: {
+        ...scoutShape.task.evidence,
+        artifacts: mergeEvidenceArtifacts(
+          scoutShape.task.evidence.artifacts,
+          scoutSkillArtifacts,
+        ),
+      },
+    };
+    const scoutManagedTask = applyScoutTerminalResultToTask(
+      scoutShape.task,
+      scoutExecution.result,
+      scoutExecution.directive,
+    );
+    await writeManagedTaskSnapshotArtifacts(scoutShape.workspaceDir, scoutManagedTask);
+    managedOptions.events?.onManagedTaskStatus?.({
+      agentMode,
+      harnessProfile: 'H0_DIRECT',
+      activeWorkerId: 'scout',
+      activeWorkerTitle: 'Scout',
+      phase: 'completed',
+      note: 'Scout completed the task directly',
+      upgradeCeiling: finalRoutingDecision.upgradeCeiling,
+      ...buildManagedStatusBudgetFields(scoutCompleteBudgetController),
+    });
+    return {
+      ...scoutExecution.result,
+      managedTask: scoutManagedTask,
+      routingDecision: finalRoutingDecision,
+    };
+  }
+
+  const shape = createTaskShape(
+    managedOptions,
+    managedOriginalTask,
+    managedOriginalTask,
+    plan,
+    {
+      originalTask: managedOriginalTask,
+      skillInvocation: managedOptions.context?.skillInvocation,
+      skillMap,
+    },
+  );
   const budgetController = createManagedBudgetController(managedOptions, plan, agentMode);
+  budgetController.spentBudget = Math.max(budgetController.spentBudget, scoutBudgetController.spentBudget);
   const sessionStorage = new ManagedWorkerSessionStorage();
   await mkdir(shape.workspaceDir, { recursive: true });
+  const skillArtifacts = await writeManagedSkillArtifacts(
+    shape.workspaceDir,
+    managedOptions.context?.skillInvocation,
+    skillMap,
+  );
   shape.task = await attachManagedTaskRepoIntelligence(managedOptions, shape.task);
   shape.task = {
     ...shape.task,
     runtime: {
-      ...shape.task.runtime,
+      ...applyManagedBudgetRuntimeState(shape.task.runtime, budgetController),
       budget: createBudgetSnapshot(budgetController, shape.task.contract.harnessProfile, 0, undefined),
       routingAttempts: plan.decision.routingAttempts,
       routingSource: plan.decision.routingSource,
       scorecard: createVerificationScorecard(shape.task, undefined),
-      currentHarness: shape.task.contract.harnessProfile,
-      upgradeCeiling: plan.decision.upgradeCeiling,
       qualityAssuranceMode: shape.qualityAssuranceMode,
       rawRoutingDecision,
       finalRoutingDecision,
       routingOverrideReason,
+      scoutDecision: {
+        summary: scoutExecution.directive.summary ?? 'Scout completed.',
+        recommendedHarness: finalRoutingDecision.harnessProfile,
+        readyForUpgrade: finalRoutingDecision.harnessProfile !== 'H0_DIRECT',
+        scope: scoutExecution.directive.scope,
+        requiredEvidence: scoutExecution.directive.requiredEvidence,
+        reviewFilesOrAreas: scoutExecution.directive.reviewFilesOrAreas,
+        evidenceAcquisitionMode: scoutExecution.directive.evidenceAcquisitionMode,
+        skillSummary: scoutExecution.directive.skillMap?.skillSummary,
+        executionObligations: scoutExecution.directive.skillMap?.executionObligations,
+        verificationObligations: scoutExecution.directive.skillMap?.verificationObligations,
+        ambiguities: scoutExecution.directive.skillMap?.ambiguities,
+        projectionConfidence: scoutExecution.directive.skillMap?.projectionConfidence,
+      },
+      skillMap,
+      evidenceAcquisitionMode: scoutExecution.directive.evidenceAcquisitionMode ?? 'overview',
+      reviewFilesOrAreas: scoutExecution.directive.reviewFilesOrAreas,
+    },
+    evidence: {
+      ...shape.task.evidence,
+      artifacts: mergeEvidenceArtifacts(
+        shape.task.evidence.artifacts,
+        skillArtifacts,
+      ),
+      entries: [
+        ...shape.task.evidence.entries,
+        {
+          assignmentId: 'scout',
+          title: 'Scout',
+          role: 'scout',
+          round: 0,
+          status: scoutExecution.result.success ? 'completed' : 'failed',
+          summary: scoutExecution.directive.summary,
+          output: scoutExecution.directive.userFacingText || extractMessageText(scoutExecution.result),
+          sessionId: scoutExecution.result.sessionId,
+          signal: scoutExecution.result.signal,
+          signalReason: scoutExecution.result.signalReason,
+        },
+      ],
     },
   };
-
-  managedOptions.events?.onManagedTaskStatus?.({
-    agentMode,
-    harnessProfile: shape.task.contract.harnessProfile,
-    currentRound: 0,
-    maxRounds: resolveManagedTaskMaxRounds(managedOptions, plan, agentMode),
-    phase: 'routing',
-    note: liveRoutingNote,
-    upgradeCeiling: shape.task.runtime?.upgradeCeiling,
-  });
-
-  if (shape.task.contract.harnessProfile === 'H0_DIRECT') {
-    const directOptions: KodaXOptions = {
-      ...managedOptions,
-      context: {
-        ...managedOptions.context,
-        taskSurface: shape.task.contract.surface,
-        managedTaskWorkspaceDir: shape.workspaceDir,
-        taskMetadata: shape.task.contract.metadata,
-        taskVerification: shape.task.contract.verification,
-        promptOverlay: [
-          shape.routingPromptOverlay,
-          managedOptions.context?.promptOverlay,
-          '[Managed Task] direct execution path.',
-          `[Managed Task Routing] ${routingBreadcrumb}`,
-          formatTaskMetadata(shape.task.contract.metadata),
-          formatVerificationContract(shape.task.contract.verification),
-        ].filter(Boolean).join('\n\n'),
-      },
-    };
-    const result = await runDirectKodaX(directOptions, prompt);
-    const managedTask = applyDirectResultToTask(shape.task, result);
-    await writeManagedTaskArtifacts(shape.workspaceDir, managedTask, {
-      success: result.success,
-      lastText: extractMessageText(result),
-      sessionId: result.sessionId,
-      signal: result.signal,
-      signalReason: result.signalReason,
-    });
-    return mergeManagedTaskIntoResult(
-      {
-        ...result,
-        lastText: extractMessageText(result) || result.lastText,
-        routingDecision: result.routingDecision ?? plan.decision,
-      },
-      managedTask,
-    );
-  }
 
   let managedTask = shape.task;
   let roundDirective: ManagedTaskVerdictDirective | undefined;
   let roundExecution: ManagedTaskRoundExecution | undefined;
   let pendingInitialWorkerSet: { terminalWorkerId: string; workers: ManagedTaskWorkerSpec[] } | undefined;
   let initialWorkerSet = { terminalWorkerId: shape.terminalWorkerId, workers: shape.workers };
-  const maxRounds = resolveManagedTaskMaxRounds(managedOptions, plan, agentMode);
-  if (managedTask.contract.harnessProfile !== 'H0_DIRECT') {
-    managedOptions.events?.onManagedTaskStatus?.({
-      agentMode,
-      harnessProfile: managedTask.contract.harnessProfile,
-      activeWorkerId: 'admission',
-      activeWorkerTitle: 'Admission',
-      currentRound: 0,
-      maxRounds,
-      phase: 'preflight',
-      note: 'Admission preflight starting',
-      upgradeCeiling: managedTask.runtime?.upgradeCeiling,
-    });
-    const admissionExecution = await runManagedAdmissionStage(
-      managedOptions,
-      managedTask,
-      prompt,
-      initialWorkerSet,
-      shape.routingPromptOverlay,
-      shape.qualityAssuranceMode,
-      budgetController,
-      plan,
-      sessionStorage,
-    );
-    managedTask = synchronizeManagedTaskGraph(
-      admissionExecution.task,
-      admissionExecution.initialWorkerSet,
-      admissionExecution.task.contract.harnessProfile,
-      admissionExecution.task.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
-    );
-    managedOptions.events?.onTextDelta?.(
-      `\n[Admission] completed: ${managedTask.runtime?.admissionSummary ?? 'Scope preflight finished.'}\n`,
-    );
-    managedTask = {
-      ...managedTask,
-      runtime: {
-        ...managedTask.runtime,
-        budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, 0, 'admission', 'admission'),
-      },
-    };
-    initialWorkerSet = admissionExecution.initialWorkerSet;
-    await writeManagedTaskSnapshotArtifacts(shape.workspaceDir, managedTask);
-  }
+  let maxRounds = resolveManagedTaskMaxRounds(managedOptions, plan, agentMode);
+  let h1CheckedDirectRevisesUsed = 0;
+  await writeManagedTaskSnapshotArtifacts(shape.workspaceDir, managedTask);
 
   for (let round = 1; round <= maxRounds; round += 1) {
     const evidenceRecoveryNote = (
@@ -5334,7 +5989,7 @@ export async function runManagedTask(
       ].join('\n')
       : undefined;
     const roundPrompt = [
-      buildManagedRoundPrompt(prompt, round, roundDirective),
+      buildManagedRoundPrompt(managedOriginalTask, round, roundDirective),
       evidenceRecoveryNote,
     ].filter(Boolean).join('\n\n');
     const roundDecision: KodaXTaskRoutingDecision = {
@@ -5342,6 +5997,9 @@ export async function runManagedTask(
       harnessProfile: managedTask.contract.harnessProfile,
       upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
     };
+    const nextPhase = round === 1 || shouldReplanManagedRound(roundDirective)
+      ? 'initial'
+      : 'refinement';
     const workerSet = pendingInitialWorkerSet
       ?? (round === 1
         ? initialWorkerSet
@@ -5351,7 +6009,13 @@ export async function runManagedTask(
           managedOptions.context?.taskMetadata,
           managedOptions.context?.taskVerification,
           shape.qualityAssuranceMode,
-          'refinement',
+          withManagedSkillArtifactPromptPaths({
+            originalTask: managedOriginalTask,
+            skillInvocation: managedOptions.context?.skillInvocation,
+            skillMap: managedTask.runtime?.skillMap,
+            previousRoleSummaries: managedTask.runtime?.roleRoundSummaries,
+          }, shape.workspaceDir),
+          nextPhase,
         ));
     pendingInitialWorkerSet = undefined;
     const roundWorkspaceDir = path.join(shape.workspaceDir, 'rounds', `round-${String(round).padStart(2, '0')}`);
@@ -5366,17 +6030,13 @@ export async function runManagedTask(
       phase: 'round',
       note: round > 1 ? `Starting refinement round ${round}` : 'Starting managed task execution',
       upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
+      ...buildManagedStatusBudgetFields(budgetController),
     });
     budgetController.currentHarness = managedTask.contract.harnessProfile;
-    budgetController.spentBudget = clampNumber(
-      Math.round(((round - 1) / Math.max(1, maxRounds)) * (budgetController.totalBudget - budgetController.reserveRemaining)),
-      0,
-      budgetController.totalBudget,
-    );
     managedTask = {
       ...managedTask,
       runtime: {
-        ...managedTask.runtime,
+        ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
         budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
       },
     };
@@ -5398,7 +6058,7 @@ export async function runManagedTask(
       roundDirective,
     );
     managedTask = applyOrchestrationResultToTask(
-      managedTask,
+      roundExecution.taskSnapshot,
       workerSet.terminalWorkerId,
       roundExecution.orchestrationResult,
       roundExecution.workerResults,
@@ -5412,7 +6072,7 @@ export async function runManagedTask(
     managedTask = {
       ...managedTask,
       runtime: {
-        ...managedTask.runtime,
+        ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
         budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
         memoryStrategies: {
           ...(managedTask.runtime?.memoryStrategies ?? {}),
@@ -5429,6 +6089,36 @@ export async function runManagedTask(
 
     roundDirective = roundExecution.directive;
     if (roundDirective) {
+      if (
+        managedTask.contract.harnessProfile === 'H1_EXECUTE_EVAL'
+        && roundDirective.status === 'revise'
+      ) {
+        if (h1CheckedDirectRevisesUsed === 0) {
+          h1CheckedDirectRevisesUsed += 1;
+          maxRounds = Math.max(maxRounds, round + 1);
+          budgetController.plannedRounds = Math.max(budgetController.plannedRounds, maxRounds);
+          roundDirective = {
+            ...roundDirective,
+            nextHarness: undefined,
+            followups: [
+              ...(roundDirective.followups ?? []),
+              'H1 checked-direct is taking one same-harness revise pass before final acceptance.',
+            ],
+          };
+        } else {
+          roundDirective = {
+            ...roundDirective,
+            status: 'blocked',
+            nextHarness: undefined,
+            reason: roundDirective.reason ?? 'Checked-direct review remained incomplete after one lightweight revise pass.',
+            followups: [
+              ...(roundDirective.followups ?? []),
+              'H1 is capped at a single same-harness revise pass. Return the best supported answer with clear limits instead of escalating to H2.',
+            ],
+            userFacingText: roundDirective.userFacingText || managedTask.verdict.summary,
+          };
+        }
+      }
       roundDirective = await persistManagedTaskDirectiveArtifact(roundWorkspaceDir, roundDirective);
       managedTask = {
         ...managedTask,
@@ -5468,7 +6158,7 @@ export async function runManagedTask(
         managedTask = {
           ...managedTask,
           runtime: {
-            ...managedTask.runtime,
+            ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
             degradedContinue: true,
             providerRuntimeBehavior: {
               downgraded: true,
@@ -5483,6 +6173,10 @@ export async function runManagedTask(
 
       if (upgradeResolution.transition?.approved && roundDirective?.nextHarness) {
         const targetHarness = roundDirective.nextHarness;
+        if (targetHarness === 'H2_PLAN_EXECUTE_EVAL') {
+          budgetController.plannedRounds = Math.max(budgetController.plannedRounds, round + 1);
+          maxRounds = Math.max(maxRounds, budgetController.plannedRounds, round + 1);
+        }
         const upgradedDecision: KodaXTaskRoutingDecision = {
           ...plan.decision,
           harnessProfile: targetHarness,
@@ -5494,6 +6188,12 @@ export async function runManagedTask(
           managedOptions.context?.taskMetadata,
           managedOptions.context?.taskVerification,
           shape.qualityAssuranceMode,
+          withManagedSkillArtifactPromptPaths({
+            originalTask: managedOriginalTask,
+            skillInvocation: managedOptions.context?.skillInvocation,
+            skillMap: managedTask.runtime?.skillMap,
+            previousRoleSummaries: managedTask.runtime?.roleRoundSummaries,
+          }, shape.workspaceDir),
           'initial',
         );
         managedTask = synchronizeManagedTaskGraph(
@@ -5505,7 +6205,7 @@ export async function runManagedTask(
         managedTask = {
           ...managedTask,
           runtime: {
-            ...managedTask.runtime,
+            ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
             budget: createBudgetSnapshot(budgetController, targetHarness, round, undefined),
           },
         };
@@ -5520,6 +6220,7 @@ export async function runManagedTask(
           phase: 'upgrade',
           note: `Approved harness upgrade ${upgradeResolution.transition.from} -> ${upgradeResolution.transition.to}`,
           upgradeCeiling: budgetController.upgradeCeiling,
+          ...buildManagedStatusBudgetFields(budgetController),
         });
       } else if (upgradeResolution.transition && !upgradeResolution.transition.approved && upgradeResolution.haltRun) {
         const denialReason = upgradeResolution.transition.denialReason
@@ -5535,6 +6236,7 @@ export async function runManagedTask(
           phase: 'upgrade',
           note: `Denied harness upgrade ${upgradeResolution.transition.from} -> ${upgradeResolution.transition.to}: ${denialReason}`,
           upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
+          ...buildManagedStatusBudgetFields(budgetController),
         });
         managedTask = {
           ...managedTask,
@@ -5553,7 +6255,7 @@ export async function runManagedTask(
             summary: roundDirective?.userFacingText || managedTask.verdict.summary,
           },
           runtime: {
-            ...managedTask.runtime,
+            ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
             budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
           },
         };
@@ -5588,7 +6290,7 @@ export async function runManagedTask(
           summary: roundExecution.budgetRequest.fallbackIfDenied || managedTask.verdict.summary,
         },
         runtime: {
-          ...managedTask.runtime,
+          ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
           budget: {
             ...createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
             extensionDenied: true,
@@ -5603,12 +6305,103 @@ export async function runManagedTask(
         followups: [roundExecution.budgetRequest.fallbackIfDenied],
         userFacingText: managedTask.verdict.summary,
       };
-      break;
+    }
+    if (roundDirective?.status === 'revise') {
+      const budgetDecision = await maybeRequestAdditionalWorkBudget(
+        managedOptions.events,
+        budgetController,
+        {
+          summary: roundDirective.reason
+            ?? roundDirective.userFacingText
+            ?? managedTask.verdict.summary
+            ?? 'Additional work required.',
+          currentRound: round,
+          maxRounds,
+        },
+      );
+      if (budgetDecision === 'approved') {
+        if (round >= maxRounds) {
+          maxRounds += 1;
+        }
+        budgetController.plannedRounds = Math.max(budgetController.plannedRounds, maxRounds);
+        managedTask = {
+          ...managedTask,
+          runtime: {
+            ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
+            budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
+          },
+        };
+        managedOptions.events?.onTextDelta?.(
+          `\n[Managed Task] additional work budget approved (+${GLOBAL_WORK_BUDGET_INCREMENT}). Continuing the run.\n`,
+        );
+        managedOptions.events?.onManagedTaskStatus?.({
+          agentMode,
+          harnessProfile: managedTask.contract.harnessProfile,
+          currentRound: round,
+          maxRounds,
+          phase: 'round',
+          note: `Additional work budget approved (+${GLOBAL_WORK_BUDGET_INCREMENT}). Continuing the run.`,
+          upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
+          ...buildManagedStatusBudgetFields(budgetController),
+        });
+      } else if (budgetDecision === 'denied') {
+        const denialReason = 'User denied additional AMA work budget.';
+        managedTask = {
+          ...managedTask,
+          contract: {
+            ...managedTask.contract,
+            status: 'blocked',
+            updatedAt: new Date().toISOString(),
+          },
+          verdict: {
+            ...managedTask.verdict,
+            status: 'blocked',
+            signal: 'BLOCKED',
+            signalReason: denialReason,
+            disposition: 'needs_continuation',
+            continuationSuggested: true,
+            summary: roundDirective.userFacingText
+              || roundDirective.reason
+              || managedTask.verdict.summary,
+          },
+          runtime: {
+            ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
+            budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, round, undefined),
+          },
+        };
+        roundDirective = {
+          ...roundDirective,
+          status: 'blocked',
+          reason: roundDirective.reason ?? denialReason,
+          userFacingText: managedTask.verdict.summary,
+        };
+        managedOptions.events?.onTextDelta?.(
+          `\n[Managed Task] additional work budget denied. Stopping with the current best result.\n`,
+        );
+        managedOptions.events?.onManagedTaskStatus?.({
+          agentMode,
+          harnessProfile: managedTask.contract.harnessProfile,
+          currentRound: round,
+          maxRounds,
+          phase: 'completed',
+          note: denialReason,
+          upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
+          ...buildManagedStatusBudgetFields(budgetController),
+        });
+        break;
+      }
+    }
+    if (
+      roundDirective?.status === 'revise'
+      && managedTask.contract.harnessProfile === 'H2_PLAN_EXECUTE_EVAL'
+      && !roundDirective.nextHarness
+      && maxRounds < MANAGED_TASK_MAX_REFINEMENT_ROUND_CAP
+    ) {
+      maxRounds = Math.max(maxRounds, round + 1, MANAGED_TASK_MIN_REFINEMENT_ROUNDS + 1);
+      budgetController.plannedRounds = Math.max(budgetController.plannedRounds, maxRounds);
     }
     if (roundDirective?.status === 'revise' && round < maxRounds) {
-      const requesterLabel = roundDirective.source === 'contract-review'
-        ? 'contract review'
-        : roundDirective.source === 'worker'
+      const requesterLabel = roundDirective.source === 'worker'
           ? 'worker handoff'
           : 'evaluator';
       managedOptions.events?.onTextDelta?.(
@@ -5623,12 +6416,10 @@ export async function runManagedTask(
   managedTask = {
     ...managedTask,
     runtime: {
-      ...managedTask.runtime,
+      ...applyManagedBudgetRuntimeState(managedTask.runtime, budgetController),
       budget: createBudgetSnapshot(budgetController, managedTask.contract.harnessProfile, maxRounds, undefined),
       scorecard: createVerificationScorecard(managedTask, roundDirective),
       memoryNotes: sessionStorage.snapshotMemoryNotes(),
-      currentHarness: managedTask.contract.harnessProfile,
-      upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
     },
   };
   const result = buildFallbackManagedResult(
@@ -5653,6 +6444,7 @@ export async function runManagedTask(
     phase: 'completed',
     note: managedTask.verdict.summary,
     upgradeCeiling: managedTask.runtime?.upgradeCeiling ?? budgetController.upgradeCeiling,
+    ...buildManagedStatusBudgetFields(budgetController),
   });
 
   return mergeManagedTaskIntoResult(

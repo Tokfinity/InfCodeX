@@ -7,6 +7,7 @@ import type {
   KodaXAgentMode,
   KodaXOptions,
   KodaXReasoningMode,
+  KodaXSkillInvocationContext,
 } from '@kodax/coding';
 import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
@@ -102,6 +103,7 @@ export interface CommandInvocationRequest extends CommandExecutionMetadata {
   source: 'skill' | 'prompt' | 'extension';
   displayName: string;
   path?: string;
+  skillInvocation?: KodaXSkillInvocationContext;
 }
 
 export type CommandResult = boolean | CommandResultData;
@@ -163,6 +165,38 @@ export interface Command {
   usage?: string;
   handler: CommandHandler;
   detailedHelp?: () => void;
+  source?: CommandSource;
+  priority?: CommandPriority;
+  location?: 'user' | 'project' | 'path';
+  path?: string;
+  userInvocable?: boolean;
+  disableModelInvocation?: boolean;
+  allowedTools?: string;
+  context?: 'fork';
+  agent?: string;
+  argumentHint?: string;
+  model?: string;
+  hooks?: CommandHooks;
+  frontmatter?: Record<string, unknown>;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function deriveArgumentHintFromUsage(usage: string | undefined, name: string): string | undefined {
+  if (!usage) {
+    return undefined;
+  }
+
+  const normalizedUsage = usage.trim();
+  if (!normalizedUsage.startsWith('/')) {
+    return undefined;
+  }
+
+  const prefixPattern = new RegExp(`^/${escapeRegExp(name)}(?:\\s+)?`, 'i');
+  const derivedHint = normalizedUsage.replace(prefixPattern, '').trim();
+  return derivedHint.length > 0 ? derivedHint : undefined;
 }
 
 export function toCommandDefinition(
@@ -171,6 +205,9 @@ export function toCommandDefinition(
 ): CommandDefinition {
   return {
     ...cmd,
-    source,
+    source: cmd.source ?? source,
+    userInvocable: cmd.userInvocable ?? true,
+    disableModelInvocation: cmd.disableModelInvocation ?? false,
+    argumentHint: cmd.argumentHint ?? deriveArgumentHintFromUsage(cmd.usage, cmd.name),
   };
 }

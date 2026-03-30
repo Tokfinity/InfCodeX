@@ -7,12 +7,13 @@ import { resolveExecutionCwd } from '../runtime-paths.js';
 import { readOptionalString } from './internal.js';
 
 const execFileAsync = promisify(execFile);
-const DEFAULT_DIFF_LIMIT = 220;
-const MAX_DIFF_LIMIT = 400;
+const DEFAULT_DIFF_LIMIT = 360;
+const LARGE_DIFF_LIMIT = 480;
+const MAX_DIFF_LIMIT = 800;
 const DEFAULT_CONTEXT_LINES = 3;
 const MAX_CONTEXT_LINES = 12;
-const DEFAULT_BUNDLE_LIMIT_PER_PATH = 120;
-const MAX_BUNDLE_PATHS = 8;
+const DEFAULT_BUNDLE_LIMIT_PER_PATH = 200;
+const MAX_BUNDLE_PATHS = 10;
 const GIT_TIMEOUT_MS = 10000;
 
 async function runGit(args: string[], cwd: string): Promise<string> {
@@ -92,6 +93,19 @@ function readStringArray(
       .filter(Boolean);
   }
   throw new Error(`${key} must be an array of strings.`);
+}
+
+function resolveSuggestedContinuationLimit(
+  currentLimit: number,
+  totalLines: number,
+): number {
+  if (totalLines >= 2_000) {
+    return Math.min(MAX_DIFF_LIMIT, Math.max(currentLimit, LARGE_DIFF_LIMIT));
+  }
+  if (totalLines >= 1_000) {
+    return Math.min(MAX_DIFF_LIMIT, Math.max(currentLimit, DEFAULT_DIFF_LIMIT));
+  }
+  return currentLimit;
 }
 
 function normalizeDiffPath(candidatePath: string, workspaceRoot: string): string {
@@ -206,6 +220,7 @@ function renderDiffSlice(options: {
   const slice = lines.slice(startIndex, startIndex + limit);
   const endLine = safeOffset + slice.length - 1;
   const hasMore = endLine < lines.length;
+  const suggestedLimit = resolveSuggestedContinuationLimit(limit, lines.length);
   const header = [
     `Changed diff for ${relativePath}`,
     `Context lines: ${contextLines}`,
@@ -213,7 +228,9 @@ function renderDiffSlice(options: {
     `Showing diff lines ${safeOffset}-${endLine} of ${lines.length}`,
   ];
   const footer = hasMore
-    ? `[Use changed_diff with offset=${endLine + 1} limit=${limit} path=${relativePath} to continue.]`
+    ? suggestedLimit > limit
+      ? `[Large diff detected. Continue with changed_diff offset=${endLine + 1} limit=${suggestedLimit} path=${relativePath} to reduce serial paging.]`
+      : `[Use changed_diff with offset=${endLine + 1} limit=${limit} path=${relativePath} to continue.]`
     : '[End of diff]';
   return [...header, '', ...slice, '', footer].join('\n');
 }
@@ -248,8 +265,11 @@ function renderBundleSection(options: {
   const slice = lines.slice(startIndex, startIndex + limit);
   const endLine = safeOffset + slice.length - 1;
   const hasMore = endLine < lines.length;
+  const suggestedLimit = resolveSuggestedContinuationLimit(limit, lines.length);
   const footer = hasMore
-    ? `[Continue ${relativePath} with changed_diff path=${relativePath} offset=${endLine + 1} limit=${limit}.]`
+    ? suggestedLimit > limit
+      ? `[Large diff detected. Continue ${relativePath} with changed_diff path=${relativePath} offset=${endLine + 1} limit=${suggestedLimit}.]`
+      : `[Continue ${relativePath} with changed_diff path=${relativePath} offset=${endLine + 1} limit=${limit}.]`
     : '[End of diff]';
 
   return [

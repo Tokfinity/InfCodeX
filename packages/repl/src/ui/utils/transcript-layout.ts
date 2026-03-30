@@ -51,16 +51,32 @@ export interface TranscriptBuildOptions {
   currentIteration?: number;
   isCompacting?: boolean;
   managedAgentMode?: string;
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
   managedHarnessProfile?: string;
   managedWorkerTitle?: string;
   managedRound?: number;
   managedMaxRounds?: number;
+  managedGlobalWorkBudget?: number;
+  managedBudgetUsage?: number;
+  managedBudgetApprovalRequired?: boolean;
   lastLiveActivityLabel?: string;
   showFullThinking?: boolean;
   showDetailedTools?: boolean;
 }
 
 const THINKING_PREVIEW_MAX_CHARS = 400;
+
+function normalizeManagedLiveActivityLabel(label: string | undefined, workerTitle?: string): string | undefined {
+  if (!label || !workerTitle) {
+    return label;
+  }
+  const escapedWorkerTitle = workerTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return label
+    .replace(new RegExp(`^\\[Tools\\]\\s+\\[${escapedWorkerTitle}\\]\\s+`, "i"), "[Tools] ")
+    .replace(new RegExp(`^\\[Thinking\\]\\s+\\[${escapedWorkerTitle}\\]\\s*`, "i"), "[Thinking] ")
+    .replace(new RegExp(`^\\[${escapedWorkerTitle}\\]\\s+thinking\\b`, "i"), "[Thinking]")
+    .trim();
+}
 
 function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
@@ -167,8 +183,6 @@ function formatHarnessProfileShort(harnessProfile?: string): string | undefined 
       return "H1";
     case "H2_PLAN_EXECUTE_EVAL":
       return "H2";
-    case "H3_MULTI_WORKER":
-      return "H3";
     default:
       return harnessProfile;
   }
@@ -248,6 +262,7 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
     currentIteration = 1,
     isCompacting = false,
     managedAgentMode,
+    managedPhase,
     managedHarnessProfile,
     managedWorkerTitle,
     managedRound,
@@ -469,29 +484,33 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
     let loadingText = "Thinking";
     let prefix = "";
     const managedHarnessShort = formatHarnessProfileShort(managedHarnessProfile);
+    const normalizedLiveActivityLabel = normalizeManagedLiveActivityLabel(lastLiveActivityLabel, managedWorkerTitle);
+    const managedPrefix = managedPhase === "routing"
+      ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Routing] `
+      : managedPhase === "preflight"
+        ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Scout${managedWorkerTitle && managedWorkerTitle !== "Scout" ? ` - ${managedWorkerTitle}` : ''}] `
+        : managedHarnessProfile
+          ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
+          : "";
     if (isCompacting) {
       loadingText = "Compacting";
     } else if (currentTool) {
-      prefix = managedHarnessProfile
-        ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
-        : "[Tool] ";
-      loadingText = lastLiveActivityLabel?.startsWith("[Tools]")
-        ? lastLiveActivityLabel
+      prefix = managedPrefix || "[Tool] ";
+      loadingText = normalizedLiveActivityLabel?.startsWith("[Tools]")
+        ? normalizedLiveActivityLabel
         : formatLiveToolLabel(currentTool, toolInputContent, toolInputCharCount);
     } else if (isThinking) {
-      prefix = managedHarnessProfile
-        ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
-        : "[Thinking] ";
-      const roundSuffix = managedRound && managedMaxRounds
+      prefix = managedPrefix || "[Thinking] ";
+      const roundSuffix = managedRound && managedMaxRounds && managedRound > 1
         ? ` round ${managedRound}/${managedMaxRounds}`
         : "";
       loadingText = thinkingCharCount > 0
         ? `${thinkingCharCount} chars${roundSuffix}`
-        : lastLiveActivityLabel
-          ? `${lastLiveActivityLabel}${roundSuffix}`
+        : normalizedLiveActivityLabel
+          ? `${normalizedLiveActivityLabel}${roundSuffix}`
           : `processing${roundSuffix}`;
-    } else if (lastLiveActivityLabel) {
-      loadingText = lastLiveActivityLabel;
+    } else if (normalizedLiveActivityLabel) {
+      loadingText = normalizedLiveActivityLabel;
     }
 
     pushWrappedRows(

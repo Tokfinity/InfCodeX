@@ -60,7 +60,9 @@ import { copyCommand } from '../commands/copy-command.js';
 import { newCommand } from '../commands/new-command.js';
 import {
   toCommandDefinition,
+  type Command as RegisteredCommand,
   type CommandCallbacks,
+  type CommandHandler as RegisteredCommandHandler,
   type CommandInvocationRequest,
   type CurrentConfig,
 } from '../commands/types.js';
@@ -69,24 +71,9 @@ import { registerAllCommands } from '../commands/index.js';
 // Re-export types needed by downstream modules.
 export type { CommandCallbacks, CurrentConfig } from '../commands/types.js';
 
-// Command handler type.
-export type CommandHandler = (
-  args: string[],
-  context: InteractiveContext,
-  callbacks: CommandCallbacks,
-  currentConfig: CurrentConfig
-) => Promise<CommandResult | void>;
-
-// Command definition.
-export interface Command {
-  name: string;
-  aliases?: string[];
-  description: string;
-  usage?: string;
-  handler: CommandHandler;
-  /** Detailed help function returning multi-line help text. */
-  detailedHelp?: () => void;
-}
+// Builtin commands use the shared command definition so registry metadata stays in one model.
+export type CommandHandler = RegisteredCommandHandler;
+export type Command = RegisteredCommand;
 
 // Built-in commands.
 function summarizeAgentsFiles(files: AgentsFile[]): { global: number; directory: number; project: number } {
@@ -1934,6 +1921,23 @@ async function executeSkillCommand(
         argumentHint: fullSkill.argumentHint,
         model: fullSkill.model,
         hooks: fullSkill.hooks,
+        skillInvocation: {
+          name: skillName,
+          path: fullSkill.skillFilePath,
+          description: fullSkill.description,
+          arguments: skillArgs || undefined,
+          allowedTools: fullSkill.allowedTools,
+          context: fullSkill.context,
+          agent: fullSkill.agent,
+          argumentHint: fullSkill.argumentHint,
+          model: fullSkill.model,
+          hookEvents: fullSkill.hooks
+            ? Object.entries(fullSkill.hooks)
+                .filter(([, hooks]) => Array.isArray(hooks) && hooks.length > 0)
+                .map(([eventName]) => eventName)
+            : undefined,
+          expandedContent: expanded.content,
+        },
       },
     };
   } catch (error) {

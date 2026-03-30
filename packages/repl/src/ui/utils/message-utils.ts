@@ -17,6 +17,7 @@ const SESSION_TITLE_MAX_LENGTH = 50;
 const MESSAGE_PREVIEW_MAX_LENGTH = 60;
 const TRUNCATION_SUFFIX = "...";
 const CONTROL_PLANE_MARKERS = [
+  "[Managed Task]",
   "[Managed Task Protocol Retry]",
   "Assigned native agent identity:",
   "Tool policy:",

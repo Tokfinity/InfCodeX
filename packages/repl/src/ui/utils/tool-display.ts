@@ -232,7 +232,15 @@ function summarizeToolDetails(toolName: string, input: ToolInputValue): string[]
   const parts: string[] = [];
 
   if (baseToolName.includes("changed_diff_bundle")) {
-    pushPathSummary(parts, record, preview, true);
+    const paths = readStringArray(record?.paths) ?? extractPathsFromPreview(preview);
+    if (paths?.length) {
+      parts.push(paths.length === 1 ? truncateValue(paths[0]) : `${paths.length} files`);
+      if (paths.length > 1) {
+        parts.push(truncateValue(paths[0]));
+      }
+    } else {
+      pushPathSummary(parts, record, preview, true);
+    }
     const limit = readNumber(record?.limit_per_path)
       ?? readNumber(record?.limitPerPath)
       ?? extractNumberFromPreview(preview, "limit_per_path")
@@ -291,6 +299,41 @@ function summarizeToolDetails(toolName: string, input: ToolInputValue): string[]
       ?? extractFieldFromPreview(preview, "command");
     if (command) {
       parts.push(`cmd=${truncateValue(command, 52)}`);
+    }
+    return parts;
+  }
+
+  if (baseToolName === "glob" || baseToolName.includes("glob_")) {
+    const pattern = readFirstString(record, "pattern")
+      ?? extractFieldFromPreview(preview, "pattern");
+    const scope = readFirstString(record, "path", "root", "directory", "cwd")
+      ?? extractFieldFromPreview(preview, "path")
+      ?? extractFieldFromPreview(preview, "root")
+      ?? extractFieldFromPreview(preview, "directory")
+      ?? extractFieldFromPreview(preview, "cwd");
+    if (pattern) {
+      parts.push(`pattern=${truncateValue(pattern, 48)}`);
+    }
+    if (scope) {
+      parts.push(truncateValue(scope));
+    }
+    return parts;
+  }
+
+  if (baseToolName === "grep" || baseToolName.includes("grep_")) {
+    const pattern = readFirstString(record, "pattern", "query")
+      ?? extractFieldFromPreview(preview, "pattern")
+      ?? extractFieldFromPreview(preview, "query");
+    const scope = readFirstString(record, "path", "root", "directory", "cwd")
+      ?? extractFieldFromPreview(preview, "path")
+      ?? extractFieldFromPreview(preview, "root")
+      ?? extractFieldFromPreview(preview, "directory")
+      ?? extractFieldFromPreview(preview, "cwd");
+    if (pattern) {
+      parts.push(`pattern=${truncateValue(pattern, 48)}`);
+    }
+    if (scope) {
+      parts.push(truncateValue(scope));
     }
     return parts;
   }

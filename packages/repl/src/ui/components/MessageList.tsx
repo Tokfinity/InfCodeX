@@ -70,6 +70,8 @@ export interface MessageListProps {
   isCompacting?: boolean;
   /** Managed-task agent mode shown in live transcript state */
   agentMode?: "sa" | "ama";
+  /** Managed-task phase shown in live transcript state */
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
   /** Managed-task harness profile shown in live transcript state */
   managedHarnessProfile?: string;
   /** Managed-task active worker title shown in live transcript state */
@@ -78,6 +80,12 @@ export interface MessageListProps {
   managedRound?: number;
   /** Managed-task maximum rounds */
   managedMaxRounds?: number;
+  /** Managed-task global work budget */
+  managedGlobalWorkBudget?: number;
+  /** Managed-task current work usage */
+  managedBudgetUsage?: number;
+  /** Whether the run is waiting on budget approval */
+  managedBudgetApprovalRequired?: boolean;
   /** Last known live activity label used when the stream is between deltas */
   lastLiveActivityLabel?: string;
   /** Visible viewport rows for transcript slicing */
@@ -476,10 +484,14 @@ export const MessageList: React.FC<MessageListProps> = ({
   currentIteration = 1,
   isCompacting = false,
   agentMode,
+  managedPhase,
   managedHarnessProfile,
   managedWorkerTitle,
   managedRound,
   managedMaxRounds,
+  managedGlobalWorkBudget,
+  managedBudgetUsage,
+  managedBudgetApprovalRequired,
   lastLiveActivityLabel,
   viewportRows,
   viewportWidth,
@@ -531,10 +543,14 @@ export const MessageList: React.FC<MessageListProps> = ({
         currentIteration,
         isCompacting,
         managedAgentMode: agentMode,
+        managedPhase,
         managedHarnessProfile,
         managedWorkerTitle,
         managedRound,
         managedMaxRounds,
+        managedGlobalWorkBudget,
+        managedBudgetUsage,
+        managedBudgetApprovalRequired,
         lastLiveActivityLabel,
         showFullThinking: windowed,
         showDetailedTools: windowed,
@@ -562,10 +578,14 @@ export const MessageList: React.FC<MessageListProps> = ({
       currentIteration,
       isCompacting,
       agentMode,
+      managedPhase,
       managedHarnessProfile,
       managedWorkerTitle,
       managedRound,
       managedMaxRounds,
+      managedGlobalWorkBudget,
+      managedBudgetUsage,
+      managedBudgetApprovalRequired,
     ]
   );
   const transcriptRows = useMemo(
