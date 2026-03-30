@@ -123,3 +123,9 @@ export {
   getAvailableProviderNames,
 } from './providers/index.js';
 export type { ProviderName } from './providers/index.js';
+export {
+  getCodexCliDefaultModel,
+  getCodexCliKnownModels,
+  getGeminiCliDefaultModel,
+  getGeminiCliKnownModels,
+} from './providers/cli-bridge-models.js';

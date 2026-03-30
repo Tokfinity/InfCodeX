@@ -21,8 +21,19 @@ import {
   NATIVE_PROVIDER_CAPABILITY_PROFILE,
   normalizeCapabilityProfile,
 } from './capability-profile.js';
+import {
+  getCodexCliDefaultModel,
+  getCodexCliKnownModels,
+  getGeminiCliDefaultModel,
+  getGeminiCliKnownModels,
+} from './cli-bridge-models.js';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+
+const GEMINI_CLI_DEFAULT_MODEL = getGeminiCliDefaultModel();
+const GEMINI_CLI_MODELS = getGeminiCliKnownModels();
+const CODEX_CLI_DEFAULT_MODEL = getCodexCliDefaultModel();
+const CODEX_CLI_MODELS = getCodexCliKnownModels();
 
 // ============== Provider 名称类型 ==============
 
@@ -297,13 +308,15 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
   },
   'gemini-cli': {
     apiKeyEnv: 'GEMINI_API_KEY',
-    model: 'gemini-cli',
+    model: GEMINI_CLI_DEFAULT_MODEL,
+    models: GEMINI_CLI_MODELS.filter((model) => model !== GEMINI_CLI_DEFAULT_MODEL),
     reasoningCapability: 'prompt-only',
     capabilityProfile: CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
   },
   'codex-cli': {
     apiKeyEnv: 'OPENAI_API_KEY',
-    model: 'codex-cli',
+    model: CODEX_CLI_DEFAULT_MODEL,
+    models: CODEX_CLI_MODELS.filter((model) => model !== CODEX_CLI_DEFAULT_MODEL),
     reasoningCapability: 'prompt-only',
     capabilityProfile: CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
   },
