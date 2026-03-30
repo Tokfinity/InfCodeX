@@ -108,7 +108,7 @@ describe("StatusBar", () => {
     expect(text).toContain("KodaX - SA");
   });
 
-  it("shows managed AMA harness and worker in busy status text while showing outer and inner counters", () => {
+  it("shows managed AMA harness and worker in busy status text while showing round and global work budget", () => {
     const text = getStatusBarText({
       sessionId: "session-1",
       permissionMode: "accept-edits",
@@ -123,13 +123,18 @@ describe("StatusBar", () => {
       managedWorkerTitle: "Planner",
       managedRound: 2,
       managedMaxRounds: 6,
+      managedGlobalWorkBudget: 200,
+      managedBudgetUsage: 87,
     });
 
-    expect(text).toContain("AMA H2 - Planner");
+    expect(text).toContain("H2 - Planner");
+    expect(text).not.toContain("AMA H2 - Planner");
     expect(text).toContain("42 chars");
     expect(text).toContain("Round 2/6");
-    expect(text).toContain("Iter 14/24");
+    expect(text).toContain("Work 87/200");
+    expect(text).not.toContain("Iter 14/24");
     expect(text).not.toContain("r2/6");
+    expect(text).toContain("session-1 | H2 - Planner");
   });
 
   it("shows managed tool progress together with the active role", () => {
@@ -145,7 +150,109 @@ describe("StatusBar", () => {
       managedWorkerTitle: "Planner",
     });
 
-    expect(text).toContain("AMA H2 - Planner");
+    expect(text).toContain("H2 - Planner");
+    expect(text).not.toContain("AMA H2 - Planner");
     expect(text).toContain("Bash (12 chars)");
+    expect(text).toContain("session-1 | H2 - Planner");
+  });
+
+  it("hides the initial round counter for AMA and only shows work on the first pass", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Generator",
+      managedRound: 1,
+      managedMaxRounds: 2,
+      managedGlobalWorkBudget: 45,
+      managedBudgetUsage: 9,
+      currentIteration: 28,
+      maxIter: 146,
+    });
+
+    expect(text).toContain("Work 9/45");
+    expect(text).not.toContain("Round 1/2");
+    expect(text).not.toContain("Iter 28/146");
+  });
+
+  it("shows neutral routing status before Scout confirms the final harness", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      managedPhase: "routing",
+      currentTool: "changed_scope",
+      toolInputCharCount: 12,
+    });
+
+    expect(text).toContain("session-1 | Routing - changed_scope (12 chars)");
+    expect(text).not.toContain("H1");
+    expect(text).not.toContain("H2");
+  });
+
+  it("shows neutral Scout preflight status without leaking the final harness", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      managedPhase: "preflight",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Scout",
+      isThinkingActive: true,
+      thinkingCharCount: 42,
+    });
+
+    expect(text).toContain("session-1 | Scout");
+    expect(text).toContain("42 chars");
+    expect(text).not.toContain("H2");
+  });
+
+  it("never falls back to generic iter counters for AMA when managed status is absent", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      currentIteration: 28,
+      maxIter: 146,
+    });
+
+    expect(text).not.toContain("Iter 28/146");
+  });
+
+  it("does not expose generic iter counters for plan mode", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "plan" as any,
+      provider: "anthropic",
+      model: "sonnet",
+      currentIteration: 28,
+      maxIter: 146,
+    });
+
+    expect(text).not.toContain("Iter 28/146");
+  });
+
+  it("still shows generic iter counters for SA runs", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "sa",
+      provider: "anthropic",
+      model: "sonnet",
+      currentIteration: 3,
+      maxIter: 8,
+    });
+
+    expect(text).toContain("Iter 3/8");
   });
 });

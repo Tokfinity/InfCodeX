@@ -34,11 +34,9 @@ const TASK_STATUSES = new Set<NonNullable<KodaXManagedTask['contract']['status']
 ]);
 const TASK_ROLES = new Set<NonNullable<KodaXManagedTask['roleAssignments'][number]['role']>>([
   'direct',
-  'lead',
+  'scout',
   'planner',
   'generator',
-  'worker',
-  'validator',
   'evaluator',
 ]);
 

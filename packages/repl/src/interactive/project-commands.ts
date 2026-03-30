@@ -10,12 +10,13 @@ import {
   runManagedTask,
   KodaXOptions,
   KodaXMessage,
+  type KodaXResult,
   type KodaXJsonValue,
   type KodaXManagedTask,
   type KodaXTaskStatus,
   type KodaXTaskVerificationContract,
 } from '@kodax/coding';
-import { ProjectStorage } from './project-storage.js';
+import { ProjectStorage, type ProjectLightweightRunRecord } from './project-storage.js';
 import {
   ProjectFeature,
   ProjectStatistics,
@@ -156,10 +157,11 @@ async function projectQuality(
   }
 
   try {
-    const content = await runProjectAnalysis(
-      options,
-      context,
-      buildProjectAnalysisPrompt(
+      const content = await runProjectAnalysis(
+        storage,
+        options,
+        context,
+        buildProjectAnalysisPrompt(
         snapshot,
         report,
         'Assess workflow health and release readiness.',
@@ -340,6 +342,97 @@ function buildProjectTaskOptions(
       taskVerification: verification ?? options.context?.taskVerification,
     },
   };
+}
+
+function truncateProjectRunText(value: string, maxLength = 320): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function extractProjectRunSummary(text: string): string {
+  const withoutCodeBlocks = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/^#{1,6}\s.*$/gm, ' ')
+    .trim();
+  const paragraphs = withoutCodeBlocks
+    .split(/\n\s*\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .filter((item) => !/^#{1,6}\s/.test(item));
+  return truncateProjectRunText(paragraphs[0] ?? withoutCodeBlocks);
+}
+
+function extractStringArrayMetadata(value: KodaXJsonValue | undefined): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
+function buildProjectLightweightRunRecord(
+  taskOptions: KodaXOptions,
+  prompt: string,
+  result: KodaXResult,
+): ProjectLightweightRunRecord {
+  const timestamp = new Date().toISOString();
+  const metadata = taskOptions.context?.taskMetadata;
+  const finalText = extractMessageText(result.messages[result.messages.length - 1]) || result.lastText || prompt;
+  const status: KodaXTaskStatus = result.signal === 'BLOCKED'
+    ? 'blocked'
+    : result.success
+      ? 'completed'
+      : 'failed';
+  const featureIndex = typeof metadata?.featureIndex === 'number'
+    ? metadata.featureIndex
+    : undefined;
+  const requestId = typeof metadata?.requestId === 'string'
+    ? metadata.requestId
+    : undefined;
+  const checks = taskOptions.context?.taskVerification?.requiredChecks?.slice(0, 8) ?? [];
+  const evidence = taskOptions.context?.taskVerification?.requiredEvidence?.slice(0, 8) ?? [];
+  const blockers = status === 'blocked'
+    ? [result.signalReason || 'The direct project run ended blocked.']
+    : [];
+  const nextStep = status === 'blocked'
+    ? '/project verify --last'
+    : featureIndex !== undefined
+      ? '/project next --no-confirm'
+      : '/project status';
+
+  return {
+    status,
+    summary: extractProjectRunSummary(finalText),
+    sessionId: result.sessionId,
+    taskSurface: 'project',
+    agentMode: taskOptions.agentMode === 'sa' ? 'sa' : 'ama',
+    executionMode: 'direct',
+    featureIndex,
+    requestId,
+    projectMetadata: metadata ? structuredClone(metadata as Record<string, unknown>) : undefined,
+    changedFiles: extractStringArrayMetadata(metadata?.changedFiles),
+    checks,
+    evidence,
+    blockers,
+    nextStep,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+async function runProjectTask(
+  storage: ProjectStorage,
+  taskOptions: KodaXOptions,
+  prompt: string,
+): Promise<KodaXResult> {
+  const result = await runManagedTask(taskOptions, prompt);
+  if (taskOptions.context?.taskSurface === 'project' && !result.managedTask) {
+    await storage.saveLightweightRunRecord(
+      buildProjectLightweightRunRecord(taskOptions, prompt, result),
+    );
+  }
+  return result;
 }
 
 async function saveProjectControlState(
@@ -689,7 +782,8 @@ async function projectPlan(
 
     if (options) {
       try {
-        const result = await runManagedTask(
+        const result = await runProjectTask(
+          storage,
           buildProjectTaskOptions(options, context),
           `You are generating feature_list.json for Project Mode.
 
@@ -889,11 +983,12 @@ Keep it actionable and avoid repeating raw JSON.`;
 }
 
 async function runProjectAnalysis(
+  storage: ProjectStorage,
   options: KodaXOptions,
   context: InteractiveContext,
   prompt: string,
 ): Promise<string> {
-  const result = await runManagedTask(buildProjectTaskOptions(options, context), prompt);
+  const result = await runProjectTask(storage, buildProjectTaskOptions(options, context), prompt);
 
   return extractMessageText(result.messages[result.messages.length - 1]);
 }
@@ -980,6 +1075,7 @@ At the end of the attempt, append exactly one JSON block wrapped in <project-har
  * 执行单个功能
  */
 async function executeSingleFeature(
+  storage: ProjectStorage,
   feature: ProjectFeature,
   index: number,
   context: InteractiveContext,
@@ -990,7 +1086,7 @@ async function executeSingleFeature(
   const desc = feature.description || feature.name || 'Unnamed';
   const prompt = buildFeaturePrompt(desc, feature.steps, userPrompt, repairPrompt);
 
-  const result = await runManagedTask(buildProjectTaskOptions(options, context), prompt);
+  const result = await runProjectTask(storage, buildProjectTaskOptions(options, context), prompt);
 
   return {
     success: true,
@@ -1030,7 +1126,7 @@ async function runVerifiedFeatureExecution(
         taskVerification: verificationContract,
       },
     };
-    const result = await executeSingleFeature(feature, index, context, taskOptions, userPrompt, repairPrompt);
+    const result = await executeSingleFeature(storage, feature, index, context, taskOptions, userPrompt, repairPrompt);
     context.messages = result.messages;
 
     const verification = await harnessAttempt.verify(result.messages);
@@ -1194,11 +1290,14 @@ async function projectStatus(
   const alignment = await storage.readAlignment();
   const sessionPlan = await storage.readSessionPlan();
   const managedTask = await storage.loadManagedTask();
+  const lightweightRun = managedTask ? null : await storage.loadLightweightRunRecord();
   const stats = snapshot?.stats ?? { total: 0, completed: 0, pending: 0, skipped: 0, percentage: 0 };
   const recommendedCommand = managedTask && managedTask.contract.status !== 'completed'
     ? (managedTask.contract.status === 'blocked' || managedTask.contract.status === 'failed'
       ? '/project verify'
       : '/project auto')
+    : lightweightRun?.nextStep?.trim()
+      ? lightweightRun.nextStep.trim()
     : getRecommendedNextStep(state, stats.total > 0, sessionPlan.trim().length > 0);
 
   if (guidance && snapshot) {
@@ -1219,6 +1318,7 @@ async function projectStatus(
 
     try {
       const content = await runProjectAnalysis(
+        storage,
         options,
         context,
         buildProjectAnalysisPrompt(snapshot, report, guidance, 'status'),
@@ -1255,6 +1355,12 @@ async function projectStatus(
       console.log(`Managed feature: #${featureIndex}`);
     }
     console.log(`Managed summary: ${managedTask.verdict.summary}`);
+  } else if (lightweightRun) {
+    console.log(`Direct run: ${lightweightRun.sessionId} (${lightweightRun.status})`);
+    if (typeof lightweightRun.featureIndex === 'number') {
+      console.log(`Direct feature: #${lightweightRun.featureIndex}`);
+    }
+    console.log(`Direct summary: ${lightweightRun.summary}`);
   }
   console.log(`Next recommended command: ${recommendedCommand}`);
   if (alignment?.openQuestions.length) {
@@ -2155,7 +2261,8 @@ User: "改描述"
 Only include fields that should change. Omit unchanged fields. Think semantically, not literally.`;
 
     try {
-      const result = await runManagedTask(
+      const result = await runProjectTask(
+        storage,
         buildProjectTaskOptions(options, context),
         prompt
       );
@@ -2344,7 +2451,8 @@ Please analyze what changes are needed and provide:
 Note: Complex operations like reordering, merging, or splitting features require manual editing of feature_list.json.`;
 
     try {
-      const result = await runManagedTask(
+      const result = await runProjectTask(
+        storage,
         buildProjectTaskOptions(options, context),
         prompt
       );
@@ -2469,7 +2577,8 @@ Please provide:
 Keep your analysis concise and actionable.`;
 
     try {
-      const result = await runManagedTask(
+      const result = await runProjectTask(
+        storage,
         buildProjectTaskOptions(options, context),
         prompt
       );
@@ -2514,7 +2623,8 @@ User's question: "${guidance}"
 Please provide a detailed and helpful analysis addressing the user's specific question.`;
 
   try {
-    const result = await runManagedTask(
+    const result = await runProjectTask(
+      storage,
       buildProjectTaskOptions(options, context),
       prompt
     );

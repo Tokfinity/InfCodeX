@@ -400,36 +400,6 @@ export function evaluateProviderPolicy(
     }
   }
 
-  if (hints.harnessProfile === 'H3_MULTI_WORKER') {
-    if (
-      snapshot.contextFidelity === 'lossy' ||
-      snapshot.sessionSupport === 'stateless' ||
-      snapshot.toolCallingFidelity === 'none' ||
-      snapshot.evidenceSupport === 'none'
-    ) {
-      pushIssue(issues, {
-        code: 'multi-worker-harness-blocked',
-        severity: 'block',
-        summary: 'multi-worker harness selection is unsafe on this provider',
-        detail:
-          'H3 multi-worker routing needs durable context, tool execution, and evidence fidelity, but this provider cannot safely preserve those semantics.',
-      });
-    } else if (
-      snapshot.transport === 'cli-bridge' ||
-      snapshot.toolCallingFidelity === 'limited' ||
-      snapshot.evidenceSupport === 'limited' ||
-      snapshot.sessionSupport === 'limited'
-    ) {
-      pushIssue(issues, {
-        code: 'multi-worker-harness-limited',
-        severity: 'warn',
-        summary: 'multi-worker harness selection is degraded on this provider',
-        detail:
-          'H3 multi-worker routing may lose coordination fidelity because this provider only offers limited session, tool, or evidence semantics.',
-      });
-    }
-  }
-
   if (hints.harnessProfile === 'H2_PLAN_EXECUTE_EVAL') {
     if (
       snapshot.toolCallingFidelity === 'none' ||

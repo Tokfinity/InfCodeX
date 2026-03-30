@@ -1,6 +1,6 @@
 # Feature 总表
 
-> Last updated: 2026-03-28
+> Last updated: 2026-03-30
 
 > 中文阅读说明：
 > 这份 `FEATURE_LIST` 是 roadmap 的总索引。
@@ -18,7 +18,7 @@
 | Completed | `34` |
 | InProgress | `0` |
 | Planned | `10` |
-| Current released version | `v0.7.4` |
+| Current released version | `v0.7.10` |
 
 ### 各版本待做分布
 
@@ -51,8 +51,13 @@
 
 ## 阅读说明
 
-- `FEATURE_022` 是当前架构转向的 umbrella feature，`FEATURE_019`、`FEATURE_025`、`FEATURE_029`、`FEATURE_034` 是它下面的关键支撑切片。
-- `FEATURE_022` 现在同时覆盖可见的 task-control plane 和内部的多角色 execution model。
+- `FEATURE_022` 是当前架构转向的 umbrella feature，`FEATURE_019`、`FEATURE_025`、`FEATURE_027`、`FEATURE_028`、`FEATURE_029`、`FEATURE_034` 是它的关键支撑切片。
+- 当前正式执行模型是：`SA` 直达；`AMA` 只保留 `H0 / H1 / H2`；`H3` 已移除。
+- `Scout` 是 pre-harness 牵引层；`H0` 支持 `Scout-complete H0`，但不允许 `Scout` 判 `H0` 后再 handoff 给第二个 direct agent。
+- `read-only / docs-only` 默认停留在 `H0`，只有用户明确要求更强校验时才允许 `H1`，永远不进入 `H2`。
+- `H1` 是 `Generator + 轻量 Evaluator` 的 lightweight checked-direct：无 `Planner`、无 contract negotiation、无默认多轮 refine。
+- `H2` 主骨架固定为 `Planner -> Generator <-> Evaluator`，只留给真正长时的 `code / system` mutation work，且默认单主 pass。
+- `Project + SA` 是一等路径，但只写 lightweight run record，不写 managed task。
 - `kodax -c` 属于 `user session` 恢复语义，不属于 internal worker-session recovery。
 
 ---

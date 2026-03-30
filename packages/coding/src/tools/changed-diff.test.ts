@@ -197,4 +197,30 @@ describe('toolChangedDiff', () => {
     expect(result).toContain('[Continue docs/A.md with changed_diff path=docs/A.md');
     expect(result).toContain('[Continue docs/B.md with changed_diff path=docs/B.md');
   });
+
+  it('suggests larger continuation windows for dominant large diffs', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'kodax-changed-diff-'));
+    initGitRepo(tempDir);
+
+    mkdirSync(join(tempDir, 'packages', 'app', 'src'), { recursive: true });
+    const initialLines = Array.from({ length: 1100 }, (_, index) => `export const value${index} = 'a';`);
+    const updatedLines = Array.from({ length: 1100 }, (_, index) => `export const value${index} = 'b';`);
+    writeFileSync(join(tempDir, 'packages', 'app', 'src', 'task-engine.ts'), `${initialLines.join('\n')}\n`);
+    commitAll(tempDir, 'initial');
+
+    writeFileSync(join(tempDir, 'packages', 'app', 'src', 'task-engine.ts'), `${updatedLines.join('\n')}\n`);
+
+    const page = await toolChangedDiff({
+      path: 'packages/app/src/task-engine.ts',
+      offset: 1,
+      limit: 120,
+    }, {
+      backups: new Map(),
+      executionCwd: tempDir,
+    });
+
+    expect(page).toContain('Showing diff lines 1-120');
+    expect(page).toContain('Large diff detected.');
+    expect(page).toContain('limit=480');
+  });
 });

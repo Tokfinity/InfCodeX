@@ -116,8 +116,6 @@ function formatHarnessProfileShort(harnessProfile?: string): string | undefined 
       return 'H1';
     case 'H2_PLAN_EXECUTE_EVAL':
       return 'H2';
-    case 'H3_MULTI_WORKER':
-      return 'H3';
     default:
       return harnessProfile;
   }
@@ -145,24 +143,24 @@ function formatToolStatus(
 }
 
 function formatBusyStatus({
-  agentMode,
   currentTool,
   isThinkingActive,
   thinkingCharCount,
   isCompacting,
   toolInputCharCount,
   toolInputContent,
+  managedPhase,
   managedHarnessProfile,
   managedWorkerTitle,
 }: Pick<
   StatusBarProps,
-  | 'agentMode'
   | 'currentTool'
   | 'isThinkingActive'
   | 'thinkingCharCount'
   | 'isCompacting'
   | 'toolInputCharCount'
   | 'toolInputContent'
+  | 'managedPhase'
   | 'managedHarnessProfile'
   | 'managedWorkerTitle'
 >): string | undefined {
@@ -170,9 +168,67 @@ function formatBusyStatus({
     return 'Compacting';
   }
 
+  if (managedPhase === 'routing') {
+    if (currentTool) {
+      return `Routing - ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+    }
+    if (isThinkingActive) {
+      return formatThinkingStatus('Routing', thinkingCharCount);
+    }
+    return 'Routing';
+  }
+
+  if (managedPhase === 'preflight') {
+    const scoutLabel = managedWorkerTitle && managedWorkerTitle !== 'Scout'
+      ? `Scout - ${managedWorkerTitle}`
+      : 'Scout';
+    if (currentTool) {
+      return `${scoutLabel} - ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+    }
+    if (isThinkingActive) {
+      return formatThinkingStatus(scoutLabel, thinkingCharCount);
+    }
+    return scoutLabel;
+  }
+
   if (managedHarnessProfile) {
     const harness = formatHarnessProfileShort(managedHarnessProfile);
-    const roleLabel = `${agentMode.toUpperCase()} ${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}`;
+    const roleLabel = `${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}`;
+    if (currentTool) {
+      return `${roleLabel} - ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+    }
+    if (isThinkingActive) {
+      return formatThinkingStatus(roleLabel, thinkingCharCount);
+    }
+    return roleLabel;
+  }
+
+  const legacyManagedPhase = managedPhase as StatusBarProps['managedPhase'];
+
+  if (legacyManagedPhase === 'routing') {
+    if (currentTool) {
+      return `Routing 路 ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+    }
+    if (isThinkingActive) {
+      return formatThinkingStatus('Routing', thinkingCharCount);
+    }
+    return 'Routing';
+  }
+
+  if (legacyManagedPhase === 'preflight') {
+    const scoutLabel = managedWorkerTitle ? `Scout - ${managedWorkerTitle}` : 'Scout';
+    if (currentTool) {
+      return `${scoutLabel} 路 ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+    }
+    if (isThinkingActive) {
+      return formatThinkingStatus(scoutLabel, thinkingCharCount);
+    }
+    return scoutLabel;
+  }
+
+  if (managedHarnessProfile) {
+    const harness = formatHarnessProfileShort(managedHarnessProfile);
+    const roleLabel = `${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}`;
     if (currentTool) {
       return `${roleLabel} · ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
     }
@@ -194,22 +250,34 @@ function formatBusyStatus({
 }
 
 function resolveIterationSegments({
+  agentMode,
+  managedPhase,
   managedHarnessProfile,
   managedRound,
   managedMaxRounds,
+  managedGlobalWorkBudget,
+  managedBudgetUsage,
   currentIteration,
   maxIter,
 }: Pick<
   StatusBarProps,
+  | 'agentMode'
+  | 'managedPhase'
   | 'managedHarnessProfile'
   | 'managedRound'
   | 'managedMaxRounds'
+  | 'managedGlobalWorkBudget'
+  | 'managedBudgetUsage'
   | 'currentIteration'
   | 'maxIter'
->): Array<{ label: 'Round' | 'Iter'; current: number; max: number }> {
-  const segments: Array<{ label: 'Round' | 'Iter'; current: number; max: number }> = [];
+>): Array<{ label: 'Round' | 'Work' | 'Iter'; current: number; max: number }> {
+  const segments: Array<{ label: 'Round' | 'Work' | 'Iter'; current: number; max: number }> = [];
 
-  if (managedHarnessProfile && managedRound && managedMaxRounds) {
+  if (managedPhase === 'routing' || managedPhase === 'preflight') {
+    return segments;
+  }
+
+  if (managedHarnessProfile && managedRound && managedMaxRounds && managedRound > 1) {
     segments.push({
       label: 'Round',
       current: managedRound,
@@ -217,7 +285,13 @@ function resolveIterationSegments({
     });
   }
 
-  if (currentIteration && maxIter) {
+  if (managedHarnessProfile && managedGlobalWorkBudget && typeof managedBudgetUsage === 'number') {
+    segments.push({
+      label: 'Work',
+      current: managedBudgetUsage,
+      max: managedGlobalWorkBudget,
+    });
+  } else if (agentMode === 'sa' && currentIteration && maxIter) {
     segments.push({
       label: 'Iter',
       current: currentIteration,
@@ -229,7 +303,7 @@ function resolveIterationSegments({
 }
 
 function formatLabeledIterationStatus(
-  segments: Array<{ label: 'Round' | 'Iter'; current: number; max: number }>,
+  segments: Array<{ label: 'Round' | 'Work' | 'Iter'; current: number; max: number }>,
 ): string | undefined {
   if (segments.length === 0) {
     return undefined;
@@ -258,10 +332,13 @@ export function getStatusBarText({
   maxIter,
   contextUsage,
   showBusyStatus = true,
+  managedPhase,
   managedHarnessProfile,
   managedWorkerTitle,
   managedRound,
   managedMaxRounds,
+  managedGlobalWorkBudget,
+  managedBudgetUsage,
 }: StatusBarProps): string {
   const parts: string[] = [];
 
@@ -274,9 +351,13 @@ export function getStatusBarText({
   parts.push(reasoningCapability ? `${rModeShort}/${rCapShort}` : rModeShort);
 
   const iterationSegments = resolveIterationSegments({
+    agentMode,
+    managedPhase,
     managedHarnessProfile,
     managedRound,
     managedMaxRounds,
+    managedGlobalWorkBudget,
+    managedBudgetUsage,
     currentIteration,
     maxIter,
   });
@@ -287,18 +368,21 @@ export function getStatusBarText({
 
   const busyStatus = showBusyStatus
     ? formatBusyStatus({
-        agentMode,
         currentTool,
         isThinkingActive,
         thinkingCharCount,
         isCompacting,
         toolInputCharCount,
         toolInputContent,
+        managedPhase,
         managedHarnessProfile,
         managedWorkerTitle,
       })
     : undefined;
-  parts.push(`${sessionId}${busyStatus ? ` ${busyStatus}` : ''}`);
+  parts.push(sessionId);
+  if (busyStatus) {
+    parts.push(busyStatus);
+  }
   parts.push(`${provider}/${model}`);
 
   if (contextUsage && contextUsage.contextWindow !== 0) {
@@ -337,10 +421,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   maxIter,
   contextUsage,
   showBusyStatus = true,
+  managedPhase,
   managedHarnessProfile,
   managedWorkerTitle,
   managedRound,
   managedMaxRounds,
+  managedGlobalWorkBudget,
+  managedBudgetUsage,
 }) => {
   const theme = useMemo(() => getTheme('dark'), []);
 
@@ -370,9 +457,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   const iterationDisplay = useMemo(() => {
     const iterationSegments = resolveIterationSegments({
+      agentMode,
+      managedPhase,
       managedHarnessProfile,
       managedRound,
       managedMaxRounds,
+      managedGlobalWorkBudget,
+      managedBudgetUsage,
       currentIteration,
       maxIter,
     });
@@ -385,18 +476,28 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     if (ratio >= 0.8) color = 'red';
     else if (ratio >= 0.5) color = 'yellow';
     return <Text color={color}>{iterationStatus}</Text>;
-  }, [currentIteration, maxIter, managedHarnessProfile, managedRound, managedMaxRounds]);
+  }, [
+    agentMode,
+    currentIteration,
+    maxIter,
+    managedPhase,
+    managedHarnessProfile,
+    managedRound,
+    managedMaxRounds,
+    managedGlobalWorkBudget,
+    managedBudgetUsage,
+  ]);
 
   const sessionToolDisplay = useMemo(() => {
     const busyStatus = showBusyStatus
       ? formatBusyStatus({
-          agentMode,
           currentTool,
           isThinkingActive,
           thinkingCharCount,
           isCompacting,
           toolInputCharCount,
           toolInputContent,
+          managedPhase,
           managedHarnessProfile,
           managedWorkerTitle,
         })
@@ -407,7 +508,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
         <Text dimColor>{sessionId}</Text>
         {busyStatus && (
           <>
-            <Text dimColor> </Text>
+            <Text dimColor> | </Text>
             <Text dimColor>{busyStatus}</Text>
           </>
         )}
@@ -415,7 +516,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     );
   }, [
     sessionId,
-    agentMode,
     currentTool,
     isThinkingActive,
     thinkingCharCount,

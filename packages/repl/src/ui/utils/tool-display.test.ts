@@ -13,7 +13,7 @@ describe("tool-display", () => {
     expect(formatToolSummary(
       "[Planner] changed_diff_bundle",
       { preview: "{\"paths\":[\"packages/a.ts\",\"packages/b.ts\"],\"limit_per_path\":120}" },
-    )).toBe("[Planner] changed_diff_bundle - 2 files - limit=120");
+    )).toBe("[Planner] changed_diff_bundle - 2 files - packages/a.ts - limit=120");
   });
 
   it("formats changed_diff summaries with path, offset, and limit", () => {
@@ -66,6 +66,27 @@ describe("tool-display", () => {
       "{\"paths\":[\"packages/coding/src/task-engine.ts\"],\"limit_per_path\":120}",
       72,
     )).toBe("[Tools] changed_diff_bundle - packages/coding/src/task-engine.ts - limit=120");
+  });
+
+  it("formats bash summaries with the exact command", () => {
+    expect(formatToolSummary(
+      "bash",
+      { command: "git status --short" },
+    )).toBe("bash - cmd=git status --short");
+  });
+
+  it("formats glob summaries with pattern and scope", () => {
+    expect(formatToolSummary(
+      "glob",
+      { pattern: "**/*.ts", path: "packages/coding/src" },
+    )).toBe("glob - pattern=**/*.ts - packages/coding/src");
+  });
+
+  it("formats grep summaries with pattern and scope", () => {
+    expect(formatToolSummary(
+      "grep",
+      { pattern: "H2_PLAN_EXECUTE_EVAL", path: "packages/coding/src" },
+    )).toBe("grep - pattern=H2_PLAN_EXECUTE_EVAL - packages/coding/src");
   });
 
   it("collapses repeated tool calls into a single summary", () => {
