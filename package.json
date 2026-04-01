@@ -43,8 +43,9 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
     "@kodax/coding": "*",
-    "@kodax/skills": "*",
     "@kodax/repl": "*",
+    "@kodax/skills": "*",
+    "aamp-sdk": "^0.1.10",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "glob": "^11.0.1",

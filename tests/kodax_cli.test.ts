@@ -4,7 +4,7 @@
  * 测试 CLI 特有功能：Commands 系统、Spinner 等
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
@@ -14,6 +14,7 @@ import { Command } from 'commander';
 // 从 kodax_cli 导入 Commands 系统
 import {
   loadCommands,
+  main,
   parseCommandCall,
   parsePermissionModeOption,
   processCommandCall,
@@ -21,6 +22,30 @@ import {
   KodaXCommand,
   resolveCliParallel,
 } from '../src/kodax_cli.js';
+
+const { runAampServerMock } = vi.hoisted(() => ({
+  runAampServerMock: vi.fn(),
+}));
+
+const { aampSdkTransportCtorMock } = vi.hoisted(() => ({
+  aampSdkTransportCtorMock: vi.fn(),
+}));
+
+vi.mock('../src/aamp_server.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/aamp_server.js')>();
+  return {
+    ...actual,
+    runAampServer: runAampServerMock,
+  };
+});
+
+vi.mock('../src/aamp_sdk_transport.js', () => ({
+  AampSdkTransport: class {
+    constructor(config: unknown) {
+      aampSdkTransportCtorMock(config);
+    }
+  },
+}));
 
 // 默认 provider
 const KODAX_DEFAULT_PROVIDER = 'zhipu-coding';
@@ -109,6 +134,44 @@ describe('Commands System', () => {
   });
 });
 
+describe('AAMP CLI', () => {
+  it('wires kodax aamp serve into the AAMP transport adapter', async () => {
+    const argv = process.argv;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--email', 'agent@example.com',
+      '--jmap-token', 'token',
+      '--jmap-url', 'http://localhost:8080/jmap',
+      '--smtp-host', 'localhost',
+      '--smtp-password', 'secret',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'agent@example.com',
+      jmapToken: 'token',
+      jmapUrl: 'http://localhost:8080/jmap',
+      smtpHost: 'localhost',
+      smtpPort: 587,
+      smtpPassword: 'secret',
+      rejectUnauthorized: true,
+    }));
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      repoRoot: TEST_DIR,
+      transport: expect.any(Object),
+    }));
+  });
+});
+
 describe('parseCommandCall', () => {
   it('should parse /command without args', () => {
     const result = parseCommandCall('/review');
@@ -147,13 +210,23 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('test', 'file.ts', commands, async () => 'mock');
+    const result = await processCommandCall('test', 'file.ts', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBe('Review this code: file.ts');
   });
 
   it('should return null for unknown command', async () => {
     const commands = new Map<string, KodaXCommand>();
-    const result = await processCommandCall('unknown', 'args', commands, async () => 'mock');
+    const result = await processCommandCall('unknown', 'args', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBeNull();
   });
 
@@ -166,7 +239,12 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('simple', 'ignored', commands, async () => 'mock');
+    const result = await processCommandCall('simple', 'ignored', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBe('Just do something');
   });
 });
@@ -345,8 +423,8 @@ describe('CLI Entry Point', () => {
   it('should document provider and team caveats in help topics', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('CLI bridge provider (latest-user-message only, MCP unavailable)');
-    expect(source).toContain('Experimental orchestration-based parallel execution for loosely coupled tasks.');
-    expect(source).toContain('not yet a fully shared-context multi-agent runtime');
+    expect(source).toContain('Legacy orchestration-based parallel execution for loosely coupled tasks.');
+    expect(source).toContain('Prefer --agent-mode ama|sa for the product path. --team is being sunset.');
     expect(source).toContain('Project mode spans two surfaces: non-REPL bootstrap commands and REPL /project commands.');
     expect(source).toContain('/project verify [#index|--last]');
   });

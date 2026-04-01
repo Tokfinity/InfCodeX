@@ -10,6 +10,8 @@ import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
+import { runAampServer } from './aamp_server.js';
+import { AampSdkTransport } from './aamp_sdk_transport.js';
 import {
   getDefaultCommandDir,
   KODAX_COMMANDS_DIR,
@@ -107,7 +109,26 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.bold('Examples:'));
     console.log(chalk.dim('  kodax acp serve'));
     console.log(chalk.dim('  kodax acp serve --cwd C:\\repo --permission-mode accept-edits'));
-    console.log(chalk.dim('  kodax acp serve -m openai --model gpt-5.4 --reasoning balanced\n'));
+     console.log(chalk.dim('  kodax acp serve -m openai --model gpt-5.4 --reasoning balanced\n'));
+  },
+  aamp: () => {
+    console.log(chalk.cyan('\nAAMP Server\n'));
+    console.log(chalk.bold('Overview:'));
+    console.log(chalk.dim('  Run KodaX as an AAMP async task worker backed by aamp-sdk.'));
+    console.log(chalk.dim('  Incoming task.dispatch messages are bridged into runKodaX and replied with task.result.\n'));
+    console.log(chalk.bold('Command:'));
+    console.log(chalk.dim('  kodax aamp serve [options]\n'));
+    console.log(chalk.bold('Options:'));
+    console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory used for task execution');
+    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
+    console.log(chalk.dim('  --model <name>               ') + 'Model override');
+    console.log(chalk.dim('  --email <addr>               ') + 'AAMP mailbox email');
+    console.log(chalk.dim('  --jmap-token <token>         ') + 'JMAP auth token (or KODAX_AAMP_JMAP_TOKEN)');
+    console.log(chalk.dim('  --jmap-url <url>             ') + 'JMAP base URL');
+    console.log(chalk.dim('  --smtp-host <host>           ') + 'SMTP host');
+    console.log(chalk.dim('  --smtp-port <port>           ') + 'SMTP port (default: 587)');
+    console.log(chalk.dim('  --smtp-password <password>   ') + 'SMTP password');
+    console.log(chalk.dim('  --allow-insecure-tls         ') + 'Disable TLS certificate verification\n');
   },
   skill: () => {
     console.log(chalk.cyan('\nSkill Utilities\n'));
@@ -310,6 +331,7 @@ function showCliHelpTopic(topic: string): boolean {
 function showCliHelpTopics(): void {
   console.log(chalk.cyan('\nDetailed Help Topics:\n'));
   console.log(chalk.dim('  kodax -h acp        ') + 'ACP server mode for editors and IDEs');
+  console.log(chalk.dim('  kodax -h aamp       ') + 'AAMP async task worker mode');
   console.log(chalk.dim('  kodax -h sessions   ') + 'Session management (-c, -r, -s options)');
   console.log(chalk.dim('  kodax -h skill      ') + 'Skill packaging and installation helpers');
   console.log(chalk.dim('  kodax -h init       ') + 'Project initialization (--init, --overwrite)');
@@ -372,6 +394,42 @@ function printAcpSubcommandHelp(name: string): boolean {
   }
 
   return false;
+}
+
+function printAampSubcommandHelp(name: string): boolean {
+  if (name === 'serve') {
+    console.log('Usage: kodax aamp serve [options]');
+    console.log();
+    console.log('Run KodaX as an AAMP async worker backed by aamp-sdk.');
+    console.log();
+    console.log('Options:');
+    console.log('  --cwd <dir>                  Working directory used for task execution');
+    console.log('  -m, --provider <name>        Provider to use');
+    console.log('  --model <name>               Model override');
+    console.log('  --email <addr>               AAMP mailbox email');
+    console.log('  --jmap-token <token>         JMAP auth token');
+    console.log('  --jmap-url <url>             JMAP base URL');
+    console.log('  --smtp-host <host>           SMTP host');
+    console.log('  --smtp-port <port>           SMTP port');
+    console.log('  --smtp-password <password>   SMTP password');
+    console.log('  --allow-insecure-tls         Disable TLS certificate verification');
+    return true;
+  }
+
+  return false;
+}
+
+function readRequiredAampOption(
+  value: string | undefined,
+  envKey: string,
+  label: string,
+): string {
+  const resolved = value ?? process.env[envKey];
+  if (resolved && resolved.trim()) {
+    return resolved.trim();
+  }
+
+  throw new Error(`Missing AAMP ${label}. Provide --${label} or set ${envKey}.`);
 }
 
 function printSkillSubcommandHelp(name: string): boolean {
@@ -593,6 +651,11 @@ async function main() {
     .description('Run KodaX as an ACP server for editors and IDEs')
     .helpOption('-h, --help', 'Show ACP server help');
 
+  const aampCommand = program
+    .command('aamp')
+    .description('Run KodaX as an AAMP async task worker')
+    .helpOption('-h, --help', 'Show AAMP server help');
+
   acpCommand
     .command('serve')
     .description('Run the ACP stdio server')
@@ -618,6 +681,49 @@ async function main() {
         reasoningMode: subcommandOptions.reasoning,
         permissionMode: subcommandOptions.permissionMode,
         agentVersion: version,
+      });
+    });
+
+  aampCommand
+    .command('serve')
+    .description('Run the AAMP worker server')
+    .option('--cwd <dir>', 'Working directory used for task execution')
+    .option('-m, --provider <name>', 'Provider to use')
+    .option('--model <name>', 'Model override')
+    .option('--email <addr>', 'AAMP mailbox email')
+    .option('--jmap-token <token>', 'JMAP auth token')
+    .option('--jmap-url <url>', 'JMAP base URL')
+    .option('--smtp-host <host>', 'SMTP host')
+    .option('--smtp-port <port>', 'SMTP port', '587')
+    .option('--smtp-password <password>', 'SMTP password')
+    .option('--allow-insecure-tls', 'Disable TLS certificate verification')
+    .action(async (subcommandOptions: {
+      cwd?: string;
+      provider?: string;
+      model?: string;
+      email?: string;
+      jmapToken?: string;
+      jmapUrl?: string;
+      smtpHost?: string;
+      smtpPort?: string;
+      smtpPassword?: string;
+      allowInsecureTls?: boolean;
+    }) => {
+      const transport = new AampSdkTransport({
+        email: readRequiredAampOption(subcommandOptions.email, 'KODAX_AAMP_EMAIL', 'email'),
+        jmapToken: readRequiredAampOption(subcommandOptions.jmapToken, 'KODAX_AAMP_JMAP_TOKEN', 'jmap-token'),
+        jmapUrl: readRequiredAampOption(subcommandOptions.jmapUrl, 'KODAX_AAMP_JMAP_URL', 'jmap-url'),
+        smtpHost: readRequiredAampOption(subcommandOptions.smtpHost, 'KODAX_AAMP_SMTP_HOST', 'smtp-host'),
+        smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, 587),
+        smtpPassword: readRequiredAampOption(subcommandOptions.smtpPassword, 'KODAX_AAMP_SMTP_PASSWORD', 'smtp-password'),
+        rejectUnauthorized: subcommandOptions.allowInsecureTls ? false : true,
+      });
+
+      await runAampServer({
+        transport,
+        repoRoot: subcommandOptions.cwd,
+        provider: subcommandOptions.provider,
+        model: subcommandOptions.model,
       });
     });
 
@@ -905,8 +1011,22 @@ async function main() {
     }
   }
 
+  if (argv[0] === 'aamp') {
+    if (argv.length === 1 || argv[1] === '-h' || argv[1] === '--help') {
+      console.log(aampCommand.helpInformation());
+      return;
+    }
+
+    const aampSubcommand = argv[1];
+    if (aampSubcommand && (argv.includes('-h') || argv.includes('--help'))) {
+      if (printAampSubcommandHelp(aampSubcommand)) {
+        return;
+      }
+    }
+  }
+
   await program.parseAsync(process.argv);
-  if (argv[0] === 'skill' || argv[0] === 'acp') {
+  if (argv[0] === 'skill' || argv[0] === 'acp' || argv[0] === 'aamp') {
     return;
   }
 

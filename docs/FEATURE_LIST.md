@@ -1,6 +1,6 @@
 # Feature 总表
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-01
 
 > 中文阅读说明：
 > 这份 `FEATURE_LIST` 是 roadmap 的总索引。
@@ -13,10 +13,10 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-045` |
-| Total tracked features | `45` |
+| Tracked feature IDs | `001-046` |
+| Total tracked features | `46` |
 | Completed | `34` |
-| InProgress | `0` |
+| InProgress | `1` |
 | Planned | `11` |
 | Current released version | `v0.7.10` |
 
@@ -29,6 +29,14 @@
 | `v0.8.0` | `4` |
 | `v0.9.0` | `3` |
 | `v1.0.0` | `2` |
+
+---
+
+## 进行中的 Feature
+
+| ID | Title | Category | Priority | Planned | Design |
+|---|---|---|---|---|---|
+| `046` | AAMP SDK Transport Surface | New | High | `v0.7.15` | [v0.7.15](features/v0.7.15.md#feature_046-aamp-sdk-transport-surface) |
 
 ---
 

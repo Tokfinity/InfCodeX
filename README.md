@@ -571,6 +571,53 @@ ACP lifecycle logs are written to `stderr` so they do not pollute ACP `stdout`. 
 
 ACP session `cwd` is passed into the coding runtime as an explicit `executionCwd`. If you start the server with `--cwd`, that value pins the execution root for every ACP session. Prompt context, relative file paths, and shell commands stay scoped to that explicit directory without mutating the Node.js process-global working directory.
 
+### AAMP Server
+
+KodaX can also run as an AAMP async task worker backed by `aamp-sdk`:
+
+```bash
+kodax aamp serve \
+  --email agent@example.com \
+  --jmap-token <token> \
+  --jmap-url http://localhost:8080/jmap \
+  --smtp-host localhost \
+  --smtp-password <password>
+
+KODAX_AAMP_EMAIL=agent@example.com \
+KODAX_AAMP_JMAP_TOKEN=<token> \
+KODAX_AAMP_JMAP_URL=http://localhost:8080/jmap \
+KODAX_AAMP_SMTP_HOST=localhost \
+KODAX_AAMP_SMTP_PASSWORD=<password> \
+kodax aamp serve --cwd /path/to/repo -m openai --model gpt-5.4
+```
+
+This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
+
+Current v1 behavior:
+
+- inbound `task.dispatch` is supported
+- `taskId -> sessionId` is persisted locally so completed tasks are not re-executed
+- outbound `task.result` is sent through the real AAMP SDK
+- inbound `task.ack` is handled by `aamp-sdk` automatic acknowledgement logic
+
+Required configuration can be passed either as CLI flags or environment variables:
+
+- `KODAX_AAMP_EMAIL`
+- `KODAX_AAMP_JMAP_TOKEN`
+- `KODAX_AAMP_JMAP_URL`
+- `KODAX_AAMP_SMTP_HOST`
+- `KODAX_AAMP_SMTP_PASSWORD`
+
+Optional flags:
+
+- `--cwd`
+- `--provider`
+- `--model`
+- `--smtp-port`
+- `--allow-insecure-tls`
+
+This first version intentionally focuses on the minimal async loop: `task.dispatch -> task.result`. Richer protocol flows such as `task.help_needed`, attachments, and structured result mapping can be layered on later without changing the KodaX runtime core.
+
 ### Permission Control
 
 KodaX provides 3 permission modes for fine-grained control:
@@ -611,6 +658,7 @@ kodax --help
 # Detailed topic help
 kodax -h sessions      # Session management details
 kodax -h acp           # ACP server mode
+kodax -h aamp          # AAMP async task worker mode
 kodax -h init          # Long-running project initialization
 kodax -h project       # Project mode / harness workflow
 kodax -h auto          # Auto-continue mode
