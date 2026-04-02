@@ -1,6 +1,6 @@
 {
   "name": "@kodax/coding",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
   "type": "module",
   "main": "dist/index.js",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./repo-intelligence-bridge": {
+      "types": "./dist/repo-intelligence/public-bridge.d.ts",
+      "import": "./dist/repo-intelligence/public-bridge.js"
     }
   },
   "scripts": {
@@ -21,12 +25,7 @@
   "dependencies": {
     "@kodax/agent": "*",
     "@kodax/ai": ">=0.5.0",
-    "@kodax/skills": "*",
-    "@lezer/go": "^1.0.1",
-    "@lezer/python": "^1.1.18",
-    "@lezer/rust": "^1.0.2",
-    "tsx": "^4.21.0",
-    "typescript": "^5.7.3"
+    "@kodax/skills": "*"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
@@ -43,5 +42,5 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/coding"
   },
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

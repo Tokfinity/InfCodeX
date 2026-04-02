@@ -8,6 +8,17 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [0.7.14] - 2026-04-02
+
+### Added
+- **Repo-intelligence dirty snapshot strategy and inventory tracking**: Dirty snapshot support for memoized reuse across requests, baseline/inventory files for clean git baseline tracking, file analysis index and dirty source hint caching
+
+### Changed
+- Bump repo-intelligence schema versions (index: 1→3, query: 2→9)
+- Sort dependencies alphabetically in package.json
+
+---
+
 ## [0.7.13] - 2026-03-31
 
 ### Added
