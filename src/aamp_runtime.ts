@@ -1,5 +1,6 @@
 import type { KodaXSessionStorage, KodaXResult } from '@kodax/coding';
 import { runKodaX } from '@kodax/coding';
+import { getSkillRegistry, initializeSkillRegistry } from '@kodax/skills';
 import type { AampDispatchEnvelope, AampTaskRecord, AampTaskResult } from './aamp_types.js';
 
 export interface KodaXAampRuntimeOptions {
@@ -55,6 +56,13 @@ export class KodaXAampRuntime {
   }
 
   async execute(dispatch: AampDispatchEnvelope, record: AampTaskRecord): Promise<AampTaskExecutionResult> {
+    const log = (msg: string) => process.stdout.write(msg);
+    log(`\n[AAMP] task=${dispatch.taskId} from=${dispatch.from}\n`);
+
+    const repoRoot = this.options.repoRoot;
+    await initializeSkillRegistry(repoRoot);
+    const skillsPrompt = getSkillRegistry(repoRoot).getSystemPromptSnippet();
+
     const result = await runKodaX(
       {
         provider: this.options.provider,
@@ -65,10 +73,19 @@ export class KodaXAampRuntime {
           scope: 'user',
         },
         context: {
-          gitRoot: this.options.repoRoot,
-          executionCwd: this.options.repoRoot,
+          gitRoot: repoRoot,
+          executionCwd: repoRoot,
           rawUserInput: dispatch.bodyText,
           taskSurface: 'cli',
+          skillsPrompt,
+        },
+        events: {
+          onTextDelta: (text) => process.stdout.write(text),
+          onThinkingDelta: (text) => log(`[thinking] ${text}`),
+          onToolUseStart: (tool) => log(`\n[tool:${tool.name}] ${JSON.stringify(tool.input ?? {})}\n`),
+          onToolResult: (result) => log(`[tool:${result.name}] done\n`),
+          onComplete: () => log(`\n[AAMP] task=${dispatch.taskId} completed\n`),
+          onError: (err) => log(`\n[AAMP] task=${dispatch.taskId} error: ${err.message}\n`),
         },
       },
       buildDispatchPrompt(dispatch),
