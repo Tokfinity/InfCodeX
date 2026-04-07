@@ -571,6 +571,92 @@ ACP lifecycle logs are written to `stderr` so they do not pollute ACP `stdout`. 
 
 ACP session `cwd` is passed into the coding runtime as an explicit `executionCwd`. If you start the server with `--cwd`, that value pins the execution root for every ACP session. Prompt context, relative file paths, and shell commands stay scoped to that explicit directory without mutating the Node.js process-global working directory.
 
+### AAMP Server
+
+KodaX can also run as an AAMP async task worker backed by `aamp-sdk`:
+
+```bash
+kodax aamp serve \
+  --email agent@example.com \
+  --mailbox-token <token> \
+  --base-url http://localhost:8080 \
+  --smtp-host localhost \
+  --smtp-password <password>
+
+kodax aamp serve --profile mailbox-a --cwd /path/to/repo
+```
+
+This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
+
+Current v1 behavior:
+
+- inbound `task.dispatch` is supported
+- `taskId -> sessionId` is persisted locally so completed tasks are not re-executed
+- outbound `task.result` is sent through the real AAMP SDK
+- inbound `task.ack` is handled by `aamp-sdk` automatic acknowledgement logic
+
+Configuration file support is profile-based only. Each AAMP mailbox must live under `aamp.profiles.<name>` in `~/.kodax/config.json`:
+
+```json
+{
+  "aamp": {
+    "profiles": {
+      "mailbox-a": {
+        "email": "agent@meshmail.ai",
+        "mailboxToken": "base64(email:password)",
+        "baseUrl": "https://meshmail.ai",
+        "smtpHost": "meshmail.ai",
+        "smtpPort": 587,
+        "smtpPassword": "mailbox-password",
+        "allowInsecureTls": false,
+        "logLevel": "info"
+      }
+    }
+  }
+}
+```
+
+Resolution order is `CLI flags > selected profile in ~/.kodax/config.json`.
+
+Legacy `jmapToken` / `jmapUrl` profile fields and CLI flags remain supported as compatibility aliases for `mailboxToken` / `baseUrl`.
+
+Startup is strict:
+
+- If `--profile <name>` is provided, that profile must exist.
+- If `--profile` is omitted, all required AAMP fields must be passed explicitly via CLI.
+- CLI flags always override the selected profile.
+
+Required AAMP fields:
+
+- `email`
+- `mailboxToken`
+- `baseUrl`
+- `smtpHost`
+- `smtpPassword`
+
+Provider and model are not duplicated under `aamp`. `kodax aamp serve` reuses the normal top-level KodaX `provider` / `model` configuration unless you pass `--provider` or `--model` as one-off overrides.
+
+Optional flags:
+
+- `--cwd`
+- `--profile`
+- `--provider`
+- `--model`
+- `--mailbox-token`
+- `--base-url`
+- `--jmap-token` (legacy alias for `--mailbox-token`)
+- `--jmap-url` (legacy alias for `--base-url`)
+- `--smtp-port`
+- `--allow-insecure-tls`
+- `--log-level`
+
+Logging:
+
+- `--log-level off|error|info|debug`
+- JSONL log files are written under `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
+
+This first version intentionally focuses on the minimal async loop: `task.dispatch -> task.result`. Richer protocol flows such as `task.help_needed`, attachments, and structured result mapping can be layered on later without changing the KodaX runtime core.
+
 ### Permission Control
 
 KodaX provides 3 permission modes for fine-grained control:
@@ -611,6 +697,7 @@ kodax --help
 # Detailed topic help
 kodax -h sessions      # Session management details
 kodax -h acp           # ACP server mode
+kodax -h aamp          # AAMP async task worker mode
 kodax -h init          # Long-running project initialization
 kodax -h project       # Project mode / harness workflow
 kodax -h auto          # Auto-continue mode

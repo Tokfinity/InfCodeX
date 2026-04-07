@@ -19,7 +19,7 @@ describe('toolBash', () => {
   });
 
   it('keeps the tail for large command output', async () => {
-    const command = 'node -e "for (let i = 1; i <= 3000; i++) console.log(`line-${i}`)"';
+    const command = "node -e \"for (let i = 1; i <= 3000; i++) console.log('line-' + i)\"";
     const result = await toolBash({ command }, {
       backups: new Map(),
       executionCwd: tempDir,

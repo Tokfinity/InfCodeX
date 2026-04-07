@@ -4,7 +4,7 @@
  * 测试 CLI 特有功能：Commands 系统、Spinner 等
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
@@ -14,6 +14,7 @@ import { Command } from 'commander';
 // 从 kodax_cli 导入 Commands 系统
 import {
   loadCommands,
+  main,
   parseCommandCall,
   parsePermissionModeOption,
   processCommandCall,
@@ -21,6 +22,58 @@ import {
   KodaXCommand,
   resolveCliParallel,
 } from '../src/kodax_cli.js';
+
+const { runAampServerMock } = vi.hoisted(() => ({
+  runAampServerMock: vi.fn(),
+}));
+
+const { aampSdkTransportCtorMock } = vi.hoisted(() => ({
+  aampSdkTransportCtorMock: vi.fn(),
+}));
+
+const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
+  prepareRuntimeConfigMock: vi.fn(() => ({})),
+}));
+
+const { createDefaultAampLoggerMock } = vi.hoisted(() => ({
+  createDefaultAampLoggerMock: vi.fn(() => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  })),
+}));
+
+vi.mock('../src/aamp_server.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/aamp_server.js')>();
+  return {
+    ...actual,
+    runAampServer: runAampServerMock,
+  };
+});
+
+vi.mock('../src/aamp_sdk_transport.js', () => ({
+  AampSdkTransport: class {
+    constructor(config: unknown, logger: unknown) {
+      aampSdkTransportCtorMock(config, logger);
+    }
+  },
+}));
+
+vi.mock('../src/aamp_logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/aamp_logger.js')>();
+  return {
+    ...actual,
+    createDefaultAampLogger: createDefaultAampLoggerMock,
+  };
+});
+
+vi.mock('@kodax/repl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax/repl')>();
+  return {
+    ...actual,
+    prepareRuntimeConfig: prepareRuntimeConfigMock,
+  };
+});
 
 // 默认 provider
 const KODAX_DEFAULT_PROVIDER = 'zhipu-coding';
@@ -109,6 +162,308 @@ describe('Commands System', () => {
   });
 });
 
+describe('AAMP CLI', () => {
+  beforeEach(() => {
+    prepareRuntimeConfigMock.mockReset();
+    prepareRuntimeConfigMock.mockReturnValue({});
+    createDefaultAampLoggerMock.mockClear();
+    delete process.env.KODAX_AAMP_EMAIL;
+    delete process.env.KODAX_AAMP_JMAP_TOKEN;
+    delete process.env.KODAX_AAMP_JMAP_URL;
+    delete process.env.KODAX_AAMP_SMTP_HOST;
+    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
+    delete process.env.KODAX_AAMP_LOG;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    delete process.env.KODAX_AAMP_EMAIL;
+    delete process.env.KODAX_AAMP_JMAP_TOKEN;
+    delete process.env.KODAX_AAMP_JMAP_URL;
+    delete process.env.KODAX_AAMP_SMTP_HOST;
+    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
+    delete process.env.KODAX_AAMP_LOG;
+  });
+
+  it('reports a missing serve subcommand instead of treating aamp options as root command options', async () => {
+    const argv = process.argv;
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      '--profile', 'default',
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+      process.exitCode = originalExitCode;
+    }
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Missing subcommand] `kodax aamp` requires `serve`.'),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Use `kodax aamp serve [options]`.'),
+    );
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('wires kodax aamp serve into the AAMP transport adapter', async () => {
+    const argv = process.argv;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--email', 'agent@example.com',
+      '--jmap-token', 'token',
+      '--jmap-url', 'http://localhost:8080/jmap',
+      '--smtp-host', 'localhost',
+      '--smtp-password', 'secret',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'agent@example.com',
+      mailboxToken: 'token',
+      baseUrl: 'http://localhost:8080',
+      smtpHost: 'localhost',
+      smtpPort: 587,
+      smtpPassword: 'secret',
+      rejectUnauthorized: true,
+    }), expect.any(Object));
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      repoRoot: TEST_DIR,
+      mailboxEmail: 'agent@example.com',
+      transport: expect.any(Object),
+    }));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'info',
+    });
+  });
+
+  it('loads AAMP profile defaults from ~/.kodax/config.json when --profile is specified', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: {
+          mailboxB: {
+            email: 'config-agent@example.com',
+            jmapToken: 'config-token',
+            jmapUrl: 'https://meshmail.ai/jmap',
+            smtpHost: 'meshmail.ai',
+            smtpPort: 2525,
+            smtpPassword: 'config-secret',
+            allowInsecureTls: true,
+            logLevel: 'debug',
+          },
+        },
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'config-agent@example.com',
+      mailboxToken: 'config-token',
+      baseUrl: 'https://meshmail.ai',
+      smtpHost: 'meshmail.ai',
+      smtpPort: 2525,
+      smtpPassword: 'config-secret',
+      rejectUnauthorized: false,
+    }), expect.any(Object));
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      mailboxEmail: 'config-agent@example.com',
+    }));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'debug',
+    });
+  });
+
+  it('lets CLI flags override a configured AAMP profile', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: {
+          mailboxB: {
+            email: 'config-agent@example.com',
+            jmapToken: 'config-token',
+            jmapUrl: 'https://meshmail.ai/jmap',
+            smtpHost: 'meshmail.ai',
+            smtpPort: 2525,
+            smtpPassword: 'config-secret',
+            allowInsecureTls: false,
+            logLevel: 'debug',
+          },
+        },
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--email', 'override@example.com',
+      '--smtp-password', 'override-secret',
+      '--log-level', 'error',
+      '--allow-insecure-tls',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'override@example.com',
+      mailboxToken: 'config-token',
+      smtpPassword: 'override-secret',
+      rejectUnauthorized: false,
+    }), expect.any(Object));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'error',
+    });
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      mailboxEmail: 'override@example.com',
+    }));
+  });
+
+  it('requires all mandatory CLI flags when no profile is specified', async () => {
+    const argv = process.argv;
+    process.env.KODAX_AAMP_EMAIL = 'ignored@example.com';
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Missing required AAMP options: email, mailboxToken, baseUrl, smtpHost, smtpPassword. Provide them via --profile <name> or explicit CLI flags.',
+      );
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).not.toHaveBeenCalled();
+    expect(runAampServerMock).not.toHaveBeenCalled();
+  });
+
+  it('fails when the requested AAMP profile does not exist', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: {
+          mailboxA: {
+            email: 'config-agent@example.com',
+          },
+        },
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Unknown AAMP profile "mailboxB". Add it under aamp.profiles in ~/.kodax/config.json or omit --profile and pass all required CLI flags.',
+      );
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('fails when aamp.profiles is malformed', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: 'bad-shape',
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Invalid AAMP config in ~/.kodax/config.json: expected aamp.profiles to be an object.',
+      );
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('accepts canonical mailboxToken/baseUrl CLI flags', async () => {
+    const argv = process.argv;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--email', 'agent@example.com',
+      '--mailbox-token', 'token',
+      '--base-url', 'http://localhost:8080/jmap',
+      '--smtp-host', 'localhost',
+      '--smtp-password', 'secret',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'agent@example.com',
+      mailboxToken: 'token',
+      baseUrl: 'http://localhost:8080',
+      smtpHost: 'localhost',
+      smtpPort: 587,
+      smtpPassword: 'secret',
+      rejectUnauthorized: true,
+    }), expect.any(Object));
+  });
+});
+
 describe('parseCommandCall', () => {
   it('should parse /command without args', () => {
     const result = parseCommandCall('/review');
@@ -147,13 +502,23 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('test', 'file.ts', commands, async () => 'mock');
+    const result = await processCommandCall('test', 'file.ts', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBe('Review this code: file.ts');
   });
 
   it('should return null for unknown command', async () => {
     const commands = new Map<string, KodaXCommand>();
-    const result = await processCommandCall('unknown', 'args', commands, async () => 'mock');
+    const result = await processCommandCall('unknown', 'args', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBeNull();
   });
 
@@ -166,7 +531,12 @@ describe('processCommandCall', () => {
       type: 'prompt',
     });
 
-    const result = await processCommandCall('simple', 'ignored', commands, async () => 'mock');
+    const result = await processCommandCall('simple', 'ignored', commands, async () => ({
+      success: true,
+      lastText: 'mock',
+      messages: [],
+      sessionId: 'mock-session',
+    }));
     expect(result).toBe('Just do something');
   });
 });
@@ -345,8 +715,8 @@ describe('CLI Entry Point', () => {
   it('should document provider and team caveats in help topics', async () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('CLI bridge provider (latest-user-message only, MCP unavailable)');
-    expect(source).toContain('Experimental orchestration-based parallel execution for loosely coupled tasks.');
-    expect(source).toContain('not yet a fully shared-context multi-agent runtime');
+    expect(source).toContain('Legacy orchestration-based parallel execution for loosely coupled tasks.');
+    expect(source).toContain('Prefer --agent-mode ama|sa for the product path. --team is being sunset.');
     expect(source).toContain('Project mode spans two surfaces: non-REPL bootstrap commands and REPL /project commands.');
     expect(source).toContain('/project verify [#index|--last]');
   });

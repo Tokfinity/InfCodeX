@@ -115,8 +115,23 @@ function extractLinkPath(markdownLink: string): string {
 }
 
 function parseFeatureRows(markdown: string): FeatureIndexRow[] {
+  const inProgressSection = getSection(markdown, '进行中的 Feature');
   const plannedSection = getSection(markdown, '计划中的 Feature');
   const completedSection = getSection(markdown, '已完成 Feature');
+
+  const inProgressRows = getMarkdownTableRows(inProgressSection).map((cells) => {
+    const [id, title, _category, priority, planned, design] = cells;
+
+    return {
+      id: stripMarkdown(id),
+      status: 'InProgress' as const,
+      priority,
+      title,
+      planned: stripMarkdown(planned),
+      released: '-',
+      designPath: extractLinkPath(design),
+    };
+  });
 
   const plannedRows = getMarkdownTableRows(plannedSection).map((cells) => {
     const [id, title, _category, priority, planned, design] = cells;
@@ -147,12 +162,12 @@ function parseFeatureRows(markdown: string): FeatureIndexRow[] {
     };
   });
 
-  return [...plannedRows, ...completedRows].sort((left, right) => Number(left.id) - Number(right.id));
+  return [...inProgressRows, ...plannedRows, ...completedRows].sort((left, right) => Number(left.id) - Number(right.id));
 }
 
 function parseFeatureOverview(markdown: string): FeatureOverview {
   const currentSection = getSection(markdown, '当前概况');
-  const [overviewPart, plannedByVersionPart = ''] = currentSection.split('### 各版本待做分布');
+  const [overviewPart, plannedByVersionPart = ''] = currentSection.split('### 各版本未完成分布');
   const overviewRows = getMarkdownTableRows(overviewPart);
   const overviewEntries = new Map(overviewRows.map((cells) => [stripMarkdown(cells[0]), stripMarkdown(cells[1])]));
 
@@ -293,9 +308,9 @@ describe('tracker consistency', () => {
       InProgress: featureRows.filter((row) => row.status === 'InProgress').length,
       Completed: featureRows.filter((row) => row.status === 'Completed').length,
     };
-    const plannedByVersion = Object.fromEntries(
+    const openByVersion = Object.fromEntries(
       [...featureRows]
-        .filter((row) => row.status === 'Planned')
+        .filter((row) => row.status !== 'Completed')
         .reduce((map, row) => {
           map.set(row.planned, (map.get(row.planned) ?? 0) + 1);
           return map;
@@ -307,7 +322,7 @@ describe('tracker consistency', () => {
     expect(featureOverview?.planned).toBe(statusCounts.Planned);
     expect(featureOverview?.inProgress).toBe(statusCounts.InProgress);
     expect(featureOverview?.completed).toBe(statusCounts.Completed);
-    expect(featureOverview?.plannedByVersion).toEqual(plannedByVersion);
+    expect(featureOverview?.plannedByVersion).toEqual(openByVersion);
   });
 
   it('keeps feature release fields and design docs consistent', async () => {

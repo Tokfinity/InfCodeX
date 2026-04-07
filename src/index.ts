@@ -19,6 +19,31 @@ export {
 } from './acp_events.js';
 // ACP server API - server `cwd` can pin the session-level executionCwd for prompts and tools.
 export { KodaXAcpServer, runAcpServer, type KodaXAcpServerOptions } from './acp_server.js';
+export {
+  KodaXAampServer,
+  runAampServer,
+  type KodaXAampServerOptions,
+} from './aamp_server.js';
+export {
+  AAMP_LOG_LEVELS,
+  JsonlAampLogger,
+  createDefaultAampLogger,
+  resolveAampLogLevel,
+  type AampLogLevel,
+  type AampLogger,
+} from './aamp_logger.js';
+export { KodaXAampRuntime, type KodaXAampRuntimeOptions } from './aamp_runtime.js';
+export { FileAampTaskStore } from './aamp_store.js';
+export { AampSdkTransport } from './aamp_sdk_transport.js';
+export type {
+  AampDispatchEnvelope,
+  AampTaskAck,
+  AampTaskRecord,
+  AampTaskResult,
+  AampTaskStatus,
+  AampTaskStore,
+  AampTransport,
+} from './aamp_types.js';
 
 // REPL API - 从 @kodax/repl 重新导出
 export {
@@ -73,3 +98,4 @@ export {
   type ExecutionPlan,
   FileSessionStorage,
 } from '@kodax/repl';
+export type { KodaXAampConfig, KodaXAampProfileConfig, KodaXUserConfig } from '@kodax/repl';

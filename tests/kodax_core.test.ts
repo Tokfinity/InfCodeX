@@ -118,7 +118,7 @@ describe('Core Module Exports', () => {
 
   it('should export KODAX_TOOLS array', () => {
     expect(Array.isArray(KODAX_TOOLS)).toBe(true);
-    expect(KODAX_TOOLS.length).toBe(14);
+    expect(KODAX_TOOLS.length).toBe(16);
   });
 
   it('should export getRequiredToolParams', () => {
@@ -404,6 +404,7 @@ describe('Provider System', () => {
   });
 
   it('should return provider for valid name', () => {
+    process.env.ZHIPU_API_KEY = 'test-key';
     const provider = getProvider('zhipu-coding');
     expect(provider).toBeDefined();
     expect(provider.name).toBe('zhipu-coding');
@@ -1082,4 +1083,3 @@ describe('Tool Execution Basic Tests', () => {
     });
   });
 });
-

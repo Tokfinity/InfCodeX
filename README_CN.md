@@ -643,6 +643,92 @@ ACP 的生命周期日志会写到 `stderr`，不会污染 ACP `stdout` 协议�
 
 ACP session 的 `cwd` 会显式传入 coding runtime 的 `executionCwd`。如果你在启动 server 时传了 `--cwd`，这个值会固定为所有 ACP session 的执行根目录。这样 prompt 上下文、相对路径工具和 shell 命令都会以显式目录为基准，而不会去修改 Node.js 进程级的全局工作目录。
 
+### AAMP Server
+
+KodaX 也可以作为基于 `aamp-sdk` 的 AAMP 异步任务 worker 运行：
+
+```bash
+kodax aamp serve \
+  --email agent@example.com \
+  --mailbox-token <token> \
+  --base-url http://localhost:8080 \
+  --smtp-host localhost \
+  --smtp-password <password>
+
+kodax aamp serve --profile mailbox-a --cwd /path/to/repo
+```
+
+这个模式会监听 AAMP `task.dispatch` 消息，把每个任务桥接到 `runKodaX(...)` 执行，并通过同一个 mailbox transport 回发 `task.result`。
+
+当前 v1 行为：
+
+- 支持入站 `task.dispatch`
+- 本地持久化 `taskId -> sessionId`，避免已完成任务重复执行
+- 通过真实 AAMP SDK 回发 `task.result`
+- 入站 `task.ack` 由 `aamp-sdk` 的自动确认逻辑处理
+
+配置文件只支持 profile 形式。每个 AAMP mailbox 都需要写在 `~/.kodax/config.json` 的 `aamp.profiles.<name>` 下：
+
+```json
+{
+  "aamp": {
+    "profiles": {
+      "mailbox-a": {
+        "email": "agent@meshmail.ai",
+        "mailboxToken": "base64(email:password)",
+        "baseUrl": "https://meshmail.ai",
+        "smtpHost": "meshmail.ai",
+        "smtpPort": 587,
+        "smtpPassword": "mailbox-password",
+        "allowInsecureTls": false,
+        "logLevel": "info"
+      }
+    }
+  }
+}
+```
+
+解析优先级是：`CLI 参数 > ~/.kodax/config.json 中选中的 profile`。
+
+旧的 `jmapToken` / `jmapUrl` profile 字段和 CLI 参数仍然保留兼容，作为 `mailboxToken` / `baseUrl` 的别名。
+
+启动规则是严格的：
+
+- 传了 `--profile <name>`，这个 profile 必须存在。
+- 不传 `--profile` 时，所有必填 AAMP 字段都必须通过 CLI 显式传入。
+- CLI 参数始终覆盖所选 profile 中的同名字段。
+
+必填 AAMP 字段：
+
+- `email`
+- `mailboxToken`
+- `baseUrl`
+- `smtpHost`
+- `smtpPassword`
+
+`provider` 和 `model` 不会在 `aamp` 下重复配置。`kodax aamp serve` 默认沿用普通 KodaX 顶层配置里的 `provider` / `model`，只有在你显式传 `--provider` 或 `--model` 时才覆盖。
+
+可选参数：
+
+- `--cwd`
+- `--profile`
+- `--provider`
+- `--model`
+- `--mailbox-token`
+- `--base-url`
+- `--jmap-token`（`--mailbox-token` 的兼容别名）
+- `--jmap-url`（`--base-url` 的兼容别名）
+- `--smtp-port`
+- `--allow-insecure-tls`
+- `--log-level`
+
+日志：
+
+- `--log-level off|error|info|debug`
+- JSONL 日志文件写入 `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
+
+这个首版有意只覆盖最小异步闭环：`task.dispatch -> task.result`。像 `task.help_needed`、附件、结构化结果映射等 richer protocol flow，后续可以继续加，但不需要改动 KodaX runtime core。
+
 ### 权限控制
 
 KodaX 提供 3 种权限模式，支持精细控制：
@@ -696,6 +782,7 @@ kodax --help
 # 详细主题帮助
 kodax -h sessions      # 会话管理详解
 kodax -h acp           # ACP Server 模式
+kodax -h aamp          # AAMP 异步任务 worker 模式
 kodax -h init          # 长时间运行任务初始化
 kodax -h project       # Project 模式 / Harness 工作流
 kodax -h auto          # 自动继续模式

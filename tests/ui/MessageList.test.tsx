@@ -206,7 +206,7 @@ describe("MessageList", () => {
       const items: HistoryItem[] = [createInfoItem("Session started")];
       const { lastFrame } = render(<MessageList items={items} viewportRows={DEFAULT_VIEWPORT_ROWS} viewportWidth={80} />);
 
-      expect(lastFrame()).toContain("Info");
+      expect(lastFrame()).toContain("ℹ");
       expect(lastFrame()).toContain("Session started");
     });
 
