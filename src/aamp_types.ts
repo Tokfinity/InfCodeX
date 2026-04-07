@@ -49,3 +49,11 @@ export interface AampTransport {
   sendResult(result: AampTaskResult): Promise<void>;
   dispose?(): Promise<void>;
 }
+
+export interface AampWorkerInput {
+  dispatch: AampDispatchEnvelope;
+  record: AampTaskRecord;
+  provider: string;
+  model?: string;
+  repoRoot: string;
+}

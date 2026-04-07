@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AampLogger } from '../src/aamp_logger.js';
+import type { AampTaskExecutionResult } from '../src/aamp_runtime.js';
+import type { AgentProcessHandle, AgentProcessSpawner } from '../src/aamp_server.js';
 import type { AampDispatchEnvelope, AampTaskAck, AampTaskResult, AampTransport } from '../src/aamp_types.js';
 
 const { runKodaXMock } = vi.hoisted(() => ({
@@ -29,8 +31,12 @@ vi.mock('@kodax/repl', async (importOriginal) => {
   };
 });
 
+import { KodaXAampRuntime } from '../src/aamp_runtime.js';
 import { KodaXAampServer, resetAampServerSingletonForTests } from '../src/aamp_server.js';
 import { FileAampTaskStore } from '../src/aamp_store.js';
+
+// Imported after mocks are set up so FileSessionStorage uses the (partially) mocked repl module.
+const { FileSessionStorage } = await import('@kodax/repl');
 
 class MockAampTransport implements AampTransport {
   readonly acks: AampTaskAck[] = [];
@@ -65,6 +71,7 @@ class MockAampTransport implements AampTransport {
   }
 }
 
+/** KodaXResult-shaped mock return value for runKodaXMock. */
 function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>>> = {}) {
   return {
     success: true,
@@ -76,9 +83,30 @@ function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>
   };
 }
 
+/**
+ * Build a mock AgentProcessSpawner that wraps KodaXAampRuntime.execute
+ * in-process so the runKodaXMock is exercised without spawning real OS processes.
+ */
+function createMockSpawner(tempDir: string): AgentProcessSpawner {
+  return (dispatch, record) => {
+    const runtime = new KodaXAampRuntime({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      repoRoot: tempDir,
+      sessionStorage: new FileSessionStorage(),
+    });
+    const resultPromise = runtime.execute(dispatch, record);
+    return {
+      pid: 12345,
+      kill: vi.fn(),
+      resultPromise,
+    };
+  };
+}
+
 describe('KodaXAampServer', () => {
   let tempDir: string;
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: { mockRestore(): void };
   let logger: AampLogger & {
     debug: ReturnType<typeof vi.fn>;
     info: ReturnType<typeof vi.fn>;
@@ -119,6 +147,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -174,6 +203,10 @@ describe('KodaXAampServer', () => {
       taskId: 'task-1',
       status: 'completed',
     }));
+    expect(logger.info).toHaveBeenCalledWith('task.process_spawned', 'agent process spawned', expect.objectContaining({
+      taskId: 'task-1',
+      pid: 12345,
+    }));
   });
 
   it('skips duplicate completed task dispatches', async () => {
@@ -185,6 +218,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -244,6 +278,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -271,5 +306,110 @@ describe('KodaXAampServer', () => {
         originalError: 'primary execution failed',
       }),
     );
+  });
+
+  describe('Cancel handling', () => {
+    it('kills the running agent process when a Cancel dispatch is received', async () => {
+      // A deferred promise that simulates a long-running agent task.
+      let resolveTask!: (value: AampTaskExecutionResult) => void;
+      const slowTaskPromise = new Promise<AampTaskExecutionResult>((resolve) => {
+        resolveTask = resolve;
+      });
+
+      const killSpy = vi.fn();
+      const mockSpawner: AgentProcessSpawner = vi.fn().mockReturnValue({
+        pid: 42,
+        kill: killSpy,
+        resultPromise: slowTaskPromise,
+      } satisfies AgentProcessHandle);
+
+      const transport = new MockAampTransport();
+      const server = new KodaXAampServer({
+        transport,
+        repoRoot: tempDir,
+        logger,
+        taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+        processSpawner: mockSpawner,
+      });
+
+      await server.start();
+
+      // Start the slow task without awaiting – handleDispatch will block on slowTaskPromise.
+      const dispatchPromise = transport.dispatch({
+        taskId: 'task-slow',
+        from: 'sender@example.com',
+        bodyText: 'Run a slow analysis',
+        messageId: 'msg-slow',
+      });
+
+      // Wait until the spawner has been called and the process is registered.
+      await vi.waitFor(() => expect(mockSpawner).toHaveBeenCalled());
+
+      // Send the Cancel dispatch targeting the running task.
+      await transport.dispatch({
+        taskId: 'cancel-dispatch',
+        from: 'sender@example.com',
+        subject: 'Cancel',
+        bodyText: 'task-slow',
+        messageId: 'msg-cancel',
+      });
+
+      // The process kill must have been called.
+      expect(killSpy).toHaveBeenCalledTimes(1);
+
+      // Logger must record the cancellation with the correct taskId and pid.
+      expect(logger.info).toHaveBeenCalledWith(
+        'task.cancel_requested',
+        'cancelling running task process',
+        expect.objectContaining({
+          targetTaskId: 'task-slow',
+          pid: 42,
+        }),
+      );
+
+      // Resolve the slow task so the dispatch promise can settle and the test exits cleanly.
+      resolveTask({
+        result: createResult() as never,
+        outbound: {
+          taskId: 'task-slow',
+          to: 'sender@example.com',
+          status: 'completed',
+          output: 'done',
+        },
+      });
+      await dispatchPromise;
+    });
+
+    it('logs info when Cancel targets a task that is not running', async () => {
+      const transport = new MockAampTransport();
+      const server = new KodaXAampServer({
+        transport,
+        repoRoot: tempDir,
+        logger,
+        taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+        processSpawner: createMockSpawner(tempDir),
+      });
+
+      await server.start();
+
+      await transport.dispatch({
+        taskId: 'cancel-only',
+        from: 'sender@example.com',
+        subject: 'Cancel',
+        bodyText: 'nonexistent-task-id',
+        messageId: 'msg-cancel',
+      });
+
+      expect(logger.info).toHaveBeenCalledWith(
+        'task.cancel_not_found',
+        'no running process found for cancel target',
+        expect.objectContaining({
+          targetTaskId: 'nonexistent-task-id',
+        }),
+      );
+      // No ACK or result should be sent for a Cancel dispatch.
+      expect(transport.acks).toHaveLength(0);
+      expect(transport.results).toHaveLength(0);
+    });
   });
 });

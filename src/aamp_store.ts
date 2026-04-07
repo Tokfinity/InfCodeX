@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { AampTaskRecord, AampTaskStore } from './aamp_types.js';
 
 const DEFAULT_AAMP_STATE_DIR = path.join(os.homedir(), '.kodax', 'aamp');
@@ -77,7 +78,7 @@ export class FileAampTaskStore implements AampTaskStore {
         records: records && typeof records === 'object' ? records : {},
       };
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
         return createDefaultState();
       }
       throw error;
@@ -87,7 +88,7 @@ export class FileAampTaskStore implements AampTaskStore {
   private async writeState(state: PersistedAampTaskStoreState): Promise<void> {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
 
-    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    const tempPath = `${this.filePath}.${process.pid}.${randomUUID()}.tmp`;
     try {
       await fs.writeFile(tempPath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
       await fs.rename(tempPath, this.filePath);
