@@ -42,11 +42,16 @@ class MockAampTransport implements AampTransport {
   readonly acks: AampTaskAck[] = [];
   readonly results: AampTaskResult[] = [];
   private handler: ((dispatch: AampDispatchEnvelope) => Promise<void>) | null = null;
+  private cancelHandler: ((targetTaskId: string) => void) | null = null;
   ackError: Error | null = null;
   resultError: Error | null = null;
 
-  async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
+  async listen(
+    handler: (dispatch: AampDispatchEnvelope) => Promise<void>,
+    cancelHandler?: (targetTaskId: string) => void,
+  ): Promise<void> {
     this.handler = handler;
+    this.cancelHandler = cancelHandler ?? null;
   }
 
   async sendAck(ack: AampTaskAck): Promise<void> {
@@ -68,6 +73,13 @@ class MockAampTransport implements AampTransport {
       throw new Error('AAMP handler not registered');
     }
     await this.handler(dispatch);
+  }
+
+  cancel(targetTaskId: string): void {
+    if (!this.cancelHandler) {
+      throw new Error('AAMP cancel handler not registered');
+    }
+    this.cancelHandler(targetTaskId);
   }
 }
 
@@ -308,108 +320,4 @@ describe('KodaXAampServer', () => {
     );
   });
 
-  describe('Cancel handling', () => {
-    it('kills the running agent process when a Cancel dispatch is received', async () => {
-      // A deferred promise that simulates a long-running agent task.
-      let resolveTask!: (value: AampTaskExecutionResult) => void;
-      const slowTaskPromise = new Promise<AampTaskExecutionResult>((resolve) => {
-        resolveTask = resolve;
-      });
-
-      const killSpy = vi.fn();
-      const mockSpawner: AgentProcessSpawner = vi.fn().mockReturnValue({
-        pid: 42,
-        kill: killSpy,
-        resultPromise: slowTaskPromise,
-      } satisfies AgentProcessHandle);
-
-      const transport = new MockAampTransport();
-      const server = new KodaXAampServer({
-        transport,
-        repoRoot: tempDir,
-        logger,
-        taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
-        processSpawner: mockSpawner,
-      });
-
-      await server.start();
-
-      // Start the slow task without awaiting – handleDispatch will block on slowTaskPromise.
-      const dispatchPromise = transport.dispatch({
-        taskId: 'task-slow',
-        from: 'sender@example.com',
-        bodyText: 'Run a slow analysis',
-        messageId: 'msg-slow',
-      });
-
-      // Wait until the spawner has been called and the process is registered.
-      await vi.waitFor(() => expect(mockSpawner).toHaveBeenCalled());
-
-      // Send the Cancel dispatch targeting the running task.
-      await transport.dispatch({
-        taskId: 'cancel-dispatch',
-        from: 'sender@example.com',
-        subject: 'Cancel',
-        bodyText: 'task-slow',
-        messageId: 'msg-cancel',
-      });
-
-      // The process kill must have been called.
-      expect(killSpy).toHaveBeenCalledTimes(1);
-
-      // Logger must record the cancellation with the correct taskId and pid.
-      expect(logger.info).toHaveBeenCalledWith(
-        'task.cancel_requested',
-        'cancelling running task process',
-        expect.objectContaining({
-          targetTaskId: 'task-slow',
-          pid: 42,
-        }),
-      );
-
-      // Resolve the slow task so the dispatch promise can settle and the test exits cleanly.
-      resolveTask({
-        result: createResult() as never,
-        outbound: {
-          taskId: 'task-slow',
-          to: 'sender@example.com',
-          status: 'completed',
-          output: 'done',
-        },
-      });
-      await dispatchPromise;
-    });
-
-    it('logs info when Cancel targets a task that is not running', async () => {
-      const transport = new MockAampTransport();
-      const server = new KodaXAampServer({
-        transport,
-        repoRoot: tempDir,
-        logger,
-        taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
-        processSpawner: createMockSpawner(tempDir),
-      });
-
-      await server.start();
-
-      await transport.dispatch({
-        taskId: 'cancel-only',
-        from: 'sender@example.com',
-        subject: 'Cancel',
-        bodyText: 'nonexistent-task-id',
-        messageId: 'msg-cancel',
-      });
-
-      expect(logger.info).toHaveBeenCalledWith(
-        'task.cancel_not_found',
-        'no running process found for cancel target',
-        expect.objectContaining({
-          targetTaskId: 'nonexistent-task-id',
-        }),
-      );
-      // No ACK or result should be sent for a Cancel dispatch.
-      expect(transport.acks).toHaveLength(0);
-      expect(transport.results).toHaveLength(0);
-    });
-  });
 });

@@ -6,13 +6,18 @@
  * runs KodaXAampRuntime.execute, then sends the AampTaskExecutionResult back
  * to the parent process via IPC (process.send).
  */
-import { FileSessionStorage } from '@kodax/repl';
+import { FileSessionStorage, prepareRuntimeConfig } from '@kodax/repl';
 import { KodaXAampRuntime } from './aamp_runtime.js';
 import type { AampWorkerInput } from './aamp_types.js';
 
 const workerInputJson = process.env.AAMP_WORKER_INPUT;
 if (workerInputJson) {
   const input = JSON.parse(workerInputJson) as AampWorkerInput;
+
+  // Register custom providers from ~/.kodax/config.json before resolving provider.
+  // The worker runs in a forked child process with a fresh memory space, so custom
+  // providers registered in the parent process are not inherited automatically.
+  prepareRuntimeConfig();
 
   const runtime = new KodaXAampRuntime({
     provider: input.provider,

@@ -167,18 +167,21 @@ export class KodaXAampServer {
       model: this.model ?? '(default)',
     });
     try {
-      await this.transport.listen(async (dispatch) => {
-        try {
-          await this.handleDispatch(dispatch);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.logger.error('dispatch.unhandled_error', 'unhandled dispatch error', {
-            taskId: dispatch.taskId,
-            mailbox: this.mailboxEmail ?? '(configured elsewhere)',
-            error: message,
-          });
-        }
-      });
+      await this.transport.listen(
+        async (dispatch) => {
+          try {
+            await this.handleDispatch(dispatch);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error('dispatch.unhandled_error', 'unhandled dispatch error', {
+              taskId: dispatch.taskId,
+              mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+              error: message,
+            });
+          }
+        },
+        (targetTaskId) => this.handleCancel(targetTaskId),
+      );
       this.logger.info('worker.started', 'worker listening for task.dispatch messages', {
         mailbox: this.mailboxEmail ?? '(configured elsewhere)',
       });
@@ -207,30 +210,25 @@ export class KodaXAampServer {
     await this.transport.dispose?.();
   }
 
-  async handleDispatch(dispatch: AampDispatchEnvelope): Promise<void> {
-    // Cancel request: body is the taskId of the running task to kill.
-    // Subject may arrive with an "[AAMP Task] " prefix added by the transport layer.
-    const normalizedSubject = dispatch.subject?.trim().replace(/^\[AAMP Task\]\s*/i, '');
-    if (normalizedSubject === 'Cancel') {
-      const targetTaskId = dispatch.bodyText.trim();
-      const handle = this.taskProcesses.get(targetTaskId);
-      if (handle) {
-        this.logger.info('task.cancel_requested', 'cancelling running task process', {
-          targetTaskId,
-          pid: handle.pid,
-          mailbox: this.mailboxEmail ?? '(configured elsewhere)',
-        });
-        handle.kill();
-        this.taskProcesses.delete(targetTaskId);
-      } else {
-        this.logger.info('task.cancel_not_found', 'no running process found for cancel target', {
-          targetTaskId,
-          mailbox: this.mailboxEmail ?? '(configured elsewhere)',
-        });
-      }
-      return;
+  handleCancel(targetTaskId: string): void {
+    const handle = this.taskProcesses.get(targetTaskId);
+    if (handle) {
+      this.logger.info('task.cancel_requested', 'cancelling running task process', {
+        targetTaskId,
+        pid: handle.pid,
+        mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+      });
+      handle.kill();
+      this.taskProcesses.delete(targetTaskId);
+    } else {
+      this.logger.info('task.cancel_not_found', 'no running process found for cancel target', {
+        targetTaskId,
+        mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+      });
     }
+  }
 
+  async handleDispatch(dispatch: AampDispatchEnvelope): Promise<void> {
     let record = await this.taskStore.get(dispatch.taskId);
     if (!record) {
       this.logger.info('dispatch.received', 'received task.dispatch', {

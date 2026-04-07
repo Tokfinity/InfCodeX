@@ -44,7 +44,10 @@ export interface AampTaskStore {
 }
 
 export interface AampTransport {
-  listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void>;
+  listen(
+    handler: (dispatch: AampDispatchEnvelope) => Promise<void>,
+    cancelHandler?: (targetTaskId: string) => void,
+  ): Promise<void>;
   sendAck(ack: AampTaskAck): Promise<void>;
   sendResult(result: AampTaskResult): Promise<void>;
   dispose?(): Promise<void>;
