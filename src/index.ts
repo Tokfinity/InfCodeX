@@ -98,3 +98,4 @@ export {
   type ExecutionPlan,
   FileSessionStorage,
 } from '@kodax/repl';
+export type { KodaXAampConfig, KodaXAampProfileConfig, KodaXUserConfig } from '@kodax/repl';

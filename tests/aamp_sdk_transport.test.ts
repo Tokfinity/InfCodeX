@@ -117,4 +117,39 @@ describe('AampSdkTransport', () => {
       }),
     );
   });
+
+  it('logs task.dispatch handler failures instead of leaking rejected promises', async () => {
+    const transport = new AampSdkTransport({
+      email: 'agent@example.com',
+      jmapToken: 'token',
+      jmapUrl: 'https://meshmail.ai',
+      smtpHost: 'meshmail.ai',
+      smtpPassword: 'secret',
+    }, logger);
+
+    const handler = vi.fn(async () => {
+      throw new Error('boom');
+    });
+    await transport.listen(handler);
+
+    const client = clientInstances[0]!;
+    client.handlers.get('task.dispatch')?.({
+      taskId: 'task-2',
+      from: 'sender@example.com',
+      subject: 'hello',
+      bodyText: 'hi',
+      messageId: 'msg-2',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'dispatch.handler_failed',
+      'task.dispatch handler failed',
+      expect.objectContaining({
+        mailbox: 'agent@example.com',
+        taskId: 'task-2',
+        error: 'boom',
+      }),
+    );
+  });
 });

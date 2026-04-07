@@ -36,16 +36,24 @@ class MockAampTransport implements AampTransport {
   readonly acks: AampTaskAck[] = [];
   readonly results: AampTaskResult[] = [];
   private handler: ((dispatch: AampDispatchEnvelope) => Promise<void>) | null = null;
+  ackError: Error | null = null;
+  resultError: Error | null = null;
 
   async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
     this.handler = handler;
   }
 
   async sendAck(ack: AampTaskAck): Promise<void> {
+    if (this.ackError) {
+      throw this.ackError;
+    }
     this.acks.push(ack);
   }
 
   async sendResult(result: AampTaskResult): Promise<void> {
+    if (this.resultError) {
+      throw this.resultError;
+    }
     this.results.push(result);
   }
 
@@ -224,5 +232,44 @@ describe('KodaXAampServer', () => {
 
     await first.stop();
     await expect(second.start()).resolves.toBeUndefined();
+  });
+
+  it('swallows secondary sendResult failures after a task error so the worker stays alive', async () => {
+    runKodaXMock.mockRejectedValue(new Error('primary execution failed'));
+
+    const transport = new MockAampTransport();
+    transport.resultError = new Error('HTTP send failed: 401');
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+    });
+
+    await server.start();
+    await expect(transport.dispatch({
+      taskId: 'task-3',
+      from: 'agent@example.com',
+      bodyText: 'Do it',
+      messageId: 'msg-3',
+    })).resolves.toBeUndefined();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'task.failed',
+      'task failed',
+      expect.objectContaining({
+        taskId: 'task-3',
+        error: 'primary execution failed',
+      }),
+    );
+    expect(logger.error).toHaveBeenCalledWith(
+      'task.failure_result_send_failed',
+      'failed to send failed task.result',
+      expect.objectContaining({
+        taskId: 'task-3',
+        error: 'HTTP send failed: 401',
+        originalError: 'primary execution failed',
+      }),
+    );
   });
 });

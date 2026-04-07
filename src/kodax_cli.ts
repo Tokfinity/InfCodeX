@@ -90,7 +90,7 @@ export {
 export type { KodaXCommand, KodaXCommandContext };
 // ============== CLI Help Topics ==============
 
-type RuntimeAampConfig = {
+type RuntimeAampProfileConfig = {
   email?: string;
   jmapToken?: string;
   jmapUrl?: string;
@@ -100,6 +100,14 @@ type RuntimeAampConfig = {
   allowInsecureTls?: boolean;
   logLevel?: AampLogLevel;
 };
+
+type RuntimeAampConfig = {
+  profiles?: Record<string, RuntimeAampProfileConfig>;
+  _invalidProfiles?: boolean;
+};
+
+const REQUIRED_AAMP_OPTION_FIELDS = ['email', 'jmapToken', 'jmapUrl', 'smtpHost', 'smtpPassword'] as const;
+type RequiredAampOptionField = (typeof REQUIRED_AAMP_OPTION_FIELDS)[number];
 
 const CLI_HELP_TOPICS: Record<string, () => void> = {
   acp: () => {
@@ -132,17 +140,18 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  kodax aamp serve [options]\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory used for task execution');
+    console.log(chalk.dim('  --profile <name>             ') + 'AAMP profile name under aamp.profiles');
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider override (defaults to normal KodaX provider config)');
     console.log(chalk.dim('  --model <name>               ') + 'Model override (defaults to normal KodaX model config)');
     console.log(chalk.dim('  --email <addr>               ') + 'AAMP mailbox email');
-    console.log(chalk.dim('  --jmap-token <token>         ') + 'JMAP auth token (or KODAX_AAMP_JMAP_TOKEN)');
+    console.log(chalk.dim('  --jmap-token <token>         ') + 'JMAP auth token');
     console.log(chalk.dim('  --jmap-url <url>             ') + 'JMAP base URL');
     console.log(chalk.dim('  --smtp-host <host>           ') + 'SMTP host');
     console.log(chalk.dim('  --smtp-port <port>           ') + 'SMTP port (default: 587)');
     console.log(chalk.dim('  --smtp-password <password>   ') + 'SMTP password');
     console.log(chalk.dim('  --allow-insecure-tls         ') + 'Disable TLS certificate verification');
     console.log(chalk.dim('  --log-level <level>          ') + 'AAMP log level: off, error, info, debug (default: info)');
-    console.log(chalk.dim('  KODAX_AAMP_LOG=<level>       ') + 'Same as --log-level');
+    console.log(chalk.dim('  Config shape                 ') + '~/.kodax/config.json -> aamp.profiles.<name>');
     console.log(chalk.dim('  Log files                    ') + '~/.kodax/aamp/logs/YYYY-MM-DD.jsonl\n');
   },
   skill: () => {
@@ -419,6 +428,7 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log();
     console.log('Options:');
     console.log('  --cwd <dir>                  Working directory used for task execution');
+    console.log('  --profile <name>             AAMP profile name under aamp.profiles');
     console.log('  -m, --provider <name>        Provider override (defaults to normal KodaX provider config)');
     console.log('  --model <name>               Model override (defaults to normal KodaX model config)');
     console.log('  --email <addr>               AAMP mailbox email');
@@ -429,25 +439,83 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log('  --smtp-password <password>   SMTP password');
     console.log('  --allow-insecure-tls         Disable TLS certificate verification');
     console.log('  --log-level <level>          AAMP log level: off, error, info, debug');
-    console.log('  KODAX_AAMP_LOG=<level>       Same as --log-level');
+    console.log('  Config shape                 ~/.kodax/config.json -> aamp.profiles.<name>');
     return true;
   }
 
   return false;
 }
 
-function readRequiredAampOption(
-  value: string | undefined,
-  configuredValue: string | undefined,
-  envKey: string,
-  label: string,
-): string {
-  const resolved = value ?? process.env[envKey] ?? configuredValue;
-  if (resolved && resolved.trim()) {
-    return resolved.trim();
+function printMissingNestedSubcommand(commandName: 'acp' | 'aamp', expectedSubcommand: 'serve'): void {
+  console.error(chalk.red(`\n[Missing subcommand] \`kodax ${commandName}\` requires \`${expectedSubcommand}\`.`));
+  console.error(chalk.dim(`Use \`kodax ${commandName} ${expectedSubcommand} [options]\`.\n`));
+}
+
+function normalizeOptionalString(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
   }
 
-  throw new Error(`Missing AAMP ${label}. Provide --${label}, set ${envKey}, or add aamp.${label.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase())} to ~/.kodax/config.json.`);
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readAampStringOption(
+  value: string | undefined,
+  configuredValue: string | undefined,
+): string | undefined {
+  return normalizeOptionalString(value) ?? normalizeOptionalString(configuredValue);
+}
+
+function readConfiguredAampProfiles(aampConfig: RuntimeAampConfig | undefined): Record<string, RuntimeAampProfileConfig> {
+  if (!aampConfig) {
+    return {};
+  }
+  if ((aampConfig as { _invalidProfiles?: boolean })._invalidProfiles === true) {
+    throw new Error('Invalid AAMP config in ~/.kodax/config.json: expected aamp.profiles to be an object.');
+  }
+
+  const profiles = (aampConfig as { profiles?: unknown }).profiles;
+  if (profiles === undefined) {
+    return {};
+  }
+  if (!profiles || typeof profiles !== 'object' || Array.isArray(profiles)) {
+    throw new Error('Invalid AAMP config in ~/.kodax/config.json: expected aamp.profiles to be an object.');
+  }
+
+  return profiles as Record<string, RuntimeAampProfileConfig>;
+}
+
+function readConfiguredAampProfile(
+  aampConfig: RuntimeAampConfig | undefined,
+  profileName: string | undefined,
+): RuntimeAampProfileConfig | undefined {
+  const normalizedProfileName = normalizeOptionalString(profileName);
+  if (!normalizedProfileName) {
+    return undefined;
+  }
+
+  const profiles = readConfiguredAampProfiles(aampConfig);
+  const profile = profiles[normalizedProfileName];
+  if (!profile) {
+    throw new Error(`Unknown AAMP profile "${normalizedProfileName}". Add it under aamp.profiles in ~/.kodax/config.json or omit --profile and pass all required CLI flags.`);
+  }
+  if (typeof profile !== 'object' || Array.isArray(profile)) {
+    throw new Error(`Invalid AAMP profile "${normalizedProfileName}" in ~/.kodax/config.json. Expected an object.`);
+  }
+
+  return profile as RuntimeAampProfileConfig;
+}
+
+function assertRequiredAampOptionsPresent(config: Partial<Record<RequiredAampOptionField, string>>): void {
+  const missing = REQUIRED_AAMP_OPTION_FIELDS.filter((field) => !normalizeOptionalString(config[field]));
+  if (missing.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `Missing required AAMP options: ${missing.join(', ')}. Provide them via --profile <name> or explicit CLI flags.`,
+  );
 }
 
 function normalizeAampJmapUrl(url: string): string {
@@ -457,9 +525,8 @@ function normalizeAampJmapUrl(url: string): string {
 function readAampLogLevelOption(
   value: string | undefined,
   configuredValue: AampLogLevel | undefined,
-  envKey = 'KODAX_AAMP_LOG',
 ): AampLogLevel {
-  const resolved = value ?? process.env[envKey] ?? configuredValue;
+  const resolved = normalizeOptionalString(value) ?? configuredValue;
   if (!resolved) {
     return 'info';
   }
@@ -728,6 +795,7 @@ async function main() {
     .command('serve')
     .description('Run the AAMP worker server')
     .option('--cwd <dir>', 'Working directory used for task execution')
+    .option('--profile <name>', 'AAMP profile name under aamp.profiles')
     .option('-m, --provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--email <addr>', 'AAMP mailbox email')
@@ -740,6 +808,7 @@ async function main() {
     .option('--log-level <level>', 'AAMP log level: off, error, info, debug')
     .action(async (subcommandOptions: {
       cwd?: string;
+      profile?: string;
       provider?: string;
       model?: string;
       email?: string;
@@ -754,28 +823,30 @@ async function main() {
       const config = prepareRuntimeConfig() as ReturnType<typeof prepareRuntimeConfig> & {
         aamp?: RuntimeAampConfig;
       };
-      const aampConfig: RuntimeAampConfig = config.aamp ?? {};
+      const configuredProfile = readConfiguredAampProfile(config.aamp, subcommandOptions.profile);
+      const resolvedAampConfig = {
+        email: readAampStringOption(subcommandOptions.email, configuredProfile?.email),
+        jmapToken: readAampStringOption(subcommandOptions.jmapToken, configuredProfile?.jmapToken),
+        jmapUrl: readAampStringOption(subcommandOptions.jmapUrl, configuredProfile?.jmapUrl),
+        smtpHost: readAampStringOption(subcommandOptions.smtpHost, configuredProfile?.smtpHost),
+        smtpPassword: readAampStringOption(subcommandOptions.smtpPassword, configuredProfile?.smtpPassword),
+      };
+      assertRequiredAampOptionsPresent(resolvedAampConfig);
+
       const logger = createDefaultAampLogger({
-        logLevel: readAampLogLevelOption(subcommandOptions.logLevel, aampConfig.logLevel),
+        logLevel: readAampLogLevelOption(subcommandOptions.logLevel, configuredProfile?.logLevel),
       });
-      const mailboxEmail = readRequiredAampOption(
-        subcommandOptions.email,
-        aampConfig.email,
-        'KODAX_AAMP_EMAIL',
-        'email',
-      );
+      const mailboxEmail = resolvedAampConfig.email!;
       const transport = new AampSdkTransport({
         email: mailboxEmail,
-        jmapToken: readRequiredAampOption(subcommandOptions.jmapToken, aampConfig.jmapToken, 'KODAX_AAMP_JMAP_TOKEN', 'jmap-token'),
-        jmapUrl: normalizeAampJmapUrl(
-          readRequiredAampOption(subcommandOptions.jmapUrl, aampConfig.jmapUrl, 'KODAX_AAMP_JMAP_URL', 'jmap-url'),
-        ),
-        smtpHost: readRequiredAampOption(subcommandOptions.smtpHost, aampConfig.smtpHost, 'KODAX_AAMP_SMTP_HOST', 'smtp-host'),
-        smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, aampConfig.smtpPort ?? 587),
-        smtpPassword: readRequiredAampOption(subcommandOptions.smtpPassword, aampConfig.smtpPassword, 'KODAX_AAMP_SMTP_PASSWORD', 'smtp-password'),
+        jmapToken: resolvedAampConfig.jmapToken!,
+        jmapUrl: normalizeAampJmapUrl(resolvedAampConfig.jmapUrl!),
+        smtpHost: resolvedAampConfig.smtpHost!,
+        smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, configuredProfile?.smtpPort ?? 587),
+        smtpPassword: resolvedAampConfig.smtpPassword!,
         rejectUnauthorized: subcommandOptions.allowInsecureTls === true
           ? false
-          : !(aampConfig.allowInsecureTls ?? false),
+          : !(configuredProfile?.allowInsecureTls ?? false),
       }, logger);
 
       await runAampServer({
@@ -1063,6 +1134,11 @@ async function main() {
       console.log(acpCommand.helpInformation());
       return;
     }
+    if (argv[1]?.startsWith('-')) {
+      printMissingNestedSubcommand('acp', 'serve');
+      process.exitCode = 1;
+      return;
+    }
 
     const acpSubcommand = argv[1];
     if (acpSubcommand && (argv.includes('-h') || argv.includes('--help'))) {
@@ -1075,6 +1151,11 @@ async function main() {
   if (argv[0] === 'aamp') {
     if (argv.length === 1 || argv[1] === '-h' || argv[1] === '--help') {
       console.log(aampCommand.helpInformation());
+      return;
+    }
+    if (argv[1]?.startsWith('-')) {
+      printMissingNestedSubcommand('aamp', 'serve');
+      process.exitCode = 1;
       return;
     }
 

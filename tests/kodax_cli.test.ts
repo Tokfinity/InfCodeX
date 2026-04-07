@@ -167,10 +167,50 @@ describe('AAMP CLI', () => {
     prepareRuntimeConfigMock.mockReset();
     prepareRuntimeConfigMock.mockReturnValue({});
     createDefaultAampLoggerMock.mockClear();
+    delete process.env.KODAX_AAMP_EMAIL;
+    delete process.env.KODAX_AAMP_JMAP_TOKEN;
+    delete process.env.KODAX_AAMP_JMAP_URL;
+    delete process.env.KODAX_AAMP_SMTP_HOST;
+    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
+    delete process.env.KODAX_AAMP_LOG;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    delete process.env.KODAX_AAMP_EMAIL;
+    delete process.env.KODAX_AAMP_JMAP_TOKEN;
+    delete process.env.KODAX_AAMP_JMAP_URL;
+    delete process.env.KODAX_AAMP_SMTP_HOST;
+    delete process.env.KODAX_AAMP_SMTP_PASSWORD;
+    delete process.env.KODAX_AAMP_LOG;
+  });
+
+  it('reports a missing serve subcommand instead of treating aamp options as root command options', async () => {
+    const argv = process.argv;
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      '--profile', 'default',
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+      process.exitCode = originalExitCode;
+    }
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[Missing subcommand] `kodax aamp` requires `serve`.'),
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Use `kodax aamp serve [options]`.'),
+    );
+    consoleErrorSpy.mockRestore();
   });
 
   it('wires kodax aamp serve into the AAMP transport adapter', async () => {
@@ -213,18 +253,22 @@ describe('AAMP CLI', () => {
     });
   });
 
-  it('loads AAMP defaults from ~/.kodax/config.json when CLI flags are absent', async () => {
+  it('loads AAMP profile defaults from ~/.kodax/config.json when --profile is specified', async () => {
     const argv = process.argv;
     prepareRuntimeConfigMock.mockReturnValue({
       aamp: {
-        email: 'config-agent@example.com',
-        jmapToken: 'config-token',
-        jmapUrl: 'https://meshmail.ai/jmap',
-        smtpHost: 'meshmail.ai',
-        smtpPort: 2525,
-        smtpPassword: 'config-secret',
-        allowInsecureTls: true,
-        logLevel: 'debug',
+        profiles: {
+          mailboxB: {
+            email: 'config-agent@example.com',
+            jmapToken: 'config-token',
+            jmapUrl: 'https://meshmail.ai/jmap',
+            smtpHost: 'meshmail.ai',
+            smtpPort: 2525,
+            smtpPassword: 'config-secret',
+            allowInsecureTls: true,
+            logLevel: 'debug',
+          },
+        },
       },
     });
     process.argv = [
@@ -232,6 +276,7 @@ describe('AAMP CLI', () => {
       'kodax',
       'aamp',
       'serve',
+      '--profile', 'mailboxB',
       '--cwd', TEST_DIR,
     ];
 
@@ -256,6 +301,134 @@ describe('AAMP CLI', () => {
     expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
       logLevel: 'debug',
     });
+  });
+
+  it('lets CLI flags override a configured AAMP profile', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: {
+          mailboxB: {
+            email: 'config-agent@example.com',
+            jmapToken: 'config-token',
+            jmapUrl: 'https://meshmail.ai/jmap',
+            smtpHost: 'meshmail.ai',
+            smtpPort: 2525,
+            smtpPassword: 'config-secret',
+            allowInsecureTls: false,
+            logLevel: 'debug',
+          },
+        },
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--email', 'override@example.com',
+      '--smtp-password', 'override-secret',
+      '--log-level', 'error',
+      '--allow-insecure-tls',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'override@example.com',
+      jmapToken: 'config-token',
+      smtpPassword: 'override-secret',
+      rejectUnauthorized: false,
+    }), expect.any(Object));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'error',
+    });
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      mailboxEmail: 'override@example.com',
+    }));
+  });
+
+  it('requires all mandatory CLI flags when no profile is specified', async () => {
+    const argv = process.argv;
+    process.env.KODAX_AAMP_EMAIL = 'ignored@example.com';
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Missing required AAMP options: email, jmapToken, jmapUrl, smtpHost, smtpPassword. Provide them via --profile <name> or explicit CLI flags.',
+      );
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).not.toHaveBeenCalled();
+    expect(runAampServerMock).not.toHaveBeenCalled();
+  });
+
+  it('fails when the requested AAMP profile does not exist', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: {
+          mailboxA: {
+            email: 'config-agent@example.com',
+          },
+        },
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Unknown AAMP profile "mailboxB". Add it under aamp.profiles in ~/.kodax/config.json or omit --profile and pass all required CLI flags.',
+      );
+    } finally {
+      process.argv = argv;
+    }
+  });
+
+  it('fails when aamp.profiles is malformed', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        profiles: 'bad-shape',
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--profile', 'mailboxB',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await expect(main()).rejects.toThrow(
+        'Invalid AAMP config in ~/.kodax/config.json: expected aamp.profiles to be an object.',
+      );
+    } finally {
+      process.argv = argv;
+    }
   });
 });
 

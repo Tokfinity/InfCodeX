@@ -90,7 +90,16 @@ export class KodaXAampServer {
     });
     try {
       await this.transport.listen(async (dispatch) => {
-        await this.handleDispatch(dispatch);
+        try {
+          await this.handleDispatch(dispatch);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.logger.error('dispatch.unhandled_error', 'unhandled dispatch error', {
+            taskId: dispatch.taskId,
+            mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+            error: message,
+          });
+        }
       });
       this.logger.info('worker.started', 'worker listening for task.dispatch messages', {
         mailbox: this.mailboxEmail ?? '(configured elsewhere)',
@@ -178,17 +187,35 @@ export class KodaXAampServer {
         sessionId: record.sessionId,
         error: message,
       });
-      await this.transport.sendResult({
-        taskId: dispatch.taskId,
-        to: dispatch.from,
-        status: 'failed',
-        output: message,
-        inReplyToMessageId: dispatch.messageId,
-      });
-      await this.taskStore.update(dispatch.taskId, {
-        status: 'failed',
-        resultSummary: message,
-      });
+      try {
+        await this.transport.sendResult({
+          taskId: dispatch.taskId,
+          to: dispatch.from,
+          status: 'failed',
+          output: message,
+          inReplyToMessageId: dispatch.messageId,
+        });
+      } catch (sendError) {
+        this.logger.error('task.failure_result_send_failed', 'failed to send failed task.result', {
+          taskId: dispatch.taskId,
+          sessionId: record.sessionId,
+          error: sendError instanceof Error ? sendError.message : String(sendError),
+          originalError: message,
+        });
+      }
+      try {
+        await this.taskStore.update(dispatch.taskId, {
+          status: 'failed',
+          resultSummary: message,
+        });
+      } catch (updateError) {
+        this.logger.error('task.failure_state_update_failed', 'failed to persist failed task state', {
+          taskId: dispatch.taskId,
+          sessionId: record.sessionId,
+          error: updateError instanceof Error ? updateError.message : String(updateError),
+          originalError: message,
+        });
+      }
     }
   }
 }

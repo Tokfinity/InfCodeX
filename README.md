@@ -583,12 +583,7 @@ kodax aamp serve \
   --smtp-host localhost \
   --smtp-password <password>
 
-KODAX_AAMP_EMAIL=agent@example.com \
-KODAX_AAMP_JMAP_TOKEN=<token> \
-KODAX_AAMP_JMAP_URL=http://localhost:8080 \
-KODAX_AAMP_SMTP_HOST=localhost \
-KODAX_AAMP_SMTP_PASSWORD=<password> \
-kodax aamp serve --cwd /path/to/repo
+kodax aamp serve --profile mailbox-a --cwd /path/to/repo
 ```
 
 This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
@@ -600,38 +595,49 @@ Current v1 behavior:
 - outbound `task.result` is sent through the real AAMP SDK
 - inbound `task.ack` is handled by `aamp-sdk` automatic acknowledgement logic
 
-Required configuration can be passed either as CLI flags or environment variables:
-
-- `KODAX_AAMP_EMAIL`
-- `KODAX_AAMP_JMAP_TOKEN`
-- `KODAX_AAMP_JMAP_URL`
-- `KODAX_AAMP_SMTP_HOST`
-- `KODAX_AAMP_SMTP_PASSWORD`
-
-The same defaults can also live in `~/.kodax/config.json`:
+Configuration file support is profile-based only. Each AAMP mailbox must live under `aamp.profiles.<name>` in `~/.kodax/config.json`:
 
 ```json
 {
   "aamp": {
-    "email": "agent@meshmail.ai",
-    "jmapToken": "base64(email:password)",
-    "jmapUrl": "https://meshmail.ai",
-    "smtpHost": "meshmail.ai",
-    "smtpPort": 587,
-    "smtpPassword": "mailbox-password",
-    "allowInsecureTls": false,
-    "logLevel": "info"
+    "profiles": {
+      "mailbox-a": {
+        "email": "agent@meshmail.ai",
+        "jmapToken": "base64(email:password)",
+        "jmapUrl": "https://meshmail.ai",
+        "smtpHost": "meshmail.ai",
+        "smtpPort": 587,
+        "smtpPassword": "mailbox-password",
+        "allowInsecureTls": false,
+        "logLevel": "info"
+      }
+    }
   }
 }
 ```
 
-Resolution order is `CLI flags > environment variables > ~/.kodax/config.json`.
+Resolution order is `CLI flags > selected profile in ~/.kodax/config.json`.
+
+Startup is strict:
+
+- If `--profile <name>` is provided, that profile must exist.
+- If `--profile` is omitted, all required AAMP fields must be passed explicitly via CLI.
+- CLI flags always override the selected profile.
+
+Required AAMP fields:
+
+- `email`
+- `jmapToken`
+- `jmapUrl`
+- `smtpHost`
+- `smtpPassword`
 
 Provider and model are not duplicated under `aamp`. `kodax aamp serve` reuses the normal top-level KodaX `provider` / `model` configuration unless you pass `--provider` or `--model` as one-off overrides.
 
 Optional flags:
 
 - `--cwd`
+- `--profile`
 - `--provider`
 - `--model`
 - `--smtp-port`
@@ -641,7 +647,6 @@ Optional flags:
 Logging:
 
 - `--log-level off|error|info|debug`
-- `KODAX_AAMP_LOG=off|error|info|debug`
 - JSONL log files are written under `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
 
 This first version intentionally focuses on the minimal async loop: `task.dispatch -> task.result`. Richer protocol flows such as `task.help_needed`, attachments, and structured result mapping can be layered on later without changing the KodaX runtime core.

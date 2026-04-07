@@ -43,7 +43,7 @@ export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');
 // UI display constants
 export const PREVIEW_MAX_LENGTH = 60;
 
-export interface KodaXAampConfig {
+export interface KodaXAampProfileConfig {
   email?: string;
   jmapToken?: string;
   jmapUrl?: string;
@@ -52,6 +52,11 @@ export interface KodaXAampConfig {
   smtpPassword?: string;
   allowInsecureTls?: boolean;
   logLevel?: 'off' | 'error' | 'info' | 'debug';
+}
+
+export interface KodaXAampConfig {
+  profiles?: Record<string, KodaXAampProfileConfig>;
+  _invalidProfiles?: boolean;
 }
 
 export interface KodaXUserConfig {
@@ -240,13 +245,13 @@ function normalizeConfiguredExtensions(value: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : [];
 }
 
-function normalizeAampConfig(value: unknown): KodaXAampConfig | undefined {
+function normalizeAampProfileConfig(value: unknown): KodaXAampProfileConfig | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
   }
 
   const parsed = value as Record<string, unknown>;
-  const normalized: KodaXAampConfig = {};
+  const normalized: KodaXAampProfileConfig = {};
 
   if (typeof parsed.email === 'string') {
     normalized.email = parsed.email;
@@ -273,10 +278,37 @@ function normalizeAampConfig(value: unknown): KodaXAampConfig | undefined {
     typeof parsed.logLevel === 'string'
     && ['off', 'error', 'info', 'debug'].includes(parsed.logLevel)
   ) {
-    normalized.logLevel = parsed.logLevel as KodaXAampConfig['logLevel'];
+    normalized.logLevel = parsed.logLevel as KodaXAampProfileConfig['logLevel'];
   }
 
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return normalized;
+}
+
+function normalizeAampConfig(value: unknown): KodaXAampConfig | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const parsed = value as Record<string, unknown>;
+  if (!parsed.profiles || typeof parsed.profiles !== 'object' || Array.isArray(parsed.profiles)) {
+    return 'profiles' in parsed ? { _invalidProfiles: true } : undefined;
+  }
+
+  const normalizedProfiles = Object.entries(parsed.profiles as Record<string, unknown>)
+    .map(([name, profileValue]) => [name.trim(), normalizeAampProfileConfig(profileValue)] as const)
+    .filter(
+      (
+        entry,
+      ): entry is readonly [string, KodaXAampProfileConfig] => entry[0].length > 0 && entry[1] !== undefined,
+    );
+
+  if (normalizedProfiles.length === 0) {
+    return undefined;
+  }
+
+  return {
+    profiles: Object.fromEntries(normalizedProfiles),
+  };
 }
 
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(

@@ -25,8 +25,16 @@ export class AampSdkTransport implements AampTransport {
 
   async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
     this.ensureConnectionEventLogging();
-    this.client.on('task.dispatch', async (task) => {
-      await handler(toDispatchEnvelope(task));
+    this.client.on('task.dispatch', (task) => {
+      const dispatch = toDispatchEnvelope(task);
+      void handler(dispatch).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.logger.error('dispatch.handler_failed', 'task.dispatch handler failed', {
+          mailbox: this.client.email,
+          taskId: dispatch.taskId,
+          error: message,
+        });
+      });
     });
     await this.client.connect();
   }
