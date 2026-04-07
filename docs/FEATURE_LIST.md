@@ -1,6 +1,6 @@
 # Feature 总表
 
-> Last updated: 2026-04-08
+> Last updated: 2026-04-07
 
 > 中文阅读说明：
 > 这份 `FEATURE_LIST` 是 roadmap 的总索引。
@@ -13,18 +13,18 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-048` |
-| Total tracked features | `48` |
+| Tracked feature IDs | `001-047` |
+| Total tracked features | `47` |
 | Completed | `35` |
 | InProgress | `1` |
-| Planned | `12` |
+| Planned | `11` |
 | Current released version | `v0.7.13` |
 
 ### 各版本未完成分布
 
 | Version | Open features |
 |---|---|
-| `v0.7.14` | `3` |
+| `v0.7.14` | `2` |
 | `v0.7.20` | `1` |
 | `v0.8.0` | `4` |
 | `v0.9.0` | `3` |
@@ -44,7 +44,6 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `048` | AAMP Multi-Instance Worker Coordination | Enhancement | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_048-aamp-multi-instance-worker-coordination) |
 | `047` | Demo Full-Auto Permission Mode | Enhancement | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_047-demo-full-auto-permission-mode) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_007-theme-system-consolidation) |
 | `023` | Dual-Mode Terminal UX | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_023-dual-mode-terminal-ux) |
