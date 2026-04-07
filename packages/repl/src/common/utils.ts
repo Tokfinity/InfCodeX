@@ -43,6 +43,32 @@ export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');
 // UI display constants
 export const PREVIEW_MAX_LENGTH = 60;
 
+export interface KodaXAampConfig {
+  email?: string;
+  jmapToken?: string;
+  jmapUrl?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpPassword?: string;
+  allowInsecureTls?: boolean;
+  logLevel?: 'off' | 'error' | 'info' | 'debug';
+}
+
+export interface KodaXUserConfig {
+  provider?: string;
+  model?: string;
+  thinking?: boolean;
+  reasoningMode?: KodaXReasoningMode;
+  agentMode?: KodaXAgentMode;
+  parallel?: boolean;
+  permissionMode?: string;
+  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
+  providerModels?: Record<string, string[]>;
+  customProviders?: KodaXCustomProviderConfig[];
+  extensions?: string[];
+  aamp?: KodaXAampConfig;
+}
+
 let cachedVersion: string | null = null;
 let shellEnvironmentHydrated = false;
 type FeatureProgressSnapshot = {
@@ -212,6 +238,45 @@ function normalizeConfiguredExtensions(value: unknown): string[] | undefined {
     .filter((entry) => entry.length > 0);
 
   return normalized.length > 0 ? normalized : [];
+}
+
+function normalizeAampConfig(value: unknown): KodaXAampConfig | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const parsed = value as Record<string, unknown>;
+  const normalized: KodaXAampConfig = {};
+
+  if (typeof parsed.email === 'string') {
+    normalized.email = parsed.email;
+  }
+  if (typeof parsed.jmapToken === 'string') {
+    normalized.jmapToken = parsed.jmapToken;
+  }
+  if (typeof parsed.jmapUrl === 'string') {
+    normalized.jmapUrl = parsed.jmapUrl;
+  }
+  if (typeof parsed.smtpHost === 'string') {
+    normalized.smtpHost = parsed.smtpHost;
+  }
+  if (typeof parsed.smtpPort === 'number' && Number.isFinite(parsed.smtpPort) && parsed.smtpPort >= 0) {
+    normalized.smtpPort = parsed.smtpPort;
+  }
+  if (typeof parsed.smtpPassword === 'string') {
+    normalized.smtpPassword = parsed.smtpPassword;
+  }
+  if (typeof parsed.allowInsecureTls === 'boolean') {
+    normalized.allowInsecureTls = parsed.allowInsecureTls;
+  }
+  if (
+    typeof parsed.logLevel === 'string'
+    && ['off', 'error', 'info', 'debug'].includes(parsed.logLevel)
+  ) {
+    normalized.logLevel = parsed.logLevel as KodaXAampConfig['logLevel'];
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string }>(
@@ -567,37 +632,17 @@ export function isProviderConfigured(name: string): boolean {
 }
 
 // Load config from ~/.kodax/config.json
-export function loadConfig(): {
-  provider?: string;
-  model?: string;
-  thinking?: boolean;
-  reasoningMode?: KodaXReasoningMode;
-  agentMode?: KodaXAgentMode;
-  parallel?: boolean;
-  permissionMode?: string;
-  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
-  providerModels?: Record<string, string[]>;
-  customProviders?: KodaXCustomProviderConfig[];
-  extensions?: string[];
-} {
+export function loadConfig(): KodaXUserConfig {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
-      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as {
-        provider?: string;
-        model?: string;
-        thinking?: boolean;
-        reasoningMode?: KodaXReasoningMode;
-        agentMode?: KodaXAgentMode;
-        parallel?: boolean;
-        permissionMode?: string;
-        providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
-        providerModels?: Record<string, string[]>;
-        customProviders?: KodaXCustomProviderConfig[];
+      const parsed = JSON.parse(fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8')) as KodaXUserConfig & {
         extensions?: unknown;
+        aamp?: unknown;
       };
       return migrateLegacyPermissionModeInConfig({
         ...parsed,
         extensions: normalizeConfiguredExtensions(parsed.extensions),
+        aamp: normalizeAampConfig(parsed.aamp),
       });
     }
   } catch {
@@ -614,25 +659,14 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
 }
 
 // Save config to ~/.kodax/config.json
-export function saveConfig(config: {
-  provider?: string;
-  model?: string;
-  thinking?: boolean;
-  reasoningMode?: KodaXReasoningMode;
-  agentMode?: KodaXAgentMode;
-  parallel?: boolean;
-  permissionMode?: string;
-  providerReasoningOverrides?: Record<string, KodaXReasoningOverride>;
-  providerModels?: Record<string, string[]>;
-  customProviders?: KodaXCustomProviderConfig[];
-  extensions?: string[];
-}): void {
+export function saveConfig(config: KodaXUserConfig): void {
   const current = loadConfig();
   const merged = { ...current, ...config };
   const normalizedExtensions = normalizeConfiguredExtensions(merged.extensions);
   if (normalizedExtensions !== undefined) {
     merged.extensions = normalizedExtensions;
   }
+  merged.aamp = normalizeAampConfig(merged.aamp);
   // Remove fields explicitly set to undefined (e.g. clearing model when switching provider)
   for (const key of Object.keys(config) as Array<keyof typeof config>) {
     if (config[key] === undefined) {

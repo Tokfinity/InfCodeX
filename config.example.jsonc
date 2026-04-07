@@ -120,5 +120,20 @@
 
     // ── Permission 权限配置 ────────────────────────────────────
     // 可选值: "plan" | "accept-edits" | "auto-in-project"
-    "permissionMode": "accept-edits"
+    "permissionMode": "accept-edits",
+
+    // ── AAMP Worker 配置（可选）───────────────────────────────
+    // 供 `kodax aamp serve` 读取的默认 mailbox 配置
+    // 优先级: CLI 参数 > 环境变量 > 此配置段
+    //
+    // "aamp": {
+    //     "email": "agent@meshmail.ai",
+    //     "jmapToken": "base64(email:password)",
+    //     "jmapUrl": "https://meshmail.ai",
+    //     "smtpHost": "meshmail.ai",
+    //     "smtpPort": 587,          // 默认 587
+    //     "smtpPassword": "mailbox-password",
+    //     "allowInsecureTls": false, // 默认 false
+    //     "logLevel": "info"         // 可选: off | error | info | debug，默认 info
+    // }
 }

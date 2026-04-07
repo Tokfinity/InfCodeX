@@ -1,6 +1,6 @@
 # Feature 总表
 
-> Last updated: 2026-04-01
+> Last updated: 2026-04-08
 
 > 中文阅读说明：
 > 这份 `FEATURE_LIST` 是 roadmap 的总索引。
@@ -13,18 +13,18 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-046` |
-| Total tracked features | `46` |
-| Completed | `34` |
+| Tracked feature IDs | `001-048` |
+| Total tracked features | `48` |
+| Completed | `35` |
 | InProgress | `1` |
-| Planned | `11` |
-| Current released version | `v0.7.10` |
+| Planned | `12` |
+| Current released version | `v0.7.13` |
 
-### 各版本待做分布
+### 各版本未完成分布
 
-| Version | Planned features |
+| Version | Open features |
 |---|---|
-| `v0.7.15` | `1` |
+| `v0.7.14` | `3` |
 | `v0.7.20` | `1` |
 | `v0.8.0` | `4` |
 | `v0.9.0` | `3` |
@@ -36,7 +36,7 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
-| `046` | AAMP SDK Transport Surface | New | High | `v0.7.15` | [v0.7.15](features/v0.7.15.md#feature_046-aamp-sdk-transport-surface) |
+| `046` | AAMP SDK Transport Surface | New | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_046-aamp-sdk-transport-surface) |
 
 ---
 
@@ -44,8 +44,9 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `048` | AAMP Multi-Instance Worker Coordination | Enhancement | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_048-aamp-multi-instance-worker-coordination) |
+| `047` | Demo Full-Auto Permission Mode | Enhancement | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_047-demo-full-auto-permission-mode) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_007-theme-system-consolidation) |
-| `045` | Provider Stream Resilience and Graceful Recovery | Enhancement | High | `v0.7.15` | [v0.7.15](features/v0.7.15.md#feature_045-provider-stream-resilience-and-graceful-recovery) |
 | `023` | Dual-Mode Terminal UX | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_023-dual-mode-terminal-ux) |
 | `026` | Roadmap Integrity and Planning Hygiene | Internal | High | `v0.7.20` | [v0.7.20](features/v0.7.20.md#feature_026-roadmap-integrity-and-planning-hygiene) |
 | `030` | Multi-Surface Delivery | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_030-multi-surface-delivery) |
@@ -109,6 +110,7 @@
 | `039` | Plan-Mode Dual-Write Allowlist | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |
 | `040` | ACP Server Support | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |
 | `041` | Tool Output Guardrails and Context Overflow Protection | `v0.6.20` (unreleased) | [v0.6.20](features/v0.6.20.md) |
+| `045` | Provider Stream Resilience and Graceful Recovery | `v0.7.13` | [v0.7.15](features/v0.7.15.md#feature_045-provider-stream-resilience-and-graceful-recovery) |
 
 ---
 

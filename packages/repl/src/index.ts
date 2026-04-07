@@ -70,6 +70,7 @@ export {
   KODAX_CONFIG_FILE,
   PREVIEW_MAX_LENGTH,
 } from "./common/utils.js";
+export type { KodaXAampConfig, KodaXUserConfig } from "./common/utils.js";
 export {
   runWithPlanMode,
   listPlans,

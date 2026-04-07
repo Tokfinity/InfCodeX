@@ -1,4 +1,5 @@
 import { AampClient, type AampClientConfig, type TaskDispatch } from 'aamp-sdk';
+import { createDefaultAampLogger, type AampLogger } from './aamp_logger.js';
 import type { AampDispatchEnvelope, AampTaskAck, AampTaskResult, AampTransport } from './aamp_types.js';
 
 function toDispatchEnvelope(task: TaskDispatch): AampDispatchEnvelope {
@@ -14,12 +15,16 @@ function toDispatchEnvelope(task: TaskDispatch): AampDispatchEnvelope {
 
 export class AampSdkTransport implements AampTransport {
   private readonly client: AampClient;
+  private readonly logger: AampLogger;
+  private connectionEventWired = false;
 
-  constructor(config: AampClientConfig) {
+  constructor(config: AampClientConfig, logger: AampLogger = createDefaultAampLogger()) {
     this.client = new AampClient(config);
+    this.logger = logger;
   }
 
   async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
+    this.ensureConnectionEventLogging();
     this.client.on('task.dispatch', async (task) => {
       await handler(toDispatchEnvelope(task));
     });
@@ -43,5 +48,45 @@ export class AampSdkTransport implements AampTransport {
 
   async dispose(): Promise<void> {
     this.client.disconnect();
+  }
+
+  private ensureConnectionEventLogging(): void {
+    if (this.connectionEventWired) {
+      return;
+    }
+
+    this.connectionEventWired = true;
+    this.client.on('connected', () => {
+      const pollingFallback = this.client.isUsingPollingFallback();
+      this.logger.info(
+        pollingFallback ? 'jmap.connected_polling' : 'jmap.connected',
+        pollingFallback ? 'connected using polling fallback' : 'connected to JMAP push',
+        {
+          mailbox: this.client.email,
+          pollingFallback,
+        },
+      );
+    });
+    this.client.on('disconnected', (reason) => {
+      this.logger.error(
+        'jmap.disconnected',
+        'JMAP connection disconnected',
+        {
+          mailbox: this.client.email,
+          reason,
+        },
+      );
+    });
+    this.client.on('error', (error) => {
+      const pollingFallback = this.client.isUsingPollingFallback();
+      this.logger.error(
+        pollingFallback ? 'jmap.polling_fallback' : 'jmap.error',
+        error.message,
+        {
+          mailbox: this.client.email,
+          pollingFallback,
+        },
+      );
+    });
   }
 }

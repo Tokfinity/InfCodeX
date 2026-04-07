@@ -651,16 +651,16 @@ KodaX 也可以作为基于 `aamp-sdk` 的 AAMP 异步任务 worker 运行：
 kodax aamp serve \
   --email agent@example.com \
   --jmap-token <token> \
-  --jmap-url http://localhost:8080/jmap \
+  --jmap-url http://localhost:8080 \
   --smtp-host localhost \
   --smtp-password <password>
 
 KODAX_AAMP_EMAIL=agent@example.com \
 KODAX_AAMP_JMAP_TOKEN=<token> \
-KODAX_AAMP_JMAP_URL=http://localhost:8080/jmap \
+KODAX_AAMP_JMAP_URL=http://localhost:8080 \
 KODAX_AAMP_SMTP_HOST=localhost \
 KODAX_AAMP_SMTP_PASSWORD=<password> \
-kodax aamp serve --cwd /path/to/repo -m openai --model gpt-5.4
+kodax aamp serve --cwd /path/to/repo
 ```
 
 这个模式会监听 AAMP `task.dispatch` 消息，把每个任务桥接到 `runKodaX(...)` 执行，并通过同一个 mailbox transport 回发 `task.result`。
@@ -680,6 +680,27 @@ kodax aamp serve --cwd /path/to/repo -m openai --model gpt-5.4
 - `KODAX_AAMP_SMTP_HOST`
 - `KODAX_AAMP_SMTP_PASSWORD`
 
+同样也可以直接写到 `~/.kodax/config.json`：
+
+```json
+{
+  "aamp": {
+    "email": "agent@meshmail.ai",
+    "jmapToken": "base64(email:password)",
+    "jmapUrl": "https://meshmail.ai",
+    "smtpHost": "meshmail.ai",
+    "smtpPort": 587,
+    "smtpPassword": "mailbox-password",
+    "allowInsecureTls": false,
+    "logLevel": "info"
+  }
+}
+```
+
+解析优先级是：`CLI 参数 > 环境变量 > ~/.kodax/config.json`。
+
+`provider` 和 `model` 不会在 `aamp` 下重复配置。`kodax aamp serve` 默认沿用普通 KodaX 顶层配置里的 `provider` / `model`，只有在你显式传 `--provider` 或 `--model` 时才覆盖。
+
 可选参数：
 
 - `--cwd`
@@ -687,6 +708,13 @@ kodax aamp serve --cwd /path/to/repo -m openai --model gpt-5.4
 - `--model`
 - `--smtp-port`
 - `--allow-insecure-tls`
+- `--log-level`
+
+日志：
+
+- `--log-level off|error|info|debug`
+- `KODAX_AAMP_LOG=off|error|info|debug`
+- JSONL 日志文件写入 `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
 
 这个首版有意只覆盖最小异步闭环：`task.dispatch -> task.result`。像 `task.help_needed`、附件、结构化结果映射等 richer protocol flow，后续可以继续加，但不需要改动 KodaX runtime core。
 

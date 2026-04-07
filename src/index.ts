@@ -24,6 +24,14 @@ export {
   runAampServer,
   type KodaXAampServerOptions,
 } from './aamp_server.js';
+export {
+  AAMP_LOG_LEVELS,
+  JsonlAampLogger,
+  createDefaultAampLogger,
+  resolveAampLogLevel,
+  type AampLogLevel,
+  type AampLogger,
+} from './aamp_logger.js';
 export { KodaXAampRuntime, type KodaXAampRuntimeOptions } from './aamp_runtime.js';
 export { FileAampTaskStore } from './aamp_store.js';
 export { AampSdkTransport } from './aamp_sdk_transport.js';

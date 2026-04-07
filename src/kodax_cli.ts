@@ -11,6 +11,7 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
 import { runAampServer } from './aamp_server.js';
+import { AAMP_LOG_LEVELS, createDefaultAampLogger, type AampLogLevel } from './aamp_logger.js';
 import { AampSdkTransport } from './aamp_sdk_transport.js';
 import {
   getDefaultCommandDir,
@@ -89,6 +90,17 @@ export {
 export type { KodaXCommand, KodaXCommandContext };
 // ============== CLI Help Topics ==============
 
+type RuntimeAampConfig = {
+  email?: string;
+  jmapToken?: string;
+  jmapUrl?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpPassword?: string;
+  allowInsecureTls?: boolean;
+  logLevel?: AampLogLevel;
+};
+
 const CLI_HELP_TOPICS: Record<string, () => void> = {
   acp: () => {
     console.log(chalk.cyan('\nACP Server\n'));
@@ -120,15 +132,18 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  kodax aamp serve [options]\n'));
     console.log(chalk.bold('Options:'));
     console.log(chalk.dim('  --cwd <dir>                  ') + 'Working directory used for task execution');
-    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
-    console.log(chalk.dim('  --model <name>               ') + 'Model override');
+    console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider override (defaults to normal KodaX provider config)');
+    console.log(chalk.dim('  --model <name>               ') + 'Model override (defaults to normal KodaX model config)');
     console.log(chalk.dim('  --email <addr>               ') + 'AAMP mailbox email');
     console.log(chalk.dim('  --jmap-token <token>         ') + 'JMAP auth token (or KODAX_AAMP_JMAP_TOKEN)');
     console.log(chalk.dim('  --jmap-url <url>             ') + 'JMAP base URL');
     console.log(chalk.dim('  --smtp-host <host>           ') + 'SMTP host');
     console.log(chalk.dim('  --smtp-port <port>           ') + 'SMTP port (default: 587)');
     console.log(chalk.dim('  --smtp-password <password>   ') + 'SMTP password');
-    console.log(chalk.dim('  --allow-insecure-tls         ') + 'Disable TLS certificate verification\n');
+    console.log(chalk.dim('  --allow-insecure-tls         ') + 'Disable TLS certificate verification');
+    console.log(chalk.dim('  --log-level <level>          ') + 'AAMP log level: off, error, info, debug (default: info)');
+    console.log(chalk.dim('  KODAX_AAMP_LOG=<level>       ') + 'Same as --log-level');
+    console.log(chalk.dim('  Log files                    ') + '~/.kodax/aamp/logs/YYYY-MM-DD.jsonl\n');
   },
   skill: () => {
     console.log(chalk.cyan('\nSkill Utilities\n'));
@@ -404,8 +419,8 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log();
     console.log('Options:');
     console.log('  --cwd <dir>                  Working directory used for task execution');
-    console.log('  -m, --provider <name>        Provider to use');
-    console.log('  --model <name>               Model override');
+    console.log('  -m, --provider <name>        Provider override (defaults to normal KodaX provider config)');
+    console.log('  --model <name>               Model override (defaults to normal KodaX model config)');
     console.log('  --email <addr>               AAMP mailbox email');
     console.log('  --jmap-token <token>         JMAP auth token');
     console.log('  --jmap-url <url>             JMAP base URL');
@@ -413,6 +428,8 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log('  --smtp-port <port>           SMTP port');
     console.log('  --smtp-password <password>   SMTP password');
     console.log('  --allow-insecure-tls         Disable TLS certificate verification');
+    console.log('  --log-level <level>          AAMP log level: off, error, info, debug');
+    console.log('  KODAX_AAMP_LOG=<level>       Same as --log-level');
     return true;
   }
 
@@ -421,15 +438,38 @@ function printAampSubcommandHelp(name: string): boolean {
 
 function readRequiredAampOption(
   value: string | undefined,
+  configuredValue: string | undefined,
   envKey: string,
   label: string,
 ): string {
-  const resolved = value ?? process.env[envKey];
+  const resolved = value ?? process.env[envKey] ?? configuredValue;
   if (resolved && resolved.trim()) {
     return resolved.trim();
   }
 
-  throw new Error(`Missing AAMP ${label}. Provide --${label} or set ${envKey}.`);
+  throw new Error(`Missing AAMP ${label}. Provide --${label}, set ${envKey}, or add aamp.${label.replace(/-([a-z])/g, (_, char: string) => char.toUpperCase())} to ~/.kodax/config.json.`);
+}
+
+function normalizeAampJmapUrl(url: string): string {
+  return url.replace(/\/+$/, '').replace(/\/jmap$/i, '');
+}
+
+function readAampLogLevelOption(
+  value: string | undefined,
+  configuredValue: AampLogLevel | undefined,
+  envKey = 'KODAX_AAMP_LOG',
+): AampLogLevel {
+  const resolved = value ?? process.env[envKey] ?? configuredValue;
+  if (!resolved) {
+    return 'info';
+  }
+
+  const normalized = resolved.trim().toLowerCase();
+  if ((AAMP_LOG_LEVELS as readonly string[]).includes(normalized)) {
+    return normalized as AampLogLevel;
+  }
+
+  throw new Error(`Invalid AAMP log level "${resolved}". Expected one of: ${AAMP_LOG_LEVELS.join(', ')}.`);
 }
 
 function printSkillSubcommandHelp(name: string): boolean {
@@ -694,9 +734,10 @@ async function main() {
     .option('--jmap-token <token>', 'JMAP auth token')
     .option('--jmap-url <url>', 'JMAP base URL')
     .option('--smtp-host <host>', 'SMTP host')
-    .option('--smtp-port <port>', 'SMTP port', '587')
+    .option('--smtp-port <port>', 'SMTP port')
     .option('--smtp-password <password>', 'SMTP password')
     .option('--allow-insecure-tls', 'Disable TLS certificate verification')
+    .option('--log-level <level>', 'AAMP log level: off, error, info, debug')
     .action(async (subcommandOptions: {
       cwd?: string;
       provider?: string;
@@ -708,22 +749,42 @@ async function main() {
       smtpPort?: string;
       smtpPassword?: string;
       allowInsecureTls?: boolean;
+      logLevel?: string;
     }) => {
-      const transport = new AampSdkTransport({
-        email: readRequiredAampOption(subcommandOptions.email, 'KODAX_AAMP_EMAIL', 'email'),
-        jmapToken: readRequiredAampOption(subcommandOptions.jmapToken, 'KODAX_AAMP_JMAP_TOKEN', 'jmap-token'),
-        jmapUrl: readRequiredAampOption(subcommandOptions.jmapUrl, 'KODAX_AAMP_JMAP_URL', 'jmap-url'),
-        smtpHost: readRequiredAampOption(subcommandOptions.smtpHost, 'KODAX_AAMP_SMTP_HOST', 'smtp-host'),
-        smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, 587),
-        smtpPassword: readRequiredAampOption(subcommandOptions.smtpPassword, 'KODAX_AAMP_SMTP_PASSWORD', 'smtp-password'),
-        rejectUnauthorized: subcommandOptions.allowInsecureTls ? false : true,
+      const config = prepareRuntimeConfig() as ReturnType<typeof prepareRuntimeConfig> & {
+        aamp?: RuntimeAampConfig;
+      };
+      const aampConfig: RuntimeAampConfig = config.aamp ?? {};
+      const logger = createDefaultAampLogger({
+        logLevel: readAampLogLevelOption(subcommandOptions.logLevel, aampConfig.logLevel),
       });
+      const mailboxEmail = readRequiredAampOption(
+        subcommandOptions.email,
+        aampConfig.email,
+        'KODAX_AAMP_EMAIL',
+        'email',
+      );
+      const transport = new AampSdkTransport({
+        email: mailboxEmail,
+        jmapToken: readRequiredAampOption(subcommandOptions.jmapToken, aampConfig.jmapToken, 'KODAX_AAMP_JMAP_TOKEN', 'jmap-token'),
+        jmapUrl: normalizeAampJmapUrl(
+          readRequiredAampOption(subcommandOptions.jmapUrl, aampConfig.jmapUrl, 'KODAX_AAMP_JMAP_URL', 'jmap-url'),
+        ),
+        smtpHost: readRequiredAampOption(subcommandOptions.smtpHost, aampConfig.smtpHost, 'KODAX_AAMP_SMTP_HOST', 'smtp-host'),
+        smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, aampConfig.smtpPort ?? 587),
+        smtpPassword: readRequiredAampOption(subcommandOptions.smtpPassword, aampConfig.smtpPassword, 'KODAX_AAMP_SMTP_PASSWORD', 'smtp-password'),
+        rejectUnauthorized: subcommandOptions.allowInsecureTls === true
+          ? false
+          : !(aampConfig.allowInsecureTls ?? false),
+      }, logger);
 
       await runAampServer({
         transport,
         repoRoot: subcommandOptions.cwd,
         provider: subcommandOptions.provider,
         model: subcommandOptions.model,
+        mailboxEmail,
+        logger,
       });
     });
 

@@ -31,6 +31,18 @@ const { aampSdkTransportCtorMock } = vi.hoisted(() => ({
   aampSdkTransportCtorMock: vi.fn(),
 }));
 
+const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
+  prepareRuntimeConfigMock: vi.fn(() => ({})),
+}));
+
+const { createDefaultAampLoggerMock } = vi.hoisted(() => ({
+  createDefaultAampLoggerMock: vi.fn(() => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  })),
+}));
+
 vi.mock('../src/aamp_server.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/aamp_server.js')>();
   return {
@@ -41,11 +53,27 @@ vi.mock('../src/aamp_server.js', async (importOriginal) => {
 
 vi.mock('../src/aamp_sdk_transport.js', () => ({
   AampSdkTransport: class {
-    constructor(config: unknown) {
-      aampSdkTransportCtorMock(config);
+    constructor(config: unknown, logger: unknown) {
+      aampSdkTransportCtorMock(config, logger);
     }
   },
 }));
+
+vi.mock('../src/aamp_logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/aamp_logger.js')>();
+  return {
+    ...actual,
+    createDefaultAampLogger: createDefaultAampLoggerMock,
+  };
+});
+
+vi.mock('@kodax/repl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax/repl')>();
+  return {
+    ...actual,
+    prepareRuntimeConfig: prepareRuntimeConfigMock,
+  };
+});
 
 // 默认 provider
 const KODAX_DEFAULT_PROVIDER = 'zhipu-coding';
@@ -135,6 +163,16 @@ describe('Commands System', () => {
 });
 
 describe('AAMP CLI', () => {
+  beforeEach(() => {
+    prepareRuntimeConfigMock.mockReset();
+    prepareRuntimeConfigMock.mockReturnValue({});
+    createDefaultAampLoggerMock.mockClear();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it('wires kodax aamp serve into the AAMP transport adapter', async () => {
     const argv = process.argv;
     process.argv = [
@@ -159,16 +197,65 @@ describe('AAMP CLI', () => {
     expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
       email: 'agent@example.com',
       jmapToken: 'token',
-      jmapUrl: 'http://localhost:8080/jmap',
+      jmapUrl: 'http://localhost:8080',
       smtpHost: 'localhost',
       smtpPort: 587,
       smtpPassword: 'secret',
       rejectUnauthorized: true,
-    }));
+    }), expect.any(Object));
     expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
       repoRoot: TEST_DIR,
+      mailboxEmail: 'agent@example.com',
       transport: expect.any(Object),
     }));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'info',
+    });
+  });
+
+  it('loads AAMP defaults from ~/.kodax/config.json when CLI flags are absent', async () => {
+    const argv = process.argv;
+    prepareRuntimeConfigMock.mockReturnValue({
+      aamp: {
+        email: 'config-agent@example.com',
+        jmapToken: 'config-token',
+        jmapUrl: 'https://meshmail.ai/jmap',
+        smtpHost: 'meshmail.ai',
+        smtpPort: 2525,
+        smtpPassword: 'config-secret',
+        allowInsecureTls: true,
+        logLevel: 'debug',
+      },
+    });
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'config-agent@example.com',
+      jmapToken: 'config-token',
+      jmapUrl: 'https://meshmail.ai',
+      smtpHost: 'meshmail.ai',
+      smtpPort: 2525,
+      smtpPassword: 'config-secret',
+      rejectUnauthorized: false,
+    }), expect.any(Object));
+    expect(runAampServerMock).toHaveBeenCalledWith(expect.objectContaining({
+      mailboxEmail: 'config-agent@example.com',
+    }));
+    expect(createDefaultAampLoggerMock).toHaveBeenCalledWith({
+      logLevel: 'debug',
+    });
   });
 });
 

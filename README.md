@@ -579,16 +579,16 @@ KodaX can also run as an AAMP async task worker backed by `aamp-sdk`:
 kodax aamp serve \
   --email agent@example.com \
   --jmap-token <token> \
-  --jmap-url http://localhost:8080/jmap \
+  --jmap-url http://localhost:8080 \
   --smtp-host localhost \
   --smtp-password <password>
 
 KODAX_AAMP_EMAIL=agent@example.com \
 KODAX_AAMP_JMAP_TOKEN=<token> \
-KODAX_AAMP_JMAP_URL=http://localhost:8080/jmap \
+KODAX_AAMP_JMAP_URL=http://localhost:8080 \
 KODAX_AAMP_SMTP_HOST=localhost \
 KODAX_AAMP_SMTP_PASSWORD=<password> \
-kodax aamp serve --cwd /path/to/repo -m openai --model gpt-5.4
+kodax aamp serve --cwd /path/to/repo
 ```
 
 This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
@@ -608,6 +608,27 @@ Required configuration can be passed either as CLI flags or environment variable
 - `KODAX_AAMP_SMTP_HOST`
 - `KODAX_AAMP_SMTP_PASSWORD`
 
+The same defaults can also live in `~/.kodax/config.json`:
+
+```json
+{
+  "aamp": {
+    "email": "agent@meshmail.ai",
+    "jmapToken": "base64(email:password)",
+    "jmapUrl": "https://meshmail.ai",
+    "smtpHost": "meshmail.ai",
+    "smtpPort": 587,
+    "smtpPassword": "mailbox-password",
+    "allowInsecureTls": false,
+    "logLevel": "info"
+  }
+}
+```
+
+Resolution order is `CLI flags > environment variables > ~/.kodax/config.json`.
+
+Provider and model are not duplicated under `aamp`. `kodax aamp serve` reuses the normal top-level KodaX `provider` / `model` configuration unless you pass `--provider` or `--model` as one-off overrides.
+
 Optional flags:
 
 - `--cwd`
@@ -615,6 +636,13 @@ Optional flags:
 - `--model`
 - `--smtp-port`
 - `--allow-insecure-tls`
+- `--log-level`
+
+Logging:
+
+- `--log-level off|error|info|debug`
+- `KODAX_AAMP_LOG=off|error|info|debug`
+- JSONL log files are written under `~/.kodax/aamp/logs/YYYY-MM-DD.jsonl`
 
 This first version intentionally focuses on the minimal async loop: `task.dispatch -> task.result`. Richer protocol flows such as `task.help_needed`, attachments, and structured result mapping can be layered on later without changing the KodaX runtime core.
 

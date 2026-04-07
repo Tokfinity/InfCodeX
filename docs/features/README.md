@@ -1,8 +1,8 @@
 # KodaX Feature Design Index
 
-> Last updated: 2026-03-31
+> Last updated: 2026-04-03
 >
-> Current released version: `v0.7.10`
+> Current released version: `v0.7.13`
 >
 > Current architecture direction:
 > `SA outside AMA` + `AMA H0/H1/H2` + `Scout -> skill-map -> Planner/Generator/Evaluator`
@@ -44,7 +44,7 @@ The current execution model is:
 |---|---|
 | [v0.7.0.md](./v0.7.0.md) | Engine foundation and AMA simplification |
 | [v0.7.10.md](./v0.7.10.md) | Repository intelligence, AMA cleanup, skill-aware orchestration |
-| [v0.7.15.md](./v0.7.15.md) | Provider resilience, retry UX, and graceful recovery |
+| [v0.7.14.md](./v0.7.14.md) | AAMP async transport surface |
 | [v0.7.20.md](./v0.7.20.md) | Roadmap integrity and planning hygiene |
 | [v0.8.0.md](./v0.8.0.md) | Knowledge, retrieval, and safe runtime |
 | [v0.9.0.md](./v0.9.0.md) | Multimodal inputs and harness maturation |
@@ -64,6 +64,7 @@ These documents remain useful as implementation history, but they are not the so
 - [v0.6.10.md](./v0.6.10.md)
 - [v0.6.15.md](./v0.6.15.md)
 - [v0.6.20.md](./v0.6.20.md)
+- [v0.7.15.md](./v0.7.15.md) - original design bucket for `FEATURE_045`, later released in `v0.7.13`
 
 ## Reading guidance
 
