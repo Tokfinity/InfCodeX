@@ -92,6 +92,8 @@ export type { KodaXCommand, KodaXCommandContext };
 
 type RuntimeAampProfileConfig = {
   email?: string;
+  mailboxToken?: string;
+  baseUrl?: string;
   jmapToken?: string;
   jmapUrl?: string;
   smtpHost?: string;
@@ -106,7 +108,7 @@ type RuntimeAampConfig = {
   _invalidProfiles?: boolean;
 };
 
-const REQUIRED_AAMP_OPTION_FIELDS = ['email', 'jmapToken', 'jmapUrl', 'smtpHost', 'smtpPassword'] as const;
+const REQUIRED_AAMP_OPTION_FIELDS = ['email', 'mailboxToken', 'baseUrl', 'smtpHost', 'smtpPassword'] as const;
 type RequiredAampOptionField = (typeof REQUIRED_AAMP_OPTION_FIELDS)[number];
 
 const CLI_HELP_TOPICS: Record<string, () => void> = {
@@ -144,8 +146,10 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider override (defaults to normal KodaX provider config)');
     console.log(chalk.dim('  --model <name>               ') + 'Model override (defaults to normal KodaX model config)');
     console.log(chalk.dim('  --email <addr>               ') + 'AAMP mailbox email');
-    console.log(chalk.dim('  --jmap-token <token>         ') + 'JMAP auth token');
-    console.log(chalk.dim('  --jmap-url <url>             ') + 'JMAP base URL');
+    console.log(chalk.dim('  --mailbox-token <token>      ') + 'Mailbox auth token (base64(email:password))');
+    console.log(chalk.dim('  --base-url <url>             ') + 'AAMP/JMAP base URL');
+    console.log(chalk.dim('  --jmap-token <token>         ') + 'Deprecated alias for --mailbox-token');
+    console.log(chalk.dim('  --jmap-url <url>             ') + 'Deprecated alias for --base-url');
     console.log(chalk.dim('  --smtp-host <host>           ') + 'SMTP host');
     console.log(chalk.dim('  --smtp-port <port>           ') + 'SMTP port (default: 587)');
     console.log(chalk.dim('  --smtp-password <password>   ') + 'SMTP password');
@@ -432,8 +436,10 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log('  -m, --provider <name>        Provider override (defaults to normal KodaX provider config)');
     console.log('  --model <name>               Model override (defaults to normal KodaX model config)');
     console.log('  --email <addr>               AAMP mailbox email');
-    console.log('  --jmap-token <token>         JMAP auth token');
-    console.log('  --jmap-url <url>             JMAP base URL');
+    console.log('  --mailbox-token <token>      Mailbox auth token (base64(email:password))');
+    console.log('  --base-url <url>             AAMP/JMAP base URL');
+    console.log('  --jmap-token <token>         Deprecated alias for --mailbox-token');
+    console.log('  --jmap-url <url>             Deprecated alias for --base-url');
     console.log('  --smtp-host <host>           SMTP host');
     console.log('  --smtp-port <port>           SMTP port');
     console.log('  --smtp-password <password>   SMTP password');
@@ -460,11 +466,15 @@ function normalizeOptionalString(value: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function readAampStringOption(
-  value: string | undefined,
-  configuredValue: string | undefined,
-): string | undefined {
-  return normalizeOptionalString(value) ?? normalizeOptionalString(configuredValue);
+function readAampStringOption(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
 }
 
 function readConfiguredAampProfiles(aampConfig: RuntimeAampConfig | undefined): Record<string, RuntimeAampProfileConfig> {
@@ -518,7 +528,7 @@ function assertRequiredAampOptionsPresent(config: Partial<Record<RequiredAampOpt
   );
 }
 
-function normalizeAampJmapUrl(url: string): string {
+function normalizeAampBaseUrl(url: string): string {
   return url.replace(/\/+$/, '').replace(/\/jmap$/i, '');
 }
 
@@ -799,8 +809,10 @@ async function main() {
     .option('-m, --provider <name>', 'Provider to use')
     .option('--model <name>', 'Model override')
     .option('--email <addr>', 'AAMP mailbox email')
-    .option('--jmap-token <token>', 'JMAP auth token')
-    .option('--jmap-url <url>', 'JMAP base URL')
+    .option('--mailbox-token <token>', 'Mailbox auth token (base64(email:password))')
+    .option('--base-url <url>', 'AAMP/JMAP base URL')
+    .option('--jmap-token <token>', 'Deprecated alias for --mailbox-token')
+    .option('--jmap-url <url>', 'Deprecated alias for --base-url')
     .option('--smtp-host <host>', 'SMTP host')
     .option('--smtp-port <port>', 'SMTP port')
     .option('--smtp-password <password>', 'SMTP password')
@@ -812,6 +824,8 @@ async function main() {
       provider?: string;
       model?: string;
       email?: string;
+      mailboxToken?: string;
+      baseUrl?: string;
       jmapToken?: string;
       jmapUrl?: string;
       smtpHost?: string;
@@ -826,8 +840,18 @@ async function main() {
       const configuredProfile = readConfiguredAampProfile(config.aamp, subcommandOptions.profile);
       const resolvedAampConfig = {
         email: readAampStringOption(subcommandOptions.email, configuredProfile?.email),
-        jmapToken: readAampStringOption(subcommandOptions.jmapToken, configuredProfile?.jmapToken),
-        jmapUrl: readAampStringOption(subcommandOptions.jmapUrl, configuredProfile?.jmapUrl),
+        mailboxToken: readAampStringOption(
+          subcommandOptions.mailboxToken,
+          subcommandOptions.jmapToken,
+          configuredProfile?.mailboxToken,
+          configuredProfile?.jmapToken,
+        ),
+        baseUrl: readAampStringOption(
+          subcommandOptions.baseUrl,
+          subcommandOptions.jmapUrl,
+          configuredProfile?.baseUrl,
+          configuredProfile?.jmapUrl,
+        ),
         smtpHost: readAampStringOption(subcommandOptions.smtpHost, configuredProfile?.smtpHost),
         smtpPassword: readAampStringOption(subcommandOptions.smtpPassword, configuredProfile?.smtpPassword),
       };
@@ -839,8 +863,8 @@ async function main() {
       const mailboxEmail = resolvedAampConfig.email!;
       const transport = new AampSdkTransport({
         email: mailboxEmail,
-        jmapToken: resolvedAampConfig.jmapToken!,
-        jmapUrl: normalizeAampJmapUrl(resolvedAampConfig.jmapUrl!),
+        mailboxToken: resolvedAampConfig.mailboxToken!,
+        baseUrl: normalizeAampBaseUrl(resolvedAampConfig.baseUrl!),
         smtpHost: resolvedAampConfig.smtpHost!,
         smtpPort: parseNonNegativeIntWithFallback(subcommandOptions.smtpPort, configuredProfile?.smtpPort ?? 587),
         smtpPassword: resolvedAampConfig.smtpPassword!,

@@ -650,8 +650,8 @@ KodaX 也可以作为基于 `aamp-sdk` 的 AAMP 异步任务 worker 运行：
 ```bash
 kodax aamp serve \
   --email agent@example.com \
-  --jmap-token <token> \
-  --jmap-url http://localhost:8080 \
+  --mailbox-token <token> \
+  --base-url http://localhost:8080 \
   --smtp-host localhost \
   --smtp-password <password>
 
@@ -675,8 +675,8 @@ kodax aamp serve --profile mailbox-a --cwd /path/to/repo
     "profiles": {
       "mailbox-a": {
         "email": "agent@meshmail.ai",
-        "jmapToken": "base64(email:password)",
-        "jmapUrl": "https://meshmail.ai",
+        "mailboxToken": "base64(email:password)",
+        "baseUrl": "https://meshmail.ai",
         "smtpHost": "meshmail.ai",
         "smtpPort": 587,
         "smtpPassword": "mailbox-password",
@@ -690,6 +690,8 @@ kodax aamp serve --profile mailbox-a --cwd /path/to/repo
 
 解析优先级是：`CLI 参数 > ~/.kodax/config.json 中选中的 profile`。
 
+旧的 `jmapToken` / `jmapUrl` profile 字段和 CLI 参数仍然保留兼容，作为 `mailboxToken` / `baseUrl` 的别名。
+
 启动规则是严格的：
 
 - 传了 `--profile <name>`，这个 profile 必须存在。
@@ -699,8 +701,8 @@ kodax aamp serve --profile mailbox-a --cwd /path/to/repo
 必填 AAMP 字段：
 
 - `email`
-- `jmapToken`
-- `jmapUrl`
+- `mailboxToken`
+- `baseUrl`
 - `smtpHost`
 - `smtpPassword`
 
@@ -712,6 +714,10 @@ kodax aamp serve --profile mailbox-a --cwd /path/to/repo
 - `--profile`
 - `--provider`
 - `--model`
+- `--mailbox-token`
+- `--base-url`
+- `--jmap-token`（`--mailbox-token` 的兼容别名）
+- `--jmap-url`（`--base-url` 的兼容别名）
 - `--smtp-port`
 - `--allow-insecure-tls`
 - `--log-level`

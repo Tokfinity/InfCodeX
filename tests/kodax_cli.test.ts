@@ -236,8 +236,8 @@ describe('AAMP CLI', () => {
 
     expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
       email: 'agent@example.com',
-      jmapToken: 'token',
-      jmapUrl: 'http://localhost:8080',
+      mailboxToken: 'token',
+      baseUrl: 'http://localhost:8080',
       smtpHost: 'localhost',
       smtpPort: 587,
       smtpPassword: 'secret',
@@ -288,8 +288,8 @@ describe('AAMP CLI', () => {
 
     expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
       email: 'config-agent@example.com',
-      jmapToken: 'config-token',
-      jmapUrl: 'https://meshmail.ai',
+      mailboxToken: 'config-token',
+      baseUrl: 'https://meshmail.ai',
       smtpHost: 'meshmail.ai',
       smtpPort: 2525,
       smtpPassword: 'config-secret',
@@ -342,7 +342,7 @@ describe('AAMP CLI', () => {
 
     expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
       email: 'override@example.com',
-      jmapToken: 'config-token',
+      mailboxToken: 'config-token',
       smtpPassword: 'override-secret',
       rejectUnauthorized: false,
     }), expect.any(Object));
@@ -367,7 +367,7 @@ describe('AAMP CLI', () => {
 
     try {
       await expect(main()).rejects.toThrow(
-        'Missing required AAMP options: email, jmapToken, jmapUrl, smtpHost, smtpPassword. Provide them via --profile <name> or explicit CLI flags.',
+        'Missing required AAMP options: email, mailboxToken, baseUrl, smtpHost, smtpPassword. Provide them via --profile <name> or explicit CLI flags.',
       );
     } finally {
       process.argv = argv;
@@ -429,6 +429,38 @@ describe('AAMP CLI', () => {
     } finally {
       process.argv = argv;
     }
+  });
+
+  it('accepts canonical mailboxToken/baseUrl CLI flags', async () => {
+    const argv = process.argv;
+    process.argv = [
+      'node',
+      'kodax',
+      'aamp',
+      'serve',
+      '--email', 'agent@example.com',
+      '--mailbox-token', 'token',
+      '--base-url', 'http://localhost:8080/jmap',
+      '--smtp-host', 'localhost',
+      '--smtp-password', 'secret',
+      '--cwd', TEST_DIR,
+    ];
+
+    try {
+      await main();
+    } finally {
+      process.argv = argv;
+    }
+
+    expect(aampSdkTransportCtorMock).toHaveBeenCalledWith(expect.objectContaining({
+      email: 'agent@example.com',
+      mailboxToken: 'token',
+      baseUrl: 'http://localhost:8080',
+      smtpHost: 'localhost',
+      smtpPort: 587,
+      smtpPassword: 'secret',
+      rejectUnauthorized: true,
+    }), expect.any(Object));
   });
 });
 

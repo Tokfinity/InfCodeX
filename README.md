@@ -578,8 +578,8 @@ KodaX can also run as an AAMP async task worker backed by `aamp-sdk`:
 ```bash
 kodax aamp serve \
   --email agent@example.com \
-  --jmap-token <token> \
-  --jmap-url http://localhost:8080 \
+  --mailbox-token <token> \
+  --base-url http://localhost:8080 \
   --smtp-host localhost \
   --smtp-password <password>
 
@@ -603,8 +603,8 @@ Configuration file support is profile-based only. Each AAMP mailbox must live un
     "profiles": {
       "mailbox-a": {
         "email": "agent@meshmail.ai",
-        "jmapToken": "base64(email:password)",
-        "jmapUrl": "https://meshmail.ai",
+        "mailboxToken": "base64(email:password)",
+        "baseUrl": "https://meshmail.ai",
         "smtpHost": "meshmail.ai",
         "smtpPort": 587,
         "smtpPassword": "mailbox-password",
@@ -618,6 +618,8 @@ Configuration file support is profile-based only. Each AAMP mailbox must live un
 
 Resolution order is `CLI flags > selected profile in ~/.kodax/config.json`.
 
+Legacy `jmapToken` / `jmapUrl` profile fields and CLI flags remain supported as compatibility aliases for `mailboxToken` / `baseUrl`.
+
 Startup is strict:
 
 - If `--profile <name>` is provided, that profile must exist.
@@ -627,8 +629,8 @@ Startup is strict:
 Required AAMP fields:
 
 - `email`
-- `jmapToken`
-- `jmapUrl`
+- `mailboxToken`
+- `baseUrl`
 - `smtpHost`
 - `smtpPassword`
 
@@ -640,6 +642,10 @@ Optional flags:
 - `--profile`
 - `--provider`
 - `--model`
+- `--mailbox-token`
+- `--base-url`
+- `--jmap-token` (legacy alias for `--mailbox-token`)
+- `--jmap-url` (legacy alias for `--base-url`)
 - `--smtp-port`
 - `--allow-insecure-tls`
 - `--log-level`

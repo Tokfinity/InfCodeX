@@ -45,6 +45,8 @@ export const PREVIEW_MAX_LENGTH = 60;
 
 export interface KodaXAampProfileConfig {
   email?: string;
+  mailboxToken?: string;
+  baseUrl?: string;
   jmapToken?: string;
   jmapUrl?: string;
   smtpHost?: string;
@@ -256,11 +258,17 @@ function normalizeAampProfileConfig(value: unknown): KodaXAampProfileConfig | un
   if (typeof parsed.email === 'string') {
     normalized.email = parsed.email;
   }
-  if (typeof parsed.jmapToken === 'string') {
-    normalized.jmapToken = parsed.jmapToken;
+  if (typeof parsed.mailboxToken === 'string') {
+    normalized.mailboxToken = parsed.mailboxToken;
   }
-  if (typeof parsed.jmapUrl === 'string') {
-    normalized.jmapUrl = parsed.jmapUrl;
+  if (typeof parsed.baseUrl === 'string') {
+    normalized.baseUrl = parsed.baseUrl;
+  }
+  if (typeof parsed.jmapToken === 'string' && normalized.mailboxToken === undefined) {
+    normalized.mailboxToken = parsed.jmapToken;
+  }
+  if (typeof parsed.jmapUrl === 'string' && normalized.baseUrl === undefined) {
+    normalized.baseUrl = parsed.jmapUrl;
   }
   if (typeof parsed.smtpHost === 'string') {
     normalized.smtpHost = parsed.smtpHost;

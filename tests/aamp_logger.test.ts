@@ -25,7 +25,7 @@ describe('JsonlAampLogger', () => {
 
     logger.info('worker.started', 'worker listening for task.dispatch messages', {
       mailbox: 'agent@example.com',
-      jmapToken: 'secret-token',
+      mailboxToken: 'secret-token',
       smtpPassword: 'super-secret',
       nested: {
         authorization: 'Basic abc',
@@ -45,7 +45,7 @@ describe('JsonlAampLogger', () => {
       message: 'worker listening for task.dispatch messages',
       fields: {
         mailbox: 'agent@example.com',
-        jmapToken: '***',
+        mailboxToken: '***',
         smtpPassword: '***',
         nested: {
           authorization: '***',

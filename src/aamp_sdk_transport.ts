@@ -2,6 +2,13 @@ import { AampClient, type AampClientConfig, type TaskDispatch } from 'aamp-sdk';
 import { createDefaultAampLogger, type AampLogger } from './aamp_logger.js';
 import type { AampDispatchEnvelope, AampTaskAck, AampTaskResult, AampTransport } from './aamp_types.js';
 
+export type AampSdkTransportConfig = Omit<AampClientConfig, 'mailboxToken' | 'baseUrl'> & {
+  mailboxToken?: string;
+  baseUrl?: string;
+  jmapToken?: string;
+  jmapUrl?: string;
+};
+
 function toDispatchEnvelope(task: TaskDispatch): AampDispatchEnvelope {
   return {
     taskId: task.taskId,
@@ -18,8 +25,21 @@ export class AampSdkTransport implements AampTransport {
   private readonly logger: AampLogger;
   private connectionEventWired = false;
 
-  constructor(config: AampClientConfig, logger: AampLogger = createDefaultAampLogger()) {
-    this.client = new AampClient(config);
+  constructor(config: AampSdkTransportConfig, logger: AampLogger = createDefaultAampLogger()) {
+    const mailboxToken = config.mailboxToken ?? config.jmapToken;
+    const baseUrl = config.baseUrl ?? config.jmapUrl;
+
+    this.client = new AampClient({
+      email: config.email,
+      mailboxToken: mailboxToken!,
+      baseUrl: baseUrl!,
+      httpSendBaseUrl: config.httpSendBaseUrl,
+      smtpHost: config.smtpHost,
+      smtpPort: config.smtpPort,
+      smtpPassword: config.smtpPassword,
+      reconnectInterval: config.reconnectInterval,
+      rejectUnauthorized: config.rejectUnauthorized,
+    });
     this.logger = logger;
   }
 

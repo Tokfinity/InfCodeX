@@ -57,8 +57,8 @@ describe('AampSdkTransport', () => {
   it('logs connection lifecycle events and forwards task.dispatch', async () => {
     const transport = new AampSdkTransport({
       email: 'agent@example.com',
-      jmapToken: 'token',
-      jmapUrl: 'https://meshmail.ai',
+      mailboxToken: 'token',
+      baseUrl: 'https://meshmail.ai',
       smtpHost: 'meshmail.ai',
       smtpPassword: 'secret',
     }, logger);
@@ -121,8 +121,8 @@ describe('AampSdkTransport', () => {
   it('logs task.dispatch handler failures instead of leaking rejected promises', async () => {
     const transport = new AampSdkTransport({
       email: 'agent@example.com',
-      jmapToken: 'token',
-      jmapUrl: 'https://meshmail.ai',
+      mailboxToken: 'token',
+      baseUrl: 'https://meshmail.ai',
       smtpHost: 'meshmail.ai',
       smtpPassword: 'secret',
     }, logger);
@@ -151,5 +151,20 @@ describe('AampSdkTransport', () => {
         error: 'boom',
       }),
     );
+  });
+
+  it('accepts legacy jmapToken/jmapUrl aliases for backward compatibility', async () => {
+    const transport = new AampSdkTransport({
+      email: 'agent@example.com',
+      jmapToken: 'legacy-token',
+      jmapUrl: 'https://meshmail.ai',
+      smtpHost: 'meshmail.ai',
+      smtpPassword: 'secret',
+    }, logger);
+
+    await transport.listen(async () => undefined);
+
+    const client = clientInstances[0]!;
+    expect(client.connect).toHaveBeenCalledTimes(1);
   });
 });

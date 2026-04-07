@@ -131,8 +131,8 @@
     //     "profiles": {
     //         "mailbox-a": {
     //             "email": "agent-a@meshmail.ai",
-    //             "jmapToken": "base64(email:password)",
-    //             "jmapUrl": "https://meshmail.ai",
+    //             "mailboxToken": "base64(email:password)",
+    //             "baseUrl": "https://meshmail.ai",
     //             "smtpHost": "meshmail.ai",
     //             "smtpPort": 587,           // 默认 587
     //             "smtpPassword": "mailbox-password-a",
@@ -141,8 +141,8 @@
     //         },
     //         "mailbox-b": {
     //             "email": "agent-b@meshmail.ai",
-    //             "jmapToken": "base64(email:password)",
-    //             "jmapUrl": "https://meshmail.ai",
+    //             "mailboxToken": "base64(email:password)",
+    //             "baseUrl": "https://meshmail.ai",
     //             "smtpHost": "meshmail.ai",
     //             "smtpPort": 587,
     //             "smtpPassword": "mailbox-password-b",
