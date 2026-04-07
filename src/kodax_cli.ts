@@ -1289,7 +1289,9 @@ async function main() {
   validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
 
   if ((options.extensions?.length ?? 0) > 0) {
-    const extensionRuntime = createExtensionRuntime({ config });
+    const extensionRuntime = createExtensionRuntime({
+      config: config as Readonly<Record<string, unknown>>,
+    });
     const extensionLoader = extensionRuntime as typeof extensionRuntime & {
       loadExtensions: (
         paths: string[],

@@ -1,5 +1,5 @@
 import fsPromises from 'node:fs/promises';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -217,18 +217,39 @@ function normalizeTestPath(filePath: string): string {
   return filePath.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
+function getWorkspaceRootCandidates(workspaceRoot: string): string[] {
+  const candidates = new Set<string>([
+    normalizeTestPath(workspaceRoot),
+  ]);
+
+  try {
+    candidates.add(normalizeTestPath(realpathSync(workspaceRoot)));
+  } catch {
+    // Keep the raw path fallback when the workspace no longer resolves.
+  }
+
+  return Array.from(candidates).sort((left, right) => right.length - left.length);
+}
+
 function collectObservedSourceStatPaths(
   calls: Array<unknown[]>,
   workspaceRoot: string,
 ): string[] {
   const observed = new Set<string>();
+  const workspaceRoots = getWorkspaceRootCandidates(workspaceRoot);
 
   for (const [filePath] of calls) {
     if (typeof filePath !== 'string') {
       continue;
     }
 
-    const relativePath = normalizeTestPath(relative(workspaceRoot, filePath));
+    const normalizedPath = normalizeTestPath(filePath);
+    const matchedRoot = workspaceRoots.find((candidate) =>
+      normalizedPath === candidate || normalizedPath.startsWith(`${candidate}/`),
+    );
+    const relativePath = matchedRoot
+      ? normalizeTestPath(normalizedPath.slice(matchedRoot.length).replace(/^\/+/, ''))
+      : normalizeTestPath(relative(workspaceRoot, filePath));
     if (
       !relativePath
       || relativePath.startsWith('..')

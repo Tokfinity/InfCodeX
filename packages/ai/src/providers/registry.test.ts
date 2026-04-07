@@ -39,6 +39,7 @@ describe('provider registry', () => {
   });
 
   it('exposes a stable default provider snapshot', () => {
+    vi.stubEnv('ZHIPU_API_KEY', 'test-key');
     expect(typeof KODAX_DEFAULT_PROVIDER).toBe('string');
     expect(getProvider()).toBeDefined();
   });

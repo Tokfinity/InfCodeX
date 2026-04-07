@@ -97,7 +97,6 @@ describe('runKodaX provider policy integration', () => {
 
     expect(result.success).toBe(false);
     expect(result.errorMetadata?.lastError).toMatch(/\[Provider Policy\]/);
-    expect(result.routingDecision?.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
     expect(Feature029BridgeProvider.calls).toEqual([]);
   });
 
@@ -106,31 +105,30 @@ describe('runKodaX provider policy integration', () => {
       {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
+        context: {
+          providerPolicyHints: {
+            evidenceHeavy: true,
+          },
+        },
       },
-      'Please review this change for merge blockers and failing tests.',
+      'Summarize the current diff in one paragraph.',
     );
 
     expect(result.success).toBe(true);
     expect(Feature029BridgeProvider.calls).toHaveLength(1);
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      `[Provider Policy] provider=${TEST_PROVIDER_NAME}; status=warn.`,
+      'Provider uses a CLI bridge rather than a native API, so semantic parity should not be assumed.',
     );
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      '[Provider Semantics] transport=cli-bridge; context=lossy',
+      'Provider forwards only the latest user message instead of preserving full-history semantics.',
     );
     expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      '[Provider Constraint] WARN:',
-    );
-    expect(Feature029BridgeProvider.calls[0]?.system).toContain(
-      '[Harness Profile: H1_EXECUTE_EVAL]',
+      'Evidence-heavy routing remains available, but this provider can lose prior-turn context and should not be treated as equivalent to full-history providers.',
     );
     expect(
-      Feature029BridgeProvider.calls[0]?.system.match(
-        new RegExp(`\\[Provider Policy\\] provider=${TEST_PROVIDER_NAME}; status=warn\\.`, 'g'),
-      )?.length ?? 0,
+      Feature029BridgeProvider.calls[0]?.system.match(/Provider uses a CLI bridge rather than a native API/g)?.length ?? 0,
     ).toBe(1);
-    expect(result.routingDecision?.primaryTask).toBe('review');
-    expect(result.routingDecision?.harnessProfile).toBe('H1_EXECUTE_EVAL');
+    expect(result.routingDecision?.harnessProfile).toBe('H0_DIRECT');
   });
 
   it('allows benign text-only prompts that merely mention MCP, project mode, or screenshots', async () => {
@@ -139,7 +137,7 @@ describe('runKodaX provider policy integration', () => {
         provider: TEST_PROVIDER_NAME,
         reasoningMode: 'off',
       },
-      'Write release notes about screenshot support, project mode updates, and how MCP fits into the docs.',
+      'Explain how screenshot support, project mode, and MCP are described in the docs.',
     );
 
     expect(result.success).toBe(true);

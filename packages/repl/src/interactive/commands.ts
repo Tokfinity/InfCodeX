@@ -1522,17 +1522,20 @@ function printDetailedHelp(commandName: string): void {
 function printStatus(context: InteractiveContext, currentConfig: CurrentConfig): void {
   const tokens = context.contextTokenSnapshot?.currentTokens ?? estimateTokens(context.messages);
   const tokenSource = context.contextTokenSnapshot?.source ?? 'estimate';
+  const permissionMode = currentConfig.permissionMode ?? 'accept-edits';
+  const reasoningMode = currentConfig.reasoningMode ?? 'off';
+  const agentMode = currentConfig.agentMode ?? 'ama';
   const capabilityProfile = getProviderCapabilityProfile(currentConfig.provider);
   const generalProviderPolicy = getProviderPolicyDecision(
     currentConfig.provider,
     currentConfig.model,
-    currentConfig.reasoningMode,
+    reasoningMode,
   );
   console.log(chalk.bold('\nSession Status:\n'));
   console.log(chalk.dim(`  Provider:    ${chalk.cyan(currentConfig.provider)}${currentConfig.model ? ` / ${chalk.cyan(currentConfig.model)}` : ''}`));
-  console.log(chalk.dim(`  Permission:  ${chalk.cyan(currentConfig.permissionMode)}`));
-  console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(currentConfig.reasoningMode)}`));
-  console.log(chalk.dim(`  Agent Mode:  ${chalk.cyan(currentConfig.agentMode.toUpperCase())}`));
+  console.log(chalk.dim(`  Permission:  ${chalk.cyan(permissionMode)}`));
+  console.log(chalk.dim(`  Reasoning:   ${chalk.cyan(reasoningMode)}`));
+  console.log(chalk.dim(`  Agent Mode:  ${chalk.cyan(agentMode.toUpperCase())}`));
   console.log(chalk.dim(`  Execution:   ${chalk.cyan(describeParallelExecution(currentConfig.parallel))}`));
   if (capabilityProfile) {
     const capabilitySummary = describeProviderCapabilitySummary(capabilityProfile);

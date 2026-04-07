@@ -1,5 +1,5 @@
 import fsPromises from 'node:fs/promises';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -26,6 +26,28 @@ function getStorageRoot(workspaceRoot: string): string {
   return join(workspaceRoot, '.agent', 'repo-intelligence');
 }
 
+function getCanonicalStorageRoot(workspaceRoot: string): string {
+  try {
+    return getStorageRoot(realpathSync(workspaceRoot)).replace(/\\/g, '/');
+  } catch {
+    return getStorageRoot(workspaceRoot).replace(/\\/g, '/');
+  }
+}
+
+function getStorageRootCandidates(workspaceRoot: string): string[] {
+  const candidates = new Set<string>([
+    getStorageRoot(workspaceRoot).replace(/\\/g, '/'),
+  ]);
+
+  try {
+    candidates.add(getStorageRoot(realpathSync(workspaceRoot)).replace(/\\/g, '/'));
+  } catch {
+    // Keep the raw path fallback when the workspace no longer resolves.
+  }
+
+  return Array.from(candidates);
+}
+
 function forceDirtyOverviewArtifacts(workspaceRoot: string): void {
   const storageRoot = getStorageRoot(workspaceRoot);
   for (const fileName of [
@@ -46,10 +68,13 @@ function writeJson(filePath: string, payload: unknown): void {
 }
 
 function collectOverviewWritePaths(calls: Array<unknown[]>, workspaceRoot: string): string[] {
+  const storageRoots = getStorageRootCandidates(workspaceRoot);
+
   return calls
     .map(([filePath]) => typeof filePath === 'string' ? filePath : null)
-    .filter((filePath): filePath is string => filePath !== null && filePath.startsWith(getStorageRoot(workspaceRoot)))
+    .filter((filePath): filePath is string => filePath !== null)
     .map((filePath) => filePath.replace(/\\/g, '/'))
+    .filter((filePath) => storageRoots.some((storageRoot) => filePath.startsWith(storageRoot)))
     .filter((filePath) =>
       filePath.endsWith('/manifest.json')
       || filePath.endsWith('/repo-overview.json')
@@ -403,10 +428,11 @@ describe('repo overview baseline cache', () => {
 
     const routingWriteSpy = vi.spyOn(fsPromises, 'writeFile');
     await getRepoRoutingSignals({ executionCwd: tempDir }, { refresh: false });
+    const canonicalStorageRoot = getCanonicalStorageRoot(tempDir);
     expect(collectOverviewWritePaths(routingWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/manifest.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview-inventory.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview.json`,
+      `${canonicalStorageRoot}/manifest.json`,
+      `${canonicalStorageRoot}/repo-overview-inventory.json`,
+      `${canonicalStorageRoot}/repo-overview.json`,
     ]);
     routingWriteSpy.mockRestore();
 
@@ -417,9 +443,9 @@ describe('repo overview baseline cache', () => {
       refresh: false,
     });
     expect(collectOverviewWritePaths(impactWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/manifest.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview-inventory.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview.json`,
+      `${canonicalStorageRoot}/manifest.json`,
+      `${canonicalStorageRoot}/repo-overview-inventory.json`,
+      `${canonicalStorageRoot}/repo-overview.json`,
     ]);
     impactWriteSpy.mockRestore();
 
@@ -431,9 +457,9 @@ describe('repo overview baseline cache', () => {
       refreshOverview: false,
     });
     expect(collectOverviewWritePaths(contextWriteSpy.mock.calls as Array<unknown[]>, tempDir)).toEqual([
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/manifest.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview-inventory.json`,
-      `${getStorageRoot(tempDir).replace(/\\/g, '/')}/repo-overview.json`,
+      `${canonicalStorageRoot}/manifest.json`,
+      `${canonicalStorageRoot}/repo-overview-inventory.json`,
+      `${canonicalStorageRoot}/repo-overview.json`,
     ]);
   }, 20000);
 });
