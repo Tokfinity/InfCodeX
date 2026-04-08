@@ -1,6 +1,7 @@
 import type { KodaXSessionStorage, KodaXResult } from '@kodax-ai/coding';
 import { runKodaX } from '@kodax-ai/coding';
 import { getSkillRegistry, initializeSkillRegistry } from '@kodax-ai/agent';
+import { evaluateAampToolPermission } from './aamp_permissions.js';
 import type { AampDispatchEnvelope, AampTaskRecord, AampTaskResult } from './aamp_types.js';
 
 export interface KodaXAampRuntimeOptions {
@@ -8,6 +9,7 @@ export interface KodaXAampRuntimeOptions {
   model?: string;
   repoRoot: string;
   sessionStorage: KodaXSessionStorage;
+  dangerousFullPermissions?: boolean;
 }
 
 export interface AampTaskExecutionResult {
@@ -86,6 +88,10 @@ export class KodaXAampRuntime {
           onToolResult: (result) => log(`[tool:${result.name}] done\n`),
           onComplete: () => log(`\n[AAMP] task=${dispatch.taskId} completed\n`),
           onError: (err) => log(`\n[AAMP] task=${dispatch.taskId} error: ${err.message}\n`),
+          beforeToolExecute: async (toolName, input) =>
+            evaluateAampToolPermission(toolName, input, {
+              dangerousFullPermissions: this.options.dangerousFullPermissions,
+            }),
         },
       },
       buildDispatchPrompt(dispatch),

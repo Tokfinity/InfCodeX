@@ -59,4 +59,5 @@ export interface AampWorkerInput {
   provider: string;
   model?: string;
   repoRoot: string;
+  dangerousFullPermissions?: boolean;
 }

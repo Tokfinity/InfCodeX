@@ -24,6 +24,7 @@ if (workerInputJson) {
     model: input.model,
     repoRoot: input.repoRoot,
     sessionStorage: new FileSessionStorage(),
+    dangerousFullPermissions: input.dangerousFullPermissions,
   });
 
   runtime

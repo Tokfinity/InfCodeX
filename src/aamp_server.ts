@@ -41,6 +41,7 @@ function createDefaultProcessSpawner(options: {
   provider: string;
   model?: string;
   repoRoot: string;
+  dangerousFullPermissions: boolean;
 }): AgentProcessSpawner {
   return (dispatch, record) => {
     const workerPath = fileURLToPath(new URL('./aamp_worker.js', import.meta.url));
@@ -50,6 +51,7 @@ function createDefaultProcessSpawner(options: {
       provider: options.provider,
       model: options.model,
       repoRoot: options.repoRoot,
+      dangerousFullPermissions: options.dangerousFullPermissions,
     };
 
     const child = fork(workerPath, [], {
@@ -89,6 +91,7 @@ export interface KodaXAampServerOptions {
   repoRoot?: string;
   provider?: string;
   model?: string;
+  dangerousFullPermissions?: boolean;
   mailboxEmail?: string;
   logger?: AampLogger;
   /** @deprecated Session storage is now managed inside the spawned worker process. */
@@ -124,6 +127,7 @@ export class KodaXAampServer {
   private readonly repoRoot: string;
   private readonly provider: string;
   private readonly model?: string;
+  private readonly dangerousFullPermissions: boolean;
   private readonly mailboxEmail?: string;
   private readonly logger: AampLogger;
   private readonly processSpawner: AgentProcessSpawner;
@@ -142,11 +146,17 @@ export class KodaXAampServer {
     this.repoRoot = repoRoot;
     this.provider = provider;
     this.model = model;
+    this.dangerousFullPermissions = options.dangerousFullPermissions === true;
     this.mailboxEmail = options.mailboxEmail;
     this.logger = options.logger ?? createDefaultAampLogger();
     this.processSpawner =
       options.processSpawner ??
-      createDefaultProcessSpawner({ provider, model, repoRoot });
+      createDefaultProcessSpawner({
+        provider,
+        model,
+        repoRoot,
+        dangerousFullPermissions: this.dangerousFullPermissions,
+      });
   }
 
   async start(): Promise<void> {
@@ -165,6 +175,7 @@ export class KodaXAampServer {
       repoRoot: this.repoRoot,
       provider: this.provider,
       model: this.model ?? '(default)',
+      dangerousFullPermissions: this.dangerousFullPermissions,
     });
     try {
       await this.transport.listen(
