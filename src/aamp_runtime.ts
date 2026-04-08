@@ -2,6 +2,7 @@ import type { KodaXSessionStorage, KodaXResult } from '@kodax/coding';
 import { runKodaX } from '@kodax/coding';
 import { getSkillRegistry, initializeSkillRegistry } from '@kodax/skills';
 import { evaluateAampToolPermission } from './aamp_permissions.js';
+import { AampTerminalOutput } from './aamp_terminal_output.js';
 import type { AampDispatchEnvelope, AampTaskRecord, AampTaskResult } from './aamp_types.js';
 
 export interface KodaXAampRuntimeOptions {
@@ -58,8 +59,8 @@ export class KodaXAampRuntime {
   }
 
   async execute(dispatch: AampDispatchEnvelope, record: AampTaskRecord): Promise<AampTaskExecutionResult> {
-    const log = (msg: string) => process.stdout.write(msg);
-    log(`\n[AAMP] task=${dispatch.taskId} from=${dispatch.from}\n`);
+    const terminal = new AampTerminalOutput();
+    terminal.writeTaskStart(dispatch);
 
     const repoRoot = this.options.repoRoot;
     await initializeSkillRegistry(repoRoot);
@@ -82,12 +83,12 @@ export class KodaXAampRuntime {
           skillsPrompt,
         },
         events: {
-          onTextDelta: (text) => process.stdout.write(text),
-          onThinkingDelta: (text) => log(`[thinking] ${text}`),
-          onToolUseStart: (tool) => log(`\n[tool:${tool.name}] ${JSON.stringify(tool.input ?? {})}\n`),
-          onToolResult: (result) => log(`[tool:${result.name}] done\n`),
-          onComplete: () => log(`\n[AAMP] task=${dispatch.taskId} completed\n`),
-          onError: (err) => log(`\n[AAMP] task=${dispatch.taskId} error: ${err.message}\n`),
+          onTextDelta: (text) => terminal.writeAgentText(text),
+          onThinkingDelta: (text) => terminal.writeThinking(text),
+          onToolUseStart: (tool) => terminal.writeToolUseStart(tool),
+          onToolResult: (result) => terminal.writeToolResult(result.name),
+          onComplete: () => terminal.writeTaskComplete(dispatch.taskId),
+          onError: (err) => terminal.writeTaskError(dispatch.taskId, err.message),
           beforeToolExecute: async (toolName, input) => evaluateAampToolPermission(toolName, input, {
             dangerousFullPermissions: this.options.dangerousFullPermissions,
           }),
