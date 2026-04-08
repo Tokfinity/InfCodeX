@@ -43,7 +43,10 @@ export class AampSdkTransport implements AampTransport {
     this.logger = logger;
   }
 
-  async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
+  async listen(
+    handler: (dispatch: AampDispatchEnvelope) => Promise<void>,
+    cancelHandler?: (targetTaskId: string) => void,
+  ): Promise<void> {
     this.ensureConnectionEventLogging();
     this.client.on('task.dispatch', (task) => {
       const dispatch = toDispatchEnvelope(task);
@@ -55,6 +58,9 @@ export class AampSdkTransport implements AampTransport {
           error: message,
         });
       });
+    });
+    this.client.on('task.cancel', (task) => {
+      cancelHandler?.(task.taskId);
     });
     await this.client.connect();
   }
