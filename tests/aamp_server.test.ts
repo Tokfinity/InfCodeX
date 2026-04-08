@@ -79,6 +79,7 @@ function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>
 describe('KodaXAampServer', () => {
   let tempDir: string;
   let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stderrWriteSpy: ReturnType<typeof vi.spyOn>;
   let logger: AampLogger & {
     debug: ReturnType<typeof vi.fn>;
     info: ReturnType<typeof vi.fn>;
@@ -101,12 +102,14 @@ describe('KodaXAampServer', () => {
       error: vi.fn(),
     };
     stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stderrWriteSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-aamp-test-'));
   });
 
   afterEach(async () => {
     resetAampServerSingletonForTests();
     stdoutWriteSpy.mockRestore();
+    stderrWriteSpy.mockRestore();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -164,6 +167,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       provider: 'openai',
       model: 'gpt-5.4',
+      dangerousFullPermissions: false,
     }));
     expect(logger.info).toHaveBeenCalledWith('worker.started', 'worker listening for task.dispatch messages', expect.any(Object));
     expect(logger.info).toHaveBeenCalledWith('dispatch.received', 'received task.dispatch', expect.objectContaining({
@@ -174,6 +178,133 @@ describe('KodaXAampServer', () => {
       taskId: 'task-1',
       status: 'completed',
     }));
+  });
+
+  it('blocks non-read bash commands by default because AAMP cannot prompt for approval', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      const decision = await options.events?.beforeToolExecute?.(
+        'bash',
+        { command: 'rm -rf dist' },
+        { toolId: 'tool-bash-write' },
+      );
+
+      expect(decision).toContain('--dangerous-full-permissions');
+      return createResult({ lastText: 'blocked by test harness' });
+    });
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-bash-blocked',
+      from: 'agent@example.com',
+      bodyText: 'Clean up the repo',
+      messageId: 'msg-bash-blocked',
+    });
+
+    expect(stderrWriteSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Blocking shell command without --dangerous-full-permissions: rm -rf dist'),
+    );
+  });
+
+  it('still auto-allows read-only bash commands in default AAMP mode', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      const decision = await options.events?.beforeToolExecute?.(
+        'bash',
+        { command: 'git status --short' },
+        { toolId: 'tool-bash-read' },
+      );
+
+      expect(decision).toBe(true);
+      return createResult({ lastText: 'read command ok' });
+    });
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-bash-read',
+      from: 'agent@example.com',
+      bodyText: 'Inspect the repo',
+      messageId: 'msg-bash-read',
+    });
+  });
+
+  it('allows destructive shell commands in dangerous full permissions mode', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      const decision = await options.events?.beforeToolExecute?.(
+        'bash',
+        { command: 'rm -rf dist' },
+        { toolId: 'tool-bash-dangerous' },
+      );
+
+      expect(decision).toBe(true);
+      return createResult({ lastText: 'dangerous shell ok' });
+    });
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      dangerousFullPermissions: true,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-bash-dangerous',
+      from: 'agent@example.com',
+      bodyText: 'Delete build outputs',
+      messageId: 'msg-bash-dangerous',
+    });
+
+    expect(stderrWriteSpy).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith('worker.starting', 'worker starting', expect.objectContaining({
+      dangerousFullPermissions: true,
+    }));
+  });
+
+  it('keeps a small hard blacklist even in dangerous full permissions mode', async () => {
+    runKodaXMock.mockImplementation(async (options) => {
+      const decision = await options.events?.beforeToolExecute?.(
+        'bash',
+        { command: 'sudo rm -rf /tmp/demo' },
+        { toolId: 'tool-bash-blacklisted' },
+      );
+
+      expect(decision).toBe('[Blocked] AAMP shell hard blacklist: privilege escalation via sudo is blocked.');
+      return createResult({ lastText: 'hard blacklist enforced' });
+    });
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      dangerousFullPermissions: true,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-bash-blacklisted',
+      from: 'agent@example.com',
+      bodyText: 'Run a forbidden shell command',
+      messageId: 'msg-bash-blacklisted',
+    });
   });
 
   it('skips duplicate completed task dispatches', async () => {

@@ -16,6 +16,7 @@ export interface KodaXAampServerOptions {
   repoRoot?: string;
   provider?: string;
   model?: string;
+  dangerousFullPermissions?: boolean;
   mailboxEmail?: string;
   logger?: AampLogger;
   sessionStorage?: KodaXSessionStorage;
@@ -46,6 +47,7 @@ export class KodaXAampServer {
   private readonly repoRoot: string;
   private readonly provider: string;
   private readonly model?: string;
+  private readonly dangerousFullPermissions: boolean;
   private readonly mailboxEmail?: string;
   private readonly logger: AampLogger;
   private started = false;
@@ -61,6 +63,7 @@ export class KodaXAampServer {
     this.repoRoot = repoRoot;
     this.provider = provider;
     this.model = model;
+    this.dangerousFullPermissions = options.dangerousFullPermissions === true;
     this.mailboxEmail = options.mailboxEmail;
     this.logger = options.logger ?? createDefaultAampLogger();
     this.runtime = new KodaXAampRuntime({
@@ -68,6 +71,7 @@ export class KodaXAampServer {
       model,
       repoRoot,
       sessionStorage: options.sessionStorage ?? new FileSessionStorage(),
+      dangerousFullPermissions: this.dangerousFullPermissions,
     });
   }
 
@@ -87,6 +91,7 @@ export class KodaXAampServer {
       repoRoot: this.repoRoot,
       provider: this.provider,
       model: this.model ?? '(default)',
+      dangerousFullPermissions: this.dangerousFullPermissions,
     });
     try {
       await this.transport.listen(async (dispatch) => {

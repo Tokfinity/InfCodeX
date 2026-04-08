@@ -444,6 +444,7 @@ function printAampSubcommandHelp(name: string): boolean {
     console.log('  --smtp-port <port>           SMTP port');
     console.log('  --smtp-password <password>   SMTP password');
     console.log('  --allow-insecure-tls         Disable TLS certificate verification');
+    console.log('  --dangerous-full-permissions Allow non-read shell commands without approval; only a small hard blacklist remains');
     console.log('  --log-level <level>          AAMP log level: off, error, info, debug');
     console.log('  Config shape                 ~/.kodax/config.json -> aamp.profiles.<name>');
     return true;
@@ -817,6 +818,10 @@ async function main() {
     .option('--smtp-port <port>', 'SMTP port')
     .option('--smtp-password <password>', 'SMTP password')
     .option('--allow-insecure-tls', 'Disable TLS certificate verification')
+    .option(
+      '--dangerous-full-permissions',
+      'Allow non-read shell commands without interactive approval; only a small hard blacklist remains',
+    )
     .option('--log-level <level>', 'AAMP log level: off, error, info, debug')
     .action(async (subcommandOptions: {
       cwd?: string;
@@ -832,6 +837,7 @@ async function main() {
       smtpPort?: string;
       smtpPassword?: string;
       allowInsecureTls?: boolean;
+      dangerousFullPermissions?: boolean;
       logLevel?: string;
     }) => {
       const config = prepareRuntimeConfig() as ReturnType<typeof prepareRuntimeConfig> & {
@@ -878,6 +884,7 @@ async function main() {
         repoRoot: subcommandOptions.cwd,
         provider: subcommandOptions.provider,
         model: subcommandOptions.model,
+        dangerousFullPermissions: subcommandOptions.dangerousFullPermissions,
         mailboxEmail,
         logger,
       });

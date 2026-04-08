@@ -584,9 +584,14 @@ kodax aamp serve \
   --smtp-password <password>
 
 kodax aamp serve --profile mailbox-a --cwd /path/to/repo
+kodax aamp serve --profile mailbox-a --cwd /path/to/repo --dangerous-full-permissions
 ```
 
 This mode listens for AAMP `task.dispatch` messages, bridges each task into `runKodaX(...)`, and sends `task.result` replies back through the same mailbox transport.
+
+Because AAMP is an async worker, it cannot stop and ask an interactive shell permission question mid-task. By default, `kodax aamp serve` still allows read-only shell commands but blocks non-read `bash` tool calls that would normally require approval in `accept-edits` mode.
+
+If you want the worker to execute non-read shell commands anyway, start it with `--dangerous-full-permissions`. In that mode, AAMP bypasses interactive shell approval and allows nearly all shell commands except for a small hard blacklist intended to protect the host machine, such as `sudo`, `su`, `dd`, `mkfs`, `shutdown`, and `curl | sh`.
 
 Current v1 behavior:
 
@@ -643,6 +648,7 @@ Optional flags:
 - `--provider`
 - `--model`
 - `--mailbox-token`
+- `--dangerous-full-permissions`
 - `--base-url`
 - `--jmap-token` (legacy alias for `--mailbox-token`)
 - `--jmap-url` (legacy alias for `--base-url`)
