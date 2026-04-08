@@ -54,11 +54,18 @@ function createDefaultProcessSpawner(options: {
       dangerousFullPermissions: options.dangerousFullPermissions,
     };
 
+    const workerEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      AAMP_WORKER_INPUT: JSON.stringify(workerInput),
+    };
+    // Child process stdout is piped (not a TTY), so chalk auto-detect would disable colors.
+    // Preserve terminal color output by forwarding FORCE_COLOR from parent when appropriate.
+    if (!workerEnv.FORCE_COLOR && process.stdout.isTTY) {
+      workerEnv.FORCE_COLOR = '1';
+    }
+
     const child = fork(workerPath, [], {
-      env: {
-        ...process.env,
-        AAMP_WORKER_INPUT: JSON.stringify(workerInput),
-      },
+      env: workerEnv,
       silent: true,
     });
 
@@ -67,14 +74,41 @@ function createDefaultProcessSpawner(options: {
     child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
 
     const resultPromise = new Promise<AampTaskExecutionResult>((resolve, reject) => {
-      child.on('message', (msg) => resolve(msg as AampTaskExecutionResult));
-      child.on('error', reject);
-      child.on('exit', (code, signal) => {
-        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-          reject(new Error(`agent process killed with signal ${signal}`));
-        } else if (code !== 0 && code !== null) {
-          reject(new Error(`agent process exited with code ${code}`));
+      let settled = false;
+      const resolveOnce = (value: AampTaskExecutionResult): void => {
+        if (settled) {
+          return;
         }
+        settled = true;
+        resolve(value);
+      };
+      const rejectOnce = (error: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(error);
+      };
+
+      child.on('message', (msg) => resolveOnce(msg as AampTaskExecutionResult));
+      child.on('error', (error) => rejectOnce(error));
+      child.on('exit', (code, signal) => {
+        if (settled) {
+          return;
+        }
+        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+          rejectOnce(new Error(`agent process killed with signal ${signal}`));
+          return;
+        }
+        if (code === 0) {
+          rejectOnce(new Error('agent process exited before sending result'));
+          return;
+        }
+        if (code !== null) {
+          rejectOnce(new Error(`agent process exited with code ${code}`));
+          return;
+        }
+        rejectOnce(new Error('agent process exited before sending result'));
       });
     });
 

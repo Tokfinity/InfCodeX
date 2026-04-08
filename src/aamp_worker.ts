@@ -30,8 +30,19 @@ if (workerInputJson) {
   runtime
     .execute(input.dispatch, input.record)
     .then((result) => {
-      process.send!(result);
-      process.exit(0);
+      if (typeof process.send !== 'function') {
+        process.stderr.write('[aamp-worker] task failed: IPC channel unavailable\n');
+        process.exit(1);
+        return;
+      }
+      process.send(result, (error) => {
+        if (error) {
+          process.stderr.write(`[aamp-worker] task failed: failed to send result via IPC: ${error.message}\n`);
+          process.exit(1);
+          return;
+        }
+        process.exit(0);
+      });
     })
     .catch((error) => {
       // Do NOT send an IPC message here. Sending a message before exit(1) would
