@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AampLogger } from '../src/aamp_logger.js';
+import type { AampTaskExecutionResult } from '../src/aamp_runtime.js';
+import type { AgentProcessHandle, AgentProcessSpawner } from '../src/aamp_server.js';
 import type { AampDispatchEnvelope, AampTaskAck, AampTaskResult, AampTransport } from '../src/aamp_types.js';
 
 const { runKodaXMock } = vi.hoisted(() => ({
@@ -29,18 +31,27 @@ vi.mock('@kodax/repl', async (importOriginal) => {
   };
 });
 
+import { KodaXAampRuntime } from '../src/aamp_runtime.js';
 import { KodaXAampServer, resetAampServerSingletonForTests } from '../src/aamp_server.js';
 import { FileAampTaskStore } from '../src/aamp_store.js';
+
+// Imported after mocks are set up so FileSessionStorage uses the (partially) mocked repl module.
+const { FileSessionStorage } = await import('@kodax/repl');
 
 class MockAampTransport implements AampTransport {
   readonly acks: AampTaskAck[] = [];
   readonly results: AampTaskResult[] = [];
   private handler: ((dispatch: AampDispatchEnvelope) => Promise<void>) | null = null;
+  private cancelHandler: ((targetTaskId: string) => void) | null = null;
   ackError: Error | null = null;
   resultError: Error | null = null;
 
-  async listen(handler: (dispatch: AampDispatchEnvelope) => Promise<void>): Promise<void> {
+  async listen(
+    handler: (dispatch: AampDispatchEnvelope) => Promise<void>,
+    cancelHandler?: (targetTaskId: string) => void,
+  ): Promise<void> {
     this.handler = handler;
+    this.cancelHandler = cancelHandler ?? null;
   }
 
   async sendAck(ack: AampTaskAck): Promise<void> {
@@ -63,8 +74,16 @@ class MockAampTransport implements AampTransport {
     }
     await this.handler(dispatch);
   }
+
+  cancel(targetTaskId: string): void {
+    if (!this.cancelHandler) {
+      throw new Error('AAMP cancel handler not registered');
+    }
+    this.cancelHandler(targetTaskId);
+  }
 }
 
+/** KodaXResult-shaped mock return value for runKodaXMock. */
 function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>>> = {}) {
   return {
     success: true,
@@ -73,6 +92,37 @@ function createResult(overrides: Partial<Awaited<ReturnType<typeof runKodaXMock>
     sessionId: 'session-from-runtime',
     interrupted: false,
     ...overrides,
+  };
+}
+
+/**
+ * Build a mock AgentProcessSpawner that wraps KodaXAampRuntime.execute
+ * in-process so the runKodaXMock is exercised without spawning real OS processes.
+ */
+function createMockSpawner(tempDir: string): AgentProcessSpawner {
+  return createMockSpawnerWithOptions(tempDir, {});
+}
+
+function createMockSpawnerWithOptions(
+  tempDir: string,
+  options: {
+    dangerousFullPermissions?: boolean;
+  },
+): AgentProcessSpawner {
+  return (dispatch, record) => {
+    const runtime = new KodaXAampRuntime({
+      provider: 'openai',
+      model: 'gpt-5.4',
+      repoRoot: tempDir,
+      sessionStorage: new FileSessionStorage(),
+      dangerousFullPermissions: options.dangerousFullPermissions === true,
+    });
+    const resultPromise = runtime.execute(dispatch, record);
+    return {
+      pid: 12345,
+      kill: vi.fn(),
+      resultPromise,
+    };
   };
 }
 
@@ -122,6 +172,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -178,6 +229,10 @@ describe('KodaXAampServer', () => {
       taskId: 'task-1',
       status: 'completed',
     }));
+    expect(logger.info).toHaveBeenCalledWith('task.process_spawned', 'agent process spawned', expect.objectContaining({
+      taskId: 'task-1',
+      pid: 12345,
+    }));
   });
 
   it('blocks non-read bash commands by default because AAMP cannot prompt for approval', async () => {
@@ -198,6 +253,9 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawnerWithOptions(tempDir, {
+        dangerousFullPermissions: false,
+      }),
     });
 
     await server.start();
@@ -231,6 +289,9 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawnerWithOptions(tempDir, {
+        dangerousFullPermissions: false,
+      }),
     });
 
     await server.start();
@@ -261,6 +322,9 @@ describe('KodaXAampServer', () => {
       dangerousFullPermissions: true,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawnerWithOptions(tempDir, {
+        dangerousFullPermissions: true,
+      }),
     });
 
     await server.start();
@@ -296,6 +360,9 @@ describe('KodaXAampServer', () => {
       dangerousFullPermissions: true,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawnerWithOptions(tempDir, {
+        dangerousFullPermissions: true,
+      }),
     });
 
     await server.start();
@@ -316,6 +383,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -375,6 +443,7 @@ describe('KodaXAampServer', () => {
       repoRoot: tempDir,
       logger,
       taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
     });
 
     await server.start();
@@ -403,4 +472,5 @@ describe('KodaXAampServer', () => {
       }),
     );
   });
+
 });

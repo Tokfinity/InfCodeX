@@ -1,15 +1,90 @@
+import { fork } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type { KodaXSessionStorage } from '@kodax/coding';
-import { FileSessionStorage, prepareRuntimeConfig } from '@kodax/repl';
+import { prepareRuntimeConfig } from '@kodax/repl';
 import { createDefaultAampLogger, type AampLogger } from './aamp_logger.js';
-import { KodaXAampRuntime } from './aamp_runtime.js';
+import type { AampTaskExecutionResult } from './aamp_runtime.js';
 import { FileAampTaskStore } from './aamp_store.js';
 import type {
   AampDispatchEnvelope,
   AampTaskRecord,
   AampTaskStore,
   AampTransport,
+  AampWorkerInput,
 } from './aamp_types.js';
+
+/**
+ * Handle to an agent process spawned for a single task.dispatch.
+ * The process runs KodaXAampRuntime.execute in isolation.
+ */
+export interface AgentProcessHandle {
+  /** OS process ID of the spawned agent process. */
+  readonly pid: number;
+  /** Send SIGTERM to the process to cancel the task. */
+  kill(): void;
+  /** Resolves with the execution result or rejects if the process fails/is killed. */
+  readonly resultPromise: Promise<AampTaskExecutionResult>;
+}
+
+/**
+ * Factory that spawns an agent process for each task.
+ * The default implementation forks aamp_worker.js via IPC.
+ * Inject a custom spawner in tests to avoid real process forks.
+ */
+export type AgentProcessSpawner = (
+  dispatch: AampDispatchEnvelope,
+  record: AampTaskRecord,
+) => AgentProcessHandle;
+
+function createDefaultProcessSpawner(options: {
+  provider: string;
+  model?: string;
+  repoRoot: string;
+  dangerousFullPermissions: boolean;
+}): AgentProcessSpawner {
+  return (dispatch, record) => {
+    const workerPath = fileURLToPath(new URL('./aamp_worker.js', import.meta.url));
+    const workerInput: AampWorkerInput = {
+      dispatch,
+      record,
+      provider: options.provider,
+      model: options.model,
+      repoRoot: options.repoRoot,
+      dangerousFullPermissions: options.dangerousFullPermissions,
+    };
+
+    const child = fork(workerPath, [], {
+      env: {
+        ...process.env,
+        AAMP_WORKER_INPUT: JSON.stringify(workerInput),
+      },
+      silent: true,
+    });
+
+    // Pipe worker output streams to the parent process.
+    child.stdout?.on('data', (data: Buffer) => process.stdout.write(data));
+    child.stderr?.on('data', (data: Buffer) => process.stderr.write(data));
+
+    const resultPromise = new Promise<AampTaskExecutionResult>((resolve, reject) => {
+      child.on('message', (msg) => resolve(msg as AampTaskExecutionResult));
+      child.on('error', reject);
+      child.on('exit', (code, signal) => {
+        if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+          reject(new Error(`agent process killed with signal ${signal}`));
+        } else if (code !== 0 && code !== null) {
+          reject(new Error(`agent process exited with code ${code}`));
+        }
+      });
+    });
+
+    return {
+      pid: child.pid!,
+      kill: () => child.kill('SIGTERM'),
+      resultPromise,
+    };
+  };
+}
 
 export interface KodaXAampServerOptions {
   transport: AampTransport;
@@ -19,8 +94,14 @@ export interface KodaXAampServerOptions {
   dangerousFullPermissions?: boolean;
   mailboxEmail?: string;
   logger?: AampLogger;
+  /** @deprecated Session storage is now managed inside the spawned worker process. */
   sessionStorage?: KodaXSessionStorage;
   taskStore?: AampTaskStore;
+  /**
+   * Factory that creates an AgentProcessHandle for each task.
+   * Defaults to forking aamp_worker.js. Inject a mock in tests.
+   */
+  processSpawner?: AgentProcessSpawner;
 }
 
 let activeAampServerCount = 0;
@@ -43,13 +124,15 @@ function createTaskRecord(dispatch: AampDispatchEnvelope): AampTaskRecord {
 export class KodaXAampServer {
   private readonly transport: AampTransport;
   private readonly taskStore: AampTaskStore;
-  private readonly runtime: KodaXAampRuntime;
   private readonly repoRoot: string;
   private readonly provider: string;
   private readonly model?: string;
   private readonly dangerousFullPermissions: boolean;
   private readonly mailboxEmail?: string;
   private readonly logger: AampLogger;
+  private readonly processSpawner: AgentProcessSpawner;
+  /** Maps taskId → running AgentProcessHandle for active tasks. */
+  private readonly taskProcesses = new Map<string, AgentProcessHandle>();
   private started = false;
 
   constructor(options: KodaXAampServerOptions) {
@@ -66,13 +149,14 @@ export class KodaXAampServer {
     this.dangerousFullPermissions = options.dangerousFullPermissions === true;
     this.mailboxEmail = options.mailboxEmail;
     this.logger = options.logger ?? createDefaultAampLogger();
-    this.runtime = new KodaXAampRuntime({
-      provider,
-      model,
-      repoRoot,
-      sessionStorage: options.sessionStorage ?? new FileSessionStorage(),
-      dangerousFullPermissions: this.dangerousFullPermissions,
-    });
+    this.processSpawner =
+      options.processSpawner ??
+      createDefaultProcessSpawner({
+        provider,
+        model,
+        repoRoot,
+        dangerousFullPermissions: this.dangerousFullPermissions,
+      });
   }
 
   async start(): Promise<void> {
@@ -94,18 +178,21 @@ export class KodaXAampServer {
       dangerousFullPermissions: this.dangerousFullPermissions,
     });
     try {
-      await this.transport.listen(async (dispatch) => {
-        try {
-          await this.handleDispatch(dispatch);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.logger.error('dispatch.unhandled_error', 'unhandled dispatch error', {
-            taskId: dispatch.taskId,
-            mailbox: this.mailboxEmail ?? '(configured elsewhere)',
-            error: message,
-          });
-        }
-      });
+      await this.transport.listen(
+        async (dispatch) => {
+          try {
+            await this.handleDispatch(dispatch);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.logger.error('dispatch.unhandled_error', 'unhandled dispatch error', {
+              taskId: dispatch.taskId,
+              mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+              error: message,
+            });
+          }
+        },
+        (targetTaskId) => this.handleCancel(targetTaskId),
+      );
       this.logger.info('worker.started', 'worker listening for task.dispatch messages', {
         mailbox: this.mailboxEmail ?? '(configured elsewhere)',
       });
@@ -132,6 +219,24 @@ export class KodaXAampServer {
       mailbox: this.mailboxEmail ?? '(configured elsewhere)',
     });
     await this.transport.dispose?.();
+  }
+
+  handleCancel(targetTaskId: string): void {
+    const handle = this.taskProcesses.get(targetTaskId);
+    if (handle) {
+      this.logger.info('task.cancel_requested', 'cancelling running task process', {
+        targetTaskId,
+        pid: handle.pid,
+        mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+      });
+      handle.kill();
+      this.taskProcesses.delete(targetTaskId);
+    } else {
+      this.logger.info('task.cancel_not_found', 'no running process found for cancel target', {
+        targetTaskId,
+        mailbox: this.mailboxEmail ?? '(configured elsewhere)',
+      });
+    }
   }
 
   async handleDispatch(dispatch: AampDispatchEnvelope): Promise<void> {
@@ -173,7 +278,20 @@ export class KodaXAampServer {
         sessionId: record.sessionId,
       });
       await this.taskStore.update(dispatch.taskId, { status: 'running' });
-      const execution = await this.runtime.execute(dispatch, record);
+
+      const handle = this.processSpawner(dispatch, record);
+      this.taskProcesses.set(dispatch.taskId, handle);
+      this.logger.info('task.process_spawned', 'agent process spawned', {
+        taskId: dispatch.taskId,
+        pid: handle.pid,
+      });
+
+      let execution: AampTaskExecutionResult;
+      try {
+        execution = await handle.resultPromise;
+      } finally {
+        this.taskProcesses.delete(dispatch.taskId);
+      }
 
       await this.transport.sendResult(execution.outbound);
       this.logger.info('task.result_sent', 'sent task.result', {
