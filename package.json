@@ -33,7 +33,8 @@
     "test:watch": "vitest",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "clean:packages": "npm run clean --workspaces",
-    "verify:publish": "node scripts/verify-publish.mjs"
+    "verify:publish": "node scripts/verify-publish.mjs",
+    "publish": "node scripts/publish-all.mjs"
   },
   "keywords": [
     "ai",
