@@ -701,6 +701,8 @@ describe('CLI Entry Point', () => {
     const source = await fs.readFile(path.join(process.cwd(), 'src', 'kodax_cli.ts'), 'utf-8');
     expect(source).toContain('--model <name>');
     expect(source).toContain('kodax -h project');
+    expect(source).toContain('acp, aamp, skill, sessions, init, project, auto, provider, thinking, team, print');
+    expect(source).toContain('kodax aamp serve --profile work');
     expect(source).toContain('/project ...            Project workflow commands');
     expect(source).toContain('Legacy no-op; current CLI already starts a fresh session by default');
     expect(source).toContain('Resume session by ID (no ID = list recent sessions, then resume the latest)');

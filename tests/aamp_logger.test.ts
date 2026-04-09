@@ -84,4 +84,47 @@ describe('JsonlAampLogger', () => {
 
     expect(writes).toEqual(['[info] worker listening mailbox=agent@example.com\n']);
   });
+
+  it('writes tool lifecycle records into JSONL files', async () => {
+    const logger = new JsonlAampLogger({
+      baseDir: tempDir,
+      logLevel: 'info',
+      terminal: false,
+      now: () => new Date('2026-04-03T12:34:56.000Z'),
+    });
+
+    logger.info('tool.execution_started', 'tool execution started', {
+      toolId: 'tool-1',
+      toolName: 'read_file',
+      path: '/tmp/demo.txt',
+    });
+    logger.info('tool.execution_finished', 'tool execution finished', {
+      toolId: 'tool-1',
+      toolName: 'read_file',
+      isError: false,
+    });
+    logger.error('tool.execution_blocked', 'tool execution blocked by permissions', {
+      toolId: 'tool-2',
+      toolName: 'bash',
+      command: 'rm -rf dist',
+      reason: '[Blocked] dangerous command',
+    });
+    logger.error('tool.execution_failed', 'tool execution failed', {
+      toolId: 'tool-3',
+      toolName: 'read_file',
+      error: 'ENOENT',
+    });
+
+    const filePath = path.join(tempDir, '2026-04-03.jsonl');
+    const lines = (await fs.readFile(filePath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(lines.map((line) => line.event)).toEqual([
+      'tool.execution_started',
+      'tool.execution_finished',
+      'tool.execution_blocked',
+      'tool.execution_failed',
+    ]);
+  });
 });
