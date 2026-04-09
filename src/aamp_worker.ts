@@ -7,6 +7,7 @@
  * to the parent process via IPC (process.send).
  */
 import { FileSessionStorage, prepareRuntimeConfig } from '@kodax-ai/repl';
+import { createDefaultAampLogger } from './aamp_logger.js';
 import { KodaXAampRuntime } from './aamp_runtime.js';
 import type { AampWorkerInput } from './aamp_types.js';
 
@@ -25,6 +26,7 @@ if (workerInputJson) {
     repoRoot: input.repoRoot,
     sessionStorage: new FileSessionStorage(),
     dangerousFullPermissions: input.dangerousFullPermissions,
+    logger: createDefaultAampLogger(),
   });
 
   runtime

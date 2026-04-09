@@ -2168,7 +2168,7 @@ function showBasicHelp(): void {
   console.log('  --no-session            Disable session persistence (print mode only)');
   console.log('  --max-iter N            Max iterations per session (default: 200)\n');
   console.log('Help Topics (use -h <topic>):');
-  console.log('  acp, skill, sessions, project, auto, provider, thinking, print\n');
+  console.log('  acp, aamp, skill, sessions, init, project, auto, provider, thinking, team, print\n');
   console.log('Interactive Commands (in REPL mode):');
   console.log('  /help, /h               Show all commands');
   console.log('  /exit, /quit            Exit interactive mode');
@@ -2181,6 +2181,7 @@ function showBasicHelp(): void {
   console.log('  kodax                             # Enter interactive mode');
   console.log('  kodax "create a component"        # Run single task (with session)');
   console.log('  kodax acp serve                   # Start ACP stdio server');
+  console.log('  kodax aamp serve --profile work   # Start AAMP async task worker');
   console.log('  kodax skill init my-skill         # Scaffold a new skill');
   console.log('  kodax skill package ./my-skill    # Package a skill without starting the agent');
   console.log('  kodax -h project                 # Project mode workflow across CLI and REPL');
