@@ -1,9 +1,9 @@
 {
   "name": "kodax",
-  "version": "0.7.14",
+  "version": "0.7.14-beta.4",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持7种LLM提供商",
   "type": "module",
-  "private": true,
+  "private": false,
   "workspaces": [
     "packages/*"
   ],
@@ -20,6 +20,7 @@
   },
   "scripts": {
     "build": "npm run build:packages && tsc",
+    "prepack": "npm run build && npm run verify:publish",
     "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax/skills",
     "dev": "tsx src/kodax_cli.ts",
     "dev:cli": "tsx src/kodax_cli.ts",
@@ -30,7 +31,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "clean:packages": "npm run clean --workspaces"
+    "clean:packages": "npm run clean --workspaces",
+    "verify:publish": "node scripts/verify-publish.mjs"
   },
   "keywords": [
     "ai",
