@@ -1297,7 +1297,7 @@ export async function runKodaX(
       // 流式调用 Provider - with automatic retry for transient errors
       // 注入 API 硬超时保护：防止大型 payload 导致 API 静默丢包引发无限等待
       const API_HARD_TIMEOUT_MS = 600_000; // Issue 084: 提升到 10 分钟硬超时
-      const API_IDLE_TIMEOUT_MS = 60_000;  // Issue 084: 60 秒空闲/停滞超时，如果有 delta 刷新则重置
+      const API_IDLE_TIMEOUT_MS = 360_000; // Issue 084: 6 分钟空闲/停滞超时，如果有 delta 刷新则重置
 
       const result = await withRetry(
         async () => {
