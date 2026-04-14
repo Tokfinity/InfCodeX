@@ -138,6 +138,14 @@ npm run build
 npm link
 ```
 
+To create an InfCodeX-branded npm tarball without changing tracked package metadata, run:
+
+```bash
+npm run release:infcodex
+```
+
+The command reuses the current single-bundle release pipeline, temporarily packages the unscoped `infcodex` package with an `infcodex` CLI command, and restores `package.json` afterward. The artifact is written as `infcodex-<version>.tgz` at the repository root.
+
 ### 2. Configure a provider
 
 KodaX reads API keys from environment variables. For built-in providers, the fastest path is:

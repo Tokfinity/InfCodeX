@@ -160,6 +160,14 @@ npm run build
 npm link
 ```
 
+如需在不修改受控包元数据的情况下生成 InfCodeX 品牌 npm 包，可执行：
+
+```bash
+npm run release:infcodex
+```
+
+该命令复用当前单 bundle 发布流程，临时生成包名为 `infcodex`、命令名为 `infcodex` 的 `infcodex-<version>.tgz`，完成后会恢复根 `package.json`。
+
 构建完成后就可以直接启动：
 
 ```bash

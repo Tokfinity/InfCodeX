@@ -16,17 +16,17 @@
 //   node scripts/release.mjs --pack-only  # produce kodax-ai-kodax-<v>.tgz at repo root
 //                                         # for local `npm install <path>` SDK consumer testing
 //                                         # (no publish; package.json restored via try/finally)
+//   node scripts/release.mjs --brand=infcodex --pack-only
+//                                         # produce an InfCodeX-branded package/bin
 //
 // Steps:
 //   1. Verify git is clean (no uncommitted changes).
 //   2. Build sub-package dist/ via `npm run build:packages` (esbuild needs them).
 //   3. Build root bundle via `npm run build:bundle`.
 //   4. Toggle root package.json `private: true` → `private: false` so npm
-//      will accept the publish. Capture pristine bytes for restore.
-//      Name / exports / bin / publishConfig are NOT rewritten — root
-//      package.json is already in published shape (v0.7.43 SDK consumer
-//      `npm link` ergonomics: name=@kodax-ai/kodax, all 8 SDK subpath
-//      exports baked in, bin path published-clean). See ADR-024.
+//      will accept the publish. Capture pristine bytes for restore. The
+//      default package shape is otherwise unchanged; `--brand=infcodex`
+//      temporarily rewrites only package name, bin name, and brand metadata.
 //   5. Run `npm publish` (or --dry-run).
 //   6. Restore pristine package.json bytes — re-asserts `private: true`
 //      so the dev tree cannot be accidentally re-published bare.
@@ -49,6 +49,8 @@ const argv = process.argv.slice(2);
 const isDryRun = argv.includes('--dry-run');
 const skipBuild = argv.includes('--skip-build');
 const packOnly = argv.includes('--pack-only');
+const brandArg = argv.find((a) => a.startsWith('--brand='));
+const releaseBrand = brandArg?.slice('--brand='.length) ?? 'kodax';
 const otpArg = argv.find((a) => a.startsWith('--otp='));
 const otp = otpArg ? otpArg.split('=')[1] : null;
 
@@ -146,9 +148,16 @@ function toggleRootPackageJsonForPublish() {
     );
   }
 
-  // The ONLY mutation: flip `private: true → false` so npm accepts the
-  // publish. Restore via try/finally guarantees the dev tree returns to
-  // `private: true` and cannot be accidentally re-published bare.
+  if (releaseBrand === 'infcodex') {
+    pkg.name = 'infcodex';
+    pkg.description = pkg.description.replace('KodaX', 'InfCodeX');
+    pkg.bin = { infcodex: 'scripts/kodax-bin.cjs' };
+    pkg.keywords = Array.from(new Set([...(pkg.keywords ?? []), 'infcodex']));
+  }
+
+  // Flip `private: true → false` so npm accepts the publish. The optional
+  // InfCodeX package metadata above is also temporary. Restore via
+  // try/finally returns the development tree to its pristine bytes.
   pkg.private = false;
 
   writeFileSync(rootPkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
@@ -190,6 +199,12 @@ function findPackageLockVersionMismatches(version) {
 // ---- main ----------------------------------------------------------------
 
 function main() {
+  if (releaseBrand !== 'kodax' && releaseBrand !== 'infcodex') {
+    throw new Error(`unsupported release brand: ${JSON.stringify(releaseBrand)}`);
+  }
+
+  const publishedPackageName = releaseBrand === 'infcodex' ? 'infcodex' : '@kodax-ai/kodax';
+
   // Sanity: git clean (uncommitted changes risk shipping unexpected dist).
   // Hard fail for real publish; warn-only for dry-run / pack-only (so
   // operators can still produce a local tarball or validate the pipeline
@@ -205,8 +220,12 @@ function main() {
 
   const pkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
   const version = pkg.version;
+  const tarballName = releaseBrand === 'infcodex'
+    ? `infcodex-${version}.tgz`
+    : `kodax-ai-kodax-${version}.tgz`;
 
   log(`Version: ${version}`);
+  log(`Package: ${publishedPackageName}`);
   log(`Mode: ${packOnly ? 'PACK-ONLY (local tarball for SDK consumer testing)' : isDryRun ? 'DRY RUN' : 'REAL PUBLISH (irreversible)'}`);
   log('');
 
@@ -274,13 +293,13 @@ function main() {
 
   log('');
   if (packOnly) {
-    log(`Tarball produced: kodax-ai-kodax-${version}.tgz`);
-    log(`Consumer install: npm install ${path.join(repoRoot, `kodax-ai-kodax-${version}.tgz`)}`);
+    log(`Tarball produced: ${tarballName}`);
+    log(`Consumer install: npm install ${path.join(repoRoot, tarballName)}`);
   } else if (isDryRun) {
     log('Dry run complete. Nothing was actually published.');
   } else {
-    log(`Published @kodax-ai/kodax@${version}.`);
-    log(`Verify: npm view @kodax-ai/kodax@${version} version --registry=https://registry.npmjs.org/`);
+    log(`Published ${publishedPackageName}@${version}.`);
+    log(`Verify: npm view ${publishedPackageName}@${version} version --registry=https://registry.npmjs.org/`);
     log('(Registry propagation can take 30-120s.)');
   }
 }
