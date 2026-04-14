@@ -1,6 +1,6 @@
 # Feature 总表
 
-> Last updated: 2026-04-07
+> Last updated: 2026-04-08
 
 > 中文阅读说明：
 > 这份 `FEATURE_LIST` 是 roadmap 的总索引。
@@ -13,11 +13,11 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-047` |
-| Total tracked features | `47` |
-| Completed | `35` |
+| Tracked feature IDs | `001-048, 052` |
+| Total tracked features | `49` |
+| Completed | `36` |
 | InProgress | `1` |
-| Planned | `11` |
+| Planned | `12` |
 | Current released version | `v0.7.13` |
 
 ### 各版本未完成分布
@@ -25,6 +25,7 @@
 | Version | Open features |
 |---|---|
 | `v0.7.14` | `2` |
+| `v0.7.15` | `1` |
 | `v0.7.20` | `1` |
 | `v0.8.0` | `4` |
 | `v0.9.0` | `3` |
@@ -44,6 +45,7 @@
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
+| `052` | Feature Registry Database, CLI, and Skill Workflow | Internal | High | `v0.7.15` | [v0.7.15](features/v0.7.15.md#feature_052-feature-registry-database-cli-and-skill-workflow) |
 | `047` | Demo Full-Auto Permission Mode | Enhancement | High | `v0.7.14` | [v0.7.14](features/v0.7.14.md#feature_047-demo-full-auto-permission-mode) |
 | `007` | Theme System Consolidation | Enhancement | Medium | `v0.8.0` | [v0.8.0](features/v0.8.0.md#feature_007-theme-system-consolidation) |
 | `023` | Dual-Mode Terminal UX | Enhancement | High | `v1.0.0` | [v1.0.0](features/v1.0.0.md#feature_023-dual-mode-terminal-ux) |
@@ -110,6 +112,7 @@
 | `040` | ACP Server Support | `v0.6.15` | [v0.6.15](features/v0.6.15.md) |
 | `041` | Tool Output Guardrails and Context Overflow Protection | `v0.6.20` (unreleased) | [v0.6.20](features/v0.6.20.md) |
 | `045` | Provider Stream Resilience and Graceful Recovery | `v0.7.13` | [v0.7.15](features/v0.7.15.md#feature_045-provider-stream-resilience-and-graceful-recovery) |
+| `048` | AAMP Dangerous Permissions Mode | `v0.7.14` (unreleased) | [v0.7.14](features/v0.7.14.md#feature_048-aamp-dangerous-permissions-mode) |
 
 ---
 

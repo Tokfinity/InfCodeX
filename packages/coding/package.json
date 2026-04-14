@@ -1,6 +1,6 @@
 {
   "name": "@kodax/coding",
-  "version": "0.7.14",
+  "version": "0.7.14-beta.6",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
   "type": "module",
   "main": "dist/index.js",
@@ -25,7 +25,15 @@
   "dependencies": {
     "@kodax/agent": "*",
     "@kodax/ai": ">=0.5.0",
-    "@kodax/skills": "*"
+    "@kodax/skills": "*",
+    "@lezer/common": "^1.5.1",
+    "@lezer/go": "^1.0.1",
+    "@lezer/python": "^1.1.18",
+    "@lezer/rust": "^1.0.2",
+    "glob": "^11.0.1",
+    "iconv-lite": "^0.6.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

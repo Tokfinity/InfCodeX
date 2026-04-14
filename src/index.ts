@@ -22,6 +22,8 @@ export { KodaXAcpServer, runAcpServer, type KodaXAcpServerOptions } from './acp_
 export {
   KodaXAampServer,
   runAampServer,
+  type AgentProcessHandle,
+  type AgentProcessSpawner,
   type KodaXAampServerOptions,
 } from './aamp_server.js';
 export {
@@ -43,6 +45,7 @@ export type {
   AampTaskStatus,
   AampTaskStore,
   AampTransport,
+  AampWorkerInput,
 } from './aamp_types.js';
 
 // REPL API - 从 @kodax/repl 重新导出

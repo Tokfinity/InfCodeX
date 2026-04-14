@@ -656,9 +656,14 @@ kodax aamp serve \
   --smtp-password <password>
 
 kodax aamp serve --profile mailbox-a --cwd /path/to/repo
+kodax aamp serve --profile mailbox-a --cwd /path/to/repo --dangerous-full-permissions
 ```
 
 这个模式会监听 AAMP `task.dispatch` 消息，把每个任务桥接到 `runKodaX(...)` 执行，并通过同一个 mailbox transport 回发 `task.result`。
+
+由于 AAMP 是异步 worker，它不能在任务执行到一半时停下来做交互式 shell 授权。默认情况下，`kodax aamp serve` 仍然允许只读 shell 命令，但会阻断那些在 `accept-edits` 模式下本来需要确认的非只读 `bash` 调用。
+
+如果你希望 worker 继续执行这类 shell 指令，可以在启动时显式传 `--dangerous-full-permissions`。这个模式只对 `aamp serve` 生效，会跳过交互式 shell 授权，除了少量用于保护宿主机的硬黑名单外基本都允许执行，例如 `sudo`、`su`、`dd`、`mkfs`、`shutdown`、`curl | sh` 仍然会被拦截。
 
 当前 v1 行为：
 
