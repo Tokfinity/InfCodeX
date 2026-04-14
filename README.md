@@ -270,6 +270,29 @@ npm run build
 npm link
 ```
 
+### Optional: release `infcodex` without touching source
+
+If you want a release tarball whose CLI command and branding are `infcodex` (instead of `kodax`) without editing tracked source files, use:
+
+```bash
+npm run release:infcodex
+```
+
+What it does:
+
+- Copies the repo to a temporary workspace.
+- Builds in that temporary workspace.
+- Rewrites package/branding from `kodax` / `KodaX` to `infcodex` / `InfCodeX`.
+- Rewrites `@kodax/*` workspace deps to in-package `file:` paths so global install does not fetch private workspace packages from npm registry.
+- Runs `npm pack` there and leaves your current git workspace unchanged.
+
+Install the generated tarball globally:
+
+```bash
+npm i -g ./tmp/infcodex-release-*/workspace/infcodex-*.tgz
+infcodex --version
+```
+
 ### 2. Configure a provider
 
 Built-in providers read credentials from environment variables:

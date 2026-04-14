@@ -1291,14 +1291,14 @@ function printStartupBanner(config: CurrentConfig, mode: string, compactionInfo?
   const theme = getCurrentTheme();
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
 
-  // INFCODEX block character logo - INFCODEX 方块字符 logo
+  // KodaX block character logo - KodaX 方块字符 logo
   const logo = `
-  ██╗ ███╗   ██╗ ███████╗  ██████╗  ██████╗  ██████╗  ██████╗  ███████╗ ██╗  ██╗
-  ██║ ████╗  ██║ ██╔════╝ ██╔════╝ ██╔═══██╗ ██╔══██╗ ██╔════╝ ██╔════╝ ╚██╗██╔╝
-  ██║ ██╔██╗ ██║ █████╗   ██║      ██║   ██║ ██║  ██║ █████╗   █████╗    ╚███╔╝
-  ██║ ██║╚██╗██║ ██╔══╝   ██║      ██║   ██║ ██║  ██║ ██╔══╝   ██╔══╝    ██╔██╗
-  ██║ ██║ ╚████║ ██║      ╚██████╗ ╚██████╔╝ ██████╔╝ ███████╗ ██║      ██╔╝ ██╗
-  ╚═╝ ╚═╝  ╚═══╝ ╚═╝       ╚═════╝  ╚═════╝  ╚═════╝  ╚══════╝ ╚═╝      ╚═╝  ╚═╝`;
+██╗  ██╗  ██████╗  ██████╗   █████╗  ██╗  ██╗
+██║ ██╔╝ ██╔═══██╗ ██╔══██╗ ██╔══██╗ ╚██╗██╔╝
+█████╔╝  ██║   ██║ ██║  ██║ ███████║  ╚███╔╝
+██╔═██╗  ██║   ██║ ██║  ██║ ██╔══██║  ██╔██╗
+██║  ██╗ ╚██████╔╝ ██████╔╝ ██║  ██║ ██╔╝ ██╗
+╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝`;
 
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
   console.log(chalk.hex(theme.colors.text)(`\n  v${KODAX_VERSION}  |  AI Coding Agent  |  ${config.provider}:${model}`));
