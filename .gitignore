@@ -47,6 +47,7 @@ coverage/
 
 # Temp
 .tmp/
+.omx/
 
 # SA refactor goldens — recordings contain user prompts, file paths, and
 # model responses captured from real KodaX sessions. Treat as PII-adjacent;
