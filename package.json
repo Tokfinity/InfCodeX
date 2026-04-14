@@ -1,6 +1,6 @@
 {
   "name": "infcodex",
-  "version": "0.7.14-beta.7",
+  "version": "0.7.14-beta.8",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持7种LLM提供商",
   "type": "module",
   "private": false,
