@@ -6,19 +6,64 @@ import { execSync } from 'node:child_process';
 const PROJECT_ROOT = process.cwd();
 const TMP_PREFIX = 'infcodex-release-';
 const PROJECT_TMP_DIR = path.join(PROJECT_ROOT, 'tmp');
+const ROOT_NPMRC = path.join(PROJECT_ROOT, '.npmrc');
 await fs.mkdir(PROJECT_TMP_DIR, { recursive: true });
 
 function run(command, cwd = PROJECT_ROOT) {
   execSync(command, {
     cwd,
     stdio: 'inherit',
+    env: {
+      ...process.env,
+      npm_config_userconfig: ROOT_NPMRC,
+    },
   });
 }
 
 function replaceBranding(text) {
-  const replaced = text
-    .replaceAll('KodaX', 'InfCodeX')
-    .replaceAll('kodax', 'infcodex');
+  const replaceWord = (source, from, to) =>
+    source.replace(new RegExp(`(^|[^A-Za-z0-9_])${from}(?=[^A-Za-z0-9_]|$)`, 'g'), `$1${to}`);
+
+  const logoReplacements = [
+    {
+      from: [
+        '██╗  ██╗  ██████╗  ██████╗   █████╗  ██╗  ██╗',
+        '██║ ██╔╝ ██╔═══██╗ ██╔══██╗ ██╔══██╗ ╚██╗██╔╝',
+        '█████╔╝  ██║   ██║ ██║  ██║ ███████║  ╚███╔╝',
+        '██╔═██╗  ██║   ██║ ██║  ██║ ██╔══██║  ██╔██╗',
+        '██║  ██╗ ╚██████╔╝ ██████╔╝ ██║  ██║ ██╔╝ ██╗',
+        '╚═╝  ╚═╝  ╚═════╝  ╚═════╝  ╚═╝  ╚═╝ ╚═╝  ╚═╝',
+      ].join('\n'),
+      to: [
+        '██╗ ███╗   ██╗ ███████╗  ██████╗  ██████╗  ██████╗  ██████╗  ██╗  ██╗',
+        '██║ ████╗  ██║ ██╔════╝ ██╔════╝ ██╔═══██╗ ██╔══██╗ ██╔════╝ ╚██╗██╔╝',
+        '██║ ██╔██╗ ██║ █████╗   ██║      ██║   ██║ ██║  ██║ █████╗    ╚███╔╝',
+        '██║ ██║╚██╗██║ ██╔══╝   ██║      ██║   ██║ ██║  ██║ ██╔══╝    ██╔██╗',
+        '██║ ██║ ╚████║ ██║      ╚██████╗ ╚██████╔╝ ██████╔╝ ███████╗ ██╔╝ ██╗',
+        '╚═╝ ╚═╝  ╚═══╝ ╚═╝       ╚═════╝  ╚═════╝  ╚═════╝  ╚══════╝ ╚═╝  ╚═╝',
+      ].join('\n'),
+    },
+  ];
+
+  let replaced = text;
+  replaced = replaceWord(replaced, 'KodaX', 'InfCodeX');
+  replaced = replaceWord(replaced, 'kodax', 'infcodex');
+
+  for (const { from, to } of logoReplacements) {
+    replaced = replaced
+      .replaceAll(from, to)
+      .replaceAll(`  ${from.replaceAll('\n', '\n  ')}`, `  ${to.replaceAll('\n', '\n  ')}`);
+  }
+
+  // Keep runtime config/control directories compatible with existing KodaX installs.
+  // InfCodeX should still read ~/.kodax/config.json and project .kodax paths.
+  replaced = replaced
+    .replaceAll('~/.infcodex', '~/.kodax')
+    .replaceAll('/.infcodex/', '/.kodax/')
+    .replaceAll('.infcodex/', '.kodax/')
+    .replaceAll("'.infcodex'", "'.kodax'")
+    .replaceAll('".infcodex"', '".kodax"');
+
   // Keep internal package scopes untouched (runtime imports must stay @kodax/*).
   return replaced.replaceAll('@infcodex/', '@kodax/');
 }
@@ -101,22 +146,79 @@ async function rewriteWorkspaceDependencies(workspaceRoot) {
   }
 }
 
-async function rewriteTextFilesRecursively(targetDir) {
+async function ensureRootHasWorkspaceDependencies(workspaceRoot) {
+  const packageMap = await buildWorkspacePackageMap(workspaceRoot);
+  const rootPackagePath = path.join(workspaceRoot, 'package.json');
+  const rootPackage = JSON.parse(await fs.readFile(rootPackagePath, 'utf8'));
+  const rootDependencies =
+    rootPackage.dependencies && typeof rootPackage.dependencies === 'object'
+      ? rootPackage.dependencies
+      : {};
+
+  for (const [packageName, packageDir] of packageMap.entries()) {
+    if (packageDir === workspaceRoot || packageName === rootPackage.name) {
+      continue;
+    }
+    if (packageName in rootDependencies) {
+      continue;
+    }
+    const rel = path.relative(workspaceRoot, packageDir).split(path.sep).join('/');
+    if (!rel || rel === '.') {
+      continue;
+    }
+    rootDependencies[packageName] = `file:${rel.startsWith('.') ? rel : `./${rel}`}`;
+  }
+
+  for (const [packageName, packageDir] of packageMap.entries()) {
+    if (packageDir === workspaceRoot || packageName === rootPackage.name) {
+      continue;
+    }
+    const packageJsonPath = path.join(packageDir, 'package.json');
+    let pkg;
+    try {
+      pkg = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    const deps = pkg?.dependencies;
+    if (!deps || typeof deps !== 'object') {
+      continue;
+    }
+    for (const [depName, depVersion] of Object.entries(deps)) {
+      if (packageMap.has(depName)) {
+        continue;
+      }
+      if (depName in rootDependencies) {
+        continue;
+      }
+      if (typeof depVersion !== 'string' || depVersion.trim() === '') {
+        continue;
+      }
+      rootDependencies[depName] = depVersion;
+    }
+  }
+
+  rootPackage.dependencies = rootDependencies;
+  await fs.writeFile(rootPackagePath, `${JSON.stringify(rootPackage, null, 2)}\n`, 'utf8');
+}
+
+async function rewriteTextFilesRecursively(targetDir, filePattern = /\.(?:md|txt)$/) {
+  let rewriteCount = 0;
   let entries;
   try {
     entries = await fs.readdir(targetDir, { withFileTypes: true });
   } catch {
-    return;
+    return rewriteCount;
   }
 
   for (const entry of entries) {
     const fullPath = path.join(targetDir, entry.name);
     if (entry.isDirectory()) {
-      await rewriteTextFilesRecursively(fullPath);
+      rewriteCount += await rewriteTextFilesRecursively(fullPath, filePattern);
       continue;
     }
 
-    if (!/\.(?:md|txt)$/.test(entry.name)) {
+    if (!filePattern.test(entry.name)) {
       continue;
     }
 
@@ -124,8 +226,11 @@ async function rewriteTextFilesRecursively(targetDir) {
     const after = replaceBranding(before);
     if (after !== before) {
       await fs.writeFile(fullPath, after, 'utf8');
+      rewriteCount += 1;
     }
   }
+
+  return rewriteCount;
 }
 
 async function main() {
@@ -157,6 +262,7 @@ async function main() {
   packageJson.bin = { infcodex: './dist/kodax_cli.js' };
   await fs.writeFile(`${packageJsonPath}`, `${JSON.stringify(packageJson, null, 2)}\n`, 'utf8');
   await rewriteWorkspaceDependencies(workdir);
+  await ensureRootHasWorkspaceDependencies(workdir);
   await fs.rm(path.join(workdir, 'package-lock.json'), { force: true });
   await fs.writeFile(
     path.join(workdir, '.npmignore'),
@@ -171,6 +277,9 @@ async function main() {
   );
 
   await rewriteTextFilesRecursively(path.join(workdir, 'docs'));
+  await rewriteTextFilesRecursively(path.join(workdir, 'dist'), /\.(?:js|mjs|cjs|d\.ts|map)$/);
+  await rewriteTextFilesRecursively(path.join(workdir, 'src'), /\.(?:ts|tsx|js|mjs|cjs)$/);
+  await rewriteTextFilesRecursively(path.join(workdir, 'packages'), /\.(?:ts|tsx|js|mjs|cjs|md|txt)$/);
 
   // Skip prepack here because we already built the temporary workspace above.
   run('npm pack --ignore-scripts', workdir);
