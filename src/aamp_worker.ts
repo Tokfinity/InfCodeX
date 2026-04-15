@@ -9,7 +9,7 @@
 import { FileSessionStorage, prepareRuntimeConfig } from '@kodax-ai/repl';
 import { createDefaultAampLogger } from './aamp_logger.js';
 import { KodaXAampRuntime } from './aamp_runtime.js';
-import type { AampWorkerInput } from './aamp_types.js';
+import type { AampWorkerInput, WorkerStreamEventMessage } from './aamp_types.js';
 
 const workerInputJson = process.env.AAMP_WORKER_INPUT;
 if (workerInputJson) {
@@ -20,13 +20,29 @@ if (workerInputJson) {
   // providers registered in the parent process are not inherited automatically.
   prepareRuntimeConfig();
 
+  // When a streamId is provided, forward text deltas to the parent process via IPC
+  // so the parent can push them as SSE stream events.
+  const onStreamDelta: ((text: string) => void) | undefined = input.streamId
+    ? (text) => {
+        if (typeof process.send === 'function') {
+          const msg: WorkerStreamEventMessage = {
+            __streamEvent: true,
+            eventType: 'text.delta',
+            payload: { text },
+          };
+          process.send(msg);
+        }
+      }
+    : undefined;
+
   const runtime = new KodaXAampRuntime({
     provider: input.provider,
     model: input.model,
     repoRoot: input.repoRoot,
     sessionStorage: new FileSessionStorage(),
-    dangerousFullPermissions: input.dangerousFullPermissions,
+    dangerousFullPermissions: input.dangerousFullPermissions === true,
     logger: createDefaultAampLogger(),
+    onStreamDelta,
   });
 
   runtime

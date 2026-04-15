@@ -51,6 +51,21 @@ export interface AampTransport {
   sendAck(ack: AampTaskAck): Promise<void>;
   sendResult(result: AampTaskResult): Promise<void>;
   dispose?(): Promise<void>;
+
+  /* ── Streaming (optional, supported by AampSdkTransport) ── */
+  createStream?(opts: { taskId: string; peerEmail: string }): Promise<{ streamId: string }>;
+  sendStreamOpened?(opts: {
+    to: string;
+    taskId: string;
+    streamId: string;
+    inReplyTo?: string;
+  }): Promise<void>;
+  appendStreamEvent?(opts: {
+    streamId: string;
+    type: string;
+    payload: Record<string, unknown>;
+  }): Promise<void>;
+  closeStream?(opts: { streamId: string; payload?: Record<string, unknown> }): Promise<void>;
 }
 
 export interface AampWorkerInput {
@@ -60,4 +75,16 @@ export interface AampWorkerInput {
   model?: string;
   repoRoot: string;
   dangerousFullPermissions?: boolean;
+  /** When set, the worker should send stream events via IPC. */
+  streamId?: string;
+}
+
+/**
+ * IPC message sent from the worker to the parent process for streaming events.
+ * Discriminated from the final AampTaskExecutionResult by the `__streamEvent` flag.
+ */
+export interface WorkerStreamEventMessage {
+  __streamEvent: true;
+  eventType: string;
+  payload: Record<string, unknown>;
 }
