@@ -153,6 +153,42 @@ describe('AampSdkTransport', () => {
     );
   });
 
+  it('forwards structuredResult when sending task results', async () => {
+    const transport = new AampSdkTransport({
+      email: 'agent@example.com',
+      mailboxToken: 'token',
+      baseUrl: 'https://meshmail.ai',
+      smtpHost: 'meshmail.ai',
+      smtpPassword: 'secret',
+    }, logger);
+
+    await transport.sendResult({
+      to: 'sender@example.com',
+      taskId: 'task-3',
+      status: 'completed',
+      output: 'done',
+      structuredResult: [
+        { fieldKey: 'summary', fieldTypeKey: 'text', value: 'summary text' },
+        { fieldKey: 'todos', fieldTypeKey: 'json', value: ['a', 'b'] },
+      ],
+      inReplyToMessageId: 'msg-3',
+    });
+
+    const client = clientInstances[0]!;
+    expect(client.sendResult).toHaveBeenCalledWith({
+      to: 'sender@example.com',
+      taskId: 'task-3',
+      status: 'completed',
+      output: 'done',
+      errorMsg: undefined,
+      structuredResult: [
+        { fieldKey: 'summary', fieldTypeKey: 'text', value: 'summary text' },
+        { fieldKey: 'todos', fieldTypeKey: 'json', value: ['a', 'b'] },
+      ],
+      inReplyTo: 'msg-3',
+    });
+  });
+
   it('accepts legacy jmapToken/jmapUrl aliases for backward compatibility', async () => {
     const transport = new AampSdkTransport({
       email: 'agent@example.com',

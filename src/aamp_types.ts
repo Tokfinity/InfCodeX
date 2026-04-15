@@ -1,3 +1,5 @@
+import type { StructuredResultField } from 'aamp-sdk';
+
 export type AampTaskStatus = 'received' | 'acknowledged' | 'running' | 'completed' | 'failed';
 
 export interface AampDispatchEnvelope {
@@ -21,7 +23,7 @@ export interface AampTaskResult {
   status: 'completed' | 'failed';
   output: string;
   inReplyToMessageId?: string;
-  structuredResult?: Record<string, unknown>;
+  structuredResult?: StructuredResultField[];
 }
 
 export interface AampTaskRecord {
