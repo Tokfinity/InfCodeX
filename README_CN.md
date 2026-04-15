@@ -317,6 +317,29 @@ npm run build
 npm link
 ```
 
+### 可选：不改源码发布 `infcodex`
+
+如果你希望发布包里的命令名和品牌文案是 `infcodex`（而不是 `kodax`），并且不修改仓库中的受控源码，可以执行：
+
+```bash
+npm run release:infcodex
+```
+
+这个脚本会：
+
+- 复制仓库到临时目录；
+- 在临时目录里完成构建；
+- 把包名/命令/品牌文案从 `kodax` / `KodaX` 替换为 `infcodex` / `InfCodeX`；
+- 将 `@kodax/*` workspace 依赖改写为包内 `file:` 相对路径，避免全局安装时去 npm registry 拉取私有包；
+- 在临时目录执行 `npm pack`，当前 git 工作区不受影响。
+
+将生成的 tarball 全局安装后即可直接使用：
+
+```bash
+npm i -g ./tmp/infcodex-release-*/workspace/infcodex-*.tgz
+infcodex --version
+```
+
 ### 2. 配置 Provider
 
 内置 provider 的凭证通过环境变量读取：

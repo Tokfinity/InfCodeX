@@ -1,6 +1,6 @@
 {
-  "name": "kodax",
-  "version": "0.7.14-beta.6",
+  "name": "infcodex",
+  "version": "0.7.14-beta.8",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持7种LLM提供商",
   "type": "module",
   "private": false,
@@ -10,6 +10,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
+    "infcodex": "./dist/kodax_cli.js",
     "kodax": "./dist/kodax_cli.js"
   },
   "exports": {
@@ -35,6 +36,7 @@
     "clean:packages": "npm run clean --workspaces",
     "verify:publish": "node scripts/verify-publish.mjs",
     "publish:all": "node scripts/publish-all.mjs",
+    "release:infcodex": "node scripts/release-infcodex.mjs",
     "unpublish:all": "node scripts/unpublish-all.mjs"
   },
   "keywords": [
