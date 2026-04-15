@@ -76,6 +76,7 @@ export class AampSdkTransport implements AampTransport {
       status: result.status === 'completed' ? 'completed' : 'rejected',
       output: result.output,
       errorMsg: result.status === 'failed' ? result.output : undefined,
+      structuredResult: result.structuredResult,
       inReplyTo: result.inReplyToMessageId,
     });
   }

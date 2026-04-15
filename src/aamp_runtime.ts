@@ -1,3 +1,4 @@
+import type { StructuredResultField } from 'aamp-sdk';
 import type { KodaXSessionStorage, KodaXResult } from '@kodax/coding';
 import { runKodaX } from '@kodax/coding';
 import { getSkillRegistry, initializeSkillRegistry } from '@kodax/skills';
@@ -76,6 +77,75 @@ function getToolErrorMessage(error: unknown): string {
     return error.message;
   }
   return typeof error === 'string' ? error : String(error);
+}
+
+interface PlanTodosStructuredPayload {
+  summary: string;
+  todos: string[];
+}
+
+function isPlanTodosTask(dispatch: AampDispatchEnvelope): boolean {
+  return dispatch.dispatchContext?.state_key === 'state_2';
+}
+
+function normalizePlanTodosPayload(value: unknown): PlanTodosStructuredPayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
+  const todos = Array.isArray(record.todos)
+    ? record.todos.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    summary,
+    todos: todos.slice(0, 5),
+  };
+}
+
+function extractPlanTodosStructuredPayload(output: string): PlanTodosStructuredPayload {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const normalized = normalizePlanTodosPayload(parsed);
+    if (normalized) {
+      return normalized;
+    }
+  } catch {
+    // fall through to empty todos fallback
+  }
+
+  return {
+    summary: output.trim(),
+    todos: [],
+  };
+}
+
+function buildStructuredResultFields(dispatch: AampDispatchEnvelope, output: string): StructuredResultField[] | undefined {
+  if (!isPlanTodosTask(dispatch)) {
+    return undefined;
+  }
+
+  const payload = extractPlanTodosStructuredPayload(output);
+  return [
+    {
+      fieldKey: 'summary',
+      fieldAlias: 'summary',
+      fieldTypeKey: 'text',
+      value: payload.summary,
+    },
+    {
+      fieldKey: 'todos',
+      fieldAlias: 'todos',
+      fieldTypeKey: 'json',
+      value: payload.todos,
+    },
+  ];
 }
 
 export class KodaXAampRuntime {
@@ -177,6 +247,7 @@ export class KodaXAampRuntime {
         status: result.success && result.signal !== 'BLOCKED' ? 'completed' : 'failed',
         output,
         inReplyToMessageId: dispatch.messageId,
+        structuredResult: buildStructuredResultFields(dispatch, output),
       },
     };
   }

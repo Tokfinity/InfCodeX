@@ -235,6 +235,103 @@ describe('KodaXAampServer', () => {
     }));
   });
 
+  it('returns structured plan_todos result when final output is valid JSON', async () => {
+    runKodaXMock.mockResolvedValue(createResult({
+      lastText: JSON.stringify({
+        summary: '完成结构化计划输出',
+        todos: ['梳理 runtime 输出', '解析 JSON 结果', '回传 structuredResult'],
+      }),
+    }));
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-plan',
+      from: 'agent@example.com',
+      bodyText: 'Please plan todos',
+      messageId: 'msg-plan',
+      dispatchContext: { state_key: 'state_2' },
+    });
+
+    expect(transport.results).toEqual([
+      {
+        taskId: 'task-plan',
+        to: 'agent@example.com',
+        status: 'completed',
+        output: '{"summary":"完成结构化计划输出","todos":["梳理 runtime 输出","解析 JSON 结果","回传 structuredResult"]}',
+        inReplyToMessageId: 'msg-plan',
+        structuredResult: [
+          {
+            fieldKey: 'summary',
+            fieldAlias: 'summary',
+            fieldTypeKey: 'text',
+            value: '完成结构化计划输出',
+          },
+          {
+            fieldKey: 'todos',
+            fieldAlias: 'todos',
+            fieldTypeKey: 'json',
+            value: ['梳理 runtime 输出', '解析 JSON 结果', '回传 structuredResult'],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it('falls back to empty structured todos when plan_todos JSON parsing fails', async () => {
+    runKodaXMock.mockResolvedValue(createResult({ lastText: '非 JSON 计划摘要' }));
+
+    const transport = new MockAampTransport();
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      processSpawner: createMockSpawner(tempDir),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-plan-fallback',
+      from: 'agent@example.com',
+      bodyText: 'Please plan todos',
+      messageId: 'msg-plan-fallback',
+      dispatchContext: { state_key: 'state_2' },
+    });
+
+    expect(transport.results).toEqual([
+      {
+        taskId: 'task-plan-fallback',
+        to: 'agent@example.com',
+        status: 'completed',
+        output: '非 JSON 计划摘要',
+        inReplyToMessageId: 'msg-plan-fallback',
+        structuredResult: [
+          {
+            fieldKey: 'summary',
+            fieldAlias: 'summary',
+            fieldTypeKey: 'text',
+            value: '非 JSON 计划摘要',
+          },
+          {
+            fieldKey: 'todos',
+            fieldAlias: 'todos',
+            fieldTypeKey: 'json',
+            value: [],
+          },
+        ],
+      },
+    ]);
+  });
+
   it('blocks non-read bash commands by default because AAMP cannot prompt for approval', async () => {
     runKodaXMock.mockImplementation(async (options) => {
       const decision = await options.events?.beforeToolExecute?.(

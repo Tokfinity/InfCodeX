@@ -15,13 +15,15 @@ export interface AampTaskAck {
   inReplyToMessageId?: string;
 }
 
+import type { StructuredResultField } from 'aamp-sdk';
+
 export interface AampTaskResult {
   taskId: string;
   to: string;
   status: 'completed' | 'failed';
   output: string;
   inReplyToMessageId?: string;
-  structuredResult?: Record<string, unknown>;
+  structuredResult?: StructuredResultField[];
 }
 
 export interface AampTaskRecord {
