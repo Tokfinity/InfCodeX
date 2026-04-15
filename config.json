@@ -1,0 +1,36 @@
+{
+  "provider": "newapi",
+  "customProviders": [
+    {
+      "name": "litellm",
+      "protocol": "openai",
+      "baseUrl": "https://litellm.violetear-cloud.ts.net/",
+      "apiKeyEnv": "KODAX_LITELLM_KEY",
+      "model": "newapi/openai/gpt-5.4",
+      "models": ["newapi/openai/gpt-5.3-codex", "newapi/openai/gpt-5.4"],
+      "supportsThinking": true
+    },
+    {
+      "name": "newapi",
+      "protocol": "openai",
+      "baseUrl": "https://cyapi.zexiweilai.com/v1",
+      "apiKeyEnv": "KODAX_NEWAPI_KEY",
+      "model": "gpt-5.1-2025-11-13",
+      "models": ["gpt-5.3-codex", "gpt-5.4"],
+      "supportsThinking": true
+    }
+  ],
+  "aamp": {
+    "profiles": {
+      "default": {
+        "email": "infcodex-dev-88c05e60@meshmail.ai",
+        "jmapToken": "aW5mY29kZXgtZGV2LTg4YzA1ZTYwQG1lc2htYWlsLmFpOjBQWk9pc19haS1DR05nNVEzRmgzQjJ1bjBDaUlzMDUtRS1aNlV2UkZTMlU=",
+        "jmapUrl": "https://meshmail.ai",
+        "smtpHost": "meshmail.ai",
+        "smtpPort": 587,
+        "smtpPassword": "0PZOis_ai-CGNg5Q3Fh3B2un0CiIs05-E-Z6UvRFS2U",
+        "allowInsecureTls": false
+      }
+    }
+  }
+}

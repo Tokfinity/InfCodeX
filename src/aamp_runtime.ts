@@ -13,6 +13,8 @@ export interface KodaXAampRuntimeOptions {
   sessionStorage: KodaXSessionStorage;
   dangerousFullPermissions?: boolean;
   logger?: AampLogger;
+  /** When set, called for each text delta to push streaming events. */
+  onStreamDelta?: (text: string) => void;
 }
 
 export interface AampTaskExecutionResult {
@@ -109,7 +111,10 @@ export class KodaXAampRuntime {
           skillsPrompt,
         },
         events: {
-          onTextDelta: (text) => terminal.writeAgentText(text),
+          onTextDelta: (text) => {
+            terminal.writeAgentText(text);
+            this.options.onStreamDelta?.(text);
+          },
           onThinkingDelta: (text) => terminal.writeThinking(text),
           onToolUseStart: (tool) => {
             terminal.writeToolUseStart(tool);
