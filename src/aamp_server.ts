@@ -49,8 +49,68 @@ export type AgentProcessSpawner = (
  */
 const STREAMING_ROLE_MARKER = '你是一名负责在本地仓库内执行开发任务的工程师。';
 
+interface PlanTodosPersistedPayload {
+  planningSummary: string;
+  todoList: string[];
+  parseError?: string;
+}
+
 function isStreamingTask(dispatch: AampDispatchEnvelope): boolean {
   return dispatch.bodyText.includes(STREAMING_ROLE_MARKER);
+}
+
+function isPlanTodosTask(dispatch: AampDispatchEnvelope): boolean {
+  return dispatch.dispatchContext?.state_key === 'state_2';
+}
+
+function normalizePlanTodosPayload(value: unknown): { summary: string; todos: string[] } | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const summary = typeof record.summary === 'string' ? record.summary.trim() : '';
+  const todos = Array.isArray(record.todos)
+    ? record.todos.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : [];
+
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    summary,
+    todos: todos.slice(0, 5),
+  };
+}
+
+function extractPlanTodosPersistedPayload(dispatch: AampDispatchEnvelope, output: string): PlanTodosPersistedPayload | undefined {
+  if (!isPlanTodosTask(dispatch)) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    const normalized = normalizePlanTodosPayload(parsed);
+    if (normalized) {
+      return {
+        planningSummary: normalized.summary,
+        todoList: normalized.todos,
+      };
+    }
+
+    return {
+      planningSummary: output.trim(),
+      todoList: [],
+      parseError: 'plan_todos output JSON missing required summary field',
+    };
+  } catch (error) {
+    return {
+      planningSummary: output.trim(),
+      todoList: [],
+      parseError: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function isWorkerStreamEvent(msg: unknown): msg is WorkerStreamEventMessage {
@@ -464,9 +524,14 @@ export class KodaXAampServer {
         status: execution.outbound.status,
         sessionId: record.sessionId,
       });
+      const planTodosPayload = extractPlanTodosPersistedPayload(dispatch, execution.outbound.output);
       await this.taskStore.update(dispatch.taskId, {
         status: execution.outbound.status === 'completed' ? 'completed' : 'failed',
+        executionStatus: execution.outbound.status,
         resultSummary: execution.outbound.output,
+        planningSummary: planTodosPayload?.planningSummary,
+        todoList: planTodosPayload?.todoList,
+        parseError: planTodosPayload?.parseError,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -512,6 +577,7 @@ export class KodaXAampServer {
       try {
         await this.taskStore.update(dispatch.taskId, {
           status: 'failed',
+          executionStatus: 'failed',
           resultSummary: message,
         });
       } catch (updateError) {

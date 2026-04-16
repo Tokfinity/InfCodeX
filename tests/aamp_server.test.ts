@@ -244,11 +244,12 @@ describe('KodaXAampServer', () => {
     }));
 
     const transport = new MockAampTransport();
+    const taskStore = new FileAampTaskStore(path.join(tempDir, 'tasks.json'));
     const server = new KodaXAampServer({
       transport,
       repoRoot: tempDir,
       logger,
-      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      taskStore,
       processSpawner: createMockSpawner(tempDir),
     });
 
@@ -284,17 +285,26 @@ describe('KodaXAampServer', () => {
         ],
       },
     ]);
+
+    expect(await taskStore.get('task-plan')).toMatchObject({
+      status: 'completed',
+      executionStatus: 'completed',
+      resultSummary: '{"summary":"完成结构化计划输出","todos":["梳理 runtime 输出","解析 JSON 结果","回传 structuredResult"]}',
+      planningSummary: '完成结构化计划输出',
+      todoList: ['梳理 runtime 输出', '解析 JSON 结果', '回传 structuredResult'],
+    });
   });
 
   it('falls back to empty structured todos when plan_todos JSON parsing fails', async () => {
     runKodaXMock.mockResolvedValue(createResult({ lastText: '非 JSON 计划摘要' }));
 
     const transport = new MockAampTransport();
+    const taskStore = new FileAampTaskStore(path.join(tempDir, 'tasks.json'));
     const server = new KodaXAampServer({
       transport,
       repoRoot: tempDir,
       logger,
-      taskStore: new FileAampTaskStore(path.join(tempDir, 'tasks.json')),
+      taskStore,
       processSpawner: createMockSpawner(tempDir),
     });
 
@@ -330,6 +340,15 @@ describe('KodaXAampServer', () => {
         ],
       },
     ]);
+
+    expect(await taskStore.get('task-plan-fallback')).toMatchObject({
+      status: 'completed',
+      executionStatus: 'completed',
+      resultSummary: '非 JSON 计划摘要',
+      planningSummary: '非 JSON 计划摘要',
+      todoList: [],
+      parseError: expect.any(String),
+    });
   });
 
   it('blocks non-read bash commands by default because AAMP cannot prompt for approval', async () => {
@@ -570,6 +589,35 @@ describe('KodaXAampServer', () => {
         originalError: 'primary execution failed',
       }),
     );
+  });
+
+  it('persists failed execution status for plan_todos tasks when runtime execution throws', async () => {
+    runKodaXMock.mockRejectedValue(new Error('primary execution failed'));
+
+    const transport = new MockAampTransport();
+    const taskStore = new FileAampTaskStore(path.join(tempDir, 'tasks.json'));
+    const server = new KodaXAampServer({
+      transport,
+      repoRoot: tempDir,
+      logger,
+      taskStore,
+      processSpawner: createMockSpawner(tempDir),
+    });
+
+    await server.start();
+    await transport.dispatch({
+      taskId: 'task-plan-runtime-failed',
+      from: 'agent@example.com',
+      bodyText: 'Please plan todos',
+      messageId: 'msg-plan-runtime-failed',
+      dispatchContext: { state_key: 'state_2' },
+    });
+
+    expect(await taskStore.get('task-plan-runtime-failed')).toMatchObject({
+      status: 'failed',
+      executionStatus: 'failed',
+      resultSummary: 'primary execution failed',
+    });
   });
 
 });

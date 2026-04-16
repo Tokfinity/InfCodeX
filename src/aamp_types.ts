@@ -35,6 +35,10 @@ export interface AampTaskRecord {
   dispatchContext?: Record<string, string>;
   inboundMessageId?: string;
   resultSummary?: string;
+  executionStatus?: 'completed' | 'failed';
+  planningSummary?: string;
+  todoList?: string[];
+  parseError?: string;
   createdAt: string;
   updatedAt: string;
 }
