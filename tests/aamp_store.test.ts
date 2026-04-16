@@ -42,17 +42,29 @@ describe('FileAampTaskStore', () => {
     const updated = await store.update('task-1', {
       status: 'completed',
       resultSummary: 'done',
+      executionStatus: 'completed',
+      planningSummary: '完成计划整理',
+      todoList: ['补齐 store 字段', '写入解析结果'],
+      parseError: 'unexpected token',
     });
 
     expect(updated).toMatchObject({
       status: 'completed',
       resultSummary: 'done',
+      executionStatus: 'completed',
+      planningSummary: '完成计划整理',
+      todoList: ['补齐 store 字段', '写入解析结果'],
+      parseError: 'unexpected token',
     });
 
     const reloaded = new FileAampTaskStore(storePath);
     expect(await reloaded.get('task-1')).toMatchObject({
       status: 'completed',
       resultSummary: 'done',
+      executionStatus: 'completed',
+      planningSummary: '完成计划整理',
+      todoList: ['补齐 store 字段', '写入解析结果'],
+      parseError: 'unexpected token',
     });
   });
 });

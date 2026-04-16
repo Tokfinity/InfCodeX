@@ -19,6 +19,7 @@ function cloneRecord(record: AampTaskRecord): AampTaskRecord {
   return {
     ...record,
     ...(record.dispatchContext ? { dispatchContext: { ...record.dispatchContext } } : {}),
+    ...(record.todoList ? { todoList: [...record.todoList] } : {}),
   };
 }
 
