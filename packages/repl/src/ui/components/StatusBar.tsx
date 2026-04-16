@@ -371,7 +371,7 @@ export function getStatusBarText({
 }: StatusBarProps): string {
   const parts: string[] = [];
 
-  parts.push(`KodaX - ${agentMode.toUpperCase()}`);
+  parts.push(`InfCodeX - ${agentMode.toUpperCase()}`);
   parts.push(permissionMode.toUpperCase());
   parts.push(parallel ? 'parallel' : 'sequential');
 
@@ -462,7 +462,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 }) => {
   const theme = useMemo(() => getTheme('dark'), []);
 
-  const kodaxDisplay = <Text color={theme.colors.primary} bold>{`KodaX - ${agentMode.toUpperCase()}`}</Text>;
+  const infCodeXDisplay = <Text color={theme.colors.primary} bold>{`InfCodeX - ${agentMode.toUpperCase()}`}</Text>;
 
   const modeColor = useMemo(() => {
     switch (permissionMode.toLowerCase()) {
@@ -594,7 +594,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
 
   return (
     <Box paddingX={1}>
-      {kodaxDisplay}
+      {infCodeXDisplay}
       <Separator />
       {modeDisplay}
       <Separator />
