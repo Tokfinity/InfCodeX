@@ -47,7 +47,7 @@ export type AgentProcessSpawner = (
  * The role text that identifies a streaming-eligible engineering task.
  * Only dispatches whose bodyText contains this role get real-time streaming.
  */
-const STREAMING_ROLE_MARKER = '你是一名负责在本地仓库内执行开发任务的工程师。';
+const STREAMING_ROLE_MARKER = '你是一名在本地环境中执行开发任务的工程师。';
 
 function isStreamingTask(dispatch: AampDispatchEnvelope): boolean {
   return dispatch.bodyText.includes(STREAMING_ROLE_MARKER);
@@ -386,6 +386,47 @@ export class KodaXAampServer {
       }
     }
 
+    // Keepalive & stream-closed state – declared outside `try` so the
+    // error-path teardown can also access them.
+    const STREAM_KEEPALIVE_INTERVAL_MS = 25_000;
+    let streamClosed = false;
+    let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+
+    const safeAppendStreamEvent = (
+      type: string,
+      payload: Record<string, unknown>,
+    ): Promise<void> | undefined => {
+      if (streamClosed || !streamId || !this.transport.appendStreamEvent) {
+        return undefined;
+      }
+      return this.transport.appendStreamEvent({
+        streamId,
+        type,
+        payload,
+      }).catch((err) => {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (errMsg.includes('409') || errMsg.includes('already closed')) {
+          if (!streamClosed) {
+            streamClosed = true;
+            if (keepaliveTimer !== null) {
+              clearInterval(keepaliveTimer);
+              keepaliveTimer = null;
+            }
+            this.logger.info('stream.remotely_closed', 'stream was closed by server (idle timeout); suppressing further appends', {
+              taskId: dispatch.taskId,
+              streamId: streamId!,
+            });
+          }
+          return;
+        }
+        this.logger.error('stream.append_failed', 'failed to append stream event', {
+          taskId: dispatch.taskId,
+          streamId: streamId!,
+          error: errMsg,
+        });
+      });
+    };
+
     try {
       this.logger.info('task.running', 'executing task', {
         taskId: dispatch.taskId,
@@ -394,22 +435,28 @@ export class KodaXAampServer {
       await this.taskStore.update(dispatch.taskId, { status: 'running' });
 
       // Build stream options for the spawner when streaming is active.
+      // aamp-sdk ≥ 0.1.16 handles ordering internally: appendStreamEvent
+      // uses a per-stream serial queue with automatic text.delta coalescing,
+      // and closeStream drains the queue before closing. We simply forward
+      // every worker event without any client-side batching or sequencing.
+      //
+      // A keepalive interval sends periodic `status` events so the AAMP
+      // server does not close the stream due to idle timeout (e.g. during
+      // long-running tool executions like `npm run build` or `git push`).
+      // Once a 409 "stream already closed" is received, we set streamClosed
+      // to suppress further append attempts and avoid error log spam.
+
+      if (streamId && this.transport.appendStreamEvent) {
+        keepaliveTimer = setInterval(() => {
+          safeAppendStreamEvent('status', { stage: 'running', message: 'agent working…' });
+        }, STREAM_KEEPALIVE_INTERVAL_MS);
+      }
+
       const streamOptions = streamId && this.transport.appendStreamEvent
         ? {
             streamId,
             onStreamEvent: (msg: WorkerStreamEventMessage) => {
-              this.transport.appendStreamEvent!({
-                streamId: streamId!,
-                type: msg.eventType,
-                payload: msg.payload,
-              }).catch((err) => {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                this.logger.error('stream.append_failed', 'failed to append stream event', {
-                  taskId: dispatch.taskId,
-                  streamId: streamId!,
-                  error: errMsg,
-                });
-              });
+              safeAppendStreamEvent(msg.eventType, msg.payload);
             },
           }
         : undefined;
@@ -429,7 +476,12 @@ export class KodaXAampServer {
       }
 
       // ── Stream teardown ──
-      if (streamId && this.transport.appendStreamEvent && this.transport.closeStream) {
+      // Stop keepalive, then close the stream if the server hasn't already.
+      if (keepaliveTimer !== null) {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      if (streamId && !streamClosed && this.transport.appendStreamEvent && this.transport.closeStream) {
         try {
           await this.transport.appendStreamEvent({
             streamId,
@@ -477,7 +529,11 @@ export class KodaXAampServer {
       });
 
       // ── Stream error teardown ──
-      if (streamId && this.transport.appendStreamEvent && this.transport.closeStream) {
+      if (keepaliveTimer !== null) {
+        clearInterval(keepaliveTimer);
+        keepaliveTimer = null;
+      }
+      if (streamId && !streamClosed && this.transport.appendStreamEvent && this.transport.closeStream) {
         try {
           await this.transport.appendStreamEvent({
             streamId,
