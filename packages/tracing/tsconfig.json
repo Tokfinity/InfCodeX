@@ -12,19 +12,10 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "composite": true,
+    "declarationMap": true,
     "sourceMap": true,
-    "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true,
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
-  "references": [
-    { "path": "../ai" },
-    { "path": "../agent" },
-    { "path": "../core" },
-    { "path": "../mcp" },
-    { "path": "../session-lineage" },
-    { "path": "../skills" }
-  ],
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
