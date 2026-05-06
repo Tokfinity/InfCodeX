@@ -22,6 +22,8 @@ import {
   type KodaXReasoningMode,
   KodaXOptions,
   warmRepoIntelligenceRuntime,
+  CODING_SUMMARY_PROMPT,
+  CODING_UPDATE_SUMMARY_PROMPT,
 } from '@kodax/coding';
 import type { AgentsFile } from '@kodax/coding';
 import {
@@ -338,7 +340,9 @@ export const BUILTIN_COMMANDS: Command[] = [
             contextWindow,
             customInstructions,
             undefined,
-            currentTokens
+            currentTokens,
+            CODING_SUMMARY_PROMPT,
+            CODING_UPDATE_SUMMARY_PROMPT,
           );
 
           if (!result.compacted) {

@@ -470,6 +470,16 @@ export {
   validateAndFixToolHistory,
 } from './agent-runtime/history-cleanup.js';
 
+// v0.7.35.1 FEATURE_142 (B-R1): coding-flavored compaction summary
+// prompts moved here from @kodax/session-lineage. Coding callers pass
+// these explicitly to preserve byte-equivalent v0.7.35 prompt behavior;
+// session-lineage now ships a neutral `DEFAULT_SUMMARY_PROMPT` as
+// fallback for generic / non-coding consumers.
+export {
+  CODING_SUMMARY_PROMPT,
+  CODING_UPDATE_SUMMARY_PROMPT,
+} from './agent-runtime/coding-compaction-prompts.js';
+
 // FEATURE_101 (v0.7.31): admission contract — capability-coupled
 // invariants (budgetCeiling / toolPermission / boundedRevise /
 // independentReview) plus the bootstrap that registers the full v1 set

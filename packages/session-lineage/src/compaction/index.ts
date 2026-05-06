@@ -24,6 +24,8 @@ export { serializeConversation } from './utils.js';
 export {
   generateSummary,
   buildCompactionPromptSnapshot,
+  DEFAULT_SUMMARY_PROMPT,
+  DEFAULT_UPDATE_SUMMARY_PROMPT,
 } from './summary-generator.js';
 export type {
   KodaXCompactionPromptVariant,

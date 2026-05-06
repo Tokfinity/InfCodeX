@@ -21,9 +21,31 @@ Your response must contain two parts:
 
 Do not continue the conversation. Do not answer any user requests.`;
 
-const SUMMARY_PROMPT = `Create a structured summary for the conversation below.
+/**
+ * Default neutral compaction summary prompts (v0.7.35.1 FEATURE_142 B-R1).
+ *
+ * These are the *generic* defaults shipped with @kodax/session-lineage.
+ * They are the "candidate-a-conservative" winner from the prompt eval
+ * (`tests/compaction-prompt.eval.ts`, 150 cells over 5 aliases × 10
+ * fixtures × 3 candidates) — schema-stable and high-recall on both
+ * coding and non-coding fixtures, with domain-neutral wording.
+ *
+ * The prior coding-flavored prompts (referencing "coding agent",
+ * "file paths, function names", "HTTP status codes", "## Files & Changes")
+ * have moved to `@kodax/coding` as `CODING_SUMMARY_PROMPT` /
+ * `CODING_UPDATE_SUMMARY_PROMPT`. Coding callers pass them via the
+ * `summaryPrompt` / `updateSummaryPrompt` parameters of
+ * `buildCompactionPromptSnapshot()` and `generateSummary()` / `compact()`
+ * to preserve the v0.7.35 behavior byte-equivalent on the coding path.
+ *
+ * Why this split (per ADR-021): @kodax/session-lineage is the generic
+ * compaction primitive package. Its public surface must not assume the
+ * caller is a coding agent — domain-specific prompt language belongs
+ * one layer up.
+ */
+export const DEFAULT_SUMMARY_PROMPT = `Create a structured summary for the conversation below.
 
-This summary will be handed to another coding agent so it can continue the same task with minimal context.
+This summary will be handed to another agent so it can continue the same task with minimal context.
 Keep only information that is still useful for continuing the work.
 
 You may drop:
@@ -38,20 +60,20 @@ You must keep:
 - current progress and unfinished work
 - blockers or unresolved questions
 - the most important next steps
-- EXACT file paths, function names, and line numbers referenced
-- EXACT error messages, HTTP status codes, and exception types
-- API endpoints, database tables, env vars, and config values mentioned
+- EXACT identifiers, references, and concrete locations the agent operated on or referenced
+- EXACT error messages, status codes, and exception types
+- EXACT configuration values, parameter values, and external resource names mentioned
 - key decisions WITH reasoning (not just the choice)
 
 CRITICAL: Every user REQUEST and DECISION must be preserved verbatim or near-verbatim.
-Never reduce "user asked to fix the 401 error on /api/auth/login by switching to JWT"
-to "user asked to fix an error".
+Never reduce "user asked to upgrade dependency X to v3.4 to resolve incompatibility with system Y"
+to "user asked to fix an issue".
 
 Keep the summary concise and high-signal. Do not mechanically preserve every historical detail.
 
 First, wrap your analysis in <analysis> tags:
 - Walk through messages chronologically
-- Note exact file paths, function names, error codes, config values
+- Note exact identifiers, references, error codes, configuration values
 - Identify user's explicit requests vs inferred intent
 - Flag technical details that MUST survive compression
 
@@ -85,25 +107,22 @@ Output format (strict markdown, inside <summary> tags):
 ## Key Context
 - [Critical context needed to continue]
 
-## Files & Changes
-- **[exact path]**: [what was done and why]
-
 ---
 
 <read-files>
-[One path per line, leave empty if none]
+[One reference per line — file paths, URLs, IDs, or other locations the agent read; leave empty if none]
 </read-files>
 
 <modified-files>
-[One path per line, leave empty if none]
+[One reference per line — locations the agent modified; leave empty if none]
 </modified-files>
 
 Conversation:
 `;
 
-const UPDATE_SUMMARY_PROMPT = `Merge the new conversation content above into <previous-summary>.
+export const DEFAULT_UPDATE_SUMMARY_PROMPT = `Merge the new conversation content above into <previous-summary>.
 
-Update the structured summary so another coding agent can continue the task immediately.
+Update the structured summary so another agent can continue the task immediately.
 Keep only the information needed to continue the work.
 
 You may remove:
@@ -118,9 +137,9 @@ You must preserve or update:
 - current progress and unfinished work
 - blockers that still matter
 - next steps based on the latest state
-- EXACT file paths, function names, and line numbers
-- EXACT error messages, HTTP status codes, and exception types
-- API endpoints, database tables, env vars, and config values
+- EXACT identifiers, references, and concrete locations
+- EXACT error messages, status codes, and exception types
+- EXACT configuration values, parameter values, and external resource names
 - key decisions WITH reasoning
 
 CRITICAL: Every user REQUEST and DECISION must be preserved verbatim or near-verbatim.
@@ -156,17 +175,14 @@ Output format (strict markdown, inside <summary> tags):
 ## Key Context
 - [Critical context needed to continue]
 
-## Files & Changes
-- **[exact path]**: [what was done and why]
-
 ---
 
 <read-files>
-[One path per line, leave empty if none]
+[One reference per line — file paths, URLs, IDs, or other locations the agent read; leave empty if none]
 </read-files>
 
 <modified-files>
-[One path per line, leave empty if none]
+[One reference per line — locations the agent modified; leave empty if none]
 </modified-files>
 
 Keep every section concise.`;
@@ -230,6 +246,19 @@ export function buildCompactionPromptSnapshot(args: {
   customInstructions?: string;
   systemPrompt?: string;
   previousSummary?: string;
+  /**
+   * Override the initial-summary instructions. When omitted, falls back
+   * to {@link DEFAULT_SUMMARY_PROMPT}. Coding callers pass
+   * `CODING_SUMMARY_PROMPT` (from @kodax/coding) here to preserve the
+   * v0.7.35 byte-equivalent prompt on the coding path.
+   */
+  summaryPrompt?: string;
+  /**
+   * Override the update-summary instructions. When omitted, falls back
+   * to {@link DEFAULT_UPDATE_SUMMARY_PROMPT}. Coding callers pass
+   * `CODING_UPDATE_SUMMARY_PROMPT` (from @kodax/coding) here.
+   */
+  updateSummaryPrompt?: string;
 }): KodaXCompactionPromptSnapshot {
   const {
     messages,
@@ -237,6 +266,8 @@ export function buildCompactionPromptSnapshot(args: {
     customInstructions,
     systemPrompt,
     previousSummary,
+    summaryPrompt,
+    updateSummaryPrompt,
   } = args;
   const trimmedCustomInstructions = customInstructions?.trim();
   const trimmedPreviousSummary = previousSummary?.trim();
@@ -271,7 +302,9 @@ export function buildCompactionPromptSnapshot(args: {
     );
   }
 
-  const baseInstructions = trimmedPreviousSummary ? UPDATE_SUMMARY_PROMPT : SUMMARY_PROMPT;
+  const baseInstructions = trimmedPreviousSummary
+    ? (updateSummaryPrompt ?? DEFAULT_UPDATE_SUMMARY_PROMPT)
+    : (summaryPrompt ?? DEFAULT_SUMMARY_PROMPT);
   sections.push(
     createCompactionPromptSection({
       id: trimmedPreviousSummary ? 'update-instructions' : 'summary-instructions',
@@ -361,7 +394,9 @@ export async function generateSummary(
   details: CompactionDetails,
   customInstructions?: string,
   systemPrompt?: string,
-  previousSummary?: string
+  previousSummary?: string,
+  summaryPrompt?: string,
+  updateSummaryPrompt?: string,
 ): Promise<string> {
   const promptSnapshot = buildCompactionPromptSnapshot({
     messages,
@@ -369,6 +404,8 @@ export async function generateSummary(
     customInstructions,
     systemPrompt,
     previousSummary,
+    summaryPrompt,
+    updateSummaryPrompt,
   });
 
   const result = await provider.stream(
