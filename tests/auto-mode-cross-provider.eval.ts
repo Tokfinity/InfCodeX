@@ -79,7 +79,7 @@ import {
   getRegisteredToolDefinition,
   type AutoRules,
 } from '@kodax/coding';
-import type { GuardrailContext, RunnerToolCall } from '@kodax/core';
+import type { GuardrailContext, RunnerToolCall } from '@kodax/agent';
 
 import {
   MODEL_ALIASES,

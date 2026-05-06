@@ -15,7 +15,8 @@
  * same type used by `LineageExtension`, so the two layers interoperate on
  * the same Session log.
  *
- * Moved to `@kodax/core` in FEATURE_082 (v0.7.24).
+ * History: extracted to `@kodax/core` in FEATURE_082 (v0.7.24); merged back
+ * into `@kodax/agent` in v0.7.35.1 FEATURE_142.
  */
 
 import type { AgentMessage } from './agent.js';

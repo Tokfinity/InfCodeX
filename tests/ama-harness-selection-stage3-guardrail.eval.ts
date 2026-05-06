@@ -85,7 +85,7 @@ import {
   type AgentTool,
   type RunnerLlmResult,
   type RunnerToolResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 import {
   getProvider,
   type KodaXMessage,

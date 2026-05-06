@@ -2,10 +2,11 @@
  * Layer A Primitive: Session / SessionEntry / MessageEntry / SessionExtension
  *
  * FEATURE_081 (v0.7.23): Base Session shape. The thick
- * `KodaXSessionLineage` in `@kodax/agent` is re-expressed as a
- * `LineageExtension` over this base — see `@kodax/session-lineage`.
+ * `KodaXSessionLineage` lives in `@kodax/session-lineage` and is re-expressed
+ * as a `LineageExtension` over this base.
  *
- * Moved to `@kodax/core` in FEATURE_082 (v0.7.24). `@kodax/coding` retains a
+ * History: extracted to `@kodax/core` in FEATURE_082 (v0.7.24); merged back
+ * into `@kodax/agent` in v0.7.35.1 FEATURE_142. `@kodax/coding` retains a
  * barrel re-export for batteries-included consumers.
  *
  * Status: @experimental — API shape may be refined during v0.7.x.

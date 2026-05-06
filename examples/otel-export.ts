@@ -19,7 +19,7 @@ import {
   Runner,
   createAgent,
   type AgentMessage,
-} from '@kodax/core';
+} from '@kodax/agent';
 import {
   Tracer,
   addTracingProcessor,

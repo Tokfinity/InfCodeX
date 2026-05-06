@@ -4,8 +4,10 @@
  * FEATURE_080 (v0.7.23): Agent-as-data types. Declarative dataclass shape.
  * The runtime counterpart is `Runner` in `./runner.ts`.
  *
- * Moved to `@kodax/core` in FEATURE_082 (v0.7.24). `@kodax/coding` retains a
- * barrel re-export for batteries-included consumers.
+ * History: extracted to `@kodax/core` in FEATURE_082 (v0.7.24); merged back
+ * into `@kodax/agent` in v0.7.35.1 FEATURE_142 (single-consumer rule —
+ * @kodax/core had only @kodax/coding as consumer). `@kodax/coding` retains
+ * a barrel re-export for batteries-included consumers.
  *
  * Status: @experimental — API shape may be refined during v0.7.x. Used by
  * the task-engine rewrite in FEATURE_084 (v0.7.26).
