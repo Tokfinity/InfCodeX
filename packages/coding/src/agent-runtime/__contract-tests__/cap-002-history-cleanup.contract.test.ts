@@ -22,7 +22,7 @@ import type { KodaXMessage } from '@kodax/ai';
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '../history-cleanup.js';
+} from '@kodax/agent';
 
 describe('CAP-002: history cleanup contract', () => {
   it('CAP-HISTORY-CLEANUP-001: orphan tool_use is removed before next provider call', () => {

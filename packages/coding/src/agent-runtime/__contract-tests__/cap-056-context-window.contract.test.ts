@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
-} from '../context-window.js';
+} from '@kodax/agent';
 
 function fakeProvider(overrides: Partial<KodaXBaseProvider> = {}): KodaXBaseProvider {
   return {

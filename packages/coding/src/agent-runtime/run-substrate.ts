@@ -77,7 +77,7 @@ import {
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from './history-cleanup.js';
+} from '@kodax/agent';
 // CAP-010 (`getToolExecutionOverride`) was used inline before CAP-024;
 // since CAP-024 moved into `agent-runtime/tool-dispatch.ts`, this
 // agent.ts no longer imports it directly.
@@ -129,7 +129,7 @@ import {
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
-import { shouldCompact } from './compaction-trigger.js';
+import { shouldCompact } from '@kodax/agent';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -151,7 +151,7 @@ import {
   applyPostToolProcessing,
 } from './tool-dispatch.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
-import { resolveContextWindow } from './context-window.js';
+import { resolveContextWindow } from '@kodax/agent';
 import {
   type RuntimeSessionState,
   buildRuntimeSessionState,

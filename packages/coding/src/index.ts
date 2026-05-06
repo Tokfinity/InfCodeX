@@ -464,11 +464,12 @@ export {
 } from './agent.js';
 
 // CAP-002: extracted from agent.ts to agent-runtime/ in FEATURE_100 P2.
-// Path here changed; SDK consumers via `@kodax/coding` see no API break.
+// v0.7.35.1 FEATURE_142 Batch D: uplifted to @kodax/agent/runtime-middleware/.
+// Re-exported here so SDK consumers via `@kodax/coding` see no API break.
 export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from './agent-runtime/history-cleanup.js';
+} from '@kodax/agent';
 
 // v0.7.35.1 FEATURE_142 (B-R1): coding-flavored compaction summary
 // prompts moved here from @kodax/session-lineage. Coding callers pass

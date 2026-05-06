@@ -51,7 +51,7 @@ import type {
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from './history-cleanup.js';
+} from '@kodax/agent';
 import { saveSessionSnapshot } from './middleware/session-snapshot.js';
 import { createEstimatedContextTokenSnapshot } from '../token-accounting.js';
 import type { RuntimeSessionState } from './runtime-session-state.js';
