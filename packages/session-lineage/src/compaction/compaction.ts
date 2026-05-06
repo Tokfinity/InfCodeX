@@ -79,6 +79,8 @@ export async function compact(
   customInstructions?: string,
   systemPrompt?: string,
   tokenCountOverride?: number,
+  summaryPrompt?: string,
+  updateSummaryPrompt?: string,
 ): Promise<CompactionResult> {
   const tokensBefore = tokenCountOverride ?? estimateTokens(messages);
 
@@ -202,6 +204,8 @@ export async function compact(
       customInstructions,
       systemPrompt,
       summary,
+      summaryPrompt,
+      updateSummaryPrompt,
     );
 
     if (summaryAttempt.summarizedMessages === 0) {
@@ -263,6 +267,8 @@ async function summarizeMessages(
   customInstructions: string | undefined,
   systemPrompt: string | undefined,
   previousSummary: string,
+  summaryPrompt: string | undefined,
+  updateSummaryPrompt: string | undefined,
 ): Promise<SummaryAttemptResult> {
   let summary = previousSummary;
   let summarizedMessages = 0;
@@ -280,6 +286,8 @@ async function summarizeMessages(
         customInstructions,
         systemPrompt,
         summary || undefined,
+        summaryPrompt,
+        updateSummaryPrompt,
       );
       summarizedMessages += chunk.length;
     } catch (error) {

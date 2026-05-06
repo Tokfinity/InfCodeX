@@ -48,6 +48,10 @@
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
 import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax/session-lineage';
+import {
+  CODING_SUMMARY_PROMPT,
+  CODING_UPDATE_SUMMARY_PROMPT,
+} from '../coding-compaction-prompts.js';
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../../types.js';
 import { estimateTokens } from '../../tokenizer.js';
 import {
@@ -121,6 +125,8 @@ export async function tryIntelligentCompact(
       undefined, // customInstructions
       input.systemPrompt,
       input.currentTokens,
+      CODING_SUMMARY_PROMPT,
+      CODING_UPDATE_SUMMARY_PROMPT,
     );
 
     if (result.compacted) {
