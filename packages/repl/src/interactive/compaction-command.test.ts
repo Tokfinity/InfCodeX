@@ -6,11 +6,11 @@ const mocks = vi.hoisted(() => ({
   resolveProvider: vi.fn(),
 }));
 
-vi.mock('@kodax/agent', async () => {
-  // Partial mock: only override `compact`. Keep all other exports real so that
-  // downstream code paths (e.g. scoutAgent / plannerAgent absorbed from
-  // @kodax/core in v0.7.35.1 FEATURE_142) continue to work.
-  const actual = await vi.importActual<typeof import('@kodax/agent')>('@kodax/agent');
+vi.mock('@kodax/session-lineage', async () => {
+  // Partial mock: only override `compact`. Keep all other exports real.
+  // (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax/agent to
+  // @kodax/session-lineage; mock the new home — see ADR-021.)
+  const actual = await vi.importActual<typeof import('@kodax/session-lineage')>('@kodax/session-lineage');
   return {
     ...actual,
     compact: mocks.compact,

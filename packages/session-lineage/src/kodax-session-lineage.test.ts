@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax/ai';
-import type { KodaXSessionLineage } from './types.js';
+import type { KodaXSessionLineage } from '@kodax/agent';
 import {
   appendSessionLineageLabel,
   applyLineageTruncation,
@@ -16,7 +16,7 @@ import {
   resolveSessionLineageTarget,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
-} from './session-lineage.js';
+} from './kodax-session-lineage.js';
 
 function createTextMessage(role: KodaXMessage['role'], content: string): KodaXMessage {
   return { role, content };

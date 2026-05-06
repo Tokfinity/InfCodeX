@@ -39,8 +39,7 @@
  */
 
 import type { KodaXBaseProvider } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/agent';
-
+import type { CompactionConfig } from '@kodax/session-lineage';
 /** Hard fallback. Mirrors Anthropic standard Claude window. */
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 

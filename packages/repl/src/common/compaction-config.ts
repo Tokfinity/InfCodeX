@@ -7,8 +7,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { CompactionConfig } from '@kodax/agent';
-
+import type { CompactionConfig } from '@kodax/session-lineage';
 /**
  * 默认压缩配置
  */

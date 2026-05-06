@@ -693,32 +693,9 @@ export { exec, webhook } from './extensions/helpers.js';
 // The Option-Y dog-food registers the default coding dispatcher as a side
 // effect of importing `./coding-preset.js`.
 
-export type {
-  Agent,
-  AgentMessage,
-  AgentReasoningProfile,
-  AgentTool,
-  Guardrail,
-  Handoff,
-  ReasoningDepth,
-  InMemorySessionOptions,
-  MessageEntry,
-  Session,
-  SessionEntry,
-  SessionExtension,
-  SessionForkOptions,
-  CompactionContext,
-  CompactionEntry,
-  CompactionEntryPayload,
-  CompactionPolicy,
-  CompactionResult,
-  DefaultSummaryCompactionOptions,
-  PresetDispatcher,
-  RunEvent,
-  RunOptions,
-  RunResult,
-} from '@kodax/agent';
+export type { Agent, AgentMessage, AgentReasoningProfile, AgentTool, Guardrail, Handoff, ReasoningDepth, InMemorySessionOptions, MessageEntry, Session, SessionEntry, SessionExtension, SessionForkOptions, CompactionContext, CompactionEntry, CompactionEntryPayload, CompactionPolicy, DefaultSummaryCompactionOptions, PresetDispatcher, RunEvent, RunOptions, RunResult } from '@kodax/agent';
 
+export type { CompactionResult } from '@kodax/session-lineage';
 export {
   createAgent,
   createHandoff,

@@ -91,97 +91,29 @@ export {
   PROMISE_PATTERN,
 } from './constants.js';
 
-// ============== Session ==============
-export {
-  generateSessionId,
-  extractTitleFromMessages,
-} from './session.js';
-
-export {
-  appendSessionLineageLabel,
-  applyLineageTruncation,
-  applySessionCompaction,
-  archiveOldIslands,
-  buildSessionTree,
-  countActiveLineageMessages,
-  createSessionLineage,
-  forkSessionLineage,
-  getSessionLineagePath,
-  getSessionMessagesFromLineage,
-  resolveSessionLineageTarget,
-  findPreviousUserEntryId,
-  rewindSessionLineage,
-  setSessionLineageActiveEntry,
-} from './session-lineage.js';
-
 // ============== Tokenizer ==============
 export {
   estimateTokens,
   countTokens,
 } from './tokenizer.js';
 
-// ============== Compaction ==============
-export type {
-  CompactionAnchor,
-  CompactionConfig,
-  CompactionDetails,
-  CompactionUpdate,
-  CompactionResult,
-  FileOperations,
-} from './compaction/types.js';
-
-export {
-  extractArtifactLedger,
-  extractFileOps,
-  mergeArtifactLedger,
-  mergeFileOps,
-} from './compaction/file-tracker.js';
-
-export {
-  serializeConversation,
-} from './compaction/utils.js';
-
-export {
-  generateSummary,
-  buildCompactionPromptSnapshot,
-} from './compaction/summary-generator.js';
-export type {
-  KodaXCompactionPromptVariant,
-  KodaXCompactionPromptSection,
-  KodaXCompactionPromptSnapshot,
-} from './compaction/summary-generator.js';
-
-export {
-  needsCompaction,
-  compact,
-} from './compaction/compaction.js';
-
-export {
-  microcompact,
-  DEFAULT_MICROCOMPACTION_CONFIG,
-} from './compaction/microcompaction.js';
-export type {
-  MicrocompactionConfig,
-} from './compaction/microcompaction.js';
-
-export {
-  buildFileContentMessages,
-  buildPostCompactAttachments,
-  injectPostCompactAttachments,
-  DEFAULT_POST_COMPACT_CONFIG,
-  POST_COMPACT_TOKEN_BUDGET,
-  POST_COMPACT_MAX_TOKENS_PER_FILE,
-} from './compaction/post-compact.js';
-export type {
-  PostCompactConfig,
-  PostCompactAttachments,
-} from './compaction/post-compact.js';
-
-// ============== Extension Persistence (FEATURE_034) ==============
-export {
-  FileExtensionStore,
-  createExtensionStore,
-} from './persistence.js';
+// ============== Session entities + persistence + compaction implementations ==============
+// v0.7.35.1 FEATURE_142 Batch B: session.ts / session-lineage.ts / persistence.ts /
+// compaction/ moved from @kodax/agent to @kodax/session-lineage. Consumers should
+// `import ... from '@kodax/session-lineage'` directly. @kodax/agent stays as the
+// pure Agent platform foundation (primitives + admission + tokenizer + types);
+// session implementation, persistence, and compaction orchestration live in
+// @kodax/session-lineage. See ADR-021 + docs/features/v0.7.35.1.md.
+//
+// Symbols moved (NOT re-exported here to keep the agent → session-lineage
+// dependency direction unidirectional, avoiding a cycle):
+//   - generateSessionId, extractTitleFromMessages
+//   - KodaXSessionLineage operations (createSessionLineage / applySessionCompaction /
+//     forkSessionLineage / rewindSessionLineage / buildSessionTree / …)
+//   - FileExtensionStore, createExtensionStore
+//   - CompactionConfig + needsCompaction / compact / microcompact / post-compact / …
+//   - CompactionAnchor / CompactionDetails / CompactionUpdate / CompactionResult /
+//     FileOperations / KodaXCompactionPromptSnapshot / …
 
 // ============== Layer A Primitives (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
 // FEATURE_082 (v0.7.24) extracted these into @kodax/core; v0.7.35.1 FEATURE_142

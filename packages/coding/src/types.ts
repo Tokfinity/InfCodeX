@@ -72,7 +72,7 @@ import type {
   SessionErrorMetadata,
 } from '@kodax/agent';
 import type { KodaXReviewScale } from '@kodax/ai';
-import type { CompactionUpdate } from '@kodax/agent';
+import type { CompactionUpdate } from '@kodax/session-lineage';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
 // `./extensions/runtime-contract.ts` to avoid `types.ts ↔ extensions/runtime.ts`
 // circular imports. The concrete `KodaXExtensionRuntime` class implements

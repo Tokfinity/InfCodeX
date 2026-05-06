@@ -32,17 +32,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig, CompactionResult } from '@kodax/agent';
-
-vi.mock('@kodax/agent', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/agent')>();
+import type { CompactionConfig, CompactionResult } from '@kodax/session-lineage';
+// v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax/agent to
+// @kodax/session-lineage; mock the new home (see ADR-021).
+vi.mock('@kodax/session-lineage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax/session-lineage')>();
   return { ...actual, compact: vi.fn() };
 });
 vi.mock('../compaction-fallback.js', () => ({
   gracefulCompactDegradation: vi.fn(),
 }));
 
-import { compact as mockedCompact } from '@kodax/agent';
+import { compact as mockedCompact } from '@kodax/session-lineage';
 import { gracefulCompactDegradation as mockedDegrade } from '../compaction-fallback.js';
 import {
   runCompactionLifecycle,

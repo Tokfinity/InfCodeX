@@ -33,18 +33,7 @@
  *   - systemPrompt arg is `undefined` (the provider carries it).
  */
 
-import {
-  buildFileContentMessages,
-  buildPostCompactAttachments,
-  compact as intelligentCompact,
-  DEFAULT_POST_COMPACT_CONFIG,
-  injectPostCompactAttachments,
-  needsCompaction,
-  POST_COMPACT_TOKEN_BUDGET,
-  type CompactionConfig,
-  type CompactionUpdate,
-} from '@kodax/agent';
-
+import { buildFileContentMessages, buildPostCompactAttachments, compact as intelligentCompact, DEFAULT_POST_COMPACT_CONFIG, injectPostCompactAttachments, needsCompaction, POST_COMPACT_TOKEN_BUDGET, type CompactionConfig, type CompactionUpdate } from '@kodax/session-lineage';
 import type { AgentMessage } from '@kodax/agent';
 
 import { resolveProvider } from '../../../providers/index.js';

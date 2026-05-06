@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type { KodaXContentBlock, KodaXMessage, KodaXToolUseBlock } from '@kodax/ai';
 import type { FileOperations } from './types.js';
-import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '../types.js';
+import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '@kodax/agent';
 
 const LEDGER_MAX_ENTRIES = 256;
 const PATH_LIKE_KEYS = [

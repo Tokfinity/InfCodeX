@@ -7,7 +7,7 @@
 import { createHash } from 'crypto';
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
 import type { CompactionDetails } from './types.js';
-import type { KodaXCompactMemorySeed } from '../types.js';
+import type { KodaXCompactMemorySeed } from '@kodax/agent';
 import { serializeConversation } from './utils.js';
 
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization specialist.
