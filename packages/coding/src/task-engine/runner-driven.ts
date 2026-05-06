@@ -59,13 +59,13 @@ import type {
   RunnerToolContext,
   RunnerToolResult,
 } from '@kodax/agent';
+import { Runner } from '@kodax/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
-  Runner,
   SCOUT_AGENT_NAME,
-} from '@kodax/agent';
+} from '../agents/task-engine-agents.js';
 
 import { resolveProvider } from '../providers/index.js';
 import {

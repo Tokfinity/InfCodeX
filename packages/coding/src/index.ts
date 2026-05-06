@@ -703,6 +703,12 @@ export {
   DefaultSummaryCompaction,
   Runner,
   registerPresetDispatcher,
+} from '@kodax/agent';
+
+// v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations are
+// coding-side now (`@kodax/coding/src/agents/task-engine-agents.ts`),
+// re-exported through coding's `agents/` barrel. See ADR-021.
+export {
   SCOUT_AGENT_NAME,
   PLANNER_AGENT_NAME,
   GENERATOR_AGENT_NAME,
@@ -712,7 +718,7 @@ export {
   plannerAgent,
   generatorAgent,
   evaluatorAgent,
-} from '@kodax/agent';
+} from './agents/task-engine-agents.js';
 
 export {
   DEFAULT_CODING_AGENT_NAME,

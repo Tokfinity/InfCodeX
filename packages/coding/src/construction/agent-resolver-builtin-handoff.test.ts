@@ -17,13 +17,13 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 
+import { _resetInvariantRegistry } from '@kodax/agent';
 import {
-  _resetInvariantRegistry,
   evaluatorAgent,
   generatorAgent,
   plannerAgent,
   scoutAgent,
-} from '@kodax/agent';
+} from '../agents/task-engine-agents.js';
 
 import { registerCodingInvariants } from '../agent-runtime/invariants/index.js';
 import {

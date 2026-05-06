@@ -225,18 +225,13 @@ export {
   runToolBeforeGuardrails,
 } from './primitives/guardrail.js';
 
-// AMA H2 role agent declarations (Scout/Planner/Generator/Evaluator)
-export {
-  SCOUT_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  GENERATOR_AGENT_NAME,
-  EVALUATOR_AGENT_NAME,
-  TASK_ENGINE_ROLE_AGENTS,
-  scoutAgent,
-  plannerAgent,
-  generatorAgent,
-  evaluatorAgent,
-} from './primitives/task-engine-agents.js';
+// v0.7.35.1 FEATURE_142 (A-R1): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
+// GENERATOR_AGENT_NAME / EVALUATOR_AGENT_NAME / TASK_ENGINE_ROLE_AGENTS /
+// scoutAgent / plannerAgent / generatorAgent / evaluatorAgent moved out of
+// @kodax/agent. These role declarations are coding-AMA-specific (H2 state
+// machine roles), not generic Agent platform primitives. Canonical home is
+// now `@kodax/coding/src/agents/task-engine-agents.ts`. Coding-side
+// consumers import from `@kodax/coding`. See ADR-021.
 
 // ============== Admission Contract (FEATURE_101 v0.7.31; absorbed from @kodax/core in v0.7.35.1) ==============
 export type {

@@ -24,7 +24,7 @@ import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
-} from '@kodax/agent';
+} from './task-engine-agents.js';
 
 import { coerceManagedProtocolToolPayload } from '../managed-protocol.js';
 import type { KodaXManagedProtocolPayload } from '../types.js';
