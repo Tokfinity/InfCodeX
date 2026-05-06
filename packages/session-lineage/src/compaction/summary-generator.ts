@@ -177,7 +177,15 @@ export interface KodaXCompactionPromptSection {
   id: string;
   title: string;
   owner: 'compaction';
-  feature: 'FEATURE_044' | 'FEATURE_050';
+  /**
+   * Provenance label — opaque string identifying which feature ticket
+   * authored this section, used by debug tooling and prompt-eval
+   * provenance traces. v0.7.35.1 FEATURE_142: widened from coding-side
+   * `'FEATURE_044' | 'FEATURE_050'` literal union per ADR-021 — the
+   * session-lineage package is generic and must not enumerate coding
+   * feature IDs in its public type surface.
+   */
+  feature: string;
   slot: 'conversation' | 'history' | 'instructions' | 'tracking';
   order: number;
   stability: 'stable' | 'dynamic' | 'specialist';

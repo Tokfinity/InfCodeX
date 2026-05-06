@@ -250,9 +250,9 @@ export function _resetInvariantRegistry(): void {
  * refinements can specialize without breaking the API.
  */
 export function resolveRequiredInvariants(
-  _role: 'scout' | 'planner' | 'generator' | 'evaluator' | 'direct',
+  _role: string,
   _toolScope: readonly string[],
-  _harnessTier: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL',
+  _harnessTier: string,
 ): readonly InvariantId[] {
   // v1: the 7 admission closed-set invariants apply uniformly.
   // Future versions may relax (e.g. independentReview optional in H0

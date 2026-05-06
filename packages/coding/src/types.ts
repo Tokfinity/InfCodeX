@@ -34,12 +34,6 @@ import type {
   KodaXExecutionPattern,
   KodaXMutationSurface,
   KodaXAssuranceIntent,
-  KodaXHarnessProfile,
-  KodaXAmaProfile,
-  KodaXAmaTactic,
-  KodaXAmaFanoutClass,
-  KodaXAmaFanoutPolicy,
-  KodaXAmaControllerDecision,
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
@@ -71,7 +65,18 @@ import type {
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
 } from '@kodax/agent';
-import type { KodaXReviewScale } from '@kodax/ai';
+// v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax/ai
+// (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
+// going through @kodax/agent's re-export, which has been removed.
+import type {
+  KodaXHarnessProfile,
+  KodaXAmaProfile,
+  KodaXAmaTactic,
+  KodaXAmaFanoutClass,
+  KodaXAmaFanoutPolicy,
+  KodaXAmaControllerDecision,
+  KodaXReviewScale,
+} from '@kodax/ai';
 import type { CompactionUpdate } from '@kodax/session-lineage';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
 // `./extensions/runtime-contract.ts` to avoid `types.ts ↔ extensions/runtime.ts`

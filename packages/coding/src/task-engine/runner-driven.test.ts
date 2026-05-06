@@ -2334,7 +2334,7 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
       amaControllerDecision: {
         profile: 'tactical',
         tactics: [],
-        fanout: { mode: 'off' as const } as unknown as import('@kodax/agent').KodaXAmaFanoutPolicy,
+        fanout: { mode: 'off' as const } as unknown as import('@kodax/ai').KodaXAmaFanoutPolicy,
         reason: 'test',
         upgradeTriggers: [],
       },

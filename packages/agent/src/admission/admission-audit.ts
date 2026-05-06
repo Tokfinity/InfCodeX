@@ -99,9 +99,22 @@ export interface AdmissionAuditOptions {
    * staged-status manifests at the call site.
    */
   readonly stagedAgents?: ReadonlyMap<string, Agent>;
-  readonly role?: 'scout' | 'planner' | 'generator' | 'evaluator' | 'direct';
+  /**
+   * Agent role identifier — opaque string from the agent layer's perspective.
+   * Concrete agent presets (e.g. coding's AMA harness with 'scout' / 'planner' /
+   * 'generator' / 'evaluator' / 'direct') brand this themselves; the admission
+   * framework only plumbs it through to `resolveRequiredInvariants`.
+   * v0.7.35.1 FEATURE_142: widened from coding-AMA literal union per ADR-021
+   * (agent layer must not enumerate coding-specific role names).
+   */
+  readonly role?: string;
   readonly toolScope?: readonly string[];
-  readonly harnessTier?: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL';
+  /**
+   * Harness tier identifier — opaque string. Concrete agent presets brand it
+   * (e.g. coding's 'H0_DIRECT' / 'H1_EXECUTE_EVAL' / 'H2_PLAN_EXECUTE_EVAL').
+   * v0.7.35.1 FEATURE_142: widened from coding-AMA literal union per ADR-021.
+   */
+  readonly harnessTier?: string;
   /**
    * ISO timestamp recorded on the AdmittedHandle. Defaults to
    * `new Date().toISOString()` — overridable so tests can pin a value.
