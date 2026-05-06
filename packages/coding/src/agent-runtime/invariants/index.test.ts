@@ -25,16 +25,19 @@ describe('registerCodingInvariants', () => {
     _resetInvariantRegistry();
     registerCodingInvariants();
     expect(listRegisteredInvariants()).toEqual([
-      // Core (registered first by registerCoreInvariants).
+      // Pure core (registered first by registerCoreInvariants).
       'finalOwner',
       'handoffLegality',
       'evidenceTrail',
-      'harnessSelectionTiming',
-      // Coding capability-coupled.
+      // Coding capability-coupled + coding-AMA-specific.
+      // v0.7.35.1 FEATURE_142 (A-R2): harnessSelectionTiming moved from
+      // @kodax/agent's pure-core set into coding's invariant chain
+      // (registered last alongside the capability-coupled four).
       'budgetCeiling',
       'toolPermission',
       'boundedRevise',
       'independentReview',
+      'harnessSelectionTiming',
     ]);
   });
 

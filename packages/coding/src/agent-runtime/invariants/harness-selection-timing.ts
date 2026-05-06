@@ -22,6 +22,14 @@
  * Pure function. State (whether confirmedHarness is set) lives on the
  * recorder context the Runner passes in; the invariant is a stateless
  * predicate.
+ *
+ * v0.7.35.1 FEATURE_142 (A-R2): moved from `@kodax/agent/src/admission/
+ * invariants/` back to `@kodax/coding/src/agent-runtime/invariants/`.
+ * The body reads `ctx.recorder.scout.payload.scout.confirmedHarness` —
+ * a hardcoded reference to coding's AMA Scout role and confirmedHarness
+ * field. Per ADR-021, the universal `@kodax/agent` admission framework
+ * must not enumerate coding-AMA field names; coding registers this
+ * invariant via `registerCodingInvariants()`.
  */
 
 import type {
@@ -29,7 +37,7 @@ import type {
   ObserveCtx,
   QualityInvariant,
   RunnerEvent,
-} from '../admission.js';
+} from '@kodax/agent';
 
 function observe(event: RunnerEvent, ctx: ObserveCtx): InvariantResult {
   if (event.kind !== 'mutation_recorded') return { ok: true };

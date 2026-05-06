@@ -289,12 +289,14 @@ export {
 } from './admission/admission-metrics.js';
 
 // FEATURE_101 v1 pure-new invariants
+// v0.7.35.1 FEATURE_142 (A-R2): `harnessSelectionTiming` moved to
+// `@kodax/coding/src/agent-runtime/invariants/` — its body reads coding's
+// AMA Scout-role `confirmedHarness` field, see ADR-021.
 export {
   CORE_INVARIANTS,
   evidenceTrail,
   finalOwner,
   handoffLegality,
-  harnessSelectionTiming,
   registerCoreInvariants,
 } from './admission/invariants/index.js';
 
