@@ -38,6 +38,10 @@ import type { AgentMessage } from '@kodax/agent';
 
 import { resolveProvider } from '../../../providers/index.js';
 import { loadCompactionConfig } from '../../../compaction-config.js';
+import {
+  CODING_SUMMARY_PROMPT,
+  CODING_UPDATE_SUMMARY_PROMPT,
+} from '../../../agent-runtime/coding-compaction-prompts.js';
 import type {
   KodaXEvents,
   KodaXMessage,
@@ -101,6 +105,8 @@ export async function buildManagedTaskCompactionHook(
         undefined, // customInstructions — none for Runner-driven path
         undefined, // systemPrompt — provider carries its own system text
         tokenEstimate,
+        CODING_SUMMARY_PROMPT,
+        CODING_UPDATE_SUMMARY_PROMPT,
       );
 
       if (!result.compacted) {
