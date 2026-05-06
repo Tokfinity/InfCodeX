@@ -23,7 +23,7 @@ import type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 export type { CapabilityKind, CapabilityProvider, CapabilityResult };
 
 export interface ModelProviderRegistration {

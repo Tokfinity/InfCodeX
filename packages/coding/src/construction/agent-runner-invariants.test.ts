@@ -19,7 +19,7 @@ import {
   _resetInvariantRegistry,
   getAdmittedAgentBindings,
   registerInvariant,
-} from '@kodax/core';
+} from '@kodax/agent';
 import type {
   AgentMessage,
   Deliverable,
@@ -29,7 +29,7 @@ import type {
   RunnerEvent,
   RunnerLlmResult,
   TerminalCtx,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { registerCodingInvariants } from '../agent-runtime/invariants/index.js';
 import {
@@ -145,10 +145,10 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     registerInvariant(probe);
     // Re-register the rest of the production set (skipping finalOwner —
     // it's been overridden by the probe above).
-    const { registerCoreInvariants } = await import('@kodax/core');
+    const { registerCoreInvariants } = await import('@kodax/agent');
     // registerCoreInvariants would clash on finalOwner; manually skip it.
     const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/core');
+      await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     registerInvariant(harnessSelectionTiming);
@@ -194,7 +194,7 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     registerInvariant(probe);
     // Register a permissive handoffLegality so admission still passes.
     const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/core');
+      await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     registerInvariant(harnessSelectionTiming);
@@ -243,7 +243,7 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     _resetInvariantRegistry();
     registerInvariant(probe);
     const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/core');
+      await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     registerInvariant(harnessSelectionTiming);

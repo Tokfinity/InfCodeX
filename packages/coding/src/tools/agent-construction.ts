@@ -28,7 +28,7 @@
  */
 
 import type { KodaXToolExecutionContext } from '../types.js';
-import { Runner, listRegisteredInvariants } from '@kodax/core';
+import { Runner, listRegisteredInvariants } from '@kodax/agent';
 
 import {
   type AgentArtifact,

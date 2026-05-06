@@ -1,28 +1,40 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-04-12
+> Last updated: 2026-05-06
 >
 > 这组 ADR 反映当前 `FEATURE_061/062` 之后的执行模型：
 > Scout-first、按证据升级 harness、skill-aware AMA。
+> v0.7.35.1 (FEATURE_142) 修正 v0.7.24 FEATURE_082 包结构漂移，详见 ADR-001 / ADR-021。
 
 ---
 
 ## ADR-001: Keep the Layered Monorepo
 
-**Status**: Accepted
+**Status**: Accepted (updated 2026-05-06 after FEATURE_142 v0.7.35.1)
 
-KodaX 继续保持分层 monorepo：
+KodaX 保持分层 monorepo，包结构经 v0.7.35.1 修正后为 **8 包**：
 
-- `@kodax/ai`
-- `@kodax/agent`
-- `@kodax/coding`
-- `@kodax/repl`
-- `@kodax/skills`
+| 包 | 角色 | 说明 |
+|---|---|---|
+| `@kodax/ai` | LLM 抽象 + provider 适配 | retry-after / cache markers / capability |
+| `@kodax/tracing` | Trace / Span / Processor | 独立可替换 OpenTelemetry / Langfuse |
+| `@kodax/session-lineage` | Session 持久化 + Lineage + Compaction 实现 | 承接 v0.7.35.1 从 `@kodax/agent` 回流的 session 实体 |
+| `@kodax/agent` | **通用 Agent 框架（智能体底座）** | Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware；不绑定 coding |
+| `@kodax/skills` | Zero-dep skill packs | — |
+| `@kodax/mcp` | MCP integration | progressive disclosure 5 模式 |
+| `@kodax/coding` | **Coding agent 实例 + coding-specific 资产** | Coding tools / role prompts / H2 task-engine / coding-preset / repo-intelligence |
+| `@kodax/repl` | Ink TUI | — |
+| `@kodax/repointel-protocol` | Repo intel 协议包 | 跨仓库共享协议 |
 
 Reasoning:
 
-- 当前边界仍然清晰且可复用。
-- task engine 的增强应建立在现有层次之上，而不是把层全部揉平。
+- 包名 = 内容承诺：`@kodax/agent` 是通用 agent 平台，`@kodax/coding` 是 coding-specific 实例
+- `@kodax/agent` 不依赖 `@kodax/coding`、不依赖 `@kodax/repl` 就能跑一个 agent
+- 未来 `@kodax/data-analysis-agent` / `@kodax/ops-agent` 等按 `@kodax/coding` 模式独立成包，统一依赖 `@kodax/agent`
+- task engine 的增强应建立在现有层次之上，而不是把层全部揉平
+- 详细包归属规则见 ADR-021
+
+**v0.7.35.1 之前（FEATURE_082 设计）**：曾包含 `@kodax/core`（含 Layer A primitives + 后续漂入的 runtime）和**设计但从未创建**的 `@kodax/capabilities`。v0.7.35.1 (FEATURE_142) 把 `@kodax/core` 30 文件全部并入 `@kodax/agent`，并撤销 `@kodax/capabilities` 死设计，理由见 [v0.7.35.1 设计稿](features/v0.7.35.1.md) §FEATURE_142。
 
 ---
 
@@ -359,3 +371,75 @@ Migration:
 - 实施于 v0.7.29 FEATURE_100，单一 feature 占整版本。
 - 直接切换，无 legacy flag。通过 capability inventory + golden-trace test suite + capability contract tests + dispatch eval baseline + reverse audit 五重保险保证零回归，详见 `docs/features/v0.7.29.md`。
 - 原计划 v0.7.29 的 FEATURE_078 (Role-Aware Reasoning Profiles) 顺延到 v0.7.30，与 FEATURE_057 Track F 共版（工作面不交叉）。下游版本（089/090/092/094）保持原位。
+
+---
+
+## ADR-021: Agent Framework Boundary（@kodax/agent vs @kodax/coding）
+
+**Status**: Accepted (FEATURE_142 v0.7.35.1)
+
+KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是**通用 Agent 框架（智能体底座）**，`@kodax/coding` 是 **coding-specific** 实例。两者不可互相侵入，下面是判断规则。
+
+### 落 `@kodax/agent` 的内容（通用 agent 平台原语）
+
+| 类别 | 子目录 | 例子 |
+|---|---|---|
+| Agent primitives | `primitives/` | Agent / Runner / Handoff / Guardrail / Session interface |
+| Admission contract | `admission/` | Admission pipeline + 7 quality invariants（FEATURE_101） |
+| Messaging | `messaging/` | 2-tier priority queue + agentId routing（FEATURE_115） |
+| Orchestration | `orchestration/` | Pattern B dispatch / SendMessage router / TaskStop / Peer router（FEATURE_119/120/123/128） |
+| Scratchpad | `scratchpad/` | 去耦合大输出通道（FEATURE_121） |
+| Memory | `memory/` | 4-type taxonomy + scope resolver（FEATURE_124） |
+| Team | `team/` | Multi-instance state broadcast + system-prompt injection（FEATURE_125） |
+| Construction | `construction/` | Self-Construction runtime / agent-resolver / sandbox-runner（FEATURE_087/088/089/090/101） |
+| Runtime middleware | `runtime-middleware/` | 通用 substrate middleware（compaction-trigger / max-tokens-continuation / permission-gate 接口层） |
+| Tokenizer | `tokenizer.ts` | js-tiktoken 适配 |
+
+**判定规则**：任何"非 coding agent 也需要"的 agent 平台能力 → `@kodax/agent`。
+
+### 落 `@kodax/coding` 的内容（coding-specific）
+
+| 类别 | 子目录 | 例子 |
+|---|---|---|
+| Coding tools | `tools/` | Read / Write / Edit / MultiEdit / Bash / Grep / Glob / WebFetch / WebSearch / SemanticLookup / RepoOverview |
+| Tool wrappers for agent platform tools | `tools/` | dispatch_child_task / send_message / task_stop / write_scratchpad / read_scratchpad / list_agents / todo_update（**工具壳留 coding，调 agent 端原语**；tool 描述文本含 coding-specific prompt） |
+| Coding role prompts | `prompts/` / `agents/*-role-prompt.ts` | Worker / Scout / Planner / Generator / Evaluator role prompts |
+| H2 task-engine 状态机 | `task-engine/` | managed-task / runner-driven / role-prompt builder（coding AMA-specific） |
+| Coding agent 实例 | `agents/` | defaultCodingAgent / scoutAgent / generatorAgent / evaluatorAgent |
+| Coding-specific middleware | `agent-runtime/` | tool-dispatch / prompt-content / assistant-message-builder / per-turn-reasoning |
+| Coding preset | `coding-preset.ts` | DEFAULT_CODING_INSTRUCTIONS + tool slice 装配 |
+| Repo intelligence | `repo-intelligence/` | Coding-specific 仓库结构理解 |
+| Coding-side provider wiring | `providers/` | Coding 端的 wire-level provider 配置 |
+| File-mutation safety net | `multi-instance/` | content-hash-cache / active-file-warning（绑 Edit / Read tool 实现） |
+
+**判定规则**：任何"只对 coding agent 有意义"的内容 → `@kodax/coding`。
+
+### Tool wrapper 的双层模式
+
+通用 agent 平台工具（dispatch_child_task / send_message / task_stop / write_scratchpad / read_scratchpad / list_agents 等）使用**双层模式**：
+
+- **底层 primitive** 在 `@kodax/agent/<domain>/`：路由 / 队列 / 注册表 / 协议（不含 prompt）
+- **工具壳** 在 `@kodax/coding/tools/`：tool schema + handler 调底层 primitive；tool description 含 coding-specific prompt（如 "use this when reviewing a coding PR"）
+
+理由：tool description 是 prompt 工程的一部分，含 coding 偏置；底层路由 / 队列等机制对所有 agent 通用。未来真有 ≥3 个非 coding agent 包后，可以再抽 `@kodax/agent/tools/` 通用工具壳层。当前 1 个 consumer，按 KodaX 哲学不预先抽。
+
+### 何时考虑再开 `@kodax/core`（types-only 子包）
+
+撤销 `@kodax/core`（v0.7.35.1）后，未来 **当且仅当**下面三条**至少一条**成立时，才考虑从 `@kodax/agent` 拆出 `@kodax/core` types-only 子包：
+
+1. 出现 ≥3 个 type-only declaration 消费者（例如 IDE 插件 typecheck 用户的 agent manifest 但不跑）
+2. 出现真实跨包横切设施需求（例如 errors 类被 `@kodax/ai` / `@kodax/agent` / `@kodax/coding` 都需要统一 shape）
+3. 出现 ≥3 个非 coding agent 包（`@kodax/data-analysis-agent` / `@kodax/ops-agent` / 等），它们之间需要共享 Layer A types 但不互相依赖
+
+**严禁预先开包**。FEATURE_082 v0.7.24 在 1 个 consumer 时强行建立 4 层模型（`ai → core → capabilities → coding`），导致 `@kodax/capabilities` 成为死设计 + `@kodax/core` 名实倒挂——这是 KodaX `NEVER add abstractions until 3+ concrete use cases` 哲学违反的实证后果，本 ADR 写明以避免重蹈。
+
+### 撤销的 `@kodax/capabilities` 死设计
+
+FEATURE_082 v0.7.24 设计稿曾把 `@kodax/capabilities` 作为 Layer B 组合能力包列入新包清单和依赖图，并约定 FEATURE_084 v0.7.26 把 Scout/Evaluator/Generator 落入此包。但：
+
+- `packages/capabilities/` **从未被创建**
+- FEATURE_084 真要落 Scout/Evaluator/Generator 时绕开它，直接放 `coding/src/agents/`
+- 事后回看：Scout/Evaluator/Generator 是 coding AMA H2 实例，本来就该在 coding——"通用 capabilities"是预先抽象
+
+v0.7.35.1 (FEATURE_142) 正式从 ADR / 文档清理 `@kodax/capabilities`，**永久撤销**。未来如真出现"通用能力包"需求（满足 ADR-021 §"何时考虑再开 core"的 3 条之一），可以新设包，不复用 `capabilities` 名字（避免与历史死设计混淆）。
+

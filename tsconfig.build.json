@@ -3,12 +3,11 @@
   "references": [
     { "path": "./packages/ai" },
     { "path": "./packages/tracing" },
-    { "path": "./packages/core" },
+    { "path": "./packages/agent" },
     { "path": "./packages/mcp" },
     { "path": "./packages/session-lineage" },
     { "path": "./packages/repointel-protocol" },
     { "path": "./packages/skills" },
-    { "path": "./packages/agent" },
     { "path": "./packages/coding" },
     { "path": "./packages/repl" }
   ]

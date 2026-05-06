@@ -182,3 +182,200 @@ export {
   FileExtensionStore,
   createExtensionStore,
 } from './persistence.js';
+
+// ============== Layer A Primitives (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
+// FEATURE_082 (v0.7.24) extracted these into @kodax/core; v0.7.35.1 FEATURE_142
+// merges them back into @kodax/agent because:
+// - @kodax/core had a single consumer (@kodax/coding); 3+ rule violation
+// - @kodax/agent IS the agent platform foundation, primitives belong here
+// See ADR-001 (updated) / ADR-021 / docs/features/v0.7.35.1.md.
+
+// Agent + Handoff
+export type {
+  Agent,
+  AgentMessage,
+  AgentMiddlewareDeclaration,
+  AgentReasoningProfile,
+  AgentTool,
+  Guardrail,
+  Handoff,
+  ReasoningDepth,
+} from './primitives/agent.js';
+export { createAgent, createHandoff } from './primitives/agent.js';
+
+// Base Session interface (the @experimental thick KodaXSessionLineage at root
+// stays as the coding-preset session implementation; this is the Layer A
+// primitive that LineageExtension is composed over)
+export type {
+  InMemorySessionOptions,
+  MessageEntry,
+  Session,
+  SessionEntry,
+  SessionExtension,
+  SessionForkOptions,
+} from './primitives/session.js';
+export { createInMemorySession } from './primitives/session.js';
+
+// CompactionPolicy + DefaultSummaryCompaction
+// Note: `PolicyCompactionResult` is the Layer A primitive type (renamed from
+// `CompactionResult` in v0.7.35.1 FEATURE_142 to disambiguate from agent's
+// pre-existing `CompactionResult` in compaction/types.ts).
+export type {
+  CompactionContext,
+  CompactionEntry,
+  CompactionEntryPayload,
+  CompactionPolicy,
+  PolicyCompactionResult,
+  DefaultSummaryCompactionOptions,
+} from './primitives/compaction.js';
+export { DefaultSummaryCompaction } from './primitives/compaction.js';
+
+// Runner + run loop
+export type {
+  PresetDispatcher,
+  PresetTracingContext,
+  RunEvent,
+  RunOptions,
+  RunResult,
+} from './primitives/runner.js';
+export {
+  Runner,
+  buildSystemPrompt,
+  registerPresetDispatcher,
+  _resetPresetDispatchers,
+  extractAssistantTextFromMessage,
+} from './primitives/runner.js';
+
+export type {
+  RunnableTool,
+  RunnerLlmResult,
+  RunnerLlmReturn,
+  RunnerToolCall,
+  RunnerToolContext,
+  RunnerToolObserver,
+  RunnerToolResult,
+} from './primitives/runner-tool-loop.js';
+export {
+  MAX_TOOL_LOOP_ITERATIONS,
+  buildAssistantMessageFromLlmResult,
+  buildToolResultMessage,
+  executeRunnerToolCall,
+  isRunnableTool,
+  isRunnerLlmResult,
+} from './primitives/runner-tool-loop.js';
+
+export type {
+  HandoffSignal,
+} from './primitives/runner-handoff.js';
+export {
+  detectHandoffSignal,
+  emitHandoffSpan,
+  replaceSystemMessage,
+} from './primitives/runner-handoff.js';
+
+// Guardrail tri-layer
+export type {
+  GuardrailContext,
+  GuardrailVerdict,
+  InputGuardrail,
+  OutputGuardrail,
+  ToolBeforeOutcome,
+  ToolGuardrail,
+} from './primitives/guardrail.js';
+export {
+  GuardrailBlockedError,
+  GuardrailEscalateError,
+  collectGuardrails,
+  runInputGuardrails,
+  runOutputGuardrails,
+  runToolAfterGuardrails,
+  runToolBeforeGuardrails,
+} from './primitives/guardrail.js';
+
+// AMA H2 role agent declarations (Scout/Planner/Generator/Evaluator)
+export {
+  SCOUT_AGENT_NAME,
+  PLANNER_AGENT_NAME,
+  GENERATOR_AGENT_NAME,
+  EVALUATOR_AGENT_NAME,
+  TASK_ENGINE_ROLE_AGENTS,
+  scoutAgent,
+  plannerAgent,
+  generatorAgent,
+  evaluatorAgent,
+} from './primitives/task-engine-agents.js';
+
+// ============== Admission Contract (FEATURE_101 v0.7.31; absorbed from @kodax/core in v0.7.35.1) ==============
+export type {
+  AdmissionCtx,
+  AdmissionVerdict,
+  AdmittedHandle,
+  AgentManifest,
+  Deliverable,
+  InvariantId,
+  InvariantResult,
+  ManifestPatch,
+  ObserveCtx,
+  QualityInvariant,
+  ReadonlyMutationTracker,
+  ReadonlyRecorder,
+  RunnerEvent,
+  SystemCap,
+  TerminalCtx,
+  ToolCapability,
+  ToolPermission,
+} from './admission/admission.js';
+
+export {
+  _resetInvariantRegistry,
+  applyManifestPatch,
+  composePatches,
+  getInvariant,
+  listRegisteredInvariants,
+  registerInvariant,
+  resolveEffectiveInvariants,
+  resolveRequiredInvariants,
+} from './admission/admission-runtime.js';
+
+export type { AdmissionAuditOptions } from './admission/admission-audit.js';
+export {
+  DEFAULT_SYSTEM_CAP,
+  runAdmissionAudit,
+  detectInstructionsInjection,
+} from './admission/admission-audit.js';
+
+export type { SessionDispatchResult } from './admission/admission-session.js';
+export {
+  InvariantSession,
+  createInvariantSessionForAgent,
+  getAdmittedAgentBindings,
+  setAdmittedAgentBindings,
+  _resetAdmittedAgentBindings,
+} from './admission/admission-session.js';
+
+export type { AdmissionMetricsSnapshot } from './admission/admission-metrics.js';
+export {
+  _resetAdmissionMetrics,
+  getAdmissionMetricsSnapshot,
+  isAdmissionDebugEnabled,
+} from './admission/admission-metrics.js';
+
+// FEATURE_101 v1 pure-new invariants
+export {
+  CORE_INVARIANTS,
+  evidenceTrail,
+  finalOwner,
+  handoffLegality,
+  harnessSelectionTiming,
+  registerCoreInvariants,
+} from './admission/invariants/index.js';
+
+// Capability provider contract — re-exported from @kodax/ai (canonical home
+// per ADR-021). Re-export here lets v0.7.35 consumers that imported these
+// types from @kodax/core continue to work via @kodax/agent without splitting
+// the import. Direct import from @kodax/ai is also supported.
+export type {
+  CapabilityKind,
+  CapabilityProvider,
+  CapabilityResult,
+} from '@kodax/ai';

@@ -15,7 +15,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { Runner, createAgent, type PresetDispatcher } from '@kodax/core';
+import { Runner, createAgent, type PresetDispatcher } from '@kodax/agent';
 import { DEFAULT_CODING_AGENT_NAME, createDefaultCodingAgent } from './coding-preset.js';
 
 describe('coding-preset', () => {

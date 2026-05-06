@@ -7,8 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent, createHandoff } from '@kodax/core';
-import type { Agent, AdmissionCtx, AgentManifest, Deliverable, SystemCap, TerminalCtx } from '@kodax/core';
+import { createAgent, createHandoff } from '@kodax/agent';
+import type { Agent, AdmissionCtx, AgentManifest, Deliverable, SystemCap, TerminalCtx } from '@kodax/agent';
 
 import { independentReview } from './independent-review.js';
 

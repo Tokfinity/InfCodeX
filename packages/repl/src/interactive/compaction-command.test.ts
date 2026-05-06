@@ -6,9 +6,16 @@ const mocks = vi.hoisted(() => ({
   resolveProvider: vi.fn(),
 }));
 
-vi.mock('@kodax/agent', () => ({
-  compact: mocks.compact,
-}));
+vi.mock('@kodax/agent', async () => {
+  // Partial mock: only override `compact`. Keep all other exports real so that
+  // downstream code paths (e.g. scoutAgent / plannerAgent absorbed from
+  // @kodax/core in v0.7.35.1 FEATURE_142) continue to work.
+  const actual = await vi.importActual<typeof import('@kodax/agent')>('@kodax/agent');
+  return {
+    ...actual,
+    compact: mocks.compact,
+  };
+});
 
 vi.mock('../common/compaction-config.js', () => ({
   loadCompactionConfig: mocks.loadCompactionConfig,

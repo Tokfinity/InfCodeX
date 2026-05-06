@@ -13,7 +13,7 @@ import type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 import type { McpServerConfig, McpServersConfig } from './config.js';
 import {
   defaultMcpCacheDir,

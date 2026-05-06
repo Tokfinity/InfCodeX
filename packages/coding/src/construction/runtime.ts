@@ -25,7 +25,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import crypto from 'crypto';
 
-import { Runner } from '@kodax/core';
+import { Runner } from '@kodax/agent';
 import type { LocalToolDefinition } from '../tools/types.js';
 import { registerTool } from '../tools/registry.js';
 import { defaultToClassifierInput } from '../tools/classifier-projection.js';
@@ -37,7 +37,7 @@ import {
   listConstructedAgents,
   registerConstructedAgent,
 } from './agent-resolver.js';
-import type { Agent as CoreAgent } from '@kodax/core';
+import type { Agent as CoreAgent } from '@kodax/agent';
 import {
   runSandboxAgentTest,
   type SandboxLlmCallback,
@@ -605,7 +605,7 @@ export async function activate(handle: StagedHandle): Promise<void> {
   // thread `invariantBindings` + admitted manifest into the resolver
   // registration. `Runner.run` consults the bindings to dispatch
   // observe / assertTerminal hooks at run time.
-  let admittedHandle: import('@kodax/core').AdmittedHandle | undefined;
+  let admittedHandle: import('@kodax/agent').AdmittedHandle | undefined;
   if (artifact.kind === 'agent') {
     const manifest = buildAdmissionManifest({
       name: artifact.name,
@@ -714,7 +714,7 @@ async function detectSelfModify(
 interface SelfModifyActivationInput {
   readonly next: ConstructionArtifact;
   readonly prev: AgentArtifact;
-  readonly admittedHandle: import('@kodax/core').AdmittedHandle | undefined;
+  readonly admittedHandle: import('@kodax/agent').AdmittedHandle | undefined;
 }
 
 /**
@@ -917,7 +917,7 @@ async function runSelfModifyActivation(
  * the persisted manifest and the registered invariant set.
  */
 interface RegisterActiveOptions {
-  readonly admittedHandle?: import('@kodax/core').AdmittedHandle;
+  readonly admittedHandle?: import('@kodax/agent').AdmittedHandle;
   /**
    * FEATURE_090 — when true, agent kind registers into the resolver's
    * pending swap queue instead of the active registry. Lookups
@@ -1011,8 +1011,8 @@ async function registerActiveAgentArtifact(
   const existing = _activated.get(activeKey(artifact));
   if (existing) existing();
 
-  let bindings: readonly import('@kodax/core').InvariantId[] | undefined;
-  let admittedManifest: import('@kodax/core').AgentManifest | undefined;
+  let bindings: readonly import('@kodax/agent').InvariantId[] | undefined;
+  let admittedManifest: import('@kodax/agent').AgentManifest | undefined;
   if (options.admittedHandle) {
     bindings = options.admittedHandle.invariantBindings;
     admittedManifest = options.admittedHandle.manifest;

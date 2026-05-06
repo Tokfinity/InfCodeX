@@ -11,8 +11,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { Agent } from '../agent.js';
-import { createAgent, createHandoff } from '../agent.js';
+import type { Agent } from '../../primitives/agent.js';
+import { createAgent, createHandoff } from '../../primitives/agent.js';
 import type { AdmissionCtx, AgentManifest, SystemCap } from '../admission.js';
 import { handoffLegality } from './handoff-legality.js';
 

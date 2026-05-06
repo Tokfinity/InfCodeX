@@ -29,7 +29,7 @@ import {
   type AgentReasoningProfile,
   type PresetDispatcher,
   type RunResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { runSubstrate } from './agent-runtime/run-substrate.js';
 import type { KodaXOptions, KodaXResult } from './types.js';

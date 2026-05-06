@@ -13,8 +13,8 @@ import {
   listRegisteredInvariants,
   Runner,
   createAgent,
-} from '@kodax/core';
-import type { AgentManifest } from '@kodax/core';
+} from '@kodax/agent';
+import type { AgentManifest } from '@kodax/agent';
 
 import { registerCodingInvariants } from './index.js';
 

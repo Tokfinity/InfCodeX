@@ -356,7 +356,7 @@ interface InkREPLProps {
    */
   setAutoModeAskUser: (
     handler:
-      | ((call: import("@kodax/core").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((call: import("@kodax/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
       | null,
   ) => void;
   /**
@@ -443,7 +443,7 @@ const PLAN_MODE_BLOCK_GUIDANCE =
 function buildAutoModeGuardrails(
   mode: PermissionMode,
   bootstrap: AutoModeBootstrapResult,
-): readonly import("@kodax/core").ToolGuardrail[] | undefined {
+): readonly import("@kodax/agent").ToolGuardrail[] | undefined {
   if (!isAutoMode(mode)) return undefined;
   return [bootstrap.getGuardrail()];
 }
@@ -7841,7 +7841,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const agentsFilesRef: { current: AgentsFile[] } = { current: initialAgentsFiles };
   const inkAutoModeAskUserRef: {
     current:
-      | ((call: import("@kodax/core").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((call: import("@kodax/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
       | null;
   } = { current: null };
   // Ref-bridge for engine-change notifications: the React component fills

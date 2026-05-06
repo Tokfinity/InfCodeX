@@ -13,7 +13,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createAgent } from './agent.js';
+import { createAgent } from '../primitives/agent.js';
 import type {
   AgentManifest,
   InvariantId,

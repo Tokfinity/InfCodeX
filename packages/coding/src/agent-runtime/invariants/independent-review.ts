@@ -23,7 +23,7 @@
  * pairing exists, not to police the message flow.
  */
 
-import type { Agent } from '@kodax/core';
+import type { Agent } from '@kodax/agent';
 import type {
   AdmissionCtx,
   AgentManifest,
@@ -31,7 +31,7 @@ import type {
   InvariantResult,
   QualityInvariant,
   TerminalCtx,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 const GENERATOR_NAME = 'generator';
 const EVALUATOR_NAME = 'evaluator';

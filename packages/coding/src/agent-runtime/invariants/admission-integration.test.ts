@@ -29,8 +29,8 @@ import {
   _resetInvariantRegistry,
   createAgent,
   createHandoff,
-} from '@kodax/core';
-import type { Agent, AgentManifest, SystemCap } from '@kodax/core';
+} from '@kodax/agent';
+import type { Agent, AgentManifest, SystemCap } from '@kodax/agent';
 
 import { registerCodingInvariants } from './index.js';
 

@@ -17,7 +17,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createAgent, createHandoff } from './agent.js';
+import { createAgent, createHandoff } from '../primitives/agent.js';
 import { runAdmissionAudit } from './admission-audit.js';
 import {
   _resetInvariantRegistry,
@@ -31,7 +31,7 @@ import type {
   ToolCapability,
 } from './admission.js';
 import { finalOwner, registerCoreInvariants } from './invariants/index.js';
-import { Runner } from './runner.js';
+import { Runner } from '../primitives/runner.js';
 
 const SYS_CAP: SystemCap = {
   maxBudget: 10_000,

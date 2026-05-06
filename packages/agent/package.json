@@ -1,7 +1,7 @@
 {
   "name": "@kodax/agent",
   "version": "0.7.35",
-  "description": "KodaX Agent - 通用 Agent 框架，会话管理和消息处理",
+  "description": "KodaX Agent — 通用 Agent 框架（智能体底座）。Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware。不绑定 coding。",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@kodax/ai": "*",
+    "@kodax/tracing": "*",
     "js-tiktoken": "^1.0.12"
   },
   "devDependencies": {

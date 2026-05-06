@@ -19,12 +19,12 @@
  * `coerceManagedProtocolToolPayload` between both paths.
  */
 
-import type { RunnableTool, RunnerToolResult } from '@kodax/core';
+import type { RunnableTool, RunnerToolResult } from '@kodax/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { coerceManagedProtocolToolPayload } from '../managed-protocol.js';
 import type { KodaXManagedProtocolPayload } from '../types.js';

@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '../agent.js';
+import { createAgent } from '../../primitives/agent.js';
 import type { ObserveCtx, ReadonlyRecorder } from '../admission.js';
 import { harnessSelectionTiming } from './harness-selection-timing.js';
 

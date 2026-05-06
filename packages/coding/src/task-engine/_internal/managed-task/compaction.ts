@@ -45,7 +45,7 @@ import {
   type CompactionUpdate,
 } from '@kodax/agent';
 
-import type { AgentMessage } from '@kodax/core';
+import type { AgentMessage } from '@kodax/agent';
 
 import { resolveProvider } from '../../../providers/index.js';
 import { loadCompactionConfig } from '../../../compaction-config.js';

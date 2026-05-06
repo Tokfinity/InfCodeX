@@ -107,7 +107,7 @@ export interface ChildExecutorOptions {
    * shared by passing the SAME instance — preventing children from reaching
    * a fresh threshold and bypassing the parent's downgrade.
    */
-  readonly guardrails?: readonly import('@kodax/core').Guardrail[];
+  readonly guardrails?: readonly import('@kodax/agent').Guardrail[];
 }
 
 export async function executeChildAgents(

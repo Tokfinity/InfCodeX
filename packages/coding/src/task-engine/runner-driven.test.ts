@@ -25,7 +25,7 @@ import {
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
 } from './runner-driven.js';
-import type { RunnableTool } from '@kodax/core';
+import type { RunnableTool } from '@kodax/agent';
 import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax/ai';
 import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
@@ -1895,8 +1895,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
 
   // Minimal RunnerToolContext for tests — `agent` is unused by the
   // bash / mutation-guard path but required by the interface.
-  function makeToolCtx(agentName: string): import('@kodax/core').RunnerToolContext {
-    return { agent: { name: agentName } as unknown as import('@kodax/core').Agent };
+  function makeToolCtx(agentName: string): import('@kodax/agent').RunnerToolContext {
+    return { agent: { name: agentName } as unknown as import('@kodax/agent').Agent };
   }
 
   it('Planner agent exposes only read + grep + glob + emit_contract (no bash/write/edit)', () => {
@@ -2127,7 +2127,7 @@ describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only',
         objective: 'test',
         read_only: false,
       },
-      { agent: { name: 'scout' } as unknown as import('@kodax/core').Agent },
+      { agent: { name: 'scout' } as unknown as import('@kodax/agent').Agent },
     );
     expect(String(result.content)).toContain('Scout can only dispatch read-only');
   });

@@ -14,7 +14,7 @@
  * breaking). Capability types come from `@kodax/core`.
  */
 
-import type { CapabilityKind, CapabilityResult } from '@kodax/core';
+import type { CapabilityKind, CapabilityResult } from '@kodax/agent';
 
 export interface ExtensionRuntimeContract {
   searchCapabilities(

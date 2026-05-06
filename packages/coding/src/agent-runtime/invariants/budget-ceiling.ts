@@ -24,7 +24,7 @@ import type {
   AgentManifest,
   InvariantResult,
   QualityInvariant,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 function admit(manifest: AgentManifest, ctx: AdmissionCtx): InvariantResult {
   if (typeof manifest.maxBudget !== 'number') return { ok: true };

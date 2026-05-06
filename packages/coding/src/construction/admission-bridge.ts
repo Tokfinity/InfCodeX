@@ -21,7 +21,7 @@
  * Pure function. No I/O, no shared mutable state.
  */
 
-import type { Agent, AgentManifest, InvariantId } from '@kodax/core';
+import type { Agent, AgentManifest, InvariantId } from '@kodax/agent';
 
 import type {
   AgentContent,

@@ -28,7 +28,7 @@
  * for tracing / observability around this call.
  */
 
-import type { Agent } from './agent.js';
+import type { Agent } from '../primitives/agent.js';
 import {
   applyManifestPatch,
   composePatches,

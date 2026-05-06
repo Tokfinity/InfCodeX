@@ -11,7 +11,7 @@ import {
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
-} from '@kodax/core';
+} from '@kodax/agent';
 import {
   CODING_AGENTS,
   evaluatorCodingAgent,

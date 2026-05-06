@@ -43,7 +43,7 @@ import type {
   RunnerToolCall,
   RunnerToolResult,
   ToolGuardrail,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import type { KodaXManagedProtocolPayload, ManagedMutationTracker } from '../../types.js';
 import {

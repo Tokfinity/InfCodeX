@@ -4,7 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "paths": {
-      "@kodax/ai": ["../ai/src/index.ts"]
+      "@kodax/ai": ["../ai/src/index.ts"],
+      "@kodax/tracing": ["../tracing/src/index.ts"]
     },
     "lib": ["ES2022"],
     "outDir": "./dist",
@@ -20,7 +21,8 @@
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "references": [
-    { "path": "../ai" }
+    { "path": "../ai" },
+    { "path": "../tracing" }
   ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

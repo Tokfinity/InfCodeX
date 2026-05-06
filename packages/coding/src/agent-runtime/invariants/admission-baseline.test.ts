@@ -29,7 +29,7 @@ import {
   getAdmissionMetricsSnapshot,
   runAdmissionAudit,
   type AgentManifest,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { registerCodingInvariants } from './index.js';
 

@@ -23,9 +23,9 @@
 import type {
   CompactionContext,
   CompactionPolicy,
-  CompactionResult,
+  PolicyCompactionResult,
   Session,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 /**
  * Delegates required to implement `LineageCompaction`. The coding preset
@@ -41,7 +41,7 @@ export interface LineageCompactionDelegates {
   readonly compact: (
     session: Session,
     ctx: CompactionContext,
-  ) => Promise<CompactionResult>;
+  ) => Promise<PolicyCompactionResult>;
   readonly restore?: (session: Session, hint: unknown) => Promise<void>;
 }
 
@@ -66,7 +66,7 @@ export class LineageCompaction implements CompactionPolicy {
     return this.delegates.shouldCompact(session, tokensUsed, budget);
   }
 
-  async compact(session: Session, ctx: CompactionContext): Promise<CompactionResult> {
+  async compact(session: Session, ctx: CompactionContext): Promise<PolicyCompactionResult> {
     return this.delegates.compact(session, ctx);
   }
 

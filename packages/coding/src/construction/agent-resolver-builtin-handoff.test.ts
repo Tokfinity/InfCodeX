@@ -23,7 +23,7 @@ import {
   generatorAgent,
   plannerAgent,
   scoutAgent,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { registerCodingInvariants } from '../agent-runtime/invariants/index.js';
 import {

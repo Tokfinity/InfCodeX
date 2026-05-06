@@ -41,7 +41,7 @@ import type {
   GuardrailVerdict,
   RunnerToolCall,
   ToolGuardrail,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { classify, type ClassifyDecision } from './classify.js';
 import {

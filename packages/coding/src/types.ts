@@ -883,7 +883,7 @@ export interface KodaXOptions {
    * consumers can inject custom ToolGuardrail / InputGuardrail / OutputGuardrail
    * instances. Empty / undefined leaves the agent's own declaration unchanged.
    */
-  guardrails?: readonly import('@kodax/core').Guardrail[];
+  guardrails?: readonly import('@kodax/agent').Guardrail[];
   /** AbortSignal for cancelling the API request */
   abortSignal?: AbortSignal;
 }
@@ -1296,7 +1296,7 @@ export interface KodaXToolExecutionContext {
    * safe under JS run-to-completion semantics — concurrent child tool calls
    * produce interleaved `recordBlock` / `recordAllow` updates with no tearing.
    */
-  guardrails?: readonly import('@kodax/core').Guardrail[];
+  guardrails?: readonly import('@kodax/agent').Guardrail[];
   /**
    * FEATURE_097 (v0.7.34): Scout-seeded todo plan store. Populated by
    * runner-driven setup whenever Scout's `executionObligations` reaches

@@ -54,9 +54,18 @@ export interface CompactionEntry extends SessionEntry {
 }
 
 /**
- * Outcome of a compaction pass.
+ * Outcome of a single CompactionPolicy.compact() pass. Renamed from
+ * `CompactionResult` to `PolicyCompactionResult` in v0.7.35.1 FEATURE_142
+ * because the Layer A primitive collided with @kodax/agent's pre-existing
+ * `CompactionResult` (compaction/types.ts) used by the coding orchestration
+ * post-compact pipeline. The two types model different things:
+ *   - `PolicyCompactionResult` (here): "summary + replaced entry ids", the
+ *     payload of one CompactionPolicy step.
+ *   - `CompactionResult` (compaction/types.ts): the rich result of the
+ *     coding-side multi-pass compaction (artifactLedger / memorySeed /
+ *     tokensBefore / tokensAfter / etc).
  */
-export interface CompactionResult {
+export interface PolicyCompactionResult {
   readonly summary: string;
   readonly replacedMessageEntryIds: readonly string[];
 }
@@ -69,7 +78,7 @@ export interface CompactionResult {
 export interface CompactionPolicy {
   readonly name: string;
   shouldCompact(session: Session, tokensUsed: number, budget: number): boolean;
-  compact(session: Session, ctx: CompactionContext): Promise<CompactionResult>;
+  compact(session: Session, ctx: CompactionContext): Promise<PolicyCompactionResult>;
   /** Optional: rehydrate compacted content when a restore hint is available. */
   restore?(session: Session, hint: unknown): Promise<void>;
 }
@@ -146,7 +155,7 @@ export class DefaultSummaryCompaction implements CompactionPolicy {
     return tokensUsed >= budget * this.thresholdRatio;
   }
 
-  async compact(session: Session, ctx: CompactionContext): Promise<CompactionResult> {
+  async compact(session: Session, ctx: CompactionContext): Promise<PolicyCompactionResult> {
     const messageEntries: MessageEntry[] = [];
     for await (const entry of session.entries()) {
       if (entry.type === 'message') {

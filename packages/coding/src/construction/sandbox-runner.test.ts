@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { Agent, AgentMessage, RunnerLlmReturn } from '@kodax/core';
+import type { Agent, AgentMessage, RunnerLlmReturn } from '@kodax/agent';
 
 import {
   _resetAgentResolverForTesting,
