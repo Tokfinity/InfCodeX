@@ -38,12 +38,13 @@ export type {
   KodaXExecutionPattern,
   KodaXMutationSurface,
   KodaXAssuranceIntent,
-  KodaXHarnessProfile,
-  KodaXAmaProfile,
-  KodaXAmaTactic,
-  KodaXAmaFanoutClass,
-  KodaXAmaFanoutPolicy,
-  KodaXAmaControllerDecision,
+  // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXAmaProfile /
+  // KodaXAmaTactic / KodaXAmaFanoutClass / KodaXAmaFanoutPolicy /
+  // KodaXAmaControllerDecision are coding-AMA-specific vocabulary; the
+  // canonical home is `@kodax/ai`. Removed from `@kodax/agent`'s public
+  // re-export per ADR-021 (the universal Agent framework must not expose
+  // coding-AMA terms in its surface). Coding-side consumers import directly
+  // from `@kodax/ai`.
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
