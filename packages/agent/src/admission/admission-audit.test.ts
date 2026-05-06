@@ -148,6 +148,16 @@ describe('runAdmissionAudit — happy path (Steps 2–5)', () => {
   });
 
   it('unions declared invariants on top of required (filtered to registered ids)', () => {
+    // Register a local observe-only stub under the 'harnessSelectionTiming'
+    // id so this test can verify that declared-and-registered invariants
+    // appear in bindings. v0.7.35.1 FEATURE_142 (A-R2) moved the real
+    // harnessSelectionTiming implementation to @kodax/coding, so agent's
+    // own test setup needs a local stub to keep this coverage.
+    registerInvariant({
+      id: 'harnessSelectionTiming',
+      description: 'observe-only stub for agent-side audit test',
+      observe: () => ({ ok: true }),
+    } as QualityInvariant);
     const m: AgentManifest = {
       ...createAgent({ name: 'a', instructions: 'b' }),
       declaredInvariants: ['harnessSelectionTiming', 'finalOwner'],
@@ -174,9 +184,16 @@ describe('runAdmissionAudit — happy path (Steps 2–5)', () => {
   });
 
   it('observe-only invariants in the effective set do not produce a spurious reject', () => {
-    // harnessSelectionTiming has only an observe hook (no admit). When it's
-    // declared on the manifest it joins the effective set, but the audit's
-    // admit loop must skip it cleanly (the !inv.admit branch).
+    // An observe-only invariant has no admit hook. When it's declared on
+    // the manifest it joins the effective set, but the audit's admit loop
+    // must skip it cleanly (the !inv.admit branch). Use a local stub
+    // registered under 'harnessSelectionTiming' (a valid invariant id) —
+    // v0.7.35.1 FEATURE_142 (A-R2) moved the real impl to @kodax/coding.
+    registerInvariant({
+      id: 'harnessSelectionTiming',
+      description: 'observe-only stub for agent-side audit test',
+      observe: () => ({ ok: true }),
+    } as QualityInvariant);
     const m: AgentManifest = {
       ...createAgent({ name: 'observer', instructions: 'watch' }),
       declaredInvariants: ['harnessSelectionTiming'],

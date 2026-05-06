@@ -147,13 +147,12 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     // it's been overridden by the probe above).
     const { registerCoreInvariants } = await import('@kodax/agent');
     // registerCoreInvariants would clash on finalOwner; manually skip it.
-    const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    registerInvariant(harnessSelectionTiming);
-    const { boundedRevise, budgetCeiling, independentReview, toolPermission } =
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
+    registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
@@ -193,13 +192,12 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     _resetInvariantRegistry();
     registerInvariant(probe);
     // Register a permissive handoffLegality so admission still passes.
-    const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    registerInvariant(harnessSelectionTiming);
-    const { boundedRevise, budgetCeiling, independentReview, toolPermission } =
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
+    registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
@@ -242,13 +240,12 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     };
     _resetInvariantRegistry();
     registerInvariant(probe);
-    const { handoffLegality, evidenceTrail, harnessSelectionTiming } =
-      await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    registerInvariant(harnessSelectionTiming);
-    const { boundedRevise, budgetCeiling, independentReview, toolPermission } =
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
+    registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
