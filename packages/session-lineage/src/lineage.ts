@@ -6,8 +6,10 @@
  * `SessionExtension` over the base `Session` primitive.
  *
  * FEATURE_082 (v0.7.24): moved from `@kodax/coding/src/extensions/lineage.ts`
- * to this package. Depends on `@kodax/core` for `Session` / `SessionEntry` /
- * `SessionExtension`. `@kodax/coding` keeps a barrel re-export.
+ * to this package. Depends on `@kodax/agent` for `Session` / `SessionEntry` /
+ * `SessionExtension` (Layer A primitives — extracted to `@kodax/core` in
+ * FEATURE_082, merged back into `@kodax/agent` in v0.7.35.1 FEATURE_142).
+ * `@kodax/coding` keeps a barrel re-export.
  *
  * Scope:
  *   - Declare the extension object.

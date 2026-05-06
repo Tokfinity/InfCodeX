@@ -1,5 +1,5 @@
 /**
- * Pure-new invariant implementations bundled with @kodax/core.
+ * Pure-new invariant implementations bundled with @kodax/agent.
  *
  * The admission contract types live in `../admission.ts`; the registry
  * runtime in `../admission-runtime.ts`. This module exports the four
@@ -9,7 +9,7 @@
  * Why this split:
  *   - These four (finalOwner, handoffLegality, evidenceTrail,
  *     harnessSelectionTiming) are pure functions of the admission types
- *     — they have NO @kodax/coding dependencies. Living in @kodax/core
+ *     — they have NO @kodax/coding dependencies. Living in @kodax/agent
  *     keeps the dependency direction clean and lets `Runner.admit`
  *     unit-test against real invariants without pulling the coding
  *     runtime into the test harness.
@@ -34,7 +34,7 @@ import { harnessSelectionTiming } from './harness-selection-timing.js';
 export { evidenceTrail, finalOwner, handoffLegality, harnessSelectionTiming };
 
 /**
- * The four pure invariants @kodax/core ships, in registration order.
+ * The four pure invariants @kodax/agent ships, in registration order.
  * Exposed as a constant so consumers can introspect the set without
  * registering (e.g. dispatch-eval metric setup that wants id labels).
  */

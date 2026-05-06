@@ -685,8 +685,8 @@ export {
 export { exec, webhook } from './extensions/helpers.js';
 
 // ============== Layer A Primitives (FEATURE_080 + FEATURE_081, v0.7.23, @experimental) ==============
-// These types & classes are migrating to @kodax/core in v0.7.24 (FEATURE_082).
-// FEATURE_082 (v0.7.24): Layer A primitives moved to `@kodax/core`. These
+// History: extracted to @kodax/core in FEATURE_082 (v0.7.24); merged back
+// into @kodax/agent in v0.7.35.1 FEATURE_142 (single-consumer rule). These
 // barrel re-exports preserve the batteries-included shape of @kodax/coding
 // — not a deprecation shim, they stay permanently.
 //

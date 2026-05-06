@@ -13,7 +13,8 @@
  *      loop, no extensions, no managed-task harness — those arrive with
  *      FEATURE_084 (v0.7.26).
  *
- * Status: @experimental. Moved to `@kodax/core` in FEATURE_082 (v0.7.24).
+ * Status: @experimental. History: extracted to `@kodax/core` in FEATURE_082
+ * (v0.7.24); merged back into `@kodax/agent` in v0.7.35.1 FEATURE_142.
  * `@kodax/coding` retains a barrel re-export for batteries-included consumers.
  */
 
@@ -109,7 +110,7 @@ export interface RunOptions {
    * FEATURE_085 (v0.7.26): run-scoped guardrails. Merged with
    * `agent.guardrails` — declaration order is agent-first, then opts.
    * Input / output / tool-before / tool-after hooks all dispatch from
-   * this union. See `@kodax/core/guardrail.ts` for shape.
+   * this union. See `@kodax/agent/primitives/guardrail.ts` for shape.
    */
   readonly guardrails?: readonly Guardrail[];
   /**

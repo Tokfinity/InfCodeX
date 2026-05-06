@@ -17,7 +17,7 @@
  *
  * The injected delegates keep this package free of coding-specific imports,
  * preserving the dependency direction
- * `@kodax/coding -> @kodax/session-lineage -> @kodax/core`.
+ * `@kodax/coding -> @kodax/session-lineage -> @kodax/agent`.
  */
 
 import type {
