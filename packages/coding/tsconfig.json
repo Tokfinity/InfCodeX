@@ -20,7 +20,6 @@
   "references": [
     { "path": "../ai" },
     { "path": "../agent" },
-    { "path": "../core" },
     { "path": "../mcp" },
     { "path": "../repointel-protocol" },
     { "path": "../session-lineage" },

@@ -58,14 +58,14 @@ import type {
   RunnerLlmResult,
   RunnerToolContext,
   RunnerToolResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   Runner,
   SCOUT_AGENT_NAME,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { resolveProvider } from '../providers/index.js';
 import {

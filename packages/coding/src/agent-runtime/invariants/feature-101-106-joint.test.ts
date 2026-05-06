@@ -38,13 +38,13 @@ import {
   createAgent,
   getInvariant,
   listRegisteredInvariants,
-} from '@kodax/core';
+} from '@kodax/agent';
 import type {
   AgentManifest,
   ObserveCtx,
   RunnerEvent,
   SystemCap,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { registerCodingInvariants } from './index.js';
 

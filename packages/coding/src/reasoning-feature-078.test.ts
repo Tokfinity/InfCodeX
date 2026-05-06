@@ -16,7 +16,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { AgentReasoningProfile } from '@kodax/core';
+import type { AgentReasoningProfile } from '@kodax/agent';
 
 import {
   clampReasoningMode,

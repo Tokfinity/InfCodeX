@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createInMemorySession, type CompactionContext } from '@kodax/core';
+import { createInMemorySession, type CompactionContext } from '@kodax/agent';
 
 import { LineageCompaction } from './compaction.js';
 

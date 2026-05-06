@@ -21,7 +21,7 @@
  *     adapts them to the Layer A `CompactionPolicy` contract.
  */
 
-import type { Session, SessionEntry, SessionExtension } from '@kodax/core';
+import type { Session, SessionEntry, SessionExtension } from '@kodax/agent';
 
 /**
  * Entry types claimed by `LineageExtension`. Mirrors the legacy

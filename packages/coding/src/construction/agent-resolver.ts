@@ -38,7 +38,7 @@
  * stale refs are an LLM-authoring footgun, not a security bypass.
  */
 
-import type { Agent, AgentManifest, AgentTool, Handoff, InvariantId } from '@kodax/core';
+import type { Agent, AgentManifest, AgentTool, Handoff, InvariantId } from '@kodax/agent';
 import {
   _resetAdmittedAgentBindings,
   evaluatorAgent,
@@ -46,7 +46,7 @@ import {
   plannerAgent,
   scoutAgent,
   setAdmittedAgentBindings,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { getRegisteredToolDefinition } from '../tools/registry.js';
 

@@ -23,8 +23,8 @@ import type {
   QualityInvariant,
   ToolCapability,
 } from './admission.js';
-import type { Agent } from './agent.js';
-import { createAgent } from './agent.js';
+import type { Agent } from '../primitives/agent.js';
+import { createAgent } from '../primitives/agent.js';
 
 describe('FEATURE_101 admission types — schema shape', () => {
   it('AgentManifest is structurally an Agent (every Agent satisfies AgentManifest)', () => {

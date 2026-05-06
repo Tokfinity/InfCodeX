@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import type { Agent } from './agent.js';
+import type { Agent } from '../primitives/agent.js';
 import {
   InvariantSession,
   createInvariantSessionForAgent,

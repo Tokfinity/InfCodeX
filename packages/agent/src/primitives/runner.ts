@@ -27,13 +27,13 @@ import type {
   InvariantId,
   InvariantResult,
   ToolCapability,
-} from './admission.js';
-import { runAdmissionAudit, type AdmissionAuditOptions } from './admission-audit.js';
+} from '../admission/admission.js';
+import { runAdmissionAudit, type AdmissionAuditOptions } from '../admission/admission-audit.js';
 import {
   createInvariantSessionForAgent,
   getAdmittedAgentBindings,
   type InvariantSession,
-} from './admission-session.js';
+} from '../admission/admission-session.js';
 import type { Session } from './session.js';
 import {
   MAX_TOOL_LOOP_ITERATIONS,

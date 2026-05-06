@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@kodax/ai": "*",
-    "@kodax/core": "*"
+    "@kodax/agent": "*"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

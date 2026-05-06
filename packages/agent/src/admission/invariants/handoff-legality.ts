@@ -19,7 +19,7 @@
  * registry migration.
  */
 
-import type { Agent } from '../agent.js';
+import type { Agent } from '../../primitives/agent.js';
 import type {
   AdmissionCtx,
   AgentManifest,

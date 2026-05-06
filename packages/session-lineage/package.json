@@ -1,7 +1,7 @@
 {
   "name": "@kodax/session-lineage",
   "version": "0.7.35",
-  "description": "KodaX Session Lineage - LineageExtension + LineageCompaction (extracted from @kodax/coding and @kodax/agent)",
+  "description": "KodaX Session Lineage — Session 实体 + 持久化 + Lineage 追踪 + LineageCompaction + DefaultSummaryCompaction。@kodax/agent 的会话子系统（v0.7.35.1 后承接从 @kodax/agent 回流的 session/persistence/compaction）。",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@kodax/ai": "*",
-    "@kodax/core": "*"
+    "@kodax/agent": "*"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",

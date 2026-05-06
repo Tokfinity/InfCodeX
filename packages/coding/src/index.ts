@@ -717,7 +717,7 @@ export type {
   RunEvent,
   RunOptions,
   RunResult,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 export {
   createAgent,
@@ -735,7 +735,7 @@ export {
   plannerAgent,
   generatorAgent,
   evaluatorAgent,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 export {
   DEFAULT_CODING_AGENT_NAME,

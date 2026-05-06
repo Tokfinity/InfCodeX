@@ -9,7 +9,7 @@
  * the `Agent.substrateExecutor` closure attached in `coding-preset.ts`.
  */
 
-import { Runner } from '@kodax/core';
+import { Runner } from '@kodax/agent';
 
 import { createDefaultCodingAgent } from './coding-preset.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';

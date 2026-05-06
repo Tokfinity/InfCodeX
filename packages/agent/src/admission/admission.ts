@@ -23,7 +23,7 @@
  *      external to admission v1 closed set but uses the same runtime)
  */
 
-import type { Agent } from './agent.js';
+import type { Agent } from '../primitives/agent.js';
 
 // ---------------------------------------------------------------------------
 // Manifest = untrusted Agent declaration

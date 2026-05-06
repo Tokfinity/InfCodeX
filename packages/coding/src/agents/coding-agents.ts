@@ -39,7 +39,7 @@ import {
   type AgentTool,
   type Guardrail,
   type Handoff,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { SCOPE_AWARE_HARNESS_GUARDRAIL_NAME } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import {

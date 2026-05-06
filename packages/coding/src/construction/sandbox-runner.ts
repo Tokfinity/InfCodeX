@@ -24,12 +24,12 @@
  * (TestResult renderer) can surface a granular failure summary.
  */
 
-import { Runner } from '@kodax/core';
+import { Runner } from '@kodax/agent';
 import type {
   Agent,
   AgentMessage,
   RunnerLlmReturn,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import { resolveConstructedAgent } from './agent-resolver.js';
 import type { AgentArtifact, AgentTestCase } from './types.js';

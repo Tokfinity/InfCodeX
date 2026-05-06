@@ -12,8 +12,8 @@ import type {
   KodaXTextBlock,
   KodaXToolDefinition,
 } from '@kodax/ai';
-import type { GuardrailContext } from '@kodax/core';
-import type { RunnerToolCall } from '@kodax/core';
+import type { GuardrailContext } from '@kodax/agent';
+import type { RunnerToolCall } from '@kodax/agent';
 
 const emptyRules: AutoRules = { allow: [], soft_deny: [], environment: [] };
 

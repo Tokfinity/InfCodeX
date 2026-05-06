@@ -22,7 +22,7 @@ import type {
   ToolGuardrail,
   GuardrailContext,
   GuardrailVerdict,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';

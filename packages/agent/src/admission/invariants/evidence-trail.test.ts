@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '../agent.js';
+import { createAgent } from '../../primitives/agent.js';
 import type { Deliverable, ObserveCtx, TerminalCtx } from '../admission.js';
 import { evidenceTrail } from './evidence-trail.js';
 

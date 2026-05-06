@@ -7,8 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '@kodax/core';
-import type { Agent, AdmissionCtx, AgentManifest, SystemCap, ToolCapability } from '@kodax/core';
+import { createAgent } from '@kodax/agent';
+import type { Agent, AdmissionCtx, AgentManifest, SystemCap, ToolCapability } from '@kodax/agent';
 
 import { resolveToolCapability, toolPermission } from './tool-permission.js';
 

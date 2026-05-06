@@ -176,3 +176,14 @@ export type {
   SideQueryResult,
   SideQueryStopReason,
 } from './side-query.js';
+
+// ============== Capability Provider (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
+// Originally extracted from @kodax/coding/src/extensions/types.ts in FEATURE_082 (v0.7.24).
+// Lives in @kodax/ai because CapabilityProvider is the provider-shaped contract
+// for data sources (MCP/RAG/custom indexes). The richer extension runtime
+// (commands / files / logger) stays in @kodax/coding/src/extensions/.
+export type {
+  CapabilityKind,
+  CapabilityProvider,
+  CapabilityResult,
+} from './capability.js';

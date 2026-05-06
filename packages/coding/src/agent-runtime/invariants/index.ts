@@ -21,8 +21,8 @@
  * `registerCoreInvariants()` so a single call wires the full v1 set.
  */
 
-import { registerCoreInvariants, registerInvariant } from '@kodax/core';
-import type { QualityInvariant } from '@kodax/core';
+import { registerCoreInvariants, registerInvariant } from '@kodax/agent';
+import type { QualityInvariant } from '@kodax/agent';
 
 import { boundedRevise } from './bounded-revise.js';
 import { budgetCeiling } from './budget-ceiling.js';

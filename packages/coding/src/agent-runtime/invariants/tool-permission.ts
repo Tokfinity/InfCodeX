@@ -23,7 +23,7 @@ import type {
   InvariantResult,
   QualityInvariant,
   ToolCapability,
-} from '@kodax/core';
+} from '@kodax/agent';
 
 /**
  * Resolve a tool name to its capability tier. The mapping reflects the

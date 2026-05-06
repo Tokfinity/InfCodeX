@@ -17,11 +17,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { Agent, AgentMessage } from './agent.js';
-import type { AgentManifest, ToolCapability } from './admission.js';
+import type { AgentManifest, ToolCapability } from '../admission/admission.js';
 import {
   setAdmittedAgentBindings,
   _resetAdmittedAgentBindings,
-} from './admission-session.js';
+} from '../admission/admission-session.js';
 import { Runner } from './runner.js';
 import type {
   RunnerLlmResult,

@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '@kodax/core';
-import type { ObserveCtx } from '@kodax/core';
+import { createAgent } from '@kodax/agent';
+import type { ObserveCtx } from '@kodax/agent';
 
 import { boundedRevise } from './bounded-revise.js';
 

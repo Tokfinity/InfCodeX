@@ -29,7 +29,7 @@ import {
   KODAX_REASONING_MODE_SEQUENCE,
 } from '@kodax/ai';
 import type { KodaXBaseProvider } from '@kodax/ai';
-import type { AgentReasoningProfile } from '@kodax/core';
+import type { AgentReasoningProfile } from '@kodax/agent';
 import {
   hasNonTransientRuntimeEvidence,
   hasTransientRetryEvidence,

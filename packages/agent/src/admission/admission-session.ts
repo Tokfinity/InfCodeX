@@ -30,7 +30,7 @@
  * patches for `clamp` though clamp is admit-time only).
  */
 
-import type { Agent } from './agent.js';
+import type { Agent } from '../primitives/agent.js';
 import { getInvariant } from './admission-runtime.js';
 import { _incInvariantViolation } from './admission-metrics.js';
 import type {
