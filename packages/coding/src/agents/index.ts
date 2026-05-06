@@ -27,3 +27,17 @@ export {
   plannerCodingAgent,
   scoutCodingAgent,
 } from './coding-agents.js';
+
+// v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations moved back
+// from `@kodax/agent/src/primitives/` per ADR-021.
+export {
+  SCOUT_AGENT_NAME,
+  PLANNER_AGENT_NAME,
+  GENERATOR_AGENT_NAME,
+  EVALUATOR_AGENT_NAME,
+  TASK_ENGINE_ROLE_AGENTS,
+  scoutAgent,
+  plannerAgent,
+  generatorAgent,
+  evaluatorAgent,
+} from './task-engine-agents.js';

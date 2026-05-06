@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { Runner } from './runner.js';
+import { Runner } from '@kodax/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,

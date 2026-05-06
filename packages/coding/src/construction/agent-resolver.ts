@@ -41,12 +41,14 @@
 import type { Agent, AgentManifest, AgentTool, Handoff, InvariantId } from '@kodax/agent';
 import {
   _resetAdmittedAgentBindings,
+  setAdmittedAgentBindings,
+} from '@kodax/agent';
+import {
   evaluatorAgent,
   generatorAgent,
   plannerAgent,
   scoutAgent,
-  setAdmittedAgentBindings,
-} from '@kodax/agent';
+} from '../agents/task-engine-agents.js';
 
 import { getRegisteredToolDefinition } from '../tools/registry.js';
 

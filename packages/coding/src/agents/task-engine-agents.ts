@@ -1,5 +1,5 @@
 /**
- * Placeholder Agent declarations for the internal task-engine roles
+ * Placeholder Agent declarations for the coding-AMA H2 task-engine roles
  * (Scout / Planner / Generator / Evaluator).
  *
  * FEATURE_080 (v0.7.23): these declarations exist so the role identities
@@ -24,9 +24,16 @@
  * full role prompts live in
  * `packages/coding/src/task-engine/_internal/prompts/role-prompt.ts` (the
  * FEATURE_079 extraction) and are loaded by the existing code path.
+ *
+ * v0.7.35.1 FEATURE_142 (A-R1): moved from `@kodax/agent/src/primitives/`
+ * back to `@kodax/coding/src/agents/`. These role declarations are
+ * coding-AMA-specific (Scout / Planner / Generator / Evaluator are the
+ * H2 state-machine roles, not generic Agent platform primitives). Per
+ * ADR-021, the universal `@kodax/agent` framework must not predeclare
+ * coding's H2 role identities.
  */
 
-import { createAgent, type Agent } from './agent.js';
+import { createAgent, type Agent } from '@kodax/agent';
 
 export const SCOUT_AGENT_NAME = 'kodax/role/scout';
 export const PLANNER_AGENT_NAME = 'kodax/role/planner';

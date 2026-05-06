@@ -30,16 +30,18 @@
  */
 
 import {
-  EVALUATOR_AGENT_NAME,
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  SCOUT_AGENT_NAME,
   type Agent,
   type AgentReasoningProfile,
   type AgentTool,
   type Guardrail,
   type Handoff,
 } from '@kodax/agent';
+import {
+  EVALUATOR_AGENT_NAME,
+  GENERATOR_AGENT_NAME,
+  PLANNER_AGENT_NAME,
+  SCOUT_AGENT_NAME,
+} from './task-engine-agents.js';
 
 import { SCOPE_AWARE_HARNESS_GUARDRAIL_NAME } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import {
