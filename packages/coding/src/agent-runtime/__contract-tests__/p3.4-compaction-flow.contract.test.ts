@@ -39,12 +39,16 @@ vi.mock('@kodax/session-lineage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax/session-lineage')>();
   return { ...actual, compact: vi.fn() };
 });
-vi.mock('../compaction-fallback.js', () => ({
-  gracefulCompactDegradation: vi.fn(),
-}));
+// v0.7.35.1 FEATURE_142 Batch D: gracefulCompactDegradation moved to
+// @kodax/agent/runtime-middleware/. Mock at the package boundary the
+// SUT (compaction-orchestration.ts) imports from.
+vi.mock('@kodax/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax/agent')>();
+  return { ...actual, gracefulCompactDegradation: vi.fn() };
+});
 
 import { compact as mockedCompact } from '@kodax/session-lineage';
-import { gracefulCompactDegradation as mockedDegrade } from '../compaction-fallback.js';
+import { gracefulCompactDegradation as mockedDegrade } from '@kodax/agent';
 import {
   runCompactionLifecycle,
   COMPACT_CIRCUIT_BREAKER_LIMIT,

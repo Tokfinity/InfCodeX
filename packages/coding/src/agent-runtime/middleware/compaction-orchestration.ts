@@ -57,8 +57,7 @@ import { estimateTokens } from '../../tokenizer.js';
 import {
   createEstimatedContextTokenSnapshot,
 } from '../../token-accounting.js';
-import { validateAndFixToolHistory } from '../history-cleanup.js';
-import { gracefulCompactDegradation } from '../compaction-fallback.js';
+import { validateAndFixToolHistory, gracefulCompactDegradation } from '@kodax/agent';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
 
 export const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;

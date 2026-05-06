@@ -309,3 +309,21 @@ export type {
   CapabilityProvider,
   CapabilityResult,
 } from '@kodax/ai';
+
+// ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
+// Generic, agent-flavor-agnostic substrate middleware uplifted from
+// `@kodax/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only
+// modules whose deps are pure `@kodax/ai` + `@kodax/session-lineage` (+ this
+// package's own tokenizer) are uplifted; the rest stay in @kodax/coding
+// because they couple to coding-flavored events / tool registry / managed
+// protocol signals. See docs/features/v0.7.35.1.md "Batch D" for per-file
+// disposition.
+export {
+  shouldCompact,
+  gracefulCompactDegradation,
+  resolveContextWindow,
+  DEFAULT_CONTEXT_WINDOW,
+  cleanupIncompleteToolCalls,
+  validateAndFixToolHistory,
+} from './runtime-middleware/index.js';
+export type { ShouldCompactInput } from './runtime-middleware/index.js';

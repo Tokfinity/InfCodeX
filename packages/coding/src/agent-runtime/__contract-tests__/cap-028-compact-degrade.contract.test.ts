@@ -39,7 +39,7 @@ import type { KodaXMessage } from '@kodax/ai';
 import type { CompactionConfig } from '@kodax/session-lineage';
 import { describe, expect, it } from 'vitest';
 
-import { gracefulCompactDegradation } from '../compaction-fallback.js';
+import { gracefulCompactDegradation } from '@kodax/agent';
 
 function config(triggerPercent = 80): CompactionConfig {
   return { enabled: true, triggerPercent } as CompactionConfig;

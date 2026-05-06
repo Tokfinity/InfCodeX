@@ -37,11 +37,15 @@ import type { CompactionConfig } from '@kodax/session-lineage';
 // Mock the substrate's gracefulCompactDegradation primitive so tests
 // stay fast and deterministic. CAP-028 owns its own contract — here
 // we only verify the wiring around it.
-vi.mock('../compaction-fallback.js', () => ({
-  gracefulCompactDegradation: vi.fn(),
-}));
+// v0.7.35.1 FEATURE_142 Batch D: gracefulCompactDegradation moved to
+// @kodax/agent/runtime-middleware/. Mock at the package boundary the
+// SUT (compaction-orchestration.ts) imports from.
+vi.mock('@kodax/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax/agent')>();
+  return { ...actual, gracefulCompactDegradation: vi.fn() };
+});
 
-import { gracefulCompactDegradation as mockedDegrade } from '../compaction-fallback.js';
+import { gracefulCompactDegradation as mockedDegrade } from '@kodax/agent';
 import { applyGracefulDegradationGate } from '../middleware/compaction-orchestration.js';
 import type { KodaXEvents } from '../../types.js';
 
