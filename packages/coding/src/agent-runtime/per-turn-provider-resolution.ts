@@ -31,7 +31,7 @@
  */
 
 import type { KodaXOptions, KodaXReasoningMode } from '../types.js';
-import type { CompactionConfig } from '@kodax/agent';
+import type { CompactionConfig } from '@kodax/session-lineage';
 import type { KodaXBaseProvider } from '@kodax/ai';
 import { resolveProvider } from '../providers/index.js';
 import { resolveContextWindow } from './context-window.js';

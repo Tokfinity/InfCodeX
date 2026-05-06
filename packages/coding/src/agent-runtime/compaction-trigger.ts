@@ -20,8 +20,7 @@
  */
 
 import type { KodaXMessage } from '@kodax/ai';
-import { needsCompaction, type CompactionConfig } from '@kodax/agent';
-
+import { needsCompaction, type CompactionConfig } from '@kodax/session-lineage';
 export interface ShouldCompactInput {
   readonly messages: KodaXMessage[];
   readonly compactionConfig: CompactionConfig;

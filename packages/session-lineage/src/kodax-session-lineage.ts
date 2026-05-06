@@ -15,7 +15,7 @@ import type {
   KodaXSessionMessageEntry,
   KodaXSessionNavigationOptions,
   KodaXSessionTreeNode,
-} from './types.js';
+} from '@kodax/agent';
 
 type NavigableSessionEntry = Exclude<KodaXSessionEntry, KodaXSessionLabelEntry>;
 

@@ -19,7 +19,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@kodax/agent": "*",
     "@kodax/coding": "*",
+    "@kodax/session-lineage": "*",
     "@kodax/skills": "*",
     "chalk": "^5.4.1",
     "clipboardy": "^4.0.0",

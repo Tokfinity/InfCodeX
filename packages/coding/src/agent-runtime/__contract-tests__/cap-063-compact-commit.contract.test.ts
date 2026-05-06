@@ -30,8 +30,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionUpdate } from '@kodax/agent';
-
+import type { CompactionUpdate } from '@kodax/session-lineage';
 import { commitCompactedHistory } from '../middleware/compaction-orchestration.js';
 import type { KodaXEvents } from '../../types.js';
 

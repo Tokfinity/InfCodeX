@@ -61,8 +61,7 @@
  */
 
 import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/agent';
-
+import type { CompactionConfig } from '@kodax/session-lineage';
 import { estimateTokens } from '../tokenizer.js';
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];

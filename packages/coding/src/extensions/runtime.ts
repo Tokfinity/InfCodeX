@@ -26,7 +26,7 @@ import type {
   KodaXExtensionStore,
   KodaXJsonValue,
 } from '../types.js';
-import { createExtensionStore } from '@kodax/agent';
+import { createExtensionStore } from '@kodax/session-lineage';
 import type {
   CapabilityProvider,
   ExtensionContributionSource,

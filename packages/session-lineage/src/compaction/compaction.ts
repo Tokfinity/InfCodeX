@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type { KodaXBaseProvider, KodaXContentBlock, KodaXMessage } from '@kodax/ai';
 import type { CompactionAnchor, CompactionConfig, CompactionResult } from './types.js';
-import { countTokens, estimateTokens } from '../tokenizer.js';
+import { countTokens, estimateTokens } from '@kodax/agent';
 import { extractArtifactLedger, extractFileOps } from './file-tracker.js';
 import { extractCompactMemorySeed, generateSummary } from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';

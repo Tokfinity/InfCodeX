@@ -20,7 +20,7 @@ import type {
   KodaXExtensionStore,
   KodaXExtensionStoreEntry,
   KodaXJsonValue,
-} from './types.js';
+} from '@kodax/agent';
 
 // ---------------------------------------------------------------------------
 // Helpers

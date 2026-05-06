@@ -33,8 +33,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/agent';
-
+import type { CompactionConfig } from '@kodax/session-lineage';
 // Mock the substrate's gracefulCompactDegradation primitive so tests
 // stay fast and deterministic. CAP-028 owns its own contract — here
 // we only verify the wiring around it.

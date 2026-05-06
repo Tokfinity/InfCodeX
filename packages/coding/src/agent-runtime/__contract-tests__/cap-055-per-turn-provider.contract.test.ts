@@ -30,7 +30,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXOptions } from '../../types.js';
-import type { CompactionConfig } from '@kodax/agent';
+import type { CompactionConfig } from '@kodax/session-lineage';
 import type { RuntimeSessionState } from '../runtime-session-state.js';
 
 import { resolvePerTurnProvider } from '../per-turn-provider-resolution.js';

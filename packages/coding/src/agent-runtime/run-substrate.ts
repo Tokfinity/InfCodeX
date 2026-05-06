@@ -35,7 +35,7 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { generateSessionId, extractTitleFromMessages } from '../session.js';
 // FEATURE_076 Q4: load-time normalization for pre-v0.7.25 session messages.
 import { normalizeLoadedSessionMessages } from '../task-engine/_internal/round-boundary.js';
-import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax/agent';
+import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax/session-lineage';
 import { loadCompactionConfig } from '../compaction-config.js';
 // CAP-014/060/061/062 token estimation now happens inside the
 // substrate compaction modules; agent.ts no longer imports

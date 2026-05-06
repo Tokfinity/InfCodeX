@@ -47,12 +47,7 @@
  */
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
-import {
-  compact as intelligentCompact,
-  type CompactionConfig,
-  type CompactionUpdate,
-} from '@kodax/agent';
-
+import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax/session-lineage';
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../../types.js';
 import { estimateTokens } from '../../tokenizer.js';
 import {

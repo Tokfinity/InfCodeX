@@ -21,6 +21,7 @@
   },
   "references": [
     { "path": "../agent" },
+    { "path": "../session-lineage" },
     { "path": "../coding" },
     { "path": "../skills" }
   ],

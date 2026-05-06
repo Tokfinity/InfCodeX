@@ -40,8 +40,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXMessage } from '@kodax/ai';
-import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from '@kodax/agent';
-
+import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from '@kodax/session-lineage';
 describe('CAP-014: microcompact per-turn cleanup contract', () => {
   it('CAP-MICROCOMPACT-001a: tool_result blocks older than maxAge turns are replaced with `[Cleared: ...]` placeholders', () => {
     const messages: KodaXMessage[] = [

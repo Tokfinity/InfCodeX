@@ -22,8 +22,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
-import type { CompactionConfig } from '@kodax/agent';
-
+import type { CompactionConfig } from '@kodax/session-lineage';
 const LEGACY_DEFAULT_TRIGGER_PERCENT = 75;
 
 /**

@@ -27,7 +27,7 @@
  */
 
 import type { KodaXBaseProvider } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/agent';
+import type { CompactionConfig } from '@kodax/session-lineage';
 import { describe, expect, it } from 'vitest';
 
 import {
