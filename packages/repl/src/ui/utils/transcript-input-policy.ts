@@ -157,6 +157,33 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
   return options.isTranscriptMode && options.hasTextSelection;
 }
 
+/**
+ * FEATURE_111 absorbed soft-pause UX (v0.7.36 FEATURE_115 Phase 1D).
+ *
+ * The "single ESC during a run while the input is empty and no pending
+ * input is queued" path returns `arm-double-escape`. This is the
+ * absorbed FEATURE_111 soft-pause entry point — it is NOT a no-op:
+ *
+ *   1. The run continues in the background (the agent does not need
+ *      runner-level pause; the substrate is a queue, not a lock).
+ *   2. The user can type a follow-up; on Enter, `addPendingInput`
+ *      enqueues into both the React `pendingInputs` array AND the
+ *      `@kodax/agent` `MessageQueue` main-thread `user` slice
+ *      (FEATURE_115 Phase 1B mirror in `StreamingContext`).
+ *   3. At the next iteration boundary, `runner-driven.ts` consults
+ *      both `events.hasPendingInputs?.()` and
+ *      `getMessageQueue().has({ maxPriority: 'user' })`
+ *      (FEATURE_115 Phase 1C) and yields the loop early so the outer
+ *      REPL can fold the queued input into the next round.
+ *   4. A second ESC within `doubleEscapeIntervalMs` upgrades to
+ *      `interrupt` (full abort) — the existing double-ESC contract.
+ *
+ * This design intentionally keeps the runner unaware of a pause flag:
+ * the queue + iteration-boundary yield is enough to deliver the FEATURE_111
+ * UX without introducing a stateful pause/resume machinery in the agent
+ * runner. A future explicit `sleep` / `await_child_task` (FEATURE_119)
+ * tool extends this to background-priority drain via Sleep gating.
+ */
 export type StreamingInterruptAction =
   | { kind: "none" }
   | { kind: "interrupt" }
