@@ -15,8 +15,9 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+
+import { getAgentConfigPath } from "@kodax/agent";
 
 const PASTE_CACHE_DIRNAME = "paste-cache";
 
@@ -28,7 +29,7 @@ const PASTE_CACHE_DIRNAME = "paste-cache";
 export const DEFAULT_PASTE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getPasteCacheDir(): string {
-  return path.join(os.homedir(), ".kodax", PASTE_CACHE_DIRNAME);
+  return getAgentConfigPath(PASTE_CACHE_DIRNAME);
 }
 
 function getPastePath(hash: string): string {

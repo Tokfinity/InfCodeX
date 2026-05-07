@@ -5,8 +5,7 @@
  */
 
 import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
+import { getAgentConfigPath } from '@kodax/agent';
 import type { CompactionConfig } from '@kodax/session-lineage';
 /**
  * 默认压缩配置
@@ -27,7 +26,7 @@ const DEFAULT_CONFIG: CompactionConfig = {
 export async function loadCompactionConfig(
   _projectRoot?: string
 ): Promise<CompactionConfig> {
-  const userConfigPath = join(homedir(), '.kodax', 'config.json');
+  const userConfigPath = getAgentConfigPath('config.json');
   try {
     const userConfig = await readConfigFile(userConfigPath);
     if (userConfig?.compaction) {

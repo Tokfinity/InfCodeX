@@ -4,6 +4,9 @@
 
 import * as path from 'path';
 import * as os from 'os';
+
+import { getAgentConfigPath } from '@kodax/agent';
+
 import type { CommandRegistry } from './registry.js';
 import { registerBuiltinCommands } from './builtin.js';
 import { discoverCommands, registerDiscoveredCommands } from './discovery.js';
@@ -51,9 +54,11 @@ export function registerAllCommands(registry: CommandRegistry, projectRoot?: str
     const discovered = discoverCommands([
       // Highest priority: project-level commands
       { path: path.join(root, '.kodax', 'commands'), location: 'project' },
-      // User-level: ~/.kodax/commands/
-      { path: path.join(home, '.kodax', 'commands'), location: 'user' },
-      // User-level: ~/.agents/commands/ (AgentSkills standard)
+      // User-level: KodaX agent home (default ~/.kodax/, redirectable
+      // via setAgentConfigHome / KODAX_HOME — v0.7.35.1 FEATURE_145).
+      { path: getAgentConfigPath('commands'), location: 'user' },
+      // User-level: ~/.agents/commands/ (cross-vendor AgentSkills standard,
+      // intentionally NOT redirectable — common across CLI agents).
       { path: path.join(home, '.agents', 'commands'), location: 'user' },
     ]);
     registerDiscoveredCommands(discovered, registry);

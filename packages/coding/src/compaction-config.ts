@@ -20,8 +20,7 @@
  */
 
 import { readFile } from 'fs/promises';
-import { join } from 'path';
-import { homedir } from 'os';
+import { getAgentConfigPath } from '@kodax/agent';
 import type { CompactionConfig } from '@kodax/session-lineage';
 const LEGACY_DEFAULT_TRIGGER_PERCENT = 75;
 
@@ -57,7 +56,7 @@ const BASE_CONFIG: Pick<CompactionConfig, 'enabled'> = {
 export async function loadCompactionConfig(
   contextWindow?: number,
 ): Promise<CompactionConfig> {
-  const userConfigPath = join(homedir(), '.kodax', 'config.json');
+  const userConfigPath = getAgentConfigPath('config.json');
   let userOverrides: Partial<CompactionConfig> | undefined;
   try {
     const userConfig = await readConfigFile(userConfigPath);

@@ -8,7 +8,8 @@ import { createServer, type Server } from 'http';
 import { randomBytes, createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import { homedir } from 'os';
+
+import { getAgentConfigPath } from '@kodax/agent';
 
 /** Escape HTML special characters to prevent XSS in OAuth callback pages. */
 function escapeHtml(str: string): string {
@@ -37,10 +38,14 @@ export interface OAuthToken {
   readonly scope?: string;
 }
 
-const TOKEN_DIR = path.join(homedir(), '.kodax', 'mcp-tokens');
+// v0.7.35.1 FEATURE_145 — resolve at call time so substrate consumers
+// can redirect via setAgentConfigHome() at boot.
+function getTokenDir(): string {
+  return getAgentConfigPath('mcp-tokens');
+}
 
 function getTokenPath(serverId: string): string {
-  return path.join(TOKEN_DIR, `${serverId}.json`);
+  return path.join(getTokenDir(), `${serverId}.json`);
 }
 
 /**
@@ -59,7 +64,7 @@ export async function loadToken(serverId: string): Promise<OAuthToken | null> {
  * Save token to disk.
  */
 export async function saveToken(serverId: string, token: OAuthToken): Promise<void> {
-  await fs.mkdir(TOKEN_DIR, { recursive: true, mode: 0o700 });
+  await fs.mkdir(getTokenDir(), { recursive: true, mode: 0o700 });
   const tokenPath = getTokenPath(serverId);
   await fs.writeFile(tokenPath, JSON.stringify(token, null, 2), 'utf-8');
   // SECURITY: Restrict file permissions to owner-only so other users on a

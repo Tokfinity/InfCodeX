@@ -14,6 +14,9 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+
+import { getAgentConfigHome } from '@kodax/agent';
+
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 
 const PLAN_MODE_PROJECT_DOC_RELATIVE_PATH = path.join('.agent', 'plan_mode_doc.md');
@@ -324,7 +327,7 @@ export function isAlwaysConfirmPath(targetPath: string, projectRoot: string): bo
   try {
     const normalizedPath = path.resolve(targetPath);
     const normalizedRoot = path.resolve(projectRoot);
-    const userKodaxDir = path.join(os.homedir(), '.kodax');
+    const userKodaxDir = getAgentConfigHome();
     const projectKodaxDir = path.join(normalizedRoot, '.kodax');
 
     // .kodax/ project config directory — always protected
