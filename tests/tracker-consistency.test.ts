@@ -114,6 +114,32 @@ function extractLinkPath(markdownLink: string): string {
   return match[1];
 }
 
+/**
+ * Far-future / RFC-pending features in the planned section may carry a
+ * "TBD (...)" placeholder in the design column instead of a markdown link
+ * — by convention these are roadmap stubs awaiting an RFC pass before a
+ * proper design doc is committed. Parser-strict link extraction would
+ * trip on them; the tracker-consistency contract only cares about the
+ * *id / status / planned-version* fields for those rows. Returning a
+ * sentinel here lets the rest of the validation suite keep running.
+ */
+function extractLinkPathOrSentinel(markdownLink: string): string {
+  const trimmed = (markdownLink ?? '').trim();
+  // Empty / dash placeholders correspond to (a) far-future RFC-pending
+  // stubs ("TBD ...") and (b) cancelled rows (`~~...~~ | — | —`) — both
+  // are intentionally without a design doc. The downstream fs.access
+  // assertion skips the sentinel.
+  if (
+    trimmed.startsWith('TBD') ||
+    trimmed === '-' ||
+    trimmed === '—' ||
+    trimmed === ''
+  ) {
+    return '__pending__';
+  }
+  return extractLinkPath(markdownLink);
+}
+
 function parseFeatureRows(markdown: string): FeatureIndexRow[] {
   const inProgressSection = getSection(markdown, '进行中的 Feature');
   const plannedSection = getSection(markdown, '计划中的 Feature');
@@ -142,7 +168,11 @@ function parseFeatureRows(markdown: string): FeatureIndexRow[] {
       title,
       planned: stripMarkdown(planned),
       released: '-',
-      designPath: extractLinkPath(design),
+      // Planned rows may legitimately carry "TBD (RFC pending; ...)" in the
+      // design column for far-future stubs. Parser uses sentinel-fallback
+      // so the rest of the consistency contract still validates on those
+      // rows (id / planned version / priority).
+      designPath: extractLinkPathOrSentinel(design),
     };
   });
 
@@ -180,10 +210,21 @@ function parseFeatureOverview(markdown: string): FeatureOverview {
     throw new Error('FEATURE_LIST.md 当前概况 section is incomplete');
   }
 
+  // Doc convention: the version key may carry a parenthetical hint (e.g.
+  // `~~v0.7.39 (legacy slot for FEATURE_096)~~`) and the count cell may
+  // be followed by free-text commentary (e.g. `6 (114/115/119 + ...)`).
+  // Strip those annotations so the parsed entry matches what the row
+  // tables produce: bare version label + leading integer count.
+  const stripParentheticalHint = (value: string): string =>
+    value.replace(/\s*\([^)]*\)\s*/g, '').trim();
+  const extractLeadingInteger = (value: string): number => {
+    const match = value.match(/^\s*(-?\d+)/);
+    return match ? Number(match[1]) : Number(value);
+  };
   const plannedByVersion = Object.fromEntries(
     getMarkdownTableRows(plannedByVersionPart).map((cells) => [
-      stripMarkdown(cells[0]),
-      Number(stripMarkdown(cells[1])),
+      stripParentheticalHint(stripMarkdown(cells[0])),
+      extractLeadingInteger(stripMarkdown(cells[1])),
     ])
   );
 
@@ -337,6 +378,11 @@ describe('tracker consistency', () => {
 
     await Promise.all(
       featureRows.map(async (row) => {
+        // `__pending__` is the sentinel for far-future planned rows whose
+        // design column carries a "TBD (RFC pending; ...)" placeholder.
+        // No file to assert existence of — by design, the doc lands when
+        // the RFC is accepted.
+        if (row.designPath === '__pending__') return;
         const absoluteDesignPath = path.join(docsDir, row.designPath);
         await expect(fs.access(absoluteDesignPath)).resolves.toBeUndefined();
       })
