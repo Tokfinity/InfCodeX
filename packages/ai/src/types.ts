@@ -427,6 +427,26 @@ export interface KodaXProviderStreamOptions {
   onHeartbeat?: (pause?: boolean) => void;
   /** 当底层 API 遇到 Rate Limit 进行重试时触发 */
   onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
+  /**
+   * FEATURE_130 (v0.7.36): structured retry-after callback. Carries the
+   * parsed source (`retry-after-seconds` / `retry-after-date` /
+   * `retry-after-ms` / `exponential-backoff`) so UI surfaces and the
+   * cost tracker can distinguish "provider-told us to wait" from
+   * "we're guessing with backoff". Coexists with the legacy
+   * `onRateLimit` flat callback above — both fire if both are wired.
+   */
+  onRetryAfter?: (event: {
+    provider: string;
+    waitMs: number;
+    reason: 'rate-limit' | 'overloaded';
+    source:
+      | 'retry-after-seconds'
+      | 'retry-after-date'
+      | 'retry-after-ms'
+      | 'exponential-backoff';
+    attempt: number;
+    maxAttempts: number;
+  }) => void;
   /** 会话标识，用于多轮对话上下文恢复 */
   sessionId?: string;
   /** Override the provider's default model for a single request */

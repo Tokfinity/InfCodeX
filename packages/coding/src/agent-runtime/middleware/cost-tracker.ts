@@ -28,6 +28,7 @@
 export {
   createCostTracker,
   recordUsage,
+  recordRetry,
   getSummary,
   formatCost,
   formatCostReport,
@@ -36,6 +37,7 @@ export {
 export type {
   CostTracker,
   TokenUsageRecord,
+  RetryRecord,
   SessionCostSummary,
   ProviderCostSummary,
 } from '@kodax/ai';

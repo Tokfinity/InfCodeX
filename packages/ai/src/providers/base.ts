@@ -17,6 +17,8 @@ import {
   KodaXStreamResult,
 } from '../types.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
+import { parseRetryAfter, extractHeadersFromError } from '../retry/retry-after.js';
+import type { RetryAfterSource } from '../retry/retry-after.js';
 import { KODAX_MAX_TOKENS } from '../constants.js';
 import {
   cloneCapabilityProfile,
@@ -39,6 +41,25 @@ function parseEnvInt(raw: string | undefined): number | undefined {
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
+
+/**
+ * FEATURE_130 (v0.7.36): structured payload fired through
+ * `KodaXEvents.onRetryAfter` whenever a provider's `withRateLimit`
+ * loop catches a 429 / 503 / 529 response and decides to wait. The
+ * `source` field carries which retry-after header form (or fallback)
+ * produced the wait duration so UI surfaces can show "provider asked
+ * us to wait 45s" vs "no header, exp-backoff guess of 4s".
+ */
+export interface KodaXRetryAfterEvent {
+  readonly provider: string;
+  readonly waitMs: number;
+  readonly reason: 'rate-limit' | 'overloaded';
+  readonly source: RetryAfterSource;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+}
+
+export type KodaXOnRetryAfterCallback = (event: KodaXRetryAfterEvent) => void;
 
 export abstract class KodaXBaseProvider {
   abstract readonly name: string;
@@ -315,26 +336,59 @@ export abstract class KodaXBaseProvider {
   protected isRateLimitError(error: unknown): boolean {
     if (!(error instanceof Error)) return false;
     const s = error.message.toLowerCase();
-    return ['rate', 'limit', '速率', '频率', '1302', '429', 'too many'].some(k => s.includes(k));
+    // FEATURE_130 (v0.7.36): include 'overload' / '503' / '529' keywords so
+    // server-overloaded responses also enter the retry path. Overload is
+    // labeled as `reason="overloaded"` by classifyRateLimitReason — both
+    // conditions flow through the same withRateLimit loop.
+    return [
+      'rate', 'limit', '速率', '频率', '1302', '429', 'too many',
+      'overload', 'overwhelmed', '503', '529', 'busy',
+    ].some(k => s.includes(k));
+  }
+
+  /**
+   * FEATURE_130: classify a rate-limit error as either a 429-style
+   * "rate-limit" or a 503/529-style "overloaded" condition. The
+   * distinction matters for UI: "rate-limit" usually surfaces a
+   * provider-supplied retry-after window; "overloaded" tends to fall
+   * through to exponential backoff with no header. Both flow through
+   * the same retry path; this only labels the event.
+   */
+  protected classifyRateLimitReason(error: unknown): 'rate-limit' | 'overloaded' {
+    const s = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    if (
+      s.includes('overload')
+      || s.includes('overwhelmed')
+      || s.includes('503')
+      || s.includes('529')
+      || s.includes('busy')
+    ) {
+      return 'overloaded';
+    }
+    return 'rate-limit';
   }
 
   /**
    * Extract Retry-After delay from error headers (429/529 responses).
-   * Returns milliseconds, or undefined if not available.
+   * Returns milliseconds, or undefined when no usable header is present.
+   *
+   * FEATURE_130 (v0.7.36): now delegates to the shared `parseRetryAfter`
+   * helper so all 12 provider adapters get 4-form coverage without each
+   * adapter rolling its own parser. The 4 forms supported are:
+   *   - `Retry-After: <integer-seconds>`
+   *   - `Retry-After: <HTTP-date>`
+   *   - `retry-after-ms: <milliseconds>` (Anthropic extension)
+   *   - exponential-backoff fallback (returned via `withRateLimit`,
+   *     not through this helper — it is `undefined` here when no
+   *     header is present, which the caller then resolves to backoff)
    */
   protected extractRetryAfterMs(error: unknown): number | undefined {
-    // Anthropic SDK: error.headers?.['retry-after']
-    const headers = (error as any)?.headers ?? (error as any)?.response?.headers;
-    const raw = typeof headers?.get === 'function'
-      ? headers.get('retry-after')
-      : headers?.['retry-after'];
-    if (!raw) return undefined;
-    const seconds = Number(raw);
-    if (!isNaN(seconds) && seconds > 0) {
-      // Cap at 120s — beyond that, just fail and let the user know
-      return Math.min(seconds * 1000, 120_000);
-    }
-    return undefined;
+    const headers = extractHeadersFromError(error);
+    if (!headers) return undefined;
+    // Use a fixed attempt of 0 so the helper only returns a header
+    // result; the backoff path is composed by the caller below.
+    const result = parseRetryAfter(headers, { attempt: 0, withJitter: false });
+    return result.type === 'header' ? result.waitMs : undefined;
   }
 
   /**
@@ -381,7 +435,8 @@ export abstract class KodaXBaseProvider {
     fn: () => Promise<T>,
     signal?: AbortSignal,
     retries = 3,
-    onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void
+    onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void,
+    onRetryAfter?: KodaXOnRetryAfterCallback,
   ): Promise<T> {
     for (let i = 0; i < retries; i++) {
       try {
@@ -408,15 +463,38 @@ export abstract class KodaXBaseProvider {
             );
           }
 
-          // Exponential backoff with jitter, respecting Retry-After header
-          const retryAfterMs = this.extractRetryAfterMs(e);
-          const baseDelay = Math.min(500 * Math.pow(2, i), 32_000);
-          const jitter = Math.random() * 0.25 * baseDelay;
-          const delay = retryAfterMs ?? Math.round(baseDelay + jitter);
-
+          // FEATURE_130 (v0.7.36): centralized retry-after parsing through
+          // `parseRetryAfter` — covers `Retry-After: <seconds>` /
+          // `Retry-After: <HTTP-date>` / `retry-after-ms: <ms>` /
+          // exponential-backoff fallback. The legacy 500*2^i backoff was
+          // identical to base=500ms in the helper, so the wait math is
+          // unchanged when there is no header present.
+          const headers = extractHeadersFromError(e) ?? {};
+          const retryDecision = parseRetryAfter(headers, {
+            attempt: i,
+            baseBackoffMs: 500,
+            maxBackoffMs: 32_000,
+            withJitter: true,
+          });
+          const delay = retryDecision.waitMs;
+          const reason = this.classifyRateLimitReason(e);
+          // Structured event for the FEATURE_130 UI countdown / cost
+          // tracker. Fired BEFORE the sleep so the spinner can render
+          // the wait duration in real time.
+          onRetryAfter?.({
+            provider: this.name,
+            waitMs: delay,
+            reason,
+            source: retryDecision.source,
+            attempt: i + 1,
+            maxAttempts: retries,
+          });
           if (onRateLimit) {
             onRateLimit(i + 1, retries, delay);
-          } else {
+          } else if (!onRetryAfter) {
+            // Only log to console when neither the legacy nor the
+            // structured callback is wired — UI surfaces handle it
+            // when at least one is set.
             console.log(`[Rate Limit] Retrying in ${delay / 1000}s (${i + 1}/${retries})...`);
           }
 

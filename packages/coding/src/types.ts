@@ -211,6 +211,35 @@ export interface KodaXEvents {
   hasPendingInputs?: () => boolean;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
   onProviderRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
+  /**
+   * FEATURE_130 (v0.7.36) — structured retry-after notification.
+   *
+   * Fires whenever a provider's `withRateLimit` loop catches a 429 /
+   * 503 / 529 (overloaded) response and decides to wait before
+   * retrying. Supersedes the legacy `onProviderRateLimit` (kept for
+   * back-compat) by carrying the parsed source of the wait duration —
+   * UI layers (InkREPL spinner, cost tracker) can surface the
+   * difference between "provider told us to wait 45s" and "no header,
+   * we're guessing 4s exp-backoff".
+   *
+   * Pattern B (FEATURE_119) interaction: each in-flight child agent
+   * fires its own `onRetryAfter` independently. Multiple children
+   * sharing a quota (e.g. 5 coding-plan providers under one tier)
+   * surface concurrent waits — the UI deduplicates by provider, not
+   * by call site.
+   */
+  onRetryAfter?: (payload: {
+    provider: string;
+    waitMs: number;
+    reason: 'rate-limit' | 'overloaded';
+    source:
+      | 'retry-after-seconds'
+      | 'retry-after-date'
+      | 'retry-after-ms'
+      | 'exponential-backoff';
+    attempt: number;
+    maxAttempts: number;
+  }) => void;
   onRepoIntelligenceTrace?: (event: KodaXRepoIntelligenceTraceEvent) => void;
   /**
    * FEATURE_097 (v0.7.34): emitted whenever the Scout-seeded todo list

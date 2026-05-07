@@ -5306,6 +5306,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         text: `[Rate Limit] Retrying in ${delayMs / 1000}s (${attempt}/${maxAttempts})...`,
       }, 'ratelimit');
     },
+    // FEATURE_130 (v0.7.36): structured retry-after display. Coexists
+    // with onProviderRateLimit (legacy flat shape stays wired for the
+    // existing rate-limit extension events). The structured event
+    // carries `provider` + `source`, letting the spinner show whether
+    // we're honoring a server-supplied wait or guessing with backoff \u2014
+    // the design's "user knows it's not a bug, it's quota" goal.
+    onRetryAfter: (event) => {
+      if (userInterruptedRef.current) {
+        return;
+      }
+      const seconds = Math.round(event.waitMs / 1000);
+      const sourceLabel =
+        event.source === 'exponential-backoff'
+          ? 'no-header \u2192 backoff'
+          : event.source;
+      const reasonLabel = event.reason === 'overloaded' ? 'Overloaded' : 'Rate limited';
+      emitInfoItemToCorrectLayer({
+        type: "info",
+        icon: "\u23F3",
+        text: `[${reasonLabel}] (${event.provider}) \u2014 retrying in ${seconds}s [${sourceLabel}] (${event.attempt}/${event.maxAttempts})`,
+      }, 'ratelimit');
+    },
     onRepoIntelligenceTrace: (event) => {
       // v0.7.27 FEATURE_086 — display repo-intelligence trace events
       // (routing / preturn / module / impact / task-snapshot) inline so

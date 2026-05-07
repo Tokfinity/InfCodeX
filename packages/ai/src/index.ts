@@ -158,12 +158,14 @@ export type { CostRate } from './cost-rates.js';
 export {
   createCostTracker,
   recordUsage,
+  recordRetry,
   getSummary,
   formatCost,
   formatCostReport,
 } from './cost-tracker.js';
 export type {
   TokenUsageRecord,
+  RetryRecord,
   ProviderCostSummary,
   SessionCostSummary,
   CostTracker,
@@ -176,6 +178,25 @@ export type {
   SideQueryResult,
   SideQueryStopReason,
 } from './side-query.js';
+
+// ============== Retry-After helper (FEATURE_130, v0.7.36) ==============
+// Cross-provider Retry-After header parsing. Used inside the base
+// provider's `withRateLimit` path so all 12 provider adapters get
+// 4-form coverage (integer seconds / HTTP-date / Anthropic
+// `retry-after-ms` / exponential backoff fallback) without touching
+// each adapter individually. Re-exported so external consumers (custom
+// providers, the REPL spinner, the cost tracker) can read the same
+// shape that fires through `KodaXEvents.onRetryAfter`.
+export { parseRetryAfter, extractHeadersFromError } from './retry/retry-after.js';
+export type {
+  ParseRetryAfterOptions,
+  RetryAfterResult,
+  RetryAfterSource,
+} from './retry/retry-after.js';
+export type {
+  KodaXRetryAfterEvent,
+  KodaXOnRetryAfterCallback,
+} from './providers/base.js';
 
 // ============== Capability Provider (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
 // Originally extracted from @kodax/coding/src/extensions/types.ts in FEATURE_082 (v0.7.24).

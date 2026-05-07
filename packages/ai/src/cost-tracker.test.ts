@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createCostTracker,
   recordUsage,
+  recordRetry,
   getSummary,
   formatCost,
   formatCostReport,
@@ -18,6 +19,65 @@ describe('cost-tracker', () => {
     it('should create an empty tracker', () => {
       const tracker = createCostTracker();
       expect(tracker.records).toEqual([]);
+      expect(tracker.retries).toEqual([]);
+    });
+  });
+
+  describe('FEATURE_130 recordRetry', () => {
+    it('appends a retry record immutably', () => {
+      const tracker1 = createCostTracker();
+      const tracker2 = recordRetry(tracker1, {
+        provider: 'anthropic',
+        waitMs: 7000,
+        reason: 'rate-limit',
+        source: 'retry-after-seconds',
+      });
+      expect(tracker1.retries).toHaveLength(0);
+      expect(tracker2.retries).toHaveLength(1);
+      expect(tracker2.retries[0]).toMatchObject({
+        provider: 'anthropic',
+        waitMs: 7000,
+        reason: 'rate-limit',
+        source: 'retry-after-seconds',
+      });
+    });
+
+    it('summary aggregates retry count and cumulative wait', () => {
+      let tracker = createCostTracker();
+      tracker = recordRetry(tracker, {
+        provider: 'anthropic',
+        waitMs: 1500,
+        reason: 'rate-limit',
+        source: 'retry-after-seconds',
+      });
+      tracker = recordRetry(tracker, {
+        provider: 'openai',
+        waitMs: 2500,
+        reason: 'overloaded',
+        source: 'exponential-backoff',
+      });
+      const summary = getSummary(tracker);
+      expect(summary.retryCount).toBe(2);
+      expect(summary.retryWaitMs).toBe(4000);
+    });
+
+    it('formatCostReport surfaces the retries line when present', () => {
+      let tracker = createCostTracker();
+      tracker = recordUsage(tracker, {
+        provider: 'anthropic',
+        model: 'claude-haiku-4-5',
+        inputTokens: 100,
+        outputTokens: 50,
+      });
+      tracker = recordRetry(tracker, {
+        provider: 'anthropic',
+        waitMs: 4500,
+        reason: 'rate-limit',
+        source: 'retry-after-ms',
+      });
+      const report = formatCostReport(getSummary(tracker));
+      expect(report).toContain('Retries: 1');
+      expect(report).toContain('4.5s');
     });
   });
 
