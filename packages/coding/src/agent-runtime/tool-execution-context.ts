@@ -111,5 +111,12 @@ export function buildToolExecutionContext(
     // FEATURE_067: onChildProgress removed — progress flows through
     // reportToolProgress → onToolProgress instead.
     onChildProgress: undefined,
+    // FEATURE_119 v0.7.36 Pattern B — async child registry, scoped to one
+    // run. Both SA (single-agent loop) and AMA (managed-task harness)
+    // build their ctx through this helper, so both surfaces get the
+    // launch-and-await split. The dispatch tool gates async-vs-sync on
+    // `KODAX_ASYNC_DISPATCH !== '0'`; the registry only reaches the tool
+    // when async dispatch is enabled.
+    childTaskRegistry: new Map(),
   };
 }

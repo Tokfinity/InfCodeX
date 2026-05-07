@@ -490,6 +490,7 @@ const CHILD_AGENT_SYSTEM_PROMPT = [
 export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
   'emit_managed_protocol',  // AMA protocol; children are SA mode
   'dispatch_child_task',    // Prevent recursive child spawning
+  'await_child_task',       // FEATURE_119: pairs with dispatch — same recursion-prevention rule
   'ask_user_question',      // Children cannot prompt the user
   'worktree_create',        // Worktree lifecycle managed by parent
   'worktree_remove',        // Worktree lifecycle managed by parent

@@ -1312,4 +1312,27 @@ export interface KodaXToolExecutionContext {
    * — tools do not have to forward events themselves.
    */
   todoStore?: import('./task-engine/todo-store.js').TodoStore;
+
+  /**
+   * FEATURE_119 v0.7.36 Pattern B: registry of in-flight async child
+   * dispatches. When set, `dispatch_child_task` runs in fire-and-forget
+   * mode (returns a `task_id` immediately without awaiting), and
+   * `await_child_task(task_id)` resolves the registered promise on demand.
+   * Worker may launch multiple children in parallel and explicitly await
+   * each when its result is needed, so the worker isn't blocked while a
+   * long-running child (e.g. a 90s `npm test`) is in flight.
+   *
+   * The map's value is the executor's full result promise, identical to
+   * what the legacy synchronous dispatch returned. `await_child_task` calls
+   * `delete(taskId)` on the map after resolving.
+   *
+   * When `undefined`, dispatch falls back to the legacy synchronous path
+   * (await inline, return finding text). The registry is populated by
+   * `runner-driven.ts` per turn so each agent run has its own registry
+   * scope.
+   */
+  childTaskRegistry?: Map<
+    string,
+    Promise<KodaXChildExecutionResult>
+  >;
 }

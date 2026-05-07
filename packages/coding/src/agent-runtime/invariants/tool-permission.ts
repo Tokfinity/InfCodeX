@@ -84,6 +84,12 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     // tool-registry mutations through ConstructionRuntime — strictest
     // tier so deployments must explicitly allow-list them.
     case 'dispatch_child_task':
+    // FEATURE_119 v0.7.36 Pattern B — `await_child_task` reclaims a
+    // running child by id. It only succeeds when a previous
+    // `dispatch_child_task` registered the task, so reachability is
+    // gated by `dispatch_child_task` itself — but we tag it `subagent`
+    // for parity so allow-list audits stay consistent across the pair.
+    case 'await_child_task':
     // AMA managed-protocol emitters (FEATURE_080+, canonical names since
     // v0.7.23). These are tier-`subagent` because emitting a verdict /
     // contract / handoff / final-verdict structurally drives the

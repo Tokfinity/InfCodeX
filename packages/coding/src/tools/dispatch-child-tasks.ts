@@ -1,15 +1,36 @@
 /**
  * dispatch_child_task — FEATURE_067 (v3: single-child async generator tool)
+ * + FEATURE_119 v0.7.36 Pattern B (launch + await split).
  *
  * Executes ONE child agent per tool call as an async generator.
  * Yields progress updates that appear in the REPL transcript in real-time.
  * The LLM dispatches multiple children by calling this tool multiple times
  * in parallel (multiple tool_use blocks in one response).
+ *
+ * Two modes:
+ *  - **Sync (legacy / default)**: when `ctx.childTaskRegistry` is undefined
+ *    (or env `KODAX_ASYNC_DISPATCH=0`), the tool awaits the executor
+ *    inline and returns the finding text. This is byte-equivalent to the
+ *    pre-v0.7.36 behavior so existing prompts and prompt-eval baselines
+ *    keep working.
+ *  - **Async (Pattern B, FEATURE_119)**: when `ctx.childTaskRegistry` is
+ *    a Map, the tool launches the executor, registers the in-flight
+ *    promise, and returns a `task_id:<id>` banner immediately. The
+ *    Worker then continues with other tools and calls `await_child_task`
+ *    when the result is needed. This unblocks the Worker during
+ *    long-running children (e.g. 90s `npm test`).
+ *
+ * Pattern B is the default when the runner provisions a registry, which
+ * happens when `KODAX_ASYNC_DISPATCH !== '0'`. Setting
+ * `KODAX_ASYNC_DISPATCH=0` forces the legacy sync path everywhere as a
+ * back-compat escape hatch.
  */
 
+import { enqueueChildTaskNotification } from '@kodax/agent';
 import type {
   KodaXChildContextBundle,
   KodaXAmaFanoutClass,
+  KodaXChildExecutionResult,
   KodaXToolExecutionContext,
 } from '../types.js';
 import type { ToolProgress } from './types.js';
@@ -20,6 +41,12 @@ import { executeChildAgents, type ChildExecutorOptions } from '../child-executor
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 const MAX_FINDING_CHARS = 8000;
 const TOOL_NAME = 'dispatch_child_task';
+
+/** Returns true if Pattern B async dispatch should be used. */
+function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
+  if (process.env.KODAX_ASYNC_DISPATCH === '0') return false;
+  return ctx.childTaskRegistry !== undefined;
+}
 
 /* ---------- Tool handler (async generator) ---------- */
 
@@ -109,24 +136,103 @@ export async function* toolDispatchChildTask(
     guardrails: ctx.guardrails,
   };
 
+  // FEATURE_119 v0.7.36 Pattern B branch: when a registry is provisioned
+  // and KODAX_ASYNC_DISPATCH is not forced off, launch the executor
+  // without awaiting and register the in-flight promise. The Worker can
+  // then continue with other tools and reclaim the result via
+  // `await_child_task`. Background drain (FEATURE_115) wakes the Worker
+  // when a child completes via `enqueueChildTaskNotification` —
+  // Sleep-gated mid-turn drain picks it up after the next yielding tool.
+  if (shouldUseAsyncDispatch(ctx)) {
+    const registry = ctx.childTaskRegistry;
+    if (!registry) {
+      // Defensive — shouldUseAsyncDispatch already gates on this, but the
+      // narrowing keeps the type checker honest.
+      yield { stage: 'error', message: `Child "${childId}": registry missing` };
+      dispatchEndStatus = 'error';
+      emitDispatchEnd();
+      return `[Tool Error] ${TOOL_NAME}: childTaskRegistry not available`;
+    }
+    if (registry.has(childId)) {
+      yield { stage: 'error', message: `Child "${childId}": duplicate task_id` };
+      dispatchEndStatus = 'error';
+      emitDispatchEnd();
+      return `[Tool Error] ${TOOL_NAME}: task_id "${childId}" is already in flight. Pick a unique id or call await_child_task to reclaim it.`;
+    }
+
+    // Capture the worktree-register callback so it can fire at result time
+    // (after await_child_task awaits the promise). Without this, write
+    // children's worktrees would never be wired into the Evaluator diff
+    // injection path on the async branch.
+    const registerWorktrees = ctx.registerChildWriteWorktrees;
+    // Default child-task notification target is the ROOT main agent
+    // (agentId === undefined). Subagents may set parentAgentId on the
+    // ctx in the future to route to a specific scope; keep it undefined
+    // for now — the queue's default-undefined target matches the main
+    // Runner loop reading from `getMessageQueue()` at iteration start.
+    const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
+      try {
+        const result = await executeChildAgents([bundle], ctx, options);
+        if (result.worktreePaths && result.worktreePaths.size > 0 && registerWorktrees) {
+          registerWorktrees(result.worktreePaths);
+        }
+        // Background drain: enqueue a task-completed notification so the
+        // Sleep-gated mid-turn drain (FEATURE_115) can wake the Worker
+        // even if it's currently mid-stream on another tool.
+        const childResult = result.results[0];
+        const status = childResult?.status ?? 'failed';
+        const summary =
+          status === 'completed'
+            ? (result.mergedFindings[0]?.evidence.join('\n') ?? childResult?.summary ?? '')
+            : `failed: ${childResult?.summary ?? 'no result'}`;
+        enqueueChildTaskNotification({
+          taskId: childId,
+          summary: summary.slice(0, 200),
+        });
+        return result;
+      } catch (err) {
+        // Re-enqueue a background notification even on crash so the Worker
+        // doesn't block waiting for a task that will never settle into the
+        // user-visible queue.
+        const message = err instanceof Error ? err.message : String(err);
+        enqueueChildTaskNotification({
+          taskId: childId,
+          summary: `crash: ${message.slice(0, 200)}`,
+        });
+        throw err;
+      }
+    })();
+    registry.set(childId, childPromise);
+    // Swallow unhandled rejections — await_child_task will re-throw at
+    // reclaim time. Without this, the unawaited promise above would
+    // surface as `unhandledRejection` on Node when the executor crashes
+    // before the Worker awaits.
+    childPromise.catch(() => {});
+
+    yield { stage: 'launched', message: `Child "${childId}" launched (async)` };
+    dispatchEndStatus = 'launched';
+    emitDispatchEnd();
+    return (
+      `task_id:${childId}\n` +
+      `Child task "${childId}" is running in the background. Continue with other tools, ` +
+      `then call await_child_task({task_id:"${childId}"}) when you need the result. ` +
+      `A <task-completed> notification will arrive automatically after a yielding tool completes.`
+    );
+  }
+
+  // --- Sync (legacy / forced via KODAX_ASYNC_DISPATCH=0) ---
   try {
-    // --- Execute single child ---
     const result = await executeChildAgents([bundle], ctx, options);
 
-    // --- Register write worktrees for Evaluator diff injection ---
     if (result.worktreePaths && result.worktreePaths.size > 0 && ctx.registerChildWriteWorktrees) {
       ctx.registerChildWriteWorktrees(result.worktreePaths);
     }
 
-    // --- Yield completion progress ---
     const childResult = result.results[0];
     const status = childResult?.status ?? 'failed';
-    // Issue 124 (v0.7.28) A4: capture the resolved status for the paired
-    // [dispatch] end line emitted by the finally block.
     dispatchEndStatus = status;
     yield { stage: 'done', message: `Child "${childId}" → ${status}` };
 
-    // --- Return final result ---
     if (!childResult || childResult.status === 'failed') {
       return `Child task "${childId}" failed: ${childResult?.summary?.slice(0, 1000) ?? 'no result'}`;
     }
@@ -137,10 +243,6 @@ export async function* toolDispatchChildTask(
     }
     return childResult.summary.slice(0, MAX_FINDING_CHARS);
   } finally {
-    // Issue 124 (v0.7.28) A4: always emit the [dispatch] end line so grep
-    // aggregation sees balanced start/end pairs even on executor failure.
-    // dispatchEndStatus stays 'error' if executeChildAgents threw before
-    // we could observe the per-child status.
     emitDispatchEnd();
   }
 }
