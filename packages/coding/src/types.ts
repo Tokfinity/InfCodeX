@@ -455,7 +455,22 @@ export type TodoStatus =
   | 'in_progress'
   | 'completed'
   | 'failed'
-  | 'skipped';
+  | 'skipped'
+  // FEATURE_114 v0.7.36: explicitly cancelled mid-task. Distinct from
+  // `skipped` (Planner-side merge) — `cancelled` is a Worker-driven
+  // mid-execution decision, surfaced with a strikethrough in the UI.
+  | 'cancelled';
+
+/**
+ * FEATURE_114 v0.7.36: Per-step deterministic evaluator hint. When a
+ * todo item carries an `evaluator`, the runner runs the corresponding
+ * deterministic check (build / test / lint) at the moment its status
+ * transitions to `completed`. Failure surfaces stderr in the next
+ * tool result so the Worker can self-correct. No LLM-as-judge
+ * variant — Phase 0.7 industry survey said 4/4 codebases reject
+ * per-step LLM verification.
+ */
+export type TodoEvaluatorHint = 'build' | 'test' | 'lint';
 
 /**
  * One row in the planner-produced todo list. Content is sourced from
@@ -475,6 +490,13 @@ export interface TodoItem {
   readonly sourceObligationIndex?: number;
   /** Optional note attached on a status transition (e.g. failure reason). */
   readonly note?: string;
+  /**
+   * FEATURE_114 v0.7.36: per-step deterministic evaluator hint. When
+   * present, the runner runs the corresponding deterministic check on
+   * `pending → completed` and surfaces stderr / exit code in the next
+   * tool result on failure.
+   */
+  readonly evaluator?: TodoEvaluatorHint;
 }
 
 export type TodoList = readonly TodoItem[];

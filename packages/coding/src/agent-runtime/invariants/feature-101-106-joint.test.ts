@@ -77,11 +77,15 @@ describe('FEATURE_101 × FEATURE_106 — joint registration + observe wiring', (
   });
   afterEach(() => _resetInvariantRegistry());
 
-  it('registerCodingInvariants brings up the full v1 set including harnessSelectionTiming', () => {
+  it('registerCodingInvariants brings up the full v1+v2 set including harnessSelectionTiming and planBeforeMutate', () => {
     const ids = listRegisteredInvariants();
     expect(ids).toContain('harnessSelectionTiming');
-    // The 8 ids = 7 admission v1 closed set + FEATURE_106 external.
-    expect(ids).toHaveLength(8);
+    expect(ids).toContain('planBeforeMutate');
+    // 9 ids = 7 admission v1 closed set + FEATURE_106 external
+    // (harnessSelectionTiming) + FEATURE_114 V2 external
+    // (planBeforeMutate). The two externals coexist during the
+    // V1↔V2 migration window.
+    expect(ids).toHaveLength(9);
   });
 
   it('Runner.admit binds harnessSelectionTiming when manifest declares it', async () => {

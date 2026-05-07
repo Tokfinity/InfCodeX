@@ -686,6 +686,11 @@ const HARNESS_TIER_ORDER: Record<KodaXHarnessProfile, number> = {
   H0_DIRECT: 0,
   H1_EXECUTE_EVAL: 1,
   H2_PLAN_EXECUTE_EVAL: 2,
+  // FEATURE_114 v0.7.36: PLANNED sits at the top of the ladder — it
+  // is the V2 single-loop profile that the upgrade path can't
+  // overshoot from H0/H1/H2 mid-task (V2 is selected at routing
+  // time via KODAX_HARNESS_V2, not via runtime escalation).
+  PLANNED: 3,
 };
 
 function isUpgradeBeyondCeiling(
@@ -1082,6 +1087,10 @@ const BUDGET_CAP_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
   H0_DIRECT: 100,
   H1_EXECUTE_EVAL: 200,
   H2_PLAN_EXECUTE_EVAL: 200,
+  // FEATURE_114 v0.7.36: PLANNED inherits H2's cap — same upper
+  // bound for total tool-call budget, regardless of whether the
+  // chain is split across roles or condensed into one Worker.
+  PLANNED: 200,
 };
 
 /**
@@ -1094,6 +1103,7 @@ const BUDGET_EXTENSION_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
   H0_DIRECT: 100,
   H1_EXECUTE_EVAL: 200,
   H2_PLAN_EXECUTE_EVAL: 200,
+  PLANNED: 200,
 };
 
 // =============================================================================
@@ -1124,6 +1134,9 @@ const MAX_ROUNDS_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
   H0_DIRECT: 1, // Scout direct answer
   H1_EXECUTE_EVAL: 6, // Scout + Gen + Eval (+ up to 3 revise cycles)
   H2_PLAN_EXECUTE_EVAL: 8, // Scout + Planner + Gen + Eval (+ up to 4 revise cycles)
+  // FEATURE_114 v0.7.36: PLANNED is one Worker chain + Evaluator with
+  // up to ~4 revise cycles, matching H2's overall envelope.
+  PLANNED: 8,
 };
 
 export interface ObserverBridge {

@@ -134,7 +134,9 @@ export type InvariantId =
   | 'boundedRevise'
   | 'independentReview'
   // External consumer (FEATURE_106)
-  | 'harnessSelectionTiming';
+  | 'harnessSelectionTiming'
+  // External consumer (FEATURE_114 v0.7.36 — V2 plan-first observation)
+  | 'planBeforeMutate';
 
 // ---------------------------------------------------------------------------
 // Invariant result + patch

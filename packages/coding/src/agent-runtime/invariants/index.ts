@@ -34,6 +34,7 @@ import { boundedRevise } from './bounded-revise.js';
 import { budgetCeiling } from './budget-ceiling.js';
 import { harnessSelectionTiming } from './harness-selection-timing.js';
 import { independentReview } from './independent-review.js';
+import { planBeforeMutate } from './plan-before-mutate.js';
 import { resolveToolCapability, toolPermission } from './tool-permission.js';
 
 export {
@@ -41,6 +42,7 @@ export {
   budgetCeiling,
   harnessSelectionTiming,
   independentReview,
+  planBeforeMutate,
   resolveToolCapability,
   toolPermission,
 };
@@ -49,6 +51,14 @@ export {
  * Coding-package-supplied invariants in registration order.
  * v0.7.35.1 FEATURE_142 (A-R2): added `harnessSelectionTiming` (moved
  * from @kodax/agent's pure-invariant set).
+ *
+ * v0.7.36 FEATURE_114: added `planBeforeMutate` — V2 plan-first
+ * structural observation. Registers alongside `harnessSelectionTiming`
+ * (not as a replacement); the two coexist because V1 runs gate on the
+ * Scout-emitted harness verdict while V2 runs gate on Worker
+ * `todo_update`. Each predicate no-ops when its expected fields are
+ * absent, so ship-side flag toggle (KODAX_HARNESS_V2) does not need a
+ * separate registry.
  */
 export const CODING_INVARIANTS: readonly QualityInvariant[] = [
   budgetCeiling,
@@ -56,6 +66,7 @@ export const CODING_INVARIANTS: readonly QualityInvariant[] = [
   boundedRevise,
   independentReview,
   harnessSelectionTiming,
+  planBeforeMutate,
 ];
 
 /**

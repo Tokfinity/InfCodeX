@@ -21,7 +21,7 @@ import { registerCodingInvariants } from './index.js';
 describe('registerCodingInvariants', () => {
   afterEach(() => _resetInvariantRegistry());
 
-  it('registers all 8 v1 invariants in canonical order', () => {
+  it('registers all 9 v1+v2 invariants in canonical order', () => {
     _resetInvariantRegistry();
     registerCodingInvariants();
     expect(listRegisteredInvariants()).toEqual([
@@ -38,6 +38,10 @@ describe('registerCodingInvariants', () => {
       'boundedRevise',
       'independentReview',
       'harnessSelectionTiming',
+      // v0.7.36 FEATURE_114: planBeforeMutate — V2 plan-first
+      // observation. Coexists with harnessSelectionTiming during the
+      // V1↔V2 migration window.
+      'planBeforeMutate',
     ]);
   });
 
