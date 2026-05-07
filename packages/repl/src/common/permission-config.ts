@@ -30,7 +30,26 @@ import {
 // Re-export for convenience - 重新导出便于使用
 export { parseAllowedToolPattern, isToolCallAllowed, generateSavePattern };
 
-// User-level config: ~/.kodax/config.json (or KODAX_HOME / programmatic override)
+/**
+ * User-level config: `~/.kodax/config.json` (or `KODAX_HOME` env var or
+ * `setAgentConfigHome()` programmatic override).
+ *
+ * **Load-time freeze warning (v0.7.35.1 FEATURE_145, parallel to the
+ * `KODAX_DIR` / `KODAX_SESSIONS_DIR` / `KODAX_CONFIG_FILE` exports in
+ * `./utils.ts`)** — this constant is evaluated ONCE at module import
+ * time. Substrate consumers that call `setAgentConfigHome(path)` AFTER
+ * importing this module will see the pre-override path here, so
+ * `getPermissionConfig()` etc. will continue to read/write
+ * `~/.kodax/config.json` instead of the redirected directory.
+ *
+ * Required ordering for substrate consumers:
+ *   1. Call `setAgentConfigHome(path)` from `@kodax/agent` early in boot
+ *   2. THEN import any `@kodax/repl` module that touches user config
+ *
+ * Standalone `kodax` CLI is unaffected — it never calls
+ * `setAgentConfigHome()` so the load-time resolution always equals the
+ * runtime resolution.
+ */
 const USER_CONFIG_FILE = getAgentConfigPath('config.json');
 
 // Project-level config: .kodax/config.local.json (in current working directory)
