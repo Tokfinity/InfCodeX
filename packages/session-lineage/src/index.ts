@@ -114,3 +114,20 @@ export {
   FileExtensionStore,
   createExtensionStore,
 } from './persistence.js';
+
+// ============== Runtime middleware (v0.7.36 — moved here from @kodax/agent to break build cycle) ==============
+// Originally uplifted to @kodax/agent in v0.7.35.1 FEATURE_142 Batch D under
+// the "generic agent platform middleware" framing, but that introduced a
+// circular `tsc -b` build dependency (agent → session-lineage → agent) which
+// only worked when stale dist artifacts were already present. v0.7.36 moves
+// these three modules back to session-lineage — semantically appropriate
+// since they all consume CompactionConfig / needsCompaction. The remaining
+// two Batch D middleware modules (history-cleanup / boundary-tracker-session)
+// stay in @kodax/agent (no compaction-domain deps).
+export {
+  shouldCompact,
+  gracefulCompactDegradation,
+  resolveContextWindow,
+  DEFAULT_CONTEXT_WINDOW,
+} from './runtime-middleware/index.js';
+export type { ShouldCompactInput } from './runtime-middleware/index.js';

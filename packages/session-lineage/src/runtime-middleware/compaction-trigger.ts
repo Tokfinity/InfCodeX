@@ -15,12 +15,23 @@
  * removing the redundancy is a P3.6 cleanup concern, not a P3.4
  * extraction concern.
  *
- * Migration history: extracted from `agent.ts:598-600` — pre-FEATURE_100
- * baseline — during FEATURE_100 P3.4a.
+ * Migration history:
+ *   - extracted from `agent.ts:598-600` — pre-FEATURE_100 baseline —
+ *     during FEATURE_100 P3.4a.
+ *   - moved from `@kodax/agent/src/runtime-middleware/` to
+ *     `@kodax/session-lineage/src/runtime-middleware/` in v0.7.36 to
+ *     break the build cycle introduced by FEATURE_142 Batch D
+ *     (agent → session-lineage → agent). session-lineage already
+ *     depends on agent, so this direction is acyclic. Semantically
+ *     this also reflects that compaction trigger is part of the
+ *     compaction lifecycle, which is session-lineage's domain.
  */
 
 import type { KodaXMessage } from '@kodax/ai';
-import { needsCompaction, type CompactionConfig } from '@kodax/session-lineage';
+
+import { needsCompaction } from '../compaction/compaction.js';
+import type { CompactionConfig } from '../compaction/types.js';
+
 export interface ShouldCompactInput {
   readonly messages: KodaXMessage[];
   readonly compactionConfig: CompactionConfig;
@@ -31,7 +42,7 @@ export interface ShouldCompactInput {
 /**
  * Returns `true` iff the compaction lifecycle should run this turn.
  * Combines the config-enabled gate with the underlying trigger
- * threshold check from `@kodax/agent`'s `needsCompaction`.
+ * threshold check from `@kodax/session-lineage`'s `needsCompaction`.
  */
 export function shouldCompact(input: ShouldCompactInput): boolean {
   return (

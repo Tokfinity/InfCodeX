@@ -324,20 +324,41 @@ export {
   setAgentConfigHome,
 } from './runtime/agent-home.js';
 
+// ============== Messaging (v0.7.36 FEATURE_115) ==============
+// agentId-scoped 2-tier priority queue infrastructure. Generic agent-platform
+// primitive per ADR-021 — downstream consumers in @kodax/coding (runner-driven
+// mid-turn drain, subagent task-notification routing) and @kodax/repl
+// (FEATURE_111 absorbed soft-pause UX). Phase 0.6 study (claude-code-actual-
+// usage.md) showed Claude Code's `'now'` priority has zero production usage,
+// so KodaX simplifies to 2 tiers.
+export type {
+  DequeueFilter,
+  EnqueueInput,
+  MessageMode,
+  MessagePriority,
+  QueuedMessage,
+} from './messaging/index.js';
+export {
+  MessageQueue,
+  _resetMessageQueueForTests,
+  getMessageQueue,
+} from './messaging/index.js';
+
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
 // `@kodax/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only
-// modules whose deps are pure `@kodax/ai` + `@kodax/session-lineage` (+ this
-// package's own tokenizer) are uplifted; the rest stay in @kodax/coding
-// because they couple to coding-flavored events / tool registry / managed
-// protocol signals. See docs/features/v0.7.35.1.md "Batch D" for per-file
-// disposition.
+// modules whose deps are pure `@kodax/ai` (+ this package's own tokenizer)
+// are uplifted; the rest stay in @kodax/coding because they couple to
+// coding-flavored events / tool registry / managed protocol signals. See
+// docs/features/v0.7.35.1.md "Batch D" for per-file disposition.
+//
+// v0.7.36 follow-up: the three compaction-related modules (`shouldCompact`,
+// `gracefulCompactDegradation`, `resolveContextWindow` + `DEFAULT_CONTEXT_WINDOW`
+// / `ShouldCompactInput`) moved to `@kodax/session-lineage/runtime-middleware/`
+// to break the build cycle (agent → session-lineage → agent) introduced
+// when they were originally placed here. Downstream consumers in
+// `@kodax/coding` now import them from `@kodax/session-lineage` directly.
 export {
-  shouldCompact,
-  gracefulCompactDegradation,
-  resolveContextWindow,
-  DEFAULT_CONTEXT_WINDOW,
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './runtime-middleware/index.js';
-export type { ShouldCompactInput } from './runtime-middleware/index.js';

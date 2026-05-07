@@ -34,12 +34,22 @@
  * `per-turn-provider-resolution.ts`. For P2 this single-cascade
  * helper is the only piece tractable as a discrete extraction.
  *
- * Migration history: extracted from `agent.ts:1700-1703` —
- * pre-FEATURE_100 baseline — during FEATURE_100 P2.
+ * Migration history:
+ *   - extracted from `agent.ts:1700-1703` — pre-FEATURE_100 baseline
+ *     — during FEATURE_100 P2.
+ *   - moved from `@kodax/agent/src/runtime-middleware/` to
+ *     `@kodax/session-lineage/src/runtime-middleware/` in v0.7.36 to
+ *     break the build cycle introduced by FEATURE_142 Batch D
+ *     (agent → session-lineage → agent). Semantically this also
+ *     reflects that the resolver consumes session-lineage's
+ *     `CompactionConfig`, so its canonical home is alongside
+ *     compaction policy types.
  */
 
 import type { KodaXBaseProvider } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
+
+import type { CompactionConfig } from '../compaction/types.js';
+
 /** Hard fallback. Mirrors Anthropic standard Claude window. */
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 

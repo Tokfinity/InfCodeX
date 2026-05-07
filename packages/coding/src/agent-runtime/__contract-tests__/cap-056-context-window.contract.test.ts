@@ -33,7 +33,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
-} from '@kodax/agent';
+} from '@kodax/session-lineage';
 
 function fakeProvider(overrides: Partial<KodaXBaseProvider> = {}): KodaXBaseProvider {
   return {

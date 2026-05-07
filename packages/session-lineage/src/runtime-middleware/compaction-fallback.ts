@@ -54,15 +54,23 @@
  * tool-use checks elsewhere in `agent.ts` use the inline pattern
  * `isTypedContentBlock(b) && b.type === 'tool_use'` instead.)
  *
- * Migration history: extracted from `agent.ts:185-187` + `195-199`
- * (the two carried predicates) + `agent.ts:201-266`
- * (`gracefulCompactDegradation` with its docstring) — pre-FEATURE_100
- * baseline — during FEATURE_100 P2.
+ * Migration history:
+ *   - extracted from `agent.ts:185-187` + `195-199` (the two carried
+ *     predicates) + `agent.ts:201-266` (`gracefulCompactDegradation`
+ *     with its docstring) — pre-FEATURE_100 baseline — during
+ *     FEATURE_100 P2.
+ *   - moved from `@kodax/agent/src/runtime-middleware/` to
+ *     `@kodax/session-lineage/src/runtime-middleware/` in v0.7.36 to
+ *     break the build cycle introduced by FEATURE_142 Batch D
+ *     (agent → session-lineage → agent). Semantically this also
+ *     reflects that compaction degradation is part of the compaction
+ *     lifecycle, which is session-lineage's domain.
  */
 
+import { estimateTokens } from '@kodax/agent';
 import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
-import { estimateTokens } from '../tokenizer.js';
+
+import type { CompactionConfig } from '../compaction/types.js';
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
 
