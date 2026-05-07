@@ -3,7 +3,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { maybeDrainMidTurn, midTurnDrainPriority, YIELD_TOOL_NAMES } from './drain.js';
+import {
+  YIELD_TOOL_NAMES,
+  enqueueChildTaskNotification,
+  maybeDrainMidTurn,
+  midTurnDrainPriority,
+} from './drain.js';
 import { _resetMessageQueueForTests, getMessageQueue } from './queue.js';
 
 describe('midTurnDrainPriority', () => {
@@ -89,5 +94,65 @@ describe('maybeDrainMidTurn', () => {
 
   it('returns [] when nothing matches', () => {
     expect(maybeDrainMidTurn({ lastTurnToolNames: [] })).toEqual([]);
+  });
+});
+
+describe('enqueueChildTaskNotification', () => {
+  beforeEach(() => {
+    _resetMessageQueueForTests();
+  });
+  afterEach(() => {
+    _resetMessageQueueForTests();
+  });
+
+  it('enqueues with priority="background" + mode="task-notification"', () => {
+    const id = enqueueChildTaskNotification({
+      taskId: 'child-001',
+      summary: 'all tests pass',
+    });
+    expect(id).toMatch(/^msg-\d+$/);
+
+    const peeked = getMessageQueue().peek({ maxPriority: 'background' });
+    expect(peeked).toHaveLength(1);
+    expect(peeked[0]?.priority).toBe('background');
+    expect(peeked[0]?.mode).toBe('task-notification');
+    expect(peeked[0]?.content).toContain('<task-completed task_id="child-001">');
+    expect(peeked[0]?.content).toContain('all tests pass');
+  });
+
+  it('routes to parentAgentId when supplied', () => {
+    enqueueChildTaskNotification({
+      parentAgentId: 'main-agent',
+      taskId: 'child-002',
+      summary: 'work done',
+    });
+    const queue = getMessageQueue();
+    expect(
+      queue.peek({ agentId: 'main-agent', maxPriority: 'background' }),
+    ).toHaveLength(1);
+    // Default-undefined target should NOT see it.
+    expect(queue.peek({ maxPriority: 'background' })).toEqual([]);
+  });
+
+  it('user-priority drain (default) does NOT pick up task-notifications', () => {
+    enqueueChildTaskNotification({
+      taskId: 'child-003',
+      summary: 'background only',
+    });
+    expect(maybeDrainMidTurn({ lastTurnToolNames: [] })).toEqual([]);
+    // Still queued as background.
+    expect(getMessageQueue().count({ maxPriority: 'background' })).toBe(1);
+  });
+
+  it('Sleep-gated drain (await_child_task ran) picks up the notification', () => {
+    enqueueChildTaskNotification({
+      taskId: 'child-004',
+      summary: 'finally',
+    });
+    const drained = maybeDrainMidTurn({
+      lastTurnToolNames: ['await_child_task'],
+    });
+    expect(drained).toHaveLength(1);
+    expect(drained[0]?.mode).toBe('task-notification');
   });
 });

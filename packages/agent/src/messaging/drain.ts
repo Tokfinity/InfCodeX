@@ -65,3 +65,39 @@ export function maybeDrainMidTurn(
     limit: input.limit,
   });
 }
+
+export interface EnqueueChildTaskNotificationInput {
+  /**
+   * agentId of the parent / coordinator that should receive the
+   * notification. `undefined` targets the main thread.
+   */
+  readonly parentAgentId?: string;
+  /** Stable identifier of the completed child task (e.g. `child-...`). */
+  readonly taskId: string;
+  /** Human-readable summary appended after the task id banner. */
+  readonly summary: string;
+}
+
+/**
+ * Enqueue a `task-notification` message destined for the parent / main
+ * thread when a backgrounded child task finishes (FEATURE_119 Pattern B).
+ *
+ * Goes in at `priority: 'background'`, so the parent only sees it once
+ * a yield tool (`await_child_task` / future `sleep`) has run. The
+ * content shape matches the FEATURE_115 design's `<task-completed>` /
+ * task-id banner so downstream consumers can format it for the LLM
+ * without re-deriving the structure.
+ *
+ * Returns the enqueued message id (matches `MessageQueue.enqueue` contract).
+ */
+export function enqueueChildTaskNotification(
+  input: EnqueueChildTaskNotificationInput,
+): string {
+  const banner = `<task-completed task_id="${input.taskId}">\n${input.summary}\n</task-completed>`;
+  return getMessageQueue().enqueue({
+    priority: 'background',
+    mode: 'task-notification',
+    agentId: input.parentAgentId,
+    content: banner,
+  });
+}

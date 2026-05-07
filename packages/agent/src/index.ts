@@ -333,6 +333,7 @@ export {
 // so KodaX simplifies to 2 tiers.
 export type {
   DequeueFilter,
+  EnqueueChildTaskNotificationInput,
   EnqueueInput,
   MaybeDrainMidTurnInput,
   MessageMode,
@@ -343,6 +344,7 @@ export {
   MessageQueue,
   YIELD_TOOL_NAMES,
   _resetMessageQueueForTests,
+  enqueueChildTaskNotification,
   getMessageQueue,
   maybeDrainMidTurn,
   midTurnDrainPriority,
