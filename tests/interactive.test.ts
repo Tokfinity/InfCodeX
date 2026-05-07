@@ -140,12 +140,15 @@ describe('BUILTIN_COMMANDS', () => {
   });
 
   it('should have mode commands', () => {
+    // v0.7.34 FEATURE_110 retired the legacy `/plan` slash command in favor
+    // of `PermissionMode="plan"` + `exit_plan_mode` (FEATURE_074, path 2).
+    // The wizard-style `/plan on|off|once|list|resume|clear` variants no
+    // longer exist; only `/mode` + `/auto` remain as user-facing mode
+    // commands. Re-asserting `/plan` here would trip on the v0.7.34 cleanup.
     const mode = BUILTIN_COMMANDS.find(c => c.name === 'mode');
     const auto = BUILTIN_COMMANDS.find(c => c.name === 'auto');
-    const plan = BUILTIN_COMMANDS.find(c => c.name === 'plan');
     expect(mode).toBeDefined();
     expect(auto).toBeDefined();
-    expect(plan).toBeDefined();
   });
 
   it('should have session commands', () => {
