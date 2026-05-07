@@ -68,6 +68,7 @@ import {
 } from '../agents/task-engine-agents.js';
 
 import { resolveProvider } from '../providers/index.js';
+import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
 import {
   buildAutoRepoIntelligenceContext,
   bucketProviderPayloadSize,
@@ -4480,11 +4481,53 @@ async function runManagedTaskViaRunnerInner(
     provider: options.provider,
     model: options.modelOverride ?? options.model,
   };
+
+  // v0.7.35.1 FEATURE_144 — pre-compute the SA path's capability-context
+  // section set ONCE per AMA entry so each role's prompt assembly
+  // skips the FS / extension-runtime calls. Filtered to the 6 sections
+  // not already covered by `workspaceSection` /
+  // `prebuiltRepoIntelligenceContext` / Shard 6d-L overlay stitching:
+  //   mcp-capability-context, skills-addendum, project-agents,
+  //   tool-construction, git-context, project-snapshot.
+  // See `ManagedRolePromptContext.capabilityContextBlock` JSDoc for the
+  // exclusion rationale.
+  const isNewSessionForCapabilities = !options.session?.initialMessages
+    || options.session.initialMessages.length === 0;
+  let prebuiltCapabilityContextBlock: string | undefined;
+  try {
+    const capabilitySections = await buildCapabilityContextSections(
+      options,
+      isNewSessionForCapabilities,
+      managedWorkspace.executionCwd,
+    );
+    const AMA_OWNED_SECTION_IDS = new Set<string>([
+      'base-system',
+      'base-system-suffix',
+      'environment-context',
+      'runtime-fact',
+      'working-directory',
+      'repo-intelligence-context',
+      'prompt-overlay',
+    ]);
+    const filtered = capabilitySections.filter(
+      (section) => !AMA_OWNED_SECTION_IDS.has(section.id),
+    );
+    if (filtered.length > 0) {
+      prebuiltCapabilityContextBlock = filtered
+        .map((section) => section.content)
+        .join('\n\n');
+    }
+  } catch {
+    // Capability context is best-effort. A failure here must not block
+    // the AMA run — workers will fall back to legacy workspaceSection
+    // visibility, matching pre-FEATURE_144 behavior.
+  }
   const rolePromptContextFactory: RolePromptContextFactory = (role, currentRecorder) => {
     const scoutPayload = currentRecorder.scout?.payload.scout;
     const ctx: ManagedRolePromptContext = {
       originalTask: prompt,
       workspace: managedWorkspace,
+      capabilityContextBlock: prebuiltCapabilityContextBlock,
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the
     // on-disk artefact paths so role prompts can quote a stable filesystem

@@ -171,6 +171,18 @@ export function createRolePrompt(
     ].filter((line): line is string => Boolean(line)).join('\n')
     : undefined;
 
+  // v0.7.35.1 FEATURE_144 — capability-context sections the AMA worker
+  // bypasses by going through `runner-driven.ts` instead of
+  // `buildSystemPrompt`. Pre-computed parent-side so each per-role
+  // invocation reuses the same MCP / AGENTS.md / git / project-snapshot
+  // / tool-construction / skills truth. See
+  // `ManagedRolePromptContext.capabilityContextBlock` JSDoc for the
+  // exact 6 sections this string covers and why the other 7 are
+  // intentionally NOT included here.
+  const capabilityContextSection = rolePromptContext?.capabilityContextBlock?.trim()
+    ? rolePromptContext.capabilityContextBlock
+    : undefined;
+
   // v0.7.26 fix — managed workers bypass `buildSystemPrompt` (legacy SA
   // path), so the base `SYSTEM_PROMPT` discipline sections (tmp-directory
   // rule, mkdir warning, cross-platform notes) never reached the LLM. The
@@ -445,6 +457,7 @@ export function createRolePrompt(
       return [
         'You are Scout — the AMA entry role for a managed KodaX task.',
         workspaceSection,
+        capabilityContextSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -628,6 +641,7 @@ export function createRolePrompt(
       return [
         'You are Planner — the H2 planning role for a managed KodaX task.',
         workspaceSection,
+        capabilityContextSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -671,6 +685,7 @@ export function createRolePrompt(
       return [
         'You are Generator — the H1/H2 execution role for a managed KodaX task.',
         workspaceSection,
+        capabilityContextSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -745,6 +760,7 @@ export function createRolePrompt(
       return [
         'You are Evaluator — the H1/H2 verifier role for a managed KodaX task.',
         workspaceSection,
+        capabilityContextSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,

@@ -6,6 +6,7 @@
 
 export { SYSTEM_PROMPT } from './system.js';
 export { buildSystemPrompt, buildSystemPromptSnapshot } from './builder.js';
+export { buildCapabilityContextSections } from './capability-sections.js';
 export {
   PROMPT_SECTION_REGISTRY,
   buildPromptSnapshot,

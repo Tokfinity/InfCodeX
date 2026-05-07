@@ -398,6 +398,7 @@ export {
   SYSTEM_PROMPT,
   buildSystemPrompt,
   buildSystemPromptSnapshot,
+  buildCapabilityContextSections,
   PROMPT_SECTION_REGISTRY,
   buildPromptSnapshot,
   createPromptSection,
