@@ -567,7 +567,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         }
       }
       return { textBlocks, toolBlocks, thinkingBlocks, usage, stopReason: finishReason ?? undefined };
-    }, signal, 3, streamOptions?.onRateLimit);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
   }
 
   override supportsNonStreamingFallback(): boolean {
@@ -694,7 +694,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         usage: normalizeOpenAIUsage(response.usage as OpenAIUsageLike),
         stopReason: choice?.finish_reason ?? undefined,
       };
-    }, signal, 3, streamOptions?.onRateLimit);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
   }
 
   private extractReasoningDelta(

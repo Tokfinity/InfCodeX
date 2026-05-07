@@ -26,22 +26,74 @@ export interface ProviderCostSummary {
   readonly outputTokens: number;
 }
 
+/**
+ * FEATURE_130 (v0.7.36) — per-retry record. Captures the wait the
+ * provider asked us to take so `/cost` can report "X retries, Ys total
+ * wait" alongside the token cost. Lives in the same tracker as token
+ * records to keep one source of truth for the session.
+ */
+export interface RetryRecord {
+  readonly timestamp: number;
+  readonly provider: string;
+  readonly waitMs: number;
+  readonly reason: 'rate-limit' | 'overloaded';
+  readonly source:
+    | 'retry-after-seconds'
+    | 'retry-after-date'
+    | 'retry-after-ms'
+    | 'exponential-backoff';
+}
+
 export interface SessionCostSummary {
   readonly totalCost: number;
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
   readonly totalCacheTokens: number;
   readonly callCount: number;
+  /** FEATURE_130: total retries triggered across the session. */
+  readonly retryCount: number;
+  /** FEATURE_130: cumulative milliseconds spent in retry-after sleeps. */
+  readonly retryWaitMs: number;
   readonly byProvider: Readonly<Record<string, ProviderCostSummary>>;
   readonly byRole: Readonly<Record<string, ProviderCostSummary>>;
 }
 
 export interface CostTracker {
   readonly records: readonly TokenUsageRecord[];
+  /** FEATURE_130 (v0.7.36): retry-wait records, append-only and immutable. */
+  readonly retries: readonly RetryRecord[];
 }
 
 export function createCostTracker(): CostTracker {
-  return { records: [] };
+  return { records: [], retries: [] };
+}
+
+/**
+ * FEATURE_130 (v0.7.36): record a retry-after wait. The InkREPL spinner
+ * (or any other consumer of `KodaXEvents.onRetryAfter`) calls this so
+ * `/cost` can surface accurate session-wide retry telemetry.
+ */
+export function recordRetry(
+  tracker: CostTracker,
+  entry: {
+    readonly provider: string;
+    readonly waitMs: number;
+    readonly reason: 'rate-limit' | 'overloaded';
+    readonly source:
+      | 'retry-after-seconds'
+      | 'retry-after-date'
+      | 'retry-after-ms'
+      | 'exponential-backoff';
+  },
+): CostTracker {
+  const record: RetryRecord = {
+    timestamp: Date.now(),
+    provider: entry.provider,
+    waitMs: entry.waitMs,
+    reason: entry.reason,
+    source: entry.source,
+  };
+  return { records: tracker.records, retries: [...tracker.retries, record] };
 }
 
 export function recordUsage(
@@ -73,7 +125,7 @@ export function recordUsage(
     role: entry.role,
   };
 
-  return { records: [...tracker.records, record] };
+  return { records: [...tracker.records, record], retries: tracker.retries };
 }
 
 export function getSummary(tracker: CostTracker): SessionCostSummary {
@@ -110,12 +162,19 @@ export function getSummary(tracker: CostTracker): SessionCostSummary {
     };
   }
 
+  let retryWaitMs = 0;
+  for (const r of tracker.retries) {
+    retryWaitMs += r.waitMs;
+  }
+
   return {
     totalCost,
     totalInputTokens,
     totalOutputTokens,
     totalCacheTokens,
     callCount: tracker.records.length,
+    retryCount: tracker.retries.length,
+    retryWaitMs,
     byProvider,
     byRole,
   };
@@ -135,6 +194,10 @@ export function formatCostReport(summary: SessionCostSummary): string {
   );
   if (summary.totalCacheTokens > 0) {
     lines.push(`Cache: ${summary.totalCacheTokens.toLocaleString()} tokens`);
+  }
+  if (summary.retryCount > 0) {
+    const seconds = (summary.retryWaitMs / 1000).toFixed(1);
+    lines.push(`Retries: ${summary.retryCount} (${seconds}s total wait)`);
   }
   lines.push('');
 

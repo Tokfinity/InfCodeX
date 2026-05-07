@@ -19,7 +19,14 @@ import {
   SessionErrorMetadata,
 } from '../types.js';
 import type { KodaXMessage, KodaXStreamResult } from '@kodax/ai';
-import { createCostTracker, recordUsage, getSummary, formatCostReport, type CostTracker } from '@kodax/ai';
+import {
+  createCostTracker,
+  recordUsage,
+  recordRetry,
+  getSummary,
+  formatCostReport,
+  type CostTracker,
+} from '@kodax/ai';
 import path from 'path';
 // FEATURE_093 (v0.7.24): `KodaXClient` is only re-exported from this module
 // for backward compatibility. Importing it here creates a cycle
@@ -740,6 +747,20 @@ export async function runSubstrate(
             emitActiveExtensionEvent,
             providerName: turnState.currentProviderName,
           });
+          // FEATURE_130 (v0.7.36): wrap the structured retry-after
+          // callback so the per-session cost tracker accumulates retry
+          // counts and total wait time. The wrapper still forwards to
+          // `events.onRetryAfter` (already handled by buildStreamHandlers)
+          // — this layer only adds the tracker write.
+          const wrappedRetryAfter: typeof streamCallbacks.onRetryAfter = (event) => {
+            turnState.costTracker = recordRetry(turnState.costTracker, {
+              provider: event.provider,
+              waitMs: event.waitMs,
+              reason: event.reason,
+              source: event.source,
+            });
+            streamCallbacks.onRetryAfter?.(event);
+          };
           result = await streamProvider.stream(
             providerMessages,
             activeToolDefinitions,
@@ -747,6 +768,7 @@ export async function runSubstrate(
             effectiveProviderReasoning,
             {
               ...streamCallbacks,
+              onRetryAfter: wrappedRetryAfter,
               modelOverride: turnState.currentModelOverride,
               signal: retrySignal,
             },

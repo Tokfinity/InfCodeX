@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KodaXBaseProvider } from './base.js';
+import type { KodaXOnRetryAfterCallback } from './base.js';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -63,8 +64,9 @@ class TestProvider extends KodaXBaseProvider {
     signal?: AbortSignal,
     retries = 3,
     onRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void,
+    onRetryAfter?: KodaXOnRetryAfterCallback,
   ): Promise<T> {
-    return this.withRateLimit(fn, signal, retries, onRateLimit);
+    return this.withRateLimit(fn, signal, retries, onRateLimit, onRetryAfter);
   }
 }
 
@@ -169,6 +171,69 @@ describe('KodaXBaseProvider', () => {
     // Existing call sites still use the no-arg overload — must continue
     // resolving to the provider-level (or default-model) value.
     expect(provider.getContextWindow()).toBe(200_000);
+  });
+
+  it('FEATURE_130: fires structured onRetryAfter with parsed source and provider name', async () => {
+    const provider = new TestProvider();
+    const onRetryAfter = vi.fn();
+    // Throw an error that carries a Retry-After header; subsequent attempt succeeds.
+    const error = Object.assign(new Error('429 rate limit hit'), {
+      headers: { 'retry-after': '7' },
+    });
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce('ok');
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback: Parameters<typeof setTimeout>[0]) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return undefined as unknown as ReturnType<typeof setTimeout>;
+    });
+    try {
+      await expect(
+        provider.exposeWithRateLimit(task, undefined, 2, undefined, onRetryAfter),
+      ).resolves.toBe('ok');
+      expect(onRetryAfter).toHaveBeenCalledTimes(1);
+      const event = onRetryAfter.mock.calls[0]![0];
+      expect(event.provider).toBe('test-provider');
+      expect(event.waitMs).toBe(7_000);
+      expect(event.reason).toBe('rate-limit');
+      expect(event.source).toBe('retry-after-seconds');
+      expect(event.attempt).toBe(1);
+      expect(event.maxAttempts).toBe(2);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it('FEATURE_130: classifies overloaded errors with reason="overloaded"', async () => {
+    const provider = new TestProvider();
+    const onRetryAfter = vi.fn();
+    const error = new Error('Server overloaded — please retry');
+    const task = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce('ok');
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout').mockImplementation((callback: Parameters<typeof setTimeout>[0]) => {
+      if (typeof callback === 'function') {
+        callback();
+      }
+      return undefined as unknown as ReturnType<typeof setTimeout>;
+    });
+    try {
+      // The classifier matches "overload" via isRateLimitError keywords —
+      // confirm overloaded errors go through the same retry path.
+      await expect(
+        provider.exposeWithRateLimit(task, undefined, 2, undefined, onRetryAfter),
+      ).resolves.toBe('ok');
+      expect(onRetryAfter).toHaveBeenCalledTimes(1);
+      const event = onRetryAfter.mock.calls[0]![0];
+      expect(event.reason).toBe('overloaded');
+      expect(event.source).toBe('exponential-backoff');
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it('surfaces rate-limit retry callbacks with the computed delay', async () => {

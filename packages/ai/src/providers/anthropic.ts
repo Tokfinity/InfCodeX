@@ -443,7 +443,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       }
 
       return { textBlocks, toolBlocks, thinkingBlocks, usage, stopReason };
-    }, signal, 3, streamOptions?.onRateLimit);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
   }
 
   override supportsNonStreamingFallback(): boolean {
@@ -571,7 +571,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         usage: normalizeAnthropicUsage((response as Anthropic.Messages.Message).usage),
         stopReason: (response as Anthropic.Messages.Message).stop_reason ?? undefined,
       };
-    }, signal, 3, streamOptions?.onRateLimit);
+    }, signal, 3, streamOptions?.onRateLimit, streamOptions?.onRetryAfter);
   }
 
   private serializeSystemMessageContent(content: string | KodaXContentBlock[]): string {

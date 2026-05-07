@@ -75,6 +75,7 @@ export type StreamHandlerCallbacks = Pick<
   | 'onThinkingEnd'
   | 'onToolInputDelta'
   | 'onRateLimit'
+  | 'onRetryAfter'
   | 'onHeartbeat'
 >;
 
@@ -112,6 +113,18 @@ export function buildStreamHandlers(input: StreamHandlerWiringInput): StreamHand
         delayMs: delay,
       });
       emitProviderRateLimit(events, rateAttempt, max, delay);
+    },
+    // FEATURE_130 (v0.7.36) — structured retry-after callback. Fires
+    // alongside onRateLimit (legacy flat shape stays wired for the
+    // existing rate-limit extension events). UI surfaces (InkREPL
+    // spinner) read the structured shape so they can show the parsed
+    // source of the wait — "provider asked for 45s" vs "we're guessing
+    // 4s exp-backoff". Per-call passthrough; the provider invokes this
+    // immediately before the retry sleep so the spinner countdown is
+    // accurate.
+    onRetryAfter: (event) => {
+      streamTimers.resetIdleTimer();
+      events.onRetryAfter?.(event);
     },
     onHeartbeat: (pause) => {
       if (pause) {
