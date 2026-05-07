@@ -334,14 +334,18 @@ export {
 export type {
   DequeueFilter,
   EnqueueInput,
+  MaybeDrainMidTurnInput,
   MessageMode,
   MessagePriority,
   QueuedMessage,
 } from './messaging/index.js';
 export {
   MessageQueue,
+  YIELD_TOOL_NAMES,
   _resetMessageQueueForTests,
   getMessageQueue,
+  maybeDrainMidTurn,
+  midTurnDrainPriority,
 } from './messaging/index.js';
 
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============

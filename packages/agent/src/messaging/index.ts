@@ -17,3 +17,10 @@ export {
   _resetMessageQueueForTests,
   getMessageQueue,
 } from './queue.js';
+
+export type { MaybeDrainMidTurnInput } from './drain.js';
+export {
+  YIELD_TOOL_NAMES,
+  maybeDrainMidTurn,
+  midTurnDrainPriority,
+} from './drain.js';

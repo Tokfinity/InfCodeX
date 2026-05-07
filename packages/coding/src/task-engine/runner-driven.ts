@@ -59,7 +59,7 @@ import type {
   RunnerToolContext,
   RunnerToolResult,
 } from '@kodax/agent';
-import { Runner } from '@kodax/agent';
+import { Runner, getMessageQueue } from '@kodax/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
@@ -2636,7 +2636,18 @@ export function buildRunnerLlmAdapter(
     // tool calls makes Runner exit the loop naturally — the Runner sees
     // "no more work" rather than an error, and the outer REPL can pick
     // up the queued prompt immediately.
-    if (options.events?.hasPendingInputs?.() === true) {
+    //
+    // FEATURE_115 v0.7.36: also yield when the agent-side message queue
+    // has user-priority messages targeting this main-thread agent.
+    // StreamingContext mirrors React state into the queue (Phase 1B), so
+    // today the two checks normally agree; the queue check future-proofs
+    // out-of-band enqueues (e.g. SDK consumers without a React surface)
+    // and is the foundational mid-turn yield point that FEATURE_119
+    // (await_child_task) extends to background priority via Sleep-gated
+    // drain.
+    const hasReactPendingInputs = options.events?.hasPendingInputs?.() === true;
+    const hasQueueUserMessages = getMessageQueue().has({ maxPriority: 'user' });
+    if (hasReactPendingInputs || hasQueueUserMessages) {
       return {
         text: '',
         toolCalls: [],
