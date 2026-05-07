@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
 
 ### Theme
 
-**Six-feature delivery — async dispatch (Pattern B), provider Retry-After + exponential backoff, file-mutation queue + Unicode normalization, Skill UX + prompt-overlay 错位修正, AMA Harness V2 foundation, Message Queue.** Every feature originally scoped for v0.7.36 ships in this release — nothing is deferred. Two of the six (FEATURE_114 V2 single-loop runner, FEATURE_115 mid-turn drain UX-polish) ship as foundation surfaces gated behind `KODAX_HARNESS_V2` (default-off) and the existing `KODAX_ASYNC_DISPATCH=0` escape hatch, so the on-by-default behavior is byte-equivalent to v0.7.35.1 for the SA path and additive for AMA. Net: 11 commits across 9 packages; 3683 + 3 (eval) tests passing; build green on Windows + POSIX.
+**Six-feature delivery — async dispatch (Pattern B), provider Retry-After + exponential backoff, file-mutation queue + Unicode normalization, Skill UX + prompt-overlay 错位修正, AMA Harness V2 foundation, Message Queue.** Every feature originally scoped for v0.7.36 ships in this release — nothing is deferred. Two of the six (FEATURE_114 V2 single-loop runner, FEATURE_115 mid-turn drain UX-polish) ship as foundation surfaces gated behind `KODAX_HARNESS_V2` (default-off) and the existing `KODAX_ASYNC_DISPATCH=0` escape hatch, so the on-by-default behavior is byte-equivalent to v0.7.35.1 for the SA path and additive for AMA. Net: 14 commits across 9 packages (12 feature commits + 2 release-ops); 3683 unit tests + 26 eval/regression tests passing; build green on Windows + POSIX.
 
 ### Added
 
