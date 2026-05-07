@@ -14,8 +14,36 @@ import React, {
   useEffect,
   type ReactNode,
 } from "react";
+import { getMessageQueue } from "@kodax/agent";
 import { StreamingState } from "../types.js";
 import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
+
+/**
+ * Mirror the React-state pending-inputs queue into the agent-side
+ * MessageQueue (FEATURE_115 v0.7.36).
+ *
+ * React state is the canonical source for UI rendering and the
+ * MAX_PENDING_INPUTS gating; the MessageQueue is the agent-side surface
+ * that downstream consumers (runner-driven mid-turn drain in Phase 1C)
+ * subscribe to. To keep them in lockstep without a remove-by-id API,
+ * we drain the main-thread `user` priority slice and re-enqueue the
+ * authoritative React-state contents after every mutation. Background
+ * priority and subagent-scoped messages are untouched.
+ *
+ * O(N) where N ≤ MAX_PENDING_INPUTS = 5; negligible overhead.
+ */
+function syncPendingInputsToQueue(contents: readonly string[]): void {
+  const queue = getMessageQueue();
+  // Drain only main-thread (`agentId === undefined`) user-priority messages.
+  queue.dequeue({ maxPriority: "user" });
+  for (const content of contents) {
+    queue.enqueue({
+      priority: "user",
+      mode: "prompt",
+      content,
+    });
+  }
+}
 
 // === Types ===
 
@@ -686,6 +714,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         pendingInputs: [...state.pendingInputs, trimmed],
       };
+      syncPendingInputsToQueue(state.pendingInputs);
       notify();
     },
 
@@ -699,6 +728,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         pendingInputs: state.pendingInputs.slice(0, -1),
       };
+      syncPendingInputsToQueue(state.pendingInputs);
       notify();
     },
 
@@ -713,6 +743,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         pendingInputs: rest,
       };
+      syncPendingInputsToQueue(state.pendingInputs);
       notify();
       return nextInput;
     },
@@ -727,6 +758,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         pendingInputs: [],
       };
+      syncPendingInputsToQueue(state.pendingInputs);
       notify();
     },
 
@@ -741,6 +773,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         pendingInputs: [],
       };
+      syncPendingInputsToQueue(state.pendingInputs);
       notify();
       return pendingInputs;
     },
