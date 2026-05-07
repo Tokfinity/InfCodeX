@@ -53,6 +53,10 @@ const MANAGED_TASK_BUDGET_BASE: Record<KodaXTaskRoutingDecision['harnessProfile'
   H0_DIRECT: 50,
   H1_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
   H2_PLAN_EXECUTE_EVAL: DEFAULT_MANAGED_WORK_BUDGET,
+  // FEATURE_114 v0.7.36: PLANNED matches H2's budget — the Worker
+  // single-loop collapses three roles into one, but the per-task
+  // tool-call envelope is still bounded by the same upper limit.
+  PLANNED: DEFAULT_MANAGED_WORK_BUDGET,
 };
 
 export function createManagedBudgetController(

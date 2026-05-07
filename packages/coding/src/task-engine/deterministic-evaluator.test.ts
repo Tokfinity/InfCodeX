@@ -1,0 +1,111 @@
+/**
+ * FEATURE_114 v0.7.36 — deterministic-evaluator contract tests.
+ *
+ * Spawns real shell commands with the active node binary so the test
+ * exercises the same code path production uses. Each test uses a
+ * one-liner that finishes in well under 1s.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  formatDeterministicEvaluatorResult,
+  runDeterministicEvaluator,
+} from './deterministic-evaluator.js';
+
+describe('runDeterministicEvaluator', () => {
+  it("reports 'pass' for an exit-0 command override", async () => {
+    const result = await runDeterministicEvaluator({
+      hint: 'build',
+      cwd: process.cwd(),
+      commandOverride: 'node -e "process.exit(0)"',
+      timeoutMs: 5_000,
+    });
+    expect(result.status).toBe('pass');
+    expect(result.exitCode).toBe(0);
+    expect(result.command).toContain('process.exit(0)');
+  });
+
+  it("reports 'fail' with stderr tail for an exit-1 command", async () => {
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      commandOverride: 'node -e "console.error(\'bad-thing\'); process.exit(2)"',
+      timeoutMs: 5_000,
+    });
+    expect(result.status).toBe('fail');
+    expect(result.exitCode).toBe(2);
+    expect(result.stderrTail).toContain('bad-thing');
+  });
+
+  it('reports exit code 0 for noop commands', async () => {
+    const result = await runDeterministicEvaluator({
+      hint: 'lint',
+      cwd: process.cwd(),
+      commandOverride: 'node -e "console.log(\'ok\')"',
+      timeoutMs: 5_000,
+    });
+    expect(result.status).toBe('pass');
+    expect(result.stdoutTail).toContain('ok');
+  });
+
+  it("reports 'error' on timeout", { timeout: 15_000 }, async () => {
+    // Kill via SIGTERM on a Node child; on Windows the platform maps
+    // SIGTERM to TerminateProcess so the child still exits, just may
+    // take a moment more than POSIX. The 15s vitest timeout covers
+    // the slowest expected reaper path.
+    const result = await runDeterministicEvaluator({
+      hint: 'test',
+      cwd: process.cwd(),
+      // Use stdin.resume() which keeps the process alive until the
+      // pipes are closed by SIGTERM/TerminateProcess — slightly more
+      // reliable across platforms than a long setTimeout.
+      commandOverride: 'node -e "process.stdin.resume()"',
+      timeoutMs: 500,
+    });
+    expect(result.status).toBe('error');
+    expect(result.stderrTail).toContain('TIMEOUT');
+  });
+});
+
+describe('formatDeterministicEvaluatorResult', () => {
+  it('renders a pass header without stderr/stdout for pass', () => {
+    const out = formatDeterministicEvaluatorResult({
+      hint: 'build',
+      command: 'npm run build',
+      status: 'pass',
+      exitCode: 0,
+      stderrTail: '',
+      stdoutTail: '',
+      durationMs: 1200,
+    });
+    expect(out).toContain('[deterministic-evaluator:build] pass');
+    expect(out).not.toContain('--- stderr tail ---');
+  });
+
+  it('includes stderr tail on fail', () => {
+    const out = formatDeterministicEvaluatorResult({
+      hint: 'test',
+      command: 'npm test',
+      status: 'fail',
+      exitCode: 1,
+      stderrTail: 'AssertionError: x !== y',
+      stdoutTail: '',
+      durationMs: 800,
+    });
+    expect(out).toContain('fail');
+    expect(out).toContain('AssertionError: x !== y');
+  });
+
+  it('renders a soft skipped message when the script is missing', () => {
+    const out = formatDeterministicEvaluatorResult({
+      hint: 'build',
+      command: 'npm run build',
+      status: 'skipped',
+      exitCode: 1,
+      stderrTail: 'Missing script: build',
+      stdoutTail: '',
+      durationMs: 50,
+    });
+    expect(out).toContain('skipped');
+    expect(out).toContain('Skipped: command not available');
+  });
+});

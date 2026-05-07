@@ -126,6 +126,15 @@ const HARNESS_PROFILE_OVERLAYS: Record<KodaXHarnessProfile, string> = {
     '- Start with a short explicit plan or option framing before making changes.',
     '- After execution, verify the result and call out any residual uncertainty.',
   ].join('\n'),
+  // FEATURE_114 v0.7.36: PLANNED is the V2 single-loop profile. The
+  // Worker collapses Scout/Planner/Generator and emits its plan via
+  // todo_update before mutating; the Evaluator stays as the
+  // structural verification gate.
+  PLANNED: [
+    '[Harness Profile: PLANNED]',
+    '- Worker single-loop with todo_update plan-first contract; Evaluator preserved as structural gate.',
+    '- Trivial tasks may skip todo_update; non-trivial tasks MUST commit a plan as the first tool call.',
+  ].join('\n'),
 };
 
 const ROUTER_SYSTEM_PROMPT = [

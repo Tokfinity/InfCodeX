@@ -214,7 +214,13 @@ export type KodaXAssuranceIntent =
 export type KodaXHarnessProfile =
   | 'H0_DIRECT'
   | 'H1_EXECUTE_EVAL'
-  | 'H2_PLAN_EXECUTE_EVAL';
+  | 'H2_PLAN_EXECUTE_EVAL'
+  // FEATURE_114 v0.7.36: PLANNED is the V2 harness profile that
+  // collapses Scout / Planner / Generator into a single Worker. The
+  // legacy three profiles stay live during the migration window
+  // (KODAX_HARNESS_V2 default off until v0.7.40). PLANNED runs preserve
+  // the Evaluator structural gate.
+  | 'PLANNED';
 
 export type KodaXReviewScale =
   | 'small'

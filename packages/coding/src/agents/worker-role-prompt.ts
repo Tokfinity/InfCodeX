@@ -1,0 +1,120 @@
+/**
+ * Worker role prompt — FEATURE_114 v0.7.36 AMA Harness V2.
+ *
+ * The Worker collapses the legacy 4-role chain
+ * (Scout → Planner → Generator → Evaluator) into a single primary
+ * agent that decides when to plan, executes, and hands off to the
+ * Evaluator (preserved as an independent structural gate). The full
+ * V2 design lives in docs/features/v0.7.36.md §FEATURE_114.
+ *
+ * Gated by the `KODAX_HARNESS_V2` env flag — when off, the legacy
+ * Scout / Planner / Generator / Evaluator prompts in role-prompt.ts
+ * stay live, so this file's wording cannot affect production runs
+ * until a deployment opts in.
+ *
+ * Wording derives from:
+ *   - SCOUT decisional framing (H0/H1/H2 → trivial / multi-step
+ *     thresholds)
+ *   - GENERATOR mutation-tool discipline + dispatch RULE A/B/C
+ *   - FEATURE_106 SCOPE COMMITMENT hard rule (ported verbatim)
+ *   - The Worker plan-first contract (todo_update on first non-trivial
+ *     tool call) and the per-step `evaluator` hint convention.
+ */
+
+import type {
+  KodaXTaskRoutingDecision,
+  KodaXTaskVerificationContract,
+} from '../types.js';
+
+export const WORKER_AGENT_NAME = 'kodax-worker';
+
+/**
+ * Pure builder. Returns a string the role-prompt entry point splices
+ * in when `KODAX_HARNESS_V2=true`. Intentionally context-light — the
+ * runner-driven path layers workspace / capability / overlay
+ * sections around this on top, identical to how the legacy
+ * `createRolePrompt` builds.
+ */
+export function buildWorkerInstructions(
+  decision: KodaXTaskRoutingDecision,
+  verification: KodaXTaskVerificationContract | undefined,
+  isResumeAfterReviseFailure: boolean,
+): string {
+  void verification; // kept on the signature for parity with legacy roles
+  const reviseFailureRetrospective = isResumeAfterReviseFailure
+    ? 'A previous attempt at this task failed under Evaluator review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying.'
+    : '';
+
+  const planFirstContract = [
+    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36):',
+    '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
+    '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update` with the full plan.',
+    '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+    '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled`). Mark exactly ONE item `in_progress` at a time.',
+    '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
+    '- Replan iteratively: insert / cancel / adjust items via `todo_update` as the picture firms up. Do NOT reset the entire list mid-task; reserve full reset for explicit "start over" decisions.',
+  ].join('\n');
+
+  const scopeCommitment = [
+    'SCOPE COMMITMENT (FEATURE_106 hard rule):',
+    '- Whatever scope you commit to in your first `todo_update` is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_update` to add items explicitly, do not slip them into a later step\'s description.',
+    '- If the user request is review/audit, your `todo_update` plan IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
+  ].join('\n');
+
+  const mutationDiscipline = [
+    'MUTATION DISCIPLINE:',
+    '- `read` first when the file is non-trivial. Skipping the read forces `edit`/`multi_edit` to fail with "old_string not found" and costs a retry round-trip.',
+    '- Prefer `edit` over `write` for existing files (smaller token footprint, diff-safe). Use `write` only for new files or full rewrites the user explicitly asked for.',
+    '- For multiple edits to one file, batch with `multi_edit` instead of N separate `edit` calls — atomic, cheaper, structure-preserving.',
+    '- NEVER route a single known-content file through `bash` heredocs. Use `write` or `edit`.',
+    '- Workspace discipline: scratch files go under `.agent/tmp/` (relative to git root). NEVER write scratch to project root or system tmp.',
+  ].join('\n');
+
+  const dispatchRules = [
+    'DISPATCH RULES (`dispatch_child_task` / `await_child_task`):',
+    '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
+    '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs. Reclaim the result with `await_child_task({task_id})` when needed.',
+    '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
+    '- Pattern B (FEATURE_119): `dispatch_child_task` returns a `task_id:<id>` immediately and runs in the background. A `<task-completed>` notification arrives at the next yielding tool boundary; you may also `await_child_task` proactively when you need the result.',
+  ].join('\n');
+
+  const handoffRules = [
+    'EVALUATOR HANDOFF (KodaX structural gate, preserved as an independent role):',
+    '- When your plan is complete (all non-cancelled items `completed`), call `emit_handoff` with the artifacts you want the Evaluator to audit.',
+    '- The Evaluator runs in a fresh read-only session, audits your changes, and returns `accept` (terminal success), `revise` (your turn again — fix the called-out issues), or `blocked` (terminal failure).',
+    '- You CANNOT bypass the Evaluator. Trying to terminate the run with a final text answer instead of `emit_handoff` will be rejected by the runner.',
+  ].join('\n');
+
+  const roleAck = [
+    `You are the Worker — KodaX's single primary agent for this task. Routing decision summary:`,
+    `- Primary task: ${decision.primaryTask}`,
+    `- Work intent: ${decision.workIntent}`,
+    `- Risk: ${decision.riskLevel}`,
+    `- Complexity: ${decision.complexity}`,
+    `- Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
+  ].join('\n');
+
+  return [
+    roleAck,
+    reviseFailureRetrospective,
+    planFirstContract,
+    scopeCommitment,
+    mutationDiscipline,
+    dispatchRules,
+    handoffRules,
+  ]
+    .filter((part) => part.length > 0)
+    .join('\n\n');
+}
+
+/**
+ * Predicate used by the runner-driven entry point to decide which
+ * harness path to take. Returns true when the V2 Worker single-loop
+ * is enabled. Reads `process.env.KODAX_HARNESS_V2` — anything other
+ * than `'true'` (case-insensitive) leaves the legacy V1 path in place.
+ */
+export function isHarnessV2Enabled(): boolean {
+  const raw = process.env.KODAX_HARNESS_V2;
+  if (typeof raw !== 'string') return false;
+  return raw.toLowerCase() === 'true';
+}
