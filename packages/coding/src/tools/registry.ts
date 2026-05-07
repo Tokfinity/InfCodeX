@@ -42,6 +42,7 @@ import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
+import { toolAwaitChildTask } from './await-child-task.js';
 import { toolTodoUpdate } from './todo-update.js';
 import {
   toolScaffoldTool,
@@ -456,6 +457,32 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       const obj = typeof i?.objective === 'string' ? i.objective.slice(0, 200) : '<no-objective>';
       const mutability = i?.readOnly === false ? 'mutating' : 'readonly';
       return `Dispatch(${mutability}): ${obj}`;
+    },
+  },
+  {
+    name: 'await_child_task',
+    description:
+      'Reclaim the result of a previously launched async child task by task_id. '
+      + 'FEATURE_119 v0.7.36 Pattern B: dispatch_child_task returns a `task_id:<id>` banner immediately and '
+      + 'runs the executor in the background. Call this tool when you need the result. It awaits the in-flight '
+      + 'promise, returns the same finding text the synchronous path would have returned, and removes the entry '
+      + 'from the registry (each task_id can be awaited at most once). '
+      + 'WHEN TO USE: dispatch read-only children in parallel with `dispatch_child_task` calls (multiple tool_use '
+      + 'blocks in one response), then call `await_child_task` for each task_id when its evidence is needed. '
+      + 'For long-running write children (e.g. 90s `npm test`), this lets you continue with other tools — read, '
+      + 'grep, todo_update — instead of blocking the Worker turn. A <task-completed> notification arrives '
+      + 'automatically after a yielding tool boundary, but you may also await proactively.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: 'The task_id returned by an earlier dispatch_child_task call.' },
+      },
+      required: ['task_id'],
+    },
+    handler: toolAwaitChildTask,
+    toClassifierInput: (input) => {
+      const i = input as { task_id?: string };
+      return `Await: ${typeof i?.task_id === 'string' ? i.task_id : '<no-task-id>'}`;
     },
   },
   {

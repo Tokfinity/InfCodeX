@@ -109,6 +109,7 @@ import { toolGrep } from '../tools/grep.js';
 import { toolRead } from '../tools/read.js';
 import { toolWrite } from '../tools/write.js';
 import { toolDispatchChildTask } from '../tools/dispatch-child-tasks.js';
+import { toolAwaitChildTask } from '../tools/await-child-task.js';
 // M1 parity (v0.7.26) — repo-intel + MCP handlers required to give Planner
 // the same inspection surface it had under v0.7.22's
 // `buildManagedWorkerToolPolicy('planner')` allow-list.
@@ -1834,6 +1835,15 @@ interface CodingToolBundle {
    * Scout produced fewer than 2 obligations and no store was wired.
    */
   readonly todoUpdate: RunnableTool;
+  /**
+   * FEATURE_119 v0.7.36 Pattern B — `await_child_task` reclaim half.
+   * Pairs with the per-role `dispatch_child_task` wrappers
+   * (`scoutDispatch` / `generatorDispatch`) so the Worker can await any
+   * task_id those wrappers launched in async mode. Also enumerated in
+   * `YIELD_TOOL_NAMES` so the next iteration boundary upgrades to a
+   * background-priority drain.
+   */
+  readonly awaitChildTask: RunnableTool;
   /** M1 parity (v0.7.26) — repo-intel + MCP surface restored to Planner.
    * v0.7.22's `buildManagedWorkerToolPolicy('planner')` exposed
    * `changed_scope`, `repo_overview`, `changed_diff_bundle`, `read`,
@@ -1865,9 +1875,21 @@ function buildCodingToolBundle(
   const multiEdit = getToolDefinition('multi_edit');
   const exitPlanMode = getToolDefinition('exit_plan_mode');
   const todoUpdate = getToolDefinition('todo_update');
-  if (!read || !grep || !glob || !bash || !write || !edit || !multiEdit || !exitPlanMode || !todoUpdate) {
+  const awaitChildTask = getToolDefinition('await_child_task');
+  if (
+    !read
+    || !grep
+    || !glob
+    || !bash
+    || !write
+    || !edit
+    || !multiEdit
+    || !exitPlanMode
+    || !todoUpdate
+    || !awaitChildTask
+  ) {
     throw new Error(
-      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update) to be registered',
+      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/await_child_task) to be registered',
     );
   }
   // M1 parity (v0.7.26) — optionally wrap repo-intel + MCP tools so
@@ -1905,6 +1927,7 @@ function buildCodingToolBundle(
     multiEdit: wrapCodingToolAsRunnable(multiEdit, toolMultiEdit, baseCtx, budget, events),
     exitPlanMode: wrapCodingToolAsRunnable(exitPlanMode, toolExitPlanMode, baseCtx, budget, events),
     todoUpdate: wrapCodingToolAsRunnable(todoUpdate, toolTodoUpdate, baseCtx, budget, events),
+    awaitChildTask: wrapCodingToolAsRunnable(awaitChildTask, toolAwaitChildTask, baseCtx, budget, events),
     repoOverview: repoOverviewDef
       ? wrapCodingToolAsRunnable(repoOverviewDef, toolRepoOverview, baseCtx, budget, events)
       : undefined,
@@ -2155,6 +2178,11 @@ export function buildRunnerAgentChain(
       // emitting its verdict. The dispatch tool itself enforces
       // `read_only` in Scout context.
       scoutDispatch,
+      // FEATURE_119 v0.7.36 Pattern B — Scout reclaims async-dispatched
+      // children via task_id. The reclaim half is needed wherever
+      // dispatch is allowed; otherwise async dispatch leaves children
+      // stranded in the registry.
+      codingTools.awaitChildTask,
     ],
     handoffs: undefined,
     reasoning: { default: 'quick', max: 'balanced', escalateOnRevise: false },
@@ -2251,6 +2279,10 @@ export function buildRunnerAgentChain(
       // `childWriteWorktreePathsRef` so the Evaluator can inject the
       // write diffs at verdict time (FEATURE_067 v2 parity).
       generatorDispatch,
+      // FEATURE_119 v0.7.36 Pattern B — Generator reclaims async-dispatched
+      // children via task_id. Without this the Generator could launch
+      // long-running children but never collect their results.
+      codingTools.awaitChildTask,
     ],
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
@@ -4243,6 +4275,10 @@ async function runManagedTaskViaRunnerInner(
     ...substrateBaseCtx,
     mutationTracker,
     todoStore,
+    // FEATURE_119 v0.7.36 Pattern B — substrate now creates the registry
+    // (shared between SA and AMA paths). The spread above already carries
+    // `substrateBaseCtx.childTaskRegistry`; the dispatch tool gates the
+    // async-vs-sync branch on `KODAX_ASYNC_DISPATCH !== '0'`.
   };
 
   // Budget controller. Start with H0 cap (50); `wrapEmitterWithRecorder`
