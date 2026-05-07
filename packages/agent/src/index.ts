@@ -310,6 +310,20 @@ export type {
   CapabilityResult,
 } from '@kodax/ai';
 
+// ============== Agent config home resolver (v0.7.35.1 FEATURE_145) ==============
+// 3-tier resolution chain (programmatic override > KODAX_HOME env > ~/.kodax
+// default) to centralize ~30 hardcoded `path.join(homedir(), '.kodax', ...)`
+// callsites previously scattered across coding / mcp / repl / session-lineage
+// / skills. With DI not set + env not set, the resolver returns the same
+// path as the prior hardcoded calls — byte-equivalent for existing users.
+// Substrate consumers (downstream agents built on @kodax/agent) call
+// setAgentConfigHome() once at boot to redirect the entire process.
+export {
+  getAgentConfigHome,
+  getAgentConfigPath,
+  setAgentConfigHome,
+} from './runtime/agent-home.js';
+
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
 // `@kodax/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only

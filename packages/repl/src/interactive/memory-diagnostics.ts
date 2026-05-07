@@ -19,9 +19,9 @@
  */
 
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import v8 from 'node:v8';
+import { getAgentConfigHome } from '@kodax/agent';
 import type {
   KodaXMessage,
   KodaXSessionEntry,
@@ -31,7 +31,7 @@ import type {
 const LEVEL = parseInt(process.env.KODAX_MEMORY_DIAG ?? '0', 10);
 const ENABLED = LEVEL >= 1;
 
-const LOG_DIR = join(homedir(), '.kodax');
+const LOG_DIR = getAgentConfigHome();
 const LOG_PATH = join(LOG_DIR, 'memory-diag.log');
 
 let turnCounter = 0;

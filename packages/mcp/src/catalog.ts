@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
+
+import { getAgentConfigPath } from '@kodax/agent';
 
 export type McpCapabilityKind = 'tool' | 'resource' | 'prompt';
 export type McpCapabilityRisk = 'read' | 'write' | 'network' | 'exec';
@@ -42,7 +43,7 @@ function safeIdComponent(value: string): string {
 }
 
 export function defaultMcpCacheDir(): string {
-  return path.join(os.homedir(), '.kodax', 'mcp');
+  return getAgentConfigPath('mcp');
 }
 
 export function createMcpCapabilityId(

@@ -13,9 +13,9 @@
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import path from 'path';
-import os from 'os';
 import crypto from 'crypto';
 
+import { getAgentConfigPath } from '@kodax/agent';
 import type {
   KodaXExtensionStore,
   KodaXExtensionStoreEntry,
@@ -27,7 +27,7 @@ import type {
 // ---------------------------------------------------------------------------
 
 function getDefaultStoreDir(): string {
-  return path.join(os.homedir(), '.kodax', 'extension-store');
+  return getAgentConfigPath('extension-store');
 }
 
 function isJsonValue(value: unknown): value is KodaXJsonValue {

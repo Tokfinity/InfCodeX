@@ -17,7 +17,8 @@
 
 import fsSync from 'fs';
 import path from 'path';
-import os from 'os';
+
+import { getAgentConfigPath } from '@kodax/agent';
 import {
   PermissionMode,
   normalizePermissionMode,
@@ -29,8 +30,8 @@ import {
 // Re-export for convenience - 重新导出便于使用
 export { parseAllowedToolPattern, isToolCallAllowed, generateSavePattern };
 
-// User-level config: ~/.kodax/config.json
-const USER_CONFIG_FILE = path.join(os.homedir(), '.kodax', 'config.json');
+// User-level config: ~/.kodax/config.json (or KODAX_HOME / programmatic override)
+const USER_CONFIG_FILE = getAgentConfigPath('config.json');
 
 // Project-level config: .kodax/config.local.json (in current working directory)
 function getProjectConfigFile(): string {

@@ -7,6 +7,7 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import { exec, spawnSync, type SpawnSyncReturns } from 'child_process';
+import { getAgentConfigHome } from '@kodax/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
@@ -37,8 +38,13 @@ import {
 
 const execAsync = promisify(exec);
 
-// CLI config directory
-export const KODAX_DIR = path.join(os.homedir(), '.kodax');
+// CLI config directory.
+// v0.7.35.1 FEATURE_145: routed through @kodax/agent's 3-tier resolver
+// (programmatic override > KODAX_HOME env > ~/.kodax default). Resolution
+// happens at module-load time — substrate consumers must call
+// setAgentConfigHome() before importing this module for the override to
+// take effect on these top-level constants.
+export const KODAX_DIR = getAgentConfigHome();
 export const KODAX_SESSIONS_DIR = path.join(KODAX_DIR, 'sessions');
 export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');
 

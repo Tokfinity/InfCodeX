@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
-import os from 'os';
 import path from 'path';
+
+import { getAgentConfigPath } from '@kodax/agent';
+
 import type { KodaXToolExecutionContext } from '../types.js';
 
 export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2000;
@@ -235,7 +237,7 @@ export function truncateLine(
 }
 
 function resolveToolOutputDir(): string {
-  return process.env[TOOL_OUTPUT_DIR_ENV] || path.join(os.homedir(), '.kodax', 'tool-results');
+  return process.env[TOOL_OUTPUT_DIR_ENV] || getAgentConfigPath('tool-results');
 }
 
 function sanitizePathSegment(value: string): string {

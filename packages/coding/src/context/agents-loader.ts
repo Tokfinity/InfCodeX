@@ -8,8 +8,9 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, parse, resolve } from "node:path";
+
+import { getAgentConfigHome } from "@kodax/agent";
 
 const CONTEXT_FILE_CANDIDATES = ["AGENTS.md", "CLAUDE.md"];
 
@@ -27,10 +28,13 @@ export interface LoadAgentsOptions {
 }
 
 /**
- * Get KodaX global directory
+ * Get KodaX global directory.
+ *
+ * Routes through {@link getAgentConfigHome} (v0.7.35.1 FEATURE_145 3-tier
+ * resolution: programmatic override > KODAX_HOME env > ~/.kodax default).
  */
 export function getKodaxGlobalDir(): string {
-  return join(homedir(), ".kodax");
+  return getAgentConfigHome();
 }
 
 function loadAgentsFile(dir: string, filenames: readonly string[]): AgentsFile | null {
