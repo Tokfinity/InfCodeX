@@ -4547,6 +4547,12 @@ async function runManagedTaskViaRunnerInner(
       isNewSessionForCapabilities,
       managedWorkspace.executionCwd,
     );
+    // FEATURE_143 (v0.7.36): `prompt-overlay` is no longer "AMA-owned"
+    // via the user-prompt stitching path — it now flows through the
+    // role-prompt builder's `promptOverlaySection`. Keeping it in the
+    // exclusion list still makes sense (we don't want SA-style
+    // duplicate emission alongside the role-prompt section), so the
+    // ID stays in this set as a deduplication guard.
     const AMA_OWNED_SECTION_IDS = new Set<string>([
       'base-system',
       'base-system-suffix',
@@ -4582,6 +4588,11 @@ async function runManagedTaskViaRunnerInner(
       originalTask: prompt,
       workspace: managedWorkspace,
       capabilityContextBlock: prebuiltCapabilityContextBlock,
+      // FEATURE_143 (v0.7.36): routing-notes overlay flows here so the
+      // role-prompt builder can emit it as a system-prompt section.
+      // Pre-FEATURE_143 this was stitched onto the user prompt head;
+      // see runner-driven.ts:promptWithOverlay for the migration.
+      promptOverlay: promptOverlay,
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the
     // on-disk artefact paths so role prompts can quote a stable filesystem
@@ -4779,18 +4790,17 @@ async function runManagedTaskViaRunnerInner(
     todoReminderState,
   );
 
-  // Shard 6d-L: stitch `plan.promptOverlay` (the routing-notes block
-  // `createReasoningPlan` produces — task-family guidance, work intent,
-  // brainstorm directives, provider-policy notes, explicit-reason trail)
-  // onto the user prompt so Scout/Planner/Generator/Evaluator receive the
-  // same contextual overlay legacy workers did. Keeping the overlay as a
-  // prompt prefix rather than a system-prompt injection matches the
-  // legacy `buildPromptOverlay` output shape, which Scout expects as
-  // free-text routing notes at the top of the task prompt.
+  // FEATURE_143 (v0.7.36) — `plan.promptOverlay` (routing-notes block:
+  // task-family guidance, work intent, brainstorm directives,
+  // provider-policy notes, explicit-reason trail) is now routed
+  // through the role-prompt builder's system-prompt section
+  // (`ManagedRolePromptContext.promptOverlay`), matching the SA-path
+  // `capability-sections.ts` injection surface. The previous Shard 6d-L
+  // stitching put this onto the user prompt head, which made the
+  // routing notes look like user input to the LLM instead of platform
+  // truth. The user prompt now carries only the actual user request.
   const promptOverlay = plan?.promptOverlay?.trim();
-  const promptWithOverlay = promptOverlay
-    ? `${promptOverlay}\n\n---\n\n${prompt}`
-    : prompt;
+  const promptWithOverlay = prompt;
 
   // Session continuity: when the caller passes `options.session.initialMessages`
   // (REPL multi-turn, session resume, plan-mode replay), prepend them as the

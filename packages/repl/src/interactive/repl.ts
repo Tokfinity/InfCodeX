@@ -84,6 +84,7 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
+import { getSkillRegistry } from '@kodax/skills';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
@@ -552,6 +553,15 @@ Keyboard Shortcuts:
     });
   }
 
+  // FEATURE_143 (v0.7.36) — classic CLI parity with InkREPL: build the
+  // skill registry's system-prompt snippet at startup and forward it via
+  // `context.skillsPrompt`. Without this, classic CLI users got an empty
+  // skills list in the system prompt while Ink TUI users got the full
+  // hardened skills manifest. See `getSystemPromptSnippet()` for the
+  // hardened wording.
+  const classicCliSkillRegistry = getSkillRegistry(gitRoot);
+  const classicCliSkillsPrompt = classicCliSkillRegistry.getSystemPromptSnippet();
+
   let isRunning = true;
   // Fix: Ensure session.id is set to reuse same session - 修复：确保 session.id 被设置以复用同一 session
   let currentOptions: RepLOptions = {
@@ -564,6 +574,7 @@ Keyboard Shortcuts:
       executionCwd: startupRuntime.executionCwd,
       repoIntelligenceMode: repoIntelligenceRuntime.mode,
       repoIntelligenceTrace: repoIntelligenceRuntime.trace,
+      skillsPrompt: classicCliSkillsPrompt,
     },
     session: {
       ...options.session,

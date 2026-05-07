@@ -82,6 +82,16 @@ export interface ManagedRolePromptContext {
    * NOT trigger fresh AGENTS.md / git status / project FS walks.
    */
   capabilityContextBlock?: string;
+  /**
+   * FEATURE_143 (v0.7.36) — routing-notes overlay (`plan.promptOverlay`)
+   * that v0.7.26 FEATURE_084 mistakenly stitched onto the user prompt
+   * head. Now flows here instead so the role-prompt builder can emit
+   * it as a system-prompt section, matching the SA path's
+   * `capability-sections.ts` behavior. Carries: task-family guidance,
+   * work intent, brainstorm directives, provider-policy notes,
+   * explicit-reason trail.
+   */
+  promptOverlay?: string;
 }
 
 /**
