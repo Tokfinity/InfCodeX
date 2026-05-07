@@ -48,6 +48,97 @@ export async function readResolvedTextFile(
   return { filePath, content };
 }
 
+/**
+ * FEATURE_131 v0.7.36 Part B — fuzzy-match Unicode normalization.
+ *
+ * Smart quotes, em-dash, full-width punctuation, and CJK compatibility
+ * characters are the silent edit-fail story KodaX hit hardest in the
+ * field: users paste code from Word / chat / web pages where input
+ * methods auto-substitute typographic glyphs for ASCII equivalents,
+ * the LLM crafts an `old_string` with the ASCII version, and the byte-
+ * level match misses.
+ *
+ * `normalizeForFuzzyMatch` applies a small, opinionated rule set that
+ * covers ~95% of these cases:
+ *   - NFKC: full-width Latin → half-width, CJK compat → standard
+ *   - smart double quotes (U+201C/U+201D) → ASCII double quote
+ *   - smart single quotes (U+2018/U+2019) → ASCII apostrophe
+ *   - en-dash / em-dash (U+2013/U+2014) → ASCII hyphen
+ *   - non-breaking space (U+00A0) → ASCII space
+ *   - ideographic space (U+3000) → ASCII space
+ *
+ * Critical invariant: this normalization is for MATCH DECISION only.
+ * Writes still use the caller's original `new_string` bytes, so user
+ * files preserve their existing typography style — we don't go
+ * around silently rewriting smart quotes to ASCII.
+ */
+export function normalizeForFuzzyMatch(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    // Em-dash (U+2014) is visually closer to `--` than a single
+    // hyphen and that is how the LLM typically writes it as a
+    // needle, so map em-dash → `--`. En-dash (U+2013) stays a
+    // single hyphen.
+    .replace(/—/g, '--')
+    .replace(/–/g, '-')
+    .replace(/ /g, ' ')
+    .replace(/　/g, ' ');
+}
+
+/**
+ * Same shape and semantics as `findUniqueNormalizedBlockMatch`, but
+ * additionally applies `normalizeForFuzzyMatch` to both haystack and
+ * needle before comparison. Used as a SECOND fallback by `edit` /
+ * `multi_edit`: byte-exact → existing whitespace-normalized → this.
+ *
+ * The matched range is mapped back into the ORIGINAL content via the
+ * logical-line offsets the helper already tracks — no offset math
+ * needed on top, because the matching unit is whole logical lines and
+ * the line boundaries are stable across normalization.
+ */
+export function findUniqueUnicodeNormalizedBlockMatch(
+  content: string,
+  needle: string,
+): { status: 'unique'; range: MatchRange } | { status: 'ambiguous'; ranges: MatchRange[] } | { status: 'missing' } {
+  const contentLines = buildLogicalLines(content);
+  const needleLines = trimBoundaryBlankLogicalLines(buildLogicalLines(needle));
+  if (needleLines.length === 0 || contentLines.length === 0) {
+    return { status: 'missing' };
+  }
+
+  const canonicalNeedle = unicodeCanonicalizeLogicalBlock(needleLines);
+  if (!canonicalNeedle) {
+    return { status: 'missing' };
+  }
+
+  const ranges: MatchRange[] = [];
+  for (let index = 0; index <= contentLines.length - needleLines.length; index++) {
+    const window = trimBoundaryBlankLogicalLines(contentLines.slice(index, index + needleLines.length));
+    if (window.length !== needleLines.length) {
+      continue;
+    }
+    if (unicodeCanonicalizeLogicalBlock(window) !== canonicalNeedle) {
+      continue;
+    }
+    ranges.push({
+      start: window[0]!.start,
+      end: window[window.length - 1]!.end,
+      startLine: window[0]!.startLine,
+      endLine: window[window.length - 1]!.endLine,
+    });
+  }
+
+  if (ranges.length === 1) {
+    return { status: 'unique', range: ranges[0]! };
+  }
+  if (ranges.length > 1) {
+    return { status: 'ambiguous', ranges };
+  }
+  return { status: 'missing' };
+}
+
 export function findUniqueNormalizedBlockMatch(
   content: string,
   needle: string,
@@ -315,6 +406,26 @@ function canonicalizeLogicalBlock(lines: LogicalLine[]): string {
 
   return trimmed
     .map((line) => (line.blank ? '' : normalizeLogicalLineForComparison(line.text)))
+    .join('\n');
+}
+
+/**
+ * FEATURE_131 Part B: same logical-block canonicalization as above
+ * plus `normalizeForFuzzyMatch`. Kept separate from
+ * `canonicalizeLogicalBlock` so the existing whitespace-tolerant path
+ * keeps its byte-equivalence guarantees for the common case — Unicode
+ * normalization only kicks in when both byte-exact and whitespace-only
+ * matches have already missed.
+ */
+function unicodeCanonicalizeLogicalBlock(lines: LogicalLine[]): string {
+  const trimmed = trimBoundaryBlankLogicalLines(lines);
+  if (trimmed.length === 0) {
+    return '';
+  }
+  return trimmed
+    .map((line) =>
+      line.blank ? '' : normalizeForFuzzyMatch(normalizeLogicalLineForComparison(line.text)),
+    )
     .join('\n');
 }
 

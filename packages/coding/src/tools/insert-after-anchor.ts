@@ -9,7 +9,9 @@ import {
   detectPreferredLineEnding,
   findSingleLineAnchorMatch,
   findUniqueNormalizedBlockMatch,
+  findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 function formatInsertError(code: 'ANCHOR_NOT_FOUND' | 'ANCHOR_AMBIGUOUS', detail: string): string {
   return `[Tool Error] insert_after_anchor: ${code}: ${detail}`;
@@ -26,41 +28,45 @@ export async function toolInsertAfterAnchor(
 
   const anchor = String(input.anchor ?? '');
   const contentToInsert = String(input.content ?? '');
-  const content = await fs.readFile(filePath, 'utf-8');
-  const insertion = resolveAnchorInsertion(content, anchor);
 
-  if (insertion.status === 'missing') {
-    return formatInsertError(
-      'ANCHOR_NOT_FOUND',
-      'Anchor not found. Retry with a unique nearby heading or section marker.',
-    );
-  }
-  if (insertion.status === 'ambiguous') {
-    return formatInsertError(
-      'ANCHOR_AMBIGUOUS',
-      `Anchor matched ${insertion.count} locations. Retry with a more specific anchor.`,
-    );
-  }
+  // FEATURE_131 Part A: serialize same-file mutations.
+  return withFileMutation(filePath, async () => {
+    const content = await fs.readFile(filePath, 'utf-8');
+    const insertion = resolveAnchorInsertion(content, anchor);
 
-  const prepared = prepareInsertionContent(content, insertion.index, contentToInsert);
-  const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
+    if (insertion.status === 'missing') {
+      return formatInsertError(
+        'ANCHOR_NOT_FOUND',
+        'Anchor not found. Retry with a unique nearby heading or section marker.',
+      );
+    }
+    if (insertion.status === 'ambiguous') {
+      return formatInsertError(
+        'ANCHOR_AMBIGUOUS',
+        `Anchor matched ${insertion.count} locations. Retry with a more specific anchor.`,
+      );
+    }
 
-  ctx.backups.set(filePath, content);
-  getFileBackups().set(filePath, content);
-  await fs.writeFile(filePath, nextContent, 'utf-8');
+    const prepared = prepareInsertionContent(content, insertion.index, contentToInsert);
+    const nextContent = `${content.slice(0, insertion.index)}${prepared}${content.slice(insertion.index)}`;
 
-  const diff = generateDiff(content, nextContent, filePath);
-  const changes = countChanges(diff);
-  const preview = diff
-    ? await formatDiffPreview({ diff, toolName: 'write', filePath, ctx })
-    : '';
+    ctx.backups.set(filePath, content);
+    getFileBackups().set(filePath, content);
+    await fs.writeFile(filePath, nextContent, 'utf-8');
 
-  return [
-    `Content inserted after anchor in: ${filePath}`,
-    `  (+${changes.added} lines, -${changes.removed} lines)`,
-    preview ? '' : undefined,
-    preview || undefined,
-  ].filter((line): line is string => line !== undefined).join('\n');
+    const diff = generateDiff(content, nextContent, filePath);
+    const changes = countChanges(diff);
+    const preview = diff
+      ? await formatDiffPreview({ diff, toolName: 'write', filePath, ctx })
+      : '';
+
+    return [
+      `Content inserted after anchor in: ${filePath}`,
+      `  (+${changes.added} lines, -${changes.removed} lines)`,
+      preview ? '' : undefined,
+      preview || undefined,
+    ].filter((line): line is string => line !== undefined).join('\n');
+  });
 }
 
 function resolveAnchorInsertion(
@@ -81,6 +87,18 @@ function resolveAnchorInsertion(
   }
   if (singleLine.status === 'ambiguous') {
     return { status: 'ambiguous', count: singleLine.ranges.length };
+  }
+
+  // FEATURE_131 Part B: Unicode-normalized fuzzy fallback. Same
+  // ruleset as edit/multi_edit so anchors copy-pasted from rich-text
+  // sources (smart quotes, em-dashes, full-width characters) still
+  // resolve.
+  const unicode = findUniqueUnicodeNormalizedBlockMatch(content, anchor);
+  if (unicode.status === 'unique') {
+    return { status: 'unique', index: unicode.range.end };
+  }
+  if (unicode.status === 'ambiguous') {
+    return { status: 'ambiguous', count: unicode.ranges.length };
   }
 
   return { status: 'missing' };

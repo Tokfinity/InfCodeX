@@ -26,7 +26,9 @@ import { formatDiffPreview } from './truncate.js';
 import {
   detectPreferredLineEnding,
   findUniqueNormalizedBlockMatch,
+  findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 const MAX_SAFE_EDIT_CHARS = 64 * 1024;
 const MAX_SAFE_EDIT_LINES = 400;
@@ -77,45 +79,48 @@ export async function toolMultiEdit(
     });
   }
 
-  const originalContent = await fs.readFile(filePath, 'utf-8');
+  // FEATURE_131 Part A: serialize same-file mutations.
+  return withFileMutation(filePath, async () => {
+    const originalContent = await fs.readFile(filePath, 'utf-8');
 
-  // Apply sequentially in memory. Any failure aborts the whole batch
-  // with NO disk write — atomicity is the main contract this tool
-  // provides beyond N individual `edit` calls.
-  let runningContent = originalContent;
-  const replacementCounts: number[] = [];
-  for (let i = 0; i < edits.length; i += 1) {
-    const edit = edits[i]!;
-    const applied = applyOneEdit(runningContent, edit, i, originalContent);
-    if ('error' in applied) {
-      return applied.error;
+    // Apply sequentially in memory. Any failure aborts the whole batch
+    // with NO disk write — atomicity is the main contract this tool
+    // provides beyond N individual `edit` calls.
+    let runningContent = originalContent;
+    const replacementCounts: number[] = [];
+    for (let i = 0; i < edits.length; i += 1) {
+      const edit = edits[i]!;
+      const applied = applyOneEdit(runningContent, edit, i, originalContent);
+      if ('error' in applied) {
+        return applied.error;
+      }
+      runningContent = applied.content;
+      replacementCounts.push(applied.replacements);
     }
-    runningContent = applied.content;
-    replacementCounts.push(applied.replacements);
-  }
 
-  if (runningContent === originalContent) {
-    return `[Tool Error] multi_edit: all ${edits.length} edits produced no net change. Check old_string / new_string values.`;
-  }
+    if (runningContent === originalContent) {
+      return `[Tool Error] multi_edit: all ${edits.length} edits produced no net change. Check old_string / new_string values.`;
+    }
 
-  ctx.backups.set(filePath, originalContent);
-  getFileBackups().set(filePath, originalContent);
-  await fs.writeFile(filePath, runningContent, 'utf-8');
+    ctx.backups.set(filePath, originalContent);
+    getFileBackups().set(filePath, originalContent);
+    await fs.writeFile(filePath, runningContent, 'utf-8');
 
-  const diff = generateDiff(originalContent, runningContent, filePath);
-  const changes = countChanges(diff);
-  const totalReplacements = replacementCounts.reduce((a, b) => a + b, 0);
+    const diff = generateDiff(originalContent, runningContent, filePath);
+    const changes = countChanges(diff);
+    const totalReplacements = replacementCounts.reduce((a, b) => a + b, 0);
 
-  let result = `File edited: ${filePath}`;
-  result += ` (${edits.length} edits, ${totalReplacements} replacement${totalReplacements === 1 ? '' : 's'})`;
-  result += `\n  (+${changes.added} lines, -${changes.removed} lines)`;
+    let result = `File edited: ${filePath}`;
+    result += ` (${edits.length} edits, ${totalReplacements} replacement${totalReplacements === 1 ? '' : 's'})`;
+    result += `\n  (+${changes.added} lines, -${changes.removed} lines)`;
 
-  if (diff) {
-    const preview = await formatDiffPreview({ diff, toolName: 'multi_edit', filePath, ctx });
-    result += `\n\n${preview}`;
-  }
+    if (diff) {
+      const preview = await formatDiffPreview({ diff, toolName: 'multi_edit', filePath, ctx });
+      result += `\n\n${preview}`;
+    }
 
-  return result;
+    return result;
+  });
 }
 
 function applyOneEdit(
@@ -146,18 +151,36 @@ function applyOneEdit(
   }
 
   // Exact match missed — try normalized fallback (same rule as `edit`)
+  let matchedRange: { start: number; end: number } | undefined;
+  let ambiguousRanges: { startLine: number }[] | undefined;
   const normalized = findUniqueNormalizedBlockMatch(content, oldStr);
   if (normalized.status === 'ambiguous') {
-    const blockLocations = normalized.ranges.map((r) => r.startLine);
+    ambiguousRanges = normalized.ranges;
+  } else if (normalized.status === 'unique') {
+    matchedRange = normalized.range;
+  } else {
+    // FEATURE_131 Part B: Unicode-normalized fuzzy fallback. See
+    // `edit.ts` and `text-anchor.ts:normalizeForFuzzyMatch` for the
+    // ruleset (NFKC + smart quotes / em-dash / 全角 → ASCII).
+    const unicode = findUniqueUnicodeNormalizedBlockMatch(content, oldStr);
+    if (unicode.status === 'ambiguous') {
+      ambiguousRanges = unicode.ranges;
+    } else if (unicode.status === 'unique') {
+      matchedRange = unicode.range;
+    }
+  }
+
+  if (ambiguousRanges) {
+    const blockLocations = ambiguousRanges.map((r) => r.startLine);
     return {
       error:
-        `[Tool Error] multi_edit: edits[${index}] matched ${normalized.ranges.length} normalized blocks `
+        `[Tool Error] multi_edit: edits[${index}] matched ${ambiguousRanges.length} normalized blocks `
         + `(lines ${formatLineList(blockLocations)}). `
         + 'Include more surrounding lines so the old_string spans a unique region, '
         + 'or set replace_all=true if all matches should change.',
     };
   }
-  if (normalized.status === 'missing') {
+  if (!matchedRange) {
     // Anchor-consumed-by-prior-edit diagnostic. When `index > 0` and the
     // anchor is present in the original file but gone from the current
     // running content, the failure is certainly caused by an earlier
@@ -192,9 +215,9 @@ function applyOneEdit(
   const replacement = normalizeReplacementLineEndings(newStr, detectPreferredLineEnding(content));
   return {
     content:
-      content.slice(0, normalized.range.start)
+      content.slice(0, matchedRange.start)
       + replacement
-      + content.slice(normalized.range.end),
+      + content.slice(matchedRange.end),
     replacements: 1,
   };
 }
