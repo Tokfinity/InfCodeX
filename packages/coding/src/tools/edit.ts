@@ -9,9 +9,11 @@ import {
   collectAnchorCandidates,
   detectPreferredLineEnding,
   findUniqueNormalizedBlockMatch,
+  findUniqueUnicodeNormalizedBlockMatch,
   readResolvedTextFile,
 } from './text-anchor.js';
 import { findExactMatchPositions, formatLineList } from './multi-edit.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 export type EditToolErrorCode =
   | 'EDIT_NOT_FOUND'
@@ -46,6 +48,21 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
     return sizeCheck;
   }
 
+  // FEATURE_131 Part A: serialize same-file mutations so concurrent
+  // children can't race the read-modify-write cycle. Different files
+  // still proceed in parallel.
+  return withFileMutation(filePath, async () => {
+    return await runEditOnce(filePath, oldStr, newStr, replaceAll, ctx);
+  });
+}
+
+async function runEditOnce(
+  filePath: string,
+  oldStr: string,
+  newStr: string,
+  replaceAll: boolean,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
   const content = await fs.readFile(filePath, 'utf-8');
   const exactMatches = findExactMatchPositions(content, oldStr);
   let replacementPlan: {
@@ -72,17 +89,39 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
       replacementCount: replaceAll ? exactMatches.length : 1,
     };
   } else {
+    let matchedRange: { start: number; end: number } | undefined;
+    let ambiguousBlocks: { startLine: number }[] | undefined;
+
     const normalized = findUniqueNormalizedBlockMatch(content, oldStr);
     if (normalized.status === 'ambiguous') {
-      const blockLocations = normalized.ranges.map((r) => r.startLine);
+      ambiguousBlocks = normalized.ranges;
+    } else if (normalized.status === 'unique') {
+      matchedRange = normalized.range;
+    } else {
+      // FEATURE_131 Part B: Unicode-normalized fuzzy fallback. Smart
+      // quotes / em-dash / 全角 input characters typically slip
+      // through both byte-exact and whitespace-tolerant comparison;
+      // try once more with NFKC + typographic-character normalization
+      // before giving up. Writes still use the caller's `new_string`
+      // bytes so user files keep their original typography.
+      const unicode = findUniqueUnicodeNormalizedBlockMatch(content, oldStr);
+      if (unicode.status === 'ambiguous') {
+        ambiguousBlocks = unicode.ranges;
+      } else if (unicode.status === 'unique') {
+        matchedRange = unicode.range;
+      }
+    }
+
+    if (ambiguousBlocks) {
+      const blockLocations = ambiguousBlocks.map((r) => r.startLine);
       return formatEditToolError(
         'EDIT_AMBIGUOUS',
-        `matched ${normalized.ranges.length} normalized blocks (lines ${formatLineList(blockLocations)}). `
+        `matched ${ambiguousBlocks.length} normalized blocks (lines ${formatLineList(blockLocations)}). `
         + 'Include more surrounding lines so the old_string spans a unique region, '
         + 'or use insert_after_anchor for section appends.',
       );
     }
-    if (normalized.status === 'missing') {
+    if (!matchedRange) {
       return formatEditToolError(
         'EDIT_NOT_FOUND',
         'old_string not found. '
@@ -98,7 +137,7 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
       detectPreferredLineEnding(content),
     );
     replacementPlan = {
-      newContent: `${content.slice(0, normalized.range.start)}${normalizedReplacement}${content.slice(normalized.range.end)}`,
+      newContent: `${content.slice(0, matchedRange.start)}${normalizedReplacement}${content.slice(matchedRange.end)}`,
       diffPreviewMode: 'diff',
       replacementCount: 1,
     };

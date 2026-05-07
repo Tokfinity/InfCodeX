@@ -5,6 +5,7 @@ import { KodaXToolExecutionContext } from '../types.js';
 import { generateDiff, countChanges } from './diff.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { formatDiffPreview } from './truncate.js';
+import { withFileMutation } from './_internal/file-mutation-queue.js';
 
 const FILE_BACKUPS = new Map<string, string>();
 
@@ -16,30 +17,35 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
   const filePath = resolveExecutionPath(input.path as string, ctx);
   const content = input.content as string;
 
-  let oldContent = '';
-  const isNewFile = !fsSync.existsSync(filePath);
+  // FEATURE_131 Part A: serialize same-file mutations across the
+  // process so concurrent children (Pattern B fan-out) can't race
+  // the read-modify-write cycle and silently lose one side's changes.
+  return withFileMutation(filePath, async () => {
+    let oldContent = '';
+    const isNewFile = !fsSync.existsSync(filePath);
 
-  if (!isNewFile) {
-    oldContent = await fs.readFile(filePath, 'utf-8');
-    ctx.backups.set(filePath, oldContent);
-    FILE_BACKUPS.set(filePath, oldContent);
-  }
+    if (!isNewFile) {
+      oldContent = await fs.readFile(filePath, 'utf-8');
+      ctx.backups.set(filePath, oldContent);
+      FILE_BACKUPS.set(filePath, oldContent);
+    }
 
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, content, 'utf-8');
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content, 'utf-8');
 
-  const diff = generateDiff(oldContent, content, filePath);
-  const changes = countChanges(diff);
+    const diff = generateDiff(oldContent, content, filePath);
+    const changes = countChanges(diff);
 
-  if (isNewFile) {
-    const lineCount = content.split('\n').length;
-    return `File created: ${filePath}\n  (${lineCount} lines written)`;
-  }
+    if (isNewFile) {
+      const lineCount = content.split('\n').length;
+      return `File created: ${filePath}\n  (${lineCount} lines written)`;
+    }
 
-  if (diff) {
-    const preview = await formatDiffPreview({ diff, toolName: 'write', filePath, ctx });
-    return `File updated: ${filePath}\n  (+${changes.added} lines, -${changes.removed} lines)\n\n${preview}`;
-  }
+    if (diff) {
+      const preview = await formatDiffPreview({ diff, toolName: 'write', filePath, ctx });
+      return `File updated: ${filePath}\n  (+${changes.added} lines, -${changes.removed} lines)\n\n${preview}`;
+    }
 
-  return `File written: ${filePath} (no changes)`;
+    return `File written: ${filePath} (no changes)`;
+  });
 }
