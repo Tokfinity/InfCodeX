@@ -154,8 +154,19 @@ export class SkillRegistry implements ISkillRegistry {
   }
 
   /**
-   * Get skills formatted for system prompt injection
-   * Filters out skills with disableModelInvocation=true (Issue 056)
+   * Get skills formatted for system prompt injection.
+   *
+   * FEATURE_143 (v0.7.36): manifest wording hardened toward Claude
+   * Code-style strong constraints. The previous wording ("when a user
+   * request matches a skill description, use read to load the skill")
+   * was too soft — the LLM treated skill invocation as one option among
+   * many and frequently authored its own answer instead of loading the
+   * SKILL.md instructions. Aligns with the
+   * `c:/Works/claudecode/src/tools/SkillTool/prompt.ts` ruleset:
+   * BLOCKING REQUIREMENT to load the relevant skill BEFORE generating
+   * any other response when a skill matches.
+   *
+   * Filters out skills with disableModelInvocation=true (Issue 056).
    */
   getSystemPromptSnippet(): string {
     // Filter out skills that disable model invocation
@@ -168,9 +179,13 @@ export class SkillRegistry implements ISkillRegistry {
     const lines = [
       '## Available Skills',
       '',
-      'The following skills provide specialized instructions for specific tasks.',
-      'When a user request matches a skill description, use the read tool to load the skill file,',
-      'then follow the skill instructions to complete the task.',
+      'When users ask you to perform tasks, check if any of the available skills below match the request. Skills provide specialized capabilities and step-by-step instructions for specific workflows.',
+      '',
+      "When users reference a \"slash command\" or \"/<something>\" (e.g. \"/feature-list-tracker\", \"/skill:foo\"), they are referring to a skill. Use the read tool to load the skill's `SKILL.md` and follow its instructions.",
+      '',
+      "**BLOCKING REQUIREMENT**: When a skill matches the user's request, you MUST read the relevant skill's `SKILL.md` BEFORE generating any other response about the task. Loading the skill is not optional and not something to defer — it is the FIRST action you take.",
+      '',
+      'NEVER mention a skill without actually reading its `SKILL.md`. Do not guess at skill names — only use skills listed below.',
       '',
     ];
 

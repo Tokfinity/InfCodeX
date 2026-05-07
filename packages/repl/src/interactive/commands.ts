@@ -2251,6 +2251,67 @@ async function executeExtensionCommand(
   return true;
 }
 
+/**
+ * FEATURE_143 (v0.7.36) — mid-line `/skill:NAME` reference.
+ *
+ * Distinct from `parseCommand`: that function only resolves a leading
+ * `/cmd` (the entire input is the command). This represents one
+ * occurrence of `/skill:NAME` anywhere in a user message — typically
+ * in the middle of natural-language prose like "use /skill:foo to
+ * sketch the layout".
+ */
+export interface InlineSkillReference {
+  /** The skill name as written, without the `/skill:` prefix. */
+  readonly name: string;
+  /** The full matched substring including the `/skill:` prefix. */
+  readonly raw: string;
+  /** Offset of `raw` in the original input string. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Scan `input` for inline `/skill:NAME` references. Mirrors the
+ * pi-mono in-text skill annotation pattern. Each match must be
+ * preceded by start-of-string or whitespace so we don't accidentally
+ * pick up `https://example.com/skill:foo` URLs or code paths.
+ *
+ * Skipping the leading `/skill:` at column 0 of a trimmed input is
+ * intentional — that case is already handled by `parseCommand`'s
+ * leading-slash branch, and feeding it into this scanner too would
+ * produce a duplicate skill load.
+ *
+ * Returns matches in textual order. Caller decides what to do —
+ * typically: preload each match's `SKILL.md` and inject it as system
+ * context immediately before the user's message.
+ */
+export function parseInlineSkillReferences(input: string): readonly InlineSkillReference[] {
+  if (typeof input !== 'string' || input.length === 0) return [];
+  const trimmed = input.trim();
+  // If the whole input is a leading-slash command (`/skill:foo args...`),
+  // defer to parseCommand — don't double-load the skill.
+  if (trimmed.startsWith('/skill:')) return [];
+
+  const matches: InlineSkillReference[] = [];
+  // Allow word chars, dashes, dots, and `:` (for nested namespace forms).
+  const regex = /(^|\s)\/skill:([\w][\w.\-:]*)/g;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(input)) !== null) {
+    const lead = match[1] ?? '';
+    const name = match[2] ?? '';
+    if (!name) continue;
+    const rawStart = match.index + lead.length;
+    const raw = `/skill:${name}`;
+    matches.push({
+      name,
+      raw,
+      start: rawStart,
+      end: rawStart + raw.length,
+    });
+  }
+  return matches;
+}
+
 export function parseCommand(input: string): { command: string; args: string[]; skillInvocation?: { name: string } } | null {
   const trimmed = input.trim();
   if (!trimmed.startsWith('/')) return null;

@@ -183,6 +183,17 @@ export function createRolePrompt(
     ? rolePromptContext.capabilityContextBlock
     : undefined;
 
+  // FEATURE_143 (v0.7.36) — `plan.promptOverlay` ("routing notes":
+  // task-family guidance, work intent, brainstorm directives,
+  // provider-policy notes, explicit-reason trail). v0.7.26 FEATURE_084
+  // stitched this onto the user prompt head; the v0.7.36 fix routes
+  // it through the system prompt instead so workers read it as
+  // platform truth, not user input. SA path already injects via
+  // `capability-sections.ts`; this is the AMA parity.
+  const promptOverlaySection = rolePromptContext?.promptOverlay?.trim()
+    ? rolePromptContext.promptOverlay.trim()
+    : undefined;
+
   // v0.7.26 fix — managed workers bypass `buildSystemPrompt` (legacy SA
   // path), so the base `SYSTEM_PROMPT` discipline sections (tmp-directory
   // rule, mkdir warning, cross-platform notes) never reached the LLM. The
@@ -458,6 +469,7 @@ export function createRolePrompt(
         'You are Scout — the AMA entry role for a managed KodaX task.',
         workspaceSection,
         capabilityContextSection,
+        promptOverlaySection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -642,6 +654,7 @@ export function createRolePrompt(
         'You are Planner — the H2 planning role for a managed KodaX task.',
         workspaceSection,
         capabilityContextSection,
+        promptOverlaySection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -686,6 +699,7 @@ export function createRolePrompt(
         'You are Generator — the H1/H2 execution role for a managed KodaX task.',
         workspaceSection,
         capabilityContextSection,
+        promptOverlaySection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -761,6 +775,7 @@ export function createRolePrompt(
         'You are Evaluator — the H1/H2 verifier role for a managed KodaX task.',
         workspaceSection,
         capabilityContextSection,
+        promptOverlaySection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
