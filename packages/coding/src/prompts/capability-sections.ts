@@ -50,6 +50,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
+import { resolveExecutionCwd } from '../runtime-paths.js';
 import type { KodaXOptions } from '../types.js';
 
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
@@ -67,12 +68,24 @@ const SYSTEM_CONTEXT_MARKER = '{context}';
  * the given options + session state. The caller is responsible for
  * passing the result to `buildPromptSnapshot()` (or whatever assembler
  * the agent uses); this helper only emits the section list.
+ *
+ * `executionCwd` is OPTIONAL — when omitted, this helper calls
+ * `resolveExecutionCwd(options.context)` internally. Passing it
+ * explicitly is supported as a perf shortcut for callers that have
+ * already resolved cwd for other purposes (e.g. `builder.ts` uses the
+ * same value to populate the snapshot's `executionCwd` field), but
+ * **the explicit value MUST equal `resolveExecutionCwd(options.context)`
+ * or the `working-directory` section will diverge from the snapshot
+ * metadata** — a subtle source of drift if a future caller resolves
+ * cwd differently. Prefer the no-arg form unless you have a documented
+ * reason to override.
  */
 export async function buildCapabilityContextSections(
   options: KodaXOptions,
   isNewSession: boolean,
-  executionCwd: string,
+  executionCwdOverride?: string,
 ): Promise<KodaXPromptSection[]> {
+  const executionCwd = executionCwdOverride ?? resolveExecutionCwd(options.context);
   const sections: KodaXPromptSection[] = [];
   const { prefix: systemPromptPrefix, suffix: systemPromptSuffix } =
     splitSystemPromptTemplate(SYSTEM_PROMPT);
