@@ -4517,10 +4517,17 @@ async function runManagedTaskViaRunnerInner(
         .map((section) => section.content)
         .join('\n\n');
     }
-  } catch {
+  } catch (error) {
     // Capability context is best-effort. A failure here must not block
     // the AMA run — workers will fall back to legacy workspaceSection
-    // visibility, matching pre-FEATURE_144 behavior.
+    // visibility, matching pre-FEATURE_144 behavior. Surface the error
+    // through the resilience debug channel so silent degradation is
+    // observable when investigating "worker should see MCP/skills/etc.
+    // but doesn't" reports.
+    emitResilienceDebug('[fea144:capability-context-build-failed]', {
+      cwd: managedWorkspace.executionCwd,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
   const rolePromptContextFactory: RolePromptContextFactory = (role, currentRecorder) => {
     const scoutPayload = currentRecorder.scout?.payload.scout;
