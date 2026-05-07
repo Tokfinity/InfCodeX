@@ -38,12 +38,37 @@ import {
 
 const execAsync = promisify(exec);
 
-// CLI config directory.
-// v0.7.35.1 FEATURE_145: routed through @kodax/agent's 3-tier resolver
-// (programmatic override > KODAX_HOME env > ~/.kodax default). Resolution
-// happens at module-load time — substrate consumers must call
-// setAgentConfigHome() before importing this module for the override to
-// take effect on these top-level constants.
+/**
+ * CLI config directory paths — top-level constants frozen at module-load time.
+ *
+ * **LOAD-TIME FREEZE WARNING (v0.7.35.1 FEATURE_145)** — these constants
+ * are computed ONCE when this module is first imported, by reading
+ * `getAgentConfigHome()` (which itself reads `KODAX_HOME` env var and
+ * the programmatic override at that single moment). Subsequent calls to
+ * `setAgentConfigHome()` have NO effect on these constants. This
+ * matches the prior v0.7.35 behavior where they were inlined as
+ * `path.join(os.homedir(), '.kodax')` — same load-time semantics, just
+ * routed through the resolver so that `KODAX_HOME` env is now honored.
+ *
+ * **For substrate consumers**: if you intend to redirect the agent
+ * config home via `setAgentConfigHome()`, you MUST call it BEFORE
+ * importing any module that transitively imports `@kodax/repl`'s
+ * `utils.ts`. Common downstream consumers that capture these constants
+ * include:
+ *   - `repl/interactive/storage.ts` → `KODAX_SESSIONS_DIR` (session
+ *     persistence; silent corruption risk if override is set late)
+ *   - the SDK's `repl/index.ts` re-exports
+ *   - root `src/index.ts` re-exports
+ *
+ * **For env-var users**: setting `KODAX_HOME=/path` before launching
+ * the kodax CLI works as expected — the env var is read at first
+ * import.
+ *
+ * **For per-call resolution**: use `getAgentConfigHome()` /
+ * `getAgentConfigPath(...)` directly from `@kodax/agent` instead of
+ * these constants — those resolve at call time and honor late
+ * `setAgentConfigHome()` calls.
+ */
 export const KODAX_DIR = getAgentConfigHome();
 export const KODAX_SESSIONS_DIR = path.join(KODAX_DIR, 'sessions');
 export const KODAX_CONFIG_FILE = path.join(KODAX_DIR, 'config.json');

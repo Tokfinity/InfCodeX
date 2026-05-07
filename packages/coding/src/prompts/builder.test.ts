@@ -300,6 +300,61 @@ describe('buildSystemPrompt', () => {
     expect(tcIdx).toBeGreaterThan(wdIdx);
   });
 
+  it('Batch E (FEATURE_142): rendered byte-equivalence — section assembly stays stable after extraction', async () => {
+    const executionCwd = await createTempDir('kodax-prompt-byte-eq-');
+    cleanupDirs.push(executionCwd);
+
+    const snapshot = await buildSystemPromptSnapshot(
+      {
+        provider: 'deepseek',
+        model: 'deepseek-v4',
+        context: {
+          executionCwd,
+          gitRoot: executionCwd,
+          repoIntelligenceContext: '## Repository Intelligence\nFROZEN-REPO-CTX',
+          promptOverlay: '## Prompt Overlay\nFROZEN-OVERLAY',
+          skillsPrompt: '## Skills\nFROZEN-SKILLS',
+        },
+      },
+      false,
+    );
+
+    const normalized = snapshot.rendered
+      .replaceAll(executionCwd, '<CWD>')
+      .replaceAll(path.basename(executionCwd), '<BASENAME>')
+      .replace(/Node: v[\d.]+/g, 'Node: <NODE>')
+      .replace(/Platform: (Windows|macOS|Linux)/g, 'Platform: <PLATFORM>')
+      .replace(/Use: (dir, move, copy, del|ls, mv, cp, rm)/g, 'Use: <SHELL_HINT>');
+
+    // Anchored start/end + presence of every dynamic section header in order.
+    const lines = normalized.split('\n');
+    expect(lines[0]).toMatch(/^You are KodaX/);
+    expect(normalized).toContain('Platform: <PLATFORM>');
+    expect(normalized).toContain('Use: <SHELL_HINT>');
+    expect(normalized).toContain('Node: <NODE>');
+    expect(normalized).toContain('[Runtime] provider=deepseek; model=deepseek-v4.');
+    expect(normalized).toContain('Working Directory: <CWD>');
+    expect(normalized).toContain('## Repository Intelligence\nFROZEN-REPO-CTX');
+    expect(normalized).toContain('## Prompt Overlay\nFROZEN-OVERLAY');
+    expect(normalized).toContain('## Skills\nFROZEN-SKILLS');
+
+    // Strict ordering — Batch E extraction must not reorder sections.
+    const idxRuntimeFact = normalized.indexOf('[Runtime] provider=deepseek');
+    const idxWorkingDir = normalized.indexOf('Working Directory: <CWD>');
+    const idxRepoIntel = normalized.indexOf('## Repository Intelligence');
+    const idxOverlay = normalized.indexOf('## Prompt Overlay');
+    const idxSkills = normalized.indexOf('## Skills');
+    expect(idxRuntimeFact).toBeLessThan(idxWorkingDir);
+    expect(idxWorkingDir).toBeLessThan(idxRepoIntel);
+    expect(idxRepoIntel).toBeLessThan(idxOverlay);
+    expect(idxOverlay).toBeLessThan(idxSkills);
+
+    // Hash is deterministic for fixed inputs (modulo cwd/platform/node — those
+    // are baked into the rendered string, so the hash legitimately varies; what
+    // we lock here is structural equivalence, not literal hash).
+    expect(snapshot.hash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it('injects MCP capability truth when the extension runtime exposes it', async () => {
     const executionCwd = await createTempDir('kodax-prompt-mcp-');
     cleanupDirs.push(executionCwd);

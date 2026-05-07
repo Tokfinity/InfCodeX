@@ -43,6 +43,21 @@ export class McpCapabilityProvider implements CapabilityProvider {
   private readonly runtimes = new Map<string, McpServerRuntime>();
   private readonly cacheDir: string;
 
+  /**
+   * Construct an MCP capability provider.
+   *
+   * **Cache-dir capture warning (v0.7.35.1 FEATURE_145)** — when
+   * `options.cacheDir` is omitted, this constructor resolves
+   * `defaultMcpCacheDir()` ONCE at instantiation time and threads the
+   * result into every `McpServerRuntime` it spawns. If a substrate
+   * consumer plans to redirect the agent config home via
+   * `setAgentConfigHome()` from `@kodax/agent`, that call MUST happen
+   * BEFORE constructing this provider. Late calls have no effect on
+   * already-constructed runtimes.
+   *
+   * To bypass the agent-home resolver entirely, pass
+   * `options.cacheDir` explicitly — that path wins unconditionally.
+   */
   constructor(
     servers: McpServersConfig | undefined,
     options: McpProviderOptions = {},
