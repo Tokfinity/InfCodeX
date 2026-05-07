@@ -129,7 +129,7 @@ import {
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
-import { shouldCompact } from '@kodax/agent';
+import { shouldCompact } from '@kodax/session-lineage';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -151,7 +151,7 @@ import {
   applyPostToolProcessing,
 } from './tool-dispatch.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
-import { resolveContextWindow } from '@kodax/agent';
+import { resolveContextWindow } from '@kodax/session-lineage';
 import {
   type RuntimeSessionState,
   buildRuntimeSessionState,
