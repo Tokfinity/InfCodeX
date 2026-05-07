@@ -59,6 +59,29 @@ export interface ManagedRolePromptContext {
     /** Active model id (post `modelOverride` resolution). See `provider`. */
     model?: string;
   };
+  /**
+   * v0.7.35.1 FEATURE_144 — capability-context sections the AMA worker
+   * needs but `workspaceSection` does not cover. Built ONCE in
+   * `runner-driven.ts` via `buildCapabilityContextSections()` and
+   * filtered to the 6 sections that aren't already injected through
+   * other Runner paths:
+   *   - `mcp-capability-context`  (active MCP server visibility)
+   *   - `skills-addendum`         (skill-specific guidance)
+   *   - `project-agents`          (AGENTS.md / CLAUDE.md project rules)
+   *   - `tool-construction`       (tool self-construction guidance)
+   *   - `git-context`             (branch / status snapshot)
+   *   - `project-snapshot`        (lightweight repo tree)
+   *
+   * `environment-context` / `working-directory` / `runtime-fact` are
+   * already in `workspaceSection`; `repo-intelligence-context` and
+   * `prompt-overlay` ride on the user prompt via separate Runner
+   * paths (`prebuiltRepoIntelligenceContext` / Shard 6d-L overlay
+   * stitching). Filtering avoids duplicate emission.
+   *
+   * Pre-computed parent-side so each per-role prompt invocation does
+   * NOT trigger fresh AGENTS.md / git status / project FS walks.
+   */
+  capabilityContextBlock?: string;
 }
 
 /**

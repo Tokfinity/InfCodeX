@@ -162,3 +162,104 @@ describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)'
     }
   });
 });
+
+// FEATURE_144 (v0.7.35.1): AMA worker capability-context parity. Each
+// role MUST receive the 6 SA-path sections that v0.7.26 FEATURE_084
+// dropped during the Runner-driven migration: mcp-capability-context,
+// skills-addendum, project-agents (AGENTS.md / CLAUDE.md), tool-
+// construction, git-context, project-snapshot.
+//
+// The runner pre-computes these via `buildCapabilityContextSections()`
+// once per AMA entry and threads the joined block onto
+// `ManagedRolePromptContext.capabilityContextBlock`. This test asserts
+// (a) the block is rendered when present, (b) it lives between the
+// workspace section and the decision summary so capability truth sits
+// next to runtime truth, (c) it is omitted cleanly when absent, and
+// (d) the 5 sections that ride on other Runner paths are NOT in this
+// block (they would otherwise duplicate).
+describe('FEATURE_144 — AMA worker capability-context parity', () => {
+  function renderRole(
+    role: 'scout' | 'planner' | 'generator' | 'evaluator',
+    capabilityContextBlock: string | undefined,
+  ): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const base = buildContext({ provider: 'p', model: 'm' });
+    const ctx: ManagedRolePromptContext = {
+      ...base,
+      capabilityContextBlock,
+    };
+    return createRolePrompt(
+      role,
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      `kodax/role/${role}`,
+      undefined,
+      ctx,
+      undefined,
+      false,
+    );
+  }
+
+  const roles = ['scout', 'planner', 'generator', 'evaluator'] as const;
+
+  it('renders capabilityContextBlock for every role when present', () => {
+    const block = [
+      '## MCP Capability Provider',
+      'Use mcp_search before mcp_call.',
+      '',
+      '## Project Agents',
+      'PROJECT RULE: prefer immutability.',
+      '',
+      'Working git context here.',
+    ].join('\n');
+    for (const role of roles) {
+      const rendered = renderRole(role, block);
+      expect(rendered, `role=${role}`).toContain('## MCP Capability Provider');
+      expect(rendered, `role=${role}`).toContain('## Project Agents');
+      expect(rendered, `role=${role}`).toContain('PROJECT RULE: prefer immutability.');
+      expect(rendered, `role=${role}`).toContain('Working git context here.');
+    }
+  });
+
+  it('positions capability block between workspaceSection and decisionSummary', () => {
+    const block = '## MCP Capability Provider\nFROZEN_MCP_MARKER';
+    for (const role of roles) {
+      const rendered = renderRole(role, block);
+      const envIdx = rendered.indexOf('## Environment');
+      const capIdx = rendered.indexOf('FROZEN_MCP_MARKER');
+      const decisionIdx = rendered.indexOf('Primary task:');
+      expect(envIdx, `role=${role}: workspaceSection present`).toBeGreaterThanOrEqual(0);
+      expect(capIdx, `role=${role}: capability block present`).toBeGreaterThan(envIdx);
+      expect(decisionIdx, `role=${role}: decisionSummary present`).toBeGreaterThan(capIdx);
+    }
+  });
+
+  it('emits no capability block when undefined (legacy callers unaffected)', () => {
+    for (const role of roles) {
+      const rendered = renderRole(role, undefined);
+      // Workspace + decision summary still present; no orphan blank gap
+      // means the filter() chain dropped the undefined entry cleanly.
+      expect(rendered).toContain('## Environment');
+      expect(rendered).toContain('Primary task:');
+      // Sentinel: no MCP / project-agents content leaks in when the
+      // parent didn't pre-compute one.
+      expect(rendered).not.toContain('## MCP Capability Provider');
+    }
+  });
+
+  it('emits no capability block when empty / whitespace-only string', () => {
+    for (const role of roles) {
+      const renderedEmpty = renderRole(role, '');
+      const renderedWs = renderRole(role, '   \n\t  \n');
+      // Both should match the undefined behavior — whitespace-only blocks
+      // would otherwise inject a noisy empty section between workspace
+      // and decision summary.
+      expect(renderedEmpty).toContain('## Environment');
+      expect(renderedWs).toContain('## Environment');
+      expect(renderedEmpty).toContain('Primary task:');
+      expect(renderedWs).toContain('Primary task:');
+    }
+  });
+});
