@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/session-lineage",
-  "version": "0.7.36",
+  "version": "0.7.37",
   "description": "KodaX Session Lineage — Session 实体 + 持久化 + Lineage 追踪 + LineageCompaction + DefaultSummaryCompaction。@kodax-ai/agent 的会话子系统（v0.7.35.1 后承接从 @kodax-ai/agent 回流的 session/persistence/compaction）。",
   "type": "module",
   "main": "dist/index.js",
