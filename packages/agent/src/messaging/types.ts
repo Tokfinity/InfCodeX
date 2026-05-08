@@ -1,12 +1,12 @@
 /**
- * @kodax/agent/messaging — Message queue types
+ * @kodax-ai/agent/messaging — Message queue types
  *
  * FEATURE_115 (v0.7.36): agentId-scoped 2-tier priority queue infrastructure.
  *
  * Per ADR-021: messaging is a generic agent-platform primitive (not coding-
  * specific). Downstream consumers:
- *   - @kodax/coding runner-driven mid-turn drain
- *   - @kodax/repl InkREPL ESC soft-pause + text injection (FEATURE_111 absorbed)
+ *   - @kodax-ai/coding runner-driven mid-turn drain
+ *   - @kodax-ai/repl InkREPL ESC soft-pause + text injection (FEATURE_111 absorbed)
  *   - subagent task-notification routing (FEATURE_119 await_child_task wakeup)
  *
  * Phase 0.6 study (`c:/tmp/claude-code-actual-usage.md`): Claude Code's

@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/coding",
+  "name": "@kodax-ai/coding",
   "version": "0.7.36",
   "description": "KodaX Coding Agent - Coding 工具 + Prompts",
   "type": "module",
@@ -23,12 +23,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/agent": "*",
-    "@kodax/ai": ">=0.5.0",
-    "@kodax/mcp": "*",
-    "@kodax/repointel-protocol": "*",
-    "@kodax/session-lineage": "*",
-    "@kodax/skills": "*"
+    "@kodax-ai/agent": "*",
+    "@kodax-ai/llm": "*",
+    "@kodax-ai/mcp": "*",
+    "@kodax-ai/repointel-protocol": "*",
+    "@kodax-ai/session-lineage": "*",
+    "@kodax-ai/skills": "*"
   },
   "devDependencies": {
     "@lezer/common": "^1.5.1",
@@ -39,7 +39,7 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {
-    "@kodax/ai": ">=0.5.0"
+    "@kodax-ai/llm": "*"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -55,5 +55,13 @@
     "@lezer/go": "^1.0.1",
     "@lezer/python": "^1.1.18",
     "@lezer/rust": "^1.0.2"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

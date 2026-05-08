@@ -4,7 +4,7 @@
  * 错误分类系统 - 决定适当的恢复策略
  */
 
-import { KodaXRateLimitError, KodaXProviderError, KodaXNetworkError, KodaXToolCallIdError } from '@kodax/ai';
+import { KodaXRateLimitError, KodaXProviderError, KodaXNetworkError, KodaXToolCallIdError } from '@kodax-ai/llm';
 
 export enum ErrorCategory {
   TRANSIENT,      // 临时错误，可重试（速率限制、超时、网络错误）

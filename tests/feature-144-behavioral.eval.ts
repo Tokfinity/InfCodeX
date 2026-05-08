@@ -47,10 +47,10 @@ import { promisify } from 'node:util';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax/ai';
-import { getProvider } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax-ai/llm';
+import { getProvider } from '@kodax-ai/llm';
 
-import { buildSystemPrompt, type KodaXOptions } from '@kodax/coding';
+import { buildSystemPrompt, type KodaXOptions } from '@kodax-ai/coding';
 import { createRolePrompt } from '../packages/coding/src/task-engine/_internal/managed-task/role-prompt.js';
 import { buildFallbackRoutingDecision } from '../packages/coding/src/reasoning.js';
 import type { ManagedRolePromptContext } from '../packages/coding/src/task-engine/_internal/managed-task/role-prompt-types.js';

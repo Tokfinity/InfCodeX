@@ -29,7 +29,7 @@
  * 'budget-exhausted').
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { KodaXOptions } from '../types.js';
 import { saveSessionSnapshot } from './middleware/session-snapshot.js';

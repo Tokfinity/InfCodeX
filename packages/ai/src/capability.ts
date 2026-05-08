@@ -1,12 +1,12 @@
 /**
  * Layer A Primitive: Capability provider contract.
  *
- * FEATURE_082 (v0.7.24): extracted from `@kodax/coding/src/extensions/types.ts`
+ * FEATURE_082 (v0.7.24): extracted from `@kodax-ai/coding/src/extensions/types.ts`
  * so third-party capability sources (MCP, RAG, custom indexes, …) can
  * implement `CapabilityProvider` without importing from the coding preset.
  *
  * The richer "extension runtime" concept (command registration, file
- * contributions, logger plumbing) stays in `@kodax/coding/src/extensions/`
+ * contributions, logger plumbing) stays in `@kodax-ai/coding/src/extensions/`
  * because it is coupled to the coding CLI surface.
  */
 

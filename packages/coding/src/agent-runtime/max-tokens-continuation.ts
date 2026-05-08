@@ -29,7 +29,7 @@
  * counter is folded into the helper's input/output round-trip.
  */
 
-import type { KodaXMessage, KodaXStreamResult } from '@kodax/ai';
+import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../types.js';
 import { KODAX_MAX_MAXTOKENS_RETRIES } from '../constants.js';

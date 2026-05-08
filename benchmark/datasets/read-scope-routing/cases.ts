@@ -15,7 +15,7 @@
  * to production phrasing.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { PromptJudge } from '../../harness/judges.js';
 import { mustMatch } from '../../harness/judges.js';

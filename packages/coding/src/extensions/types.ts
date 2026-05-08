@@ -2,7 +2,7 @@ import type {
   KodaXBaseProvider,
   KodaXMessage,
   KodaXReasoningMode,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import type {
   KodaXExtensionSessionRecord,
   KodaXExtensionStore,
@@ -16,14 +16,14 @@ import type {
 import type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
 
-// FEATURE_082 (v0.7.24): capability contract lives in `@kodax/core` so
+// FEATURE_082 (v0.7.24): capability contract lives in `@kodax-ai/core` so
 // third-party providers (MCP, RAG, custom indexes, …) can implement it
 // without a coding dependency. Re-exported here for backward compatibility.
 import type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 export type { CapabilityKind, CapabilityProvider, CapabilityResult };
 
 export interface ModelProviderRegistration {

@@ -4,11 +4,11 @@
  * Capability inventory: docs/features/v0.7.29-capability-inventory.md#cap-012-per-session-costtracker
  *
  * Substrate-level wrapper around the immutable cost-tracker primitives that
- * live in `@kodax/ai`. Re-exported here so other agent-runtime modules
+ * live in `@kodax-ai/llm`. Re-exported here so other agent-runtime modules
  * import from a stable agent-runtime path rather than reaching into the
  * sibling AI package directly.
  *
- * Migration history: implementation has lived in `@kodax/ai` since v0.7.22;
+ * Migration history: implementation has lived in `@kodax-ai/llm` since v0.7.22;
  * this re-export module is the FEATURE_100 P2 surface that future substrate
  * executor wiring imports against. Both `agent.ts:1435` and
  * `runner-driven.ts:2273` already construct trackers via `createCostTracker`;
@@ -32,7 +32,7 @@ export {
   getSummary,
   formatCost,
   formatCostReport,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 export type {
   CostTracker,
@@ -40,4 +40,4 @@ export type {
   RetryRecord,
   SessionCostSummary,
   ProviderCostSummary,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';

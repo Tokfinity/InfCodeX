@@ -33,7 +33,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents } from '../../types.js';
-import type { KodaXToolUseBlock } from '@kodax/ai';
+import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 
 import { checkPreToolAbort } from '../tool-cancellation.js';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../../constants.js';

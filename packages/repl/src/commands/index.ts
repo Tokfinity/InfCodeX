@@ -5,7 +5,7 @@
 import * as path from 'path';
 import * as os from 'os';
 
-import { getAgentConfigPath } from '@kodax/agent';
+import { getAgentConfigPath } from '@kodax-ai/agent';
 
 import type { CommandRegistry } from './registry.js';
 import { registerBuiltinCommands } from './builtin.js';

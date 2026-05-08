@@ -9,7 +9,7 @@
  * (onTextDelta, onToolUseStart, etc.) for transparency.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 // ============== Types ==============
 

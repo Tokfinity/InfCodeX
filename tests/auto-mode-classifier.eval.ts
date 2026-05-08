@@ -48,13 +48,13 @@ import {
   getProvider,
   sideQuery,
   type KodaXTokenUsage,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   buildClassifierPrompt,
   classify,
   parseClassifierOutput,
   type ClassifyDecision,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 import {
   availableAliases,

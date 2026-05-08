@@ -22,7 +22,7 @@ import {
   DEFAULT_SELF_MODIFY_BUDGET,
   remainingSelfModifyBudget,
   type AgentArtifact,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 import {
   runConstructedAudit,

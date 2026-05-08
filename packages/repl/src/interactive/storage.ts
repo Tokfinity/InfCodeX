@@ -17,7 +17,7 @@ import type {
   KodaXSessionRuntimeInfo,
   KodaXSessionScope,
   KodaXSessionStorage,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import {
   appendSessionLineageLabel,
   archiveOldIslands,
@@ -30,13 +30,13 @@ import {
   getSessionMessagesFromLineage,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-storage.js';
 // `KODAX_SESSIONS_DIR` is a module-load-time-frozen constant (see
 // `../common/utils.ts` JSDoc — v0.7.35.1 FEATURE_145). All session I/O
 // in this module reads it directly. If a substrate consumer wants
 // session storage redirected, they MUST call `setAgentConfigHome()`
-// from `@kodax/agent` BEFORE importing `@kodax/repl`. Late calls will
+// from `@kodax-ai/agent` BEFORE importing `@kodax-ai/repl`. Late calls will
 // silently write sessions to the original (default) path.
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';

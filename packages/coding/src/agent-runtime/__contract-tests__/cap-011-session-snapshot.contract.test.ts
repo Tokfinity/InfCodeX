@@ -28,7 +28,7 @@
  * STATUS: ACTIVE since FEATURE_100 P2.
  */
 
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax/agent';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';

@@ -85,7 +85,7 @@ import {
   type AgentTool,
   type RunnerLlmResult,
   type RunnerToolResult,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import {
   getProvider,
   type KodaXMessage,
@@ -95,7 +95,7 @@ import {
   type KodaXToolDefinition,
   type KodaXToolUseBlock,
   type KodaXTaskRoutingDecision,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 import {
   type ModelAlias,

@@ -46,8 +46,8 @@
  * baseline — during FEATURE_100 P3.4c.
  */
 
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
-import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax/session-lineage';
+import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
+import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax-ai/session-lineage';
 import {
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
@@ -57,8 +57,8 @@ import { estimateTokens } from '../../tokenizer.js';
 import {
   createEstimatedContextTokenSnapshot,
 } from '../../token-accounting.js';
-import { validateAndFixToolHistory } from '@kodax/agent';
-import { gracefulCompactDegradation } from '@kodax/session-lineage';
+import { validateAndFixToolHistory } from '@kodax-ai/agent';
+import { gracefulCompactDegradation } from '@kodax-ai/session-lineage';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
 
 export const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;

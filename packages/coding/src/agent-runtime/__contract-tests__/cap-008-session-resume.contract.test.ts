@@ -18,8 +18,8 @@
  * STATUS: ACTIVE since FEATURE_100 P2.
  */
 
-import type { KodaXSessionStorage } from '@kodax/agent';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXSessionStorage } from '@kodax-ai/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXOptions } from '../../types.js';

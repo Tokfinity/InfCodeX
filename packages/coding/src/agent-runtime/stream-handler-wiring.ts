@@ -39,7 +39,7 @@
  */
 
 import type { KodaXEvents } from '../types.js';
-import type { KodaXProviderStreamOptions } from '@kodax/ai';
+import type { KodaXProviderStreamOptions } from '@kodax-ai/llm';
 import type { StableBoundaryTracker } from '../resilience/stable-boundary.js';
 import type { ExtensionEventMap } from '../extensions/types.js';
 import type { StreamTimers } from './stream-timers.js';

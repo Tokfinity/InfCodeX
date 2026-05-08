@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/skills",
+  "name": "@kodax-ai/skills",
   "version": "0.7.36",
   "description": "KodaX Skills - Agent Skills standard implementation for KodaX",
   "type": "module",
@@ -40,5 +40,13 @@
   "dependencies": {
     "fflate": "^0.8.2",
     "yaml": "^2.8.2"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

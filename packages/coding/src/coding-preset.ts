@@ -15,9 +15,9 @@
  *   `runKodaX(opts, prompt)` (now a thin `Runner.run` wrapper in `agent.ts`)
  *   share one execution path.
  *
- * This file stays in `@kodax/coding` because the substrate executor closure
+ * This file stays in `@kodax-ai/coding` because the substrate executor closure
  * imports `runSubstrate` from `agent-runtime/run-substrate.ts`. Importing
- * `@kodax/core` alone never loads the substrate body.
+ * `@kodax-ai/core` alone never loads the substrate body.
  */
 
 import {
@@ -29,7 +29,7 @@ import {
   type AgentReasoningProfile,
   type PresetDispatcher,
   type RunResult,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import { runSubstrate } from './agent-runtime/run-substrate.js';
 import type { KodaXOptions, KodaXResult } from './types.js';

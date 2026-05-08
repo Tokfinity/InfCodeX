@@ -24,7 +24,7 @@ import {
   type KodaXMessage,
   type KodaXReasoningRequest,
   type KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 import {
   resolveAlias,

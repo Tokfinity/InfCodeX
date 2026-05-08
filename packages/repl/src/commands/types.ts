@@ -9,7 +9,7 @@ import type {
   KodaXOptions,
   KodaXReasoningMode,
   KodaXSkillInvocationContext,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import type * as readline from 'readline';
 import type { InteractiveContext } from '../interactive/context.js';
 import type { PermissionMode } from '../permission/types.js';
@@ -105,7 +105,7 @@ export interface CommandCallbacks {
    * guardrail state through it. Used by `/auto-engine` (show), `/auto-denials`,
    * and the status bar engine indicator.
    */
-  getAutoModeStats?: () => import('@kodax/coding').AutoModeStats | undefined;
+  getAutoModeStats?: () => import('@kodax-ai/coding').AutoModeStats | undefined;
   /**
    * FEATURE_092 phase 2b.8: manual engine setter for `/auto-engine llm|rules`.
    * No-op when the guardrail hasn't been constructed yet. Threshold downgrades

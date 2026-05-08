@@ -7,8 +7,8 @@ import type {
   KodaXStreamResult,
   KodaXToolDefinition,
   KodaXToolResultBlock,
-} from '@kodax/ai';
-import { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 import { compact, needsCompaction, truncateUserText } from './compaction.js';
 import { generateSummary } from './summary-generator.js';
 

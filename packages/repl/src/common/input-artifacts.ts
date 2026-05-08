@@ -3,8 +3,8 @@ import path from 'node:path';
 import type {
   KodaXContentBlock,
   KodaXInputArtifact,
-} from '@kodax/coding';
-import { buildPromptMessageContent } from '@kodax/coding';
+} from '@kodax-ai/coding';
+import { buildPromptMessageContent } from '@kodax-ai/coding';
 
 const IMAGE_MEDIA_TYPES: Record<string, string> = {
   '.gif': 'image/gif',

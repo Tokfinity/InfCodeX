@@ -1,5 +1,5 @@
 /**
- * @kodax/agent Compaction Module
+ * @kodax-ai/agent Compaction Module
  *
  * 上下文压缩模块 - 智能摘要与文件追踪
  */

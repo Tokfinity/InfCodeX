@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { listPluginSkillPaths } from '@kodax/skills';
+import { listPluginSkillPaths } from '@kodax-ai/skills';
 import { executeTool } from '../tools/index.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import {

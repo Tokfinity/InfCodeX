@@ -44,7 +44,7 @@ describe('CAP-070: translateAbortError', () => {
     expect(result.constructor.name).toBe('KodaXNetworkError');
     expect(result.message).toMatch(/Stream stalled/);
     // KodaXNetworkError carries `transient: true` when caused by stall;
-    // we don't tightly couple to the field name (it's @kodax/ai's
+    // we don't tightly couple to the field name (it's @kodax-ai/llm's
     // contract), only that the resulting class is the network-error one.
   });
 

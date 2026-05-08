@@ -22,7 +22,7 @@
  * the mental model simple; later shards may refine.
  */
 
-import type { Span } from '@kodax/tracing';
+import type { Span } from '@kodax-ai/tracing';
 
 import type { Agent, AgentMessage, Handoff } from './agent.js';
 import type { RunnerToolCall, RunnerToolResult } from './runner-tool-loop.js';

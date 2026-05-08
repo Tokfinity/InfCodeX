@@ -2,7 +2,7 @@
  * Utilities for extracting message content for history rendering, copy, and previews.
  */
 
-import type { KodaXContentBlock, KodaXMessage } from "@kodax/coding";
+import type { KodaXContentBlock, KodaXMessage } from "@kodax-ai/coding";
 
 export type RestoredHistorySeed =
   | { type: "user"; text: string }

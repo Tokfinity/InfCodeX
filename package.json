@@ -20,7 +20,7 @@
   },
   "scripts": {
     "build": "npm run build:packages && tsc",
-    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax/skills",
+    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/skills",
     "dev": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
     "dev:cli": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
     "dev:mem-diag": "node scripts/mem-diag-launch.cjs",
@@ -50,9 +50,9 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
-    "@kodax/coding": "*",
-    "@kodax/repl": "*",
-    "@kodax/skills": "*",
+    "@kodax-ai/coding": "*",
+    "@kodax-ai/repl": "*",
+    "@kodax-ai/skills": "*",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
     "glob": "^11.0.1",

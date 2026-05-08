@@ -147,7 +147,7 @@ export interface RecoveryDecision {
  */
 export interface RecoveryResult {
   /** Reconstructed messages from the stable boundary forward. */
-  messages: import('@kodax/ai').KodaXMessage[];
+  messages: import('@kodax-ai/llm').KodaXMessage[];
   /** Tool call IDs that were dropped (incomplete at failure time). */
   droppedToolCallIds: string[];
   /** Tool call IDs that were preserved (already executed). */

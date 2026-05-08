@@ -32,21 +32,21 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 // Mock the substrate's gracefulCompactDegradation primitive so tests
 // stay fast and deterministic. CAP-028 owns its own contract — here
 // we only verify the wiring around it.
-// v0.7.36: gracefulCompactDegradation moved from @kodax/agent to
-// @kodax/session-lineage/runtime-middleware/ to break the build cycle
+// v0.7.36: gracefulCompactDegradation moved from @kodax-ai/agent to
+// @kodax-ai/session-lineage/runtime-middleware/ to break the build cycle
 // introduced by FEATURE_142 Batch D. Mock at the package boundary the
 // SUT (compaction-orchestration.ts) imports from.
-vi.mock('@kodax/session-lineage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/session-lineage')>();
+vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/session-lineage')>();
   return { ...actual, gracefulCompactDegradation: vi.fn() };
 });
 
-import { gracefulCompactDegradation as mockedDegrade } from '@kodax/session-lineage';
+import { gracefulCompactDegradation as mockedDegrade } from '@kodax-ai/session-lineage';
 import { applyGracefulDegradationGate } from '../middleware/compaction-orchestration.js';
 import type { KodaXEvents } from '../../types.js';
 

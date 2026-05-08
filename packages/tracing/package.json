@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/tracing",
+  "name": "@kodax-ai/tracing",
   "version": "0.7.36",
   "description": "KodaX Tracing - Trace / Span / SpanData / TracingProcessor (FEATURE_083)",
   "type": "module",
@@ -31,5 +31,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/tracing"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

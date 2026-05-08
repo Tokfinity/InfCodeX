@@ -27,7 +27,7 @@
  * pre-FEATURE_100 baseline — during FEATURE_100 P3.3a.
  */
 
-import type { KodaXContentBlock } from '@kodax/ai';
+import type { KodaXContentBlock } from '@kodax-ai/llm';
 
 export const EMPTY_ASSISTANT_CONTENT_PLACEHOLDER: KodaXContentBlock = {
   type: 'text',

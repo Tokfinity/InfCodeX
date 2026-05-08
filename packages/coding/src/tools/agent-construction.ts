@@ -28,7 +28,7 @@
  */
 
 import type { KodaXToolExecutionContext } from '../types.js';
-import { Runner, listRegisteredInvariants } from '@kodax/agent';
+import { Runner, listRegisteredInvariants } from '@kodax-ai/agent';
 
 import {
   type AgentArtifact,
@@ -212,7 +212,7 @@ export async function toolValidateAgent(
     if (listRegisteredInvariants().length === 0) {
       return [
         '[Tool Error] validate_agent: invariant registry is empty.',
-        'Call registerCodingInvariants() (from @kodax/coding) before invoking validate_agent —',
+        'Call registerCodingInvariants() (from @kodax-ai/coding) before invoking validate_agent —',
         'the REPL surface bootstraps this at startup; non-REPL contexts must register explicitly.',
       ].join(' ');
     }

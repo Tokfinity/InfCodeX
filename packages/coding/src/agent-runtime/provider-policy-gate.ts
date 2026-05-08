@@ -25,7 +25,7 @@
  * pre-FEATURE_100 baseline — during FEATURE_100 P3.2b.
  */
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { KodaXOptions } from '../types.js';
 import {
   buildProviderPolicyPromptNotes,

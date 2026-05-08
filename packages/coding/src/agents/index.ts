@@ -29,7 +29,7 @@ export {
 } from './coding-agents.js';
 
 // v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations moved back
-// from `@kodax/agent/src/primitives/` per ADR-021.
+// from `@kodax-ai/agent/src/primitives/` per ADR-021.
 export {
   SCOUT_AGENT_NAME,
   PLANNER_AGENT_NAME,

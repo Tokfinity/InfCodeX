@@ -5,7 +5,7 @@
  * a Generator (mutation-producing) role, an Evaluator must also be
  * reachable so the generator's output is independently verified. v1
  * uses agent name conventions (`generator` / `evaluator`) — the
- * canonical role names declared by `@kodax/core/task-engine-agents.ts`.
+ * canonical role names declared by `@kodax-ai/core/task-engine-agents.ts`.
  *
  * Hooks:
  *   - admit: walk the reachable handoff graph from the manifest. If
@@ -23,7 +23,7 @@
  * pairing exists, not to police the message flow.
  */
 
-import type { Agent } from '@kodax/agent';
+import type { Agent } from '@kodax-ai/agent';
 import type {
   AdmissionCtx,
   AgentManifest,
@@ -31,7 +31,7 @@ import type {
   InvariantResult,
   QualityInvariant,
   TerminalCtx,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 const GENERATOR_NAME = 'generator';
 const EVALUATOR_NAME = 'evaluator';

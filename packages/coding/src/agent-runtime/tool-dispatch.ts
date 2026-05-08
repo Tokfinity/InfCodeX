@@ -106,7 +106,7 @@ import type {
   KodaXToolExecutionContext,
   KodaXToolResultBlock,
 } from '../types.js';
-import type { KodaXToolUseBlock } from '@kodax/ai';
+import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import { executeTool } from '../tools/index.js';
 import { emitActiveExtensionEvent } from '../extensions/runtime.js';

@@ -48,7 +48,7 @@ import type {
   KodaXOptions,
   SessionErrorMetadata,
 } from '../../types.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXInputArtifact } from '../../types.js';
 import { extractTitleFromMessages } from '../../session.js';
 import { normalizeLoadedSessionMessages } from '../../task-engine/_internal/round-boundary.js';

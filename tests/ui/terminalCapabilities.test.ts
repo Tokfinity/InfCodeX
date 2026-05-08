@@ -11,8 +11,8 @@ import {
   supportsEmoji,
   getTerminalWidth,
   isScreenReader,
-} from "@kodax/repl";
-import type { TerminalCapabilities } from "@kodax/repl";
+} from "@kodax-ai/repl";
+import type { TerminalCapabilities } from "@kodax-ai/repl";
 
 describe("TerminalCapabilities", () => {
   const originalEnv = process.env;

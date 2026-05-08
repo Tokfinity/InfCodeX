@@ -1,4 +1,4 @@
-import type { KodaXRepoIntelligenceTraceEvent } from "@kodax/coding";
+import type { KodaXRepoIntelligenceTraceEvent } from "@kodax-ai/coding";
 import type { CreatableHistoryItem } from "../types.js";
 
 /** Narrow info-only history item so callers can pass to emitInfoItemToCorrectLayer. */

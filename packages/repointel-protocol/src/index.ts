@@ -4,7 +4,7 @@
  * RPC contract between a host CLI (kodax/codex/claude/opencode) and the
  * repo-intelligence daemon. Kept as a standalone package so external
  * clients can depend on the contract without pulling the whole
- * `@kodax/coding` runtime.
+ * `@kodax-ai/coding` runtime.
  */
 
 export const REPOINTEL_CONTRACT_VERSION = 1 as const;

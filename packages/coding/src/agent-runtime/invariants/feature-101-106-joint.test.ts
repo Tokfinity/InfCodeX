@@ -38,13 +38,13 @@ import {
   createAgent,
   getInvariant,
   listRegisteredInvariants,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import type {
   AgentManifest,
   ObserveCtx,
   RunnerEvent,
   SystemCap,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import { registerCodingInvariants } from './index.js';
 
@@ -54,7 +54,7 @@ const SYS_CAP: SystemCap = {
   allowedToolCapabilities: ['read', 'edit', 'bash:test'],
 };
 
-// Matches @kodax/core/admission.ts §ReadonlyMutationTracker.
+// Matches @kodax-ai/core/admission.ts §ReadonlyMutationTracker.
 function emptyTracker(): ObserveCtx['mutationTracker'] {
   return { files: new Set<string>(), totalOps: 0 };
 }

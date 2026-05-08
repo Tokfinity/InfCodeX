@@ -18,7 +18,7 @@
  * STATUS: ACTIVE since FEATURE_100 P2.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { describe, expect, it } from 'vitest';
 
 import {

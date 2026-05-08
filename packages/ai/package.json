@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/ai",
+  "name": "@kodax-ai/llm",
   "version": "0.7.36",
   "description": "KodaX AI - 独立的 LLM 抽象层，可被其他项目复用",
   "type": "module",
@@ -41,5 +41,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/ai"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

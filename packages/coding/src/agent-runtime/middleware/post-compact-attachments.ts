@@ -26,9 +26,9 @@
  * baseline — during FEATURE_100 P3.4b.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionResult } from '@kodax/session-lineage';
-import { buildPostCompactAttachments, buildFileContentMessages, injectPostCompactAttachments, DEFAULT_POST_COMPACT_CONFIG, POST_COMPACT_TOKEN_BUDGET } from '@kodax/session-lineage';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { CompactionResult } from '@kodax-ai/session-lineage';
+import { buildPostCompactAttachments, buildFileContentMessages, injectPostCompactAttachments, DEFAULT_POST_COMPACT_CONFIG, POST_COMPACT_TOKEN_BUDGET } from '@kodax-ai/session-lineage';
 import { estimateTokens } from '../../tokenizer.js';
 
 export interface ApplyPostCompactAttachmentsInput {

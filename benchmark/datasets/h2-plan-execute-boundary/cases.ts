@@ -233,7 +233,7 @@ const PLANNED_CASES: readonly H2BoundaryCase[] = [
       '记录字段（建议最小集）：task_id / trace_id / parent_trace_id / stage (scout|planner|generator|evaluator|reviewer|classifier) / subagent_role / provider / model / capability_request / ' +
       'prompt_tokens / completion_tokens / cache_hit / cache_write / latency_ms / cost_usd / tool_call_total / tool_call_failed / tool_call_failure_reason / ' +
       'fallback_count / retry_count / triggered_rework / objective_signals (test/lint/typecheck/build pass|fail|n_a) / user_outcome_event。' +
-      '存储：本地 JSONL 或 SQLite，**不要引入 OTel**（单用户 CLI 不需要企业基础设施）。复用现有 @kodax/tracing 的 Tracer/Span 抽象（FEATURE_083 v0.7.24 已落地），新增本地 TracingProcessor 子类做持久化。' +
+      '存储：本地 JSONL 或 SQLite，**不要引入 OTel**（单用户 CLI 不需要企业基础设施）。复用现有 @kodax-ai/tracing 的 Tracer/Span 抽象（FEATURE_083 v0.7.24 已落地），新增本地 TracingProcessor 子类做持久化。' +
       '注入层：调用层强制打基础字段（provider/model/tokens/latency/tool_result），subagent 提供 stage tag。' +
       '隐私 / 本地优先：trace 数据完全 local-only，默认不上报；提供配置开关（默认开，可关闭）。',
     gitHeadSha: null,

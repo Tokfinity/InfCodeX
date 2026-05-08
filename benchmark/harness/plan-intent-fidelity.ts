@@ -17,7 +17,7 @@
  * scout_verdict (H1-ref) against the Generator's final state diff.
  */
 
-import { getProvider, type KodaXMessage } from '@kodax/ai';
+import { getProvider, type KodaXMessage } from '@kodax-ai/llm';
 
 import { resolveAlias, type ModelAlias } from './aliases.js';
 

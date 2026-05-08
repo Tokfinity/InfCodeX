@@ -28,14 +28,14 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   clearRuntimeModelProviders,
   KodaXBaseProvider,
   KODAX_CAPPED_MAX_OUTPUT_TOKENS,
   KODAX_ESCALATED_MAX_OUTPUT_TOKENS,
   registerModelProvider,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 
 const TEST_PROVIDER_NAME = 'max-tokens-escalation-provider';

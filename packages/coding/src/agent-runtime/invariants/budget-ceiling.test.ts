@@ -4,8 +4,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '@kodax/agent';
-import type { AdmissionCtx, AgentManifest, SystemCap } from '@kodax/agent';
+import { createAgent } from '@kodax-ai/agent';
+import type { AdmissionCtx, AgentManifest, SystemCap } from '@kodax-ai/agent';
 
 import { budgetCeiling } from './budget-ceiling.js';
 

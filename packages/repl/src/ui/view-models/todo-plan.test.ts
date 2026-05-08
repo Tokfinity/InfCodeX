@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import type { TodoItem, TodoStatus } from "@kodax/coding";
+import type { TodoItem, TodoStatus } from "@kodax-ai/coding";
 
 import {
   MAX_VISIBLE_ROWS,

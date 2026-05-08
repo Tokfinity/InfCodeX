@@ -16,8 +16,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { KodaXMessage, KodaXToolDefinition } from '@kodax/ai';
-import { getProvider } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import { getProvider } from '@kodax-ai/llm';
 
 /**
  * 一个最小的 constructed-tool schema：声明 path 输入，要求 read 能力。

@@ -9,7 +9,7 @@ import type {
   KodaXSessionLineage,
   KodaXSessionRuntimeInfo,
   KodaXSessionUiHistoryItem,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 // Interactive mode - 交互模式
 export type InteractiveMode = 'code' | 'ask';

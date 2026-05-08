@@ -14,7 +14,7 @@ import React, {
   useEffect,
   type ReactNode,
 } from "react";
-import { getMessageQueue } from "@kodax/agent";
+import { getMessageQueue } from "@kodax-ai/agent";
 import { StreamingState } from "../types.js";
 import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
 

@@ -19,7 +19,7 @@ import {
   _resetInvariantRegistry,
   getAdmittedAgentBindings,
   registerInvariant,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import type {
   AgentMessage,
   Deliverable,
@@ -29,7 +29,7 @@ import type {
   RunnerEvent,
   RunnerLlmResult,
   TerminalCtx,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import { registerCodingInvariants } from '../agent-runtime/invariants/index.js';
 import {
@@ -145,9 +145,9 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     registerInvariant(probe);
     // Re-register the rest of the production set (skipping finalOwner —
     // it's been overridden by the probe above).
-    const { registerCoreInvariants } = await import('@kodax/agent');
+    const { registerCoreInvariants } = await import('@kodax-ai/agent');
     // registerCoreInvariants would clash on finalOwner; manually skip it.
-    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
@@ -192,7 +192,7 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     _resetInvariantRegistry();
     registerInvariant(probe);
     // Register a permissive handoffLegality so admission still passes.
-    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
@@ -240,7 +240,7 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     };
     _resetInvariantRegistry();
     registerInvariant(probe);
-    const { handoffLegality, evidenceTrail } = await import('@kodax/agent');
+    const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
     const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =

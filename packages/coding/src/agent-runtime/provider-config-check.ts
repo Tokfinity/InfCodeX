@@ -22,7 +22,7 @@
  * pre-FEATURE_100 baseline — during FEATURE_100 P3.6n.
  */
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 
 /**
  * CAP-042: throw if the provider lacks the API key env-var.

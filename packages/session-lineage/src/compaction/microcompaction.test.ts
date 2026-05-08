@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from './microcompaction.js';
 
 function createTextMessage(role: KodaXMessage['role'], content: string): KodaXMessage {

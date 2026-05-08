@@ -24,8 +24,8 @@ import {
   warmRepoIntelligenceRuntime,
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
-} from '@kodax/coding';
-import type { AgentsFile } from '@kodax/coding';
+} from '@kodax-ai/coding';
+import type { AgentsFile } from '@kodax-ai/coding';
 import {
   PermissionMode,
   PERMISSION_MODES,
@@ -49,8 +49,8 @@ import {
   saveConfig,
 } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
-import { compact } from '@kodax/session-lineage';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import { compact } from '@kodax-ai/session-lineage';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,
@@ -58,7 +58,7 @@ import {
   expandSkillForLLM,
   type SkillMetadata,
   type SkillContext,
-} from '@kodax/skills';
+} from '@kodax-ai/skills';
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
 import { newCommand } from '../commands/new-command.js';

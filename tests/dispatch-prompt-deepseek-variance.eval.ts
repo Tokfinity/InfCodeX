@@ -55,7 +55,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax/ai';
+import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax-ai/llm';
 
 const T1_TASK = 'Audit three independent packages of this monorepo for security issues: packages/ai, packages/coding, packages/repl. For each package, find any vulnerabilities (input validation gaps, unsafe shell, secret handling, etc). Report findings per-package.';
 

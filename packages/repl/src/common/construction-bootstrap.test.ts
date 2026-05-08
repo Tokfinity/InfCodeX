@@ -31,7 +31,7 @@ import {
   drainPendingSwaps,
   hasPendingSwap,
   resolveConstructedAgent,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 import {
   bindAskUserForConstruction,

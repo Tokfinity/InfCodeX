@@ -1,11 +1,11 @@
 /**
  * KodaX Core Types
  *
- * 核心类型定义 - 重新导出 @kodax/agent 类型 + Coding 特定类型
+ * 核心类型定义 - 重新导出 @kodax-ai/agent 类型 + Coding 特定类型
  */
 
-// ============== Import from @kodax/agent ==============
-// 通用 Agent 类型从 @kodax/agent 导入
+// ============== Import from @kodax-ai/agent ==============
+// 通用 Agent 类型从 @kodax-ai/agent 导入
 
 import type {
   KodaXImageBlock,
@@ -64,10 +64,10 @@ import type {
   KodaXSessionUiHistoryItemType,
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
-} from '@kodax/agent';
-// v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax/ai
+} from '@kodax-ai/agent';
+// v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
-// going through @kodax/agent's re-export, which has been removed.
+// going through @kodax-ai/agent's re-export, which has been removed.
 import type {
   KodaXHarnessProfile,
   KodaXAmaProfile,
@@ -76,8 +76,8 @@ import type {
   KodaXAmaFanoutPolicy,
   KodaXAmaControllerDecision,
   KodaXReviewScale,
-} from '@kodax/ai';
-import type { CompactionUpdate } from '@kodax/session-lineage';
+} from '@kodax-ai/llm';
+import type { CompactionUpdate } from '@kodax-ai/session-lineage';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
 // `./extensions/runtime-contract.ts` to avoid `types.ts ↔ extensions/runtime.ts`
 // circular imports. The concrete `KodaXExtensionRuntime` class implements
@@ -91,7 +91,7 @@ import type {
   RecoveryLadderStep,
 } from './resilience/types.js';
 
-// Re-export all types from @kodax/agent
+// Re-export all types from @kodax-ai/agent
 export type {
   KodaXImageBlock,
   KodaXTextBlock,
@@ -361,14 +361,14 @@ export interface KodaXProviderPolicyHints {
   workIntent?: KodaXTaskWorkIntent;
 }
 
-// FEATURE_082 (v0.7.24): MCP server configuration moved to `@kodax/mcp`.
+// FEATURE_082 (v0.7.24): MCP server configuration moved to `@kodax-ai/mcp`.
 // `KodaX*` aliases re-exported for backward compatibility.
 import type {
   McpServerConfig,
   McpServersConfig,
   McpTransportKind,
   McpConnectMode,
-} from '@kodax/mcp';
+} from '@kodax-ai/mcp';
 
 export type KodaXMcpTransport = McpTransportKind;
 export type KodaXMcpConnectMode = McpConnectMode;
@@ -420,7 +420,7 @@ export interface KodaXRepoIntelligenceTrace {
  * (interactive REPL), and `acp_server`.
  *
  * Note: FEATURE_083 (v0.7.24) initially marked this as superseded by
- * `EvidenceSpan` in `@kodax/tracing`. **FEATURE_086 (v0.7.27) re-evaluated
+ * `EvidenceSpan` in `@kodax-ai/tracing`. **FEATURE_086 (v0.7.27) re-evaluated
  * and retained it**: `EvidenceSpanData` is a generic
  * `{ source, queryPreview?, resultCount?, cacheHit?, error? }` abstraction
  * that does not carry the repo-intelligence-specific `stage` enum,
@@ -939,7 +939,7 @@ export interface KodaXOptions {
    * consumers can inject custom ToolGuardrail / InputGuardrail / OutputGuardrail
    * instances. Empty / undefined leaves the agent's own declaration unchanged.
    */
-  guardrails?: readonly import('@kodax/agent').Guardrail[];
+  guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
   /** AbortSignal for cancelling the API request */
   abortSignal?: AbortSignal;
 }
@@ -1352,7 +1352,7 @@ export interface KodaXToolExecutionContext {
    * safe under JS run-to-completion semantics — concurrent child tool calls
    * produce interleaved `recordBlock` / `recordAllow` updates with no tearing.
    */
-  guardrails?: readonly import('@kodax/agent').Guardrail[];
+  guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
   /**
    * FEATURE_097 (v0.7.34): Scout-seeded todo plan store. Populated by
    * runner-driven setup whenever Scout's `executionObligations` reaches

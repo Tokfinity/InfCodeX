@@ -29,7 +29,7 @@ import {
   KodaXBaseProvider,
   clearRuntimeModelProviders,
   registerModelProvider,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -37,7 +37,7 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 import { runKodaX } from '../../agent.js';
 

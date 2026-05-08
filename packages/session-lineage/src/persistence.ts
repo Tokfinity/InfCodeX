@@ -1,5 +1,5 @@
 /**
- * @kodax/agent Extension Persistence Store
+ * @kodax-ai/agent Extension Persistence Store
  *
  * JSONL-backed key-value store scoped to a single extension identity.
  * Each store instance owns one `.jsonl` file inside the extension store
@@ -15,12 +15,12 @@ import fsSync from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-import { getAgentConfigPath } from '@kodax/agent';
+import { getAgentConfigPath } from '@kodax-ai/agent';
 import type {
   KodaXExtensionStore,
   KodaXExtensionStoreEntry,
   KodaXJsonValue,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 // ---------------------------------------------------------------------------
 // Helpers

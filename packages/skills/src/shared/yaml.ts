@@ -2,8 +2,8 @@
  * Shared YAML frontmatter parsing helpers.
  *
  * These primitives are consumed by both SKILL.md loading
- * (`@kodax/skills/skill-loader.ts`) and user/project markdown command
- * discovery (`@kodax/repl/commands/discovery.ts`). Both paths read the
+ * (`@kodax-ai/skills/skill-loader.ts`) and user/project markdown command
+ * discovery (`@kodax-ai/repl/commands/discovery.ts`). Both paths read the
  * same frontmatter shape (description + hook entries), so the
  * tolerant YAML sanitizer, the hook/tool normalizers, and the
  * frontmatter splitter all live here instead of being copy-pasted.

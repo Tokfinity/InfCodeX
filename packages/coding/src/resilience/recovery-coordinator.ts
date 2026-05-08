@@ -13,7 +13,7 @@ import type {
   KodaXContentBlock,
   KodaXThinkingBlock,
   KodaXRedactedThinkingBlock,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import type {
   ResilienceClassification,
   RecoveryAction,

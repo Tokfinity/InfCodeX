@@ -1,5 +1,5 @@
 /**
- * @kodax/agent/messaging/drain — mid-turn drain decision (FEATURE_115).
+ * @kodax-ai/agent/messaging/drain — mid-turn drain decision (FEATURE_115).
  *
  * Sleep-gated drain logic shared between any agent harness that wants to
  * pull queued messages between tool execution and the next LLM call.

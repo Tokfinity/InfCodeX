@@ -62,8 +62,8 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXProviderConfig,
-} from '@kodax/ai';
-import { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 
 // ---------------------------------------------------------------------------
 // Recording shape

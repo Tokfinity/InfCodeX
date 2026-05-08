@@ -25,8 +25,8 @@ import {
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
 } from './runner-driven.js';
-import type { RunnableTool } from '@kodax/agent';
-import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax/ai';
+import type { RunnableTool } from '@kodax-ai/agent';
+import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax-ai/llm';
 import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
@@ -265,14 +265,14 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
   const ESCALATION_PROVIDER_NAME = 'runner-driven-max-tokens-test';
   const ESCALATION_PROVIDER_API_KEY_ENV = 'RUNNER_DRIVEN_MAX_TOKENS_TEST_API_KEY';
 
-  let KodaXBaseProviderRef: typeof import('@kodax/ai').KodaXBaseProvider;
-  let registerModelProviderFn: typeof import('@kodax/ai').registerModelProvider;
-  let clearRuntimeModelProvidersFn: typeof import('@kodax/ai').clearRuntimeModelProviders;
+  let KodaXBaseProviderRef: typeof import('@kodax-ai/llm').KodaXBaseProvider;
+  let registerModelProviderFn: typeof import('@kodax-ai/llm').registerModelProvider;
+  let clearRuntimeModelProvidersFn: typeof import('@kodax-ai/llm').clearRuntimeModelProviders;
   let KODAX_CAPPED: number;
   let KODAX_ESCALATED: number;
 
   beforeAll(async () => {
-    const aiModule = await import('@kodax/ai');
+    const aiModule = await import('@kodax-ai/llm');
     KodaXBaseProviderRef = aiModule.KodaXBaseProvider;
     registerModelProviderFn = aiModule.registerModelProvider;
     clearRuntimeModelProvidersFn = aiModule.clearRuntimeModelProviders;
@@ -470,7 +470,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
   // pieces so the continuation doesn't hit the same wall as the cut-off turn.
   it('L5 continuation injects the Claude Code style meta message', async () => {
     const observedBudgets: number[] = [];
-    const capturedMessagesPerCall: Array<readonly import('@kodax/ai').KodaXMessage[]> = [];
+    const capturedMessagesPerCall: Array<readonly import('@kodax-ai/llm').KodaXMessage[]> = [];
     const responses: Array<{ textBlocks: { type: 'text'; text: string }[]; stopReason?: string }> = [
       // Turn 1 returns max_tokens with text — after L1 escalation (which
       // doesn't fire here because first turn already at capped budget
@@ -503,7 +503,7 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
           evidenceSupport: 'limited' as const,
         },
       };
-      async stream(messages: import('@kodax/ai').KodaXMessage[]): Promise<any> {
+      async stream(messages: import('@kodax-ai/llm').KodaXMessage[]): Promise<any> {
         observedBudgets.push(this.getEffectiveMaxOutputTokens());
         capturedMessagesPerCall.push([...messages]);
         const resp = responses[callIdx++];
@@ -1895,8 +1895,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
 
   // Minimal RunnerToolContext for tests — `agent` is unused by the
   // bash / mutation-guard path but required by the interface.
-  function makeToolCtx(agentName: string): import('@kodax/agent').RunnerToolContext {
-    return { agent: { name: agentName } as unknown as import('@kodax/agent').Agent };
+  function makeToolCtx(agentName: string): import('@kodax-ai/agent').RunnerToolContext {
+    return { agent: { name: agentName } as unknown as import('@kodax-ai/agent').Agent };
   }
 
   it('Planner agent exposes only read + grep + glob + emit_contract (no bash/write/edit)', () => {
@@ -2127,7 +2127,7 @@ describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only',
         objective: 'test',
         read_only: false,
       },
-      { agent: { name: 'scout' } as unknown as import('@kodax/agent').Agent },
+      { agent: { name: 'scout' } as unknown as import('@kodax-ai/agent').Agent },
     );
     expect(String(result.content)).toContain('Scout can only dispatch read-only');
   });
@@ -2334,7 +2334,7 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
       amaControllerDecision: {
         profile: 'tactical',
         tactics: [],
-        fanout: { mode: 'off' as const } as unknown as import('@kodax/ai').KodaXAmaFanoutPolicy,
+        fanout: { mode: 'off' as const } as unknown as import('@kodax-ai/llm').KodaXAmaFanoutPolicy,
         reason: 'test',
         upgradeTriggers: [],
       },

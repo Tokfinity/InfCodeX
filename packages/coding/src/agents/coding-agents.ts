@@ -35,7 +35,7 @@ import {
   type AgentTool,
   type Guardrail,
   type Handoff,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,

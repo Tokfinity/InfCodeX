@@ -30,7 +30,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { normalizeLoadedSessionMessages } from '../../task-engine/_internal/round-boundary.js';
 
 describe('CAP-045: session loading + post-load message normalization contract', () => {

@@ -49,7 +49,7 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
       const detail = err instanceof Error ? err.message : String(err);
       throw new Error(
         `[child-executor] Failed to lazy-load agent module (\`${spec}\`) for dispatch_child_task. ` +
-        `This usually means the @kodax/coding build is broken or out of date. ` +
+        `This usually means the @kodax-ai/coding build is broken or out of date. ` +
         `Underlying cause: ${detail}`,
       );
     }
@@ -107,7 +107,7 @@ export interface ChildExecutorOptions {
    * shared by passing the SAME instance — preventing children from reaching
    * a fresh threshold and bypassing the parent's downgrade.
    */
-  readonly guardrails?: readonly import('@kodax/agent').Guardrail[];
+  readonly guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
 }
 
 export async function executeChildAgents(

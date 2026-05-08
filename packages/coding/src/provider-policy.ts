@@ -2,8 +2,8 @@ import type {
   KodaXBaseProvider,
   KodaXProviderCapabilityProfile,
   KodaXReasoningCapability,
-} from '@kodax/ai';
-import { normalizeCapabilityProfile } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { normalizeCapabilityProfile } from '@kodax-ai/llm';
 import {
   isCustomProviderName,
   isProviderName,

@@ -2,7 +2,7 @@
  * KodaX Tool Types
  */
 
-import type { KodaXToolDefinition } from '@kodax/ai';
+import type { KodaXToolDefinition } from '@kodax-ai/llm';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 /**

@@ -7,7 +7,7 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 import { render } from "ink-testing-library";
 
-import type { TodoItem } from "@kodax/coding";
+import type { TodoItem } from "@kodax-ai/coding";
 
 import { TodoListSurface } from "./TodoListSurface.js";
 import {

@@ -3,17 +3,17 @@
  * contract for an MCP server fleet.
  *
  * FEATURE_082 (v0.7.24): moved from
- * `@kodax/coding/src/capabilities/providers/mcp/provider.ts` to this package.
+ * `@kodax-ai/coding/src/capabilities/providers/mcp/provider.ts` to this package.
  * The coding-specific `registerConfiguredMcpCapabilityProvider` adapter (which
  * pulls in `KodaXExtensionRuntime`) lives in
- * `@kodax/coding/src/capabilities/providers/mcp-adapter.ts`.
+ * `@kodax-ai/coding/src/capabilities/providers/mcp-adapter.ts`.
  */
 
 import type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import type { McpServerConfig, McpServersConfig } from './config.js';
 import {
   defaultMcpCacheDir,
@@ -51,7 +51,7 @@ export class McpCapabilityProvider implements CapabilityProvider {
    * `defaultMcpCacheDir()` ONCE at instantiation time and threads the
    * result into every `McpServerRuntime` it spawns. If a substrate
    * consumer plans to redirect the agent config home via
-   * `setAgentConfigHome()` from `@kodax/agent`, that call MUST happen
+   * `setAgentConfigHome()` from `@kodax-ai/agent`, that call MUST happen
    * BEFORE constructing this provider. Late calls have no effect on
    * already-constructed runtimes.
    *

@@ -32,7 +32,7 @@ import {
   type SelfModifyAskUser,
   configureRuntime,
   rehydrateActiveArtifacts,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 type AskUserFn = (options: AskUserQuestionOptions) => Promise<string>;
 

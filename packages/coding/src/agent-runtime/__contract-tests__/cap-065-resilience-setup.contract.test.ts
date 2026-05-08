@@ -30,7 +30,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 
 import { buildResilienceSession } from '../provider-retry-policy.js';
 import { StableBoundaryTracker } from '../../resilience/stable-boundary.js';

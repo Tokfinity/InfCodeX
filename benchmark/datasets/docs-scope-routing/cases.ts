@@ -21,7 +21,7 @@
  * production choice; this eval only verifies anchor's docs-only behavior.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { PromptVariant } from '../../harness/harness.js';
 import type { PromptJudge } from '../../harness/judges.js';

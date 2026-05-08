@@ -4,8 +4,8 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "paths": {
-      "@kodax/ai": ["../ai/src/index.ts"],
-      "@kodax/tracing": ["../tracing/src/index.ts"]
+      "@kodax-ai/llm": ["../ai/src/index.ts"],
+      "@kodax-ai/tracing": ["../tracing/src/index.ts"]
     },
     "lib": ["ES2022"],
     "outDir": "./dist",

@@ -35,22 +35,22 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig, CompactionResult } from '@kodax/session-lineage';
-// Mock @kodax/session-lineage's `compact` so we can deterministically control
+import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
+import type { CompactionConfig, CompactionResult } from '@kodax-ai/session-lineage';
+// Mock @kodax-ai/session-lineage's `compact` so we can deterministically control
 // the LLM compaction outcome (success / partial / throw / no-op)
 // without exercising the real provider/LLM stack.
-// (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax/agent to
-// @kodax/session-lineage; see ADR-021.)
-vi.mock('@kodax/session-lineage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/session-lineage')>();
+// (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax-ai/agent to
+// @kodax-ai/session-lineage; see ADR-021.)
+vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/session-lineage')>();
   return {
     ...actual,
     compact: vi.fn(),
   };
 });
 
-import { compact as mockedCompact } from '@kodax/session-lineage';
+import { compact as mockedCompact } from '@kodax-ai/session-lineage';
 import {
   tryIntelligentCompact,
   COMPACT_CIRCUIT_BREAKER_LIMIT,
@@ -87,7 +87,7 @@ const baseMessages: KodaXMessage[] = [
 
 /**
  * Provider stub. Since `intelligentCompact` is mocked at module
- * scope (see `vi.mock('@kodax/session-lineage', ...)` above), the provider's
+ * scope (see `vi.mock('@kodax-ai/session-lineage', ...)` above), the provider's
  * methods are never actually invoked. We just need a typed
  * placeholder that satisfies the helper's input contract.
  */

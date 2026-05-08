@@ -19,7 +19,7 @@
  * `coerceManagedProtocolToolPayload` between both paths.
  */
 
-import type { RunnableTool, RunnerToolResult } from '@kodax/agent';
+import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,

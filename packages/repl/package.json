@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/repl",
+  "name": "@kodax-ai/repl",
   "version": "0.7.36",
   "description": "KodaX REPL - 完整的交互式终端体验",
   "type": "module",
@@ -19,10 +19,10 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/agent": "*",
-    "@kodax/coding": "*",
-    "@kodax/session-lineage": "*",
-    "@kodax/skills": "*",
+    "@kodax-ai/agent": "*",
+    "@kodax-ai/coding": "*",
+    "@kodax-ai/session-lineage": "*",
+    "@kodax-ai/skills": "*",
     "chalk": "^5.4.1",
     "clipboardy": "^4.0.0",
     "ink": "^6.7.0",
@@ -50,5 +50,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/repl"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -1,7 +1,7 @@
 import type {
   KodaXContextOptions,
   KodaXContextTokenSnapshot,
-} from "@kodax/coding";
+} from "@kodax-ai/coding";
 
 export function buildManagedRunContext(
   baseContext: KodaXContextOptions | undefined,

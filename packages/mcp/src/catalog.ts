@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-import { getAgentConfigPath } from '@kodax/agent';
+import { getAgentConfigPath } from '@kodax-ai/agent';
 
 export type McpCapabilityKind = 'tool' | 'resource' | 'prompt';
 export type McpCapabilityRisk = 'read' | 'write' | 'network' | 'exec';

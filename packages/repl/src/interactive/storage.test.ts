@@ -2,7 +2,7 @@ import os from 'os';
 import path from 'path';
 import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applySessionCompaction, createSessionLineage } from '@kodax/coding';
+import { applySessionCompaction, createSessionLineage } from '@kodax-ai/coding';
 
 describe('FileSessionStorage', () => {
   let tempHome: string;

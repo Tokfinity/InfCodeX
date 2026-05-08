@@ -34,7 +34,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { CapabilityResult } from '@kodax/agent';
+import type { CapabilityResult } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../../types.js';
 import type { ExtensionRuntimeContract } from '../../extensions/runtime-contract.js';
 import {

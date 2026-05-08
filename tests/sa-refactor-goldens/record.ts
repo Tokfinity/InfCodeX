@@ -20,7 +20,7 @@
  * orchestration implementation must satisfy.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 // Recorder/Replay providers landed in providers.ts; re-export here so the
 // orchestration entry points remain a single import for callers.

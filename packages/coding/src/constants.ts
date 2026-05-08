@@ -13,7 +13,7 @@ export {
   KODAX_STAGGER_DELAY,
   KODAX_API_MIN_INTERVAL,
   PROMISE_PATTERN,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 /** Prefix used to detect user-cancelled tool results in the agent loop. */
 export const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';

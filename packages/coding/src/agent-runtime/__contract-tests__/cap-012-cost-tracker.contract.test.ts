@@ -13,7 +13,7 @@
  * Verified location: agent.ts:1435 (matches legacy semantics)
  *
  * STATUS: ACTIVE since FEATURE_100 P2. The cost-tracker implementation lives
- * in `@kodax/ai`; the substrate-internal re-export at
+ * in `@kodax-ai/llm`; the substrate-internal re-export at
  * `agent-runtime/middleware/cost-tracker.ts` is what other middleware
  * modules import against. This contract pins the immutable functional API
  * (each call returns a NEW tracker, never mutates).

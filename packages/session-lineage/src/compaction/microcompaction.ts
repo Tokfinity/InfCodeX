@@ -15,7 +15,7 @@
  * - Immutable: returns new array, never mutates input
  */
 
-import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
 import { buildToolContextMap } from './compaction.js';
 
 export interface MicrocompactionConfig {

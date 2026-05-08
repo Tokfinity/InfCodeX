@@ -35,8 +35,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
-import type { KodaXSessionArtifactLedgerEntry } from '@kodax/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
 
 import { applyPostCompactAttachments } from '../middleware/post-compact-attachments.js';
 

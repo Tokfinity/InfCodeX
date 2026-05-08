@@ -28,7 +28,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../../types.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { emitIterationEnd } from '../event-emitter.js';
 

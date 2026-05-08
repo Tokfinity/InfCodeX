@@ -9,10 +9,10 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax/agent';
-import { KodaXBaseProvider } from '@kodax/ai';
-import { clearRuntimeModelProviders } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
+import { clearRuntimeModelProviders } from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 import { createExtensionRuntime, getActiveExtensionRuntime } from './extensions/index.js';
 

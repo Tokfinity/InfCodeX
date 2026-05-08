@@ -27,7 +27,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export interface RawSession {
   /** Stable session id (from meta.id, falling back to filename stem). */

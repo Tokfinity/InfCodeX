@@ -174,13 +174,13 @@ export function composePatches(patches: readonly ManifestPatch[]): ManifestPatch
 /**
  * Open-ended registry mapping `InvariantId` to `QualityInvariant`
  * implementations. The admission v1 closed set (7 invariants) is
- * registered by `@kodax/coding/src/agent-runtime/invariants/index.ts`
+ * registered by `@kodax-ai/coding/src/agent-runtime/invariants/index.ts`
  * during package initialization; FEATURE_106 registers the 8th
  * (`harnessSelectionTiming`) on the same registry; future features may
  * register more.
  *
  * Single shared module-scope registry — same instance whether accessed
- * from @kodax/core or via an @kodax/coding consumer. Tests reset it via
+ * from @kodax-ai/core or via an @kodax-ai/coding consumer. Tests reset it via
  * `_resetInvariantRegistry()`.
  */
 const _registry = new Map<InvariantId, QualityInvariant>();

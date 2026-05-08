@@ -1,5 +1,5 @@
 /**
- * @kodax/agent/messaging/queue — 2-tier agentId-scoped FIFO message queue.
+ * @kodax-ai/agent/messaging/queue — 2-tier agentId-scoped FIFO message queue.
  *
  * FEATURE_115 (v0.7.36).
  *

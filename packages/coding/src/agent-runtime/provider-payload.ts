@@ -13,7 +13,7 @@
  * during FEATURE_100 P2.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export function estimateProviderPayloadBytes(messages: KodaXMessage[], systemPrompt: string): number {
   return Buffer.byteLength(JSON.stringify({

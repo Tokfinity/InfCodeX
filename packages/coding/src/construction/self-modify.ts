@@ -17,7 +17,7 @@
  *     LLM summary. No arbitrary thresholds here.
  *
  * Why this lives outside the FEATURE_101 admission invariant set:
- *   The 7+1 invariants in `@kodax/core/admission` run on EVERY
+ *   The 7+1 invariants in `@kodax-ai/core/admission` run on EVERY
  *   constructed agent (first-time stage_agent included). Ratchet
  *   semantics ("new ⊇ old") only make sense in the self-modify
  *   path — there is no "old" for a first-time stage. Embedding it in

@@ -5,7 +5,7 @@
  * If it does, clamp via a `clampMaxBudget` patch — the manifest is
  * admitted with the lower value.
  *
- * Why this lives in @kodax/coding (not @kodax/core): the system budget
+ * Why this lives in @kodax-ai/coding (not @kodax-ai/core): the system budget
  * baseline is `DEFAULT_MANAGED_WORK_BUDGET = 200` declared in the coding
  * task-engine constants. Admission's job is to express the same policy
  * declaratively at the manifest layer; the actual runtime budget
@@ -24,7 +24,7 @@ import type {
   AgentManifest,
   InvariantResult,
   QualityInvariant,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 function admit(manifest: AgentManifest, ctx: AdmissionCtx): InvariantResult {
   if (typeof manifest.maxBudget !== 'number') return { ok: true };

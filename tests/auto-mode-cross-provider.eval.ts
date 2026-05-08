@@ -72,14 +72,14 @@ import {
   getProvider,
   getSummary,
   type CostTracker,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   createAutoModeToolGuardrail,
   getBuiltinRegisteredToolDefinition,
   getRegisteredToolDefinition,
   type AutoRules,
-} from '@kodax/coding';
-import type { GuardrailContext, RunnerToolCall } from '@kodax/agent';
+} from '@kodax-ai/coding';
+import type { GuardrailContext, RunnerToolCall } from '@kodax-ai/agent';
 
 import {
   MODEL_ALIASES,

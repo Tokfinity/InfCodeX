@@ -1,22 +1,22 @@
 /**
  * Capability-coupled + coding-AMA-specific invariants registered by
- * @kodax/coding.
+ * @kodax-ai/coding.
  *
- * Pairs with `@kodax/agent`'s pure-new invariants (`finalOwner`,
+ * Pairs with `@kodax-ai/agent`'s pure-new invariants (`finalOwner`,
  * `handoffLegality`, `evidenceTrail`). Together they form the FEATURE_101
  * admission v1 closed set + FEATURE_106 external.
  *
  * Why this split:
  *
  *   - Three pure invariants (finalOwner, handoffLegality, evidenceTrail)
- *     are pure functions of admission types and live in @kodax/agent.
+ *     are pure functions of admission types and live in @kodax-ai/agent.
  *   - Four coupled invariants (budgetCeiling, toolPermission,
- *     boundedRevise, independentReview) tie into @kodax/coding's budget
+ *     boundedRevise, independentReview) tie into @kodax-ai/coding's budget
  *     controller / tool registry / revise tracker / role conventions and
  *     live here.
  *   - `harnessSelectionTiming` (FEATURE_106 external) reads coding's AMA
  *     `ctx.recorder.scout.payload.scout.confirmedHarness` and lives here
- *     too (v0.7.35.1 FEATURE_142 A-R2 moved it from @kodax/agent per
+ *     too (v0.7.35.1 FEATURE_142 A-R2 moved it from @kodax-ai/agent per
  *     ADR-021 — agent admission framework must not enumerate coding-AMA
  *     field names).
  *
@@ -27,8 +27,8 @@
  * harnessSelectionTiming.
  */
 
-import { registerCoreInvariants, registerInvariant } from '@kodax/agent';
-import type { QualityInvariant } from '@kodax/agent';
+import { registerCoreInvariants, registerInvariant } from '@kodax-ai/agent';
+import type { QualityInvariant } from '@kodax-ai/agent';
 
 import { boundedRevise } from './bounded-revise.js';
 import { budgetCeiling } from './budget-ceiling.js';
@@ -50,7 +50,7 @@ export {
 /**
  * Coding-package-supplied invariants in registration order.
  * v0.7.35.1 FEATURE_142 (A-R2): added `harnessSelectionTiming` (moved
- * from @kodax/agent's pure-invariant set).
+ * from @kodax-ai/agent's pure-invariant set).
  *
  * v0.7.36 FEATURE_114: added `planBeforeMutate` — V2 plan-first
  * structural observation. Registers alongside `harnessSelectionTiming`
@@ -70,8 +70,8 @@ export const CODING_INVARIANTS: readonly QualityInvariant[] = [
 ];
 
 /**
- * Register the @kodax/coding capability-coupled + coding-AMA-specific
- * invariants AND the @kodax/agent pure-new invariants. Single bootstrap
+ * Register the @kodax-ai/coding capability-coupled + coding-AMA-specific
+ * invariants AND the @kodax-ai/agent pure-new invariants. Single bootstrap
  * call covers the FEATURE_101 admission v1 closed set + FEATURE_106's
  * external `harnessSelectionTiming`.
  *

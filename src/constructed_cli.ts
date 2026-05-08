@@ -32,7 +32,7 @@ import {
   getRegisteredToolDefinition,
   executeTool,
   type KodaXToolExecutionContext,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 /**
  * Top-level commander subcommands the kodax CLI reserves. The direct-

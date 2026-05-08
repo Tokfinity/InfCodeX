@@ -7,7 +7,7 @@
 import type { CursorPosition } from "./utils/text-buffer.js";
 import type { PastedContent, PasteStore } from "./utils/paste-store.js";
 import type { PermissionMode } from "../permission/types.js";
-import type { KodaXAgentMode, KodaXReasoningMode } from "@kodax/coding";
+import type { KodaXAgentMode, KodaXReasoningMode } from "@kodax-ai/coding";
 
 // === Keyboard Events - 键盘事件 ===
 

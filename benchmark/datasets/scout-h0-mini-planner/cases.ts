@@ -34,7 +34,7 @@
  * independently.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { PromptJudge } from '../../harness/judges.js';
 import type { PromptVariant } from '../../harness/harness.js';

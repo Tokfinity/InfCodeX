@@ -22,8 +22,8 @@ import type {
   KodaXThinkingBlock,
   KodaXToolResultBlock,
   KodaXToolUseBlock,
-} from '@kodax/ai';
-import type { Span } from '@kodax/tracing';
+} from '@kodax-ai/llm';
+import type { Span } from '@kodax-ai/tracing';
 
 import type { Agent, AgentMessage, AgentTool } from './agent.js';
 

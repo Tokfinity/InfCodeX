@@ -44,7 +44,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createRolePrompt } from '../packages/coding/src/task-engine/_internal/managed-task/role-prompt.js';
 import { buildFallbackRoutingDecision } from '../packages/coding/src/reasoning.js';
-import type { KodaXTaskRole } from '@kodax/coding';
+import type { KodaXTaskRole } from '@kodax-ai/coding';
 import type { ManagedRolePromptContext } from '../packages/coding/src/task-engine/_internal/managed-task/role-prompt-types.js';
 
 const ROLES: KodaXTaskRole[] = ['scout', 'planner', 'generator', 'evaluator'];

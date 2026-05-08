@@ -6,7 +6,7 @@ import {
   createExtensionRuntime,
   getActiveExtensionRuntime,
   registerOfficialSandboxExtension,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import { BUILTIN_COMMANDS, executeCommand, getCommandRegistry } from './commands.js';
 
 describe('extension command host adapters', () => {

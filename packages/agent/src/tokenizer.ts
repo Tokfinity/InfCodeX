@@ -1,11 +1,11 @@
 /**
- * @kodax/agent Tokenizer
+ * @kodax-ai/agent Tokenizer
  *
  * Token 估算 - 使用 tiktoken 进行精确计算
  */
 
 import { getEncoding, Tiktoken } from 'js-tiktoken';
-import type { KodaXMessage, KodaXContentBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
 
 // 使用 cl100k_base 编码（Claude/GPT-4 通用）
 // 懒加载，只在第一次使用时初始化

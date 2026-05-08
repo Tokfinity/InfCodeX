@@ -22,7 +22,7 @@ import {
   setAdmittedAgentBindings,
   type Agent,
   type AgentManifest,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import type { PromptJudge } from '../../harness/judges.js';
 import {

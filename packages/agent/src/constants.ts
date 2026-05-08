@@ -1,5 +1,5 @@
 /**
- * @kodax/agent Constants
+ * @kodax-ai/agent Constants
  *
  * 通用 Agent 常量配置
  */

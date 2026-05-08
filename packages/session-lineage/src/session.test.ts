@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { extractTitleFromMessages } from './session.js';
 
 describe('session title extraction', () => {

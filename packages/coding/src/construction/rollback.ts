@@ -48,8 +48,8 @@
  * runtime's persistence concern separate from CLI-side attribution.
  */
 
-import { Runner } from '@kodax/agent';
-import type { Agent } from '@kodax/agent';
+import { Runner } from '@kodax-ai/agent';
+import type { Agent } from '@kodax-ai/agent';
 
 import { buildAdmissionManifest } from './admission-bridge.js';
 import {

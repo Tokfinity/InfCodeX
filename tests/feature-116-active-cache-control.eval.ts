@@ -53,7 +53,7 @@ import {
 } from '../packages/ai/src/cache-control.js';
 
 describe('FEATURE_116 — structural ship gate', () => {
-  it('cache-boundary helpers are exported from @kodax/ai', () => {
+  it('cache-boundary helpers are exported from @kodax-ai/llm', () => {
     expect(typeof insertCacheBoundary).toBe('function');
     expect(typeof isCacheBoundary).toBe('function');
     expect(typeof lowerCacheBoundaries).toBe('function');

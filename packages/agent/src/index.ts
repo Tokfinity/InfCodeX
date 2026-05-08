@@ -1,5 +1,5 @@
 /**
- * @kodax/agent
+ * @kodax-ai/agent
  *
  * 通用 Agent 框架 - 会话管理和消息处理
  *
@@ -41,10 +41,10 @@ export type {
   // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXAmaProfile /
   // KodaXAmaTactic / KodaXAmaFanoutClass / KodaXAmaFanoutPolicy /
   // KodaXAmaControllerDecision are coding-AMA-specific vocabulary; the
-  // canonical home is `@kodax/ai`. Removed from `@kodax/agent`'s public
+  // canonical home is `@kodax-ai/llm`. Removed from `@kodax-ai/agent`'s public
   // re-export per ADR-021 (the universal Agent framework must not expose
   // coding-AMA terms in its surface). Coding-side consumers import directly
-  // from `@kodax/ai`.
+  // from `@kodax-ai/llm`.
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
@@ -100,11 +100,11 @@ export {
 
 // ============== Session entities + persistence + compaction implementations ==============
 // v0.7.35.1 FEATURE_142 Batch B: session.ts / session-lineage.ts / persistence.ts /
-// compaction/ moved from @kodax/agent to @kodax/session-lineage. Consumers should
-// `import ... from '@kodax/session-lineage'` directly. @kodax/agent stays as the
+// compaction/ moved from @kodax-ai/agent to @kodax-ai/session-lineage. Consumers should
+// `import ... from '@kodax-ai/session-lineage'` directly. @kodax-ai/agent stays as the
 // pure Agent platform foundation (primitives + admission + tokenizer + types);
 // session implementation, persistence, and compaction orchestration live in
-// @kodax/session-lineage. See ADR-021 + docs/features/v0.7.35.1.md.
+// @kodax-ai/session-lineage. See ADR-021 + docs/features/v0.7.35.1.md.
 //
 // Symbols moved (NOT re-exported here to keep the agent → session-lineage
 // dependency direction unidirectional, avoiding a cycle):
@@ -116,11 +116,11 @@ export {
 //   - CompactionAnchor / CompactionDetails / CompactionUpdate / CompactionResult /
 //     FileOperations / KodaXCompactionPromptSnapshot / …
 
-// ============== Layer A Primitives (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
-// FEATURE_082 (v0.7.24) extracted these into @kodax/core; v0.7.35.1 FEATURE_142
-// merges them back into @kodax/agent because:
-// - @kodax/core had a single consumer (@kodax/coding); 3+ rule violation
-// - @kodax/agent IS the agent platform foundation, primitives belong here
+// ============== Layer A Primitives (absorbed from @kodax-ai/core in v0.7.35.1 FEATURE_142) ==============
+// FEATURE_082 (v0.7.24) extracted these into @kodax-ai/core; v0.7.35.1 FEATURE_142
+// merges them back into @kodax-ai/agent because:
+// - @kodax-ai/core had a single consumer (@kodax-ai/coding); 3+ rule violation
+// - @kodax-ai/agent IS the agent platform foundation, primitives belong here
 // See ADR-001 (updated) / ADR-021 / docs/features/v0.7.35.1.md.
 
 // Agent + Handoff
@@ -228,12 +228,12 @@ export {
 // v0.7.35.1 FEATURE_142 (A-R1): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
 // GENERATOR_AGENT_NAME / EVALUATOR_AGENT_NAME / TASK_ENGINE_ROLE_AGENTS /
 // scoutAgent / plannerAgent / generatorAgent / evaluatorAgent moved out of
-// @kodax/agent. These role declarations are coding-AMA-specific (H2 state
+// @kodax-ai/agent. These role declarations are coding-AMA-specific (H2 state
 // machine roles), not generic Agent platform primitives. Canonical home is
-// now `@kodax/coding/src/agents/task-engine-agents.ts`. Coding-side
-// consumers import from `@kodax/coding`. See ADR-021.
+// now `@kodax-ai/coding/src/agents/task-engine-agents.ts`. Coding-side
+// consumers import from `@kodax-ai/coding`. See ADR-021.
 
-// ============== Admission Contract (FEATURE_101 v0.7.31; absorbed from @kodax/core in v0.7.35.1) ==============
+// ============== Admission Contract (FEATURE_101 v0.7.31; absorbed from @kodax-ai/core in v0.7.35.1) ==============
 export type {
   AdmissionCtx,
   AdmissionVerdict,
@@ -290,7 +290,7 @@ export {
 
 // FEATURE_101 v1 pure-new invariants
 // v0.7.35.1 FEATURE_142 (A-R2): `harnessSelectionTiming` moved to
-// `@kodax/coding/src/agent-runtime/invariants/` — its body reads coding's
+// `@kodax-ai/coding/src/agent-runtime/invariants/` — its body reads coding's
 // AMA Scout-role `confirmedHarness` field, see ADR-021.
 export {
   CORE_INVARIANTS,
@@ -300,15 +300,15 @@ export {
   registerCoreInvariants,
 } from './admission/invariants/index.js';
 
-// Capability provider contract — re-exported from @kodax/ai (canonical home
+// Capability provider contract — re-exported from @kodax-ai/llm (canonical home
 // per ADR-021). Re-export here lets v0.7.35 consumers that imported these
-// types from @kodax/core continue to work via @kodax/agent without splitting
-// the import. Direct import from @kodax/ai is also supported.
+// types from @kodax-ai/core continue to work via @kodax-ai/agent without splitting
+// the import. Direct import from @kodax-ai/llm is also supported.
 export type {
   CapabilityKind,
   CapabilityProvider,
   CapabilityResult,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 // ============== Agent config home resolver (v0.7.35.1 FEATURE_145) ==============
 // 3-tier resolution chain (programmatic override > KODAX_HOME env > ~/.kodax
@@ -316,7 +316,7 @@ export type {
 // callsites previously scattered across coding / mcp / repl / session-lineage
 // / skills. With DI not set + env not set, the resolver returns the same
 // path as the prior hardcoded calls — byte-equivalent for existing users.
-// Substrate consumers (downstream agents built on @kodax/agent) call
+// Substrate consumers (downstream agents built on @kodax-ai/agent) call
 // setAgentConfigHome() once at boot to redirect the entire process.
 export {
   getAgentConfigHome,
@@ -326,8 +326,8 @@ export {
 
 // ============== Messaging (v0.7.36 FEATURE_115) ==============
 // agentId-scoped 2-tier priority queue infrastructure. Generic agent-platform
-// primitive per ADR-021 — downstream consumers in @kodax/coding (runner-driven
-// mid-turn drain, subagent task-notification routing) and @kodax/repl
+// primitive per ADR-021 — downstream consumers in @kodax-ai/coding (runner-driven
+// mid-turn drain, subagent task-notification routing) and @kodax-ai/repl
 // (FEATURE_111 absorbed soft-pause UX). Phase 0.6 study (claude-code-actual-
 // usage.md) showed Claude Code's `'now'` priority has zero production usage,
 // so KodaX simplifies to 2 tiers.
@@ -352,18 +352,18 @@ export {
 
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
-// `@kodax/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only
-// modules whose deps are pure `@kodax/ai` (+ this package's own tokenizer)
-// are uplifted; the rest stay in @kodax/coding because they couple to
+// `@kodax-ai/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only
+// modules whose deps are pure `@kodax-ai/llm` (+ this package's own tokenizer)
+// are uplifted; the rest stay in @kodax-ai/coding because they couple to
 // coding-flavored events / tool registry / managed protocol signals. See
 // docs/features/v0.7.35.1.md "Batch D" for per-file disposition.
 //
 // v0.7.36 follow-up: the three compaction-related modules (`shouldCompact`,
 // `gracefulCompactDegradation`, `resolveContextWindow` + `DEFAULT_CONTEXT_WINDOW`
-// / `ShouldCompactInput`) moved to `@kodax/session-lineage/runtime-middleware/`
+// / `ShouldCompactInput`) moved to `@kodax-ai/session-lineage/runtime-middleware/`
 // to break the build cycle (agent → session-lineage → agent) introduced
 // when they were originally placed here. Downstream consumers in
-// `@kodax/coding` now import them from `@kodax/session-lineage` directly.
+// `@kodax-ai/coding` now import them from `@kodax-ai/session-lineage` directly.
 export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,

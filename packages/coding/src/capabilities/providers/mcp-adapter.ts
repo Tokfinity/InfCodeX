@@ -1,16 +1,16 @@
 /**
  * Coding-runtime adapter: registers an `McpCapabilityProvider` (from
- * `@kodax/mcp`) against the coding-specific `KodaXExtensionRuntime`.
+ * `@kodax-ai/mcp`) against the coding-specific `KodaXExtensionRuntime`.
  *
  * FEATURE_082 (v0.7.24): split out of the old
  * `capabilities/providers/mcp/provider.ts`. The provider class now lives in
- * `@kodax/mcp` and stays free of any coding runtime dependency; this file
+ * `@kodax-ai/mcp` and stays free of any coding runtime dependency; this file
  * is the thin bridge that wires the provider into the coding extension
  * runtime.
  */
 
-import { McpCapabilityProvider, type McpProviderOptions } from '@kodax/mcp';
-import type { McpServersConfig } from '@kodax/mcp';
+import { McpCapabilityProvider, type McpProviderOptions } from '@kodax-ai/mcp';
+import type { McpServersConfig } from '@kodax-ai/mcp';
 import type { KodaXExtensionRuntime } from '../../extensions/runtime.js';
 
 export async function registerConfiguredMcpCapabilityProvider(

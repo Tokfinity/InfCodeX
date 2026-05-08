@@ -12,7 +12,7 @@ import {
   KodaXRateLimitError,
   KodaXProviderError,
   KodaXNetworkError,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import type {
   ResilienceErrorClass,
   FailureStage,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildClassifierPrompt } from './classifier-prompt.js';
 import type { AutoRules } from './rules.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 const emptyRules: AutoRules = { allow: [], soft_deny: [], environment: [] };
 

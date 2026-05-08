@@ -22,7 +22,7 @@
  *     Code's "task too simple to need a list" stance.
  */
 
-import type { TodoItem } from "@kodax/coding";
+import type { TodoItem } from "@kodax-ai/coding";
 
 export const MAX_VISIBLE_ROWS = 6;
 /** 5-second linger before the surface auto-hides after the last item closes. */

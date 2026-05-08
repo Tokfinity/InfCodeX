@@ -23,8 +23,8 @@ import {
   getProviderModel,
   getProviderList,
   isProviderConfigured,
-} from '@kodax/repl';
-import { type KodaXMessage, KODAX_PROVIDERS } from '@kodax/coding';
+} from '@kodax-ai/repl';
+import { type KodaXMessage, KODAX_PROVIDERS } from '@kodax-ai/coding';
 
 // ============== 上下文管理测试 ==============
 

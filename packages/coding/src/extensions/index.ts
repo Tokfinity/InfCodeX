@@ -36,7 +36,7 @@ export {
   runActiveExtensionHook,
 } from './runtime.js';
 
-// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax/mcp`; the coding
+// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax-ai/mcp`; the coding
 // runtime adapter (the function below) now lives beside the package boundary.
 export {
   registerConfiguredMcpCapabilityProvider,

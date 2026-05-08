@@ -32,7 +32,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../../types.js';
-import type { KodaXMessage, KodaXToolUseBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolUseBlock } from '@kodax-ai/llm';
 
 import { checkAndRetryIncompleteTools } from '../incomplete-tool-retry.js';
 import { KODAX_MAX_INCOMPLETE_RETRIES } from '../../constants.js';

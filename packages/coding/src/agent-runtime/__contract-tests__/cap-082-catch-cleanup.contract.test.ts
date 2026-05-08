@@ -24,7 +24,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 
 import { runCatchCleanup } from '../catch-terminals.js';

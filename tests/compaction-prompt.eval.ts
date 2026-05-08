@@ -4,13 +4,13 @@
  * Compares 3 compaction summary prompts head-to-head on a 10-fixture
  * dataset (5 coding + 5 non-coding) to pick the winner that ships as
  * `DEFAULT_SUMMARY_PROMPT` / `DEFAULT_UPDATE_SUMMARY_PROMPT` in
- * `@kodax/session-lineage`:
+ * `@kodax-ai/session-lineage`:
  *
  *   - baseline-coding         → verbatim v0.7.35 prompt (coding-flavored)
  *   - candidate-a-conservative → minimal neutralization
  *   - candidate-b-aggressive   → A + bullet collapse + dropped example
  *
- * The baseline-coding prompt is preserved verbatim in @kodax/coding as
+ * The baseline-coding prompt is preserved verbatim in @kodax-ai/coding as
  * `CODING_SUMMARY_PROMPT` (byte-equivalent to v0.7.35 — coding caller
  * passes it via the new `summaryPrompt` parameter). Eval picks the
  * neutral default for non-coding consumers.
@@ -28,7 +28,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { getProvider, sideQuery, type KodaXTokenUsage } from '@kodax/ai';
+import { getProvider, sideQuery, type KodaXTokenUsage } from '@kodax-ai/llm';
 
 import { availableAliases, resolveAlias, type ModelAlias } from '../benchmark/harness/aliases.js';
 import {
@@ -41,7 +41,7 @@ import {
   type KeyFact,
 } from '../benchmark/datasets/compaction-prompt/fixtures.js';
 
-// Mirrors @kodax/session-lineage/src/compaction/summary-generator.ts
+// Mirrors @kodax-ai/session-lineage/src/compaction/summary-generator.ts
 // SUMMARIZATION_SYSTEM_PROMPT (module-private). Copying is intentional —
 // the eval holds the system prompt fixed across candidates so only the
 // user prompt varies. If session-lineage's system prompt is ever changed,

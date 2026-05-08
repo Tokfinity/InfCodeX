@@ -7,8 +7,8 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { executeTool } from '@kodax/coding';
-import type { KodaXToolExecutionContext } from '@kodax/coding';
+import { executeTool } from '@kodax-ai/coding';
+import type { KodaXToolExecutionContext } from '@kodax-ai/coding';
 import {
   PermissionMode,
   PermissionContext,

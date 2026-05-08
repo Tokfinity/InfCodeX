@@ -11,7 +11,7 @@
  * P2 migrates middleware modules into `agent-runtime/`.
  */
 
-import type { KodaXMessage, KodaXToolDefinition } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
 import type { KodaXEvents, KodaXOptions } from '../../types.js';
 
 // ---------------------------------------------------------------------------

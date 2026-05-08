@@ -2,7 +2,7 @@
  * KodaX AI - 独立的 LLM 抽象层
  *
  * @description 可被其他项目复用的 LLM Provider 抽象层
- * @module @kodax/ai
+ * @module @kodax-ai/llm
  */
 
 // ============== Types ==============
@@ -214,11 +214,11 @@ export type {
   KodaXOnRetryAfterCallback,
 } from './providers/base.js';
 
-// ============== Capability Provider (absorbed from @kodax/core in v0.7.35.1 FEATURE_142) ==============
-// Originally extracted from @kodax/coding/src/extensions/types.ts in FEATURE_082 (v0.7.24).
-// Lives in @kodax/ai because CapabilityProvider is the provider-shaped contract
+// ============== Capability Provider (absorbed from @kodax-ai/core in v0.7.35.1 FEATURE_142) ==============
+// Originally extracted from @kodax-ai/coding/src/extensions/types.ts in FEATURE_082 (v0.7.24).
+// Lives in @kodax-ai/llm because CapabilityProvider is the provider-shaped contract
 // for data sources (MCP/RAG/custom indexes). The richer extension runtime
-// (commands / files / logger) stays in @kodax/coding/src/extensions/.
+// (commands / files / logger) stays in @kodax-ai/coding/src/extensions/.
 export type {
   CapabilityKind,
   CapabilityProvider,

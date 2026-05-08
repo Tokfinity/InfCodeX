@@ -110,7 +110,7 @@ export function _resetAdmissionMetrics(): void {
 
 // ---------------------------------------------------------------------------
 // Internal increment helpers — called from admission-audit and
-// admission-session. Not exported in @kodax/core's public surface.
+// admission-session. Not exported in @kodax-ai/core's public surface.
 // ---------------------------------------------------------------------------
 
 /** @internal */

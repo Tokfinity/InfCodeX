@@ -1,5 +1,5 @@
-export { extractArtifactLedger, mergeArtifactLedger, type CompactionAnchor, type CompactionUpdate } from '@kodax/session-lineage';
-import type { KodaXToolUseBlock } from '@kodax/ai';
+export { extractArtifactLedger, mergeArtifactLedger, type CompactionAnchor, type CompactionUpdate } from '@kodax-ai/session-lineage';
+import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 import { getRequiredToolParams } from './tools/index.js';
 
 export function checkIncompleteToolCalls(toolBlocks: KodaXToolUseBlock[]): string[] {

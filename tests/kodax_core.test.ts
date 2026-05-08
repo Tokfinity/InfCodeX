@@ -10,7 +10,7 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 
-// 从 @kodax/coding 包导入函数
+// 从 @kodax-ai/coding 包导入函数
 import {
   checkPromiseSignal,
   estimateTokens,
@@ -36,15 +36,15 @@ import {
   KodaXToolError,
   KodaXRateLimitError,
   KodaXSessionError,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
-// 从 @kodax/repl 包导入工具函数
+// 从 @kodax-ai/repl 包导入工具函数
 import {
   getGitRoot,
   rateLimitedCall,
   KODAX_DIR,
   KODAX_SESSIONS_DIR,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
 
 // 从 prompts/builder 导入环境上下文函数（内部函数，需要特殊处理）
 // 暂时移除 getEnvContext 和 getProjectSnapshot 的测试，因为它们现在是内部函数

@@ -2,7 +2,7 @@
  * v0.7.35.1 FEATURE_142 (B-R1) — coding-caller routing regression test.
  *
  * The byte-equivalence contract requires that ALL coding-layer callers
- * of `compact` from `@kodax/session-lineage` explicitly pass
+ * of `compact` from `@kodax-ai/session-lineage` explicitly pass
  * `CODING_SUMMARY_PROMPT` / `CODING_UPDATE_SUMMARY_PROMPT` as the 8th
  * and 9th positional arguments — otherwise the call falls through to
  * `DEFAULT_*_PROMPT` (the neutral default) and the coding path's prompt
@@ -17,7 +17,7 @@
  *
  * Strategy:
  *   1. The CAP-060 caller (`tryIntelligentCompact`) is verified
- *      runtime-style with a `vi.mock('@kodax/session-lineage')` — easy
+ *      runtime-style with a `vi.mock('@kodax-ai/session-lineage')` — easy
  *      because the function takes its config as input.
  *   2. The Runner-driven caller (`buildManagedTaskCompactionHook`) is
  *      verified at the source level — its config loads from disk via
@@ -43,12 +43,12 @@ import type {
   KodaXProviderStreamOptions,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 import type {
   CompactionConfig,
   CompactionResult,
-} from '@kodax/session-lineage';
+} from '@kodax-ai/session-lineage';
 
 import {
   CODING_SUMMARY_PROMPT,
@@ -63,15 +63,15 @@ const REPO_ROOT = resolve(__dirname, '..', '..', '..', '..');
 // Runtime test for the CAP-060 caller (mockable input config).
 // ---------------------------------------------------------------------------
 
-vi.mock('@kodax/session-lineage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/session-lineage')>();
+vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/session-lineage')>();
   return {
     ...actual,
     compact: vi.fn(),
   };
 });
 
-import { compact as mockedCompact } from '@kodax/session-lineage';
+import { compact as mockedCompact } from '@kodax-ai/session-lineage';
 import { tryIntelligentCompact } from './middleware/compaction-orchestration.js';
 
 const compactMock = mockedCompact as unknown as ReturnType<typeof vi.fn>;
@@ -169,7 +169,7 @@ interface CodingCallerCheck {
 
 /**
  * Add an entry here for every coding-layer call site that invokes
- * `compact` (or `intelligentCompact`) from `@kodax/session-lineage`.
+ * `compact` (or `intelligentCompact`) from `@kodax-ai/session-lineage`.
  * The audit asserts that both `CODING_SUMMARY_PROMPT` and
  * `CODING_UPDATE_SUMMARY_PROMPT` appear adjacent (separated only by
  * whitespace / commas / line breaks) — catches the regression class

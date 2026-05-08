@@ -7,7 +7,7 @@
  *   - Layer A (here): `CompactionPolicy` interface + `DefaultSummaryCompaction`
  *     — a minimal "token threshold → LLM summary of old messages" policy that
  *     any external Agent can pick up with zero KodaX runtime dependency.
- *   - Layer B (`@kodax/session-lineage/src/lineage.ts`): `LineageCompaction`
+ *   - Layer B (`@kodax-ai/session-lineage/src/lineage.ts`): `LineageCompaction`
  *     wraps the full FEATURE_072 lineage-native compaction for the coding
  *     preset.
  *
@@ -15,8 +15,8 @@
  * same type used by `LineageExtension`, so the two layers interoperate on
  * the same Session log.
  *
- * History: extracted to `@kodax/core` in FEATURE_082 (v0.7.24); merged back
- * into `@kodax/agent` in v0.7.35.1 FEATURE_142.
+ * History: extracted to `@kodax-ai/core` in FEATURE_082 (v0.7.24); merged back
+ * into `@kodax-ai/agent` in v0.7.35.1 FEATURE_142.
  */
 
 import type { AgentMessage } from './agent.js';
@@ -57,7 +57,7 @@ export interface CompactionEntry extends SessionEntry {
 /**
  * Outcome of a single CompactionPolicy.compact() pass. Renamed from
  * `CompactionResult` to `PolicyCompactionResult` in v0.7.35.1 FEATURE_142
- * because the Layer A primitive collided with @kodax/agent's pre-existing
+ * because the Layer A primitive collided with @kodax-ai/agent's pre-existing
  * `CompactionResult` (compaction/types.ts) used by the coding orchestration
  * post-compact pipeline. The two types model different things:
  *   - `PolicyCompactionResult` (here): "summary + replaced entry ids", the

@@ -33,7 +33,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXEvents, KodaXOptions, SessionErrorMetadata } from '../../types.js';
 
 import {

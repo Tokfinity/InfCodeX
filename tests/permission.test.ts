@@ -4,7 +4,7 @@ const { executeToolMock } = vi.hoisted(() => ({
   executeToolMock: vi.fn(async () => "[executed]"),
 }));
 
-vi.mock("@kodax/coding", () => ({
+vi.mock("@kodax-ai/coding", () => ({
   executeTool: executeToolMock,
 }));
 

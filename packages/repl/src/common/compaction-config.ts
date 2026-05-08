@@ -1,12 +1,12 @@
 /**
- * @kodax/repl Compaction Config
+ * @kodax-ai/repl Compaction Config
  *
  * 压缩配置加载 - 仅从用户级配置文件加载
  */
 
 import { readFile } from 'fs/promises';
-import { getAgentConfigPath } from '@kodax/agent';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import { getAgentConfigPath } from '@kodax-ai/agent';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 /**
  * 默认压缩配置
  */

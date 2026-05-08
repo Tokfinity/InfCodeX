@@ -31,7 +31,7 @@
  * reports actual token usage per cell so the calibration is self-correcting.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export type TranscriptFixtureSize = 'empty' | 'short' | 'medium' | 'long' | 'huge';
 

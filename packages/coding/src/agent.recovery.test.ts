@@ -6,13 +6,13 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   clearRuntimeModelProviders,
   KodaXBaseProvider,
   KodaXNetworkError,
   registerModelProvider,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import { runKodaX } from './agent.js';
 
 const TEST_PROVIDER_NAME = 'feature-045-recovery-provider';

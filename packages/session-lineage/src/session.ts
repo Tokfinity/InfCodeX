@@ -1,10 +1,10 @@
 /**
- * @kodax/agent Session
+ * @kodax-ai/agent Session
  *
  * 会话管理 - Session ID 生成和消息处理
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 const DEFAULT_SESSION_TITLE = 'Untitled Session';
 const SESSION_TITLE_MAX_LENGTH = 50;

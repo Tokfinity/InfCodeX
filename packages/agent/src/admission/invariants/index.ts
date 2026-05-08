@@ -1,5 +1,5 @@
 /**
- * Pure-new invariant implementations bundled with @kodax/agent.
+ * Pure-new invariant implementations bundled with @kodax-ai/agent.
  *
  * The admission contract types live in `../admission.ts`; the registry
  * runtime in `../admission-runtime.ts`. This module exports the three
@@ -8,17 +8,17 @@
  *
  * Why this split:
  *   - These three (finalOwner, handoffLegality, evidenceTrail) are pure
- *     functions of the admission types — they have NO @kodax/coding
- *     dependencies. Living in @kodax/agent keeps the dependency direction
+ *     functions of the admission types — they have NO @kodax-ai/coding
+ *     dependencies. Living in @kodax-ai/agent keeps the dependency direction
  *     clean and lets `Runner.admit` unit-test against real invariants
  *     without pulling the coding runtime into the test harness.
  *   - The four coupled invariants (budgetCeiling, toolPermission,
- *     boundedRevise, independentReview) wrap @kodax/coding capabilities
+ *     boundedRevise, independentReview) wrap @kodax-ai/coding capabilities
  *     (mutation tracker, budget controller, ToolGuardrail tier resolver)
- *     and live in `@kodax/coding/src/agent-runtime/invariants/`.
+ *     and live in `@kodax-ai/coding/src/agent-runtime/invariants/`.
  *   - `harnessSelectionTiming` (FEATURE_106 external) was here in
  *     v0.7.31; v0.7.35.1 FEATURE_142 (A-R2) moved it back to
- *     `@kodax/coding/src/agent-runtime/invariants/` because its body
+ *     `@kodax-ai/coding/src/agent-runtime/invariants/` because its body
  *     hardcoded `ctx.recorder.scout.payload.scout.confirmedHarness` —
  *     a coding-AMA Scout-role field reference (ADR-021).
  *
@@ -37,7 +37,7 @@ import { handoffLegality } from './handoff-legality.js';
 export { evidenceTrail, finalOwner, handoffLegality };
 
 /**
- * The three pure invariants @kodax/agent ships, in registration order.
+ * The three pure invariants @kodax-ai/agent ships, in registration order.
  * Exposed as a constant so consumers can introspect the set without
  * registering (e.g. dispatch-eval metric setup that wants id labels).
  */

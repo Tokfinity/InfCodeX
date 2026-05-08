@@ -33,7 +33,7 @@ import {
   type RunnerLlmResult,
   type RunnerToolCall,
   type RunnerToolResult,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import type { KodaXManagedProtocolPayload, ManagedMutationTracker } from '../../types.js';
 import {

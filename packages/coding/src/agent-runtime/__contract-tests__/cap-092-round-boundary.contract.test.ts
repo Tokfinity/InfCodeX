@@ -31,7 +31,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { reshapeToUserConversation } from '../../task-engine/_internal/round-boundary.js';
 import type { KodaXOptions, KodaXResult } from '../../types.js';
 

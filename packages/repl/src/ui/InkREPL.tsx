@@ -90,7 +90,7 @@ import {
   recordDenial,
   isDeniedRecently,
   getDenialContext,
-} from "@kodax/coding";
+} from "@kodax-ai/coding";
 import type {
   AgentsFile,
   CompactionUpdate,
@@ -98,8 +98,8 @@ import type {
   KodaXSessionLineage,
   TodoItem,
   TodoList,
-} from "@kodax/coding";
-import { estimateTokens } from "@kodax/agent";
+} from "@kodax-ai/coding";
+import { estimateTokens } from "@kodax-ai/agent";
 import {
   PermissionMode,
   ConfirmResult,
@@ -147,7 +147,7 @@ import {
 } from "../interactive/auto-mode-bootstrap.js";
 import { isAutoMode, createAutoInProjectDeprecationEmitter } from "../permission/types.js";
 import { copyTextToClipboard } from "../common/clipboard.js";
-import { initializeSkillRegistry, getSkillRegistry } from "@kodax/skills";
+import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/skills";
 import { getTheme } from "./themes/index.js";
 import { KODAX_BANNER_LOGO_LINES } from "./constants/banner-logo.js";
 import chalk from "chalk";
@@ -356,7 +356,7 @@ interface InkREPLProps {
    */
   setAutoModeAskUser: (
     handler:
-      | ((call: import("@kodax/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((call: import("@kodax-ai/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
       | null,
   ) => void;
   /**
@@ -400,7 +400,7 @@ interface BannerProps {
   compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean };
 }
 
-type StreamingEvents = import("@kodax/coding").KodaXEvents & {
+type StreamingEvents = import("@kodax-ai/coding").KodaXEvents & {
   onCompactedMessages?: (messages: KodaXMessage[], update?: CompactionUpdate) => void;
 };
 
@@ -443,7 +443,7 @@ const PLAN_MODE_BLOCK_GUIDANCE =
 function buildAutoModeGuardrails(
   mode: PermissionMode,
   bootstrap: AutoModeBootstrapResult,
-): readonly import("@kodax/agent").ToolGuardrail[] | undefined {
+): readonly import("@kodax-ai/agent").ToolGuardrail[] | undefined {
   if (!isAutoMode(mode)) return undefined;
   return [bootstrap.getGuardrail()];
 }
@@ -4681,7 +4681,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // useCallback, stable across renders), so the binding is mount-once and
   // tear-down on unmount.
   const askUserForConstructionPolicy = useCallback(
-    async (options: import("@kodax/coding").AskUserQuestionOptions): Promise<string> => {
+    async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string> => {
       const selectOptions = options.options ? toSelectOptions(options.options) : [];
       const selected = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
@@ -5628,7 +5628,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     },
     // Issue 069: Ask user a question interactively.
     // Issue 114: ESC returns undefined → must signal cancellation, not silently fallback.
-    askUser: async (options: import("@kodax/coding").AskUserQuestionOptions): Promise<string> => {
+    askUser: async (options: import("@kodax-ai/coding").AskUserQuestionOptions): Promise<string> => {
       const selectOptions = options.options ? toSelectOptions(options.options) : [];
       const selectedValue = await showSelectDialogWithOptions(
         getAskUserDialogTitle(options),
@@ -5659,7 +5659,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return false;
     },
     // Multi-question mode: present each question sequentially with back navigation.
-    askUserMulti: async (options: import("@kodax/coding").AskUserMultiOptions): Promise<Record<string, string> | undefined> => {
+    askUserMulti: async (options: import("@kodax-ai/coding").AskUserMultiOptions): Promise<Record<string, string> | undefined> => {
       const questions = options.questions;
       const answers: Record<string, string> = {};
       const BACK_VALUE = "__back__";
@@ -5772,7 +5772,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       iter: number;
       maxIter: number;
       tokenCount: number;
-      contextTokenSnapshot?: import("@kodax/coding").KodaXContextTokenSnapshot;
+      contextTokenSnapshot?: import("@kodax-ai/coding").KodaXContextTokenSnapshot;
       scope?: 'parent' | 'worker';
     }) => {
       // FEATURE_072: only parent-scoped iteration events may mutate
@@ -7720,7 +7720,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   // Load config
   const { prepareRuntimeConfig, getGitRoot } = await import("../common/utils.js");
   const { loadCompactionConfig } = await import("../common/compaction-config.js");
-  const { resolveProvider } = await import("@kodax/coding");
+  const { resolveProvider } = await import("@kodax-ai/coding");
 
   const config = prepareRuntimeConfig();
 
@@ -7863,7 +7863,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const agentsFilesRef: { current: AgentsFile[] } = { current: initialAgentsFiles };
   const inkAutoModeAskUserRef: {
     current:
-      | ((call: import("@kodax/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((call: import("@kodax-ai/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
       | null;
   } = { current: null };
   // Ref-bridge for engine-change notifications: the React component fills

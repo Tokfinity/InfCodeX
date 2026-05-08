@@ -36,7 +36,7 @@ import type {
   KodaXEvents,
   KodaXToolExecutionContext,
 } from '../../types.js';
-import type { KodaXToolUseBlock } from '@kodax/ai';
+import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 
 import { applyPostToolProcessing } from '../tool-dispatch.js';
 import {

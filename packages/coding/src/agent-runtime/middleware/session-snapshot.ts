@@ -44,7 +44,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';
 import {

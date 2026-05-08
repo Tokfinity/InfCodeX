@@ -1,4 +1,4 @@
-import type { ProviderRecoveryEvent } from "@kodax/coding";
+import type { ProviderRecoveryEvent } from "@kodax-ai/coding";
 import type { CreatableHistoryItem } from "../types.js";
 
 /**

@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, parse, resolve } from "node:path";
 
-import { getAgentConfigHome } from "@kodax/agent";
+import { getAgentConfigHome } from "@kodax-ai/agent";
 
 const CONTEXT_FILE_CANDIDATES = ["AGENTS.md", "CLAUDE.md"];
 

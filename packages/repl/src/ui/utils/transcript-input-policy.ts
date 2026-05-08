@@ -168,7 +168,7 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
  *      runner-level pause; the substrate is a queue, not a lock).
  *   2. The user can type a follow-up; on Enter, `addPendingInput`
  *      enqueues into both the React `pendingInputs` array AND the
- *      `@kodax/agent` `MessageQueue` main-thread `user` slice
+ *      `@kodax-ai/agent` `MessageQueue` main-thread `user` slice
  *      (FEATURE_115 Phase 1B mirror in `StreamingContext`).
  *   3. At the next iteration boundary, `runner-driven.ts` consults
  *      both `events.hasPendingInputs?.()` and

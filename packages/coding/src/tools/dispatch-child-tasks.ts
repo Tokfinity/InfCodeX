@@ -26,7 +26,7 @@
  * back-compat escape hatch.
  */
 
-import { enqueueChildTaskNotification } from '@kodax/agent';
+import { enqueueChildTaskNotification } from '@kodax-ai/agent';
 import type {
   KodaXChildContextBundle,
   KodaXAmaFanoutClass,

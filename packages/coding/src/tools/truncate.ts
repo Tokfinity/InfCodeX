@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 
-import { getAgentConfigPath } from '@kodax/agent';
+import { getAgentConfigPath } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 

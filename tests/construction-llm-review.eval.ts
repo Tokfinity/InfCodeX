@@ -18,13 +18,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
-import { getProvider } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import { getProvider } from '@kodax-ai/llm';
 import {
   buildLlmReviewPrompt,
   parseLlmReviewVerdict,
   type Capabilities,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 interface ReviewCase {
   readonly id: string;

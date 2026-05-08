@@ -28,7 +28,7 @@ import type {
   KodaXMessage,
   KodaXToolResultBlock,
   KodaXToolUseBlock,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 export interface StripOptions {
   readonly maxToolResultBytes?: number;
