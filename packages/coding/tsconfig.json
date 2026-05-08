@@ -3,7 +3,9 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -18,13 +20,33 @@
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "references": [
-    { "path": "../ai" },
-    { "path": "../agent" },
-    { "path": "../mcp" },
-    { "path": "../repointel-protocol" },
-    { "path": "../session-lineage" },
-    { "path": "../skills" }
+    {
+      "path": "../ai"
+    },
+    {
+      "path": "../agent"
+    },
+    {
+      "path": "../mcp"
+    },
+    {
+      "path": "../repointel-protocol"
+    },
+    {
+      "path": "../session-lineage"
+    },
+    {
+      "path": "../skills"
+    }
   ],
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**"
+  ]
 }
