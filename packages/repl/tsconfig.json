@@ -3,7 +3,9 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "jsx": "react-jsx",
     "outDir": "./dist",
     "rootDir": "./src",
@@ -20,11 +22,30 @@
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
   "references": [
-    { "path": "../agent" },
-    { "path": "../session-lineage" },
-    { "path": "../coding" },
-    { "path": "../skills" }
+    {
+      "path": "../agent"
+    },
+    {
+      "path": "../session-lineage"
+    },
+    {
+      "path": "../coding"
+    },
+    {
+      "path": "../skills"
+    }
   ],
-  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js"],
-  "exclude": ["node_modules", "dist", "src/**/__tests__/**"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "src/**/*.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/__tests__/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/__tests__/**"
+  ]
 }
