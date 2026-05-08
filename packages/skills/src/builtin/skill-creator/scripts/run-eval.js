@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expandSkillForLLM } from '../../../skill-expander.js';
 import { loadFullSkill } from '../../../skill-loader.js';
-import { ensureDirectory } from './utils.js';
+import { ensureDirectory, loadKodaXSDK } from './utils.js';
 
 function normalizeAssertion(assertion) {
   if (typeof assertion === 'string') {
@@ -99,7 +99,7 @@ export async function buildEvalPrompt(evalItem, options) {
 }
 
 async function defaultRunAgent(prompt, options) {
-  const { runKodaX, estimateTokens } = await import('@kodax/coding');
+  const { runKodaX, estimateTokens } = await loadKodaXSDK();
   const startedAt = Date.now();
   const result = await runKodaX(
     {

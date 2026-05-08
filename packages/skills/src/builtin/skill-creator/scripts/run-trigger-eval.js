@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   extractJsonObject,
+  loadKodaXSDK,
   loadSkill,
 } from './utils.js';
 
@@ -34,7 +35,7 @@ export function parseTriggerDecision(text) {
 }
 
 async function defaultRunPrompt(prompt, options) {
-  const { runKodaX } = await import('@kodax/coding');
+  const { runKodaX } = await loadKodaXSDK();
   const result = await runKodaX(
     {
       provider: options.provider,

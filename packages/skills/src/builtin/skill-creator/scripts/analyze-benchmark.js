@@ -9,6 +9,7 @@ import {
 } from './aggregate-benchmark.js';
 import {
   extractJsonObject,
+  loadKodaXSDK,
   loadRelativeText,
   readJsonFile,
   truncateText,
@@ -116,7 +117,7 @@ ${truncateText(JSON.stringify(input.failureClusters, null, 2), 8000)}
 }
 
 async function defaultRunAnalyst(prompt, options) {
-  const { runKodaX } = await import('@kodax/coding');
+  const { runKodaX } = await loadKodaXSDK();
   const result = await runKodaX(
     {
       provider: options.provider ?? 'anthropic',

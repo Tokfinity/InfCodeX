@@ -21,6 +21,7 @@
   "scripts": {
     "build": "npm run build:packages && tsc",
     "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/skills",
+    "build:bundle": "node scripts/build-bundle.mjs",
     "dev": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
     "dev:cli": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
     "dev:mem-diag": "node scripts/mem-diag-launch.cjs",
@@ -50,22 +51,54 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.15.0",
-    "@kodax-ai/coding": "*",
-    "@kodax-ai/repl": "*",
-    "@kodax-ai/skills": "*",
+    "@alcalzone/ansi-tokenize": "^0.2.5",
+    "@anthropic-ai/sdk": "^0.80.0",
+    "ansi-escapes": "^7.3.0",
+    "auto-bind": "^5.0.1",
     "chalk": "^5.4.1",
+    "cli-boxes": "^3.0.0",
+    "cli-cursor": "^4.0.0",
+    "cli-truncate": "^5.2.0",
+    "clipboardy": "^4.0.0",
+    "code-excerpt": "^4.0.0",
     "commander": "^13.1.0",
+    "es-toolkit": "^1.46.1",
+    "fflate": "^0.8.2",
     "glob": "^11.0.1",
-    "iconv-lite": "^0.6.3"
+    "iconv-lite": "^0.6.3",
+    "indent-string": "^5.0.0",
+    "ink": "^6.7.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "is-in-ci": "^2.0.0",
+    "js-tiktoken": "^1.0.12",
+    "openai": "^6.32.0",
+    "partial-json": "^0.1.7",
+    "patch-console": "^2.0.0",
+    "react": ">=19.0.0",
+    "react-devtools-core": "^7.0.1",
+    "react-reconciler": "^0.33.0",
+    "scheduler": "^0.27.0",
+    "signal-exit": "^4.1.0",
+    "slice-ansi": "^8.0.0",
+    "stack-utils": "^2.0.6",
+    "string-width": "^7.0.0",
+    "terminal-size": "^4.0.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "widest-line": "^6.0.0",
+    "wrap-ansi": "^8.1.0",
+    "ws": "^7.5.10",
+    "yaml": "^2.8.2",
+    "yoga-layout": "^3.2.1",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
     "@types/react": "^19.0.0",
     "@vitest/coverage-v8": "^3.2.4",
+    "esbuild": "^0.27.7",
     "ink-testing-library": "^4.0.0",
-    "react-devtools-core": "^7.0.1",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
     "vitest": "^3.2.4"
   },
   "engines": {
@@ -74,5 +107,14 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/icetomoyo/KodaX.git"
-  }
+  },
+  "files": [
+    "dist",
+    "scripts/kodax-bin.cjs",
+    "scripts/production-env.cjs",
+    "README.md",
+    "README_CN.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ]
 }
