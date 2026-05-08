@@ -90,6 +90,46 @@ describe("message-utils", () => {
     ]);
   });
 
+  it("filters system messages from restored transcript (LLM-internal scaffolding)", () => {
+    // System messages in KodaX are LLM-internal scaffolding (Scout/Generator/
+    // Planner/Evaluator role-prompts, capability-sections, AMA controller
+    // metadata, repo-intelligence snapshots) — never user-facing. Re-rendering
+    // them as "System [HH:MM]" transcript bubbles on `-c` resume would leak
+    // the entire prior task's role-prompt to the user.
+    const scoutPrompt: HistorySeedSourceMessage = {
+      role: "system",
+      content: [
+        "## Repository Intelligence",
+        "Repository overview for some-prior-cwd",
+        "",
+        "You are Scout — the AMA entry role for a managed KodaX task.",
+        "",
+        "## Environment",
+        "Working Directory: D:/some/prior/cwd",
+        "",
+        "Original user request:",
+        "把当前文件夹做个git初始化",
+      ].join("\n"),
+    };
+    expect(extractHistorySeedsFromMessage(scoutPrompt)).toEqual([]);
+  });
+
+  it("filters system messages even when content is short (defensive)", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "system",
+      content: "any system text",
+    };
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
+  it("filters system messages with structured content blocks", () => {
+    const message: HistorySeedSourceMessage = {
+      role: "system",
+      content: [{ type: "text", text: "internal scaffolding" }],
+    };
+    expect(extractHistorySeedsFromMessage(message)).toEqual([]);
+  });
+
   it("extracts the latest assistant text from structured content", () => {
     const messages: KodaXMessage[] = [
       { role: "user", content: "hello" },

@@ -296,8 +296,15 @@ export function extractHistorySeedsFromMessage(message: HistorySeedSourceMessage
       return [{ type: "user", text: content }];
     }
     case "system": {
-      const content = extractTextContent(message.content);
-      return content.trim().length > 0 ? [{ type: "system", text: content }] : [];
+      // ISSUE_<TBD> (v0.7.37+): system messages in KodaX are LLM-internal
+      // scaffolding (Scout/Generator/Planner/Evaluator role-prompts,
+      // capability-sections, AMA controller metadata, repo-intelligence
+      // snapshots) — never user-facing. On `kodax -c` / session restore,
+      // re-rendering these as "System [HH:MM]" transcript bubbles leaks
+      // the entire prior task's role-prompt to the user. Filter them out
+      // entirely. Live-session user-visible banners go through
+      // `addHistoryItem` directly, not this restore path.
+      return [];
     }
     default:
       return [];
