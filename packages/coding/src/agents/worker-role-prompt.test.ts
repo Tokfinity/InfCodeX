@@ -72,6 +72,14 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('Pattern B');
   });
 
+  it('emits the FEATURE_148 anti-immediate-await rule', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('DO NOT IMMEDIATELY AWAIT');
+    expect(out).toContain('FEATURE_148');
+    // Concrete user-facing rephrase that ties the rule to a real workflow:
+    expect(out).toContain('dispatch X, then DO Y, then await X');
+  });
+
   it('emits the Evaluator handoff section (structural gate preserved)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('EVALUATOR HANDOFF');
