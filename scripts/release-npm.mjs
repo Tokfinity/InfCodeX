@@ -147,21 +147,9 @@ function publishOne(pkgDir, pkgName, version) {
     restorePkgJson(pkgJsonPath, restoreState);
   }
 
-  if (!isDryRun) {
-    log(`-- verifying ${pkgName}@${version} is visible on npm…`);
-    // npm view can take a moment to propagate; retry up to 5 times.
-    let visible = false;
-    for (let i = 0; i < 5; i++) {
-      visible = npmView(pkgName, version);
-      if (visible) break;
-      // eslint-disable-next-line no-await-in-loop
-      execSync('node -e "setTimeout(()=>{}, 2000)"');
-    }
-    if (!visible) {
-      throw new Error(`${pkgName}@${version} not visible on npm registry after retry`);
-    }
-    log(`-- ✓ ${pkgName}@${version} confirmed on registry`);
-  }
+  // npm view post-publish verification removed: redundant with `+ @kodax-ai/<pkg>@<v>`
+  // success line npm publish itself emits. Bulk verification happens after the full
+  // sweep via `npm view` over all 9 packages at once.
 }
 
 function main() {
