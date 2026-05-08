@@ -120,9 +120,15 @@ function restoreRootPackageJson(rawBytes) {
 
 function main() {
   // Sanity: git clean (uncommitted changes risk shipping unexpected dist).
-  if (!gitIsClean() && !isDryRun) {
-    logError('git working tree is not clean. Commit or stash first, then retry.');
-    process.exit(1);
+  // Hard fail for real publish; warn-only for dry-run (so operators can
+  // still validate the pipeline mid-edit, but get a visible reminder).
+  if (!gitIsClean()) {
+    if (isDryRun) {
+      log('WARNING: git working tree is not clean. Dry-run will proceed but real publish would refuse.');
+    } else {
+      logError('git working tree is not clean. Commit or stash first, then retry.');
+      process.exit(1);
+    }
   }
 
   const pkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));

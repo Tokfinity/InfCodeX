@@ -6,8 +6,11 @@
 //   2. dist/index.js       — SDK entry (used by builtin helper scripts;
 //                             also exposed via package.json#exports for
 //                             path-B SDK consumers)
-//   3. dist/builtin-skills/ — verbatim copy of packages/skills/dist/builtin/
-//                             (LLM-triggered helper scripts + skill metadata)
+//   3. dist/builtin/       — verbatim copy of packages/skills/dist/builtin/.
+//                             Path MUST stay 'dist/builtin/' (not 'builtin-skills/')
+//                             because @kodax-ai/skills resolveBuiltinPath() does
+//                             `path.join(__dirname, 'builtin')` and esbuild
+//                             rewrites __dirname to the bundled dist/ directory.
 //
 // All 9 internal @kodax-ai/* sub-packages are inlined into the bundles via
 // esbuild's automatic transitive import tracking. All third-party packages
@@ -17,10 +20,15 @@
 //
 // CONTRACT: dist layout is the helper-script's load contract — DO NOT
 // change without updating skills helper scripts that depend on
-// '../../../../dist/index.js' relative resolution. See HLD §12.4 risk 3.
+// '../../../index.js' relative resolution (3 levels up, not 4):
+//   dist/builtin/<skill>/scripts/X.js  →  ../  ../  ../  → dist/  →  index.js
+// See HLD §12.4 risk 3.
+
+// Layout contract constant — used by sanity check below + helper scripts.
+const HELPER_SCRIPT_DEPTH_TO_DIST = 3;
 
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -47,11 +55,12 @@ function readPkg(p) {
 
 // Everything in root deps stays external (npm installs them on the user
 // machine). Only @kodax-ai/* internal sub-packages get inlined.
-// Exception: react-devtools-core is intercepted by stubReactDevtoolsCorePlugin
+// Exception: react-devtools-core + ws are intercepted by stubVendoredInkDevDepsPlugin
 // before reaching the external check (see plugin docstring above).
 const rootPkg = readPkg(path.join(repoRoot, 'package.json'));
+const STUBBED_PACKAGES = new Set(['react-devtools-core', 'ws']);
 const thirdPartyExternals = Object.keys(rootPkg.dependencies || {})
-  .filter((name) => name !== 'react-devtools-core');
+  .filter((name) => !STUBBED_PACKAGES.has(name));
 
 // Node built-ins are always external by virtue of platform: 'node'.
 // We DO NOT external @kodax-ai/* — esbuild will resolve them via
@@ -97,9 +106,10 @@ try {
 // initialize() / connectToDevTools() are never actually called — they exist
 // only for module-load-time linkage.
 
-const stubReactDevtoolsCorePlugin = {
-  name: 'stub-react-devtools-core',
+const stubVendoredInkDevDepsPlugin = {
+  name: 'stub-vendored-ink-dev-deps',
   setup(build) {
+    // react-devtools-core: see docstring above.
     build.onResolve({ filter: /^react-devtools-core$/ }, () => ({
       path: 'react-devtools-core-stub',
       namespace: 'stub',
@@ -110,6 +120,29 @@ const stubReactDevtoolsCorePlugin = {
         export default { initialize: noop, connectToDevTools: noop };
         export const initialize = noop;
         export const connectToDevTools = noop;
+      `,
+      loader: 'js',
+    }));
+    // ws: vendored ink fork's devtools-window-polyfill.js does
+    //   import ws from 'ws'; customGlobal.WebSocket ||= ws;
+    // — only used inside the dev-mode devtools branch (gated by isDev()).
+    // Stub it so we don't drag the full ws ^8 surface into the bundle's
+    // top-level static imports just for a dev-mode shim that production
+    // CLI never enters. The stub is identity-shaped: WebSocket constructor.
+    // ws still appears in root package.json#dependencies because openai's
+    // peerOptional 'ws@^8.18.0' must be satisfiable for `npm install -g`
+    // to succeed under npm 11 strict-peer-deps; npm 11 satisfies the peer
+    // by finding ws in node_modules even when the bundle doesn't import it.
+    build.onResolve({ filter: /^ws$/ }, () => ({
+      path: 'ws-stub',
+      namespace: 'stub',
+    }));
+    build.onLoad({ filter: /^ws-stub$/, namespace: 'stub' }, () => ({
+      contents: `
+        // Stub: real ws never loaded in production CLI (vendored ink dev path only).
+        class WebSocketStub {}
+        export default WebSocketStub;
+        export { WebSocketStub as WebSocket };
       `,
       loader: 'js',
     }));
@@ -156,7 +189,7 @@ const commonOptions = {
   // Metafile (opt-in via --metafile): bundle composition for CI inspection.
   // Default off because the file is ~1 MB and consumers don't need it.
   metafile: writeMetafile,
-  plugins: [stubReactDevtoolsCorePlugin],
+  plugins: [stubVendoredInkDevDepsPlugin],
   // Resolve workspace internals via symlinks under root node_modules (npm
   // workspaces creates symlinks for @kodax-ai/* into packages/*/dist).
   // The resolveExtensions order ensures we prefer compiled .js (faster build,
@@ -175,7 +208,7 @@ const cliResult = await build({
   outfile: path.join(distDir, 'kodax_cli.js'),
 });
 
-const cliBytes = (await import('node:fs')).statSync(path.join(distDir, 'kodax_cli.js')).size;
+const cliBytes = statSync(path.join(distDir, 'kodax_cli.js')).size;
 log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
 // ---- build SDK entry -----------------------------------------------------
@@ -187,22 +220,52 @@ const sdkResult = await build({
   outfile: path.join(distDir, 'index.js'),
 });
 
-const sdkBytes = (await import('node:fs')).statSync(path.join(distDir, 'index.js')).size;
+const sdkBytes = statSync(path.join(distDir, 'index.js')).size;
 log(`  ✓ dist/index.js (${(sdkBytes / 1024).toFixed(0)} kB)`);
 
 // ---- copy builtin skill resources ---------------------------------------
 
 // Layout contract (see HLD §12.4 risk 3):
-//   dist/builtin-skills/<skill-name>/{SKILL.md, scripts/, references/, agents/}
-// Helper scripts compute SDK path as path.resolve(here, '../../../../dist/index.js')
-// so the depth must stay at:
-//   here = dist/builtin-skills/<skill>/scripts → SDK = dist/index.js
-//   relative depth: scripts (1) → <skill> (2) → builtin-skills (3) → dist (4)
+//   dist/builtin/<skill-name>/{SKILL.md, scripts/, references/, agents/}
+// Helper scripts compute SDK path as path.resolve(here, '../../../index.js')
+// so the depth must stay at HELPER_SCRIPT_DEPTH_TO_DIST levels:
+//   here = dist/builtin/<skill>/scripts → SDK = dist/index.js
+//   relative depth: scripts (1) → <skill> (2) → builtin (3) → dist (root)
+//
+// CRITICAL: directory MUST be 'builtin' (not 'builtin-skills') because
+// @kodax-ai/skills' resolveBuiltinPath() at packages/skills/src/types.ts
+// computes path.join(__dirname, 'builtin'). esbuild rewrites __dirname to
+// the runtime bundled dist/ location, so we must mirror that name here.
 const skillsBuiltinSrc = path.join(repoRoot, 'packages/skills/dist/builtin');
-const skillsBuiltinDst = path.join(distDir, 'builtin-skills');
+const skillsBuiltinDst = path.join(distDir, 'builtin');
 log(`Copying builtin skills: ${path.relative(repoRoot, skillsBuiltinSrc)} → ${path.relative(repoRoot, skillsBuiltinDst)}`);
 cpSync(skillsBuiltinSrc, skillsBuiltinDst, { recursive: true });
-log(`  ✓ dist/builtin-skills/ copied`);
+log(`  ✓ dist/builtin/ copied`);
+
+// ---- sanity check: helper script depth contract -------------------------
+
+// Verify the layout contract: a known helper script must be exactly
+// HELPER_SCRIPT_DEPTH_TO_DIST levels below dist/. If a future refactor
+// adds an intermediate directory, this fails the build instead of
+// silently breaking loadKodaXSDK() at runtime in user installs.
+const sampleHelper = path.join(distDir, 'builtin/skill-creator/scripts/utils.js');
+if (!existsSync(sampleHelper)) {
+  console.error('[build-bundle] ERROR: sample helper script missing at expected path:', sampleHelper);
+  process.exit(1);
+}
+const distRelativeDepth = path
+  .relative(distDir, path.dirname(sampleHelper))
+  .split(/[\\/]/)
+  .filter(Boolean).length;
+if (distRelativeDepth !== HELPER_SCRIPT_DEPTH_TO_DIST) {
+  console.error(
+    `[build-bundle] ERROR: helper script depth contract violated. ` +
+    `Expected ${HELPER_SCRIPT_DEPTH_TO_DIST} levels, got ${distRelativeDepth}. ` +
+    `Update HELPER_SCRIPT_DEPTH_TO_DIST + utils.js loadKodaXSDK() relative path.`,
+  );
+  process.exit(1);
+}
+log(`  ✓ helper depth contract: ${distRelativeDepth} levels (matches HELPER_SCRIPT_DEPTH_TO_DIST)`);
 
 // ---- copy other dist artifacts that bin uses -----------------------------
 
@@ -216,7 +279,6 @@ log(`  ✓ dist/builtin-skills/ copied`);
 // ---- write metafile for audit (opt-in) ----------------------------------
 
 if (writeMetafile) {
-  const { writeFileSync } = await import('node:fs');
   const meta = {
     cli: cliResult.metafile,
     sdk: sdkResult.metafile,
@@ -236,6 +298,6 @@ log('');
 log('Bundle complete:');
 log(`  CLI:  ${(cliBytes / 1024).toFixed(0)} kB → dist/kodax_cli.js`);
 log(`  SDK:  ${(sdkBytes / 1024).toFixed(0)} kB → dist/index.js`);
-log(`  Builtin skills: dist/builtin-skills/`);
+log(`  Builtin skills: dist/builtin/`);
 log('');
 log('Next: `npm pack` to produce the publish-ready tarball.');

@@ -486,7 +486,7 @@ This routing update keeps KodaX lightweight by default:
 ├── dist/
 │   ├── kodax_cli.js                   ← CLI entry（bin 命令运行）
 │   ├── index.js                       ← SDK entry（builtin helper + 路径 B 消费者）
-│   ├── *.js.map                       ← source map（集成方调试用）
+│   ├── *.js.map                       ← source map（opt-in，--with-sourcemap，默认不发）
 │   └── builtin-skills/<skill>/        ← LLM 通过 skill 触发的资源（含 helper scripts）
 ├── scripts/
 │   ├── kodax-bin.cjs                  ← bin shim（NODE_ENV=production preload）
@@ -542,20 +542,20 @@ This routing update keeps KodaX lightweight by default:
 
 #### 风险 3 — Skills builtin helper script 路径硬编码
 
-**场景**：`dist/builtin-skills/skill-creator/scripts/run-eval.js` 这类 helper script 是 KodaX 自带的、由 LLM 通过 skill 触发执行的脚本。它们需要 import 到 `dist/index.js` 中的 SDK API（`runKodaX` / `estimateTokens`）。
+**场景**：`dist/builtin/skill-creator/scripts/run-eval.js` 这类 helper script 是 KodaX 自带的、由 LLM 通过 skill 触发执行的脚本。它们需要 import 到 `dist/index.js` 中的 SDK API（`runKodaX` / `estimateTokens`）。
 
 ```javascript
 const here = path.dirname(fileURLToPath(import.meta.url));
-const sdkPath = path.resolve(here, '../../../../dist/index.js');
+const sdkPath = path.resolve(here, '../../../index.js');
 const sdk = await import(pathToFileURL(sdkPath).href);
 ```
 
-`'../../../../dist/index.js'` 这串相对路径**硬编码了 dist 布局**。
+`'../../../index.js'` 这串相对路径**硬编码了 dist 布局**。
 
 **风险**：将来重构 dist 布局（比如把 `builtin-skills/` 改成 `assets/skills/builtin/` 多套一层），所有 helper script 路径会断 —— 而且断的是运行时，编译期看不出。
 
 **应对**：
-- `scripts/build-bundle.mjs` 中把 dist 布局**契约化**：注释 + 一个常量 `HELPER_SCRIPT_DEPTH_TO_DIST = 4`
+- `scripts/build-bundle.mjs` 中把 dist 布局**契约化**：注释 + 常量 `HELPER_SCRIPT_DEPTH_TO_DIST = 3` + build 结束前的 sanity check（`existsSync` + 实际 depth 计数对照常量，违反则 `process.exit(1)` 阻塞 release）
 - helper script 内运行时 `fs.existsSync(sdkPath)` sanity check
 - e2e 测试覆盖 `npm pack && install + 跑一次 skill helper`，build-time gate 而非 publish-time
 - 严重度：中；维护成本：长期警觉，重构 dist 布局必须同步改 helper script
@@ -567,8 +567,9 @@ const sdk = await import(pathToFileURL(sdkPath).href);
 **风险**：没有 source map → 集成方调试是黑盒。
 
 **应对**：
-- `scripts/build-bundle.mjs` 中 `sourcemap: true`，输出 `dist/*.js.map` 包含原始 `packages/*/src/**` 路径映射
-- root `package.json#files` 白名单包含 `dist/**/*.map`（默认 `dist/` 整个目录已包含）
+- `scripts/build-bundle.mjs` 默认 **sourcemap 关闭**，需 `--with-sourcemap` 显式启用（实测 source map 加 ~13 MB unpacked / ~3 MB gzipped 到 tarball；路径 B 集成方比例少 + KodaX 是开源的，需要时可从 GitHub source 重 build）
+- `--with-sourcemap` 启用后 `dist/*.js.map` 含原始 `packages/*/src/**` 路径映射；publish 时仍走 root `package.json#files` 白名单（默认 `dist/` 整目录包括 .map）
+- 后续如果 path B 反馈量大可改为默认 on（trade-off 见 ADR-022）
 - 严重度：低；维护成本：一次配置
 
 #### 风险 5 — Bundle size 不应膨胀
