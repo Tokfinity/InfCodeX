@@ -13,6 +13,7 @@ export type {
   KodaXToolResultBlock,
   KodaXThinkingBlock,
   KodaXRedactedThinkingBlock,
+  KodaXCacheBoundary,
   KodaXContentBlock,
   KodaXMessage,
   KodaXTokenUsage,
@@ -193,6 +194,21 @@ export type {
   RetryAfterResult,
   RetryAfterSource,
 } from './retry/retry-after.js';
+
+// FEATURE_116 (v0.7.37) — cache boundary helpers. Producer side
+// (`insertCacheBoundary`) is called by prompt assembly; consumer side
+// (`lowerCacheBoundaries` / `stripCacheBoundaries`) is called by
+// provider base classes during request lowering.
+export {
+  insertCacheBoundary,
+  isCacheBoundary,
+  lowerCacheBoundaries,
+  stripCacheBoundaries,
+} from './cache-control.js';
+export type {
+  KodaXAnthropicCacheableBlock,
+  KodaXCacheLowerMode,
+} from './cache-control.js';
 export type {
   KodaXRetryAfterEvent,
   KodaXOnRetryAfterCallback,

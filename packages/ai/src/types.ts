@@ -42,13 +42,39 @@ export interface KodaXRedactedThinkingBlock {
   data: string;
 }
 
+/**
+ * FEATURE_116 (v0.7.37) — Cache boundary marker.
+ *
+ * Marks the end of a cacheable prefix in a request payload. Provider base
+ * classes lower this to the wire-level cache mechanism their API supports:
+ *
+ * - `KodaXAnthropicCompatProvider`: turns the marker into
+ *   `cache_control: { type: 'ephemeral' }` on the immediately preceding
+ *   block, then strips the marker itself.
+ * - `KodaXOpenAICompatProvider`: strips the marker (OpenAI / DeepSeek
+ *   auto prefix-cache; Kimi/Zhipu/通义 self-cache via separate cache_id
+ *   endpoint deferred to v0.7.45+).
+ * - `KodaXAcpProvider` (CLI bridge): strips the marker (CLI bridge does
+ *   not touch wire; avoids leaking marker into subprocess input).
+ *
+ * Place at the suffix of any stable prefix (system prompt, tools array,
+ * role prompt). The marker is purely client-side: it MUST be removed
+ * before the request is sent over the wire.
+ */
+export interface KodaXCacheBoundary {
+  type: 'cache-boundary';
+  /** Optional hint identifying which logical region this boundary terminates. Diagnostic only. */
+  hint?: 'system' | 'tools' | 'role-prompt';
+}
+
 export type KodaXContentBlock =
     | KodaXTextBlock
     | KodaXToolUseBlock
     | KodaXToolResultBlock
     | KodaXImageBlock
     | KodaXThinkingBlock
-    | KodaXRedactedThinkingBlock;
+    | KodaXRedactedThinkingBlock
+    | KodaXCacheBoundary;
 
 // ============== 消息类型 ==============
 
