@@ -4,6 +4,7 @@ import {
     CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
     cloneCapabilityProfile,
 } from './capability-profile.js';
+import { stripCacheBoundaries } from '../cache-control.js';
 import type {
     KodaXMessage,
     KodaXProviderCapabilityProfile,
@@ -73,6 +74,28 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         return cloneCapabilityProfile(CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE);
     }
 
+    /**
+     * FEATURE_116 (v0.7.37) — Strip any `cache-boundary` markers from
+     * KodaXMessage content arrays before they reach the ACP CLI bridge.
+     * The CLI subprocess does not understand KodaX-internal cache markers;
+     * stripping at the entry point keeps the marker abstraction purely
+     * client-side.
+     *
+     * Idempotent: messages with no boundary content return the same
+     * reference.
+     */
+    protected stripCacheBoundariesFromMessages(
+        messages: KodaXMessage[],
+    ): KodaXMessage[] {
+        return messages.map((m) => {
+            if (typeof m.content === 'string') return m;
+            const stripped = stripCacheBoundaries(m.content);
+            return stripped.length === m.content.length
+                ? m
+                : { ...m, content: stripped };
+        });
+    }
+
     async stream(
         messages: KodaXMessage[],
         tools: KodaXToolDefinition[],
@@ -81,6 +104,10 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
         streamOptions?: KodaXProviderStreamOptions,
         signal?: AbortSignal
     ): Promise<KodaXStreamResult> {
+
+        // FEATURE_116 (v0.7.37): strip boundary markers up front so the
+        // CLI bridge never sees them.
+        messages = this.stripCacheBoundariesFromMessages(messages);
 
         void tools;
         void system;
