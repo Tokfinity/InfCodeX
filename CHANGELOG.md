@@ -6,7 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-<!-- last-sync: 110b84a -->
+<!-- last-sync: 3dbf474 -->
+
+---
+
+## [0.7.37] - 2026-05-08
 
 ### Theme
 

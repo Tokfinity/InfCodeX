@@ -20,7 +20,7 @@
 | Absorbed | `3` |
 | InProgress | `1` |
 | Planned | `52` |
-| Current released version | `v0.7.36` |
+| Current released version | `v0.7.37` |
 
 > Note: `Planned` includes 8 strikethrough rows (`095` absorbed → 057, `059` absorbed → 084, `063` cancelled, `073` cancelled, `109` cancelled, `111` absorbed → 115, `122` cancelled, `127` cancelled never-planned) that remain in the planned table for traceability. The `Cancelled` and `Absorbed` counters above slice the same rows by lifecycle reason. `125` was re-scoped from v0.8.10 mode-based design to v0.7.41 LLM-First auto coordination — see its row for rationale.
 
