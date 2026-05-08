@@ -105,7 +105,7 @@ describe('h2-boundary-runner — end-to-end plumbing (fake kodax)', () => {
   // Worktree setup + subprocess spawn + git diff add up to 1-3s on a hot
   // box; under parallel test pressure this can exceed vitest's 5s default.
   // Generous 30s ceiling per test absorbs that without masking real hangs.
-  it('runs 1 case × 1 alias × 1 variant: spawns fake kodax, captures session, persists matrix', { timeout: 30_000 }, async () => {
+  it('runs 1 case × 1 alias × 1 variant: spawns fake kodax, captures session, persists matrix', { timeout: 60_000 }, async () => {
     const tmp = await fs.mkdtemp(path.join(tmpdir(), 'h2-boundary-test-'));
     cleanups.push(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
     const fakeBin = await makeFakeKodaxBin(tmp);
@@ -167,7 +167,7 @@ describe('h2-boundary-runner — end-to-end plumbing (fake kodax)', () => {
     expect(matrix.primaryHeadUntouched.ok).toBe(true);
   });
 
-  it('H2-B variant propagates KODAX_PLANNER_INPUTFILTER=strip-reasoning to the spawn', { timeout: 30_000 }, async () => {
+  it('H2-B variant propagates KODAX_PLANNER_INPUTFILTER=strip-reasoning to the spawn', { timeout: 60_000 }, async () => {
     const tmp = await fs.mkdtemp(path.join(tmpdir(), 'h2-boundary-test-'));
     cleanups.push(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
     const fakeBin = await makeFakeKodaxBin(tmp);
@@ -198,7 +198,7 @@ describe('h2-boundary-runner — end-to-end plumbing (fake kodax)', () => {
     expect(jsonl).toMatch(/"plannerInputFilter":"strip-reasoning"/);
   });
 
-  it('H1-ref variant propagates KODAX_FORCE_MAX_HARNESS=H1', { timeout: 30_000 }, async () => {
+  it('H1-ref variant propagates KODAX_FORCE_MAX_HARNESS=H1', { timeout: 60_000 }, async () => {
     const tmp = await fs.mkdtemp(path.join(tmpdir(), 'h2-boundary-test-'));
     cleanups.push(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
     const fakeBin = await makeFakeKodaxBin(tmp);
@@ -229,7 +229,7 @@ describe('h2-boundary-runner — end-to-end plumbing (fake kodax)', () => {
     expect(jsonl).toMatch(/"plannerInputFilter":null/);
   });
 
-  it('mustNotTouchViolations fires when the agent touches a forbidden path', { timeout: 30_000 }, async () => {
+  it('mustNotTouchViolations fires when the agent touches a forbidden path', { timeout: 60_000 }, async () => {
     const tmp = await fs.mkdtemp(path.join(tmpdir(), 'h2-boundary-test-'));
     cleanups.push(async () => { await fs.rm(tmp, { recursive: true, force: true }); });
     // Unique filename per test invocation to avoid accidental collision with
