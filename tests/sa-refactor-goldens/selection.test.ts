@@ -265,8 +265,14 @@ const HAS_REAL_SESSIONS = existsSync(REAL_SESSIONS_DIR);
 
 const describeOrSkip = HAS_REAL_SESSIONS ? describe : describe.skip;
 
+// The two corpus-scanning tests below iterate over every jsonl in the
+// user's `~/.kodax/sessions/` directory (can be 100s of files in active
+// development environments). Under heavy parallel test load (~4800
+// concurrent tests) the cumulative I/O contention can push these past
+// vitest's default 5s timeout even though parsing itself is fast in
+// isolation. Bumped to 30s — same defensive pattern as v0.7.34 Issue 128.
 describeOrSkip('against real .kodax/sessions/ corpus', () => {
-  it('parses every jsonl file without throwing and reports basic shape', async () => {
+  it('parses every jsonl file without throwing and reports basic shape', { timeout: 30_000 }, async () => {
     const files = await listSessionFiles(REAL_SESSIONS_DIR);
     expect(files.length).toBeGreaterThan(0);
 
@@ -294,7 +300,7 @@ describeOrSkip('against real .kodax/sessions/ corpus', () => {
     expect(recognized / files.length).toBeGreaterThanOrEqual(0.9);
   });
 
-  it('selectSessions over the real corpus returns a report with no parser-level warnings', async () => {
+  it('selectSessions over the real corpus returns a report with no parser-level warnings', { timeout: 30_000 }, async () => {
     const files = await listSessionFiles(REAL_SESSIONS_DIR);
     const sessions = await Promise.all(files.map(parseSessionFile));
     const report = selectSessions(sessions);

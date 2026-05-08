@@ -32,6 +32,16 @@ async function currentHead(): Promise<string> {
 
 const repoRoot = process.cwd();
 
+// All tests in this suite shell out to the real `git` binary (worktree
+// add / remove / prune, rev-parse). Under heavy parallel test load
+// (~4800 concurrent tests) these git operations consistently exceed
+// vitest's default 5s per-test timeout, producing flaky failures even
+// though the underlying logic is sound (single-test runs always pass).
+// Bumped to 20s — same defensive pattern as v0.7.34 Issue 128 (10
+// contract suites bumped to 15s). Global testTimeout untouched so
+// unit-test perf regressions still surface fast.
+const GIT_TEST_TIMEOUT = 20_000;
+
 describe('worktree-runner', () => {
   const created: string[] = [];
 
@@ -48,7 +58,7 @@ describe('worktree-runner', () => {
     );
   });
 
-  it('setupWorktree creates a worktree at the given SHA, then cleanupWorktree removes it', async () => {
+  it('setupWorktree creates a worktree at the given SHA, then cleanupWorktree removes it', { timeout: GIT_TEST_TIMEOUT }, async () => {
     const head = await currentHead();
     const handle = await setupWorktree({
       id: 'unit-setup',
@@ -71,7 +81,7 @@ describe('worktree-runner', () => {
     await expect(fs.stat(handle.path)).rejects.toBeDefined();
   });
 
-  it('setupWorktree throws on unreachable SHA (case is skipped, not faked)', async () => {
+  it('setupWorktree throws on unreachable SHA (case is skipped, not faked)', { timeout: GIT_TEST_TIMEOUT }, async () => {
     await expect(
       setupWorktree({
         id: 'unit-bad-sha',
@@ -81,7 +91,7 @@ describe('worktree-runner', () => {
     ).rejects.toThrow(/not reachable/);
   });
 
-  it('runInWorktree always cleans up even when fn throws', async () => {
+  it('runInWorktree always cleans up even when fn throws', { timeout: GIT_TEST_TIMEOUT }, async () => {
     const head = await currentHead();
     let capturedPath = '';
     await expect(
@@ -94,7 +104,7 @@ describe('worktree-runner', () => {
     await expect(fs.stat(capturedPath)).rejects.toBeDefined();
   });
 
-  it('assertPrimaryHeadUnchanged returns ok when HEAD matches', async () => {
+  it('assertPrimaryHeadUnchanged returns ok when HEAD matches', { timeout: GIT_TEST_TIMEOUT }, async () => {
     const head = await currentHead();
     const result = await assertPrimaryHeadUnchanged({
       repoRoot,
@@ -103,7 +113,7 @@ describe('worktree-runner', () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it('assertPrimaryHeadUnchanged surfaces drift when expected HEAD differs', async () => {
+  it('assertPrimaryHeadUnchanged surfaces drift when expected HEAD differs', { timeout: GIT_TEST_TIMEOUT }, async () => {
     const result = await assertPrimaryHeadUnchanged({
       repoRoot,
       expectedHeadAtStart: '0000000000000000000000000000000000000000',
@@ -114,7 +124,7 @@ describe('worktree-runner', () => {
     }
   });
 
-  it('scanAndCleanOrphanWorktrees only touches kodax-eval- prefixed dirs', async () => {
+  it('scanAndCleanOrphanWorktrees only touches kodax-eval- prefixed dirs', { timeout: GIT_TEST_TIMEOUT }, async () => {
     // Plant a fake orphan AND an unrelated dir; ensure only the orphan goes.
     const fakeOrphan = path.join(tmpdir(), `kodax-eval-orphan-test-${Date.now()}`);
     const unrelated = path.join(tmpdir(), `unrelated-dir-test-${Date.now()}`);
