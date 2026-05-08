@@ -29,6 +29,7 @@ import {
   mapDepthToOpenAIReasoningEffort,
   resolveThinkingBudget,
 } from '../reasoning.js';
+import { stripCacheBoundaries } from '../cache-control.js';
 import { buildImageDataUrl } from './image-serialization.js';
 
 const KODAX_OPENAI_COMPAT_USER_AGENT = 'KodaX';
@@ -173,6 +174,32 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   protected override onStaleConnection(): void {
     this.initClient();
+  }
+
+  /**
+   * FEATURE_116 (v0.7.37) — Strip any `cache-boundary` markers from
+   * KodaXMessage content arrays before they reach OpenAI wire
+   * serialization. OpenAI / DeepSeek auto-cache prefix tokens
+   * server-side, so the client has no marker to lower; Kimi/Zhipu/通义
+   * self-cache via separate `cache_id` endpoints that are deferred to
+   * v0.7.45+ (FEATURE_102). Stripping is the correct universal action
+   * for this base class.
+   *
+   * Idempotent: a message whose content is a string or contains no
+   * boundaries returns the same reference. Safe to call multiple times.
+   */
+  protected stripCacheBoundariesFromMessages(
+    messages: KodaXMessage[],
+  ): KodaXMessage[] {
+    return messages.map((m) => {
+      if (typeof m.content === 'string') return m;
+      const stripped = stripCacheBoundaries(m.content);
+      // Preserve identity when nothing changed — keeps downstream
+      // memoization and === checks behaving as before.
+      return stripped.length === m.content.length
+        ? m
+        : { ...m, content: stripped };
+    });
   }
 
   /**
@@ -342,8 +369,12 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     signal?: AbortSignal
   ): Promise<KodaXStreamResult> {
     return this.withRateLimit(async () => {
+      // FEATURE_116 (v0.7.37): strip any cache-boundary markers before
+      // building the wire payload. OpenAI-compat path has no client-side
+      // cache marker to lower; the markers are KodaX-internal only.
+      const cleanMessages = this.stripCacheBoundariesFromMessages(messages);
       const { system: mergedSystem, rest: nonSystemMessages } =
-        this.normalizeSystemForWire(system, messages);
+        this.normalizeSystemForWire(system, cleanMessages);
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages),
@@ -583,8 +614,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     signal?: AbortSignal,
   ): Promise<KodaXStreamResult> {
     return this.withRateLimit(async () => {
+      // FEATURE_116 (v0.7.37): strip cache-boundary markers (see stream()).
+      const cleanMessages = this.stripCacheBoundariesFromMessages(messages);
       const { system: mergedSystem, rest: nonSystemMessages } =
-        this.normalizeSystemForWire(system, messages);
+        this.normalizeSystemForWire(system, cleanMessages);
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
         ...await this.convertMessages(nonSystemMessages),
