@@ -486,7 +486,7 @@ FEATURE_147 (v0.7.37) 完成了 `@kodax/*` → `@kodax-ai/*` scope 重命名，�
 - 新增 `scripts/build-bundle.mjs` —— esbuild 三个 entry：
   - `src/kodax_cli.ts` → `dist/kodax_cli.js`（CLI bin 入口）
   - `src/index.ts` → `dist/index.js`（SDK 入口；服务于 KodaX 自己的 builtin helper scripts，顺带开放给路径 B 集成方）
-  - 静态复制 `packages/skills/dist/builtin/` → `dist/builtin-skills/`（LLM 通过 skill 触发的资源）
+  - 静态复制 `packages/skills/dist/builtin/` → `dist/builtin/`（LLM 通过 skill 触发的资源；目录名必须是 `builtin` 而非 `builtin-skills`，因为 `@kodax-ai/skills` 通过 `path.join(__dirname, 'builtin')` 解析）
 
 **对 SDK 集成方影响**：
 - 路径 A（推荐）—— `git clone + npm link + bundle 自己产品`：完全不受影响
