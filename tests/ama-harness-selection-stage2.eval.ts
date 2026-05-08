@@ -49,7 +49,7 @@
  */
 
 import { describe, it } from 'vitest';
-import type { KodaXThinkingDepth } from '@kodax/ai';
+import type { KodaXThinkingDepth } from '@kodax-ai/llm';
 
 import type { ModelAlias } from '../benchmark/harness/aliases.js';
 import { availableAliases } from '../benchmark/harness/aliases.js';

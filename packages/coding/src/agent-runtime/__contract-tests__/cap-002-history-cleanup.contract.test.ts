@@ -17,12 +17,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 describe('CAP-002: history cleanup contract', () => {
   it('CAP-HISTORY-CLEANUP-001: orphan tool_use is removed before next provider call', () => {

@@ -1,5 +1,5 @@
 /**
- * @kodax/coding Compaction Config
+ * @kodax-ai/coding Compaction Config
  *
  * Default trigger picks an adaptive percent based on the active provider's
  * context window. Short-window models compact earlier so the LLM doesn't
@@ -20,8 +20,8 @@
  */
 
 import { readFile } from 'fs/promises';
-import { getAgentConfigPath } from '@kodax/agent';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import { getAgentConfigPath } from '@kodax-ai/agent';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 const LEGACY_DEFAULT_TRIGGER_PERCENT = 75;
 
 /**

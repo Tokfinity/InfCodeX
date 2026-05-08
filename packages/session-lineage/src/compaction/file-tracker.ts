@@ -1,11 +1,11 @@
 /**
- * @kodax/agent File Tracking
+ * @kodax-ai/agent File Tracking
  */
 
 import { randomUUID } from 'node:crypto';
-import type { KodaXContentBlock, KodaXMessage, KodaXToolUseBlock } from '@kodax/ai';
+import type { KodaXContentBlock, KodaXMessage, KodaXToolUseBlock } from '@kodax-ai/llm';
 import type { FileOperations } from './types.js';
-import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '@kodax/agent';
+import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
 
 const LEDGER_MAX_ENTRIES = 256;
 const PATH_LIKE_KEYS = [

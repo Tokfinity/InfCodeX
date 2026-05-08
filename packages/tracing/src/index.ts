@@ -1,9 +1,9 @@
 /**
- * @kodax/tracing — Trace / Span / SpanData / TracingProcessor.
+ * @kodax-ai/tracing — Trace / Span / SpanData / TracingProcessor.
  *
  * FEATURE_083 (v0.7.24): unified tracing substrate for KodaX. Standalone so
  * external SDK consumers can wire KodaX into OpenTelemetry, Langfuse or a
- * custom sink without pulling @kodax/core or @kodax/coding.
+ * custom sink without pulling @kodax-ai/core or @kodax-ai/coding.
  *
  * The `Runner` (FEATURE_080/v0.7.23) accepts an optional tracer; the SA
  * path emits `AgentSpan` / `GenerationSpan` / `ToolCallSpan` as of Slice 8.

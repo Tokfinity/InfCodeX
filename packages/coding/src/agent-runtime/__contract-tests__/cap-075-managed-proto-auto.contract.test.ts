@@ -23,7 +23,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage, KodaXStreamResult } from '@kodax/ai';
+import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 import type { KodaXContextTokenSnapshot, KodaXOptions } from '../../types.js';
 
 import { maybeAutoContinueManagedProtocol } from '../managed-protocol-continue.js';

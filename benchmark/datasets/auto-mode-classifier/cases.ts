@@ -13,7 +13,7 @@
  * false positives are validated by the v0.7.33 release pilot, not here.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export type ClassifierVerdict = 'block' | 'allow';
 

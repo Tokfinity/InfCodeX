@@ -144,7 +144,7 @@ describe('Runner', () => {
 
   describe('tracing integration (FEATURE_083)', () => {
     it('emits an AgentSpan + GenerationSpan around the generic path', async () => {
-      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax/tracing');
+      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
       setTracingProcessors([]);
       const startedSpans: string[] = [];
       const endedSpans: string[] = [];
@@ -177,7 +177,7 @@ describe('Runner', () => {
     });
 
     it('passes a PresetTracingContext to preset dispatchers when tracer is active', async () => {
-      const { Tracer } = await import('@kodax/tracing');
+      const { Tracer } = await import('@kodax-ai/tracing');
       let receivedTracingContext: unknown;
       const dispatcher: PresetDispatcher = vi.fn(async (_a, _i, _opts, ctx) => {
         receivedTracingContext = ctx;
@@ -361,7 +361,7 @@ describe('Runner', () => {
     });
 
     it('emits a ToolCallSpan under the AgentSpan for each tool execution', async () => {
-      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax/tracing');
+      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
       setTracingProcessors([]);
       const endedSpans: Array<{ name: string; kind: string; error: boolean }> = [];
       addTracingProcessor({
@@ -406,7 +406,7 @@ describe('Runner', () => {
     });
 
     it('marks ToolCallSpan with error=true when the tool throws', async () => {
-      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax/tracing');
+      const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
       setTracingProcessors([]);
       const endedSpans: Array<{ kind: string; error: boolean }> = [];
       addTracingProcessor({

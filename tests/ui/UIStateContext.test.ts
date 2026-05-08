@@ -19,7 +19,7 @@ import {
   generateId,
   createHistoryItem,
   createToolCall,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Test Constants ===
 

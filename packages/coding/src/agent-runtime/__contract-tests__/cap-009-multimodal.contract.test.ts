@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { KodaXInputArtifact } from '@kodax/coding';
+import type { KodaXInputArtifact } from '@kodax-ai/coding';
 
 import { buildPromptMessageContent } from '../prompt-content.js';
 

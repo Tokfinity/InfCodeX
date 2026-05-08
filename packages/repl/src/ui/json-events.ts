@@ -11,7 +11,7 @@ import type {
   KodaXManagedTaskStatusEvent,
   KodaXRepoIntelligenceTraceEvent,
   KodaXTokenUsage,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 type JsonWritable = Pick<NodeJS.WritableStream, 'write'>;
 

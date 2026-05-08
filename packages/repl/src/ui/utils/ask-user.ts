@@ -1,4 +1,4 @@
-import type { AskUserQuestionOptions } from "@kodax/coding";
+import type { AskUserQuestionOptions } from "@kodax-ai/coding";
 
 export interface SelectOption {
   label: string;

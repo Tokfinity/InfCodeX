@@ -25,15 +25,15 @@
  * `packages/coding/src/task-engine/_internal/prompts/role-prompt.ts` (the
  * FEATURE_079 extraction) and are loaded by the existing code path.
  *
- * v0.7.35.1 FEATURE_142 (A-R1): moved from `@kodax/agent/src/primitives/`
- * back to `@kodax/coding/src/agents/`. These role declarations are
+ * v0.7.35.1 FEATURE_142 (A-R1): moved from `@kodax-ai/agent/src/primitives/`
+ * back to `@kodax-ai/coding/src/agents/`. These role declarations are
  * coding-AMA-specific (Scout / Planner / Generator / Evaluator are the
  * H2 state-machine roles, not generic Agent platform primitives). Per
- * ADR-021, the universal `@kodax/agent` framework must not predeclare
+ * ADR-021, the universal `@kodax-ai/agent` framework must not predeclare
  * coding's H2 role identities.
  */
 
-import { createAgent, type Agent } from '@kodax/agent';
+import { createAgent, type Agent } from '@kodax-ai/agent';
 
 export const SCOUT_AGENT_NAME = 'kodax/role/scout';
 export const PLANNER_AGENT_NAME = 'kodax/role/planner';

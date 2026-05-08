@@ -32,7 +32,7 @@
  * STATUS: ACTIVE since FEATURE_100 P2 for the gate logic.
  */
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import { describe, expect, it } from 'vitest';
 
 import type { KodaXOptions } from '../../types.js';

@@ -5,7 +5,7 @@
  *
  *   - BASELINE_CODING_SUMMARY_PROMPT / BASELINE_CODING_UPDATE_SUMMARY_PROMPT
  *     The verbatim v0.7.35 prompt — coding-flavored. Kept as ground-truth
- *     baseline; will become CODING_SUMMARY_PROMPT in @kodax/coding when the
+ *     baseline; will become CODING_SUMMARY_PROMPT in @kodax-ai/coding when the
  *     two-layer split lands.
  *
  *   - CANDIDATE_A_SUMMARY_PROMPT / CANDIDATE_A_UPDATE_SUMMARY_PROMPT

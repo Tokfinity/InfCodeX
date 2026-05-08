@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import { assertProviderConfigured } from '../provider-config-check.js';
 
 function makeProvider(opts: {

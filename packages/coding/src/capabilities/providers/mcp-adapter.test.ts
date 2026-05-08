@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMcpTestServerFixture, getMcpCachePaths } from '@kodax/mcp';
+import { createMcpTestServerFixture, getMcpCachePaths } from '@kodax-ai/mcp';
 import { createExtensionRuntime } from '../../extensions/runtime.js';
 import { registerConfiguredMcpCapabilityProvider } from './mcp-adapter.js';
 

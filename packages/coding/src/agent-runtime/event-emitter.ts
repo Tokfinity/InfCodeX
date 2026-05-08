@@ -46,7 +46,7 @@
  */
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../types.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 

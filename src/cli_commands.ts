@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import type { KodaXResult } from '@kodax/coding';
+import type { KodaXResult } from '@kodax-ai/coding';
 
 export const KODAX_COMMANDS_DIR = path.join(os.homedir(), '.kodax', 'commands');
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { classify } from './classify.js';
 import type { AutoRules } from './rules.js';
-import { KodaXBaseProvider, createCostTracker, getSummary } from '@kodax/ai';
+import { KodaXBaseProvider, createCostTracker, getSummary } from '@kodax-ai/llm';
 import type {
   CostTracker,
   KodaXMessage,
@@ -12,7 +12,7 @@ import type {
   KodaXTextBlock,
   KodaXToolDefinition,
   KodaXToolUseBlock,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 const emptyRules: AutoRules = { allow: [], soft_deny: [], environment: [] };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { KodaXNetworkError } from '@kodax/ai';
+import { KodaXNetworkError } from '@kodax-ai/llm';
 import { withRetry } from './retry-handler.js';
 import { ErrorCategory, type ErrorClassification } from './error-classification.js';
 

@@ -41,7 +41,7 @@
  */
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../types.js';
-import type { KodaXMessage, KodaXToolUseBlock, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolUseBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
 import { checkIncompleteToolCalls } from '../messages.js';
 import { getRequiredToolParams } from '../tools/index.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';

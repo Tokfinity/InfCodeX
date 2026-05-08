@@ -11,7 +11,7 @@
  *   - Default options produce permissive system caps
  *
  * Tests reset the registry before each block and register the four
- * pure-new invariants (no @kodax/coding capability-coupled invariants
+ * pure-new invariants (no @kodax-ai/coding capability-coupled invariants
  * needed at this layer).
  */
 
@@ -151,7 +151,7 @@ describe('runAdmissionAudit — happy path (Steps 2–5)', () => {
     // Register a local observe-only stub under the 'harnessSelectionTiming'
     // id so this test can verify that declared-and-registered invariants
     // appear in bindings. v0.7.35.1 FEATURE_142 (A-R2) moved the real
-    // harnessSelectionTiming implementation to @kodax/coding, so agent's
+    // harnessSelectionTiming implementation to @kodax-ai/coding, so agent's
     // own test setup needs a local stub to keep this coverage.
     registerInvariant({
       id: 'harnessSelectionTiming',
@@ -188,7 +188,7 @@ describe('runAdmissionAudit — happy path (Steps 2–5)', () => {
     // the manifest it joins the effective set, but the audit's admit loop
     // must skip it cleanly (the !inv.admit branch). Use a local stub
     // registered under 'harnessSelectionTiming' (a valid invariant id) —
-    // v0.7.35.1 FEATURE_142 (A-R2) moved the real impl to @kodax/coding.
+    // v0.7.35.1 FEATURE_142 (A-R2) moved the real impl to @kodax-ai/coding.
     registerInvariant({
       id: 'harnessSelectionTiming',
       description: 'observe-only stub for agent-side audit test',
@@ -301,7 +301,7 @@ describe('runAdmissionAudit — clamp composition (Steps 3–5)', () => {
   beforeEach(() => {
     _resetInvariantRegistry();
     // Register a stub invariant that returns a clamp patch — tests the
-    // patch-composition pipeline without needing the @kodax/coding
+    // patch-composition pipeline without needing the @kodax-ai/coding
     // capability-coupled invariants.
     const budgetClamper: QualityInvariant = {
       id: 'budgetCeiling',

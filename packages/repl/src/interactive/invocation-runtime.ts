@@ -1,6 +1,6 @@
 import { exec as execCallback } from 'child_process';
 import { promisify } from 'util';
-import type { KodaXEvents, KodaXOptions } from '@kodax/coding';
+import type { KodaXEvents, KodaXOptions } from '@kodax-ai/coding';
 import type { CommandHook, CommandHooks, CommandInvocationRequest } from '../commands/types.js';
 
 const execAsync = promisify(execCallback);

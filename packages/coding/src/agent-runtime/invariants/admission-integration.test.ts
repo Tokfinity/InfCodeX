@@ -16,7 +16,7 @@
  *      `harnessSelectionTiming` declared (observe-only id surfacing in
  *      bindings); admission still succeeds with both signals recorded.
  *
- * Sits in @kodax/coding because it depends on the capability-coupled
+ * Sits in @kodax-ai/coding because it depends on the capability-coupled
  * invariants. The pure-only suite at
  * `packages/core/src/admission-audit.test.ts` covers the core set in
  * isolation.
@@ -29,8 +29,8 @@ import {
   _resetInvariantRegistry,
   createAgent,
   createHandoff,
-} from '@kodax/agent';
-import type { Agent, AgentManifest, SystemCap } from '@kodax/agent';
+} from '@kodax-ai/agent';
+import type { Agent, AgentManifest, SystemCap } from '@kodax-ai/agent';
 
 import { registerCodingInvariants } from './index.js';
 

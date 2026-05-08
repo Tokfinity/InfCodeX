@@ -24,7 +24,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXJsonValue } from '@kodax/agent';
+import type { KodaXJsonValue } from '@kodax-ai/agent';
 
 import {
   buildRuntimeSessionState,

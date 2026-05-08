@@ -27,9 +27,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
-import { shouldCompact } from '@kodax/session-lineage';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import { shouldCompact } from '@kodax-ai/session-lineage';
 
 function makeConfig(overrides: Partial<CompactionConfig> = {}): CompactionConfig {
   return {

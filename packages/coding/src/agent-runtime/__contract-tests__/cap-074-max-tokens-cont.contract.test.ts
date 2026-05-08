@@ -30,7 +30,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage, KodaXStreamResult } from '@kodax/ai';
+import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 import type { KodaXContextTokenSnapshot, KodaXEvents } from '../../types.js';
 
 import { maybeContinueAfterMaxTokens } from '../max-tokens-continuation.js';

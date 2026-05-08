@@ -1,10 +1,10 @@
 /**
- * @kodax/agent Types
+ * @kodax-ai/agent Types
  *
  * 通用 Agent 类型定义
  */
 
-// ============== Re-export AI Types from @kodax/ai ==============
+// ============== Re-export AI Types from @kodax-ai/llm ==============
 
 export type {
   KodaXImageBlock,
@@ -36,15 +36,15 @@ export type {
   // v0.7.35.1 FEATURE_142 (A-R4): KodaXHarnessProfile / KodaXAmaProfile /
   // KodaXAmaTactic / KodaXAmaFanoutClass / KodaXAmaFanoutPolicy /
   // KodaXAmaControllerDecision removed — coding-AMA-specific, see ADR-021.
-  // Coding-side consumers import directly from `@kodax/ai`.
+  // Coding-side consumers import directly from `@kodax-ai/llm`.
   KodaXTaskRoutingDecision,
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 // Import for local types
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export type KodaXJsonPrimitive = string | number | boolean | null;
 export type KodaXJsonValue =

@@ -22,9 +22,9 @@
  * ```
  */
 
-// ============== Re-export from @kodax/ai ==============
+// ============== Re-export from @kodax-ai/llm ==============
 // AI types are re-exported for backward compatibility
-// New code should import directly from @kodax/ai
+// New code should import directly from @kodax-ai/llm
 
 export type {
   KodaXImageBlock,
@@ -64,13 +64,13 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 export {
   KodaXError,
   KodaXProviderError,
   KodaXRateLimitError,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 // ============== Core Types ==============
 
@@ -199,7 +199,7 @@ export {
   CANCELLED_TOOL_RESULT_MESSAGE,
 } from './constants.js';
 
-// ============== Provider (re-export from @kodax/ai) ==============
+// ============== Provider (re-export from @kodax-ai/llm) ==============
 
 export {
   KodaXBaseProvider,
@@ -383,7 +383,7 @@ export {
 
 export {
   REPOINTEL_DEFAULT_ENDPOINT,
-} from '@kodax/repointel-protocol';
+} from '@kodax-ai/repointel-protocol';
 
 export {
   renderModuleContext,
@@ -465,15 +465,15 @@ export {
 } from './agent.js';
 
 // CAP-002: extracted from agent.ts to agent-runtime/ in FEATURE_100 P2.
-// v0.7.35.1 FEATURE_142 Batch D: uplifted to @kodax/agent/runtime-middleware/.
-// Re-exported here so SDK consumers via `@kodax/coding` see no API break.
+// v0.7.35.1 FEATURE_142 Batch D: uplifted to @kodax-ai/agent/runtime-middleware/.
+// Re-exported here so SDK consumers via `@kodax-ai/coding` see no API break.
 export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 // v0.7.35.1 FEATURE_142 (B-R1): coding-flavored compaction summary
-// prompts moved here from @kodax/session-lineage. Coding callers pass
+// prompts moved here from @kodax-ai/session-lineage. Coding callers pass
 // these explicitly to preserve byte-equivalent v0.7.35 prompt behavior;
 // session-lineage now ships a neutral `DEFAULT_SUMMARY_PROMPT` as
 // fallback for generic / non-coding consumers.
@@ -697,17 +697,17 @@ export {
 export { exec, webhook } from './extensions/helpers.js';
 
 // ============== Layer A Primitives (FEATURE_080 + FEATURE_081, v0.7.23, @experimental) ==============
-// History: extracted to @kodax/core in FEATURE_082 (v0.7.24); merged back
-// into @kodax/agent in v0.7.35.1 FEATURE_142 (single-consumer rule). These
-// barrel re-exports preserve the batteries-included shape of @kodax/coding
+// History: extracted to @kodax-ai/core in FEATURE_082 (v0.7.24); merged back
+// into @kodax-ai/agent in v0.7.35.1 FEATURE_142 (single-consumer rule). These
+// barrel re-exports preserve the batteries-included shape of @kodax-ai/coding
 // — not a deprecation shim, they stay permanently.
 //
 // The Option-Y dog-food registers the default coding dispatcher as a side
 // effect of importing `./coding-preset.js`.
 
-export type { Agent, AgentMessage, AgentReasoningProfile, AgentTool, Guardrail, Handoff, ReasoningDepth, InMemorySessionOptions, MessageEntry, Session, SessionEntry, SessionExtension, SessionForkOptions, CompactionContext, CompactionEntry, CompactionEntryPayload, CompactionPolicy, DefaultSummaryCompactionOptions, PresetDispatcher, RunEvent, RunOptions, RunResult } from '@kodax/agent';
+export type { Agent, AgentMessage, AgentReasoningProfile, AgentTool, Guardrail, Handoff, ReasoningDepth, InMemorySessionOptions, MessageEntry, Session, SessionEntry, SessionExtension, SessionForkOptions, CompactionContext, CompactionEntry, CompactionEntryPayload, CompactionPolicy, DefaultSummaryCompactionOptions, PresetDispatcher, RunEvent, RunOptions, RunResult } from '@kodax-ai/agent';
 
-export type { CompactionResult } from '@kodax/session-lineage';
+export type { CompactionResult } from '@kodax-ai/session-lineage';
 export {
   createAgent,
   createHandoff,
@@ -715,10 +715,10 @@ export {
   DefaultSummaryCompaction,
   Runner,
   registerPresetDispatcher,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 // v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations are
-// coding-side now (`@kodax/coding/src/agents/task-engine-agents.ts`),
+// coding-side now (`@kodax-ai/coding/src/agents/task-engine-agents.ts`),
 // re-exported through coding's `agents/` barrel. See ADR-021.
 export {
   SCOUT_AGENT_NAME,
@@ -768,7 +768,7 @@ export {
 } from './tools/tool-result-truncation-guardrail.js';
 
 // FEATURE_082 (v0.7.24): LineageExtension and LineageCompaction moved to
-// `@kodax/session-lineage`. Barrel re-export kept for
+// `@kodax-ai/session-lineage`. Barrel re-export kept for
 // batteries-included consumers; not a deprecation shim.
 export type {
   LineageArtifactLedgerPayload,
@@ -776,9 +776,9 @@ export type {
   LineageLabelPayload,
   LineageTreeNode,
   LineageCompactionDelegates,
-} from '@kodax/session-lineage';
+} from '@kodax-ai/session-lineage';
 
-export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax/session-lineage';
+export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax-ai/session-lineage';
 
 // NOTE: `KodaXSessionLineage` is exported above (line ~90) alongside the
 // legacy session types. As of FEATURE_081 (v0.7.23) it is superseded by
@@ -786,7 +786,7 @@ export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax
 // (v0.7.27) alongside the `KodaX*` prefix cleanup.
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './extensions/helpers.js';
 
-// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax/mcp`. Barrel
+// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax-ai/mcp`. Barrel
 // re-export kept for batteries-included consumers; not a deprecation shim.
 export type {
   McpServerConfig,
@@ -802,7 +802,7 @@ export type {
   McpProviderOptions,
   McpTransport,
   McpTransportEvents,
-} from '@kodax/mcp';
+} from '@kodax-ai/mcp';
 export {
   McpCapabilityProvider,
   McpServerRuntime,
@@ -812,7 +812,7 @@ export {
   parseMcpCapabilityId,
   searchMcpCatalog,
   getMcpCachePaths,
-} from '@kodax/mcp';
+} from '@kodax-ai/mcp';
 
 // FEATURE_087 + FEATURE_088 (v0.7.28): Construction Runtime — runtime-
 // generated tools / agents / skills. v0.7.28 ships tool generation only.

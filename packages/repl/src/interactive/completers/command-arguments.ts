@@ -8,7 +8,7 @@
 // FEATURE_093 (v0.7.24): import types from ./types.ts to break the
 // `argument-completer.ts ↔ command-arguments.ts` cycle.
 import type { ArgumentDefinition, CommandArgumentsRegistry } from './types.js';
-import { REPOINTEL_DEFAULT_ENDPOINT, getAvailableProviderNames, isKnownProvider } from '@kodax/coding';
+import { REPOINTEL_DEFAULT_ENDPOINT, getAvailableProviderNames, isKnownProvider } from '@kodax-ai/coding';
 import { getProviderAvailableModels } from '../../common/utils.js';
 
 /**

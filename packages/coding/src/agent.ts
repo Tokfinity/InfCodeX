@@ -9,7 +9,7 @@
  * the `Agent.substrateExecutor` closure attached in `coding-preset.ts`.
  */
 
-import { Runner } from '@kodax/agent';
+import { Runner } from '@kodax-ai/agent';
 
 import { createDefaultCodingAgent } from './coding-preset.js';
 import { applyFollowupEscalationToOptions } from './reasoning.js';
@@ -57,4 +57,4 @@ export { describeTransientProviderRetry } from './agent-runtime/provider-retry-p
 export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';

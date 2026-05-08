@@ -26,9 +26,9 @@
  *     agency without putting safety on the line.
  */
 
-import type { CostTracker } from '@kodax/ai';
-import { KodaXBaseProvider, sideQuery } from '@kodax/ai';
-import type { KodaXMessage } from '@kodax/ai';
+import type { CostTracker } from '@kodax-ai/llm';
+import { KodaXBaseProvider, sideQuery } from '@kodax-ai/llm';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';

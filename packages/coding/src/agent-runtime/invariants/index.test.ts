@@ -13,8 +13,8 @@ import {
   listRegisteredInvariants,
   Runner,
   createAgent,
-} from '@kodax/agent';
-import type { AgentManifest } from '@kodax/agent';
+} from '@kodax-ai/agent';
+import type { AgentManifest } from '@kodax-ai/agent';
 
 import { registerCodingInvariants } from './index.js';
 
@@ -31,7 +31,7 @@ describe('registerCodingInvariants', () => {
       'evidenceTrail',
       // Coding capability-coupled + coding-AMA-specific.
       // v0.7.35.1 FEATURE_142 (A-R2): harnessSelectionTiming moved from
-      // @kodax/agent's pure-core set into coding's invariant chain
+      // @kodax-ai/agent's pure-core set into coding's invariant chain
       // (registered last alongside the capability-coupled four).
       'budgetCeiling',
       'toolPermission',

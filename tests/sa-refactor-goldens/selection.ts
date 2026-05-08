@@ -323,7 +323,7 @@ export function selectSessions(
 /** Flatten message content (string OR block array) into a single text blob
  *  for pattern matching. Includes text + tool_result content, drops
  *  tool_use input (which contains code/data and would produce false positives). */
-function extractFlatText(content: import('@kodax/ai').KodaXMessage['content']): string {
+function extractFlatText(content: import('@kodax-ai/llm').KodaXMessage['content']): string {
   if (typeof content === 'string') return content;
   return content
     .map((b) => {

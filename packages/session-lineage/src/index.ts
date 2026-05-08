@@ -1,16 +1,16 @@
 /**
- * @kodax/session-lineage — Session 实体 + 持久化 + Lineage 追踪 +
+ * @kodax-ai/session-lineage — Session 实体 + 持久化 + Lineage 追踪 +
  * LineageCompaction + DefaultSummaryCompaction.
  *
  * Originally populated in FEATURE_082 Slice 3 by moving the lineage
- * implementation out of `@kodax/coding/src/extensions/lineage`.
- * v0.7.35.1 FEATURE_142 Batch B absorbed `@kodax/agent`'s session.ts /
+ * implementation out of `@kodax-ai/coding/src/extensions/lineage`.
+ * v0.7.35.1 FEATURE_142 Batch B absorbed `@kodax-ai/agent`'s session.ts /
  * session-lineage.ts / persistence.ts / compaction/ subdirectory so this
- * package now owns the full session subsystem. Depends on `@kodax/agent`
+ * package now owns the full session subsystem. Depends on `@kodax-ai/agent`
  * for `Session` / `SessionEntry` / `SessionExtension` / `CompactionPolicy`
  * primitives.
  *
- * `@kodax/coding` retains a barrel re-export as a convenience for
+ * `@kodax-ai/coding` retains a barrel re-export as a convenience for
  * batteries-included consumers; that is not a deprecation shim.
  */
 
@@ -115,15 +115,15 @@ export {
   createExtensionStore,
 } from './persistence.js';
 
-// ============== Runtime middleware (v0.7.36 — moved here from @kodax/agent to break build cycle) ==============
-// Originally uplifted to @kodax/agent in v0.7.35.1 FEATURE_142 Batch D under
+// ============== Runtime middleware (v0.7.36 — moved here from @kodax-ai/agent to break build cycle) ==============
+// Originally uplifted to @kodax-ai/agent in v0.7.35.1 FEATURE_142 Batch D under
 // the "generic agent platform middleware" framing, but that introduced a
 // circular `tsc -b` build dependency (agent → session-lineage → agent) which
 // only worked when stale dist artifacts were already present. v0.7.36 moves
 // these three modules back to session-lineage — semantically appropriate
 // since they all consume CompactionConfig / needsCompaction. The remaining
 // two Batch D middleware modules (history-cleanup / boundary-tracker-session)
-// stay in @kodax/agent (no compaction-domain deps).
+// stay in @kodax-ai/agent (no compaction-domain deps).
 export {
   shouldCompact,
   gracefulCompactDegradation,

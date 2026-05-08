@@ -18,8 +18,8 @@
  * Migration history:
  *   - extracted from `agent.ts:598-600` — pre-FEATURE_100 baseline —
  *     during FEATURE_100 P3.4a.
- *   - moved from `@kodax/agent/src/runtime-middleware/` to
- *     `@kodax/session-lineage/src/runtime-middleware/` in v0.7.36 to
+ *   - moved from `@kodax-ai/agent/src/runtime-middleware/` to
+ *     `@kodax-ai/session-lineage/src/runtime-middleware/` in v0.7.36 to
  *     break the build cycle introduced by FEATURE_142 Batch D
  *     (agent → session-lineage → agent). session-lineage already
  *     depends on agent, so this direction is acyclic. Semantically
@@ -27,7 +27,7 @@
  *     compaction lifecycle, which is session-lineage's domain.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import { needsCompaction } from '../compaction/compaction.js';
 import type { CompactionConfig } from '../compaction/types.js';
@@ -42,7 +42,7 @@ export interface ShouldCompactInput {
 /**
  * Returns `true` iff the compaction lifecycle should run this turn.
  * Combines the config-enabled gate with the underlying trigger
- * threshold check from `@kodax/session-lineage`'s `needsCompaction`.
+ * threshold check from `@kodax-ai/session-lineage`'s `needsCompaction`.
  */
 export function shouldCompact(input: ShouldCompactInput): boolean {
   return (

@@ -78,7 +78,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax/ai';
+import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax-ai/llm';
 
 /* ---------- Provider/model matrix ---------- */
 

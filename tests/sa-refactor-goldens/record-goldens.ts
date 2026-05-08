@@ -44,8 +44,8 @@ import {
   registerModelProvider,
   resolveProvider,
   type KodaXBaseProvider,
-} from '@kodax/ai';
-import { runKodaX } from '@kodax/coding';
+} from '@kodax-ai/llm';
+import { runKodaX } from '@kodax-ai/coding';
 
 import { listSessionFiles, parseSessionFile } from './session-parser.js';
 import { selectSessions, type SelectedSession } from './selection.js';

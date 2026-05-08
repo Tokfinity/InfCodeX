@@ -15,7 +15,7 @@
  *       - extracts the merged finding (or summary) and returns it
  *       - removes the entry from the registry
  *
- * The tool is also enumerated in `YIELD_TOOL_NAMES` (`@kodax/agent`):
+ * The tool is also enumerated in `YIELD_TOOL_NAMES` (`@kodax-ai/agent`):
  * after a turn that called `await_child_task`, the mid-turn drain
  * upgrades to background priority so `<task-completed>` notifications
  * enqueued by `enqueueChildTaskNotification` are flushed into the next

@@ -1,5 +1,5 @@
 /**
- * @kodax/repl - KodaX 完整的交互式终端体验
+ * @kodax-ai/repl - KodaX 完整的交互式终端体验
  *
  * 提供两个入口：
  * - Ink UI (推荐): 现代化 React 终端 UI

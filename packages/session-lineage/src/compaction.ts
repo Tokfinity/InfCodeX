@@ -6,9 +6,9 @@
  * coding preset can implement `CompactionPolicy` without re-implementing the
  * compaction loop. The actual compaction runtime (microcompaction, post-
  * compact reconstruction, summary generation) stays in
- * `@kodax/agent/src/compaction/` until FEATURE_084 (v0.7.26) consolidates it.
+ * `@kodax-ai/agent/src/compaction/` until FEATURE_084 (v0.7.26) consolidates it.
  *
- * Usage (inside @kodax/coding):
+ * Usage (inside @kodax-ai/coding):
  *
  *   const policy = new LineageCompaction({
  *     shouldCompact: (session, used, budget) => runFeature072Heuristic(used, budget),
@@ -17,7 +17,7 @@
  *
  * The injected delegates keep this package free of coding-specific imports,
  * preserving the dependency direction
- * `@kodax/coding -> @kodax/session-lineage -> @kodax/agent`.
+ * `@kodax-ai/coding -> @kodax-ai/session-lineage -> @kodax-ai/agent`.
  */
 
 import type {
@@ -25,7 +25,7 @@ import type {
   CompactionPolicy,
   PolicyCompactionResult,
   Session,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 /**
  * Delegates required to implement `LineageCompaction`. The coding preset

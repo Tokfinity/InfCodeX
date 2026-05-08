@@ -7,13 +7,13 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { KodaXProviderError } from '@kodax/ai';
+import { KodaXProviderError } from '@kodax-ai/llm';
 import { resolveResilienceConfig, DEFAULT_RESILIENCE_CONFIG } from './config.js';
 import { classifyResilienceError } from './classifier.js';
 import { StableBoundaryTracker } from './stable-boundary.js';
 import { ProviderRecoveryCoordinator, sanitizeThinkingBlocks } from './recovery-coordinator.js';
 import { reconstructMessagesWithToolGuard } from './tool-guard.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 // ============== Config Tests ==============
 

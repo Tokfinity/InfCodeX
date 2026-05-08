@@ -14,7 +14,7 @@
  *    settle so Sleep-gated mid-turn drain can wake the Worker.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _resetMessageQueueForTests, getMessageQueue } from '@kodax/agent';
+import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
 
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolAwaitChildTask } from './await-child-task.js';

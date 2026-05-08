@@ -11,8 +11,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createAgent } from '@kodax/agent';
-import type { ObserveCtx, ReadonlyRecorder } from '@kodax/agent';
+import { createAgent } from '@kodax-ai/agent';
+import type { ObserveCtx, ReadonlyRecorder } from '@kodax-ai/agent';
 import { harnessSelectionTiming } from './harness-selection-timing.js';
 
 const manifest = createAgent({ name: 'scout', instructions: 'classify' });

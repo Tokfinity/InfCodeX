@@ -12,7 +12,7 @@
  * This module provides a full parity port:
  *   - loads compaction config from the repo root
  *   - tracks a per-run circuit breaker (same threshold as legacy)
- *   - delegates to `@kodax/agent/compact` for the actual summarisation
+ *   - delegates to `@kodax-ai/agent/compact` for the actual summarisation
  *   - fires the legacy event surface (`onCompactStart` / `onCompactStats`
  *     / `onCompact` / `onCompactEnd` / `onCompactedMessages`) so the
  *     REPL can render its "compacting…" UI and refresh its local
@@ -33,8 +33,8 @@
  *   - systemPrompt arg is `undefined` (the provider carries it).
  */
 
-import { buildFileContentMessages, buildPostCompactAttachments, compact as intelligentCompact, DEFAULT_POST_COMPACT_CONFIG, injectPostCompactAttachments, needsCompaction, POST_COMPACT_TOKEN_BUDGET, type CompactionConfig, type CompactionUpdate } from '@kodax/session-lineage';
-import type { AgentMessage } from '@kodax/agent';
+import { buildFileContentMessages, buildPostCompactAttachments, compact as intelligentCompact, DEFAULT_POST_COMPACT_CONFIG, injectPostCompactAttachments, needsCompaction, POST_COMPACT_TOKEN_BUDGET, type CompactionConfig, type CompactionUpdate } from '@kodax-ai/session-lineage';
+import type { AgentMessage } from '@kodax-ai/agent';
 
 import { resolveProvider } from '../../../providers/index.js';
 import { loadCompactionConfig } from '../../../compaction-config.js';

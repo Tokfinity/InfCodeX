@@ -10,7 +10,7 @@
 import {
   _resetMessageQueueForTests,
   getMessageQueue,
-} from "@kodax/agent";
+} from "@kodax-ai/agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createStreamingManager } from "./StreamingContext.js";

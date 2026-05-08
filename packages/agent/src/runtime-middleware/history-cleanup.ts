@@ -22,7 +22,7 @@
  *
  * Migration history: extracted from `agent.ts` (originally lines 517–758)
  * during FEATURE_100 P2. Both `agent.ts` and `task-engine/runner-driven.ts`
- * already consume these via the package re-export (`@kodax/coding`).
+ * already consume these via the package re-export (`@kodax-ai/coding`).
  *
  * Type guards are inlined here rather than imported from agent.ts because
  * the migration's whole point is to remove dependencies on agent.ts. If
@@ -30,7 +30,7 @@
  * extract them to `agent-runtime/content-blocks.ts`.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 type MessageContentBlock = Exclude<KodaXMessage['content'], string>[number];
 

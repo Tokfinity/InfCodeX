@@ -1,7 +1,7 @@
 import type {
   KodaXAgentMode,
   KodaXManagedTaskStatusEvent,
-} from "@kodax/coding";
+} from "@kodax-ai/coding";
 import { formatAmaWorkStripText } from "../components/AmaWorkStrip.js";
 import {
   buildBackgroundTaskViewModel,

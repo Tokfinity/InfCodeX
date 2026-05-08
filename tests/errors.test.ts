@@ -10,7 +10,7 @@ import {
   KodaXRateLimitError,
   KodaXSessionError,
   KodaXTerminalError,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 describe('KodaXError', () => {
   it('should create base error with message', () => {

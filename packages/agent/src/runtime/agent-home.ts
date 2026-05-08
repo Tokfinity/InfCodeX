@@ -8,9 +8,9 @@
  *   1. **Drift**: each new caller in a future feature was a fresh
  *      hardcode site; nothing stopped a caller from using the wrong
  *      string (`'kodax'` instead of `'.kodax'`, etc.).
- *   2. **Substrate consumer coupling**: when `@kodax/agent` is reused
- *      by a downstream agent (e.g. `@kodax/ops-agent`,
- *      `@kodax/data-analysis-agent`), there was no way to redirect the
+ *   2. **Substrate consumer coupling**: when `@kodax-ai/agent` is reused
+ *      by a downstream agent (e.g. `@kodax-ai/ops-agent`,
+ *      `@kodax-ai/data-analysis-agent`), there was no way to redirect the
  *      runtime config dir — every derivative agent was forced to
  *      share the `~/.kodax/` namespace.
  *
@@ -21,7 +21,7 @@
  *      before any subsystem reads the path.
  *   2. **`KODAX_HOME` env var** — middle priority. Used by shell / CI /
  *      test isolation / multi-tenant shared machines. (Already honored
- *      historically by `@kodax/ai/src/reasoning-overrides.ts`; this
+ *      historically by `@kodax-ai/llm/src/reasoning-overrides.ts`; this
  *      helper makes it the canonical path for all packages.)
  *   3. **`~/.kodax/`** — lowest priority. Default for the standalone
  *      kodax CLI. With DI not set + env not set, the resolver returns
@@ -42,10 +42,10 @@
  * `~/.opsagent/` simultaneously).
  *
  * NOT migrated:
- *   - `@kodax/ai/src/reasoning-overrides.ts:49` keeps its inline
+ *   - `@kodax-ai/llm/src/reasoning-overrides.ts:49` keeps its inline
  *     `process.env.KODAX_HOME ?? path.join(os.homedir(), '.kodax')`
  *     fallback because moving it to this helper would create an
- *     `@kodax/ai → @kodax/agent` dependency cycle (agent already
+ *     `@kodax-ai/llm → @kodax-ai/agent` dependency cycle (agent already
  *     imports ai). The two implementations have identical observable
  *     behavior at the env / default tiers; the programmatic override
  *     tier doesn't apply to ai-layer code.
@@ -69,7 +69,7 @@ let _programmaticOverride: string | undefined;
  * Set the agent config home programmatically. Highest priority in
  * {@link getAgentConfigHome}'s 3-tier chain.
  *
- * Substrate consumers (e.g. an agent built on top of `@kodax/agent`)
+ * Substrate consumers (e.g. an agent built on top of `@kodax-ai/agent`)
  * should call this once at process boot, before any subsystem reads
  * the path. Pass `undefined` to reset (used in tests).
  */

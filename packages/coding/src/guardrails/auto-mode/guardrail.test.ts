@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createAutoModeToolGuardrail } from './guardrail.js';
 import type { AutoModeAskUser, AutoModeGuardrailConfig } from './guardrail.js';
 import type { AutoRules } from './rules.js';
-import { KodaXBaseProvider } from '@kodax/ai';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -11,9 +11,9 @@ import type {
   KodaXStreamResult,
   KodaXTextBlock,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import type { GuardrailContext } from '@kodax/agent';
-import type { RunnerToolCall } from '@kodax/agent';
+} from '@kodax-ai/llm';
+import type { GuardrailContext } from '@kodax-ai/agent';
+import type { RunnerToolCall } from '@kodax-ai/agent';
 
 const emptyRules: AutoRules = { allow: [], soft_deny: [], environment: [] };
 

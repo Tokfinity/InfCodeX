@@ -12,7 +12,7 @@
  *    from where it left off
  */
 
-import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
 
 // ============== Message Reconstruction ==============
 

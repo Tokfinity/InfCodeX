@@ -27,7 +27,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXContentBlock } from '@kodax/ai';
+import type { KodaXContentBlock } from '@kodax-ai/llm';
 
 import {
   guardEmptyAssistantContent,

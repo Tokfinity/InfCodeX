@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
-import type { KodaXSessionArtifactLedgerEntry } from '@kodax/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
 import {
   buildFileContentMessages,
   buildPostCompactAttachments,

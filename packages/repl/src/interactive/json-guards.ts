@@ -7,7 +7,7 @@ import type {
   KodaXMessage,
   KodaXSessionUiHistoryItem,
   SessionErrorMetadata,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 const MESSAGE_ROLES = new Set<KodaXMessage['role']>(['user', 'assistant', 'system']);
 const TASK_SURFACES = new Set<NonNullable<KodaXManagedTask['contract']['surface']>>(['cli', 'repl', 'plan']);

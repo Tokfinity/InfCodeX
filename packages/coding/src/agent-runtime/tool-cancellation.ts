@@ -39,7 +39,7 @@ import type {
   KodaXMessage,
   KodaXToolUseBlock,
   KodaXToolResultBlock,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import { isVisibleToolName, hasQueuedFollowUp, emitStreamEnd } from './event-emitter.js';
 import { isCancelledToolResultContent } from './tool-result-classify.js';

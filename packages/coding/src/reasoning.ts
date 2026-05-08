@@ -27,9 +27,9 @@ import type {
 import {
   getDefaultThinkingDepthForMode,
   KODAX_REASONING_MODE_SEQUENCE,
-} from '@kodax/ai';
-import type { KodaXBaseProvider } from '@kodax/ai';
-import type { AgentReasoningProfile } from '@kodax/agent';
+} from '@kodax-ai/llm';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
+import type { AgentReasoningProfile } from '@kodax-ai/agent';
 import {
   hasNonTransientRuntimeEvidence,
   hasTransientRetryEvidence,

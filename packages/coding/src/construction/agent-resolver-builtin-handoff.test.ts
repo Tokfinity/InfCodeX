@@ -9,7 +9,7 @@
  * target zero instructions — silent role-spec loss.
  *
  * The patch resolves `builtin:<role>` refs to the real
- * `@kodax/core/task-engine-agents` declarations.
+ * `@kodax-ai/core/task-engine-agents` declarations.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -17,7 +17,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 
-import { _resetInvariantRegistry } from '@kodax/agent';
+import { _resetInvariantRegistry } from '@kodax-ai/agent';
 import {
   evaluatorAgent,
   generatorAgent,

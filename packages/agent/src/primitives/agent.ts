@@ -4,9 +4,9 @@
  * FEATURE_080 (v0.7.23): Agent-as-data types. Declarative dataclass shape.
  * The runtime counterpart is `Runner` in `./runner.ts`.
  *
- * History: extracted to `@kodax/core` in FEATURE_082 (v0.7.24); merged back
- * into `@kodax/agent` in v0.7.35.1 FEATURE_142 (single-consumer rule —
- * @kodax/core had only @kodax/coding as consumer). `@kodax/coding` retains
+ * History: extracted to `@kodax-ai/core` in FEATURE_082 (v0.7.24); merged back
+ * into `@kodax-ai/agent` in v0.7.35.1 FEATURE_142 (single-consumer rule —
+ * @kodax-ai/core had only @kodax-ai/coding as consumer). `@kodax-ai/coding` retains
  * a barrel re-export for batteries-included consumers.
  *
  * Status: @experimental — API shape may be refined during v0.7.x. Used by
@@ -18,7 +18,7 @@
  *   - AgentReasoningProfile behavior → FEATURE_078 (v0.7.29)
  */
 
-import type { KodaXMessage, KodaXReasoningMode, KodaXToolDefinition } from '@kodax/ai';
+import type { KodaXMessage, KodaXReasoningMode, KodaXToolDefinition } from '@kodax-ai/llm';
 
 /**
  * Reasoning depth / mode selector. Alias for `KodaXReasoningMode` to keep the
@@ -29,14 +29,14 @@ export type ReasoningDepth = KodaXReasoningMode;
 
 /**
  * Tool binding accepted by an `Agent`. Layer A treats tools as opaque
- * definitions; the executor lives in `@kodax/coding` and is wired up by the
+ * definitions; the executor lives in `@kodax-ai/coding` and is wired up by the
  * Runner when it dispatches through `runKodaX`.
  */
 export type AgentTool = KodaXToolDefinition;
 
 /**
  * Transport-level message reused from the AI layer. Kept as an alias so
- * consumers of the Layer A primitives do not need to import from `@kodax/ai`
+ * consumers of the Layer A primitives do not need to import from `@kodax-ai/llm`
  * directly.
  */
 export type AgentMessage = KodaXMessage;

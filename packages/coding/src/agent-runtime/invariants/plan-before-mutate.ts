@@ -29,7 +29,7 @@ import type {
   ObserveCtx,
   QualityInvariant,
   RunnerEvent,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 function observe(event: RunnerEvent, ctx: ObserveCtx): InvariantResult {
   if (event.kind !== 'mutation_recorded') return { ok: true };

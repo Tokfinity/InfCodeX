@@ -41,7 +41,7 @@ import type {
   ObserveCtx,
   QualityInvariant,
   RunnerEvent,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 const REVISE_WARN_THRESHOLD = 3;
 

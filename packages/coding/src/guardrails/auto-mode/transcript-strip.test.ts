@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { stripAssistantText } from './transcript-strip.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 const userText = (text: string): KodaXMessage => ({ role: 'user', content: text });
 const assistantText = (text: string): KodaXMessage => ({ role: 'assistant', content: text });

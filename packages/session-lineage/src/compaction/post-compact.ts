@@ -20,9 +20,9 @@
  */
 
 import fs from 'fs/promises';
-import type { KodaXMessage } from '@kodax/ai';
-import type { KodaXSessionArtifactLedgerEntry } from '@kodax/agent';
-import { estimateTokens } from '@kodax/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
+import { estimateTokens } from '@kodax-ai/agent';
 
 /**
  * Absolute cap on total post-compact attachment tokens.

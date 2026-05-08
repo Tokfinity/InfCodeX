@@ -27,7 +27,7 @@ import {
 } from './protocol-emitters.js';
 
 describe('coding-agents — identity', () => {
-  it('binds each coding agent to its corresponding @kodax/core name', () => {
+  it('binds each coding agent to its corresponding @kodax-ai/core name', () => {
     expect(scoutCodingAgent.name).toBe(SCOUT_AGENT_NAME);
     expect(plannerCodingAgent.name).toBe(PLANNER_AGENT_NAME);
     expect(generatorCodingAgent.name).toBe(GENERATOR_AGENT_NAME);

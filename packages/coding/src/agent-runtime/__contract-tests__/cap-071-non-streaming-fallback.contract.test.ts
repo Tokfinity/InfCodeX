@@ -31,7 +31,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXBaseProvider, KodaXStreamResult } from '@kodax/ai';
+import type { KodaXBaseProvider, KodaXStreamResult } from '@kodax-ai/llm';
 import type { KodaXEvents } from '../../types.js';
 
 import { executeNonStreamingFallback } from '../non-streaming-fallback.js';

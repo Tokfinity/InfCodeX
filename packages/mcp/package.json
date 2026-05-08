@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/mcp",
+  "name": "@kodax-ai/mcp",
   "version": "0.7.36",
   "description": "KodaX MCP - Model Context Protocol capability provider with progressive disclosure (lazy connect / 2-level descriptors / search-describe / elicitation / cache)",
   "type": "module",
@@ -19,8 +19,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/ai": "*",
-    "@kodax/agent": "*"
+    "@kodax-ai/llm": "*",
+    "@kodax-ai/agent": "*"
   },
   "devDependencies": {
     "@types/node": "^22.13.4",
@@ -35,5 +35,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/mcp"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

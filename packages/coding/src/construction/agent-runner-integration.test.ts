@@ -19,8 +19,8 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 
-import { Runner, _resetInvariantRegistry } from '@kodax/agent';
-import type { AgentMessage, RunnerLlmResult } from '@kodax/agent';
+import { Runner, _resetInvariantRegistry } from '@kodax-ai/agent';
+import type { AgentMessage, RunnerLlmResult } from '@kodax-ai/agent';
 
 import { registerCodingInvariants } from '../agent-runtime/invariants/index.js';
 import {

@@ -36,7 +36,7 @@
  * during FEATURE_100 P3.2d.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { StableBoundaryTracker } from '../resilience/stable-boundary.js';
 import { telemetryBoundary } from '../resilience/telemetry.js';
 

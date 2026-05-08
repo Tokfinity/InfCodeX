@@ -54,7 +54,7 @@
  * FEATURE_100 P3.3e.
  */
 
-import type { KodaXMessage, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
 
 import type {
   KodaXContextTokenSnapshot,

@@ -37,8 +37,8 @@
  * Migration history:
  *   - extracted from `agent.ts:1700-1703` — pre-FEATURE_100 baseline
  *     — during FEATURE_100 P2.
- *   - moved from `@kodax/agent/src/runtime-middleware/` to
- *     `@kodax/session-lineage/src/runtime-middleware/` in v0.7.36 to
+ *   - moved from `@kodax-ai/agent/src/runtime-middleware/` to
+ *     `@kodax-ai/session-lineage/src/runtime-middleware/` in v0.7.36 to
  *     break the build cycle introduced by FEATURE_142 Batch D
  *     (agent → session-lineage → agent). Semantically this also
  *     reflects that the resolver consumes session-lineage's
@@ -46,7 +46,7 @@
  *     compaction policy types.
  */
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 
 import type { CompactionConfig } from '../compaction/types.js';
 

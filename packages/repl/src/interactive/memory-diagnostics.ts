@@ -21,12 +21,12 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import v8 from 'node:v8';
-import { getAgentConfigHome } from '@kodax/agent';
+import { getAgentConfigHome } from '@kodax-ai/agent';
 import type {
   KodaXMessage,
   KodaXSessionEntry,
   KodaXSessionLineage,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 const LEVEL = parseInt(process.env.KODAX_MEMORY_DIAG ?? '0', 10);
 const ENABLED = LEVEL >= 1;

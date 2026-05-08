@@ -3,7 +3,7 @@
  * against an untrusted manifest.
  *
  * Pure orchestration of the building blocks declared elsewhere in
- * @kodax/core:
+ * @kodax-ai/core:
  *
  *   1. **Schema validation** — manifest has well-formed name, instructions,
  *      tools, declaredInvariants, requestedToolCapabilities. Fail-fast on

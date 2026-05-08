@@ -35,11 +35,11 @@
  * STATUS: ACTIVE since FEATURE_100 P2 for the truncation invariants.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 import { describe, expect, it } from 'vitest';
 
-import { gracefulCompactDegradation } from '@kodax/session-lineage';
+import { gracefulCompactDegradation } from '@kodax-ai/session-lineage';
 
 function config(triggerPercent = 80): CompactionConfig {
   return { enabled: true, triggerPercent } as CompactionConfig;

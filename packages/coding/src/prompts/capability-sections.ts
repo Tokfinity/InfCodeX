@@ -23,16 +23,16 @@
  *   12. skills-addendum           (when context.skillsPrompt)
  *   13. tool-construction         (when toolConstructionMode includes it)
  *
- * Why this lives in `@kodax/coding/src/prompts/` and NOT
- * `@kodax/agent/`:
+ * Why this lives in `@kodax-ai/coding/src/prompts/` and NOT
+ * `@kodax-ai/agent/`:
  *   - All callers (builder.ts SA path + future AMA role-prompt) are
- *     coding-internal. A future `@kodax/data-analysis-agent` would
+ *     coding-internal. A future `@kodax-ai/data-analysis-agent` would
  *     have its own builder + role-prompt with its own section set
  *     (e.g. `prompt-overlay` is coding-routing-specific). Cross-agent
  *     reuse is at the **pattern** level (each agent has its own
  *     `capability-sections.ts`), not the **content** level.
- *   - Hoisting to `@kodax/agent/` would force `@kodax/agent` →
- *     `@kodax/skills` / `@kodax/mcp` cross-package dependencies,
+ *   - Hoisting to `@kodax-ai/agent/` would force `@kodax-ai/agent` →
+ *     `@kodax-ai/skills` / `@kodax-ai/mcp` cross-package dependencies,
  *     breaking the "agent doesn't depend on application-layer
  *     packages" promise.
  *   - The drift problem this batch solves is "SA / AMA assemble the

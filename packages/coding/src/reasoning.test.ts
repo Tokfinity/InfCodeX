@@ -6,8 +6,8 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
-import { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
 import {
   buildAmaControllerDecision,
   buildHeuristicAutoRerouteDecision,

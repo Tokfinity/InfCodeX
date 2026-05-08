@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
 import { render, screen } from "ink-testing-library";
-import { SuggestionsDisplay, type Suggestion } from "@kodax/repl";
+import { SuggestionsDisplay, type Suggestion } from "@kodax-ai/repl";
 
 // Mock theme
 const mockTheme = {

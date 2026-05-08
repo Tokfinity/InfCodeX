@@ -1,9 +1,9 @@
 /**
  * MCP server configuration shapes.
  *
- * FEATURE_082 (v0.7.24): moved from `@kodax/coding/src/types.ts`. Kept as the
+ * FEATURE_082 (v0.7.24): moved from `@kodax-ai/coding/src/types.ts`. Kept as the
  * `Mcp*` names here; the `KodaXMcp*` aliases continue to re-export from
- * `@kodax/coding` for backward compatibility.
+ * `@kodax-ai/coding` for backward compatibility.
  */
 
 export type McpTransportKind = 'stdio' | 'sse' | 'streamable-http';

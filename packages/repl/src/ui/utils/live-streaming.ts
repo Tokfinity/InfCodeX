@@ -1,4 +1,4 @@
-import type { KodaXManagedTaskStatusEvent } from "@kodax/coding";
+import type { KodaXManagedTaskStatusEvent } from "@kodax-ai/coding";
 
 function formatHarnessProfileShort(harnessProfile?: string): string | undefined {
   switch (harnessProfile) {

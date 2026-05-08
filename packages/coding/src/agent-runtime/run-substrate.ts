@@ -18,7 +18,7 @@ import {
   KodaXToolResultBlock,
   SessionErrorMetadata,
 } from '../types.js';
-import type { KodaXMessage, KodaXStreamResult } from '@kodax/ai';
+import type { KodaXMessage, KodaXStreamResult } from '@kodax-ai/llm';
 import {
   createCostTracker,
   recordUsage,
@@ -26,7 +26,7 @@ import {
   getSummary,
   formatCostReport,
   type CostTracker,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import path from 'path';
 // FEATURE_093 (v0.7.24): `KodaXClient` is only re-exported from this module
 // for backward compatibility. Importing it here creates a cycle
@@ -42,7 +42,7 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { generateSessionId, extractTitleFromMessages } from '../session.js';
 // FEATURE_076 Q4: load-time normalization for pre-v0.7.25 session messages.
 import { normalizeLoadedSessionMessages } from '../task-engine/_internal/round-boundary.js';
-import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax/session-lineage';
+import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax-ai/session-lineage';
 import { loadCompactionConfig } from '../compaction-config.js';
 // CAP-014/060/061/062 token estimation now happens inside the
 // substrate compaction modules; agent.ts no longer imports
@@ -84,7 +84,7 @@ import {
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 // CAP-010 (`getToolExecutionOverride`) was used inline before CAP-024;
 // since CAP-024 moved into `agent-runtime/tool-dispatch.ts`, this
 // agent.ts no longer imports it directly.
@@ -136,7 +136,7 @@ import {
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
-import { shouldCompact } from '@kodax/session-lineage';
+import { shouldCompact } from '@kodax-ai/session-lineage';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -158,7 +158,7 @@ import {
   applyPostToolProcessing,
 } from './tool-dispatch.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
-import { resolveContextWindow } from '@kodax/session-lineage';
+import { resolveContextWindow } from '@kodax-ai/session-lineage';
 import {
   type RuntimeSessionState,
   buildRuntimeSessionState,

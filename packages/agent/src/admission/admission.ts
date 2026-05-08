@@ -3,14 +3,14 @@
  *
  * FEATURE_101 (v0.7.31) — types-only module. Runner.admit() runtime lives
  * in `./runner.ts`; the seven (+1 external) invariant implementations live
- * in `@kodax/coding/src/agent-runtime/invariants/`.
+ * in `@kodax-ai/coding/src/agent-runtime/invariants/`.
  *
  * Why types-only here: the admission contract is a Layer A primitive that
- * @kodax/coding consumes — putting it in @kodax/core keeps SDK consumers
+ * @kodax-ai/coding consumes — putting it in @kodax-ai/core keeps SDK consumers
  * from pulling in coding-specific imports just to reference admission
  * types. The actual invariant implementations need access to mutation
  * trackers, budget controllers, and ToolGuardrail capability tiers — all
- * of which live in @kodax/coding — so they belong there.
+ * of which live in @kodax-ai/coding — so they belong there.
  *
  * Status: @experimental. v0.7.31 ships these types alongside the FEATURE_089
  * agent-generation consumer; once dispatch eval baseline (FEATURE_101
@@ -248,7 +248,7 @@ export type RunnerEvent =
 
 /**
  * Read-only view of the per-run mutation tracker. Invariant observe hooks
- * may inspect but never mutate. (The full @kodax/coding mutation tracker
+ * may inspect but never mutate. (The full @kodax-ai/coding mutation tracker
  * has additional fields like per-file line deltas — those are the coding
  * package's concern, not the Layer A primitive.)
  */

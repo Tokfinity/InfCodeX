@@ -18,7 +18,7 @@
 import fsSync from 'fs';
 import path from 'path';
 
-import { getAgentConfigPath } from '@kodax/agent';
+import { getAgentConfigPath } from '@kodax-ai/agent';
 import {
   PermissionMode,
   normalizePermissionMode,
@@ -43,8 +43,8 @@ export { parseAllowedToolPattern, isToolCallAllowed, generateSavePattern };
  * `~/.kodax/config.json` instead of the redirected directory.
  *
  * Required ordering for substrate consumers:
- *   1. Call `setAgentConfigHome(path)` from `@kodax/agent` early in boot
- *   2. THEN import any `@kodax/repl` module that touches user config
+ *   1. Call `setAgentConfigHome(path)` from `@kodax-ai/agent` early in boot
+ *   2. THEN import any `@kodax-ai/repl` module that touches user config
  *
  * Standalone `kodax` CLI is unaffected — it never calls
  * `setAgentConfigHome()` so the load-time resolution always equals the

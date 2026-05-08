@@ -5,12 +5,12 @@ import {
   KodaXExtensionRuntime,
   KodaXReasoningMode,
   KODAX_REASONING_MODE_SEQUENCE,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import {
   createCliEvents,
   createJsonEvents,
   FileSessionStorage,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
 
 export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];

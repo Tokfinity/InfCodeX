@@ -83,7 +83,7 @@ import {
   getAvailableProviderNames,
   KODAX_TOOLS,
   KodaXTerminalError,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import {
   getGitRoot,
   prepareRuntimeConfig,
@@ -92,7 +92,7 @@ import {
   resolveInteractiveSurfacePreference,
   runInteractiveMode,
   runInkInteractiveMode,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
 import type { AcpPermissionMode } from './acp_server.js';
 export {
   ACP_PERMISSION_MODES,

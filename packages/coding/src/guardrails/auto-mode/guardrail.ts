@@ -35,13 +35,13 @@
  * structural opt-out and forwards everything else to the classifier.
  */
 
-import type { CostTracker, KodaXBaseProvider } from '@kodax/ai';
+import type { CostTracker, KodaXBaseProvider } from '@kodax-ai/llm';
 import type {
   GuardrailContext,
   GuardrailVerdict,
   RunnerToolCall,
   ToolGuardrail,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import { classify, type ClassifyDecision } from './classify.js';
 import {

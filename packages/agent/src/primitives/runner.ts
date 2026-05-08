@@ -13,13 +13,13 @@
  *      loop, no extensions, no managed-task harness — those arrive with
  *      FEATURE_084 (v0.7.26).
  *
- * Status: @experimental. History: extracted to `@kodax/core` in FEATURE_082
- * (v0.7.24); merged back into `@kodax/agent` in v0.7.35.1 FEATURE_142.
- * `@kodax/coding` retains a barrel re-export for batteries-included consumers.
+ * Status: @experimental. History: extracted to `@kodax-ai/core` in FEATURE_082
+ * (v0.7.24); merged back into `@kodax-ai/agent` in v0.7.35.1 FEATURE_142.
+ * `@kodax-ai/coding` retains a barrel re-export for batteries-included consumers.
  */
 
-import type { Span, Tracer, Trace } from '@kodax/tracing';
-import { defaultTracer } from '@kodax/tracing';
+import type { Span, Tracer, Trace } from '@kodax-ai/tracing';
+import { defaultTracer } from '@kodax-ai/tracing';
 
 import type { Agent, AgentMessage, Guardrail } from './agent.js';
 import type {
@@ -110,7 +110,7 @@ export interface RunOptions {
    * FEATURE_085 (v0.7.26): run-scoped guardrails. Merged with
    * `agent.guardrails` — declaration order is agent-first, then opts.
    * Input / output / tool-before / tool-after hooks all dispatch from
-   * this union. See `@kodax/agent/primitives/guardrail.ts` for shape.
+   * this union. See `@kodax-ai/agent/primitives/guardrail.ts` for shape.
    */
   readonly guardrails?: readonly Guardrail[];
   /**
@@ -907,7 +907,7 @@ export class Runner {
    *
    * Pure delegation to `runAdmissionAudit` — invariants are resolved from
    * the shared module-scope registry (registered via
-   * `registerCoreInvariants()` and the @kodax/coding capability-coupled
+   * `registerCoreInvariants()` and the @kodax-ai/coding capability-coupled
    * invariants). The runtime stays sync (no I/O); `async` is reserved
    * for future versions that may need to consult external policy stores.
    *

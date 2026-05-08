@@ -3,7 +3,7 @@
  * policy) as a Layer A `ToolGuardrail.afterTool`.
  *
  * FEATURE_085 (v0.7.26): the tri-layer Guardrail runtime lives in
- * `@kodax/core`. The existing truncation logic in `tool-result-policy.ts`
+ * `@kodax-ai/core`. The existing truncation logic in `tool-result-policy.ts`
  * predates that runtime and targets `KodaXToolExecutionContext`. Rather
  * than merge the two, we expose an adapter that coding consumers can
  * register when driving a Runner through the generic path — the adapter
@@ -22,7 +22,7 @@ import type {
   ToolGuardrail,
   GuardrailContext,
   GuardrailVerdict,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';

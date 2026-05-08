@@ -32,7 +32,7 @@
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import {
   KodaXExtensionRuntime,

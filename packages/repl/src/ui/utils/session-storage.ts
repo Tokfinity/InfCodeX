@@ -10,7 +10,7 @@ import type {
   KodaXSessionNavigationOptions,
   KodaXSessionRuntimeInfo,
   SessionErrorMetadata,
-} from "@kodax/coding";
+} from "@kodax-ai/coding";
 import {
   appendSessionLineageLabel,
   countActiveLineageMessages,
@@ -21,10 +21,10 @@ import {
   getSessionMessagesFromLineage,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
-} from "@kodax/coding";
+} from "@kodax-ai/coding";
 
 // Re-export SessionErrorMetadata for backward compatibility
-export type { SessionErrorMetadata } from "@kodax/coding";
+export type { SessionErrorMetadata } from "@kodax-ai/coding";
 
 /**
  * Session data structure.

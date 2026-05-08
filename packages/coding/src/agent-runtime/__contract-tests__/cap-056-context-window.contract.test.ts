@@ -26,14 +26,14 @@
  * STATUS: ACTIVE since FEATURE_100 P2.
  */
 
-import type { KodaXBaseProvider } from '@kodax/ai';
-import type { CompactionConfig } from '@kodax/session-lineage';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
 import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
-} from '@kodax/session-lineage';
+} from '@kodax-ai/session-lineage';
 
 function fakeProvider(overrides: Partial<KodaXBaseProvider> = {}): KodaXBaseProvider {
   return {

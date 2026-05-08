@@ -47,7 +47,7 @@
  * placeholders — see prose above).
  */
 
-import type { KodaXSessionData, KodaXSessionStorage } from '@kodax/agent';
+import type { KodaXSessionData, KodaXSessionStorage } from '@kodax-ai/agent';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXOptions, SessionErrorMetadata } from '../../types.js';

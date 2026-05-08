@@ -18,7 +18,7 @@ import {
   activate,
   _resetRuntimeForTesting,
   type ConstructionArtifact,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 import {
   parseArgsByInputSchema,

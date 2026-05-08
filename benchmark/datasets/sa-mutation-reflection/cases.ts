@@ -24,7 +24,7 @@
  */
 
 import { buildMutationScopeReflection } from '../../../packages/coding/src/agent-runtime/middleware/mutation-reflection.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { PromptJudge } from '../../harness/judges.js';
 import { mustContainAny, mustNotMatch } from '../../harness/judges.js';

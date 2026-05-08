@@ -15,7 +15,7 @@
  *     is a reject — the deliverable is unauditable.
  *
  * The threshold is intentionally coarse (any > 0 works): per-file
- * evidence is the @kodax/coding mutation tracker's job, not the Layer A
+ * evidence is the @kodax-ai/coding mutation tracker's job, not the Layer A
  * primitive's. We can tighten the rule once FEATURE_089 starts emitting
  * structured mutation→evidence pairings.
  */

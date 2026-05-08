@@ -33,8 +33,8 @@ import {
   expect,
   it,
 } from 'vitest';
-import { KodaXBaseProvider, clearRuntimeModelProviders } from '@kodax/ai';
-import { registerModelProvider } from '@kodax/ai';
+import { KodaXBaseProvider, clearRuntimeModelProviders } from '@kodax-ai/llm';
+import { registerModelProvider } from '@kodax-ai/llm';
 import type {
   KodaXMessage,
   KodaXProviderConfig,
@@ -42,7 +42,7 @@ import type {
   KodaXReasoningRequest,
   KodaXStreamResult,
   KodaXToolDefinition,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 import { runKodaX } from '../../agent.js';
 import {

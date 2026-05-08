@@ -20,8 +20,8 @@ import { describe, expect, it, vi } from 'vitest';
 // `bootstrapAutoMode` calls `loadAutoRules` against the real filesystem.
 // We mock it to return an empty merge so the test doesn't depend on the
 // developer's `~/.kodax/auto-rules.jsonc` (it doesn't exist in CI).
-vi.mock('@kodax/coding', async () => {
-  const actual = await vi.importActual<typeof import('@kodax/coding')>('@kodax/coding');
+vi.mock('@kodax-ai/coding', async () => {
+  const actual = await vi.importActual<typeof import('@kodax-ai/coding')>('@kodax-ai/coding');
   return {
     ...actual,
     loadAutoRules: vi.fn(async () => ({

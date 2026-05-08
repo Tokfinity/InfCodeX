@@ -1,14 +1,14 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { pathToFileURL } from 'url';
-import type { KodaXMessage, KodaXReasoningMode } from '@kodax/ai';
+import type { KodaXMessage, KodaXReasoningMode } from '@kodax-ai/llm';
 import { exec as extensionExec, webhook as extensionWebhook } from './helpers.js';
 import {
   registerModelProvider,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import {
   registerPluginSkillPath,
-} from '@kodax/skills';
+} from '@kodax-ai/skills';
 import { tsImport } from 'tsx/esm/api';
 import {
   getBuiltinRegisteredToolDefinition,
@@ -26,7 +26,7 @@ import type {
   KodaXExtensionStore,
   KodaXJsonValue,
 } from '../types.js';
-import { createExtensionStore } from '@kodax/session-lineage';
+import { createExtensionStore } from '@kodax-ai/session-lineage';
 import type {
   CapabilityProvider,
   ExtensionContributionSource,

@@ -41,7 +41,7 @@ import {
   disableSelfModify,
   readDisableState,
   rollbackSelfModify,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 interface CliOpts {
   readonly cwd: string;

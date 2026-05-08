@@ -6,13 +6,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { StreamingState } from "@kodax/repl";
+import { StreamingState } from "@kodax-ai/repl";
 import {
   type StreamingContextValue,
   type StreamingActions,
   createStreamingManager,
   type StreamingManager,
-} from "@kodax/repl";
+} from "@kodax-ai/repl";
 
 // === Tests ===
 

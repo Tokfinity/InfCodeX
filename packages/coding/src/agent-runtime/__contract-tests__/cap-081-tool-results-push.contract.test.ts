@@ -32,7 +32,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
 import type { KodaXContextTokenSnapshot } from '../../types.js';
 
 import { pushToolResultsAndSettle } from '../middleware/extension-queue.js';

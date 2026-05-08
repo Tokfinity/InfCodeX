@@ -40,7 +40,7 @@
  * baseline — during FEATURE_100 P3.5d.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type {
   KodaXContextTokenSnapshot,
@@ -51,7 +51,7 @@ import type {
 import {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import { saveSessionSnapshot } from './middleware/session-snapshot.js';
 import { createEstimatedContextTokenSnapshot } from '../token-accounting.js';
 import type { RuntimeSessionState } from './runtime-session-state.js';

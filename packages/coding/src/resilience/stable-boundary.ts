@@ -9,7 +9,7 @@
  * tool call JSON) is considered unstable and will be discarded on recovery.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type {
   FailureStage,
   ProviderExecutionState,

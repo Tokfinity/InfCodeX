@@ -2,7 +2,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax/coding';
+import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax-ai/coding';
 import { CommandCompleter, FileCompleter, findCommandSlashIndex } from './autocomplete.js';
 import { getCommandRegistry } from './commands.js';
 

@@ -29,7 +29,7 @@
  */
 
 import type { KodaXOptions, KodaXReasoningMode } from '../types.js';
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { reasoningModeToDepth, type ReasoningPlan } from '../reasoning.js';
 import {
   buildReasoningExecutionState,

@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "../tui.js";
-import type { KodaXAmaFanoutClass } from "@kodax/coding";
+import type { KodaXAmaFanoutClass } from "@kodax-ai/coding";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
 

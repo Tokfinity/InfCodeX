@@ -22,7 +22,7 @@
  * avoids drift when emit-tool schemas change.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 import type { PromptJudge } from '../../harness/judges.js';
 import { mustMatch, mustNotMatch } from '../../harness/judges.js';

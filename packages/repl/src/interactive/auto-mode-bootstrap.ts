@@ -38,8 +38,8 @@ import {
   type AutoModeAskUser,
   type AutoModeToolGuardrail,
   type RulesLoadResult,
-} from '@kodax/coding';
-import type { KodaXBaseProvider } from '@kodax/ai';
+} from '@kodax-ai/coding';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
 
 export interface AutoModeBootstrapDeps {

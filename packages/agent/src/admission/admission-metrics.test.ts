@@ -61,7 +61,7 @@ describe('admission-metrics — counter increments', () => {
 
   it('increments admitOkClamped on a clamp verdict', () => {
     // Register a probe invariant that emits a clamp patch — core-only
-    // tests don't have budget-ceiling registered (it lives in @kodax/coding).
+    // tests don't have budget-ceiling registered (it lives in @kodax-ai/coding).
     _resetInvariantRegistry();
     const clamper: QualityInvariant = {
       id: 'finalOwner',

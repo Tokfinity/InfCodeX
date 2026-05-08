@@ -38,11 +38,11 @@
  * stale refs are an LLM-authoring footgun, not a security bypass.
  */
 
-import type { Agent, AgentManifest, AgentTool, Handoff, InvariantId } from '@kodax/agent';
+import type { Agent, AgentManifest, AgentTool, Handoff, InvariantId } from '@kodax-ai/agent';
 import {
   _resetAdmittedAgentBindings,
   setAdmittedAgentBindings,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import {
   evaluatorAgent,
   generatorAgent,
@@ -57,7 +57,7 @@ import type { AgentArtifact, AgentContent, AgentHandoffRef, ToolRef } from './ty
 /**
  * FEATURE_101 v0.7.31.1 — builtin agent registry.
  *
- * Maps the 4 v1 builtin role names to their `@kodax/core/task-engine-agents`
+ * Maps the 4 v1 builtin role names to their `@kodax-ai/core/task-engine-agents`
  * declarations. Constructed agents that handoff to a builtin role
  * (e.g. `target: { ref: 'builtin:scout' }`) get the real role declaration
  * here instead of a phantom stub `{ name, instructions: '' }`.
@@ -199,7 +199,7 @@ function liftToolRef(ref: ToolRef): AgentTool | undefined {
   const name = colon === -1 ? ref.ref : ref.ref.slice(colon + 1).split('@')[0]!;
   const registered = getRegisteredToolDefinition(name);
   if (!registered) return undefined;
-  // AgentTool === KodaXToolDefinition (see @kodax/core/agent.ts:33),
+  // AgentTool === KodaXToolDefinition (see @kodax-ai/core/agent.ts:33),
   // shape: { name, description, input_schema }. We strip the runtime
   // `handler` field — Runner.run resolves tools by name through
   // TOOL_REGISTRY at execute time, so the AgentTool entry only carries
@@ -216,7 +216,7 @@ function liftToolRef(ref: ToolRef): AgentTool | undefined {
  *
  * Resolution order (FEATURE_101 v0.7.31.1):
  *   1. `builtin:<role>` → look up in BUILTIN_AGENTS (returns the real
- *      `@kodax/core` task-engine declaration with full instructions /
+ *      `@kodax-ai/core` task-engine declaration with full instructions /
  *      reasoning profile).
  *   2. `constructed:<name>[@version]` → look up in AGENT_REGISTRY
  *      (returns the activated constructed agent).

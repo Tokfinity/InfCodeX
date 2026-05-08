@@ -15,7 +15,7 @@
  *      with explicit "Do NOT include thinking or preamble" guidance.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type { AutoRules } from './rules.js';
 
 export interface BuildClassifierPromptInput {

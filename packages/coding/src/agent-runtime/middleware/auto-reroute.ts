@@ -44,7 +44,7 @@
  * FEATURE_100 P2.
  */
 
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
+import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
 
 import type { KodaXEvents, KodaXOptions } from '../../types.js';
 import { type ReasoningPlan, maybeCreateAutoReroutePlan } from '../../reasoning.js';

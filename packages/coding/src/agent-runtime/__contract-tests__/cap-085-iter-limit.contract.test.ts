@@ -26,7 +26,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXOptions } from '../../types.js';
 
 import { applyIterationLimitTerminal } from '../iteration-limit-terminal.js';

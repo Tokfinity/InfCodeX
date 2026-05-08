@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { KodaXCustomProviderConfig } from '@kodax/coding';
+import type { KodaXCustomProviderConfig } from '@kodax-ai/coding';
 
 const { registerCustomProvidersMock } = vi.hoisted(() => ({
   registerCustomProvidersMock: vi.fn(),
 }));
 
-vi.mock('@kodax/coding', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/coding')>();
+vi.mock('@kodax-ai/coding', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
   return {
     ...actual,
     registerCustomProviders: registerCustomProvidersMock,

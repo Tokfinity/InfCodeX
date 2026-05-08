@@ -16,7 +16,7 @@ const mockSkills = [
 const mockListUserInvocable = vi.fn();
 
 // Mock the skills module - must be before any imports that use it
-vi.mock('@kodax/skills', () => ({
+vi.mock('@kodax-ai/skills', () => ({
   getSkillRegistry: vi.fn(() => ({
     size: 1,
     listUserInvocable: mockListUserInvocable,

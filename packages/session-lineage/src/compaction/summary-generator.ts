@@ -1,13 +1,13 @@
 /**
- * @kodax/agent Compaction Summary Generator
+ * @kodax-ai/agent Compaction Summary Generator
  *
  * Generates continuation-oriented summaries for compacted conversations.
  */
 
 import { createHash } from 'crypto';
-import type { KodaXBaseProvider, KodaXMessage } from '@kodax/ai';
+import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
 import type { CompactionDetails } from './types.js';
-import type { KodaXCompactMemorySeed } from '@kodax/agent';
+import type { KodaXCompactMemorySeed } from '@kodax-ai/agent';
 import { serializeConversation } from './utils.js';
 
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization specialist.
@@ -24,7 +24,7 @@ Do not continue the conversation. Do not answer any user requests.`;
 /**
  * Default neutral compaction summary prompts (v0.7.35.1 FEATURE_142 B-R1).
  *
- * These are the *generic* defaults shipped with @kodax/session-lineage.
+ * These are the *generic* defaults shipped with @kodax-ai/session-lineage.
  * They are the "candidate-a-conservative" winner from the prompt eval
  * (`tests/compaction-prompt.eval.ts`, 150 cells over 5 aliases × 10
  * fixtures × 3 candidates) — schema-stable and high-recall on both
@@ -32,13 +32,13 @@ Do not continue the conversation. Do not answer any user requests.`;
  *
  * The prior coding-flavored prompts (referencing "coding agent",
  * "file paths, function names", "HTTP status codes", "## Files & Changes")
- * have moved to `@kodax/coding` as `CODING_SUMMARY_PROMPT` /
+ * have moved to `@kodax-ai/coding` as `CODING_SUMMARY_PROMPT` /
  * `CODING_UPDATE_SUMMARY_PROMPT`. Coding callers pass them via the
  * `summaryPrompt` / `updateSummaryPrompt` parameters of
  * `buildCompactionPromptSnapshot()` and `generateSummary()` / `compact()`
  * to preserve the v0.7.35 behavior byte-equivalent on the coding path.
  *
- * Why this split (per ADR-021): @kodax/session-lineage is the generic
+ * Why this split (per ADR-021): @kodax-ai/session-lineage is the generic
  * compaction primitive package. Its public surface must not assume the
  * caller is a coding agent — domain-specific prompt language belongs
  * one layer up.
@@ -249,14 +249,14 @@ export function buildCompactionPromptSnapshot(args: {
   /**
    * Override the initial-summary instructions. When omitted, falls back
    * to {@link DEFAULT_SUMMARY_PROMPT}. Coding callers pass
-   * `CODING_SUMMARY_PROMPT` (from @kodax/coding) here to preserve the
+   * `CODING_SUMMARY_PROMPT` (from @kodax-ai/coding) here to preserve the
    * v0.7.35 byte-equivalent prompt on the coding path.
    */
   summaryPrompt?: string;
   /**
    * Override the update-summary instructions. When omitted, falls back
    * to {@link DEFAULT_UPDATE_SUMMARY_PROMPT}. Coding callers pass
-   * `CODING_UPDATE_SUMMARY_PROMPT` (from @kodax/coding) here.
+   * `CODING_UPDATE_SUMMARY_PROMPT` (from @kodax-ai/coding) here.
    */
   updateSummaryPrompt?: string;
 }): KodaXCompactionPromptSnapshot {

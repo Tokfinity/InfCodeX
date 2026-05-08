@@ -20,16 +20,16 @@ const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
   prepareRuntimeConfigMock: vi.fn(),
 }));
 
-vi.mock('@kodax/coding', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/coding')>();
+vi.mock('@kodax-ai/coding', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
   return {
     ...actual,
     runKodaX: runKodaXMock,
   };
 });
 
-vi.mock('@kodax/repl', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax/repl')>();
+vi.mock('@kodax-ai/repl', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/repl')>();
   return {
     ...actual,
     prepareRuntimeConfig: prepareRuntimeConfigMock,

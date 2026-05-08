@@ -35,7 +35,7 @@ import {
   createExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
   type KodaXExtensionRuntime,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 import {
   computeConfirmTools,
   FileSessionStorage,
@@ -48,7 +48,7 @@ import {
   isPathInsideProject,
   isToolCallAllowed,
   prepareRuntimeConfig,
-} from '@kodax/repl';
+} from '@kodax-ai/repl';
 import {
   AcpLogger,
   resolveAcpLogLevel,
@@ -62,7 +62,7 @@ import {
 /**
  * Permission mode ids exposed to ACP clients. These are wire-protocol values
  * advertised in `SessionMode.id`, so the set is intentionally narrower than
- * the canonical `PermissionMode` from `@kodax/repl`.
+ * the canonical `PermissionMode` from `@kodax-ai/repl`.
  *
  * Why `'auto'` (canonical FEATURE_092 v0.7.33) is **not** here:
  *
@@ -149,8 +149,8 @@ interface KodaXAcpSessionState {
 /** Convert ACP McpServer[] to KodaX flat server config. */
 function convertAcpMcpServers(
   servers: McpServer[],
-): import('@kodax/coding').KodaXMcpServersConfig {
-  const result: import('@kodax/coding').KodaXMcpServersConfig = {};
+): import('@kodax-ai/coding').KodaXMcpServersConfig {
+  const result: import('@kodax-ai/coding').KodaXMcpServersConfig = {};
   for (const server of servers) {
     if ('command' in server) {
       // Stdio

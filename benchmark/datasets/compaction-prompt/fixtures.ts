@@ -20,7 +20,7 @@
  * recall consistency.
  */
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
 export type FactMatchMode = 'substring' | 'substring-ci';
 

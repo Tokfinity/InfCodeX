@@ -17,7 +17,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 
-import { getAgentConfigPath } from "@kodax/agent";
+import { getAgentConfigPath } from "@kodax-ai/agent";
 
 const PASTE_CACHE_DIRNAME = "paste-cache";
 

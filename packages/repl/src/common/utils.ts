@@ -7,7 +7,7 @@ import fsSync from 'fs';
 import path from 'path';
 import os from 'os';
 import { exec, spawnSync, type SpawnSyncReturns } from 'child_process';
-import { getAgentConfigHome } from '@kodax/agent';
+import { getAgentConfigHome } from '@kodax-ai/agent';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { setLocale } from './i18n.js';
@@ -34,7 +34,7 @@ import {
   type KodaXReasoningOverride,
   type KodaXMcpServersConfig,
   type KodaXCustomProviderConfig,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 const execAsync = promisify(exec);
 
@@ -52,7 +52,7 @@ const execAsync = promisify(exec);
  *
  * **For substrate consumers**: if you intend to redirect the agent
  * config home via `setAgentConfigHome()`, you MUST call it BEFORE
- * importing any module that transitively imports `@kodax/repl`'s
+ * importing any module that transitively imports `@kodax-ai/repl`'s
  * `utils.ts`. Common downstream consumers that capture these constants
  * include:
  *   - `repl/interactive/storage.ts` → `KODAX_SESSIONS_DIR` (session
@@ -65,7 +65,7 @@ const execAsync = promisify(exec);
  * import.
  *
  * **For per-call resolution**: use `getAgentConfigHome()` /
- * `getAgentConfigPath(...)` directly from `@kodax/agent` instead of
+ * `getAgentConfigPath(...)` directly from `@kodax-ai/agent` instead of
  * these constants — those resolve at call time and honor late
  * `setAgentConfigHome()` calls.
  */

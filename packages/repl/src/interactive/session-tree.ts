@@ -1,4 +1,4 @@
-import type { KodaXSessionTreeNode } from '@kodax/coding';
+import type { KodaXSessionTreeNode } from '@kodax-ai/coding';
 
 function summarizeEntry(entry: KodaXSessionTreeNode['entry']): string {
   switch (entry.type) {

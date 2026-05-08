@@ -12,7 +12,7 @@ import {
   type KodaXAgentMode,
   KODAX_REASONING_MODE_SEQUENCE,
   type KodaXReasoningMode,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 // FEATURE_093 (v0.7.24): import from concrete module, not the barrel,
 // to break the `ui/shortcuts/index.ts ↔ ui/shortcuts/GlobalShortcuts.tsx` cycle.
 import { useShortcut } from './useShortcut.js';

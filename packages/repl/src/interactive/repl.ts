@@ -40,8 +40,8 @@ import {
   KODAX_DEFAULT_PROVIDER,
   setSessionLineageActiveEntry,
   getCustomProvider,
-} from '@kodax/coding';
-import type { AgentsFile } from '@kodax/coding';
+} from '@kodax-ai/coding';
+import type { AgentsFile } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
   computeConfirmTools,
@@ -84,7 +84,7 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
-import { getSkillRegistry } from '@kodax/skills';
+import { getSkillRegistry } from '@kodax-ai/skills';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
@@ -403,7 +403,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
 
   // Load compaction config for banner display
   const compactionConfig = await loadCompactionConfig(gitRoot ?? undefined);
-  const { resolveProvider } = await import('@kodax/coding');
+  const { resolveProvider } = await import('@kodax-ai/coding');
   const providerInstance = resolveProvider(currentConfig.provider);
   const effectiveContextWindow = compactionConfig.contextWindow
     ?? providerInstance.getEffectiveContextWindow?.(currentConfig.model)
@@ -411,7 +411,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     ?? 200000;
 
   // Load AGENTS.md files
-  const { loadAgentsFiles } = await import('@kodax/coding');
+  const { loadAgentsFiles } = await import('@kodax-ai/coding');
   const reloadAgentsFiles = async (): Promise<AgentsFile[]> => {
     return loadAgentsFiles({
       cwd: process.cwd(),

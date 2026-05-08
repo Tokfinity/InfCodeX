@@ -25,7 +25,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { KodaXMessage } from '@kodax/ai';
+import type { KodaXMessage } from '@kodax-ai/llm';
 import { rebaseContextTokenSnapshot } from '../../token-accounting.js';
 
 const SHORT_MESSAGES: KodaXMessage[] = [

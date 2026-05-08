@@ -27,7 +27,7 @@
  * @experimental API shape may adjust during v0.7.x rollout.
  */
 
-import type { Span } from '@kodax/tracing';
+import type { Span } from '@kodax-ai/tracing';
 
 import type { Agent, AgentMessage, Guardrail } from './agent.js';
 import type { RunnerToolCall, RunnerToolResult } from './runner-tool-loop.js';

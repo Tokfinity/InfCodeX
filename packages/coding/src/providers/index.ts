@@ -1,11 +1,11 @@
 /**
  * KodaX Providers
  *
- * Provider 模块统一导出 - 从 @kodax/ai 重新导出
- * @deprecated 直接从 @kodax/ai 导入
+ * Provider 模块统一导出 - 从 @kodax-ai/llm 重新导出
+ * @deprecated 直接从 @kodax-ai/llm 导入
  */
 
-// Re-export everything from @kodax/ai for backward compatibility
+// Re-export everything from @kodax-ai/llm for backward compatibility
 export {
   KodaXBaseProvider,
   KodaXAnthropicCompatProvider,
@@ -42,5 +42,5 @@ export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
-} from '@kodax/ai';
-export type { ProviderName } from '@kodax/ai';
+} from '@kodax-ai/llm';
+export type { ProviderName } from '@kodax-ai/llm';

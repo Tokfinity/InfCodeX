@@ -33,13 +33,13 @@ import type {
   KodaXTextBlock,
   KodaXToolDefinition,
   KodaXToolUseBlock,
-} from '@kodax/ai';
-import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax/ai';
+} from '@kodax-ai/llm';
+import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
 // CAP-012: per-session cost tracker. Import via the substrate re-export
 // shim (`agent-runtime/middleware/cost-tracker.ts`) instead of reaching
-// directly into `@kodax/ai`, so AMA and SA share one declared substrate
+// directly into `@kodax-ai/llm`, so AMA and SA share one declared substrate
 // surface. Runtime implementation is identical (the shim re-exports the
-// same `@kodax/ai` symbols); the difference is documented sharing — any
+// same `@kodax-ai/llm` symbols); the difference is documented sharing — any
 // future cost-tracker substrate wrapper added there is automatically
 // picked up by AMA.
 import {
@@ -58,8 +58,8 @@ import type {
   RunnerLlmResult,
   RunnerToolContext,
   RunnerToolResult,
-} from '@kodax/agent';
-import { Runner, getMessageQueue } from '@kodax/agent';
+} from '@kodax-ai/agent';
+import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import {
   EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
@@ -1981,7 +1981,7 @@ const NULL_OBSERVER: ObserverBridge = {
  *   - self-contained role instructions (no legacy prompt context)
  *   - role-appropriate coding tools
  *   - the recorder-wrapped emit tool
- *   - handoff topology matching @kodax/coding/agents/coding-agents.ts:
+ *   - handoff topology matching @kodax-ai/coding/agents/coding-agents.ts:
  *       Scout → Gen (H1) | Planner (H2)
  *       Planner → Gen
  *       Generator → Evaluator
@@ -2378,7 +2378,7 @@ export function buildRunnerScoutAgent(ctx: KodaXToolExecutionContext): Agent {
  */
 export interface RunnerAdapterTokenState {
   totalTokens: number;
-  lastUsage?: import('@kodax/ai').KodaXTokenUsage;
+  lastUsage?: import('@kodax-ai/llm').KodaXTokenUsage;
   source: 'api' | 'estimate';
 }
 
@@ -2661,7 +2661,7 @@ export function buildRunnerLlmAdapter(
       : agent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
       : 'sa';
     const reasoningMode = resolveRoleReasoning(role, userCeiling, agent.reasoning, scoutHint);
-    const providerReasoning: import('@kodax/ai').KodaXReasoningRequest | undefined =
+    const providerReasoning: import('@kodax-ai/llm').KodaXReasoningRequest | undefined =
       reasoningMode === 'off'
         ? { enabled: false, mode: 'off' }
         : {
@@ -2704,10 +2704,10 @@ export function buildRunnerLlmAdapter(
       textBlocks?: readonly { text: string }[];
       toolBlocks?: readonly KodaXToolUseBlock[];
       thinkingBlocks?: readonly (
-        | import('@kodax/ai').KodaXThinkingBlock
-        | import('@kodax/ai').KodaXRedactedThinkingBlock
+        | import('@kodax-ai/llm').KodaXThinkingBlock
+        | import('@kodax-ai/llm').KodaXRedactedThinkingBlock
       )[];
-      usage?: import('@kodax/ai').KodaXTokenUsage;
+      usage?: import('@kodax-ai/llm').KodaXTokenUsage;
     };
     if (overrideStream) {
       streamResult = await overrideStream(transcript, wireTools, system);
@@ -2913,7 +2913,7 @@ export function buildRunnerLlmAdapter(
           ) {
             const reason = (retryTimeoutController.signal as { reason?: { message?: string } })
               .reason?.message ?? 'Stream stalled';
-            const { KodaXNetworkError } = await import('@kodax/ai');
+            const { KodaXNetworkError } = await import('@kodax-ai/llm');
             error = new KodaXNetworkError(reason, true);
           }
 
@@ -3063,8 +3063,8 @@ export function buildRunnerLlmAdapter(
       // mid-sentence and the Runner exits with a partial answer.
       let l5Retries = 0;
       let accumulatedText = (raw.textBlocks ?? []).map((b) => b.text).join('');
-      type ThinkingBlock = import('@kodax/ai').KodaXThinkingBlock
-        | import('@kodax/ai').KodaXRedactedThinkingBlock;
+      type ThinkingBlock = import('@kodax-ai/llm').KodaXThinkingBlock
+        | import('@kodax-ai/llm').KodaXRedactedThinkingBlock;
       const accumulatedThinking: ThinkingBlock[] | undefined = raw.thinkingBlocks
         ? [...raw.thinkingBlocks]
         : undefined;

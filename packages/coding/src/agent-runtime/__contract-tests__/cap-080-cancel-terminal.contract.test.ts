@@ -32,7 +32,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../../types.js';
-import type { KodaXMessage, KodaXToolResultBlock } from '@kodax/ai';
+import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
 
 import {
   hasCancelledToolResult,

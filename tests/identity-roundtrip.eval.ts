@@ -24,9 +24,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { KodaXMessage } from '@kodax/ai';
-import { getProvider } from '@kodax/ai';
-import { buildSystemPrompt } from '@kodax/coding';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import { getProvider } from '@kodax-ai/llm';
+import { buildSystemPrompt } from '@kodax-ai/coding';
 
 interface ProbeCase {
   id: string;

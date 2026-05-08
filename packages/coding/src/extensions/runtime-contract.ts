@@ -1,6 +1,6 @@
 /**
  * FEATURE_093 (v0.7.24): minimal contract interface for the coding extension
- * runtime. Extracted so `@kodax/coding/src/types.ts` can reference the
+ * runtime. Extracted so `@kodax-ai/coding/src/types.ts` can reference the
  * extension runtime at the type level without importing `./extensions/runtime.js`,
  * which in turn imports from `types.ts` — a cycle that lasted since v0.7.20.
  *
@@ -11,10 +11,10 @@
  * through Options/Context fields.
  *
  * File must have NO imports from `../types.js` (that is the cycle we are
- * breaking). Capability types come from `@kodax/core`.
+ * breaking). Capability types come from `@kodax-ai/core`.
  */
 
-import type { CapabilityKind, CapabilityResult } from '@kodax/agent';
+import type { CapabilityKind, CapabilityResult } from '@kodax-ai/agent';
 
 export interface ExtensionRuntimeContract {
   searchCapabilities(

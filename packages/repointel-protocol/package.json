@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/repointel-protocol",
+  "name": "@kodax-ai/repointel-protocol",
   "version": "0.7.36",
   "description": "KodaX Repo-Intelligence Protocol - RPC contract for repo-intelligence daemon, reusable by external CLI clients",
   "type": "module",
@@ -31,5 +31,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/repointel-protocol"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

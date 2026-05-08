@@ -6,11 +6,11 @@ const mocks = vi.hoisted(() => ({
   resolveProvider: vi.fn(),
 }));
 
-vi.mock('@kodax/session-lineage', async () => {
+vi.mock('@kodax-ai/session-lineage', async () => {
   // Partial mock: only override `compact`. Keep all other exports real.
-  // (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax/agent to
-  // @kodax/session-lineage; mock the new home — see ADR-021.)
-  const actual = await vi.importActual<typeof import('@kodax/session-lineage')>('@kodax/session-lineage');
+  // (v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax-ai/agent to
+  // @kodax-ai/session-lineage; mock the new home — see ADR-021.)
+  const actual = await vi.importActual<typeof import('@kodax-ai/session-lineage')>('@kodax-ai/session-lineage');
   return {
     ...actual,
     compact: mocks.compact,
@@ -21,8 +21,8 @@ vi.mock('../common/compaction-config.js', () => ({
   loadCompactionConfig: mocks.loadCompactionConfig,
 }));
 
-vi.mock('@kodax/coding', async () => {
-  const actual = await vi.importActual<typeof import('@kodax/coding')>('@kodax/coding');
+vi.mock('@kodax-ai/coding', async () => {
+  const actual = await vi.importActual<typeof import('@kodax-ai/coding')>('@kodax-ai/coding');
   return {
     ...actual,
     resolveProvider: mocks.resolveProvider,

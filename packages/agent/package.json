@@ -1,5 +1,5 @@
 {
-  "name": "@kodax/agent",
+  "name": "@kodax-ai/agent",
   "version": "0.7.36",
   "description": "KodaX Agent — 通用 Agent 框架（智能体底座）。Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware。不绑定 coding。",
   "type": "module",
@@ -19,8 +19,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@kodax/ai": "*",
-    "@kodax/tracing": "*",
+    "@kodax-ai/llm": "*",
+    "@kodax-ai/tracing": "*",
     "js-tiktoken": "^1.0.12"
   },
   "devDependencies": {
@@ -36,5 +36,13 @@
     "url": "https://github.com/icetomoyo/KodaX.git",
     "directory": "packages/agent"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

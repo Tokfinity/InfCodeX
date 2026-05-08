@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KodaXProviderError } from '@kodax/ai';
+import { KodaXProviderError } from '@kodax-ai/llm';
 import { classifyError, ErrorCategory } from './error-classification.js';
 
 describe('classifyError', () => {

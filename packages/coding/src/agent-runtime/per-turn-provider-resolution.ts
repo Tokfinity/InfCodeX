@@ -31,10 +31,10 @@
  */
 
 import type { KodaXOptions, KodaXReasoningMode } from '../types.js';
-import type { CompactionConfig } from '@kodax/session-lineage';
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import { resolveProvider } from '../providers/index.js';
-import { resolveContextWindow } from '@kodax/session-lineage';
+import { resolveContextWindow } from '@kodax-ai/session-lineage';
 import type { RuntimeSessionState } from './runtime-session-state.js';
 
 export interface PerTurnProviderResolution {

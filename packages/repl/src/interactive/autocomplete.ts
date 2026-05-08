@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as readline from 'readline';
-import { getActiveExtensionRuntime } from '@kodax/coding';
+import { getActiveExtensionRuntime } from '@kodax-ai/coding';
 import { getCommandRegistry } from './commands.js';
 
 /**

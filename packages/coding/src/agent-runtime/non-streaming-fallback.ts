@@ -53,7 +53,7 @@ import type {
   KodaXMessage,
   KodaXToolDefinition,
   KodaXReasoningRequest,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 import type { BoundaryTrackerSession } from './boundary-tracker-session.js';
 import type { ExtensionEventEmitter } from './stream-handler-wiring.js';
 

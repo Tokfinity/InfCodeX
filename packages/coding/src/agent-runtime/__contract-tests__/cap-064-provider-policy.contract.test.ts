@@ -29,7 +29,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXBaseProvider } from '@kodax/ai';
+import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { KodaXOptions } from '../../types.js';
 
 import { applyProviderPolicyGate } from '../provider-policy-gate.js';

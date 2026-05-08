@@ -1,5 +1,5 @@
 /**
- * @kodax/agent Compaction Utils
+ * @kodax-ai/agent Compaction Utils
  *
  * 消息序列化工具 - 将消息转换为结构化文本格式
  */
@@ -11,7 +11,7 @@ import type {
   KodaXToolUseBlock,
   KodaXToolResultBlock,
   KodaXThinkingBlock,
-} from '@kodax/ai';
+} from '@kodax-ai/llm';
 
 /**
  * 序列化对话为文本

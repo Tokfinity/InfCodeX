@@ -14,7 +14,7 @@ import {
   type TracingProcessor,
 } from './index.js';
 
-describe('@kodax/tracing', () => {
+describe('@kodax-ai/tracing', () => {
   beforeEach(() => {
     setTracingProcessors([]);
   });

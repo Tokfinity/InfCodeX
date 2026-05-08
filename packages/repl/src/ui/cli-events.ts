@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import readline from 'readline';
-import type { KodaXEvents } from '@kodax/coding';
+import type { KodaXEvents } from '@kodax-ai/coding';
 import { buildToolConfirmationDisplay } from '../common/tool-confirmation.js';
 import type { ConfirmResult } from '../permission/types.js';
 

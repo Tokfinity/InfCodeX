@@ -5,11 +5,11 @@
  * (label, rewind, compaction ledger, branch summary) as a
  * `SessionExtension` over the base `Session` primitive.
  *
- * FEATURE_082 (v0.7.24): moved from `@kodax/coding/src/extensions/lineage.ts`
- * to this package. Depends on `@kodax/agent` for `Session` / `SessionEntry` /
- * `SessionExtension` (Layer A primitives — extracted to `@kodax/core` in
- * FEATURE_082, merged back into `@kodax/agent` in v0.7.35.1 FEATURE_142).
- * `@kodax/coding` keeps a barrel re-export.
+ * FEATURE_082 (v0.7.24): moved from `@kodax-ai/coding/src/extensions/lineage.ts`
+ * to this package. Depends on `@kodax-ai/agent` for `Session` / `SessionEntry` /
+ * `SessionExtension` (Layer A primitives — extracted to `@kodax-ai/core` in
+ * FEATURE_082, merged back into `@kodax-ai/agent` in v0.7.35.1 FEATURE_142).
+ * `@kodax-ai/coding` keeps a barrel re-export.
  *
  * Scope:
  *   - Declare the extension object.
@@ -18,12 +18,12 @@
  *   - Implement a `buildLineageTree` reducer that projects an entry stream
  *     back to a navigable tree.
  *   - NOT re-implemented here: `branch`, `rewind`, full compaction. Those
- *     stay in `@kodax/agent/session-lineage.ts` for coding-preset use; the
+ *     stay in `@kodax-ai/agent/session-lineage.ts` for coding-preset use; the
  *     `LineageCompaction` policy in this package is the thin wrapper that
  *     adapts them to the Layer A `CompactionPolicy` contract.
  */
 
-import type { Session, SessionEntry, SessionExtension } from '@kodax/agent';
+import type { Session, SessionEntry, SessionExtension } from '@kodax-ai/agent';
 
 /**
  * Entry types claimed by `LineageExtension`. Mirrors the legacy
@@ -65,7 +65,7 @@ export interface LineageArtifactLedgerPayload {
 
 /**
  * Projected tree node. Mirrors the navigation shape of
- * `KodaXSessionTreeNode` from `@kodax/agent/types.ts`, restricted to the
+ * `KodaXSessionTreeNode` from `@kodax-ai/agent/types.ts`, restricted to the
  * fields the base Session can supply.
  */
 export interface LineageTreeNode {
