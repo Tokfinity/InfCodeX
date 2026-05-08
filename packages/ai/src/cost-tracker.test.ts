@@ -318,6 +318,71 @@ describe('cost-tracker', () => {
       const summary = getSummary(tracker);
       expect(summary.totalCacheTokens).toBe(1500);
     });
+
+    // FEATURE_116 (v0.7.37) — cacheHitRate field tests
+    it('should report cacheHitRate=0 for an empty tracker', () => {
+      const summary = getSummary(createCostTracker());
+      expect(summary.cacheHitRate).toBe(0);
+      expect(summary.totalCacheReadTokens).toBe(0);
+      expect(summary.totalCacheWriteTokens).toBe(0);
+    });
+
+    it('should compute cacheHitRate from cumulative read / (read + write)', () => {
+      let tracker = createCostTracker();
+      // First call: pure write (cache miss / first turn — creating cache).
+      tracker = recordUsage(tracker, {
+        provider: 'anthropic',
+        model: 'claude-opus-4-6',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 1000,
+      });
+      let summary = getSummary(tracker);
+      expect(summary.totalCacheReadTokens).toBe(0);
+      expect(summary.totalCacheWriteTokens).toBe(1000);
+      expect(summary.cacheHitRate).toBe(0); // first turn: 0 / 1000 = 0
+
+      // Second call: pure read (cache hit on stable prefix).
+      tracker = recordUsage(tracker, {
+        provider: 'anthropic',
+        model: 'claude-opus-4-6',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 1000,
+        cacheWriteTokens: 0,
+      });
+      summary = getSummary(tracker);
+      expect(summary.totalCacheReadTokens).toBe(1000);
+      expect(summary.totalCacheWriteTokens).toBe(1000);
+      expect(summary.cacheHitRate).toBe(0.5);
+
+      // Third call: another cache hit.
+      tracker = recordUsage(tracker, {
+        provider: 'anthropic',
+        model: 'claude-opus-4-6',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 2000,
+        cacheWriteTokens: 0,
+      });
+      summary = getSummary(tracker);
+      expect(summary.totalCacheReadTokens).toBe(3000);
+      expect(summary.cacheHitRate).toBeCloseTo(0.75); // 3000 / 4000
+    });
+
+    it('should not produce NaN when cache fields are absent', () => {
+      let tracker = createCostTracker();
+      tracker = recordUsage(tracker, {
+        provider: 'openai',
+        model: 'gpt-5.4',
+        inputTokens: 1000,
+        outputTokens: 500,
+      });
+      const summary = getSummary(tracker);
+      expect(summary.cacheHitRate).toBe(0);
+      expect(Number.isFinite(summary.cacheHitRate)).toBe(true);
+    });
   });
 
   describe('formatCost', () => {
@@ -354,18 +419,23 @@ describe('cost-tracker', () => {
       expect(report).toContain('1,000,000 in / 1,000,000 out');
     });
 
-    it('should include cache information if present', () => {
+    it('should include cache information with hit-rate breakdown if present', () => {
       let tracker = createCostTracker();
       tracker = recordUsage(tracker, {
         provider: 'anthropic',
         model: 'claude-opus-4-6',
         inputTokens: 1000,
         outputTokens: 500,
-        cacheReadTokens: 1000,
+        cacheReadTokens: 800,
+        cacheWriteTokens: 200,
       });
 
       const report = formatCostReport(getSummary(tracker));
+      // FEATURE_116 (v0.7.37): cache line shows total + read/write split + hit rate
       expect(report).toContain('Cache: 1,000 tokens');
+      expect(report).toContain('800 read');
+      expect(report).toContain('200 write');
+      expect(report).toContain('80% hit rate');
     });
 
     it('should include provider breakdown when present', () => {

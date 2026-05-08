@@ -49,6 +49,19 @@ export interface SessionCostSummary {
   readonly totalInputTokens: number;
   readonly totalOutputTokens: number;
   readonly totalCacheTokens: number;
+  /** FEATURE_116 (v0.7.37): cumulative cache-read input tokens across the
+   * session. Splits `totalCacheTokens` into the read half so the hit rate
+   * (`cacheHitRate = totalCacheReadTokens / totalCacheTokens`) is
+   * derivable for `/cost` reporting. */
+  readonly totalCacheReadTokens: number;
+  /** FEATURE_116 (v0.7.37): cumulative cache-write (creation) input tokens. */
+  readonly totalCacheWriteTokens: number;
+  /** FEATURE_116 (v0.7.37): cache-read share of all cache tokens this
+   * session, in [0, 1]. Computed as `totalCacheReadTokens /
+   * (totalCacheReadTokens + totalCacheWriteTokens)`. Returns 0 when no
+   * cache activity has been recorded — a session with zero cache
+   * activity is not "0% hit rate", just untracked. */
+  readonly cacheHitRate: number;
   readonly callCount: number;
   /** FEATURE_130: total retries triggered across the session. */
   readonly retryCount: number;
@@ -133,6 +146,8 @@ export function getSummary(tracker: CostTracker): SessionCostSummary {
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
   let totalCacheTokens = 0;
+  let totalCacheReadTokens = 0;
+  let totalCacheWriteTokens = 0;
   const byProvider: Record<string, ProviderCostSummary> = {};
   const byRole: Record<string, ProviderCostSummary> = {};
 
@@ -141,6 +156,8 @@ export function getSummary(tracker: CostTracker): SessionCostSummary {
     totalInputTokens += r.inputTokens;
     totalOutputTokens += r.outputTokens;
     totalCacheTokens += r.cacheReadTokens + r.cacheWriteTokens;
+    totalCacheReadTokens += r.cacheReadTokens;
+    totalCacheWriteTokens += r.cacheWriteTokens;
 
     // Aggregate by provider
     const prev = byProvider[r.provider];
@@ -167,11 +184,21 @@ export function getSummary(tracker: CostTracker): SessionCostSummary {
     retryWaitMs += r.waitMs;
   }
 
+  // FEATURE_116 (v0.7.37): cache hit rate = read / (read + write).
+  // Defined to 0 when no cache activity has been observed (avoids 0/0
+  // NaN; an empty session reports 0% rather than a bogus 100%).
+  const cacheHitRate = totalCacheTokens > 0
+    ? totalCacheReadTokens / totalCacheTokens
+    : 0;
+
   return {
     totalCost,
     totalInputTokens,
     totalOutputTokens,
     totalCacheTokens,
+    totalCacheReadTokens,
+    totalCacheWriteTokens,
+    cacheHitRate,
     callCount: tracker.records.length,
     retryCount: tracker.retries.length,
     retryWaitMs,
@@ -193,7 +220,15 @@ export function formatCostReport(summary: SessionCostSummary): string {
     `Tokens: ${summary.totalInputTokens.toLocaleString()} in / ${summary.totalOutputTokens.toLocaleString()} out`,
   );
   if (summary.totalCacheTokens > 0) {
-    lines.push(`Cache: ${summary.totalCacheTokens.toLocaleString()} tokens`);
+    // FEATURE_116 (v0.7.37): break the cache total into read / write and
+    // surface hit rate so users can see prompt caching saving them money.
+    const hitPct = (summary.cacheHitRate * 100).toFixed(0);
+    lines.push(
+      `Cache: ${summary.totalCacheTokens.toLocaleString()} tokens (`
+        + `${summary.totalCacheReadTokens.toLocaleString()} read / `
+        + `${summary.totalCacheWriteTokens.toLocaleString()} write, `
+        + `${hitPct}% hit rate)`,
+    );
   }
   if (summary.retryCount > 0) {
     const seconds = (summary.retryWaitMs / 1000).toFixed(1);
