@@ -1,10 +1,70 @@
 #!/usr/bin/env node
 
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import YAML from 'yaml';
+
+// FEATURE_150 (v0.7.37) — KodaX SDK loader for builtin helper scripts.
+//
+// These helper scripts (run-eval.js / grade-evals.js / etc.) need access to
+// the runKodaX / estimateTokens API. The SDK lives in different places
+// depending on install mode:
+//
+//   1. Bundle-installed (npm install -g @kodax-ai/cli):
+//      this file → <prefix>/lib/node_modules/@kodax-ai/cli/dist/builtin-skills/skill-creator/scripts/utils.js
+//      SDK       → <prefix>/lib/node_modules/@kodax-ai/cli/dist/index.js
+//      Resolution: relative path '../../../index.js' (3 levels up from scripts/ to dist/)
+//
+//   2. Dev monorepo (npm run dev / direct invocation against built sub-packages):
+//      this file → <repo>/packages/skills/dist/builtin/skill-creator/scripts/utils.js
+//      SDK       → not at relative path; resolved via npm workspace symlink
+//      Resolution: bare-name `@kodax-ai/coding` (workspace alias works in this scope)
+//
+//   3. Path B SDK consumer (`npm install @kodax-ai/cli` in user project):
+//      this file would be inside their node_modules; same as case 1 layout.
+//
+// See docs/HLD.md §12.4 risk 3 for the dist-layout contract.
+
+let _cachedSdk = null;
+
+export async function loadKodaXSDK() {
+  if (_cachedSdk) return _cachedSdk;
+
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const errors = [];
+
+  // Strategy 1: bundled install — relative path to dist/index.js
+  // Layout: dist/builtin-skills/<skill>/scripts/utils.js → ../../../index.js
+  const relSdkPath = path.resolve(here, '../../../index.js');
+  if (existsSync(relSdkPath)) {
+    _cachedSdk = await import(pathToFileURL(relSdkPath).href);
+    return _cachedSdk;
+  }
+  errors.push(`relative SDK path not found: ${relSdkPath}`);
+
+  // Strategy 2: dev monorepo — workspace symlink resolves bare name
+  try {
+    _cachedSdk = await import('@kodax-ai/coding');
+    return _cachedSdk;
+  } catch (err) {
+    errors.push(`bare-name @kodax-ai/coding failed: ${err?.code ?? err?.message}`);
+  }
+
+  // Strategy 3: bundled install via bare cli name (npm-installed CLI alongside)
+  try {
+    _cachedSdk = await import('@kodax-ai/cli');
+    return _cachedSdk;
+  } catch (err) {
+    errors.push(`bare-name @kodax-ai/cli failed: ${err?.code ?? err?.message}`);
+  }
+
+  throw new Error(
+    `Cannot locate KodaX SDK from helper script ${import.meta.url}.\nAttempted:\n  - ${errors.join('\n  - ')}`,
+  );
+}
 
 export function toPosixPath(filePath) {
   return filePath.replace(/\\/g, '/');

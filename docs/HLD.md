@@ -462,3 +462,134 @@ This routing update keeps KodaX lightweight by default:
 - `reviewScale`, repo size, changed file count, and changed line count now affect evidence strategy only.
 - `H2_PLAN_EXECUTE_EVAL` is reserved for long-running mutation work that changes code or system state and benefits from contract plus executable verification.
 - H2 now defaults to one main pass; extra passes require a structured evaluator failure rather than default ceremony.
+
+---
+
+## 12. npm Distribution Architecture (FEATURE_150, v0.7.37)
+
+> 决策依据见 [ADR-022](ADR.md#adr-022-npm-distribution--single-bundle-not-multi-package-feature_149-v0737)。
+
+源码层是分层 monorepo（ADR-001），npm 发布层是**单 bundle 包 `@kodax-ai/cli`**。这两个层是**正交**的：源码读起来是 9 个独立可用的子包；npm 装起来是一个自包含的 CLI。
+
+### 12.1 发布物布局
+
+`@kodax-ai/cli@<version>` tarball 内部：
+
+```text
+@kodax-ai/cli/
+├── package.json
+│   ├── name: @kodax-ai/cli
+│   ├── bin: { "kodax": "scripts/kodax-bin.cjs" }
+│   ├── main: "dist/index.js"          ← SDK 入口
+│   ├── exports: { ".": "./dist/index.js" }
+│   └── dependencies: <仅第三方包>     ← 不再有任何 @kodax-ai/*
+├── dist/
+│   ├── kodax_cli.js                   ← CLI entry（bin 命令运行）
+│   ├── index.js                       ← SDK entry（builtin helper + 路径 B 消费者）
+│   ├── *.js.map                       ← source map（集成方调试用）
+│   └── builtin-skills/<skill>/        ← LLM 通过 skill 触发的资源（含 helper scripts）
+├── scripts/
+│   ├── kodax-bin.cjs                  ← bin shim（NODE_ENV=production preload）
+│   └── production-env.cjs
+└── README.md / README_CN.md / LICENSE / CHANGELOG.md
+```
+
+### 12.2 三种集成路径
+
+| 路径 | 谁会走 | 实现方式 |
+|---|---|---|
+| **A. CLI 终端用户** | 90% 用户 | `npm install -g @kodax-ai/cli` → 用 `kodax` 命令 |
+| **B. 源码 SDK 集成方** | 想做基于 KodaX 的产品的开发者 | `git clone + npm link/file: + 自己 esbuild bundle` |
+| **C. 临时 SDK 用户** | 懒得 clone 仓库的小集成场景（不主推） | `npm install @kodax-ai/cli` → `import { runKodaX } from '@kodax-ai/cli'` |
+
+路径 A / C 都从 `dist/` 解析；路径 B 从 `packages/*/src/` 解析（不依赖 npm registry）。
+
+### 12.3 Bundle 边界 — 哪些 inline、哪些 external
+
+**Inline 进 bundle（esbuild 自动 inline）**：
+- `packages/{ai,agent,coding,mcp,repl,repointel-protocol,session-lineage,skills,tracing}/src/**`：所有 9 个内部子包源码
+
+**Standalone external（保留 import 让 npm 在用户机器上装）**：
+- 真第三方运行时包：`chalk` `commander` `glob` `iconv-lite` `js-tiktoken` `fflate` `yaml` `clipboardy` `string-width` `ink` `ink-spinner` `ink-text-input` `react` `@agentclientprotocol/sdk`
+- vendored Ink fork 的 transitive deps（26 个）：`yoga-layout` `react-reconciler` `ws` `scheduler` `cli-cursor` `stack-utils` `code-excerpt` `es-toolkit` `ansi-escapes` `is-in-ci` `auto-bind` `signal-exit` `patch-console` `wrap-ansi` `terminal-size` `react-devtools-core` `widest-line` `slice-ansi` `@alcalzone/ansi-tokenize` `cli-boxes` `indent-string` `cli-truncate` `yoga-layout-prebuilt` `prop-types` `arrify` `string-length`
+- 运行时 import 的工具：`typescript`（运行时 AST 分析）、`tsx`（用户 .ts 扩展加载）
+
+### 12.4 五个已知风险与应对
+
+发布架构脆弱面 + 应对方案。维护时定期重审。
+
+#### 风险 1 — `tsx` ESM API 必须 external
+
+**场景**：KodaX extensions 系统让用户写自己的 `.ts` 扩展文件，运行时通过 `tsx/esm/api` 的 `tsImport` 动态加载。`tsx` 内部依赖 Node.js ESM loader hook 机制，必须在进程早期注册。
+
+**风险**：esbuild 默认会把 `tsx` 也 inline 进 bundle，bundled 后的 `tsx` 失去 loader hook 注册时机，用户 `.ts` 扩展加载失败。
+
+**应对**：
+- `scripts/build-bundle.mjs` 中显式 `external: ['tsx']`
+- root `package.json#dependencies` 保留 `"tsx": "^4.21.0"`
+- 严重度：低；维护成本：一次配置，无后续
+
+#### 风险 2 — Vendored Ink fork 的 transitive deps 必须 external（且必须显式声明）
+
+**场景**：`packages/repl/src/tui/` 是 Ink 库的 vendored fork（fork 自上游 Ink 的源码并修改）。Vendored 模式下 KodaX 不再 `import 'ink'`，所以 npm 不会替我们装 Ink 的 26 个 transitive deps。
+
+**风险**：bundle 不进去（多个包含 native binding，如 `yoga-layout` 的 `.wasm`），但又必须在用户机器上安装到，否则运行时 `ERR_MODULE_NOT_FOUND`。这正是 v0.7.37 首次 multi-package 发布触发的实证 bug。
+
+**应对**：
+- 全部 26 个包列入 root `package.json#dependencies`（清单见 §12.3）
+- `scripts/build-bundle.mjs` 中 `external` 包含这 26 个
+- 严重度：低；维护成本：一次复制粘贴，新加 vendored 文件时检查 import
+
+#### 风险 3 — Skills builtin helper script 路径硬编码
+
+**场景**：`dist/builtin-skills/skill-creator/scripts/run-eval.js` 这类 helper script 是 KodaX 自带的、由 LLM 通过 skill 触发执行的脚本。它们需要 import 到 `dist/index.js` 中的 SDK API（`runKodaX` / `estimateTokens`）。
+
+```javascript
+const here = path.dirname(fileURLToPath(import.meta.url));
+const sdkPath = path.resolve(here, '../../../../dist/index.js');
+const sdk = await import(pathToFileURL(sdkPath).href);
+```
+
+`'../../../../dist/index.js'` 这串相对路径**硬编码了 dist 布局**。
+
+**风险**：将来重构 dist 布局（比如把 `builtin-skills/` 改成 `assets/skills/builtin/` 多套一层），所有 helper script 路径会断 —— 而且断的是运行时，编译期看不出。
+
+**应对**：
+- `scripts/build-bundle.mjs` 中把 dist 布局**契约化**：注释 + 一个常量 `HELPER_SCRIPT_DEPTH_TO_DIST = 4`
+- helper script 内运行时 `fs.existsSync(sdkPath)` sanity check
+- e2e 测试覆盖 `npm pack && install + 跑一次 skill helper`，build-time gate 而非 publish-time
+- 严重度：中；维护成本：长期警觉，重构 dist 布局必须同步改 helper script
+
+#### 风险 4 — Source map 必须包含原 KodaX 源码映射
+
+**场景**：路径 B 集成方在生产中遇到 KodaX 内部错误，看到栈指向 `/app/dist/index.js:14523` 这种巨大行号，无法定位。
+
+**风险**：没有 source map → 集成方调试是黑盒。
+
+**应对**：
+- `scripts/build-bundle.mjs` 中 `sourcemap: true`，输出 `dist/*.js.map` 包含原始 `packages/*/src/**` 路径映射
+- root `package.json#files` 白名单包含 `dist/**/*.map`（默认 `dist/` 整个目录已包含）
+- 严重度：低；维护成本：一次配置
+
+#### 风险 5 — Bundle size 不应膨胀
+
+**场景**：用户 `npm install -g @kodax-ai/cli` 下载 tarball。当前 9 子包 dist 总和 ~1.5 MB；bundle 后预估 800-1200 kB（去重 + tree shake 节省）。
+
+**风险**：esbuild 配置不当（如未做 module dedup）可能导致 bundle 反而比 multi-package 更大。
+
+**应对**：
+- `scripts/build-bundle.mjs` 中 `metafile: true` 输出 build 分析 → CI 中跑 `esbuild-visualizer`，每个 release 检查
+- 加 `--minify` 压缩（节省 30-50%）
+- 设阈值：bundle size > 2 MB 触发 release gate
+- 严重度：低；维护成本：每次 release 检查一次
+
+### 12.5 与 ADR-001 / ADR-021 的关系
+
+源码层（ADR-001 / ADR-021）的"layered monorepo + 9 子包独立可用"承诺**不变**。Bundle 是发布层的聚合操作，不消除源码层的边界。
+
+| 不变量 | 在源码层 | 在发布层 |
+|---|---|---|
+| 9 个子包独立可用 | ✅（git clone 路径 A） | ❌（只发 1 个 cli） |
+| Layer independence | ✅（review 必须守） | N/A（bundle 后变成实现细节） |
+| 独立 release cadence | N/A（dev 不需要） | ❌（10 个版本号合 1 个） |
+| 独立 npm visibility | N/A | ❌（仅 cli 出现在 npmjs.com） |

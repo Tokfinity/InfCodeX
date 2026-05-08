@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   extractTaggedText,
+  loadKodaXSDK,
   loadSkill,
   pathExists,
   writeSkill,
@@ -40,7 +41,7 @@ export function extractDescriptionCandidate(text) {
 }
 
 async function defaultGenerate(prompt, options) {
-  const { runKodaX } = await import('@kodax/coding');
+  const { runKodaX } = await loadKodaXSDK();
   const result = await runKodaX(
     {
       provider: options.provider,

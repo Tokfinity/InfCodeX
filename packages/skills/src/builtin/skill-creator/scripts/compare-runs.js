@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   extractJsonObject,
+  loadKodaXSDK,
   loadRelativeText,
   readJsonFile,
   truncateText,
@@ -117,7 +118,7 @@ ${truncateText(pair.B.output, 12000)}
 }
 
 async function defaultRunComparator(prompt, options) {
-  const { runKodaX } = await import('@kodax/coding');
+  const { runKodaX } = await loadKodaXSDK();
   const result = await runKodaX(
     {
       provider: options.provider ?? 'anthropic',
