@@ -89,8 +89,15 @@ describe('anthropic message serialization', () => {
     await provider.stream(messages, TOOLS, 'Base system prompt');
 
     const kwargs = create.mock.calls[0]?.[0];
-    expect(kwargs.system).toContain('Base system prompt');
-    expect(kwargs.system).toContain('[对话历史摘要]');
+    // FEATURE_116 (v0.7.37): system is now wrapped as a single
+    // TextBlockParam carrying cache_control. Extract the text for
+    // content assertions; fall through to string for the disabled-cache
+    // shape.
+    const systemText = typeof kwargs.system === 'string'
+      ? kwargs.system
+      : (kwargs.system as Array<{ text: string }>).map((b) => b.text).join('\n');
+    expect(systemText).toContain('Base system prompt');
+    expect(systemText).toContain('[对话历史摘要]');
     expect(kwargs.messages).toHaveLength(2);
     expect(kwargs.messages[1]?.content[0]).toMatchObject({
       type: 'tool_result',

@@ -26,6 +26,11 @@ import {
   clampThinkingBudget,
   resolveThinkingBudget,
 } from '../reasoning.js';
+import {
+  insertCacheBoundary,
+  isCacheBoundary,
+  lowerCacheBoundaries,
+} from '../cache-control.js';
 import { readImageFileAsBase64, resolveImageMediaType } from './image-serialization.js';
 
 const KODAX_ANTHROPIC_COMPAT_USER_AGENT = 'KodaX';
@@ -117,6 +122,57 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     this.initClient();
   }
 
+  /**
+   * FEATURE_116 (v0.7.37) — Wrap a string `system` prompt as a single
+   * cacheable text block. v1 treats the entire system prompt as one cache
+   * prefix (implicit boundary at the end). When upstream callers later
+   * emit `KodaXContentBlock[]` with explicit `cache-boundary` markers
+   * (Phase 1.4+), this helper switches to lowering those markers via
+   * `lowerCacheBoundaries(blocks, 'attach')`.
+   *
+   * Escape hatch: setting `KODAX_DISABLE_PROMPT_CACHE=1` returns the
+   * original string unchanged so prompt caching can be disabled at
+   * runtime without redeploying.
+   */
+  protected applyCacheControlToSystem(
+    systemText: string,
+  ): string | Anthropic.Messages.TextBlockParam[] {
+    if (!systemText.trim()) return systemText;
+    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') return systemText;
+    const blocks = insertCacheBoundary(
+      [{ type: 'text', text: systemText }],
+      'system',
+    );
+    // After lowering, no boundary marker remains — the cache_control
+    // attribute now lives on the wrapping text block. Cast the lowered
+    // shape to the Anthropic SDK's TextBlockParam union.
+    return lowerCacheBoundaries(blocks, 'attach') as Anthropic.Messages.TextBlockParam[];
+  }
+
+  /**
+   * FEATURE_116 (v0.7.37) — Mark the last tool definition as the cache
+   * suffix for the tools array. The Anthropic API caches the entire
+   * prefix up to and including the marked tool, so this is equivalent
+   * to "all tool defs are cacheable".
+   *
+   * Returns a new array; never mutates input.
+   */
+  protected applyCacheControlToTools(
+    tools: KodaXToolDefinition[],
+  ): Anthropic.Messages.Tool[] {
+    if (tools.length === 0) return tools as Anthropic.Messages.Tool[];
+    if (process.env.KODAX_DISABLE_PROMPT_CACHE === '1') {
+      return tools as Anthropic.Messages.Tool[];
+    }
+    const out = tools.slice() as Anthropic.Messages.Tool[];
+    const last = out[out.length - 1]!;
+    out[out.length - 1] = {
+      ...last,
+      cache_control: { type: 'ephemeral' },
+    } as Anthropic.Messages.Tool;
+    return out;
+  }
+
   async stream(
     messages: KodaXMessage[],
     tools: KodaXToolDefinition[],
@@ -148,9 +204,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
           max_tokens: maxOutputTokens,
-          system: this.buildSystemPrompt(system, messages),
+          system: this.applyCacheControlToSystem(this.buildSystemPrompt(system, messages)),
           messages: convertedMessages,
-          tools: tools as Anthropic.Messages.Tool[],
+          tools: this.applyCacheControlToTools(tools),
           stream: true,
         };
 
@@ -481,9 +537,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
         const kwargs: Anthropic.Messages.MessageCreateParams = {
           model,
           max_tokens: maxOutputTokens,
-          system: this.buildSystemPrompt(system, messages),
+          system: this.applyCacheControlToSystem(this.buildSystemPrompt(system, messages)),
           messages: convertedMessages,
-          tools: tools as Anthropic.Messages.Tool[],
+          tools: this.applyCacheControlToTools(tools),
         };
 
         if (capability === 'native-budget') {
@@ -577,6 +633,21 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   private serializeSystemMessageContent(content: string | KodaXContentBlock[]): string {
     if (typeof content === 'string') {
       return content.trim();
+    }
+
+    // FEATURE_116 fail-loud: a cache-boundary marker reaching the wire
+    // serialization path means lowering was skipped somewhere upstream.
+    // Silently dropping the marker would silently disable caching on
+    // that branch — refuse to serialize so the caller fixes the
+    // omission.
+    for (const block of content) {
+      if (isCacheBoundary(block)) {
+        throw new KodaXProviderError(
+          'cache-boundary marker reached system message serialization unlowered. '
+            + 'Provider base class lowering must run before any wire-level serialization.',
+          this.name,
+        );
+      }
     }
 
     return content
