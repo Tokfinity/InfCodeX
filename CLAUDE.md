@@ -112,6 +112,10 @@ Only the files in the tables below are allowed. Any other `.md` must go under `d
 - **Layout**: unit tests next to source (`packages/*/src/**/*.test.ts`); E2E in `tests/`. No `__tests__/` directories.
 - **TDD**: write test first (RED) → fail → minimal impl (GREEN) → pass → refactor.
 
+## Benchmark / Eval Workflow
+
+Before any benchmark/eval work (datasets, eval design, runs, analysis), **MUST** read [benchmark/EVAL_GUIDELINES.md](benchmark/EVAL_GUIDELINES.md) and follow it.
+
 ## **CRITICAL** Forbidden Items
 
 **Code**
