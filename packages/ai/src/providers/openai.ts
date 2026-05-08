@@ -42,16 +42,25 @@ function getOpenAICompatDefaultHeaders(
     : { 'User-Agent': KODAX_OPENAI_COMPAT_USER_AGENT };
 }
 
-type OpenAIUsageLike = {
+export type OpenAIUsageLike = {
   prompt_tokens?: number;
   completion_tokens?: number;
   total_tokens?: number;
   prompt_tokens_details?: {
     cached_tokens?: number | null;
   } | null;
+  // FEATURE_116 Sub-task D — DeepSeek private cache fields. DeepSeek's
+  // OpenAI-compat /chat/completions returns cache stats at the TOP level
+  // of `usage` (not nested), with prompt_tokens === hit + miss. Reading
+  // these recovers a ~4x cost-report inflation for cached requests
+  // (DeepSeek server-side cache fires regardless; only KodaX's local
+  // accounting was blind to it). Verified against DeepSeek API docs
+  // 2026-05-08. See docs/features/v0.7.37.md § Sub-task 116-D.
+  prompt_cache_hit_tokens?: number | null;
+  prompt_cache_miss_tokens?: number | null;
 } | null | undefined;
 
-function normalizeOpenAIUsage(usage: OpenAIUsageLike): KodaXTokenUsage | undefined {
+export function normalizeOpenAIUsage(usage: OpenAIUsageLike): KodaXTokenUsage | undefined {
   if (!usage) {
     return undefined;
   }
@@ -71,11 +80,18 @@ function normalizeOpenAIUsage(usage: OpenAIUsageLike): KodaXTokenUsage | undefin
     return undefined;
   }
 
+  // OpenAI-standard `prompt_tokens_details.cached_tokens` wins on conflict
+  // for forward compat (if DeepSeek ever adds the standard field, prefer
+  // it). Falls back to DeepSeek's private `prompt_cache_hit_tokens` when
+  // the standard field is absent — same semantics (subset of prompt_tokens).
   const cachedReadTokens =
     typeof usage.prompt_tokens_details?.cached_tokens === 'number' &&
     usage.prompt_tokens_details.cached_tokens >= 0
       ? usage.prompt_tokens_details.cached_tokens
-      : undefined;
+      : typeof usage.prompt_cache_hit_tokens === 'number' &&
+        usage.prompt_cache_hit_tokens >= 0
+        ? usage.prompt_cache_hit_tokens
+        : undefined;
 
   return {
     inputTokens,
