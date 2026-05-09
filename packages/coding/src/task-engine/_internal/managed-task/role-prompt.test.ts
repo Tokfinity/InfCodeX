@@ -263,3 +263,111 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
     }
   });
 });
+
+// FEATURE_114 v0.7.36 Slice 2 — Worker role prompt entry wire.
+// The 'worker' branch of `createRolePrompt` collapses the legacy
+// scout/planner/generator chain into a single primary agent that
+// drives plan + execution behind the KODAX_HARNESS_V2 flag. These
+// tests assert the wiring (not Worker prompt wording — that lives in
+// `worker-role-prompt.ts` and is covered by its own tests when the
+// V2 runner ships in Slice 3):
+//   1. Worker emits the canonical workspace / capability / overlay /
+//      decisionSummary / contract context layers (FEATURE_144 +
+//      FEATURE_086 parity).
+//   2. Worker uses `emit_handoff` (matches Generator wire format so
+//      the protocol-emitters pipeline plugs in unchanged).
+//   3. Worker prompt actually splices `buildWorkerInstructions`
+//      (plan-first contract / scope commitment / dispatch RULE A/B/C
+//      / handoff fragments).
+//   4. `isResumeAfterReviseFailure` flag is threaded through to the
+//      Worker fragment (revise-retry retrospective sentence).
+describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
+  function renderWorker(
+    overrides: Partial<ManagedRolePromptContext> = {},
+  ): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      ...overrides,
+    };
+    return createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+    );
+  }
+
+  it('emits the canonical context layers (workspace / decisionSummary / shared closing rule)', () => {
+    const rendered = renderWorker();
+    expect(rendered).toContain('## Environment');
+    expect(rendered).toContain('Working Directory:');
+    expect(rendered).toContain('Primary task:');
+    expect(rendered).toContain('Workspace discipline:');
+    expect(rendered).toContain('Preserve any exact machine-readable closing contract');
+  });
+
+  it('routes Worker through emit_handoff (parity with Generator wire format)', () => {
+    const rendered = renderWorker();
+    expect(rendered).toContain('"emit_handoff"');
+    // Sanity: not the Scout / Planner / Evaluator emit names — the
+    // Worker switch case must NOT regress to a paste-from-Scout default.
+    expect(rendered).not.toContain('"emit_scout_verdict"');
+    expect(rendered).not.toContain('"emit_contract"');
+    expect(rendered).not.toContain('"emit_verdict"');
+  });
+
+  it('splices buildWorkerInstructions content (plan-first + scope commitment + dispatch + handoff fragments)', () => {
+    const rendered = renderWorker();
+    // Pinned tokens from `buildWorkerInstructions` — if the entry
+    // wire breaks, these disappear and the V2 path silently falls
+    // back to a context-only prompt with no planning guidance.
+    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36)');
+    expect(rendered).toContain('SCOPE COMMITMENT (FEATURE_106 hard rule)');
+    expect(rendered).toContain('MUTATION DISCIPLINE');
+    expect(rendered).toContain('DISPATCH RULES');
+    expect(rendered).toContain('EVALUATOR HANDOFF');
+    expect(rendered).toContain('You are the Worker — KodaX\'s single primary agent');
+  });
+
+  it('threads isResumeAfterReviseFailure into the Worker retrospective fragment', () => {
+    const fresh = renderWorker();
+    const resume = renderWorker({ isResumeAfterReviseFailure: true });
+    // Fresh-run prompt should NOT carry the retrospective sentence.
+    expect(fresh).not.toContain('A previous attempt at this task failed under Evaluator review');
+    // Resume prompt MUST carry it (drives the LLM to read failed-item
+    // notes before retrying with the same approach).
+    expect(resume).toContain('A previous attempt at this task failed under Evaluator review');
+    expect(resume).toContain('failed under Evaluator review');
+  });
+
+  it('does not leak Scout/Planner/Generator/Evaluator-specific prompt fragments', () => {
+    const rendered = renderWorker();
+    // FEATURE_106 Scout EMIT TIMING / TRIVIAL-EXEMPTION block belongs
+    // only to Scout; would confuse the Worker which emits handoffs.
+    expect(rendered).not.toContain('EMIT TIMING (CRITICAL — read this carefully)');
+    // Planner contract payload shape is generator-handoff-equivalent
+    // for Worker — make sure we did not paste the planner block in.
+    expect(rendered).not.toContain('Contract payload shape (pass to emit_contract)');
+    // Evaluator verdict shape ditto.
+    expect(rendered).not.toContain('Verdict payload shape (pass to emit_verdict)');
+  });
+
+  it('renders capability + repo intelligence parity (FEATURE_144 / FEATURE_086 still apply to Worker)', () => {
+    const rendered = renderWorker({
+      capabilityContextBlock: '## MCP Capability Provider\nFROZEN_MCP_MARKER',
+    });
+    const envIdx = rendered.indexOf('## Environment');
+    const capIdx = rendered.indexOf('FROZEN_MCP_MARKER');
+    const decisionIdx = rendered.indexOf('Primary task:');
+    expect(envIdx).toBeGreaterThanOrEqual(0);
+    expect(capIdx).toBeGreaterThan(envIdx);
+    expect(decisionIdx).toBeGreaterThan(capIdx);
+  });
+});

@@ -477,6 +477,9 @@ export function getManagedBlockNameForRole(role: string): string | undefined {
     case 'planner': return MANAGED_TASK_CONTRACT_BLOCK;
     case 'evaluator': return MANAGED_TASK_VERDICT_BLOCK;
     case 'generator': return MANAGED_TASK_HANDOFF_BLOCK;
+    // FEATURE_114 v0.7.36 — Worker hands off via the same handoff block
+    // Generator uses (mirrors ROLE_EMIT_TOOL_NAMES).
+    case 'worker': return MANAGED_TASK_HANDOFF_BLOCK;
     default: return undefined;
   }
 }
@@ -494,6 +497,9 @@ export function hasManagedProtocolForRole(
     case 'planner': return !!payload.contract;
     case 'evaluator': return !!payload.verdict;
     case 'generator': return !!payload.handoff;
+    // FEATURE_114 v0.7.36 — Worker emits the same handoff payload
+    // shape Generator does (see getManagedBlockNameForRole).
+    case 'worker': return !!payload.handoff;
     default: return false;
   }
 }

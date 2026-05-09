@@ -276,6 +276,10 @@ export function getEmitToolNameForRole(
     case 'planner': return 'emit_contract';
     case 'generator': return 'emit_handoff';
     case 'evaluator': return 'emit_verdict';
+    // FEATURE_114 v0.7.36 — Worker reuses generator's emit_handoff
+    // tool/payload shape; keep this in sync with ROLE_EMIT_TOOL_NAMES
+    // in role-prompt.ts (same single-source-of-truth invariant).
+    case 'worker': return 'emit_handoff';
     default: return undefined;
   }
 }

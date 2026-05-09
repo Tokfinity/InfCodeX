@@ -92,6 +92,17 @@ export interface ManagedRolePromptContext {
    * explicit-reason trail.
    */
   promptOverlay?: string;
+  /**
+   * FEATURE_114 v0.7.36 — Worker resume signal. The runner-driven V2 path
+   * sets this to `true` when re-invoking the Worker after the Evaluator
+   * returned `revise` and the previous Worker turn had failed/cancelled
+   * todo items. The Worker prompt picks it up and prepends a one-line
+   * retrospective so the LLM treats prior `failed` items as ground truth
+   * (don't repeat the same approach). Default `false` / omitted preserves
+   * fresh-run wording. Read only by the `case 'worker':` branch in
+   * `createRolePrompt`; legacy roles ignore it.
+   */
+  isResumeAfterReviseFailure?: boolean;
 }
 
 /**

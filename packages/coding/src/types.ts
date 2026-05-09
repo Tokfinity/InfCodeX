@@ -964,7 +964,12 @@ export interface KodaXOptions {
 
 export type KodaXTaskSurface = 'cli' | 'repl' | 'plan';
 export type KodaXTaskStatus = 'planned' | 'running' | 'blocked' | 'failed' | 'completed';
-export type KodaXTaskRole = 'direct' | 'scout' | 'planner' | 'generator' | 'evaluator';
+// FEATURE_114 v0.7.36: 'worker' is the AMA Harness V2 role that collapses
+// scout/planner/generator into a single primary agent driving plan + exec
+// behind the KODAX_HARNESS_V2 flag. Evaluator stays a separate role.
+// Legacy roles (scout/planner/generator/evaluator) remain on the V1 path
+// until v0.7.45 cleanup; both paths share the role-prompt switch.
+export type KodaXTaskRole = 'direct' | 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker';
 
 export interface KodaXTaskContract {
   taskId: string;
