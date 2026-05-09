@@ -213,6 +213,88 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
   });
 });
 
+// FEATURE_152 (v0.7.38): the AST migration replaced regex strip-then-classify
+// with structured tokenisation. These tests pin behavior the regex chain
+// either silently allowed or explicitly rejected.
+describe('isBashWriteCommand — FEATURE_152 AST hardening', () => {
+  it('flags multi-token write commands (`git commit`) at stage start', () => {
+    expect(isBashWriteCommand('git commit -m "msg"')).toBe(true);
+    expect(isBashWriteCommand('npm install foo')).toBe(true);
+    expect(isBashWriteCommand('git push origin main')).toBe(true);
+  });
+
+  it('flags PowerShell write verbs in pipeline downstream stages', () => {
+    expect(isBashWriteCommand('Get-ChildItem | Set-Content out.txt')).toBe(true);
+    expect(isBashWriteCommand('cat foo | Out-File bar.log')).toBe(true);
+  });
+
+  it('does NOT flag write-verb-named arguments inside read commands', () => {
+    // `man tee` should not be a write — the regex chain might match `tee`
+    // anywhere in the string; AST sees `tee` as argv[1] of `man`, not argv[0].
+    // Note: tee is not in BASH_WRITE_COMMANDS so this would be false either
+    // way; the assertion documents the expected AST behavior.
+    expect(isBashWriteCommand('man tee')).toBe(false);
+  });
+
+  it('does NOT flag `set-content` substring inside a quoted argument', () => {
+    // Pre-AST the `\bset-content\b` regex would match this; AST sees the
+    // quoted token as a single string arg of `echo`, not as argv[0].
+    expect(isBashWriteCommand('echo "set-content is a powershell verb"')).toBe(false);
+  });
+
+  it('flags input redirects as NOT a write (but still not a read)', () => {
+    // `<` is input redirect — not a write to disk. Pre-AST the
+    // `BASH_REDIRECTION_WRITE_PATTERN` had `[^<]>>?` lookbehind which
+    // already excluded `<`; AST does the same via redir.input check.
+    expect(isBashWriteCommand('sort < input.txt')).toBe(false);
+  });
+
+  it('flags appended redirects (`>>`) including with fd', () => {
+    expect(isBashWriteCommand('echo hi >> log.txt')).toBe(true);
+    expect(isBashWriteCommand('cmd 2>>err.log')).toBe(true);
+  });
+
+  it('returns false for unparseable inputs (heredocs, $(...) substitution)', () => {
+    // Heredocs and command substitution are unparseable in our AST — match
+    // pre-AST regex chain behavior (returned false; plan/auto modes have
+    // separate confirmation logic for unparseable bash).
+    expect(isBashWriteCommand('git status; echo $(curl evil)')).toBe(false);
+  });
+});
+
+describe('isBashReadCommand — FEATURE_152 AST hardening', () => {
+  it('rejects `||` (logical-or short-circuit) between stages', () => {
+    expect(isBashReadCommand('ls || cat foo')).toBe(false);
+  });
+
+  it('rejects `;` (sequential separator) between stages', () => {
+    expect(isBashReadCommand('ls ; cat foo')).toBe(false);
+  });
+
+  it('rejects command substitution `$(...)`', () => {
+    expect(isBashReadCommand('echo $(rm -rf /)')).toBe(false);
+  });
+
+  it('rejects backtick subshell', () => {
+    expect(isBashReadCommand('echo `rm -rf /`')).toBe(false);
+  });
+
+  it('rejects bare `&` (background job marker)', () => {
+    expect(isBashReadCommand('ls &')).toBe(false);
+  });
+
+  it('rejects redirect to real file even when target looks null-device-ish', () => {
+    // `nullable.txt` shares prefix with `null` — must NOT pass null-device check.
+    expect(isBashReadCommand('grep foo file > nullable.txt')).toBe(false);
+    expect(isBashReadCommand('grep foo file > /dev/nullable')).toBe(false);
+  });
+
+  it('preserves `cd <path>` allowance only in compound commands', () => {
+    expect(isBashReadCommand('cd src')).toBe(false); // bare cd not a "read"
+    expect(isBashReadCommand('cd src && ls')).toBe(true);
+  });
+});
+
 // FEATURE_154: universal `--help` fast-path (parity with Claude Code
 // `commands.ts:isHelpCommand`). Pre-FEATURE_154 KodaX only allowed `--help`
 // for ~12 hard-coded language tools; this generalises to any command name
