@@ -248,7 +248,7 @@ const subCommands = normalizedCommand.split(/\s*(?:&&|\|)\s*/);
 - 引入 `packages/repl/src/permission/bash-ast.ts`（基于 `shell-quote`，~12KB pure JS，**没有引入 tree-sitter+wasm**），把命令解析从正则全面切换到 AST。
 - `NULL_DEVICE_REDIRECT_PATTERN` / `BASH_REDIRECTION_WRITE_PATTERN` / `BASH_WRITE_COMMAND_REGEXES` / `BASH_WRITE_SUBCOMMAND_PATTERNS` 四个常量在 slice 2 全部删除——`isNullDevice(redir.target)` 取代了 strip-then-classify，结构化的 `BashRedirection.target` 替代了 raw-string regex。
 - AST 层防御：`shell-quote` 把 `\`` 当普通字符放进 string token，会让 `echo \`rm -rf /\`` 通过 read-only check；`bash-ast.ts:parseBashCommand` 在 tokenise 前显式检测 backtick 并标记 `unparseable=true`，所有 caller 自动 fail-closed。
-- 实施 commits：`9a001bb` (slice 1 module + 22 tests) → `f61720c` (slice 2 isBashRead/Write AST 切换 + 删 strip-then-classify) → `dc8b848` (slice 3 extractPaths / collectBashWriteTargets AST hybrid) → `23dec91` / `4572758` (review fixes)。
+- 实施 commits：`9a001bb` (slice 1 module + 22 tests) → `a39ff5d` (slice 1 review fix — flattenArgv 注释) → `f61720c` (slice 2 isBashRead/Write AST 切换 + 删 strip-then-classify) → `23dec91` (slice 2 review fix — bash-ast 注释) → `dc8b848` (slice 3 extractPaths / collectBashWriteTargets AST hybrid) → `4572758` (slice 3 review fix — 测试注释精度)。
 - 测试覆盖增加：bash-ast.ts 24 cases + permission.test.ts 增加 26 个 AST hardening cases，**Issue 129 的 8 个回归测试一行不动继续通过**——AST 版本严格保留语义，仅替换实现。
 
 简言之：Issue 129 已从 "fd-redirect 假阳性的局部 hotfix" 演进为 "整个 bash 解析层结构化"。后续如果在同一类问题上再发现假阳性/漏报，应该在 AST 层一处修复，而不是回到正则补丁路。
