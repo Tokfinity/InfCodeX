@@ -1508,10 +1508,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // (the LLM is instructed to keep at most one task active per owner).
   // Memoized BEFORE the transcript render-model memos so `currentTodoActiveForm`
   // is in scope when those memos reference it (no TDZ).
+  // FEATURE_151 (v0.7.38) Slice F — fallback chain matches CC's
+  // `Spinner.tsx:169` behavior: `currentTodo?.activeForm ??
+  // currentTodo?.subject ?? randomVerb`. KodaX maps `subject` → `content`
+  // (the imperative form). When the LLM forgets to supply `activeForm`
+  // for an `in_progress` item — possible despite role-prompt enforcement
+  // — show the imperative content instead of falling back to a generic
+  // random spinner verb. The user gets at least item-level signal
+  // ("Run failing tests") rather than a context-free "Working...".
   const currentTodoActiveForm = useMemo<string | undefined>(() => {
     for (const item of todoItems) {
-      if (item.status === "in_progress" && item.activeForm && item.activeForm.length > 0) {
+      if (item.status !== "in_progress") continue;
+      if (item.activeForm && item.activeForm.length > 0) {
         return item.activeForm;
+      }
+      if (item.content && item.content.length > 0) {
+        return item.content;
       }
     }
     return undefined;

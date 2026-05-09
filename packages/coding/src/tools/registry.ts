@@ -44,6 +44,7 @@ import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolAwaitChildTask } from './await-child-task.js';
 import { toolTodoUpdate } from './todo-update.js';
+import { toolTodoList } from './todo-list.js';
 import {
   toolScaffoldTool,
   toolValidateTool,
@@ -840,12 +841,14 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
               },
             },
             required: ['id', 'content'],
-            // FEATURE_151 (v0.7.38) — reject extra keys at the schema layer
-            // so an LLM that confuses init-item shape with update shape
-            // (e.g. passing `status: 'pending'` per item) gets a clear
-            // schema-validation error instead of silently dropping the
-            // field at runtime.
-            additionalProperties: false,
+            // Note: ideally we'd set `additionalProperties: false` here so
+            // an LLM passing `{id, content, status:'pending'}` (mixing
+            // init-item shape with update shape) gets a schema-validation
+            // error rather than a silent drop. But `KodaXToolDefinition['input_schema']`
+            // does not currently model that field (see `packages/ai/src/types.ts:113`).
+            // Runtime validator in `executeInitOp` already destructures only
+            // the known keys, so extra fields are dropped harmlessly. Schema-layer
+            // hardening tracked as a separate type-extension follow-up.
           },
         },
         id: {
@@ -872,6 +875,19 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       //   op="update" → requires `id` + `status`
     },
     handler: toolTodoUpdate,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'todo_list',
+    description:
+      'FEATURE_151 (v0.7.38) — read-only query that returns the current visible plan list as JSON. Use this when you want to confirm what items are pending before deciding the next move, when you need to see the canonical id set after an "Unknown todo id" error, or when refining a plan and want to compare it against the existing list. ' +
+      'Returns {ok: true, count: N, items: [{id, content, status, activeForm?, note?}, ...]} on success; {ok: false, reason: "todo_list is not active ..."} when no plan list infrastructure is wired (no managed task active). ' +
+      'This tool is read-only — it never mutates the store. Pair with todo_update({op:"init", ...}) to commit a new plan or todo_update({op:"update", id, status}) to change item state.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+    handler: toolTodoList,
     toClassifierInput: () => '',
   },
   {
