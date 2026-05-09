@@ -97,7 +97,13 @@ describe("agents-loader", () => {
       expect(files).toHaveLength(1);
     });
 
-    it("should handle file read errors gracefully", () => {
+    it("should handle file read errors gracefully (silent — CLAUDE.md no-console rule)", () => {
+      // FEATURE_149 v0.7.38: previously emitted `console.warn` on read
+      // failure-after-stat-success, but the project rule (CLAUDE.md)
+      // forbids `console.log/warn` in production code. Treat as absent
+      // — same outcome as the pre-FEATURE_149 silent behavior. Pin that
+      // no warn fires so a future `console.warn` re-introduction trips
+      // this test.
       const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       // Create a directory with same name as file to cause read error
@@ -106,7 +112,7 @@ describe("agents-loader", () => {
 
       const files = loadAgentsFiles({ cwd: testDir });
       expect(files).toHaveLength(0);
-      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(consoleWarnSpy).not.toHaveBeenCalled();
 
       consoleWarnSpy.mockRestore();
     });

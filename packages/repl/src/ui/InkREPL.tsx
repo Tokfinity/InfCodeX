@@ -209,6 +209,11 @@ import {
   type FullscreenPolicy,
 } from "./utils/terminal-host-profile.js";
 import { formatPendingInputsSummary, MAX_PENDING_INPUTS } from "./utils/pending-inputs.js";
+import {
+  SLASH_MID_TASK_GUARD_DEDUPE_KEY,
+  SLASH_MID_TASK_GUARD_MESSAGE,
+  isSlashCommandText,
+} from "./utils/slash-mid-task-guard.js";
 import { runQueuedPromptSequence } from "./utils/queued-prompt-sequence.js";
 import {
   hasTranscriptInputActivity,
@@ -6582,12 +6587,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // run one mid-task. Future versions can layer in CC's
         // immediate-local-jsx execution path for side-effect-free
         // commands like `/help` / `/cost`.
-        if (fullText.trimStart().startsWith('/')) {
+        if (isSlashCommandText(fullText)) {
           emitInfoItemToCorrectLayer({
             type: "info",
             icon: "\u26A0",
-            text: 'Slash commands cannot be queued mid-task. Press Esc to abort the current task, then run the command.',
-          }, 'queue-limit');
+            text: SLASH_MID_TASK_GUARD_MESSAGE,
+          }, SLASH_MID_TASK_GUARD_DEDUPE_KEY);
           return;
         }
 

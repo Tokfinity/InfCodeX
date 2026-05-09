@@ -92,8 +92,10 @@ function readFileWithMtimeCache(filePath: string): string | null {
     const content = readFileSync(filePath, "utf-8");
     fileContentCache.set(filePath, { mtimeMs, content });
     return content;
-  } catch (error) {
-    console.warn(`[kodax:agents] Could not read ${filePath}: ${error}`);
+  } catch {
+    // Read fail-after-stat-success is rare (race with delete, EACCES) —
+    // treat as absent to match the pre-FEATURE_149 silent behavior.
+    // KodaX project rule (CLAUDE.md): no console.log/warn in production.
     fileContentCache.delete(filePath);
     return null;
   }
