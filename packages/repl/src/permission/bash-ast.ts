@@ -36,10 +36,11 @@ import { parse as shellQuoteParse, type ParseEntry } from 'shell-quote';
  *   - `isBashReadCommand` already supports `|` chains; each stage must
  *     independently be a read command, so the consumer iterates stages
  *     not tokens.
- *   - `isBashWriteCommand` only needs to check redirection on the LAST
- *     stage (`grep foo | tee /tmp/out` writes via tee in stage 2, but
- *     `grep foo > out.txt` writes in stage 1). Per-stage redirection
- *     gives the consumer precise control.
+ *   - `isBashWriteCommand` checks every stage's argv (`tee` / `Set-Content`
+ *     can appear at the start of any pipeline stage, not only stage 0)
+ *     AND every stage's redirections (`grep foo > out.txt` writes in
+ *     stage 1; `grep foo | tee out.log` writes via stage 2's argv[0]).
+ *     Per-stage exposure gives the consumer precise control.
  */
 export interface BashPipelineStage {
   /** Argv-style positional tokens for this stage, with quoting stripped. */
