@@ -433,4 +433,25 @@ describe('isToolCallAllowed (FEATURE_153 extractor path)', () => {
     );
     expect(allowed).toBe(false);
   });
+
+  it('fails closed on extractor throw (timeout / network / abort) — falls through to confirmation', async () => {
+    // The extractor module throws on transient failures so its LRU cache
+    // can evict the failed slot. isToolCallAllowed must catch and return
+    // false so the caller falls through to the user confirmation prompt
+    // instead of letting the rejection bubble into the tool-exec loop.
+    const throwingExtractor: BashPrefixExtractor = {
+      extract: async () => {
+        throw new Error('extractCommandPrefix timeout (8000ms)');
+      },
+      clearCache: () => {},
+      cacheSize: () => 0,
+    };
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "msg"' },
+      ['Bash(git commit:*)'],
+      throwingExtractor,
+    );
+    expect(allowed).toBe(false);
+  });
 });

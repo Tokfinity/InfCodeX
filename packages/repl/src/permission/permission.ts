@@ -16,7 +16,7 @@ import path from 'path';
 import os from 'os';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
-import type { BashPrefixExtractor } from '@kodax-ai/coding';
+import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
 
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 
@@ -443,7 +443,19 @@ export async function isToolCallAllowed(
 
   // FEATURE_153 path: extract once, match against extracted prefix.
   if (extractor) {
-    const result = await extractor.extract(command, signal);
+    // Fail-closed on transient extractor failures (timeout / network / abort
+    // / invalid provider). The extractor module deliberately throws on these
+    // so its LRU cache can evict the failed slot — but that means callers
+    // need to handle the throw. We centralise it here so all 4 production
+    // call sites (REPL, InkREPL, ACP server, executor.ts) get consistent
+    // graceful fallback to the confirmation prompt instead of an unhandled
+    // rejection bubbling into the tool-execution loop.
+    let result: BashPrefixResult;
+    try {
+      result = await extractor.extract(command, signal);
+    } catch {
+      return false;
+    }
     if (result.kind !== 'prefix') {
       // injection_detected / no_prefix → no allowlist pattern can match
       // (treat as "user hasn't allowlisted this") so the command falls

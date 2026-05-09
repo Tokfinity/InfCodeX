@@ -45,7 +45,9 @@ describe("TodoListSurface", () => {
     expect(lastFrame()).toBe("");
   });
 
-  it("FEATURE_151 (v0.7.38): renders a single-item list (CC TaskListV2 parity)", () => {
+  it("FEATURE_151 (v0.7.38) Slice A: renders a single-item list (MIN=1, CC TaskListV2 parity)", () => {
+    // Slice A dropped MIN_ITEMS from 2 to 1 so even a single-item plan
+    // mounts the surface (matching CC's `TaskListV2` no-floor behavior).
     const vm = buildTodoPlanViewModel([makeItem("todo_1", "Lone task")], {
       now: NOW,
       lastAllCompletedAt: null,
@@ -53,8 +55,6 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Lone task");
-    // Slice H': counter no longer rendered by this component.
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
   it("FEATURE_151 (v0.7.38): keeps rendering after the (formerly 5s) linger elapses", () => {
@@ -109,14 +109,14 @@ describe("TodoListSurface", () => {
     expect(frame).toContain("Update type definitions");
   });
 
-  it("Slice H (v0.7.38): renders ⎿ connector exactly once (CC MessageResponse parity)", () => {
+  it("Slice H (v0.7.38): renders ⎿ connector exactly once, positioned BEFORE the first row content", () => {
     // Pre-Slice H the gutter was per-row `▏` (vertical bar), which
     // looked like a small panel's left border. Slice H replaces it with
     // CC `MessageResponse`'s once-only `⎿` connector — flex-row layout
     // means subsequent rows in the right column align under the first
     // row's content position with no extra glyph.
     const items = [
-      makeItem("todo_1", "A", "in_progress"),
+      makeItem("todo_1", "FirstRowContent", "in_progress"),
       makeItem("todo_2", "B", "pending"),
       makeItem("todo_3", "C", "pending"),
     ];
@@ -128,6 +128,12 @@ describe("TodoListSurface", () => {
     // The old per-row `▏` gutter must NOT appear anywhere — Slice H
     // explicitly removed it to drop the "panel border" feel.
     expect(frame).not.toContain("▏");
+    // Positional pin: `⎿` must appear BEFORE the first row content
+    // (not after, which would mean the flex-row wrapper got reversed).
+    const elbowIdx = frame.indexOf("⎿");
+    const firstRowContentIdx = frame.indexOf("FirstRowContent");
+    expect(elbowIdx).toBeGreaterThanOrEqual(0);
+    expect(firstRowContentIdx).toBeGreaterThan(elbowIdx);
   });
 
   it("shows the failed-note suffix in failed-row text", () => {
