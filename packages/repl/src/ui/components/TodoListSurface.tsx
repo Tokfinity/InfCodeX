@@ -1,6 +1,6 @@
 /**
  * TodoListSurface — FEATURE_097 (v0.7.34); embedded-spinner layout since
- * FEATURE_151 (v0.7.38) Slice G/H.
+ * FEATURE_151 (v0.7.38) Slice H'.
  *
  * Renders the todo list under the spinner / above the BackgroundTaskBar.
  * Pure presentational layer — every layout decision (anchor, window,
@@ -8,28 +8,26 @@
  * `view-models/todo-plan.ts`. This component just walks the rows and
  * emits one `<Text>` per row.
  *
- * Visual structure (Slice H — mirrors Claude Code `MessageResponse` +
- * `TaskListV2 isStandalone=false`, see
- * c:/Works/claudecode/src/components/MessageResponse.tsx#L22 +
- * c:/Works/claudecode/src/components/TaskListV2.tsx#L210):
+ * Visual structure (Slice H' — mirrors Claude Code `MessageResponse`,
+ * see c:/Works/claudecode/src/components/MessageResponse.tsx#L22):
  *
  *   ```
- *                                   1/3 completed     ← right-aligned counter
- *     ⎿  ☐ Add unit test                              ← ⎿ ONLY on first row
- *        ● Run failing tests                          ← subsequent rows align
- *        ☐ Wire CI                                       under the row content
+ *   ✻ Running tests…                  1/3 completed   ← spinner row (rendered
+ *     ⎿  ✓ Add unit test                                 by InkREPL activityBar
+ *        ● Run failing tests                             slot, NOT this file)
+ *        ☐ Wire CI                                    ← rows from this file
  *   ```
  *
- *   - **Counter line** (top, right-aligned, dim): "X/N completed". Kept
- *     per user feedback (2026-05-09): the counter is informational and
- *     not visually heavy. Does NOT contribute to the "panel feel" — that
- *     was the per-row gutter, which is removed below.
- *   - **⎿ as left-column connector** (Slice H): a flex-row Box with a
- *     fixed-width left column (`"  ⎿  "`, dim) that renders ONCE — Ink's
- *     row layout means subsequent rows in the right column align under
- *     the row content with no extra gutter glyph per row. This produces
- *     CC's "embedded-in-spinner" feel instead of the Slice G "small panel
- *     with left border" feel that per-row `▏` produced.
+ *   - **Counter rendering lives in `InkREPL.tsx` activityBar slot, NOT
+ *     here.** Slice H' moved the `"X/N completed"` counter onto the
+ *     spinner row (right-aligned, dim) per user feedback (2026-05-09)
+ *     so spinner verb + counter share one line — saves vertical real
+ *     estate, fewer "header lines" stacking. This component renders
+ *     ONLY the `⎿` block + rows.
+ *   - **⎿ as left-column connector**: a flex-row Box with a fixed-width
+ *     left column (`"  ⎿  "`, dim) that renders ONCE — Ink's row layout
+ *     means subsequent rows in the right column align under the first
+ *     row's content position with no extra gutter glyph per row.
  *   - **Symbol colors** come from the view-model's `symbolColor` field;
  *     the row text is rendered in default text color (failed item
  *     content gets a dim suffix `(note)` from the view-model).
@@ -39,10 +37,13 @@
  *   - `vm.rows.length === 0` → return `null` (empty list, surface hidden).
  *
  * History note:
- *   - Slice G (initial cut) deleted the counter line entirely. User
- *     feedback (2026-05-09) corrected: the counter wasn't the problem,
- *     the per-row `▏` gutter was. Slice H restores the counter and
- *     replaces the per-row gutter with CC's once-only `⎿` connector.
+ *   - Slice G deleted the counter; user corrected — counter is fine,
+ *     per-row `▏` gutter was the "panel" source.
+ *   - Slice H replaced per-row `▏` with once-only `⎿`, kept counter as
+ *     separate top line.
+ *   - Slice H' (final) moved counter to the spinner row in InkREPL.tsx.
+ *     `completedCount` / `totalCount` are still consumed — by the
+ *     activityBar caller, not by this component.
  */
 
 import React from "react";
@@ -111,20 +112,14 @@ export const TodoListSurface: React.FC<TodoListSurfaceProps> = ({
 }) => {
   if (!viewModel.shouldRender) return null;
   if (viewModel.rows.length === 0) return null;
-  const counter = `${viewModel.completedCount}/${viewModel.totalCount} completed`;
   const dimColor = getTheme("dark").colors.dim;
   return (
-    <Box flexDirection="column">
-      <Box flexDirection="row" justifyContent="flex-end">
-        <Text dimColor>{counter}</Text>
-      </Box>
-      <Box flexDirection="row">
-        <Text color={dimColor}>{EMBEDDED_PREFIX}</Text>
-        <Box flexDirection="column" flexGrow={1}>
-          {viewModel.rows.map((row, idx) => (
-            <TodoListRow key={`${row.kind}-${row.id ?? idx}`} row={row} />
-          ))}
-        </Box>
+    <Box flexDirection="row">
+      <Text color={dimColor}>{EMBEDDED_PREFIX}</Text>
+      <Box flexDirection="column" flexGrow={1}>
+        {viewModel.rows.map((row, idx) => (
+          <TodoListRow key={`${row.kind}-${row.id ?? idx}`} row={row} />
+        ))}
       </Box>
     </Box>
   );

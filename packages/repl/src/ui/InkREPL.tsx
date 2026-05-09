@@ -7412,21 +7412,38 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inlineNotices={promptFooterNotices.length > 0 ? (
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
-      activityBar={promptActivityViewModel ? (
-        <Box paddingX={1}>
-          {promptActivityViewModel.showSpinner ? (
-            <Spinner color={getTheme("dark").colors.accent} />
+      activityBar={(promptActivityViewModel || todoPlanViewModel.shouldRender) ? (
+        // FEATURE_151 (v0.7.38) Slice H' — spinner verb + todo counter
+        // share one line. Left column: existing spinner glyph + verb
+        // text (when any activity is present). Right column: dim
+        // "X/N completed" counter (when the todo store has items).
+        // Mirrors CC's tendency to keep status fragments compact on a
+        // single line; was previously a dedicated header inside
+        // TodoListSurface, which forced an extra blank line above the
+        // todo rows when only counter changes occurred.
+        <Box paddingX={1} flexDirection="row">
+          <Box flexGrow={1}>
+            {promptActivityViewModel?.showSpinner ? (
+              <Spinner color={getTheme("dark").colors.accent} />
+            ) : null}
+            {promptActivityViewModel ? (
+              <Text
+                color={
+                  promptActivityViewModel.kind === "waiting"
+                    ? getTheme("dark").colors.warning
+                    : getTheme("dark").colors.accent
+                }
+              >
+                {promptActivityViewModel.showSpinner ? " " : ""}
+                {promptActivityViewModel.text}
+              </Text>
+            ) : null}
+          </Box>
+          {todoPlanViewModel.shouldRender ? (
+            <Text dimColor>
+              {`${todoPlanViewModel.completedCount}/${todoPlanViewModel.totalCount} completed`}
+            </Text>
           ) : null}
-          <Text
-            color={
-              promptActivityViewModel.kind === "waiting"
-                ? getTheme("dark").colors.warning
-                : getTheme("dark").colors.accent
-            }
-          >
-            {promptActivityViewModel.showSpinner ? " " : ""}
-            {promptActivityViewModel.text}
-          </Text>
         </Box>
       ) : undefined}
       todoSurface={
