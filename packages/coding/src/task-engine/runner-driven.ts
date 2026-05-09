@@ -2338,6 +2338,17 @@ export function buildRunnerAgentChain(
       codingTools.grep,
       codingTools.glob,
       wrapReadOnlyBash(codingTools.bash, 'Evaluator'),
+      // FEATURE_151 (v0.7.38) Slice D follow-up (2026-05-09): Evaluator
+      // gets `todo_list` so verdict reasoning can factor in remaining
+      // plan state (e.g. lenient on partial completion when 4 steps
+      // remain vs strict on the last step). Read-only — does NOT reset
+      // the throttle reminder counter (that gates on `todo_update`),
+      // does NOT show in user transcript (HIDDEN_TODO_TOOL_NAMES),
+      // and consistent with Evaluator's read-only role boundary.
+      // FUTURE AMA changes that add new roles or split existing ones
+      // MUST decide explicitly whether the new role gets `todo_list`;
+      // do NOT default-include it just because it's read-only.
+      codingTools.todoList,
     ],
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: false },
