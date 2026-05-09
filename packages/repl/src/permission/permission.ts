@@ -588,29 +588,107 @@ export function isAlwaysConfirmPath(targetPath: string, projectRoot: string): bo
 }
 
 /**
- * Extract potential file paths from a bash command
- * Issue 052: Used to check if bash command operates on protected paths
+ * Heuristic: does this argv token look like a file path? Used by
+ * `extractPathsFromCommand` to filter post-AST argv tokens. Mirrors the
+ * pre-AST regex `pathPattern` plus a "looks-absolute" Windows / POSIX
+ * fallback. Quoting is already stripped by AST tokenisation, so this
+ * runs against the literal value the shell would see.
+ */
+function looksLikePath(token: string): boolean {
+  if (!token || token.startsWith('-')) {
+    return false; // flag, not a path
+  }
+  // Relative ./ or ../ paths (POSIX or Windows separators)
+  if (/^\.\.?[/\\]/.test(token)) return true;
+  // Home-relative
+  if (token.startsWith('~/') || token.startsWith('~\\')) return true;
+  // Windows drive-letter absolute (`C:\foo`)
+  if (/^[a-zA-Z]:[/\\]/.test(token)) return true;
+  // POSIX absolute (`/foo/bar`)
+  if (token.startsWith('/') && token.length > 1) return true;
+  // Hidden-dir-relative (`.agent/plan_mode_doc.md`) — token has a separator
+  // and starts with `.`, but not `..` (already matched above).
+  if (token.startsWith('.') && /[/\\]/.test(token)) return true;
+  return false;
+}
+
+/**
+ * Pre-AST regex-based path scanner. Retained as a complementary pass
+ * because shell-quote's POSIX tokenisation eats Windows backslash escapes:
+ *   `rm C:\Users\foo\bar.txt` → AST argv is `['rm', 'C:Users', 'oo\bar.txt']`
+ *                               (the `\U`, `\f`, `\b` are POSIX-escape-stripped).
+ * The regex sees raw input and recognises `C:\foo`-style paths as one
+ * coherent token, which is what callers (`isCommandOnProtectedPath`,
+ * `collectBashWriteTargets`) actually need to make path-safety decisions.
+ *
+ * Pre-AST regex was the entire impl; here it's a Windows-path safety net
+ * layered ON TOP of the AST argv pass. Tokens recognised by both are
+ * de-duped at the `Set` level by the caller.
+ */
+function legacyRegexPathScan(command: string): string[] {
+  const out: string[] = [];
+
+  // Quoted paths (single or double quotes)
+  const quotedPattern = /["']([^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = quotedPattern.exec(command)) !== null) {
+    out.push(m[1]!);
+  }
+
+  // Common path patterns (mirrors pre-AST `pathPattern` exactly so we
+  // preserve identification of `./foo`, `../foo`, `C:\foo`, `~/foo`,
+  // `.x/foo`)
+  const pathPattern = /(?:^|\s)(\.\.?\/[^\s]+|\.\.?\\[^\s]+|[a-zA-Z]:\\[^\s]+|~\/[^\s]+|\.[^\s]*[/\\][^\s]*)/g;
+  while ((m = pathPattern.exec(command)) !== null) {
+    out.push(m[1]!);
+  }
+  return out;
+}
+
+/**
+ * Extract potential file paths from a bash command. Used to check whether
+ * a bash invocation operates on protected paths (`isCommandOnProtectedPath`)
+ * and as a "wide net" feeder into `collectBashWriteTargets`.
+ *
+ * FEATURE_152 (v0.7.38): hybrid AST + legacy-regex pass:
+ *   1. AST tokenisation for argv — gives correctly unquoted paths,
+ *      including paths with spaces (`"path with spaces.txt"`). Pre-AST
+ *      regex needed quotes literally present in input.
+ *   2. Legacy regex pass for Windows backslash paths — shell-quote treats
+ *      `\` as POSIX escape so `C:\Users\foo` mangles into `C:Users`.
+ *      The regex recognises the raw Windows path token before tokenisation.
+ *
+ * Both passes contribute; results de-duplicate via `Set` at the call site.
+ *
+ * Issue 052: original purpose — gate "always allow" on bash commands that
+ * touch protected paths.
  */
 export function extractPathsFromCommand(command: string): string[] {
-  const paths: string[] = [];
+  const paths = new Set<string>();
 
-  // Match quoted paths (single or double quotes)
-  const quotedPattern = /["']([^"']+)["']/g;
-  let match;
-  while ((match = quotedPattern.exec(command)) !== null) {
-    paths.push(match[1]!);
+  // Pass 1: AST-based argv + redirection targets (handles quoted-with-spaces)
+  const tree = parseBashCommand(command);
+  if (!tree.unparseable) {
+    for (const stmt of tree.statements) {
+      for (const stage of stmt.stages) {
+        for (const token of stage.argv) {
+          if (looksLikePath(token)) paths.add(token);
+        }
+        for (const redir of stage.redirections) {
+          if (looksLikePath(redir.target)) paths.add(redir.target);
+        }
+      }
+    }
   }
 
-  // Match common path patterns:
-  // - Relative paths starting with . or ..
-  // - Paths containing slashes
-  // - Windows absolute paths (C:\, D:\, etc.)
-  const pathPattern = /(?:^|\s)(\.\.?\/[^\s]+|\.\.?\\[^\s]+|[a-zA-Z]:\\[^\s]+|~\/[^\s]+|\.[^\s]*[/\\][^\s]*)/g;
-  while ((match = pathPattern.exec(command)) !== null) {
-    paths.push(match[1]!);
+  // Pass 2: legacy regex pass (handles Windows backslash paths shell-quote
+  // can't tokenise). Always run — even on parseable input — because the
+  // two passes recognise different forms.
+  for (const p of legacyRegexPathScan(command)) {
+    paths.add(p);
   }
 
-  return paths;
+  return Array.from(paths);
 }
 
 /**
@@ -788,35 +866,109 @@ function formatPlanModeAllowedLocations(projectRoot?: string): string {
   return `${projectPlanDoc} or the system temp directory (${tempSummary})`;
 }
 
+/**
+ * Subcommand verbs in `tee` that take a file as the next positional arg.
+ * Empty for `tee` itself — its only flag we care about is `-a` (append),
+ * which doesn't change which token is the target. Listed for symmetry
+ * with future expansion.
+ */
+const TEE_FLAGS_TAKING_NO_VALUE = new Set(['-a', '--append', '-i', '--ignore-interrupts']);
+
+/**
+ * From a stage whose `argv[0]` is `tee` (case-insensitive), return the
+ * positional target file(s). Skips known boolean flags; takes the first
+ * non-flag positional after them. Multiple targets technically supported
+ * by tee — we collect all of them.
+ */
+function collectTeeTargets(stage: { readonly argv: readonly string[] }): string[] {
+  const targets: string[] = [];
+  for (let i = 1; i < stage.argv.length; i += 1) {
+    const tok = stage.argv[i]!;
+    if (TEE_FLAGS_TAKING_NO_VALUE.has(tok)) continue;
+    if (tok.startsWith('-')) continue; // unknown flag — skip to be safe
+    targets.push(tok);
+  }
+  return targets;
+}
+
+/**
+ * From a stage whose `argv[0]` is a PowerShell write verb (Set-Content,
+ * Out-File, New-Item, etc.), find the target path. PowerShell verbs use
+ * `-Path <value>` for the target; if absent, the first non-flag
+ * positional is the target (`Set-Content foo.txt`).
+ */
+function collectPowerShellWriteTargets(stage: { readonly argv: readonly string[] }): string[] {
+  const targets: string[] = [];
+  let i = 1;
+  let positionalSeen = false;
+  while (i < stage.argv.length) {
+    const tok = stage.argv[i]!;
+    const lower = tok.toLowerCase();
+    if (lower === '-path' || lower === '-literalpath' || lower === '-destination') {
+      const next = stage.argv[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        targets.push(next);
+        i += 2;
+        continue;
+      }
+    }
+    if (!tok.startsWith('-') && !positionalSeen) {
+      targets.push(tok);
+      positionalSeen = true;
+    }
+    i += 1;
+  }
+  return targets;
+}
+
+/**
+ * Collect the file targets that a bash command might write to. Used by
+ * plan-mode (`getPlanModeBlockReason`) and `getBashOutsideProjectWriteRisk`.
+ *
+ * FEATURE_152 (v0.7.38): backed by `parseBashCommand` AST. The pre-AST
+ * version concatenated four overlapping regex sweeps over the raw command
+ * string — each had its own substring-vs-token pitfalls (e.g. `tee`
+ * matched as substring in `committee.txt`). The AST gives clean argv
+ * tokens with quoting stripped, and per-stage redirection targets.
+ */
 export function collectBashWriteTargets(command: string): string[] {
   const targets = new Set<string>();
-  const pushTarget = (value: string | undefined) => {
-    const trimmed = value?.trim().replace(/^['"]|['"]$/g, '');
-    if (trimmed) {
-      targets.add(trimmed);
-    }
+  const pushTarget = (value: string | undefined): void => {
+    const trimmed = value?.trim();
+    if (trimmed) targets.add(trimmed);
   };
 
+  // 1. Heuristic path tokens (covers e.g. `cp src.ts dst.ts` where neither
+  //    arg is a redirection but both name files). Pre-AST version included
+  //    this via `extractPathsFromCommand`; preserved for compat.
   for (const extractedPath of extractPathsFromCommand(command)) {
     pushTarget(extractedPath);
   }
 
-  const redirectPattern = />>?\s*([^\s;|&]+)/g;
-  let redirectMatch: RegExpExecArray | null;
-  while ((redirectMatch = redirectPattern.exec(command)) !== null) {
-    pushTarget(redirectMatch[1]);
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) {
+    return Array.from(targets);
   }
 
-  const powershellWritePattern = /(?:set-content|add-content|out-file|new-item)\s+(?:-path\s+)?(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let powershellMatch: RegExpExecArray | null;
-  while ((powershellMatch = powershellWritePattern.exec(command)) !== null) {
-    pushTarget(powershellMatch[1] ?? powershellMatch[2] ?? powershellMatch[3]);
-  }
+  for (const stmt of tree.statements) {
+    for (const stage of stmt.stages) {
+      // 2. Redirection targets — output redirects only; input redirects
+      //    don't write. Null-device redirects ARE included so plan-mode
+      //    won't mistake `echo hi 2>NUL > /tmp/out` for "no targets".
+      for (const redir of stage.redirections) {
+        if (redir.input) continue;
+        pushTarget(redir.target);
+      }
 
-  const teePattern = /\btee\b(?:\s+-a)?\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&]+))/gi;
-  let teeMatch: RegExpExecArray | null;
-  while ((teeMatch = teePattern.exec(command)) !== null) {
-    pushTarget(teeMatch[1] ?? teeMatch[2] ?? teeMatch[3]);
+      // 3. Stage-command-specific writes
+      const cmd = stage.argv[0]?.toLowerCase();
+      if (!cmd) continue;
+      if (cmd === 'tee') {
+        for (const t of collectTeeTargets(stage)) pushTarget(t);
+      } else if (POWERSHELL_WRITE_TOKENS.has(cmd)) {
+        for (const t of collectPowerShellWriteTargets(stage)) pushTarget(t);
+      }
+    }
   }
 
   return Array.from(targets);
