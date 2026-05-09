@@ -37,7 +37,6 @@ import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
 import {
   buildTodoPlanViewModel,
-  isPlanFullyClosed,
 } from "./view-models/todo-plan.js";
 import { buildFooterHeaderViewModel } from "./view-models/footer-header.js";
 import {
@@ -1517,10 +1516,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
     return undefined;
   }, [todoItems]);
-  // Tracks the wall-clock at which all items first became terminal.
-  // Used by the view-model to enforce the 5 s post-completion linger.
-  // `null` whenever any pending / in_progress / failed item is present.
-  const [todoLastAllCompletedAt, setTodoLastAllCompletedAt] = useState<number | null>(null);
+  // FEATURE_151 (v0.7.38): the post-completion 5-second linger gate that
+  // previously hid the surface after `lastAllCompletedAt + 5s` was removed.
+  // The matching React state (`todoLastAllCompletedAt` + setter) was deleted
+  // because nothing reads it anymore. The view-model still accepts a
+  // `lastAllCompletedAt` field on `BuildTodoPlanOptions` for one release of
+  // back-compat with any external embedder that may hand-build the options
+  // shape — we just pass `null`.
   const [managedLiveEvents, setManagedLiveEvents] = useState<HistoryItem[]>([]);
   const [managedForegroundTurnItems, setManagedForegroundTurnItems] = useState<HistoryItem[]>([]);
   const [lastLiveActivityLabel, setLastLiveActivityLabel] = useState<string | undefined>(undefined);
@@ -3192,28 +3194,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const promptBusyText = promptActivityViewModel?.text;
 
   // FEATURE_097 (v0.7.34) — recompute the todo plan view-model whenever
-  // the underlying items snapshot, the closed-at timestamp, or the
-  // managed-foreground spinner state changes. The view-model itself
-  // gates rendering on item count + linger-window expiry; the host
-  // additionally only mounts the surface while the spinner is showing
-  // (i.e. a managed task is actively in flight) per design §"挂载点".
-  // `Date.now()` is read inside the memo so a re-render after the
-  // 5 s linger expires sees a stale-enough `now` to hide the surface.
+  // the underlying items snapshot changes. FEATURE_151 (v0.7.38): the
+  // host no longer gates the mount on `showSpinner`, the view-model no
+  // longer hides on a 5-second linger, and the `setTodoItems([])` clear
+  // useEffect was removed — the surface stays visible until the next
+  // Scout `init()` or LLM `todo_update op:'init'` fires `onChange` with
+  // a new list. `now` and `lastAllCompletedAt` are still passed for
+  // back-compat with the `BuildTodoPlanOptions` type but are no longer
+  // consulted by the view-model. See
+  // `docs/features/v0.7.38.md#feature_151...` Slice A + C.
   const todoPlanViewModel = useMemo(
     () => buildTodoPlanViewModel(todoItems, {
       now: Date.now(),
-      lastAllCompletedAt: todoLastAllCompletedAt,
+      lastAllCompletedAt: null,
     }),
-    [todoItems, todoLastAllCompletedAt],
+    [todoItems],
   );
-  // FEATURE_151 (v0.7.38): the 5-second linger timer + `setTodoItems([])`
-  // forced clear was removed to match Claude Code's persistent-visibility
-  // behavior. The surface now stays mounted (and the React state retains
-  // items) until the next AMA task's Scout `init()` or LLM-driven
-  // `todo_update op:'init'` fires `onChange` with a new list. The
-  // `todoLastAllCompletedAt` state itself is kept (other code reads it
-  // and the view-model still accepts it for back-compat) but no longer
-  // drives a clear. See `docs/features/v0.7.38.md#feature_151...` Slice C.
 
   const statusBarViewModel = useMemo(
     () => buildStatusBarViewModel(statusBarProps),
@@ -5374,34 +5370,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // §"事件路由注意", todo state is task-global, not per-worker, so it
       // does NOT route through `emitInfoItemToCorrectLayer`. The store's
       // onChange callback already handed us a frozen snapshot — push it
-      // straight into React state. We also maintain a closed-at timestamp
-      // so the view-model's 5 s linger window has a wall-clock anchor.
+      // straight into React state.
       //
-      // Brief-false-arm note: on a `revise` verdict the wrapper marks
-      // every in_progress item as `failed`, which is a terminal state,
-      // so this handler arms the linger timer momentarily. The next
-      // Generator turn's `instructions` closure then calls
-      // `todoStore.resetFailed()` (failed → pending), which fires
-      // another `onTodoUpdate` that flips `todoLastAllCompletedAt` back
-      // to `null`. The matching `useEffect` cleanup cancels the timer
-      // before it ever expires, so the surface stays mounted across the
-      // retry boundary. Self-correcting; no user-visible glitch.
+      // FEATURE_151 (v0.7.38) — the wall-clock-anchor `todoLastAllCompletedAt`
+      // arming and `isPlanFullyClosed` check were removed because the
+      // 5-second post-completion linger gate they fed into is gone (the
+      // surface now stays visible until the next Scout init() / LLM
+      // op:'init' replace()). Keeping the arming would have caused
+      // spurious re-renders without driving any UI behavior. The
+      // `userInterruptedRef` guard remains so an in-flight Esc still
+      // suppresses incoming store updates from a possibly-half-aborted
+      // round.
       if (userInterruptedRef.current) {
         return;
       }
       setTodoItems(items);
-      const allClosed = isPlanFullyClosed(items);
-      setTodoLastAllCompletedAt((prev) => {
-        if (allClosed) {
-          // First flip into "everything terminal" arms the linger timer;
-          // subsequent flips while still all-closed leave the timer alone
-          // so the surface really does disappear ~5 s after the LAST
-          // transition, not after the most recent re-render.
-          return prev ?? Date.now();
-        }
-        // Any non-terminal item present → reset the linger timer.
-        return null;
-      });
     },
     onScoutSuspiciousCompletion: (payload) => {
       // X-layer: Scout's H0 completion was inferred (no explicit escalation)
@@ -6743,6 +6726,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             };
             setLiveTokenCount(null);
             clearUIHistory();
+            // FEATURE_151 (v0.7.38): drop the persisted todo plan surface
+            // at session boundary so the new session starts visually
+            // clean (matches Claude Code's `expandedView` reset semantics
+            // on session-new path).
+            setTodoItems([]);
             // Issue 121: drop paste-store entries at session boundary so
             // ids restart from 1 and stale refs don't linger into the
             // fresh session. Input history (↑↓) is handled separately.
@@ -6770,6 +6758,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               persistedUiHistoryRef.current = context.uiHistory ?? [];
               setLiveTokenCount(null);
               clearUIHistory();
+              // FEATURE_151 (v0.7.38): reset todo plan surface on session
+              // load — the loaded session has its own message stream and
+              // does not carry over runtime todoStore state.
+              setTodoItems([]);
               setSessionId(id);
               console.log(chalk.green(`[Session loaded: ${id}]`));
               return "loaded";
@@ -6795,6 +6787,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // context.messages should only be cleared by specific commands like /clear
             context.uiHistory = [];
             clearUIHistory();
+            // FEATURE_151 (v0.7.38): also drop the persisted todo plan
+            // surface so a new prompt starts from a clean slate. Without
+            // this the previous task's completed [✓✓✓] list lingers
+            // visually until the next Scout `init()` or LLM `op:'init'`
+            // replaces it. The `/clear` command's intent is "wipe the
+            // session view"; the todo surface is part of that view.
+            setTodoItems([]);
           },
           printHistory: () => {
             if (context.messages.length === 0) {
@@ -6935,6 +6934,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();
+            // FEATURE_151 (v0.7.38): reset todo plan surface on tree-switch.
+            setTodoItems([]);
             console.log(chalk.green(`\n[Switched to tree entry: ${selector}]`));
             console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
             return "switched";
@@ -6981,6 +6982,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             };
             setLiveTokenCount(null);
             clearUIHistory();
+            // FEATURE_151 (v0.7.38): reset todo plan surface on fork —
+            // the new fork starts a fresh task tree.
+            setTodoItems([]);
             setSessionId(forked.sessionId);
             console.log(chalk.green(`\n[Forked session: ${forked.sessionId}]`));
             console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
@@ -7008,6 +7012,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             persistedUiHistoryRef.current = context.uiHistory ?? [];
             setLiveTokenCount(null);
             clearUIHistory();
+            // FEATURE_151 (v0.7.38): reset todo plan surface on rewind.
+            setTodoItems([]);
             console.log(chalk.green(`\n[Rewound session${selector ? ` to ${selector}` : " to previous turn"}]`));
             console.log(chalk.dim(`  Messages: ${rewound.messages.length}`));
             return "rewound";

@@ -840,6 +840,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
               },
             },
             required: ['id', 'content'],
+            // FEATURE_151 (v0.7.38) — reject extra keys at the schema layer
+            // so an LLM that confuses init-item shape with update shape
+            // (e.g. passing `status: 'pending'` per item) gets a clear
+            // schema-validation error instead of silently dropping the
+            // field at runtime.
+            additionalProperties: false,
           },
         },
         id: {
