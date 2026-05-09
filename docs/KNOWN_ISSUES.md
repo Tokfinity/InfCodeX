@@ -73,7 +73,7 @@ _Last Updated: 2026-05-09_
 | 126 | Low | Open | tmux 默认不透传 OSC 8 超链接 — kodax 输出中的 file:// / docs URL 在 tmux 内不可点击 | 一直存在 | - | 2026-04-28 | - |
 | 127 | High | Resolved | AMA 每次 query 都弹出"发现未完成的任务"对话框 — managed task checkpoint 清理 race + 错误/取消路径未清理 | v0.7.26 | v0.7.34 | 2026-05-03 | 2026-05-03 |
 | 128 | Medium | Resolved | runKodaX 端到端 contract 测试在并发负载下 5000ms 超时偶发 flake | 一直存在 | v0.7.34 | 2026-05-03 | 2026-05-03 |
-| 129 | Medium | Open | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | - | 2026-05-09 | - |
+| 129 | Medium | Resolved | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | v0.7.38 | 2026-05-09 | 2026-05-09 |
 
 ---
 
@@ -83,10 +83,11 @@ _Last Updated: 2026-05-09_
 ### 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决
 
 - **Priority**: Medium（auto 模式下高频打断，破坏"无人值守"承诺；非 corrupt-data，仅 UX）
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: 一直存在（`isBashWriteCommand` redirection regex + 只读白名单的 Windows 缺位 + 管道判定都是初始设计）
+- **Fixed**: v0.7.38
 - **Created**: 2026-05-09
-- **Target Version**: v0.7.39
+- **Resolved**: 2026-05-09
 
 #### Current Behavior
 
@@ -166,6 +167,79 @@ KodaX 的 auto 模式核心 UX 承诺是 "无人值守自动跑"，并通过 LLM
 - `permission.test.ts` — `isBashReadCommand("findstr foo file.txt")` 应返回 `true`
 - `permission.test.ts` — `isBashReadCommand("findstr foo a | findstr bar")` 应返回 `true`（管道两端都是 safe-read）
 - `permission.test.ts` — `isBashReadCommand("ls | rm -rf /")` 应仍返回 `false`（管道末端是 write，regression guard）
+
+#### Resolution
+
+实施了 Proposed Solution 的全部三项，按"strip-then-classify"思路把 null-device fd-redirect 从规则层完全擦除，让真实的写检测 / 只读判定都跑在干净的命令字符串上：
+
+**1. `NULL_DEVICE_REDIRECT_PATTERN` 新常量** ([packages/repl/src/permission/permission.ts](../packages/repl/src/permission/permission.ts))
+
+```ts
+const NULL_DEVICE_REDIRECT_PATTERN = /(?:[0-9]+|&)>>?\s*(?:nul|\/dev\/null)(?=\s|$|[;|&])/gi;
+```
+
+匹配 `2>NUL` / `2>>nul` / `2>/dev/null` / `&>/dev/null` 等明确 fd-prefix 的 null-device 重定向。`\b`-style lookahead 保证 `foo/nul.txt` 之类路径不会被误擦。**故意**不匹配 bare `>NUL`（不带 fd 前缀），那种形式罕见且语义上仍是写动词。
+
+**2. `isBashWriteCommand` 在跑既有 regex 前先 strip null-device redirect**
+
+```ts
+const normalizedCommand = command.trim().toLowerCase()
+  .replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
+```
+
+→ `2>NUL` 不再触发 `BASH_REDIRECTION_WRITE_PATTERN` 假阳性 → "Modify files" 错标消失 → [executor.ts:236-247](../packages/repl/src/permission/executor.ts#L236-L247) 的 `getBashOutsideProjectWriteRisk` 也跟着 short-circuit 为 `dangerous: false`，不再弹确认。
+
+**3. `isBashReadCommand` 同步 strip + 允许管道 + 拒绝 `||`**
+
+```ts
+let normalizedCommand = command.trim().replace(/\\\r?\n/g, ' ');
+normalizedCommand = normalizedCommand.replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
+
+// `&&` 和单个 `|` 都允许（fan out 到 sub-command 拆分）；`||` 仍拒绝以保守
+const baseIllegalSyntax = /[<>;`]|\$\(|(?<!&)&(?!&)|\|\|/;
+// ...
+const subCommands = normalizedCommand.split(/\s*(?:&&|\|)\s*/);
+```
+
+`&&` 的"每段都是 safe-read 即放行"特例对 `|` 也复用。`||` 留作未来 issue 再开（scope 控制）。
+
+**4. `BASH_SAFE_READ_COMMANDS` 加 Windows 原生只读三件套** ([packages/repl/src/permission/types.ts](../packages/repl/src/permission/types.ts))
+
+`findstr`、`fc`、`where` 加入白名单。`select-string`（PowerShell 等价）原本就在。
+
+#### Files Changed
+
+- [packages/repl/src/permission/permission.ts](../packages/repl/src/permission/permission.ts) — `NULL_DEVICE_REDIRECT_PATTERN` + `isBashReadCommand` / `isBashWriteCommand` strip 逻辑（净 +25 / -15 行）
+- [packages/repl/src/permission/types.ts](../packages/repl/src/permission/types.ts) — `BASH_SAFE_READ_COMMANDS` 加 `findstr`、`fc`、`where`（净 +2 行）
+
+#### Tests Added
+
+[packages/repl/src/permission/permission.test.ts](../packages/repl/src/permission/permission.test.ts) — 8 个新 case：
+
+- `isBashWriteCommand("findstr foo bar 2>NUL")` / `"2>nul"` / `"2>>/dev/null"` / `"&>/dev/null"` 全部 `false`（fd-redirect 修正）
+- `isBashWriteCommand("echo hi > out.txt")` / `"echo hi >> out.txt"` / `"cat foo > /tmp/x")` 仍 `true`（regression guard）
+- `isBashWriteCommand("cmd 2>NUL > out.txt")` 仍 `true`（混合 case：null-device strip 后仍能识别真写）
+- `isBashReadCommand("findstr ...")` / `"fc ..."` / `"where ..."` 全 `true`（Windows 工具白名单）
+- `isBashReadCommand("findstr foo a.txt | findstr bar")` / `"grep foo file | grep bar | wc -l"` 全 `true`（管道 fan-out）
+- `isBashReadCommand("findstr foo a.txt 2>NUL | findstr bar")` / 原始 Issue 129 复现命令全 `true`
+- `isBashReadCommand("ls | rm -rf /")` / `"cat file | tee out.txt")` / `"grep foo file > out.txt")` 仍 `false`（regression guard）
+
+#### Verification After Fix
+
+- `permission.test.ts`：26/26 ✓（含 18 既有 + 8 新增）
+- `permission/types.test.ts`：12/12 ✓
+- `tool-confirmation.test.ts`：8/8 ✓（依赖 isBashWriteCommand 标 Intent，确认无回归）
+- `src/common/` + `src/interactive/` 完整跑：232/232 ✓
+- `npm run build`：通过
+
+#### Why This Approach
+
+替代方案考虑过：
+- **直接在 `isBashWriteCommand` 改 `BASH_REDIRECTION_WRITE_PATTERN` regex 加排除分支** — 单 regex 越来越复杂，难读；分两步（strip + classify）更清晰
+- **在 `getBashOutsideProjectWriteRisk` 上加 stderr-discard 例外** — 治标不治本，UI 上仍把命令标成 "Modify files"
+- **彻底重写 `isBashReadCommand` 用 shell parser** — 引入新依赖，超 scope
+
+最终采用**最小切口的 strip-then-classify**：一个 module-level regex 常量被两处函数共用，逻辑可单测可解释，无新依赖。
 
 #### Related
 
@@ -3565,11 +3639,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 56 (26 Open, 30 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 56 (25 Open, 31 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-05-09: Issue 129 added & resolved
+- Added 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 (Medium)
+- Resolved 129 in v0.7.38: 三个相互叠加的根因（`2>NUL` 假阳性 + 缺 `findstr` 白名单 + 管道一票否决）以最小切口"strip-then-classify"统一修掉
+- 新增 `NULL_DEVICE_REDIRECT_PATTERN` 模块常量被 `isBashReadCommand` / `isBashWriteCommand` 共用；`BASH_SAFE_READ_COMMANDS` 加 `findstr`、`fc`、`where` 三件套
+- 新加 8 个 unit test，全包重跑 232/232 PASS
 
 ### 2026-04-11: Issue 107 added
 - Added 107: harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition (Medium Priority)

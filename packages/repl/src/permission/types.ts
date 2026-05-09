@@ -164,9 +164,11 @@ export const BASH_SAFE_READ_COMMANDS = new Set([
   // Basic shell inspection
   "ls", "cat", "pwd", "echo", "whoami", "date", "which", "whereis", "tree",
   "dir", "type", "get-childitem", "get-content", "select-string", "get-location",
+  "where",
 
   // Search and find
   "grep", "find", "awk", "sed", "head", "tail", "less", "more", "wc",
+  "findstr", "fc",
 
   // Git operations (read-only)
   "git status", "git diff", "git log", "git show", "git branch",
