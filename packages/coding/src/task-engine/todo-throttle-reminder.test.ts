@@ -144,6 +144,9 @@ describe('throttle reminder text format', () => {
     expect(text).toContain('- todo_3: Update type definitions');
     // Closing line exactly matches the design literal.
     expect(text).toContain('If you have started or finished any of these, call todo_update now.');
+    // FEATURE_151 (v0.7.38): suppression discipline — model must not
+    // surface the reminder to the user.
+    expect(text).toContain('NEVER mention this reminder to the user.');
     // Wrapped in <system-reminder> tags for Anthropic-style recognition.
     expect(text.startsWith('<system-reminder>')).toBe(true);
     expect(text.endsWith('</system-reminder>')).toBe(true);
@@ -186,6 +189,8 @@ describe('throttle reminder text format', () => {
     const text = buildTodoReminderText(store);
     expect(text).toContain('terminal state');
     expect(text).not.toMatch(/^- todo_/m); // no bullet list
+    // FEATURE_151 (v0.7.38): suppression discipline applies here too.
+    expect(text).toContain('NEVER mention this reminder to the user.');
   });
 
   // FEATURE_151 (v0.7.38) — empty-store branch nudges LLM to op:'init'.

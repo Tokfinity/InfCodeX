@@ -157,6 +157,9 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
       `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. ` +
         `All listed items are already in a terminal state, but you may want to call todo_update ` +
         `if any new substep emerged.`,
+      // FEATURE_151 (v0.7.38) — match Claude Code's `<system-reminder>`
+      // suppression discipline (mirrors `messages.ts:3668`).
+      'NEVER mention this reminder to the user.',
       '</system-reminder>',
     ].join('\n');
   }
@@ -169,6 +172,9 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
   }
   lines.push(
     'If you have started or finished any of these, call todo_update now.',
+    // FEATURE_151 (v0.7.38) — match Claude Code's `<system-reminder>`
+    // suppression discipline (mirrors `messages.ts:3668`).
+    'NEVER mention this reminder to the user.',
     '</system-reminder>',
   );
   return lines.join('\n');
