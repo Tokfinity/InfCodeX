@@ -1,9 +1,14 @@
 /**
  * Hermetic Ink render tests for TodoListSurface (FEATURE_097, v0.7.34;
- * embedded-spinner layout since FEATURE_151 v0.7.38 Slice H).
+ * embedded-spinner layout since FEATURE_151 v0.7.38 Slice H').
  * No LLM calls. Tests rendering behavior, hide-when-not-renderable,
- * symbol output, counter formatting, and the CC-style `⎿` connector
- * that appears once on the first row to signal "embedded under spinner".
+ * symbol output, and the CC-style `⎿` connector that appears once on
+ * the first row to signal "embedded under spinner".
+ *
+ * Slice H' (2026-05-09): the `"X/N completed"` counter moved out of
+ * this component into `InkREPL.tsx`'s activityBar slot (rendered
+ * right-aligned on the spinner row). These tests no longer assert on
+ * counter content — that's the activityBar caller's responsibility.
  */
 import React from "react";
 import { describe, expect, it } from "vitest";
@@ -48,7 +53,8 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Lone task");
-    expect(frame).toContain("0/1 completed");
+    // Slice H': counter no longer rendered by this component.
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
   it("FEATURE_151 (v0.7.38): keeps rendering after the (formerly 5s) linger elapses", () => {
@@ -68,10 +74,13 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).not.toBe("");
-    expect(frame).toContain("3/3 completed");
+    expect(frame).toContain("✓");
   });
 
-  it("renders the counter line in 'X/Y completed' format", () => {
+  it("Slice H' (v0.7.38): counter is NOT rendered by this component (lives in activityBar)", () => {
+    // Counter rendering moved to InkREPL.tsx's activityBar slot so the
+    // spinner verb and counter share one line. This component renders
+    // ONLY the ⎿ block + rows.
     const items = [
       makeItem("todo_1", "A", "completed"),
       makeItem("todo_2", "B", "in_progress"),
@@ -79,7 +88,8 @@ describe("TodoListSurface", () => {
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    expect(lastFrame()).toContain("1/3 completed");
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
   it("renders item rows with the right symbols", () => {
@@ -160,16 +170,5 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Second");
-  });
-
-  it("counter renders 0/N when no item has completed yet", () => {
-    const items = [
-      makeItem("todo_1", "A", "in_progress"),
-      makeItem("todo_2", "B", "pending"),
-      makeItem("todo_3", "C", "pending"),
-    ];
-    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
-    const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    expect(lastFrame()).toContain("0/3 completed");
   });
 });
