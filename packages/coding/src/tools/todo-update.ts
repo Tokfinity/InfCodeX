@@ -64,14 +64,22 @@
  * (Hermetic test coverage: see todo-update.test.ts.)
  */
 
-import type { KodaXToolExecutionContext, TodoStatus } from '../types.js';
+import type { KodaXToolExecutionContext, TodoEvaluatorHint, TodoStatus } from '../types.js';
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set([
   'in_progress',
   'completed',
   'failed',
   'skipped',
+  // FEATURE_114 v0.7.36: explicit cancellation mid-task. Distinct from
+  // `skipped` (Planner-merge) — `cancelled` is a Worker-driven mid-execution
+  // decision (UI shows strikethrough). 'pending' deliberately omitted — the
+  // store enters items at pending automatically; explicit pending transitions
+  // are the runner's job (resetFailed) not the LLM's.
+  'cancelled',
 ]);
+
+const ALLOWED_EVALUATOR_HINTS: ReadonlySet<string> = new Set(['build', 'test', 'lint']);
 
 const ALLOWED_OPS: ReadonlySet<string> = new Set(['init', 'update']);
 
@@ -101,6 +109,13 @@ interface InitItemInput {
   readonly id: unknown;
   readonly content: unknown;
   readonly activeForm?: unknown;
+  /**
+   * FEATURE_114 v0.7.36 — optional per-step deterministic evaluator hint.
+   * `'build' | 'test' | 'lint'`. When supplied, the runner runs the
+   * corresponding deterministic check on `pending → completed`. Useful
+   * sparingly on milestone steps with a real ground-truth check.
+   */
+  readonly evaluator?: unknown;
 }
 
 function jsonResult(payload: Record<string, unknown>): string {
@@ -146,7 +161,7 @@ function executeInitOp(
         reason: `Invalid op:'init' items[${i}]: must be an object {id, content, activeForm?}.`,
       });
     }
-    const { id, content, activeForm } = raw;
+    const { id, content, activeForm, evaluator } = raw;
     if (typeof id !== 'string' || id.length === 0) {
       return jsonResult({
         ok: false,
@@ -176,10 +191,20 @@ function executeInitOp(
           '(present-continuous form, e.g. "Running tests").',
       });
     }
+    // FEATURE_114 v0.7.36 — validate optional evaluator hint.
+    if (evaluator !== undefined && (typeof evaluator !== 'string' || !ALLOWED_EVALUATOR_HINTS.has(evaluator))) {
+      return jsonResult({
+        ok: false,
+        reason:
+          `Invalid op:'init' items[${i}].evaluator: when provided, must be one of ` +
+          `'build' | 'test' | 'lint'. Got ${JSON.stringify(evaluator)}.`,
+      });
+    }
     seeds.push({
       id,
       content,
       ...(typeof activeForm === 'string' ? { activeForm } : {}),
+      ...(typeof evaluator === 'string' ? { evaluator: evaluator as TodoEvaluatorHint } : {}),
     });
   }
 
@@ -236,7 +261,7 @@ export async function toolTodoUpdate(
       ok: false,
       reason:
         `Invalid status: ${JSON.stringify(status)}. ` +
-        `Allowed: in_progress | completed | failed | skipped.`,
+        `Allowed: in_progress | completed | failed | skipped | cancelled.`,
     });
   }
 
