@@ -1,10 +1,9 @@
 /**
  * Hermetic Ink render tests for TodoListSurface (FEATURE_097, v0.7.34;
- * compact-only since FEATURE_151 v0.7.38 Slice G).
+ * embedded-spinner layout since FEATURE_151 v0.7.38 Slice H).
  * No LLM calls. Tests rendering behavior, hide-when-not-renderable,
- * symbol output. The "X/N completed" counter header was dropped in
- * Slice G — surface now mirrors CC `<TaskListV2 isStandalone={false}>`
- * (no panel header, just the rows).
+ * symbol output, counter formatting, and the CC-style `⎿` connector
+ * that appears once on the first row to signal "embedded under spinner".
  */
 import React from "react";
 import { describe, expect, it } from "vitest";
@@ -49,9 +48,7 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Lone task");
-    // Slice G: counter header dropped. Per-row symbol + content is
-    // sufficient signal; no separate "X/N completed" line.
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
+    expect(frame).toContain("0/1 completed");
   });
 
   it("FEATURE_151 (v0.7.38): keeps rendering after the (formerly 5s) linger elapses", () => {
@@ -71,17 +68,10 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).not.toBe("");
-    // Slice G: surface still mounted post-linger; rows render, but no
-    // "X/N completed" header. Each row's ✓ symbol carries the signal.
-    expect(frame).toContain("✓");
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
+    expect(frame).toContain("3/3 completed");
   });
 
-  it("Slice G (v0.7.38): no counter header line — surface is compact-only", () => {
-    // Pre-Slice G this asserted `"1/3 completed"`. The dedicated counter
-    // line was dropped to mirror CC's `<TaskListV2 isStandalone={false}>`
-    // branch (no panel header). Per-row symbols + summary fold rows
-    // already convey progress.
+  it("renders the counter line in 'X/Y completed' format", () => {
     const items = [
       makeItem("todo_1", "A", "completed"),
       makeItem("todo_2", "B", "in_progress"),
@@ -89,8 +79,7 @@ describe("TodoListSurface", () => {
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    const frame = lastFrame() ?? "";
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
+    expect(lastFrame()).toContain("1/3 completed");
   });
 
   it("renders item rows with the right symbols", () => {
@@ -110,17 +99,25 @@ describe("TodoListSurface", () => {
     expect(frame).toContain("Update type definitions");
   });
 
-  it("renders the gutter prefix (▏) on every row", () => {
+  it("Slice H (v0.7.38): renders ⎿ connector exactly once (CC MessageResponse parity)", () => {
+    // Pre-Slice H the gutter was per-row `▏` (vertical bar), which
+    // looked like a small panel's left border. Slice H replaces it with
+    // CC `MessageResponse`'s once-only `⎿` connector — flex-row layout
+    // means subsequent rows in the right column align under the first
+    // row's content position with no extra glyph.
     const items = [
       makeItem("todo_1", "A", "in_progress"),
       makeItem("todo_2", "B", "pending"),
+      makeItem("todo_3", "C", "pending"),
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
-    // Expect the gutter to appear once per row (2 rows here).
-    const occurrences = (frame.match(/▏/g) ?? []).length;
-    expect(occurrences).toBeGreaterThanOrEqual(2);
+    const elbows = (frame.match(/⎿/g) ?? []).length;
+    expect(elbows).toBe(1);
+    // The old per-row `▏` gutter must NOT appear anywhere — Slice H
+    // explicitly removed it to drop the "panel border" feel.
+    expect(frame).not.toContain("▏");
   });
 
   it("shows the failed-note suffix in failed-row text", () => {
@@ -165,7 +162,7 @@ describe("TodoListSurface", () => {
     expect(frame).toContain("Second");
   });
 
-  it("Slice G (v0.7.38): no '0/N' counter when nothing has completed yet", () => {
+  it("counter renders 0/N when no item has completed yet", () => {
     const items = [
       makeItem("todo_1", "A", "in_progress"),
       makeItem("todo_2", "B", "pending"),
@@ -173,10 +170,6 @@ describe("TodoListSurface", () => {
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    const frame = lastFrame() ?? "";
-    // Pre-Slice G this expected `"0/3 completed"`. Now: rows visible,
-    // no counter header. Active item (in_progress) is the signal.
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
-    expect(frame).toContain("●"); // in_progress symbol
+    expect(lastFrame()).toContain("0/3 completed");
   });
 });

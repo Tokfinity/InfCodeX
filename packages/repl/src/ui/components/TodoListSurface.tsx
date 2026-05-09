@@ -1,32 +1,48 @@
 /**
- * TodoListSurface — FEATURE_097 (v0.7.34), compact-only since FEATURE_151
- * (v0.7.38) Slice G.
+ * TodoListSurface — FEATURE_097 (v0.7.34); embedded-spinner layout since
+ * FEATURE_151 (v0.7.38) Slice G/H.
  *
- * Renders the Scout-seeded todo list under the spinner / above the
- * BackgroundTaskBar. Pure presentational layer — every layout decision
- * (anchor, window, summary folds, failed-item priority, post-completion
- * linger) lives in `view-models/todo-plan.ts`. This component just walks
- * the rows and emits one `<Text>` per row.
+ * Renders the todo list under the spinner / above the BackgroundTaskBar.
+ * Pure presentational layer — every layout decision (anchor, window,
+ * summary folds, failed-item priority, post-completion linger) lives in
+ * `view-models/todo-plan.ts`. This component just walks the rows and
+ * emits one `<Text>` per row.
  *
- * Layout (compact-only, mirrors Claude Code `TaskListV2` `isStandalone=false`
- * branch — c:/Works/claudecode/src/components/TaskListV2.tsx#L210):
- *   - NO header line. Slice G dropped the `"X/N completed"` right-aligned
- *     counter so the surface stops feeling like a standalone panel and
- *     simply nests under the spinner output. Per-row symbols (✓/●/☐/✗)
- *     and the existing `"N done … +M more"` summary folds already convey
- *     progress; the dedicated counter row was redundant ornamentation.
- *   - One `<Text>` per row, prefixed by a dimmed `▏` gutter (U+258F).
- *   - Symbol colors come from the view-model's `symbolColor` field; the
- *     row text is rendered in default text color (failed item content
- *     gets a dim suffix `(note)` from the view-model).
+ * Visual structure (Slice H — mirrors Claude Code `MessageResponse` +
+ * `TaskListV2 isStandalone=false`, see
+ * c:/Works/claudecode/src/components/MessageResponse.tsx#L22 +
+ * c:/Works/claudecode/src/components/TaskListV2.tsx#L210):
+ *
+ *   ```
+ *                                   1/3 completed     ← right-aligned counter
+ *     ⎿  ☐ Add unit test                              ← ⎿ ONLY on first row
+ *        ● Run failing tests                          ← subsequent rows align
+ *        ☐ Wire CI                                       under the row content
+ *   ```
+ *
+ *   - **Counter line** (top, right-aligned, dim): "X/N completed". Kept
+ *     per user feedback (2026-05-09): the counter is informational and
+ *     not visually heavy. Does NOT contribute to the "panel feel" — that
+ *     was the per-row gutter, which is removed below.
+ *   - **⎿ as left-column connector** (Slice H): a flex-row Box with a
+ *     fixed-width left column (`"  ⎿  "`, dim) that renders ONCE — Ink's
+ *     row layout means subsequent rows in the right column align under
+ *     the row content with no extra gutter glyph per row. This produces
+ *     CC's "embedded-in-spinner" feel instead of the Slice G "small panel
+ *     with left border" feel that per-row `▏` produced.
+ *   - **Symbol colors** come from the view-model's `symbolColor` field;
+ *     the row text is rendered in default text color (failed item
+ *     content gets a dim suffix `(note)` from the view-model).
  *
  * Surface visibility:
  *   - `vm.shouldRender === false` → return `null` (component unmounts).
  *   - `vm.rows.length === 0` → return `null` (empty list, surface hidden).
  *
- * The post-completion linger after completion is enforced by the host's
- * `lastAllCompletedAt` timestamp; this component only cares about the
- * rows it is told to render.
+ * History note:
+ *   - Slice G (initial cut) deleted the counter line entirely. User
+ *     feedback (2026-05-09) corrected: the counter wasn't the problem,
+ *     the per-row `▏` gutter was. Slice H restores the counter and
+ *     replaces the per-row gutter with CC's once-only `⎿` connector.
  */
 
 import React from "react";
@@ -39,15 +55,18 @@ import type {
   TodoSymbolColor,
 } from "../view-models/todo-plan.js";
 
-const GUTTER = "▏"; // ▏
+/**
+ * CC `MessageResponse` left-column glyph (verbatim from
+ * c:/Works/claudecode/src/components/MessageResponse.tsx#L22):
+ * two leading spaces + `⎿` + two trailing spaces. The trailing spaces
+ * give the right column a visual indent so subsequent rows line up
+ * under the first row's content area.
+ */
+const EMBEDDED_PREFIX = "  ⎿  "; // ⎿ U+23BF
 
 function resolveSymbolColor(
   color: TodoSymbolColor,
 ): string | undefined {
-  // Map view-model abstract color tokens to theme colors. Returning
-  // `undefined` falls through to the default text color. We intentionally
-  // do NOT pass `dimColor` here — the symbol color sits beside dim text
-  // and the dim symbol color (#666666) does the visual job already.
   const theme = getTheme("dark");
   switch (color) {
     case "cyan":
@@ -72,7 +91,6 @@ const TodoListRow: React.FC<TodoListRowProps> = ({ row }) => {
   const isSummary = row.kind !== "item";
   return (
     <Box flexDirection="row">
-      <Text color={getTheme("dark").colors.dim}>{`${GUTTER} `}</Text>
       <Text color={symbolColor} bold={row.isActive}>
         {row.symbol}
       </Text>
@@ -93,11 +111,21 @@ export const TodoListSurface: React.FC<TodoListSurfaceProps> = ({
 }) => {
   if (!viewModel.shouldRender) return null;
   if (viewModel.rows.length === 0) return null;
+  const counter = `${viewModel.completedCount}/${viewModel.totalCount} completed`;
+  const dimColor = getTheme("dark").colors.dim;
   return (
     <Box flexDirection="column">
-      {viewModel.rows.map((row, idx) => (
-        <TodoListRow key={`${row.kind}-${row.id ?? idx}`} row={row} />
-      ))}
+      <Box flexDirection="row" justifyContent="flex-end">
+        <Text dimColor>{counter}</Text>
+      </Box>
+      <Box flexDirection="row">
+        <Text color={dimColor}>{EMBEDDED_PREFIX}</Text>
+        <Box flexDirection="column" flexGrow={1}>
+          {viewModel.rows.map((row, idx) => (
+            <TodoListRow key={`${row.kind}-${row.id ?? idx}`} row={row} />
+          ))}
+        </Box>
+      </Box>
     </Box>
   );
 };
