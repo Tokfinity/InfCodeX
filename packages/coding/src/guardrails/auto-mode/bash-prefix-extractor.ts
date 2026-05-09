@@ -306,11 +306,17 @@ export interface BashPrefixExtractor {
 }
 
 export interface CreateBashPrefixExtractorOptions {
-  readonly provider: KodaXBaseProvider;
   /**
-   * LIVE getter (matches `auto-mode/guardrail.ts` pattern). Re-evaluated
-   * on every extract() call so mid-session `/model` swaps redirect the
-   * extractor without requiring any explicit reset.
+   * LIVE getter for the provider instance. Re-evaluated on every extract()
+   * call so mid-session `/provider` swaps redirect the extractor without
+   * requiring any explicit reset. Mirrors `auto-mode/guardrail.ts`'s
+   * provider-name + resolveProvider live-resolution pattern but expressed
+   * directly as a provider getter for module-level simplicity.
+   */
+  readonly getProvider: () => KodaXBaseProvider;
+  /**
+   * LIVE getter for the model. Re-evaluated on every extract() call so
+   * mid-session `/model` swaps redirect the extractor.
    */
   readonly getModel: () => string;
   readonly timeoutMs?: number;
@@ -359,7 +365,7 @@ export function createBashPrefixExtractor(
     }
 
     const promise = extractCommandPrefix({
-      provider: opts.provider,
+      provider: opts.getProvider(),
       model: opts.getModel(),
       command,
       timeoutMs: opts.timeoutMs,

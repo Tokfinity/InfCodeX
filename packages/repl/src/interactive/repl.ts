@@ -51,6 +51,7 @@ import {
   normalizePermissionMode,
 } from '../permission/types.js';
 import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
+import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { getGitRoot, prepareRuntimeConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
 import {
@@ -486,6 +487,16 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
         statusBar?.update({ autoModeEngine: engine });
       }
     },
+  });
+
+  // FEATURE_153 (v0.7.38): build the LLM-backed bash prefix extractor used by
+  // `isToolCallAllowed`. Live getters re-resolve provider + model on every
+  // call, so mid-session `/provider` and `/model` swaps redirect the
+  // extractor without an explicit reset (mirrors the auto-mode guardrail's
+  // hotfix-3 LIVE getter pattern).
+  const bashPrefixExtractor: BashPrefixExtractor = createBashPrefixExtractor({
+    getProvider: () => resolveProvider(currentConfig.provider),
+    getModel: () => currentConfig.model ?? '',
   });
 
   // Initialize status bar (if terminal supports) - 初始化状态栏 (如果终端支持)
@@ -1008,9 +1019,19 @@ Keyboard Shortcuts:
 
             // Check if tool needs confirmation based on mode
             if (confirmTools.has(tool)) {
-              // Check alwaysAllowTools in accept-edits mode for bash
+              // Check alwaysAllowTools in accept-edits mode for bash.
+              // FEATURE_153: pass LLM extractor (constructed at REPL bootstrap;
+              // see bashPrefixExtractor below) so allowlist patterns match
+              // against extracted safe prefix instead of naive startsWith.
               if (mode === 'accept-edits' && tool === 'bash') {
-                if (isToolCallAllowed(tool, input, alwaysAllowTools)) {
+                if (
+                  await isToolCallAllowed(
+                    tool,
+                    input,
+                    alwaysAllowTools,
+                    bashPrefixExtractor,
+                  )
+                ) {
                   return true;
                 }
               }

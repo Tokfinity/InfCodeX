@@ -90,9 +90,12 @@ import {
   isDeniedRecently,
   getDenialContext,
   getRegisteredToolDefinition,
+  createBashPrefixExtractor,
+  resolveProvider,
 } from "@kodax-ai/coding";
 import type {
   AgentsFile,
+  BashPrefixExtractor,
   CompactionUpdate,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
@@ -4079,6 +4082,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }, [currentConfig.permissionMode]);
   const alwaysAllowToolsRef = useRef<string[]>(loadAlwaysAllowTools());
 
+  // FEATURE_153 (v0.7.38): live currentConfig ref + LLM-backed bash prefix
+  // extractor for `isToolCallAllowed`. The ref-based getter pattern mirrors
+  // permissionModeRef above so /provider and /model swaps mid-session
+  // redirect the extractor without recreation.
+  const currentConfigRef = useRef(currentConfig);
+  useEffect(() => {
+    currentConfigRef.current = currentConfig;
+  }, [currentConfig]);
+  const bashPrefixExtractorRef = useRef<BashPrefixExtractor | null>(null);
+  if (bashPrefixExtractorRef.current === null) {
+    bashPrefixExtractorRef.current = createBashPrefixExtractor({
+      getProvider: () => resolveProvider(currentConfigRef.current.provider),
+      getModel: () => currentConfigRef.current.model ?? '',
+    });
+  }
+
   // FEATURE_092 phase 2b.7b slice E: emit the auto-in-project alias deprecation
   // notice at most once per session. Same factory the readline REPL uses; the
   // emitter caches its own fired-once flag.
@@ -5592,9 +5611,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // === 4. Check if tool needs confirmation based on mode ===
       if (confirmTools.has(tool)) {
-        // In accept-edits mode, check alwaysAllowTools for bash
+        // In accept-edits mode, check alwaysAllowTools for bash.
+        // FEATURE_153: extractor matches allowlist patterns against the LLM-
+        // extracted safe prefix (e.g. `git commit`) instead of naive startsWith,
+        // closing the `git commit -m "x" $(curl evil)` injection surface.
         if (mode === 'accept-edits' && tool === 'bash') {
-          if (isToolCallAllowed(tool, input, alwaysAllowTools)) {
+          if (
+            await isToolCallAllowed(
+              tool,
+              input,
+              alwaysAllowTools,
+              bashPrefixExtractorRef.current ?? undefined,
+            )
+          ) {
             return true; // Auto-allowed
           }
         }
