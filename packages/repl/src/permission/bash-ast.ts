@@ -119,6 +119,16 @@ export function parseBashCommand(command: string): BashCommandTree {
     return { statements: [], unparseable: false };
   }
 
+  // Pre-tokenization safety: shell-quote treats `` ` `` as an ordinary char
+  // and packs it into string tokens (`echo \`rm -rf /\`` parses to argv
+  // ['echo', '`rm', '-rf', '/`'] — a "safe" `echo` argv from the AST's
+  // perspective even though backticks request command substitution at
+  // shell-eval time). Flag the input as unparseable so callers fail-closed
+  // (refuse auto-allow) on any backtick form.
+  if (trimmed.includes('`')) {
+    return { statements: [], unparseable: true };
+  }
+
   let entries: ParseEntry[];
   try {
     entries = shellQuoteParse(trimmed);

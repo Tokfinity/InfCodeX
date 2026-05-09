@@ -19,6 +19,7 @@ import { getAgentConfigHome } from '@kodax-ai/agent';
 import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
 
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
+import { isNullDevice, parseBashCommand } from './bash-ast.js';
 
 const PLAN_MODE_PROJECT_DOC_RELATIVE_PATH = path.join('.agent', 'plan_mode_doc.md');
 const existingPathPrefixCache = new Map<string, string>();
@@ -81,19 +82,6 @@ function isSingleBashReadCommand(command: string): boolean {
 
   return false; // Default to denying (requiring confirmation)
 }
-
-/**
- * Match fd-redirect to a null device (e.g. `2>NUL`, `2>/dev/null`, `&>/dev/null`).
- * These discard output to a special device — they are NOT writes to disk, so they
- * should not classify a command as a write or block read-only safety checks.
- *
- * Issue 129: requires explicit fd (`0-9`) or `&` prefix; bare `>NUL` / `>/dev/null`
- * is left as a real redirect since user-typed `>NUL` without an fd is rare and
- * functionally is still a redirect verb. Matches case-insensitively. The lookahead
- * ensures `nul` / `/dev/null` is a token boundary, so paths like `foo/nul.txt`
- * are not stripped.
- */
-const NULL_DEVICE_REDIRECT_PATTERN = /(?:[0-9]+|&)>>?\s*(?:nul|\/dev\/null)(?=\s|$|[;|&])/gi;
 
 /**
  * Token pattern for `isHelpCommand` non-flag tokens. Strict alphanumeric match —
@@ -160,13 +148,20 @@ export function isHelpCommand(command: string): boolean {
 
 /**
  * Check if a bash command is strictly a safe read-only operation (Whitelist).
- * Supports compound commands connected by `&&` and pipe chains connected by `|`
- * — every stage must independently be a safe read-only command. fd-redirects to
- * a null device (e.g. `2>NUL`, `2>/dev/null`) are stripped before validation
- * since they don't write anything (Issue 129).
  *
- * Rejects dangerous shell operators: `<`, real `>` (write), `||`, single `&`,
- * `;`, backtick, `$(...)`, and unescaped `\` on POSIX.
+ * FEATURE_152 (v0.7.38): replaces the pre-AST regex strip-then-classify
+ * pipeline with `parseBashCommand` from `bash-ast.ts`. The AST gives us:
+ *   - statements split on `&&` / `||` / `;` (we only allow null and `&&`),
+ *   - pipeline stages split on `|` (every stage must be a safe-read command),
+ *   - per-stage redirections (input redirects rejected; output redirects only
+ *     allowed when the target is a null device, which discards output rather
+ *     than writing — preserves Issue 129 behavior),
+ *   - `unparseable: true` for inputs we can't model (heredocs, command
+ *     substitution `$(...)`, backticks, bare `&`, etc.) — fail-closed to
+ *     `false` so unmodeled syntax always falls through to confirmation.
+ *
+ * Per-stage syntactic checks (`isSingleBashReadCommand`) are unchanged —
+ * the AST migration only replaces the splitting + null-device-strip layer.
  *
  * @param command - bash command string
  * @returns true if the command is a safe read operation
@@ -184,57 +179,52 @@ export function isBashReadCommand(command: string): boolean {
     return true;
   }
 
-  // 1. Handle line continuations + strip null-device fd-redirects (Issue 129)
-  let normalizedCommand = command.trim().replace(/\\\r?\n/g, ' ');
-  normalizedCommand = normalizedCommand.replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
-
-  // 2. Strict syntax validation: reject dangerous shell operators.
-  //    `&&` and single `|` are explicitly permitted — both fan out to the
-  //    sub-command split below, where every stage must be a safe-read command.
-  //    `||` (logical-or short-circuit) stays rejected: scope-control change
-  //    in scope of Issue 129 was limited to enabling pipes, not adding logical-or.
-  const baseIllegalSyntax = /[<>;`]|\$\(|(?<!&)&(?!&)|\|\|/;
-  if (baseIllegalSyntax.test(normalizedCommand)) {
+  // FEATURE_152: AST parse. Line continuations (`\<newline>`) are not
+  // typically present in single-line tool inputs; collapse them defensively
+  // before parse so multi-line history paste still works.
+  const collapsed = command.trim().replace(/\\\r?\n/g, ' ');
+  const tree = parseBashCommand(collapsed);
+  if (tree.unparseable || tree.statements.length === 0) {
     return false;
   }
 
-  // 3. Handle backslashes conditionally
-  if (normalizedCommand.includes('\\')) {
-    if (path.sep !== '\\') { // Not on Windows
-      // On Unix, \ is dangerous unless it's just escaping a space (e.g. My\ Folder)
-      const withoutEscapedSpaces = normalizedCommand.replace(/\\ /g, '');
-      // If there are any backslashes left after removing escaped spaces, it's dangerous
-      if (withoutEscapedSpaces.includes('\\')) {
+  const isCompound = tree.statements.length > 1
+    || (tree.statements[0]?.stages.length ?? 0) > 1;
+
+  for (const stmt of tree.statements) {
+    // Only allow null (first stmt) or `&&` between statements. `||` and `;`
+    // were rejected by the pre-AST `baseIllegalSyntax` regex; preserved here.
+    if (stmt.precedingOp !== null && stmt.precedingOp !== '&&') {
+      return false;
+    }
+
+    for (const stage of stmt.stages) {
+      // Redirection policy:
+      //   - input redirects (`<`, `<<`, `<<<`) → reject (could read from
+      //     anything, breaks read-only contract).
+      //   - output redirects (`>`, `>>`, `2>`, `&>`, etc.) → reject UNLESS
+      //     target is a null device. fd-redirect to null discards output;
+      //     this is the Issue 129 carve-out, now expressed structurally.
+      for (const redir of stage.redirections) {
+        if (redir.input) return false;
+        if (!isNullDevice(redir.target)) return false;
+      }
+
+      // Stage commands run through `isSingleBashReadCommand` exactly as
+      // before — argv joined back into a string preserves the existing
+      // tokenizer's expectations (e.g. `git status -s` → starts-with-match).
+      const stageStr = stage.argv.join(' ');
+      if (!stageStr) continue;
+
+      // 'cd <path>' is allowed only inside compound commands (preserves
+      // the pre-AST behavior — bare `cd` alone is not a "read" operation).
+      if (isCompound && stage.argv[0]?.toLowerCase() === 'cd' && stage.argv.length >= 2) {
+        continue;
+      }
+
+      if (!isSingleBashReadCommand(stageStr)) {
         return false;
       }
-    }
-    // On Windows, \ is a path separator and generally safe in the context of these read-only commands
-  }
-
-  // 4. Split by `&&` and `|` — every stage must be a safe-read operation.
-  //    Handles `cd /path && git status`, `findstr a | findstr b`, and
-  //    combinations of both.
-  const subCommands = normalizedCommand.split(/\s*(?:&&|\|)\s*/);
-
-  // If no compound operator found, this is a single command
-  if (subCommands.length === 1) {
-    return isSingleBashReadCommand(subCommands[0]!);
-  }
-
-  // 5. All sub-commands must be safe read operations.
-  //    Special case: 'cd' is allowed as a prefix in compound commands.
-  for (const subCmd of subCommands) {
-    const trimmedCmd = subCmd?.trim();
-    if (!trimmedCmd) continue;
-
-    // Allow 'cd <path>' as a safe prefix command
-    if (/^cd\s+/.test(trimmedCmd.toLowerCase())) {
-      continue;
-    }
-
-    // All other sub-commands must pass the read-only check
-    if (!isSingleBashReadCommand(trimmedCmd)) {
-      return false;
     }
   }
 
@@ -255,33 +245,58 @@ export function getDirectShellBypassBlockReason(command: string): string | null 
   return `[Blocked] Direct !command execution only supports safe read-only commands. Use the bash tool for commands that write files, invoke shells, or require confirmation.`;
 }
 
-// Pre-compile regexes for BASH_WRITE_COMMANDS for performance
-const BASH_WRITE_COMMAND_REGEXES = Array.from(BASH_WRITE_COMMANDS).map(writeCmd => {
-  const escapedCmd = writeCmd.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[|&;><]\\s*)${escapedCmd}(\\s|$)`);
-});
-
-const BASH_WRITE_SUBCOMMAND_PATTERNS = [
-  /\bremove-item\b/,
-  /\bset-content\b/,
-  /\badd-content\b/,
-  /\bout-file\b/,
-  /\bnew-item\b/,
-  /\bcopy-item\b/,
-  /\bmove-item\b/,
-  /\brename-item\b/,
-  /\bni\b/,
-];
-
-const BASH_REDIRECTION_WRITE_PATTERN = /(^|[^<])>>?(?=\s*\S)/;
+/**
+ * PowerShell write cmdlets that don't appear in `BASH_WRITE_COMMANDS` (which
+ * only lists POSIX-y verbs). These can appear ANYWHERE in argv (not just
+ * argv[0]) because PowerShell pipelines compose them inline:
+ *   `Get-ChildItem | Set-Content foo.txt`  → second stage's argv[0]
+ *   `New-Item -Path foo`                    → first stage's argv[0]
+ * `ni` is the New-Item alias; `del` / `copy` / `move` / `ren` already covered
+ * by `BASH_WRITE_COMMANDS`.
+ */
+const POWERSHELL_WRITE_TOKENS = new Set([
+  'remove-item',
+  'set-content',
+  'add-content',
+  'out-file',
+  'new-item',
+  'copy-item',
+  'move-item',
+  'rename-item',
+  'ni',
+]);
 
 /**
- * Check if a bash command is a write operation
- * 检查 bash 命令是否是发布写操作的黑名单
+ * Check if a bash command is a write operation.
  *
- * Issue 129: fd-redirects to a null device (`2>NUL`, `2>/dev/null`, `&>/dev/null`)
- * are stripped before pattern matching since they discard output rather than
- * writing to disk. Any redirect to a real path still flags as a write.
+ * FEATURE_152 (v0.7.38): replaces the pre-AST regex blacklist with
+ * `parseBashCommand` from `bash-ast.ts`. The AST eliminates two whole
+ * classes of false positives the regex chain had:
+ *   1. **Issue 129 strip-then-classify**: pre-AST code regex-stripped
+ *      `2>NUL` / `2>/dev/null` BEFORE pattern matching, then ran a
+ *      blacklist of pre-compiled regexes. The strip was fragile — any
+ *      future fd-redirect form would re-introduce the false positive.
+ *      Now redirections are structured tokens with a `target` field;
+ *      `isNullDevice(target)` is the single source of truth.
+ *   2. **Substring matches inside argv strings**: pre-AST `\\bset-content\\b`
+ *      matched `set-content` even when it appeared inside a quoted string
+ *      argument or inside a path. AST argv tokens are post-quote-stripping
+ *      so PowerShell verb checks compare against actual command names.
+ *
+ * Detection rules (per-stage):
+ *   - argv[0] OR argv[0..1] (joined with space) matches any entry in
+ *     `BASH_WRITE_COMMANDS` (handles both `rm` and `git commit`).
+ *   - any argv token matches a `POWERSHELL_WRITE_TOKENS` entry (these can
+ *     appear inline, not just at stage start, due to PowerShell pipeline
+ *     conventions — `ls | Set-Content foo` puts the verb at argv[0] of
+ *     stage 2, but `New-Item -Path foo -Value bar` has it as argv[0] of
+ *     stage 1; we cover both with a token-anywhere check).
+ *   - any non-input redirection whose target is NOT a null device.
+ *
+ * Unparseable inputs (heredocs, `$(...)`) are conservatively returned as
+ * `false` to match the pre-AST regex chain's behavior — those inputs just
+ * didn't match anything in the regex blacklist either. Plan-mode and
+ * auto-mode handle the unparseable case via separate confirmation paths.
  *
  * @param command - bash command string
  * @returns true if the command is a write operation
@@ -290,24 +305,42 @@ export function isBashWriteCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
   }
-  const normalizedCommand = command
-    .trim()
-    .toLowerCase()
-    .replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
 
-  for (const regex of BASH_WRITE_COMMAND_REGEXES) {
-    if (regex.test(normalizedCommand)) {
-      return true;
-    }
+  const tree = parseBashCommand(command);
+  if (tree.unparseable) {
+    // Match pre-AST behavior on unparseable inputs (return false). Plan-
+    // mode + auto-mode upstream pipelines treat unparseable bash as a
+    // confirmation case via different logic — this function is purely
+    // "does the command match a known write pattern".
+    return false;
   }
 
-  if (BASH_REDIRECTION_WRITE_PATTERN.test(normalizedCommand)) {
-    return true;
-  }
+  for (const stmt of tree.statements) {
+    for (const stage of stmt.stages) {
+      const argvLower = stage.argv.map((tok) => tok.toLowerCase());
 
-  for (const pattern of BASH_WRITE_SUBCOMMAND_PATTERNS) {
-    if (pattern.test(normalizedCommand)) {
-      return true;
+      // Rule 1: argv[0] / argv[0..1] against BASH_WRITE_COMMANDS
+      if (argvLower.length > 0) {
+        const first = argvLower[0]!;
+        const firstTwo = argvLower.length >= 2
+          ? `${argvLower[0]} ${argvLower[1]}`
+          : null;
+        for (const writeCmd of BASH_WRITE_COMMANDS) {
+          if (writeCmd === first) return true;
+          if (firstTwo !== null && writeCmd === firstTwo) return true;
+        }
+      }
+
+      // Rule 2: PowerShell verb anywhere in argv
+      for (const token of argvLower) {
+        if (POWERSHELL_WRITE_TOKENS.has(token)) return true;
+      }
+
+      // Rule 3: non-input redirect to a real (non-null-device) target
+      for (const redir of stage.redirections) {
+        if (redir.input) continue;
+        if (!isNullDevice(redir.target)) return true;
+      }
     }
   }
 

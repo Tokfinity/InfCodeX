@@ -138,6 +138,22 @@ describe('parseBashCommand — unparseable / safety', () => {
     const tree = parseBashCommand('git status # show working tree');
     expect(tree.statements[0].stages[0].argv).toEqual(['git', 'status']);
   });
+
+  it('flags backtick subshell as unparseable (shell-quote treats ` as plain char)', () => {
+    // Without this guard, `echo \`rm -rf /\`` would parse to a "safe" argv
+    // form because shell-quote doesn't tokenise backticks specially. The
+    // module pre-checks for `\`` and forces unparseable to fail-closed.
+    const tree = parseBashCommand('echo `rm -rf /`');
+    expect(tree.unparseable).toBe(true);
+    expect(tree.statements).toEqual([]);
+  });
+
+  it('flags `$(...)` command substitution as unparseable', () => {
+    // `$` ends up in argv but `(` is an unknown op — falls through to the
+    // `unparseable = true` branch in the parser.
+    const tree = parseBashCommand('echo $(rm -rf /)');
+    expect(tree.unparseable).toBe(true);
+  });
 });
 
 describe('flattenArgv / flattenRedirections', () => {
