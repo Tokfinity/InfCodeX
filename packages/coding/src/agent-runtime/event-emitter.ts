@@ -50,8 +50,28 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 
+/**
+ * FEATURE_151 (v0.7.38) Slice E — `todo_update` and `todo_list` are
+ * scaffolding for the user-visible TodoListSurface. The user already
+ * sees plan progress through that surface; surfacing every individual
+ * tool call (especially during a multi-step task where the Generator
+ * fires `op:'update'` 2-4 times per round) is pure transcript noise.
+ *
+ * Mirrors Claude Code's stance: `TodoWriteTool` / `TaskCreateTool` /
+ * `TaskUpdateTool` / `TaskListTool` all set `shouldDefer: true +
+ * renderToolUseMessage() => null + userFacingName() => ''`, hiding the
+ * call entirely from the user transcript.
+ */
+const HIDDEN_TODO_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'todo_update',
+  'todo_list',
+]);
+
 export function isVisibleToolName(name: string): boolean {
-  return !isManagedProtocolToolName(name);
+  return (
+    !isManagedProtocolToolName(name)
+    && !HIDDEN_TODO_TOOL_NAMES.has(name)
+  );
 }
 
 export function hasQueuedFollowUp(events: KodaXEvents): boolean {

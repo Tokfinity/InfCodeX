@@ -42,4 +42,13 @@ describe('CAP-035: tool name visibility classification contract', () => {
     expect(isVisibleToolName('  Emit_Managed_Protocol  ')).toBe(false);
     expect(isVisibleToolName('EMIT_MANAGED_PROTOCOL')).toBe(false);
   });
+
+  // FEATURE_151 (v0.7.38) Slice E — todo scaffolding tools hidden from
+  // user transcript. Mirrors CC TodoWriteTool / TaskListTool / etc all
+  // setting `shouldDefer: true + renderToolUseMessage() => null +
+  // userFacingName() => ''`.
+  it('CAP-TOOL-VISIBILITY-001d: FEATURE_151 todo scaffolding tools hidden', () => {
+    expect(isVisibleToolName('todo_update')).toBe(false);
+    expect(isVisibleToolName('todo_list')).toBe(false);
+  });
 });

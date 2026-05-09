@@ -104,6 +104,7 @@ import { toolEdit } from '../tools/edit.js';
 import { toolMultiEdit } from '../tools/multi-edit.js';
 import { toolExitPlanMode } from '../tools/exit-plan-mode.js';
 import { toolTodoUpdate } from '../tools/todo-update.js';
+import { toolTodoList } from '../tools/todo-list.js';
 import { toolGlob } from '../tools/glob.js';
 import { toolGrep } from '../tools/grep.js';
 import { toolRead } from '../tools/read.js';
@@ -1849,6 +1850,12 @@ interface CodingToolBundle {
    */
   readonly todoUpdate: RunnableTool;
   /**
+   * FEATURE_151 (v0.7.38) Slice D — `todo_list` read-only query, mirroring
+   * Claude Code's `TaskListTool`. Lets the model inspect its own plan
+   * (especially after Unknown-id errors or long quiet stretches).
+   */
+  readonly todoList: RunnableTool;
+  /**
    * FEATURE_119 v0.7.36 Pattern B — `await_child_task` reclaim half.
    * Pairs with the per-role `dispatch_child_task` wrappers
    * (`scoutDispatch` / `generatorDispatch`) so the Worker can await any
@@ -1888,6 +1895,7 @@ function buildCodingToolBundle(
   const multiEdit = getToolDefinition('multi_edit');
   const exitPlanMode = getToolDefinition('exit_plan_mode');
   const todoUpdate = getToolDefinition('todo_update');
+  const todoList = getToolDefinition('todo_list');
   const awaitChildTask = getToolDefinition('await_child_task');
   if (
     !read
@@ -1899,10 +1907,11 @@ function buildCodingToolBundle(
     || !multiEdit
     || !exitPlanMode
     || !todoUpdate
+    || !todoList
     || !awaitChildTask
   ) {
     throw new Error(
-      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/await_child_task) to be registered',
+      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list/await_child_task) to be registered',
     );
   }
   // M1 parity (v0.7.26) — optionally wrap repo-intel + MCP tools so
@@ -1940,6 +1949,7 @@ function buildCodingToolBundle(
     multiEdit: wrapCodingToolAsRunnable(multiEdit, toolMultiEdit, baseCtx, budget, events),
     exitPlanMode: wrapCodingToolAsRunnable(exitPlanMode, toolExitPlanMode, baseCtx, budget, events),
     todoUpdate: wrapCodingToolAsRunnable(todoUpdate, toolTodoUpdate, baseCtx, budget, events),
+    todoList: wrapCodingToolAsRunnable(todoList, toolTodoList, baseCtx, budget, events),
     awaitChildTask: wrapCodingToolAsRunnable(awaitChildTask, toolAwaitChildTask, baseCtx, budget, events),
     repoOverview: repoOverviewDef
       ? wrapCodingToolAsRunnable(repoOverviewDef, toolRepoOverview, baseCtx, budget, events)
@@ -2186,6 +2196,10 @@ export function buildRunnerAgentChain(
       // (Heavy variant, eval-confirmed 2026-05-04). The tool soft-fails
       // with `not active` when no plan list was seeded (obligations<2).
       codingTools.todoUpdate,
+      // FEATURE_151 (v0.7.38) Slice D — Scout can `todo_list` to inspect
+      // the canonical list at any point (e.g. to confirm the post-init
+      // state matches what it intended after a verdict-driven replace).
+      codingTools.todoList,
       // Shard 6d-Q: Scout may dispatch read-only child investigations
       // (evidence scans, repo reconnaissance) in parallel before
       // emitting its verdict. The dispatch tool itself enforces
@@ -2223,6 +2237,10 @@ export function buildRunnerAgentChain(
   // (handled at runner-driven seeding hooks) to swap the displayed plan.
   // Per-step status updates after replace use this tool.
   plannerTools.push(codingTools.todoUpdate);
+  // FEATURE_151 (v0.7.38) Slice D — Planner may `todo_list` to compare its
+  // refined success_criteria against the runner-seeded list before deciding
+  // whether to call `todo_update({op:"init", ...})` to replace it.
+  plannerTools.push(codingTools.todoList);
   plannerTools.push(...codingTools.mcp);
   const planner: WritableAgent = {
     name: PLANNER_AGENT_NAME,
@@ -2287,6 +2305,10 @@ export function buildRunnerAgentChain(
       // executor and the primary driver of todo_update transitions
       // (pending → in_progress → completed) per major step.
       codingTools.todoUpdate,
+      // FEATURE_151 (v0.7.38) Slice D — Generator may `todo_list` to
+      // recover the canonical id set after an Unknown-id error or to
+      // compare its working plan against the displayed list.
+      codingTools.todoList,
       // Shard 6d-Q: Generator may dispatch write-capable child tasks for
       // parallel fan-out. Worktree paths flow through
       // `childWriteWorktreePathsRef` so the Evaluator can inject the
