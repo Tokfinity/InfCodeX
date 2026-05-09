@@ -608,5 +608,11 @@ describe('runKodaX extension runtime integration', () => {
     ).toBe(false);
 
     await runtime.dispose();
-  });
+    // 30_000 (was 5_000 default): under heavy parallel load (~226 test files
+    // running concurrently), this `runKodaX` integration test can balloon
+    // past the 5s default even though it completes in ~900ms in isolation.
+    // Same pattern as v0.7.37 d4a47bc — vitest's per-test timeout aborts the
+    // it-block but does NOT cancel the runKodaX substrate's in-flight
+    // provider.stream, so a timeout cascade leaks state into the next test.
+  }, 30_000);
 });
