@@ -271,6 +271,13 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     });
     proc.on('close', code => {
       clearTimeout(timer);
+      // Trailing flush of live progress so the final tail (often the most
+      // informative — exit notice, "X tests passed", final commit hash)
+      // always lands before the tool result. Without this, fast commands
+      // (< throttle window) emit zero progress events, and on heavy load
+      // only the first throttled fire wins so the tail (e.g. last
+      // "epsilon"-style line) is silently dropped.
+      reportLiveProgress(true);
       const stdoutDecoded = decodeCollector(stdout);
       const stderrDecoded = decodeCollector(stderr);
       const stdoutText = stdoutDecoded.text;

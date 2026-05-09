@@ -234,6 +234,43 @@ CC [`BashTool.tsx`](c:/Works/claudecode/src/tools/BashTool/BashTool.tsx) 实现 
 
 ---
 
+## Test 8 — Slash-command mid-task guard（Slice C6，CC parity）
+
+> **来源**：14 维度 queue parity 审计的唯一 P0 GAP。Slash 命令（`/clear` / `/cost` / `/agents` / `/help` 等）是 REPL 本地控制指令，不是 user message——把 `/clear` 排队 = 把字面字符串 `/clear` 当 user message 发给 LLM，**不会**真的清 transcript。
+
+### 步骤
+
+1. 启 KodaX，发任意一个会跑较久的 prompt（如：`详细解释 git rebase`）。
+2. 在 agent 还在响应时，在输入框输入 `/cost` 并按 Enter。
+3. 观察输入框 / queue 区 / status 行。
+4. 再试普通 prompt（如：`继续`）+ Enter，验证普通 prompt 仍可正常排队。
+
+### 期望结果
+
+- `/cost` **不**进队列。
+- 立刻在 transcript / status 区出现 inline 提示行：
+  ```
+  ⚠ Slash commands cannot be queued mid-task. Press Esc to abort the current task, then run the command.
+  ```
+- 输入框被清空（与普通排队后清空一致）。
+- 普通 prompt（步骤 4）仍正常排队 `[1/1]`，行为不受影响。
+- 按 Esc 中止当前轮，再单独输入 `/cost` Enter 时，slash 命令正常执行（说明只 gate "mid-task"，不破坏正常 slash 路径）。
+
+### 失败排查
+
+| 现象 | 诊断 |
+|------|------|
+| `/cost` 进了队列（`[1/1] /cost`） | `InkREPL.tsx` `handleSubmit` 的 isLoading 分支没接 slash detection；看 ~line 6571 `fullText.trimStart().startsWith('/')` |
+| 普通 prompt 也被拒绝 | `trimStart().startsWith('/')` 误伤；检查输入有没有前导空白被吞 |
+| 提示行没出现 | `emitInfoItemToCorrectLayer({type:"info",icon:"⚠",...},'queue-limit')` 调用未生效，看 dedupe key 是否冲突 |
+| Esc 后单独 `/cost` 也被拒 | guard 没只在 isLoading 分支生效——slash 路径在非 loading 时应直接走 commandRouter |
+
+### 对照
+
+CC slash 命令也只在 REPL idle 时执行——CC 的 input box 在 task running 时把 slash 输入送给 commandRouter（不入 queue），KodaX 与之一致。CC 没有"slash mid-task" 的语义，因为 CC 的输入路径直接区分 slash vs prompt——KodaX 的 `pendingInputs` 是 `readonly string[]`（不带 mode 字段），所以需要在 enqueue 入口做这个 guard。
+
+---
+
 ## 回归 checklist（每次 ship 必跑）
 
 - [ ] Test 1 latency：排队 prompt 视觉延迟 < 100ms（micro-bench < 5ms）
@@ -243,6 +280,7 @@ CC [`BashTool.tsx`](c:/Works/claudecode/src/tools/BashTool/BashTool.tsx) 实现 
 - [ ] Test 5 line-buffered streaming：完整行成块出现，无字符级跳动；响应结束后无内容丢失
 - [ ] Test 6 activeForm spinner：Worker 调 `todo_update({status:'in_progress', activeForm:'…'})` 后 spinner 立刻切到 `[Plan] …`
 - [ ] Test 7 bash live progress：长 bash 期间 spinner / tool-display 实时显示 stdout/stderr tail
+- [ ] Test 8 slash-mid-task guard：响应过程中输入 `/cost` 被拒绝并提示，普通 prompt 仍正常排队
 - [ ] `npm run test`（含 `queue-mirror.test.ts` + `queued-prompt-sequence.test.ts` + `queued-prompt-sequence-latency.test.ts` + `transcript-layout.test.ts` + `todo-store.test.ts` + `bash.test.ts`）全绿
 - [ ] `npm run test:eval -- feature-149-batched-drain` 通过 stage-1 gate
 

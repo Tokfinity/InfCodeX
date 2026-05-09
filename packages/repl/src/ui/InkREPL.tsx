@@ -6568,6 +6568,29 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           return;
         }
 
+        // FEATURE_149 (v0.7.38) \u2014 CC parity audit P0-1: reject slash
+        // commands at enqueue time. KodaX's queue stores plain strings
+        // and the drain path (`runQueuedPromptSequence`) feeds them
+        // verbatim to the agent as user prompts \u2014 without re-dispatching
+        // through `parseCommand`. So a `/cost` typed during loading
+        // would silently arrive at the LLM as the literal text "/cost"
+        // (broken). CC handles this by special-casing slash commands at
+        // dequeue (`queueProcessor.ts:70` \u2014 slash items are processed
+        // one-at-a-time via the command pipeline). For v0.7.38 we use
+        // the simpler conservative approach: refuse to queue slash
+        // commands and tell the user to abort first if they want to
+        // run one mid-task. Future versions can layer in CC's
+        // immediate-local-jsx execution path for side-effect-free
+        // commands like `/help` / `/cost`.
+        if (fullText.trimStart().startsWith('/')) {
+          emitInfoItemToCorrectLayer({
+            type: "info",
+            icon: "\u26A0",
+            text: 'Slash commands cannot be queued mid-task. Press Esc to abort the current task, then run the command.',
+          }, 'queue-limit');
+          return;
+        }
+
         // FEATURE_149 Phase B1b (v0.7.38) — fast-abort path.
         //
         // When the in-flight tool is tagged `interruptBehavior: 'cancel'`
