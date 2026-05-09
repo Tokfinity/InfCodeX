@@ -254,8 +254,15 @@ export function parseBashCommand(command: string): BashCommandTree {
 // ============== Convenience accessors ==============
 
 /**
- * All argv tokens across every stage of every statement, in order. Useful
- * for "does ANY part of the command name a write target" sweeps.
+ * All argv tokens across every stage of every statement, in order.
+ *
+ * **Do NOT use this for write-command detection.** `flattenArgv` cannot
+ * distinguish `tee` appearing as a stage's command (a write) from `tee`
+ * appearing as a positional argument (e.g. `man tee`). For "is this a
+ * write command?" checks, iterate `tree.statements[i].stages[j]` and
+ * inspect `stage.argv[0]` directly. `flattenArgv` is only safe for
+ * "does ANY token mention a path" / argv-content searches that don't
+ * care about token position.
  */
 export function flattenArgv(tree: BashCommandTree): string[] {
   const out: string[] = [];
