@@ -191,6 +191,14 @@ export interface InputPromptProps {
    * paste contents. Consumer can hydrate a disk-backed paste cache here.
    */
   onHistoryRecall?: (entry: { text: string; pastedContents: PastedContent[] }) => void;
+  /**
+   * FEATURE_149 Phase 2.1 (v0.7.38) — pop the queued follow-up inputs back
+   * into the editor when the user presses ↑ on an empty buffer. Return the
+   * joined text to load (queue gets atomically cleared by the consumer), or
+   * `undefined` to leave history-recall behavior intact when the queue is
+   * empty.
+   */
+  onPopPendingInputs?: () => string | undefined;
 }
 
 export interface StatusBarProps {

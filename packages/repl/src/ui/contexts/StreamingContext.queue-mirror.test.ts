@@ -127,4 +127,35 @@ describe("StreamingContext pending-inputs ↔ MessageQueue mirror", () => {
     // MAX_PENDING_INPUTS is 5; React state caps; queue mirrors react state.
     expect(mainThreadUserContents()).toEqual(["m0", "m1", "m2", "m3", "m4"]);
   });
+
+  // FEATURE_149 Phase B1a (v0.7.38): the default abort() clears the queue
+  // (Esc / exit semantics — drop everything). The fast-abort path passes
+  // `{ preservePendingInputs: true }` so the freshly-submitted prompt
+  // sitting in the queue survives and gets picked up by the next
+  // runQueuedPromptSequence iteration.
+  describe("abort options.preservePendingInputs", () => {
+    it("default abort() clears the pendingInputs queue (Esc behavior)", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("legacy-keep");
+      expect(mgr.getState().pendingInputs).toEqual(["legacy-keep"]);
+      mgr.abort();
+      expect(mgr.getState().pendingInputs).toEqual([]);
+    });
+
+    it("abort({ preservePendingInputs: true }) keeps the queue intact (fast-abort)", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("survives-abort");
+      mgr.addPendingInput("also-survives");
+      expect(mgr.getState().pendingInputs).toEqual(["survives-abort", "also-survives"]);
+      mgr.abort({ preservePendingInputs: true });
+      expect(mgr.getState().pendingInputs).toEqual(["survives-abort", "also-survives"]);
+    });
+
+    it("abort({ preservePendingInputs: false }) is equivalent to default abort", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("clear-me");
+      mgr.abort({ preservePendingInputs: false });
+      expect(mgr.getState().pendingInputs).toEqual([]);
+    });
+  });
 });

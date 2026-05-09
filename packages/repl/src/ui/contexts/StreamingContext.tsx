@@ -113,6 +113,20 @@ export interface StreamingContextValue {
 }
 
 /**
+ * FEATURE_149 Phase 4 (v0.7.38) — `abort()` options.
+ *
+ * The default (no options) preserves the v0.6.0+ contract: abort drops the
+ * queued follow-ups so Esc's "cancel everything" UX stays predictable. The
+ * fast-abort path in `handleSubmit` (when the in-flight tool is tagged
+ * `interruptBehavior: 'cancel'`) passes `{ preservePendingInputs: true }` so
+ * the freshly-submitted prompt sitting in the queue survives the abort and
+ * is picked up by the next `runQueuedPromptSequence` iteration.
+ */
+export interface AbortOptions {
+  readonly preservePendingInputs?: boolean;
+}
+
+/**
  * Streaming actions interface - 娴佸紡鎿嶄綔鎺ュ彛
  */
 export interface StreamingActions {
@@ -132,7 +146,7 @@ export interface StreamingActions {
   setError: (error: string | undefined) => void;
 
   /** 鍙栨秷褰撳墠娴佸紡鍝嶅簲 */
-  abort: () => void;
+  abort: (options?: AbortOptions) => void;
 
   /** 閲嶇疆鐘舵€?*/
   reset: () => void;
@@ -247,7 +261,7 @@ export interface StreamingManager {
   setError: (error: string | undefined) => void;
 
   /** 鍙栨秷褰撳墠娴佸紡鍝嶅簲 */
-  abort: () => void;
+  abort: (options?: AbortOptions) => void;
 
   /** 閲嶇疆鐘舵€?*/
   reset: () => void;
@@ -458,7 +472,7 @@ export function createStreamingManager(): StreamingManager {
       notify();
     },
 
-    abort: () => {
+    abort: (options?: AbortOptions) => {
       bufferSealed = true; // Issue 116: seal buffer before flush to block racing callbacks
       flushPendingUpdates();
       state.abortController?.abort();
@@ -474,7 +488,10 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
-        pendingInputs: [],
+        // FEATURE_149 (v0.7.38): preserve queue for fast-abort callers
+        // (handleSubmit when interruptBehavior:'cancel' tool is mid-flight).
+        // Default behavior (Esc / exit) clears as before.
+        pendingInputs: options?.preservePendingInputs ? state.pendingInputs : [],
       };
       notify();
     },
@@ -836,8 +853,8 @@ export function StreamingProvider({
     managerRef.current.setError(error);
   }, []);
 
-  const abort = useCallback(() => {
-    managerRef.current.abort();
+  const abort = useCallback((options?: AbortOptions) => {
+    managerRef.current.abort(options);
   }, []);
 
   const reset = useCallback(() => {

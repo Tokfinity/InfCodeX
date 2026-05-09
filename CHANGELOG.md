@@ -6,7 +6,57 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-<!-- last-sync: 2e0e124 -->
+<!-- last-sync: f9616b7 -->
+
+---
+
+## [0.7.38] - 2026-05-09
+
+### Theme
+
+**Two-feature delivery — Queued Prompt Injection Latency & Mid-Turn UX Parity, Write-Child Mutation Context Injection.** v0.7.38 closes the "queued prompt feels laggy" gap users hit in v0.7.37 by removing four cumulative latency sources and adding three Claude-Code-style mid-turn UX surfaces (FEATURE_149); and corrects the long-standing under-injection where parallel write children silently skipped the project's `AGENTS.md` mutation policy because they shared the read-child minimal system prompt (FEATURE_117 v2). Configuration cleanup: KodaX no longer reads `CLAUDE.md` as a fallback when `AGENTS.md` is absent — `CLAUDE.md` is Claude-Code-specific project guidance and injecting it into the KodaX agent context produces semantic mismatch (KodaX's own repo dogfood-bit this).
+
+### Added
+
+- **FEATURE_149 — Queued Prompt Injection Latency & Mid-Turn UX Parity** — Three slices, all in v0.7.38:
+  - **Slice A (latency cleanup, zero behavior change)**: Removed the legacy 50ms `setTimeout` floor in `stageQueuedPrompt` (`packages/repl/src/ui/InkREPL.tsx`); added an mtime-keyed file-content cache to `loadAgentsFiles` (`packages/coding/src/context/agents-loader.ts`) so per-round AGENTS.md walks are O(stat) once warmed instead of O(read+parse). Round-N → round-N+1 handoff floor measured at < 5ms (`packages/repl/src/ui/utils/queued-prompt-sequence-latency.test.ts` micro-bench), down from a 53ms minimum.
+  - **Slice B (behavioral changes, prompt-eval-gated)**:
+    - **B1 — Interruptible-tool fast-abort (infrastructure-ready, no tool opt-in)**: Tools may now declare `interruptBehavior: 'cancel' | 'wait'`; default is `'wait'`. The `handleSubmit` fast-abort path is wired so that when an in-flight tool is `'cancel'`-tagged, a newly submitted prompt aborts the active round immediately (preserving the freshly submitted prompt via the new `abort({ preservePendingInputs: true })` option) and the user redirects within ~500ms of `Enter`. **No built-in tool is currently tagged `'cancel'`** — fact-check of `c:/Works/claudecode/src/` showed CC's `interruptBehavior` interface exists in `Tool.ts:416` but **zero** concrete tools (`BashTool` / `FileEditTool` / `TaskGetTool` / `TaskOutputTool` / etc.) opt in. CC's `hasInterruptibleToolInProgress` requires `every(t => 'cancel')`, so in production it almost never fires. KodaX matches CC's conservative posture: SIGTERM-mid-bash leaves half-written files / half-pushed git / half-mutated databases, and aborting `await_child_task` orphans the FEATURE_119 Pattern B background child. The infrastructure (type + field + fast-abort path + `preservePendingInputs` option) is in place for future side-effect-free wait-only tools (Sleep / Wait / Schedule) to opt in. Esc remains the explicit user-side abort gesture.
+    - **B3 — Batched drain**: `runQueuedPromptSequence` now coalesces all pending follow-ups into a single batched user message joined by `\n\n---\n\n`, so N pending prompts collapse to **one** agent invocation rather than N. Drives both cost reduction and better LLM-side coherence (the model sees all sub-tasks at once and can interleave/parallelize). Backed by `tests/feature-149-batched-drain.eval.ts` (5 alias × 4 case = 20 cells; stage-1 acceptance: alias mean ≥ 75% pass per case, max-min spread ≤ 20pp).
+  - **Slice C (UX surface, pure UI)**:
+    - **C1 — Up-arrow popAllEditable**: Pressing ↑ when the input is empty pops the entire pending-prompts queue back into the editor, joined by blank lines, so the user can edit / reorder / delete and resubmit. The hint line below the queue surface advertises the gesture.
+    - **C2 — Multi-line queue render**: Queue is shown as `[i/N] preview` rows in `QueuedCommandsSurface` (one per pending input), replacing the single-line summary. Esc still drops the latest entry.
+    - **C3 — Line-buffered streaming render** (added during implementation after CC naturalness investigation): While a model token stream is in flight, only complete lines (those ending in `\n`) are rendered to the transcript live area. The currently-being-typed trailing line is suppressed until its newline arrives, mirroring Claude Code's [`REPL.tsx:1473`](c:/Works/claudecode/src/screens/REPL.tsx#L1473) `streamingText.substring(0, streamingText.lastIndexOf('\n') + 1)` pattern. Eliminates character-level flicker (especially noticeable on Windows conhost / reduced-motion terminals); the full final response still lands in transcript history when the round completes (no tail content lost). Implementation: 1 file, ~10 LoC at [`transcript-layout.ts:757`](packages/repl/src/ui/utils/transcript-layout.ts#L757); 3 new pinning tests.
+  - Test guide: `docs/test-guides/FEATURE_149_v0.7.38_TEST_GUIDE.md`. Design doc: `docs/features/v0.7.38.md#feature_149-queued-prompt-injection-latency--mid-turn-ux-parity`.
+
+- **FEATURE_117 v2 — Write-Child Mutation Context Injection** — Replaced v1's invalidated "strip read-path context" design with the inverse: write children now inherit the project's `AGENTS.md` mutation policy that the parent agent already follows. Rationale: `child-executor.ts` write and read children both used the bare `CHILD_AGENT_SYSTEM_PROMPT` (~500 tokens, no project rules) because `systemPromptOverride` short-circuits `buildSystemPrompt`. v1 assumed children were inheriting the parent's full 5.2k-token stable context and wanted to strip — Phase 3 fact-check disproved that, but surfaced the real gap: write children silently violated project rules (no-`any`, no-hardcoded-config, conventional-commit format) because they couldn't see them. v2 adds a single `buildWriteSystemPrompt(parentCtx.gitRoot)` helper (~17 LoC) that prepends the bare base prompt with a one-line framing sentence and the formatted `AGENTS.md` block. Lookup walks from `parentCtx.gitRoot`, **not** the worktree path — worktrees are transient checkouts that don't carry untracked `AGENTS.md` files. Read children stay on the bare prompt (read tasks don't mutate; rules don't apply). Cost is amortized via FEATURE_149's mtime cache (single disk read per fan-out wave) and FEATURE_116's `cache_control: ephemeral` (single billing per 5-min window). Test guide: `docs/test-guides/FEATURE_117_v0.7.38_TEST_GUIDE.md`. Design doc: `docs/features/v0.7.38.md#feature_117-v2-write-child-mutation-context-injection`. 4 new unit cases pin behavior (write-inject / no-AGENTS-md fallback / read-stays-minimal / lookup-uses-parent-gitRoot / undefined-gitRoot graceful no-op).
+
+### Changed
+
+- **`packages/coding/src/context/agents-loader.ts` no longer falls back to `CLAUDE.md`** — `CONTEXT_FILE_CANDIDATES` reduced from `["AGENTS.md", "CLAUDE.md"]` to `["AGENTS.md"]`. `CLAUDE.md` is Claude-Code-specific project guidance (its content is authored to be consumed by the Claude Code CLI). When a project ships both files, contents typically overlap — the previous fallback caused either double-injection (when both files exist at different traversal depths) or semantic mismatch (KodaX agent receiving CC-targeted instructions). KodaX's own repository dogfooded this: `docs/CLAUDE.md` is CC project rules and was being injected into the KodaX agent context. **Minor breaking change**: projects that ship only `CLAUDE.md` (no `AGENTS.md`) stop receiving any project-agents section — migration is `mv CLAUDE.md AGENTS.md` or symlink. `AGENTS.md` is the canonical AI-agent rules filename across the AI-agent tooling ecosystem (KodaX, Cursor, Continue, etc.).
+
+- **`KodaXEvents`-style abort signature gains `options?: { preservePendingInputs?: boolean }`** — Default `abort()` clears the pending-inputs queue (Esc / exit semantics, unchanged). The new `abort({ preservePendingInputs: true })` keeps the queue intact and is used by FEATURE_149 B1's fast-abort path so the freshly submitted follow-up survives the interrupt and is picked up by the next `runQueuedPromptSequence` iteration.
+
+### Notes for callers
+
+- **CLI users**: zero migration needed. The `\n\n---\n\n` batched-drain separator only affects how multiple queued prompts are sent to the LLM; user-side input is unchanged. The new ↑ gesture on empty input replaces the previous no-op (history was never wired here).
+- **`@kodax-ai/coding` SDK consumers calling `executeChildAgents` directly**: read-only children are byte-equivalent to v0.7.37. Write children's `systemPromptOverride` now contains additional `AGENTS.md`-derived content when the parent context has a discoverable AGENTS.md. If you were asserting equality against `CHILD_AGENT_SYSTEM_PROMPT`, switch to `startsWith` or use the now-exported const directly.
+- **Tools with custom interrupt semantics**: `LocalToolDefinition.interruptBehavior` defaults to `'wait'` if unset — no change for existing custom tools. Set it to `'cancel'` only for tools that block on observable wall-clock time (network IO, sleep, child-task wait) where a user follow-up should redirect immediately.
+
+### Verified
+
+- All 262 affected test files pass (`npm run test` — `packages/coding`, `packages/repl/src/ui/utils`, `packages/repl/src/ui/contexts`, `tests/tracker-consistency.test.ts`).
+- New: `packages/repl/src/ui/utils/queued-prompt-sequence-latency.test.ts` (handoff floor < 5ms + 50ms-floor sanity check).
+- New: `tests/feature-149-batched-drain.eval.ts` + `benchmark/datasets/feature-149-batched-drain/cases.test.ts` (4 cases, 30 hermetic shape tests; pilot eval skips when API keys absent).
+- New: 4 cases in `packages/coding/src/child-executor.test.ts` for FEATURE_117 v2 mutation context injection.
+- `npm run build` (`tsc -b tsconfig.build.json`) green.
+
+### Known not-in-scope
+
+- **Mid-tool-call prompt injection** (streaming a new user message to the LLM while a tool is still executing) — conflicts with cancel-then-reissue boundaries; deferred to v0.7.43+.
+- **Soft-pause state machine** — FEATURE_111 v0.7.43 scope.
+- **Council / multi-advisor consult** — FEATURE_105 v0.7.46 scope.
+- **Read-child cost-stripping** — v1 of FEATURE_117 was abandoned; read children already minimal.
 
 ---
 

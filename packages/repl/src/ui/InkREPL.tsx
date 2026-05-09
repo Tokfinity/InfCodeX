@@ -90,6 +90,7 @@ import {
   recordDenial,
   isDeniedRecently,
   getDenialContext,
+  getRegisteredToolDefinition,
 } from "@kodax-ai/coding";
 import type {
   AgentsFile,
@@ -1424,6 +1425,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     addPendingInput,
     removeLastPendingInput,
     shiftPendingInput,
+    consumePendingInputs,
   } = useStreamingActions();
 
   // State
@@ -6258,13 +6260,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       return;
     }
 
+    // FEATURE_149 Phase 1.1: state writes happen synchronously; caller's
+    // `await onBeforeQueuedRound(...)` yields a microtask which is enough
+    // for React's reducer dispatch to settle before runRound reads context.
+    // The previous `setTimeout(50)` floor was a cargo-culted wait that added
+    // ~50ms to every queued-prompt injection without any guaranteed semantics.
     addHistoryItem({
       type: "user",
       text: normalizedPrompt,
     });
     setSubmitCounter((prev) => prev + 1);
     touchContext(context);
-    await new Promise((resolve) => setTimeout(resolve, 50));
   }, [addHistoryItem, context]);
 
   const runQueueableAgentSequence = useCallback(async (
@@ -6535,6 +6541,37 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           }, 'queue-limit');
           return;
         }
+
+        // FEATURE_149 Phase B1b (v0.7.38) — fast-abort path.
+        //
+        // When the in-flight tool is tagged `interruptBehavior: 'cancel'`
+        // (e.g., bash, await_child_task), waiting for it to finish is
+        // antagonistic to the user's redirect. Sequence:
+        //   1) queue the new prompt FIRST (so it survives the abort),
+        //   2) `abort({ preservePendingInputs: true })` — Substrate's
+        //      AbortError terminal resolves with `{ success: true,
+        //      interrupted: true }` (run-substrate.ts:1447), so the active
+        //      `runQueuedPromptSequence` loop continues into its next
+        //      iteration and shifts our queued prompt without losing
+        //      isLoading state.
+        //
+        // For 'wait'-class tools (or untracked tools), keep the legacy
+        // queue-without-abort behavior — they finish quickly enough that
+        // an abort would cost more than it saves.
+        const activeToolName = streamingState.currentTool;
+        if (activeToolName) {
+          const def = getRegisteredToolDefinition(activeToolName);
+          if (def?.interruptBehavior === 'cancel') {
+            addPendingInput(fullText);
+            abort({ preservePendingInputs: true });
+            setInputText("");
+            setIsInputEmpty(true);
+            setSubmitCounter(prev => prev + 1);
+            touchContext(context);
+            return;
+          }
+        }
+
         // Queue the EXPANDED text — downstream drain path feeds the agent.
         addPendingInput(fullText);
         setInputText("");
@@ -7345,6 +7382,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         <PromptComposer
           onSubmit={handleSubmit}
           onHistoryRecall={handleHistoryRecall}
+          // FEATURE_149 Phase 2.1 (v0.7.38) — ↑ on empty buffer pulls the
+          // queued follow-ups back into the editor for editing/reordering.
+          // `consumePendingInputs` clears the queue atomically; we stitch the
+          // entries with `\n---\n` so the user can split them back apart by
+          // hand (mirrors Claude Code's `popAllEditable`).
+          onPopPendingInputs={() => {
+            const inputs = consumePendingInputs();
+            if (inputs.length === 0) return undefined;
+            return inputs.join("\n---\n");
+          }}
           prompt=">"
           placeholder={buildPromptPlaceholderText({
             isLoading,

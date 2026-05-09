@@ -366,6 +366,16 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['command'],
     },
     handler: toolBash,
+    // FEATURE_149 (v0.7.38) — `interruptBehavior` is intentionally LEFT
+    // UNSET (defaults to 'wait'). KodaX mirrors Claude Code's conservative
+    // posture here: SIGTERM-mid-bash leaves half-written files, half-pushed
+    // git, half-mutated databases — letting a long shell finish + queueing
+    // the new prompt is safer than aborting. CC's `BashTool` likewise has
+    // no `interruptBehavior` override (default `'block'` in CC = our
+    // `'wait'`). The fast-abort path in `InkREPL.tsx:handleSubmit` stays
+    // wired so a future side-effect-free wait-only tool (Sleep, Wait,
+    // Schedule) can opt in by tagging `'cancel'` — that's the only safe
+    // shape for fast-abort.
     toClassifierInput: (input) => {
       const i = input as { command?: string };
       return `Bash: ${typeof i?.command === 'string' ? i.command : '<no-command>'}`;
@@ -480,6 +490,15 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['task_id'],
     },
     handler: toolAwaitChildTask,
+    // FEATURE_149 (v0.7.38) — `interruptBehavior` is intentionally LEFT
+    // UNSET. Aborting a Worker round mid-await would orphan the
+    // background child: per FEATURE_119 Pattern B the executor keeps
+    // running in the background after the await is dropped, but the
+    // resolver entry would never be claimed and the child's mutations
+    // (it could be writing to a worktree right now) would land into a
+    // detached state. CC's `TaskGetTool` / `TaskOutputTool` likewise
+    // default to `'block'`. Keep it 'wait' here — let the await finish,
+    // queue the new prompt for the next round.
     toClassifierInput: (input) => {
       const i = input as { task_id?: string };
       return `Await: ${typeof i?.task_id === 'string' ? i.task_id : '<no-task-id>'}`;

@@ -29,8 +29,34 @@ export type ToolHandlerStreaming = (
 /** Union of both handler types. Existing tools use ToolHandlerSync; new long-running tools may use ToolHandlerStreaming. */
 export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;
 
+/**
+ * FEATURE_149 (v0.7.38) — interrupt-on-submit policy for in-flight tools.
+ *
+ * Controls whether submitting a new prompt while THIS tool is mid-execution
+ * triggers a fast-abort of the current agent round (so the new prompt starts
+ * immediately) or queues the prompt to run after the tool resolves.
+ *
+ *   - `'cancel'` — long-running tools whose work the user is likely to want
+ *     to abandon when they redirect (e.g., `bash` running a 30s script,
+ *     `dispatch_child_task` synchronously awaiting a child, sleep-style
+ *     tools). InkREPL submit handler aborts the round immediately.
+ *
+ *   - `'wait'` (default) — atomic / fast tools (read, grep, glob, write,
+ *     edit, …) where waiting for completion is cheaper than aborting and
+ *     redoing.
+ *
+ * Mirrors Claude Code `interruptBehavior` (`utils/handlePromptSubmit.ts`).
+ */
+export type ToolInterruptBehavior = 'cancel' | 'wait';
+
 export interface LocalToolDefinition extends KodaXToolDefinition {
   handler: ToolHandler;
+
+  /**
+   * FEATURE_149 (v0.7.38) — submit-time interrupt policy. See
+   * {@link ToolInterruptBehavior}. Default `'wait'` when undefined.
+   */
+  interruptBehavior?: ToolInterruptBehavior;
 
   /**
    * Classifier projection — REQUIRED (FEATURE_092 v0.7.33).
