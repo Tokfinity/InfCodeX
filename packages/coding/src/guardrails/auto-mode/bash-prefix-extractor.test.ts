@@ -252,7 +252,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
   it('caches the result of a successful extraction', async () => {
     const provider = new StubProvider(async () => okStream('git status'));
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
     });
 
@@ -273,7 +273,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
         }),
     );
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
     });
 
@@ -298,7 +298,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
       return okStream('git status');
     });
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
     });
 
@@ -315,7 +315,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
   it('clearCache drops all entries', async () => {
     const provider = new StubProvider(async () => okStream('git status'));
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
     });
 
@@ -337,7 +337,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
     });
 
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
       cacheSize: 2,
     });
@@ -361,7 +361,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
     const seenModels: string[] = [];
     const provider = new StubProvider(async () => okStream('git status'));
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => {
         seenModels.push(activeModel);
         return activeModel;
@@ -378,7 +378,7 @@ describe('createBashPrefixExtractor — cached factory', () => {
   it('caches injection_detected too (avoids re-asking LLM about the same dangerous command)', async () => {
     const provider = new StubProvider(async () => okStream('command_injection_detected'));
     const extractor = createBashPrefixExtractor({
-      provider,
+      getProvider: () => provider,
       getModel: () => 'stub-default',
     });
 
