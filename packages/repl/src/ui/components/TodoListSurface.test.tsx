@@ -27,9 +27,10 @@ function makeItem(
 const NOW = 1_700_000_000_000;
 
 describe("TodoListSurface", () => {
-  it("returns null when viewModel.shouldRender is false", () => {
-    // Single item — below MIN_ITEMS_TO_RENDER threshold.
-    const vm = buildTodoPlanViewModel([makeItem("todo_1", "lone")], {
+  it("returns null when viewModel.shouldRender is false (empty store)", () => {
+    // FEATURE_151 (v0.7.38): MIN dropped to 1, so the only "below threshold"
+    // case is now an EMPTY store. A single item renders (see next test).
+    const vm = buildTodoPlanViewModel([], {
       now: NOW,
       lastAllCompletedAt: null,
     });
@@ -37,7 +38,22 @@ describe("TodoListSurface", () => {
     expect(lastFrame()).toBe("");
   });
 
-  it("returns null after the 5s post-completion linger elapses", () => {
+  it("FEATURE_151 (v0.7.38): renders a single-item list (CC TaskListV2 parity)", () => {
+    const vm = buildTodoPlanViewModel([makeItem("todo_1", "Lone task")], {
+      now: NOW,
+      lastAllCompletedAt: null,
+    });
+    const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
+    const frame = lastFrame() ?? "";
+    expect(frame).toContain("Lone task");
+    expect(frame).toContain("0/1 completed");
+  });
+
+  it("FEATURE_151 (v0.7.38): keeps rendering after the (formerly 5s) linger elapses", () => {
+    // Pre-FEATURE_151 the surface auto-hid 5s after every item went terminal.
+    // Post-FEATURE_151 the surface stays visible until the next `replace()`
+    // event from a new Scout init or LLM op:'init', matching CC's
+    // `expandedView==='tasks'` persistence semantics.
     const items = [
       makeItem("todo_1", "A", "completed"),
       makeItem("todo_2", "B", "completed"),
@@ -48,7 +64,9 @@ describe("TodoListSurface", () => {
       lastAllCompletedAt: NOW - POST_COMPLETION_LINGER_MS - 1,
     });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    expect(lastFrame()).toBe("");
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toBe("");
+    expect(frame).toContain("3/3 completed");
   });
 
   it("renders the counter line in 'X/Y completed' format", () => {

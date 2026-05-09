@@ -89,11 +89,16 @@ describe('throttle reminder threshold (TURNS_SINCE_TODO_UPDATE_REMINDER = 8)', (
     expect(shouldFireTodoReminder(state, store)).toBe(true);
   });
 
-  it('front-gate: does not fire when store has no items', () => {
+  // FEATURE_151 (v0.7.38) — front gate `!hasItems()` REMOVED. Empty store
+  // now also fires (with the LLM-self-init nudge text). The previous
+  // behavior was a chicken-and-egg deadlock that prevented the LLM from
+  // ever learning about the plan-list infrastructure when Scout did not
+  // seed.
+  it('FEATURE_151: fires even when store has no items (LLM nudged to op:init)', () => {
     const state = createTodoReminderState();
     const emptyStore = createTodoStore();
     state.roundsSinceUpdate.current = TURNS_SINCE_TODO_UPDATE_REMINDER + 100;
-    expect(shouldFireTodoReminder(state, emptyStore)).toBe(false);
+    expect(shouldFireTodoReminder(state, emptyStore)).toBe(true);
   });
 });
 
@@ -182,6 +187,26 @@ describe('throttle reminder text format', () => {
     expect(text).toContain('terminal state');
     expect(text).not.toMatch(/^- todo_/m); // no bullet list
   });
+
+  // FEATURE_151 (v0.7.38) — empty-store branch nudges LLM to op:'init'.
+  it('FEATURE_151: empty store reminder nudges LLM toward op:"init"', () => {
+    const emptyStore = createTodoStore();
+    const text = buildTodoReminderText(emptyStore);
+    expect(text.startsWith('<system-reminder>')).toBe(true);
+    expect(text.endsWith('</system-reminder>')).toBe(true);
+    expect(text).toContain('have not committed a plan');
+    expect(text).toContain('todo_update({op:"init"');
+    // Must mention the trivial-task exemption so the LLM doesn't spam plans.
+    expect(text).toContain('Trivial');
+    // Must NOT show the v0.7.34 'Pending items:' bullet header.
+    expect(text).not.toContain('Pending items:');
+  });
+
+  it('FEATURE_151: empty store reminder lists no bullet items (defensive)', () => {
+    const emptyStore = createTodoStore();
+    const text = buildTodoReminderText(emptyStore);
+    expect(text).not.toMatch(/^- /m);
+  });
 });
 
 describe('end-to-end throttle scenario', () => {
@@ -208,24 +233,17 @@ describe('end-to-end throttle scenario', () => {
     expect(firedCount).toBe(2);
   });
 
-  it('does not fire if store has fewer than 2 items at any point', () => {
+  it('FEATURE_151: fires once at 1 item (front-gate removed; UI MIN=1 renders)', () => {
     const state = createTodoReminderState();
     const store = createTodoStore();
-    // Single-item store — design says obligations < 2 means no seed; but
-    // even if one slipped through, the threshold + front-gate logic should
-    // still hold (front-gate is `hasItems()` which is true at 1 item, but
-    // the design states obligations < 2 never seeds, so this is defense).
     store.init([{ id: 'todo_1', content: 'sole task' }]);
     let firedCount = 0;
     for (let i = 0; i < 20; i++) {
       if (shouldFireTodoReminder(state, store)) firedCount++;
       tickTodoReminder(state);
     }
-    // It DOES fire once even at 1 item — front-gate is hasItems(), not
-    // length>=2. The "obligations < 2 → don't seed" is enforced upstream
-    // at runner-driven.ts (Scout/Planner contract emit branches), so by
-    // the time we reach this layer the store is either empty (no fire) or
-    // ≥ 2 (fires normally). This test documents that.
+    // Always fired once at threshold; populated-store branch text formats
+    // the bullet line for the single item.
     expect(firedCount).toBe(1);
   });
 });

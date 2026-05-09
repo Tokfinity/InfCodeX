@@ -3206,22 +3206,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }),
     [todoItems, todoLastAllCompletedAt],
   );
-  // After all items close, set up a one-shot timer to force a re-render
-  // ~5 s later so the linger window actually fires. Without this, no
-  // event would fire to drop the surface — items stayed terminal but
-  // React had no reason to re-render.
-  useEffect(() => {
-    if (todoLastAllCompletedAt === null) return;
-    const elapsed = Date.now() - todoLastAllCompletedAt;
-    const remaining = Math.max(0, 5_000 - elapsed) + 100;
-    const timer = setTimeout(() => {
-      // Drop the items so the next render returns null. This also
-      // resets the closed-at flag so a new task can re-arm the surface.
-      setTodoItems([]);
-      setTodoLastAllCompletedAt(null);
-    }, remaining);
-    return () => clearTimeout(timer);
-  }, [todoLastAllCompletedAt]);
+  // FEATURE_151 (v0.7.38): the 5-second linger timer + `setTodoItems([])`
+  // forced clear was removed to match Claude Code's persistent-visibility
+  // behavior. The surface now stays mounted (and the React state retains
+  // items) until the next AMA task's Scout `init()` or LLM-driven
+  // `todo_update op:'init'` fires `onChange` with a new list. The
+  // `todoLastAllCompletedAt` state itself is kept (other code reads it
+  // and the view-model still accepts it for back-compat) but no longer
+  // drives a clear. See `docs/features/v0.7.38.md#feature_151...` Slice C.
 
   const statusBarViewModel = useMemo(
     () => buildStatusBarViewModel(statusBarProps),
@@ -7420,13 +7412,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         </Box>
       ) : undefined}
       todoSurface={
-        // FEATURE_097 (v0.7.34) — gate on the same spinner the design
-        // anchors against (`promptActivityViewModel.showSpinner`); the
-        // view-model itself decides whether to render rows. The two
-        // gates are intentionally redundant: the spinner gate hides the
-        // surface during idle prompts, and the view-model gate hides it
-        // for too-short tasks / post-linger / empty list.
-        promptActivityViewModel?.showSpinner ? (
+        // FEATURE_097 (v0.7.34) — surface mount.
+        // FEATURE_151 (v0.7.38) — spinner gate REMOVED. Previously the
+        // surface was only mounted when `promptActivityViewModel.showSpinner`
+        // was true, which hid the list during idle prompts (between rounds,
+        // after task completion). To match Claude Code's persistent
+        // visibility (`expandedView === 'tasks'` stays sticky once
+        // TaskCreate fires; see `c:/Works/claudecode/src/screens/REPL.tsx`
+        // standalone TaskListV2 path at `!showSpinner` branch + Spinner.tsx
+        // inline path during spinner), KodaX now mounts unconditionally
+        // and lets the view-model's `shouldRender` (totalCount >= 1) be
+        // the sole gate. When items are empty `<TodoListSurface>` returns
+        // null on its own — no extra wrapping cost.
+        todoPlanViewModel.shouldRender ? (
           <Box paddingX={1}>
             <TodoListSurface viewModel={todoPlanViewModel} />
           </Box>

@@ -31,14 +31,29 @@ function makeItems(n: number, status: TodoStatus = "pending"): TodoItem[] {
 const NOW = 1_700_000_000_000;
 
 describe("buildTodoPlanViewModel — gating", () => {
-  it("hides the surface when totalCount < MIN_ITEMS_TO_RENDER", () => {
-    expect(MIN_ITEMS_TO_RENDER).toBe(2);
-    const vm = buildTodoPlanViewModel([makeItem("todo_1", "lone task")], {
+  // FEATURE_151 (v0.7.38): MIN dropped 2 → 1 to match CC; linger gate
+  // removed. The constant exports stay so external code that imports them
+  // does not break, but the linger ones are now no-ops in the view-model.
+  it("hides the surface when totalCount < MIN_ITEMS_TO_RENDER (i.e. empty)", () => {
+    expect(MIN_ITEMS_TO_RENDER).toBe(1);
+    const vm = buildTodoPlanViewModel([], {
       now: NOW,
       lastAllCompletedAt: null,
     });
     expect(vm.shouldRender).toBe(false);
+    expect(vm.totalCount).toBe(0);
+  });
+
+  it("renders a single-item list (FEATURE_151: MIN=1, CC parity)", () => {
+    const vm = buildTodoPlanViewModel([makeItem("todo_1", "lone task")], {
+      now: NOW,
+      lastAllCompletedAt: null,
+    });
+    expect(vm.shouldRender).toBe(true);
     expect(vm.totalCount).toBe(1);
+    // The single row should render as a plain item (no folds).
+    expect(vm.rows.length).toBe(1);
+    expect(vm.rows[0]?.kind).toBe("item");
   });
 
   it("renders when totalCount >= MIN_ITEMS_TO_RENDER", () => {
@@ -46,27 +61,29 @@ describe("buildTodoPlanViewModel — gating", () => {
     expect(vm.shouldRender).toBe(true);
   });
 
-  it("post-completion linger: hides AFTER POST_COMPLETION_LINGER_MS elapsed", () => {
+  // FEATURE_151 (v0.7.38): the post-completion 5-second linger gate was
+  // removed. These tests pin the new behavior — view-model NEVER hides
+  // based on `lastAllCompletedAt`; surface stays visible until the host
+  // replaces the list (Scout init or LLM op:'init').
+  it("FEATURE_151: still renders when items terminal AND linger window 'expired'", () => {
     const items = makeItems(3, "completed");
     const closedAt = NOW - POST_COMPLETION_LINGER_MS - 1;
-    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: closedAt });
-    expect(vm.shouldRender).toBe(false);
-  });
-
-  it("post-completion linger: still renders WITHIN the linger window", () => {
-    const items = makeItems(3, "completed");
-    const closedAt = NOW - 1_000;
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: closedAt });
     expect(vm.shouldRender).toBe(true);
   });
 
-  it("post-completion linger: never closes when lastAllCompletedAt is null", () => {
-    // Caller sets lastAllCompletedAt only after the LAST flip; if it's
-    // null, treat the surface as still active.
+  it("FEATURE_151: still renders when items terminal AND linger never started", () => {
     const vm = buildTodoPlanViewModel(makeItems(3, "completed"), {
       now: NOW,
       lastAllCompletedAt: null,
     });
+    expect(vm.shouldRender).toBe(true);
+  });
+
+  it("FEATURE_151: still renders when items terminal AND linger 'within window'", () => {
+    const items = makeItems(3, "completed");
+    const closedAt = NOW - 1_000;
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: closedAt });
     expect(vm.shouldRender).toBe(true);
   });
 });

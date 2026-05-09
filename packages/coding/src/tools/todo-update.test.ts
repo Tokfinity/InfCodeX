@@ -229,3 +229,225 @@ describe('todo_update graceful degradation when store is not wired', () => {
     expect(parsed.reason.toLowerCase()).toContain('not active');
   });
 });
+
+// FEATURE_151 (v0.7.38) — `op: 'init'` whole-list write tests.
+// Mirrors Claude Code TodoWrite semantics: LLM commits the full list in one
+// call; calling on an already-populated store fully replaces.
+
+describe("todo_update FEATURE_151 op:'init' happy path", () => {
+  function makeEmptyContext(): {
+    ctx: KodaXToolExecutionContext;
+    store: ReturnType<typeof createTodoStore>;
+    notifyCount: () => number;
+  } {
+    let calls = 0;
+    const store = createTodoStore({ onChange: () => calls++ });
+    return {
+      ctx: makeContext({ todoStore: store }),
+      store,
+      notifyCount: () => calls,
+    };
+  }
+
+  it('seeds an empty store and returns {ok:true, count:N}', async () => {
+    const { ctx, store, notifyCount } = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [
+          { id: 'todo_1', content: 'Audit auth', activeForm: 'Auditing auth' },
+          { id: 'todo_2', content: 'Update tests' },
+        ],
+      },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; count?: number };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.count).toBe(2);
+    const all = store.getAll();
+    expect(all).toHaveLength(2);
+    expect(all[0]?.id).toBe('todo_1');
+    expect(all[0]?.content).toBe('Audit auth');
+    expect(all[0]?.activeForm).toBe('Auditing auth');
+    expect(all[0]?.status).toBe('pending');
+    expect(all[1]?.id).toBe('todo_2');
+    expect(all[1]?.activeForm).toBeUndefined();
+    // init() always notifies (even an empty seed counts as an intentional
+    // event), so we expect exactly 1 onChange firing for one tool call.
+    expect(notifyCount()).toBe(1);
+  });
+
+  it('accepts a single-item init (FEATURE_151 + Slice A: MIN=1 renders)', async () => {
+    const { ctx, store } = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: 'todo_1', content: 'Do the thing' }] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; count?: number };
+    expect(parsed.ok).toBe(true);
+    expect(parsed.count).toBe(1);
+    expect(store.getAll()).toHaveLength(1);
+  });
+
+  it('REPLACES an already-populated store (CC TodoWrite parity)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    // Pre-populated with todo_1, todo_2, todo_3 from `makeContextWithStore`.
+    expect(store.getAll()).toHaveLength(3);
+    // Mutate one to verify replace really wipes state, not merges.
+    store.updateStatus('todo_1', 'completed');
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [
+          { id: 'p_1', content: 'New plan step 1' },
+          { id: 'p_2', content: 'New plan step 2' },
+        ],
+      },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true, count: 2 });
+    const all = store.getAll();
+    expect(all).toHaveLength(2);
+    expect(all.map((it) => it.id)).toEqual(['p_1', 'p_2']);
+    // todo_1's completed status is GONE — fully replaced.
+    expect(all.every((it) => it.status === 'pending')).toBe(true);
+  });
+
+  it("works as documented when omitting `op` (default 'update' branch unaffected)", async () => {
+    const { ctx, store } = makeContextWithStore();
+    // No `op` field → defaults to 'update'; existing behavior preserved.
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', status: 'in_progress', activeForm: 'Renaming function' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll()[0]?.status).toBe('in_progress');
+    expect(store.getAll()[0]?.activeForm).toBe('Renaming function');
+  });
+});
+
+describe("todo_update FEATURE_151 op:'init' input validation", () => {
+  function makeEmptyContext(): KodaXToolExecutionContext {
+    return makeContext({ todoStore: createTodoStore() });
+  }
+
+  it("rejects unknown `op` value", async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'replace', items: [{ id: 'a', content: 'b' }] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('Invalid op');
+    expect(parsed.reason).toContain("'init'");
+  });
+
+  it('rejects op:init with non-array items', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'init', items: { id: 'a', content: 'b' } },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items');
+    expect(parsed.reason).toContain('array');
+  });
+
+  it('rejects op:init with empty items array', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate({ op: 'init', items: [] }, ctx);
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('>= 1');
+  });
+
+  it('rejects op:init with malformed item object', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: 'todo_1', content: 'A' }, null] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[1]');
+  });
+
+  it('rejects op:init with empty id', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: '', content: 'A' }] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[0].id');
+  });
+
+  it('rejects op:init with duplicate ids', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [
+          { id: 'todo_1', content: 'A' },
+          { id: 'todo_1', content: 'B' },
+        ],
+      },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('duplicate');
+  });
+
+  it('rejects op:init with empty content', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: 'todo_1', content: '' }] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[0].content');
+  });
+
+  it('rejects op:init with non-string activeForm', async () => {
+    const ctx = makeEmptyContext();
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [{ id: 'todo_1', content: 'A', activeForm: 42 as unknown as string }],
+      },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[0].activeForm');
+  });
+
+  it('treats omitted activeForm as undefined (not "")', async () => {
+    const ctx = makeContext({ todoStore: createTodoStore() });
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: 'todo_1', content: 'A' }] },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true, count: 1 });
+    const stored = (ctx.todoStore!.getAll())[0];
+    expect(stored?.activeForm).toBeUndefined();
+  });
+
+  it('does not attempt op:init when todoStore is not wired (graceful degradation)', async () => {
+    const ctx = makeContext({ todoStore: undefined });
+    const result = await toolTodoUpdate(
+      { op: 'init', items: [{ id: 'todo_1', content: 'A' }] },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    // Same "not active" message as the v0.7.34 update path — store unwired
+    // is store unwired regardless of which op the LLM tried.
+    expect(parsed.reason.toLowerCase()).toContain('not active');
+  });
+});

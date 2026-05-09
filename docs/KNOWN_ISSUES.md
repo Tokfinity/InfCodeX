@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-05-03_
+_Last Updated: 2026-05-09_
 
 ---
 
@@ -73,11 +73,105 @@ _Last Updated: 2026-05-03_
 | 126 | Low | Open | tmux 默认不透传 OSC 8 超链接 — kodax 输出中的 file:// / docs URL 在 tmux 内不可点击 | 一直存在 | - | 2026-04-28 | - |
 | 127 | High | Resolved | AMA 每次 query 都弹出"发现未完成的任务"对话框 — managed task checkpoint 清理 race + 错误/取消路径未清理 | v0.7.26 | v0.7.34 | 2026-05-03 | 2026-05-03 |
 | 128 | Medium | Resolved | runKodaX 端到端 contract 测试在并发负载下 5000ms 超时偶发 flake | 一直存在 | v0.7.34 | 2026-05-03 | 2026-05-03 |
+| 129 | Medium | Open | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | - | 2026-05-09 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决
+
+- **Priority**: Medium（auto 模式下高频打断，破坏"无人值守"承诺；非 corrupt-data，仅 UX）
+- **Status**: Open
+- **Introduced**: 一直存在（`isBashWriteCommand` redirection regex + 只读白名单的 Windows 缺位 + 管道判定都是初始设计）
+- **Created**: 2026-05-09
+- **Target Version**: v0.7.39
+
+#### Current Behavior
+
+在 `auto` 模式（含 `auto-in-project` 老别名）下，下列纯只读 shell 命令仍弹"[Confirm] Execute bash command? Risk: May modify files / Intent: Modify files"：
+
+```cmd
+cd C:\Works\claudecode && findstr /S /I /N "todos\[" src\bootstrap\state.ts 2>NUL | findstr /V "node_modules"
+```
+
+只要命令同时具备以下任一组合，就会触发：
+- 含 `2>NUL` 或 `2>/dev/null`（stderr 丢弃，不写文件）
+- 含 `|`（管道，即使两端都是只读 grep/findstr）
+- `cd` 目标在项目根之外
+
+#### Expected Behavior
+
+auto 模式下纯只读命令应当直接放行，不打断用户。LLM 风险分类器只在规则层无法判定时介入，不应被规则层假阳性提前 short-circuit 成必须确认。
+
+#### Reproduction
+
+1. `kodax`（auto 模式）
+2. 输入提示，让模型跑 `findstr ... 2>NUL | findstr ...` 之类只读搜索
+3. **每次都弹确认对话框**，标签为 "Modify files / May modify files"
+
+#### Root Cause（三个相互叠加的 bug）
+
+**A. `2>NUL` 被误判成"写文件"** — [packages/repl/src/permission/permission.ts:189](../packages/repl/src/permission/permission.ts#L189)
+
+```ts
+const BASH_REDIRECTION_WRITE_PATTERN = /(^|[^<])>>?(?=\s*\S)/;
+```
+
+regex 只排除 heredoc (`<<`)，没排除 fd 重定向。`2>NUL` 中 `2>` 完全匹配（`2` 不是 `<`）→ `isBashWriteCommand` 返回 `true` → [tool-confirmation.ts:94](../packages/repl/src/common/tool-confirmation.ts#L94) 把 Intent 标成 `intent.modify`、Risk 标成 `risk.modify`。**直接的可见症状由此产生**。
+
+**B. 出项目目录的"写命令"在 auto 模式下强制 confirm** — [packages/repl/src/permission/executor.ts:236-247](../packages/repl/src/permission/executor.ts#L236-L247)
+
+```ts
+if (mode === 'auto-in-project' && permContext.gitRoot && toolName === 'bash') {
+  const dangerCheck = getBashOutsideProjectWriteRisk(command, permContext.gitRoot);
+  if (dangerCheck.dangerous) { /* 强制 onConfirm */ }
+}
+```
+
+`getBashOutsideProjectWriteRisk` 第一行 `if (!isBashWriteCommand(command)) return { dangerous: false }` —— 因 bug A 假阳性，逻辑直接走到下一步。`cd C:\Works\claudecode` 把目标指到项目外 → `dangerous=true` → 强制弹 `onConfirm`，**LLM 分类器根本没机会发言**（admission 层在它之后）。
+
+**C. 只读白名单没救场** — [packages/repl/src/permission/types.ts:163-177](../packages/repl/src/permission/types.ts#L163-L177) + [permission.ts:110](../packages/repl/src/permission/permission.ts#L110)
+
+如果 `isBashReadCommand` 能返回 `true`，[executor.ts:197-199](../packages/repl/src/permission/executor.ts#L197-L199) 会直接放行。但它过不了：
+- `findstr`（Windows 原生 grep 等价物）不在 `BASH_SAFE_READ_COMMANDS` 里，白名单只有 `find`/`grep`/`select-string` 等 Unix/PowerShell 工具。
+- 即使加了 `findstr`，`baseIllegalSyntax = /[<>|;\`]|\$\(|(?<!&)&(?!&)/` 在 [permission.ts:110](../packages/repl/src/permission/permission.ts#L110) 会因为命令含 `|`（管道）和 `>`（在 `2>NUL` 里）整体拒绝。它对 `&&` 已经做了"拆开后每段都是 safe-read 即放行"的特例（[permission.ts:128-152](../packages/repl/src/permission/permission.ts#L128-L152)），但没对 `|` 做同样处理。
+
+#### Why It Matters
+
+KodaX 的 auto 模式核心 UX 承诺是 "无人值守自动跑"，并通过 LLM 分类器（FEATURE_092）做风险评估兜底。当下规则层假阳性把"读"误判为"写"，会同时：
+1. 触发不该触发的"出项目写"硬规则 → 弹窗
+2. 在弹窗 UI 上把命令标成 "Modify files"，给用户错误的安全感（"模型真的要改文件吗？"）
+3. 让 auto 模式在 Windows + 跨项目搜索 + stderr 静默 这种**完全合理的高频组合**下退化到 `accept-edits` 体验
+
+#### Proposed Solution
+
+按优先级执行（任一条都能让示例命令走到放行分支，但都做才完整）：
+
+| Priority | Location | Change |
+|---|---|---|
+| ① | `permission.ts:189` `BASH_REDIRECTION_WRITE_PATTERN` | 排除 fd 重定向到空设备：`2>NUL` / `2>nul` / `2>/dev/null` / `&>/dev/null` 等不算 write |
+| ② | `types.ts:163` `BASH_SAFE_READ_COMMANDS` | 加 `findstr`、`fc`、`where`（Windows 原生只读工具） |
+| ③ | `permission.ts:96` `isBashReadCommand` | 管道 `\|` 不再一票否决：按 `\|` 拆分后所有 stage 都是 safe-read 应判定为 safe（已对 `&&` 这么做） |
+
+①是关键根因 —— 只修它"Modify files" 误标就消失，弹窗也跟着消失（因 [permission.ts:601](../packages/repl/src/permission/permission.ts#L601) 的 early return）。
+②③是相关 paper-cut，趁同一 PR 一起修能让 Windows + 复合只读管道的场景彻底安静。
+
+#### Tests to Add
+
+- `permission.test.ts` — `isBashWriteCommand("findstr foo bar 2>NUL")` 应返回 `false`
+- `permission.test.ts` — `isBashWriteCommand("ls 2>/dev/null")` 应返回 `false`
+- `permission.test.ts` — `isBashWriteCommand("echo hi > out.txt")` 应仍返回 `true`（写文件 regression guard）
+- `permission.test.ts` — `isBashReadCommand("findstr foo file.txt")` 应返回 `true`
+- `permission.test.ts` — `isBashReadCommand("findstr foo a | findstr bar")` 应返回 `true`（管道两端都是 safe-read）
+- `permission.test.ts` — `isBashReadCommand("ls | rm -rf /")` 应仍返回 `false`（管道末端是 write，regression guard）
+
+#### Related
+
+- FEATURE_092 (v0.7.33) — auto-mode classifier；本 issue 的根因在分类器**之前**的硬规则层
+- Issue 085 (v0.5.30 已修) — 只读 Bash 命令白名单未在非 plan 模式复用；本 issue 是其在 Windows 命令族下的延伸缺口
+
 ---
 ### 128: runKodaX 端到端 contract 测试在并发负载下 5000ms 超时偶发 flake
 
@@ -3471,7 +3565,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 55 (25 Open, 30 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 56 (26 Open, 30 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 

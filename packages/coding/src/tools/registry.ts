@@ -805,7 +805,9 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_update',
     description:
-      'Update the status of a planned todo item so the user can see real-time progress on the visible plan checklist. Use this every time you start or finish a major step. Rules: ' +
+      'Drive the visible plan checklist so the user sees real-time progress. Two operating modes selected by `op`: ' +
+      '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, content, activeForm?}, ...]` (>= 1 entry; ids must be unique non-empty strings, content non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. Match Claude Code TodoWrite guidance: skip op:"init" for trivial single-step / informational tasks. ' +
+      '(B) `op="update"` (default; omit `op` for back-compat) — single-item state transition. Use this every time you start or finish a major step. Rules: ' +
       '(1) Set status="in_progress" BEFORE starting work on an item. ' +
       '(2) Set status="completed" AFTER finishing that item. ' +
       '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. ' +
@@ -817,26 +819,51 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     input_schema: {
       type: 'object',
       properties: {
+        op: {
+          type: 'string',
+          enum: ['init', 'update'],
+          description:
+            'Operation mode. "init" replaces the whole list with `items`; "update" mutates one item by `id`. Default = "update" when omitted.',
+        },
+        items: {
+          type: 'array',
+          description:
+            'op="init" payload — the new plan list. Each entry: {id: non-empty string (unique within list), content: non-empty string, activeForm?: present-continuous string}.',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'Unique non-empty item id (e.g. "todo_1").' },
+              content: { type: 'string', description: 'Imperative description of what needs to be done (e.g. "Run failing tests").' },
+              activeForm: {
+                type: 'string',
+                description: 'Optional present-continuous form (e.g. "Running failing tests") shown by the spinner when this item flips to in_progress.',
+              },
+            },
+            required: ['id', 'content'],
+          },
+        },
         id: {
           type: 'string',
-          description: 'The id of the todo item to update (e.g. "todo_3"). Must match a current valid id in the plan list.',
+          description: 'op="update" only. The id of the todo item to update (e.g. "todo_3"). Must match a current valid id in the plan list.',
         },
         status: {
           type: 'string',
           enum: ['in_progress', 'completed', 'failed', 'skipped'],
-          description: 'New status. "pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict.',
+          description: 'op="update" only. New status. "pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict.',
         },
         note: {
           type: 'string',
-          description: 'Optional free-text reason or detail. When omitted, any pre-existing note on the item is preserved.',
+          description: 'op="update" only. Optional free-text reason or detail. When omitted, any pre-existing note on the item is preserved.',
         },
         activeForm: {
           type: 'string',
           description:
-            'Present-continuous form of the item content (e.g. "Running failing tests"). Required when status="in_progress" so the spinner can show the user what you are doing right now. Omitted on completed/failed/skipped (the previous activeForm is preserved but irrelevant once the item leaves in_progress).',
+            'op="update" only. Present-continuous form of the item content (e.g. "Running failing tests"). Required when status="in_progress" so the spinner can show the user what you are doing right now. Omitted on completed/failed/skipped (the previous activeForm is preserved but irrelevant once the item leaves in_progress).',
         },
       },
-      required: ['id', 'status'],
+      // No top-level required fields — the handler validates per-op:
+      //   op="init"   → requires `items`
+      //   op="update" → requires `id` + `status`
     },
     handler: toolTodoUpdate,
     toClassifierInput: () => '',

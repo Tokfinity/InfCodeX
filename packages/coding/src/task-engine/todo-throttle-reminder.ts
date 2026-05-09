@@ -1,41 +1,38 @@
 /**
- * Todo Throttle Reminder — FEATURE_097 (v0.7.34) §5 ②.
+ * Todo Throttle Reminder — FEATURE_097 (v0.7.34) §5 ② + FEATURE_151 (v0.7.38).
  *
- * Layer 2 fallback for "model forgot to call `todo_update`": after
+ * Layer 2 fallback for "model forgot to engage with the plan list": after
  * `TURNS_SINCE_TODO_UPDATE_REMINDER` consecutive Runner rounds without a
- * `todo_update` invocation, inject a `<system-reminder>` block listing the
- * still-pending items as a nudge. Mirrors Claude Code's
- * `getTodoReminderAttachments`, with the threshold tuned for KodaX's
- * heavier per-round cost (one round = LLM turn + tool calls; KodaX rounds
- * are noticeably heavier than Claude Code's, hence 8 vs Claude Code's 10).
+ * `todo_update` invocation, inject a `<system-reminder>` block. Mirrors
+ * Claude Code's `getTodoReminderAttachments` (threshold tuned to KodaX's
+ * heavier per-round cost — 8 vs Claude Code's 10).
  *
- * Counter scope (per design — note that the source design doc has two
- * bullets that read self-contradictory; this docstring resolves them):
- *   - **Per managed-task** in the lifetime sense: ONE `TodoReminderState`
- *     object is created per `runManagedTaskViaRunnerInner` call and lives
- *     for the whole task. State is NOT created fresh for each Scout /
- *     Planner / Generator / Evaluator role. (This is what the design's
- *     "per managed-task (NOT per agent)" bullet was protecting against —
- *     the *object's lifetime*, not the counter's value.)
+ * FEATURE_151 (v0.7.38) — the front gate `if (!todoStore.hasItems()) return false`
+ * was a chicken-and-egg deadlock: when Scout did not seed (the common
+ * case for tasks where `executionObligations.length < 2`), the store
+ * stayed empty AND the reminder never fired AND the LLM had no signal
+ * that a plan list was even available. With Slice B1 giving the LLM a
+ * self-seeding path via `todo_update({op:'init', items:[...]})`, the
+ * gate is removed and the reminder fires regardless of store state. The
+ * text is now branched:
+ *   - **empty store** → nudge the LLM toward `op:'init'` if the task is
+ *     non-trivial (matches Claude Code's "TodoWrite hasn't been used
+ *     recently" prompt that fires unconditionally).
+ *   - **populated store** → unchanged from v0.7.34 — list the still-open
+ *     items so the LLM knows what to act on.
+ *
+ * Counter scope:
+ *   - **Per managed-task** lifetime: ONE `TodoReminderState` object per
+ *     `runManagedTaskViaRunnerInner` call.
  *   - **Counter resets** on:
- *       1. any `todo_update` tool call (the wrapper at
- *          `runner-driven.ts:buildRunnerAgentChain` clears it),
- *       2. role/agent transition (the LLM adapter clears it when it sees
- *          a different `agent.name` on a successive call). The design's
- *          "phase 切换 (Scout → Planner → Generator → Evaluator) → 0"
- *          bullet drives this; it gives every role a fresh 8-round window
- *          rather than letting Scout's quiet investigation eat into
- *          Generator's first turn.
+ *       1. any `todo_update` tool call (whether op:'init' or op:'update';
+ *          the wrapper at `runner-driven.ts:buildRunnerAgentChain`
+ *          clears it),
+ *       2. role/agent transition.
  *   - **Increment** by 1 on every adapter call (each call = one round).
  *
- * Front gate: when the store has no items (Scout obligations < 2 → store
- * never seeded), no reminder fires — keeps simple H0 tasks noise-free.
- *
- * Re-fire policy: fire ONCE per "run-of-no-updates". Once the reminder
- * has fired at counter ≥ threshold, it stays silent until the counter is
- * reset (either via `todo_update` call or role transition). This avoids
- * wedging the adapter into a permanent "every round inject" loop when
- * the model genuinely cannot make progress on the listed items.
+ * Re-fire policy: fire ONCE per "run-of-no-updates". Once fired,
+ * suppress until the counter is reset.
  *
  * FEATURE_104: this module produces LLM-facing prompt text and therefore
  * must have a paired eval at `tests/feature-097-throttle-reminder.eval.ts`.
@@ -89,12 +86,19 @@ export function resetTodoReminderState(state: TodoReminderState): void {
  *
  * Caller must call this exactly once per adapter call, BEFORE incrementing
  * the counter for the upcoming round.
+ *
+ * FEATURE_151 (v0.7.38) — the `!todoStore.hasItems()` early-return was
+ * removed. Empty store now also reaches the threshold check; the body
+ * text (`buildTodoReminderText`) branches on store state to give the LLM
+ * the right nudge (op:'init' vs op:'update'). The `todoStore` parameter
+ * is retained for API stability and for tests that pass it through; it
+ * is no longer consulted by this function.
  */
 export function shouldFireTodoReminder(
   state: TodoReminderState,
   todoStore: TodoStore,
 ): boolean {
-  if (!todoStore.hasItems()) return false;
+  void todoStore;
   if (state.roundsSinceUpdate.current < TURNS_SINCE_TODO_UPDATE_REMINDER) return false;
   if (state.lastFiredAtRound.current >= 0) return false; // already fired this run
   state.lastFiredAtRound.current = state.roundsSinceUpdate.current;
@@ -111,26 +115,43 @@ export function tickTodoReminder(state: TodoReminderState): void {
 }
 
 /**
- * Build the `<system-reminder>` text body. Lists every non-terminal item
- * (pending OR in_progress OR failed) so the model sees what is still
- * outstanding. Skipped/completed items are NOT listed — the model only
- * needs to act on the ones that are still open.
+ * Build the `<system-reminder>` text body. Three branches:
+ *   - **Empty store** (FEATURE_151 v0.7.38) — no plan committed yet.
+ *     Nudge the LLM toward `todo_update({op:'init', ...})` if the task
+ *     is non-trivial. Mirrors Claude Code's "TodoWrite tool hasn't been
+ *     used recently" attachment ([attachments.ts:3668](
+ *     c:/Works/claudecode/src/utils/messages.ts#L3668)).
+ *   - **Populated, has open items** — list every non-terminal item
+ *     (pending / in_progress / failed). Unchanged from v0.7.34.
+ *   - **Populated, all terminal** — short form: model may want to close
+ *     out or add a follow-up substep. Unchanged from v0.7.34.
  *
- * Format mirrors the design-doc literal exactly so the eval harness can
- * test for it character-for-character. The only variable parts are
- * `TURNS_SINCE_TODO_UPDATE_REMINDER` and the bullet list.
+ * Format mirrors the design-doc literal so the eval harness can pin
+ * character-for-character.
  */
 export function buildTodoReminderText(todoStore: TodoStore): string {
+  // FEATURE_151 (v0.7.38) — empty store branch.
+  if (!todoStore.hasItems()) {
+    return [
+      '<system-reminder>',
+      `You have not committed a plan in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations.`,
+      'If this task has ≥2 distinct execution steps, commit a plan now via',
+      'todo_update({op:"init", items:[{id:"todo_1", content:"...", activeForm:"..."}, ...]}).',
+      'A visible plan list helps the user follow progress and forces full-scope thinking.',
+      'Trivial single-step tasks (single typo / single edit / single-action lookup /',
+      'one-sentence answer) may proceed without a plan — ignore this reminder if applicable.',
+      'NEVER mention this reminder to the user.',
+      '</system-reminder>',
+    ].join('\n');
+  }
+
   const items = todoStore.getAll();
   const open = items.filter(
     (it) => it.status === 'pending' || it.status === 'in_progress' || it.status === 'failed',
   );
   if (open.length === 0) {
-    // Edge case: every item is in a terminal state but the model never
-    // signalled "done" via accept. The reminder still has value as a
-    // nudge to call `todo_update` to close out — but with no list to
-    // print, fall back to a shorter form so we don't emit a malformed
-    // empty bullet list.
+    // Every item is in a terminal state but the model never signalled
+    // "done" via accept. Nudge to close out / add a follow-up substep.
     return [
       '<system-reminder>',
       `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. ` +
