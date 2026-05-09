@@ -451,3 +451,80 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
     expect(parsed.reason.toLowerCase()).toContain('not active');
   });
 });
+
+// FEATURE_114 v0.7.36 Slice 1 — schema additions:
+//   - `cancelled` accepted as a status transition value
+//   - `evaluator: "build" | "test" | "lint"` accepted as an init-item field,
+//     persisted on the resulting TodoItem
+describe("todo_update FEATURE_114 v0.7.36 Slice 1 — cancelled status + evaluator hint", () => {
+  it('accepts status="cancelled" on op="update" (Worker mid-execution drop)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_2', status: 'cancelled', note: 'no longer needed' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    const item = store.getAll().find((it) => it.id === 'todo_2');
+    expect(item?.status).toBe('cancelled');
+    expect(item?.note).toBe('no longer needed');
+  });
+
+  it('rejects status="pending" — runner-only transition (parity with pre-FEATURE_114)', async () => {
+    const { ctx } = makeContextWithStore();
+    const result = await toolTodoUpdate({ id: 'todo_2', status: 'pending' }, ctx);
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('Invalid status');
+  });
+
+  it("op:'init' persists evaluator hint on resulting TodoItem", async () => {
+    const ctx = makeContext({ todoStore: createTodoStore() });
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [
+          { id: 'todo_1', content: 'Run unit tests', evaluator: 'test' },
+          { id: 'todo_2', content: 'Type-check the module', evaluator: 'build' },
+          { id: 'todo_3', content: 'Format and lint', evaluator: 'lint' },
+          { id: 'todo_4', content: 'Manual verification step' /* no evaluator */ },
+        ],
+      },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true, count: 4 });
+    const items = ctx.todoStore!.getAll();
+    expect(items[0]?.evaluator).toBe('test');
+    expect(items[1]?.evaluator).toBe('build');
+    expect(items[2]?.evaluator).toBe('lint');
+    expect(items[3]?.evaluator).toBeUndefined();
+  });
+
+  it("op:'init' rejects unknown evaluator values", async () => {
+    const ctx = makeContext({ todoStore: createTodoStore() });
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [{ id: 'todo_1', content: 'A', evaluator: 'typecheck' }],
+      },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[0].evaluator');
+    expect(parsed.reason).toContain("'build' | 'test' | 'lint'");
+  });
+
+  it("op:'init' rejects non-string evaluator values", async () => {
+    const ctx = makeContext({ todoStore: createTodoStore() });
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [{ id: 'todo_1', content: 'A', evaluator: 1 }],
+      },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('items[0].evaluator');
+  });
+});

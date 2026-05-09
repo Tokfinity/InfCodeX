@@ -25,7 +25,7 @@
  *                          via `replace(...)`
  */
 
-import type { TodoItem, TodoList, TodoStatus } from '../types.js';
+import type { TodoEvaluatorHint, TodoItem, TodoList, TodoStatus } from '../types.js';
 
 export interface TodoInit {
   readonly id: string;
@@ -37,6 +37,14 @@ export interface TodoInit {
    * while this item is `in_progress`. See `TodoItem.activeForm` JSDoc.
    */
   readonly activeForm?: string;
+  /**
+   * FEATURE_114 v0.7.36 — per-step deterministic evaluator hint. When
+   * present, the runner runs the corresponding deterministic check
+   * (build / test / lint) on `pending → completed`. Failure surfaces
+   * stderr in the next tool result so the Worker can self-correct.
+   * See `TodoItem.evaluator` JSDoc.
+   */
+  readonly evaluator?: TodoEvaluatorHint;
 }
 
 export interface TodoStoreOptions {
@@ -134,6 +142,10 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
         owner: seed.owner,
         sourceObligationIndex: seed.sourceObligationIndex,
         activeForm: seed.activeForm,
+        // FEATURE_114 v0.7.36 — carry the optional evaluator hint from
+        // seed to TodoItem. Slice 3 will wire `runDeterministicEvaluator`
+        // to consume this on `pending → completed`.
+        evaluator: seed.evaluator,
       }));
       // init always notifies — even an empty seed list represents an
       // intentional "the task is starting, here is the (empty) plan" event.

@@ -814,7 +814,9 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. ' +
       '(4) Use status="failed" if an attempt clearly failed and needs retry. ' +
       '(5) Use status="skipped" only when the item turned out to be unnecessary (e.g. Planner merged two obligations into one). ' +
-      '(6) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item content (e.g. content "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. ' +
+      '(6) Use status="cancelled" (FEATURE_114) when you decide mid-execution to drop an item the user no longer needs — UI shows strikethrough; distinct from "skipped" which is for Planner-driven merging. ' +
+      '(7) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item content (e.g. content "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. ' +
+      '(8) On op="init" items you may attach an optional `evaluator: "build" | "test" | "lint"` hint (FEATURE_114) — when an item with this hint flips to "completed", the runner runs the corresponding deterministic check and surfaces stderr in your next tool result on failure. Use sparingly — only on milestone steps with a real ground-truth check. ' +
       'If the call returns ok=false with reason "Unknown todo id", inspect the listed valid ids and retry with a correct one. ' +
       'If the call returns ok=false with reason "todo_update is not active", the current run has no plan list and you may continue working without further todo_update calls.',
     input_schema: {
@@ -839,6 +841,11 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
                 type: 'string',
                 description: 'Optional present-continuous form (e.g. "Running failing tests") shown by the spinner when this item flips to in_progress.',
               },
+              evaluator: {
+                type: 'string',
+                enum: ['build', 'test', 'lint'],
+                description: 'Optional (FEATURE_114) per-step deterministic evaluator. When set and the item flips to "completed", the runner runs `npm run build` / `npm test` / `npm run lint` accordingly; failure surfaces stderr in your next tool result. Use sparingly — only on milestone steps.',
+              },
             },
             required: ['id', 'content'],
             // Note: ideally we'd set `additionalProperties: false` here so
@@ -857,8 +864,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         },
         status: {
           type: 'string',
-          enum: ['in_progress', 'completed', 'failed', 'skipped'],
-          description: 'op="update" only. New status. "pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict.',
+          enum: ['in_progress', 'completed', 'failed', 'skipped', 'cancelled'],
+          description: 'op="update" only. New status. "pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict. "cancelled" (FEATURE_114) signals a Worker-driven mid-execution decision to drop the item; UI shows strikethrough.',
         },
         note: {
           type: 'string',
