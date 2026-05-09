@@ -271,6 +271,13 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     });
     proc.on('close', code => {
       clearTimeout(timer);
+      // Skip trailing flush + entire close-handler processing once
+      // `settle` has fired (abort path: `onAbort` calls `settle('[Cancelled]…')`
+      // synchronously, then `proc.kill()` triggers `close` next tick).
+      // Without this, the trailing `reportLiveProgress(true)` would emit a
+      // post-cancel progress event to non-UI consumers (the React-layer UI
+      // is gated by `userInterruptedRef`, but SDK / test consumers are not).
+      if (settled) return;
       // Trailing flush of live progress so the final tail (often the most
       // informative — exit notice, "X tests passed", final commit hash)
       // always lands before the tool result. Without this, fast commands

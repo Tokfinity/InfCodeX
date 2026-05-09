@@ -298,7 +298,7 @@ async function executeWriteChild(
   // computed against the parent gitRoot, not the worktree path — the
   // worktree is a transient checkout of the same repo, so AGENTS.md
   // resolution must walk from the original project root.
-  const writeSystemPrompt = await buildWriteSystemPrompt(parentCtx.gitRoot ?? wtPath);
+  const writeSystemPrompt = buildWriteSystemPrompt(parentCtx.gitRoot ?? wtPath);
 
   try {
     const result = await (await getRunKodaX())(
@@ -517,7 +517,11 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
  *
  * Returns the base prompt unchanged when no AGENTS.md exists.
  */
-async function buildWriteSystemPrompt(gitRoot: string): Promise<string> {
+function buildWriteSystemPrompt(gitRoot: string): string {
+  // Sync — `loadAgentsFiles` reads via `readFileSync` and the helper has no
+  // async I/O. Kept synchronous so the single mtime-stat-and-cache walk
+  // does not pay an unnecessary microtask boundary on every write-child
+  // spawn (FEATURE_119 H2 fan-out can dispatch 4-8 children in one wave).
   const agentsFiles = loadAgentsFiles({ cwd: gitRoot, projectRoot: gitRoot });
   const formatted = formatAgentsForPrompt(agentsFiles);
   if (!formatted) return CHILD_AGENT_SYSTEM_PROMPT;
