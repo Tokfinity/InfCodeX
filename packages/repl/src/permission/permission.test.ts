@@ -473,6 +473,26 @@ describe('isBashWriteCommand — FEATURE_152 attack-surface hardening', () => {
     // The write-detection itself only needs argv[0] match → still flags.
     expect(isBashWriteCommand('Get-Content foo | Out-File -FilePath bar.txt')).toBe(true);
   });
+
+  it('does NOT flag path-qualified custom executables (`~/myrm foo`) — known gap, delegated to LLM classifier', () => {
+    // Documents an acknowledged limitation: BASH_WRITE_COMMANDS is keyed on
+    // bare verb names (`rm`, `git commit`, etc.). A path-qualified executable
+    // (`~/myrm`, `./scripts/delete-everything.sh`, `/usr/local/bin/myrm`) is
+    // not recognised as a write at this layer.
+    //
+    // Why this is acceptable: KodaX is a single-user CLI (trust boundary
+    // user↔agent), the agent generates command text programmatically, and
+    // the FEATURE_092 auto-mode LLM classifier is the upstream gate that
+    // sees the full command string with semantic context. This rule-layer
+    // function is "known write patterns", not "anything that could write".
+    //
+    // If this becomes a real issue (3+ user reports of path-qualified write
+    // tools sneaking past), revisit by adding `path.basename(argv[0])` to
+    // the BASH_WRITE_COMMANDS lookup. Don't add ad-hoc patches before then.
+    expect(isBashWriteCommand('~/myrm foo')).toBe(false);
+    expect(isBashWriteCommand('./scripts/delete-everything.sh')).toBe(false);
+    expect(isBashWriteCommand('/usr/local/bin/myrm bar')).toBe(false);
+  });
 });
 
 // FEATURE_154: universal `--help` fast-path (parity with Claude Code
