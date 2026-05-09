@@ -1122,6 +1122,8 @@ const ROLE_TO_TITLE: Record<KodaXTaskRole, string> = {
   generator: 'Generator',
   evaluator: 'Evaluator',
   direct: 'Direct',
+  // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop role.
+  worker: 'Worker',
 };
 
 /**

@@ -35,6 +35,7 @@ import {
   MANAGED_TASK_VERDICT_BLOCK,
 } from '../../../managed-protocol.js';
 import { isRepoIntelligenceWorkingToolName } from '../../../tools/index.js';
+import { buildWorkerInstructions } from '../../../agents/worker-role-prompt.js';
 import {
   formatFullSkillSection,
   formatRoleRoundSummarySection,
@@ -64,6 +65,12 @@ const ROLE_EMIT_TOOL_NAMES: Record<Exclude<KodaXTaskRole, 'direct'>, string> = {
   planner: 'emit_contract',
   generator: 'emit_handoff',
   evaluator: 'emit_verdict',
+  // FEATURE_114 v0.7.36 — Worker (V2 single-loop primary agent) hands off
+  // to the structurally-preserved Evaluator role with the same payload
+  // shape Generator uses today. Reusing `emit_handoff` keeps the wire
+  // format identical so the V2 runner can plug into the existing
+  // wrapEmitterWithRecorder + protocol-emitters pipeline unchanged.
+  worker: 'emit_handoff',
 };
 
 /**
@@ -863,6 +870,58 @@ export function createRolePrompt(
         sharedWorkerDiscipline,
         sharedClosingRule,
       ].filter((section): section is string => Boolean(section)).join('\n\n');
+    case 'worker': {
+      // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
+      // Wraps `buildWorkerInstructions` (decisional + plan-first +
+      // mutation + dispatch + handoff fragments) with the same
+      // workspace / capability / overlay / decisionSummary / contract /
+      // metadata / verification / tool-policy context layers the legacy
+      // Scout/Planner/Generator/Evaluator branches use, so the V2 path
+      // doesn't lose any FEATURE_144 (capability-context) or
+      // FEATURE_086 (repo-intelligence) parity gains. Skill section
+      // mirrors Generator (skillMap + full skill expansion) — Worker
+      // both plans and executes, so it needs the planner-style map AND
+      // the generator-style execution surface.
+      const workerSkillSection = generatorSkillSection;
+      const isResumeAfterReviseFailure = rolePromptContext?.isResumeAfterReviseFailure === true;
+      const workerInstructions = buildWorkerInstructions(
+        decision,
+        verification,
+        isResumeAfterReviseFailure,
+      );
+      return [
+        // Worker is its own role announcement, but we still emit the
+        // canonical decisionSummary + originalTask / agent / contract
+        // sections so the LLM sees the same machine-readable context
+        // the legacy roles get.
+        workspaceSection,
+        capabilityContextSection,
+        promptOverlaySection,
+        decisionSummary,
+        originalTaskSection,
+        roundInstructionSection,
+        agentSection,
+        contractSection,
+        metadataSection,
+        verificationSection,
+        toolPolicySection,
+        parallelBatchGuidance,
+        workerSkillSection,
+        previousRoleSummarySection,
+        // The standalone Worker fragment (plan-first contract + scope
+        // commitment + mutation discipline + dispatch RULE A/B/C +
+        // handoff rules) lives here, mirroring how Scout's H0/H1/H2
+        // framework lives between context blocks and the protocol
+        // emit instructions.
+        workerInstructions,
+        managedProtocolToolInstructions,
+        // Same fenced-block fallback Generator gets (Worker hands off
+        // to Evaluator with the handoff payload shape).
+        handoffBlockInstructions,
+        sharedWorkerDiscipline,
+        sharedClosingRule,
+      ].filter((section): section is string => Boolean(section)).join('\n\n');
+    }
     case 'direct':
     default:
       return prompt;
