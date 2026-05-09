@@ -392,6 +392,89 @@ describe('extractPathsFromCommand — FEATURE_152 AST hardening', () => {
   });
 });
 
+// FEATURE_152 slice 4 (v0.7.38): attack-surface hardening. The pre-AST regex
+// chain had documented blind spots around quoting, comments, and operator
+// fusion that the AST migration closed. These tests pin closed-state
+// behavior so future regressions are caught.
+describe('isBashReadCommand — FEATURE_152 attack-surface hardening', () => {
+  it('rejects nested command substitution `$(echo $(rm))`', () => {
+    expect(isBashReadCommand('echo $(echo $(rm -rf /))')).toBe(false);
+  });
+
+  it('rejects backticks inside quoted strings', () => {
+    // Backticks inside double-quoted strings still expand in bash. AST
+    // pre-tokenisation guard catches this regardless of quoting.
+    expect(isBashReadCommand('echo "test `whoami`"')).toBe(false);
+  });
+
+  it('rejects append-redirect to real files', () => {
+    expect(isBashReadCommand('grep foo file >> log.txt')).toBe(false);
+  });
+
+  it('rejects fd-redirect to real files', () => {
+    expect(isBashReadCommand('grep foo file 2>err.log')).toBe(false);
+  });
+
+  it('treats `&>` real file redirect as not-read', () => {
+    expect(isBashReadCommand('cmd &> output.log')).toBe(false);
+  });
+
+  it('rejects herestring `<<<`', () => {
+    // Herestring is an input redirect form; rejected as input.
+    expect(isBashReadCommand('cat <<< "string"')).toBe(false);
+  });
+
+  it('preserves Issue 129 reproduction command exactly', () => {
+    expect(
+      isBashReadCommand(
+        'cd C:\\Works\\claudecode && findstr /S /I /N "todos" src\\bootstrap\\state.ts 2>NUL | findstr /V "node_modules"',
+      ),
+    ).toBe(true);
+  });
+});
+
+describe('isBashWriteCommand — FEATURE_152 attack-surface hardening', () => {
+  it('flags rm even buried inside a compound', () => {
+    // `cmd && rm foo` — rm is argv[0] of stage 2 of statement 2.
+    expect(isBashWriteCommand('echo hi && rm foo.txt')).toBe(true);
+  });
+
+  it('flags pipeline-downstream rm', () => {
+    // `cat foo | rm bar` — rm is argv[0] of stage 2 even though pipeline
+    // semantically doesn't reach rm. AST treats every stage uniformly,
+    // which is conservative + correct.
+    expect(isBashWriteCommand('cat foo | rm bar')).toBe(true);
+  });
+
+  it('does NOT flag rm-as-argument (`man rm`)', () => {
+    // Pre-AST regex `(^|[|&;><])rm(\s|$)` would NOT match here either
+    // (rm is preceded by a space, not a separator). AST sees argv[0]=man.
+    // Pin the behavior either way.
+    expect(isBashWriteCommand('man rm')).toBe(false);
+  });
+
+  it('does NOT flag write verb inside double-quoted argument', () => {
+    expect(isBashWriteCommand('echo "I will rm everything"')).toBe(false);
+  });
+
+  it('does NOT flag write verb inside single-quoted argument', () => {
+    expect(isBashWriteCommand("echo 'rm bar'")).toBe(false);
+  });
+
+  it('flags Remove-Item appearing as stage 2 of a pipeline', () => {
+    // PowerShell pipeline form. Remove-Item is in POWERSHELL_WRITE_TOKENS.
+    expect(isBashWriteCommand('Get-ChildItem | Remove-Item')).toBe(true);
+  });
+
+  it('flags Out-File even when invoked with -FilePath instead of -Path', () => {
+    // -FilePath is an Out-File-specific alias. Our collectPowerShellWriteTargets
+    // recognises -Path / -LiteralPath / -Destination explicitly; -FilePath
+    // is treated as a flag and the first positional becomes the target.
+    // The write-detection itself only needs argv[0] match → still flags.
+    expect(isBashWriteCommand('Get-Content foo | Out-File -FilePath bar.txt')).toBe(true);
+  });
+});
+
 // FEATURE_154: universal `--help` fast-path (parity with Claude Code
 // `commands.ts:isHelpCommand`). Pre-FEATURE_154 KodaX only allowed `--help`
 // for ~12 hard-coded language tools; this generalises to any command name
