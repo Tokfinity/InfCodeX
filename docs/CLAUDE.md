@@ -198,7 +198,8 @@ prompt-eval case under `tests/*.eval.ts` using the `benchmark/harness/`
 module (`aliases.ts` + `judges.ts` + `harness.ts` + `report.ts` + `persist.ts`).
 
 **Triggers** (must add/update an eval):
-- `packages/coding/src/agent-runtime/system-prompt-*.ts`
+- `packages/coding/src/prompts/capability-sections.ts` (FEATURE_142 v0.7.35.1 Batch E — single source of truth for the 13 capability sections; supersedes the pre-v0.7.35.1 `agent-runtime/system-prompt-*.ts` paths)
+- `packages/coding/src/prompts/builder.ts` / `packages/coding/src/prompts/system.ts`
 - `packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts`
 - Tool `description` fields in `packages/coding/src/tools/`
 - `coding-preset.ts:DEFAULT_CODING_INSTRUCTIONS`

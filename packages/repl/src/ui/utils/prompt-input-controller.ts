@@ -37,6 +37,13 @@ export interface PromptInputControllerOptions {
    * before expansion is attempted on the next submit.
    */
   onHistoryRecall?: (entry: { text: string; pastedContents: PastedContent[] }) => void;
+  /**
+   * FEATURE_149 Phase 2.1 (v0.7.38) — pop queued follow-ups back into the
+   * editor on ↑ when the buffer is empty. Returns the text to load (the
+   * consumer atomically clears its queue), or `undefined` to fall through
+   * to normal history navigation when the queue is empty.
+   */
+  onPopPendingInputs?: () => string | undefined;
 }
 
 export interface PromptInputControllerResult {
@@ -171,6 +178,7 @@ export function usePromptInputController({
   autocompleteEnabled = true,
   onInputChange,
   onHistoryRecall,
+  onPopPendingInputs,
 }: PromptInputControllerOptions): PromptInputControllerResult {
   const lastEscPressRef = useRef<number>(0);
 
@@ -396,6 +404,20 @@ export function usePromptInputController({
         return true;
       }
 
+      // FEATURE_149 Phase 2.1 (v0.7.38) — pop queued follow-ups back into
+      // the editor when ↑ is pressed on an EMPTY buffer. The empty-buffer
+      // condition guarantees we only intercept history navigation in cases
+      // where there's nothing to navigate from anyway, so existing history
+      // recall UX is preserved when the queue is empty (callback returns
+      // `undefined`).
+      if (text.length === 0 && onPopPendingInputs) {
+        const popped = onPopPendingInputs();
+        if (typeof popped === "string" && popped.length > 0) {
+          setText(popped);
+          return true;
+        }
+      }
+
       if (shouldUseHistoryNavigation(cursor.row, lines.length, "up")) {
         saveTempInput(text);
         const entry = navigateUp();
@@ -562,6 +584,7 @@ export function usePromptInputController({
     navigateUp,
     newline,
     onExit,
+    onPopPendingInputs,
     redo,
     resetHistory,
     saveTempInput,

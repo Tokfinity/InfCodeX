@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { runQueuedPromptSequence } from "./queued-prompt-sequence.js";
 
 describe("runQueuedPromptSequence", () => {
-  it("runs queued prompts one round at a time in FIFO order", async () => {
+  // FEATURE_149 Phase B3 (v0.7.38): drained prompts collapse into a SINGLE
+  // batched round so N submits cost 1 agent invocation instead of N. The
+  // join separator matches `popAllEditable`'s `\n\n---\n\n`.
+  it("batches multiple queued prompts into a single round (FEATURE_149 B3)", async () => {
     const completed: string[] = [];
     const beforeQueued: string[] = [];
     const prompts = ["follow-up one", "follow-up two"];
@@ -21,15 +24,31 @@ describe("runQueuedPromptSequence", () => {
       shouldContinue: (round) => !round.interrupted,
     });
 
-    expect(result.prompt).toBe("follow-up two");
-    expect(runRound).toHaveBeenCalledTimes(3);
+    // Initial round + ONE batched round (not 2 separate rounds).
+    expect(runRound).toHaveBeenCalledTimes(2);
     expect(runRound.mock.calls.map(([prompt]) => prompt)).toEqual([
       "initial",
-      "follow-up one",
-      "follow-up two",
+      "follow-up one\n\n---\n\nfollow-up two",
     ]);
-    expect(completed).toEqual(["initial", "follow-up one", "follow-up two"]);
-    expect(beforeQueued).toEqual(["follow-up one", "follow-up two"]);
+    expect(result.prompt).toBe("follow-up one\n\n---\n\nfollow-up two");
+    expect(completed).toEqual(["initial", "follow-up one\n\n---\n\nfollow-up two"]);
+    expect(beforeQueued).toEqual(["follow-up one\n\n---\n\nfollow-up two"]);
+  });
+
+  it("uses the bare prompt (no separator) when only one item is drained", async () => {
+    const prompts = ["solo"];
+    const runRound = vi.fn(async (prompt: string) => ({ prompt, interrupted: false }));
+
+    const result = await runQueuedPromptSequence({
+      initialPrompt: "initial",
+      runRound,
+      shiftPendingPrompt: () => prompts.shift(),
+      shouldContinue: (round) => !round.interrupted,
+    });
+
+    expect(runRound).toHaveBeenCalledTimes(2);
+    expect(runRound.mock.calls.map(([prompt]) => prompt)).toEqual(["initial", "solo"]);
+    expect(result.prompt).toBe("solo");
   });
 
   it("stops before consuming queued prompts when the current round should not continue", async () => {
@@ -50,8 +69,8 @@ describe("runQueuedPromptSequence", () => {
     expect(shiftPendingPrompt).not.toHaveBeenCalled();
   });
 
-  it("skips blank queued prompts before running the next valid round", async () => {
-    const prompts = ["   ", "", "follow-up"];
+  it("skips blank entries while batching the rest into a single round", async () => {
+    const prompts = ["   ", "", "follow-up A", "  ", "follow-up B"];
     const runRound = vi.fn(async (prompt: string) => ({ prompt, interrupted: false }));
 
     const result = await runQueuedPromptSequence({
@@ -61,10 +80,27 @@ describe("runQueuedPromptSequence", () => {
       shouldContinue: (round) => !round.interrupted,
     });
 
-    expect(result.prompt).toBe("follow-up");
+    // Whitespace-only entries are filtered; A and B are batched together.
+    expect(runRound).toHaveBeenCalledTimes(2);
     expect(runRound.mock.calls.map(([prompt]) => prompt)).toEqual([
       "initial",
-      "follow-up",
+      "follow-up A\n\n---\n\nfollow-up B",
     ]);
+    expect(result.prompt).toBe("follow-up A\n\n---\n\nfollow-up B");
+  });
+
+  it("returns initial result when the pending queue is empty after the first round", async () => {
+    const runRound = vi.fn(async (prompt: string) => ({ prompt, interrupted: false }));
+    const shiftPendingPrompt = vi.fn(() => undefined);
+
+    const result = await runQueuedPromptSequence({
+      initialPrompt: "lone",
+      runRound,
+      shiftPendingPrompt,
+      shouldContinue: (round) => !round.interrupted,
+    });
+
+    expect(runRound).toHaveBeenCalledTimes(1);
+    expect(result.prompt).toBe("lone");
   });
 });

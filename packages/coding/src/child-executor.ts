@@ -66,6 +66,7 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
   return _runKodaXCache;
 }
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
+import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
 
 /* ---------- Public API ---------- */
 
@@ -291,6 +292,14 @@ async function executeWriteChild(
   );
   const provider = options.parentOptions.provider ?? 'anthropic';
 
+  // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
+  // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
+  // (they don't mutate, so project rules don't apply). The override is
+  // computed against the parent gitRoot, not the worktree path — the
+  // worktree is a transient checkout of the same repo, so AGENTS.md
+  // resolution must walk from the original project root.
+  const writeSystemPrompt = await buildWriteSystemPrompt(parentCtx.gitRoot ?? wtPath);
+
   try {
     const result = await (await getRunKodaX())(
       {
@@ -308,7 +317,7 @@ async function executeWriteChild(
         context: {
           gitRoot: wtPath,
           executionCwd: wtPath,
-          systemPromptOverride: CHILD_AGENT_SYSTEM_PROMPT,
+          systemPromptOverride: writeSystemPrompt,
           excludeTools: CHILD_EXCLUDE_TOOLS_BASE, // Write children keep write/edit tools
         },
         events: childEvents,
@@ -450,8 +459,11 @@ async function resolveEvidenceRef(
  * Focused system prompt for child agents — replaces the full system prompt entirely.
  * Mirrors Claude Code's DEFAULT_AGENT_PROMPT: lightweight, task-focused, no AMA overhead.
  * KodaX-specific: emphasizes parallel tool calls and structured output.
+ *
+ * Read-only children use this verbatim. Write children get an additional
+ * mutation-policy section appended via `buildWriteSystemPrompt` (FEATURE_117).
  */
-const CHILD_AGENT_SYSTEM_PROMPT = [
+export const CHILD_AGENT_SYSTEM_PROMPT = [
   'You are a focused sub-agent executing a specific task assigned by a parent agent.',
   'Use the available tools to complete the task fully. Do not gold-plate, but do not leave it half-done.',
   '',
@@ -479,6 +491,49 @@ const CHILD_AGENT_SYSTEM_PROMPT = [
   '',
   'Keep the report focused — the parent will relay it to the user.',
 ].join('\n');
+
+/**
+ * FEATURE_117 v2 (v0.7.38, 2026-05-09) — write-child mutation context.
+ *
+ * Read-only children get `CHILD_AGENT_SYSTEM_PROMPT` verbatim — they only
+ * navigate code, so AGENTS.md mutation policy is irrelevant. Write children
+ * (H2 Generator fan-out, isolated worktree) actually edit files and would
+ * silently violate project rules ("NEVER use `any`", forbidden imports,
+ * coding-style conventions) unless the project's AGENTS.md is in their
+ * system prompt.
+ *
+ * The original FEATURE_117 design ("strip read-path context") was inverted
+ * after Phase 3 fact-check showed `systemPromptOverride` already short-
+ * circuits `buildSystemPrompt` for ALL children — there was nothing to
+ * strip. The real gap is the opposite direction: write children silently
+ * skip the project rules. This helper restores them only for the write
+ * path.
+ *
+ * Cost: AGENTS.md is loaded once via `loadAgentsFiles` (mtime-cached by
+ * FEATURE_149 Phase 1.2), formatted, and prepended to the override.
+ * Anthropic `cache_control: ephemeral` covers the system prompt block,
+ * so the AGENTS.md tokens are billed once per ~5 min cache window
+ * regardless of fan-out size.
+ *
+ * Returns the base prompt unchanged when no AGENTS.md exists.
+ */
+async function buildWriteSystemPrompt(gitRoot: string): Promise<string> {
+  const agentsFiles = loadAgentsFiles({ cwd: gitRoot, projectRoot: gitRoot });
+  const formatted = formatAgentsForPrompt(agentsFiles);
+  if (!formatted) return CHILD_AGENT_SYSTEM_PROMPT;
+
+  // `formatted` already has its own `# Project Context` H1 + `## … Rules`
+  // H2s + `---` dividers. Don't re-wrap with another H2 (`## Mutation
+  // Policy`) — the heading hierarchy would invert (H2 → H1 inside) and
+  // muddle the structure for the LLM. Just prepend a short framing
+  // sentence so the child knows these rules apply to its mutations.
+  return [
+    CHILD_AGENT_SYSTEM_PROMPT,
+    '',
+    'Project rules apply to your mutations. Follow them as the parent agent would:',
+    formatted,
+  ].join('\n');
+}
 
 /**
  * Tools excluded from child agents at API level (LLM never sees these definitions).

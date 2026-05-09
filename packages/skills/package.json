@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/skills",
-  "version": "0.7.37",
+  "version": "0.7.38",
   "description": "KodaX Skills - Agent Skills standard implementation for KodaX",
   "type": "module",
   "main": "dist/index.js",

@@ -147,7 +147,11 @@ describe("transcript-layout", () => {
       isThinking: true,
       thinkingCharCount: 42,
       thinkingContent: "thinking details",
-      streamingResponse: "partial response",
+      // FEATURE_149 (v0.7.38) line-buffered streaming: trailing newline so
+      // the "partial response" line is treated as a COMPLETE line and
+      // surfaces in the render. A token stream without a trailing newline
+      // is intentionally suppressed (mirrors Claude Code's REPL.tsx:1473).
+      streamingResponse: "partial response\n",
       currentIteration: 2,
       iterationHistory: [
         {
@@ -171,6 +175,52 @@ describe("transcript-layout", () => {
     expect(text).toContain("* tools: read_file");
   });
 
+  // FEATURE_149 (v0.7.38) — line-buffered streaming. Mirrors Claude Code's
+  // REPL.tsx:1473 `streamingText.substring(0, lastIndexOf('\n')+1)`. While
+  // a token stream is in flight, only complete lines (those ending in `\n`)
+  // are shown so the in-progress line doesn't flicker character by character.
+  describe("line-buffered streaming render", () => {
+    it("hides streamingResponse with no newline (in-flight line suppressed)", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 60,
+        isLoading: true,
+        streamingResponse: "still typing without newline",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).not.toContain("still typing without newline");
+      // Header should also be suppressed when there's nothing visible to show.
+      expect(text).not.toContain("Assistant");
+    });
+
+    it("renders ONLY the complete-line prefix of streamingResponse", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        streamingResponse: "first complete line\nsecond complete line\nthird in pro",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("first complete line");
+      expect(text).toContain("second complete line");
+      // The in-progress trailing line is suppressed until its `\n` arrives.
+      expect(text).not.toContain("third in pro");
+    });
+
+    it("renders all lines once streamingResponse ends with a newline", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        streamingResponse: "alpha\nbeta\ngamma\n",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("alpha");
+      expect(text).toContain("beta");
+      expect(text).toContain("gamma");
+    });
+  });
+
   it("keeps managed live events out of transcript live render models while preserving actual streaming content", () => {
     const model = buildTranscriptRenderModel({
       items: [assistant("Previous review round finished.")],
@@ -189,7 +239,8 @@ describe("transcript-layout", () => {
       isThinking: true,
       thinkingCharCount: 84,
       thinkingContent: "Verifying that the live transcript keeps progress events and final review text visible together.",
-      streamingResponse: "Found 2 must-fix issues.",
+      // FEATURE_149 line-buffered streaming — \n required for the line to surface.
+      streamingResponse: "Found 2 must-fix issues.\n",
       showFullThinking: true,
       showLiveProgressRows: true,
     });
@@ -240,7 +291,8 @@ describe("transcript-layout", () => {
       isThinking: true,
       thinkingCharCount: 42,
       thinkingContent: "thinking details",
-      streamingResponse: "partial response",
+      // FEATURE_149 line-buffered streaming — \n required.
+      streamingResponse: "partial response\n",
       currentIteration: 2,
       iterationHistory: [
         {

@@ -755,15 +755,28 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
   }
 
   if (streamingResponse) {
-    pushWrappedRows(rows, "streaming-header", "Assistant", viewportWidth, {
-      color: "secondary",
-      bold: true,
-    });
-    pushWrappedRows(rows, "streaming-body", streamingResponse, getBodyWidth(viewportWidth, 2), {
-      color: "text",
-      indent: 2,
-    });
-    pushBlankRow(rows, "streaming-blank");
+    // FEATURE_149 (v0.7.38) — line-buffered streaming render. Mirror Claude
+    // Code's `REPL.tsx:1473` `streamingText.substring(0, lastIndexOf('\n')+1)`:
+    // only show COMPLETE lines while a token stream is in flight. The
+    // currently-being-typed line is hidden until its `\n` arrives, so the
+    // user sees lines materialize whole instead of flickering character by
+    // character as deltas land. Once the round completes the full final
+    // text lands in transcript history (which renders unfiltered), so no
+    // tail content is lost.
+    const lastNewline = streamingResponse.lastIndexOf("\n");
+    const visibleStreaming =
+      lastNewline >= 0 ? streamingResponse.slice(0, lastNewline + 1) : "";
+    if (visibleStreaming.length > 0) {
+      pushWrappedRows(rows, "streaming-header", "Assistant", viewportWidth, {
+        color: "secondary",
+        bold: true,
+      });
+      pushWrappedRows(rows, "streaming-body", visibleStreaming, getBodyWidth(viewportWidth, 2), {
+        color: "text",
+        indent: 2,
+      });
+      pushBlankRow(rows, "streaming-blank");
+    }
   }
 
   return rows;

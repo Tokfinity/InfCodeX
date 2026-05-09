@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock runKodaX before importing child-executor
 vi.mock('./agent.js', () => ({
@@ -19,8 +23,10 @@ import {
   buildEvaluatorMergePrompt,
   collectWriteChildDiffs,
   buildChildEvents,
+  CHILD_AGENT_SYSTEM_PROMPT,
   CHILD_EXCLUDE_TOOLS_BASE,
 } from './child-executor.js';
+import { clearAgentsLoaderCacheForTesting } from './context/agents-loader.js';
 import type { ChildExecutorOptions, WriteChildDiff } from './child-executor.js';
 import { runKodaX } from './agent.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
@@ -362,6 +368,205 @@ describe('executeChildAgents', () => {
     // worktreePaths should be available before cleanup
     // (cleanup happens in finally, but result is built before that)
     expect(result.results).toHaveLength(1);
+  });
+});
+
+/* ---------- FEATURE_117 v2: Write-child mutation context inject ---------- */
+
+describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
+  let tmpRoot: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tmpRoot = mkdtempSync(join(tmpdir(), 'kodax-feat117-'));
+    clearAgentsLoaderCacheForTesting();
+  });
+
+  afterEach(() => {
+    clearAgentsLoaderCacheForTesting();
+    try {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  function createTmpCtx(gitRoot: string) {
+    return {
+      backups: new Map(),
+      gitRoot,
+      executionCwd: gitRoot,
+    };
+  }
+
+  it('write child receives AGENTS.md mutation policy in systemPromptOverride', async () => {
+    const sentinel = 'NEVER_USE_ANY_TYPE_FEAT117_SENTINEL';
+    writeFileSync(
+      join(tmpRoot, 'AGENTS.md'),
+      `# Project Rules\n\n- ${sentinel}\n- All commits must be conventional.\n`,
+    );
+
+    mockWorktreeCreate.mockResolvedValueOnce(
+      JSON.stringify({ path: join(tmpRoot, 'wt'), branch: 'wt' }),
+    );
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's1',
+    });
+
+    const bundles = [createBundle({ id: 'cb-w1', readOnly: false, objective: 'Refactor' })];
+
+    await executeChildAgents(
+      bundles,
+      createTmpCtx(tmpRoot),
+      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const opts = mockRunKodaX.mock.calls[0]![0] as {
+      context: { systemPromptOverride: string };
+    };
+    expect(opts.context.systemPromptOverride).toContain(sentinel);
+    // The framing line introducing project rules to the child.
+    expect(opts.context.systemPromptOverride).toContain(
+      'Project rules apply to your mutations',
+    );
+    // `formatAgentsForPrompt` always wraps with `# Project Context` H1.
+    expect(opts.context.systemPromptOverride).toContain('# Project Context');
+    // Base CHILD_AGENT_SYSTEM_PROMPT preserved as the leading block.
+    expect(opts.context.systemPromptOverride.startsWith(CHILD_AGENT_SYSTEM_PROMPT)).toBe(true);
+  });
+
+  it('write child falls back to bare CHILD_AGENT_SYSTEM_PROMPT when no AGENTS.md exists', async () => {
+    // tmpRoot has no AGENTS.md
+    mockWorktreeCreate.mockResolvedValueOnce(
+      JSON.stringify({ path: join(tmpRoot, 'wt'), branch: 'wt' }),
+    );
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's1',
+    });
+
+    const bundles = [createBundle({ id: 'cb-w2', readOnly: false, objective: 'Refactor' })];
+
+    await executeChildAgents(
+      bundles,
+      createTmpCtx(tmpRoot),
+      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const opts = mockRunKodaX.mock.calls[0]![0] as {
+      context: { systemPromptOverride: string };
+    };
+    // Exact equality — no project-rules block when AGENTS.md is absent.
+    expect(opts.context.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
+    expect(opts.context.systemPromptOverride).not.toContain('Project rules apply');
+    expect(opts.context.systemPromptOverride).not.toContain('# Project Context');
+  });
+
+  it('read-only child does NOT receive AGENTS.md content (read path stays minimal)', async () => {
+    writeFileSync(
+      join(tmpRoot, 'AGENTS.md'),
+      '# Project Rules\n\n- READONLY_LEAK_SENTINEL_FEAT117\n',
+    );
+
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'inspected',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's1',
+    });
+
+    const bundles = [createBundle({ id: 'cb-r1', readOnly: true, objective: 'Inspect' })];
+
+    await executeChildAgents(
+      bundles,
+      createTmpCtx(tmpRoot),
+      createOptions({ parentRole: 'scout', parentHarness: 'H0_DIRECT' }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const opts = mockRunKodaX.mock.calls[0]![0] as {
+      context: { systemPromptOverride: string };
+    };
+    expect(opts.context.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
+    expect(opts.context.systemPromptOverride).not.toContain('READONLY_LEAK_SENTINEL_FEAT117');
+    expect(opts.context.systemPromptOverride).not.toContain('Project rules apply');
+  });
+
+  it('write child gracefully no-ops when parent gitRoot is undefined (non-git workspace)', async () => {
+    // When parentCtx.gitRoot is undefined, buildWriteSystemPrompt falls
+    // back to wtPath. Worktrees don't carry untracked AGENTS.md, so the
+    // formatted block is empty and the bare CHILD_AGENT_SYSTEM_PROMPT
+    // surfaces — which is the right behavior for non-git workspaces.
+    mockWorktreeCreate.mockResolvedValueOnce(
+      JSON.stringify({ path: join(tmpRoot, 'wt-no-gitroot'), branch: 'wt' }),
+    );
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's1',
+    });
+
+    const bundles = [createBundle({ id: 'cb-w-nogr', readOnly: false, objective: 'Refactor' })];
+
+    await executeChildAgents(
+      bundles,
+      { backups: new Map(), gitRoot: undefined, executionCwd: undefined } as unknown as Parameters<typeof executeChildAgents>[1],
+      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const opts = mockRunKodaX.mock.calls[0]![0] as {
+      context: { systemPromptOverride: string };
+    };
+    expect(opts.context.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
+  });
+
+  it('write child resolves AGENTS.md from parent gitRoot, not the worktree path', async () => {
+    // Worktree is a transient checkout under a different path. The
+    // AGENTS.md lookup must walk from the original gitRoot, otherwise
+    // worktree-only paths would have no project rules.
+    const sentinel = 'PARENT_GITROOT_AGENTS_SENTINEL';
+    writeFileSync(
+      join(tmpRoot, 'AGENTS.md'),
+      `# Rules\n\n- ${sentinel}\n`,
+    );
+
+    // Worktree path is intentionally outside tmpRoot so its own walk
+    // would not find AGENTS.md unless the lookup uses parent gitRoot.
+    const wtPath = mkdtempSync(join(tmpdir(), 'kodax-feat117-wt-'));
+    try {
+      mockWorktreeCreate.mockResolvedValueOnce(
+        JSON.stringify({ path: wtPath, branch: 'wt' }),
+      );
+      mockRunKodaX.mockResolvedValueOnce({
+        success: true,
+        lastText: 'done',
+        messages: [{ role: 'assistant', content: '' }],
+        sessionId: 's1',
+      });
+
+      const bundles = [createBundle({ id: 'cb-w3', readOnly: false, objective: 'Refactor' })];
+      await executeChildAgents(
+        bundles,
+        createTmpCtx(tmpRoot),
+        createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      );
+
+      const opts = mockRunKodaX.mock.calls[0]![0] as {
+        context: { systemPromptOverride: string };
+      };
+      expect(opts.context.systemPromptOverride).toContain(sentinel);
+    } finally {
+      try { rmSync(wtPath, { recursive: true, force: true }); } catch { /* best-effort */ }
+    }
   });
 });
 
