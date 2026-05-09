@@ -95,6 +95,69 @@ function isSingleBashReadCommand(command: string): boolean {
 const NULL_DEVICE_REDIRECT_PATTERN = /(?:[0-9]+|&)>>?\s*(?:nul|\/dev\/null)(?=\s|$|[;|&])/gi;
 
 /**
+ * Token pattern for `isHelpCommand` non-flag tokens. Strict alphanumeric match —
+ * rejects paths (`./bin/foo`), versioned filenames (`script.js`), shell metachars
+ * (`$VAR`), and any other construct that could be smuggled past a "looks like a
+ * help command" check.
+ */
+const HELP_COMMAND_TOKEN_PATTERN = /^[a-zA-Z0-9]+$/;
+
+/**
+ * FEATURE_154 — universal `--help` fast-path (parity with Claude Code
+ * `commands.ts:isHelpCommand` at [commands.ts:388-436]).
+ *
+ * Returns `true` for commands of the shape `[CMD [SUBCMD ...]] --help` where
+ * every non-flag token is a simple alphanumeric identifier and `--help` is
+ * the only flag. These commands are unconditionally safe (programs print
+ * help and exit), so they fast-path past the LLM classifier (FEATURE_092)
+ * and the safe-read whitelist.
+ *
+ * Why: KodaX's auto-mode classifier costs an LLM call per tool invocation.
+ * Paying token cost on every `kubectl --help` / `docker --help` etc. is
+ * waste. Pre-FEATURE_154, KodaX only fast-pathed `--help` for ~12 language
+ * tools (`node` / `npm` / `python` / etc.) via the `languageTools` carve-out
+ * in `isSingleBashReadCommand`; this generalises to any command name.
+ *
+ * Strict by design (matches CC):
+ *   - Must end with `--help` (after trim)
+ *   - Must NOT contain `'` or `"` (could hide injection behind alphanumerics)
+ *   - Must contain `--help` exactly; any other flag (`-c`, `--version`, etc.) → false
+ *   - Every non-flag token must match `/^[a-zA-Z0-9]+$/` (rejects paths,
+ *     versioned files, env vars, shell metacharacters)
+ *
+ * Slightly stricter than CC on `$VAR` (CC's shell-quote tokenizer represents
+ * env-substitutions as object tokens that the loop skips, effectively
+ * letting them pass; KodaX's simple split sees them as strings and rejects.
+ * The stricter behavior is a deliberate safety choice.).
+ */
+export function isHelpCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (!trimmed.endsWith('--help')) {
+    return false;
+  }
+  // Reject any quoted argument — could hide injection (`python -c 'evil()' --help`).
+  if (trimmed.includes('"') || trimmed.includes("'")) {
+    return false;
+  }
+
+  let foundHelp = false;
+  for (const token of trimmed.split(/\s+/)) {
+    if (token.startsWith('-')) {
+      if (token === '--help') {
+        foundHelp = true;
+      } else {
+        return false;
+      }
+    } else {
+      if (!HELP_COMMAND_TOKEN_PATTERN.test(token)) {
+        return false;
+      }
+    }
+  }
+  return foundHelp;
+}
+
+/**
  * Check if a bash command is strictly a safe read-only operation (Whitelist).
  * Supports compound commands connected by `&&` and pipe chains connected by `|`
  * — every stage must independently be a safe read-only command. fd-redirects to
@@ -110,6 +173,14 @@ const NULL_DEVICE_REDIRECT_PATTERN = /(?:[0-9]+|&)>>?\s*(?:nul|\/dev\/null)(?=\s
 export function isBashReadCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
+  }
+
+  // FEATURE_154: universal `--help` fast-path. `* --help` is unconditionally
+  // safe — programs print help and exit. Skipping the rest of the parser
+  // (and, in auto mode, the LLM classifier) saves a Haiku/main-model call
+  // per help invocation. See isHelpCommand for the strict admission rules.
+  if (isHelpCommand(command)) {
+    return true;
   }
 
   // 1. Handle line continuations + strip null-device fd-redirects (Issue 129)

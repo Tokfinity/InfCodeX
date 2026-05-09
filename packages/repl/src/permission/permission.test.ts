@@ -9,6 +9,7 @@ import {
   isBashReadCommand,
   isBashWriteCommand,
   isCommandOnProtectedPath,
+  isHelpCommand,
   isPlanModeAllowedPath,
 } from './permission.js';
 
@@ -207,5 +208,91 @@ describe('isBashReadCommand — Windows search tools and pipe chains (Issue 129)
 
   it('rejects redirects to real files even with a read-only base command', () => {
     expect(isBashReadCommand('grep foo file > out.txt')).toBe(false);
+  });
+});
+
+// FEATURE_154: universal `--help` fast-path (parity with Claude Code
+// `commands.ts:isHelpCommand`). Pre-FEATURE_154 KodaX only allowed `--help`
+// for ~12 hard-coded language tools; this generalises to any command name
+// to bypass the LLM classifier on unconditionally safe help queries.
+describe('isHelpCommand — universal --help fast-path (FEATURE_154)', () => {
+  it('accepts simple `cmd --help` for arbitrary commands', () => {
+    expect(isHelpCommand('python --help')).toBe(true);
+    expect(isHelpCommand('node --help')).toBe(true);
+    expect(isHelpCommand('docker --help')).toBe(true);
+    expect(isHelpCommand('kubectl --help')).toBe(true);
+    expect(isHelpCommand('terraform --help')).toBe(true);
+  });
+
+  it('accepts `cmd subcmd ... --help` patterns with multiple alphanumeric tokens', () => {
+    expect(isHelpCommand('git log --help')).toBe(true);
+    expect(isHelpCommand('npm run --help')).toBe(true);
+    expect(isHelpCommand('docker container ls --help')).toBe(true);
+    expect(isHelpCommand('kubectl get pods --help')).toBe(true);
+  });
+
+  it('handles surrounding and inter-token whitespace', () => {
+    expect(isHelpCommand('  python --help  ')).toBe(true);
+    expect(isHelpCommand('python  --help')).toBe(true);
+    expect(isHelpCommand('\tpython\t--help\n')).toBe(true);
+  });
+
+  it('rejects commands containing quotes (potential injection bypass)', () => {
+    expect(isHelpCommand("python -c 'evil()' --help")).toBe(false);
+    expect(isHelpCommand('node -e "evil" --help')).toBe(false);
+    expect(isHelpCommand('echo "hi" --help')).toBe(false);
+  });
+
+  it('rejects flags other than --help', () => {
+    expect(isHelpCommand('python --help --version')).toBe(false);
+    expect(isHelpCommand('python -c script --help')).toBe(false);
+    expect(isHelpCommand('node --no-warnings --help')).toBe(false);
+    expect(isHelpCommand('git -C /repo log --help')).toBe(false);
+  });
+
+  it('rejects non-alphanumeric non-flag tokens (paths, dotted, env vars, shell ops)', () => {
+    expect(isHelpCommand('./bin/foo --help')).toBe(false);
+    expect(isHelpCommand('/usr/bin/python --help')).toBe(false);
+    expect(isHelpCommand('python script.js --help')).toBe(false);
+    expect(isHelpCommand('foo $VAR --help')).toBe(false);
+    expect(isHelpCommand('foo bar* --help')).toBe(false);
+    expect(isHelpCommand('python --help && rm')).toBe(false);
+  });
+
+  it('rejects commands not ending with --help', () => {
+    expect(isHelpCommand('python -h')).toBe(false);
+    expect(isHelpCommand('python --version')).toBe(false);
+    expect(isHelpCommand('python --help && ls')).toBe(false);
+    expect(isHelpCommand('python --help | grep usage')).toBe(false);
+    expect(isHelpCommand('--help python')).toBe(false);
+  });
+
+  it('rejects empty / whitespace-only input', () => {
+    expect(isHelpCommand('')).toBe(false);
+    expect(isHelpCommand('   ')).toBe(false);
+    expect(isHelpCommand('--help')).toBe(true); // bare `--help` allowed (matches CC)
+  });
+
+  it('integrates into isBashReadCommand for arbitrary command names', () => {
+    // Pre-FEATURE_154, only the 12 hard-coded language tools (node/npm/python/etc.)
+    // could pass `--help` through the safe-read whitelist. Now any command can.
+    expect(isBashReadCommand('docker --help')).toBe(true);
+    expect(isBashReadCommand('kubectl --help')).toBe(true);
+    expect(isBashReadCommand('terraform --help')).toBe(true);
+    expect(isBashReadCommand('git status --help')).toBe(true);
+  });
+
+  it('preserves language-tools --help (no regression)', () => {
+    expect(isBashReadCommand('python --help')).toBe(true);
+    expect(isBashReadCommand('node --help')).toBe(true);
+    expect(isBashReadCommand('npm --help')).toBe(true);
+  });
+
+  it('preserves language-tools script-execution blocking (no regression)', () => {
+    // The languageTools branch in isSingleBashReadCommand still blocks scripts
+    // for these tools. FEATURE_154 only bypasses the parser for *--help* form.
+    expect(isBashReadCommand('node script.js')).toBe(false);
+    expect(isBashReadCommand('npm install foo')).toBe(false);
+    expect(isBashReadCommand('python -c "print(1)"')).toBe(false);
   });
 });
