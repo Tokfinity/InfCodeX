@@ -497,6 +497,22 @@ export interface TodoItem {
    * tool result on failure.
    */
   readonly evaluator?: TodoEvaluatorHint;
+  /**
+   * FEATURE_149 v0.7.38 (Slice C4) — present-continuous form of `content`,
+   * used by the spinner status line while this item is `in_progress`.
+   * Mirrors Claude Code's [`Spinner.tsx:169`](c:/Works/claudecode/src/components/Spinner.tsx#L169)
+   * `currentTodo?.activeForm` lookup. Examples:
+   *   content: "Run failing test"  → activeForm: "Running failing test"
+   *   content: "Refactor auth"     → activeForm: "Refactoring auth"
+   *   content: "Verify build"      → activeForm: "Verifying build"
+   *
+   * Optional. When absent, the spinner falls back to a generic verb (no
+   * regression vs pre-FEATURE_149 behavior). When the LLM provides
+   * activeForm via `todo_update`, the spinner picks it up live without
+   * waiting for the round to end — that's the user-visible "working on X
+   * now" feel CC achieves.
+   */
+  readonly activeForm?: string;
 }
 
 export type TodoList = readonly TodoItem[];

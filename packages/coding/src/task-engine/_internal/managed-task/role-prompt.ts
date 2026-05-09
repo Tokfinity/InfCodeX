@@ -562,6 +562,13 @@ export function createRolePrompt(
           '  todo_update at each transition (pending → in_progress → completed) so the',
           '  user sees real-time progress. This gives the user a visible plan and forces',
           '  you to think through the full scope before acting.',
+          '',
+          '  When transitioning a todo to status="in_progress", ALWAYS supply the',
+          '  `activeForm` argument — a present-continuous-tense rephrasing of the',
+          '  item content (content "Run failing tests" → activeForm "Running failing',
+          '  tests"; content "Refactor auth module" → activeForm "Refactoring auth',
+          '  module"). The spinner shows this verb live so the user sees what you',
+          '  are working on right now without waiting for the round to end.',
         ].join('\n'),
         // FEATURE_097 v0.7.34 hotfix-2 — emit timing anchor.
         // GLM-as-Scout production transcript revealed Scouts treating
@@ -721,7 +728,7 @@ export function createRolePrompt(
         // FEATURE_097 (v0.7.34): drive the user-visible plan list so progress
         // is observable round-to-round. The tool soft-fails if no plan was
         // seeded for this run, so calling it is always safe.
-        'PLAN PROGRESS: When the run carries a visible obligation list (Scout produced ≥ 2 execution obligations), call todo_update at each transition: status="in_progress" BEFORE starting an obligation, status="completed" AFTER finishing it. Only ONE obligation should be in_progress at a time (per owner). If a step clearly fails and needs retry, set status="failed" with a brief note. If todo_update returns ok=false with reason "not active", no plan list was seeded for this run — continue without calling it.',
+        'PLAN PROGRESS: When the run carries a visible obligation list (Scout produced ≥ 2 execution obligations), call todo_update at each transition: status="in_progress" BEFORE starting an obligation, status="completed" AFTER finishing it. Only ONE obligation should be in_progress at a time (per owner). If a step clearly fails and needs retry, set status="failed" with a brief note. When you set status="in_progress", ALWAYS supply the activeForm argument — a present-continuous-tense rephrasing of the obligation (e.g. obligation "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now. If todo_update returns ok=false with reason "not active", no plan list was seeded for this run — continue without calling it.',
         // FEATURE_107 P5: experimental, env-gated, P6 cleanup target.
         generatorReasoningDiscipline,
         isTerminalAuthority

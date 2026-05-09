@@ -32,6 +32,11 @@ export interface TodoInit {
   readonly content: string;
   readonly owner?: string;
   readonly sourceObligationIndex?: number;
+  /**
+   * FEATURE_149 (v0.7.38) — present-continuous form for spinner display
+   * while this item is `in_progress`. See `TodoItem.activeForm` JSDoc.
+   */
+  readonly activeForm?: string;
 }
 
 export interface TodoStoreOptions {
@@ -64,8 +69,13 @@ export interface TodoStore {
    * existing note; when omitted (undefined), preserves any existing note.
    * Use `resetFailed()` (or pass an explicit empty-string note) to clear.
    * No-op for unknown id.
+   *
+   * FEATURE_149 (v0.7.38): when `activeForm` is supplied, replaces the
+   * item's `activeForm` field (used by the spinner). Omitted = preserve
+   * existing. Empty string = clear. Same preserve-vs-clear semantics as
+   * `note`.
    */
-  updateStatus(id: string, status: TodoStatus, note?: string): boolean;
+  updateStatus(id: string, status: TodoStatus, note?: string, activeForm?: string): boolean;
   /** Planner H2 path: full-replace the list (used after the planner refines obligations). */
   replace(items: readonly TodoItem[]): void;
   /**
@@ -123,12 +133,13 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
         status: 'pending' as TodoStatus,
         owner: seed.owner,
         sourceObligationIndex: seed.sourceObligationIndex,
+        activeForm: seed.activeForm,
       }));
       // init always notifies — even an empty seed list represents an
       // intentional "the task is starting, here is the (empty) plan" event.
       notifyIfChanged(true);
     },
-    updateStatus(id, status, note): boolean {
+    updateStatus(id, status, note, activeForm): boolean {
       const idx = items.findIndex((it) => it.id === id);
       if (idx < 0) return false;
       const prev = items[idx]!;
@@ -139,15 +150,23 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       // `failed` item carrying an Evaluator note is later re-tried by the
       // Generator via `updateStatus(id, 'in_progress')` with no note arg —
       // the previous failure context should remain attached to the item.
-      const next: TodoItem =
-        note === undefined ? { ...prev, status } : { ...prev, status, note };
+      // FEATURE_149 (v0.7.38): same preserve-vs-replace semantics for
+      // `activeForm` — omitted preserves existing, supplied replaces.
+      let next: TodoItem = { ...prev, status };
+      if (note !== undefined) next = { ...next, note };
+      if (activeForm !== undefined) next = { ...next, activeForm };
       // Honour the onChange "no-op writes do NOT fire" contract: when
-      // status AND note are both unchanged this call is semantically a
-      // no-op (e.g., the LLM emitted `todo_update({id, status:'in_progress'})`
-      // a second time after the first one already flipped it). Skip the
-      // notification to avoid wasted React renders. We still return `true`
-      // because the id was found — the tool-level contract reports success.
-      if (next.status === prev.status && next.note === prev.note) {
+      // status AND note AND activeForm are all unchanged this call is
+      // semantically a no-op (e.g., the LLM emitted
+      // `todo_update({id, status:'in_progress'})` a second time after the
+      // first one already flipped it). Skip the notification to avoid
+      // wasted React renders. We still return `true` because the id was
+      // found — the tool-level contract reports success.
+      if (
+        next.status === prev.status
+        && next.note === prev.note
+        && next.activeForm === prev.activeForm
+      ) {
         return true;
       }
       items = items.map((it, i) => (i === idx ? next : it));
