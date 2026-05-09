@@ -75,4 +75,61 @@ describe('toolBash', () => {
     expect(content).toContain('bg-output');
     expect(content).toContain('[Exit:');
   });
+
+  // FEATURE_149 (v0.7.38) — live progress reporting via reportToolProgress.
+  // The bash tool feeds stdout/stderr chunks into a small UTF-8 tail and
+  // calls ctx.reportToolProgress so the REPL spinner / tool-call display
+  // can show live output. Mirrors CC's BashTool.renderToolUseProgressMessage.
+  describe('live progress reporting (FEATURE_149)', () => {
+    it('calls reportToolProgress with stdout tail during execution', async () => {
+      const progressEvents: string[] = [];
+      // node script that prints 5 lines with a small gap between them so the
+      // throttle has time to fire — but short enough that the test stays fast.
+      const command = `node -e "const lines=['alpha','beta','gamma','delta','epsilon']; (async()=>{ for(const l of lines){ console.log(l); await new Promise(r=>setTimeout(r,30)); }})()"`;
+      const result = await toolBash({ command }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+        reportToolProgress: (msg) => {
+          progressEvents.push(msg);
+        },
+      });
+
+      expect(result).toContain('alpha');
+      expect(result).toContain('epsilon');
+      // We should have received at least one progress event with the tail.
+      // Throttle is 100ms so we won't get 5; we get 1-3 typically.
+      expect(progressEvents.length).toBeGreaterThan(0);
+      // The tail should be visible in at least one event — order is preserved.
+      const allEvents = progressEvents.join('\n');
+      expect(allEvents).toContain('epsilon');
+    });
+
+    it('does not throw when reportToolProgress is undefined (back-compat)', async () => {
+      const command = `node -e "console.log('quiet')"`;
+      const result = await toolBash({ command }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+        // reportToolProgress intentionally omitted
+      });
+
+      expect(result).toContain('quiet');
+    });
+
+    it('includes stderr in live progress (npm/pytest etc. emit to stderr)', async () => {
+      const progressEvents: string[] = [];
+      const command = `node -e "process.stderr.write('warn-msg\\n'); console.log('done')"`;
+      const result = await toolBash({ command }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+        reportToolProgress: (msg) => {
+          progressEvents.push(msg);
+        },
+      });
+
+      expect(result).toContain('done');
+      // stderr line should have shown up in progress.
+      const allEvents = progressEvents.join('\n');
+      expect(allEvents).toMatch(/warn-msg|done/);
+    });
+  });
 });

@@ -66,6 +66,14 @@ export interface TranscriptBuildOptions {
   managedBudgetUsage?: number;
   managedBudgetApprovalRequired?: boolean;
   lastLiveActivityLabel?: string;
+  /**
+   * FEATURE_149 (v0.7.38) — when a todo item is `in_progress` and carries
+   * an `activeForm` string, the spinner status line uses it as the leader
+   * verb (e.g. "Running failing tests..."). Mirrors Claude Code's
+   * `Spinner.tsx:169` `currentTodo?.activeForm` lookup. When undefined,
+   * falls back to the legacy `currentTool` / `isThinking` cascade.
+   */
+  currentTodoActiveForm?: string;
   showFullThinking?: boolean;
   showDetailedTools?: boolean;
   showAllContent?: boolean;
@@ -437,6 +445,7 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
     managedRound,
     managedMaxRounds,
     lastLiveActivityLabel,
+    currentTodoActiveForm,
     showFullThinking = false,
     showDetailedTools = false,
     showAllContent = false,
@@ -724,6 +733,17 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
           return rows;
         }
       }
+    } else if (currentTodoActiveForm) {
+      // FEATURE_149 (v0.7.38) — activeForm-driven spinner, mirroring CC's
+      // `Spinner.tsx:169` `currentTodo?.activeForm` lookup. When the LLM
+      // marks a todo `in_progress` with an `activeForm` like
+      // "Running failing tests", the spinner immediately shows that verb
+      // in place of the generic "[Tool] read..." or "[Thinking]
+      // processing" fallback. Tools / thinking still happen — this just
+      // gives the user a higher-level "what is the agent working on right
+      // now" cue while they happen.
+      prefix = managedPrefix || "[Plan] ";
+      loadingText = currentTodoActiveForm;
     } else if (currentTool) {
       prefix = managedPrefix || "[Tool] ";
       loadingText = normalizedLiveActivityLabel?.startsWith("[Tools]")

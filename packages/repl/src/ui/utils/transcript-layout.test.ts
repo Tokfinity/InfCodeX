@@ -175,6 +175,66 @@ describe("transcript-layout", () => {
     expect(text).toContain("* tools: read_file");
   });
 
+  // FEATURE_149 (v0.7.38) — activeForm-driven spinner. Mirrors CC's
+  // Spinner.tsx:169 `currentTodo?.activeForm` lookup. When the todo store
+  // has an in_progress item with `activeForm`, the spinner shows that
+  // verb in place of the generic fallback / currentTool / isThinking.
+  describe("activeForm-driven spinner (FEATURE_149 C4)", () => {
+    it("uses currentTodoActiveForm in the spinner line when supplied", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        currentTodoActiveForm: "Running failing tests",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("Running failing tests");
+      expect(text).toContain("[Plan]");
+    });
+
+    it("activeForm preempts the generic currentTool fallback", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        currentTool: "read",
+        toolInputContent: "/path/to/file",
+        toolInputCharCount: 12,
+        currentTodoActiveForm: "Refactoring auth module",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("Refactoring auth module");
+      // The generic [Tool] read prefix should NOT win when activeForm wins.
+      expect(text).not.toMatch(/\[Tool\]\s+read/);
+    });
+
+    it("falls back to currentTool when no activeForm provided", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        currentTool: "read",
+        toolInputContent: "/path/to/file",
+        toolInputCharCount: 12,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("[Tool]");
+    });
+
+    it("compacting still beats activeForm (top-priority preserved)", () => {
+      const rows = buildTranscriptRows({
+        items: [],
+        viewportWidth: 80,
+        isLoading: true,
+        isCompacting: true,
+        currentTodoActiveForm: "Should not appear while compacting",
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("Compacting");
+      expect(text).not.toContain("Should not appear");
+    });
+  });
+
   // FEATURE_149 (v0.7.38) — line-buffered streaming. Mirrors Claude Code's
   // REPL.tsx:1473 `streamingText.substring(0, lastIndexOf('\n')+1)`. While
   // a token stream is in flight, only complete lines (those ending in `\n`)

@@ -177,6 +177,63 @@ CC 同样行为，[`REPL.tsx:1473`](c:/Works/claudecode/src/screens/REPL.tsx#L14
 
 ---
 
+## Test 6 — activeForm-driven spinner（Slice C4，CC parity）
+
+### 步骤
+
+1. 启 KodaX，发一个会触发 Scout 的中等复杂任务（≥ 2 obligations），例如：`分析 packages/coding/src/tools/bash.ts，找出可能的安全风险并给出 3 个改进建议`。
+2. 观察响应过程中的 spinner status 行：
+
+### 期望结果
+
+- Scout 探查阶段：spinner 行如 `[Tool] grep ...` / `[Thinking] processing...`（旧行为）
+- Worker 进入执行阶段、调 `todo_update({status:'in_progress', activeForm:'Analyzing bash.ts safety'})` 后：
+  - spinner 立即切到 `[Plan] Analyzing bash.ts safety...`
+  - **不**等任何工具结束
+  - 切到下一个 todo 时，spinner 跟着切（`[Plan] Drafting recommendations...`）
+
+### 失败排查
+
+| 现象 | 诊断 |
+|------|------|
+| spinner 一直是 `[Thinking] processing` 或 `[Tool] xxx` | LLM 调 todo_update 没传 activeForm；可能 role-prompt 改动未生效，或 LLM 忽略了引导 |
+| 调 todo_update 报 `Invalid activeForm` | 类型校验失败——传了非 string；看 todo-update.ts |
+| 切了 in_progress 但 spinner 不跟 | InkREPL.tsx 的 `currentTodoActiveForm` useMemo 没接 / 没传给 transcript model；看 transcript-layout.ts spinner 级联 |
+
+### 对照
+
+CC [`Spinner.tsx:169`](c:/Works/claudecode/src/components/Spinner.tsx#L169) 同样读 `currentTodo?.activeForm` 实时切 spinner，是 CC "看起来 agent 在认真做事"的核心——比 "Working..." 信息量大得多。
+
+---
+
+## Test 7 — Bash live progress（Slice C5，CC parity）
+
+### 步骤
+
+1. 启 KodaX，发：`运行 bash 跑 5 行有间隔的输出` 或更实战的：`npm test --workspace packages/coding`。
+2. 观察 bash 工具调用过程中的 spinner / tool-call display：
+
+### 期望结果
+
+- bash 启动后**立即**进度条 / spinner status 显示 stdout/stderr 的最近几行
+- 命令输出每来一行（throttle 100ms），progress 行更新一次
+- 30s 长跑期间用户看到**实时进度**（不是 30s 静默等待）
+- 命令完成后 transcript 显示完整 output（live progress 与 final output 是两条路径，互不干扰）
+
+### 失败排查
+
+| 现象 | 诊断 |
+|------|------|
+| bash 跑期间无任何进度 | `ctx.reportToolProgress` 没传到 bash，看 tool-execution-context.ts wiring |
+| progress 显示乱码 | UTF-8 chunk 边界切到多字节字符——预期可接受（live tail 是 best-effort）；最终 output decode 仍正确 |
+| 30s 跑期间频繁刷屏（> 20fps） | throttle 没生效，看 `LIVE_PROGRESS_THROTTLE_MS` |
+
+### 对照
+
+CC [`BashTool.tsx`](c:/Works/claudecode/src/tools/BashTool/BashTool.tsx) 实现 `renderToolUseProgressMessage()` + [`BashModeProgress.tsx`](c:/Works/claudecode/src/components/BashModeProgress.tsx) 渲染 `<UserBashInputMessage>` + `<ShellProgressMessage>` 实时滚动。KodaX 走 `reportToolProgress` 通道（轻量，spinner-line-only，不专门为 bash 渲染独立组件），是较轻量的等价。
+
+---
+
 ## 回归 checklist（每次 ship 必跑）
 
 - [ ] Test 1 latency：排队 prompt 视觉延迟 < 100ms（micro-bench < 5ms）
@@ -184,7 +241,9 @@ CC 同样行为，[`REPL.tsx:1473`](c:/Works/claudecode/src/screens/REPL.tsx#L14
 - [ ] Test 3 batched drain：3 条排队 = 1 次 agent invocation，LLM 全部回应
 - [ ] Test 4 queue surface：多行渲染 + ↑ pop + Esc 砍尾全部工作
 - [ ] Test 5 line-buffered streaming：完整行成块出现，无字符级跳动；响应结束后无内容丢失
-- [ ] `npm run test`（含 `queue-mirror.test.ts` + `queued-prompt-sequence.test.ts` + `queued-prompt-sequence-latency.test.ts` + `transcript-layout.test.ts`）全绿
+- [ ] Test 6 activeForm spinner：Worker 调 `todo_update({status:'in_progress', activeForm:'…'})` 后 spinner 立刻切到 `[Plan] …`
+- [ ] Test 7 bash live progress：长 bash 期间 spinner / tool-display 实时显示 stdout/stderr tail
+- [ ] `npm run test`（含 `queue-mirror.test.ts` + `queued-prompt-sequence.test.ts` + `queued-prompt-sequence-latency.test.ts` + `transcript-layout.test.ts` + `todo-store.test.ts` + `bash.test.ts`）全绿
 - [ ] `npm run test:eval -- feature-149-batched-drain` 通过 stage-1 gate
 
 ---

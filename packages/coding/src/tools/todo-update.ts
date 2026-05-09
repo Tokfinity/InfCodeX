@@ -50,6 +50,13 @@ interface TodoUpdateInput {
   id?: unknown;
   status?: unknown;
   note?: unknown;
+  /**
+   * FEATURE_149 (v0.7.38) — present-continuous form (e.g. "Running tests").
+   * Optional; when supplied with `status: 'in_progress'`, the spinner
+   * picks it up live as `currentTodo?.activeForm`. Omitted = preserve
+   * existing.
+   */
+  activeForm?: unknown;
 }
 
 function jsonResult(payload: Record<string, unknown>): string {
@@ -60,7 +67,7 @@ export async function toolTodoUpdate(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const { id, status, note } = input as TodoUpdateInput;
+  const { id, status, note, activeForm } = input as TodoUpdateInput;
 
   if (!ctx.todoStore) {
     // Configuration error — runner-driven did not wire a store for this run.
@@ -96,6 +103,13 @@ export async function toolTodoUpdate(
     });
   }
 
+  if (activeForm !== undefined && typeof activeForm !== 'string') {
+    return jsonResult({
+      ok: false,
+      reason: 'Invalid activeForm: when provided, must be a string (present-continuous, e.g. "Running tests").',
+    });
+  }
+
   if (!ctx.todoStore.has(id)) {
     const validIds = ctx.todoStore.allIds();
     const validList =
@@ -111,7 +125,12 @@ export async function toolTodoUpdate(
     });
   }
 
-  ctx.todoStore.updateStatus(id, status as TodoStatus, note as string | undefined);
+  ctx.todoStore.updateStatus(
+    id,
+    status as TodoStatus,
+    note as string | undefined,
+    activeForm as string | undefined,
+  );
   // Note: store fires its onChange callback internally — no need for the
   // tool to also emit onTodoUpdate.
   return jsonResult({ ok: true });

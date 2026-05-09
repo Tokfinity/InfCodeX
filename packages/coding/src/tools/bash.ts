@@ -226,11 +226,48 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       }
     }
 
+    // FEATURE_149 (v0.7.38) — live progress for long-running bash. Mirrors
+    // Claude Code's `BashTool.renderToolUseProgressMessage` (the user sees
+    // command output scrolling live in the transcript instead of a 30s
+    // silent wait). Strategy: maintain a small UTF-8 string tail
+    // (`liveTail`) separate from the 512KB capture collectors; on each
+    // chunk, append + cap, then call `ctx.reportToolProgress` with the
+    // last 3 complete lines, throttled to ~10 fps so we don't flood the
+    // Ink renderer. Final output (post-`close`) still flows through the
+    // existing decodeCollector path — this is purely an additive UI hint.
+    let liveTail = '';
+    const LIVE_TAIL_MAX_CHARS = 1024; // ~3-5 lines worth of stdout context
+    const LIVE_PROGRESS_THROTTLE_MS = 100;
+    let lastProgressAt = 0;
+    const reportLiveProgress = (force: boolean): void => {
+      if (!ctx.reportToolProgress) return;
+      const now = Date.now();
+      if (!force && now - lastProgressAt < LIVE_PROGRESS_THROTTLE_MS) return;
+      lastProgressAt = now;
+      // Pick the last few non-empty lines for a compact "tail" display.
+      const lines = liveTail.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+      if (lines.length === 0) return;
+      const tail = lines.slice(-3).join(' | ');
+      // Cap the displayed tail so the spinner line stays readable.
+      const display = tail.length > 120 ? '…' + tail.slice(-119) : tail;
+      ctx.reportToolProgress(display);
+    };
+
     proc.stdout?.on('data', (chunk: Buffer) => {
       appendTailChunk(stdout, chunk, BASH_CAPTURE_LIMIT_BYTES);
+      // Best-effort UTF-8 decode for the live tail. Multi-byte chars
+      // straddling a chunk boundary may render imperfectly for one frame
+      // — acceptable for a transient progress hint (the captured output
+      // is still decoded correctly via decodeCollector at end-of-stream).
+      liveTail = (liveTail + chunk.toString('utf-8')).slice(-LIVE_TAIL_MAX_CHARS);
+      reportLiveProgress(false);
     });
     proc.stderr?.on('data', (chunk: Buffer) => {
       appendTailChunk(stderr, chunk, BASH_CAPTURE_LIMIT_BYTES);
+      // stderr also feeds the live tail — many CLIs (npm / cargo / pytest)
+      // emit progress to stderr.
+      liveTail = (liveTail + chunk.toString('utf-8')).slice(-LIVE_TAIL_MAX_CHARS);
+      reportLiveProgress(false);
     });
     proc.on('close', code => {
       clearTimeout(timer);

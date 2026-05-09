@@ -411,3 +411,73 @@ describe('todo-store revise → reset cross-turn lifecycle (FEATURE_097 §5 ①)
     expect(store.getAll()).toEqual([]);
   });
 });
+
+// FEATURE_149 (v0.7.38) — `activeForm` field on TodoItem drives the
+// spinner verb. Tests pin: seeded value flows through; updateStatus can
+// set / preserve / replace; absent value stays absent.
+describe('todo-store activeForm (FEATURE_149)', () => {
+  it('init() seeds activeForm when provided', () => {
+    const store = createTodoStore();
+    store.init([
+      { id: 'todo_1', content: 'Run failing tests', activeForm: 'Running failing tests' },
+    ]);
+    expect(store.getAll()[0]?.activeForm).toBe('Running failing tests');
+  });
+
+  it('init() leaves activeForm undefined when not provided (back-compat)', () => {
+    const store = createTodoStore();
+    store.init(SEEDS);
+    for (const it of store.getAll()) {
+      expect(it.activeForm).toBeUndefined();
+    }
+  });
+
+  it('updateStatus() sets activeForm when supplied', () => {
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', content: 'Refactor auth' }]);
+    store.updateStatus('todo_1', 'in_progress', undefined, 'Refactoring auth');
+    expect(store.getAll()[0]?.activeForm).toBe('Refactoring auth');
+    expect(store.getAll()[0]?.status).toBe('in_progress');
+  });
+
+  it('updateStatus() preserves existing activeForm when omitted', () => {
+    const store = createTodoStore();
+    store.init([
+      { id: 'todo_1', content: 'Refactor auth', activeForm: 'Refactoring auth' },
+    ]);
+    // Subsequent transition with no activeForm arg should preserve.
+    store.updateStatus('todo_1', 'completed');
+    expect(store.getAll()[0]?.activeForm).toBe('Refactoring auth');
+  });
+
+  it('updateStatus() replaces activeForm when supplied', () => {
+    const store = createTodoStore();
+    store.init([
+      { id: 'todo_1', content: 'Refactor auth', activeForm: 'old phrase' },
+    ]);
+    store.updateStatus('todo_1', 'in_progress', undefined, 'new phrase');
+    expect(store.getAll()[0]?.activeForm).toBe('new phrase');
+  });
+
+  it('updateStatus() with no actual change does not fire onChange (no-op contract)', () => {
+    const events: TodoList[] = [];
+    const store = createTodoStore({ onChange: (items) => { events.push(items); } });
+    store.init([
+      { id: 'todo_1', content: 'X', activeForm: 'Doing X' },
+    ]);
+    events.length = 0; // Drop the init notification.
+    // Same status + same activeForm = no-op.
+    store.updateStatus('todo_1', 'pending', undefined, 'Doing X');
+    expect(events).toEqual([]);
+  });
+
+  it('updateStatus() fires onChange when only activeForm changes', () => {
+    const events: TodoList[] = [];
+    const store = createTodoStore({ onChange: (items) => { events.push(items); } });
+    store.init([{ id: 'todo_1', content: 'X', activeForm: 'Doing X' }]);
+    events.length = 0;
+    store.updateStatus('todo_1', 'pending', undefined, 'Working on X');
+    expect(events.length).toBe(1);
+    expect(events[0]![0]!.activeForm).toBe('Working on X');
+  });
+});

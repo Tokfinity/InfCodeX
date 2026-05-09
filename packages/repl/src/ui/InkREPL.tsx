@@ -1495,6 +1495,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // does `setTodoItems(items)` directly (no managedForegroundLedger
   // round-trip — the list is task-global, not per-worker).
   const [todoItems, setTodoItems] = useState<readonly TodoItem[]>([]);
+  // FEATURE_149 (v0.7.38) — derive the spinner's "currentTodoActiveForm"
+  // from the first `in_progress` item's `activeForm` field. Mirrors CC's
+  // `Spinner.tsx:169` `currentTodo?.activeForm` lookup. The transcript
+  // layout uses this string as the spinner's leader verb when present
+  // ("Running failing tests..." instead of generic "Thinking..."). The
+  // first-match rule matches CC's "one in_progress at a time" convention
+  // (the LLM is instructed to keep at most one task active per owner).
+  // Memoized BEFORE the transcript render-model memos so `currentTodoActiveForm`
+  // is in scope when those memos reference it (no TDZ).
+  const currentTodoActiveForm = useMemo<string | undefined>(() => {
+    for (const item of todoItems) {
+      if (item.status === "in_progress" && item.activeForm && item.activeForm.length > 0) {
+        return item.activeForm;
+      }
+    }
+    return undefined;
+  }, [todoItems]);
   // Tracks the wall-clock at which all items first became terminal.
   // Used by the view-model to enforce the 5 s post-completion linger.
   // `null` whenever any pending / in_progress / failed item is present.
@@ -2600,6 +2617,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         managedBudgetUsage: effectivePromptIsLoading ? managedTaskStatus?.budgetUsage : undefined,
         managedBudgetApprovalRequired: effectivePromptIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
         lastLiveActivityLabel: effectivePromptStreamingState.lastLiveActivityLabel,
+        // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
+        currentTodoActiveForm,
         windowed: false,
         showFullThinking: false,
         showDetailedTools: false,
@@ -2636,6 +2655,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       fullscreenBannerSection,
       terminalWidth,
       transcriptMaxLines,
+      currentTodoActiveForm,
     ],
   );
   const transcriptMainScreenRenderModel = useMemo(
@@ -2671,6 +2691,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           managedBudgetUsage: transcriptDisplayIsLoading ? managedTaskStatus?.budgetUsage : undefined,
           managedBudgetApprovalRequired: transcriptDisplayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
           lastLiveActivityLabel: transcriptStreamingState.lastLiveActivityLabel,
+          // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
+          currentTodoActiveForm,
           windowed: false,
           showFullThinking: true,
           showDetailedTools: showAllInTranscript,
@@ -2713,6 +2735,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       transcriptStreamingState.toolInputContent,
       showAllInTranscript,
       useRendererViewportShell,
+      currentTodoActiveForm,
     ],
   );
   const ownedTranscriptRenderModel = useMemo(
@@ -2752,6 +2775,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           managedBudgetUsage: currentSurfaceIsLoading ? managedTaskStatus?.budgetUsage : undefined,
           managedBudgetApprovalRequired: currentSurfaceIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
           lastLiveActivityLabel: currentSurfaceStreamingState.lastLiveActivityLabel,
+          // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
+          currentTodoActiveForm,
           windowed: true,
           showFullThinking: isTranscriptMode,
           showDetailedTools: showAllInTranscript,
@@ -2797,6 +2822,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       transcriptMaxLines,
       transcriptOwnsViewport,
       showAllInTranscript,
+      currentTodoActiveForm,
     ],
   );
   const activeTranscriptRenderModel = useMemo(
