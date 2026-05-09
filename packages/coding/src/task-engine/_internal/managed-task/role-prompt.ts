@@ -563,6 +563,14 @@ export function createRolePrompt(
           '  user sees real-time progress. This gives the user a visible plan and forces',
           '  you to think through the full scope before acting.',
           '',
+          '  FEATURE_151 (v0.7.38) — RECOVERY PATH: if you skipped emit_scout_verdict',
+          '  (or emitted with executionObligations < 2) and only later realized the',
+          '  task is genuinely multi-step, you may commit a plan via',
+          '  todo_update({op:"init", items:[{id, content, activeForm?}, ...]}). This',
+          '  is the only LLM-side path to seed a list when the runner did not. Do',
+          '  not abuse it for trivial tasks — the same TRIVIAL-EXEMPTION criteria',
+          '  apply (single typo / single edit / single-action lookup → no plan).',
+          '',
           '  When transitioning a todo to status="in_progress", ALWAYS supply the',
           '  `activeForm` argument — a present-continuous-tense rephrasing of the',
           '  item content (content "Run failing tests" → activeForm "Running failing',
@@ -686,7 +694,7 @@ export function createRolePrompt(
         // You only need to call todo_update if you want to record interim
         // status transitions (rare for a planner; status transitions are
         // mostly Generator territory).
-        'PLAN PROGRESS: The user-visible plan list is refreshed automatically from your contract. You generally do not need to call todo_update; if you do, restrict it to status="skipped" when an obligation turned out to be unnecessary (Generator handles in_progress / completed transitions). If todo_update returns ok=false with reason "not active", no plan list was seeded for this run.',
+        'PLAN PROGRESS: The user-visible plan list is refreshed automatically from your contract. You generally do not need to call todo_update; if you do, restrict it to status="skipped" when an obligation turned out to be unnecessary (Generator handles in_progress / completed transitions). FEATURE_151 (v0.7.38) — if you decide the contract\'s success_criteria need to be reflected as a fully fresh plan list (e.g. Scout-seeded obligations diverge from your refined criteria), you may call todo_update({op:"init", items:[{id, content, activeForm?}, ...]}) to replace the list with one keyed to your criteria. Calling on an already-populated store fully replaces — items not in the new list are dropped. If todo_update returns ok=false with reason "not active", no plan list infrastructure is wired for this run.',
         [
           `Contract payload shape (pass to ${ROLE_EMIT_TOOL_NAMES.planner}):`,
           'summary: <one-line contract summary>',
@@ -728,7 +736,7 @@ export function createRolePrompt(
         // FEATURE_097 (v0.7.34): drive the user-visible plan list so progress
         // is observable round-to-round. The tool soft-fails if no plan was
         // seeded for this run, so calling it is always safe.
-        'PLAN PROGRESS: When the run carries a visible obligation list (Scout produced ≥ 2 execution obligations), call todo_update at each transition: status="in_progress" BEFORE starting an obligation, status="completed" AFTER finishing it. Only ONE obligation should be in_progress at a time (per owner). If a step clearly fails and needs retry, set status="failed" with a brief note. When you set status="in_progress", ALWAYS supply the activeForm argument — a present-continuous-tense rephrasing of the obligation (e.g. obligation "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now. If todo_update returns ok=false with reason "not active", no plan list was seeded for this run — continue without calling it.',
+        'PLAN PROGRESS: When the run carries a visible obligation list (Scout produced ≥ 2 execution obligations), call todo_update at each transition: status="in_progress" BEFORE starting an obligation, status="completed" AFTER finishing it. Only ONE obligation should be in_progress at a time (per owner). If a step clearly fails and needs retry, set status="failed" with a brief note. When you set status="in_progress", ALWAYS supply the activeForm argument — a present-continuous-tense rephrasing of the obligation (e.g. obligation "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now. FEATURE_151 (v0.7.38) — if no plan list exists (Scout did not seed one) but you have realised the work is genuinely multi-step, commit a plan with todo_update({op:"init", items:[{id, content, activeForm?}, ...]}) and then proceed with status updates. Only do this for tasks with ≥ 2 distinct execution steps; trivial single-step tasks should proceed without a plan. If todo_update returns ok=false with reason "not active", no plan list infrastructure is wired for this run — continue without calling it.',
         // FEATURE_107 P5: experimental, env-gated, P6 cleanup target.
         generatorReasoningDiscipline,
         isTerminalAuthority

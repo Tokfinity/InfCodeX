@@ -1,11 +1,12 @@
 /**
- * Todo Plan View-Model — FEATURE_097 (v0.7.34).
+ * Todo Plan View-Model — FEATURE_097 (v0.7.34) + FEATURE_151 (v0.7.38).
  *
  * Pure transform from `TodoList` (the canonical store snapshot) to a
  * render-ready set of rows for `TodoListSurface.tsx`. All display
  * decisions live here so the component layer is a thin renderer.
  *
- * Design rules (per docs/features/v0.7.34.md §"View-Model"):
+ * Design rules (per docs/features/v0.7.34.md §"View-Model" with
+ * FEATURE_151 v0.7.38 visibility-parity revisions):
  *   - Max visible rows = 6 (hard cap, includes optional summary rows).
  *   - Anchor = first in_progress, else first pending, else last
  *     completed/terminal.
@@ -17,18 +18,36 @@
  *   - Failed-item priority: surface the most recent failed item even
  *     if it would fall outside the window (replaces the nearest
  *     pending slot inside the window).
- *   - shouldRender = totalCount >= 2 AND not within the post-completion
- *     5 s linger window. Below 2, the surface stays hidden — Claude
- *     Code's "task too simple to need a list" stance.
+ *   - shouldRender = totalCount >= MIN_ITEMS_TO_RENDER. FEATURE_151:
+ *     MIN dropped from 2 to 1 to match Claude Code's `tasks.length === 0`
+ *     UI gate (TaskListV2.tsx:89). The 5-second post-completion linger
+ *     auto-hide is also removed in FEATURE_151 — the surface stays
+ *     visible until the next AMA task's Scout init or the LLM's
+ *     `todo_update op:'init'` triggers a `replace()`. The
+ *     `lastAllCompletedAt` parameter is kept on `BuildTodoPlanOptions`
+ *     for callers that still pass it (back-compat) but is no longer
+ *     consulted; it will be removed in a future cleanup pass once all
+ *     callers have migrated.
  */
 
 import type { TodoItem } from "@kodax-ai/coding";
 
 export const MAX_VISIBLE_ROWS = 6;
-/** 5-second linger before the surface auto-hides after the last item closes. */
+/**
+ * @deprecated FEATURE_151 (v0.7.38) — the linger-based auto-hide was removed
+ * to match Claude Code's persistent-visibility behavior. The constant is
+ * retained for one release cycle so external `BuildTodoPlanOptions`
+ * callers (`InkREPL.tsx`) keep type-checking, then will be deleted along
+ * with `lastAllCompletedAt`.
+ */
 export const POST_COMPLETION_LINGER_MS = 5_000;
-/** Below this many items, the surface never renders. */
-export const MIN_ITEMS_TO_RENDER = 2;
+/**
+ * Below this many items the surface never renders. FEATURE_151 (v0.7.38):
+ * 2 → 1 to match Claude Code's `if (tasks.length === 0) return null;`
+ * (TaskListV2.tsx:89). 1-item lists from LLM-driven `todo_update op:'init'`
+ * (FEATURE_151 Slice B1) now render; 0-item store still hides the surface.
+ */
+export const MIN_ITEMS_TO_RENDER = 1;
 
 export type TodoRowKind = "item" | "summary_done" | "summary_pending";
 export type TodoSymbolColor =
@@ -62,13 +81,18 @@ export interface TodoPlanViewModel {
 }
 
 export interface BuildTodoPlanOptions {
-  /** Current epoch ms — used to evaluate the linger window. */
+  /**
+   * Current epoch ms. FEATURE_151 (v0.7.38): no longer consulted by the
+   * view-model (the post-completion linger gate was removed for CC parity)
+   * but still passed by `InkREPL.tsx` callers, so the field is retained
+   * to avoid a coordinated cross-package signature change.
+   */
   readonly now: number;
   /**
-   * The epoch ms at which all items first reached a terminal state.
-   * Caller sets this when the last in_progress / pending flips, and
-   * resets it back to `null` if any item leaves the terminal set
-   * (e.g., Evaluator revise marks something failed mid-linger).
+   * @deprecated FEATURE_151 (v0.7.38) — the 5-second post-completion
+   * auto-hide was removed; surface stays visible until the next
+   * `replace()` event. Callers may continue to pass this value (the
+   * view-model ignores it). Will be deleted in a future cleanup pass.
    */
   readonly lastAllCompletedAt: number | null;
 }
@@ -248,14 +272,18 @@ export function buildTodoPlanViewModel(
     return baseVm([], false);
   }
 
-  // Post-completion linger: if every item is terminal AND the linger
-  // window has elapsed, hide the surface.
-  if (allItemsTerminal(items) && opts.lastAllCompletedAt !== null) {
-    const elapsed = opts.now - opts.lastAllCompletedAt;
-    if (elapsed >= POST_COMPLETION_LINGER_MS) {
-      return baseVm([], false);
-    }
-  }
+  // FEATURE_151 (v0.7.38): the post-completion 5-second linger gate that
+  // previously hid the surface after `lastAllCompletedAt + 5s` was removed
+  // to match Claude Code's persistent visibility (TaskListV2 stays mounted
+  // for the whole session via `expandedView==='tasks'`). Items remain
+  // visible until the next `replace()` from a new Scout `init()` or an
+  // LLM-driven `todo_update op:'init'`. The `opts.now` and
+  // `opts.lastAllCompletedAt` parameters are intentionally not consulted
+  // here — see the type-doc on `BuildTodoPlanOptions` for the back-compat
+  // rationale. The unused-args lint is silenced via the void operator
+  // below to keep the parameter shape stable for InkREPL callers.
+  void opts.now;
+  void opts.lastAllCompletedAt;
 
   const anchorIdx = pickAnchorIndex(items);
   const window = decideWindow(items, anchorIdx);
