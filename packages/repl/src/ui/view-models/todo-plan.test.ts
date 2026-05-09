@@ -224,6 +224,9 @@ describe("buildTodoPlanViewModel — symbol mapping", () => {
     ["completed", "✓"],
     ["failed", "✗"],
     ["skipped", "⊘"],
+    // FEATURE_114 v0.7.36 Slice 1: cancelled is a Worker-driven mid-task
+    // drop. Distinct glyph from skipped (⊘ Planner-merge vs ☒ Worker-cancel).
+    ["cancelled", "☒"],
   ])("status=%s renders symbol %s", (status, symbol) => {
     const items: TodoItem[] = [
       makeItem("todo_1", "A", status),
@@ -298,6 +301,19 @@ describe("isPlanFullyClosed", () => {
     expect(isPlanFullyClosed([
       makeItem("todo_1", "A", "completed"),
       makeItem("todo_2", "B", "failed"),
+      makeItem("todo_3", "C", "skipped"),
+    ])).toBe(true);
+  });
+
+  it("FEATURE_114 v0.7.36 Slice 1: cancelled counts as terminal — fully-cancelled plan closes", () => {
+    expect(isPlanFullyClosed([
+      makeItem("todo_1", "A", "cancelled"),
+      makeItem("todo_2", "B", "cancelled"),
+    ])).toBe(true);
+    // Mixed terminal also closes.
+    expect(isPlanFullyClosed([
+      makeItem("todo_1", "A", "completed"),
+      makeItem("todo_2", "B", "cancelled"),
       makeItem("todo_3", "C", "skipped"),
     ])).toBe(true);
   });

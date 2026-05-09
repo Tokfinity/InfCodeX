@@ -102,6 +102,13 @@ const SYMBOL_IN_PROGRESS = "●"; // ●
 const SYMBOL_COMPLETED = "✓"; // ✓
 const SYMBOL_FAILED = "✗"; // ✗
 const SYMBOL_SKIPPED = "⊘"; // ⊘
+// FEATURE_114 v0.7.36 Slice 1 — `cancelled` is a Worker-driven mid-task
+// drop (distinct from `skipped` which is Planner-merge). Use the
+// "ballot box with X" glyph (different shape from skipped's `⊘` so the
+// two terminal-but-not-completed status flavors are visually distinct).
+// Slice 4 may extend the row renderer to add strikethrough on the row's
+// content text; the symbol alone is sufficient for compact-only display.
+const SYMBOL_CANCELLED = "☒"; // ☒
 
 function symbolForStatus(status: TodoItem["status"]): {
   symbol: string;
@@ -116,6 +123,8 @@ function symbolForStatus(status: TodoItem["status"]): {
       return { symbol: SYMBOL_FAILED, color: "red" };
     case "skipped":
       return { symbol: SYMBOL_SKIPPED, color: "gray" };
+    case "cancelled":
+      return { symbol: SYMBOL_CANCELLED, color: "gray" };
     case "pending":
     default:
       return { symbol: SYMBOL_PENDING, color: "dim" };
@@ -123,7 +132,16 @@ function symbolForStatus(status: TodoItem["status"]): {
 }
 
 function isTerminal(status: TodoItem["status"]): boolean {
-  return status === "completed" || status === "failed" || status === "skipped";
+  // FEATURE_114 v0.7.36 Slice 1 — `cancelled` joins the terminal set:
+  // a cancelled item is "done" from the linger / fully-closed perspective
+  // exactly like skipped. Without this guard, a fully-cancelled plan would
+  // never satisfy `isPlanFullyClosed` and the surface would never close.
+  return (
+    status === "completed"
+    || status === "failed"
+    || status === "skipped"
+    || status === "cancelled"
+  );
 }
 
 /** Item is "settled" when caller wants the linger timer to advance. */
