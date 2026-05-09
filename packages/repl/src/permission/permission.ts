@@ -82,13 +82,27 @@ function isSingleBashReadCommand(command: string): boolean {
 }
 
 /**
- * Check if a bash command is strictly a safe read-only operation (Whitelist).
- * Supports compound commands connected by && (all parts must be read-only).
- * Rejects dangerous shell operators: |, >, <, &, ;, `, $(), \\ (except path separators or spaces)
+ * Match fd-redirect to a null device (e.g. `2>NUL`, `2>/dev/null`, `&>/dev/null`).
+ * These discard output to a special device — they are NOT writes to disk, so they
+ * should not classify a command as a write or block read-only safety checks.
  *
- * 检查一个 bash 命令是否是严格安全的只读操作（白名单）。
- * 支持 && 连接的复合命令（所有部分都必须是只读的）。
- * 拒绝危险的 shell 操作符: |, >, <, &, ;, `, $(), \\ (允许路径分隔符/转义空格)
+ * Issue 129: requires explicit fd (`0-9`) or `&` prefix; bare `>NUL` / `>/dev/null`
+ * is left as a real redirect since user-typed `>NUL` without an fd is rare and
+ * functionally is still a redirect verb. Matches case-insensitively. The lookahead
+ * ensures `nul` / `/dev/null` is a token boundary, so paths like `foo/nul.txt`
+ * are not stripped.
+ */
+const NULL_DEVICE_REDIRECT_PATTERN = /(?:[0-9]+|&)>>?\s*(?:nul|\/dev\/null)(?=\s|$|[;|&])/gi;
+
+/**
+ * Check if a bash command is strictly a safe read-only operation (Whitelist).
+ * Supports compound commands connected by `&&` and pipe chains connected by `|`
+ * — every stage must independently be a safe read-only command. fd-redirects to
+ * a null device (e.g. `2>NUL`, `2>/dev/null`) are stripped before validation
+ * since they don't write anything (Issue 129).
+ *
+ * Rejects dangerous shell operators: `<`, real `>` (write), `||`, single `&`,
+ * `;`, backtick, `$(...)`, and unescaped `\` on POSIX.
  *
  * @param command - bash command string
  * @returns true if the command is a safe read operation
@@ -98,21 +112,21 @@ export function isBashReadCommand(command: string): boolean {
     return false;
   }
 
-  // Handle line continuations first (replace \ followed by newline with space)
+  // 1. Handle line continuations + strip null-device fd-redirects (Issue 129)
   let normalizedCommand = command.trim().replace(/\\\r?\n/g, ' ');
+  normalizedCommand = normalizedCommand.replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
 
-  // 1. Strict syntax validation: Reject any command containing dangerous shell operators
-  // Note: && is explicitly allowed for compound read-only commands like "cd dir && git diff"
-  // We check for single & (background execution) separately from &&
-  
-  // Reject: |, <, >, single &, ;, `, $(), \ (conditionally)
-  // Base dangerous operators (removed \ from base set)
-  const baseIllegalSyntax = /[<>|;`]|\$\(|(?<!&)&(?!&)/;
+  // 2. Strict syntax validation: reject dangerous shell operators.
+  //    `&&` and single `|` are explicitly permitted — both fan out to the
+  //    sub-command split below, where every stage must be a safe-read command.
+  //    `||` (logical-or short-circuit) stays rejected: scope-control change
+  //    in scope of Issue 129 was limited to enabling pipes, not adding logical-or.
+  const baseIllegalSyntax = /[<>;`]|\$\(|(?<!&)&(?!&)|\|\|/;
   if (baseIllegalSyntax.test(normalizedCommand)) {
     return false;
   }
 
-  // Handle backslashes conditionally
+  // 3. Handle backslashes conditionally
   if (normalizedCommand.includes('\\')) {
     if (path.sep !== '\\') { // Not on Windows
       // On Unix, \ is dangerous unless it's just escaping a space (e.g. My\ Folder)
@@ -125,17 +139,18 @@ export function isBashReadCommand(command: string): boolean {
     // On Windows, \ is a path separator and generally safe in the context of these read-only commands
   }
 
-  // 2. Split by && and check each sub-command
-  // Handle compound commands like "cd /path && git status"
-  const subCommands = normalizedCommand.split(/\s*&&\s*/);
+  // 4. Split by `&&` and `|` — every stage must be a safe-read operation.
+  //    Handles `cd /path && git status`, `findstr a | findstr b`, and
+  //    combinations of both.
+  const subCommands = normalizedCommand.split(/\s*(?:&&|\|)\s*/);
 
-  // If no && found, this is a single command
+  // If no compound operator found, this is a single command
   if (subCommands.length === 1) {
     return isSingleBashReadCommand(subCommands[0]!);
   }
 
-  // 3. All sub-commands must be safe read operations
-  // Special case: 'cd' is allowed as a prefix in compound commands
+  // 5. All sub-commands must be safe read operations.
+  //    Special case: 'cd' is allowed as a prefix in compound commands.
   for (const subCmd of subCommands) {
     const trimmedCmd = subCmd?.trim();
     if (!trimmedCmd) continue;
@@ -192,6 +207,10 @@ const BASH_REDIRECTION_WRITE_PATTERN = /(^|[^<])>>?(?=\s*\S)/;
  * Check if a bash command is a write operation
  * 检查 bash 命令是否是发布写操作的黑名单
  *
+ * Issue 129: fd-redirects to a null device (`2>NUL`, `2>/dev/null`, `&>/dev/null`)
+ * are stripped before pattern matching since they discard output rather than
+ * writing to disk. Any redirect to a real path still flags as a write.
+ *
  * @param command - bash command string
  * @returns true if the command is a write operation
  */
@@ -199,7 +218,10 @@ export function isBashWriteCommand(command: string): boolean {
   if (!command || !command.trim()) {
     return false;
   }
-  const normalizedCommand = command.trim().toLowerCase();
+  const normalizedCommand = command
+    .trim()
+    .toLowerCase()
+    .replace(NULL_DEVICE_REDIRECT_PATTERN, ' ');
 
   for (const regex of BASH_WRITE_COMMAND_REGEXES) {
     if (regex.test(normalizedCommand)) {
