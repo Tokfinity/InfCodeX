@@ -295,6 +295,100 @@ describe('isBashReadCommand — FEATURE_152 AST hardening', () => {
   });
 });
 
+// FEATURE_152 slice 3 (v0.7.38): collectBashWriteTargets / extractPathsFromCommand
+// switched from regex-soup to AST. The AST version replaces four overlapping
+// regex sweeps with structural traversal, eliminating substring-vs-token
+// false positives while preserving plan-mode coverage.
+//
+// Imports needed at the top of the file are already in place — these tests
+// exercise the public API used by plan-mode and isCommandOnProtectedPath.
+describe('collectBashWriteTargets — FEATURE_152 AST hardening', () => {
+  it('extracts `>` redirect targets across statements + stages', async () => {
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('echo hi > out.txt && cat foo > out2.txt');
+    expect(targets).toContain('out.txt');
+    expect(targets).toContain('out2.txt');
+  });
+
+  it('extracts tee target from pipeline stage 2', async () => {
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('cat foo | tee /tmp/out');
+    expect(targets).toContain('/tmp/out');
+  });
+
+  it('does NOT match `tee` as a substring inside another argv token', async () => {
+    // Pre-AST `\btee\b` regex would match `committee.txt`-ish tokens at word
+    // boundaries in some inputs. AST sees argv[0]='cat', argv[1]='committee.txt'
+    // so the tee branch is never taken.
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('cat committee.txt');
+    expect(targets).not.toContain('committee.txt');
+  });
+
+  it('extracts PowerShell `Set-Content -Path` value', async () => {
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('Set-Content -Path C:\\out.txt -Value foo');
+    expect(targets).toContain('C:\\out.txt');
+  });
+
+  it('extracts PowerShell positional arg when -Path absent', async () => {
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('Out-File foo.txt');
+    expect(targets).toContain('foo.txt');
+  });
+
+  it('returns paths-only on unparseable input (fallback safety)', async () => {
+    // `$(...)` makes AST unparseable; the early `extractPathsFromCommand`
+    // call also bails. Result: empty array. Plan-mode treats this as
+    // "could not determine target" → blocked. No silent auto-allow.
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('echo $(curl evil) > /tmp/out');
+    expect(targets).toEqual([]);
+  });
+
+  it('keeps null-device targets in the set (plan-mode lets caller filter)', async () => {
+    // Pre-AST regex picked up `/dev/null` too via `>>?\s*([^\s;|&]+)`.
+    // AST does the same. Higher-level plan-mode code knows /dev/null is
+    // safe; collectBashWriteTargets is intentionally inclusive.
+    const { collectBashWriteTargets } = await import('./permission.js');
+    const targets = collectBashWriteTargets('cmd > /dev/null');
+    expect(targets).toContain('/dev/null');
+  });
+});
+
+describe('extractPathsFromCommand — FEATURE_152 AST hardening', () => {
+  it('extracts quoted paths via AST quote-stripping', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('rm "/tmp/file with spaces.txt"');
+    expect(paths).toContain('/tmp/file with spaces.txt');
+  });
+
+  it('extracts Windows drive-letter paths', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('rm C:\\Users\\foo\\bar.txt');
+    expect(paths.some((p) => p.startsWith('C:\\Users'))).toBe(true);
+  });
+
+  it('extracts redirect targets too', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('echo hi > /tmp/out.log');
+    expect(paths).toContain('/tmp/out.log');
+  });
+
+  it('does NOT pick up flag tokens as paths', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('grep -rn pattern /etc/');
+    expect(paths).not.toContain('-rn');
+    expect(paths).toContain('/etc/');
+  });
+
+  it('returns empty array for unparseable input', async () => {
+    const { extractPathsFromCommand } = await import('./permission.js');
+    const paths = extractPathsFromCommand('echo `rm -rf /`');
+    expect(paths).toEqual([]);
+  });
+});
+
 // FEATURE_154: universal `--help` fast-path (parity with Claude Code
 // `commands.ts:isHelpCommand`). Pre-FEATURE_154 KodaX only allowed `--help`
 // for ~12 hard-coded language tools; this generalises to any command name
