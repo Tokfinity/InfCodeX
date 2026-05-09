@@ -12,10 +12,15 @@
  * see c:/Works/claudecode/src/components/MessageResponse.tsx#L22):
  *
  *   ```
- *   ✻ Running tests…                  1/3 completed   ← spinner row (rendered
+ *   ⠋ Running tests…                  1/3 completed   ← spinner row (rendered
  *     ⎿  ✓ Add unit test                                 by InkREPL activityBar
  *        ● Run failing tests                             slot, NOT this file)
  *        ☐ Wire CI                                    ← rows from this file
+ *
+ * Spinner glyph note: `⠋` shown above is one frame of KodaX's Braille
+ * animation cycle (`["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]`,
+ * 80ms tick — see `LoadingIndicator.tsx:70`). KodaX does NOT use CC's
+ * static `✻` sparkle; the spinner identity is preserved.
  *   ```
  *
  *   - **Counter rendering lives in `InkREPL.tsx` activityBar slot, NOT
