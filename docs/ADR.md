@@ -514,3 +514,110 @@ FEATURE_147 (v0.7.37) 完成了 `@kodax/*` → `@kodax-ai/*` scope 重命名，�
 
 ---
 
+## ADR-023: Bash Command Parsing — Regex → AST Migration (FEATURE_152, v0.7.38)
+
+**Status**: Proposed (2026-05-09)
+
+**TL;DR**：`packages/repl/src/permission/permission.ts` 里 `isBashReadCommand` / `isBashWriteCommand` / `extractPathsFromCommand` / `collectBashWriteTargets` 从手写 regex 拼凑迁移到基于 **`shell-quote`（pure JS POSIX shell parser）** 的 AST 解析。**不**引入 tree-sitter（CC 用作 primary path）—— shell-quote 单独覆盖 99% 场景，且 KodaX "极致轻量化" 哲学不接受 WASM 二进制膨胀。Issue 129 (v0.7.38) 临时 strip-then-classify hack 在迁移落地的同一 commit 内一次性删除（**不并行**两套实现）。
+
+### 背景
+
+当前 [permission.ts](../packages/repl/src/permission/permission.ts) 用 4 个 regex 常量加手写字符串切分判定 bash 命令是只读还是写：
+
+- `BASH_REDIRECTION_WRITE_PATTERN = /(^|[^<])>>?(?=\s*\S)/`
+- `BASH_WRITE_COMMAND_REGEXES`（按 `BASH_WRITE_COMMANDS` set 动态生成）
+- `BASH_WRITE_SUBCOMMAND_PATTERNS`（PowerShell cmdlet 关键字）
+- `baseIllegalSyntax = /[<>;`]|\$\(|(?<!&)&(?!&)|\|\|/`（在 `isBashReadCommand` 内）
+
+这套设计在 KodaX 早期（v0.3.x）足够用，但近期暴露了三类系统性问题：
+
+**问题 A — 假阳性导致 LLM 分类器被 short-circuit**（已有 [Issue 129](KNOWN_ISSUES.md#129) 实例）：
+- `2>NUL` (Windows) / `2>/dev/null` (POSIX) stderr 丢弃被当成写文件 → [tool-confirmation.ts:94](../packages/repl/src/common/tool-confirmation.ts#L94) 把 Intent 标成 "Modify files"
+- 配合 [executor.ts:236-247](../packages/repl/src/permission/executor.ts#L236-L247) 出项目 `cd` 的硬规则，auto 模式下 FEATURE_092 (v0.7.33) 的 LLM 分类器没机会发言
+
+**问题 B — Windows / 复合命令族覆盖不全**：
+- `findstr` / `fc` / `where`（Windows 原生工具）原本不在 `BASH_SAFE_READ_COMMANDS`
+- 管道 `|` 一票否决（已有 `&&` 拆分，但没扩展到 `|`）
+- heredoc / line-continuation / 命令替换嵌套等 attack vector 不受 regex 检查（CC 在 [commands.ts:120-160](C:\Works\claudecode\src\utils\bash\commands.ts#L120-L160) 有大段安全注释专门处理）
+
+**问题 C — 维护成本随场景膨胀**：
+- Issue 129 已通过 strip-then-classify pre-pass（`NULL_DEVICE_REDIRECT_PATTERN` 在 regex 之前先擦掉 fd-redirect）解决，但每次发现新的"语法上读、regex 误判写"场景都要再加一个 strip。技术债在累积。
+
+参考实现：Claude Code 在 [`utils/bash/commands.ts`](C:\Works\claudecode\src\utils\bash\commands.ts) (1339 行) 用 **tree-sitter 作为 primary**（精度 + 性能）+ **shell-quote 作为兜底**（覆盖 tree-sitter 不可用环境）。Tree-sitter 路径需要 WASM binary（`tree-sitter-bash.wasm` ~500KB）+ async 初始化；shell-quote 是 pure JS、同步 API、~12KB。
+
+### 决策
+
+KodaX 跳过 tree-sitter，直接用 shell-quote 作为唯一 AST 后端。新增内部模块 [`packages/repl/src/permission/bash-ast.ts`](../packages/repl/src/permission/bash-ast.ts)，对外只暴露既有公开签名（`isBashReadCommand` / `isBashWriteCommand` / `extractPathsFromCommand` / `collectBashWriteTargets`），调用方零改动。
+
+### Reasoning
+
+1. **极致轻量化哲学**（[CLAUDE.md](../CLAUDE.md) 核心原则之一）：tree-sitter + WASM ~500KB 进单文件二进制不可接受。shell-quote 12KB pure JS 可接受。
+2. **shell-quote 已被 CC 验证覆盖 99% 场景**：CC 把它当 fallback 全功能路径，不是降级路径——任何 tree-sitter 不在的场景，shell-quote 同样产出正确决策。
+3. **同步 API 保持**：现有 `isBashReadCommand(command: string): boolean` 是同步签名，调用方包括 [executor.ts:197](../packages/repl/src/permission/executor.ts#L197) 同步执行链。tree-sitter WASM 强制异步会污染 4 个调用文件 + 上游 `executeWithPermission` 链路。shell-quote 同步即可。
+4. **fail-closed 是默认安全语义**：shell-quote 在解析失败（malformed shell syntax）时返回 error；新代码视作 "unsafe → 提示用户" 而不是放行。镜像 CC `splitCommandWithOperators` 在 [commands.ts:156-160](C:\Works\claudecode\src\utils\bash\commands.ts#L156-L160) 的 fail-closed 策略。
+5. **一次性替换避免新旧并行**（feedback memory: 大重构不引入新旧代码并行）：迁移 land 的同一 commit 内删除所有 regex 常量 + Issue 129 的 `NULL_DEVICE_REDIRECT_PATTERN` strip-then-classify hack。任何瞬间只有一套实现。
+6. **PowerShell 不进 AST**：`set-content` / `out-file` / `new-item` 等 PowerShell cmdlet 在 [permission.ts:177-187](../packages/repl/src/permission/permission.ts#L177-L187) 的 `BASH_WRITE_SUBCOMMAND_PATTERNS` 里用关键字匹配，不属于 POSIX shell 语法族；本 ADR 不动。
+
+### Consequences
+
+**保留不变**：
+- 4 个公开函数签名（`isBashReadCommand` / `isBashWriteCommand` / `extractPathsFromCommand` / `collectBashWriteTargets`）+ 类型 → 调用方 0 改动
+- `BASH_SAFE_READ_COMMANDS` set 作为白名单语义保留（仍是命令名匹配的 source of truth）
+- `BASH_WRITE_COMMANDS` set 同上
+- `BASH_WRITE_SUBCOMMAND_PATTERNS`（PowerShell 关键字）保留
+- `getBashOutsideProjectWriteRisk` / `getPlanModeBlockReason` 行为保留
+- `tool-confirmation.ts` 的 Intent / Risk 分类逻辑保留（消费 `isBashWriteCommand` 的输出）
+
+**删除**：
+- `BASH_REDIRECTION_WRITE_PATTERN` regex 常量
+- `BASH_WRITE_COMMAND_REGEXES` 编译数组
+- `NULL_DEVICE_REDIRECT_PATTERN`（Issue 129 引入的临时 hack）
+- `isBashReadCommand` 内部的 `baseIllegalSyntax` / `subCommands.split(...)` 手写切分逻辑
+
+**新增**：
+- `packages/repl/src/permission/bash-ast.ts`：内部 helper 模块，导出 `parseBashCommand(s)`（基于 shell-quote）、`extractRedirections(tokens)`、`splitByControlOps(tokens)` 等
+- `package.json` deps 加 `shell-quote@^1.8` + `@types/shell-quote@^1.7`（dev）
+- 测试加 ~40 case 覆盖 heredoc / 命令替换嵌套 / fd-redirect 各形态 / line-continuation / ZSH 力覆盖等 attack vector（参考 CC 的 hardening test）
+
+**对 SDK 集成方影响**：无。所有改动在 `@kodax-ai/repl` 包内部。
+
+### 替代方案讨论
+
+**A. 继续用 regex + 每次新场景加 strip-pass**：被否。Issue 129 已经证明 `2>NUL` / `|` / `findstr` 任一个 regex 漏判都需要一次 hotfix；剩余场景（heredoc 写、ZSH `>!` 力覆盖、命令替换内嵌写）每个都要重复一遍。技术债线性增长。
+
+**B. tree-sitter 作为 primary（CC 等价方案）**：被否。+500KB WASM 二进制 + async API 污染 + 4 个调用方需要重构同步链路。CC 也只把 tree-sitter 当性能优化，shell-quote 作 fallback —— 我们直接用 fallback 即可。
+
+**C. 写自己的 lexer**：被否。1500+ 行 hand-rolled parser 等价于在 KodaX 内部重写一个 shell-quote。`shell-quote` 是 substack 维护多年的稳定库（npm 周下载 1500 万+，CC 用作生产 fallback），自己重写不增加价值。
+
+**D. 把 Issue 129 的 strip-then-classify pattern 系统化（每个 false-positive 加一条 strip 规则）**：被否。等价于方案 A 的工程化版本——治标不治本，且 strip-pass 本身改命令字符串，未来如果分类器需要看完整命令 token（比如 LLM prefix extractor / FEATURE_153）会失真。
+
+### 与其他 ADR 的关系
+
+- **不影响 ADR-001 / ADR-021**（包结构、layered monorepo）：所有改动在 `@kodax-ai/repl` 包内部。
+- **不影响 ADR-022**（npm bundle 发布）：`shell-quote` 作为 root `package.json` 的 deps 经 esbuild 自动 inline 到 `dist/kodax_cli.js`，不增加发布工程负担。
+- **解锁 FEATURE_092 (v0.7.33) 的设计意图**：auto-mode LLM classifier 当前被规则层假阳性 short-circuit；AST 化后误判面收敛，classifier 在所有 non-trivial 命令上拿回主决策权——这是用户感知 auto 模式 "顺/不顺" 的根因。
+- **解锁 FEATURE_153**（LLM prefix extractor，参考 CC `BASH_POLICY_SPEC`）：prefix extractor 需要的是命令的 token 化结构（"command name + args"），shell-quote AST 直接产出，FEATURE_153 不再需要自己解析。
+- **不影响 FEATURE_154**（universal `--help` fast-path）：`isHelpCommand` 是基于 token 的判定，shell-quote 输出直接喂进去更简洁。
+
+### 触发回退的条件
+
+未来当且仅当下面**任一**条成立时，回滚到 hand-written parser（注意：不会回滚到 v0.7.37 的纯 regex 方案，那个已经被验证不够）：
+
+1. shell-quote 出现无法修复的安全 bug（CC 已经在生产 fallback 路径用了 1+ 年没遇到，概率低）
+2. 出现 ≥3 个 KodaX 实测场景 shell-quote 解析正确但产出的 token 流不足以做安全决策，且无法通过补充 token-walker 逻辑解决
+
+### 实施切片（FEATURE_152）
+
+每个切片独立 commit + push，逐步 review：
+
+| Slice | 改动 | LOC | 风险 |
+|---|---|---|---|
+| 1 | 引入 `bash-ast.ts` + 装 `shell-quote` deps，**不接入** | ~400 | 中（新增模块；既有路径不动） |
+| 2 | 切换 `isBashReadCommand` / `isBashWriteCommand` 内部到 AST，**同 commit 删 `NULL_DEVICE_REDIRECT_PATTERN` + 旧 regex 常量** | ~500 | **高**（核心切换；no-parallel 原则） |
+| 3 | 切换 `extractPathsFromCommand` / `collectBashWriteTargets` 到 AST | ~300 | 中 |
+| 4 | 清理：删除已无引用的 `BASH_*_REGEXES` / `BASH_REDIRECTION_WRITE_PATTERN` 等 dead code，补 hardening test（heredoc / 命令替换 / ZSH 力覆盖） | ~200 | 低 |
+
+每个 slice 完成后跑：`packages/repl/src/permission/` 全测 + `packages/repl/src/common/tool-confirmation.test.ts` + `tests/tracker-consistency.test.ts` + `npm run build`，确认 0 漂移 0 退化再进下一片。
+
+---
+
