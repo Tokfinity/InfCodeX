@@ -1,5 +1,6 @@
 /**
- * TodoListSurface — FEATURE_097 (v0.7.34).
+ * TodoListSurface — FEATURE_097 (v0.7.34), compact-only since FEATURE_151
+ * (v0.7.38) Slice G.
  *
  * Renders the Scout-seeded todo list under the spinner / above the
  * BackgroundTaskBar. Pure presentational layer — every layout decision
@@ -7,10 +8,14 @@
  * linger) lives in `view-models/todo-plan.ts`. This component just walks
  * the rows and emits one `<Text>` per row.
  *
- * Layout (per design):
- *   - One header line with the "X / N completed" indicator on the right.
- *   - One `<Text>` per row, prefixed by a dimmed `▏` gutter (U+258F) so
- *     the surface visually nests under the spinner like Claude Code does.
+ * Layout (compact-only, mirrors Claude Code `TaskListV2` `isStandalone=false`
+ * branch — c:/Works/claudecode/src/components/TaskListV2.tsx#L210):
+ *   - NO header line. Slice G dropped the `"X/N completed"` right-aligned
+ *     counter so the surface stops feeling like a standalone panel and
+ *     simply nests under the spinner output. Per-row symbols (✓/●/☐/✗)
+ *     and the existing `"N done … +M more"` summary folds already convey
+ *     progress; the dedicated counter row was redundant ornamentation.
+ *   - One `<Text>` per row, prefixed by a dimmed `▏` gutter (U+258F).
  *   - Symbol colors come from the view-model's `symbolColor` field; the
  *     row text is rendered in default text color (failed item content
  *     gets a dim suffix `(note)` from the view-model).
@@ -19,7 +24,7 @@
  *   - `vm.shouldRender === false` → return `null` (component unmounts).
  *   - `vm.rows.length === 0` → return `null` (empty list, surface hidden).
  *
- * The 5 s linger after completion is enforced by the host's
+ * The post-completion linger after completion is enforced by the host's
  * `lastAllCompletedAt` timestamp; this component only cares about the
  * rows it is told to render.
  */
@@ -88,12 +93,8 @@ export const TodoListSurface: React.FC<TodoListSurfaceProps> = ({
 }) => {
   if (!viewModel.shouldRender) return null;
   if (viewModel.rows.length === 0) return null;
-  const counter = `${viewModel.completedCount}/${viewModel.totalCount} completed`;
   return (
     <Box flexDirection="column">
-      <Box flexDirection="row" justifyContent="flex-end">
-        <Text dimColor>{counter}</Text>
-      </Box>
       {viewModel.rows.map((row, idx) => (
         <TodoListRow key={`${row.kind}-${row.id ?? idx}`} row={row} />
       ))}

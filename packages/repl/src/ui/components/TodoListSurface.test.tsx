@@ -1,7 +1,10 @@
 /**
- * Hermetic Ink render tests for TodoListSurface (FEATURE_097, v0.7.34).
+ * Hermetic Ink render tests for TodoListSurface (FEATURE_097, v0.7.34;
+ * compact-only since FEATURE_151 v0.7.38 Slice G).
  * No LLM calls. Tests rendering behavior, hide-when-not-renderable,
- * symbol output, and counter formatting.
+ * symbol output. The "X/N completed" counter header was dropped in
+ * Slice G — surface now mirrors CC `<TaskListV2 isStandalone={false}>`
+ * (no panel header, just the rows).
  */
 import React from "react";
 import { describe, expect, it } from "vitest";
@@ -46,7 +49,9 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Lone task");
-    expect(frame).toContain("0/1 completed");
+    // Slice G: counter header dropped. Per-row symbol + content is
+    // sufficient signal; no separate "X/N completed" line.
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
   it("FEATURE_151 (v0.7.38): keeps rendering after the (formerly 5s) linger elapses", () => {
@@ -66,10 +71,17 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).not.toBe("");
-    expect(frame).toContain("3/3 completed");
+    // Slice G: surface still mounted post-linger; rows render, but no
+    // "X/N completed" header. Each row's ✓ symbol carries the signal.
+    expect(frame).toContain("✓");
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
-  it("renders the counter line in 'X/Y completed' format", () => {
+  it("Slice G (v0.7.38): no counter header line — surface is compact-only", () => {
+    // Pre-Slice G this asserted `"1/3 completed"`. The dedicated counter
+    // line was dropped to mirror CC's `<TaskListV2 isStandalone={false}>`
+    // branch (no panel header). Per-row symbols + summary fold rows
+    // already convey progress.
     const items = [
       makeItem("todo_1", "A", "completed"),
       makeItem("todo_2", "B", "in_progress"),
@@ -77,7 +89,8 @@ describe("TodoListSurface", () => {
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    expect(lastFrame()).toContain("1/3 completed");
+    const frame = lastFrame() ?? "";
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
   });
 
   it("renders item rows with the right symbols", () => {
@@ -152,7 +165,7 @@ describe("TodoListSurface", () => {
     expect(frame).toContain("Second");
   });
 
-  it("counter renders 0/N when no item has completed yet", () => {
+  it("Slice G (v0.7.38): no '0/N' counter when nothing has completed yet", () => {
     const items = [
       makeItem("todo_1", "A", "in_progress"),
       makeItem("todo_2", "B", "pending"),
@@ -160,6 +173,10 @@ describe("TodoListSurface", () => {
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    expect(lastFrame()).toContain("0/3 completed");
+    const frame = lastFrame() ?? "";
+    // Pre-Slice G this expected `"0/3 completed"`. Now: rows visible,
+    // no counter header. Active item (in_progress) is the signal.
+    expect(frame).not.toMatch(/\d+\/\d+ completed/);
+    expect(frame).toContain("●"); // in_progress symbol
   });
 });
