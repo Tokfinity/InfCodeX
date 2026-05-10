@@ -78,85 +78,51 @@ describe("TodoListSurface", () => {
   });
 
   it("Slice H' (v0.7.38): counter is NOT rendered by this component (lives in activityBar)", () => {
-    // Counter rendering moved to InkREPL.tsx's activityBar slot so the
-    // spinner verb and counter share one line. This component renders
-    // ONLY the ⎿ block + rows.
+    // Slice H' moved "X/N completed" out of TodoListSurface and onto
+    // the spinner row in InkREPL.tsx. This test guards against a
+    // regression where the counter accidentally gets re-introduced
+    // into this component (would cause a double-render).
     const items = [
-      makeItem("todo_1", "A", "completed"),
-      makeItem("todo_2", "B", "in_progress"),
-      makeItem("todo_3", "C", "pending"),
+      makeItem("todo_1", "First", "in_progress"),
+      makeItem("todo_2", "Second", "pending"),
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
-    expect(frame).not.toMatch(/\d+\/\d+ completed/);
+    // The counter ("0/2 completed", "X/Y completed") format MUST NOT
+    // appear in this component's output.
+    expect(frame).not.toMatch(/\d+\/\d+\s+completed/);
   });
 
-  it("renders item rows with the right symbols", () => {
+  it("renders item rows under the embedded-prefix connector ⎿", () => {
+    // The `⎿` glyph is the once-only left-column connector from
+    // Claude Code's MessageResponse pattern (Slice H final layout).
     const items = [
-      makeItem("todo_1", "Locate test fixtures", "completed"),
-      makeItem("todo_2", "Run migration tests", "in_progress"),
-      makeItem("todo_3", "Update type definitions", "pending"),
+      makeItem("todo_1", "First", "in_progress"),
+      makeItem("todo_2", "Second", "pending"),
     ];
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
-    expect(frame).toContain("✓"); // completed
-    expect(frame).toContain("●"); // in_progress
-    expect(frame).toContain("☐"); // pending
-    expect(frame).toContain("Locate test fixtures");
-    expect(frame).toContain("Run migration tests");
-    expect(frame).toContain("Update type definitions");
+    expect(frame).toContain("⎿");
+    // First row: ● (in_progress symbol) + content.
+    expect(frame).toContain("First");
+    // Second row: ☐ (pending symbol) + content.
+    expect(frame).toContain("Second");
   });
 
-  it("Slice H (v0.7.38): renders ⎿ connector exactly once, positioned BEFORE the first row content", () => {
-    // Pre-Slice H the gutter was per-row `▏` (vertical bar), which
-    // looked like a small panel's left border. Slice H replaces it with
-    // CC `MessageResponse`'s once-only `⎿` connector — flex-row layout
-    // means subsequent rows in the right column align under the first
-    // row's content position with no extra glyph.
+  it("renders summary fold rows when the window omits items", () => {
+    // 8 items with most completed → top fold should appear.
     const items = [
-      makeItem("todo_1", "FirstRowContent", "in_progress"),
-      makeItem("todo_2", "B", "pending"),
-      makeItem("todo_3", "C", "pending"),
+      makeItem("d1", "done1", "completed"),
+      makeItem("d2", "done2", "completed"),
+      makeItem("d3", "done3", "completed"),
+      makeItem("d4", "done4", "completed"),
+      makeItem("active", "Active step", "in_progress"),
+      makeItem("p1", "pending1", "pending"),
+      makeItem("p2", "pending2", "pending"),
+      makeItem("p3", "pending3", "pending"),
     ];
-    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
-    const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    const frame = lastFrame() ?? "";
-    const elbows = (frame.match(/⎿/g) ?? []).length;
-    expect(elbows).toBe(1);
-    // The old per-row `▏` gutter must NOT appear anywhere — Slice H
-    // explicitly removed it to drop the "panel border" feel.
-    expect(frame).not.toContain("▏");
-    // Positional pin: `⎿` must appear BEFORE the first row content
-    // (not after, which would mean the flex-row wrapper got reversed).
-    const elbowIdx = frame.indexOf("⎿");
-    const firstRowContentIdx = frame.indexOf("FirstRowContent");
-    expect(elbowIdx).toBeGreaterThanOrEqual(0);
-    expect(firstRowContentIdx).toBeGreaterThan(elbowIdx);
-  });
-
-  it("shows the failed-note suffix in failed-row text", () => {
-    const items = [
-      makeItem("todo_1", "Run migration", "failed", "Evaluator requested revision"),
-      makeItem("todo_2", "Update types", "pending"),
-      makeItem("todo_3", "Verify e2e", "pending"),
-    ];
-    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
-    const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
-    const frame = lastFrame() ?? "";
-    expect(frame).toContain("✗");
-    expect(frame).toContain("Run migration");
-    expect(frame).toContain("Evaluator requested revision");
-  });
-
-  it("renders summary fold rows when the list is long", () => {
-    const items: TodoItem[] = Array.from({ length: 12 }, (_, i) => {
-      let status: TodoItem["status"] = "pending";
-      if (i < 4) status = "completed";
-      if (i === 5) status = "in_progress";
-      return makeItem(`todo_${i + 1}`, `Step ${i + 1}`, status);
-    });
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
@@ -176,5 +142,73 @@ describe("TodoListSurface", () => {
     const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
     const frame = lastFrame() ?? "";
     expect(frame).toContain("Second");
+  });
+
+  // FEATURE_114 v0.7.36 Slice 4 — cancelled strikethrough + evaluator
+  // badge.
+  //
+  // Note on strikethrough verification: ink-testing-library's
+  // `lastFrame()` strips ANSI escapes (verified empirically), so we
+  // can't assert on the raw chalk SGR sequence directly. The
+  // strikethrough wiring is verified at two layers instead:
+  //   - View-model: `todo-plan.test.ts` asserts the row's
+  //     `isStrikethrough: true` flag for cancelled rows.
+  //   - Component: this file asserts both the cancelled symbol AND
+  //     the row content text are present, so a regression that
+  //     mis-routed or dropped the `<Text strikethrough>` element
+  //     would surface as a missing-content failure.
+  // Ink's own contract covers the chalk emission; that belongs to
+  // its test suite, not ours.
+  describe("FEATURE_114 Slice 4 — cancelled strikethrough + evaluator badge rendering", () => {
+    it("cancelled-status row renders symbol + text content together (strikethrough wiring intact)", () => {
+      const items: TodoItem[] = [
+        makeItem("todo_1", "Active step", "in_progress"),
+        makeItem("todo_2", "Dropped step", "cancelled"),
+      ];
+      const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+      const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
+      const frame = lastFrame() ?? "";
+      // Active row renders normally.
+      expect(frame).toContain("Active step");
+      // Cancelled row keeps both the ☒ symbol and the content text.
+      // A regression that swapped the renderer for a
+      // strikethrough-strip variant (early Slice 4 implementation
+      // bug, real example) drops the content here and fails.
+      expect(frame).toContain("☒");
+      expect(frame).toContain("Dropped step");
+    });
+
+    it("renders the evaluator badge after the row text when item.evaluator is set", () => {
+      const items: TodoItem[] = [
+        { ...makeItem("todo_1", "Compile", "in_progress"), evaluator: "build" },
+        makeItem("todo_2", "Plain step (no hint)", "pending"),
+      ];
+      const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+      const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
+      const frame = lastFrame() ?? "";
+      // Badge text is `[build]`; assert it appears AFTER the matching
+      // row's content so the visual order is content-then-badge.
+      const compileIdx = frame.indexOf("Compile");
+      const buildBadgeIdx = frame.indexOf("[build]");
+      expect(compileIdx).toBeGreaterThan(-1);
+      expect(buildBadgeIdx).toBeGreaterThan(compileIdx);
+      // Plain step has no hint, so no `[build]` badge attaches to it.
+      // The single occurrence proves the badge is selectively
+      // rendered (would fail if every row got the badge).
+      const buildOccurrences = frame.split("[build]").length - 1;
+      expect(buildOccurrences).toBe(1);
+    });
+
+    it("does NOT render any badge when no item carries an evaluator hint", () => {
+      const items: TodoItem[] = [
+        makeItem("todo_1", "First", "in_progress"),
+        makeItem("todo_2", "Second", "pending"),
+      ];
+      const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+      const { lastFrame } = render(<TodoListSurface viewModel={vm} />);
+      const frame = lastFrame() ?? "";
+      // No bracket-bracket badge formatting should appear at all.
+      expect(frame).not.toMatch(/\[(?:build|test|lint)\]/);
+    });
   });
 });

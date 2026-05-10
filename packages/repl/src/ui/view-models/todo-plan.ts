@@ -67,6 +67,22 @@ export interface TodoRow {
   readonly text: string;
   /** True only on the in_progress item. UI uses bold/cyan accent. */
   readonly isActive: boolean;
+  /**
+   * FEATURE_114 v0.7.36 Slice 4 — true when the row should render with
+   * strikethrough styling. Currently only set for `cancelled` status
+   * items so a Worker-driven mid-task drop is visually distinguishable
+   * from a Planner `skipped` (the symbol `☒` already differs from `⊘`,
+   * but strikethrough on the content text gives the user the same
+   * "this won't happen" cue Claude Code's `cancelled` rendering does).
+   */
+  readonly isStrikethrough?: boolean;
+  /**
+   * FEATURE_114 v0.7.36 Slice 4 — bracketed badge for the deterministic
+   * per-step evaluator hint (`[build]` / `[test]` / `[lint]`). Renders
+   * dim, after the row text, only on item rows that carry an evaluator
+   * hint. Undefined when the item has no hint or for summary rows.
+   */
+  readonly evaluatorBadge?: string;
 }
 
 export interface TodoPlanViewModel {
@@ -171,6 +187,22 @@ function buildItemRow(item: TodoItem): TodoRow {
   const text = item.status === "failed" && item.note
     ? `${item.content} (${item.note})`
     : item.content;
+  // FEATURE_114 v0.7.36 Slice 4 — cancelled rows render strikethrough
+  // so a Worker-driven mid-task drop is visually distinct from a
+  // Planner-merge `skipped`. The symbol (`☒` vs `⊘`) already differs;
+  // strikethrough on the row text reinforces the "this won't happen"
+  // cue.
+  const isStrikethrough = item.status === "cancelled";
+  // FEATURE_114 v0.7.36 Slice 4 — evaluator hint badge. Items with
+  // `evaluator: 'build' | 'test' | 'lint'` get a dim bracketed label
+  // appended after the row text (e.g. `Run integration tests [test]`)
+  // so the user can see which steps will trigger a deterministic
+  // check at completion time. The badge is render-only metadata; the
+  // actual check fires from the runner-driven `todo_update` wrapper
+  // (Slice 3c).
+  const evaluatorBadge = item.evaluator
+    ? `[${item.evaluator}]`
+    : undefined;
   return {
     kind: "item",
     id: item.id,
@@ -178,6 +210,8 @@ function buildItemRow(item: TodoItem): TodoRow {
     symbolColor: color,
     text,
     isActive: item.status === "in_progress",
+    isStrikethrough,
+    evaluatorBadge,
   };
 }
 

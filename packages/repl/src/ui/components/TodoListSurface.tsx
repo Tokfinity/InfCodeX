@@ -95,15 +95,34 @@ interface TodoListRowProps {
 const TodoListRow: React.FC<TodoListRowProps> = ({ row }) => {
   const symbolColor = resolveSymbolColor(row.symbolColor);
   const isSummary = row.kind !== "item";
+  // FEATURE_114 v0.7.36 Slice 4 — cancelled-status rows render with
+  // strikethrough so the Worker-driven mid-task drop is visually
+  // distinct from a Planner `skipped`. Ink `<Text>`'s `strikethrough`
+  // prop wraps the text in chalk's strikethrough escape sequence;
+  // ANSI terminals that don't support strikethrough (rare in
+  // 2026 dev environments) downgrade gracefully — they simply render
+  // without the line, which still leaves the `☒` symbol + dim color
+  // as cues. The symbol itself is NOT struck through (would be
+  // visually noisy and the U+2612 glyph already conveys cancelled).
   return (
     <Box flexDirection="row">
       <Text color={symbolColor} bold={row.isActive}>
         {row.symbol}
       </Text>
       <Text> </Text>
-      <Text dimColor={isSummary} bold={row.isActive}>
+      <Text
+        dimColor={isSummary}
+        bold={row.isActive}
+        strikethrough={row.isStrikethrough}
+      >
         {row.text}
       </Text>
+      {row.evaluatorBadge ? (
+        <>
+          <Text> </Text>
+          <Text dimColor>{row.evaluatorBadge}</Text>
+        </>
+      ) : null}
     </Box>
   );
 };

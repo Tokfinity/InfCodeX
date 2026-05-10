@@ -333,3 +333,85 @@ describe("counts", () => {
     expect(vm.totalCount).toBe(5);
   });
 });
+
+// FEATURE_114 v0.7.36 Slice 4 — view-model surfaces the cancelled-row
+// strikethrough flag and the deterministic-evaluator badge label.
+// Pure transform tests; the renderer is covered separately in
+// `TodoListSurface.test.tsx`.
+describe("FEATURE_114 Slice 4 — cancelled strikethrough + evaluator badge", () => {
+  it("cancelled-status row sets isStrikethrough: true (other statuses leave it falsy)", () => {
+    const items: TodoItem[] = [
+      makeItem("todo_1", "Done", "completed"),
+      makeItem("todo_2", "Dropped", "cancelled"),
+      makeItem("todo_3", "Active", "in_progress"),
+      makeItem("todo_4", "Pending", "pending"),
+    ];
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+    const byContent: Record<string, boolean | undefined> = {};
+    for (const row of vm.rows) {
+      if (row.kind !== "item") continue;
+      byContent[row.text] = row.isStrikethrough;
+    }
+    expect(byContent.Dropped).toBe(true);
+    // Other statuses MUST NOT carry the flag — strikethrough should be
+    // unique to cancelled so the user reads it as "this won't happen".
+    expect(byContent.Done).toBeFalsy();
+    expect(byContent.Active).toBeFalsy();
+    expect(byContent.Pending).toBeFalsy();
+  });
+
+  it("items with evaluator hint surface a bracketed badge ([build] / [test] / [lint])", () => {
+    const items: TodoItem[] = [
+      { ...makeItem("todo_1", "Compile", "in_progress"), evaluator: "build" },
+      { ...makeItem("todo_2", "Run unit tests", "pending"), evaluator: "test" },
+      { ...makeItem("todo_3", "Lint pass", "pending"), evaluator: "lint" },
+      makeItem("todo_4", "Plain step (no hint)", "pending"),
+    ];
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+    const byContent: Record<string, string | undefined> = {};
+    for (const row of vm.rows) {
+      if (row.kind !== "item") continue;
+      byContent[row.text] = row.evaluatorBadge;
+    }
+    expect(byContent.Compile).toBe("[build]");
+    expect(byContent["Run unit tests"]).toBe("[test]");
+    expect(byContent["Lint pass"]).toBe("[lint]");
+    // Items without a hint must NOT carry a badge — undefined sentinel
+    // tells the renderer to skip the trailing dim text fragment.
+    expect(byContent["Plain step (no hint)"]).toBeUndefined();
+  });
+
+  it("cancelled rows can carry an evaluator badge (independent fields)", () => {
+    // Edge case: the LLM `op:'init'` schema permits an `evaluator` hint
+    // on any item; if the item is later cancelled, the badge should
+    // still surface so the user can see what check was attached. The
+    // strikethrough on the row text already makes the dropped state
+    // obvious; double-suppressing the badge would hide useful context.
+    const items: TodoItem[] = [
+      { ...makeItem("todo_1", "Skipped build", "cancelled"), evaluator: "build" },
+    ];
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+    const row = vm.rows.find((r) => r.kind === "item" && r.text === "Skipped build");
+    expect(row?.isStrikethrough).toBe(true);
+    expect(row?.evaluatorBadge).toBe("[build]");
+  });
+
+  it("summary fold rows do not carry the new fields (item-only metadata)", () => {
+    // Force a top-fold by completing items above the window. Summary
+    // rows are render hints, not item rows — the new fields should be
+    // undefined on them so the renderer's strikethrough / badge code
+    // paths are skipped cleanly.
+    const items: TodoItem[] = [
+      ...Array.from({ length: 5 }, (_, i) => makeItem(`d${i}`, `done${i}`, "completed")),
+      makeItem("todo_active", "Active step", "in_progress"),
+      makeItem("todo_next", "Next step", "pending"),
+    ];
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+    const summaryRows = vm.rows.filter((r) => r.kind !== "item");
+    expect(summaryRows.length).toBeGreaterThan(0);
+    for (const row of summaryRows) {
+      expect(row.isStrikethrough).toBeUndefined();
+      expect(row.evaluatorBadge).toBeUndefined();
+    }
+  });
+});
