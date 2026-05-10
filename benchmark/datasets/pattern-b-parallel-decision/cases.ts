@@ -10,13 +10,18 @@
  *                                 obviously correct pattern (RULE A)
  *   - `PATTERN_B_TOOLS`         — minimal tool surface advertised to the
  *                                 LLM: read / grep / glob / bash +
- *                                 dispatch_child_task / await_child_task
- *                                 (mirrors KodaX runtime tool schemas, no
- *                                 protocol-emitter churn coupling)
+ *                                 dispatch_child_task (mirrors KodaX
+ *                                 runtime tool schemas, no protocol-
+ *                                 emitter churn coupling).
+ *                                 **v0.7.39 FEATURE_155 update**: the
+ *                                 paired `await_child_task` tool was
+ *                                 removed in Slice C1 — idle-yield is
+ *                                 the canonical wait mechanic now.
  *   - `buildPatternBSystemPrompt()` — Worker system prompt under test,
- *                                 includes FEATURE_119 Pattern B block +
- *                                 DISPATCH RULES A/B/C from
- *                                 `worker-role-prompt.ts`
+ *                                 includes FEATURE_119 Pattern B
+ *                                 fan-out + DISPATCH RULES A/B/C +
+ *                                 FEATURE_155 idle-yield wait wording
+ *                                 from `worker-role-prompt.ts`
  */
 
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
@@ -152,7 +157,11 @@ export const PATTERN_B_TOOLS: readonly KodaXToolDefinition[] = Object.freeze([
       'suites in parallel, fan out N greps). This is the FEATURE_119 Pattern B parallel fan-out — ' +
       'do NOT serialize one dispatch per response, that defeats the async win. ' +
       'After dispatching, you may continue with other tools (e.g. read, grep) while children run. ' +
-      'Reclaim results with `await_child_task({task_id})` when you need them.',
+      'When you have nothing else useful to do, end your turn with one short status sentence and NO ' +
+      'tool calls — the runner will resume you when children finish (you will see a ' +
+      '`<task-completed task_id="…">…</task-completed>` block in your next user message). ' +
+      'FEATURE_155 v0.7.39: there is NO paired `await_child_task` tool — idle-yield is the only ' +
+      'wait mechanic.',
     input_schema: {
       type: 'object',
       properties: {
@@ -168,25 +177,6 @@ export const PATTERN_B_TOOLS: readonly KodaXToolDefinition[] = Object.freeze([
       required: ['prompt'],
     },
   },
-  {
-    name: 'await_child_task',
-    description:
-      'Reclaim the result of a previously-dispatched child task. ' +
-      'WHEN TO USE: after launching multiple `dispatch_child_task` calls in parallel within one response, ' +
-      'emit `await_child_task` for each `task_id:<id>` banner you received, when you need the results. ' +
-      'A `<task-completed>` background notification will arrive at the next yielding tool boundary; ' +
-      'you may also `await_child_task` proactively. Pass the `task_id` from the dispatch banner.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        task_id: {
-          type: 'string',
-          description: 'The task_id returned by an earlier `dispatch_child_task` call.',
-        },
-      },
-      required: ['task_id'],
-    },
-  },
 ]);
 
 /**
@@ -199,14 +189,13 @@ export function buildPatternBSystemPrompt(): string {
   return [
     'You are the Worker — a coding agent investigating tasks in a TypeScript monorepo.',
     '',
-    'DISPATCH RULES (`dispatch_child_task` / `await_child_task`):',
+    'DISPATCH RULES (`dispatch_child_task` — idle-yield model, FEATURE_155 v0.7.39):',
     '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
-    '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs. Reclaim the result with `await_child_task({task_id})` when needed.',
+    '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out: NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
-    '- Pattern B (FEATURE_119): `dispatch_child_task` returns a `task_id:<id>` immediately and runs in the background. A `<task-completed>` notification arrives at the next yielding tool boundary; you may also `await_child_task` proactively when you need the result.',
+    '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads, drafting). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. There is NO `await_child_task` tool (removed in v0.7.39 Slice C1).',
     '',
     'IMPORTANT: When the user asks for ≥3 independent investigations, emit MULTIPLE `dispatch_child_task` ' +
-    'tool_use blocks **in the same response**. Sequential one-per-turn dispatches defeat the async win. ' +
-    'After parallel dispatch, reclaim each result with `await_child_task({task_id})`.',
+    'tool_use blocks **in the same response**. Sequential one-per-turn dispatches defeat the async win.',
   ].join('\n');
 }
