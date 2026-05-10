@@ -739,6 +739,135 @@ describe('runManagedTaskViaRunner — Scout H0_DIRECT end-to-end', () => {
   });
 });
 
+// FEATURE_114 v0.7.36 Slice 5 — V2 single-loop end-to-end runner test.
+// Sibling to the Slice 3b unit tests that asserted chain SHAPE; this
+// test asserts the chain actually FLOWS through Worker → Evaluator
+// when KODAX_HARNESS_V2=true. Reuses the `makeChainMockLlm` helper
+// (per-agent turn detection via system-prompt sniffing) and adds a
+// 'worker' branch.
+describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () => {
+  async function withHarnessV2<T>(value: 'true' | undefined, fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.KODAX_HARNESS_V2;
+    if (value === undefined) delete process.env.KODAX_HARNESS_V2;
+    else process.env.KODAX_HARNESS_V2 = value;
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
+      else process.env.KODAX_HARNESS_V2 = prev;
+    }
+  }
+
+  it('runs a V2 trivial flow: Worker emits handoff → Evaluator accepts', async () => {
+    await withHarnessV2('true', async () => {
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              textBlocks: [{ text: 'Trivial arithmetic — answering directly. 2 + 2 = 4.' }],
+              toolBlocks: [
+                {
+                  type: 'tool_use',
+                  id: 'worker-handoff-1',
+                  name: 'emit_handoff',
+                  input: {
+                    status: 'ready',
+                    summary: 'Trivial arithmetic answered directly.',
+                    evidence: ['2 + 2 = 4 by basic arithmetic.'],
+                    followup: ['none'],
+                  },
+                },
+              ],
+            };
+          }
+          // After accept, Worker MAY be re-invoked by Runner if
+          // post-evaluator continuation logic lingers. Return an
+          // empty text-only response as the safe fallback — the
+          // Runner's stop condition picks this up cleanly.
+          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [
+                {
+                  type: 'tool_use',
+                  id: 'evaluator-verdict-1',
+                  name: 'emit_verdict',
+                  input: {
+                    status: 'accept',
+                    reason: 'Worker answer is correct and well-grounded.',
+                    user_answer: '2 + 2 = 4.',
+                    followup: ['none'],
+                  },
+                },
+              ],
+            };
+          }
+          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
+        },
+      });
+      const result = await runManagedTaskViaRunner(
+        makeOptions(),
+        'What is 2 + 2?',
+        mock,
+      );
+      expect(result.success).toBe(true);
+      expect(result.signal).toBe('COMPLETE');
+      // The accepted answer reaches the user — either via the
+      // Evaluator `user_answer` field or the surrounding text.
+      expect(result.lastText).toMatch(/2 \+ 2 = 4/);
+      // Verdict slot recorded as accept (the V2 verdict-slot post-
+      // pass left it untouched because handoffTarget=undefined on
+      // accept; only the Generator-targeted revise default would
+      // trigger the V2 rewrite).
+      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+    });
+  });
+
+  it('V2 flag off: same prompt routes through Scout (V1 baseline preserved)', async () => {
+    await withHarnessV2(undefined, async () => {
+      // V1 Scout H0 shape — when flag is off, the run takes the
+      // V1 entry. This guards against a regression where Slice 3b's
+      // flag check accidentally returns true on undefined env.
+      const mock = makeChainMockLlm({
+        scout: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [
+                {
+                  type: 'tool_use',
+                  id: 'scout-1',
+                  name: 'emit_scout_verdict',
+                  input: {
+                    confirmed_harness: 'H0_DIRECT',
+                    direct_completion_ready: 'yes',
+                    summary: 'Arithmetic',
+                    scope: [],
+                    required_evidence: [],
+                    harness_rationale: 'Trivial.',
+                  },
+                },
+              ],
+            };
+          }
+          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
+        },
+      });
+      const result = await runManagedTaskViaRunner(
+        makeOptions(),
+        'What is 2 + 2?',
+        mock,
+      );
+      expect(result.success).toBe(true);
+      // V1 path: Scout populated the harness profile. V2 path
+      // wouldn't have a Scout role record — so this is a clean
+      // sentinel for which path the runner took.
+      expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
+    });
+  });
+});
+
 describe('parity — Runner path and legacy SA path produce compatible KodaXResult shape', () => {
   // The goal of Shard 5a parity is NOT byte-level equivalence (the legacy
   // AMA state machine emits dozens of observer events and populates a
@@ -790,6 +919,20 @@ function makeChainMockLlm(handlers: Record<string, AgentTurn>) {
     if (system.includes('You are Planner')) return 'planner';
     if (system.includes('You are Generator')) return 'generator';
     if (system.includes('You are Evaluator')) return 'evaluator';
+    // FEATURE_114 v0.7.36 Slice 5 — Worker prompt opens with one
+    // of two markers depending on whether the prompt is built via
+    // `worker-role-prompt.ts` (production path: "You are the Worker
+    // — KodaX's single primary agent …") or the
+    // `WORKER_INSTRUCTIONS_FALLBACK` constant in this file
+    // (test/topology-only path: "You are Worker (AMA Harness V2 …").
+    // Match both so e2e tests work whether or not promptContext is
+    // wired by the test fixture.
+    if (
+      system.includes('You are the Worker')
+      || system.includes('You are Worker (AMA Harness V2')
+    ) {
+      return 'worker';
+    }
     return 'unknown';
   };
   return async (
@@ -800,7 +943,14 @@ function makeChainMockLlm(handlers: Record<string, AgentTurn>) {
     const role = detectRole(system);
     turnCount[role] = (turnCount[role] ?? 0) + 1;
     const handler = handlers[role];
-    if (!handler) throw new Error(`No mock handler for role ${role}`);
+    if (!handler) {
+      // Debug aid: when role is "unknown", surface the first 200
+      // chars of the system prompt so the test failure tells us why
+      // the role detector missed.
+      throw new Error(
+        `No mock handler for role ${role}. system head: ${JSON.stringify(system.slice(0, 240))}`,
+      );
+    }
     return handler(turnCount[role]!, transcript);
   };
 }
