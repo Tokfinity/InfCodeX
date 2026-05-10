@@ -239,3 +239,63 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     expect(registry.has('c6')).toBe(false);
   });
 });
+
+// FEATURE_155 (v0.7.39) — dispatch banner branches on KODAX_IDLE_YIELD.
+// Flag OFF (default) preserves the v0.7.38 banner pointing the LLM at
+// `await_child_task`; flag ON swaps to the idle-yield wording so the
+// banner aligns with the Worker prompt's IDLE-YIELD section.
+describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', () => {
+  let prevIdleYield: string | undefined;
+  beforeEach(() => {
+    prevIdleYield = process.env.KODAX_IDLE_YIELD;
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+  });
+  afterEach(() => {
+    if (prevIdleYield === undefined) delete process.env.KODAX_IDLE_YIELD;
+    else process.env.KODAX_IDLE_YIELD = prevIdleYield;
+    _resetMessageQueueForTests();
+  });
+
+  it('flag OFF (default): banner instructs the LLM to call await_child_task', async () => {
+    delete process.env.KODAX_IDLE_YIELD;
+    let resolveExec!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveExec = resolve;
+      }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const banner = await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'iy-off', objective: 'probe' }, buildBaseCtx(registry)),
+    );
+    expect(banner).toContain('task_id:iy-off');
+    expect(banner).toContain('await_child_task({task_id:"iy-off"})');
+    // No idle-yield wording on the legacy path.
+    expect(banner).not.toContain('end your turn with one short status sentence');
+    resolveExec(buildSuccessResult('iy-off', ['ok']));
+    await registry.get('iy-off');
+  });
+
+  it('flag ON: banner instructs the LLM to idle-yield and explicitly forbids await_child_task', async () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    let resolveExec!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveExec = resolve;
+      }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const banner = await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'iy-on', objective: 'probe' }, buildBaseCtx(registry)),
+    );
+    expect(banner).toContain('task_id:iy-on');
+    expect(banner).toContain('end your turn with one short status sentence and NO tool calls');
+    expect(banner).toContain('<task-completed task_id="iy-on">');
+    expect(banner).toContain('Do NOT call await_child_task to wait');
+    // Make sure the legacy "then call await_child_task({task_id})" line is gone.
+    expect(banner).not.toContain('then call await_child_task({task_id:"iy-on"})');
+    resolveExec(buildSuccessResult('iy-on', ['ok']));
+    await registry.get('iy-on');
+  });
+});

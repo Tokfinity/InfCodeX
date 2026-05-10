@@ -138,3 +138,72 @@ describe('WORKER_AGENT_NAME', () => {
     expect(WORKER_AGENT_NAME).toBe('kodax-worker');
   });
 });
+
+// FEATURE_155 (v0.7.39) — idle-yield prompt gating. Flag OFF (default)
+// preserves the v0.7.38 wording byte-for-byte; flag ON swaps the
+// dispatch section for the idle-yield variant and retires the
+// FEATURE_148 anti-immediate-await block. Pin both branches so a
+// future edit can't silently drop a contract from either path.
+describe('buildWorkerInstructions — FEATURE_155 idle-yield gating', () => {
+  let prevIdleYield: string | undefined;
+  beforeEach(() => {
+    prevIdleYield = process.env.KODAX_IDLE_YIELD;
+  });
+  afterEach(() => {
+    if (prevIdleYield === undefined) delete process.env.KODAX_IDLE_YIELD;
+    else process.env.KODAX_IDLE_YIELD = prevIdleYield;
+  });
+
+  it('flag OFF (default): emits the FEATURE_148 anti-immediate-await block + the legacy await_child_task wording', () => {
+    delete process.env.KODAX_IDLE_YIELD;
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('await_child_task');
+    expect(out).toContain('DO NOT IMMEDIATELY AWAIT');
+    expect(out).toContain('FEATURE_148');
+    expect(out).not.toContain('IDLE-YIELD');
+  });
+
+  it('flag ON: dispatch section swaps to the idle-yield model and retires the FEATURE_148 anti-await block', () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('idle-yield model');
+    expect(out).toContain('IDLE-YIELD (preferred wait mechanic)');
+    expect(out).toContain('end your turn with ONE short status sentence and NO tool calls');
+    expect(out).toContain('<task-completed task_id=');
+    // FEATURE_148 anti-pattern is gone under idle-yield.
+    expect(out).not.toContain('DO NOT IMMEDIATELY AWAIT');
+    expect(out).not.toContain('FEATURE_148');
+    // Explicit deprecation of await_child_task.
+    expect(out).toContain('DO NOT call `await_child_task` to wait');
+  });
+
+  it('flag ON: FAN-OUT plan granularity guidance switches in_progress trigger from await_child_task to dispatch_child_task', () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('just before the corresponding `dispatch_child_task`');
+    expect(out).not.toContain('just before the corresponding `await_child_task`');
+    expect(out).toContain('<task-completed task_id="…">');
+  });
+
+  it('flag OFF: FAN-OUT plan granularity guidance retains the await_child_task in_progress trigger', () => {
+    delete process.env.KODAX_IDLE_YIELD;
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('just before the corresponding `await_child_task`');
+  });
+
+  it('flag ON: dispatch RULE B no longer says "Reclaim with await_child_task" (idle-yield handles waits)', () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('RULE B');
+    expect(out).not.toContain('Reclaim the result with `await_child_task');
+  });
+
+  it('flag ON keeps the structural gates intact (PLAN-FIRST, SCOPE COMMITMENT, EVALUATOR HANDOFF, FAN-OUT PLAN GRANULARITY)', () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('PLAN-FIRST CONTRACT');
+    expect(out).toContain('SCOPE COMMITMENT');
+    expect(out).toContain('FAN-OUT PLAN GRANULARITY');
+    expect(out).toContain('EVALUATOR HANDOFF');
+  });
+});

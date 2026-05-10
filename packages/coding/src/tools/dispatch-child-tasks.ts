@@ -35,6 +35,12 @@ import type {
 } from '../types.js';
 import type { ToolProgress } from './types.js';
 import { executeChildAgents, type ChildExecutorOptions } from '../child-executor.js';
+// FEATURE_155 (v0.7.39) — when idle-yield is active, the dispatch
+// banner returned to the LLM steers it toward exiting the turn
+// text-only instead of calling `await_child_task`. When the flag is
+// off the v0.7.38 banner is preserved so the legacy path stays
+// byte-identical.
+import { isIdleYieldEnabled } from '../task-engine/_internal/managed-task/idle-yield.js';
 
 /* ---------- Constants ---------- */
 
@@ -212,12 +218,21 @@ export async function* toolDispatchChildTask(
     yield { stage: 'launched', message: `Child "${childId}" launched (async)` };
     dispatchEndStatus = 'launched';
     emitDispatchEnd();
-    return (
-      `task_id:${childId}\n` +
-      `Child task "${childId}" is running in the background. Continue with other tools, ` +
-      `then call await_child_task({task_id:"${childId}"}) when you need the result. ` +
-      `A <task-completed> notification will arrive automatically after a yielding tool completes.`
-    );
+    return isIdleYieldEnabled()
+      ? (
+        `task_id:${childId}\n` +
+        `Child task "${childId}" is running in the background. ` +
+        `Do whatever interleaved work is useful (more dispatches, side-reads, drafting). ` +
+        `When you have nothing else useful to do, end your turn with one short status sentence and NO tool calls — ` +
+        `the runner will resume you when this child finishes (you will see a <task-completed task_id="${childId}">…</task-completed> block in your next user message). ` +
+        `Do NOT call await_child_task to wait for this id.`
+      )
+      : (
+        `task_id:${childId}\n` +
+        `Child task "${childId}" is running in the background. Continue with other tools, ` +
+        `then call await_child_task({task_id:"${childId}"}) when you need the result. ` +
+        `A <task-completed> notification will arrive automatically after a yielding tool completes.`
+      );
   }
 
   // --- Sync (legacy / forced via KODAX_ASYNC_DISPATCH=0) ---
