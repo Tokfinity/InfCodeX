@@ -129,6 +129,30 @@ describe('FEATURE_114 V2 baseline judges', () => {
     }
   });
 
+  it('multi_step_no_fanout_seeds_plan — pass on numeric-id items (anti-pattern 7 fix)', () => {
+    // Real models commonly emit `id:"1"`, `id:"2"` — the WORKED EXAMPLE
+    // in the prompt uses `todo_1` style but most models default to bare
+    // numbers. The original regex required the `todo_` prefix and
+    // produced a false-negative across all 4 aliases on the first run
+    // (ZERO pass on 60 calls). This pin keeps the relaxed regex from
+    // regressing back to a strict prefix match.
+    const judges = buildJudges('multi_step_no_fanout_seeds_plan');
+    const sampleOutput = `todo_update({
+  op: "init",
+  items: [
+    { id: "1", content: "Read withTimeout function" },
+    { id: "2", content: "Add negative-timeout guard", evaluator: "build" }
+  ]
+})`;
+    for (const j of judges) {
+      const result = j.judge(sampleOutput);
+      expect(
+        result.passed,
+        `judge "${j.name}" should pass on numeric-id items`,
+      ).toBe(true);
+    }
+  });
+
   it('multi_step_no_fanout_seeds_plan — fail when dispatch_child_task appears', () => {
     const judges = buildJudges('multi_step_no_fanout_seeds_plan');
     const sampleOutput = `todo_update({op:"init", items:[
