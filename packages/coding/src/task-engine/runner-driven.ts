@@ -247,6 +247,21 @@ import {
   sanitizeManagedUserFacingText,
 } from './_internal/managed-task/sanitize.js';
 import { buildManagedTaskCompactionHook } from './_internal/managed-task/compaction.js';
+// FEATURE_155 (v0.7.39) — idle-yield outer loop primitives. The wiring
+// here detects a Worker turn that exited via the no-tool-calls /
+// pending-children branch, waits for a wake event (child completion or
+// inbound user message), and resumes Runner.run with a synthetic user
+// message so the Worker can react. Gated by `KODAX_IDLE_YIELD=true` —
+// default off in v0.7.39 because the Worker prompt still mandates
+// `await_child_task`. Slice B1 lands the prompt change and flips the
+// default; Slice C1 removes the `await_child_task` tool entirely.
+import {
+  composeIdleYieldUserMessage,
+  countLastAssistantToolCalls,
+  detectIdleYield,
+  isIdleYieldEnabled,
+  waitForWakeEvent,
+} from './_internal/managed-task/idle-yield.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';
@@ -5211,129 +5226,205 @@ async function runManagedTaskViaRunnerInner(
     : harnessV2Active
       ? chain.worker
       : chain.scout;
-  const runResult = await Runner.run(entryAgent, runnerInput, {
-    llm,
-    abortSignal: options.abortSignal,
-    compactionHook,
-    // Register two run-scoped guardrails:
-    //
-    //   1. tool-result-truncation: post-execute size policy parity
-    //      with the SA substrate (`applyToolResultGuardrail`). Without
-    //      it the LLM sees raw unbounded tool output, blowing the
-    //      context window on read/grep of large files.
-    //   2. scope-aware-harness (FEATURE_106 v0.7.31): when Scout has
-    //      committed to H0_DIRECT (or hasn't committed at all) and
-    //      Generator-stage mutations cross the significance threshold
-    //      (≥3 files OR ≥100 lines), append the canonical
-    //      emit_scout_verdict hint so the LLM can promote to H1/H2.
-    //      Idempotent on `mutationTracker.reflectionInjected`; reads
-    //      `managedProtocolPayloadRef.current.scout.confirmedHarness`
-    //      to skip when Scout already escalated.
-    //
-    // Both participate in the core Guardrail lifecycle (Span emission +
-    // declaration-order composition).
-    guardrails: [
-      createToolResultTruncationGuardrail(baseCtx),
-      // `mutationTracker` is constructed unconditionally above (line ~3923),
-      // so the guardrail is always wired here. Its internal filters
-      // (mutation-tool predicate, scope-significance threshold, Scout
-      // verdict check, idempotency flag) handle the no-op cases at
-      // runtime — short-circuit branches return `{ action: 'allow' }`
-      // without touching the tool result.
-      createScopeAwareHarnessGuardrail({
-        mutationTracker,
-        payloadRef: managedProtocolPayloadRef,
-      }),
-    ],
-    // Surface Runner tool-loop invocations through the
-    // KodaXEvents channels the worker ledger consumes. Without this
-    // wiring the REPL worker ledger stays empty mid-run — only the final
-    // formal output reaches the user (observed regression report:
-    // "除了正式输出之外的任何别的信息都看不到"). Legacy agent.ts fired
-    // events.onToolResult at three sites per invocation (success / error
-    // / cancelled); the Runner observer maps 1:1 onto
-    // `onToolUseStart` + `onToolResult` here.
-    toolObserver: {
-      // CAP-010 tri-state permission gate: plan-mode / accept-edits /
-      // extension "tool:before" hooks run here. Delegates to the
-      // shared substrate helper so SA and AMA evaluate the same gate
-      // chain — pre-FEATURE_100 the AMA path only invoked
-      // `events.beforeToolExecute` and dropped the extension
-      // `tool:before` branch entirely; substrate parity restores it.
-      // Tri-state contract preserved verbatim: undefined → allow;
-      // CANCELLED_TOOL_RESULT_MESSAGE → cancel; other string → block
-      // with that string as the synthesized tool_result content.
-      beforeTool: options.events
-        ? async (call) => {
-          const override = await getToolExecutionOverride(
-            options.events!,
-            call.name,
-            call.input,
-            call.id,
-            options.context?.executionCwd,
-            options.context?.gitRoot ?? undefined,
-          );
-          if (override === undefined) return true;
-          if (override === CANCELLED_TOOL_RESULT_MESSAGE) return false;
-          return override;
-        }
-        : undefined,
-      onToolCall: (call) => {
-        // CAP-035: filter internal control-plane tools (emit_managed_protocol,
-        // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
-        // AMA emitted every tool call regardless of visibility — REPL
-        // showed `emit_managed_protocol` invocations as if they were
-        // user-facing. SA always filtered via isVisibleToolName; AMA now
-        // does too.
-        if (!isVisibleToolName(call.name)) return;
-        options.events?.onToolUseStart?.({
-          name: call.name,
-          id: call.id,
-          input: call.input,
-        });
-      },
-      onToolResult: (call, result) => {
-        // F4 parity — track whether any tool result was truncated by the
-        // tool-result-truncation guardrail. `result.metadata.truncated`
-        // is set by the guardrail's rewrite step. Observed values feed
-        // into `runtime.toolOutputTruncated` / `toolOutputTruncationNotes`.
-        const meta = result.metadata as { truncated?: boolean; policy?: unknown } | undefined;
-        if (meta?.truncated) {
-          toolTruncationRef.truncated = true;
-          toolTruncationRef.notes.push(
-            `${call.name}: result was truncated to guardrail policy`,
-          );
-        }
-        // CAP-035: same visibility filter on the result side.
-        if (!isVisibleToolName(call.name)) return;
-        options.events?.onToolResult?.({
-          id: call.id,
-          name: call.name,
-          content: result.content,
-        });
-      },
+  // Run-scoped guardrails — created ONCE so the FEATURE_155 idle-yield
+  // outer loop can invoke `Runner.run` repeatedly without re-instantiating
+  // them. Re-instantiating would reset their stateful idempotency flags
+  // (e.g. `mutationTracker.reflectionInjected` consulted by the scope-
+  // aware harness guardrail), so any prior turn's
+  // emit_scout_verdict-hint injection would replay on resume.
+  const runnerGuardrails = [
+    // 1. tool-result-truncation: post-execute size policy parity with
+    //    the SA substrate (`applyToolResultGuardrail`). Without it the
+    //    LLM sees raw unbounded tool output, blowing the context window
+    //    on read/grep of large files.
+    createToolResultTruncationGuardrail(baseCtx),
+    // 2. scope-aware-harness (FEATURE_106 v0.7.31): when Scout has
+    //    committed to H0_DIRECT (or hasn't committed at all) and
+    //    Generator-stage mutations cross the significance threshold
+    //    (≥3 files OR ≥100 lines), append the canonical
+    //    emit_scout_verdict hint so the LLM can promote to H1/H2.
+    //    Idempotent on `mutationTracker.reflectionInjected`; reads
+    //    `managedProtocolPayloadRef.current.scout.confirmedHarness` to
+    //    skip when Scout already escalated.
+    createScopeAwareHarnessGuardrail({
+      mutationTracker,
+      payloadRef: managedProtocolPayloadRef,
+    }),
+  ] as const;
+  // Surface Runner tool-loop invocations through the KodaXEvents
+  // channels the worker ledger consumes. Without this wiring the REPL
+  // worker ledger stays empty mid-run — only the final formal output
+  // reaches the user (observed regression report: "除了正式输出之外的
+  // 任何别的信息都看不到"). Legacy agent.ts fired events.onToolResult at
+  // three sites per invocation (success / error / cancelled); the
+  // Runner observer maps 1:1 onto `onToolUseStart` + `onToolResult`
+  // here.
+  const runnerToolObserver = {
+    // CAP-010 tri-state permission gate: plan-mode / accept-edits /
+    // extension "tool:before" hooks run here. Delegates to the shared
+    // substrate helper so SA and AMA evaluate the same gate chain —
+    // pre-FEATURE_100 the AMA path only invoked
+    // `events.beforeToolExecute` and dropped the extension
+    // `tool:before` branch entirely; substrate parity restores it.
+    // Tri-state contract preserved verbatim: undefined → allow;
+    // CANCELLED_TOOL_RESULT_MESSAGE → cancel; other string → block
+    // with that string as the synthesized tool_result content.
+    beforeTool: options.events
+      ? async (call: { name: string; id: string; input: Record<string, unknown> }) => {
+        const override = await getToolExecutionOverride(
+          options.events!,
+          call.name,
+          call.input,
+          call.id,
+          options.context?.executionCwd,
+          options.context?.gitRoot ?? undefined,
+        );
+        if (override === undefined) return true;
+        if (override === CANCELLED_TOOL_RESULT_MESSAGE) return false;
+        return override;
+      }
+      : undefined,
+    onToolCall: (call: { name: string; id: string; input: Record<string, unknown> }) => {
+      // CAP-035: filter internal control-plane tools (emit_managed_protocol,
+      // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
+      // AMA emitted every tool call regardless of visibility — REPL
+      // showed `emit_managed_protocol` invocations as if they were
+      // user-facing. SA always filtered via isVisibleToolName; AMA now
+      // does too.
+      if (!isVisibleToolName(call.name)) return;
+      options.events?.onToolUseStart?.({
+        name: call.name,
+        id: call.id,
+        input: call.input,
+      });
     },
-    // Iteration cap for the entire Scout → (Planner) → Generator → Evaluator
-    // chain. Core's default (20) is meant for stand-alone single-agent runs
-    // and is far too low for a multi-role investigation + execution + verify
-    // chain. This is a hard SAFETY ceiling — the real throttle is the
-    // budget controller (H0=100 / H1=H2=200 base, +100/+200 on 90%-threshold
-    // user approval). A 500-turn ceiling allows 2-3 extensions plus ample
-    // room for tool-heavy iterations (each LLM turn can carry multiple
-    // parallel tool calls). The budget-extension dialog (Shard 6b) catches
-    // the user at the 90% threshold long before this cap, so reaching 500
-    // genuinely indicates a prompt / tool-design bug worth flagging.
-    maxToolLoopIterations: 500,
-  }).catch(async (err: unknown) => {
-    // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and any
-    // LLM / Runner error before the rejection propagates. Without this,
-    // a non-success terminal exit leaves a fresh checkpoint.json on
-    // disk, which the next query's findValidCheckpoint scan picks up
-    // and triggers the "found incomplete task" prompt — same UX bug as
-    // the success-path race, just on the error/abort branch.
-    await cleanupRunCheckpoint();
-    throw err;
-  });
+    onToolResult: (
+      call: { name: string; id: string },
+      result: { content: string; metadata?: unknown },
+    ) => {
+      // F4 parity — track whether any tool result was truncated by the
+      // tool-result-truncation guardrail. `result.metadata.truncated`
+      // is set by the guardrail's rewrite step. Observed values feed
+      // into `runtime.toolOutputTruncated` / `toolOutputTruncationNotes`.
+      const meta = result.metadata as { truncated?: boolean; policy?: unknown } | undefined;
+      if (meta?.truncated) {
+        toolTruncationRef.truncated = true;
+        toolTruncationRef.notes.push(
+          `${call.name}: result was truncated to guardrail policy`,
+        );
+      }
+      // CAP-035: same visibility filter on the result side.
+      if (!isVisibleToolName(call.name)) return;
+      options.events?.onToolResult?.({
+        id: call.id,
+        name: call.name,
+        content: result.content,
+      });
+    },
+  };
+
+  // FEATURE_155 (v0.7.39) idle-yield outer loop.
+  //
+  // The legacy single-call shape is preserved when `KODAX_IDLE_YIELD`
+  // is unset/false (the v0.7.39 default) — `Runner.run` still resolves
+  // exactly once and falls through to the post-run code below
+  // unchanged. When the flag is on AND the Worker exits via the
+  // no-tool-calls + pending-children + no-handoff branch, the loop
+  // waits for an external wake event (child completion or inbound
+  // queue message), splices a synthetic user message that surfaces
+  // the wake content, and re-enters `Runner.run` so the Worker can
+  // observe and react. See `idle-yield.ts` for the predicate /
+  // wake-event semantics.
+  const idleYieldEnabled = isIdleYieldEnabled();
+  let currentAgent: Agent = entryAgent;
+  let currentInput: AgentMessage[] = runnerInput;
+  let runResult: Awaited<ReturnType<typeof Runner.run>>;
+  // Defensive guard against a misbehaving prompt that flips into an
+  // infinite idle-loop. The legacy `await_child_task` path could not
+  // loop, so this is purely a v0.7.39 safety floor — the budget
+  // controller still gates real work, but a stuck-loop from a buggy
+  // prompt would otherwise wedge the REPL forever.
+  const IDLE_YIELD_MAX_ITERATIONS = 64;
+  let idleYieldIterations = 0;
+
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    runResult = await Runner.run(currentAgent, currentInput, {
+      llm,
+      abortSignal: options.abortSignal,
+      compactionHook,
+      guardrails: [...runnerGuardrails],
+      toolObserver: runnerToolObserver,
+      // Iteration cap for the entire chain. Core's default (20) is meant
+      // for stand-alone single-agent runs and is far too low for a multi-
+      // role investigation + execution + verify chain. This is a hard
+      // SAFETY ceiling — the real throttle is the budget controller
+      // (H0=100 / H1=H2=200 base, +100/+200 on 90%-threshold user
+      // approval). A 500-turn ceiling allows 2-3 extensions plus ample
+      // room for tool-heavy iterations (each LLM turn can carry multiple
+      // parallel tool calls). The budget-extension dialog (Shard 6b)
+      // catches the user at the 90% threshold long before this cap, so
+      // reaching 500 genuinely indicates a prompt / tool-design bug
+      // worth flagging.
+      maxToolLoopIterations: 500,
+    }).catch(async (err: unknown) => {
+      // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and any
+      // LLM / Runner error before the rejection propagates. Without
+      // this, a non-success terminal exit leaves a fresh
+      // checkpoint.json on disk, which the next query's
+      // findValidCheckpoint scan picks up and triggers the "found
+      // incomplete task" prompt — same UX bug as the success-path
+      // race, just on the error/abort branch.
+      await cleanupRunCheckpoint();
+      throw err;
+    });
+
+    if (!idleYieldEnabled) break;
+
+    if (++idleYieldIterations > IDLE_YIELD_MAX_ITERATIONS) {
+      // Defensive: log via the logger surface (no console.log) and
+      // exit the loop. Caller will see the last runResult unchanged.
+      // A legitimate run never approaches this cap — if we hit it
+      // there's a prompt bug worth surfacing on the next iteration's
+      // turn.
+      break;
+    }
+
+    const snapshot = {
+      lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
+      pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
+      hasEmittedHandoff: Boolean(managedProtocolPayloadRef.current?.handoff),
+    };
+    if (!detectIdleYield(snapshot)) break;
+
+    const wakeEvent = await waitForWakeEvent({
+      registry: baseCtx.childTaskRegistry ?? new Map(),
+      messageQueue: getMessageQueue(),
+      // Worker runs as the main thread; the dispatch handler enqueues
+      // child notifications with `parentAgentId: undefined` (default
+      // main-thread target). Match that here so the queue arm sees
+      // them.
+      agentId: undefined,
+      abortSignal: options.abortSignal,
+    });
+    if (wakeEvent.kind === 'aborted') break;
+
+    const syntheticUserMessage = composeIdleYieldUserMessage(wakeEvent, () =>
+      getMessageQueue().dequeue({
+        agentId: undefined,
+        maxPriority: 'background',
+      }),
+    );
+    if (!syntheticUserMessage) break; // truly empty wake — no payload to splice
+
+    // Replay the full transcript + the synthetic wake message. Worker
+    // stays the entry agent on resume — the multi-role chain's prior
+    // turns are reflected in `runResult.messages`, so the Runner's
+    // transition logic will pick up where the Worker left off (the
+    // handoff slot is empty, so no handoff replay races).
+    currentInput = [...runResult.messages, syntheticUserMessage];
+    currentAgent = chain.worker;
+  }
 
   // Issue 127 (review feedback): clean up the checkpoint EARLY — the
   // moment Runner.run resolves successfully — so any throw from the

@@ -33,6 +33,46 @@
 import type { MessageQueue, QueuedMessage } from '@kodax-ai/agent';
 
 import type { KodaXChildExecutionResult } from '../../../types.js';
+import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
+
+/**
+ * Env-flag gate for the runner-driven outer-loop wiring (Slice A2).
+ *
+ * Default OFF in v0.7.39 because the Worker prompt still mandates
+ * `await_child_task` — the predicate would not actually trip in
+ * production today. Slice B1 lands the prompt change and flips the
+ * default to ON. Keeping the gate explicit lets us unit-test the
+ * wiring in isolation and lets users disable it after Slice B1 if
+ * a regression surfaces.
+ *
+ * Returns true only for the literal string `'true'` (case-insensitive).
+ * Anything else — unset, `'false'`, `'0'`, garbage — disables.
+ */
+export function isIdleYieldEnabled(): boolean {
+  const raw = process.env.KODAX_IDLE_YIELD;
+  if (typeof raw !== 'string') return false;
+  return raw.toLowerCase() === 'true';
+}
+
+/**
+ * Count the `tool_use` blocks on the last assistant message of a Runner
+ * transcript. Used to populate `IdleYieldSnapshot.lastAssistantToolCallCount`
+ * — a 0 count is the marker for the no-tool-calls exit branch
+ * `Runner.run` uses to terminate its tool loop.
+ */
+export function countLastAssistantToolCalls(
+  messages: readonly KodaXMessage[],
+): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || msg.role !== 'assistant') continue;
+    if (typeof msg.content === 'string') return 0;
+    return (msg.content as readonly KodaXContentBlock[]).filter(
+      (b) => (b as { type?: string }).type === 'tool_use',
+    ).length;
+  }
+  return 0;
+}
 
 /** Snapshot of the Worker run's exit state, computed by the task-engine. */
 export interface IdleYieldSnapshot {
@@ -226,4 +266,84 @@ export function waitForWakeEvent(
     // waiter blocks indefinitely — by design (caller must
     // either dispatch a child or queue a message to wake it).
   });
+}
+
+/**
+ * Compose the synthetic user message spliced after a Worker idle-yield
+ * resume. The runner-driven outer loop calls this with the resolved
+ * `WakeEvent` plus a function that drains any pending background
+ * messages (typically `() => getMessageQueue().dequeue(...)`).
+ *
+ *   - `messages-arrived` wake: the queue arm already drained the
+ *     QueuedMessage(s); pass their content through verbatim. Then
+ *     drain anything that arrived between settle and this call (a
+ *     tight race with the dispatch handler's enqueue is possible) and
+ *     concatenate.
+ *
+ *   - `child-completed` / `child-failed` wake: the dispatch handler's
+ *     in-IIFE `enqueueChildTaskNotification` is a precondition of the
+ *     promise settling, so the queue holds the canonical
+ *     `<task-completed>` banner. Drain to capture it. If for any
+ *     reason the banner is missing (defensive — a misbehaving
+ *     dispatch path that resolved without enqueuing), synthesize a
+ *     minimal one from the wake event so the Worker still observes
+ *     the resolution rather than silently looping again.
+ *
+ *   - `aborted`: caller is expected to break out before reaching this
+ *     helper. If reached anyway, returns `undefined` so the outer
+ *     loop treats it as a terminal exit.
+ *
+ * Returns `undefined` when the wake yields no spliceable content —
+ * the outer loop treats that as a real terminal exit.
+ */
+export function composeIdleYieldUserMessage(
+  wakeEvent: WakeEvent,
+  drainBackgroundQueue: () => readonly QueuedMessage[],
+): KodaXMessage | undefined {
+  const fragments: string[] = [];
+
+  if (wakeEvent.kind === 'messages-arrived') {
+    for (const msg of wakeEvent.messages) {
+      if (typeof msg.content === 'string' && msg.content.length > 0) {
+        fragments.push(msg.content);
+      }
+    }
+  }
+
+  if (wakeEvent.kind !== 'aborted') {
+    const drained = drainBackgroundQueue();
+    for (const msg of drained) {
+      if (typeof msg.content === 'string' && msg.content.length > 0) {
+        fragments.push(msg.content);
+      }
+    }
+  }
+
+  // Defensive fallback — child-* wake with empty queue. Only shape
+  // that can reach this branch is a misbehaving dispatch path that
+  // resolved the promise without enqueuing; surface a minimal banner
+  // so Worker still sees the result instead of silently looping
+  // again.
+  if (fragments.length === 0) {
+    if (wakeEvent.kind === 'child-completed') {
+      fragments.push(
+        `<task-completed task_id="${wakeEvent.taskId}">\n(child task completed; no summary available)\n</task-completed>`,
+      );
+    } else if (wakeEvent.kind === 'child-failed') {
+      fragments.push(
+        `<task-completed task_id="${wakeEvent.taskId}">\nfailed: ${wakeEvent.error.message}\n</task-completed>`,
+      );
+    }
+  }
+
+  if (fragments.length === 0) return undefined;
+
+  return {
+    role: 'user',
+    content: fragments.join('\n\n'),
+    // Hidden in REPL display — the Worker only ever sees this in its
+    // transcript, the human never reads it. Without this flag the
+    // REPL would render the synthetic banner as a user message bubble.
+    _synthetic: true,
+  };
 }
