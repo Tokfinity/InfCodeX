@@ -1,4 +1,21 @@
 /**
+ * **ARCHIVED — DO NOT RUN.** Retired by FEATURE_155 v0.7.39 Slice D2.
+ *
+ * The probe target was `firstTool.name === 'await_child_task'`, but
+ * Slice C1 deleted that tool entirely. The anti-immediate-await
+ * anti-pattern this eval was designed to detect can no longer happen
+ * (no callable target), so the eval has no degenerate-rate to
+ * measure. `vitest.eval.config.ts` excludes `tests/_archive/**` so
+ * `npm run test:eval` no longer picks this file up; it's preserved
+ * here as a historical record of the methodology + thresholds.
+ *
+ * Replacement: idle-yield adoption is now measured by
+ * `tests/feature-155-idle-yield-adoption.eval.ts` (Layer 2 single-
+ * turn probe with the same methodology, but checking that the agent
+ * yields control instead of issuing degenerate await tool calls).
+ *
+ * --- Original header (kept verbatim) ---
+ *
  * Eval: FEATURE_148 Pattern B post-dispatch probe (v0.7.37).
  *
  * ## Layer 2 single-turn probe per benchmark/EVAL_GUIDELINES.md
@@ -28,7 +45,7 @@
  *
  * ## Run
  *
- *   npm run test:eval -- feature-148-post-dispatch-probe
+ *   (archived; no longer runnable)
  */
 
 import { describe, expect, it } from 'vitest';

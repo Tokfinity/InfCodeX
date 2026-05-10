@@ -42,6 +42,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.eval.ts'],
+    // Archived evals (e.g. FEATURE_155 retired feature-148-post-dispatch-probe
+    // because its target tool `await_child_task` was deleted in v0.7.39
+    // Slice C1) live under `tests/_archive/` for historical reference.
+    // They must not run via `npm run test:eval`.
+    exclude: ['tests/_archive/**', '**/node_modules/**', '**/dist/**'],
     testTimeout: 60_000,
   },
 });
