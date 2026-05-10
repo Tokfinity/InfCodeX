@@ -87,6 +87,33 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('CANNOT bypass the Evaluator');
   });
 
+  // FEATURE_151 Slice I (v0.7.38) — fan-out plan granularity guidance.
+  // Pin presence of the section + its key signals so a future prompt edit
+  // doesn't silently drop the fan-out → N-item-per-child contract that
+  // closes the review fan-out visibility gap.
+  it('emits the FAN-OUT PLAN GRANULARITY section (Slice I)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('FAN-OUT PLAN GRANULARITY');
+    expect(out).toContain('FEATURE_151 Slice I');
+    // Mechanical contract: ≥3 children → ONE item per child's objective.
+    expect(out).toContain('≥3 children');
+    expect(out).toContain('ONE item per child');
+    // Anti-pattern call-out — plan list IS the user's progress dashboard.
+    expect(out).toContain('plan list IS the user');
+    // Tied to dispatch RULE A / RULE C (same trigger surface).
+    expect(out).toMatch(/RULE A or RULE C/);
+  });
+
+  it('orders Slice I after dispatch rules and before Evaluator handoff', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    const dispatchIdx = out.indexOf('DISPATCH RULES');
+    const fanOutIdx = out.indexOf('FAN-OUT PLAN GRANULARITY');
+    const handoffIdx = out.indexOf('EVALUATOR HANDOFF');
+    expect(dispatchIdx).toBeGreaterThanOrEqual(0);
+    expect(fanOutIdx).toBeGreaterThan(dispatchIdx);
+    expect(handoffIdx).toBeGreaterThan(fanOutIdx);
+  });
+
   it('includes a revise-failure retrospective when flagged', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, true);
     expect(out).toContain('previous attempt at this task failed');
