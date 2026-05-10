@@ -129,7 +129,11 @@ import { toolGrep } from '../tools/grep.js';
 import { toolRead } from '../tools/read.js';
 import { toolWrite } from '../tools/write.js';
 import { toolDispatchChildTask } from '../tools/dispatch-child-tasks.js';
-import { toolAwaitChildTask } from '../tools/await-child-task.js';
+// FEATURE_155 v0.7.39 Slice C1 — `await_child_task` tool removed.
+// All chains (V1 Scout/Generator + V2 Worker) now wait via idle-yield;
+// the runner-driven outer loop in `runManagedTaskViaRunnerInner`
+// resumes them on `<task-completed>` notifications. The legacy import
+// path is gone; `await-child-task.ts` is deleted.
 // M1 parity (v0.7.26) — repo-intel + MCP handlers required to give Planner
 // the same inspection surface it had under v0.7.22's
 // `buildManagedWorkerToolPolicy('planner')` allow-list.
@@ -1927,15 +1931,6 @@ interface CodingToolBundle {
    * (especially after Unknown-id errors or long quiet stretches).
    */
   readonly todoList: RunnableTool;
-  /**
-   * FEATURE_119 v0.7.36 Pattern B — `await_child_task` reclaim half.
-   * Pairs with the per-role `dispatch_child_task` wrappers
-   * (`scoutDispatch` / `generatorDispatch`) so the Worker can await any
-   * task_id those wrappers launched in async mode. Also enumerated in
-   * `YIELD_TOOL_NAMES` so the next iteration boundary upgrades to a
-   * background-priority drain.
-   */
-  readonly awaitChildTask: RunnableTool;
   /** M1 parity (v0.7.26) — repo-intel + MCP surface restored to Planner.
    * v0.7.22's `buildManagedWorkerToolPolicy('planner')` exposed
    * `changed_scope`, `repo_overview`, `changed_diff_bundle`, `read`,
@@ -1968,7 +1963,6 @@ function buildCodingToolBundle(
   const exitPlanMode = getToolDefinition('exit_plan_mode');
   const todoUpdate = getToolDefinition('todo_update');
   const todoList = getToolDefinition('todo_list');
-  const awaitChildTask = getToolDefinition('await_child_task');
   if (
     !read
     || !grep
@@ -1980,10 +1974,9 @@ function buildCodingToolBundle(
     || !exitPlanMode
     || !todoUpdate
     || !todoList
-    || !awaitChildTask
   ) {
     throw new Error(
-      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list/await_child_task) to be registered',
+      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list) to be registered',
     );
   }
   // M1 parity (v0.7.26) — optionally wrap repo-intel + MCP tools so
@@ -2022,7 +2015,6 @@ function buildCodingToolBundle(
     exitPlanMode: wrapCodingToolAsRunnable(exitPlanMode, toolExitPlanMode, baseCtx, budget, events),
     todoUpdate: wrapCodingToolAsRunnable(todoUpdate, toolTodoUpdate, baseCtx, budget, events),
     todoList: wrapCodingToolAsRunnable(todoList, toolTodoList, baseCtx, budget, events),
-    awaitChildTask: wrapCodingToolAsRunnable(awaitChildTask, toolAwaitChildTask, baseCtx, budget, events),
     repoOverview: repoOverviewDef
       ? wrapCodingToolAsRunnable(repoOverviewDef, toolRepoOverview, baseCtx, budget, events)
       : undefined,
@@ -2394,11 +2386,12 @@ export function buildRunnerAgentChain(
       // emitting its verdict. The dispatch tool itself enforces
       // `read_only` in Scout context.
       scoutDispatch,
-      // FEATURE_119 v0.7.36 Pattern B — Scout reclaims async-dispatched
-      // children via task_id. The reclaim half is needed wherever
-      // dispatch is allowed; otherwise async dispatch leaves children
-      // stranded in the registry.
-      codingTools.awaitChildTask,
+      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed.
+      // Scout (V1 path) waits for dispatched children via the
+      // runner-driven idle-yield outer loop, same mechanic V2
+      // Worker uses. The runner detects the no-tool-calls exit
+      // with pending children and resumes Scout when a
+      // `<task-completed task_id="…">` notification arrives.
     ],
     handoffs: undefined,
     reasoning: { default: 'quick', max: 'balanced', escalateOnRevise: false },
@@ -2503,10 +2496,11 @@ export function buildRunnerAgentChain(
       // `childWriteWorktreePathsRef` so the Evaluator can inject the
       // write diffs at verdict time (FEATURE_067 v2 parity).
       generatorDispatch,
-      // FEATURE_119 v0.7.36 Pattern B — Generator reclaims async-dispatched
-      // children via task_id. Without this the Generator could launch
-      // long-running children but never collect their results.
-      codingTools.awaitChildTask,
+      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed.
+      // Generator waits for dispatched children via the runner-driven
+      // idle-yield outer loop. Worktree-write children's diffs still
+      // flow through `childWriteWorktreePathsRef` at result time;
+      // only the explicit reclaim tool goes away.
     ],
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },

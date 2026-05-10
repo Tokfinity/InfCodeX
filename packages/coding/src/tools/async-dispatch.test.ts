@@ -17,7 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
 
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
-import { toolAwaitChildTask } from './await-child-task.js';
+// FEATURE_155 v0.7.39 Slice C1 — `await_child_task` tool deleted; all
+// tests that exercised the await reclaim path are removed below. The
+// dispatch-half tests stay.
 import type {
   KodaXChildExecutionResult,
   KodaXToolExecutionContext,
@@ -123,24 +125,6 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     await registry.get('c1');
   });
 
-  it('await_child_task awaits the registered promise and returns finding', async () => {
-    mockExec.mockResolvedValue(buildSuccessResult('c2', ['evidence-A', 'evidence-B']));
-
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
-    const ctx = buildBaseCtx(registry);
-
-    const banner = await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'c2', objective: 'x' }, ctx),
-    );
-    expect(banner).toContain('task_id:c2');
-    expect(registry.size).toBe(1);
-
-    const finding = await toolAwaitChildTask({ task_id: 'c2' }, ctx);
-    expect(finding).toBe('evidence-A\nevidence-B');
-    // Registry entry consumed.
-    expect(registry.has('c2')).toBe(false);
-  });
-
   it('rejects duplicate task_ids', async () => {
     mockExec.mockReturnValue(new Promise(() => {})); // never resolves
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
@@ -156,28 +140,6 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     );
     expect(second).toContain('already in flight');
     expect(mockExec).toHaveBeenCalledTimes(1);
-  });
-
-  it('await with unknown task_id surfaces helpful error', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
-    const ctx = buildBaseCtx(registry);
-
-    const result = await toolAwaitChildTask({ task_id: 'ghost' }, ctx);
-    expect(result).toContain('unknown task_id "ghost"');
-    expect(result).toContain('In-flight task ids: <none>');
-  });
-
-  it('await without registry surfaces sync-mode hint', async () => {
-    const ctx = buildBaseCtx(undefined);
-    const result = await toolAwaitChildTask({ task_id: 'anything' }, ctx);
-    expect(result).toContain('async dispatch is disabled');
-  });
-
-  it('await without task_id rejects with missing-parameter error', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
-    const ctx = buildBaseCtx(registry);
-    const result = await toolAwaitChildTask({}, ctx);
-    expect(result).toContain('Missing required parameter: task_id');
   });
 
   it('background notification is enqueued on child completion', async () => {
@@ -224,7 +186,7 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     expect(result).toBe('legacy');
   });
 
-  it('await re-throws crash messages and removes the entry', async () => {
+  it('background notification is enqueued on child crash (Slice C1: tracked via queue, not via await reclaim)', async () => {
     mockExec.mockRejectedValue(new Error('boom'));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
@@ -234,9 +196,18 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     );
     expect(banner).toContain('task_id:c6');
 
-    const reclaimed = await toolAwaitChildTask({ task_id: 'c6' }, ctx);
-    expect(reclaimed).toContain('crashed: boom');
-    expect(registry.has('c6')).toBe(false);
+    // Wait for the IIFE to settle (the `.catch(() => {})` swallows the
+    // unhandled-rejection warning so we can observe the side effects
+    // — registry entry stays until idle-yield resume drains the queue,
+    // and the crash banner lands on the background queue).
+    await registry.get('c6')?.catch(() => undefined);
+
+    const queue = getMessageQueue();
+    const peeked = queue.peek({ maxPriority: 'background' });
+    expect(peeked).toHaveLength(1);
+    expect(peeked[0]?.mode).toBe('task-notification');
+    expect(peeked[0]?.content).toContain('<task-completed task_id="c6">');
+    expect(peeked[0]?.content).toContain('crash: boom');
   });
 });
 
