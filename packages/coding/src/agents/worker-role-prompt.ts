@@ -53,22 +53,6 @@ export function buildWorkerInstructions(
     '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled`). Mark exactly ONE item `in_progress` at a time.',
     '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
     '- Replan iteratively: insert / cancel / adjust items via `todo_update` as the picture firms up. Do NOT reset the entire list mid-task; reserve full reset for explicit "start over" decisions.',
-    '',
-    'CONCRETE FIRST-TURN EXAMPLE (non-fan-out multi-step — single file, 2-3 steps):',
-    '  todo_update({op:"init", items:[',
-    '    {id:"todo_1", content:"Read packages/core/src/timeout.ts to locate withTimeout", activeForm:"Reading timeout.ts"},',
-    '    {id:"todo_2", content:"Add negative-timeout guard to withTimeout",                  activeForm:"Adding guard"},',
-    '    {id:"todo_3", content:"Run build to verify the change typechecks",                  activeForm:"Running build", evaluator:"build"}',
-    '  ]})',
-    '  [then proceed with read / edit / bash to execute the plan]',
-    '',
-    'ANTI-PATTERNS for plan commit (NEVER emit any of these on a non-trivial task):',
-    '  BAD (silent narration):    "I\'ll plan first. Step 1: read X. Step 2: edit Y. Step 3: build."  [then directly calls read]',
-    '  BAD (markdown header):     "## Plan\\n- Read X\\n- Edit Y\\n- Run build"                          (markdown is not a tool call)',
-    '  BAD (delayed init):        [reads X, edits Y, builds, THEN calls todo_update at the end]      (the plan list is invisible during the work)',
-    '  GOOD: `todo_update({op:"init", items:[...]})` as the FIRST tool call, BEFORE any read/edit/bash.',
-    '',
-    '- Why this matters: the realtime plan list (TodoListSurface) only renders AFTER `todo_update({op:"init"})` is parsed. Markdown bullets in your text response do not drive the UI — the user sees a blank screen for 30+ seconds while you investigate, cannot intervene, cannot trust you\'re on track. "Plan in markdown only" is structurally equivalent to "no plan at all" from the user\'s point of view.',
   ].join('\n');
 
   const scopeCommitment = [
