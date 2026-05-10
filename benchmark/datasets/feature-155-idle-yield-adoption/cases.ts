@@ -62,8 +62,8 @@
  *
  * ## Sample size
  *
- *   N=5 reps per (alias × case). 4 alias × 3 case × 5 reps = 60 probes
- *   ≈ $1.20 (~$0.02/probe averaged across the alias mix). Strict
+ *   N=5 reps per (alias × case). 5 alias × 3 case × 5 reps = 75 probes
+ *   ≈ $1.50 (~$0.02/probe averaged across the alias mix). Strict
  *   serial within alias to avoid 429.
  *
  *   N=5 (vs FEATURE_148's N=3) because the "no tool call at all"
