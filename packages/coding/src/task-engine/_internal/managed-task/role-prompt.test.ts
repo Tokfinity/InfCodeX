@@ -371,3 +371,133 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(decisionIdx).toBeGreaterThan(capIdx);
   });
 });
+
+// FEATURE_114 v0.7.36 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin.
+//
+// Goal: regression-gate the Scout EMIT TIMING + TRIVIAL-EXEMPTION wording
+// so accidental edits do not silently widen the exemption boundary
+// (which is FEATURE_097 root cause #3 — "Scout treats too many tasks
+// as trivial").
+//
+// Per `benchmark/EVAL_GUIDELINES.md` anti-pattern 5 ("prompt iteration
+// with large-scale experiments"), this slice does NOT pre-emptively
+// rewrite the prompt. The Scout wording is already strong (single-step
+// boundary, review/audit ≥2 files clause, EMIT TIMING anchor); a
+// data-driven decision on whether to strengthen further is the
+// Slice 8b Layer 2 probe (`tests/scout-trivial-exemption.eval.ts`,
+// pending API budget authorization). These Layer 1 unit tests pin
+// the current contract so the probe baseline is stable.
+//
+// Slice 8b probe design (pending, NOT run by this file):
+//   Categories (5 probes each, mock user task + history):
+//     A. Single-step lookups → Scout MUST exit without emit
+//     B. ≥2-file investigations phrased as questions → MUST emit EARLY
+//     C. "Explain how X works" with multi-file scope → MUST emit EARLY
+//   Pre-registered threshold: ≥80% mean across 2 alias families per
+//   category. Drop below threshold → strengthen; above → leave as is.
+describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => {
+  function renderScoutPrompt(overrides: Partial<NonNullable<ManagedRolePromptContext['workspace']>> = {}): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    return createRolePrompt(
+      'scout',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/scout',
+      undefined,
+      buildContext({ provider: 'p', model: 'm', ...overrides }),
+      undefined,
+      false,
+    );
+  }
+
+  it('EMIT TIMING block is present (timing anchor — call EARLY, before main work)', () => {
+    const rendered = renderScoutPrompt();
+    expect(rendered).toContain('EMIT TIMING (CRITICAL — read this carefully)');
+    // Pin the timing anchor — "EARLY — within the first 1-2 scoping turns".
+    expect(rendered).toMatch(/EARLY.*within the first 1-2 scoping turns/);
+    // Pin the contract framing — emit_scout_verdict is a PLAN COMMITMENT,
+    // not a final report.
+    expect(rendered).toContain('PLAN COMMITMENT, not a final report');
+    expect(rendered).toContain('what you PLAN TO DO next, NOT what you have already done');
+  });
+
+  it('ANTI-PATTERN block calls out late emit + post-hoc obligations', () => {
+    const rendered = renderScoutPrompt();
+    expect(rendered).toContain('ANTI-PATTERN (do NOT do this)');
+    expect(rendered).toContain('Call emit_scout_verdict at the END');
+    // The correct flow line — pin the canonical sequence so a future
+    // edit can't drop the explicit transition guidance.
+    expect(rendered).toContain('commit plan EARLY → execute → todo_update at each step');
+  });
+
+  it('TRIVIAL-EXEMPTION boundary is single-step ONLY (typo / single-line edit / single-action lookup / one-sentence answer)', () => {
+    const rendered = renderScoutPrompt();
+    expect(rendered).toContain('TRIVIAL-EXEMPTION (narrow, do not abuse)');
+    // Pin the exact boundary phrase — "exactly ONE distinct execution
+    // step". The prompt source joins lines with `\n  ` (line
+    // continuation), so the phrase spans a line break — match with a
+    // whitespace-tolerant regex. Loosening this (e.g. "≤ 2 steps")
+    // would silently widen the exemption and is the FEATURE_097 root
+    // cause #3 regression we explicitly guard against.
+    expect(rendered).toMatch(/exactly ONE distinct\s+execution step/);
+    expect(rendered).toContain('a single typo fix');
+    expect(rendered).toContain('a single-line edit');
+    expect(rendered).toContain('a single-action');
+    expect(rendered).toContain('a one-sentence answer');
+  });
+
+  it('EVERYTHING-ELSE clause: review/audit/investigation ≥2 files MUST emit EARLY (the FEATURE_097 #3 protection)', () => {
+    const rendered = renderScoutPrompt();
+    // Pin the load-bearing must-emit clause that catches review-style
+    // tasks LLMs are most likely to misclassify as trivial. Removing
+    // any of these phrases re-opens the exemption loophole. The
+    // phrase spans a line break in the source (`including review /`
+    // → `\n  audit / investigation`), match with whitespace tolerance.
+    expect(rendered).toContain('EVERYTHING ELSE');
+    expect(rendered).toMatch(/review \/\s+audit \/ investigation tasks that touch ≥2 files/);
+    expect(rendered).toContain('even when the harness ends up being H0_DIRECT');
+    expect(rendered).toContain('MUST');
+    expect(rendered).toMatch(/emit_scout_verdict EARLY with executionObligations populated/);
+    // The post-emit handoff: continue as H0 executor + call todo_update
+    // at each step transition. Spans a line break — match with
+    // whitespace tolerance.
+    expect(rendered).toMatch(/continue as the H0 executor and call todo_update at each step transition/);
+  });
+
+  it('TRIVIAL-EXEMPTION block belongs to Scout only (does NOT leak into Planner / Generator / Evaluator)', () => {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    for (const role of ['planner', 'generator', 'evaluator'] as const) {
+      const rendered = createRolePrompt(
+        role,
+        userQuestion,
+        decision,
+        undefined,
+        undefined,
+        `kodax/role/${role}`,
+        undefined,
+        buildContext({ provider: 'p', model: 'm' }),
+        undefined,
+        false,
+      );
+      expect(rendered, `role=${role}`).not.toContain('TRIVIAL-EXEMPTION');
+      expect(rendered, `role=${role}`).not.toContain('EMIT TIMING (CRITICAL');
+    }
+  });
+
+  it('block ordering: EMIT TIMING comes after EXECUTION OBLIGATIONS, anchor before SCOPE COMMITMENT context', () => {
+    // The Scout prompt builds the TRIVIAL-EXEMPTION argument in
+    // sequence: SCOPE COMMITMENT (when to escalate) → EXECUTION
+    // OBLIGATIONS (how to populate) → EMIT TIMING (when to call). A
+    // future edit that reorders these could break the rhetorical
+    // structure that drives early emission. Pin the order.
+    const rendered = renderScoutPrompt();
+    const scopeIdx = rendered.indexOf('SCOPE COMMITMENT (hard rule)');
+    const execIdx = rendered.indexOf('EXECUTION OBLIGATIONS:');
+    const emitIdx = rendered.indexOf('EMIT TIMING (CRITICAL');
+    expect(scopeIdx).toBeGreaterThanOrEqual(0);
+    expect(execIdx).toBeGreaterThan(scopeIdx);
+    expect(emitIdx).toBeGreaterThan(execIdx);
+  });
+});
