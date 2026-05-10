@@ -58,6 +58,29 @@ export interface ViewportBudgetOptions {
   historySearch?: ViewportBudgetHistorySearchState | null;
   maxVisibleSelectOptions?: number;
   reviewHint?: string;
+  /**
+   * FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — number of rows
+   * the TodoListSurface will render in the footer. ZERO when the
+   * surface is hidden (`viewModel.shouldRender === false`); otherwise
+   * `viewModel.rows.length` (header row + per-item rows; each row is
+   * a single Ink `<Box flexDirection="row">` so 1:1 row-to-line).
+   *
+   * Pre-fix behaviour: this parameter did not exist. When the plan
+   * list rendered (e.g. 5 rows for Scout header + 4 items), the
+   * transcript window ate the same number of rows it would have
+   * without the list, pushing the composer + status-bar OFF SCREEN.
+   * Bug filed in v0.7.38 user-test session.
+   */
+  todoSurfaceRows?: number;
+  /**
+   * Whether the activityBar slot (containing the spinner + activity
+   * verb + "X/N completed" counter) is rendered at all. The slot
+   * always takes exactly 1 row when visible. Distinct from
+   * `activitySummary` (which only reserves rows when the spinner verb
+   * is present); if the plan-list counter is the ONLY part visible,
+   * `activitySummary` is empty but `activityBarVisible` is still true.
+   */
+  activityBarVisible?: boolean;
 }
 
 export type ViewportBudgetSlotName =
@@ -93,6 +116,8 @@ export interface ViewportBudgetResult {
   overlayRows: number;
   visibleSelectOptions: number;
   reviewHintRows: number;
+  /** Rows reserved for TodoListSurface in the footer (0 when hidden). */
+  todoSurfaceRows: number;
   slots: ViewportBudgetSlot[];
 }
 
@@ -152,14 +177,27 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     historySearch,
     maxVisibleSelectOptions = 5,
     reviewHint,
+    todoSurfaceRows: todoSurfaceRowsRaw = 0,
+    activityBarVisible = false,
   } = options;
+  const todoSurfaceRows = Math.max(0, Math.floor(todoSurfaceRowsRaw));
 
   const headerRows = footerHeaderText
     ? wrapLineCount(footerHeaderText, Math.max(1, terminalWidth - 2))
     : 0;
-  const activityRows = activitySummary
+  // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38): the activityBar
+  // slot in InkREPL.tsx renders whenever EITHER the spinner verb OR
+  // the plan-list counter is visible. If only the counter is shown,
+  // `activitySummary` is empty but the slot still occupies 1 row.
+  // Reserve max(verb-rows, 1) rows when the slot is visible at all,
+  // otherwise the composer + status-bar push off-screen as soon as
+  // the plan list renders without an active spinner verb.
+  const activityVerbRows = activitySummary
     ? wrapLineCount(activitySummary, Math.max(1, terminalWidth - 2))
     : 0;
+  const activityRows = activityBarVisible
+    ? Math.max(1, activityVerbRows)
+    : activityVerbRows;
   const pendingInputRows = pendingInputSummary
     ? wrapLineCount(pendingInputSummary, Math.max(1, terminalWidth - 2))
     : 0;
@@ -274,6 +312,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
   const footerRows =
     headerRows +
     activityRows +
+    todoSurfaceRows +
     pendingInputRows +
     stashNoticeRows +
     notificationRows +
@@ -321,6 +360,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     overlayRows,
     visibleSelectOptions,
     reviewHintRows,
+    todoSurfaceRows,
     slots,
   };
 }

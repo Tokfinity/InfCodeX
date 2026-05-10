@@ -3349,6 +3349,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inputText: footerBudgetInputText,
       footerHeaderText: footerHeaderSummary,
       activitySummary: isTranscriptMode ? undefined : promptBusyText,
+      // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — activityBar
+      // slot in the prompt footer renders whenever EITHER the spinner
+      // verb OR the plan-list "X/N completed" counter is visible.
+      // Mirrors the JSX at the activityBar prop site below.
+      activityBarVisible: isTranscriptMode
+        ? false
+        : Boolean(promptBusyText) || todoPlanViewModel.shouldRender,
+      // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — TodoListSurface
+      // is rendered between activityBar and composer in PromptFooter.
+      // Each viewModel row is a single Ink Box (1 line). Without this
+      // budget reservation the composer + status-bar fall off-screen
+      // as soon as the plan list shows.
+      todoSurfaceRows: isTranscriptMode
+        ? 0
+        : todoPlanViewModel.shouldRender
+          ? todoPlanViewModel.rows.length
+          : 0,
       pendingInputSummary: footerBudgetPendingInputSummary,
       stashNoticeSummary: stashNoticeText,
       notificationSummary: footerNotificationSummary,

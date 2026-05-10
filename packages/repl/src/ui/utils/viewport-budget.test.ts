@@ -216,4 +216,77 @@ describe("viewport-budget", () => {
 
     expect(windowedBudget.messageRows).toBe(inlineBudget.messageRows);
   });
+
+  // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — pin the
+  // composer + status-bar visibility regression that v0.7.38 user
+  // testing surfaced. Prior to this fix the viewport budget did not
+  // reserve rows for the TodoListSurface or the always-visible
+  // activityBar slot, so the moment a plan list rendered the input
+  // bar + status bar disappeared off-screen.
+  it("reserves rows for TodoListSurface so composer + status-bar stay visible", () => {
+    const withoutPlan = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+    });
+    const withPlanList = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      // 5 rows = Scout header + 4 items, the exact case the user hit.
+      todoSurfaceRows: 5,
+      activityBarVisible: true,
+    });
+
+    // 5 plan rows + 1 activityBar row = 6 reserved bottom rows.
+    expect(withPlanList.todoSurfaceRows).toBe(5);
+    expect(withPlanList.activityRows).toBeGreaterThanOrEqual(1);
+    expect(withPlanList.messageRows).toBe(withoutPlan.messageRows - 6);
+    // Footer must include the plan-list rows and an activityBar row,
+    // otherwise composer + status get pushed off-screen.
+    expect(withPlanList.footerRows).toBeGreaterThanOrEqual(
+      withoutPlan.footerRows + 6,
+    );
+  });
+
+  it("reserves activityBar row when only the plan-list counter is visible (no spinner verb)", () => {
+    // The plan-list counter ("X/N completed") shares the activityBar
+    // slot with the spinner verb. When the verb is absent but the
+    // counter is shown, the slot still occupies 1 row; the budget
+    // must account for that even though `activitySummary` is empty.
+    const counterOnly = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      activitySummary: undefined,
+      activityBarVisible: true,
+      todoSurfaceRows: 3,
+    });
+    expect(counterOnly.activityRows).toBe(1);
+    expect(counterOnly.todoSurfaceRows).toBe(3);
+  });
+
+  it("does not reserve plan-list rows when shouldRender is false", () => {
+    const noPlan = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      todoSurfaceRows: 0,
+      activityBarVisible: false,
+    });
+    expect(noPlan.todoSurfaceRows).toBe(0);
+    expect(noPlan.activityRows).toBe(0);
+  });
 });
