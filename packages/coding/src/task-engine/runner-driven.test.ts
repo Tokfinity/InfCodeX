@@ -2125,6 +2125,199 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       expect(v2Targets).not.toContain('kodax/role/generator');
     });
   });
+
+  // FEATURE_114 v0.7.36 Slice 3c — deterministic per-step evaluator.
+  // The runner wraps `todo_update` so a successful pending|in_progress
+  // → completed transition on an item with `evaluator: 'build'|'test'|
+  // 'lint'` triggers the corresponding npm command and threads stderr
+  // back into the tool result. These tests use a stub evaluator runner
+  // (injected via `buildRunnerAgentChain`'s last param) to avoid
+  // spawning real shell commands; the helper's own contract is covered
+  // by `deterministic-evaluator.test.ts`.
+  describe('FEATURE_114 Slice 3c — deterministic per-step evaluator wrap', () => {
+    type StubCall = {
+      hint: 'build' | 'test' | 'lint';
+      cwd: string;
+    };
+
+    function buildStubRunner(calls: StubCall[], outcome: 'pass' | 'fail'): (
+      input: { hint: 'build' | 'test' | 'lint'; cwd: string },
+    ) => Promise<{
+      hint: 'build' | 'test' | 'lint';
+      command: string;
+      status: 'pass' | 'fail' | 'skipped' | 'error';
+      exitCode: number | undefined;
+      stderrTail: string;
+      stdoutTail: string;
+      durationMs: number;
+    }> {
+      return async (input) => {
+        calls.push({ hint: input.hint, cwd: input.cwd });
+        return outcome === 'pass'
+          ? {
+            hint: input.hint,
+            command: `npm run ${input.hint}`,
+            status: 'pass',
+            exitCode: 0,
+            stderrTail: '',
+            stdoutTail: '',
+            durationMs: 12,
+          }
+          : {
+            hint: input.hint,
+            command: `npm run ${input.hint}`,
+            status: 'fail',
+            exitCode: 1,
+            stderrTail: 'TypeError: cannot read x of undefined',
+            stdoutTail: '',
+            durationMs: 18,
+          };
+      };
+    }
+
+    async function buildChainWithEvaluator(
+      stubCalls: StubCall[],
+      outcome: 'pass' | 'fail',
+    ): Promise<{
+      chain: ReturnType<typeof buildRunnerAgentChain>;
+      todoStore: import('./todo-store.js').TodoStore;
+    }> {
+      const { createTodoStore } = await import('./todo-store.js');
+      const todoStore = createTodoStore();
+      const stub = buildStubRunner(stubCalls, outcome);
+      // Production wires `todoStore` into baseCtx so the underlying
+      // todo_update tool handler can read it via `ctx.todoStore`. Mirror
+      // that here so the wrapper sees real status transitions instead
+      // of the not-active error path.
+      const ctxWithStore: KodaXToolExecutionContext = { ...makeCtx(), todoStore };
+      const chain = buildRunnerAgentChain(
+        ctxWithStore,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        todoStore,
+        undefined,
+        undefined,
+        '/test/cwd',
+        stub,
+      );
+      return { chain, todoStore };
+    }
+
+    function findTodoUpdate(chain: ReturnType<typeof buildRunnerAgentChain>): RunnableTool {
+      const tool = chain.worker.tools?.find((t) => t.name === 'todo_update');
+      if (!tool) throw new Error('todo_update tool not on worker');
+      return tool;
+    }
+
+    it('triggers the evaluator when an item with evaluator hint flips to completed', async () => {
+      const calls: StubCall[] = [];
+      const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
+      todoStore.init([
+        { id: 't1', content: 'Build the package', evaluator: 'build' },
+        { id: 't2', content: 'Run tests' },
+      ]);
+      const tool = findTodoUpdate(chain);
+      // Set t1 to completed via the wrapped tool. Snapshot pre-state
+      // is captured by the wrapper; post-state shows status='completed'
+      // with evaluator='build', so the stub fires.
+      const result = await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0].hint).toBe('build');
+      expect(calls[0].cwd).toBe('/test/cwd');
+      expect(typeof result.content).toBe('string');
+      expect(String(result.content)).toContain('[evaluator:t1]');
+      expect(String(result.content)).toContain('[deterministic-evaluator:build] pass');
+    });
+
+    it('threads fail stderr tail into the tool result so the LLM sees it', async () => {
+      const calls: StubCall[] = [];
+      const { chain, todoStore } = await buildChainWithEvaluator(calls, 'fail');
+      todoStore.init([{ id: 't1', content: 'Run tests', evaluator: 'test' }]);
+      const tool = findTodoUpdate(chain);
+      const result = await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      expect(calls[0].hint).toBe('test');
+      expect(String(result.content)).toContain('fail');
+      expect(String(result.content)).toContain('TypeError: cannot read x of undefined');
+    });
+
+    it('does NOT trigger the evaluator on items without an evaluator hint', async () => {
+      const calls: StubCall[] = [];
+      const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
+      todoStore.init([{ id: 't1', content: 'Plain step (no hint)' }]);
+      const tool = findTodoUpdate(chain);
+      await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      expect(calls).toHaveLength(0);
+    });
+
+    it('does NOT re-trigger the evaluator when the item was already completed (no transition)', async () => {
+      const calls: StubCall[] = [];
+      const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
+      todoStore.init([{ id: 't1', content: 'Build', evaluator: 'build' }]);
+      const tool = findTodoUpdate(chain);
+      // First flip — fires.
+      await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      // Second call attempting the same transition — already-completed,
+      // wrapper short-circuits.
+      await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      expect(calls).toHaveLength(1);
+    });
+
+    it('no-op when runtimeCwd is omitted (legacy callers / test fixtures)', async () => {
+      const calls: StubCall[] = [];
+      const { createTodoStore } = await import('./todo-store.js');
+      const todoStore = createTodoStore();
+      const stub = buildStubRunner(calls, 'pass');
+      const ctxWithStore: KodaXToolExecutionContext = { ...makeCtx(), todoStore };
+      const chain = buildRunnerAgentChain(
+        ctxWithStore,
+        {},
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        todoStore,
+        undefined,
+        undefined,
+        // runtimeCwd intentionally omitted
+        undefined,
+        stub,
+      );
+      todoStore.init([{ id: 't1', content: 'Build', evaluator: 'build' }]);
+      const tool = chain.worker.tools?.find((t) => t.name === 'todo_update');
+      if (!tool) throw new Error('todo_update tool missing');
+      await tool.execute(
+        { id: 't1', status: 'completed' },
+        { agent: { name: 'worker' } as unknown as import('@kodax-ai/agent').Agent },
+      );
+      expect(calls).toHaveLength(0);
+    });
+  });
 });
 
 describe('Shard 6d-T — Scout skillMap injected into Generator + Evaluator instructions', () => {
