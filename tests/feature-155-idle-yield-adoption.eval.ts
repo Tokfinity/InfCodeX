@@ -36,8 +36,8 @@
  *
  * ## Sample size
  *
- *   N=5 reps per (alias × case). 4 alias × 3 case × 5 reps = 60
- *   probes ≈ $1.20. Strict serial within alias to avoid 429.
+ *   N=5 reps per (alias × case). 5 alias × 3 case × 5 reps = 75
+ *   probes ≈ $1.50. Strict serial within alias to avoid 429.
  *
  * ## Run
  *
@@ -84,6 +84,7 @@ const PROBE_ALIASES: ModelAlias[] = [
   'ds/v4pro',
   'kimi',
   'mmx/m27',
+  'zhipu/glm51',
 ];
 
 const RUNNABLE_ALIASES = availableAliases(...PROBE_ALIASES);
