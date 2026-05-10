@@ -181,8 +181,8 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
  * This design intentionally keeps the runner unaware of a pause flag:
  * the queue + iteration-boundary yield is enough to deliver the FEATURE_111
  * UX without introducing a stateful pause/resume machinery in the agent
- * runner. A future explicit `sleep` / `await_child_task` (FEATURE_119)
- * tool extends this to background-priority drain via Sleep gating.
+ * runner. FEATURE_155 (v0.7.39) idle-yield extends this to background-
+ * priority drain via the runner-driven outer loop's wake event.
  */
 export type StreamingInterruptAction =
   | { kind: "none" }

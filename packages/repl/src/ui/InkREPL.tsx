@@ -6632,7 +6632,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // FEATURE_149 Phase B1b (v0.7.38) — fast-abort path.
         //
         // When the in-flight tool is tagged `interruptBehavior: 'cancel'`
-        // (e.g., bash, await_child_task), waiting for it to finish is
+        // (e.g., bash, dispatch_child_task), waiting for it to finish is
         // antagonistic to the user's redirect. Sequence:
         //   1) queue the new prompt FIRST (so it survives the abort),
         //   2) `abort({ preservePendingInputs: true })` — Substrate's

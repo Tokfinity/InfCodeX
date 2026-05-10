@@ -25,13 +25,11 @@ import type {
   KodaXTaskRoutingDecision,
   KodaXTaskVerificationContract,
 } from '../types.js';
-// FEATURE_155 (v0.7.39) — idle-yield prompt gating. When the runtime
-// flag is on, the Worker prompt teaches a lighter-weight wait mechanic
-// (text-only turn end, automatic resume on `<task-completed>`) and
-// retires the FEATURE_148 anti-immediate-await rule. When OFF, the
-// prompt is byte-identical to v0.7.38, so a flag-OFF deployment cannot
-// drift behaviorally from the previous release.
-import { isIdleYieldEnabled } from '../task-engine/_internal/managed-task/idle-yield.js';
+// FEATURE_155 (v0.7.39) — Worker prompt teaches idle-yield as the
+// canonical wait mechanic. Slice C3 retired the flag-gated OFF branch
+// (the v0.7.38 `await_child_task` wording) because Slice C1 removed
+// the underlying tool — any prompt that mentioned it would point at
+// a non-existent capability.
 
 export const WORKER_AGENT_NAME = 'kodax-worker';
 
@@ -77,31 +75,17 @@ export function buildWorkerInstructions(
     '- Workspace discipline: scratch files go under `.agent/tmp/` (relative to git root). NEVER write scratch to project root or system tmp.',
   ].join('\n');
 
-  // FEATURE_155 (v0.7.39) — when idle-yield is active, the dispatch
-  // section teaches the lighter "exit your turn text-only, runner
-  // resumes you on completion" mechanic and replaces the FEATURE_148
-  // anti-immediate-await rule (whose "out of useful work → await"
-  // branch is now obsolete: idle-yield is the right answer there).
-  // When the flag is off the v0.7.38 wording is preserved verbatim so
-  // the legacy path is byte-identical.
-  const idleYieldActive = isIdleYieldEnabled();
-  const dispatchRules = idleYieldActive
-    ? [
-      'DISPATCH RULES (`dispatch_child_task` — idle-yield model, FEATURE_155 v0.7.39):',
-      '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
-      '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
-      '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
-      '- IDLE-YIELD (preferred wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
-      '- DO NOT call `await_child_task` to wait. Idle-yield is the right path. (`await_child_task` exists as a transitional fallback only; using it blocks the conversation and is being removed.)',
-    ].join('\n')
-    : [
-      'DISPATCH RULES (`dispatch_child_task` / `await_child_task`):',
-      '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
-      '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs. Reclaim the result with `await_child_task({task_id})` when needed.',
-      '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
-      '- Pattern B (FEATURE_119): `dispatch_child_task` returns a `task_id:<id>` immediately and runs in the background. A `<task-completed>` notification arrives at the next yielding tool boundary; you may also `await_child_task` proactively when you need the result.',
-      '- ANTI-PATTERN — DO NOT IMMEDIATELY AWAIT (FEATURE_148): after `dispatch_child_task` returns a `task_id:<id>`, your IMMEDIATE next move must NOT be `await_child_task` on that id when there is OTHER USEFUL WORK to do. Useful work includes: dispatching ADDITIONAL independent children, doing the SIDE-READS the user asked for in the same request, drafting a synthesis plan in text, OR reading context that will let you act on the child result faster once it arrives. Only call `await_child_task` when (a) you actually need the result to proceed and have run out of interleaved work, or (b) the user explicitly asked for the dispatched probe and nothing else. Concretely: if the user asks "do X (slow) AND also do Y (cheap)" — dispatch X, then DO Y, then await X. Awaiting X immediately after dispatch and only then doing Y collapses Pattern B back to a sync call with extra steps.',
-    ].join('\n');
+  // FEATURE_155 (v0.7.39) — Worker waits via idle-yield. The
+  // `await_child_task` tool was removed in Slice C1; the prompt
+  // teaches the only remaining wait mechanic (text-only turn end,
+  // runner resumes on `<task-completed>`).
+  const dispatchRules = [
+    'DISPATCH RULES (`dispatch_child_task` — idle-yield model, FEATURE_155 v0.7.39):',
+    '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
+    '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
+    '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
+    '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
+  ].join('\n');
 
   const fanOutPlanGranularity = [
     'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
@@ -120,9 +104,7 @@ export function buildWorkerInstructions(
     '    BAD: items:[{content:"Fan out review across 5 packages"}]                          (1 item collapses N children)',
     '    BAD: items:[{content:"Review all packages"},{content:"Aggregate findings"}]        (2 items hides per-package progress)',
     '    BAD: any items array shorter than the number of dispatch_child_task calls.',
-    idleYieldActive
-      ? '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).'
-      : '- Mark each item `in_progress` just before the corresponding `await_child_task`, and `completed` when that child returns successfully (`failed` if the child crashes / times out).',
+    '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
     '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
   ].join('\n');
 

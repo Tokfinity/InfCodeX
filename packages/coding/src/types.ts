@@ -1388,15 +1388,15 @@ export interface KodaXToolExecutionContext {
   /**
    * FEATURE_119 v0.7.36 Pattern B: registry of in-flight async child
    * dispatches. When set, `dispatch_child_task` runs in fire-and-forget
-   * mode (returns a `task_id` immediately without awaiting), and
-   * `await_child_task(task_id)` resolves the registered promise on demand.
-   * Worker may launch multiple children in parallel and explicitly await
-   * each when its result is needed, so the worker isn't blocked while a
-   * long-running child (e.g. a 90s `npm test`) is in flight.
+   * mode (returns a `task_id` immediately without awaiting). The Worker
+   * launches multiple children in parallel; under FEATURE_155 (v0.7.39)
+   * idle-yield, the runner-driven outer loop awaits the registered
+   * promises on the Worker's behalf and splices a `<task-completed>`
+   * banner into the next user turn — the Worker no longer pulls results
+   * itself (the legacy `await_child_task` tool was removed in Slice C1).
    *
    * The map's value is the executor's full result promise, identical to
-   * what the legacy synchronous dispatch returned. `await_child_task` calls
-   * `delete(taskId)` on the map after resolving.
+   * what the legacy synchronous dispatch returned.
    *
    * When `undefined`, dispatch falls back to the legacy synchronous path
    * (await inline, return finding text). The registry is populated by

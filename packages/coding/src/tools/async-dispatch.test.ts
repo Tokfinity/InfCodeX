@@ -211,45 +211,20 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
   });
 });
 
-// FEATURE_155 (v0.7.39 Slice B1) — dispatch banner branches on
-// KODAX_IDLE_YIELD. Default is now ON (Slice B1.D); the v0.7.38
-// banner pointing the LLM at `await_child_task` is reachable only
-// through the explicit `KODAX_IDLE_YIELD=false` opt-out.
-describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', () => {
-  let prevIdleYield: string | undefined;
+// FEATURE_155 (v0.7.39 Slice C3) — dispatch banner is always
+// idle-yield. The `KODAX_IDLE_YIELD` flag was retired alongside
+// `await_child_task` (Slice C1) — the legacy banner that pointed
+// the LLM at the deleted tool would teach a non-existent capability.
+describe('FEATURE_155 v0.7.39 — dispatch banner is always idle-yield (Slice C3)', () => {
   beforeEach(() => {
-    prevIdleYield = process.env.KODAX_IDLE_YIELD;
     mockExec.mockReset();
     _resetMessageQueueForTests();
   });
   afterEach(() => {
-    if (prevIdleYield === undefined) delete process.env.KODAX_IDLE_YIELD;
-    else process.env.KODAX_IDLE_YIELD = prevIdleYield;
     _resetMessageQueueForTests();
   });
 
-  it('opt-out (KODAX_IDLE_YIELD=false): banner instructs the LLM to call await_child_task', async () => {
-    process.env.KODAX_IDLE_YIELD = 'false';
-    let resolveExec!: (r: KodaXChildExecutionResult) => void;
-    mockExec.mockReturnValue(
-      new Promise<KodaXChildExecutionResult>((resolve) => {
-        resolveExec = resolve;
-      }),
-    );
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
-    const banner = await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'iy-off', objective: 'probe' }, buildBaseCtx(registry)),
-    );
-    expect(banner).toContain('task_id:iy-off');
-    expect(banner).toContain('await_child_task({task_id:"iy-off"})');
-    // No idle-yield wording on the legacy path.
-    expect(banner).not.toContain('end your turn with one short status sentence');
-    resolveExec(buildSuccessResult('iy-off', ['ok']));
-    await registry.get('iy-off');
-  });
-
-  it('default (idle-yield ON): banner instructs the LLM to idle-yield and explicitly forbids await_child_task', async () => {
-    delete process.env.KODAX_IDLE_YIELD;
+  it('banner instructs the LLM to idle-yield and never mentions the deleted await_child_task tool', async () => {
     let resolveExec!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
       new Promise<KodaXChildExecutionResult>((resolve) => {
@@ -263,9 +238,8 @@ describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', ()
     expect(banner).toContain('task_id:iy-on');
     expect(banner).toContain('end your turn with one short status sentence and NO tool calls');
     expect(banner).toContain('<task-completed task_id="iy-on">');
-    expect(banner).toContain('Do NOT call await_child_task to wait');
-    // Make sure the legacy "then call await_child_task({task_id})" line is gone.
-    expect(banner).not.toContain('then call await_child_task({task_id:"iy-on"})');
+    // The deleted tool's name must not appear anywhere in the banner.
+    expect(banner).not.toContain('await_child_task');
     resolveExec(buildSuccessResult('iy-on', ['ok']));
     await registry.get('iy-on');
   });

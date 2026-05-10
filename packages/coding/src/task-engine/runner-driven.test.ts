@@ -2206,11 +2206,9 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       expect(workerTools).toContain('exit_plan_mode');
       // Async dispatch (FEATURE_119 Pattern B parity).
       expect(workerTools).toContain('dispatch_child_task');
-      // FEATURE_155 v0.7.39 Slice B2 — `await_child_task` is removed
-      // from the Worker's tool list. Idle-yield is the canonical
-      // wait mechanic for V2 (default ON since Slice B1.D); V1
-      // chains keep the tool as the transitional fallback for
-      // `KODAX_IDLE_YIELD=false` users.
+      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` was deleted
+      // entirely. Idle-yield (always-on since Slice C3) is the only
+      // wait mechanic for child dispatches.
       expect(workerTools).not.toContain('await_child_task');
       // Worker MUST NOT carry the V1 emit tools — those belong to the
       // legacy roles only.
@@ -3790,9 +3788,8 @@ describe('H1 structural resume — buildStructuralResumeSeed (v0.7.26)', () => {
 // =============================================================================
 // FEATURE_155 (v0.7.39) Slice A2 — runner-driven idle-yield outer loop
 // =============================================================================
-// End-to-end integration: with `KODAX_IDLE_YIELD=true`, when the Worker
-// dispatches a child and exits with a text-only turn (no tool calls),
-// the outer loop must
+// End-to-end integration: when the Worker dispatches a child and exits
+// with a text-only turn (no tool calls), the outer loop must
 //   (a) detect idle-yield via `detectIdleYield`,
 //   (b) wait for the child to settle via `waitForWakeEvent`,
 //   (c) splice the canonical `<task-completed>` banner into the
@@ -3801,12 +3798,11 @@ describe('H1 structural resume — buildStructuralResumeSeed (v0.7.26)', () => {
 //
 // The single test exercises the full happy path (probe child completes
 // → Worker emits handoff → Evaluator accepts) with the child-executor
-// mocked so we control settlement timing precisely. No production
-// scenario today triggers idle-yield because the Worker prompt still
-// mandates `await_child_task` — Slice B1 lands the prompt change. This
-// test is the only place in v0.7.39 that drives the outer-loop wiring
-// through a real `Runner.run` -> idle-yield -> resume -> `Runner.run`
-// cycle.
+// mocked so we control settlement timing precisely. Idle-yield is
+// always-on as of Slice C3 (the `KODAX_IDLE_YIELD` env-flag gate was
+// retired); this test is the only place that drives the outer-loop
+// wiring through a real `Runner.run` -> idle-yield -> resume ->
+// `Runner.run` cycle.
 
 function buildSuccessChildResult(
   childId: string,
@@ -3840,15 +3836,12 @@ function buildSuccessChildResult(
 
 describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
   let prevHarnessV2: string | undefined;
-  let prevIdleYield: string | undefined;
   let prevAsyncDispatch: string | undefined;
 
   beforeEach(() => {
     prevHarnessV2 = process.env.KODAX_HARNESS_V2;
-    prevIdleYield = process.env.KODAX_IDLE_YIELD;
     prevAsyncDispatch = process.env.KODAX_ASYNC_DISPATCH;
     process.env.KODAX_HARNESS_V2 = 'true';
-    process.env.KODAX_IDLE_YIELD = 'true';
     // Ensure the dispatch tool takes the async / fire-and-forget path
     // — the sync path runs the child inline and never reaches the
     // idle-yield branch.
@@ -3860,8 +3853,6 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
   afterEach(() => {
     if (prevHarnessV2 === undefined) delete process.env.KODAX_HARNESS_V2;
     else process.env.KODAX_HARNESS_V2 = prevHarnessV2;
-    if (prevIdleYield === undefined) delete process.env.KODAX_IDLE_YIELD;
-    else process.env.KODAX_IDLE_YIELD = prevIdleYield;
     if (prevAsyncDispatch === undefined) delete process.env.KODAX_ASYNC_DISPATCH;
     else process.env.KODAX_ASYNC_DISPATCH = prevAsyncDispatch;
     _resetMessageQueueForTests();
@@ -3982,60 +3973,11 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     expect(result.lastText).toBe('Imports of foo: 3.');
   }, 30_000);
 
-  it('opt-out (KODAX_IDLE_YIELD=false): same Worker exit shape returns immediately without a resume (legacy v0.7.38 path)', async () => {
-    process.env.KODAX_IDLE_YIELD = 'false';
-
-    let resolveChild!: (r: KodaXChildExecutionResult) => void;
-    mockExec.mockReturnValue(
-      new Promise<KodaXChildExecutionResult>((resolve) => {
-        resolveChild = resolve;
-      }),
-    );
-
-    const workerTurns: number[] = [];
-    const mock = makeChainMockLlm({
-      worker: (turn) => {
-        workerTurns.push(turn);
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'w-1',
-              name: 'dispatch_child_task',
-              input: {
-                id: 'probe-2',
-                objective: 'count imports of foo',
-                read_only: true,
-              },
-            }],
-          };
-        }
-        // Simulate the exact same idle-yield exit shape as the
-        // happy-path test. With the flag explicitly off, the outer
-        // loop must NOT call waitForWakeEvent — `Runner.run` returns
-        // once and the run terminates with whatever state it has.
-        return {
-          textBlocks: [{ text: 'Done without waiting (flag off).' }],
-        };
-      },
-      evaluator: () => ({ textBlocks: [{ text: 'fallback' }] }),
-    });
-
-    const startedAt = Date.now();
-    const result = await runManagedTaskViaRunner(makeOptions(), 'count imports of foo', mock);
-    const elapsedMs = Date.now() - startedAt;
-
-    // Settle the child after the run already returned — proves the
-    // outer loop did NOT block on it.
-    resolveChild(buildSuccessChildResult('probe-2', ['ignored']));
-
-    expect(workerTurns).toEqual([1, 2]);
-    // Sanity floor: even mocked, runManagedTaskViaRunner does heavy
-    // setup. The point of this assertion is "did NOT wait the full
-    // child settle". Pick a generous bound that's still well under
-    // any plausible idle-yield wait time.
-    expect(elapsedMs).toBeLessThan(10_000);
-    // Result is well-formed — flag-off path is the v0.7.38 opt-out.
-    expect(result.signal).toBeDefined();
-  }, 30_000);
+  // FEATURE_155 v0.7.39 Slice C3 — the `KODAX_IDLE_YIELD=false` opt-out
+  // test was retired here. With `await_child_task` removed (Slice C1)
+  // there is no working off-path: setting the flag would leave the
+  // runner with a Worker prompt that exits text-only but no resumer
+  // to wake it. The flag is now hard-coded ON in `isIdleYieldEnabled`,
+  // and the always-on outer loop is fully covered by the happy-path
+  // test above.
 });
