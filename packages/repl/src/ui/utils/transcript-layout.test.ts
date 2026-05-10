@@ -556,6 +556,28 @@ describe("transcript-layout", () => {
     expect(text).not.toContain("[AMA H2");
   });
 
+  it("uses [AMA Worker] preflight prefix on V2 (managedWorkerTitle === 'Worker')", () => {
+    // FEATURE_114 v0.7.38 Slice 7 — Worker is the V2 entry agent and
+    // the runner emits `activeWorkerTitle: 'Worker'` on preflight.
+    // The transcript spinner must reflect that instead of falling
+    // back to the V1 hardcoded 'Scout'.
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 80,
+      isLoading: true,
+      isThinking: true,
+      thinkingCharCount: 42,
+      managedAgentMode: "ama",
+      managedPhase: "preflight",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Worker",
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("[AMA Worker] 42 chars...");
+    expect(text).not.toContain("[AMA Scout");
+  });
+
   it("uses a neutral routing prefix before Scout confirms the final harness", () => {
     const rows = buildTranscriptRows({
       items: [],

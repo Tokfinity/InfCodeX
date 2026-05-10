@@ -57,7 +57,14 @@ export function formatManagedTaskLiveStatusLabel(
 
   if (status.activeWorkerTitle) {
     if (status.phase === "preflight") {
-      return trimmedNote ? `[Scout] ${trimmedNote}` : "[Phase] Scout preflight";
+      // FEATURE_114 v0.7.38 Slice 7 — use the runner-supplied title
+      // instead of the V1 hardcoded "Scout". Under V2 the preflight
+      // emit carries `activeWorkerTitle: 'Worker'`; this keeps the V1
+      // path bit-for-bit ('Scout' in → '[Scout]' out) while letting
+      // V2 render `[Worker] analyzing task` correctly.
+      return trimmedNote
+        ? `[${status.activeWorkerTitle}] ${trimmedNote}`
+        : `[Phase] ${status.activeWorkerTitle} preflight`;
     }
     if (status.phase === "routing") {
       return trimmedNote ? `[Routing] ${trimmedNote}` : "[Routing]";
@@ -75,6 +82,9 @@ export function formatManagedTaskLiveStatusLabel(
   }
 
   if (status.phase === "preflight") {
+    // No activeWorkerTitle on this preflight emit (defensive — runner
+    // always supplies one). Keep the V1 fallback string so legacy
+    // call sites that omit the title still render something sensible.
     return "[Phase] Scout preflight";
   }
 
@@ -88,7 +98,13 @@ export function formatManagedTaskBreadcrumb(
   const note = options?.expanded ? (status.detailNote ?? status.note) : status.note;
   const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
   const prefix = `${status.agentMode.toUpperCase()} ${harness}`;
-  const scoutPrefix = `${status.agentMode.toUpperCase()} Scout`;
+  // FEATURE_114 v0.7.38 Slice 7 — preflight breadcrumb derives the
+  // role label from the runner-supplied title. V1 keeps "AMA Scout";
+  // V2 renders "AMA Worker". When the title is missing (legacy
+  // breadcrumb call), fall back to "Scout" so existing transcripts
+  // don't regress.
+  const preflightRole = status.activeWorkerTitle ?? "Scout";
+  const preflightPrefix = `${status.agentMode.toUpperCase()} ${preflightRole}`;
   const routingPrefix = `${status.agentMode.toUpperCase()} Routing`;
   const roundSuffix = status.currentRound && status.maxRounds && status.currentRound > 1
     ? ` - Round ${status.currentRound}/${status.maxRounds}`
@@ -100,7 +116,9 @@ export function formatManagedTaskBreadcrumb(
     case "starting":
       return note ? `${prefix} - ${note}` : `${prefix} - Managed task starting`;
     case "preflight":
-      return note ? `${scoutPrefix} - ${note}` : `${scoutPrefix} - Scout preflight starting`;
+      return note
+        ? `${preflightPrefix} - ${note}`
+        : `${preflightPrefix} - ${preflightRole} preflight starting`;
     case "round":
       return note ? `${prefix} - ${note}` : `${prefix} - Managed task round update${roundSuffix}`;
     case "worker":

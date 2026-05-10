@@ -119,6 +119,31 @@ describe("live-streaming", () => {
     })).toBe("[Scout] analyzing task complexity");
   });
 
+  it("renders [Worker] in V2 preflight live labels (FEATURE_114 v0.7.38)", () => {
+    // V2 entry is chain.worker; the runner now emits Worker on
+    // preflight so the live label must follow the supplied title
+    // instead of the V1 hardcoded "Scout".
+    expect(formatManagedTaskLiveStatusLabel({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      activeWorkerTitle: "Worker",
+      phase: "preflight",
+      note: "Worker analyzing task",
+    })).toBe("[Worker] analyzing task");
+  });
+
+  it("renders V2 preflight breadcrumb as 'AMA Worker - …'", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      activeWorkerTitle: "Worker",
+      currentRound: 0,
+      maxRounds: 8,
+      phase: "preflight",
+      note: "Worker analyzing task",
+    })).toBe("AMA Worker - Worker analyzing task");
+  });
+
   it("keeps worker completion notes in managed-task live labels", () => {
     expect(formatManagedTaskLiveStatusLabel({
       agentMode: "ama",
