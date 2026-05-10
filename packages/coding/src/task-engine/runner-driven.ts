@@ -67,6 +67,12 @@ import {
   SCOUT_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../agents/task-engine-agents.js';
+// FEATURE_114 v0.7.36 — gates the AMA Harness V2 single-loop path.
+// Returns false when `KODAX_HARNESS_V2` is unset or anything other than
+// 'true' (case-insensitive). Slice 3b consumes this in two places:
+// (a) entry-agent selection (chain.scout vs chain.worker), and
+// (b) Evaluator's revise handoff target (Generator vs Worker).
+import { isHarnessV2Enabled } from '../agents/worker-role-prompt.js';
 
 import { resolveProvider } from '../providers/index.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
@@ -889,6 +895,24 @@ function wrapEmitterWithRecorder(
                 revisesSoFar + 1,
               );
             }
+          }
+        }
+        // FEATURE_114 v0.7.36 Slice 3b — V2 revise routing (post-pass).
+        // `resolveHandoffTarget` and the V1 ceiling-violation /
+        // H1-cap rewrites above target Generator as the "executor"
+        // anchor. When V2 is active the executor is Worker, so any
+        // path that ended up with handoffTarget=Generator after the
+        // V1 logic gets rewritten to Worker here. Idempotent and
+        // post-pass so the V1 rewrites keep their literal control
+        // flow under the flag-off baseline.
+        if (slot === 'verdict' && isHarnessV2Enabled()) {
+          const v2EmitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
+          if (v2EmitterMeta.handoffTarget === GENERATOR_AGENT_NAME) {
+            const v2RewrittenMetadata: ProtocolEmitterMetadata = {
+              ...v2EmitterMeta,
+              handoffTarget: WORKER_AGENT_NAME,
+            };
+            result = { ...result, metadata: v2RewrittenMetadata as unknown as Record<string, unknown> };
           }
         }
         recorder[slot] = result.metadata as unknown as ProtocolEmitterMetadata;
@@ -2417,12 +2441,27 @@ export function buildRunnerAgentChain(
   const worker: WritableAgent = {
     name: WORKER_AGENT_NAME,
     instructions: () => {
-      // Mirror Generator's pendingFailedReset consumption: when the
-      // Evaluator returned `revise` and re-dispatched Worker, drop any
-      // failed → pending visual reset BEFORE the Worker turn starts so
-      // the user sees the ● → ✗ → ☐ → ● sequence across the retry
-      // boundary. Slice 3b populates `pendingFailedResetRef` from the
-      // V2 evaluator-revise transition.
+      // FEATURE_114 v0.7.36 Slice 3b — Worker resume handling.
+      //
+      // Order matters: build the prompt BEFORE consuming the ref so
+      // the role-prompt context factory's `isResumeAfterReviseFailure`
+      // read sees the armed state. If we reset first, the
+      // contextFactory reads `false` and the Worker prompt loses the
+      // retrospective sentence on the retry turn.
+      //
+      // 1. Build prompt — contextFactory reads pendingFailedResetRef.current
+      //    and writes ctx.isResumeAfterReviseFailure when role==='worker'.
+      const resolved = resolveRoleInstructions(
+        'worker',
+        WORKER_AGENT_NAME,
+        WORKER_INSTRUCTIONS_FALLBACK,
+        recorder,
+        promptContext,
+        verification,
+      );
+      // 2. Visual reset + ref clear. Mirrors Generator's same-turn
+      //    consumption (kept identical so the retry UX is bit-for-bit
+      //    consistent across V1 and V2 — the user sees ● → ✗ → ☐ → ●).
       if (
         pendingFailedResetRef
         && pendingFailedResetRef.current
@@ -2431,14 +2470,7 @@ export function buildRunnerAgentChain(
         todoStore.resetFailed();
         pendingFailedResetRef.current = false;
       }
-      return resolveRoleInstructions(
-        'worker',
-        WORKER_AGENT_NAME,
-        WORKER_INSTRUCTIONS_FALLBACK,
-        recorder,
-        promptContext,
-        verification,
-      );
+      return resolved;
     },
     tools: [
       handoffEmit,
@@ -2487,17 +2519,28 @@ export function buildRunnerAgentChain(
   const generatorHandoffs: Handoff[] = [
     { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
   ];
-  const evaluatorHandoffs: Handoff[] = [
-    { target: generator, kind: 'continuation', description: 'revise — retry execution' },
-    { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
-  ];
-  // FEATURE_114 v0.7.36 — Worker hand-off graph. Worker emits
-  // `emit_handoff` and continues to Evaluator. The Evaluator → Worker
-  // revise edge is wired in Slice 3b alongside the entry-agent swap;
-  // doing so here would (harmlessly) create a parallel revise target
-  // that the V1 path never selects, but adding it under the active
-  // V2 flag keeps the V1 evaluatorHandoffs literal pristine and the
-  // V2 transition reviewable as a single change.
+  // FEATURE_114 v0.7.36 Slice 3b — Evaluator's revise handoff target
+  // depends on which executor is active for this run. V1: revise →
+  // Generator. V2: revise → Worker. The handoff list always carries
+  // Planner (replan path: works for both V1 and V2 H2 escalation) and
+  // exactly one executor target; the LLM-driven handoff selection
+  // route via `resolveHandoffTarget` rewrite (verdict-slot wrapper
+  // below) targets the same executor literally.
+  //
+  // Reading `isHarnessV2Enabled()` at chain-build time is safe: a run
+  // can't change harness mid-flight (the flag is a process-level
+  // env var, not per-request), so the chain's structural target
+  // matches the runtime's selected entry agent.
+  const v2ActiveAtChainBuild = isHarnessV2Enabled();
+  const evaluatorHandoffs: Handoff[] = v2ActiveAtChainBuild
+    ? [
+      { target: worker, kind: 'continuation', description: 'V2 revise — retry execution via Worker' },
+      { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
+    ]
+    : [
+      { target: generator, kind: 'continuation', description: 'revise — retry execution' },
+      { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
+    ];
   const workerHandoffs: Handoff[] = [
     { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
   ];
@@ -4768,6 +4811,20 @@ async function runManagedTaskViaRunnerInner(
       // Pre-FEATURE_143 this was stitched onto the user prompt head;
       // see runner-driven.ts:promptWithOverlay for the migration.
       promptOverlay: promptOverlay,
+      // FEATURE_114 v0.7.36 Slice 3b — Worker resume signal.
+      // `pendingFailedResetRef.current === true` means the Evaluator
+      // returned `revise` on the previous turn AND the verdict-slot
+      // wrapper armed the failed→pending visual reset. The Worker
+      // prompt picks this up via `worker-role-prompt.ts` → prepended
+      // retrospective sentence so the LLM treats prior `failed` items
+      // as ground truth on the retry. Only relevant for `role==='worker'`;
+      // legacy roles ignore the field. Read at factory invocation time
+      // (every Runner turn) so the signal stays fresh; the Worker
+      // instructions closure consumes the ref AFTER prompt resolution
+      // so this read sees the armed state.
+      isResumeAfterReviseFailure: role === 'worker'
+        ? pendingFailedResetRef.current === true
+        : undefined,
     };
     // v0.7.26 C4 parity — surface the caller's skill invocation + the
     // on-disk artefact paths so role prompts can quote a stable filesystem
@@ -5022,13 +5079,25 @@ async function runManagedTaskViaRunnerInner(
   // first unfinished role. The role-prompt factory reads the seeded
   // recorder slots so planner/generator/evaluator see `scoutScope` +
   // `previousRoleSummaries` on turn 1, matching what they'd see mid-run.
+  //
+  // FEATURE_114 v0.7.36 — when `KODAX_HARNESS_V2=true` AND the run is
+  // a fresh start (no structural resume), the AMA Harness V2 single-
+  // loop entry is `chain.worker` instead of `chain.scout`. V2 resume
+  // is intentionally out of scope for v0.7.38 (the V2 entry path
+  // doesn't yet have a checkpoint shape — checkpoints carry
+  // scout/contract/handoff slots, not worker slots). When the flag is
+  // off the literal V1 entry-agent select is preserved bit-for-bit so
+  // the legacy path stays a verbatim baseline.
+  const harnessV2Active = isHarnessV2Enabled();
   const entryAgent: Agent = structuralResumeSeed
     ? (structuralResumeSeed.startingRole === 'generator'
       ? chain.generator
       : structuralResumeSeed.startingRole === 'planner'
         ? chain.planner
         : chain.scout)
-    : chain.scout;
+    : harnessV2Active
+      ? chain.worker
+      : chain.scout;
   const runResult = await Runner.run(entryAgent, runnerInput, {
     llm,
     abortSignal: options.abortSignal,
