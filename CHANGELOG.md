@@ -8,6 +8,21 @@ All notable changes to this project will be documented in this file.
 
 <!-- last-sync: f9616b7 -->
 
+### v0.7.39 in progress (FEATURE_155 Phase A → C complete; D1 docs / D2 final eval pending)
+
+- **FEATURE_155 — Chat-While-Waiting (Phase A → C delivered)** — Removes `await_child_task` and adopts Claude Code's idle-yield wait pattern: when the Worker dispatches a child and has nothing else useful to do, it ends its turn with one short status sentence (no tool calls); the runner-driven outer loop blocks on the next external wake event (child completion / inbound user message / abort signal) and resumes the Worker with a synthetic `<task-completed task_id="…">…</task-completed>` user message. Same MessageQueue carries both event kinds; `priority='user'` (typed input) wins over `priority='background'` (child notification) in the same drain cycle, so users can chat with the agent while children are in flight. Phases:
+  - **A1** — `idle-yield.ts` foundation utilities (`detectIdleYield` 3-condition predicate, `waitForWakeEvent` 3-way race, `composeIdleYieldUserMessage` synthetic-message builder, `countLastAssistantToolCalls` snapshot helper, `isIdleYieldEnabled` env-flag gate). 33 unit tests pin every boundary. No production caller wired in. Commit `6a420504`.
+  - **A2** — Runner-driven outer loop wraps `Runner.run` in `while(true)`; on idle-yield exit, calls `waitForWakeEvent`, splices the wake content into the next user turn, re-enters `Runner.run`. Defensive `IDLE_YIELD_MAX_ITERATIONS=64` floor against prompt bugs. 35 tests (33 unit + 2 e2e). Commits `1f0d1eab` + `bbf747d3`.
+  - **B1** — Worker prompt + `dispatch_child_task` banner teach idle-yield. Layer 2 single-turn probe eval (3 cases × 5 aliases × 5 reps = 75 cells). First run hit PARTIAL (2/4 aliases ≥80%); rerun added `zhipu/glm51` and met SHIP gate (3/5 ≥80%). Default `KODAX_IDLE_YIELD` flipped to ON. Commits `3828265f`, `016e3fb2`, `1a08de10`, `6a63d986`.
+  - **B2** — V2 Worker chain drops `awaitChildTask` from its tool list. Commit `3830141b`.
+  - **C1** — Full tool removal: `await-child-task.ts` deleted; `registry.ts` / `tool-permission.ts` / `child-executor.ts` `CHILD_EXCLUDE_TOOLS_BASE` / V1 chain validation all cleaned up; `async-dispatch.test.ts` rewrites the crash-tracking test against queue notification (no await reclaim path). Commit `80410e49`.
+  - **C2** — `YIELD_TOOL_NAMES` Set emptied; `midTurnDrainPriority` retires the yield-tool gate (the runner's outer loop owns background-priority dequeue at no-tool-calls exit now). Commit `c8990094`.
+  - **C3** — `KODAX_IDLE_YIELD` env-flag gate retired (idle-yield is always-on). The OFF branch would have left a deployment with prompts pointing at the deleted tool, so the flag has no working semantics post-C1. `isIdleYieldEnabled()` hard-coded to `true` for import-compat; Worker prompt + dispatch banner OFF branches removed; outer loop unconditional; stale `await_child_task` references in comments cleaned up. Commit `35468f9f`.
+
+  Still pending under v0.7.39:
+  - **D1** — design doc / changelog / feature-list / test-guide (this entry).
+  - **D2** — Layer 2 chat-while-waiting behavioral eval (300ms perception budget) + final regression sweep + retire `tests/feature-148-post-dispatch-probe.eval.ts` to `tests/_archive/` (its anti-immediate-await target tool no longer exists).
+
 ---
 
 ## [0.7.38] - 2026-05-09
