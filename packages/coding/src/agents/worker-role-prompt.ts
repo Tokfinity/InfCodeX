@@ -79,6 +79,19 @@ export function buildWorkerInstructions(
     '- ANTI-PATTERN — DO NOT IMMEDIATELY AWAIT (FEATURE_148): after `dispatch_child_task` returns a `task_id:<id>`, your IMMEDIATE next move must NOT be `await_child_task` on that id when there is OTHER USEFUL WORK to do. Useful work includes: dispatching ADDITIONAL independent children, doing the SIDE-READS the user asked for in the same request, drafting a synthesis plan in text, OR reading context that will let you act on the child result faster once it arrives. Only call `await_child_task` when (a) you actually need the result to proceed and have run out of interleaved work, or (b) the user explicitly asked for the dispatched probe and nothing else. Concretely: if the user asks "do X (slow) AND also do Y (cheap)" — dispatch X, then DO Y, then await X. Awaiting X immediately after dispatch and only then doing Y collapses Pattern B back to a sync call with extra steps.',
   ].join('\n');
 
+  const fanOutPlanGranularity = [
+    'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
+    '- When your plan involves dispatching ≥3 children (`dispatch_child_task` per RULE A or RULE C), expand the plan to ONE item per child\'s objective — mirror each child\'s `bundle.objective` literally. Do NOT collapse N dispatches into one "fan out" item.',
+    '  GOOD: `todo_update({op:"init", items:[',
+    '          {id:"todo_1", content:"Review packages/foo", activeForm:"Reviewing packages/foo"},',
+    '          {id:"todo_2", content:"Review packages/bar", activeForm:"Reviewing packages/bar"},',
+    '          ... one item per dispatched child ...',
+    '        ]})`',
+    '  BAD:  `todo_update({op:"init", items:[{content:"Fan out review across 5 packages"}]})`',
+    '- Mark each item `in_progress` just before the corresponding `await_child_task`, and `completed` when that child returns successfully (`failed` if the child crashes / times out).',
+    '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into a single item turns parallel work into a black box and hides 30+ seconds of progress. The plan-first contract above (≥2 distinct steps → todo_update) interpreted strictly: "dispatching 5 children" IS 5 distinct steps from the user\'s viewpoint, not 1.',
+  ].join('\n');
+
   const handoffRules = [
     'EVALUATOR HANDOFF (KodaX structural gate, preserved as an independent role):',
     '- When your plan is complete (all non-cancelled items `completed`), call `emit_handoff` with the artifacts you want the Evaluator to audit.',
@@ -102,6 +115,7 @@ export function buildWorkerInstructions(
     scopeCommitment,
     mutationDiscipline,
     dispatchRules,
+    fanOutPlanGranularity,
     handoffRules,
   ]
     .filter((part) => part.length > 0)
