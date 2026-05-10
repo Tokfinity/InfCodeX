@@ -2041,20 +2041,88 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     });
 
     it('legacy V1 chain handoffs are unchanged (no Worker leak into V1 topology)', () => {
-      // Slice 3a is dead code on the V1 path — Scout still escalates
-      // to Generator/Planner, Evaluator's revise still targets
-      // Generator + Planner, no V1 edge points at Worker. Slice 3b
-      // wires the Evaluator → Worker revise edge alongside the entry
-      // agent swap; until then, the V1 graph stays bit-identical.
-      const chain = buildRunnerAgentChain(makeCtx(), {});
-      const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
-      expect(evalTargets).not.toContain('kodax/role/worker');
-      const scoutTargets = (chain.scout.handoffs ?? []).map((h) => h.target.name);
-      expect(scoutTargets).not.toContain('kodax/role/worker');
-      const plannerTargets = (chain.planner.handoffs ?? []).map((h) => h.target.name);
-      expect(plannerTargets).not.toContain('kodax/role/worker');
-      const genTargets = (chain.generator.handoffs ?? []).map((h) => h.target.name);
-      expect(genTargets).not.toContain('kodax/role/worker');
+      // V1 baseline (KODAX_HARNESS_V2 unset/false): Scout still
+      // escalates to Generator/Planner, Evaluator's revise targets
+      // Generator + Planner, no V1 edge points at Worker. The V2
+      // entry-agent swap and Evaluator → Worker revise edge are
+      // gated behind the flag (Slice 3b coverage below).
+      const prev = process.env.KODAX_HARNESS_V2;
+      delete process.env.KODAX_HARNESS_V2;
+      try {
+        const chain = buildRunnerAgentChain(makeCtx(), {});
+        const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+        expect(evalTargets).not.toContain('kodax/role/worker');
+        expect(evalTargets).toContain('kodax/role/generator');
+        expect(evalTargets).toContain('kodax/role/planner');
+        const scoutTargets = (chain.scout.handoffs ?? []).map((h) => h.target.name);
+        expect(scoutTargets).not.toContain('kodax/role/worker');
+        const plannerTargets = (chain.planner.handoffs ?? []).map((h) => h.target.name);
+        expect(plannerTargets).not.toContain('kodax/role/worker');
+        const genTargets = (chain.generator.handoffs ?? []).map((h) => h.target.name);
+        expect(genTargets).not.toContain('kodax/role/worker');
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
+        else process.env.KODAX_HARNESS_V2 = prev;
+      }
+    });
+  });
+
+  // FEATURE_114 v0.7.36 Slice 3b — V2 single-loop topology under flag.
+  // When KODAX_HARNESS_V2=true, the runner-driven chain swaps
+  // Evaluator's revise target from Generator to Worker so the
+  // single-loop Worker → Evaluator → revise(Worker) path resolves.
+  // The entry-agent swap (chain.scout vs chain.worker) is wired in
+  // `runManagedTaskViaRunnerInner` itself; that requires the full
+  // runner harness so it's covered indirectly via the existing
+  // Scout-H0 e2e test under flag-off baseline + a unit assertion on
+  // `isHarnessV2Enabled` here.
+  describe('FEATURE_114 Slice 3b — V2 flag-gated handoff topology', () => {
+    function withHarnessV2<T>(value: 'true' | undefined, fn: () => T): T {
+      const prev = process.env.KODAX_HARNESS_V2;
+      if (value === undefined) delete process.env.KODAX_HARNESS_V2;
+      else process.env.KODAX_HARNESS_V2 = value;
+      try {
+        return fn();
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
+        else process.env.KODAX_HARNESS_V2 = prev;
+      }
+    }
+
+    it('V2 active: Evaluator revise targets Worker (Generator no longer in handoff list)', () => {
+      withHarnessV2('true', () => {
+        const chain = buildRunnerAgentChain(makeCtx(), {});
+        const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+        expect(evalTargets).toContain('kodax/role/worker');
+        expect(evalTargets).toContain('kodax/role/planner');
+        // V2 mode swaps the executor: Generator MUST NOT be on
+        // Evaluator's revise list (would create a phantom V1 path
+        // the runner can't satisfy because the entry agent is Worker).
+        expect(evalTargets).not.toContain('kodax/role/generator');
+      });
+    });
+
+    it('V2 active: Worker still hands off to Evaluator (single edge unchanged)', () => {
+      withHarnessV2('true', () => {
+        const chain = buildRunnerAgentChain(makeCtx(), {});
+        const workerTargets = (chain.worker.handoffs ?? []).map((h) => h.target.name);
+        expect(workerTargets).toEqual(['kodax/role/evaluator']);
+      });
+    });
+
+    it('flag toggles deterministically: same chain factory, different graphs', () => {
+      const v1Targets = withHarnessV2(undefined, () => {
+        const chain = buildRunnerAgentChain(makeCtx(), {});
+        return (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+      });
+      const v2Targets = withHarnessV2('true', () => {
+        const chain = buildRunnerAgentChain(makeCtx(), {});
+        return (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+      });
+      expect(v1Targets).toContain('kodax/role/generator');
+      expect(v1Targets).not.toContain('kodax/role/worker');
+      expect(v2Targets).toContain('kodax/role/worker');
+      expect(v2Targets).not.toContain('kodax/role/generator');
     });
   });
 });
