@@ -22,7 +22,7 @@ const baseDecision: KodaXTaskRoutingDecision = {
   requiresBrainstorm: false,
 };
 
-describe('isHarnessV2Enabled', () => {
+describe('isHarnessV2Enabled (v0.7.38 Slice 7 — V2 is now default)', () => {
   beforeEach(() => {
     delete process.env.KODAX_HARNESS_V2;
   });
@@ -30,24 +30,26 @@ describe('isHarnessV2Enabled', () => {
     delete process.env.KODAX_HARNESS_V2;
   });
 
-  it('returns false by default (no env var set)', () => {
+  it('returns true by default (no env var set) — V2 is the default in v0.7.38+', () => {
+    expect(isHarnessV2Enabled()).toBe(true);
+  });
+
+  it('returns false ONLY when env is exactly "false" (V1 opt-out)', () => {
+    process.env.KODAX_HARNESS_V2 = 'false';
     expect(isHarnessV2Enabled()).toBe(false);
   });
 
-  it('returns true when env is exactly "true"', () => {
-    process.env.KODAX_HARNESS_V2 = 'true';
-    expect(isHarnessV2Enabled()).toBe(true);
-  });
-
-  it('is case-insensitive — TRUE is also true', () => {
-    process.env.KODAX_HARNESS_V2 = 'TRUE';
-    expect(isHarnessV2Enabled()).toBe(true);
-  });
-
-  it('returns false for "1" / "yes" / other truthy-looking values', () => {
-    for (const value of ['1', 'yes', 'on', 'enabled']) {
+  it('opt-out is case-insensitive — FALSE / False also disable V2', () => {
+    for (const value of ['FALSE', 'False']) {
       process.env.KODAX_HARNESS_V2 = value;
       expect(isHarnessV2Enabled()).toBe(false);
+    }
+  });
+
+  it('returns true for "true" / "TRUE" / "1" / "yes" — anything other than "false" leaves V2 active', () => {
+    for (const value of ['true', 'TRUE', '1', 'yes', 'on', 'enabled', '']) {
+      process.env.KODAX_HARNESS_V2 = value;
+      expect(isHarnessV2Enabled()).toBe(true);
     }
   });
 });

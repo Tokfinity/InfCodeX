@@ -35,11 +35,21 @@ import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../ty
 // the repo's cwd with `.agent/managed-tasks/` entries.
 let testWorkspaceRoot: string;
 
+// v0.7.38 Slice 7 — V2 is now the default behavior at runtime. This
+// test file exercises the V1 chain extensively; pin the env to V1 for
+// the whole file so V1 mocks (scout/planner/generator/evaluator only)
+// stay valid. Tests that need V2 explicitly use the local `withHarnessV2('true', ...)`
+// helper which save/restores the env around their scope.
+let prevHarnessV2Env: string | undefined;
 beforeAll(async () => {
+  prevHarnessV2Env = process.env.KODAX_HARNESS_V2;
+  process.env.KODAX_HARNESS_V2 = 'false';
   testWorkspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-driven-'));
 });
 
 afterAll(async () => {
+  if (prevHarnessV2Env === undefined) delete process.env.KODAX_HARNESS_V2;
+  else process.env.KODAX_HARNESS_V2 = prevHarnessV2Env;
   if (testWorkspaceRoot) {
     // Windows can hold transient handles immediately after tests;
     // retry a few times before giving up so CI stays clean.
@@ -746,7 +756,13 @@ describe('runManagedTaskViaRunner — Scout H0_DIRECT end-to-end', () => {
 // (per-agent turn detection via system-prompt sniffing) and adds a
 // 'worker' branch.
 describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () => {
-  async function withHarnessV2<T>(value: 'true' | undefined, fn: () => Promise<T>): Promise<T> {
+  // v0.7.38 Slice 7 — V2 is now the DEFAULT. Pass 'false' to opt out
+  // (V1 path), 'true' to assert V2 explicitly, undefined to test the
+  // unset-env default (which is now V2).
+  async function withHarnessV2<T>(
+    value: 'true' | 'false' | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
     const prev = process.env.KODAX_HARNESS_V2;
     if (value === undefined) delete process.env.KODAX_HARNESS_V2;
     else process.env.KODAX_HARNESS_V2 = value;
@@ -825,8 +841,12 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
     });
   });
 
-  it('V2 flag off: same prompt routes through Scout (V1 baseline preserved)', async () => {
-    await withHarnessV2(undefined, async () => {
+  it('V2 flag off (KODAX_HARNESS_V2=false): same prompt routes through Scout (V1 baseline preserved)', async () => {
+    // v0.7.38 Slice 7 — V2 is the default; explicit `false` opts out
+    // to V1. Previously this test used `undefined` (env unset =
+    // implicit V1); the default flip flips that meaning so we now
+    // pass 'false' explicitly to keep testing the V1 codepath.
+    await withHarnessV2('false', async () => {
       // V1 Scout H0 shape — when flag is off, the run takes the
       // V1 entry. This guards against a regression where Slice 3b's
       // flag check accidentally returns true on undefined env.
@@ -2191,13 +2211,13 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     });
 
     it('legacy V1 chain handoffs are unchanged (no Worker leak into V1 topology)', () => {
-      // V1 baseline (KODAX_HARNESS_V2 unset/false): Scout still
-      // escalates to Generator/Planner, Evaluator's revise targets
-      // Generator + Planner, no V1 edge points at Worker. The V2
-      // entry-agent swap and Evaluator → Worker revise edge are
-      // gated behind the flag (Slice 3b coverage below).
+      // v0.7.38 Slice 7: V2 is now default, so we set the env var
+      // to 'false' explicitly to test V1 baseline. Previously this
+      // test used `delete env` (implicit V1 default); the default
+      // flip changes that semantics so the env var must now carry
+      // the explicit V1 opt-out value.
       const prev = process.env.KODAX_HARNESS_V2;
-      delete process.env.KODAX_HARNESS_V2;
+      process.env.KODAX_HARNESS_V2 = 'false';
       try {
         const chain = buildRunnerAgentChain(makeCtx(), {});
         const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
@@ -2227,7 +2247,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
   // Scout-H0 e2e test under flag-off baseline + a unit assertion on
   // `isHarnessV2Enabled` here.
   describe('FEATURE_114 Slice 3b — V2 flag-gated handoff topology', () => {
-    function withHarnessV2<T>(value: 'true' | undefined, fn: () => T): T {
+    function withHarnessV2<T>(value: 'true' | 'false' | undefined, fn: () => T): T {
       const prev = process.env.KODAX_HARNESS_V2;
       if (value === undefined) delete process.env.KODAX_HARNESS_V2;
       else process.env.KODAX_HARNESS_V2 = value;
@@ -2261,7 +2281,10 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     });
 
     it('flag toggles deterministically: same chain factory, different graphs', () => {
-      const v1Targets = withHarnessV2(undefined, () => {
+      // v0.7.38 Slice 7 — V2 is now the default. To compare V1 vs V2
+      // graphs, pass 'false' for V1 opt-out instead of undefined
+      // (which now means "V2 default").
+      const v1Targets = withHarnessV2('false', () => {
         const chain = buildRunnerAgentChain(makeCtx(), {});
         return (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
       });
