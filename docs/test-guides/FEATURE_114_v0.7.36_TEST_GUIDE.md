@@ -1,24 +1,31 @@
 # FEATURE_114 v0.7.36 — AMA Harness V2 (Worker + Evaluator) 人测指引
 
-> **目的**：验证 (1) `KODAX_HARNESS_V2=true` 时入口 agent 切到 Worker；(2) Worker plan-first 契约（≥2 步任务 todo_update 必须先于 mutation）；(3) Evaluator 仍是结构性 gate（Worker → emit_handoff → Evaluator → accept/revise/blocked）；(4) revise 路径回 Worker（不是 Generator）；(5) Worker 可以 mid-task replan（insert / cancel / adjust）；(6) `evaluator: 'build' \| 'test' \| 'lint'` hint 在 `pending → completed` 时触发对应 npm 命令并把 stderr 反馈给 Worker；(7) cancelled 状态在 UI 显示删除线；(8) flag 关闭时 V1 路径完全不变（Scout/Planner/Generator/Evaluator）。
+> **v0.7.38 Slice 7 更新**：V2 已成为默认路径。`KODAX_HARNESS_V2` 环境变量
+> 现在是 **opt-out** 语义——不设、设为空、设为 `'true'` / `'1'` / `'yes'` 都
+> 走 V2；只有显式设为 `'false'`（case-insensitive）才退回 V1。决策依据见
+> [docs/features/v0.7.36.md](../features/v0.7.36.md) §"迁移策略" 中 v0.7.38
+> 段，eval 数据见 commit `2acbf9d0` 与 `tests/feature-114-v1-baseline-comparison.eval.ts`。
+>
+> **目的**：验证 (1) 默认入口 agent 是 Worker（不再是 Scout）；(2) Worker
+> plan-first 契约（≥2 步任务 todo_update 必须先于 mutation）；(3) Evaluator 仍
+> 是结构性 gate（Worker → emit_handoff → Evaluator → accept/revise/blocked）；
+> (4) revise 路径回 Worker（不是 Generator）；(5) Worker 可以 mid-task
+> replan（insert / cancel / adjust）；(6) `evaluator: 'build' \| 'test' \|
+> 'lint'` hint 在 `pending → completed` 时触发对应 npm 命令并把 stderr 反馈给
+> Worker；(7) cancelled 状态在 UI 显示删除线；(8) `KODAX_HARNESS_V2=false`
+> 退出时 V1 路径完全不变（Scout/Planner/Generator/Evaluator）。
 >
 > **设计文档**：[docs/features/v0.7.36.md](../features/v0.7.36.md) §FEATURE_114
 >
 > **前置**：
-> - 任意可用 provider API key（推荐 Anthropic / kimi-code / zhipu-coding 用于 Worker plan-first 契约稳定性最好的 alias）
+> - 任意可用 provider API key（推荐 ds/v4pro 或 zhipu/glm51——eval 实测在
+>   "edit + build verify" 多步任务上 plan-list 可见性最稳定 80% / 40%；
+>   weak-model 路径如 kimi 在该任务上 V1 V2 都是 0% 模型上限，不影响 V2
+>   ship 决定）
 > - KodaX v0.7.38 已构建（`npm run build`）
 > - 本指引在 Ink TUI 下做（`./bin/kodax.mjs` 默认入口）
-> - 启动前设置环境变量：
->   ```bash
->   # POSIX (bash / zsh)
->   export KODAX_HARNESS_V2=true
->
->   # Windows PowerShell
->   $env:KODAX_HARNESS_V2 = 'true'
->
->   # Windows cmd
->   set KODAX_HARNESS_V2=true
->   ```
+> - **不再需要主动设置 `KODAX_HARNESS_V2=true`**——v0.7.38+ 默认就走 V2。
+>   只有想测 V1 baseline 时才需要 `KODAX_HARNESS_V2=false`（见 Test 6）。
 
 ---
 
@@ -26,7 +33,7 @@
 
 ### 步骤
 
-1. 设置 `KODAX_HARNESS_V2=true`，启 KodaX。
+1. 启 KodaX（v0.7.38+ 默认即 V2，无需设置 env；如要强制也可显式 `KODAX_HARNESS_V2=true`）。
 2. 发一个 trivial 任务（单步、不需要计划）：
    ```
    1+1=
@@ -45,7 +52,7 @@
 |------|------|
 | Worker 调了 `todo_update` | LLM 误判 trivial → 多余开销但不算 bug；可在 prompt 里强调 "single-question lookup → answer directly" |
 | Evaluator 没跑（Worker 直接返回最终文本）| V2 必经 Evaluator——检查 `wrapEmitterWithRecorder` 是否漏了 verdict-slot 处理 |
-| 仍走 Scout（看到 `[Scout]` 字样）| `KODAX_HARNESS_V2` 没生效——确认 env 在 KodaX 启动 shell 里设置好；`process.env.KODAX_HARNESS_V2` 必须等于字符串 `'true'`（大小写不敏感） |
+| 仍走 Scout（看到 `[Scout]` 字样）| 检查启动 shell 里有没有遗留的 `KODAX_HARNESS_V2=false` opt-out（unset 后再启动）；v0.7.38+ 默认 V2，只有显式 `'false'`（case-insensitive）才走 V1 |
 
 ---
 
@@ -53,7 +60,7 @@
 
 ### 步骤
 
-1. 设置 `KODAX_HARNESS_V2=true`，启 KodaX。
+1. 启 KodaX（v0.7.38+ 默认即 V2，无需设置 env；如要强制也可显式 `KODAX_HARNESS_V2=true`）。
 2. 发一个明显 ≥ 2 步的任务：
    ```
    写一个 hello.ts 打印 hello world，然后写一个 README.md 解释怎么跑
@@ -82,7 +89,7 @@
 
 ### 步骤
 
-1. 设置 `KODAX_HARNESS_V2=true`，启 KodaX。
+1. 启 KodaX（v0.7.38+ 默认即 V2，无需设置 env；如要强制也可显式 `KODAX_HARNESS_V2=true`）。
 2. 发一个故意有 bug 的任务：
    ```
    写一个 src/calc.ts 实现加法，注意把 + 写成 -（故意制造 bug 让 Evaluator 抓）
@@ -111,7 +118,7 @@
 
 ### 步骤
 
-1. 设置 `KODAX_HARNESS_V2=true`，启 KodaX。
+1. 启 KodaX（v0.7.38+ 默认即 V2，无需设置 env；如要强制也可显式 `KODAX_HARNESS_V2=true`）。
 2. 发：
    ```
    计划三步：A、B、C；做完 A 后告诉我应该 cancel B 直接做 C
@@ -149,7 +156,7 @@
 ### 步骤
 
 1. **必须**在一个真有 `package.json` 的项目目录里跑（KodaX 仓库本身就 OK）。
-2. 设置 `KODAX_HARNESS_V2=true`，启 KodaX。
+2. 启 KodaX（v0.7.38+ 默认即 V2，无需设置 env）。
 3. 发：
    ```
    修改 packages/coding/src/task-engine/todo-store.ts 加一行 console.log("test")，
@@ -182,15 +189,21 @@
 
 ---
 
-## Test 6 — Flag 关闭时 V1 路径完全不变（regression gate）
+## Test 6 — V1 opt-out 路径完全不变（regression gate）
 
 ### 步骤
 
-1. **取消** `KODAX_HARNESS_V2` 环境变量（或设为 `false`）：
+1. **显式设置** `KODAX_HARNESS_V2=false` 退到 V1 路径（v0.7.38 Slice 7
+   默认翻转后，unset 等于 V2 active；要测 V1 必须显式 `false`）：
    ```bash
-   unset KODAX_HARNESS_V2
-   # 或
+   # POSIX
    export KODAX_HARNESS_V2=false
+
+   # PowerShell
+   $env:KODAX_HARNESS_V2 = 'false'
+
+   # Windows cmd
+   set KODAX_HARNESS_V2=false
    ```
 2. 启 KodaX。
 3. 跑 Test 2 同样的任务（写两个文件）。
@@ -205,17 +218,18 @@
 ### 关键回归检查
 
 ```bash
-# 不带 V2 flag
-unset KODAX_HARNESS_V2
+# 显式 V1 opt-out
+export KODAX_HARNESS_V2=false
 npx vitest run packages/coding packages/repl
-# 应当 3395 tests passed
+# 应当 3410 tests passed
 ```
 
 ### 失败排查
 
 | 现象 | 诊断 |
 |------|------|
-| Flag off 但仍走 Worker | `isHarnessV2Enabled()` 误判；env 字符串值必须是 `'true'`（小写），其他值（包括 `1`）都返 false |
+| `unset KODAX_HARNESS_V2` 仍走 Worker | **预期**——v0.7.38 Slice 7 翻了默认；要 V1 必须显式 `KODAX_HARNESS_V2=false` |
+| `KODAX_HARNESS_V2=false` 仍走 Worker | `isHarnessV2Enabled()` 实现错；env 必须是 `'false'`（case-insensitive），其他值（包括 `'0'` / `'no'`）都返 true 走 V2 |
 | Evaluator handoffs 含 Worker | `evaluatorHandoffs` 字面量逻辑被破坏；查 `runner-driven.ts` 的 `v2ActiveAtChainBuild` 三元表达式 |
 | 既有 V1 测试挂了 | 跑 `git diff a3ff28c..HEAD -- packages/coding/src/task-engine/runner-driven.ts` 看是否动了 V1 字面量；V1 路径在 Slice 3b 应当 bit-for-bit 保留 |
 
@@ -249,11 +263,17 @@ npx vitest run packages/coding packages/repl
 
 ## 紧急 rollback
 
-如果 `KODAX_HARNESS_V2=true` 暴露严重 bug，立即：
+如果 V2 默认开启暴露严重 bug，立即：
 
 ```bash
-unset KODAX_HARNESS_V2
-# 或在 settings.json 里强制 false（如果之后接入 settings 入口）
+# 单用户 / 单个 shell 强制回 V1
+export KODAX_HARNESS_V2=false      # POSIX
+$env:KODAX_HARNESS_V2 = 'false'    # PowerShell
+set KODAX_HARNESS_V2=false         # Windows cmd
 ```
 
-V2 路径完全在 flag 内；关闭 = 100% 回到 v0.7.34/35 已 ship 行为。
+如果是全局回退（影响所有用户），翻 [packages/coding/src/agents/worker-role-prompt.ts](../../packages/coding/src/agents/worker-role-prompt.ts) 中
+`isHarnessV2Enabled()` 一行——把默认 return 从 `true` 改回 `false`，发个
+v0.7.38.x 补丁版本即可。
+
+V2 路径完全在 flag 内；显式关闭 = 100% 回到 v0.7.34/35 已 ship 行为。
