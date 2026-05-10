@@ -12,20 +12,23 @@ import {
 import { _resetMessageQueueForTests, getMessageQueue } from './queue.js';
 
 describe('midTurnDrainPriority', () => {
-  it('returns "user" by default (no yield tool ran)', () => {
+  it('returns "user" by default — no yield tools registered under FEATURE_155 idle-yield', () => {
     expect(midTurnDrainPriority([])).toBe('user');
     expect(midTurnDrainPriority(['read', 'edit', 'bash'])).toBe('user');
   });
 
-  it('returns "background" when await_child_task ran', () => {
-    expect(midTurnDrainPriority(['await_child_task'])).toBe('background');
-    expect(midTurnDrainPriority(['read', 'await_child_task', 'bash'])).toBe(
-      'background',
-    );
+  it('returns "user" even for the legacy await_child_task name (tool removed in v0.7.39 Slice C1)', () => {
+    // YIELD_TOOL_NAMES is empty under idle-yield. Even if a transcript
+    // somehow carries the legacy name, the drain ceiling stays at user
+    // because the runner-driven outer loop is now the canonical path
+    // for background-priority dequeue.
+    expect(midTurnDrainPriority(['await_child_task'])).toBe('user');
+    expect(midTurnDrainPriority(['read', 'await_child_task', 'bash'])).toBe('user');
   });
 
-  it('YIELD_TOOL_NAMES contains await_child_task', () => {
-    expect(YIELD_TOOL_NAMES.has('await_child_task')).toBe(true);
+  it('YIELD_TOOL_NAMES is empty (FEATURE_155 retired the gate; placeholder kept for future tools)', () => {
+    expect(YIELD_TOOL_NAMES.size).toBe(0);
+    expect(YIELD_TOOL_NAMES.has('await_child_task')).toBe(false);
   });
 });
 
@@ -47,16 +50,19 @@ describe('maybeDrainMidTurn', () => {
     expect(queue.size()).toBe(1); // background remains
   });
 
-  it('drains both priorities when await_child_task ran', () => {
+  it('idle-yield (v0.7.39+): legacy await_child_task name no longer widens drain to background', () => {
     const queue = getMessageQueue();
     queue.enqueue({ priority: 'user', mode: 'prompt', content: 'u' });
     queue.enqueue({ priority: 'background', mode: 'task-notification', content: 'b' });
 
+    // Even with the legacy yield-tool name in the lastTurn list, the
+    // drain stays at user priority — the background side waits for
+    // the runner's outer-loop wake event instead.
     const drained = maybeDrainMidTurn({
       lastTurnToolNames: ['await_child_task'],
     });
-    expect(drained.map((m) => m.content)).toEqual(['u', 'b']);
-    expect(queue.size()).toBe(0);
+    expect(drained.map((m) => m.content)).toEqual(['u']);
+    expect(queue.size()).toBe(1); // background notification stays queued
   });
 
   it('respects agentId scoping', () => {
@@ -144,7 +150,12 @@ describe('enqueueChildTaskNotification', () => {
     expect(getMessageQueue().count({ maxPriority: 'background' })).toBe(1);
   });
 
-  it('Sleep-gated drain (await_child_task ran) picks up the notification', () => {
+  it('idle-yield (v0.7.39+): mid-turn drain does NOT pick up task-notifications even with legacy yield-tool name', () => {
+    // Pre-v0.7.39 this test asserted that `await_child_task` widened
+    // the drain to background. Under FEATURE_155 idle-yield the
+    // runner-driven outer loop owns background-priority dequeue at
+    // the no-tool-calls exit, so mid-turn drain stays at user
+    // priority regardless of which tools the previous turn ran.
     enqueueChildTaskNotification({
       taskId: 'child-004',
       summary: 'finally',
@@ -152,7 +163,7 @@ describe('enqueueChildTaskNotification', () => {
     const drained = maybeDrainMidTurn({
       lastTurnToolNames: ['await_child_task'],
     });
-    expect(drained).toHaveLength(1);
-    expect(drained[0]?.mode).toBe('task-notification');
+    expect(drained).toEqual([]);
+    expect(getMessageQueue().count({ maxPriority: 'background' })).toBe(1);
   });
 });
