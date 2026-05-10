@@ -2206,7 +2206,12 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       expect(workerTools).toContain('exit_plan_mode');
       // Async dispatch (FEATURE_119 Pattern B parity).
       expect(workerTools).toContain('dispatch_child_task');
-      expect(workerTools).toContain('await_child_task');
+      // FEATURE_155 v0.7.39 Slice B2 — `await_child_task` is removed
+      // from the Worker's tool list. Idle-yield is the canonical
+      // wait mechanic for V2 (default ON since Slice B1.D); V1
+      // chains keep the tool as the transitional fallback for
+      // `KODAX_IDLE_YIELD=false` users.
+      expect(workerTools).not.toContain('await_child_task');
       // Worker MUST NOT carry the V1 emit tools — those belong to the
       // legacy roles only.
       expect(workerTools).not.toContain('emit_scout_verdict');

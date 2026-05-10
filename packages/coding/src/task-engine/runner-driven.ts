@@ -2613,7 +2613,16 @@ export function buildRunnerAgentChain(
       codingTools.todoList,
       // Worker dispatch wrapper allows write fan-out (Generator-equivalent).
       workerDispatch,
-      codingTools.awaitChildTask,
+      // FEATURE_155 v0.7.39 Slice B2 — `await_child_task` removed from
+      // Worker's tool list. Idle-yield (default ON) is the canonical
+      // wait mechanic: Worker exits text-only after dispatching, the
+      // runner-driven outer loop resumes when a child completes (see
+      // `_internal/managed-task/idle-yield.ts`). V1 chains
+      // (Scout / Planner / Generator) keep `await_child_task`
+      // available as a transitional fallback so opt-out via
+      // `KODAX_IDLE_YIELD=false` (which routes through Scout chain
+      // when also paired with `KODAX_HARNESS_V2=false`) still works
+      // for users on the v0.7.38 baseline.
     ],
     handoffs: undefined,
     // Worker plans + executes, so it warrants the deeper reasoning
