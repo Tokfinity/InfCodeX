@@ -14,13 +14,19 @@ once (e.g. "for each of these 4 packages, tell me X"), does the LLM:
 1. **Use Pattern B correctly** — emit ≥2 `dispatch_child_task` tool_use
    blocks in **one** response (parallel fan-out, RULE A read-only
    pattern in `worker-role-prompt.ts`)?
-2. **Not orphan tasks** — every `dispatch_child_task` eventually pairs
-   with an `await_child_task` (or the LLM at least intends to wait
-   based on transcript evidence)?
+2. **(Historical, no longer applicable)** Not orphan tasks — pre-v0.7.39
+   every `dispatch_child_task` had to pair with an `await_child_task`.
+   FEATURE_155 v0.7.39 Slice C1 deleted the await tool entirely; the
+   runner-driven outer loop reclaims results automatically via the
+   idle-yield path, so "orphan" is now a category error (every dispatch
+   is implicitly waited on by the runner, not the LLM).
 
 Sync degeneration ("dispatch then immediately await, dispatch then
-immediately await…") is the failure mode this eval is designed to
-catch — that pattern reduces FEATURE_119 to the v0.7.35 sync path.
+immediately await…") was the failure mode this eval was designed to
+catch on the v0.7.35-v0.7.38 path. Post-FEATURE_155 the await-side of
+that failure mode is structurally impossible (no tool to call), so the
+eval now measures only the dispatch-side: does the LLM still fan out
+in parallel under the idle-yield prompt?
 
 ## Why behavioral, not structural
 
@@ -45,38 +51,23 @@ and checks tool-call structure.
 | Metric | PASS | INCONCLUSIVE | FAIL |
 |---|---|---|---|
 | parallel-dispatch trigger rate (≥2 dispatch in single response) | ≥ 60% | 30-60% | < 30% |
-| orphan rate (informational only — see note) | n/a | n/a | n/a |
+| orphan rate | (retired — see note) | | |
 
-> Pre-registered baseline: v0.7.35 had no `await_child_task` tool, so
-> every dispatch was synchronous → trigger rate of "parallel
-> dispatch in single response" was strictly 0%. Any non-zero trigger
-> rate at v0.7.37 is a strict improvement.
+> Pre-registered baseline: v0.7.35 had no async dispatch at all,
+> so trigger rate of "parallel dispatch in single response" was
+> strictly 0%. Any non-zero trigger rate at v0.7.37+ is a strict
+> improvement.
 
-### Why orphan rate is informational, not a gate
+### Why orphan rate is retired (v0.7.39 FEATURE_155 Slice C1)
 
-Orphan rate is "dispatch count > await count" — i.e. dispatching a child
-task but never claiming the result. In production this would mean a
-runaway in-flight promise. To **measure** it as a pass/fail gate,
-the eval would need to be **multi-turn**: dispatch in turn 1, see the
-synthetic `task_id:<id>` banner come back as a tool result, then on
-turn 2 emit `await_child_task({task_id})`. The orphan signal is the
-gap between dispatch count and await count *across the full multi-turn
-trajectory*.
-
-This eval is **single-turn** (one provider.stream call per cell),
-which means:
-- The dispatch tool never actually executes — it returns no
-  `task_id:<id>` banner.
-- The LLM has no task_ids to await on within the same response.
-- Therefore orphan rate of 100% is the **single-turn baseline**, not
-  a regression.
-
-Multi-turn orphan measurement requires a `mockChildExecutor` primitive
-that emits synthetic task_id banners at the dispatch tool boundary.
-That primitive is documented in `docs/features/v0.7.37.md` Step 0.5
-and explicitly **skipped** for this v0.7.37 eval ship — single-turn
-trigger-rate validation is sufficient to falsify the "Pattern B
-prompt is rhetorically dead" hypothesis, which is the dominant risk.
+The legacy orphan-rate signal counted "dispatch_child_task without
+matching await_child_task". FEATURE_155 deleted the `await_child_task`
+tool entirely — the runner-driven outer loop now reclaims child
+results automatically through idle-yield (synthesizes a
+`<task-completed task_id="…">` user message on the next turn).
+Every dispatch is implicitly reclaimed by the runner. "Orphan" is
+no longer a measurable failure mode in this dataset's single-turn
+probe shape, so the metric is retired.
 
 ### First-run results (2026-05-08, 5 alias × 5 task = 25 cells)
 
@@ -105,15 +96,23 @@ reads) sometimes triggers sequential reads.
 
 ## Last-run conclusion
 
-**2026-05-08 sweeps**: 76-88% parallel-dispatch trigger rate (range
-across two sweeps of 25 cells each), comfortably above the 60% PASS
-gate. The Pattern B prompt anchors are doing real work in
-production-shape probes. Next re-run trigger: any change to
-`worker-role-prompt.ts` Pattern B / DISPATCH RULES section, or to
-`dispatch_child_task` / `await_child_task` description fields.
+**2026-05-08 sweeps** (pre-FEATURE_155): 76-88% parallel-dispatch
+trigger rate (range across two sweeps of 25 cells each), comfortably
+above the 60% PASS gate. The Pattern B prompt anchors were doing real
+work in production-shape probes.
+
+**2026-05-11 dataset migration**: tool surface + system prompt updated
+in lockstep with the production wording change — `await_child_task`
+tool removed (FEATURE_155 Slice C1), prompt switched to idle-yield
+wording (FEATURE_155 Slice C3). The fan-out trigger-rate signal is
+preserved; only the post-dispatch wait wording changed. A re-run
+sweep against the new prompt is the next maintenance task.
+
+Next re-run trigger: any change to `worker-role-prompt.ts` Pattern B
+/ DISPATCH RULES section, or to `dispatch_child_task` description.
 
 ## Re-run triggers
 
 - Worker role prompt changes (`packages/coding/src/agents/worker-role-prompt.ts`)
-- `dispatch_child_task` / `await_child_task` description changes
+- `dispatch_child_task` description changes
 - New Pattern B-aware prompt section added/removed

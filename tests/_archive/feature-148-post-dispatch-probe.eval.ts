@@ -59,13 +59,13 @@ import {
   availableAliases,
   resolveAlias,
   type ModelAlias,
-} from '../benchmark/harness/aliases.js';
+} from '../../benchmark/harness/aliases.js';
 import {
   buildPostDispatchProbeSystemPrompt,
   POST_DISPATCH_PROBE_CASES,
   POST_DISPATCH_PROBE_TOOLS,
   type PostDispatchProbeCase,
-} from '../benchmark/datasets/pattern-b-post-dispatch-probe/cases.js';
+} from '../../benchmark/datasets/_archive/pattern-b-post-dispatch-probe/cases.js';
 
 // ---------------------------------------------------------------------------
 // Aliases under test (only those with API keys configured)

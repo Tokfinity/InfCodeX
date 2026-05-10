@@ -1,4 +1,19 @@
-# Pattern B Post-Dispatch Probe (FEATURE_148)
+# Pattern B Post-Dispatch Probe (FEATURE_148) — **ARCHIVED**
+
+> **Retired by FEATURE_155 v0.7.39 Slice D2** (2026-05-11). The
+> probe's degenerate-condition target is `firstTool.name ===
+> 'await_child_task'`, but Slice C1 deleted that tool entirely. The
+> anti-immediate-await failure mode this dataset measured can no
+> longer happen (the LLM has no callable target). Its only consumer,
+> `tests/feature-148-post-dispatch-probe.eval.ts`, also archived to
+> `tests/_archive/`. Preserved here as a historical reference for
+> Layer 2 single-turn probe methodology.
+>
+> Replacement: `benchmark/datasets/feature-155-idle-yield-adoption/`
+> applies the same Layer 2 probe shape to the post-FEATURE_155
+> idle-yield wait pattern.
+
+---
 
 > **Layer 2 single-turn probe** dataset for FEATURE_148 (v0.7.37).
 > Validates whether the Worker, when handed a freshly-launched
