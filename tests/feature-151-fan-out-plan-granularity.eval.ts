@@ -15,24 +15,29 @@
  *   3. single_lookup       — single function lookup,     expect NO op:init
  *   4. single_grep         — single grep,                expect NO op:init
  *
- * ## Run model
+ * ## Run model — Phase 1 exploration (Layer 2, single alias)
  *
- * Single-turn probe per FEATURE_104 §single-step convention. 5 alias × 4
- * case × 1 run = 20 cells. Pilot stage; post-pilot may bump to 3 run/cell
- * if variance warrants.
+ * Per `benchmark/EVAL_GUIDELINES.md` (反模式 4: "探索期就开多 alias"), prompt
+ * effectiveness is probed on ONE cheap/fast alias (`ds/v4flash`) with N=10
+ * before any multi-alias generalization. Each run is a single-turn LLM probe
+ * via `runOneShot` — NOT a multi-step agent loop.
  *
- * **Stage-1 acceptance gate** (per design `docs/features/v0.7.38.md
- * §FEATURE_151 Slice I — Decision matrix`):
+ * Topology: 1 alias × 4 case × 10 runs = 40 LLM calls (~$0.4 budget).
  *
- *   - Pass: C1 + C2 ≥ 80% probe call op:'init' with sufficient items.
- *   - Pass: C3 + C4 ≤ 20% probe call op:'init' (defends against
- *     over-trigger on trivial tasks).
- *   - Cross-alias max-min spread ≤ 15pp (FEATURE_109 AHE standard).
+ * **Phase 1 pre-registered decision matrix** (set BEFORE any LLM call —
+ * see also `docs/features/v0.7.38.md §FEATURE_151 Slice I`):
  *
- * No hard `expect.fail` in this commit — eval records numbers per case
- * for inspection, mirroring the FEATURE_097 / FEATURE_106 / FEATURE_148 /
- * sibling FEATURE_151 self-seeding pilot pattern. Stage gating to
- * `expect.fail` is promoted post-pilot once thresholds are calibrated.
+ *   - PASS:    positive (review_3_modules + audit_5_packages) ≥80%
+ *              AND negative (single_lookup + single_grep) ≤20%
+ *              → promote to Phase 2 multi-alias generalization
+ *   - PARTIAL: positive 60–80% OR negative 20–40%
+ *              → tighten Slice I prompt, repeat Phase 1 on same alias
+ *   - FAIL:    positive <60%
+ *              → rewrite Slice I prompt, repeat Phase 1 on same alias
+ *
+ * Phase 2 (multi-alias) is a SEPARATE run with its own pre-registered budget.
+ * No hard `expect.fail` in this commit — eval records numbers per case for
+ * inspection, mirroring the sibling self-seeding pilot pattern.
  *
  * ## Run
  *
@@ -57,13 +62,30 @@ import {
   buildPromptVariants,
 } from '../benchmark/datasets/feature-151-fan-out-plan-granularity/cases.js';
 
-const STAGE_LABEL = 'pilot-1run';
-const RUNS_PER_CELL = 1;
+// EVAL_GUIDELINES compliance — exploration phase (Layer 2, single alias):
+// Per `benchmark/EVAL_GUIDELINES.md` 反模式 4 ("探索期就开多 alias"), prompt
+// effectiveness is first probed on ONE cheap/fast alias with N=10 to establish
+// baseline. Multi-alias generalization is a separate Phase 2 only entered if
+// Phase 1 clears the pre-registered thresholds below.
+//
+// Pre-registered decision matrix (set BEFORE running, per checklist item 6):
+//   - Phase 1 PASS:  positive cases ≥80% AND negative cases ≤20%
+//                    → promote to Phase 2 multi-alias (separate run, separate budget)
+//   - Phase 1 PARTIAL: positive 60–80% OR negative 20–40%
+//                    → tighten Slice I prompt, re-run Phase 1 on same alias
+//   - Phase 1 FAIL:  positive <60%
+//                    → rewrite Slice I prompt, re-run Phase 1 on same alias
+//
+// Budget: 4 cases × 10 runs × 1 alias = 40 calls × ~$0.01/call ≈ $0.4
+// ROI: $0.4 buys one production-prompt decision (Slice I keep / strengthen / rewrite).
+const STAGE_LABEL = 'phase1-explore-1alias-10run';
+const RUNS_PER_CELL = 10;
+const EXPLORE_ALIAS = 'ds/v4flash';
 
 describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
-  const aliases = availableAliases();
+  const aliases = availableAliases(EXPLORE_ALIAS);
   if (aliases.length === 0) {
-    it('skips: no provider API keys in env', () => {
+    it(`skips: no API key for exploration alias ${EXPLORE_ALIAS}`, () => {
       // No-op test makes the skip visible in vitest output.
     });
     return;
@@ -72,16 +94,24 @@ describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
   for (const c of CASES) {
     it(
       `${c.id} — ${STAGE_LABEL}`,
-      { timeout: 5 * 60_000 },
+      // 15-min cap: 1 alias × 10 runs × ~10s/call ≈ 100s/case worst case;
+      // 15min gives 9× headroom for provider hiccups without inviting the
+      // 60min runaway we hit on the prior multi-alias attempt.
+      { timeout: 15 * 60_000 },
       async () => {
         const variants = buildPromptVariants(c.id);
         const judges = buildJudges(c.id);
 
+        // NOTE: harness field is `runs`, not `runsPerCell` (the sibling
+        // feature-151-todo-self-seeding eval mistakenly uses `runsPerCell`,
+        // which the harness ignores — silently falls back to
+        // DEFAULT_BENCHMARK_RUNS = 3. Track-fix scoped to that file's
+        // next pass; this driver gets the parameter name right.
         const result = await runBenchmark({
           variants,
           models: aliases,
           judges,
-          runsPerCell: RUNS_PER_CELL,
+          runs: RUNS_PER_CELL,
         });
 
         // Pilot logging mirrors feature-151-todo-self-seeding.eval.ts —
@@ -95,25 +125,40 @@ describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
         }
         lines.push(`  behaviour:  ${c.behaviour}`);
         const cells = result.byVariant['v0.7.38'] ?? [];
-        let passCount = 0;
+        let totalRuns = 0;
+        let totalPassed = 0;
         for (const cell of cells) {
-          const firstRun = cell.runsRaw[0];
-          if (!firstRun) continue;
-          if (firstRun.passed) passCount++;
-          const status = firstRun.passed ? 'PASS' : 'FAIL';
-          const failedJudges = firstRun.judges
-            .filter((j) => !j.passed)
-            .map((j) => j.name)
+          let cellPassed = 0;
+          const failureCount: Record<string, number> = {};
+          for (const run of cell.runsRaw) {
+            totalRuns++;
+            if (run.passed) {
+              totalPassed++;
+              cellPassed++;
+            } else {
+              for (const j of run.judges) {
+                if (!j.passed) {
+                  failureCount[j.name] = (failureCount[j.name] ?? 0) + 1;
+                }
+              }
+            }
+          }
+          const cellTotal = cell.runsRaw.length;
+          const cellRate = cellTotal > 0
+            ? ((cellPassed / cellTotal) * 100).toFixed(0)
+            : 'n/a';
+          const failureSummary = Object.entries(failureCount)
+            .map(([name, n]) => `${name}×${n}`)
             .join(',');
           lines.push(
-            `  ${cell.alias.padEnd(13)} ${status}` +
-              (failedJudges ? `  (failed: ${failedJudges})` : ''),
+            `  ${cell.alias.padEnd(13)} ${cellPassed}/${cellTotal} (${cellRate}%)` +
+              (failureSummary ? `  (failed: ${failureSummary})` : ''),
           );
         }
-        const passRate = cells.length > 0
-          ? ((passCount / cells.length) * 100).toFixed(1)
+        const overallRate = totalRuns > 0
+          ? ((totalPassed / totalRuns) * 100).toFixed(1)
           : 'n/a';
-        lines.push(`  pass-rate: ${passCount}/${cells.length} (${passRate}%)`);
+        lines.push(`  overall: ${totalPassed}/${totalRuns} (${overallRate}%)`);
         // eslint-disable-next-line no-console
         console.log(lines.join('\n'));
       },

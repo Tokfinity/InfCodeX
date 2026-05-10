@@ -81,15 +81,23 @@ export function buildWorkerInstructions(
 
   const fanOutPlanGranularity = [
     'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
-    '- When your plan involves dispatching ≥3 children (`dispatch_child_task` per RULE A or RULE C), expand the plan to ONE item per child\'s objective — mirror each child\'s `bundle.objective` literally. Do NOT collapse N dispatches into one "fan out" item.',
-    '  GOOD: `todo_update({op:"init", items:[',
-    '          {id:"todo_1", content:"Review packages/foo", activeForm:"Reviewing packages/foo"},',
-    '          {id:"todo_2", content:"Review packages/bar", activeForm:"Reviewing packages/bar"},',
-    '          ... one item per dispatched child ...',
-    '        ]})`',
-    '  BAD:  `todo_update({op:"init", items:[{content:"Fan out review across 5 packages"}]})`',
+    '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool call MUST be `todo_update({op:"init", ...})`. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
+    '- COUNT-FIRST RULE: before calling `todo_update`, count the exact number N of `dispatch_child_task` calls you will make. The `op:"init"` items array MUST contain EXACTLY N items — ONE item per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `content:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
+    '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 items:',
+    '    todo_update({op:"init", items:[',
+    '      {id:"todo_1", content:"Audit packages/ai",     activeForm:"Auditing packages/ai"},',
+    '      {id:"todo_2", content:"Audit packages/agent",  activeForm:"Auditing packages/agent"},',
+    '      {id:"todo_3", content:"Audit packages/coding", activeForm:"Auditing packages/coding"},',
+    '      {id:"todo_4", content:"Audit packages/repl",   activeForm:"Auditing packages/repl"},',
+    '      {id:"todo_5", content:"Audit packages/skills", activeForm:"Auditing packages/skills"}',
+    '    ]})',
+    '- ANTI-PATTERNS (NEVER emit any of these):',
+    '    BAD: skip todo_update and go straight to dispatch_child_task                       (violates plan-first)',
+    '    BAD: items:[{content:"Fan out review across 5 packages"}]                          (1 item collapses N children)',
+    '    BAD: items:[{content:"Review all packages"},{content:"Aggregate findings"}]        (2 items hides per-package progress)',
+    '    BAD: any items array shorter than the number of dispatch_child_task calls.',
     '- Mark each item `in_progress` just before the corresponding `await_child_task`, and `completed` when that child returns successfully (`failed` if the child crashes / times out).',
-    '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into a single item turns parallel work into a black box and hides 30+ seconds of progress. The plan-first contract above (≥2 distinct steps → todo_update) interpreted strictly: "dispatching 5 children" IS 5 distinct steps from the user\'s viewpoint, not 1.',
+    '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
   ].join('\n');
 
   const handoffRules = [
