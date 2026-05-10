@@ -317,7 +317,23 @@ function judgesMultiStepNoFanoutSeedsPlan(minItems: number): readonly PromptJudg
       name: `mentions_at_least_${minItems}_items`,
       category: 'correctness',
       judge: (out) => {
-        const matches = out.match(/id["\s:]+["']?todo_/gi);
+        // Anti-pattern 7 fix (post-2026-05-10 hardening): the original
+        // regex required the `todo_` prefix that only appears in the
+        // dataset's WORKED EXAMPLE. Production LLMs commonly emit
+        // `id:"1"`, `id:"2"`, ... instead, and that's still a valid
+        // op:"init" item. Count any quoted-id occurrence inside an
+        // `items` array region — bounded to the items region so prose
+        // mentions of "id" outside the call don't inflate the count.
+        const lower = out.toLowerCase();
+        const itemsIdx = lower.indexOf('items');
+        if (itemsIdx < 0) return { passed: false, reason: 'no items array found' };
+        const tail = out.slice(itemsIdx);
+        // Take a generous window after `items` — most calls fit within
+        // a few KB. We cap at 4kB so a runaway prose response that
+        // happens to contain `items` and unrelated `id:` later doesn't
+        // false-pass.
+        const region = tail.slice(0, 4096);
+        const matches = region.match(/\bid\s*:?\s*["'`]/gi);
         const itemCount = matches ? matches.length : 0;
         if (itemCount >= minItems) return { passed: true };
         return {
