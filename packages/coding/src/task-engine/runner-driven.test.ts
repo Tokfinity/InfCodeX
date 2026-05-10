@@ -1991,6 +1991,72 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     expect(scoutTools).toContain('bash');
     expect(scoutTools).toContain('exit_plan_mode');
   });
+
+  // FEATURE_114 v0.7.36 Slice 3a — Worker agent in the runner chain.
+  // Slice 3a is intentionally additive: the Worker slot is built but
+  // never dispatched until Slice 3b flips the entry agent under
+  // KODAX_HARNESS_V2=true. These tests assert structural presence
+  // (chain.worker exists with the right name + tool surface +
+  // single-handoff topology) so Slice 3b has a stable target.
+  describe('FEATURE_114 Slice 3a — Worker agent topology', () => {
+    it('chain.worker exists with the canonical worker agent name', () => {
+      const chain = buildRunnerAgentChain(makeCtx(), {});
+      expect(chain.worker.name).toBe('kodax/role/worker');
+    });
+
+    it('Worker exposes the full execution toolbox (Scout exec ∪ Generator mutation surface)', () => {
+      const chain = buildRunnerAgentChain(makeCtx(), {});
+      const workerTools = chain.worker.tools?.map((t) => t.name) ?? [];
+      // Emits handoff (same wire format as Generator → Evaluator).
+      expect(workerTools).toContain('emit_handoff');
+      // Read surface — every probe Scout/Generator have.
+      expect(workerTools).toContain('read');
+      expect(workerTools).toContain('grep');
+      expect(workerTools).toContain('glob');
+      // Mutation surface — Worker is the V2 single-loop executor.
+      expect(workerTools).toContain('bash');
+      expect(workerTools).toContain('write');
+      expect(workerTools).toContain('edit');
+      expect(workerTools).toContain('multi_edit');
+      // Plan + flow control.
+      expect(workerTools).toContain('todo_update');
+      expect(workerTools).toContain('todo_list');
+      expect(workerTools).toContain('exit_plan_mode');
+      // Async dispatch (FEATURE_119 Pattern B parity).
+      expect(workerTools).toContain('dispatch_child_task');
+      expect(workerTools).toContain('await_child_task');
+      // Worker MUST NOT carry the V1 emit tools — those belong to the
+      // legacy roles only.
+      expect(workerTools).not.toContain('emit_scout_verdict');
+      expect(workerTools).not.toContain('emit_contract');
+      expect(workerTools).not.toContain('emit_verdict');
+    });
+
+    it('Worker hands off to Evaluator (single continuation edge)', () => {
+      const chain = buildRunnerAgentChain(makeCtx(), {});
+      const handoffs = chain.worker.handoffs ?? [];
+      expect(handoffs).toHaveLength(1);
+      expect(handoffs[0].target.name).toBe('kodax/role/evaluator');
+      expect(handoffs[0].kind).toBe('continuation');
+    });
+
+    it('legacy V1 chain handoffs are unchanged (no Worker leak into V1 topology)', () => {
+      // Slice 3a is dead code on the V1 path — Scout still escalates
+      // to Generator/Planner, Evaluator's revise still targets
+      // Generator + Planner, no V1 edge points at Worker. Slice 3b
+      // wires the Evaluator → Worker revise edge alongside the entry
+      // agent swap; until then, the V1 graph stays bit-identical.
+      const chain = buildRunnerAgentChain(makeCtx(), {});
+      const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+      expect(evalTargets).not.toContain('kodax/role/worker');
+      const scoutTargets = (chain.scout.handoffs ?? []).map((h) => h.target.name);
+      expect(scoutTargets).not.toContain('kodax/role/worker');
+      const plannerTargets = (chain.planner.handoffs ?? []).map((h) => h.target.name);
+      expect(plannerTargets).not.toContain('kodax/role/worker');
+      const genTargets = (chain.generator.handoffs ?? []).map((h) => h.target.name);
+      expect(genTargets).not.toContain('kodax/role/worker');
+    });
+  });
 });
 
 describe('Shard 6d-T — Scout skillMap injected into Generator + Evaluator instructions', () => {

@@ -39,6 +39,12 @@ export const SCOUT_AGENT_NAME = 'kodax/role/scout';
 export const PLANNER_AGENT_NAME = 'kodax/role/planner';
 export const GENERATOR_AGENT_NAME = 'kodax/role/generator';
 export const EVALUATOR_AGENT_NAME = 'kodax/role/evaluator';
+// FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
+// Collapses Scout/Planner/Generator into one Worker that drives plan +
+// execute behind the KODAX_HARNESS_V2 flag; Evaluator stays a separate
+// structural gate. Legacy four-role identifiers above remain live until
+// v0.7.45 cleanup so the V1 path is unaffected.
+export const WORKER_AGENT_NAME = 'kodax/role/worker';
 
 /**
  * Scout role declaration. Scout is the AMA entry point that both judges
@@ -83,6 +89,26 @@ export const evaluatorAgent: Agent = createAgent({
   instructions:
     'H1/H2 verifier role: check generator output against the verification '
     + 'contract, emit revise / replan verdicts when needed.',
+});
+
+/**
+ * Worker role declaration — FEATURE_114 v0.7.36. The AMA Harness V2
+ * single-loop primary agent: plans (todo_update), executes
+ * (read/write/edit/bash/dispatch), and hands off to Evaluator. Only
+ * active when `KODAX_HARNESS_V2=true`; the Scout/Planner/Generator
+ * placeholders above stay live for the legacy V1 path until v0.7.45
+ * cleanup.
+ *
+ * Like the other declarations in this file, this is a placeholder for
+ * Layer A `Agent` data — the runtime Worker (with full tool set,
+ * handoffs, mutation guards) is constructed in
+ * `task-engine/runner-driven.ts::buildRunnerAgentChain`.
+ */
+export const workerAgent: Agent = createAgent({
+  name: WORKER_AGENT_NAME,
+  instructions:
+    'AMA Harness V2 primary role: plan via todo_update, execute via '
+    + 'tool calls, hand off to Evaluator with emit_handoff.',
 });
 
 /** All four placeholder role agents, exposed for iteration in downstream features. */

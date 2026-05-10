@@ -65,6 +65,7 @@ import {
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
+  WORKER_AGENT_NAME,
 } from '../agents/task-engine-agents.js';
 
 import { resolveProvider } from '../providers/index.js';
@@ -312,6 +313,19 @@ const EVALUATOR_INSTRUCTIONS_FALLBACK = [
   'You are Evaluator (H1/H2 verifier). Call `emit_verdict` exactly once with status ',
   '(accept|revise|blocked). You may call: read, grep, glob, bash (read-only verification ',
   'preferred).',
+].join('\n');
+
+// FEATURE_114 v0.7.36 — minimal Worker instructions for the
+// topology-only test path (no `promptContext`). Real Worker prompts
+// are produced by `createRolePrompt('worker', ...)` via
+// `worker-role-prompt.ts`. Mirrors the other *_FALLBACK constants
+// above; the production path never reaches this string.
+const WORKER_INSTRUCTIONS_FALLBACK = [
+  'You are Worker (AMA Harness V2 single-loop primary agent). Plan via ',
+  '`todo_update`, execute via tool calls, then call `emit_handoff` exactly ',
+  'once with status/summary/evidence/followup. You may call: read, grep, glob, ',
+  'bash, write, edit, multi_edit, todo_update, todo_list, dispatch_child_task, ',
+  'await_child_task, exit_plan_mode.',
 ].join('\n');
 
 /**
@@ -1770,7 +1784,12 @@ function wrapGeneratorBashWithMutationGuard(
 function wrapDispatchChildTaskForRole(
   definition: KodaXToolDefinition,
   baseCtx: KodaXToolExecutionContext,
-  role: 'scout' | 'generator',
+  // FEATURE_114 v0.7.36 — `'worker'` joins the dispatch-capable roles
+  // for the V2 single-loop path. Worker's dispatch behavior matches
+  // Generator's (read-only fan-out + write fan-out gated by harness),
+  // so the wrapper body is unchanged; only the role label flows
+  // through into `managedProtocolRole`.
+  role: 'scout' | 'generator' | 'worker',
   budget: ManagedTaskBudgetController | undefined,
   childWriteWorktreePathsRef: { current: Map<string, string> },
   observer: ObserverBridge,
@@ -1978,6 +1997,14 @@ export interface RunnerAgentChain {
   readonly planner: Agent;
   readonly generator: Agent;
   readonly evaluator: Agent;
+  /**
+   * FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
+   * Active only when `KODAX_HARNESS_V2=true` (gate wired in Slice 3b).
+   * In V1 runs the Worker slot is built but never dispatched, so its
+   * presence here costs nothing structural. Worker handoffs target
+   * Evaluator (the structural gate KodaX preserves).
+   */
+  readonly worker: Agent;
 }
 
 const NULL_OBSERVER: ObserverBridge = {
@@ -2095,6 +2122,21 @@ export function buildRunnerAgentChain(
     dispatchDefinition,
     ctx,
     'generator',
+    budget,
+    childWriteWorktreePathsRef,
+    observer,
+    events,
+  );
+  // FEATURE_114 v0.7.36 — Worker dispatch wrapper for the V2 single-loop
+  // path. Worker IS the executor (no separate Generator), so it inherits
+  // Generator's full dispatch surface: read-only fan-out via RULE A,
+  // long-running probes via RULE B, and write fan-out (readOnly:false)
+  // via RULE C. Worker stays dead code in the V1 path until Slice 3b
+  // flips the entry agent under `KODAX_HARNESS_V2=true`.
+  const workerDispatch = wrapDispatchChildTaskForRole(
+    dispatchDefinition,
+    ctx,
+    'worker',
     budget,
     childWriteWorktreePathsRef,
     observer,
@@ -2356,6 +2398,79 @@ export function buildRunnerAgentChain(
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: false },
   };
 
+  // FEATURE_114 v0.7.36 — AMA Harness V2 Worker agent.
+  //
+  // Tool surface: union of Scout's H0 executor (read/grep/glob + bash/
+  // write/edit/multi_edit + exitPlanMode) and Generator's mutation-
+  // guarded execution (mutation-guard wrappers for bash/write/edit/
+  // multi_edit so plan.decision.primaryTask='review' still blocks
+  // accidental mutations) plus dispatch (with write fan-out) and
+  // todo_update / todo_list. Worker also receives await_child_task so
+  // it can reclaim async-dispatched children (FEATURE_119 Pattern B).
+  // Discipline (plan-first, scope commitment, dispatch RULE A/B/C,
+  // mutation discipline) lives in `worker-role-prompt.ts`; the
+  // tool-policy layer returns `undefined` for `'worker'` (matches Scout).
+  //
+  // Slice 3a is intentionally additive: the Worker agent is built but
+  // never dispatched until Slice 3b flips the entry agent under
+  // `KODAX_HARNESS_V2=true`. V1 runs are unaffected.
+  const worker: WritableAgent = {
+    name: WORKER_AGENT_NAME,
+    instructions: () => {
+      // Mirror Generator's pendingFailedReset consumption: when the
+      // Evaluator returned `revise` and re-dispatched Worker, drop any
+      // failed → pending visual reset BEFORE the Worker turn starts so
+      // the user sees the ● → ✗ → ☐ → ● sequence across the retry
+      // boundary. Slice 3b populates `pendingFailedResetRef` from the
+      // V2 evaluator-revise transition.
+      if (
+        pendingFailedResetRef
+        && pendingFailedResetRef.current
+        && todoStore
+      ) {
+        todoStore.resetFailed();
+        pendingFailedResetRef.current = false;
+      }
+      return resolveRoleInstructions(
+        'worker',
+        WORKER_AGENT_NAME,
+        WORKER_INSTRUCTIONS_FALLBACK,
+        recorder,
+        promptContext,
+        verification,
+      );
+    },
+    tools: [
+      handoffEmit,
+      codingTools.read,
+      codingTools.grep,
+      codingTools.glob,
+      // Mutation guards mirror Generator's wrappers — `plan.decision.
+      // primaryTask='review'` (or scoutMutationIntent='review-only')
+      // still blocks accidental mutations even when the Worker
+      // collapses Scout+Generator. Without these wrappers a
+      // primaryTask='review' run could accidentally mutate via bash
+      // / write / edit / multi_edit.
+      wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef),
+      wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef),
+      wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef),
+      wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef),
+      codingTools.exitPlanMode,
+      codingTools.todoUpdate,
+      codingTools.todoList,
+      // Worker dispatch wrapper allows write fan-out (Generator-equivalent).
+      workerDispatch,
+      codingTools.awaitChildTask,
+    ],
+    handoffs: undefined,
+    // Worker plans + executes, so it warrants the deeper reasoning
+    // budget Generator gets in the V1 path. `escalateOnRevise:true`
+    // matches Generator: when Evaluator returns `revise`, the next
+    // Worker turn lifts to deep reasoning to break the retry loop
+    // (Slice 3b wires the revise transition).
+    reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
+  };
+
   const scoutHandoffs: Handoff[] = [
     { target: generator, kind: 'continuation', description: 'Upgrade to H1 — execute + evaluate' },
     { target: planner, kind: 'continuation', description: 'Upgrade to H2 — plan + execute + evaluate' },
@@ -2376,17 +2491,29 @@ export function buildRunnerAgentChain(
     { target: generator, kind: 'continuation', description: 'revise — retry execution' },
     { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
   ];
+  // FEATURE_114 v0.7.36 — Worker hand-off graph. Worker emits
+  // `emit_handoff` and continues to Evaluator. The Evaluator → Worker
+  // revise edge is wired in Slice 3b alongside the entry-agent swap;
+  // doing so here would (harmlessly) create a parallel revise target
+  // that the V1 path never selects, but adding it under the active
+  // V2 flag keeps the V1 evaluatorHandoffs literal pristine and the
+  // V2 transition reviewable as a single change.
+  const workerHandoffs: Handoff[] = [
+    { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
+  ];
 
   scout.handoffs = scoutHandoffs;
   planner.handoffs = plannerHandoffs;
   generator.handoffs = generatorHandoffs;
   evaluator.handoffs = evaluatorHandoffs;
+  worker.handoffs = workerHandoffs;
 
   return {
     scout: Object.freeze(scout) as Agent,
     planner: Object.freeze(planner) as Agent,
     generator: Object.freeze(generator) as Agent,
     evaluator: Object.freeze(evaluator) as Agent,
+    worker: Object.freeze(worker) as Agent,
   };
 }
 

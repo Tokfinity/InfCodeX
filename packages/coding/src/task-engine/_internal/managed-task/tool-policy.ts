@@ -362,6 +362,14 @@ export function buildManagedWorkerToolPolicy(
   switch (role) {
     case 'scout':
       return undefined;
+    // FEATURE_114 v0.7.36 — Worker is the AMA Harness V2 single-loop
+    // primary role. Like Scout under V1, Worker runs with the default
+    // unrestricted tool surface — discipline (plan-first, mutation
+    // discipline, dispatch RULE A/B/C, scope commitment) is enforced
+    // by the prompt (`worker-role-prompt.ts`), not the tool-policy
+    // layer. The structural Evaluator gate remains the safety net.
+    case 'worker':
+      return undefined;
     case 'planner':
       return finalizeToolPolicy({
         summary: 'Planner may inspect scope facts and overview evidence to produce a sprint contract, but must not linearly page raw diffs, perform deep claim verification, mutate files, or execute implementation steps.',
