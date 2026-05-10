@@ -29,7 +29,7 @@ vi.mock('../child-executor.js', async () => ({
 }));
 const { executeChildAgents: mockExecuteChildAgents } = await import('../child-executor.js');
 const mockExec = mockExecuteChildAgents as unknown as ReturnType<typeof vi.fn>;
-import { _resetMessageQueueForTests } from '@kodax-ai/agent';
+import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
   buildRunnerLlmAdapter,
@@ -3980,4 +3980,137 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
   // to wake it. The flag is now hard-coded ON in `isIdleYieldEnabled`,
   // and the always-on outer loop is fully covered by the happy-path
   // test above.
+
+  // FEATURE_155 v0.7.39 Slice D2 — chat-while-waiting behavioral
+  // test. The pre-registered acceptance criterion is "user input in
+  // the idle-wait window reaches the Worker on the NEXT turn within
+  // a perception budget". `waitForWakeEvent` polls the message queue
+  // every 100ms (`pollIntervalMs` default), so the worst-case
+  // latency between enqueue and wake is one poll tick + Runner.run
+  // re-entry overhead. We assert ≤500ms — a generous bound that's
+  // still well under user-perceived "slow" thresholds (the Worker's
+  // status-text turn was already idle when we enqueued, so there's
+  // no LLM call to wait on; only the poll-tick + outer-loop
+  // re-entry).
+  it('user input enqueued during idle-wait reaches Worker within perception budget', async () => {
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const workerTurns: number[] = [];
+    let userMessageDeliveredAt: number | undefined;
+    let userMessageEnqueuedAt: number | undefined;
+    let workerSawUserText = false;
+
+    const mock = makeChainMockLlm({
+      worker: (turn, transcript) => {
+        workerTurns.push(turn);
+        if (turn === 1) {
+          // Fire a read-only probe — child stays unresolved so the
+          // Worker stays in idle-wait and `waitForWakeEvent` is
+          // racing only the queue arm + abort arm.
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'dispatch_child_task',
+              input: {
+                id: 'probe-cww-1',
+                objective: 'long-running probe',
+                read_only: true,
+              },
+            }],
+          };
+        }
+        if (turn === 2) {
+          // Idle-yield: text-only response. After this returns, the
+          // outer loop transitions into `waitForWakeEvent`. We
+          // schedule a queue.enqueue from the test harness AFTER a
+          // small delay so it lands during the wait.
+          setTimeout(() => {
+            userMessageEnqueuedAt = Date.now();
+            getMessageQueue().enqueue({
+              priority: 'user',
+              mode: 'prompt',
+              content: 'side-question while you wait',
+            });
+          }, 30);
+          return {
+            textBlocks: [{ text: 'Probing in the background; ask me anything.' }],
+          };
+        }
+        if (turn === 3) {
+          // Resume turn — the synthetic user message should carry
+          // the side-question content. Record latency at the moment
+          // Worker first observes it.
+          for (const msg of transcript) {
+            if (
+              msg.role === 'user'
+              && typeof msg.content === 'string'
+              && msg.content.includes('side-question while you wait')
+            ) {
+              userMessageDeliveredAt = Date.now();
+              workerSawUserText = true;
+              break;
+            }
+          }
+          // Settle the child so the run completes.
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('probe-cww-1', ['done']));
+          }, 5);
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-2',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'probe done + side answered',
+                evidence: ['done'],
+                followup: ['none'],
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'fallthrough' }] };
+      },
+      evaluator: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: {
+                status: 'accept',
+                user_answer: 'OK.',
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'OK.' }] };
+      },
+    });
+
+    const result = await runManagedTaskViaRunner(makeOptions(), 'long task', mock);
+
+    expect(result.success).toBe(true);
+    expect(workerSawUserText).toBe(true);
+    expect(workerTurns).toContain(3);
+
+    // Perception-budget assertion: the gap between user enqueue and
+    // the Worker observing the message should fit within one queue-
+    // poll tick (100ms default) plus generous re-entry overhead.
+    expect(userMessageEnqueuedAt).toBeDefined();
+    expect(userMessageDeliveredAt).toBeDefined();
+    const latencyMs = (userMessageDeliveredAt as number) - (userMessageEnqueuedAt as number);
+    // Floor at 0 to guard against system-clock drift on slow CI hosts;
+    // ceiling at 500ms — well above the 100ms poll budget plus
+    // Runner.run re-entry on a mocked LLM.
+    expect(latencyMs).toBeGreaterThanOrEqual(0);
+    expect(latencyMs).toBeLessThan(500);
+  }, 30_000);
 });
