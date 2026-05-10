@@ -42,7 +42,8 @@ import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
-import { toolAwaitChildTask } from './await-child-task.js';
+// FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
+// (default ON since Slice B1.D) is the canonical wait mechanic.
 import { toolTodoUpdate } from './todo-update.js';
 import { toolTodoList } from './todo-list.js';
 import {
@@ -470,41 +471,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       return `Dispatch(${mutability}): ${obj}`;
     },
   },
-  {
-    name: 'await_child_task',
-    description:
-      'Reclaim the result of a previously launched async child task by task_id. '
-      + 'FEATURE_119 v0.7.36 Pattern B: dispatch_child_task returns a `task_id:<id>` banner immediately and '
-      + 'runs the executor in the background. Call this tool when you need the result. It awaits the in-flight '
-      + 'promise, returns the same finding text the synchronous path would have returned, and removes the entry '
-      + 'from the registry (each task_id can be awaited at most once). '
-      + 'WHEN TO USE: dispatch read-only children in parallel with `dispatch_child_task` calls (multiple tool_use '
-      + 'blocks in one response), then call `await_child_task` for each task_id when its evidence is needed. '
-      + 'For long-running write children (e.g. 90s `npm test`), this lets you continue with other tools — read, '
-      + 'grep, todo_update — instead of blocking the Worker turn. A <task-completed> notification arrives '
-      + 'automatically after a yielding tool boundary, but you may also await proactively.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: 'The task_id returned by an earlier dispatch_child_task call.' },
-      },
-      required: ['task_id'],
-    },
-    handler: toolAwaitChildTask,
-    // FEATURE_149 (v0.7.38) — `interruptBehavior` is intentionally LEFT
-    // UNSET. Aborting a Worker round mid-await would orphan the
-    // background child: per FEATURE_119 Pattern B the executor keeps
-    // running in the background after the await is dropped, but the
-    // resolver entry would never be claimed and the child's mutations
-    // (it could be writing to a worktree right now) would land into a
-    // detached state. CC's `TaskGetTool` / `TaskOutputTool` likewise
-    // default to `'block'`. Keep it 'wait' here — let the await finish,
-    // queue the new prompt for the next round.
-    toClassifierInput: (input) => {
-      const i = input as { task_id?: string };
-      return `Await: ${typeof i?.task_id === 'string' ? i.task_id : '<no-task-id>'}`;
-    },
-  },
+  // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` registry entry
+  // removed. Idle-yield is the canonical wait mechanic (Slice B1.D
+  // default flip); the runner-driven outer loop in
+  // `runManagedTaskViaRunnerInner` resumes any agent that exits
+  // text-only with pending children when a `<task-completed>`
+  // notification lands on the message queue.
   {
     name: 'web_search',
     description: 'Search the web for discovery-oriented results with explicit trust and freshness signaling.',
