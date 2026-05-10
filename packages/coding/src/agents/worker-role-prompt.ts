@@ -133,11 +133,31 @@ export function buildWorkerInstructions(
 /**
  * Predicate used by the runner-driven entry point to decide which
  * harness path to take. Returns true when the V2 Worker single-loop
- * is enabled. Reads `process.env.KODAX_HARNESS_V2` — anything other
- * than `'true'` (case-insensitive) leaves the legacy V1 path in place.
+ * is enabled. Reads `process.env.KODAX_HARNESS_V2`.
+ *
+ * **v0.7.38 Slice 7 (default flip)**: V2 is now the DEFAULT. Reasoning,
+ * with raw eval data:
+ *
+ *   - `tests/feature-114-v1-baseline-comparison.eval.ts` (n=20, 4
+ *     production aliases) showed V1 Scout commits a render-eligible
+ *     plan list on only **10%** of "edit + build verify" multi-step
+ *     tasks (the most common shape). V2 Worker commits **45%** on
+ *     the same task with the same n — a +35pp delta on the metric
+ *     users actually feel ("can I see what the agent is doing?").
+ *   - `tests/feature-114-harness-v2-baseline.eval.ts` (n=60) showed
+ *     V2's signature emit_handoff path at 95-100% across all 4
+ *     aliases, and the negative-case "do not over-trigger" guard at
+ *     100% across all 4 aliases.
+ *   - V2 architecture is structurally simpler (Worker + Evaluator vs
+ *     Scout/Planner/Generator/Evaluator), making the prompt surface
+ *     smaller and the failure modes easier to reason about.
+ *
+ * Opt-out path: `KODAX_HARNESS_V2=false` (case-insensitive) restores
+ * the V1 path bit-for-bit. Anything else (unset, '', 'true', 'TRUE',
+ * '1', 'yes', etc.) leaves V2 active.
  */
 export function isHarnessV2Enabled(): boolean {
   const raw = process.env.KODAX_HARNESS_V2;
-  if (typeof raw !== 'string') return false;
-  return raw.toLowerCase() === 'true';
+  if (typeof raw !== 'string') return true;
+  return raw.toLowerCase() !== 'false';
 }
