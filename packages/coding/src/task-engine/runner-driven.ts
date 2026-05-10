@@ -73,6 +73,18 @@ import {
 // (a) entry-agent selection (chain.scout vs chain.worker), and
 // (b) Evaluator's revise handoff target (Generator vs Worker).
 import { isHarnessV2Enabled } from '../agents/worker-role-prompt.js';
+// FEATURE_114 v0.7.36 Slice 3c — deterministic per-step evaluator.
+// When a `todo_update` flips an item with an `evaluator` hint to
+// `completed`, the runner runs the corresponding npm command and
+// threads stderr back into the next tool result. Pure helper; the
+// runner wrapper is right below the existing todoReminderState wrap.
+import {
+  formatDeterministicEvaluatorResult,
+  runDeterministicEvaluator,
+  type DeterministicEvaluatorHint,
+  type DeterministicEvaluatorResult,
+  type RunDeterministicEvaluatorInput,
+} from './deterministic-evaluator.js';
 
 import { resolveProvider } from '../providers/index.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
@@ -2098,6 +2110,19 @@ export function buildRunnerAgentChain(
   // call resets the throttle reminder counter (model is making
   // progress; the no-update streak is broken).
   todoReminderState?: TodoReminderState,
+  // FEATURE_114 v0.7.36 Slice 3c — deterministic per-step evaluator
+  // hook. When provided, the `todo_update` wrapper detects items that
+  // flip to `completed` AND carry an `evaluator: 'build'|'test'|'lint'`
+  // hint, runs the corresponding command in `runtimeCwd`, and appends
+  // a formatted result to the tool's output so the LLM sees the check
+  // outcome on its next turn. Omitted → no-op (tests / legacy callers).
+  runtimeCwd?: string,
+  // FEATURE_114 v0.7.36 Slice 3c — injectable evaluator runner. Tests
+  // pass a stub here to avoid spawning real shell commands; production
+  // omits this and uses the real `runDeterministicEvaluator`.
+  runDeterministicEvaluatorOverride?: (
+    input: RunDeterministicEvaluatorInput,
+  ) => Promise<DeterministicEvaluatorResult>,
 ): RunnerAgentChain {
   const codingTools = buildCodingToolBundle(ctx, budget, events);
   // FEATURE_097 (v0.7.34) §5 ② — wrap `todo_update` so every successful
@@ -2125,6 +2150,87 @@ export function buildRunnerAgentChain(
           }
         }
         return result;
+      },
+    };
+    (codingTools as { -readonly [K in keyof typeof codingTools]: typeof codingTools[K] }).todoUpdate = wrappedTodoUpdate;
+  }
+  // FEATURE_114 v0.7.36 Slice 3c — deterministic per-step evaluator.
+  // When `todoStore` + `runtimeCwd` are wired, wrap `todo_update` so a
+  // successful `pending|in_progress → completed` transition on an
+  // item with `evaluator: 'build'|'test'|'lint'` triggers the
+  // corresponding npm command. The check's outcome (pass / fail with
+  // stderr tail / skipped on missing script / error on timeout) is
+  // appended to the tool result so the Worker reads it on the next
+  // turn and self-corrects. No-op when either dependency is missing
+  // — keeps test fixtures + V1 callers untouched.
+  //
+  // The wrapper composes AFTER the throttle-reminder wrap above so
+  // both effects fire on the same tool call.
+  if (todoStore && runtimeCwd) {
+    const runEvaluator = runDeterministicEvaluatorOverride ?? runDeterministicEvaluator;
+    const baseTodoUpdate = codingTools.todoUpdate;
+    const wrappedTodoUpdate: RunnableTool = {
+      ...baseTodoUpdate,
+      execute: async (input, runnerCtx): Promise<RunnerToolResult> => {
+        // Snapshot pre-state so we can detect status transitions on
+        // the items the tool call touches. Cheap (O(N), N small).
+        const preState = new Map<string, { status: string; evaluator?: string }>();
+        for (const item of todoStore.getAll()) {
+          preState.set(item.id, { status: item.status, evaluator: item.evaluator });
+        }
+        const result = await baseTodoUpdate.execute(input, runnerCtx);
+        if (result.isError) return result;
+        // Find items whose status freshly flipped to `completed` AND
+        // carry an evaluator hint. In the typical update-op path
+        // exactly one item flips per call; on init-op N items can be
+        // seeded but they all start at `pending` (no completion to
+        // check). Scan all items defensively — cheap.
+        const transitions: Array<{ id: string; hint: DeterministicEvaluatorHint }> = [];
+        for (const item of todoStore.getAll()) {
+          if (item.status !== 'completed') continue;
+          if (!item.evaluator) continue;
+          const before = preState.get(item.id);
+          // Skip items that were already `completed` BEFORE this call —
+          // re-running checks on no-op transitions would double the
+          // cost and confuse the LLM with stale results.
+          if (before?.status === 'completed') continue;
+          // Type-narrow the hint — todo-store stores the schema-validated
+          // value already, but TS can't prove that across the boundary.
+          const hint = item.evaluator;
+          if (hint !== 'build' && hint !== 'test' && hint !== 'lint') continue;
+          transitions.push({ id: item.id, hint });
+        }
+        if (transitions.length === 0) return result;
+        // Run each check sequentially. Worker prompt guidance steers
+        // toward only-one-in_progress-at-a-time, so the typical case
+        // is a single transition per call; sequential keeps stdout
+        // tails interpretable when multiple do co-occur.
+        const evaluatorOutputs: string[] = [];
+        for (const { id, hint } of transitions) {
+          try {
+            const checkResult = await runEvaluator({
+              hint,
+              cwd: runtimeCwd,
+            });
+            evaluatorOutputs.push(
+              `[evaluator:${id}] ${formatDeterministicEvaluatorResult(checkResult)}`,
+            );
+          } catch (err) {
+            // Defensive: a thrown evaluator surfaces as a soft
+            // diagnostic in the tool result, not a runner crash.
+            const message = err instanceof Error ? err.message : String(err);
+            evaluatorOutputs.push(
+              `[evaluator:${id}] [deterministic-evaluator:${hint}] error — ${message}`,
+            );
+          }
+        }
+        // Thread the evaluator output into the tool result. Preserve
+        // the original JSON envelope as the first line so existing
+        // parsers (`todoReminderState` reset above) stay happy; the
+        // evaluator output is a tail block.
+        const baseContent = typeof result.content === 'string' ? result.content : '';
+        const enrichedContent = [baseContent, '', ...evaluatorOutputs].join('\n');
+        return { ...result, content: enrichedContent };
       },
     };
     (codingTools as { -readonly [K in keyof typeof codingTools]: typeof codingTools[K] }).todoUpdate = wrappedTodoUpdate;
@@ -5008,6 +5114,13 @@ async function runManagedTaskViaRunnerInner(
     todoStore,
     pendingFailedResetRef,
     todoReminderState,
+    // FEATURE_114 v0.7.36 Slice 3c — workspace cwd for the
+    // deterministic per-step evaluator. The check spawns
+    // `npm run build/test/lint` here when a todo flips to completed
+    // with an evaluator hint. Production always has a cwd; the
+    // override slot is for tests only and stays undefined in the
+    // hot path.
+    managedWorkspace.executionCwd,
   );
   // FEATURE_078: provide a callback that surfaces Scout's
   // `downstream_reasoning_hint` to the per-role adapter. Read lazily —
