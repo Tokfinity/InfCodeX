@@ -681,10 +681,18 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
     let prefix = "";
     const managedHarnessShort = formatHarnessProfileShort(managedHarnessProfile);
     const normalizedLiveActivityLabel = normalizeManagedLiveActivityLabel(lastLiveActivityLabel, managedWorkerTitle);
+    // FEATURE_114 v0.7.38 Slice 7 — preflight prefix derives the role
+    // label from `managedWorkerTitle`. The runner emits 'Worker' on
+    // V2 preflight and 'Scout' on V1; previously this branch
+    // hardcoded 'Scout' and only appended a non-Scout title as a
+    // suffix, so V2 sessions rendered '[AMA Scout - Worker]' instead
+    // of '[AMA Worker]'. Falling back to 'Scout' keeps legacy
+    // transcripts unchanged when the title is missing.
+    const preflightRole = managedWorkerTitle ?? "Scout";
     const managedPrefix = managedPhase === "routing"
       ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Routing] `
       : managedPhase === "preflight"
-        ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Scout${managedWorkerTitle && managedWorkerTitle !== "Scout" ? ` - ${managedWorkerTitle}` : ''}] `
+        ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${preflightRole}] `
         : managedHarnessProfile
           ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
           : "";

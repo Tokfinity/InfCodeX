@@ -1070,7 +1070,18 @@ function wrapEmitterWithRecorder(
             );
           }
         }
-        observer.onRoleEmit(SLOT_TO_ROLE[slot], recorder);
+        // FEATURE_114 v0.7.38 Slice 7 — V2 role label for the handoff
+        // slot. SLOT_TO_ROLE['handoff'] === 'generator' is the V1 truth
+        // (Generator emits emit_handoff). Under V2 the executor is
+        // Worker, so the slot=handoff emit comes from chain.worker; we
+        // rewrite the role label here so the REPL sees `[Worker]`
+        // instead of `[Generator]` after the handoff fires. All other
+        // slots (scout / contract / verdict) keep their V1 mapping.
+        const emittedRole: KodaXTaskRole =
+          slot === 'handoff' && isHarnessV2Enabled()
+            ? 'worker'
+            : SLOT_TO_ROLE[slot];
+        observer.onRoleEmit(emittedRole, recorder);
         // 90%-threshold budget-extension dialog. Legacy only triggered this
         // on Evaluator revise; the Runner-driven path now fires it after
         // every role emit (scout/contract/handoff/verdict). Reason: in a
@@ -1451,14 +1462,26 @@ function buildObserverBridge(
     });
   };
   return {
-    preflight: () =>
+    preflight: () => {
+      // FEATURE_114 v0.7.38 Slice 7 — when V2 is the entry path
+      // (chain.worker, see ~line 5212), the preflight title MUST mirror
+      // that. Otherwise `activeWorkerTitle: 'Scout'` persists into every
+      // Worker tool call (REPL reads `managedTaskStatusRef.current
+      // .activeWorkerTitle` as the per-tool prefix), so users see
+      // `[Scout] read/bash/grep` for a path that's actually running
+      // Worker — exactly the symptom that surfaced after the V2
+      // default flip. V1 path keeps the literal Scout label.
+      const v2Active = isHarnessV2Enabled();
       emit({
         phase: 'preflight',
-        activeWorkerId: 'scout',
-        activeWorkerTitle: ROLE_TO_TITLE.scout,
-        note: 'Scout analyzing task complexity',
+        activeWorkerId: v2Active ? 'worker' : 'scout',
+        activeWorkerTitle: v2Active ? ROLE_TO_TITLE.worker : ROLE_TO_TITLE.scout,
+        note: v2Active
+          ? 'Worker analyzing task'
+          : 'Scout analyzing task complexity',
         persistToHistory: false,
-      }),
+      });
+    },
     onRoleEmit: (role, recorder) => {
       // Once Scout has confirmed a harness tier, keep it as the reference.
       const scoutHarness = recorder.scout?.payload.scout?.confirmedHarness;

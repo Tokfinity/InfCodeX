@@ -853,6 +853,116 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
     });
   });
 
+  it('V2 active: preflight emits activeWorkerTitle="Worker" (not "Scout")', async () => {
+    // FEATURE_114 v0.7.38 Slice 7 — when V2 is the entry path
+    // (chain.worker), the runner's preflight emit MUST carry the
+    // Worker label so the REPL prefix on Worker's tool calls reads
+    // `[Worker] read/bash/grep`. The previous hardcoded scout label
+    // persisted into every Worker tool call (no slot emit had fired
+    // yet) and made V2 sessions appear to still be running V1.
+    await withHarnessV2('true', async () => {
+      const statuses: Array<Record<string, unknown>> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              textBlocks: [{ text: 'Done.' }],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'e1',
+                name: 'emit_verdict',
+                input: { status: 'accept', user_answer: 'ok' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+        },
+      });
+      await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
+      const preflight = statuses.find((s) => s.phase === 'preflight');
+      expect(preflight?.activeWorkerId).toBe('worker');
+      expect(preflight?.activeWorkerTitle).toBe('Worker');
+      expect(preflight?.note).toBe('Worker analyzing task');
+    });
+  });
+
+  it('V2 active: handoff slot maps to role="worker" (not "generator")', async () => {
+    // FEATURE_114 v0.7.38 Slice 7 — Worker emits emit_handoff in V2;
+    // SLOT_TO_ROLE['handoff'] === 'generator' is the V1 truth, so the
+    // observer must rewrite the role to 'worker' under V2 or the
+    // post-handoff status event would tag tool calls with
+    // [Generator] for the rest of the run.
+    await withHarnessV2('true', async () => {
+      const statuses: Array<Record<string, unknown>> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              textBlocks: [{ text: 'Done.' }],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'e1',
+                name: 'emit_verdict',
+                input: { status: 'accept', user_answer: 'ok' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+        },
+      });
+      await runManagedTaskViaRunner(opts, 'task', mock);
+      const workerTurn = statuses.find(
+        (s) => s.phase === 'worker' && s.activeWorkerId === 'worker',
+      );
+      expect(workerTurn).toBeDefined();
+      expect(workerTurn?.activeWorkerTitle).toBe('Worker');
+      // Generator must never appear as an emitted role under V2 —
+      // the chain doesn't route through it on the entry path.
+      const generatorTurn = statuses.find(
+        (s) => s.phase === 'worker' && s.activeWorkerId === 'generator',
+      );
+      expect(generatorTurn).toBeUndefined();
+    });
+  });
+
   it('V2 flag off (KODAX_HARNESS_V2=false): same prompt routes through Scout (V1 baseline preserved)', async () => {
     // v0.7.38 Slice 7 — V2 is the default; explicit `false` opts out
     // to V1. Previously this test used `undefined` (env unset =
@@ -1324,17 +1434,35 @@ describe('Shard 5b parity — blocked path', () => {
 
 describe('Shard 6a — onManagedTaskStatus observer events', () => {
   it('fires preflight at start and completed at end', async () => {
-    const statuses: Array<{ phase?: string; activeWorkerId?: string }> = [];
+    const statuses: Array<{
+      phase?: string;
+      activeWorkerId?: string;
+      activeWorkerTitle?: string;
+      note?: string;
+    }> = [];
     const opts = {
       ...makeOptions(),
       events: {
-        onManagedTaskStatus: (s: { phase?: string; activeWorkerId?: string }) => statuses.push(s),
+        onManagedTaskStatus: (s: {
+          phase?: string;
+          activeWorkerId?: string;
+          activeWorkerTitle?: string;
+          note?: string;
+        }) => statuses.push(s),
       },
     } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
     await runManagedTaskViaRunner(opts, 'Say hi', async () => ({
       textBlocks: [{ text: 'Hi.' }], toolBlocks: [],
     }));
-    expect(statuses.some((s) => s.phase === 'preflight')).toBe(true);
+    const preflight = statuses.find((s) => s.phase === 'preflight');
+    expect(preflight).toBeDefined();
+    // V1 baseline (file-level KODAX_HARNESS_V2='false') keeps the
+    // legacy Scout label on preflight. The Slice 7 V2 path uses
+    // 'Worker' — covered by the V2 preflight test in the
+    // 'Shard 5d V2 trivial flow' describe block.
+    expect(preflight?.activeWorkerId).toBe('scout');
+    expect(preflight?.activeWorkerTitle).toBe('Scout');
+    expect(preflight?.note).toBe('Scout analyzing task complexity');
     expect(statuses.some((s) => s.phase === 'completed')).toBe(true);
   });
 
