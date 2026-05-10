@@ -1,12 +1,12 @@
 /**
- * Idle-yield primitives for FEATURE_??? (v0.7.39) — async chat-while-waiting.
+ * Idle-yield primitives for FEATURE_155 (v0.7.39) — async chat-while-waiting.
  *
  * Replaces the blocking `await_child_task` semantics with a Claude-Code-style
- * "Worker turn ends idle, runner waits for the next external event"
- * mechanism. After this lands, when the Worker has dispatched ≥1 children
- * and has nothing else to do, it outputs a brief status line (no tool
- * calls), and Runner.run returns. This module gives the task-engine layer
- * the two utilities it needs to interpret that exit and resume:
+ * "agent turn ends idle, runner waits for the next external event"
+ * mechanism. When the agent has dispatched ≥1 children and has nothing else
+ * to do, it outputs a brief status line (no tool calls), and Runner.run
+ * returns. This module gives the task-engine layer the two utilities it
+ * needs to interpret that exit and resume:
  *
  *   1. `detectIdleYield(...)` — synchronous predicate over the run's exit
  *      state. Returns true when the Worker turn ended without an
@@ -36,27 +36,19 @@ import type { KodaXChildExecutionResult } from '../../../types.js';
 import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
 
 /**
- * Env-flag gate for the runner-driven outer-loop wiring (Slice A2 +
- * the Worker prompt / dispatch banner from Slice B1).
+ * Env-flag gate for the runner-driven outer-loop wiring.
  *
- * **Default ON in v0.7.39 (Slice B1 flip)** — Layer 2 eval at SHA
- * `1a08de10` recorded ≥80% idle-yield adoption on 3 of 5 aliases
- * (kimi 100%, mmx/m27 100%, zhipu/glm51 93.3%; overall 81.3%). The
- * pre-registered SHIP gate (≥3 of 4 aliases ≥80%) is met. ds/v4pro
- * (66.7%) and ds/v4flash (46.7%) retain a `read=N` failure mode on
- * the single-dispatch case; the `await_child_task` tool stays
- * available as a transitional fallback so those models still
- * complete tasks even when they don't idle-yield.
- *
- * Opt-out path: `KODAX_IDLE_YIELD=false` (case-insensitive) restores
- * the v0.7.38 blocking-await behavior bit-for-bit. Anything else
- * (unset, `'true'`, `'TRUE'`, `'1'`, `''`, etc.) leaves idle-yield
- * active.
+ * **Slice C3 (v0.7.39) — flag retired as a runtime gate.** With
+ * `await_child_task` removed (Slice C1) there is no working "v0.7.38
+ * emulation" path: the prompt + banner always teach idle-yield, so
+ * gating only the outer loop would leave a flag-OFF deployment with
+ * agents that exit text-only but no resumer to wake them. The
+ * function is therefore hard-coded to `true` and exists only for
+ * import compatibility with the Slice A1/A2 callers and
+ * historical-test references; the env var has no effect.
  */
 export function isIdleYieldEnabled(): boolean {
-  const raw = process.env.KODAX_IDLE_YIELD;
-  if (typeof raw !== 'string') return true;
-  return raw.toLowerCase() !== 'false';
+  return true;
 }
 
 /**

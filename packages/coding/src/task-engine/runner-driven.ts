@@ -252,18 +252,16 @@ import {
 } from './_internal/managed-task/sanitize.js';
 import { buildManagedTaskCompactionHook } from './_internal/managed-task/compaction.js';
 // FEATURE_155 (v0.7.39) — idle-yield outer loop primitives. The wiring
-// here detects a Worker turn that exited via the no-tool-calls /
+// here detects an agent turn that exited via the no-tool-calls /
 // pending-children branch, waits for a wake event (child completion or
 // inbound user message), and resumes Runner.run with a synthetic user
-// message so the Worker can react. Gated by `KODAX_IDLE_YIELD=true` —
-// default off in v0.7.39 because the Worker prompt still mandates
-// `await_child_task`. Slice B1 lands the prompt change and flips the
-// default; Slice C1 removes the `await_child_task` tool entirely.
+// message so the agent can react. Always-on since Slice C3 — the
+// `KODAX_IDLE_YIELD` env-flag gate was retired together with the
+// `await_child_task` tool because there is no working off-path now.
 import {
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
-  isIdleYieldEnabled,
   waitForWakeEvent,
 } from './_internal/managed-task/idle-yield.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
@@ -5328,25 +5326,22 @@ async function runManagedTaskViaRunnerInner(
 
   // FEATURE_155 (v0.7.39) idle-yield outer loop.
   //
-  // The legacy single-call shape is preserved when `KODAX_IDLE_YIELD`
-  // is unset/false (the v0.7.39 default) — `Runner.run` still resolves
-  // exactly once and falls through to the post-run code below
-  // unchanged. When the flag is on AND the Worker exits via the
-  // no-tool-calls + pending-children + no-handoff branch, the loop
-  // waits for an external wake event (child completion or inbound
-  // queue message), splices a synthetic user message that surfaces
-  // the wake content, and re-enters `Runner.run` so the Worker can
-  // observe and react. See `idle-yield.ts` for the predicate /
-  // wake-event semantics.
-  const idleYieldEnabled = isIdleYieldEnabled();
+  // When the agent exits via the no-tool-calls + pending-children +
+  // no-handoff branch, the loop waits for an external wake event
+  // (child completion or inbound queue message), splices a synthetic
+  // user message that surfaces the wake content, and re-enters
+  // `Runner.run` so the agent can observe and react. The
+  // `KODAX_IDLE_YIELD` env-flag gate was retired in Slice C3 — there
+  // is no working "v0.7.38 emulation" path now that
+  // `await_child_task` is gone. See `idle-yield.ts` for the predicate
+  // and wake-event semantics.
   let currentAgent: Agent = entryAgent;
   let currentInput: AgentMessage[] = runnerInput;
   let runResult: Awaited<ReturnType<typeof Runner.run>>;
   // Defensive guard against a misbehaving prompt that flips into an
-  // infinite idle-loop. The legacy `await_child_task` path could not
-  // loop, so this is purely a v0.7.39 safety floor — the budget
-  // controller still gates real work, but a stuck-loop from a buggy
-  // prompt would otherwise wedge the REPL forever.
+  // infinite idle-loop. The budget controller still gates real work,
+  // but a stuck-loop from a buggy prompt would otherwise wedge the
+  // REPL forever.
   const IDLE_YIELD_MAX_ITERATIONS = 64;
   let idleYieldIterations = 0;
 
@@ -5381,8 +5376,6 @@ async function runManagedTaskViaRunnerInner(
       await cleanupRunCheckpoint();
       throw err;
     });
-
-    if (!idleYieldEnabled) break;
 
     if (++idleYieldIterations > IDLE_YIELD_MAX_ITERATIONS) {
       // Defensive: log via the logger surface (no console.log) and

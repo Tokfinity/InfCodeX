@@ -7,7 +7,7 @@
  * specific). Downstream consumers:
  *   - @kodax-ai/coding runner-driven mid-turn drain
  *   - @kodax-ai/repl InkREPL ESC soft-pause + text injection (FEATURE_111 absorbed)
- *   - subagent task-notification routing (FEATURE_119 await_child_task wakeup)
+ *   - subagent task-notification routing (FEATURE_155 idle-yield wakeup)
  *
  * Phase 0.6 study (`c:/tmp/claude-code-actual-usage.md`): Claude Code's
  * `'now'` priority has zero production usage; KodaX simplifies to 2 tiers.

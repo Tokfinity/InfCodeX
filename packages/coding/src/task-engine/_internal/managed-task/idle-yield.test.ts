@@ -356,7 +356,11 @@ describe('waitForWakeEvent', () => {
   });
 });
 
-describe('isIdleYieldEnabled (Slice B1.D — default flipped to ON in v0.7.39)', () => {
+describe('isIdleYieldEnabled (Slice C3 — env-flag gate retired in v0.7.39)', () => {
+  // The env-flag gate was retired together with `await_child_task`
+  // (Slice C1) — there is no working "v0.7.38 emulation" path now,
+  // so the function is hard-coded to true regardless of env. The
+  // export survives only for import-compat with Slice A1/A2 callers.
   let prev: string | undefined;
   beforeEach(() => {
     prev = process.env.KODAX_IDLE_YIELD;
@@ -366,23 +370,10 @@ describe('isIdleYieldEnabled (Slice B1.D — default flipped to ON in v0.7.39)',
     else process.env.KODAX_IDLE_YIELD = prev;
   });
 
-  it('returns true when env var is unset (v0.7.39 default after eval SHIP gate met)', () => {
-    delete process.env.KODAX_IDLE_YIELD;
-    expect(isIdleYieldEnabled()).toBe(true);
-  });
-
-  it('returns false ONLY for explicit "false" (opt-out path back to v0.7.38 behavior)', () => {
-    process.env.KODAX_IDLE_YIELD = 'false';
-    expect(isIdleYieldEnabled()).toBe(false);
-    process.env.KODAX_IDLE_YIELD = 'FALSE';
-    expect(isIdleYieldEnabled()).toBe(false);
-    process.env.KODAX_IDLE_YIELD = 'False';
-    expect(isIdleYieldEnabled()).toBe(false);
-  });
-
-  it('returns true for "true" / "TRUE" / "1" / "" / arbitrary other values (anything but "false" leaves idle-yield active)', () => {
-    for (const value of ['true', 'TRUE', '1', '', 'yes', 'on', 'enabled']) {
-      process.env.KODAX_IDLE_YIELD = value;
+  it('returns true regardless of env value (flag retired, idle-yield is always-on)', () => {
+    for (const value of [undefined, '', 'true', 'TRUE', '1', 'false', 'FALSE', 'False', 'no', 'yes']) {
+      if (value === undefined) delete process.env.KODAX_IDLE_YIELD;
+      else process.env.KODAX_IDLE_YIELD = value;
       expect(isIdleYieldEnabled()).toBe(true);
     }
   });
