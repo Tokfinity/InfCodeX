@@ -114,9 +114,11 @@ ROUND 3: ...
 [ ] sample size 多少？为什么是这个数（不能是"看心情"）？
 [ ] pre-registered 决策阈值：什么样的结果让我做什么决定？
 [ ] 总成本 budget：估计 $X。能换什么决定？($X 不值就放弃)
+[ ] raw output dump 路径？(强制条款，见 §Raw output preservation)
+[ ] LLM-judge 抽样审计计划？disagree 阈值多少触发 redo？(见反模式 7)
 ```
 
-**特别强调**：第 6 条（pre-registered 阈值）必须在跑实验前定下来。否则跑完只会陷入"再多跑 N 个看看"的无限增量。
+**特别强调**：第 6 条（pre-registered 阈值）必须在跑实验前定下来。否则跑完只会陷入"再多跑 N 个看看"的无限增量。第 8、9 条是 2026-05-10 FEATURE_151 Slice I 验证教训新增 — 没有 raw dump + LLM-judge 抽查，regex 假阴假阳会让你基于错误数据做错误决策（详见反模式 7 真实案例）。
 
 ---
 
@@ -156,6 +158,61 @@ OK = process exit 0 是个**极其弱的信号**：
 ### 反模式 6：跑完才想"什么算 signal"
 
 如果跑完看着 17pp delta 在思考"是 signal 还是 noise"，说明决策阈值没事先定。**跑前必须 pre-register**：例如 "delta < 10pp 视为 0 差异，跨 alias 一致才算 real signal"。
+
+### 反模式 7：用 regex 实现 "不应出现" 类否定断言
+
+反模式 1 推荐的"内容断言：assistant 文本包含 / 不包含某个 phrase"在**不包含**方向上有结构性陷阱：
+
+- **现象**：负面 case（如"trivial 任务上不应调用 todo_update"）的 regex 形如 `output 不出现 'todo_update'`。
+- **失败模式**：verbose / chain-of-thought 模型会写 `I should NOT call todo_update` 或在 `<antThinking>` 块里分析 `trivial 任务，不需要 todo_update`。模型的实际行为正确（确实没调用），但 regex 看不懂否定语义，把字面量出现判 fail。
+- **真实案例**（2026-05-10, FEATURE_151 Slice I 验证）：kimi 在 `single_lookup` / `single_grep` 4 个负面 case 里，5 次有 2-3 次 regex FAIL，干净 context 下 LLM-judge 全部 PASS。"kimi 上引入了过触发回归"是 regex 假阴性，根本不存在的 regression，差点让我们把没有 bug 的 v2 prompt 改回去。
+
+**强制规则**：
+
+1. **Negative-case judges 不能只用 regex**。要么改成"绝对结构断言"（例如：第一个 tool_call 的 name ≠ X — 需 harness 暴露 toolCalls），要么必须 pair LLM-judge 兜底。
+2. **所有 eval run 必须落盘 raw output**（见下节 §Raw output preservation）。每跑必 dump，不 dump 等于把数据丢了。
+3. **跑完后强制抽查**：每个 cell 至少抽 1 条 regex-fail 用 LLM-judge（干净 context）独立判一次，对比 regex；如果 disagreement >10%，整个 eval 数据作废重跑。Positive case 也建议抽 1 条 regex-pass 防止假阳性。
+
+---
+
+## Raw output preservation（强制条款）
+
+每次 eval run 必须把 `runsRaw[].text` + `toolCalls` + 每个 judge 的 pass/reason 落到磁盘 JSON。
+
+**理由**（同反模式 7）：
+- regex / 机械判子可能假阴假阳，**唯一的 ground truth 是模型的原始文本输出**。
+- 只有原始输出落盘，事后 LLM-judge 才能跑（不然每次跑 + judge = 重跑成本）。
+- pass-rate aggregate 是 derived，dump 是 source of truth — 没 dump 等于扔了源数据，留下的是 lossy summary。
+
+**落盘路径约定**：`os.tmpdir() / kodax-eval-dumps / <feature-id> / <case>.json`（即 Linux/macOS `/tmp/kodax-eval-dumps/...`，Windows `%LOCALAPPDATA%/Temp/kodax-eval-dumps/...`）。**必须用 OS tmpdir，不能放 repo 工作树内**（哪怕 gitignore 兜底也不行 — dump 是 transient runtime 产物，由 OS 回收，结构上和源代码必须分离）。
+
+Schema：
+
+```json
+{
+  "case": "<case_id>",
+  "stage": "<phase / variant>",
+  "userMessage": "<exact user message>",
+  "aliases": [
+    {
+      "alias": "<provider/model>",
+      "passRate": "<regex pass-rate>",
+      "runs": [
+        {
+          "runIndex": 0,
+          "text": "<raw model output>",
+          "toolCalls": ["<harness-captured tool calls>"],
+          "durationMs": 1234,
+          "regexPassed": true,
+          "regexJudges": [{ "name": "...", "passed": true, "reason": "..." }]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**参考实现**：`tests/feature-151-fan-out-plan-granularity.eval.ts` 在 driver 末尾用 `os.tmpdir()` + `node:fs.writeFileSync` 落盘，并 `console.log` 绝对路径供 operator 追溯。
 
 ---
 
@@ -199,4 +256,4 @@ KodaX 已有 [benchmark/harness/](harness/) 但**主要支持 Layer 3.5**（端�
 
 ## 总结：一句话方法论
 
-> 每一次 LLM 请求都必须能用机械化 assertion 验证一个 pre-registered 假设。如果做不到，先用代码 reading 或 unit test 替代；替代不了的实验本身就是设计错的。
+> 每一次 LLM 请求都必须能用机械化 assertion 验证一个 pre-registered 假设。**raw output 必须落盘**（反模式 7 教训），跑完每个 cell 至少抽 1 条 fail 让干净-context 的 LLM-judge 独立复核 — 不复核就不能信 regex 数据。如果做不到机械 assertion，先用代码 reading 或 unit test 替代；替代不了的实验本身就是设计错的。

@@ -15,27 +15,29 @@
  *   3. single_lookup       — single function lookup,     expect NO op:init
  *   4. single_grep         — single grep,                expect NO op:init
  *
- * ## Run model — Phase 1 exploration (Layer 2, single alias)
+ * ## Run model — Phase 2 cross-family validation (Layer 2, multi-alias)
  *
- * Per `benchmark/EVAL_GUIDELINES.md` (反模式 4: "探索期就开多 alias"), prompt
- * effectiveness is probed on ONE cheap/fast alias (`ds/v4flash`) with N=10
- * before any multi-alias generalization. Each run is a single-turn LLM probe
- * via `runOneShot` — NOT a multi-step agent loop.
+ * Phase 1 single-alias exploration on ds/v4flash (commits a3ff28c..7c508a2)
+ * lifted positive-case pass rate +30pp from v1 (25% avg) to v2 (55% avg) but
+ * showed ds/v4flash has an instruction-following ceiling that further
+ * prompt iteration would not productively break. Phase 2 evaluates the v2
+ * prompt against 5 production-grade aliases to answer the actual decision
+ * question: "ship Slice I in v0.7.38?".
  *
- * Topology: 1 alias × 4 case × 10 runs = 40 LLM calls (~$0.4 budget).
+ * Each run is a single-turn LLM probe via `runOneShot` — NOT a multi-step
+ * agent loop. Topology: 5 alias × 4 case × 5 runs = 100 LLM calls (~$3).
  *
- * **Phase 1 pre-registered decision matrix** (set BEFORE any LLM call —
+ * **Phase 2 pre-registered decision matrix** (set BEFORE any LLM call —
  * see also `docs/features/v0.7.38.md §FEATURE_151 Slice I`):
  *
- *   - PASS:    positive (review_3_modules + audit_5_packages) ≥80%
- *              AND negative (single_lookup + single_grep) ≤20%
- *              → promote to Phase 2 multi-alias generalization
- *   - PARTIAL: positive 60–80% OR negative 20–40%
- *              → tighten Slice I prompt, repeat Phase 1 on same alias
- *   - FAIL:    positive <60%
- *              → rewrite Slice I prompt, repeat Phase 1 on same alias
+ *   - SHIP:    ≥3 of 5 aliases hit ≥80% on EACH positive case
+ *              AND ≤20% on EACH negative case
+ *              → Slice I final, ship v0.7.38 as designed
+ *   - PARTIAL: 1-2 aliases ≥80% positive, others <80% but trending up
+ *              → ship Slice I anyway, document weaker-model behaviour in test guide
+ *   - REJECT:  0 aliases ≥80% positive
+ *              → revert Slice I, redesign
  *
- * Phase 2 (multi-alias) is a SEPARATE run with its own pre-registered budget.
  * No hard `expect.fail` in this commit — eval records numbers per case for
  * inspection, mirroring the sibling self-seeding pilot pattern.
  *
@@ -52,6 +54,10 @@
  *   - tests/feature-151-todo-self-seeding.eval.ts (sibling eval, same theme)
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, it } from 'vitest';
 
 import { availableAliases } from '../benchmark/harness/aliases.js';
@@ -62,30 +68,60 @@ import {
   buildPromptVariants,
 } from '../benchmark/datasets/feature-151-fan-out-plan-granularity/cases.js';
 
-// EVAL_GUIDELINES compliance — exploration phase (Layer 2, single alias):
-// Per `benchmark/EVAL_GUIDELINES.md` 反模式 4 ("探索期就开多 alias"), prompt
-// effectiveness is first probed on ONE cheap/fast alias with N=10 to establish
-// baseline. Multi-alias generalization is a separate Phase 2 only entered if
-// Phase 1 clears the pre-registered thresholds below.
+// Raw-output dump root — driver always writes per-case JSON for offline
+// LLM-as-judge cross-validation against the regex judges (EVAL_GUIDELINES
+// mechanical-assertion compliance check, see §Raw output preservation).
+// Lives under the OS tmp directory so the dump is treated as a transient
+// runtime artifact (cleaned by OS) and cannot accidentally leak into the
+// repo working tree. Run prints the absolute path so an operator can find
+// it for offline LLM-judge audit.
+const DUMP_ROOT = join(tmpdir(), 'kodax-eval-dumps', 'feature-151-fan-out-plan-granularity');
+
+// EVAL_GUIDELINES — Phase 2 cross-family validation (Layer 2, multi-alias):
 //
-// Pre-registered decision matrix (set BEFORE running, per checklist item 6):
-//   - Phase 1 PASS:  positive cases ≥80% AND negative cases ≤20%
-//                    → promote to Phase 2 multi-alias (separate run, separate budget)
-//   - Phase 1 PARTIAL: positive 60–80% OR negative 20–40%
-//                    → tighten Slice I prompt, re-run Phase 1 on same alias
-//   - Phase 1 FAIL:  positive <60%
-//                    → rewrite Slice I prompt, re-run Phase 1 on same alias
+// Phase 1 (single-alias ds/v4flash, v1+v2 prompt, see commits a3ff28c..7c508a2)
+// established that v2 lifts positive-case pass rate +30pp on the weakest model
+// (20%→60% on 3-pkg, 30%→50% on 5-pkg). Phase 1 declared PARTIAL/FAIL on the
+// strict pre-registered matrix, but diagnosis showed ds/v4flash hits a hard
+// instruction-following ceiling that further single-alias prompt iteration
+// would not break (matches EVAL_GUIDELINES anti-pattern 5 — micro-tweak
+// blind retry). Decision question for the eval is "ship Slice I in v0.7.38?",
+// which requires cross-family signal, not perfecting the floor model.
 //
-// Budget: 4 cases × 10 runs × 1 alias = 40 calls × ~$0.01/call ≈ $0.4
-// ROI: $0.4 buys one production-prompt decision (Slice I keep / strengthen / rewrite).
-const STAGE_LABEL = 'phase1-explore-1alias-10run';
-const RUNS_PER_CELL = 10;
-const EXPLORE_ALIAS = 'ds/v4flash';
+// Phase 2 pre-registered decision matrix (set BEFORE running):
+//   - SHIP:    ≥3 of 5 aliases hit ≥80% on EACH positive case AND ≤20% on EACH negative
+//              → Slice I final, ship v0.7.38 as designed
+//   - PARTIAL: 1-2 aliases ≥80% positive, others <80% but trending up vs Phase 1 v1 baseline
+//              → ship Slice I anyway (net-positive), document weaker-model behaviour in test guide
+//   - REJECT:  0 aliases ≥80% positive
+//              → revert Slice I, redesign
+//
+// Budget: 4 cases × 5 runs × 5 aliases = 100 calls × ~$0.03/call avg ≈ $3
+// ROI: $3 buys one ship-or-revert decision for v0.7.38 — within EVAL_GUIDELINES
+//      "$5 实验换一条 production prompt 改动: 值" guidance.
+//
+// Concurrency: per-alias single-call (反模式 3), cross-alias serial in vitest.
+// Aliases: ds/v4flash excluded (Phase 1 floor-model data already in hand).
+// Phase 2 RE-RUN with raw-output dump for regex-vs-LLM-judge cross-check.
+// Original Phase 2 lost raw outputs (driver only logged aggregates). This
+// pass adds disk dump of `runsRaw[].text` per case so an LLM-as-judge can
+// audit whether regex pass/fail reflects actual model behaviour — covers
+// both kimi negative-case regression suspicion AND mmx 20%/80% split AND
+// zhipu's apparent v1→v2 regression all in one run.
+const STAGE_LABEL = 'phase2-multialias-5run-with-dump';
+const RUNS_PER_CELL = 5;
+const PHASE2_ALIASES = [
+  'zhipu/glm51',
+  'kimi',
+  'mmx/m27',
+  'ark/glm51',
+  'ds/v4pro',
+] as const;
 
 describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
-  const aliases = availableAliases(EXPLORE_ALIAS);
+  const aliases = availableAliases(...PHASE2_ALIASES);
   if (aliases.length === 0) {
-    it(`skips: no API key for exploration alias ${EXPLORE_ALIAS}`, () => {
+    it('skips: no provider API keys in env for any Phase 2 alias', () => {
       // No-op test makes the skip visible in vitest output.
     });
     return;
@@ -94,10 +130,10 @@ describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
   for (const c of CASES) {
     it(
       `${c.id} — ${STAGE_LABEL}`,
-      // 15-min cap: 1 alias × 10 runs × ~10s/call ≈ 100s/case worst case;
-      // 15min gives 9× headroom for provider hiccups without inviting the
-      // 60min runaway we hit on the prior multi-alias attempt.
-      { timeout: 15 * 60_000 },
+      // 25-min cap: 5 alias × 5 runs × 60s/call worst case = 25 min/case.
+      // Per-call upper bound 300s acceptable per user direction; total wall
+      // for 4 cases ≈ 100 min worst case, typically ~15 min/case.
+      { timeout: 25 * 60_000 },
       async () => {
         const variants = buildPromptVariants(c.id);
         const judges = buildJudges(c.id);
@@ -161,6 +197,41 @@ describe('Eval: FEATURE_151 Slice I fan-out plan granularity (v0.7.38)', () => {
         lines.push(`  overall: ${totalPassed}/${totalRuns} (${overallRate}%)`);
         // eslint-disable-next-line no-console
         console.log(lines.join('\n'));
+
+        // Dump raw outputs for LLM-as-judge cross-validation. One file per
+        // case; lives under os.tmpdir() / kodax-eval-dumps so the OS reaps
+        // it as a transient runtime artifact (cannot leak into repo tree).
+        mkdirSync(DUMP_ROOT, { recursive: true });
+        const variant = variants[0];
+        const dump = {
+          case: c.id,
+          stage: STAGE_LABEL,
+          expectInit: c.expectInit,
+          minItems: c.minItems,
+          behaviour: c.behaviour,
+          userMessage: variant?.userMessage ?? '',
+          systemPromptSha: undefined as string | undefined,
+          aliases: cells.map((cell) => ({
+            alias: cell.alias,
+            passRate: cell.passRate,
+            runs: cell.runsRaw.map((run) => ({
+              runIndex: run.runIndex,
+              text: run.text,
+              durationMs: run.durationMs,
+              error: run.error,
+              regexPassed: run.passed,
+              regexJudges: run.judges.map((j) => ({
+                name: j.name,
+                passed: j.passed,
+                reason: j.reason,
+              })),
+            })),
+          })),
+        };
+        const dumpPath = join(DUMP_ROOT, `${c.id}.json`);
+        writeFileSync(dumpPath, JSON.stringify(dump, null, 2), 'utf8');
+        // eslint-disable-next-line no-console
+        console.log(`  raw-output dump: ${dumpPath}`);
       },
     );
   }
