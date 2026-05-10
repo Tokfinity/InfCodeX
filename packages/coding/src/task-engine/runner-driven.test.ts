@@ -11,13 +11,25 @@
  *     managedTask when Generator/Evaluator enter the chain)
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
   EMIT_SCOUT_VERDICT_TOOL_NAME,
 } from '../agents/protocol-emitters.js';
+// FEATURE_155 (v0.7.39) idle-yield e2e test below. Mock the child-
+// executor so the dispatch tool's IIFE has a controllable promise
+// instead of spawning a real sub-Runner. None of the pre-existing
+// 113 tests in this file invoke `dispatch_child_task` end-to-end —
+// they exercise tool topology only — so this mock is a no-op for
+// every other suite.
+vi.mock('../child-executor.js', async () => ({
+  executeChildAgents: vi.fn(),
+}));
+const { executeChildAgents: mockExecuteChildAgents } = await import('../child-executor.js');
+const mockExec = mockExecuteChildAgents as unknown as ReturnType<typeof vi.fn>;
+import { _resetMessageQueueForTests } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
   buildRunnerLlmAdapter,
@@ -27,7 +39,7 @@ import {
 } from './runner-driven.js';
 import type { RunnableTool } from '@kodax-ai/agent';
 import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax-ai/llm';
-import type { KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
+import type { KodaXChildExecutionResult, KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
 // Shard 6d-h artifact writes (contract.json / managed-task.json /
@@ -3768,4 +3780,257 @@ describe('H1 structural resume — buildStructuralResumeSeed (v0.7.26)', () => {
     expect(skillMap?.skillSummary).toBe('use edit for single-file change');
     expect(skillMap?.executionObligations).toEqual(['preserve CRLF', 'keep header comment']);
   });
+});
+
+// =============================================================================
+// FEATURE_155 (v0.7.39) Slice A2 — runner-driven idle-yield outer loop
+// =============================================================================
+// End-to-end integration: with `KODAX_IDLE_YIELD=true`, when the Worker
+// dispatches a child and exits with a text-only turn (no tool calls),
+// the outer loop must
+//   (a) detect idle-yield via `detectIdleYield`,
+//   (b) wait for the child to settle via `waitForWakeEvent`,
+//   (c) splice the canonical `<task-completed>` banner into the
+//       transcript via `composeIdleYieldUserMessage`, and
+//   (d) re-enter `Runner.run` so the Worker can react.
+//
+// The single test exercises the full happy path (probe child completes
+// → Worker emits handoff → Evaluator accepts) with the child-executor
+// mocked so we control settlement timing precisely. No production
+// scenario today triggers idle-yield because the Worker prompt still
+// mandates `await_child_task` — Slice B1 lands the prompt change. This
+// test is the only place in v0.7.39 that drives the outer-loop wiring
+// through a real `Runner.run` -> idle-yield -> resume -> `Runner.run`
+// cycle.
+
+function buildSuccessChildResult(
+  childId: string,
+  evidence: string[],
+): KodaXChildExecutionResult {
+  return {
+    results: [
+      {
+        childId,
+        fanoutClass: 'evidence-scan',
+        status: 'completed',
+        disposition: 'valid',
+        summary: evidence.join('\n'),
+        evidenceRefs: [],
+        contradictions: [],
+      },
+    ],
+    mergedFindings: [
+      {
+        childId,
+        objective: 'idle-yield probe',
+        evidence,
+        artifacts: [],
+      },
+    ],
+    mergedArtifacts: [],
+    totalTokensUsed: 0,
+    cancelledChildren: [],
+  };
+}
+
+describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
+  let prevHarnessV2: string | undefined;
+  let prevIdleYield: string | undefined;
+  let prevAsyncDispatch: string | undefined;
+
+  beforeEach(() => {
+    prevHarnessV2 = process.env.KODAX_HARNESS_V2;
+    prevIdleYield = process.env.KODAX_IDLE_YIELD;
+    prevAsyncDispatch = process.env.KODAX_ASYNC_DISPATCH;
+    process.env.KODAX_HARNESS_V2 = 'true';
+    process.env.KODAX_IDLE_YIELD = 'true';
+    // Ensure the dispatch tool takes the async / fire-and-forget path
+    // — the sync path runs the child inline and never reaches the
+    // idle-yield branch.
+    delete process.env.KODAX_ASYNC_DISPATCH;
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+  });
+
+  afterEach(() => {
+    if (prevHarnessV2 === undefined) delete process.env.KODAX_HARNESS_V2;
+    else process.env.KODAX_HARNESS_V2 = prevHarnessV2;
+    if (prevIdleYield === undefined) delete process.env.KODAX_IDLE_YIELD;
+    else process.env.KODAX_IDLE_YIELD = prevIdleYield;
+    if (prevAsyncDispatch === undefined) delete process.env.KODAX_ASYNC_DISPATCH;
+    else process.env.KODAX_ASYNC_DISPATCH = prevAsyncDispatch;
+    _resetMessageQueueForTests();
+  });
+
+  it('Worker dispatches → idle-yields → child completes → Worker resumes & emits handoff → Evaluator accepts', async () => {
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const workerTurns: number[] = [];
+    let resumeTranscriptHadBanner = false;
+
+    const mock = makeChainMockLlm({
+      worker: (turn, transcript) => {
+        workerTurns.push(turn);
+        if (turn === 1) {
+          // Fire a read-only probe dispatch. The dispatch tool's
+          // async branch registers a promise (mocked above) and
+          // returns the `task_id:probe-1` banner as tool_result.
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'dispatch_child_task',
+              input: {
+                id: 'probe-1',
+                objective: 'count imports of foo',
+                read_only: true,
+              },
+            }],
+          };
+        }
+        if (turn === 2) {
+          // Schedule the child to settle just AFTER this turn returns
+          // and the outer loop transitions into `waitForWakeEvent`.
+          // 20 ms is enough headroom for the Runner to process this
+          // turn's no-tool-calls exit without making the test slow.
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('probe-1', ['found 3 imports of foo']));
+          }, 20);
+          // Idle-yield: text-only response with NO tool calls. This
+          // is the entry condition that `detectIdleYield` keys on.
+          return {
+            textBlocks: [{ text: 'Awaiting probe-1 result before continuing.' }],
+          };
+        }
+        if (turn === 3) {
+          // After resume — confirm the synthetic user message
+          // carrying the `<task-completed task_id="probe-1">` banner
+          // is in the transcript. This is the contract `composeIdleYieldUserMessage`
+          // must satisfy for the Worker to observe the wake.
+          for (const msg of transcript) {
+            if (
+              msg.role === 'user'
+              && typeof msg.content === 'string'
+              && msg.content.includes('<task-completed task_id="probe-1">')
+              && msg.content.includes('found 3 imports of foo')
+            ) {
+              resumeTranscriptHadBanner = true;
+              break;
+            }
+          }
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-2',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'probe-1 done',
+                evidence: ['found 3 imports of foo'],
+                followup: ['none'],
+              },
+            }],
+          };
+        }
+        // Fallback for any extra turn after handoff — Runner-driven
+        // post-evaluator continuation can re-enter Worker; return
+        // safe text-only.
+        return { textBlocks: [{ text: 'Done.' }] };
+      },
+      evaluator: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: {
+                status: 'accept',
+                user_answer: 'Imports of foo: 3.',
+                reason: 'evidence corroborated',
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'Imports of foo: 3.' }] };
+      },
+    });
+
+    const result = await runManagedTaskViaRunner(makeOptions(), 'count imports of foo', mock);
+
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+    // Worker MUST have been called at least three times:
+    //   turn 1 — dispatch
+    //   turn 2 — idle-yield (text-only)
+    //   turn 3 — emit_handoff (post-resume)
+    expect(workerTurns.length).toBeGreaterThanOrEqual(3);
+    expect(workerTurns).toContain(3);
+    // The synthetic user message must have surfaced the canonical
+    // banner format on resume.
+    expect(resumeTranscriptHadBanner).toBe(true);
+    expect(result.lastText).toBe('Imports of foo: 3.');
+  }, 30_000);
+
+  it('flag off (default): same Worker exit shape returns immediately without a resume', async () => {
+    delete process.env.KODAX_IDLE_YIELD;
+
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const workerTurns: number[] = [];
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        workerTurns.push(turn);
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'dispatch_child_task',
+              input: {
+                id: 'probe-2',
+                objective: 'count imports of foo',
+                read_only: true,
+              },
+            }],
+          };
+        }
+        // Simulate the exact same idle-yield exit shape as the
+        // happy-path test. With the flag OFF, the outer loop must
+        // NOT call waitForWakeEvent — `Runner.run` returns once and
+        // the run terminates with whatever state it has.
+        return {
+          textBlocks: [{ text: 'Done without waiting (flag off).' }],
+        };
+      },
+      evaluator: () => ({ textBlocks: [{ text: 'fallback' }] }),
+    });
+
+    const startedAt = Date.now();
+    const result = await runManagedTaskViaRunner(makeOptions(), 'count imports of foo', mock);
+    const elapsedMs = Date.now() - startedAt;
+
+    // Settle the child after the run already returned — proves the
+    // outer loop did NOT block on it.
+    resolveChild(buildSuccessChildResult('probe-2', ['ignored']));
+
+    expect(workerTurns).toEqual([1, 2]);
+    // Sanity floor: even mocked, runManagedTaskViaRunner does heavy
+    // setup. The point of this assertion is "did NOT wait the full
+    // child settle". Pick a generous bound that's still well under
+    // any plausible idle-yield wait time.
+    expect(elapsedMs).toBeLessThan(10_000);
+    // Result is well-formed — flag-off path is the v0.7.39 default.
+    expect(result.signal).toBeDefined();
+  }, 30_000);
 });

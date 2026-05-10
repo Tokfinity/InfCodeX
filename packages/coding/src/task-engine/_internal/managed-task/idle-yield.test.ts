@@ -13,13 +13,19 @@
  *     the ordering invariants that matter when multiple wake sources
  *     fire near-simultaneously.
  */
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { MessageQueue } from '@kodax-ai/agent';
 
 import type { KodaXChildExecutionResult } from '../../../types.js';
+import type { KodaXMessage } from '@kodax-ai/llm';
+import type { QueuedMessage } from '@kodax-ai/agent';
+
 import {
+  composeIdleYieldUserMessage,
+  countLastAssistantToolCalls,
   detectIdleYield,
+  isIdleYieldEnabled,
   waitForWakeEvent,
   type WakeEvent,
 } from './idle-yield.js';
@@ -347,5 +353,213 @@ describe('waitForWakeEvent', () => {
     queue.enqueue({ priority: 'user', mode: 'prompt', content: 'no-leak' });
     await new Promise((r) => setTimeout(r, 30));
     expect(queue.size()).toBe(1);
+  });
+});
+
+describe('isIdleYieldEnabled', () => {
+  let prev: string | undefined;
+  beforeEach(() => {
+    prev = process.env.KODAX_IDLE_YIELD;
+  });
+  afterEach(() => {
+    if (prev === undefined) delete process.env.KODAX_IDLE_YIELD;
+    else process.env.KODAX_IDLE_YIELD = prev;
+  });
+
+  it('returns false when env var is unset (Slice A2 default — wiring is OFF until B1)', () => {
+    delete process.env.KODAX_IDLE_YIELD;
+    expect(isIdleYieldEnabled()).toBe(false);
+  });
+
+  it('returns true for "true" (case-insensitive)', () => {
+    process.env.KODAX_IDLE_YIELD = 'true';
+    expect(isIdleYieldEnabled()).toBe(true);
+    process.env.KODAX_IDLE_YIELD = 'TRUE';
+    expect(isIdleYieldEnabled()).toBe(true);
+  });
+
+  it('returns false for "false" / "0" / arbitrary garbage (strict opt-in)', () => {
+    process.env.KODAX_IDLE_YIELD = 'false';
+    expect(isIdleYieldEnabled()).toBe(false);
+    process.env.KODAX_IDLE_YIELD = '0';
+    expect(isIdleYieldEnabled()).toBe(false);
+    process.env.KODAX_IDLE_YIELD = 'yes';
+    expect(isIdleYieldEnabled()).toBe(false);
+  });
+});
+
+describe('countLastAssistantToolCalls', () => {
+  it('returns 0 for an empty transcript', () => {
+    expect(countLastAssistantToolCalls([])).toBe(0);
+  });
+
+  it('returns 0 when last assistant message is a plain text string', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'hi back' },
+    ];
+    expect(countLastAssistantToolCalls(messages)).toBe(0);
+  });
+
+  it('returns 0 when last assistant message has only text blocks', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'just text' }],
+      },
+    ];
+    expect(countLastAssistantToolCalls(messages)).toBe(0);
+  });
+
+  it('returns the number of tool_use blocks on the last assistant message', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'thinking…' },
+          { type: 'tool_use', id: 'a', name: 'read', input: {} },
+          { type: 'tool_use', id: 'b', name: 'grep', input: {} },
+        ],
+      },
+    ];
+    expect(countLastAssistantToolCalls(messages)).toBe(2);
+  });
+
+  it('skips trailing user / system messages and counts the most recent assistant', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: '1', name: 'x', input: {} }],
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: '1', content: 'ok' }],
+      },
+    ];
+    // Last assistant turn (1 tool_use), even though `messages.at(-1)` is user.
+    expect(countLastAssistantToolCalls(messages)).toBe(1);
+  });
+
+  it('returns 0 when no assistant message exists', () => {
+    const messages: KodaXMessage[] = [{ role: 'user', content: 'orphan' }];
+    expect(countLastAssistantToolCalls(messages)).toBe(0);
+  });
+});
+
+describe('composeIdleYieldUserMessage', () => {
+  function queuedMessage(content: string, priority: 'user' | 'background' = 'background'): QueuedMessage {
+    return {
+      id: 'qm-' + Math.random().toString(36).slice(2, 8),
+      priority,
+      mode: 'task-notification',
+      content,
+      enqueuedAt: Date.now(),
+    } as QueuedMessage;
+  }
+
+  it('returns undefined when wake is "aborted" (caller should have broken out earlier)', () => {
+    const result = composeIdleYieldUserMessage({ kind: 'aborted' }, () => []);
+    expect(result).toBeUndefined();
+  });
+
+  it('messages-arrived: passes the QueuedMessage content through verbatim and concatenates trailing drain', () => {
+    const drainCalls: number[] = [];
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('hello from queue', 'user')],
+      },
+      () => {
+        drainCalls.push(1);
+        return [queuedMessage('<task-completed task_id="late"/>', 'background')];
+      },
+    );
+    expect(result).toBeDefined();
+    expect(result!.role).toBe('user');
+    expect(result!._synthetic).toBe(true);
+    expect(result!.content).toContain('hello from queue');
+    expect(result!.content).toContain('<task-completed task_id="late"/>');
+    // Late drain should be appended AFTER the wake-event content.
+    expect((result!.content as string).indexOf('hello from queue')).toBeLessThan(
+      (result!.content as string).indexOf('<task-completed'),
+    );
+    expect(drainCalls.length).toBe(1);
+  });
+
+  it('child-completed: pulls the canonical <task-completed> banner from the drained queue', () => {
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'child-completed',
+        taskId: 'child-X',
+        result: { results: [], mergedFindings: [] },
+      },
+      () => [
+        queuedMessage(
+          '<task-completed task_id="child-X">\nfound 3 imports\n</task-completed>',
+        ),
+      ],
+    );
+    expect(result).toBeDefined();
+    expect(result!.content).toContain('child-X');
+    expect(result!.content).toContain('found 3 imports');
+  });
+
+  it('child-completed with empty queue: synthesizes a defensive fallback banner', () => {
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'child-completed',
+        taskId: 'child-orphan',
+        result: { results: [], mergedFindings: [] },
+      },
+      () => [],
+    );
+    expect(result).toBeDefined();
+    expect(result!.content).toContain('child-orphan');
+    expect(result!.content).toContain('(child task completed; no summary available)');
+  });
+
+  it('child-failed with empty queue: synthesizes a banner carrying the error message', () => {
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'child-failed',
+        taskId: 'child-crashed',
+        error: new Error('exec failed: SIGTERM'),
+      },
+      () => [],
+    );
+    expect(result).toBeDefined();
+    expect(result!.content).toContain('child-crashed');
+    expect(result!.content).toContain('failed: exec failed: SIGTERM');
+  });
+
+  it('does not call the drain callback for "aborted" wake (no queue mutation on abort)', () => {
+    let drainCalled = false;
+    composeIdleYieldUserMessage({ kind: 'aborted' }, () => {
+      drainCalled = true;
+      return [];
+    });
+    expect(drainCalled).toBe(false);
+  });
+
+  it('marks the synthesized message _synthetic so the REPL hides it from the user', () => {
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('foo', 'user')],
+      },
+      () => [],
+    );
+    expect(result?._synthetic).toBe(true);
+  });
+
+  it('joins multiple fragments with a blank-line separator', () => {
+    const result = composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('first', 'user'), queuedMessage('second', 'user')],
+      },
+      () => [queuedMessage('third')],
+    );
+    expect(result?.content).toBe('first\n\nsecond\n\nthird');
   });
 });
