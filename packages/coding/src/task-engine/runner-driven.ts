@@ -5226,12 +5226,12 @@ async function runManagedTaskViaRunnerInner(
     : harnessV2Active
       ? chain.worker
       : chain.scout;
-  // Run-scoped guardrails — created ONCE so the FEATURE_155 idle-yield
-  // outer loop can invoke `Runner.run` repeatedly without re-instantiating
-  // them. Re-instantiating would reset their stateful idempotency flags
-  // (e.g. `mutationTracker.reflectionInjected` consulted by the scope-
-  // aware harness guardrail), so any prior turn's
-  // emit_scout_verdict-hint injection would replay on resume.
+  // Run-scoped guardrails — built ONCE so the FEATURE_155 idle-yield
+  // outer loop can re-enter `Runner.run` cheaply. The factories return
+  // stateless objects (idempotency state lives on the closed-over
+  // `mutationTracker` / `payloadRef`, which persist across iterations
+  // either way), so reusing is purely a small allocation saving on the
+  // resume path; correctness is unchanged from the pre-loop shape.
   const runnerGuardrails = [
     // 1. tool-result-truncation: post-execute size policy parity with
     //    the SA substrate (`applyToolResultGuardrail`). Without it the
