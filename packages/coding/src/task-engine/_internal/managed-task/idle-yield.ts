@@ -36,22 +36,27 @@ import type { KodaXChildExecutionResult } from '../../../types.js';
 import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
 
 /**
- * Env-flag gate for the runner-driven outer-loop wiring (Slice A2).
+ * Env-flag gate for the runner-driven outer-loop wiring (Slice A2 +
+ * the Worker prompt / dispatch banner from Slice B1).
  *
- * Default OFF in v0.7.39 because the Worker prompt still mandates
- * `await_child_task` — the predicate would not actually trip in
- * production today. Slice B1 lands the prompt change and flips the
- * default to ON. Keeping the gate explicit lets us unit-test the
- * wiring in isolation and lets users disable it after Slice B1 if
- * a regression surfaces.
+ * **Default ON in v0.7.39 (Slice B1 flip)** — Layer 2 eval at SHA
+ * `1a08de10` recorded ≥80% idle-yield adoption on 3 of 5 aliases
+ * (kimi 100%, mmx/m27 100%, zhipu/glm51 93.3%; overall 81.3%). The
+ * pre-registered SHIP gate (≥3 of 4 aliases ≥80%) is met. ds/v4pro
+ * (66.7%) and ds/v4flash (46.7%) retain a `read=N` failure mode on
+ * the single-dispatch case; the `await_child_task` tool stays
+ * available as a transitional fallback so those models still
+ * complete tasks even when they don't idle-yield.
  *
- * Returns true only for the literal string `'true'` (case-insensitive).
- * Anything else — unset, `'false'`, `'0'`, garbage — disables.
+ * Opt-out path: `KODAX_IDLE_YIELD=false` (case-insensitive) restores
+ * the v0.7.38 blocking-await behavior bit-for-bit. Anything else
+ * (unset, `'true'`, `'TRUE'`, `'1'`, `''`, etc.) leaves idle-yield
+ * active.
  */
 export function isIdleYieldEnabled(): boolean {
   const raw = process.env.KODAX_IDLE_YIELD;
-  if (typeof raw !== 'string') return false;
-  return raw.toLowerCase() === 'true';
+  if (typeof raw !== 'string') return true;
+  return raw.toLowerCase() !== 'false';
 }
 
 /**

@@ -240,10 +240,10 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
   });
 });
 
-// FEATURE_155 (v0.7.39) — dispatch banner branches on KODAX_IDLE_YIELD.
-// Flag OFF (default) preserves the v0.7.38 banner pointing the LLM at
-// `await_child_task`; flag ON swaps to the idle-yield wording so the
-// banner aligns with the Worker prompt's IDLE-YIELD section.
+// FEATURE_155 (v0.7.39 Slice B1) — dispatch banner branches on
+// KODAX_IDLE_YIELD. Default is now ON (Slice B1.D); the v0.7.38
+// banner pointing the LLM at `await_child_task` is reachable only
+// through the explicit `KODAX_IDLE_YIELD=false` opt-out.
 describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', () => {
   let prevIdleYield: string | undefined;
   beforeEach(() => {
@@ -257,8 +257,8 @@ describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', ()
     _resetMessageQueueForTests();
   });
 
-  it('flag OFF (default): banner instructs the LLM to call await_child_task', async () => {
-    delete process.env.KODAX_IDLE_YIELD;
+  it('opt-out (KODAX_IDLE_YIELD=false): banner instructs the LLM to call await_child_task', async () => {
+    process.env.KODAX_IDLE_YIELD = 'false';
     let resolveExec!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
       new Promise<KodaXChildExecutionResult>((resolve) => {
@@ -277,8 +277,8 @@ describe('FEATURE_155 v0.7.39 — dispatch banner respects KODAX_IDLE_YIELD', ()
     await registry.get('iy-off');
   });
 
-  it('flag ON: banner instructs the LLM to idle-yield and explicitly forbids await_child_task', async () => {
-    process.env.KODAX_IDLE_YIELD = 'true';
+  it('default (idle-yield ON): banner instructs the LLM to idle-yield and explicitly forbids await_child_task', async () => {
+    delete process.env.KODAX_IDLE_YIELD;
     let resolveExec!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
       new Promise<KodaXChildExecutionResult>((resolve) => {

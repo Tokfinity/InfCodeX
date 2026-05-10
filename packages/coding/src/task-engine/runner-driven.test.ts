@@ -3977,8 +3977,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     expect(result.lastText).toBe('Imports of foo: 3.');
   }, 30_000);
 
-  it('flag off (default): same Worker exit shape returns immediately without a resume', async () => {
-    delete process.env.KODAX_IDLE_YIELD;
+  it('opt-out (KODAX_IDLE_YIELD=false): same Worker exit shape returns immediately without a resume (legacy v0.7.38 path)', async () => {
+    process.env.KODAX_IDLE_YIELD = 'false';
 
     let resolveChild!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
@@ -4006,9 +4006,9 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
           };
         }
         // Simulate the exact same idle-yield exit shape as the
-        // happy-path test. With the flag OFF, the outer loop must
-        // NOT call waitForWakeEvent — `Runner.run` returns once and
-        // the run terminates with whatever state it has.
+        // happy-path test. With the flag explicitly off, the outer
+        // loop must NOT call waitForWakeEvent — `Runner.run` returns
+        // once and the run terminates with whatever state it has.
         return {
           textBlocks: [{ text: 'Done without waiting (flag off).' }],
         };
@@ -4030,7 +4030,7 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // child settle". Pick a generous bound that's still well under
     // any plausible idle-yield wait time.
     expect(elapsedMs).toBeLessThan(10_000);
-    // Result is well-formed — flag-off path is the v0.7.39 default.
+    // Result is well-formed — flag-off path is the v0.7.38 opt-out.
     expect(result.signal).toBeDefined();
   }, 30_000);
 });
