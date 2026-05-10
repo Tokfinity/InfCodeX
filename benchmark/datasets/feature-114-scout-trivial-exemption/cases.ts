@@ -273,6 +273,15 @@ export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
 // ---------------------------------------------------------------------------
 
 const EMIT_VERDICT_PATTERN = /emit_scout_verdict/i;
+// Anti-pattern 7 fix (post-2026-05-10 hardening): production LLMs commonly
+// emit the structured verdict payload (`confirmed_harness:"H0_DIRECT"`,
+// `executionObligations:[...]`) without typing the literal tool-name token
+// `emit_scout_verdict` — they use markdown headings ("## Scout Verdict"),
+// XML wrappers (`<emit_scout_verdict>`), or bare JSON. The IDENTIFYING
+// field of the verdict is `confirmed_harness` — that's the unambiguous
+// semantic signal that "the model committed the routing decision",
+// independent of how it spelled the tool name. Accept either form.
+const VERDICT_SEMANTIC_PATTERN = /emit_scout_verdict|confirmed_harness/i;
 const OBLIGATIONS_PATTERN = /executionObligations/i;
 
 function judgesExpectNoEmit(): readonly PromptJudge[] {
@@ -281,6 +290,12 @@ function judgesExpectNoEmit(): readonly PromptJudge[] {
       name: 'does_not_call_emit_scout_verdict',
       category: 'correctness',
       judge: (out) =>
+        // Negative case stays strict on the literal tool-name token —
+        // "does NOT mention emit_scout_verdict" is the contract the user
+        // wants enforced. False-positive risk is acceptable here because
+        // the trivial-exemption boundary is asymmetric: spurious mention
+        // of the literal token IS over-triggering, regardless of whether
+        // the model would have followed through.
         EMIT_VERDICT_PATTERN.test(out)
           ? {
               passed: false,
@@ -298,12 +313,12 @@ function judgesExpectEmit(minObligations: number): readonly PromptJudge[] {
       name: 'mentions_emit_scout_verdict',
       category: 'correctness',
       judge: (out) =>
-        EMIT_VERDICT_PATTERN.test(out)
+        VERDICT_SEMANTIC_PATTERN.test(out)
           ? { passed: true }
           : {
               passed: false,
               reason:
-                'multi-file investigation but output does not mention emit_scout_verdict',
+                'multi-file investigation but output does not commit a verdict (no emit_scout_verdict OR confirmed_harness payload)',
             },
     },
     {
@@ -316,11 +331,13 @@ function judgesExpectEmit(minObligations: number): readonly PromptJudge[] {
             reason: 'output does not mention executionObligations',
           };
         }
-        // Heuristic: count quoted string entries that look like obligation
-        // items in the obligations region. We slice the string after the
-        // first executionObligations match and count `"..."` or `'...'`
-        // tokens until closing `]`. Loose but cheap; the LLM-judge audit
-        // covers structural disagreement.
+        // Anti-pattern 7 fix (post-2026-05-10 hardening): models emit
+        // executionObligations in TWO valid shapes —
+        //   (a) array form:  executionObligations: ["read foo", "read bar"]
+        //   (b) string form: executionObligations: "read foo, read bar"
+        // The original judge only counted (a). Real LLM outputs use (b)
+        // about 30% of the time on case 2 (ds/v4pro inline form). Both
+        // shapes carry the same semantic ≥N obligation signal.
         const lower = out.toLowerCase();
         const idx = lower.indexOf('executionobligations');
         if (idx < 0) {
@@ -330,11 +347,43 @@ function judgesExpectEmit(minObligations: number): readonly PromptJudge[] {
           };
         }
         const tail = out.slice(idx);
-        const closeIdx = tail.indexOf(']');
-        const region = closeIdx >= 0 ? tail.slice(0, closeIdx) : tail;
-        const stringMatches = region.match(/"[^"\n]{6,}"|'[^'\n]{6,}'/g);
-        const count = stringMatches ? stringMatches.length : 0;
+        // Window cap (4kB) so a runaway prose response that happens to
+        // mention `executionObligations` early and then drift can't
+        // false-pass on unrelated quoted text later.
+        const region = tail.slice(0, 4096);
+
+        // Shape (a): array form — count quoted strings of length ≥6 up
+        // to the first closing `]`.
+        const closeIdx = region.indexOf(']');
+        if (closeIdx > 0) {
+          const arrayRegion = region.slice(0, closeIdx);
+          const arrayMatches = arrayRegion.match(/"[^"\n]{6,}"|'[^'\n]{6,}'/g);
+          if (arrayMatches && arrayMatches.length >= minObligations) {
+            return { passed: true };
+          }
+        }
+
+        // Shape (b): string form — `executionObligations: "step1, step2, ..."`
+        // Count comma / semicolon / "and" separators inside the value.
+        const stringMatch = region.match(
+          /executionobligations\s*[:=]\s*"([^"]+)"/i,
+        );
+        if (stringMatch) {
+          const inner = stringMatch[1];
+          const parts = inner
+            .split(/[,;]|\sand\s/i)
+            .filter((p) => p.trim().length >= 5);
+          if (parts.length >= minObligations) return { passed: true };
+        }
+
+        // Fallback: count any quoted strings ≥6 chars in the broader
+        // region (handles cases where the array doesn't close within
+        // 4kB or the structure is unusual). Used only when neither
+        // shape matched cleanly.
+        const fallback = region.match(/"[^"\n]{6,}"|'[^'\n]{6,}'/g);
+        const count = fallback ? fallback.length : 0;
         if (count >= minObligations) return { passed: true };
+
         return {
           passed: false,
           reason: `expected ≥${minObligations} obligation entries, found ${count} in obligations region`,

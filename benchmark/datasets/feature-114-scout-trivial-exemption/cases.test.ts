@@ -121,6 +121,57 @@ emit_scout_verdict({
     }
   });
 
+  it('two_file_investigation_emits — pass on confirmed_harness without literal emit_scout_verdict (anti-pattern 7 fix)', () => {
+    // Real models commonly emit the structured verdict as `## Scout Verdict`
+    // markdown + JSON or `<emit_scout_verdict>` XML — without literally
+    // typing the tool-name token inside a JSON block. The IDENTIFYING field
+    // of the verdict is `confirmed_harness`; that's the unambiguous semantic
+    // signal of "model committed the routing decision". Keep the relaxed
+    // regex from regressing back to a strict literal-token match.
+    const judges = buildJudges('two_file_investigation_emits');
+    const sampleOutput = `## Scout Verdict
+
+\`\`\`json
+{
+  "confirmed_harness": "H0_DIRECT",
+  "summary": "Compare withTimeout implementations across two packages",
+  "scope": ["packages/core/src/timeout.ts", "packages/agent/src/utils/timeout.ts"],
+  "review_files_or_areas": [],
+  "executionObligations": [
+    "Read packages/core/src/timeout.ts to note error handling, default timeout, cancellation",
+    "Read packages/agent/src/utils/timeout.ts and capture the same dimensions"
+  ]
+}
+\`\`\``;
+    for (const j of judges) {
+      const result = j.judge(sampleOutput);
+      expect(
+        result.passed,
+        `judge "${j.name}" should pass on confirmed_harness markdown form`,
+      ).toBe(true);
+    }
+  });
+
+  it('two_file_investigation_emits — pass on string-form executionObligations (anti-pattern 7 fix)', () => {
+    // ds/v4pro emits inline string form ~30% of the time: a single
+    // comma-separated string instead of a quoted-string array. Both shapes
+    // carry the same ≥N obligation signal and must pass.
+    const judges = buildJudges('two_file_investigation_emits');
+    const sampleOutput = `<emit_scout_verdict>
+  confirmed_harness="H0_DIRECT"
+  summary="Compare withTimeout implementations"
+  scope="packages/core/src/timeout.ts, packages/agent/src/utils/timeout.ts"
+  executionObligations="Read packages/core/src/timeout.ts, Read packages/agent/src/utils/timeout.ts, Compare error handling and timeout defaults"
+</emit_scout_verdict>`;
+    for (const j of judges) {
+      const result = j.judge(sampleOutput);
+      expect(
+        result.passed,
+        `judge "${j.name}" should pass on string-form executionObligations`,
+      ).toBe(true);
+    }
+  });
+
   it('two_file_investigation_emits — fail when emit absent', () => {
     const judges = buildJudges('two_file_investigation_emits');
     const result = judges[0]?.judge(
