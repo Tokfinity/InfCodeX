@@ -242,6 +242,74 @@ describe('FileSessionStorage', () => {
     });
   });
 
+  // v0.7.38 FEATURE_157 — Windows-aware path equality in session-list
+  // gating. Production reproduction (user report 2026-05-11): session
+  // saved with `gitRoot: 'C:/Works/.../KodaX'`; a subsequent shell where
+  // `getGitRoot()` returns lowercase drive letter `c:/Works/.../KodaX`
+  // hit the literal `===` comparison and excluded every prior
+  // same-repo session, leaving `kodax -c` / `kodax -r` to start fresh
+  // with no resume context (the user's "previous conversation lost"
+  // symptom). Two arms cover: (a) the workspaceRoot branch when
+  // sessionRuntime carries it, (b) the gitRoot fallback when it
+  // doesn't (older sessions without runtimeInfo are exactly this
+  // shape — every session in the user's reproduction lacked the
+  // runtimeInfo field).
+  it('FEATURE_157: lists same-repo sessions across drive-letter case differences (Windows / darwin parity)', async () => {
+    // The bug only manifests on case-insensitive filesystems (win32 +
+    // darwin). On strict-case POSIX (most Linux) the pre-fix literal
+    // equality is correct, so the case-insensitive branch should not
+    // fire — skip the test there so we don't pin behaviour we don't
+    // want.
+    if (process.platform !== 'win32' && process.platform !== 'darwin') {
+      return;
+    }
+    // The session was saved with uppercase drive letter (typical when
+    // launched from a fresh PowerShell where node returns the literal
+    // user-typed path).
+    const savedGitRoot = 'C:/Works/GitWorks/KodaX-author/KodaX';
+    // The session is being listed from a shell where the runtime
+    // returns a different case (typical from a VS Code-spawned shell
+    // or from a path that went through `process.cwd()` normalisation
+    // on some Windows configurations).
+    const lookupGitRoot = 'c:/Works/GitWorks/KodaX-author/KodaX';
+
+    vi.doMock('./workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('./workspace-runtime.js')>('./workspace-runtime.js');
+      return {
+        ...actual,
+        // Mock returns the lowercase variant — what the resume-time
+        // shell perceives. The session on disk has the uppercase
+        // variant. Pre-FEATURE_157 the literal `===` would fail and
+        // exclude the session; post-FEATURE_157 `pathsEqual` folds
+        // case on win32/darwin and the session is included.
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: undefined,
+          workspaceRoot: undefined,
+          executionCwd: lookupGitRoot,
+          branch: undefined,
+          workspaceKind: 'detected',
+        })),
+      };
+    });
+
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+
+    // Save a session as it appears on disk in the production
+    // reproduction — no runtimeInfo (legacy sessions don't have it).
+    await storage.save('session-uppercase', {
+      messages: [{ role: 'user', content: 'session saved with uppercase C:' }],
+      title: 'Pre-existing Conversation',
+      gitRoot: savedGitRoot,
+      scope: 'user',
+    });
+
+    // Listing with the lowercase variant MUST surface the session.
+    const sessions = await storage.list(lookupGitRoot);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.id).toBe('session-uppercase');
+  });
+
   it('supports branch switching, checkpoint labels, and forking without losing prior history', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();

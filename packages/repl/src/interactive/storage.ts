@@ -230,6 +230,36 @@ function isKodaXSessionRuntimeInfo(value: unknown): value is KodaXSessionRuntime
     );
 }
 
+/**
+ * v0.7.38 FEATURE_157 — Windows-aware path equality for session-list
+ * gating. Windows filesystem paths are case-insensitive (NTFS / ReFS
+ * fold case on lookup) and node sometimes returns the drive letter in
+ * different case across processes (`C:\...` from one PowerShell, `c:\...`
+ * from a VS Code-spawned shell). The session-list filter at line ~880
+ * compares `sessionGitRoot === currentGitRoot` literally; a case
+ * mismatch on the drive letter wipes the entire prior-session list,
+ * leaving `kodax -c` / `kodax -r` with nothing to resume — which
+ * surfaces as "the previous conversation seems lost, agent answered
+ * from scratch".
+ *
+ * Reproduction (2026-05-11 user report): session
+ * `20260511_110542.jsonl` saved with
+ * `gitRoot: "C:/Works/GitWorks/KodaX-author/KodaX"`. Subsequent
+ * `kodax -c` produced session `20260511_130217.jsonl` rooted from a
+ * shell where `getGitRoot()` returned the drive letter lowercased,
+ * the list filter excluded all four prior same-repo sessions, and
+ * the new session was created fresh without resume context.
+ *
+ * POSIX behaviour unchanged: literal string equality preserves
+ * case-sensitive semantics where the filesystem is case-sensitive.
+ */
+function pathsEqual(a: string, b: string): boolean {
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return a.toLowerCase() === b.toLowerCase();
+  }
+  return a === b;
+}
+
 function getLastNavigableEntryId(entries: KodaXSessionEntry[]): string | null {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
@@ -877,9 +907,15 @@ export class FileSessionStorage implements KodaXSessionStorage {
             : 'user';
           if (currentGitRoot) {
             const sameCanonicalRepo = isSameCanonicalRepo(currentRuntime, sessionRuntime);
+            // FEATURE_157: Windows-aware comparison (case-insensitive on
+            // win32/darwin) — see `pathsEqual` JSDoc for the resume-loss
+            // failure shape this guards against. Branching preserved
+            // identical to the pre-FEATURE_157 logic: workspace branch
+            // when sessionRuntime carries workspaceRoot, gitRoot
+            // otherwise — only the equality operator changes.
             const sameWorkspace = sessionRuntime?.workspaceRoot
-              ? sessionRuntime.workspaceRoot === currentRuntime.workspaceRoot
-              : sessionGitRoot === currentGitRoot;
+              ? pathsEqual(sessionRuntime.workspaceRoot, currentRuntime.workspaceRoot ?? '')
+              : pathsEqual(sessionGitRoot, currentGitRoot);
             if (!sameCanonicalRepo && !sameWorkspace) {
               continue;
             }
