@@ -4241,4 +4241,268 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     expect(latencyMs).toBeGreaterThanOrEqual(0);
     expect(latencyMs).toBeLessThan(500);
   }, 30_000);
+
+  // v0.7.38 FEATURE_155 hotfix follow-up — Bug B verification at the
+  // outer-loop / chain level. The production trace
+  // (`fix(v0.7.38)` commit `c1bdaf4e` motivation) showed the runner
+  // re-entering `Runner.run` after Evaluator emit_verdict accept,
+  // because (a) pendingChildTaskCount > 0 and (b) neither
+  // `hasEmittedHandoff` nor `hasEmittedTerminalVerdict` was actually
+  // reading the right source-of-truth field. This test exercises
+  // exactly the production-bug shape: dispatch + emit_handoff in one
+  // turn, then Evaluator emit_verdict accept, then a text-only
+  // Evaluator turn (the `lastAssistantToolCallCount === 0` arm),
+  // while a child is still in flight. Pass criterion: the loop
+  // STOPS after verdict — `evaluator(turn=2)` MUST NOT run a third
+  // time even though a wake event would fire if the gate were
+  // broken.
+  it('outer loop terminates after Evaluator emits accept verdict, even with pending children (Bug B regression)', async () => {
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const evaluatorTurns: number[] = [];
+
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          // One response carries BOTH dispatch (child stays unsettled
+          // for now) AND emit_handoff to the Evaluator. The chain
+          // transitions to Evaluator with the child still in the
+          // registry.
+          return {
+            toolBlocks: [
+              {
+                type: 'tool_use',
+                id: 'w-1',
+                name: 'dispatch_child_task',
+                input: {
+                  id: 'bug-b-probe',
+                  objective: 'long audit',
+                  read_only: true,
+                },
+              },
+              {
+                type: 'tool_use',
+                id: 'w-2',
+                name: 'emit_handoff',
+                input: {
+                  status: 'ready',
+                  summary: 'handed off',
+                  evidence: [],
+                  followup: ['none'],
+                },
+              },
+            ],
+          };
+        }
+        return { textBlocks: [{ text: 'worker done' }] };
+      },
+      evaluator: (turn) => {
+        evaluatorTurns.push(turn);
+        if (turn === 1) {
+          // Evaluator immediately emits accept verdict — child is
+          // still in flight in the registry (Bug B's exact shape).
+          // Also schedule the child to complete shortly after this
+          // turn so that, if the gate is broken, a wake event would
+          // fire and trigger turn 2 (the failure mode).
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('bug-b-probe', ['late finding']));
+          }, 50);
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: {
+                status: 'accept',
+                user_answer: 'Audit complete.',
+                reason: 'verified',
+              },
+            }],
+          };
+        }
+        // The failure mode: this branch runs if the outer loop
+        // re-entered Runner.run after the accept verdict. Returning
+        // text-only here mirrors the production trace's degenerate
+        // ack ("已处理"). The assertion below fails the test if we
+        // reach turn 2+.
+        return { textBlocks: [{ text: `degenerate ack turn ${turn}` }] };
+      },
+    });
+
+    const result = await runManagedTaskViaRunner(makeOptions(), 'long audit task', mock);
+
+    // The verdict went through and is the final user-facing answer.
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+    expect(result.lastText).toBe('Audit complete.');
+
+    // CORE ASSERTION (Bug B): the outer loop must NOT re-enter
+    // Runner.run after the Evaluator emit_verdict accept. ONE
+    // Runner.run invocation can take Evaluator through 2 turns (the
+    // tool_use turn for emit_verdict, then a single final-text turn
+    // after the synthetic tool_result) — that's standard Runner
+    // behaviour, not idle-yield re-entry. What we forbid is a 3rd+
+    // Evaluator turn driven by a post-verdict idle-yield resume.
+    expect(evaluatorTurns.length).toBeLessThanOrEqual(2);
+    // Settle the pending child to avoid leaking an unresolved promise
+    // into other tests (mockExec is reset on each test via beforeEach
+    // but the in-flight IIFE may still be awaiting it).
+    resolveChild(buildSuccessChildResult('bug-b-probe', ['late finding']));
+  }, 30_000);
+
+  // v0.7.38 FEATURE_155 hotfix follow-up — Bug A integration test.
+  // The unit-level test in `async-dispatch.test.ts` checks the
+  // registry is cleaned up after a single dispatch settles. This
+  // test drives the EXACT production-bug shape that motivated the
+  // hotfix: Worker dispatches 2 children, first child completes →
+  // Worker resumes → still idle-yields waiting for second → second
+  // child completes → Worker resumes → emits handoff. Pass criterion:
+  // the first child's `<task-completed>` banner appears EXACTLY
+  // ONCE in the Worker transcript (not duplicated because the
+  // settled-then-not-deleted registry entry kept re-firing
+  // `child-completed` wakes with a fabricated
+  // "(no summary available)" banner).
+  it('settled child does NOT re-fire wake on subsequent idle-yield (Bug A registry-leak regression at integration level)', async () => {
+    const childResolvers = new Map<string, (r: KodaXChildExecutionResult) => void>();
+    mockExec.mockImplementation((bundles) => {
+      const bundle = bundles[0];
+      return new Promise<KodaXChildExecutionResult>((resolve) => {
+        childResolvers.set(bundle.id, resolve);
+      });
+    });
+
+    const workerTurns: number[] = [];
+
+    const mock = makeChainMockLlm({
+      worker: (turn, transcript) => {
+        workerTurns.push(turn);
+        if (turn === 1) {
+          // Fan out 2 children in one response — the registry will
+          // hold both for the next several wakes.
+          return {
+            toolBlocks: [
+              {
+                type: 'tool_use',
+                id: 'w-1a',
+                name: 'dispatch_child_task',
+                input: { id: 'leak-A', objective: 'probe A', read_only: true },
+              },
+              {
+                type: 'tool_use',
+                id: 'w-1b',
+                name: 'dispatch_child_task',
+                input: { id: 'leak-B', objective: 'probe B', read_only: true },
+              },
+            ],
+          };
+        }
+        if (turn === 2) {
+          // Settle A only; B stays pending. The outer loop should
+          // wake on A, but then the next snapshot still has B
+          // pending → another idle-yield wait. The bug used to be:
+          // after A's wake, A's registry entry stayed and the next
+          // `waitForWakeEvent` immediately fired another
+          // `child-completed` for A with a fake banner. Fix:
+          // `.finally(() => registry.delete(childId))` removes A
+          // from the registry the moment A's promise settles.
+          setTimeout(() => {
+            childResolvers.get('leak-A')!(
+              buildSuccessChildResult('leak-A', ['A finding']),
+            );
+          }, 10);
+          return {
+            textBlocks: [{ text: 'Awaiting probes.' }],
+          };
+        }
+        if (turn === 3) {
+          // After A wakes us — A's banner MUST be in the transcript,
+          // appearing exactly once. Continue idle-yielding for B.
+          setTimeout(() => {
+            childResolvers.get('leak-B')!(
+              buildSuccessChildResult('leak-B', ['B finding']),
+            );
+          }, 10);
+          return {
+            textBlocks: [{ text: 'A in, awaiting B.' }],
+          };
+        }
+        if (turn === 4) {
+          // Both children in. Emit handoff.
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-4',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'both probes done',
+                evidence: ['A finding', 'B finding'],
+                followup: ['none'],
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'fallthrough' }] };
+      },
+      evaluator: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: { status: 'accept', user_answer: 'Both probes complete.' },
+            }],
+          };
+        }
+        // Post-verdict text-only final-text turn — Runner needs a
+        // non-tool response after the synthetic tool_result, otherwise
+        // it loops emit_verdict to MAX_TOOL_LOOP_ITERATIONS.
+        return { textBlocks: [{ text: 'Both probes complete.' }] };
+      },
+    });
+
+    const result = await runManagedTaskViaRunner(makeOptions(), 'two-child fan-out', mock);
+
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+
+    // The CORE assertion: count occurrences of A's banner across all
+    // transcripts the Worker observed. The bug would have inflated
+    // this number to 2+ as the leaked A entry kept re-firing wakes
+    // with fabricated `(no summary available)` banners.
+    let aBannerCount = 0;
+    let aFakeBannerCount = 0;
+    let bBannerCount = 0;
+    // Re-run the mock once more synthetically by inspecting the
+    // recorded turns isn't possible here, but we can lean on the
+    // `workerTurns` evidence: a clean run is exactly turns 1-4. A
+    // leaked-registry run inflates the turn count via spurious wakes.
+    // The Bug A integration symptom is "turn 3 sees A's banner ONCE
+    // and turn 4 emits handoff" — a leaked path would re-yield more
+    // times before reaching the handoff turn.
+    expect(workerTurns).toEqual([1, 2, 3, 4]);
+
+    // Additionally inspect the result's recorded messages for the
+    // banner counts. `result.messages` carries the full transcript.
+    const messages = result.messages ?? [];
+    for (const msg of messages) {
+      if (msg.role !== 'user' || typeof msg.content !== 'string') continue;
+      if (msg.content.includes('<task-completed task_id="leak-A">')) aBannerCount++;
+      if (msg.content.includes('<task-completed task_id="leak-B">')) bBannerCount++;
+      if (msg.content.includes('(child task completed; no summary available)')) {
+        aFakeBannerCount++;
+      }
+    }
+    expect(aBannerCount).toBe(1);
+    expect(bBannerCount).toBe(1);
+    // The defensive-fallback fake banner is the smoking gun of
+    // Bug A. Post-fix, it MUST NOT appear.
+    expect(aFakeBannerCount).toBe(0);
+  }, 30_000);
 });
