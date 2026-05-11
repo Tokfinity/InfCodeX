@@ -3385,17 +3385,30 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // slot in the prompt footer renders whenever EITHER the spinner
       // verb OR the plan-list "X/N completed" counter is visible.
       // Mirrors the JSX at the activityBar prop site below.
+      //
+      // v0.7.38 hotfix (2026-05-11) — gate plan-list contribution on
+      // `isLoading` to match the TodoListSurface mount gate. Without
+      // this, the budget keeps reserving rows for one frame after
+      // `isLoading` flips to false but before the `useEffect` clears
+      // `todoItems`, leaving blank lines between transcript and
+      // composer.
       activityBarVisible: isTranscriptMode
         ? false
-        : Boolean(promptBusyText) || todoPlanViewModel.shouldRender,
+        : Boolean(promptBusyText) || (isLoading && todoPlanViewModel.shouldRender),
       // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — TodoListSurface
       // is rendered between activityBar and composer in PromptFooter.
       // Each viewModel row is a single Ink Box (1 line). Without this
       // budget reservation the composer + status-bar fall off-screen
       // as soon as the plan list shows.
+      //
+      // v0.7.38 hotfix (2026-05-11) — `isLoading` gate must mirror the
+      // mount gate at the todoSurface= prop site (see line ~7590); the
+      // mount conditional uses `(isLoading && shouldRender)`, so the
+      // budget reservation has to follow suit or the layout reserves
+      // empty rows when the run terminates.
       todoSurfaceRows: isTranscriptMode
         ? 0
-        : todoPlanViewModel.shouldRender
+        : (isLoading && todoPlanViewModel.shouldRender)
           ? todoPlanViewModel.rows.length
           : 0,
       pendingInputSummary: footerBudgetPendingInputSummary,
@@ -7521,7 +7534,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inlineNotices={promptFooterNotices.length > 0 ? (
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
-      activityBar={(promptActivityViewModel || todoPlanViewModel.shouldRender) ? (
+      activityBar={(promptActivityViewModel || (isLoading && todoPlanViewModel.shouldRender)) ? (
         // FEATURE_151 (v0.7.38) Slice H' — spinner verb + todo counter
         // share one line. Left column: existing spinner glyph + verb
         // text (when any activity is present). Right column: dim
@@ -7530,6 +7543,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // single line; was previously a dedicated header inside
         // TodoListSurface, which forced an extra blank line above the
         // todo rows when only counter changes occurred.
+        //
+        // v0.7.38 hotfix (2026-05-11) — gate the plan-counter half on
+        // `isLoading` for the same reason as the TodoListSurface mount
+        // (see line ~7603). If the run terminated but `todoItems` has
+        // not yet been cleared by the post-run `useEffect`, the counter
+        // would otherwise linger as a stray dim line above the prompt.
         <Box paddingX={1} flexDirection="row">
           <Box flexGrow={1}>
             {promptActivityViewModel?.showSpinner ? (
@@ -7548,7 +7567,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               </Text>
             ) : null}
           </Box>
-          {todoPlanViewModel.shouldRender ? (
+          {(isLoading && todoPlanViewModel.shouldRender) ? (
             <Text dimColor>
               {`${todoPlanViewModel.completedCount}/${todoPlanViewModel.totalCount} completed`}
             </Text>
