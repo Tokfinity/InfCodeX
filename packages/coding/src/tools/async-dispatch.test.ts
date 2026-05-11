@@ -198,9 +198,11 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
 
     // Wait for the IIFE to settle (the `.catch(() => {})` swallows the
     // unhandled-rejection warning so we can observe the side effects
-    // — registry entry stays until idle-yield resume drains the queue,
-    // and the crash banner lands on the background queue).
+    // — the crash banner lands on the background queue).
     await registry.get('c6')?.catch(() => undefined);
+    // Yield one more microtask so the dispatch IIFE's `.finally`
+    // (the registry-cleanup hotfix below) has a chance to run.
+    await Promise.resolve();
 
     const queue = getMessageQueue();
     const peeked = queue.peek({ maxPriority: 'background' });
@@ -208,6 +210,73 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     expect(peeked[0]?.mode).toBe('task-notification');
     expect(peeked[0]?.content).toContain('<task-completed task_id="c6">');
     expect(peeked[0]?.content).toContain('crash: boom');
+  });
+
+  // v0.7.38 FEATURE_155 hotfix — Bug A regression. Without the
+  // dispatch-side `.finally(() => registry.delete(childId))`, a settled
+  // child's promise stays in the registry forever; every subsequent
+  // `waitForWakeEvent` call wraps it with `.then`, which fires
+  // synchronously for an already-resolved promise and triggers a
+  // spurious wake. Production symptom: Evaluator gets bombarded by
+  // duplicate `<task-completed>` notifications for the same child,
+  // each one consuming an extra LLM turn up to the
+  // IDLE_YIELD_MAX_ITERATIONS=64 ceiling.
+  //
+  // The test uses a manually-controlled child promise so we can
+  // assert two distinct states: (1) entry present while child is
+  // in flight, (2) entry removed once child settles.
+  it('registry entry is deleted after the child promise resolves (Bug A hotfix, happy path)', async () => {
+    let resolveExec!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveExec = resolve;
+      }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    const banner = await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'cleanup-1', objective: 'finish' }, ctx),
+    );
+    expect(banner).toContain('task_id:cleanup-1');
+    // In-flight — entry must be present so `waitForWakeEvent` can race
+    // it on the next outer-loop iteration.
+    expect(registry.has('cleanup-1')).toBe(true);
+
+    resolveExec(buildSuccessResult('cleanup-1', ['done']));
+    await registry.get('cleanup-1');
+    // The `.finally` hook is scheduled in the microtask queue alongside
+    // any consumer `.then` handlers — yield one more tick so it runs
+    // before we inspect.
+    await Promise.resolve();
+
+    // Settled — registry must be cleaned up. Without the hotfix this
+    // entry would persist, and a follow-up `waitForWakeEvent` would
+    // immediately fire `child-completed` for the already-resolved
+    // promise, triggering the defensive-fallback fake banner.
+    expect(registry.has('cleanup-1')).toBe(false);
+  });
+
+  it('registry entry is deleted after the child promise rejects (Bug A hotfix, crash branch)', async () => {
+    let rejectExec!: (err: Error) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((_resolve, reject) => {
+        rejectExec = reject;
+      }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'cleanup-2', objective: 'crash' }, ctx),
+    );
+    expect(registry.has('cleanup-2')).toBe(true);
+
+    rejectExec(new Error('crashed'));
+    await registry.get('cleanup-2')?.catch(() => undefined);
+    await Promise.resolve();
+
+    expect(registry.has('cleanup-2')).toBe(false);
   });
 });
 

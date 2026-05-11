@@ -207,11 +207,28 @@ export async function* toolDispatchChildTask(
       }
     })();
     registry.set(childId, childPromise);
-    // Swallow unhandled rejections — await_child_task will re-throw at
-    // reclaim time. Without this, the unawaited promise above would
-    // surface as `unhandledRejection` on Node when the executor crashes
-    // before the Worker awaits.
-    childPromise.catch(() => {});
+    // v0.7.38 FEATURE_155 hotfix — clean the registry entry when the
+    // child promise settles, regardless of outcome. Without this the
+    // entry stays forever and every subsequent `waitForWakeEvent` call
+    // re-observes the already-settled promise, fires another
+    // `child-completed` wake, and triggers
+    // `composeIdleYieldUserMessage`'s defensive fallback to fabricate a
+    // bogus `(child task completed; no summary available)` banner —
+    // which then drives another LLM turn. The legacy
+    // `await_child_task` tool used to do this cleanup at reclaim
+    // time; Slice C1 deleted that tool without compensating.
+    //
+    // The trailing `.catch(() => {})` swallows the rejection on the
+    // promise chain so a child that crashes before any consumer awaits
+    // it doesn't surface as `unhandledRejection` on Node. It also has
+    // to be after `.finally` because `.finally` returns a NEW promise
+    // that rejects with the same reason — without the chained
+    // `.catch`, the cleanup branch would itself become unhandled.
+    childPromise
+      .finally(() => {
+        registry.delete(childId);
+      })
+      .catch(() => {});
 
     yield { stage: 'launched', message: `Child "${childId}" launched (async)` };
     dispatchEndStatus = 'launched';

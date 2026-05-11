@@ -97,6 +97,18 @@ export interface IdleYieldSnapshot {
    * already owns the next step.
    */
   readonly hasEmittedHandoff: boolean;
+  /**
+   * v0.7.38 FEATURE_155 hotfix — true if the run's
+   * `managedProtocolPayload.verdict` has been populated with a
+   * terminal Evaluator verdict (`accept` / `blocked`; `revise`
+   * triggers a chain re-run, not idle-yield continuation).
+   * Without this gate the outer loop would keep re-entering
+   * `Runner.run` after the Evaluator already emitted a terminal
+   * verdict — wasting LLM turns on post-verdict child notifications.
+   * Idle-yield REQUIRES this to be false; same reasoning as
+   * `hasEmittedHandoff` but for the Evaluator side of the chain.
+   */
+  readonly hasEmittedTerminalVerdict: boolean;
 }
 
 /**
@@ -104,7 +116,7 @@ export interface IdleYieldSnapshot {
  * "no tool calls + still has pending children" path that idle-yield
  * is designed to handle.
  *
- * The three conjunction terms are deliberately independent — caller
+ * The four conjunction terms are deliberately independent — caller
  * can mix in additional gating (e.g. a feature flag) without rewriting
  * this. Returning false here means "treat the run as terminal /
  * delegate to legacy semantics" and is the safe default.
@@ -112,6 +124,7 @@ export interface IdleYieldSnapshot {
 export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
   if (snapshot.lastAssistantToolCallCount > 0) return false;
   if (snapshot.hasEmittedHandoff) return false;
+  if (snapshot.hasEmittedTerminalVerdict) return false;
   if (snapshot.pendingChildTaskCount <= 0) return false;
   return true;
 }
@@ -214,9 +227,14 @@ export function waitForWakeEvent(
       return;
     }
 
-    // Child arm — wrap each registry entry. Crucially we do NOT mutate
-    // the registry: the dispatch path's existing .then/.catch handlers
-    // own cleanup. We just observe.
+    // Child arm — wrap each registry entry. We do NOT mutate the
+    // registry here; the dispatch path's IIFE attaches a
+    // `.finally(() => registry.delete(childId))` so settled entries
+    // disappear before the next `waitForWakeEvent` call iterates.
+    // Without that cleanup an already-settled promise's `.then` fires
+    // synchronously in the microtask queue and resolves this wake with
+    // a spurious `child-completed` event — the FEATURE_155 v0.7.38
+    // hotfix landed the dispatch-side fix.
     for (const [taskId, promise] of registry.entries()) {
       promise.then(
         (result) => {

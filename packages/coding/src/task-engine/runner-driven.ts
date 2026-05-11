@@ -5409,10 +5409,21 @@ async function runManagedTaskViaRunnerInner(
       break;
     }
 
+    // v0.7.38 FEATURE_155 hotfix — Bug B. Treat a terminal Evaluator
+    // verdict (`accept` / `blocked`) the same way as a Worker handoff:
+    // the run is done, the outer loop must stop. `revise` is NOT
+    // terminal (chain re-runs Worker/Generator) so it doesn't gate the
+    // idle-yield predicate here. Without this gate the loop would
+    // keep re-entering `Runner.run` for every pending-child wake event
+    // after the Evaluator already emitted accept — wasting LLM turns
+    // up to `IDLE_YIELD_MAX_ITERATIONS=64`.
+    const verdictStatusForGate = managedProtocolPayloadRef.current?.verdict?.status;
     const snapshot = {
       lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
       pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
       hasEmittedHandoff: Boolean(managedProtocolPayloadRef.current?.handoff),
+      hasEmittedTerminalVerdict:
+        verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
     };
     if (!detectIdleYield(snapshot)) break;
 

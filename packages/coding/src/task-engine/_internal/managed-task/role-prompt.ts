@@ -862,17 +862,23 @@ export function createRolePrompt(
           : 'You own the final verification pass and must personally execute any required checks or browser validation before accepting the task.',
         'Evaluate the task against the verification criteria and thresholds. If any hard threshold is not met, do not accept the task.',
         evaluatorPublicAnswerRule,
-        (() => {
-          // Use the effective ceiling (upgradeCeiling reflects the system's actual
-          // decision after Scout override; topologyCeiling is the original heuristic).
-          // This avoids telling the evaluator "don't exceed H0" when the task is
-          // legitimately running at H1 because Scout escalated.
-          const effectiveCeiling = decision.upgradeCeiling ?? decision.topologyCeiling;
-          return effectiveCeiling && effectiveCeiling !== 'H2_PLAN_EXECUTE_EVAL'
-            ? `Do not request a stronger harness than ${effectiveCeiling}. If the task is still incomplete at that ceiling, return the best supported user-facing answer with explicit limits instead of escalating further.`
-            : undefined;
-        })(),
-        'Return the final user-facing answer. If the task is not ready, explain the blocker or missing evidence clearly.',
+        // v0.7.38 FEATURE_155 hotfix — Bug C. Without this guidance an
+        // Evaluator that dispatched audit children would emit_verdict
+        // immediately after its first turn, while children are still in
+        // flight. The verdict then misses every child's findings, and
+        // the runner outer loop terminates with a final user-facing
+        // text that doesn't restate the consolidated review. The
+        // idle-yield mechanic is the wait surface: ending the turn
+        // text-only with NO tool calls cedes control to the runner,
+        // which resumes the Evaluator when a child completes.
+        [
+          'CHILD-TASK WAIT DISCIPLINE (FEATURE_155 idle-yield, v0.7.38 hotfix):',
+          '- If you dispatched any child tasks with `dispatch_child_task`, you MUST wait for ALL of them to return before calling `emit_verdict`. Your verdict must integrate every child finding to be accurate.',
+          '- The wait mechanic is idle-yield: when a child is still in flight and you have no other useful work, end your turn with ONE short status sentence and NO tool calls. The runner will resume you on the next turn with one or more `<task-completed task_id="…">…</task-completed>` blocks in your user message — react to each, then check whether more are pending.',
+          '- Only call `emit_verdict` once every dispatched child has surfaced a `<task-completed>` block in your transcript. A verdict that ships before children settle silently loses their findings and is treated as a quality regression.',
+          '- If a child crashes you still see a `<task-completed task_id="…">failed: …</task-completed>` block — count it as settled and continue.',
+        ].join('\n'),
+        'Return the final user-facing answer. If the task is not ready, explain the blocker or missing evidence clearly. When you do emit_verdict, the `user_answer` field MUST restate the consolidated review (problems found, drift checks, regressions, top recommendations) — do NOT collapse it to a one-line acknowledgement; the user reads this as the final report.',
         'If the original task requires an exact closing block, include it in your final answer when you conclude.',
         [
           `Verdict payload shape (pass to ${ROLE_EMIT_TOOL_NAMES.evaluator}):`,

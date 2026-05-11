@@ -501,3 +501,68 @@ describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => 
     expect(emitIdx).toBeGreaterThan(execIdx);
   });
 });
+
+// v0.7.38 FEATURE_155 hotfix — Bug C: Evaluator must wait for child
+// tasks to settle before emit_verdict, and the verdict's user_answer
+// must restate the consolidated review (not collapse to a one-line
+// ack). Structural test pins both anchors in the Evaluator prompt so
+// a future edit can't silently drop the contract. A Layer 2 behavioural
+// eval is the follow-up (tracked in FEATURE_LIST under FEATURE_155
+// pending work) — this structural test is the minimum gate for the
+// hotfix release.
+describe('createRolePrompt — Evaluator wait-for-children + final-answer contract (v0.7.38 FEATURE_155 hotfix)', () => {
+  function renderEvaluatorPrompt(): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    return createRolePrompt(
+      'evaluator',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/evaluator',
+      undefined,
+      buildContext({ provider: 'p', model: 'm' }),
+      undefined,
+      false,
+    );
+  }
+
+  it('teaches the Evaluator to wait for ALL dispatched children before emit_verdict', () => {
+    const rendered = renderEvaluatorPrompt();
+    expect(rendered).toContain('CHILD-TASK WAIT DISCIPLINE');
+    expect(rendered).toContain('wait for ALL of them to return before calling `emit_verdict`');
+    expect(rendered).toContain('end your turn with ONE short status sentence and NO tool calls');
+    expect(rendered).toContain('<task-completed task_id="…">…</task-completed>');
+  });
+
+  it('requires the final user_answer to restate the consolidated review (not a one-line ack)', () => {
+    const rendered = renderEvaluatorPrompt();
+    expect(rendered).toContain('the `user_answer` field MUST restate the consolidated review');
+    expect(rendered).toContain('do NOT collapse it to a one-line acknowledgement');
+  });
+
+  it('crashed children still count as settled so the Evaluator doesn\'t block forever', () => {
+    const rendered = renderEvaluatorPrompt();
+    expect(rendered).toContain('failed:');
+    expect(rendered).toContain('count it as settled and continue');
+  });
+
+  it('wait-discipline block belongs to Evaluator only (does NOT leak into Worker / Generator / Scout / Planner)', () => {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
+      const rendered = createRolePrompt(
+        role,
+        userQuestion,
+        decision,
+        undefined,
+        undefined,
+        `kodax/role/${role}`,
+        undefined,
+        buildContext({ provider: 'p', model: 'm' }),
+        undefined,
+        false,
+      );
+      expect(rendered, `role=${role}`).not.toContain('CHILD-TASK WAIT DISCIPLINE');
+    }
+  });
+});
