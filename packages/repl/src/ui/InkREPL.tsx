@@ -817,6 +817,17 @@ function buildManagedLiveEventDrafts(
           return acc;
         }
         const isCompleted = event.kind === "completed";
+        // v0.7.38 (2026-05-11) \u2014 suppress task-completed lifecycle marker
+        // by default to match Claude Code (which has no equivalent
+        // marker \u2014 turn boundaries are signaled by the spinner halting,
+        // not by transcript text). The harness still runs the full
+        // completion machinery (Scout verdict, Evaluator handoff,
+        // emit_handoff contract) \u2014 only the transcript rendering is
+        // gated. Set KODAX_TRANSCRIPT_HARNESS_MARKERS=1 to restore the
+        // legacy behaviour for debugging / replay analysis.
+        if (isCompleted && !TRANSCRIPT_HARNESS_MARKERS_ENABLED) {
+          return acc;
+        }
         const localizedLabel = isCompleted
           ? `[${localizeManagedCompletionSummary(compactText)}]`
           : undefined;
@@ -837,6 +848,13 @@ function buildManagedLiveEventDrafts(
       }, []);
   }
 
+  // v0.7.38 (2026-05-11) — suppress the fallback "AMA H0 - Task
+  // completed" breadcrumb by default (parity with Claude Code, which
+  // signals turn end via spinner halt). Gate mirrors the events-array
+  // branch above. Set KODAX_TRANSCRIPT_HARNESS_MARKERS=1 to restore.
+  if (status.phase === "completed" && !TRANSCRIPT_HARNESS_MARKERS_ENABLED) {
+    return [];
+  }
   const compactText = formatManagedTaskBreadcrumb(status);
   const text = formatManagedTaskBreadcrumb(status, { expanded: true }) ?? compactText;
   if (!compactText || !text) {
@@ -1083,6 +1101,20 @@ function toPersistedUiHistoryItem(
 
 const MAX_PERSISTED_UI_HISTORY_ITEMS = 150;
 const MAX_PERSISTED_UI_HISTORY_ROUNDS = 50;
+
+// v0.7.38 (2026-05-11) — opt-in flag for the legacy harness-lifecycle
+// markers that used to appear in the transcript ("AMA H0 - Task
+// completed", "[Scout] Completion marked uncertain — signals: ...").
+// Default OFF: the markers are suppressed so the transcript reads like
+// a continuous chat (parity with Claude Code, which has no equivalent
+// markers). The underlying harness — Scout/Worker/Evaluator routing,
+// idle-yield, mutation guard, capability sections, message queue,
+// child registry — is unchanged; only the visualization layer in the
+// transcript is affected. Set `KODAX_TRANSCRIPT_HARNESS_MARKERS=1` to
+// restore the legacy persistence (useful when debugging session
+// replays where you want explicit turn-boundary anchors).
+const TRANSCRIPT_HARNESS_MARKERS_ENABLED =
+  process.env.KODAX_TRANSCRIPT_HARNESS_MARKERS === '1';
 
 export function trimPersistedUiHistorySnapshot(
   items: readonly KodaXSessionUiHistoryItem[],
@@ -5487,6 +5519,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (userInterruptedRef.current) {
         return;
       }
+      // v0.7.38 (2026-05-11) — suppressed by default to match Claude
+      // Code, which has no equivalent transcript marker. The
+      // suspicious-completion signal still propagates through the
+      // harness (recorder, lineage, eval) — only the transcript banner
+      // is gated. Set KODAX_TRANSCRIPT_HARNESS_MARKERS=1 to restore.
+      if (!TRANSCRIPT_HARNESS_MARKERS_ENABLED) {
+        return;
+      }
       // Scout-suspicious fires while Scout still owns the managed
       // foreground turn — route to that layer so it renders inline
       // with the Scout output, not stacked under the user prompt.
@@ -6270,7 +6310,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const managedTranscriptItems = roundFailed
       ? []
       : managedRoundEvents.length === 0
-        ? buildManagedTaskTranscriptItems(result)
+        ? (TRANSCRIPT_HARNESS_MARKERS_ENABLED
+            ? buildManagedTaskTranscriptItems(result)
+            : buildManagedTaskTranscriptItems(result).filter(
+                (text) => !isCompletionTranscriptItem(text),
+              ))
         : [];
     const roundHistoryItems = hasManagedForegroundLedger
       ? []
