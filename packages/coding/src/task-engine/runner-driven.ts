@@ -1594,12 +1594,20 @@ function buildObserverBridge(
     idleWaiting: (role, pendingCount) => {
       if (!events?.onManagedTaskStatus) return;
       // FEATURE_156 — keep the activeWorker identity on whoever just
-      // parked (today always Worker, but the field is role-agnostic to
-      // avoid hardcoding the V2-only invariant). Phase stays 'worker'
-      // because we're still inside an in-progress agent turn's
-      // continuation — `idleWaiting=true` distinguishes the alive-
-      // suspended sub-state from active execution; the consumer
-      // branches on it.
+      // parked (today always Worker, but the wiring is agent-agnostic to
+      // avoid hardcoding the V2-only invariant — see Step 0 of
+      // FEATURE_120 docs for the future migration that could open this
+      // path to additional roles). `idleWaiting=true` distinguishes the
+      // alive-suspended sub-state from active execution; consumers
+      // branch on that flag, not on a new phase value.
+      //
+      // `phase` is generic 'worker' (the existing "an agent is doing
+      // work" phase used by every per-role emit at line ~1527, NOT the
+      // V2-specific Worker role) — keeps the same fallback display
+      // path other phases use. The role identity carries through
+      // `activeWorkerId` / `activeWorkerTitle`, so any future role
+      // arriving at this branch surfaces with the correct label
+      // without a phase-enum change.
       const resolvedTitle = role ? ROLE_TO_TITLE[role] : undefined;
       events.onManagedTaskStatus({
         agentMode: 'ama',

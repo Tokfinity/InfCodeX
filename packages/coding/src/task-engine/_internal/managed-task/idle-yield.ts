@@ -140,10 +140,14 @@ export interface IdleYieldSnapshot {
  * "no tool calls + still has pending children" path that idle-yield
  * is designed to handle.
  *
- * The four conjunction terms are deliberately independent — caller
- * can mix in additional gating (e.g. a feature flag) without rewriting
- * this. Returning false here means "treat the run as terminal /
- * delegate to legacy semantics" and is the safe default.
+ * The conjunction terms are deliberately independent — caller can mix
+ * in additional gating (e.g. a feature flag) without rewriting this.
+ * Returning false here means "treat the run as terminal / delegate to
+ * legacy semantics" and is the safe default. The current term set is:
+ * `lastAssistantToolCallCount`, `hasEmittedHandoff`,
+ * `hasEmittedTerminalVerdict`, and (`pendingChildTaskCount` OR
+ * `hasPendingBackgroundMessages`) — the last pair forms the wait-or-
+ * resume gate (fast-child race recovery; see field docs).
  */
 export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
   if (snapshot.lastAssistantToolCallCount > 0) return false;

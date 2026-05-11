@@ -3213,21 +3213,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const promptBusyText = promptActivityViewModel?.text;
 
   // FEATURE_097 (v0.7.34) — recompute the todo plan view-model whenever
-  // the underlying items snapshot changes. FEATURE_151 (v0.7.38): the
-  // host no longer gates the mount on `showSpinner`, the view-model no
-  // longer hides on a 5-second linger, and the `setTodoItems([])` clear
-  // useEffect was removed — the surface stays visible until the next
-  // Scout `init()` or LLM `todo_update op:'init'` fires `onChange` with
-  // a new list. v0.7.38 hotfix (2026-05-11): Slice C correction
-  // restores the on-run-end clear path (see the
-  // `useEffect([isLoading])` below) and re-gates the surface mount on
-  // `isLoading` at the JSX site below. Re-verification of the CC
-  // source revealed the original Slice C rationale misread CC's gate
-  // composition — see the long-form comment on the `todoSurface=`
-  // prop. `now` and `lastAllCompletedAt` are still passed for
-  // back-compat with the `BuildTodoPlanOptions` type but are no longer
-  // consulted by the view-model. See
-  // `docs/features/v0.7.38.md#feature_151...` Slice A + C.
+  // the underlying items snapshot changes. FEATURE_151 (v0.7.38) Slice
+  // A changes that survive: the view-model no longer hides on a
+  // 5-second linger, MIN_ITEMS_TO_RENDER drops to 1 for CC parity, and
+  // `now` / `lastAllCompletedAt` are kept on `BuildTodoPlanOptions`
+  // for back-compat but the view-model ignores them.
+  //
+  // v0.7.38 Slice C correction (2026-05-11 hotfix): the original Slice
+  // C "persistent visibility" rationale misread CC's gate composition
+  // — re-verifying `c:/Works/claudecode/src/` confirmed CC hides the
+  // list at run-end by default (Spinner-internal mount +
+  // `expandedView==='tasks'` toggle defaulting to 'none'). The surface
+  // mount is now re-gated on `isLoading` at the JSX site below, and the
+  // `useEffect([isLoading])` immediately following this hook clears
+  // `todoItems` on the true→false edge so a stale list doesn't flash
+  // back on the next prompt's first frame. See the long-form comment
+  // on the `todoSurface=` prop for verbatim CC source references.
   const todoPlanViewModel = useMemo(
     () => buildTodoPlanViewModel(todoItems, {
       now: Date.now(),
@@ -7425,6 +7426,35 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
         }
 
+        // v0.7.39 run-end safety net — finalize any tool calls left in
+        // Executing state when the run terminates. The per-turn
+        // `onStreamEnd` handler (line ~5195) is the primary cleanup
+        // path: it cancels stragglers per LLM turn so the displayed
+        // `tool_group` items flip out of "(running)". But the V2 chain's
+        // terminal `emit_verdict` path can exit the Runner-driven idle-
+        // yield outer loop (runner-driven.ts ~5460) before that final
+        // stream-end signal lands in the REPL, stranding the last tool
+        // as `Executing` in `iterationToolCallsRef` and the foreground
+        // tool_group history item. Mirrors the FEATURE_151 Slice C
+        // correction (1c630723) — clear stale UI on the run-end edge
+        // rather than depending on an event that may not fire.
+        // Skip when the user interrupted: `resetInterruptedPromptState`
+        // already cleared `liveToolCalls` and the foreground turn
+        // history, so this would be a no-op and adding a Cancelled
+        // patch into history items that no longer exist is wasted work.
+        if (!userInterruptedRef.current) {
+          const orphanedTools = finalizeAllExecutingToolCalls(
+            ToolCallStatus.Cancelled,
+            () => ({
+              error: "Run ended before the tool result was observed.",
+              output: undefined,
+            }),
+          );
+          if (orphanedTools.length > 0 && managedForegroundOwnerRef.current.workerId) {
+            orphanedTools.forEach((tool) => syncManagedForegroundToolGroup(tool));
+          }
+        }
+
         setIsLoading(false);
         stopStreaming();
         clearResponse(); // Fix: clear stale buffer to prevent ghost [Interrupted] on next submit
@@ -7475,6 +7505,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       startCompacting,
       stopCompacting,
       resetLiveToolCalls,
+      finalizeAllExecutingToolCalls,
+      syncManagedForegroundToolGroup,
       clearWorkStripTimers,
     ]
   );
