@@ -5437,12 +5437,27 @@ async function runManagedTaskViaRunnerInner(
     // `revise` is NOT terminal (chain re-runs Worker/Generator) so
     // it's excluded from the terminal-verdict gate.
     const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
+    // v0.7.38 hotfix follow-up #2 — fast-child race. Read the background
+    // queue alongside the registry. If a child completed during the
+    // current Runner.run iteration, its `.finally(delete)` may have
+    // already removed the registry entry before this snapshot, but the
+    // `enqueueChildTaskNotification` ran BEFORE the promise resolved,
+    // so the banner sits in the background queue waiting for
+    // `composeIdleYieldUserMessage` to drain it. Without this gate the
+    // loop would break and strand the banner. See
+    // `IdleYieldSnapshot.hasPendingBackgroundMessages` docs for full
+    // rationale.
+    const hasPendingBackgroundMessages = getMessageQueue().has({
+      agentId: undefined,
+      maxPriority: 'background',
+    });
     const snapshot = {
       lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
       pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
       hasEmittedHandoff: Boolean(recorder.handoff),
       hasEmittedTerminalVerdict:
         verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
+      hasPendingBackgroundMessages,
     };
     if (!detectIdleYield(snapshot)) break;
 
