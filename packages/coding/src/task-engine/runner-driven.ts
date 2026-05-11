@@ -5409,19 +5409,38 @@ async function runManagedTaskViaRunnerInner(
       break;
     }
 
-    // v0.7.38 FEATURE_155 hotfix — Bug B. Treat a terminal Evaluator
-    // verdict (`accept` / `blocked`) the same way as a Worker handoff:
-    // the run is done, the outer loop must stop. `revise` is NOT
-    // terminal (chain re-runs Worker/Generator) so it doesn't gate the
-    // idle-yield predicate here. Without this gate the loop would
-    // keep re-entering `Runner.run` for every pending-child wake event
-    // after the Evaluator already emitted accept — wasting LLM turns
-    // up to `IDLE_YIELD_MAX_ITERATIONS=64`.
-    const verdictStatusForGate = managedProtocolPayloadRef.current?.verdict?.status;
+    // v0.7.38 FEATURE_155 hotfix follow-up — Bug B (corrected) +
+    // hasEmittedHandoff source-of-truth fix. The V2 chain uses the
+    // dedicated `emit_handoff` / `emit_verdict` tools built by
+    // `buildEmitter` in `protocol-emitters.ts`, which return
+    // ProtocolEmitterMetadata in their tool-result `metadata` field
+    // but do NOT call `ctx.emitManagedProtocol(...)` — so the
+    // `managedProtocolPayloadRef.current.{handoff,verdict}` fields
+    // stay `undefined` for the entire V2 run. Reading those fields
+    // (as the original Slice A2 wiring did for `hasEmittedHandoff`,
+    // and the first cut of this hotfix did for `hasEmittedTerminal-
+    // Verdict`) silently makes both gates always-false, and the only
+    // thing breaking the outer loop is `lastAssistantToolCallCount
+    // > 0`. That short-circuits in the happy path (LLM's last
+    // assistant message ends in a tool_use), which is why the Slice
+    // A2 e2e test passed despite the broken gate; the production
+    // bug only surfaces when the LLM emits a text-only turn AFTER
+    // emit_verdict (lastAssistantToolCallCount === 0) with children
+    // still pending — exactly the user's 2026-05-11 trace.
+    //
+    // The correct source is `recorder` — `wrapEmitterWithRecorder`
+    // copies the emitter metadata into `recorder[slot]` at line
+    // ~947. That's the canonical chain state and is what every
+    // other call site reads (e.g. line 1275, 3671, 4005). The
+    // outer loop now matches.
+    //
+    // `revise` is NOT terminal (chain re-runs Worker/Generator) so
+    // it's excluded from the terminal-verdict gate.
+    const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
     const snapshot = {
       lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
       pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
-      hasEmittedHandoff: Boolean(managedProtocolPayloadRef.current?.handoff),
+      hasEmittedHandoff: Boolean(recorder.handoff),
       hasEmittedTerminalVerdict:
         verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
     };
