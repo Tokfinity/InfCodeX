@@ -46,12 +46,13 @@ function buildChildResult(
 }
 
 describe('detectIdleYield', () => {
-  it('returns true when all three idle-yield conditions hold', () => {
+  it('returns true when all four idle-yield conditions hold', () => {
     expect(
       detectIdleYield({
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: 1,
         hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
       }),
     ).toBe(true);
   });
@@ -62,6 +63,7 @@ describe('detectIdleYield', () => {
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: 1,
         hasEmittedHandoff: true,
+        hasEmittedTerminalVerdict: false,
       }),
     ).toBe(false);
   });
@@ -72,6 +74,7 @@ describe('detectIdleYield', () => {
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: 0,
         hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
       }),
     ).toBe(false);
   });
@@ -82,6 +85,7 @@ describe('detectIdleYield', () => {
         lastAssistantToolCallCount: 3,
         pendingChildTaskCount: 1,
         hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
       }),
     ).toBe(false);
   });
@@ -92,6 +96,24 @@ describe('detectIdleYield', () => {
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: -1,
         hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+      }),
+    ).toBe(false);
+  });
+
+  // v0.7.38 FEATURE_155 hotfix — Bug B regression. After the Evaluator
+  // emits a terminal verdict (`accept` / `blocked`), the outer loop
+  // must STOP idle-yielding even if children are still in flight —
+  // otherwise post-verdict child notifications would drive degenerate
+  // LLM turns up to `IDLE_YIELD_MAX_ITERATIONS=64`. `revise` is NOT
+  // terminal (chain re-runs) and is wired in the caller, not here.
+  it('returns false when a terminal verdict has been emitted (accept/blocked)', () => {
+    expect(
+      detectIdleYield({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 1,
+        hasEmittedHandoff: true,
+        hasEmittedTerminalVerdict: true,
       }),
     ).toBe(false);
   });
