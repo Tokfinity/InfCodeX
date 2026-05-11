@@ -6,11 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-<!-- last-sync: 1c63072 -->
+<!-- last-sync: 1957fdd -->
 
-### v0.7.38 — Additions after 2026-05-09 RC snapshot
+---
 
-The 2026-05-09 RC entry below captured the originally-planned three-feature delivery (FEATURE_149 / FEATURE_117 v2 / FEATURE_151). Between 2026-05-09 and final release, the following work landed and **ships in the same v0.7.38** (`package.json` version remains `0.7.38`; no separate v0.7.39 release planned for this content). On final release this section will be folded into the v0.7.38 entry.
+## [0.7.38] - 2026-05-11
+
+### Theme
+
+**Nine-feature delivery — Queued Prompt Injection Latency & Mid-Turn UX Parity, Write-Child Mutation Context Injection, TodoList Visibility & LLM Self-Seeding Parity, Bash AST Migration, LLM-backed Bash Prefix Extractor, Universal `--help` Fast-Path, Chat-While-Waiting, Idle-Wait Visual Continuity, Windows / macOS Case-Insensitive Workspace Match.** v0.7.38's RC snapshot (2026-05-09) shipped the originally-planned three-feature delivery: closing the "queued prompt feels laggy" gap users hit in v0.7.37 by removing four cumulative latency sources and adding three Claude-Code-style mid-turn UX surfaces (FEATURE_149); correcting the long-standing under-injection where parallel write children silently skipped the project's `AGENTS.md` mutation policy because they shared the read-child minimal system prompt (FEATURE_117 v2); and closing the FEATURE_097 coverage gap where users almost never saw the realtime todo list (FEATURE_151). Between the RC and final release, six additional pieces landed and ship in the same `0.7.38` version: security hardening (FEATURE_152/153/154 — closing Issue 129 follow-up + auto-mode allowlist injection vulnerability), V2 Worker default flip (FEATURE_114 Slice 6/7/8), full Chat-While-Waiting delivery with idle-yield wait pattern + 7-bug hotfix chain (FEATURE_155), idle-wait visual continuity (FEATURE_156), Windows / macOS case-insensitive workspace match for `kodax -c` (FEATURE_157), and a UX polish pass that suppresses harness lifecycle markers in the transcript by default for chat-while-waiting flow parity with Claude Code. Configuration cleanup: KodaX no longer reads `CLAUDE.md` as a fallback when `AGENTS.md` is absent — `CLAUDE.md` is Claude-Code-specific project guidance and injecting it into the KodaX agent context produces semantic mismatch (KodaX's own repo dogfood-bit this).
+
+### Added (post-RC — landed 2026-05-09 → 2026-05-11)
 
 **Security hardening** (Issue 129 follow-up):
 
@@ -51,15 +57,7 @@ Production trace showed Evaluator emitting `emit_verdict` accept before children
 - **FEATURE_157 — Windows-aware session-list path comparison** (this batch). Session-list filter in `storage.ts:list()` was doing literal `sessionGitRoot === currentGitRoot` comparison. Drive-letter case differences across shells (`C:/...` saved vs `c:/...` looked-up — happens when sessions are saved from one PowerShell and listed from a VS Code-spawned shell on Windows / case-insensitive macOS) caused the filter to exclude all prior same-repo sessions, leaving `kodax -c` / `kodax -r` with nothing to resume. Symptom: "the previous conversation seems lost, agent answered from scratch with no context". Fix: `pathsEqual()` helper folds case on win32 + darwin; POSIX-strict equality preserved on Linux. Reproduces on 4-session timestamp ladder where all sessions stored uppercase drive letter but a 13:02 `kodax -c` shell returned lowercase.
 - **Harness lifecycle markers suppressed in transcript by default** (`KODAX_TRANSCRIPT_HARNESS_MARKERS=1` to restore). Three transcript artefacts that interrupted the chat flow during chat-while-waiting are now off by default: (1) `> AMA H<n> - Task completed` breadcrumb from `buildManagedLiveEventDrafts`; (2) `[Scout] Completion marked uncertain — signals: ...` warning from `onScoutSuspiciousCompletion`; (3) `[Task completed]` post-task summary label from `buildManagedTaskTranscriptItems`. Parity with Claude Code, which signals turn end via spinner halt rather than transcript text. **The harness itself is unchanged** — Scout/Worker/Evaluator routing, idle-yield wait, mutation guard, capability sections, message queue, child registry, and all FEATURE_155 hotfix invariants are untouched; only the transcript visualization layer is gated. Symptom motivation: when users typed a follow-up while the agent was still running, the queued prompt landed under "Task completed" + "Completion uncertain" lines on the next render, making continuous chat read like a hard task boundary. Set the env flag to restore the legacy persistence for session-replay debugging where explicit turn anchors are useful.
 
----
-
-## [0.7.38] - 2026-05-09 (RC snapshot — see Unreleased above for additions before final release)
-
-### Theme
-
-**Three-feature delivery — Queued Prompt Injection Latency & Mid-Turn UX Parity, Write-Child Mutation Context Injection, TodoList Visibility & LLM Self-Seeding Parity.** v0.7.38 closes the "queued prompt feels laggy" gap users hit in v0.7.37 by removing four cumulative latency sources and adding three Claude-Code-style mid-turn UX surfaces (FEATURE_149); corrects the long-standing under-injection where parallel write children silently skipped the project's `AGENTS.md` mutation policy because they shared the read-child minimal system prompt (FEATURE_117 v2); and closes the FEATURE_097 coverage gap where users almost never saw the realtime todo list — adds an LLM-driven `op:'init'` write path equivalent to Claude Code's `TodoWrite`, drops the UI single-item / linger / spinner-mount gates, and fixes the throttle-reminder chicken-and-egg deadlock that prevented the LLM from learning the plan-list infrastructure existed when Scout did not seed (FEATURE_151). Configuration cleanup: KodaX no longer reads `CLAUDE.md` as a fallback when `AGENTS.md` is absent — `CLAUDE.md` is Claude-Code-specific project guidance and injecting it into the KodaX agent context produces semantic mismatch (KodaX's own repo dogfood-bit this).
-
-### Added
+### Added (RC — 2026-05-09)
 
 - **FEATURE_149 — Queued Prompt Injection Latency & Mid-Turn UX Parity** — Three slices, all in v0.7.38:
   - **Slice A (latency cleanup, zero behavior change)**: Removed the legacy 50ms `setTimeout` floor in `stageQueuedPrompt` (`packages/repl/src/ui/InkREPL.tsx`); added an mtime-keyed file-content cache to `loadAgentsFiles` (`packages/coding/src/context/agents-loader.ts`) so per-round AGENTS.md walks are O(stat) once warmed instead of O(read+parse). Round-N → round-N+1 handoff floor measured at < 5ms (`packages/repl/src/ui/utils/queued-prompt-sequence-latency.test.ts` micro-bench), down from a 53ms minimum.
@@ -99,11 +97,25 @@ Production trace showed Evaluator emitting `emit_verdict` accept before children
 
 ### Verified
 
+**RC (2026-05-09)**:
+
 - All 262 affected test files pass (`npm run test` — `packages/coding`, `packages/repl/src/ui/utils`, `packages/repl/src/ui/contexts`, `tests/tracker-consistency.test.ts`).
 - New: `packages/repl/src/ui/utils/queued-prompt-sequence-latency.test.ts` (handoff floor < 5ms + 50ms-floor sanity check).
 - New: `tests/feature-149-batched-drain.eval.ts` + `benchmark/datasets/feature-149-batched-drain/cases.test.ts` (4 cases, 30 hermetic shape tests; pilot eval skips when API keys absent).
 - New: 4 cases in `packages/coding/src/child-executor.test.ts` for FEATURE_117 v2 mutation context injection.
 - `npm run build` (`tsc -b tsconfig.build.json`) green.
+
+**Post-RC (2026-05-11)**:
+
+- Full repo suite green except 1 pre-existing failure unrelated to this delivery (`tests/acp_server.test.ts` — permission-request count expectation, fails on HEAD without any of this delivery's changes; tracked separately).
+- New: 14 attack-surface hardening tests for `packages/repl/src/permission/bash-ast.ts` (FEATURE_152).
+- New: ~30 tests across `packages/coding/src/guardrails/auto-mode/bash-prefix-extractor.test.ts` + extractor integration (FEATURE_153).
+- New: 33 unit tests pinning `idle-yield.ts` foundation utilities + 35 tests for `Runner.run` outer-loop wiring (FEATURE_155 Slice A1/A2).
+- New: 10 tests for `ObserverBridge.idleWaiting()` + status-bar consumer (FEATURE_156).
+- New: `packages/repl/src/interactive/storage.test.ts` "FEATURE_157 — lists same-repo sessions across drive-letter case differences" (skipped on Linux; runs on win32 + darwin).
+- New: 2 pinning tests in `worker-role-prompt.test.ts` for FEATURE_151 Slice I fan-out plan granularity.
+- Eval ship gates met: FEATURE_155 Slice B1 chat-while-waiting (3/5 alias ≥80% after adding zhipu/glm51), FEATURE_151 Slice I fan-out plan granularity (3/5 alias ≥80% positive AND ≤20% negative-trigger after v2 prompt rewrite).
+- `npm run build` (`tsc -b tsconfig.build.json`) green; type-check clean across all packages.
 
 ### Known not-in-scope
 
