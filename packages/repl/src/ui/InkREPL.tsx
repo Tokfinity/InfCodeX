@@ -3218,7 +3218,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // longer hides on a 5-second linger, and the `setTodoItems([])` clear
   // useEffect was removed — the surface stays visible until the next
   // Scout `init()` or LLM `todo_update op:'init'` fires `onChange` with
-  // a new list. `now` and `lastAllCompletedAt` are still passed for
+  // a new list. v0.7.38 hotfix (2026-05-11): Slice C correction
+  // restores the on-run-end clear path (see the
+  // `useEffect([isLoading])` below) and re-gates the surface mount on
+  // `isLoading` at the JSX site below. Re-verification of the CC
+  // source revealed the original Slice C rationale misread CC's gate
+  // composition — see the long-form comment on the `todoSurface=`
+  // prop. `now` and `lastAllCompletedAt` are still passed for
   // back-compat with the `BuildTodoPlanOptions` type but are no longer
   // consulted by the view-model. See
   // `docs/features/v0.7.38.md#feature_151...` Slice A + C.
@@ -3229,6 +3235,27 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }),
     [todoItems],
   );
+
+  // v0.7.38 hotfix (2026-05-11) — FEATURE_151 Slice C correction.
+  // Clear `todoItems` when the loading lifecycle transitions
+  // true → false (i.e. the AMA run terminated). Without this, the
+  // next prompt re-enters `isLoading=true` and the gated mount
+  // surfaces the PREVIOUS run's completed list until the new run's
+  // Scout `init()` / LLM `op:'init'` replaces it — a stale-list
+  // flash that defeats the whole point of the on-end clear.
+  //
+  // Scoped strictly to the true→false edge by checking `wasLoadingRef`
+  // — a transient mid-render `isLoading=false` snapshot during initial
+  // mount (before the first prompt) MUST NOT clear (there's nothing
+  // to clear, and we don't want to schedule a stray setState on
+  // every render).
+  const wasLoadingRef = useRef(false);
+  useEffect(() => {
+    if (wasLoadingRef.current && !isLoading) {
+      setTodoItems((items) => (items.length > 0 ? [] : items));
+    }
+    wasLoadingRef.current = isLoading;
+  }, [isLoading]);
 
   const statusBarViewModel = useMemo(
     () => buildStatusBarViewModel(statusBarProps),
@@ -7498,18 +7525,37 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       ) : undefined}
       todoSurface={
         // FEATURE_097 (v0.7.34) — surface mount.
-        // FEATURE_151 (v0.7.38) — spinner gate REMOVED. Previously the
-        // surface was only mounted when `promptActivityViewModel.showSpinner`
-        // was true, which hid the list during idle prompts (between rounds,
-        // after task completion). To match Claude Code's persistent
-        // visibility (`expandedView === 'tasks'` stays sticky once
-        // TaskCreate fires; see `c:/Works/claudecode/src/screens/REPL.tsx`
-        // standalone TaskListV2 path at `!showSpinner` branch + Spinner.tsx
-        // inline path during spinner), KodaX now mounts unconditionally
-        // and lets the view-model's `shouldRender` (totalCount >= 1) be
-        // the sole gate. When items are empty `<TodoListSurface>` returns
-        // null on its own — no extra wrapping cost.
-        todoPlanViewModel.shouldRender ? (
+        // FEATURE_151 (v0.7.38) — spinner gate REMOVED unconditionally.
+        // v0.7.38 hotfix (2026-05-11) — Slice C CORRECTION.
+        //
+        // FEATURE_151 Slice C cited Claude Code's
+        // `expandedView === 'tasks'` as the rationale for unconditional
+        // mount. Re-verifying against `c:/Works/claudecode/src/` shows
+        // CC actually has TWO gates that together produce a
+        // "default-OFF after run ends" behaviour:
+        //   1. Spinner.tsx:282-285 — TaskListV2 rendered INSIDE Spinner,
+        //      i.e. only while a run is active.
+        //   2. screens/REPL.tsx:4606 — standalone TaskListV2 rendered
+        //      ONLY when `expandedView === 'tasks'` (user-toggled via
+        //      Ctrl+O); default `expandedView` is 'none' so the post-
+        //      run path is hidden by default.
+        // Combined: CC's list disappears when the run ends (which is
+        // exactly what the user reported as the desired behaviour in
+        // 2026-05-11 — "对话完成、计划列表也都完成时，列表残留在对话框
+        // 上方").
+        //
+        // KodaX correction: gate mount on `isLoading`. The list shows
+        // during an active run (matches CC's Spinner path) and hides
+        // once the run terminates (matches CC's default-OFF
+        // expandedView). A user-facing toggle equivalent to CC's
+        // Ctrl+O / expandedView==='tasks' is out of scope here — can be
+        // a separate feature if requested.
+        //
+        // `todoItems` clear on `isLoading` true→false (see the
+        // `useEffect` below) prevents stale plan items from a
+        // previous run flashing back when the next prompt re-enters
+        // the loading state.
+        (isLoading && todoPlanViewModel.shouldRender) ? (
           <Box paddingX={1}>
             <TodoListSurface viewModel={todoPlanViewModel} />
           </Box>
