@@ -251,6 +251,17 @@ export interface StatusBarProps {
   managedBudgetUsage?: number;
   managedBudgetApprovalRequired?: boolean;
   /**
+   * v0.7.38 FEATURE_156 — true when the runner-driven outer loop is
+   * parked in `waitForWakeEvent` (idle-yield from FEATURE_155). The
+   * status bar renders this as "{role} - waiting for N children"
+   * instead of falling back to the last role-emit label, so the user
+   * can tell the spinner is actively waiting on something concrete.
+   * Consumers MUST branch on `=== true` (undefined transitions out).
+   */
+  managedIdleWaiting?: boolean;
+  /** v0.7.38 FEATURE_156 — child count surfaced in the idle-wait label. */
+  managedIdleWaitingPendingCount?: number;
+  /**
    * FEATURE_092 phase 2b.8: classifier engine indicator. Only renders when
    * permissionMode is in the auto family. `'llm'` shows green `auto[LLM]`
    * (healthy), `'rules'` shows yellow `auto[RULES]` (downgraded — every

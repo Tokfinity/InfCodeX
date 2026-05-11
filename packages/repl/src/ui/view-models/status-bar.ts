@@ -237,6 +237,8 @@ export function buildBusyStatusText({
   managedPhase,
   managedHarnessProfile,
   managedWorkerTitle,
+  managedIdleWaiting,
+  managedIdleWaitingPendingCount,
 }: Pick<
   StatusBarProps,
   | "activeToolCount"
@@ -249,6 +251,8 @@ export function buildBusyStatusText({
   | "managedPhase"
   | "managedHarnessProfile"
   | "managedWorkerTitle"
+  | "managedIdleWaiting"
+  | "managedIdleWaitingPendingCount"
 >): string | undefined {
   const runningToolsLabel = activeToolCount && activeToolCount > 0
     ? `${activeToolCount} tool${activeToolCount === 1 ? "" : "s"} running`
@@ -295,6 +299,29 @@ export function buildBusyStatusText({
   if (managedHarnessProfile) {
     const harness = formatHarnessProfileShort(managedHarnessProfile);
     const roleLabel = `${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ""}`;
+    // v0.7.38 FEATURE_156 — idle-wait visual indicator. Distinct from
+    // `currentTool` / `isThinkingActive`: the agent is alive but
+    // suspended pending external wake, so the spinner is justified but
+    // there's no tool / thinking to surface. Without this branch the
+    // status bar falls through to the bare role label and the user has
+    // no signal about what the spinner is waiting on. Tool / thinking
+    // override idle-waiting because once the agent resumes the next
+    // role-emit clears `managedIdleWaiting` and the running tool /
+    // thinking state becomes the truth.
+    if (
+      managedIdleWaiting === true
+      && !runningToolsLabel
+      && !currentTool
+      && !isThinkingActive
+    ) {
+      const count = managedIdleWaitingPendingCount ?? 0;
+      const phrase = count > 1
+        ? `waiting for ${count} children`
+        : count === 1
+          ? "waiting for 1 child"
+          : "idle - resuming";
+      return `${roleLabel} - ${phrase}`;
+    }
     if (runningToolsLabel) {
       return `${roleLabel} - ${runningToolsLabel}`;
     }
@@ -412,6 +439,8 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
     managedMaxRounds,
     managedGlobalWorkBudget,
     managedBudgetUsage,
+    managedIdleWaiting,
+    managedIdleWaitingPendingCount,
   } = props;
 
   const segments: StatusBarSegment[] = [
@@ -481,6 +510,8 @@ function buildStatusBarSegments(props: StatusBarProps): StatusBarSegment[] {
         managedPhase,
         managedHarnessProfile,
         managedWorkerTitle,
+        managedIdleWaiting,
+        managedIdleWaitingPendingCount,
       })
     : undefined;
 
