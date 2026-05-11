@@ -1,4 +1,23 @@
 /**
+ * **ARCHIVED — DO NOT RUN.** Retired in FEATURE_155 v0.7.39 Phase 0b
+ * follow-up cleanup.
+ *
+ * Slice B1.D ship gate is met (commits `1a08de10` + `6a63d986`,
+ * v0.7.38): `KODAX_IDLE_YIELD` flipped to default-ON, then retired in
+ * Slice C3 (`isIdleYieldEnabled()` hard-codes `true`). The dataset
+ * tested LLM behavior in the transitional state when `await_child_task`
+ * was still present in the tool list but the prompt taught idle-yield
+ * as the preferred path — Slice C1 deleted the tool entirely, so the
+ * "transitional fallback" scenario this eval measures is no longer
+ * reproducible against current production.
+ *
+ * `vitest.eval.config.ts` excludes `tests/_archive/**` so
+ * `npm run test:eval` no longer picks this file up; it is preserved
+ * here as a historical record of how the idle-yield adoption ship
+ * gate was cleared.
+ *
+ * --- Original header (kept verbatim) ---
+ *
  * Eval: FEATURE_155 idle-yield adoption (v0.7.39).
  *
  * ## Layer 2 single-turn probe per benchmark/EVAL_GUIDELINES.md
@@ -67,13 +86,13 @@ import {
   availableAliases,
   resolveAlias,
   type ModelAlias,
-} from '../benchmark/harness/aliases.js';
+} from '../../benchmark/harness/aliases.js';
 import {
   buildIdleYieldSystemPrompt,
   IDLE_YIELD_CASES,
   IDLE_YIELD_TOOLS,
   type IdleYieldCase,
-} from '../benchmark/datasets/feature-155-idle-yield-adoption/cases.js';
+} from '../../benchmark/datasets/_archive/feature-155-idle-yield-adoption/cases.js';
 
 // ---------------------------------------------------------------------------
 // Aliases under test (only those with API keys configured)
