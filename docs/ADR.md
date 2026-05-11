@@ -387,7 +387,7 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 | Agent primitives | `primitives/` | Agent / Runner / Handoff / Guardrail / Session interface |
 | Admission contract | `admission/` | Admission pipeline + 7 quality invariants（FEATURE_101） |
 | Messaging | `messaging/` | 2-tier priority queue + agentId routing（FEATURE_115） |
-| Orchestration | `orchestration/` | Pattern B dispatch / SendMessage router / TaskStop / Peer router（FEATURE_119/120/123/128） |
+| Orchestration | `orchestration/` | Pattern B dispatch / child-task registry / idle-yield 状态机（detectIdleYield + waitForWakeEvent + composeIdleYieldUserMessage）/ Runner.runWithIdleYield 包装 / SendMessage router / TaskStop / Peer router（FEATURE_119/120/123/128/155 — v0.7.39 FEATURE_120 Step 0 完成包归属迁移） |
 | Scratchpad | `scratchpad/` | 去耦合大输出通道（FEATURE_121） |
 | Memory | `memory/` | 4-type taxonomy + scope resolver（FEATURE_124） |
 | Team | `team/` | Multi-instance state broadcast + system-prompt injection（FEATURE_125） |
