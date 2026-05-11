@@ -184,7 +184,7 @@ const commonOptions = {
   // Output ESM with .js extensions in source — keep the import structure
   // that already works in dev (--import tsx).
   banner: {
-    js: '// @kodax-ai/cli — bundled distribution. See docs/ADR.md ADR-022.',
+    js: '// @kodax-ai/kodax-cli — bundled distribution. See docs/ADR.md ADR-022.',
   },
   // Metafile (opt-in via --metafile): bundle composition for CI inspection.
   // Default off because the file is ~1 MB and consumers don't need it.

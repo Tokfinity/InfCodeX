@@ -469,16 +469,16 @@ This routing update keeps KodaX lightweight by default:
 
 > 决策依据见 [ADR-022](ADR.md#adr-022-npm-distribution--single-bundle-not-multi-package-feature_149-v0737)。
 
-源码层是分层 monorepo（ADR-001），npm 发布层是**单 bundle 包 `@kodax-ai/cli`**。这两个层是**正交**的：源码读起来是 9 个独立可用的子包；npm 装起来是一个自包含的 CLI。
+源码层是分层 monorepo（ADR-001），npm 发布层是**单 bundle 包 `@kodax-ai/kodax-cli`**。这两个层是**正交**的：源码读起来是 9 个独立可用的子包；npm 装起来是一个自包含的 CLI。
 
 ### 12.1 发布物布局
 
-`@kodax-ai/cli@<version>` tarball 内部：
+`@kodax-ai/kodax-cli@<version>` tarball 内部：
 
 ```text
-@kodax-ai/cli/
+@kodax-ai/kodax-cli/
 ├── package.json
-│   ├── name: @kodax-ai/cli
+│   ├── name: @kodax-ai/kodax-cli
 │   ├── bin: { "kodax": "scripts/kodax-bin.cjs" }
 │   ├── main: "dist/index.js"          ← SDK 入口
 │   ├── exports: { ".": "./dist/index.js" }
@@ -498,9 +498,9 @@ This routing update keeps KodaX lightweight by default:
 
 | 路径 | 谁会走 | 实现方式 |
 |---|---|---|
-| **A. CLI 终端用户** | 90% 用户 | `npm install -g @kodax-ai/cli` → 用 `kodax` 命令 |
+| **A. CLI 终端用户** | 90% 用户 | `npm install -g @kodax-ai/kodax-cli` → 用 `kodax` 命令 |
 | **B. 源码 SDK 集成方** | 想做基于 KodaX 的产品的开发者 | `git clone + npm link/file: + 自己 esbuild bundle` |
-| **C. 临时 SDK 用户** | 懒得 clone 仓库的小集成场景（不主推） | `npm install @kodax-ai/cli` → `import { runKodaX } from '@kodax-ai/cli'` |
+| **C. 临时 SDK 用户** | 懒得 clone 仓库的小集成场景（不主推） | `npm install @kodax-ai/kodax-cli` → `import { runKodaX } from '@kodax-ai/kodax-cli'` |
 
 路径 A / C 都从 `dist/` 解析；路径 B 从 `packages/*/src/` 解析（不依赖 npm registry）。
 
@@ -574,7 +574,7 @@ const sdk = await import(pathToFileURL(sdkPath).href);
 
 #### 风险 5 — Bundle size 不应膨胀
 
-**场景**：用户 `npm install -g @kodax-ai/cli` 下载 tarball。当前 9 子包 dist 总和 ~1.5 MB；bundle 后预估 800-1200 kB（去重 + tree shake 节省）。
+**场景**：用户 `npm install -g @kodax-ai/kodax-cli` 下载 tarball。当前 9 子包 dist 总和 ~1.5 MB；bundle 后预估 800-1200 kB（去重 + tree shake 节省）。
 
 **风险**：esbuild 配置不当（如未做 module dedup）可能导致 bundle 反而比 multi-package 更大。
 
