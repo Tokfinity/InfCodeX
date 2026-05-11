@@ -7,8 +7,21 @@
  *
  *   When the plan involves dispatching ≥3 children (`dispatch_child_task`
  *   per RULE A or RULE C), expand the plan to ONE item per child's
- *   objective. Mark each item `in_progress` just before the corresponding
- *   `await_child_task`, and `completed` when the child returns.
+ *   objective. Mark each item `in_progress` when work meaningfully
+ *   starts on it (typically when its child is dispatched), and
+ *   `completed` when the child's `<task-completed task_id="…">` banner
+ *   arrives in the next user message (the idle-yield reclaim path —
+ *   FEATURE_155 v0.7.39 Slice C1 deleted `await_child_task`).
+ *
+ * **v0.7.39 prompt update (this commit, Phase 0b)**: removed three
+ * mentions of `await_child_task` that lingered in the system-prompt
+ * blocks (DISPATCH RULES heading / status-transition rule / Tool
+ * Docs). The eval's positive cases (op:"init" with N items) are
+ * unaffected by this change — only the supporting prose around when
+ * to transition statuses changed. Stage-1 SHIP gate cleared under
+ * v0.7.38 wording (commit `7c508a2` v2 prompt, 3/5 alias pass);
+ * a re-run after this update would re-baseline against the current
+ * production tool surface.
  *
  * Four cases, balanced 2 positive (fan-out, expect ≥N items) + 2 negative
  * (trivial lookup, expect NO todo_update at all):
@@ -146,10 +159,10 @@ const WORKER_PROMPT_FANOUT_SECTIONS = [
   '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update` with the full plan.',
   '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled`). Mark exactly ONE item `in_progress` at a time.',
   '',
-  'DISPATCH RULES (`dispatch_child_task` / `await_child_task`):',
+  'DISPATCH RULES (`dispatch_child_task`):',
   '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
   '- RULE C — write fan-out: NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children.',
-  '- Pattern B (FEATURE_119): `dispatch_child_task` returns a `task_id:<id>` immediately and runs in the background.',
+  '- Pattern B (FEATURE_119): `dispatch_child_task` returns a `task_id:<id>` immediately and runs in the background. Children settle via the idle-yield reclaim path — when you have no more useful work and children are still in flight, end your turn with a one-line status (no tool calls); the runner resumes you with `<task-completed task_id="…">` banners in the next user message (FEATURE_155 v0.7.39 Slice C1 deleted the explicit await tool).',
   '',
   'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
   '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool call MUST be `todo_update({op:"init", ...})`. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
@@ -167,7 +180,7 @@ const WORKER_PROMPT_FANOUT_SECTIONS = [
   '    BAD: items:[{content:"Fan out review across 5 packages"}]                          (1 item collapses N children)',
   '    BAD: items:[{content:"Review all packages"},{content:"Aggregate findings"}]        (2 items hides per-package progress)',
   '    BAD: any items array shorter than the number of dispatch_child_task calls.',
-  '- Mark each item `in_progress` just before the corresponding `await_child_task`, and `completed` when that child returns successfully (`failed` if the child crashes / times out).',
+  '- Mark each item `in_progress` when work meaningfully starts on it (typically just before / right after the corresponding `dispatch_child_task`), and `completed` when that child\'s `<task-completed task_id="…">` banner arrives in the next user message (`failed` if the banner reports crash / timeout).',
   '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
 ].join('\n');
 
@@ -183,10 +196,7 @@ const TOOL_DOCS_BLURB = [
   '`dispatch_child_task`:',
   '  Input:  { id:string, objective:string, readOnly:boolean, scope_summary?:string }',
   '  Output: { task_id:string }  (returns immediately; runs in background — Pattern B)',
-  '',
-  '`await_child_task`:',
-  '  Input:  { task_id:string }',
-  '  Output: child\'s final summary text once the child completes.',
+  '  Reclaim: idle-yield — end your turn text-only when out of useful work; the runner resumes you with `<task-completed task_id="…">` banners spliced into the next user message. There is NO explicit await tool (`await_child_task` deleted in FEATURE_155 v0.7.39 Slice C1).',
   '',
   '`read` / `grep` / `glob`:',
   '  Standard read-only file inspection tools.',

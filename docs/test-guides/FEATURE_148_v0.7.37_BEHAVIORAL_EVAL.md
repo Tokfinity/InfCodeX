@@ -1,5 +1,10 @@
 # FEATURE_148 v0.7.37 Behavioral Eval Report
 
+> **⚠️ RETIRED (v0.7.39 Phase 0b)** — The probe target `firstTool.name === 'await_child_task'` is no longer reachable: `await_child_task` was deleted in v0.7.38 FEATURE_155 Slice C1 (commit `80410e49`). The anti-immediate-await anti-pattern this eval was designed to detect can no longer manifest (no callable target). The driver was moved to [`tests/_archive/feature-148-post-dispatch-probe.eval.ts`](../../tests/_archive/feature-148-post-dispatch-probe.eval.ts) in v0.7.38 Slice D2 (commit `3efae389`); this report is preserved verbatim below as a historical record of the methodology + thresholds. The replacement signal is "did the agent idle-yield" — measured by [`tests/_archive/feature-155-idle-yield-adoption.eval.ts`](../../tests/_archive/feature-155-idle-yield-adoption.eval.ts) (also archived now that the transitional-fallback scenario is unreproducible).
+
+---
+
+
 > **Eval**: Pattern B post-dispatch probe — does the Worker, when handed a fresh `task_id:<id>`, immediately await it (sync degeneration) or do the side-task the user explicitly asked for?
 >
 > **Methodology**: Layer 2 single-turn probe per [`benchmark/EVAL_GUIDELINES.md`](../../benchmark/EVAL_GUIDELINES.md). One `provider.stream` call per cell with a pre-canned 3-message history that ends with a synthetic `task_id:child-1 launched` tool_result. Mechanical assertion on the first emitted `tool_use`.

@@ -1,4 +1,26 @@
 /**
+ * **ARCHIVED — DO NOT RUN.** Retired in FEATURE_155 v0.7.39 Phase 0b
+ * follow-up cleanup.
+ *
+ * Slice 6/7 ship gates this eval was designed to inform are met:
+ * Slice 7 flipped `KODAX_HARNESS_V2` default to ON in v0.7.38
+ * (commit `2acbf9d0`). The dataset's system prompt still advertises
+ * `await_child_task` in DISPATCH RULES + Tool Docs blocks — that tool
+ * was deleted in v0.7.38 FEATURE_155 Slice C1, so any re-run would
+ * measure Worker behavior against a fictitious contract.
+ *
+ * `vitest.eval.config.ts` excludes `tests/_archive/**` so
+ * `npm run test:eval` no longer picks this file up; it is preserved
+ * here as a historical record of the methodology + Slice 6/7
+ * decision rationale.
+ *
+ * Imports below point at the archived dataset path
+ * (`benchmark/datasets/_archive/...`) but the file is no longer
+ * executed; if you need to resurrect this eval, re-baseline the
+ * system prompt against the current tool surface first.
+ *
+ * --- Original header (kept verbatim) ---
+ *
  * Eval: FEATURE_114 v0.7.36 AMA Harness V2 baseline (Slice 6).
  *
  * ## Purpose
@@ -71,13 +93,13 @@ import { join } from 'node:path';
 
 import { describe, it } from 'vitest';
 
-import { availableAliases } from '../benchmark/harness/aliases.js';
-import { runBenchmark } from '../benchmark/harness/harness.js';
+import { availableAliases } from '../../benchmark/harness/aliases.js';
+import { runBenchmark } from '../../benchmark/harness/harness.js';
 import {
   CASES,
   buildJudges,
   buildPromptVariants,
-} from '../benchmark/datasets/feature-114-harness-v2-baseline/cases.js';
+} from '../../benchmark/datasets/_archive/feature-114-harness-v2-baseline/cases.js';
 
 // Raw-output dump root — driver always writes per-case JSON for offline
 // LLM-as-judge cross-validation against the regex judges (EVAL_GUIDELINES

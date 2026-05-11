@@ -1,4 +1,16 @@
 /**
+ * **ARCHIVED — DO NOT RUN.** Retired in FEATURE_155 v0.7.39 Phase 0b
+ * follow-up cleanup, paired with the archived V2 baseline driver.
+ *
+ * Slice 7 decision is met: V2 flag flipped to default-ON in v0.7.38
+ * (commit `2acbf9d0`). The dataset's system prompt block still
+ * advertises `await_child_task` which was deleted in v0.7.38 Slice C1,
+ * so any re-run would no longer be apples-to-apples with current
+ * production tool surface. Preserved as a historical record of the
+ * Slice 7 decision input.
+ *
+ * --- Original header (kept verbatim) ---
+ *
  * Eval: FEATURE_114 V1 baseline comparison (Slice 7 decision input).
  *
  * ## Purpose
@@ -41,13 +53,13 @@ import { join } from 'node:path';
 
 import { describe, it } from 'vitest';
 
-import { availableAliases } from '../benchmark/harness/aliases.js';
-import { runBenchmark } from '../benchmark/harness/harness.js';
+import { availableAliases } from '../../benchmark/harness/aliases.js';
+import { runBenchmark } from '../../benchmark/harness/harness.js';
 import {
   CASES,
   buildJudges,
   buildPromptVariants,
-} from '../benchmark/datasets/feature-114-v1-baseline-comparison/cases.js';
+} from '../../benchmark/datasets/_archive/feature-114-v1-baseline-comparison/cases.js';
 
 const DUMP_ROOT = join(
   tmpdir(),
