@@ -4625,4 +4625,112 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     expect(workerTurns).toEqual([1, 2, 3]);
     expect(result.lastText).toBe('Audit X complete.');
   }, 30_000);
+
+  // v0.7.38 FEATURE_156 — idle-wait status emit. Verifies the
+  // producer side: when the outer loop is about to park in
+  // `waitForWakeEvent`, the observer bridge fires an
+  // `onManagedTaskStatus` event with `idleWaiting=true` +
+  // `idleWaitingPendingCount` set to the registry size, and the
+  // identity (`activeWorkerId` / `activeWorkerTitle`) reflects the
+  // agent that just parked (Worker today, but the lookup is
+  // agent-agnostic).
+  it('emits idleWaiting=true with role + pendingCount before waitForWakeEvent (FEATURE_156)', async () => {
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const statusEvents: Array<{
+      idleWaiting?: boolean;
+      idleWaitingPendingCount?: number;
+      activeWorkerId?: string;
+      activeWorkerTitle?: string;
+      phase?: string;
+    }> = [];
+
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'dispatch_child_task',
+              input: { id: 'feat156-1', objective: 'audit', read_only: true },
+            }],
+          };
+        }
+        if (turn === 2) {
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('feat156-1', ['finding']));
+          }, 20);
+          return { textBlocks: [{ text: 'awaiting feat156-1' }] };
+        }
+        if (turn === 3) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-3',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'audit done',
+                evidence: ['finding'],
+                followup: ['none'],
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'fallthrough' }] };
+      },
+      evaluator: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: { status: 'accept', user_answer: 'Audit complete.' },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'Audit complete.' }] };
+      },
+    });
+
+    const options: KodaXOptions = {
+      ...makeOptions(),
+      events: {
+        onManagedTaskStatus: (status) => {
+          statusEvents.push({
+            idleWaiting: status.idleWaiting,
+            idleWaitingPendingCount: status.idleWaitingPendingCount,
+            activeWorkerId: status.activeWorkerId,
+            activeWorkerTitle: status.activeWorkerTitle,
+            phase: status.phase,
+          });
+        },
+      },
+    };
+
+    const result = await runManagedTaskViaRunner(options, 'audit task', mock);
+    expect(result.success).toBe(true);
+
+    // CORE assertion: at least ONE status emit carries idleWaiting=true
+    // with the Worker identity + pendingCount=1 (the in-flight child).
+    const idleEmits = statusEvents.filter((e) => e.idleWaiting === true);
+    expect(idleEmits.length).toBeGreaterThanOrEqual(1);
+    const first = idleEmits[0]!;
+    expect(first.activeWorkerId).toBe('worker');
+    expect(first.activeWorkerTitle).toBe('Worker');
+    expect(first.idleWaitingPendingCount).toBe(1);
+    expect(first.phase).toBe('worker');
+
+    // Subsequent role-emits MUST not carry idleWaiting=true (post-wake
+    // role-emit clears the field — consumers branch on `=== true`).
+    const lastEmit = statusEvents[statusEvents.length - 1];
+    expect(lastEmit?.idleWaiting).not.toBe(true);
+  }, 30_000);
 });

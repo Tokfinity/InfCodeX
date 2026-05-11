@@ -3145,6 +3145,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           globalWorkBudget: managedTaskStatus?.globalWorkBudget,
           budgetUsage: managedTaskStatus?.budgetUsage,
           budgetApprovalRequired: managedTaskStatus?.budgetApprovalRequired,
+          idleWaiting: managedTaskStatus?.idleWaiting,
+          idleWaitingPendingCount: managedTaskStatus?.idleWaitingPendingCount,
         },
         autoModeEngine,
       }),
@@ -3169,6 +3171,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       managedTaskStatus?.globalWorkBudget,
       managedTaskStatus?.budgetUsage,
       managedTaskStatus?.budgetApprovalRequired,
+      managedTaskStatus?.idleWaiting,
+      managedTaskStatus?.idleWaitingPendingCount,
       autoModeEngine,
     ],
   );

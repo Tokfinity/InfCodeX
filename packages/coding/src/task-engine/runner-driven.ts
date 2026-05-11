@@ -1232,6 +1232,27 @@ export interface ObserverBridge {
     fanoutClass: 'finding-validation' | 'evidence-scan' | 'module-triage',
     count?: number,
   ) => void;
+  /**
+   * v0.7.38 FEATURE_156 — fire when the runner-driven outer loop is
+   * about to park in `waitForWakeEvent` (idle-yield from FEATURE_155).
+   * Surfaces "alive but suspended pending external wake" so the REPL's
+   * status-bar can render "Worker - waiting for N children" instead
+   * of falling back to the last role-emit label, which gives the user
+   * no signal about what the spinner is waiting on.
+   *
+   * Agent-agnostic — caller passes the role of whichever agent just
+   * exited idle (today always 'worker'; the field doesn't lock in
+   * that invariant).
+   *
+   * No paired "resumed" emit needed: the next iteration's
+   * `onRoleEmit` naturally clears `idleWaiting` because it doesn't
+   * set the field, and the consumer branches on `=== true` so
+   * undefined transitions out of the waiting label.
+   */
+  readonly idleWaiting: (
+    role: KodaXTaskRole | undefined,
+    pendingCount: number,
+  ) => void;
 }
 
 /**
@@ -1566,6 +1587,35 @@ function buildObserverBridge(
         childFanoutClass: fanoutClass,
         childFanoutCount: count ?? 1,
         note: `Dispatching ${fanoutClass} child task`,
+        persistToHistory: false,
+        ...buildManagedStatusBudgetFields(budget, budgetApprovalRef.current),
+      });
+    },
+    idleWaiting: (role, pendingCount) => {
+      if (!events?.onManagedTaskStatus) return;
+      // FEATURE_156 — keep the activeWorker identity on whoever just
+      // parked (today always Worker, but the field is role-agnostic to
+      // avoid hardcoding the V2-only invariant). Phase stays 'worker'
+      // because we're still inside an in-progress agent turn's
+      // continuation — `idleWaiting=true` distinguishes the alive-
+      // suspended sub-state from active execution; the consumer
+      // branches on it.
+      const resolvedTitle = role ? ROLE_TO_TITLE[role] : undefined;
+      events.onManagedTaskStatus({
+        agentMode: 'ama',
+        harnessProfile: harnessRef.current,
+        currentRound: roundRef.current,
+        maxRounds: maxRoundsRef.current,
+        upgradeCeiling: harnessRef.current,
+        phase: 'worker',
+        activeWorkerId: role,
+        activeWorkerTitle: resolvedTitle,
+        idleWaiting: true,
+        idleWaitingPendingCount: pendingCount,
+        note:
+          pendingCount > 0
+            ? `${resolvedTitle ?? 'Agent'} idle — waiting for ${pendingCount} child task${pendingCount === 1 ? '' : 's'}`
+            : `${resolvedTitle ?? 'Agent'} idle — resuming`,
         persistToHistory: false,
         ...buildManagedStatusBudgetFields(budget, budgetApprovalRef.current),
       });
@@ -2077,6 +2127,7 @@ const NULL_OBSERVER: ObserverBridge = {
   completed: () => undefined,
   notifyBudgetApprovalRequest: () => undefined,
   notifyChildFanout: () => undefined,
+  idleWaiting: () => undefined,
 };
 
 /**
@@ -5460,6 +5511,25 @@ async function runManagedTaskViaRunnerInner(
       hasPendingBackgroundMessages,
     };
     if (!detectIdleYield(snapshot)) break;
+
+    // FEATURE_156 — surface "alive but suspended" to the REPL. Agent-
+    // agnostic identity lookup: today only the Worker can reach this
+    // (see `dispatch-child-tasks.ts` role guard + `hasEmittedHandoff`
+    // gate in `detectIdleYield`), but the wiring carries no
+    // role-specific assumption — if any chain ever opens idle-yield to
+    // a different role, the status emit picks up the change. Note: we
+    // count the registry, NOT registry + queue — the
+    // background-banner-only case is the transient "fast-child race
+    // recovery" sub-state (`pendingCount === 0` + `idleWaiting === true`)
+    // which the status-bar renders as "idle — resuming".
+    const idleRole: KodaXTaskRole | undefined =
+      currentAgent.name === SCOUT_AGENT_NAME ? 'scout'
+        : currentAgent.name === PLANNER_AGENT_NAME ? 'planner'
+          : currentAgent.name === GENERATOR_AGENT_NAME ? 'generator'
+            : currentAgent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
+              : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
+                : undefined;
+    observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
 
     const wakeEvent = await waitForWakeEvent({
       registry: baseCtx.childTaskRegistry ?? new Map(),

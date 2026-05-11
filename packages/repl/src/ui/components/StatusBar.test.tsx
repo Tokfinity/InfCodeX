@@ -318,4 +318,98 @@ describe("StatusBar", () => {
 
     expect(text).toContain("Iter 3/8");
   });
+
+  // v0.7.38 FEATURE_156 — idle-wait visual indicator (status-bar render side).
+  describe("FEATURE_156 idle-wait label", () => {
+    const baseProps = {
+      sessionId: "session-1",
+      permissionMode: "accept-edits" as const,
+      agentMode: "ama" as const,
+      provider: "anthropic",
+      model: "sonnet",
+      managedHarnessProfile: "H0_DIRECT",
+      managedWorkerTitle: "Worker",
+    };
+
+    it("renders 'waiting for N children' when idleWaiting=true and N>1", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        managedIdleWaiting: true,
+        managedIdleWaitingPendingCount: 3,
+      });
+      expect(text).toContain("H0 - Worker - waiting for 3 children");
+    });
+
+    it("renders 'waiting for 1 child' (singular) when count=1", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        managedIdleWaiting: true,
+        managedIdleWaitingPendingCount: 1,
+      });
+      expect(text).toContain("H0 - Worker - waiting for 1 child");
+      expect(text).not.toContain("children");
+    });
+
+    it("renders 'idle - resuming' transitional state when count=0 (fast-child race recovery)", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        managedIdleWaiting: true,
+        managedIdleWaitingPendingCount: 0,
+      });
+      expect(text).toContain("H0 - Worker - idle - resuming");
+    });
+
+    it("falls back to bare role label when idleWaiting is undefined (default = not idle)", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        // managedIdleWaiting omitted (undefined)
+      });
+      // No "waiting for" phrase — old behaviour preserved for all
+      // non-idle-yield emit sites that don't set the field.
+      expect(text).not.toContain("waiting for");
+      expect(text).not.toContain("idle");
+      expect(text).toContain("H0 - Worker");
+    });
+
+    it("falls back to bare role label when idleWaiting=false (explicit non-idle)", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        managedIdleWaiting: false,
+        managedIdleWaitingPendingCount: 3,  // ignored when idleWaiting !== true
+      });
+      expect(text).not.toContain("waiting for");
+      expect(text).toContain("H0 - Worker");
+    });
+
+    it("idle-wait label is suppressed when a tool is currently running (active execution wins)", () => {
+      const text = getStatusBarText({
+        ...baseProps,
+        managedIdleWaiting: true,
+        managedIdleWaitingPendingCount: 2,
+        currentTool: "read_file",
+        toolInputCharCount: 30,
+        activeToolCount: 1,
+      });
+      // Running tool indicates the agent already resumed and is
+      // executing — `idleWaiting` from a stale event must not stamp
+      // "waiting for" onto a Worker that's actively reading a file.
+      expect(text).not.toContain("waiting for");
+      expect(text).toContain("1 tool running");
+    });
+
+    it("agent-agnostic: renders Evaluator label correctly if idle-wait ever extends to Evaluator", () => {
+      // Today only Worker can idle-yield (Evaluator can't dispatch
+      // children, and `hasEmittedHandoff` gate blocks Evaluator
+      // idle-yield path). The label code is intentionally
+      // role-agnostic — pin that with a forward-looking test so a
+      // future role-set change doesn't silently hardcode "Worker".
+      const text = getStatusBarText({
+        ...baseProps,
+        managedWorkerTitle: "Evaluator",
+        managedIdleWaiting: true,
+        managedIdleWaitingPendingCount: 2,
+      });
+      expect(text).toContain("H0 - Evaluator - waiting for 2 children");
+    });
+  });
 });

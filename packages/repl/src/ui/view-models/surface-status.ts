@@ -27,6 +27,10 @@ export interface SurfaceStatusManagedState {
   globalWorkBudget?: number;
   budgetUsage?: number;
   budgetApprovalRequired?: boolean;
+  /** v0.7.38 FEATURE_156 — surfaces idle-yield wait in the status bar. */
+  idleWaiting?: boolean;
+  /** v0.7.38 FEATURE_156 — child count surfaced in idle-wait label. */
+  idleWaitingPendingCount?: number;
 }
 
 export interface BuildSurfaceStatusBarPropsOptions {
@@ -85,6 +89,16 @@ export function buildSurfaceStatusBarProps(
     managedBudgetUsage: options.isLoading ? options.managedState?.budgetUsage : undefined,
     managedBudgetApprovalRequired: options.isLoading
       ? options.managedState?.budgetApprovalRequired
+      : undefined,
+    // v0.7.38 FEATURE_156 — gated on `isLoading` like every other
+    // managedState passthrough above: when the run finishes the idle
+    // state is no longer meaningful, so we clear it the same way the
+    // sibling fields are cleared.
+    managedIdleWaiting: options.isLoading
+      ? options.managedState?.idleWaiting
+      : undefined,
+    managedIdleWaitingPendingCount: options.isLoading
+      ? options.managedState?.idleWaitingPendingCount
       : undefined,
     autoModeEngine: options.autoModeEngine,
   };

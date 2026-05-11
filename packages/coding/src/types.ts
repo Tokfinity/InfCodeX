@@ -774,6 +774,38 @@ export interface KodaXManagedTaskStatusEvent {
   globalWorkBudget?: number;
   budgetUsage?: number;
   budgetApprovalRequired?: boolean;
+  /**
+   * v0.7.38 FEATURE_156 — true while the runner-driven outer loop is
+   * parked in `waitForWakeEvent` (idle-yield from FEATURE_155). The
+   * agent is alive but suspended pending an external wake — typically
+   * a dispatched child task completing, or a user message arriving via
+   * the FEATURE_115 MessageQueue (chat-while-waiting).
+   *
+   * Default (`undefined` / `false`) means "not idle-waiting" — every
+   * pre-FEATURE_156 emit site implicitly sets this. Consumers MUST
+   * branch on `=== true` (not truthy / not undefined) so that
+   * subsequent role-emits with `idleWaiting` unset naturally transition
+   * the UI out of the waiting state.
+   *
+   * Agent-agnostic: today only the Worker can reach an idle-yield
+   * state (the dispatch tool is restricted to Scout/Generator/Worker,
+   * and the `hasEmittedHandoff` gate blocks idle-yield post-handoff so
+   * Evaluator can never park here), but the field carries no
+   * role-specific semantics — `activeWorkerTitle` carries the role
+   * identity for display.
+   */
+  idleWaiting?: boolean;
+  /**
+   * v0.7.38 FEATURE_156 — count of children the agent is actively
+   * waiting on at the idle-yield boundary (`registry.size` snapshot).
+   * Status-bar renders this as "waiting for N children" so the user
+   * can tell how many outstanding pieces of work are pending. 0 with
+   * `idleWaiting=true` is the transitional "background banner queued,
+   * registry already drained" state (fast-child race recovery path,
+   * see FEATURE_155 hotfix follow-up #2) and renders as "idle —
+   * resuming".
+   */
+  idleWaitingPendingCount?: number;
 }
 
 export interface KodaXVerificationScorecardCriterion {
