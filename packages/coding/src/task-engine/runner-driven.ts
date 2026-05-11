@@ -360,7 +360,7 @@ const WORKER_INSTRUCTIONS_FALLBACK = [
   '`todo_update`, execute via tool calls, then call `emit_handoff` exactly ',
   'once with status/summary/evidence/followup. You may call: read, grep, glob, ',
   'bash, write, edit, multi_edit, todo_update, todo_list, dispatch_child_task, ',
-  'await_child_task, exit_plan_mode.',
+  'exit_plan_mode.',
 ].join('\n');
 
 /**
@@ -2624,8 +2624,10 @@ export function buildRunnerAgentChain(
   // guarded execution (mutation-guard wrappers for bash/write/edit/
   // multi_edit so plan.decision.primaryTask='review' still blocks
   // accidental mutations) plus dispatch (with write fan-out) and
-  // todo_update / todo_list. Worker also receives await_child_task so
-  // it can reclaim async-dispatched children (FEATURE_119 Pattern B).
+  // todo_update / todo_list. FEATURE_155 (v0.7.38) Slice C1 removed
+  // `await_child_task`; Worker now reclaims async-dispatched children
+  // via the idle-yield wait mechanic in the outer runner loop
+  // (`detectIdleYield` + `waitForWakeEvent`).
   // Discipline (plan-first, scope commitment, dispatch RULE A/B/C,
   // mutation discipline) lives in `worker-role-prompt.ts`; the
   // tool-policy layer returns `undefined` for `'worker'` (matches Scout).
