@@ -7,15 +7,15 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import YAML from 'yaml';
 
-// FEATURE_150 (v0.7.37) — KodaX SDK loader for builtin helper scripts.
+// FEATURE_150 (v0.7.37, renamed v0.7.39) — KodaX SDK loader for builtin helper scripts.
 //
 // These helper scripts (run-eval.js / grade-evals.js / etc.) need access to
 // the runKodaX / estimateTokens API. The SDK lives in different places
 // depending on install mode:
 //
-//   1. Bundle-installed (npm install -g @kodax-ai/cli):
-//      this file → <prefix>/lib/node_modules/@kodax-ai/cli/dist/builtin-skills/skill-creator/scripts/utils.js
-//      SDK       → <prefix>/lib/node_modules/@kodax-ai/cli/dist/index.js
+//   1. Bundle-installed (npm install -g @kodax-ai/kodax-cli):
+//      this file → <prefix>/lib/node_modules/@kodax-ai/kodax-cli/dist/builtin-skills/skill-creator/scripts/utils.js
+//      SDK       → <prefix>/lib/node_modules/@kodax-ai/kodax-cli/dist/index.js
 //      Resolution: relative path '../../../index.js' (3 levels up from scripts/ to dist/)
 //
 //   2. Dev monorepo (npm run dev / direct invocation against built sub-packages):
@@ -23,8 +23,14 @@ import YAML from 'yaml';
 //      SDK       → not at relative path; resolved via npm workspace symlink
 //      Resolution: bare-name `@kodax-ai/coding` (workspace alias works in this scope)
 //
-//   3. Path B SDK consumer (`npm install @kodax-ai/cli` in user project):
+//   3. Path B SDK consumer (`npm install @kodax-ai/kodax-cli` in user project):
 //      this file would be inside their node_modules; same as case 1 layout.
+//
+// Legacy: v0.7.37/v0.7.38 published the bundle under `@kodax-ai/cli`. That
+// package is deprecated as of v0.7.39 (renamed to `@kodax-ai/kodax-cli`).
+// The Strategy 4 fallback below keeps `import('@kodax-ai/cli')` working for
+// any user still on the legacy installed version; remove the fallback when
+// no `@kodax-ai/cli` installs remain in the wild.
 //
 // See docs/HLD.md §12.4 risk 3 for the dist-layout contract.
 
@@ -55,10 +61,19 @@ export async function loadKodaXSDK() {
 
   // Strategy 3: bundled install via bare cli name (npm-installed CLI alongside)
   try {
+    _cachedSdk = await import('@kodax-ai/kodax-cli');
+    return _cachedSdk;
+  } catch (err) {
+    errors.push(`bare-name @kodax-ai/kodax-cli failed: ${err?.code ?? err?.message}`);
+  }
+
+  // Strategy 4: legacy fallback for users still on @kodax-ai/cli installs
+  // (v0.7.37/v0.7.38). Will be removed after a reasonable deprecation window.
+  try {
     _cachedSdk = await import('@kodax-ai/cli');
     return _cachedSdk;
   } catch (err) {
-    errors.push(`bare-name @kodax-ai/cli failed: ${err?.code ?? err?.message}`);
+    errors.push(`bare-name @kodax-ai/cli (legacy) failed: ${err?.code ?? err?.message}`);
   }
 
   throw new Error(

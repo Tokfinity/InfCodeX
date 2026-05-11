@@ -512,6 +512,26 @@ FEATURE_147 (v0.7.37) 完成了 `@kodax/*` → `@kodax-ai/*` scope 重命名，�
 
 仅 1 条满足不足以回滚 —— 单 SDK 用户可以通过路径 A（git clone + bundle）解决。
 
+### Addendum (v0.7.39, 2026-05-11) — 包名更正 `@kodax-ai/cli` → `@kodax-ai/kodax-cli`
+
+v0.7.37/v0.7.38 在 npm 上的包名是 `@kodax-ai/cli`。命名时跟随了 SDK 范式（`@org/cli` 形态名），但实践证明这与 KodaX 作为**产品**的定位不匹配——业界主流是把 npm 包名直接对齐产品名（`@anthropic-ai/claude-code`、`aider-chat` 等）。v0.7.38 刚发完正式版本（之前只有 0.0.1 占位包），用户量极小，是改名最佳窗口期。
+
+**决定**：v0.7.39 起改名为 `@kodax-ai/kodax-cli`。
+- 保留 `@kodax-ai` scope（未来加 `@kodax-ai/sdk` 等独立子包仍有命名空间）
+- 包名第二段直接 = 产品名 `kodax`，对齐业界主流
+- 保留 `-cli` 后缀明确这是 CLI 工具的发布形态
+
+**Migration**：
+- `scripts/release.mjs` 改 `pkg.name = '@kodax-ai/kodax-cli'`
+- 所有 forward-going 文档（HLD、README、ADR-022 本段、release.mjs banner、build-bundle banner、skill-creator/utils.js Strategy 3）一次性更新
+- 历史记录（CHANGELOG v0.7.37/v0.7.38 entries、docs/features/v0.7.37.md、docs/FEATURE_LIST.md）保留原 `@kodax-ai/cli` 字样，作为命名历史的真实记录
+- v0.7.39 发布后对 `@kodax-ai/cli@*` 执行 `npm deprecate "Package renamed to @kodax-ai/kodax-cli. Run: npm install -g @kodax-ai/kodax-cli"`
+- `skill-creator/scripts/utils.js` 保留 `import('@kodax-ai/cli')` 作为 Strategy 4 兜底（向后兼容 v0.7.37/v0.7.38 已安装用户）；deprecation 窗口过后再移除
+
+**不改的部分**：
+- `packages/*/package.json` 里 `@kodax-ai/{ai,agent,coding,mcp,repl,...}` 子包名**不动**——它们本来就不发到 npm（bundle 模式），仅作 workspace 内部 alias。这次改名只针对 root 发布物。
+- bin 命令 `kodax` 不动（安装后用户跑的命令仍是 `kodax`）。
+
 ---
 
 ## ADR-023: Bash Command Parsing — Regex → AST Migration (FEATURE_152, v0.7.38)

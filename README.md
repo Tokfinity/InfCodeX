@@ -480,11 +480,11 @@ See [docs/release.md](docs/release.md) for full details on build flags, archive 
 ### As Library
 
 ```bash
-npm install kodax
+npm install @kodax-ai/kodax-cli
 ```
 
 ```typescript
-import { runKodaX } from 'kodax';
+import { runKodaX } from '@kodax-ai/kodax-cli';
 
 process.env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY ?? 'your_api_key';
 

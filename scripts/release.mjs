@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FEATURE_150 (v0.7.37) — single-bundle npm release for @kodax-ai/cli.
+// FEATURE_150 (v0.7.37) — single-bundle npm release for @kodax-ai/kodax-cli.
 //
 // Replaces:
 //   - scripts/release-npm.mjs        (multi-package publish — deleted)
@@ -18,7 +18,7 @@
 //   1. Verify git is clean (no uncommitted changes).
 //   2. Build sub-package dist/ via `npm run build:packages` (esbuild needs them).
 //   3. Build root bundle via `npm run build:bundle`.
-//   4. Rewrite root package.json: name → @kodax-ai/cli, drop private,
+//   4. Rewrite root package.json: name → @kodax-ai/kodax-cli, drop private,
 //      add publishConfig, normalize bin paths. Capture pristine bytes for restore.
 //   5. Run `npm publish` (or --dry-run).
 //   6. Restore pristine package.json bytes (try/finally guarantees this).
@@ -80,7 +80,7 @@ function rewriteRootPackageJson() {
   const pkg = JSON.parse(rawBytes);
 
   // 1. Switch publish identity: monorepo internal name "kodax" → public scope
-  pkg.name = '@kodax-ai/cli';
+  pkg.name = '@kodax-ai/kodax-cli';
 
   // 2. Remove private flag (npm refuses to publish private packages)
   delete pkg.private;
@@ -150,7 +150,7 @@ function main() {
   }
 
   // Step 3: rewrite root package.json
-  log('-- rewriting root package.json (name → @kodax-ai/cli, drop private, normalize bin)');
+  log('-- rewriting root package.json (name → @kodax-ai/kodax-cli, drop private, normalize bin)');
   const pristineBytes = rewriteRootPackageJson();
 
   // Step 4: publish, then restore (try/finally guarantees restore)
@@ -172,8 +172,8 @@ function main() {
   if (isDryRun) {
     log('Dry run complete. Nothing was actually published.');
   } else {
-    log(`Published @kodax-ai/cli@${version}.`);
-    log(`Verify: npm view @kodax-ai/cli@${version} version --registry=https://registry.npmjs.org/`);
+    log(`Published @kodax-ai/kodax-cli@${version}.`);
+    log(`Verify: npm view @kodax-ai/kodax-cli@${version} version --registry=https://registry.npmjs.org/`);
     log('(Registry propagation can take 30-120s.)');
   }
 }

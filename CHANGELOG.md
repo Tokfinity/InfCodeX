@@ -6,7 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-<!-- last-sync: 1957fdd -->
+<!-- last-sync: 383206a -->
+
+### Changed
+
+- ⚠️ **npm package renamed `@kodax-ai/cli` → `@kodax-ai/kodax-cli`** (effective next publish). v0.7.37/v0.7.38 published the bundle as `@kodax-ai/cli`; the name was inherited from SDK-style conventions (`@org/cli`) but doesn't match how the npm ecosystem names CLI products (industry standard is product-name in the package, e.g. `@anthropic-ai/claude-code`, `aider-chat`). v0.7.38 only just left placeholder status (0.0.1 → 0.7.38) so user count is minimal — best window to rename. **Migration**: `npm uninstall -g @kodax-ai/cli && npm install -g @kodax-ai/kodax-cli` (or `npx @kodax-ai/kodax-cli@<version>`). The `kodax` bin command is unchanged. `@kodax-ai/cli@*` will be deprecated on npm after the v0.7.39 publish with a notice pointing to the new name. ADR-022 Addendum records the rename rationale. `packages/skills/.../utils.js` keeps `import('@kodax-ai/cli')` as a Strategy 4 fallback for already-installed users; the fallback will be removed after a reasonable deprecation window.
 
 ---
 
