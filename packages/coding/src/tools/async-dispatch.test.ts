@@ -139,6 +139,12 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
       toolDispatchChildTask({ id: 'dup', objective: 'b' }, ctx),
     );
     expect(second).toContain('already in flight');
+    // FEATURE_155 v0.7.39 cleanup — duplicate-id error must not point
+    // the LLM at the deleted `await_child_task` tool. Idle-yield is now
+    // the only reclaim path; the message advertises it via the
+    // `<task-completed>` banner pattern.
+    expect(second).not.toContain('await_child_task');
+    expect(second).toContain('<task-completed task_id="dup">');
     expect(mockExec).toHaveBeenCalledTimes(1);
   });
 

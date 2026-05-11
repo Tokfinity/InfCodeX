@@ -16,8 +16,12 @@
  *  - **Async (Pattern B, FEATURE_119)**: when `ctx.childTaskRegistry` is
  *    a Map, the tool launches the executor, registers the in-flight
  *    promise, and returns a `task_id:<id>` banner immediately. The
- *    Worker then continues with other tools and calls `await_child_task`
- *    when the result is needed. This unblocks the Worker during
+ *    Worker continues with other useful work; when it runs out, it
+ *    ends the turn text-only and the runner-driven outer loop resumes
+ *    it via the idle-yield wait mechanic (FEATURE_155 v0.7.39 Slice
+ *    C1 — `await_child_task` tool removed; children are reclaimed
+ *    automatically via `<task-completed>` notifications spliced into
+ *    the next user message). This unblocks the Worker during
  *    long-running children (e.g. 90s `npm test`).
  *
  * Pattern B is the default when the runner provisions a registry, which
@@ -142,11 +146,14 @@ export async function* toolDispatchChildTask(
 
   // FEATURE_119 v0.7.36 Pattern B branch: when a registry is provisioned
   // and KODAX_ASYNC_DISPATCH is not forced off, launch the executor
-  // without awaiting and register the in-flight promise. The Worker can
-  // then continue with other tools and reclaim the result via
-  // `await_child_task`. Background drain (FEATURE_115) wakes the Worker
-  // when a child completes via `enqueueChildTaskNotification` —
-  // Sleep-gated mid-turn drain picks it up after the next yielding tool.
+  // without awaiting and register the in-flight promise. The Worker
+  // continues with other useful work; when out of work it ends the turn
+  // text-only, and the runner-driven outer loop's idle-yield mechanic
+  // (FEATURE_155 v0.7.39) resumes it on the next external wake event.
+  // Background drain (FEATURE_115) wakes the Worker when a child
+  // completes via `enqueueChildTaskNotification` — the same
+  // `<task-completed>` banner is also synthesized into the next user
+  // message by `composeIdleYieldUserMessage`.
   if (shouldUseAsyncDispatch(ctx)) {
     const registry = ctx.childTaskRegistry;
     if (!registry) {
@@ -161,13 +168,14 @@ export async function* toolDispatchChildTask(
       yield { stage: 'error', message: `Child "${childId}": duplicate task_id` };
       dispatchEndStatus = 'error';
       emitDispatchEnd();
-      return `[Tool Error] ${TOOL_NAME}: task_id "${childId}" is already in flight. Pick a unique id or call await_child_task to reclaim it.`;
+      return `[Tool Error] ${TOOL_NAME}: task_id "${childId}" is already in flight. Pick a unique id; the existing child will be reclaimed automatically via the idle-yield wait mechanic (its result will arrive as a <task-completed task_id="${childId}"> block in your next user message).`;
     }
 
-    // Capture the worktree-register callback so it can fire at result time
-    // (after await_child_task awaits the promise). Without this, write
-    // children's worktrees would never be wired into the Evaluator diff
-    // injection path on the async branch.
+    // Capture the worktree-register callback so it can fire at result
+    // time (when the child promise settles, before the registry cleanup
+    // `.finally` runs below). Without this, write children's worktrees
+    // would never be wired into the Evaluator diff injection path on
+    // the async branch.
     const registerWorktrees = ctx.registerChildWriteWorktrees;
     // Default child-task notification target is the ROOT main agent
     // (agentId === undefined). Subagents may set parentAgentId on the
