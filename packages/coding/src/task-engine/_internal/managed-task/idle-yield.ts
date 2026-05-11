@@ -109,6 +109,30 @@ export interface IdleYieldSnapshot {
    * `hasEmittedHandoff` but for the Evaluator side of the chain.
    */
   readonly hasEmittedTerminalVerdict: boolean;
+  /**
+   * v0.7.38 FEATURE_155 hotfix follow-up — true if the
+   * background-priority message queue still has undelivered
+   * `<task-completed>` banners destined for the Worker. Set this
+   * alongside `pendingChildTaskCount` because of the **fast-child
+   * race**: the dispatch IIFE calls
+   * `enqueueChildTaskNotification` BEFORE its promise resolves, and
+   * the registry's `.finally(delete)` cleanup runs in the same
+   * microtask burst. When a child completes faster than the
+   * surrounding Runner.run iteration (e.g. a sub-second probe vs a
+   * multi-second LLM call), the registry entry is removed BEFORE
+   * the outer loop reads `pendingChildTaskCount` — making the
+   * snapshot see `0`, breaking the loop, and orphaning the banner
+   * in the background queue. With this field, the loop stays in
+   * the wait state whenever there's still something to deliver,
+   * regardless of which arm (registry or queue) carries it.
+   *
+   * Drained only by the outer loop's
+   * `composeIdleYieldUserMessage` call AFTER `waitForWakeEvent`
+   * returns. The mid-turn drain (FEATURE_115) caps at `user`
+   * priority post-FEATURE_155, so this is the **only** consumer of
+   * background-priority messages — losing it strands the banner.
+   */
+  readonly hasPendingBackgroundMessages: boolean;
 }
 
 /**
@@ -125,7 +149,11 @@ export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
   if (snapshot.lastAssistantToolCallCount > 0) return false;
   if (snapshot.hasEmittedHandoff) return false;
   if (snapshot.hasEmittedTerminalVerdict) return false;
-  if (snapshot.pendingChildTaskCount <= 0) return false;
+  // Either a pending child OR an undelivered background banner keeps
+  // us in the wait state — see `hasPendingBackgroundMessages` docs
+  // for the fast-child race rationale.
+  if (snapshot.pendingChildTaskCount <= 0
+      && !snapshot.hasPendingBackgroundMessages) return false;
   return true;
 }
 
@@ -212,6 +240,18 @@ export function waitForWakeEvent(
   return new Promise<WakeEvent>((resolve) => {
     let settled = false;
     let intervalId: ReturnType<typeof setInterval> | undefined;
+    // v0.7.38 hotfix follow-up #2 — abort listener leak. Without
+    // tracking & removing on wake, every idle-yield iteration on the
+    // same long-lived `abortSignal` (one per outer-loop turn, capped at
+    // IDLE_YIELD_MAX_ITERATIONS=64 per run) leaves a dead listener
+    // attached. `{once:true}` only auto-removes when the listener
+    // actually fires; if the wake wins the race (the common case),
+    // the listener stays. AbortSignal is an EventTarget (no MaxListeners
+    // warning), so the leak was silent. Capture the bound handler now
+    // and remove it explicitly in `settle()`.
+    const abortHandler = (): void => {
+      settle({ kind: 'aborted' });
+    };
     const settle = (event: WakeEvent): void => {
       if (settled) return;
       settled = true;
@@ -219,6 +259,7 @@ export function waitForWakeEvent(
         clearInterval(intervalId);
         intervalId = undefined;
       }
+      abortSignal?.removeEventListener('abort', abortHandler);
       resolve(event);
     };
 
@@ -263,16 +304,11 @@ export function waitForWakeEvent(
       }
     }, pollIntervalMs);
 
-    // Abort arm — tear down on Esc / parent-cancel. Use {once:true}
-    // so the listener removes itself; preserves AbortController
-    // semantics for callers that reuse the controller.
-    abortSignal?.addEventListener(
-      'abort',
-      () => {
-        settle({ kind: 'aborted' });
-      },
-      { once: true },
-    );
+    // Abort arm — tear down on Esc / parent-cancel. Note: `{once:true}`
+    // is still useful as belt-and-suspenders (auto-remove on abort
+    // fire) but the explicit removeEventListener in `settle()` is the
+    // load-bearing cleanup for the common non-abort path.
+    abortSignal?.addEventListener('abort', abortHandler, { once: true });
 
     // Edge: registry was already empty AND queue had a pending
     // message at construction time. The poll arm would still

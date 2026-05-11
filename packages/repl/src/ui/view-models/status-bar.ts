@@ -272,19 +272,24 @@ export function buildBusyStatusText({
   }
 
   if (managedPhase === "preflight") {
-    const scoutLabel = managedWorkerTitle && managedWorkerTitle !== "Scout"
-      ? `Scout - ${managedWorkerTitle}`
-      : "Scout";
+    // f23a7cb1 follow-up — V1 set workerTitle="Scout"; V2 (FEATURE_114
+    // Slice 7) sets workerTitle="Worker". Original code wrapped the
+    // title in `Scout - {title}` which stamped a stale "Scout -" prefix
+    // onto V2 sessions where workerTitle already IS the entry role.
+    // managedWorkerTitle is the authoritative entry-agent label for the
+    // current chain — use it directly; fall back to "Scout" only when
+    // the preflight ran without setting a title.
+    const phaseLabel = managedWorkerTitle ?? "Scout";
     if (runningToolsLabel) {
-      return `${scoutLabel} - ${runningToolsLabel}`;
+      return `${phaseLabel} - ${runningToolsLabel}`;
     }
     if (currentTool) {
-      return `${scoutLabel} - ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
+      return `${phaseLabel} - ${formatToolStatus(currentTool, toolInputCharCount, toolInputContent)}`;
     }
     if (isThinkingActive) {
-      return formatThinkingStatus(scoutLabel, thinkingCharCount);
+      return formatThinkingStatus(phaseLabel, thinkingCharCount);
     }
-    return scoutLabel;
+    return phaseLabel;
   }
 
   if (managedHarnessProfile) {

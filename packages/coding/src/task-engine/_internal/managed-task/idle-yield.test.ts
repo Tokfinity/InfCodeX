@@ -46,13 +46,14 @@ function buildChildResult(
 }
 
 describe('detectIdleYield', () => {
-  it('returns true when all four idle-yield conditions hold', () => {
+  it('returns true when all idle-yield conditions hold', () => {
     expect(
       detectIdleYield({
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: 1,
         hasEmittedHandoff: false,
         hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
       }),
     ).toBe(true);
   });
@@ -64,17 +65,19 @@ describe('detectIdleYield', () => {
         pendingChildTaskCount: 1,
         hasEmittedHandoff: true,
         hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
       }),
     ).toBe(false);
   });
 
-  it('returns false when registry has no pending children (real terminal stop)', () => {
+  it('returns false when registry empty AND no background messages (real terminal stop)', () => {
     expect(
       detectIdleYield({
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: 0,
         hasEmittedHandoff: false,
         hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
       }),
     ).toBe(false);
   });
@@ -86,17 +89,19 @@ describe('detectIdleYield', () => {
         pendingChildTaskCount: 1,
         hasEmittedHandoff: false,
         hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
       }),
     ).toBe(false);
   });
 
-  it('returns false when pendingChildTaskCount is negative (defensive: malformed snapshot)', () => {
+  it('returns false when pendingChildTaskCount is negative AND no background messages (defensive: malformed snapshot)', () => {
     expect(
       detectIdleYield({
         lastAssistantToolCallCount: 0,
         pendingChildTaskCount: -1,
         hasEmittedHandoff: false,
         hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: false,
       }),
     ).toBe(false);
   });
@@ -114,6 +119,54 @@ describe('detectIdleYield', () => {
         pendingChildTaskCount: 1,
         hasEmittedHandoff: true,
         hasEmittedTerminalVerdict: true,
+        hasPendingBackgroundMessages: false,
+      }),
+    ).toBe(false);
+  });
+
+  // v0.7.38 FEATURE_155 hotfix follow-up #2 — fast-child race
+  // regression. When a child completes faster than the surrounding
+  // Runner.run iteration, the dispatch IIFE's
+  // `.finally(() => registry.delete(childId))` runs in the same
+  // microtask burst as the IIFE's `enqueueChildTaskNotification` —
+  // and the cleanup runs BEFORE the outer loop's
+  // `detectIdleYield` snapshot. Without the
+  // `hasPendingBackgroundMessages` gate, the snapshot sees
+  // `pendingChildTaskCount=0`, the loop breaks, and the
+  // already-enqueued banner is stranded in the background queue.
+  it('returns true when registry empty BUT background queue has banners (fast-child race)', () => {
+    expect(
+      detectIdleYield({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 0,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: true,
+      }),
+    ).toBe(true);
+  });
+
+  it('hasPendingBackgroundMessages does NOT override the handoff/verdict gates', () => {
+    // Even if a banner is queued, a Worker handoff or a terminal
+    // Evaluator verdict still wins — the chain has already moved on,
+    // background notifications no longer matter for the Worker's
+    // current decision loop.
+    expect(
+      detectIdleYield({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 0,
+        hasEmittedHandoff: true,
+        hasEmittedTerminalVerdict: false,
+        hasPendingBackgroundMessages: true,
+      }),
+    ).toBe(false);
+    expect(
+      detectIdleYield({
+        lastAssistantToolCallCount: 0,
+        pendingChildTaskCount: 0,
+        hasEmittedHandoff: false,
+        hasEmittedTerminalVerdict: true,
+        hasPendingBackgroundMessages: true,
       }),
     ).toBe(false);
   });
@@ -350,6 +403,43 @@ describe('waitForWakeEvent', () => {
     expect(event.messages[0]?.content).toBe('for-main');
     // 'for-other' stays in queue — different agentId consumer would drain it.
     expect(queue.size()).toBe(1);
+  });
+
+  // v0.7.38 FEATURE_155 hotfix follow-up #2 — abort listener cleanup.
+  // Before this fix the wake-on-non-abort path left the abort
+  // listener attached. Over an outer loop running 64 idle-yield
+  // iterations on the SAME long-lived signal that's the difference
+  // between 1 listener and 64. AbortSignal is an EventTarget so
+  // there's no MaxListeners warning — the leak was silent.
+  // We assert by counting listeners (Node's AbortSignal extends
+  // EventTarget but the underlying EventEmitter is private; on
+  // recent Node we can probe via the legacy listener-tracking
+  // helper from `events`).
+  it('removes the abort listener when wake fires on a non-abort path', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const controller = new AbortController();
+    const { getEventListeners } = await import('events');
+    const beforeCount = getEventListeners(controller.signal, 'abort').length;
+
+    // Drive 5 sequential idle-yield cycles on the SAME signal. Each
+    // wakes via the queue arm (not abort), so the abort listener
+    // must be removed by `settle()` each time, leaving the signal
+    // listener count unchanged at the end.
+    for (let i = 0; i < 5; i++) {
+      const wakePromise = waitForWakeEvent({
+        registry,
+        messageQueue: queue,
+        agentId: undefined,
+        pollIntervalMs: 5,
+        abortSignal: controller.signal,
+      });
+      queue.enqueue({ priority: 'user', mode: 'prompt', content: `msg-${i}` });
+      const event = await wakePromise;
+      expect(event.kind).toBe('messages-arrived');
+    }
+
+    const afterCount = getEventListeners(controller.signal, 'abort').length;
+    expect(afterCount).toBe(beforeCount);
   });
 
   it('cleans up the poll interval on abort (no leaked timer between tests)', async () => {

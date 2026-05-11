@@ -4505,4 +4505,124 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // Bug A. Post-fix, it MUST NOT appear.
     expect(aFakeBannerCount).toBe(0);
   }, 30_000);
+
+  // v0.7.38 FEATURE_155 hotfix follow-up #2 — fast-child race
+  // regression. Production trace (user screenshot 2026-05-11):
+  // Worker dispatched 3 audit children, two returned + were
+  // processed, Worker emitted text-only "等待最后一个子任务" while
+  // the third child completed DURING that LLM call. The third
+  // child's IIFE ran `enqueueChildTaskNotification` then resolved;
+  // the registry's `.finally(delete)` ran in the same microtask
+  // burst — BEFORE the outer-loop snapshot. `pendingChildTaskCount`
+  // read 0, `detectIdleYield` returned false, loop broke. The
+  // banner was orphaned in the background queue and the run ended
+  // with the Worker's "等待..." placeholder as the final answer.
+  //
+  // Fix: `IdleYieldSnapshot.hasPendingBackgroundMessages` keeps the
+  // loop alive whenever there's still a banner to drain.
+  // Verification shape: simulate the production race by resolving
+  // the child's promise WHILE the Worker's text-only turn is still
+  // running — both `enqueue` and `.finally(delete)` complete before
+  // the outer-loop snapshot sees `pendingChildTaskCount`.
+  it('fast-child race: child settles during Worker turn → loop must NOT break (background queue keeps it alive)', async () => {
+    let resolveChild!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveChild = resolve;
+      }),
+    );
+
+    const workerTurns: number[] = [];
+
+    const mock = makeChainMockLlm({
+      worker: (turn, transcript) => {
+        workerTurns.push(turn);
+        if (turn === 1) {
+          // Dispatch a single fast child. Schedule the resolution
+          // for AFTER this turn returns but BEFORE turn 2's text-only
+          // exit completes — simulating "child settles during the
+          // surrounding Runner.run iteration".
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('fast-1', ['fast finding']));
+          }, 5);
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'dispatch_child_task',
+              input: { id: 'fast-1', objective: 'audit X', read_only: true },
+            }],
+          };
+        }
+        if (turn === 2) {
+          // Text-only idle-yield. By the time the outer loop runs
+          // `detectIdleYield` after THIS turn, the child's IIFE has
+          // already settled (the setTimeout above) and the
+          // `.finally(delete)` has removed `fast-1` from the
+          // registry. `pendingChildTaskCount` therefore reads 0.
+          // The `hasPendingBackgroundMessages` field is what keeps
+          // the loop alive — banner is queued.
+          return {
+            textBlocks: [{ text: 'awaiting fast-1' }],
+          };
+        }
+        if (turn === 3) {
+          // Resumed via the banner-only wake. Verify Worker saw the
+          // banner on its way back in. Then emit handoff.
+          let sawBanner = false;
+          for (const msg of transcript) {
+            if (
+              msg.role === 'user'
+              && typeof msg.content === 'string'
+              && msg.content.includes('<task-completed task_id="fast-1">')
+              && msg.content.includes('fast finding')
+            ) {
+              sawBanner = true;
+              break;
+            }
+          }
+          expect(sawBanner).toBe(true);
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-3',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'fast-1 audit complete',
+                evidence: ['fast finding'],
+                followup: ['none'],
+              },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'fallthrough' }] };
+      },
+      evaluator: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'e-1',
+              name: 'emit_verdict',
+              input: { status: 'accept', user_answer: 'Audit X complete.' },
+            }],
+          };
+        }
+        return { textBlocks: [{ text: 'Audit X complete.' }] };
+      },
+    });
+
+    const result = await runManagedTaskViaRunner(makeOptions(), 'fast audit', mock);
+
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+    // CORE assertion: Worker MUST reach turn 3 (post-resume). Pre-fix
+    // the outer loop would break after turn 2 and the run would end
+    // with the "awaiting fast-1" text as `lastText`, with the banner
+    // orphaned in the background queue. Post-fix the loop stays alive,
+    // wake fires on the queue arm, Worker resumes and emits handoff.
+    expect(workerTurns).toEqual([1, 2, 3]);
+    expect(result.lastText).toBe('Audit X complete.');
+  }, 30_000);
 });
