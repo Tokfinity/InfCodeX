@@ -564,6 +564,7 @@ export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
   // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed; the
   // tool no longer exists, so excluding it from children is moot.
   'send_message',           // FEATURE_120: coordinator-only — children cannot steer siblings
+  'task_stop',              // FEATURE_120: coordinator-only — children cannot stop siblings
   'ask_user_question',      // Children cannot prompt the user
   'worktree_create',        // Worktree lifecycle managed by parent
   'worktree_remove',        // Worktree lifecycle managed by parent

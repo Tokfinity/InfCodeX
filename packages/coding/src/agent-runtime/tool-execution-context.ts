@@ -118,5 +118,11 @@ export function buildToolExecutionContext(
     // `KODAX_ASYNC_DISPATCH !== '0'`; the registry only reaches the tool
     // when async dispatch is enabled.
     childTaskRegistry: new Map(),
+    // FEATURE_120 v0.7.39 Phase 3b — per-child AbortController registry,
+    // populated by `dispatch_child_task` at launch time and drained
+    // when the child settles. The `task_stop` tool reads this map to
+    // request graceful exit of a specific child. Paired lifetime with
+    // `childTaskRegistry` — same async-mode gating.
+    childAbortControllers: new Map(),
   };
 }

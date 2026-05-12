@@ -65,6 +65,7 @@ import type {
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
   ChildTaskRegistry,
+  TaskAbortRegistry,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1446,4 +1447,23 @@ export interface KodaXToolExecutionContext {
    * built-in.
    */
   childTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
+
+  /**
+   * FEATURE_120 v0.7.39 Phase 3b: per-child AbortController registry.
+   * Provisioned alongside `childTaskRegistry` by `runner-driven.ts`
+   * when async dispatch is enabled. `dispatch_child_task` allocates
+   * a fresh `AbortController` per child and registers it here under
+   * the child's task id; the child's executor receives the controller's
+   * signal (chained with the parent's `abortSignal` so EITHER source
+   * can cancel the child). The `task_stop` tool looks up the
+   * controller and calls `requestTaskStop` to fire the signal.
+   *
+   * The map is cleaned in the dispatch handler's `.finally` chain
+   * alongside the child-task registry cleanup so an aborted or
+   * settled child does not leak its controller reference.
+   *
+   * Undefined in legacy sync-mode dispatch (same gate as
+   * `childTaskRegistry`).
+   */
+  childAbortControllers?: TaskAbortRegistry;
 }
