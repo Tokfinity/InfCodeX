@@ -16,7 +16,7 @@
  * **Out of scope (deferred to REPL-side `extraCollectors`)**:
  *   - protected_path / outside_project signals that depend on extracting
  *     paths from a bash command argv. The AST + path-extraction utilities
- *     live in `@kodax/repl` for historical reasons (Issue 130 root cause);
+ *     live in `@kodax/repl` for historical reasons (Issue 131 root cause);
  *     keeping this module repl-independent preserves layer boundaries
  *     (ADR-021). The guardrail accepts `extraCollectors` so REPL can inject
  *     a path-aware bash collector built on its `extractPathsFromCommand`.

@@ -727,7 +727,7 @@ ADR-022 Addendum（"v0.7.39 改名 kodax-cli"）被 ADR-024 取代；保留为�
 
 **Status**: Accepted (2026-05-12)
 
-**TL;DR**：把 `auto` 模式的 REPL 同步硬规则（[`InkREPL.tsx`](../packages/repl/src/ui/InkREPL.tsx) Step 2.5 dangerous-bash + Step 3 protected-path）从**前置 veto** 改为**喂给 LLM 分类器的信号**；同时把 `~/.kodax/` 写、5 条 catastrophic 模式提升为 **Tier 0 绝对禁令**（LLM 不能 override）；引入 **speculative classify** 抹平延迟；保留 engine 降级到 'rules' 后**重新激活原硬规则路径**做兜底。结构性吃掉 [Issue 130](KNOWN_ISSUES.md#130) `looksLikePath` Windows-flag 误判（`findstr /R` / `dir /B` / `where /R` 等被当作 POSIX 绝对路径触发误确认）。对齐 CC `useCanUseTool` 单决策点 + `SAFE_YOLO_ALLOWLISTED_TOOLS` Tier 1 + `yoloClassifier` LLM-final 架构，但保留 KodaX 已有的 denial tracker / circuit breaker / engine 降级三件套。
+**TL;DR**：把 `auto` 模式的 REPL 同步硬规则（[`InkREPL.tsx`](../packages/repl/src/ui/InkREPL.tsx) Step 2.5 dangerous-bash + Step 3 protected-path）从**前置 veto** 改为**喂给 LLM 分类器的信号**；同时把 `~/.kodax/` 写、5 条 catastrophic 模式提升为 **Tier 0 绝对禁令**（LLM 不能 override）；引入 **speculative classify** 抹平延迟；保留 engine 降级到 'rules' 后**重新激活原硬规则路径**做兜底。结构性吃掉 [Issue 131](KNOWN_ISSUES.md#131) `looksLikePath` Windows-flag 误判（`findstr /R` / `dir /B` / `where /R` 等被当作 POSIX 绝对路径触发误确认）。对齐 CC `useCanUseTool` 单决策点 + `SAFE_YOLO_ALLOWLISTED_TOOLS` Tier 1 + `yoloClassifier` LLM-final 架构，但保留 KodaX 已有的 denial tracker / circuit breaker / engine 降级三件套。
 
 ### 背景
 
@@ -793,7 +793,7 @@ KodaX 的差距不在 LLM 模型能力，而在**决策架构**。
 
 **speculative classify**：tool call 进入 Tier 2 时立即发起 classify，并发起 350ms 的"安静窗口"（用户已习惯 ~200ms 视觉延迟）。若分类器在窗口内返回 allow，直接放行不弹 confirm；否则正常 escalate 流程。对齐 CC [`bashPermissions.ts:peekSpeculativeClassifierCheck`](../../claudecode/src/tools/BashTool/bashPermissions.ts) 思路，但实现更窄（不引入 BashPermission 框架）。
 
-**Windows-flag 误判结构性修复**（吃掉 Issue 130 hotfix）：
+**Windows-flag 误判结构性修复**（吃掉 [Issue 131](KNOWN_ISSUES.md#131) hotfix）：
 1. [`looksLikePath`](../packages/repl/src/permission/permission.ts) 在 `process.platform === 'win32'` 下识别 `/[A-Za-z]` / `/[A-Za-z]:` 形式为 cmd flag，不当路径。
 2. `BASH_SAFE_READ_COMMANDS` 加入 `git tag` / `git stash list` / `git config --get` / `git describe`（CC `DEFAULT_SAFE_PATTERNS` 平价）。
 3. 但**这两条本身就是 signals 输入路径的副产物**——结构性改完后，`looksLikePath` 即使再有边角误识别，LLM 看到 signal 也能正确决策；不再单点故障。
@@ -890,12 +890,12 @@ KodaX 的差距不在 LLM 模型能力，而在**决策架构**。
 | 2 | `packages/coding/src/guardrails/auto-mode/signals.ts` 类型 + 收集器 + 单测（无消费方） | 类型/逻辑 review |
 | 3 | `absolute-denylist.ts` (Tier 0) + 单测 | 安全 review (清单 freeze) |
 | 4 | `classify.ts` 接受 `signals[]` + prompt 更新 + speculative classify 基建 | prompt/eval review |
-| 5 | `looksLikePath` Windows-flag 修正 + `git tag` 等加入 `BASH_SAFE_READ_COMMANDS` + 回归测试（结构性修复 [Issue 130](KNOWN_ISSUES.md#130)） | bug parity review |
+| 5 | `looksLikePath` Windows-flag 修正 + `git tag` 等加入 `BASH_SAFE_READ_COMMANDS` + 回归测试（结构性修复 [Issue 131](KNOWN_ISSUES.md#131)） | bug parity review |
 | 6 | `AutoModeToolGuardrail.beforeTool` 接 Tier 0 + signals + speculative classify | guardrail review |
 | 7 | `onEngineChange` 通知 REPL + REPL 层在 `mode==='auto' && engine==='llm'` 时跳过 Step 2.5/3；其他组合走原路径 | **cutover commit**（最关键）|
 | 8 | UI 接 signals → Scope/Risk 渲染；移除 `_alwaysConfirm` / `_dangerousCommand` / `_outsideProject` marker（在 auto 路径） | UX parity review |
 | 9 | Eval：FEATURE_092 dataset 全量复跑 + Windows-flag 回归 + 子代理 boundary 回归 + 降级路径回归 | **release gate** |
-| 10 | KNOWN_ISSUES 删 Issue 130 + 加 v0.7.39 follow-up notes（如 speculative 窗口需调） + CHANGELOG | docs review |
+| 10 | KNOWN_ISSUES 加 Issue 131 Resolved + v0.7.39 follow-up notes（如 speculative 窗口需调） + CHANGELOG + test guide | docs review |
 
 **纪律**：
 - 每个 commit 后主动 review 三件事（无新漏洞 / 无 scope 漂移 / 无功能退化）。

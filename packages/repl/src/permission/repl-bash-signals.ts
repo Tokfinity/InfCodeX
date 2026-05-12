@@ -7,7 +7,7 @@
  *
  * Why this lives in @kodax/repl, not @kodax/coding:
  *   The AST + path-extraction utilities live in `packages/repl/src/permission/`
- *   for historical reasons (Issue 130 root-cause area). Lifting them to
+ *   for historical reasons (Issue 131 root-cause area). Lifting them to
  *   `@kodax/coding` is a separate refactor (out of FEATURE_158 scope per
  *   ADR-025 design decision). Instead, the guardrail accepts an
  *   `extraCollectors` config knob and the REPL injects this collector at
