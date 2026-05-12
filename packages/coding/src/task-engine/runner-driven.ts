@@ -2701,10 +2701,12 @@ export function buildRunnerAgentChain(
       // every chain (Worker / Scout / Generator). Idle-yield (always on
       // since Slice C3 retired `KODAX_IDLE_YIELD`) is the only wait
       // mechanic: Worker exits text-only after dispatching, the
-      // runner-driven outer loop resumes when a child completes (see
-      // `_internal/managed-task/idle-yield.ts`). Children settle via
-      // `<task-completed task_id="…">` notifications spliced into the
-      // next user message by `composeIdleYieldUserMessage`.
+      // runner-driven outer loop resumes when a child completes
+      // (idle-yield primitives now live in `@kodax-ai/agent`'s
+      // `orchestration/idle-yield.ts` post-FEATURE_120 Step 0b lift).
+      // Children settle via `<task-completed task_id="…">`
+      // notifications spliced into the next user message by
+      // `composeIdleYieldUserMessage`.
     ],
     handoffs: undefined,
     // Worker plans + executes, so it warrants the deeper reasoning
