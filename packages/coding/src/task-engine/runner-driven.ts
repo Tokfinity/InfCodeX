@@ -258,19 +258,17 @@ import { buildManagedTaskCompactionHook } from './_internal/managed-task/compact
 // message so the agent can react. Always-on since Slice C3 — the
 // `KODAX_IDLE_YIELD` env-flag gate was retired together with the
 // `await_child_task` tool because there is no working off-path now.
-// v0.7.39 FEATURE_120 Step 0b: idle-yield primitives lifted from
-// `_internal/managed-task/idle-yield.ts` into `@kodax-ai/agent`'s
-// `orchestration/` module. Bug A-G hotfix behavior carried over
-// verbatim — registry cleanup (Bug A) is now built into
-// `registerChildTask`; the rest live in the agent-side
-// `idle-yield.ts`. Coding consumes the generic primitives
-// specialized on `KodaXChildExecutionResult` (the generic param is
-// inferred from the registry value type).
+// v0.7.39 FEATURE_120 Step 0b/0c: idle-yield primitives + outer-loop
+// wrapper lifted to `@kodax-ai/agent`'s `orchestration/` module. Bug
+// A-G hotfix behavior carried over verbatim — registry cleanup (Bug
+// A) is now built into `registerChildTask`; the rest live in the
+// agent-side `idle-yield.ts` / `runner-with-idle-yield.ts`. Coding
+// consumes the generic primitives specialized on
+// `KodaXChildExecutionResult` (the generic param is inferred from
+// the registry value type).
 import {
-  composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
-  detectIdleYield,
-  waitForWakeEvent,
+  runWithIdleYield,
 } from '@kodax-ai/agent';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
@@ -5416,167 +5414,127 @@ async function runManagedTaskViaRunnerInner(
     },
   };
 
-  // FEATURE_155 (v0.7.39) idle-yield outer loop.
+  // FEATURE_155 (v0.7.39) idle-yield outer loop, wrapped by
+  // FEATURE_120 v0.7.39 Step 0c's `runWithIdleYield` generic helper.
   //
   // When the agent exits via the no-tool-calls + pending-children +
   // no-handoff branch, the loop waits for an external wake event
   // (child completion or inbound queue message), splices a synthetic
   // user message that surfaces the wake content, and re-enters
-  // `Runner.run` so the agent can observe and react. The
-  // `KODAX_IDLE_YIELD` env-flag gate was retired in Slice C3 — there
-  // is no working "v0.7.38 emulation" path now that
-  // `await_child_task` is gone. See `idle-yield.ts` for the predicate
-  // and wake-event semantics.
-  let currentAgent: Agent = entryAgent;
-  let currentInput: AgentMessage[] = runnerInput;
-  let runResult: Awaited<ReturnType<typeof Runner.run>>;
-  // Defensive guard against a misbehaving prompt that flips into an
-  // infinite idle-loop. The budget controller still gates real work,
-  // but a stuck-loop from a buggy prompt would otherwise wedge the
-  // REPL forever.
-  const IDLE_YIELD_MAX_ITERATIONS = 64;
-  let idleYieldIterations = 0;
-
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    runResult = await Runner.run(currentAgent, currentInput, {
-      llm,
-      abortSignal: options.abortSignal,
-      compactionHook,
-      guardrails: [...runnerGuardrails],
-      toolObserver: runnerToolObserver,
-      // Iteration cap for the entire chain. Core's default (20) is meant
-      // for stand-alone single-agent runs and is far too low for a multi-
-      // role investigation + execution + verify chain. This is a hard
-      // SAFETY ceiling — the real throttle is the budget controller
-      // (H0=100 / H1=H2=200 base, +100/+200 on 90%-threshold user
-      // approval). A 500-turn ceiling allows 2-3 extensions plus ample
-      // room for tool-heavy iterations (each LLM turn can carry multiple
-      // parallel tool calls). The budget-extension dialog (Shard 6b)
-      // catches the user at the 90% threshold long before this cap, so
-      // reaching 500 genuinely indicates a prompt / tool-design bug
-      // worth flagging.
-      maxToolLoopIterations: 500,
-    }).catch(async (err: unknown) => {
-      // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and any
-      // LLM / Runner error before the rejection propagates. Without
-      // this, a non-success terminal exit leaves a fresh
-      // checkpoint.json on disk, which the next query's
-      // findValidCheckpoint scan picks up and triggers the "found
-      // incomplete task" prompt — same UX bug as the success-path
-      // race, just on the error/abort branch.
-      await cleanupRunCheckpoint();
-      throw err;
-    });
-
-    if (++idleYieldIterations > IDLE_YIELD_MAX_ITERATIONS) {
-      // Defensive: log via the logger surface (no console.log) and
-      // exit the loop. Caller will see the last runResult unchanged.
-      // A legitimate run never approaches this cap — if we hit it
-      // there's a prompt bug worth surfacing on the next iteration's
-      // turn.
-      break;
-    }
-
-    // v0.7.38 FEATURE_155 hotfix follow-up — Bug B (corrected) +
-    // hasEmittedHandoff source-of-truth fix. The V2 chain uses the
-    // dedicated `emit_handoff` / `emit_verdict` tools built by
-    // `buildEmitter` in `protocol-emitters.ts`, which return
-    // ProtocolEmitterMetadata in their tool-result `metadata` field
-    // but do NOT call `ctx.emitManagedProtocol(...)` — so the
-    // `managedProtocolPayloadRef.current.{handoff,verdict}` fields
-    // stay `undefined` for the entire V2 run. Reading those fields
-    // (as the original Slice A2 wiring did for `hasEmittedHandoff`,
-    // and the first cut of this hotfix did for `hasEmittedTerminal-
-    // Verdict`) silently makes both gates always-false, and the only
-    // thing breaking the outer loop is `lastAssistantToolCallCount
-    // > 0`. That short-circuits in the happy path (LLM's last
-    // assistant message ends in a tool_use), which is why the Slice
-    // A2 e2e test passed despite the broken gate; the production
-    // bug only surfaces when the LLM emits a text-only turn AFTER
-    // emit_verdict (lastAssistantToolCallCount === 0) with children
-    // still pending — exactly the user's 2026-05-11 trace.
-    //
-    // The correct source is `recorder` — `wrapEmitterWithRecorder`
-    // copies the emitter metadata into `recorder[slot]` at line
-    // ~947. That's the canonical chain state and is what every
-    // other call site reads (e.g. line 1275, 3671, 4005). The
-    // outer loop now matches.
-    //
-    // `revise` is NOT terminal (chain re-runs Worker/Generator) so
-    // it's excluded from the terminal-verdict gate.
-    const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
-    // v0.7.38 hotfix follow-up #2 — fast-child race. Read the background
-    // queue alongside the registry. If a child completed during the
-    // current Runner.run iteration, its `.finally(delete)` may have
-    // already removed the registry entry before this snapshot, but the
-    // `enqueueChildTaskNotification` ran BEFORE the promise resolved,
-    // so the banner sits in the background queue waiting for
-    // `composeIdleYieldUserMessage` to drain it. Without this gate the
-    // loop would break and strand the banner. See
-    // `IdleYieldSnapshot.hasPendingBackgroundMessages` docs for full
-    // rationale.
-    const hasPendingBackgroundMessages = getMessageQueue().has({
-      agentId: undefined,
-      maxPriority: 'background',
-    });
-    const snapshot = {
-      lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
-      pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
-      hasEmittedHandoff: Boolean(recorder.handoff),
-      hasEmittedTerminalVerdict:
-        verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
-      hasPendingBackgroundMessages,
-    };
-    if (!detectIdleYield(snapshot)) break;
-
-    // FEATURE_156 — surface "alive but suspended" to the REPL. Agent-
-    // agnostic identity lookup: today only the Worker can reach this
-    // (see `dispatch-child-tasks.ts` role guard + `hasEmittedHandoff`
-    // gate in `detectIdleYield`), but the wiring carries no
-    // role-specific assumption — if any chain ever opens idle-yield to
-    // a different role, the status emit picks up the change. Note: we
-    // count the registry, NOT registry + queue — the
-    // background-banner-only case is the transient "fast-child race
-    // recovery" sub-state (`pendingCount === 0` + `idleWaiting === true`)
-    // which the status-bar renders as "idle — resuming".
-    const idleRole: KodaXTaskRole | undefined =
-      currentAgent.name === SCOUT_AGENT_NAME ? 'scout'
-        : currentAgent.name === PLANNER_AGENT_NAME ? 'planner'
-          : currentAgent.name === GENERATOR_AGENT_NAME ? 'generator'
-            : currentAgent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
-              : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
-                : undefined;
-    observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
-
-    const wakeEvent = await waitForWakeEvent({
-      registry: baseCtx.childTaskRegistry ?? new Map(),
-      messageQueue: getMessageQueue(),
-      // Worker runs as the main thread; the dispatch handler enqueues
-      // child notifications with `parentAgentId: undefined` (default
-      // main-thread target). Match that here so the queue arm sees
-      // them.
-      agentId: undefined,
-      abortSignal: options.abortSignal,
-    });
-    if (wakeEvent.kind === 'aborted') break;
-
-    const syntheticUserMessage = composeIdleYieldUserMessage(wakeEvent, () =>
-      getMessageQueue().dequeue({
-        agentId: undefined,
-        maxPriority: 'background',
+  // `Runner.run` so the agent can observe and react.
+  //
+  // Bug A-G hotfix invariants preserved through the wrapper:
+  //   - Bug A (registry cleanup): owned by `registerChildTask`
+  //     (`@kodax-ai/agent`).
+  //   - Bug B+D (terminal-verdict + handoff gates): `computeSnapshot`
+  //     reads from `recorder` — the canonical chain state —
+  //     **not** `managedProtocolPayloadRef`. The V2 chain's
+  //     `emit_handoff` / `emit_verdict` tools return metadata via
+  //     `wrapEmitterWithRecorder` (line ~947); reading
+  //     `managedProtocolPayloadRef.current.*` would silently make
+  //     both gates always-false and break the loop only on
+  //     `lastAssistantToolCallCount > 0`, masking the bug except on
+  //     text-only turns after emit_verdict with pending children
+  //     (the 2026-05-11 production trace). `revise` is excluded
+  //     from the terminal gate (chain re-runs Worker/Generator).
+  //   - Bug E (fast-child race): `hasPendingBackgroundMessages`
+  //     reads the queue alongside the registry. A child that
+  //     completes within the current `Runner.run` iteration has its
+  //     `.finally(delete)` race with `enqueueChildTaskNotification`;
+  //     the banner sits in the background queue waiting for
+  //     `composeIdleYieldUserMessage` to drain it. Without this
+  //     gate the loop would break and strand the banner.
+  //   - Bug F (abort listener cleanup): owned by the agent-layer
+  //     `waitForWakeEvent`.
+  const runResult = await runWithIdleYield({
+    initialAgent: entryAgent,
+    initialInput: runnerInput,
+    runOnce: (agent, input) =>
+      Runner.run(agent, input, {
+        llm,
+        abortSignal: options.abortSignal,
+        compactionHook,
+        guardrails: [...runnerGuardrails],
+        toolObserver: runnerToolObserver,
+        // Iteration cap for the entire chain. Core's default (20) is
+        // meant for stand-alone single-agent runs and is far too low
+        // for a multi-role investigation + execution + verify chain.
+        // This is a hard SAFETY ceiling — the real throttle is the
+        // budget controller (H0=100 / H1=H2=200 base, +100/+200 on
+        // 90%-threshold user approval). A 500-turn ceiling allows
+        // 2-3 extensions plus ample room for tool-heavy iterations
+        // (each LLM turn can carry multiple parallel tool calls).
+        // The budget-extension dialog (Shard 6b) catches the user at
+        // the 90% threshold long before this cap, so reaching 500
+        // genuinely indicates a prompt / tool-design bug worth
+        // flagging.
+        maxToolLoopIterations: 500,
+      }).catch(async (err: unknown) => {
+        // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
+        // any LLM / Runner error before the rejection propagates.
+        // Without this, a non-success terminal exit leaves a fresh
+        // checkpoint.json on disk, which the next query's
+        // findValidCheckpoint scan picks up and triggers the "found
+        // incomplete task" prompt.
+        await cleanupRunCheckpoint();
+        throw err;
       }),
-    );
-    if (!syntheticUserMessage) break; // truly empty wake — no payload to splice
-
-    // Replay the full transcript + the synthetic wake message. Worker
-    // stays the entry agent on resume — the multi-role chain's prior
-    // turns are reflected in `runResult.messages`, so the Runner's
+    computeSnapshot: (rr) => {
+      // Bug B+D: read from recorder, NOT managedProtocolPayloadRef.
+      const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
+      return {
+        lastAssistantToolCallCount: countLastAssistantToolCalls(rr.messages),
+        pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
+        hasEmittedHandoff: Boolean(recorder.handoff),
+        hasEmittedTerminalVerdict:
+          verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
+        // Bug E: queue arm alongside registry arm.
+        hasPendingBackgroundMessages: getMessageQueue().has({
+          agentId: undefined,
+          maxPriority: 'background',
+        }),
+      };
+    },
+    registry: baseCtx.childTaskRegistry ?? new Map(),
+    messageQueue: getMessageQueue(),
+    // Worker runs as the main thread; the dispatch handler enqueues
+    // child notifications with `parentAgentId: undefined` (default
+    // main-thread target). Match that here so the queue arm sees
+    // them.
+    agentId: undefined,
+    abortSignal: options.abortSignal,
+    // Worker stays the entry agent on resume — the multi-role chain's
+    // prior turns are reflected in `rr.messages`, so the Runner's
     // transition logic will pick up where the Worker left off (the
     // handoff slot is empty, so no handoff replay races).
-    currentInput = [...runResult.messages, syntheticUserMessage];
-    currentAgent = chain.worker;
-  }
+    resumeAgent: () => chain.worker,
+    onIdleWaiting: (currentAgent) => {
+      // FEATURE_156 — surface "alive but suspended" to the REPL.
+      // Agent-agnostic identity lookup: today only the Worker can
+      // reach this (see `dispatch-child-tasks.ts` role guard +
+      // `hasEmittedHandoff` gate in `detectIdleYield`), but the
+      // wiring carries no role-specific assumption — if any chain
+      // ever opens idle-yield to a different role, the status emit
+      // picks up the change. Note: we count the registry, NOT
+      // registry + queue — the background-banner-only case is the
+      // transient "fast-child race recovery" sub-state
+      // (`pendingCount === 0` + `idleWaiting === true`) which the
+      // status-bar renders as "idle — resuming".
+      const idleRole: KodaXTaskRole | undefined =
+        currentAgent.name === SCOUT_AGENT_NAME ? 'scout'
+          : currentAgent.name === PLANNER_AGENT_NAME ? 'planner'
+            : currentAgent.name === GENERATOR_AGENT_NAME ? 'generator'
+              : currentAgent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
+                : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
+                  : undefined;
+      observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
+    },
+    // `maxIterations` omitted — wrapper defaults to 64, matching the
+    // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
+    // the (max+1)th iteration AFTER runOnce returns but BEFORE the
+    // snapshot, so a legitimate run that completes at the cap still
+    // returns its result.
+  });
 
   // Issue 127 (review feedback): clean up the checkpoint EARLY — the
   // moment Runner.run resolves successfully — so any throw from the
