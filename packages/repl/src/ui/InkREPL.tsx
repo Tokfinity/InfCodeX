@@ -116,6 +116,7 @@ import {
   isBashWriteCommand,
   isBashReadCommand,
   getPlanModeBlockReason,
+  replBashPathSignalCollector,
 } from "../permission/index.js";
 import type { PermissionContext } from "../permission/types.js";
 import {
@@ -364,7 +365,14 @@ interface InkREPLProps {
    */
   setAutoModeAskUser: (
     handler:
-      | ((call: import("@kodax-ai/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((
+          call: import("@kodax-ai/agent").RunnerToolCall,
+          reason: string,
+          // FEATURE_158 (v0.7.39): optional static-analysis signals threaded
+          // from the guardrail. Confirm dialog renders Scope/Risk from these
+          // (tool-confirmation.ts reads input._classifierSignals).
+          signals?: readonly import("@kodax-ai/coding").ToolCallSignal[],
+        ) => Promise<"allow" | "block">)
       | null,
   ) => void;
   /**
@@ -1672,6 +1680,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   const resetManagedForegroundLedgerState = useCallback((options?: { clearOwner?: boolean }) => {
     const current = managedForegroundLedgerRef.current;
+    // Issue 130: preserve Executing tool_group entries across the reset (see
+    // `transitionManagedForegroundPhase` for the full rationale). The
+    // iteration-boundary call site at L5579 pairs with `resetLiveToolCalls`,
+    // so the live-tool layer is handled inline at that call site too —
+    // here we only own the ledger-ref layer.
+    const preservedTools = current.activeToolGroupTools.filter(
+      (t) => t.status === ToolCallStatus.Executing,
+    );
     managedForegroundLedgerRef.current = {
       ...(options?.clearOwner
         ? {}
@@ -1679,7 +1695,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             workerId: current.workerId,
             workerTitle: current.workerTitle,
           }),
-      activeToolGroupTools: [],
+      ...(preservedTools.length > 0
+        ? {
+            activeToolGroupItemId: current.activeToolGroupItemId,
+            activeToolGroupTools: preservedTools,
+          }
+        : { activeToolGroupTools: [] }),
     };
     if (options?.clearOwner) {
       managedForegroundOwnerRef.current = {};
@@ -2016,18 +2037,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   }) => {
     // Flush any pending text before phase transition to avoid losing content
     flushForegroundTextBuffer();
+    // Issue 130: when a phase transition fires while a previous worker's tool
+    // is still Executing (e.g. emit_verdict between observer.onRoleEmit and
+    // events.onToolResult), preserve the Executing entries across the reset
+    // so the late-arriving tool_result event can be routed back to its
+    // original tool_group history item via the L1962 in-place-update guard.
+    // Clearing them outright (the pre-fix behavior) leaves the entry stuck
+    // at the `running` placeholder forever — see Issue 115 for the sibling
+    // kind-transition variant of the same bug class.
+    const prevLedger = managedForegroundLedgerRef.current;
+    const preservedTools = prevLedger.activeToolGroupTools.filter(
+      (t) => t.status === ToolCallStatus.Executing,
+    );
+    const executingLiveTools = activeToolCallsRef.current.filter(
+      (t) => t.status === ToolCallStatus.Executing,
+    );
+    const executingIds = new Set(executingLiveTools.map((t) => t.id));
     managedForegroundLedgerRef.current = {
       workerId: nextWorker?.workerId,
       workerTitle: nextWorker?.workerTitle,
-      activeToolGroupTools: [],
+      ...(preservedTools.length > 0
+        ? {
+            activeToolGroupItemId: prevLedger.activeToolGroupItemId,
+            activeToolGroupTools: preservedTools,
+          }
+        : { activeToolGroupTools: [] }),
     };
     managedForegroundOwnerRef.current = {
       workerId: nextWorker?.workerId,
       workerTitle: nextWorker?.workerTitle,
     };
     iterationToolsRef.current = [];
-    iterationToolCallsRef.current = [];
-    setLiveToolCalls([]);
+    iterationToolCallsRef.current = iterationToolCallsRef.current.filter(
+      (t) => executingIds.has(t.id),
+    );
+    setLiveToolCalls(executingLiveTools);
     clearToolInputContent();
     setCurrentTool(undefined);
     stopThinking();
@@ -5417,10 +5461,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             workerTitle: status.activeWorkerTitle,
           });
         } else if (previousForegroundWorker.workerId !== status.activeWorkerId) {
+          // Issue 130: defensive guard. This branch fires when no previous
+          // foreground owner existed (`previousForegroundWorker.workerId`
+          // is falsy) — so in normal flow there should be no in-flight
+          // tools to preserve. Apply the same hasExecutingTools pattern
+          // for consistency with `transitionManagedForegroundPhase`, in
+          // case a stale ledger somehow carries an Executing entry
+          // across foreground promotion.
+          const prevLedger = managedForegroundLedgerRef.current;
+          const preservedTools = prevLedger.activeToolGroupTools.filter(
+            (t) => t.status === ToolCallStatus.Executing,
+          );
           managedForegroundLedgerRef.current = {
             workerId: status.activeWorkerId,
             workerTitle: status.activeWorkerTitle,
-            activeToolGroupTools: [],
+            ...(preservedTools.length > 0
+              ? {
+                  activeToolGroupItemId: prevLedger.activeToolGroupItemId,
+                  activeToolGroupTools: preservedTools,
+                }
+              : { activeToolGroupTools: [] }),
           };
           managedForegroundOwnerRef.current = {
             workerId: status.activeWorkerId,
@@ -5578,9 +5638,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       if (ownsForegroundLedger) {
         resetManagedForegroundLedgerState({ clearOwner: false });
       }
+      // Issue 130: pair with the ledger-layer preservation in
+      // resetManagedForegroundLedgerState — if a tool result from the
+      // previous iteration is still in flight (e.g. emit_verdict whose
+      // onToolResult lands after the iteration boundary fires), keep
+      // its entry in liveToolCalls / iterationToolCallsRef so
+      // finalizeLiveToolCall can still find it by id. Drop only the
+      // already-terminal entries (those have been reported in the
+      // prior round and don't need to carry forward).
+      const carriedExecutingTools = activeToolCallsRef.current.filter(
+        (t) => t.status === ToolCallStatus.Executing,
+      );
+      const carriedExecutingIds = new Set(carriedExecutingTools.map((t) => t.id));
       iterationToolsRef.current = [];
-      iterationToolCallsRef.current = [];
-      resetLiveToolCalls();
+      iterationToolCallsRef.current = iterationToolCallsRef.current.filter(
+        (t) => carriedExecutingIds.has(t.id),
+      );
+      setLiveToolCalls(carriedExecutingTools);
       clearToolInputContent();
       setCurrentTool(undefined);
       setLastLiveActivityLabel(
@@ -5651,6 +5725,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         if (isBashReadCommand(command)) {
           return true; // Auto-allowed for safe read-only commands in all modes
         }
+      }
+
+      // === 2.4. FEATURE_158 (v0.7.39) auto[llm] short-circuit ===
+      // In `auto` mode with the LLM engine active, the REPL-side hard rules
+      // (Step 2.5 dangerous + Step 3 protected-path) are intentionally
+      // SKIPPED — those rules become signals consumed by the runner-level
+      // AutoModeToolGuardrail.beforeTool (Tier 0 absolute deny + signals[]
+      // fed into the classifier prompt + speculative race). This is the
+      // structural decision in ADR-025.
+      //
+      // When the engine downgrades to 'rules' (denial 3/20 or breaker
+      // 5/10m), this short-circuit yields and the original Step 2.5/3
+      // rules re-engage automatically — defense-in-depth tier 3 fallback.
+      // The classifier engine ref is updated by `setAutoModeEngineChange`
+      // (subscribed on mount); reads are synchronous and reflect live state.
+      if (isAutoMode(mode) && autoModeEngine === 'llm') {
+        return true; // Defer all further checks to AutoModeToolGuardrail.beforeTool
       }
 
       // === 2.5. Dangerous bash commands: always require confirmation ===
@@ -5970,6 +6061,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     finalizeAllExecutingToolCalls,
     findLatestExecutingTool,
     resetLiveToolCalls,
+    setLiveToolCalls,
     streamingState.currentTool,
   ]);
 
@@ -5991,12 +6083,18 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // here. Cleanup on unmount clears the ref so a unmounted dialog doesn't
   // leak its confirmRequest setter.
   useEffect(() => {
-    setAutoModeAskUser(async (call, reason) => {
+    setAutoModeAskUser(async (call, reason, signals) => {
       const result = await showConfirmDialog(
         call.name,
         {
           ...(call.input as Record<string, unknown>),
           _reason: `[auto-mode] ${reason}`,
+          // FEATURE_158: attach signals so tool-confirmation.ts renders
+          // Scope/Risk from the classifier's view rather than the
+          // input-marker path (FEATURE_066 _alwaysConfirm / _dangerousCommand).
+          // Plan/accept-edits modes keep the marker path (those flows don't
+          // go through askUser).
+          ...(signals && signals.length > 0 ? { _classifierSignals: signals } : {}),
         },
       );
       return result.confirmed ? 'allow' : 'block';
@@ -8188,7 +8286,11 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const agentsFilesRef: { current: AgentsFile[] } = { current: initialAgentsFiles };
   const inkAutoModeAskUserRef: {
     current:
-      | ((call: import("@kodax-ai/agent").RunnerToolCall, reason: string) => Promise<"allow" | "block">)
+      | ((
+          call: import("@kodax-ai/agent").RunnerToolCall,
+          reason: string,
+          signals?: readonly import("@kodax-ai/coding").ToolCallSignal[],
+        ) => Promise<"allow" | "block">)
       | null;
   } = { current: null };
   // Ref-bridge for engine-change notifications: the React component fills
@@ -8217,7 +8319,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   const inkCurrentConfigRef: { current: CurrentConfig } = { current: currentConfig };
   const autoModeSettings = loadAutoModeSettings();
   const autoModeBootstrap: AutoModeBootstrapResult = await bootstrapAutoMode({
-    askUser: async (call, reason) => {
+    askUser: async (call, reason, signals) => {
       const handler = inkAutoModeAskUserRef.current;
       if (!handler) {
         // Component hasn't mounted its showConfirmDialog yet (vanishingly rare
@@ -8225,7 +8327,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         // and only triggers on a real tool call after mount). Fail closed.
         return 'block';
       }
-      return handler(call, reason);
+      return handler(call, reason, signals);
     },
     projectRoot: gitRoot ?? process.cwd(),
     getAgentsFiles: () => agentsFilesRef.current,
@@ -8240,6 +8342,9 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     onEngineChange: (engine) => {
       inkAutoModeEngineChangeRef.current?.(engine);
     },
+    // FEATURE_158: inject path-aware bash signal collector. Path utilities
+    // live in @kodax/repl; this is the layer-boundary-preserving entrypoint.
+    extraCollectors: [replBashPathSignalCollector],
   });
 
   // Note: Banner is now shown inside Ink component (Banner.tsx)

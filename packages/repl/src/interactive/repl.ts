@@ -53,6 +53,7 @@ import {
 import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
 import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
+import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
 import { getGitRoot, prepareRuntimeConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
 import {
   InteractiveContext,
@@ -456,11 +457,17 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   // of file-system I/O — env override layers feed the resolver chain.
   const autoModeSettings = loadAutoModeSettings();
   const autoModeBootstrap: AutoModeBootstrapResult = await bootstrapAutoMode({
-    askUser: async (call, reason) => {
+    askUser: async (call, reason, signals) => {
       const result = await confirmToolExecution(
         rl,
         call.name,
-        call.input as Record<string, unknown>,
+        // FEATURE_158: attach signals so confirmToolExecution renders
+        // Scope/Risk from the classifier's view. Readline path follows
+        // the same _classifierSignals input-marker convention as Ink.
+        {
+          ...(call.input as Record<string, unknown>),
+          ...(signals && signals.length > 0 ? { _classifierSignals: signals } : {}),
+        },
         {
           permissionMode: currentPermissionMode,
           reason: `[auto-mode] ${reason}`,
@@ -487,6 +494,8 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
         statusBar?.update({ autoModeEngine: engine });
       }
     },
+    // FEATURE_158: inject the REPL-side path-aware bash signal collector.
+    extraCollectors: [replBashPathSignalCollector],
   });
 
   // FEATURE_153 (v0.7.38): build the LLM-backed bash prefix extractor used by
