@@ -33,6 +33,7 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 import { buildClassifierPrompt } from './classifier-prompt.js';
 import { parseClassifierOutput } from './parse-output.js';
 import type { AutoRules } from './rules.js';
+import type { ToolCallSignal } from './signals.js';
 
 export interface ClassifyOptions {
   readonly provider: KodaXBaseProvider;
@@ -41,6 +42,14 @@ export interface ClassifyOptions {
   readonly claudeMd?: string;
   readonly transcript: readonly KodaXMessage[];
   readonly action: string;
+  /**
+   * FEATURE_158 (v0.7.39): static-analysis signals forwarded to the
+   * classifier prompt. Empty / undefined preserves the FEATURE_092 prompt
+   * shape (no `<signals>` block emitted). When supplied, the classifier
+   * sees signals between `<transcript>` and `<action>` as informational
+   * input — not verdicts.
+   */
+  readonly signals?: readonly ToolCallSignal[];
   readonly timeoutMs?: number;
   readonly abortSignal?: AbortSignal;
   readonly costTracker?: CostTracker;
@@ -69,6 +78,7 @@ export async function classify(opts: ClassifyOptions): Promise<ClassifyDecision>
     claudeMd: opts.claudeMd,
     transcript: opts.transcript,
     action: opts.action,
+    signals: opts.signals,
   });
 
   const result = await sideQuery({

@@ -17,12 +17,24 @@
 
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type { AutoRules } from './rules.js';
+import type { ToolCallSignal } from './signals.js';
 
 export interface BuildClassifierPromptInput {
   readonly rules: AutoRules;
   readonly claudeMd?: string;
   readonly transcript: readonly KodaXMessage[];
   readonly action: string;
+  /**
+   * FEATURE_158 (v0.7.39): mechanical pattern matches over the tool call
+   * (dangerous_pattern / protected_path / outside_project / network / etc.).
+   * Surfaced to the model as **informational input** — NOT verdicts. The
+   * model weighs signals alongside transcript + rules to produce the
+   * final allow / block / escalate decision.
+   *
+   * Empty / undefined → no `<signals>` block emitted (back-compat shape
+   * for callers that don't yet supply signals).
+   */
+  readonly signals?: readonly ToolCallSignal[];
 }
 
 export interface ClassifierPrompt {
@@ -43,6 +55,12 @@ Decision criteria:
   - Block (yes) if the action plausibly: exfiltrates secrets, executes untrusted remote code, performs destructive irreversible operations on systems outside the project (e.g. force-pushing main, dropping production tables), poisons dependencies, or otherwise violates user intent.
   - Allow (no) if the action is consistent with the user's stated intent and project rules, even if it mutates state inside the project.
   - When uncertain, err toward block — false positives are recoverable (the agent can adapt), false negatives may not be.
+
+About <signals> (when present):
+  - Signals are mechanical pattern matches over the action (e.g. "this command matches git push --force regex" or "this path is under ~/.kodax/"). They are NOT verdicts — they are observations the static checker noticed.
+  - Weigh signals against transcript context. Severity hints ('high' / 'medium') indicate how destructive the pattern typically is, but the conversation context overrides narrow signal matches. Example: "outside_project: /tmp/foo" during a debugging session where the user authorized scratch files should still allow.
+  - dangerous_pattern with severity='high' (sudo / curl|sh / git push --force / chmod 777 / SQL destructive) typically warrants block UNLESS the transcript explicitly authorizes it.
+  - protected_path signals (especially zone='user-kodax') indicate credentials zone — never allow a write to user-kodax via shell; the agent must use the kodax config API instead.
 
 Output EXACTLY:
 <block>yes|no</block><reason>one short sentence, ≤ 30 words</reason>
@@ -97,8 +115,43 @@ function buildUserMessage(input: BuildClassifierPromptInput): string {
     parts.push(serializeMessage(msg));
   }
   parts.push('</transcript>');
+
+  if (input.signals && input.signals.length > 0) {
+    parts.push('<signals>');
+    for (const signal of input.signals) {
+      parts.push(`  - ${formatSignal(signal)}`);
+    }
+    parts.push('</signals>');
+  }
+
   parts.push(`<action>${neutralize(input.action)}</action>`);
   return parts.join('\n');
+}
+
+/**
+ * Render a signal as a single human-readable line for the classifier
+ * prompt. All user-controlled strings flow through `neutralize` so a
+ * malicious path/pattern can't forge structural delimiters.
+ */
+function formatSignal(signal: ToolCallSignal): string {
+  switch (signal.kind) {
+    case 'dangerous_pattern':
+      return `dangerous_pattern (${signal.severity}): ${neutralize(signal.pattern)}`;
+    case 'protected_path':
+      return `protected_path (zone=${signal.zone}): ${neutralize(signal.path)}`;
+    case 'outside_project':
+      return `outside_project: ${neutralize(signal.path)}`;
+    case 'shell_redirect_outside':
+      return `shell_redirect_outside: ${neutralize(signal.target)}`;
+    case 'package_install':
+      return `package_install: ${signal.manager}`;
+    case 'git_write':
+      return `git_write: ${signal.verb}`;
+    case 'network':
+      return `network: ${signal.tool}`;
+    case 'file_modification':
+      return `file_modification: ${signal.targets.map(neutralize).join(', ')}`;
+  }
 }
 
 function serializeMessage(msg: KodaXMessage): string {
