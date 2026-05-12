@@ -9,10 +9,24 @@
  *
  * Module set (each module owns one concern):
  *   - `task-registry.ts` — in-flight child-task tracking + cleanup
+ *   - `idle-yield.ts` — async wait-and-resume mechanic (FEATURE_155)
  *
- * Phase 1b/1c/1d add `idle-yield.ts`, the `Runner.runWithIdleYield`
- * API, and the common `child-executor.ts` fan-out helper.
+ * Phase 1c/1d add the `Runner.runWithIdleYield` API and the common
+ * `child-executor.ts` fan-out helper.
  */
 
 export type { ChildTaskRegistry } from './task-registry.js';
 export { registerChildTask } from './task-registry.js';
+
+export type {
+  IdleYieldSnapshot,
+  WaitForWakeEventOptions,
+  WakeEvent,
+} from './idle-yield.js';
+export {
+  composeIdleYieldUserMessage,
+  countLastAssistantToolCalls,
+  detectIdleYield,
+  isIdleYieldEnabled,
+  waitForWakeEvent,
+} from './idle-yield.js';

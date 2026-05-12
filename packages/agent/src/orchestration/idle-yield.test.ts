@@ -1,25 +1,40 @@
 /**
- * Idle-yield primitives — unit tests (FEATURE_??? Phase A Slice A1, v0.7.39).
+ * Idle-yield primitives — unit tests.
  *
- * Phase A1 ships these utilities in isolation — no production caller wires
- * them in yet. The tests pin the semantics that Slice A2/A3 depend on:
+ * Originally shipped as
+ * `packages/coding/src/task-engine/_internal/managed-task/idle-yield.test.ts`
+ * (FEATURE_155 Slice A1, v0.7.39). Lifted to `@kodax-ai/agent`'s
+ * `orchestration/` in v0.7.39 FEATURE_120 Step 0b together with the
+ * implementation (ADR-021).
  *
- *   - `detectIdleYield`: a pure 3-condition predicate. Tests cover every
- *     boundary so flipping any single condition independently fails the
- *     suite. This is the contract the wiring layer (Slice A3) reads.
+ * The tests pin the semantics that the runner outer loop depends on:
  *
- *   - `waitForWakeEvent`: child-Promise / queue-poll / abort race. Tests
- *     cover each arm winning, cleanup-on-resolution, abort-safety, and
- *     the ordering invariants that matter when multiple wake sources
- *     fire near-simultaneously.
+ *   - `detectIdleYield`: a pure 4-condition predicate (the
+ *     `hasEmittedTerminalVerdict` + `hasPendingBackgroundMessages`
+ *     fields were added in the v0.7.38 FEATURE_155 hotfix follow-up
+ *     chain — Bug B/D and Bug E respectively). Tests cover every
+ *     boundary so flipping any single condition independently fails
+ *     the suite.
+ *
+ *   - `waitForWakeEvent`: child-Promise / queue-poll / abort race.
+ *     Tests cover each arm winning, cleanup-on-resolution,
+ *     abort-safety (Bug F regression pin — explicit
+ *     `removeEventListener` on non-abort wakes), and the ordering
+ *     invariants that matter when multiple wake sources fire
+ *     near-simultaneously.
+ *
+ * Fixture note: the original `buildChildResult` used coding-flavor
+ * `TestChildResult`. The lifted suite uses a structurally
+ * equivalent local `TestChildResult` so the agent layer keeps zero
+ * inbound deps on coding (ADR-021). The shape mirrors coding's so the
+ * `result.results[0]?.status` reads in the wake-event assertion stay
+ * unchanged.
  */
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-import { MessageQueue } from '@kodax-ai/agent';
-
-import type { KodaXChildExecutionResult } from '../../../types.js';
+import { MessageQueue } from '../messaging/index.js';
+import type { QueuedMessage } from '../messaging/index.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { QueuedMessage } from '@kodax-ai/agent';
 
 import {
   composeIdleYieldUserMessage,
@@ -30,9 +45,25 @@ import {
   type WakeEvent,
 } from './idle-yield.js';
 
+/**
+ * Local minimal stand-in for `@kodax-ai/coding`'s
+ * `TestChildResult`. Tests inspect `result.results[0]?.status`
+ * to confirm the child-completed branch carries the right payload —
+ * mirror that shape exactly. Other fields of the production type are
+ * unused by the tests and intentionally omitted.
+ */
+interface TestChildResult {
+  readonly results: ReadonlyArray<{
+    readonly id: string;
+    readonly status: 'completed' | 'failed';
+    readonly summary: string;
+  }>;
+  readonly mergedFindings: readonly unknown[];
+}
+
 function buildChildResult(
   status: 'completed' | 'failed' = 'completed',
-): KodaXChildExecutionResult {
+): TestChildResult {
   return {
     results: [
       {
@@ -179,8 +210,8 @@ describe('waitForWakeEvent', () => {
   });
 
   it("resolves with 'child-completed' when a child Promise settles successfully first", async () => {
-    let resolveChild!: (value: KodaXChildExecutionResult) => void;
-    const childPromise = new Promise<KodaXChildExecutionResult>((res) => {
+    let resolveChild!: (value: TestChildResult) => void;
+    const childPromise = new Promise<TestChildResult>((res) => {
       resolveChild = res;
     });
     const registry = new Map([['task-A', childPromise]]);
@@ -203,7 +234,7 @@ describe('waitForWakeEvent', () => {
 
   it("resolves with 'child-failed' when a child Promise rejects first", async () => {
     let rejectChild!: (reason: Error) => void;
-    const childPromise = new Promise<KodaXChildExecutionResult>((_res, rej) => {
+    const childPromise = new Promise<TestChildResult>((_res, rej) => {
       rejectChild = rej;
     });
     // Suppress unhandled-rejection warning when we settle ahead of the await.
@@ -227,7 +258,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it("resolves with 'messages-arrived' when a queue message arrives first", async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const wakePromise = waitForWakeEvent({
       registry,
       messageQueue: queue,
@@ -250,7 +281,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it('drains the dequeued messages from the queue (at-most-once delivery)', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     queue.enqueue({ priority: 'user', mode: 'prompt', content: 'first' });
     queue.enqueue({
       priority: 'background',
@@ -274,7 +305,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it("user-priority messages drain before background-priority on the same wake", async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     queue.enqueue({
       priority: 'background',
       mode: 'task-notification',
@@ -297,7 +328,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it("resolves with 'aborted' when the abort signal fires before any other event", async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const controller = new AbortController();
     const wakePromise = waitForWakeEvent({
       registry,
@@ -313,7 +344,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it('resolves immediately when the abort signal is already aborted at entry', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const controller = new AbortController();
     controller.abort();
     const event = await waitForWakeEvent({
@@ -327,11 +358,11 @@ describe('waitForWakeEvent', () => {
   });
 
   it('child-completed wins when a child settles before queue poll fires', async () => {
-    let resolveChild!: (v: KodaXChildExecutionResult) => void;
+    let resolveChild!: (v: TestChildResult) => void;
     const registry = new Map([
       [
         'task-fast',
-        new Promise<KodaXChildExecutionResult>((r) => (resolveChild = r)),
+        new Promise<TestChildResult>((r) => (resolveChild = r)),
       ],
     ]);
     // 10s poll interval makes the queue arm essentially never fire in
@@ -353,7 +384,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it('only the first settling event wins (subsequent fires are ignored)', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const events: WakeEvent[] = [];
     const wakePromise = waitForWakeEvent({
       registry,
@@ -378,7 +409,7 @@ describe('waitForWakeEvent', () => {
   });
 
   it('respects agentId filter — messages addressed to other agents are not consumed', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     queue.enqueue({
       priority: 'user',
       mode: 'prompt',
@@ -416,7 +447,7 @@ describe('waitForWakeEvent', () => {
   // recent Node we can probe via the legacy listener-tracking
   // helper from `events`).
   it('removes the abort listener when wake fires on a non-abort path', async () => {
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const controller = new AbortController();
     const { getEventListeners } = await import('events');
     const beforeCount = getEventListeners(controller.signal, 'abort').length;
@@ -447,7 +478,7 @@ describe('waitForWakeEvent', () => {
     // synchronously after settling, and a subsequent enqueue/dequeue
     // cycle on the same queue must not consume anything (no stray
     // interval still running from a previous waiter).
-    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const registry = new Map<string, Promise<TestChildResult>>();
     const controller = new AbortController();
     const first = waitForWakeEvent({
       registry,

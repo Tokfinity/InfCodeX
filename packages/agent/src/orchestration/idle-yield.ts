@@ -1,42 +1,65 @@
 /**
- * Idle-yield primitives for FEATURE_155 (v0.7.39) — async chat-while-waiting.
+ * Idle-yield primitives — async chat-while-waiting orchestration core.
  *
- * Replaces the blocking `await_child_task` semantics with a Claude-Code-style
- * "agent turn ends idle, runner waits for the next external event"
- * mechanism. When the agent has dispatched ≥1 children and has nothing else
- * to do, it outputs a brief status line (no tool calls), and Runner.run
- * returns. This module gives the task-engine layer the two utilities it
- * needs to interpret that exit and resume:
+ * Originally shipped as `packages/coding/src/task-engine/_internal/
+ * managed-task/idle-yield.ts` (v0.7.39 Slices A1-C3, FEATURE_155). The
+ * v0.7.38 hotfix follow-up chain (Bug A-G) landed inside the same file.
+ * v0.7.39 FEATURE_120 Step 0 (this slice) lifts the module to
+ * `@kodax-ai/agent`'s `orchestration/` so any agent-flavor consumer
+ * outside KodaX's coding stack can reuse the same async fan-out
+ * wait-and-resume mechanic (ADR-021).
+ *
+ * The lifted module is **generic over the child-task result type**
+ * (`TChildResult`). Coding's `KodaXChildExecutionResult` shape stays in
+ * `@kodax-ai/coding`; only `taskId` + `error` are read here. The
+ * `result` field is opaque — `composeIdleYieldUserMessage` never
+ * inspects it (the fallback banner uses only `taskId` / error message).
+ *
+ * Replaces the blocking `await_child_task` semantics with a Claude-Code-
+ * style "agent turn ends idle, runner waits for the next external event"
+ * mechanism. When the agent has dispatched ≥1 children and has nothing
+ * else to do, it outputs a brief status line (no tool calls), and
+ * Runner.run returns. This module gives the runner layer the utilities
+ * it needs to interpret that exit and resume:
  *
  *   1. `detectIdleYield(...)` — synchronous predicate over the run's exit
- *      state. Returns true when the Worker turn ended without an
- *      `emit_handoff` AND there are still child tasks the Worker is
- *      expected to wait on. False on every other path (handoff complete,
- *      registry empty, run aborted, etc.) so legacy behaviour is
- *      untouched.
+ *      state. Returns true when the agent turn ended without an
+ *      `emit_handoff` AND there are still child tasks the agent is
+ *      expected to wait on. False on every other path so legacy
+ *      semantics stay untouched.
  *
  *   2. `waitForWakeEvent(...)` — async race between child-task
- *      completions and the FEATURE_115 MessageQueue. Returns the first
- *      event so the task-engine knows what to splice into the Worker's
- *      next-turn context. Cooperative with `AbortSignal` so REPL Esc
- *      tears it down promptly.
+ *      completions and the MessageQueue. Returns the first event so the
+ *      runner layer knows what to splice into the next-turn context.
+ *      Cooperative with `AbortSignal` so REPL Esc tears it down promptly.
  *
- * **Phase A1 scope**: this file is pure utility code — no `runner-driven.ts`
- * call site touches it yet. Wiring lands in Slice A2 (drain trigger) and
- * Slice A3 (`runManagedTaskViaRunnerInner` outer loop). Keeping this in
- * isolation lets each slice stay reviewable on its own and lets us revert
- * the wiring without losing the foundation.
+ *   3. `composeIdleYieldUserMessage(...)` — given a resolved
+ *      `WakeEvent`, builds the synthetic user message that the runner
+ *      should splice into the next `Runner.run` input.
  *
- * Design ref: `docs/features/v0.7.39.md` §Phase A — idle-yield foundation.
+ * Bug A-G hotfix invariants preserved verbatim from the v0.7.38
+ * release:
+ *
+ *   - Bug B / D / `hasEmittedTerminalVerdict` field: outer loop gates
+ *     on terminal Evaluator verdict, NOT on legacy
+ *     `managedProtocolPayloadRef.verdict`. The agent layer carries
+ *     the boolean as a snapshot field; callers compute it.
+ *   - Bug E / `hasPendingBackgroundMessages` field: fast-child race
+ *     recovery — keep the loop alive when either the registry OR the
+ *     queue still has undelivered work.
+ *   - Bug F / abort listener cleanup: explicit
+ *     `removeEventListener` in `settle()` even on non-abort wakes.
+ *   - Bug A registry cleanup: NOT this module's responsibility — owned
+ *     by `registerChildTask` in `task-registry.ts`.
  */
 
-import type { MessageQueue, QueuedMessage } from '@kodax-ai/agent';
-
-import type { KodaXChildExecutionResult } from '../../../types.js';
 import type { KodaXMessage, KodaXContentBlock } from '@kodax-ai/llm';
 
+import type { MessageQueue, QueuedMessage } from '../messaging/index.js';
+import type { ChildTaskRegistry } from './task-registry.js';
+
 /**
- * Env-flag gate for the runner-driven outer-loop wiring.
+ * Env-flag gate for the runner outer-loop wiring.
  *
  * **Slice C3 (v0.7.39) — flag retired as a runtime gate.** With
  * `await_child_task` removed (Slice C1) there is no working "v0.7.38
@@ -71,72 +94,69 @@ export function countLastAssistantToolCalls(
   return 0;
 }
 
-/** Snapshot of the Worker run's exit state, computed by the task-engine. */
+/** Snapshot of the agent run's exit state, computed by the runner layer. */
 export interface IdleYieldSnapshot {
   /**
    * The last assistant message's tool-call count from the Runner.run
-   * transcript. Worker idle-yield is signalled when this is 0 (Runner
+   * transcript. Idle-yield is signalled when this is 0 (Runner
    * exited via the no-tool-calls branch, not via a tool-driven
    * handoff).
    */
   readonly lastAssistantToolCallCount: number;
   /**
    * Number of child tasks still in the registry when Runner.run
-   * returned. Reads `ctx.childTaskRegistry.size` at the boundary.
-   * Idle-yield only fires when this is > 0 — otherwise there's
-   * nothing to wait for and the Worker stop is a real terminal
-   * event (which the existing Worker-prompt contract treats as a
-   * spec violation, separate from idle-yield).
+   * returned. Reads `registry.size` at the boundary. Idle-yield only
+   * fires when this is > 0 OR `hasPendingBackgroundMessages` is true
+   * — otherwise there's nothing to wait for and the stop is a real
+   * terminal event.
    */
   readonly pendingChildTaskCount: number;
   /**
-   * True if the run's `managedProtocolPayload.handoff` has been
-   * populated with an `emit_handoff` payload. False = the run
-   * ended without Worker calling emit_handoff. Idle-yield
-   * REQUIRES this to be false; otherwise the Evaluator path
-   * already owns the next step.
+   * True if the run's managed-protocol payload has been populated
+   * with a handoff (typically `emit_handoff` for the worker→evaluator
+   * boundary). False = the run ended without a handoff. Idle-yield
+   * REQUIRES this to be false; otherwise the handoff target already
+   * owns the next step.
    */
   readonly hasEmittedHandoff: boolean;
   /**
-   * v0.7.38 FEATURE_155 hotfix — true if the run's
-   * `managedProtocolPayload.verdict` has been populated with a
-   * terminal Evaluator verdict (`accept` / `blocked`; `revise`
-   * triggers a chain re-run, not idle-yield continuation).
-   * Without this gate the outer loop would keep re-entering
-   * `Runner.run` after the Evaluator already emitted a terminal
-   * verdict — wasting LLM turns on post-verdict child notifications.
-   * Idle-yield REQUIRES this to be false; same reasoning as
-   * `hasEmittedHandoff` but for the Evaluator side of the chain.
+   * v0.7.38 FEATURE_155 Bug B+D hotfix — true if the run's managed-
+   * protocol payload has been populated with a terminal verdict
+   * (`accept` / `blocked`; `revise` triggers a chain re-run, not
+   * idle-yield continuation). Without this gate the outer loop would
+   * keep re-entering `Runner.run` after a terminal verdict — wasting
+   * LLM turns on post-verdict child notifications. Idle-yield
+   * REQUIRES this to be false; same reasoning as `hasEmittedHandoff`
+   * but for the verdict side.
    */
   readonly hasEmittedTerminalVerdict: boolean;
   /**
-   * v0.7.38 FEATURE_155 hotfix follow-up — true if the
-   * background-priority message queue still has undelivered
-   * `<task-completed>` banners destined for the Worker. Set this
-   * alongside `pendingChildTaskCount` because of the **fast-child
-   * race**: the dispatch IIFE calls
-   * `enqueueChildTaskNotification` BEFORE its promise resolves, and
-   * the registry's `.finally(delete)` cleanup runs in the same
-   * microtask burst. When a child completes faster than the
-   * surrounding Runner.run iteration (e.g. a sub-second probe vs a
-   * multi-second LLM call), the registry entry is removed BEFORE
-   * the outer loop reads `pendingChildTaskCount` — making the
-   * snapshot see `0`, breaking the loop, and orphaning the banner
-   * in the background queue. With this field, the loop stays in
-   * the wait state whenever there's still something to deliver,
-   * regardless of which arm (registry or queue) carries it.
+   * v0.7.38 FEATURE_155 Bug E hotfix — true if the background-priority
+   * message queue still has undelivered banners destined for the
+   * caller agent. Set this alongside `pendingChildTaskCount` because
+   * of the **fast-child race**: the dispatch IIFE may enqueue a
+   * notification BEFORE its promise resolves, and the registry's
+   * `.finally(delete)` cleanup runs in the same microtask burst.
+   * When a child completes faster than the surrounding Runner.run
+   * iteration (e.g. a sub-second probe vs a multi-second LLM call),
+   * the registry entry is removed BEFORE the outer loop reads
+   * `pendingChildTaskCount` — making the snapshot see `0`, breaking
+   * the loop, and orphaning the banner in the background queue.
+   * With this field, the loop stays in the wait state whenever
+   * there's still something to deliver, regardless of which arm
+   * (registry or queue) carries it.
    *
-   * Drained only by the outer loop's
-   * `composeIdleYieldUserMessage` call AFTER `waitForWakeEvent`
-   * returns. The mid-turn drain (FEATURE_115) caps at `user`
-   * priority post-FEATURE_155, so this is the **only** consumer of
-   * background-priority messages — losing it strands the banner.
+   * Drained only by the outer loop's `composeIdleYieldUserMessage`
+   * call AFTER `waitForWakeEvent` returns. The mid-turn drain caps
+   * at `user` priority post-FEATURE_155, so this is the **only**
+   * consumer of background-priority messages — losing it strands
+   * the banner.
    */
   readonly hasPendingBackgroundMessages: boolean;
 }
 
 /**
- * Pure predicate. True when the Worker turn ended via the
+ * Pure predicate. True when the agent turn ended via the
  * "no tool calls + still has pending children" path that idle-yield
  * is designed to handle.
  *
@@ -161,12 +181,20 @@ export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
   return true;
 }
 
-/** Discriminated union surfacing the reason a wake completed. */
-export type WakeEvent =
+/**
+ * Discriminated union surfacing the reason a wake completed.
+ *
+ * Generic over `TChildResult` so coding-flavor consumers can carry
+ * their `KodaXChildExecutionResult` shape through `child-completed`
+ * wakes without the agent layer naming the type. This module only
+ * reads `taskId` (for the fallback banner) and `error` — `result` is
+ * opaque pass-through.
+ */
+export type WakeEvent<TChildResult = unknown> =
   | {
       readonly kind: 'child-completed';
       readonly taskId: string;
-      readonly result: KodaXChildExecutionResult;
+      readonly result: TChildResult;
     }
   | {
       readonly kind: 'child-failed';
@@ -179,21 +207,21 @@ export type WakeEvent =
     }
   | { readonly kind: 'aborted' };
 
-export interface WaitForWakeEventOptions {
+export interface WaitForWakeEventOptions<TChildResult = unknown> {
   /**
    * Live ChildTaskRegistry snapshot. The waiter wraps each entry's
    * promise so the FIRST settling child wins the race.
    *
    * **NOTE**: the waiter does NOT delete entries on settlement — the
-   * registry's normal cleanup path (FEATURE_119 dispatch handler's
-   * .then/.catch) owns deletion. Wrapping doesn't double-consume.
+   * registry's normal cleanup path (`registerChildTask`'s built-in
+   * `.finally` chain) owns deletion. Wrapping doesn't double-consume.
    */
-  readonly registry: ReadonlyMap<string, Promise<KodaXChildExecutionResult>>;
-  /** FEATURE_115 process-global queue surface. */
+  readonly registry: ChildTaskRegistry<TChildResult>;
+  /** Process-global message queue surface (FEATURE_115 substrate). */
   readonly messageQueue: MessageQueue;
   /**
    * AgentId filter for queue dequeues. Use `undefined` to match
-   * main-thread messages (the Worker's standard queue scope).
+   * main-thread messages (the standard queue scope).
    */
   readonly agentId: string | undefined;
   /**
@@ -220,7 +248,7 @@ export interface WaitForWakeEventOptions {
  *   - At-most-once dequeue: when the queue arm wins, the messages it
  *     drained are returned to the caller AND removed from the queue
  *     (the caller is now responsible for splicing them into the
- *     Worker's next-turn context).
+ *     agent's next-turn context).
  *   - Abort-safe: if `abortSignal` fires before any other event, the
  *     waiter resolves with `{ kind: 'aborted' }`. Already-settled
  *     child promises are NOT cancelled — the registry's owner handles
@@ -228,23 +256,22 @@ export interface WaitForWakeEventOptions {
  *
  * Caller responsibilities:
  *   - Pass the EXACT registry snapshot (not a copy) so subsequent
- *     dispatches the Worker performs after wake are visible to the
+ *     dispatches the agent performs after wake are visible to the
  *     next `waitForWakeEvent` call.
- *   - Splice the returned messages / child result into the Worker's
+ *   - Splice the returned messages / child result into the agent's
  *     next Runner.run input. The waiter does not itself construct
- *     synthetic user-message bytes — that's the runner-driven
- *     wiring layer's job (Slice A3).
+ *     synthetic user-message bytes — that's the runner-layer's job.
  */
-export function waitForWakeEvent(
-  options: WaitForWakeEventOptions,
-): Promise<WakeEvent> {
+export function waitForWakeEvent<TChildResult = unknown>(
+  options: WaitForWakeEventOptions<TChildResult>,
+): Promise<WakeEvent<TChildResult>> {
   const { registry, messageQueue, agentId, abortSignal, pollIntervalMs = 100 } =
     options;
 
-  return new Promise<WakeEvent>((resolve) => {
+  return new Promise<WakeEvent<TChildResult>>((resolve) => {
     let settled = false;
     let intervalId: ReturnType<typeof setInterval> | undefined;
-    // v0.7.38 hotfix follow-up #2 — abort listener leak. Without
+    // v0.7.38 FEATURE_155 Bug F hotfix — abort listener leak. Without
     // tracking & removing on wake, every idle-yield iteration on the
     // same long-lived `abortSignal` (one per outer-loop turn, capped at
     // IDLE_YIELD_MAX_ITERATIONS=64 per run) leaves a dead listener
@@ -256,7 +283,7 @@ export function waitForWakeEvent(
     const abortHandler = (): void => {
       settle({ kind: 'aborted' });
     };
-    const settle = (event: WakeEvent): void => {
+    const settle = (event: WakeEvent<TChildResult>): void => {
       if (settled) return;
       settled = true;
       if (intervalId !== undefined) {
@@ -273,13 +300,13 @@ export function waitForWakeEvent(
     }
 
     // Child arm — wrap each registry entry. We do NOT mutate the
-    // registry here; the dispatch path's IIFE attaches a
+    // registry here; `registerChildTask` attaches a
     // `.finally(() => registry.delete(childId))` so settled entries
     // disappear before the next `waitForWakeEvent` call iterates.
     // Without that cleanup an already-settled promise's `.then` fires
     // synchronously in the microtask queue and resolves this wake with
     // a spurious `child-completed` event — the FEATURE_155 v0.7.38
-    // hotfix landed the dispatch-side fix.
+    // Bug A hotfix landed the dispatch-side fix.
     for (const [taskId, promise] of registry.entries()) {
       promise.then(
         (result) => {
@@ -324,8 +351,8 @@ export function waitForWakeEvent(
 }
 
 /**
- * Compose the synthetic user message spliced after a Worker idle-yield
- * resume. The runner-driven outer loop calls this with the resolved
+ * Compose the synthetic user message spliced after an agent idle-yield
+ * resume. The runner outer loop calls this with the resolved
  * `WakeEvent` plus a function that drains any pending background
  * messages (typically `() => getMessageQueue().dequeue(...)`).
  *
@@ -341,7 +368,7 @@ export function waitForWakeEvent(
  *     `<task-completed>` banner. Drain to capture it. If for any
  *     reason the banner is missing (defensive — a misbehaving
  *     dispatch path that resolved without enqueuing), synthesize a
- *     minimal one from the wake event so the Worker still observes
+ *     minimal one from the wake event so the agent still observes
  *     the resolution rather than silently looping again.
  *
  *   - `aborted`: caller is expected to break out before reaching this
@@ -351,8 +378,8 @@ export function waitForWakeEvent(
  * Returns `undefined` when the wake yields no spliceable content —
  * the outer loop treats that as a real terminal exit.
  */
-export function composeIdleYieldUserMessage(
-  wakeEvent: WakeEvent,
+export function composeIdleYieldUserMessage<TChildResult = unknown>(
+  wakeEvent: WakeEvent<TChildResult>,
   drainBackgroundQueue: () => readonly QueuedMessage[],
 ): KodaXMessage | undefined {
   const fragments: string[] = [];
@@ -377,7 +404,7 @@ export function composeIdleYieldUserMessage(
   // Defensive fallback — child-* wake with empty queue. Only shape
   // that can reach this branch is a misbehaving dispatch path that
   // resolved the promise without enqueuing; surface a minimal banner
-  // so Worker still sees the result instead of silently looping
+  // so agent still sees the result instead of silently looping
   // again.
   if (fragments.length === 0) {
     if (wakeEvent.kind === 'child-completed') {
@@ -396,7 +423,7 @@ export function composeIdleYieldUserMessage(
   return {
     role: 'user',
     content: fragments.join('\n\n'),
-    // Hidden in REPL display — the Worker only ever sees this in its
+    // Hidden in REPL display — the agent only ever sees this in its
     // transcript, the human never reads it. Without this flag the
     // REPL would render the synthetic banner as a user message bubble.
     _synthetic: true,
