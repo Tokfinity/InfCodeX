@@ -30,7 +30,7 @@
  * back-compat escape hatch.
  */
 
-import { enqueueChildTaskNotification } from '@kodax-ai/agent';
+import { enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
 import type {
   KodaXChildContextBundle,
   KodaXAmaFanoutClass,
@@ -214,29 +214,24 @@ export async function* toolDispatchChildTask(
         throw err;
       }
     })();
-    registry.set(childId, childPromise);
-    // v0.7.38 FEATURE_155 hotfix — clean the registry entry when the
-    // child promise settles, regardless of outcome. Without this the
-    // entry stays forever and every subsequent `waitForWakeEvent` call
+    // v0.7.38 FEATURE_155 Bug A hotfix + v0.7.39 FEATURE_120 Step 0
+    // packaging: the `registerChildTask` helper bundles the
+    // `.finally(() => registry.delete(childId)).catch(() => {})`
+    // cleanup chain into a single call. Without that chain the entry
+    // stays forever and every subsequent `waitForWakeEvent` call
     // re-observes the already-settled promise, fires another
     // `child-completed` wake, and triggers
-    // `composeIdleYieldUserMessage`'s defensive fallback to fabricate a
-    // bogus `(child task completed; no summary available)` banner —
-    // which then drives another LLM turn. The legacy
-    // `await_child_task` tool used to do this cleanup at reclaim
-    // time; Slice C1 deleted that tool without compensating.
+    // `composeIdleYieldUserMessage`'s defensive fallback to fabricate
+    // a bogus `(child task completed; no summary available)` banner —
+    // driving another LLM turn. The trailing `.catch(() => {})`
+    // (chained AFTER `.finally`) swallows the rejection so a child
+    // that crashes before any consumer awaits doesn't surface as
+    // `unhandledRejection` on Node.
     //
-    // The trailing `.catch(() => {})` swallows the rejection on the
-    // promise chain so a child that crashes before any consumer awaits
-    // it doesn't surface as `unhandledRejection` on Node. It also has
-    // to be after `.finally` because `.finally` returns a NEW promise
-    // that rejects with the same reason — without the chained
-    // `.catch`, the cleanup branch would itself become unhandled.
-    childPromise
-      .finally(() => {
-        registry.delete(childId);
-      })
-      .catch(() => {});
+    // The duplicate-id guard at L160 (`registry.has(childId)`)
+    // protects the dispatch path; `registerChildTask` also throws on
+    // duplicates as belt-and-suspenders.
+    registerChildTask(registry, childId, childPromise);
 
     yield { stage: 'launched', message: `Child "${childId}" launched (async)` };
     dispatchEndStatus = 'launched';
