@@ -462,6 +462,15 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/ai/src/")' },
         evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence: "file:path", "diff:path", or "finding:text"' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
+        // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
+        // no-op for now; FEATURE_102 (v0.7.45) will translate this
+        // to a concrete model selection. Surfacing the field now so
+        // prompt-eval data starts accumulating.
+        model_hint: {
+          type: 'string',
+          enum: ['fast', 'balanced', 'deep'],
+          description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short lookups (read 1-2 files, simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); FEATURE_102 (v0.7.45) will activate the hint. Mark "fast" only for trivial single-file lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
+        },
       },
       required: ['objective'],
     },

@@ -33,6 +33,7 @@
 import { enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
 import type {
   KodaXChildContextBundle,
+  KodaXChildModelHint,
   KodaXAmaFanoutClass,
   KodaXChildExecutionResult,
   KodaXToolExecutionContext,
@@ -99,6 +100,17 @@ export async function* toolDispatchChildTask(
       `[dispatch] end childId=${childId} status=${dispatchEndStatus} duration_ms=${dispatchDurationMs}`,
     );
   };
+  // FEATURE_120 v0.7.39 Phase 4 — optional `model_hint` field. Routing
+  // is a no-op for now (every child still runs on the parent's model);
+  // FEATURE_102 (v0.7.45) is the planned consumer. Parsed tolerantly:
+  // unknown strings fall back to undefined so a misuse doesn't fail
+  // the dispatch.
+  const modelHintRaw = typeof input.model_hint === 'string' ? input.model_hint.trim() : '';
+  const modelHint: KodaXChildModelHint | undefined =
+    modelHintRaw === 'fast' || modelHintRaw === 'balanced' || modelHintRaw === 'deep'
+      ? modelHintRaw
+      : undefined;
+
   const bundle: KodaXChildContextBundle = {
     id: childId,
     fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
@@ -111,6 +123,7 @@ export async function* toolDispatchChildTask(
     constraints: Array.isArray(input.constraints)
       ? input.constraints.filter((c): c is string => typeof c === 'string')
       : [],
+    modelHint,
   };
 
   // --- Build executor options ---

@@ -319,3 +319,79 @@ describe('FEATURE_155 v0.7.39 — dispatch banner is always idle-yield (Slice C3
     await registry.get('iy-on');
   });
 });
+
+// FEATURE_120 v0.7.39 Phase 4 — model_hint schema field (routing
+// no-op). The tool surfaces + parses the hint onto the bundle so
+// FEATURE_102 (v0.7.45) can consume it later without re-plumbing.
+describe('FEATURE_120 v0.7.39 Phase 4 — dispatch_child_task.model_hint', () => {
+  beforeEach(() => {
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+  });
+  afterEach(() => {
+    _resetMessageQueueForTests();
+  });
+
+  it.each(['fast', 'balanced', 'deep'] as const)(
+    'forwards %s on the bundle passed to executeChildAgents',
+    async (hint) => {
+      mockExec.mockResolvedValueOnce(buildSuccessResult('mh', ['ok']));
+      const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+      await drainGeneratorReturn(
+        toolDispatchChildTask(
+          { id: 'mh', objective: 'probe', model_hint: hint },
+          buildBaseCtx(registry),
+        ),
+      );
+      // First call: [bundles, ctx, options]; first bundle is our child.
+      const call = mockExec.mock.calls[0]!;
+      const bundles = call[0] as Array<{ modelHint?: string }>;
+      expect(bundles[0]?.modelHint).toBe(hint);
+      await registry.get('mh')?.catch(() => undefined);
+    },
+  );
+
+  it('omitted model_hint becomes undefined on the bundle (no default substitution)', async () => {
+    mockExec.mockResolvedValueOnce(buildSuccessResult('mh-omit', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'mh-omit', objective: 'probe' },
+        buildBaseCtx(registry),
+      ),
+    );
+    const bundles = mockExec.mock.calls[0]![0] as Array<{ modelHint?: string }>;
+    expect(bundles[0]?.modelHint).toBeUndefined();
+    await registry.get('mh-omit')?.catch(() => undefined);
+  });
+
+  it('unknown model_hint string falls back to undefined (tolerant parse)', async () => {
+    mockExec.mockResolvedValueOnce(buildSuccessResult('mh-bad', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'mh-bad', objective: 'probe', model_hint: 'ultra-fast' },
+        buildBaseCtx(registry),
+      ),
+    );
+    // Dispatch still launches; the unknown hint is silently dropped.
+    expect(result).toContain('task_id:mh-bad');
+    const bundles = mockExec.mock.calls[0]![0] as Array<{ modelHint?: string }>;
+    expect(bundles[0]?.modelHint).toBeUndefined();
+    await registry.get('mh-bad')?.catch(() => undefined);
+  });
+
+  it('non-string model_hint is ignored (no TypeError, modelHint undefined)', async () => {
+    mockExec.mockResolvedValueOnce(buildSuccessResult('mh-num', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'mh-num', objective: 'probe', model_hint: 42 as unknown as string },
+        buildBaseCtx(registry),
+      ),
+    );
+    const bundles = mockExec.mock.calls[0]![0] as Array<{ modelHint?: string }>;
+    expect(bundles[0]?.modelHint).toBeUndefined();
+    await registry.get('mh-num')?.catch(() => undefined);
+  });
+});

@@ -629,7 +629,30 @@ export interface KodaXChildContextBundle {
   evidenceRefs: string[];
   constraints: string[];
   readOnly: boolean;
+  /**
+   * FEATURE_120 v0.7.39 Phase 4 — optional model tier hint that the
+   * dispatching agent provides as a UX signal. Routing is a **no-op**
+   * for now: every child runs on the parent's model regardless of
+   * hint. FEATURE_102 (v0.7.45 capability profile) is the planned
+   * consumer that will translate `'fast' | 'balanced' | 'deep'` to a
+   * concrete provider/model selection. The field is surfaced + parsed
+   * now so prompt-eval data starts accumulating; the routing wire-up
+   * lands separately.
+   */
+  modelHint?: KodaXChildModelHint;
 }
+
+/**
+ * FEATURE_120 v0.7.39 Phase 4 — model tier hint. Tier semantics:
+ *   - `'fast'` — short lookups (read 1-2 files, simple grep).
+ *   - `'balanced'` — normal subtasks (default behavior; same as omit).
+ *   - `'deep'` — heavy reasoning (multi-file analysis, complex audit).
+ *
+ * `omit` ≡ `'balanced'` so the absent case maps to "default routing".
+ * Validators MUST reject other strings (the dispatch tool drops
+ * unknown values silently with a tolerant fallback to `undefined`).
+ */
+export type KodaXChildModelHint = 'fast' | 'balanced' | 'deep';
 
 export interface KodaXChildAgentResult {
   childId: string;
