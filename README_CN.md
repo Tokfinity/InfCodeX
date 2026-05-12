@@ -79,8 +79,12 @@ kodax "Review this repository and summarize the architecture"
 
 ### 4. 作为库使用
 
+```bash
+npm install @kodax-ai/kodax
+```
+
 ```typescript
-import { runKodaX } from 'kodax';
+import { runKodaX } from '@kodax-ai/kodax';
 
 const result = await runKodaX(
   {
@@ -90,6 +94,20 @@ const result = await runKodaX(
   'Explain this codebase'
 );
 ```
+
+#### SDK Subpath 导入（v0.7.39+）
+
+如果只想用某个子能力，按 subpath 引入更轻量，bundler 也能更好地 tree-shake：
+
+```typescript
+import { Runner } from '@kodax-ai/kodax/agent';        // Agent runtime
+import { createProvider } from '@kodax-ai/kodax/llm';  // LLM 抽象（12 家 provider）
+import { runKodaX } from '@kodax-ai/kodax/coding';     // Coding tools + prompts
+import { SkillRegistry } from '@kodax-ai/kodax/skills'; // 零依赖 skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';     // REPL 配置 / session 工具
+```
+
+6 个入口（root + 5 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
 
 ### 5. 自定义 Provider（OpenAI / Anthropic 兼容端点）
 
@@ -116,7 +134,7 @@ const result = await runKodaX(
 库模式下用 `registerCustomProviders()` 显式注册：
 
 ```typescript
-import { registerCustomProviders, runKodaX } from 'kodax';
+import { registerCustomProviders, runKodaX } from '@kodax-ai/kodax';
 
 registerCustomProviders([
   {

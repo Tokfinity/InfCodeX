@@ -465,44 +465,68 @@ This routing update keeps KodaX lightweight by default:
 
 ---
 
-## 12. npm Distribution Architecture (FEATURE_150, v0.7.37)
+## 12. npm Distribution Architecture (FEATURE_150, v0.7.37; ADR-024 v0.7.39)
 
-> 决策依据见 [ADR-022](ADR.md#adr-022-npm-distribution--single-bundle-not-multi-package-feature_149-v0737)。
+> 决策依据见 [ADR-022](ADR.md#adr-022-npm-distribution--single-bundle-not-multi-package-feature_149-v0737) + [ADR-024](ADR.md#adr-024-npm-发布物正名-kodax-ainkodax--sdk-subpath-exports-形式化-v0739)。
+>
+> **历史 npm 包名**：v0.7.37/v0.7.38 首发为 `@kodax-ai/cli`；v0.7.38 dual-publish 中间形态为 `@kodax-ai/kodax-cli`；v0.7.39 起正名为 **`@kodax-ai/kodax`**（ADR-024）。
 
-源码层是分层 monorepo（ADR-001），npm 发布层是**单 bundle 包 `@kodax-ai/kodax-cli`**。这两个层是**正交**的：源码读起来是 9 个独立可用的子包；npm 装起来是一个自包含的 CLI。
+源码层是分层 monorepo（ADR-001），npm 发布层是**单 bundle 包 `@kodax-ai/kodax`**。这两个层是**正交**的：源码读起来是 9 个独立可用的子包；npm 装起来是一个自包含的 CLI + 5 个 SDK subpath。
 
 ### 12.1 发布物布局
 
-`@kodax-ai/kodax-cli@<version>` tarball 内部：
+`@kodax-ai/kodax@<version>` tarball 内部：
 
 ```text
-@kodax-ai/kodax-cli/
+@kodax-ai/kodax/
 ├── package.json
-│   ├── name: @kodax-ai/kodax-cli
+│   ├── name: @kodax-ai/kodax
 │   ├── bin: { "kodax": "scripts/kodax-bin.cjs" }
-│   ├── main: "dist/index.js"          ← SDK 入口
-│   ├── exports: { ".": "./dist/index.js" }
-│   └── dependencies: <仅第三方包>     ← 不再有任何 @kodax-ai/*
+│   ├── main: "dist/index.js"                  ← SDK root 入口
+│   ├── exports:
+│   │   ├── "."        → ./dist/index.js       ← SDK root（汇总）
+│   │   ├── "./agent"  → ./dist/sdk-agent.js   ← @kodax-ai/kodax/agent
+│   │   ├── "./llm"    → ./dist/sdk-llm.js     ← @kodax-ai/kodax/llm
+│   │   ├── "./coding" → ./dist/sdk-coding.js  ← @kodax-ai/kodax/coding
+│   │   ├── "./repl"   → ./dist/sdk-repl.js    ← @kodax-ai/kodax/repl
+│   │   └── "./skills" → ./dist/sdk-skills.js  ← @kodax-ai/kodax/skills
+│   └── dependencies: <仅第三方包>             ← 不再有任何 @kodax-ai/*
 ├── dist/
-│   ├── kodax_cli.js                   ← CLI entry（bin 命令运行）
-│   ├── index.js                       ← SDK entry（builtin helper + 路径 B 消费者）
+│   ├── kodax_cli.js                   ← CLI entry（bin 命令运行；self-contained）
+│   ├── index.js                       ← SDK root entry（builtin helper + 路径 C root import）
+│   ├── sdk-agent.js                   ← SDK subpath @kodax-ai/kodax/agent
+│   ├── sdk-llm.js                     ← SDK subpath @kodax-ai/kodax/llm
+│   ├── sdk-coding.js                  ← SDK subpath @kodax-ai/kodax/coding
+│   ├── sdk-repl.js                    ← SDK subpath @kodax-ai/kodax/repl
+│   ├── sdk-skills.js                  ← SDK subpath @kodax-ai/kodax/skills
+│   ├── chunks/*.js                    ← 6 个 SDK entry 共享代码（esbuild splitting:true）
 │   ├── *.js.map                       ← source map（opt-in，--with-sourcemap，默认不发）
-│   └── builtin-skills/<skill>/        ← LLM 通过 skill 触发的资源（含 helper scripts）
+│   └── builtin/<skill>/               ← LLM 通过 skill 触发的资源（含 helper scripts）
 ├── scripts/
 │   ├── kodax-bin.cjs                  ← bin shim（NODE_ENV=production preload）
 │   └── production-env.cjs
 └── README.md / README_CN.md / LICENSE / CHANGELOG.md
 ```
 
+CLI 单 entry self-contained（最快 bin 启动）；6 个 SDK entry（root + 5 subpath）通过 esbuild `splitting: true` 共享 `dist/chunks/*.js`，避免 re-export 同一组内部包导致 6× tarball 膨胀。实测 v0.7.39 tarball ~1.1 MB packed / ~3.5 MB unpacked。
+
 ### 12.2 三种集成路径
 
 | 路径 | 谁会走 | 实现方式 |
 |---|---|---|
-| **A. CLI 终端用户** | 90% 用户 | `npm install -g @kodax-ai/kodax-cli` → 用 `kodax` 命令 |
+| **A. CLI 终端用户** | 90% 用户 | `npm install -g @kodax-ai/kodax` → 用 `kodax` 命令 |
 | **B. 源码 SDK 集成方** | 想做基于 KodaX 的产品的开发者 | `git clone + npm link/file: + 自己 esbuild bundle` |
-| **C. 临时 SDK 用户** | 懒得 clone 仓库的小集成场景（不主推） | `npm install @kodax-ai/kodax-cli` → `import { runKodaX } from '@kodax-ai/kodax-cli'` |
+| **C. SDK 消费者** | 想直接装 npm 包 import 用 SDK API | `npm install @kodax-ai/kodax` → `import { Runner } from '@kodax-ai/kodax/agent'`（或 `runKodaX` 从 root / coding subpath） |
 
 路径 A / C 都从 `dist/` 解析；路径 B 从 `packages/*/src/` 解析（不依赖 npm registry）。
+
+**路径 C subpath 选择建议**：
+
+- 只用 LLM 抽象 → `@kodax-ai/kodax/llm`（最薄表面，~3 kB entry + 共享 chunk）
+- 写 agent runtime → `@kodax-ai/kodax/agent`
+- 想要 KodaX 完整 coding capability（含 `runKodaX`） → `@kodax-ai/kodax/coding` 或 root `@kodax-ai/kodax`
+- 写 skill loader → `@kodax-ai/kodax/skills`（zero-dep，最便宜的 subpath）
+- 嵌入 REPL UI → `@kodax-ai/kodax/repl`（带 Ink + React 间接依赖）
 
 ### 12.3 Bundle 边界 — 哪些 inline、哪些 external
 
@@ -574,7 +598,7 @@ const sdk = await import(pathToFileURL(sdkPath).href);
 
 #### 风险 5 — Bundle size 不应膨胀
 
-**场景**：用户 `npm install -g @kodax-ai/kodax-cli` 下载 tarball。当前 9 子包 dist 总和 ~1.5 MB；bundle 后预估 800-1200 kB（去重 + tree shake 节省）。
+**场景**：用户 `npm install -g @kodax-ai/kodax` 下载 tarball。当前 9 子包 dist 总和 ~1.5 MB；bundle + chunk splitting 后实测 ~1.1 MB packed / ~3.5 MB unpacked（v0.7.39）。
 
 **风险**：esbuild 配置不当（如未做 module dedup）可能导致 bundle 反而比 multi-package 更大。
 

@@ -480,11 +480,11 @@ See [docs/release.md](docs/release.md) for full details on build flags, archive 
 ### As Library
 
 ```bash
-npm install @kodax-ai/kodax-cli
+npm install @kodax-ai/kodax
 ```
 
 ```typescript
-import { runKodaX } from '@kodax-ai/kodax-cli';
+import { runKodaX } from '@kodax-ai/kodax';
 
 process.env.ZHIPU_API_KEY = process.env.ZHIPU_API_KEY ?? 'your_api_key';
 
@@ -499,6 +499,20 @@ const result = await runKodaX({
 
 console.log(result.lastText);
 ```
+
+#### SDK Subpath Imports (v0.7.39+)
+
+For smaller surface and tree-shake-friendly imports, the SDK is also exposed via subpath exports — pick only the package(s) you need:
+
+```typescript
+import { Runner } from '@kodax-ai/kodax/agent';       // agent runtime
+import { createProvider } from '@kodax-ai/kodax/llm'; // LLM abstraction (12 providers)
+import { runKodaX } from '@kodax-ai/kodax/coding';    // coding tools + prompts
+import { SkillRegistry } from '@kodax-ai/kodax/skills'; // zero-dep skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';    // REPL config / session helpers
+```
+
+All 6 entries (root + 5 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
 
 For CLI users, provider defaults live in `~/.kodax/config.json`. For library users, API keys are still read from environment variables; if you need custom base URLs or provider aliases, use `registerCustomProviders()` as shown above.
 

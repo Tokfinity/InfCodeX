@@ -514,6 +514,8 @@ FEATURE_147 (v0.7.37) 完成了 `@kodax/*` → `@kodax-ai/*` scope 重命名，�
 
 ### Addendum (v0.7.39, 2026-05-11) — 包名更正 `@kodax-ai/cli` → `@kodax-ai/kodax-cli`
 
+> **Status (2026-05-12)**: 本 addendum 描述的中间状态 `@kodax-ai/kodax-cli` 已被 **ADR-024** 取代为 `@kodax-ai/kodax`。v0.7.38 在 npm 上确实双发了 `@kodax-ai/kodax-cli@0.7.38`（作为 `@kodax-ai/cli@0.7.38` 同代码 dual-publish），但 v0.7.39 起的正式发布物名称是 `@kodax-ai/kodax`（无 `-cli` 后缀）。保留下文记录决策演变历史。
+
 v0.7.37/v0.7.38 在 npm 上的包名是 `@kodax-ai/cli`。命名时跟随了 SDK 范式（`@org/cli` 形态名），但实践证明这与 KodaX 作为**产品**的定位不匹配——业界主流是把 npm 包名直接对齐产品名（`@anthropic-ai/claude-code`、`aider-chat` 等）。v0.7.38 刚发完正式版本（之前只有 0.0.1 占位包），用户量极小，是改名最佳窗口期。
 
 **决定**：v0.7.39 起改名为 `@kodax-ai/kodax-cli`。
@@ -638,6 +640,86 @@ KodaX 跳过 tree-sitter，直接用 shell-quote 作为唯一 AST 后端。新�
 | 4 | 清理：删除已无引用的 `BASH_*_REGEXES` / `BASH_REDIRECTION_WRITE_PATTERN` 等 dead code，补 hardening test（heredoc / 命令替换 / ZSH 力覆盖） | ~200 | 低 |
 
 每个 slice 完成后跑：`packages/repl/src/permission/` 全测 + `packages/repl/src/common/tool-confirmation.test.ts` + `tests/tracker-consistency.test.ts` + `npm run build`，确认 0 漂移 0 退化再进下一片。
+
+---
+
+## ADR-024: npm 发布物正名 `@kodax-ai/kodax` + SDK Subpath Exports 形式化 (v0.7.39)
+
+**Status**: Accepted (2026-05-12)
+
+**TL;DR**：把 npm 发布物从 `@kodax-ai/kodax-cli`（v0.7.38 中间形态）改为 `@kodax-ai/kodax`（去 `-cli` 后缀），同时通过 ESM subpath exports 把 5 个内部包（agent / llm / coding / repl / skills）显式开放给 SDK 消费者。源码层分包（ADR-001 / ADR-021）**完全不变**；ADR-022 的"单 bundle 发布"决策**仍然成立** —— 本 ADR 只是在 bundle 内部增加 6 个 entry（root + 5 subpath）并共享 chunks。
+
+### 背景
+
+v0.7.37 / v0.7.38 在 npm 上的包名经历了两次决策：
+
+1. v0.7.37/v0.7.38 首发：`@kodax-ai/cli`
+2. v0.7.38 dual-publish：`@kodax-ai/kodax-cli`（同代码，ADR-022 Addendum 记录的中间状态）
+
+v0.7.38 发布后的复盘暴露两个问题：
+
+1. **`-cli` 后缀和"产品名 = 包名"业界主流不一致**。`@anthropic-ai/claude-code`、`aider-chat`、`next`、`vite` 等都是产品名直接做包名，没有 `-cli` 后缀。`-cli` 后缀暗示"还有一个非 CLI 的 SDK 包"的二分结构，但 KodaX 实际上是一个 CLI + 内嵌 SDK 表层的整体。
+2. **SDK 形态没有显式入口**。装 `@kodax-ai/kodax-cli` 后想 `import { Runner } from '...'` —— 只能从 root 拿到，且 root entry 把所有东西 re-export 到一处，bundler 静态分析不友好，对希望 tree-shake 的 SDK 消费者不够明确。
+
+### 决策
+
+1. **改名**：v0.7.39 起 npm 发布物名称为 `@kodax-ai/kodax`（无 `-cli` 后缀），覆盖 v0.7.38 的 `@kodax-ai/kodax-cli` 中间状态。
+2. **SDK Subpath Exports**：在 `package.json#exports` 增加 5 个 subpath：
+   - `@kodax-ai/kodax/agent`  → re-exports `@kodax-ai/agent`
+   - `@kodax-ai/kodax/llm`    → re-exports `@kodax-ai/llm`
+   - `@kodax-ai/kodax/coding` → re-exports `@kodax-ai/coding`
+   - `@kodax-ai/kodax/repl`   → re-exports `@kodax-ai/repl`
+   - `@kodax-ai/kodax/skills` → re-exports `@kodax-ai/skills`
+3. **Bundle 结构**：CLI 仍然单 entry self-contained（最快 bin 启动）；6 个 SDK entry（root + 5 subpath）改用 esbuild `splitting: true` 多 entry 单次构建，共享代码自动落到 `dist/chunks/*.js`，避免 6× tarball 膨胀。
+
+### Reasoning
+
+1. **名字 = 产品**。`kodax` 命令、`kodax` 产品定位、`@kodax-ai/kodax` npm 包 —— 三者一致是最少认知负担的命名。
+2. **改名窗口期 v0.7.38 → v0.7.39 最佳**。v0.7.38 是首次真实公网发布（之前只有 0.0.1 占位），用户量极小；v0.7.39 之前再改一次成本极低，v1.0 之后再改成本不可控。
+3. **Subpath exports 是 SDK 表面化的标准做法**。ESM 生态（`react-dom/server`、`firebase/firestore`）证明这是 tree-shake 友好的方式；不引入新概念。
+4. **共享 chunks 控制 bundle 膨胀**。5 个 subpath 几乎都 re-export 同一组内部代码；不共享会让 tarball 翻 6 倍。`splitting: true` 让每个 SDK entry 自己只剩 1-30 kB，chunks 集中 ~1.4 MB，整体 tarball ~1.1 MB 不变。
+
+### Consequences
+
+**变化**：
+
+- `scripts/release.mjs`：`pkg.name = '@kodax-ai/kodax'`；`rewriteRootPackageJson()` 注入 5 个 subpath `exports`
+- `scripts/build-bundle.mjs`：SDK 部分改多 entry + `splitting: true`，输出 `dist/index.js` + `dist/sdk-{agent,llm,coding,repl,skills}.js` + `dist/chunks/*.js`；CLI 路径保持 self-contained
+- 新增 `src/sdk-{agent,llm,coding,repl,skills}.ts` —— 各自一行 `export * from '@kodax-ai/<pkg>'`
+- `packages/skills/src/builtin/skill-creator/scripts/utils.js` SDK Strategy chain 简化为 3 层（relative / `@kodax-ai/coding` / `@kodax-ai/kodax`），删除 `@kodax-ai/kodax-cli` 和 `@kodax-ai/cli` 兜底
+
+**不变**：
+
+- 源码层 9 子包结构、layer independence、ADR-001 / ADR-021 全部不变
+- ADR-022"单 bundle 发布"主决策不变 —— bundle 内部 entry 数目变化，对外仍是一个 npm 包
+- bin 命令仍然是 `kodax`
+- `packages/*/package.json` 的内部 `@kodax-ai/{ai,agent,coding,...}` workspace 包名不变（仍是 workspace internal alias，不发 npm）
+
+**对 npm 上历史包的处理**：
+
+- `@kodax-ai/cli@0.7.37` / `@kodax-ai/cli@0.7.38`：deprecate 指向 `@kodax-ai/kodax`
+- `@kodax-ai/kodax-cli@0.7.38`：在 72h 窗口内 unpublish（仅一个版本，无下游绑定）；过期后 deprecate
+- 不做 chain redirect（cli → kodax-cli → kodax）；直接两条 parallel deprecate（cli → kodax；kodax-cli → kodax）
+
+### 替代方案讨论
+
+**A. 保留 `-cli` 后缀，仅做 subpath exports**：被否。后缀 vs 主流不一致的问题不解决；v0.7.39 已是改名窗口最后机会。
+
+**B. 拆 `@kodax-ai/sdk` 单独发包**：被否。引入第二个 npm 发布物违反 ADR-022 单 bundle 决策；当前没有任何独立 SDK 用户证据；subpath exports 已经把 SDK 表面暴露出来，不需要额外的 npm 包。
+
+**C. 直接发 `@kodax-ai/agent` / `@kodax-ai/llm` 等独立子包**：被否。等同于回滚到 ADR-022 之前的 multi-package 发布模型 —— 那个模型的"vendored fork transitive deps 漏声明"bug class 仍未解决。
+
+### 与 ADR-022 的关系
+
+ADR-022 的"npm 发布物 = 单 bundle 包"主决策不变。ADR-024 在它之上做两件事：
+1. 修正包名（不改变"单包"事实，只改名字）
+2. 在 bundle 内部增加多 entry —— `package.json#exports` 通过 subpath 把同一个 npm 包的不同入口暴露给消费者，**仍然是一个 npm 包，一份 tarball，一个 version 号**
+
+ADR-022 Addendum（"v0.7.39 改名 kodax-cli"）被 ADR-024 取代；保留为决策演变历史。
+
+### 触发回退的条件
+
+仅当 ADR-022 的回退条件成立（≥3 独立 SDK 用户 + ≥2 子包独立 release cadence）时，连带回滚 ADR-024 的 subpath exports 部分 —— 但即便如此，**`@kodax-ai/kodax` 这个包名不再改**（避免再次扰动用户安装命令）。
 
 ---
 
