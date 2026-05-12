@@ -53,3 +53,10 @@ export type {
   RouteMessageResult,
 } from './send-message-router.js';
 export { routeMessage } from './send-message-router.js';
+
+export type {
+  RequestTaskStopOptions,
+  RequestTaskStopResult,
+  TaskAbortRegistry,
+} from './task-stop.js';
+export { requestTaskStop } from './task-stop.js';
