@@ -1,22 +1,32 @@
 #!/usr/bin/env node
 // FEATURE_150 (v0.7.37) — npm distribution bundle builder.
+// ADR-024 (v0.7.39) — SDK subpath exports added (agent / llm / coding / repl / skills).
 //
-// Produces three artifacts under dist/:
-//   1. dist/kodax_cli.js   — CLI entry (bin command runs this)
-//   2. dist/index.js       — SDK entry (used by builtin helper scripts;
-//                             also exposed via package.json#exports for
-//                             path-B SDK consumers)
-//   3. dist/builtin/       — verbatim copy of packages/skills/dist/builtin/.
-//                             Path MUST stay 'dist/builtin/' (not 'builtin-skills/')
-//                             because @kodax-ai/skills resolveBuiltinPath() does
-//                             `path.join(__dirname, 'builtin')` and esbuild
-//                             rewrites __dirname to the bundled dist/ directory.
+// Produces the following artifacts under dist/:
+//   1. dist/kodax_cli.js     — CLI entry (bin command runs this; self-contained)
+//   2. dist/index.js         — SDK root entry (`@kodax-ai/kodax`)
+//   3. dist/sdk-agent.js     — SDK subpath `@kodax-ai/kodax/agent`
+//   4. dist/sdk-llm.js       — SDK subpath `@kodax-ai/kodax/llm`
+//   5. dist/sdk-coding.js    — SDK subpath `@kodax-ai/kodax/coding`
+//   6. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
+//   7. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
+//   8. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
+//                                across the 6 SDK entries (avoids 6× bundle bloat).
+//   9. dist/builtin/         — verbatim copy of packages/skills/dist/builtin/.
+//                                Path MUST stay 'dist/builtin/' (not 'builtin-skills/')
+//                                because @kodax-ai/skills resolveBuiltinPath() does
+//                                `path.join(__dirname, 'builtin')` and esbuild
+//                                rewrites __dirname to the bundled dist/ directory.
 //
 // All 9 internal @kodax-ai/* sub-packages are inlined into the bundles via
 // esbuild's automatic transitive import tracking. All third-party packages
 // (and node built-ins) stay external and are listed in root package.json#dependencies.
 //
-// See docs/ADR.md ADR-022 + docs/HLD.md §12 for architecture rationale.
+// CLI stays self-contained (no chunk hops) for fastest bin startup. The 6
+// SDK entries share code via `splitting: true` so re-exporting the same
+// internal package from multiple subpaths doesn't multiply tarball size.
+//
+// See docs/ADR.md ADR-022 + ADR-024 + docs/HLD.md §12 for architecture rationale.
 //
 // CONTRACT: dist layout is the helper-script's load contract — DO NOT
 // change without updating skills helper scripts that depend on
@@ -184,7 +194,7 @@ const commonOptions = {
   // Output ESM with .js extensions in source — keep the import structure
   // that already works in dev (--import tsx).
   banner: {
-    js: '// @kodax-ai/kodax-cli — bundled distribution. See docs/ADR.md ADR-022.',
+    js: '// @kodax-ai/kodax — bundled distribution. See docs/ADR.md ADR-022 + ADR-024.',
   },
   // Metafile (opt-in via --metafile): bundle composition for CI inspection.
   // Default off because the file is ~1 MB and consumers don't need it.
@@ -211,17 +221,44 @@ const cliResult = await build({
 const cliBytes = statSync(path.join(distDir, 'kodax_cli.js')).size;
 log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
-// ---- build SDK entry -----------------------------------------------------
+// ---- build SDK entries (multi-entry + code-splitting) -------------------
+//
+// ADR-024: the 6 SDK entries (root + 5 subpaths) share large internal
+// packages (e.g. sdk-coding re-exports @kodax-ai/coding which also surfaces
+// through the root index.ts). Without splitting, each entry would inline
+// the same code → 6× tarball bloat. With `splitting: true`, esbuild emits
+// shared `dist/chunks/*.js` and each entry imports only what it needs.
+//
+// Helper scripts (`loadKodaXSDK()`) use `await import('../../../index.js')`
+// — Node's ESM resolver follows chunk imports transparently, so splitting
+// does not affect the helper-depth contract verified below.
 
-log('Building dist/index.js (SDK entry)…');
-const sdkResult = await build({
-  ...commonOptions,
-  entryPoints: [path.join(repoRoot, 'src/index.ts')],
-  outfile: path.join(distDir, 'index.js'),
+const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-repl', 'sdk-skills'];
+const sdkEntryPoints = sdkEntryNames.map((name) => {
+  // index.ts lives directly under src/, the others as src/sdk-<name>.ts.
+  const filename = name === 'index' ? 'index.ts' : `${name}.ts`;
+  return path.join(repoRoot, 'src', filename);
 });
 
-const sdkBytes = statSync(path.join(distDir, 'index.js')).size;
-log(`  ✓ dist/index.js (${(sdkBytes / 1024).toFixed(0)} kB)`);
+log(`Building ${sdkEntryNames.length} SDK entries (splitting on)…`);
+const sdkResult = await build({
+  ...commonOptions,
+  entryPoints: sdkEntryPoints,
+  outdir: distDir,
+  splitting: true,
+  chunkNames: 'chunks/[name]-[hash]',
+});
+
+const sdkBytesByEntry = Object.fromEntries(
+  sdkEntryNames.map((name) => {
+    const outPath = path.join(distDir, `${name}.js`);
+    return [name, statSync(outPath).size];
+  }),
+);
+for (const name of sdkEntryNames) {
+  log(`  ✓ dist/${name}.js (${(sdkBytesByEntry[name] / 1024).toFixed(0)} kB)`);
+}
+const sdkBytes = sdkBytesByEntry.index;
 
 // ---- copy builtin skill resources ---------------------------------------
 
@@ -297,7 +334,11 @@ if (writeMetafile) {
 log('');
 log('Bundle complete:');
 log(`  CLI:  ${(cliBytes / 1024).toFixed(0)} kB → dist/kodax_cli.js`);
-log(`  SDK:  ${(sdkBytes / 1024).toFixed(0)} kB → dist/index.js`);
+for (const name of sdkEntryNames) {
+  const label = name === 'index' ? 'SDK (root) ' : `SDK ${name.replace('sdk-', '/')}`.padEnd(11);
+  log(`  ${label}:  ${(sdkBytesByEntry[name] / 1024).toFixed(0)} kB → dist/${name}.js`);
+}
 log(`  Builtin skills: dist/builtin/`);
+log(`  Shared chunks:  dist/chunks/`);
 log('');
 log('Next: `npm pack` to produce the publish-ready tarball.');
