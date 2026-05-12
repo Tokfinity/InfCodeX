@@ -39,3 +39,11 @@ export {
   DEFAULT_IDLE_YIELD_MAX_ITERATIONS,
   runWithIdleYield,
 } from './runner-with-idle-yield.js';
+
+export type {
+  FanOutOutcome,
+  FanOutProgressEvent,
+  RunFanOutOptions,
+  RunFanOutResult,
+} from './fan-out.js';
+export { runFanOut } from './fan-out.js';
