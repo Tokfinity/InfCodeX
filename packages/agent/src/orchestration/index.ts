@@ -30,3 +30,12 @@ export {
   isIdleYieldEnabled,
   waitForWakeEvent,
 } from './idle-yield.js';
+
+export type {
+  RunWithIdleYieldOptions,
+  RunWithIdleYieldRunResult,
+} from './runner-with-idle-yield.js';
+export {
+  DEFAULT_IDLE_YIELD_MAX_ITERATIONS,
+  runWithIdleYield,
+} from './runner-with-idle-yield.js';

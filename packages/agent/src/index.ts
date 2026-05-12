@@ -359,15 +359,19 @@ export {
 export type {
   ChildTaskRegistry,
   IdleYieldSnapshot,
+  RunWithIdleYieldOptions,
+  RunWithIdleYieldRunResult,
   WaitForWakeEventOptions,
   WakeEvent,
 } from './orchestration/index.js';
 export {
+  DEFAULT_IDLE_YIELD_MAX_ITERATIONS,
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
   isIdleYieldEnabled,
   registerChildTask,
+  runWithIdleYield,
   waitForWakeEvent,
 } from './orchestration/index.js';
 
