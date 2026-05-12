@@ -7,32 +7,36 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import YAML from 'yaml';
 
-// FEATURE_150 (v0.7.37, renamed v0.7.39) — KodaX SDK loader for builtin helper scripts.
+// FEATURE_150 (v0.7.37, finalized v0.7.39) — KodaX SDK loader for builtin helper scripts.
 //
 // These helper scripts (run-eval.js / grade-evals.js / etc.) need access to
 // the runKodaX / estimateTokens API. The SDK lives in different places
 // depending on install mode:
 //
-//   1. Bundle-installed (npm install -g @kodax-ai/kodax-cli):
-//      this file → <prefix>/lib/node_modules/@kodax-ai/kodax-cli/dist/builtin-skills/skill-creator/scripts/utils.js
-//      SDK       → <prefix>/lib/node_modules/@kodax-ai/kodax-cli/dist/index.js
+//   1. Bundle-installed (npm install -g @kodax-ai/kodax):
+//      this file → <prefix>/lib/node_modules/@kodax-ai/kodax/dist/builtin/skill-creator/scripts/utils.js
+//      SDK       → <prefix>/lib/node_modules/@kodax-ai/kodax/dist/index.js
 //      Resolution: relative path '../../../index.js' (3 levels up from scripts/ to dist/)
+//      → Strategy 1 covers 99%+ of bundle-installed users.
 //
 //   2. Dev monorepo (npm run dev / direct invocation against built sub-packages):
 //      this file → <repo>/packages/skills/dist/builtin/skill-creator/scripts/utils.js
 //      SDK       → not at relative path; resolved via npm workspace symlink
-//      Resolution: bare-name `@kodax-ai/coding` (workspace alias works in this scope)
+//      Resolution: bare-name `@kodax-ai/coding` (workspace alias)
 //
-//   3. Path B SDK consumer (`npm install @kodax-ai/kodax-cli` in user project):
-//      this file would be inside their node_modules; same as case 1 layout.
+//   3. Rare edge case — bundle install with non-standard layout (manual copy,
+//      symlinked dist dir, etc.) where Strategy 1 path-existence check fails:
+//      fall back to bare-name `@kodax-ai/kodax`.
 //
-// Legacy: v0.7.37/v0.7.38 published the bundle under `@kodax-ai/cli`. That
-// package is deprecated as of v0.7.39 (renamed to `@kodax-ai/kodax-cli`).
-// The Strategy 4 fallback below keeps `import('@kodax-ai/cli')` working for
-// any user still on the legacy installed version; remove the fallback when
-// no `@kodax-ai/cli` installs remain in the wild.
+// Legacy fallback (`@kodax-ai/cli` v0.7.37/v0.7.38 RC, `@kodax-ai/kodax-cli`
+// v0.7.38 dual-publish) is intentionally NOT in this chain. Both legacy names
+// are deprecated/unpublished on npm and the user base was effectively zero
+// (placeholder publish + 2-hour dual-publish window). Anyone who installed
+// the legacy names still hits Strategy 1 (relative path resolution doesn't
+// care about package name) — bare-name fallback was over-defensive.
 //
-// See docs/HLD.md §12.4 risk 3 for the dist-layout contract.
+// See docs/ADR.md ADR-022 / ADR-024 + docs/HLD.md §12 for the SDK distribution
+// contract.
 
 let _cachedSdk = null;
 
@@ -43,7 +47,7 @@ export async function loadKodaXSDK() {
   const errors = [];
 
   // Strategy 1: bundled install — relative path to dist/index.js
-  // Layout: dist/builtin-skills/<skill>/scripts/utils.js → ../../../index.js
+  // Layout: dist/builtin/<skill>/scripts/utils.js → ../../../index.js
   const relSdkPath = path.resolve(here, '../../../index.js');
   if (existsSync(relSdkPath)) {
     _cachedSdk = await import(pathToFileURL(relSdkPath).href);
@@ -59,21 +63,12 @@ export async function loadKodaXSDK() {
     errors.push(`bare-name @kodax-ai/coding failed: ${err?.code ?? err?.message}`);
   }
 
-  // Strategy 3: bundled install via bare cli name (npm-installed CLI alongside)
+  // Strategy 3: bare-name canonical (rare edge case fallback)
   try {
-    _cachedSdk = await import('@kodax-ai/kodax-cli');
+    _cachedSdk = await import('@kodax-ai/kodax');
     return _cachedSdk;
   } catch (err) {
-    errors.push(`bare-name @kodax-ai/kodax-cli failed: ${err?.code ?? err?.message}`);
-  }
-
-  // Strategy 4: legacy fallback for users still on @kodax-ai/cli installs
-  // (v0.7.37/v0.7.38). Will be removed after a reasonable deprecation window.
-  try {
-    _cachedSdk = await import('@kodax-ai/cli');
-    return _cachedSdk;
-  } catch (err) {
-    errors.push(`bare-name @kodax-ai/cli (legacy) failed: ${err?.code ?? err?.message}`);
+    errors.push(`bare-name @kodax-ai/kodax failed: ${err?.code ?? err?.message}`);
   }
 
   throw new Error(
