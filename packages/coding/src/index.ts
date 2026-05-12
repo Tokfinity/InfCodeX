@@ -975,6 +975,31 @@ export type {
   AutoModeStats,
 } from './guardrails/auto-mode/guardrail.js';
 
+// FEATURE_158 (v0.7.39): signal collector contract for the auto-mode
+// classifier prompt + UI Scope/Risk rendering. REPL injects path-aware
+// bash collector via `extraCollectors` (see `extraCollectors` on
+// AutoModeGuardrailConfig).
+export {
+  collectAllSignals,
+  type SignalCollector,
+  type ToolCallSignal,
+} from './guardrails/auto-mode/signals.js';
+export { bashSignalCollector } from './guardrails/auto-mode/bash-signals.js';
+export { fileSignalCollector } from './guardrails/auto-mode/file-signals.js';
+export {
+  checkAbsoluteDeny,
+  type AbsoluteDenyResult,
+  type AbsoluteDenyMatch,
+  type AbsoluteDenyMiss,
+  type TierZeroPatternId,
+} from './guardrails/auto-mode/absolute-denylist.js';
+export {
+  speculativeRace,
+  readWindowFromEnv as readSpeculativeWindowFromEnv,
+  DEFAULT_WINDOW_MS as DEFAULT_SPECULATIVE_WINDOW_MS,
+  type SpeculativeResult,
+} from './guardrails/auto-mode/speculative.js';
+
 // ============== FEATURE_153 (v0.7.38): Bash Command Prefix Extractor ==============
 //
 // LLM-backed prefix extraction for bash allowlist matching, replacing the

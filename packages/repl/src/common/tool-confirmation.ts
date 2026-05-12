@@ -1,3 +1,5 @@
+import type { ToolCallSignal } from "@kodax-ai/coding";
+
 import { isBashReadCommand, isBashWriteCommand } from "../permission/permission.js";
 import { t } from "./i18n.js";
 
@@ -117,6 +119,56 @@ function classifyShellRisks(command: string): string[] {
   return risks;
 }
 
+// FEATURE_158: signal-driven Scope/Risk rendering for auto[llm] escalate path.
+// Plan/accept-edits keep marker-based rendering (scopeFromMarkers).
+
+function readSignals(value: unknown): readonly ToolCallSignal[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  // We trust the runtime shape — guardrail attaches the same type we read.
+  // Defensive narrowing keeps malicious inputs from crashing render.
+  return value.filter(
+    (s): s is ToolCallSignal => typeof s === "object" && s !== null && typeof (s as { kind?: unknown }).kind === "string",
+  );
+}
+
+function scopeFromSignals(signals: readonly ToolCallSignal[] | undefined): string | undefined {
+  if (!signals) return undefined;
+  if (signals.some((s) => s.kind === "protected_path")) return t("scope.protected");
+  if (signals.some((s) => s.kind === "outside_project" || s.kind === "shell_redirect_outside")) {
+    return t("scope.outside");
+  }
+  return undefined;
+}
+
+function scopeFromMarkers(input: Record<string, unknown>): string | undefined {
+  if (input._outsideProject === true) return t("scope.outside");
+  if (input._alwaysConfirm === true) return t("scope.protected");
+  return undefined;
+}
+
+function risksFromSignals(signals: readonly ToolCallSignal[] | undefined): string[] {
+  if (!signals) return [];
+  const risks: string[] = [];
+  // High-priority severity dangerous patterns surface as Destructive.
+  const hasHighDanger = signals.some((s) => s.kind === "dangerous_pattern" && s.severity === "high");
+  const hasMediumDanger = signals.some((s) => s.kind === "dangerous_pattern" && s.severity === "medium");
+  if (hasHighDanger) {
+    risks.push(t("risk.destructive"));
+  } else if (hasMediumDanger) {
+    // Medium severity = "may modify" framing (e.g. broad rm).
+    risks.push(t("risk.modify"));
+  }
+  // Network always adds its own line (orthogonal axis).
+  if (signals.some((s) => s.kind === "network")) {
+    risks.push(t("risk.network"));
+  }
+  // Package install / git write → deps-style risk.
+  if (signals.some((s) => s.kind === "package_install")) {
+    risks.push(t("risk.deps"));
+  }
+  return risks;
+}
+
 const FIELD_LABEL_KEYS: Record<ToolConfirmationField["label"], string> = {
   Reason: "field.reason",
   Intent: "field.intent",
@@ -187,11 +239,14 @@ export function buildToolConfirmationDisplay(
   const path = readString(input.path);
   const command = readString(input.command);
   const reason = readString(input._reason) ?? readString(input.justification);
-  const scope = input._outsideProject === true
-    ? t("scope.outside")
-    : input._alwaysConfirm === true
-      ? t("scope.protected")
-      : undefined;
+
+  // FEATURE_158 (v0.7.39): when auto[llm] guardrail escalates, it attaches
+  // `_classifierSignals` to the confirm-dialog input. Prefer signals-based
+  // scope rendering — it's strictly richer than the marker-based path
+  // (FEATURE_066 _alwaysConfirm / _outsideProject), which serves
+  // plan / accept-edits modes that don't go through askUser.
+  const signals = readSignals(input._classifierSignals);
+  const scope = scopeFromSignals(signals) ?? scopeFromMarkers(input);
 
   pushField(fields, "Reason", reason);
 
@@ -201,7 +256,11 @@ export function buildToolConfirmationDisplay(
       if (command) {
         pushField(fields, "Intent", classifyShellIntent(command));
         pushField(fields, "Scope", scope);
-        const risks = classifyShellRisks(command);
+        // FEATURE_158: prefer signal-derived risks when present (auto[llm]
+        // escalate path); fall back to command-regex risks (plan / accept-
+        // edits / auto[rules] paths where signals aren't threaded).
+        const signalRisks = risksFromSignals(signals);
+        const risks = signalRisks.length > 0 ? signalRisks : classifyShellRisks(command);
         if (risks.length > 0) {
           pushField(fields, "Risk", risks.join("; "));
         }

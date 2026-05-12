@@ -38,6 +38,7 @@ import {
   type AutoModeAskUser,
   type AutoModeToolGuardrail,
   type RulesLoadResult,
+  type SignalCollector,
 } from '@kodax-ai/coding';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import type { PermissionMode } from '../permission/types.js';
@@ -75,6 +76,17 @@ export interface AutoModeBootstrapDeps {
    * mode toggle to refresh.
    */
   readonly onEngineChange?: (engine: 'llm' | 'rules') => void;
+
+  /**
+   * FEATURE_158 (v0.7.39): additional signal collectors merged with the
+   * coding-side defaults (`bashSignalCollector` + `fileSignalCollector`).
+   * The REPL passes `replBashPathSignalCollector` here so bash commands
+   * targeting protected paths (~/.kodax / <projectRoot>/.kodax) or
+   * redirecting outside the project produce signals — the path utilities
+   * live in @kodax/repl, so this is the layer-boundary-preserving
+   * injection point.
+   */
+  readonly extraCollectors?: readonly SignalCollector[];
 }
 
 /**
@@ -161,6 +173,10 @@ export async function bootstrapAutoMode(
       askUser: deps.askUser,
       log: deps.log,
       onEngineChange: deps.onEngineChange,
+      // FEATURE_158: thread projectRoot to signal collectors + Tier 0;
+      // path-aware bash collector merges with coding-side defaults.
+      projectRoot: deps.projectRoot,
+      extraCollectors: deps.extraCollectors,
       // FEATURE_092 phase 2b.7b slice C: starting engine + timeout + classifier
       // model overrides. `userSettings` is layer 4 of `resolveClassifierModel`;
       // `envVar` is layer 2 (cli flag and session-override remain unset until
