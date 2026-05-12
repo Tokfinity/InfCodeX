@@ -233,7 +233,9 @@ $env:KODAX_ASYNC_DISPATCH = "0"
 npm run test
 ```
 
-期望：≥ 257 个 test files / ≥ 2601 个 tests 全绿（agent + coding + repl 三个包合计）。如果有 todo / skipped，确认数量与上版本一致。
+期望：≥ 488 个 test files / ≥ 5398 个 tests 全绿（agent + coding + repl + skills + benchmark 合计）。如果有 todo / skipped，确认数量与上版本一致。
+
+> **已知 flake**：`benchmark/harness/h2-boundary-runner.test.ts` 的 2 个 case（`H2-B variant propagates …` / `H1-ref variant propagates …`）在 `npm run test` 重并行负载下偶发 ENOENT；commit `d4a47bc9` 已 bump 过 timeout，仍偶发。**验证方式**：单独跑 `npx vitest run --no-file-parallelism benchmark/harness/h2-boundary-runner.test.ts` 应该 4/4 通过。如果连串行都失败才是真问题。此 flake 与 FEATURE_120 无关。
 
 特别关注：
 
