@@ -61,35 +61,17 @@ export async function toolTaskStop(
     return `[Tool Error] ${TOOL_NAME}: Async dispatch is disabled (no childAbortControllers on context). Children run synchronously and complete inside their dispatch_child_task call — there is no in-flight target to stop.`;
   }
 
-  // --- Enqueue stop-request explanation BEFORE aborting ---
-  // Order matters: the message must land in the queue before the
-  // child's abort fires so the child's next drain sees the reason
-  // alongside the cancellation. The child's task-task registry is
-  // ALSO required for routeMessage (it validates `to` exists).
-  const childTaskRegistry = ctx.childTaskRegistry;
-  if (reason && childTaskRegistry) {
-    const stopRequestContent =
-      `<coordinator-stop-request>\n` +
-      `Reason: ${reason}\n` +
-      `Finish your current tool call gracefully and emit a final summary.\n` +
-      `</coordinator-stop-request>`;
-    // We tolerate routeMessage returning unknown-target here — the
-    // registry-based check on requestTaskStop below is the
-    // authoritative "is this task in flight" gate. If the child has
-    // already settled and been auto-cleaned from childTaskRegistry,
-    // the stop request becomes a no-op and `requestTaskStop` will
-    // also surface the unknown-target / already-aborted state.
-    routeMessage({
-      to: taskId,
-      priority: 'user',
-      mode: 'system-reminder',
-      content: stopRequestContent,
-      registry: childTaskRegistry,
-      queue: getMessageQueue(),
-    });
-  }
-
-  // --- Request the abort ---
+  // --- Request the abort FIRST ---
+  // `abortRegistry.has(taskId)` is the authoritative "is this task in
+  // flight" gate. Routing the stop-request message BEFORE this check
+  // would leak an orphan `<coordinator-stop-request>` block into a
+  // dead child's queue when the abort registry has already been
+  // drained (the inner IIFE's `.finally` deletes from
+  // `childAbortControllers` before `registerChildTask`'s outer
+  // `.finally` deletes from `childTaskRegistry` — there is a small
+  // window where the latter still reports `.has(taskId) === true`).
+  // Order chosen so the message only lands when the abort actually
+  // succeeded.
   const stopOutcome = requestTaskStop({
     taskId,
     registry: abortRegistry,
@@ -102,6 +84,29 @@ export async function toolTaskStop(
     }
     // already-aborted
     return `[Tool Error] ${TOOL_NAME}: Task "${stopOutcome.taskId}" is already aborted (its first-abort cause is preserved). No additional action needed; the child will surface the cancellation at its next abort check.`;
+  }
+
+  // --- Enqueue stop-request explanation AFTER successful abort ---
+  // Best-effort delivery: if the child is currently awaiting an LLM
+  // call, it observes the abort signal first when the call returns;
+  // mid-turn drain semantics determine whether the message is seen
+  // before the child's final summary. Either way, the message only
+  // exists when the abort actually fired.
+  const childTaskRegistry = ctx.childTaskRegistry;
+  if (reason && childTaskRegistry) {
+    const stopRequestContent =
+      `<coordinator-stop-request>\n` +
+      `Reason: ${reason}\n` +
+      `Finish your current tool call gracefully and emit a final summary.\n` +
+      `</coordinator-stop-request>`;
+    routeMessage({
+      to: taskId,
+      priority: 'user',
+      mode: 'system-reminder',
+      content: stopRequestContent,
+      registry: childTaskRegistry,
+      queue: getMessageQueue(),
+    });
   }
 
   return `task_stop signal sent to ${taskId}. Child will exit at its next abort check (currently-executing tool completes atomically first).`;
