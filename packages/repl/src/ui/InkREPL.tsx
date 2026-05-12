@@ -1978,44 +1978,86 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
     const currentLedger = managedForegroundLedgerRef.current;
 
-    // If the ledger has switched away from tool_group (e.g. to thinking)
-    // but still holds a reference to a prior tool_group with this tool,
-    // update that original item in place instead of creating a duplicate.
+    // === Tier 1 — Fast path (ref-based): tool already lives in the
+    // currently-tracked active tool_group's refs. Covers:
+    //   - same-group delta/result update (most common case)
+    //   - Issue 115: kind transition (tool_group → thinking) with
+    //     preserved refs — toolCall.id still in activeToolGroupTools
+    //   - Issue 130: phase/iteration transition with preserved refs
+    //     (when no new worker has yet stomped on the active slot)
+    // The original L1962 guard was guarded by `activeKind !== "tool_group"`
+    // to avoid colliding with the same-group fallthrough; the unified
+    // fast path drops that condition because matching by ID is enough.
     if (
-      currentLedger.activeKind !== "tool_group"
-      && currentLedger.activeToolGroupItemId
+      currentLedger.activeToolGroupItemId
       && currentLedger.activeToolGroupTools.some((t) => t.id === toolCall.id)
     ) {
       const nextTools = currentLedger.activeToolGroupTools.map((t) => (
         t.id === toolCall.id ? toolCall : t
       ));
-      // Clean up preserved refs once all tools have reached a terminal state.
       const allResolved = nextTools.every((t) => (
         t.status === ToolCallStatus.Success
         || t.status === ToolCallStatus.Error
         || t.status === ToolCallStatus.Cancelled
       ));
       managedForegroundLedgerRef.current = {
-        ...managedForegroundLedgerRef.current,
+        ...currentLedger,
         ...(allResolved
           ? { activeToolGroupItemId: undefined, activeToolGroupTools: [] }
           : { activeToolGroupTools: nextTools }
         ),
       };
       updateManagedForegroundLedgerItem(currentLedger.activeToolGroupItemId, (item) => (
-        item.type === "tool_group"
-          ? { ...item, tools: nextTools }
-          : item
+        item.type === "tool_group" ? { ...item, tools: nextTools } : item
       ));
       return;
     }
 
+    // === Tier 2 — Orphan history-search (Issue 130 EC1): tool is NOT in
+    // the active group's refs (a new worker has stomped on the active
+    // slot, OR ref preservation was bypassed). Search foreground turn
+    // history backwards for the tool_group that originally owned this
+    // tool ID and update it in place. Decouples orphan recovery from
+    // the single-slot ref tracker so multi-slot tracking isn't needed.
+    // O(m) on managedForegroundTurnItemsRef.current; bounded per-turn
+    // (<100 items in practice). The reverse iteration biases the
+    // search toward the most recent groups, which is where orphans
+    // most often live in normal sequencing.
+    const historyItems = managedForegroundTurnItemsRef.current;
+    for (let i = historyItems.length - 1; i >= 0; i -= 1) {
+      const item = historyItems[i];
+      if (item.type !== "tool_group") continue;
+      if (!item.tools.some((t) => t.id === toolCall.id)) continue;
+      const nextTools = item.tools.map((t) => (
+        t.id === toolCall.id ? toolCall : t
+      ));
+      updateManagedForegroundLedgerItem(item.id, (existing) => (
+        existing.type === "tool_group" ? { ...existing, tools: nextTools } : existing
+      ));
+      return;
+    }
+
+    // === Tier 3 — Create / extend: tool is brand new. Get the active
+    // tool_group (creating one if needed) and add the tool.
+    //
+    // Issue 130 bugfix: when `startManagedForegroundLedgerBlock` returns
+    // a NEWLY-created itemId (e.g. activeKind was undefined after a
+    // phase transition), nextTools must be `[toolCall]` only. The
+    // pre-fix code unconditionally did `[...currentLedger.activeToolGroupTools,
+    // toolCall]`, which leaks preserved orphan tools (e.g. V1 from
+    // the previous worker) into the new group's history. The reuse
+    // gate below ensures the carry-over only happens when we're truly
+    // extending the same active group (typical parallel tool case).
     const itemId = startManagedForegroundLedgerBlock("tool_group", currentLedger.workerTitle);
-    const nextTools = currentLedger.activeToolGroupTools.some((existing) => existing.id === toolCall.id)
-      ? currentLedger.activeToolGroupTools.map((existing) => (
-          existing.id === toolCall.id ? toolCall : existing
-        ))
-      : [...currentLedger.activeToolGroupTools, toolCall];
+    const isReuseOfActiveGroup = currentLedger.activeKind === "tool_group"
+      && currentLedger.activeToolGroupItemId === itemId;
+    const nextTools = isReuseOfActiveGroup
+      ? (currentLedger.activeToolGroupTools.some((existing) => existing.id === toolCall.id)
+          ? currentLedger.activeToolGroupTools.map((existing) => (
+              existing.id === toolCall.id ? toolCall : existing
+            ))
+          : [...currentLedger.activeToolGroupTools, toolCall])
+      : [toolCall];
     managedForegroundLedgerRef.current = {
       ...managedForegroundLedgerRef.current,
       activeKind: "tool_group",
@@ -2023,12 +2065,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       activeToolGroupTools: nextTools,
     };
     updateManagedForegroundLedgerItem(itemId, (item) => (
-      item.type === "tool_group"
-        ? {
-            ...item,
-            tools: nextTools,
-          }
-        : item
+      item.type === "tool_group" ? { ...item, tools: nextTools } : item
     ));
   }, [startManagedForegroundLedgerBlock, updateManagedForegroundLedgerItem, flushForegroundTextBuffer]);
 
