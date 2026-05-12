@@ -194,6 +194,7 @@ dist/binary/linux-x64/
 | zhipu-coding | `ZHIPU_API_KEY` | Native | glm-5（GLM Coding Plan 端点） |
 | minimax-coding | `MINIMAX_API_KEY` | Native | MiniMax-M2.7 |
 | mimo-coding | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
+| ark-coding | `ARK_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan，多模型网关，Anthropic 协议） |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | （通过 gemini CLI） |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | （通过 codex CLI） |
@@ -255,10 +256,12 @@ KodaX 有 30+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 
 | 工具 | 说明 |
 |------|------|
-| `dispatch_child_task` | 派发子 agent 跑独立调研 / 改动任务 |
+| `dispatch_child_task` | 派发子 agent 跑独立调研 / 改动任务。可选 `model_hint: 'fast' \| 'balanced' \| 'deep'`（advisory 标记，routing 在 FEATURE_102 v0.7.45 之前是 no-op） |
+| `send_message` | 给在跑 child 队列追加一条 `<coordinator-instruction>` 指令，child 下一个 turn 边界看到。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
+| `task_stop` | 请求指定 child 优雅退出。当前 tool 原子结束后 child 看到 `<coordinator-stop-request>` 并 emit 最终摘要。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
 | `ask_user_question` | 向用户发起单选 / 多选 / 自由文本提问 |
 | `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
-| `emit_managed_protocol` | scout / planner / handoff / verdict 内部协议侧信道 |
+| `emit_managed_protocol` | managed-task 协议侧信道（handoff / verdict 等 role payload）。v0.7.36 FEATURE_114 起默认走 V2 Worker→Evaluator 链。 |
 
 ## Repo Intelligence Premium
 
@@ -505,38 +508,45 @@ node .\clients\repointel\scripts\install.mjs --host opencode --workspace-root C:
 
 ## 仓库结构
 
-KodaX 是一个基于 npm workspaces 的 TypeScript monorepo。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，源码层 9 个 workspace 包，npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 5 个 SDK subpath exports（ADR-022 + ADR-024，v0.7.39）。核心包：
 
-| 包 | 作用 | 主要依赖 |
+| Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
-| `@kodax/ai` | LLM 抽象层（12 个内置 provider + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
-| `@kodax/agent` | 通用 Agent 框架，会话管理 + tokenization + 可插拔 compaction policy | `@kodax/ai`, `js-tiktoken` |
-| `@kodax/skills` | Agent Skills 标准实现（自然语言触发、变量解析） | 零外部依赖 |
-| `@kodax/coding` | Coding Agent：30+ 工具、prompts、agent loop、auto-continue | `@kodax/ai`, `@kodax/agent`, `@kodax/skills` |
-| `@kodax/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax/coding`, `ink`, `react` |
+| `@kodax-ai/llm` | LLM 抽象层（12 个内置 provider + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + 会话管理 + tokenization + 可插拔 compaction（ADR-021 standalone-consumable） | `@kodax-ai/llm`, `js-tiktoken` |
+| `@kodax-ai/skills` | Agent Skills 标准实现（自然语言触发、变量解析） | 零外部依赖 |
+| `@kodax-ai/coding` | Coding Agent：30+ 工具（含 `dispatch_child_task` / `send_message` / `task_stop`）、role prompts、agent loop、auto-continue | `@kodax-ai/llm`, `@kodax-ai/agent`, `@kodax-ai/skills` |
+| `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+辅助包：`@kodax-ai/mcp`、`@kodax-ai/repointel-protocol`、`@kodax-ai/session-lineage`、`@kodax-ai/tracing`（按需依赖）。
+
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills}.ts` 是 5 个 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # @kodax/ai
-│   │   └── providers/       # 12 个 LLM provider 实现
-│   ├── agent/               # @kodax/agent（session + token）
-│   ├── skills/              # @kodax/skills
+│   ├── ai/                  # @kodax-ai/llm —— 12 个 LLM provider 实现
+│   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield / session
+│   ├── skills/              # @kodax-ai/skills —— 零依赖 skill 加载器
 │   │   └── builtin/         # 内置 skills：code-review / tdd / git-workflow / skill-creator
-│   ├── coding/              # @kodax/coding（tools + prompts）
-│   │   └── tools/           # read/write/edit/bash/grep/repo-intel/MCP/worktree/...
-│   └── repl/                # @kodax/repl（Ink TUI）
+│   ├── coding/              # @kodax-ai/coding —— tools + prompts + agent loop
+│   ├── repl/                # @kodax-ai/repl —— Ink TUI
+│   ├── mcp/                 # @kodax-ai/mcp
+│   ├── repointel-protocol/  # @kodax-ai/repointel-protocol
+│   ├── session-lineage/     # @kodax-ai/session-lineage
+│   └── tracing/             # @kodax-ai/tracing
 ├── src/
-│   └── kodax_cli.ts         # CLI 主入口
+│   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
+│   └── sdk-*.ts             # 5 个 SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl,skills}
 ├── scripts/
-│   └── build-binary.mjs     # Bun --compile 单文件二进制打包脚本
+│   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + 6 SDK entry + chunks）
+│   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
+│   └── release.mjs          # ADR-024 release-time pkg name/exports 注入
 └── .github/workflows/
     └── release.yml          # 推 v* tag 自动发布 GitHub Release
 ```
 
-这套拆分让你既可以把 KodaX 当成完整产品使用，也可以只复用其中某一层能力。
+这套拆分让你既可以把 KodaX 当成完整产品使用，也可以只复用其中某一层能力 —— SDK 消费者装 `@kodax-ai/kodax` 后从 subpath（`@kodax-ai/kodax/agent` 等）按需 import。
 ## API 导出
 
 ```typescript

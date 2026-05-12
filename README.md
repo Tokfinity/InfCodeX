@@ -103,7 +103,7 @@ kodax --session review "Give me concrete fix suggestions"
 Library usage still expects API keys from environment variables. If you want custom provider names or base URLs in code, register them explicitly:
 
 ```typescript
-import { registerCustomProviders, runKodaX } from 'kodax';
+import { registerCustomProviders, runKodaX } from '@kodax-ai/kodax';
 
 registerCustomProviders([
   {
@@ -342,67 +342,77 @@ The installable shared skill itself lives at:
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces, consisting of 5 packages:
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout has 9 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 5 SDK subpath exports (ADR-022 + ADR-024, v0.7.39):
 
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # @kodax/ai - Independent LLM abstraction layer
-│   │   └── providers/       # 12 LLM providers (Anthropic, OpenAI, DeepSeek, MiMo, etc.)
+│   ├── ai/                  # @kodax-ai/llm - LLM abstraction (12 providers)
+│   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
-│   ├── agent/               # @kodax/agent - Generic Agent framework
-│   │   └── session/         # Session management, message handling
+│   ├── agent/               # @kodax-ai/agent - Generic Agent framework
+│   │   └── orchestration/   # Runner, runFanOut, runWithIdleYield, ChildTaskRegistry
 │   │
-│   ├── skills/              # @kodax/skills - Skills standard implementation
+│   ├── skills/              # @kodax-ai/skills - Skills standard implementation
 │   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
 │   │
-│   ├── coding/              # @kodax/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # Tools: read, write, edit, bash, glob, grep, undo, ask_user_question, repo-intelligence
+│   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
+│   │   └── tools/           # 30+ tools: read, write, edit, bash, glob, grep, undo,
+│   │                        #   dispatch_child_task, send_message, task_stop,
+│   │                        #   ask_user_question, repo-intelligence, …
 │   │
-│   └── repl/                # @kodax/repl - Interactive terminal UI
-│       ├── ui/              # Ink/React components, themes
-│       └── interactive/     # Commands, REPL logic
+│   ├── repl/                # @kodax-ai/repl - Interactive terminal UI (Ink TUI)
+│   ├── mcp/                 # @kodax-ai/mcp - MCP integration
+│   ├── repointel-protocol/  # @kodax-ai/repointel-protocol - repo-intel protocol
+│   ├── session-lineage/     # @kodax-ai/session-lineage - branchable session tree
+│   └── tracing/             # @kodax-ai/tracing - tracing / observability
 │
-├── src/
-│   └── kodax_cli.ts         # Main CLI entry point
+├── src/                     # CLI entry + 5 SDK subpath entries (sdk-{agent,llm,coding,repl,skills}.ts)
+│   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl,skills}
 │
-└── package.json             # Root workspace config
+└── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
 
 ### Package Dependencies
 
 ```
-                    ┌─────────────────┐
-                    │   kodax (root)  │
-                    │   CLI Entry     │
-                    └────────┬────────┘
+                    ┌──────────────────┐
+                    │  kodax (root)    │
+                    │  CLI Entry       │
+                    └────────┬─────────┘
                              │
               ┌──────────────┴──────────────┐
               │                             │
               ▼                             ▼
-       ┌─────────────┐               ┌─────────────┐
-       │ @kodax/repl │               │@kodax/coding│
-       │  UI Layer   │               │ Tools+Prompts│
-       └──────┬──────┘               └──────┬──────┘
+       ┌──────────────┐              ┌────────────────┐
+       │@kodax-ai/repl│              │@kodax-ai/coding│
+       │  UI Layer    │              │ Tools+Prompts  │
+       └──────┬───────┘              └──────┬─────────┘
               │                             │
               │              ┌──────────────┼──────────────┐
               │              │              │              │
               ▼              ▼              ▼              ▼
-       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-       │@kodax/skills│ │ @kodax/agent│ │  @kodax/ai  │ │  External   │
-       │(zero deps)  │ │Agent Frame  │ │LLM Abstract │ │   SDKs      │
-       └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘
+       ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐
+       │@kodax-ai/    │ │@kodax-ai/    │ │@kodax-ai/llm │ │  External   │
+       │skills        │ │agent         │ │LLM Abstract  │ │   SDKs      │
+       │(zero deps)   │ │Runner +      │ │(12 providers)│ │             │
+       │              │ │fan-out +     │ │              │ │             │
+       │              │ │idle-yield    │ │              │ │             │
+       └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘
 ```
 
 ### Package Overview
 
-| Package | Purpose | Key Dependencies |
+Source-side workspace package names (`@kodax-ai/*`). npm consumers install the single bundled `@kodax-ai/kodax` package and import from SDK subpaths — see [SDK Usage](#sdk-usage) below.
+
+| Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
-| `@kodax/ai` | Independent LLM abstraction, reusable by other projects | @anthropic-ai/sdk, openai |
-| `@kodax/agent` | Generic Agent framework, session management | @kodax/ai, js-tiktoken |
-| `@kodax/skills` | Skills standard implementation | Zero external deps |
-| `@kodax/coding` | Coding Agent with tools and prompts | @kodax/ai, @kodax/agent, @kodax/skills |
-| `@kodax/repl` | Complete interactive terminal UI | @kodax/coding, ink, react |
+| `@kodax-ai/llm` | LLM abstraction (12 providers + custom registration) | @anthropic-ai/sdk, openai |
+| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, session, tokenization (ADR-021 standalone-consumable) | @kodax-ai/llm, js-tiktoken |
+| `@kodax-ai/skills` | Skills standard implementation | Zero external deps |
+| `@kodax-ai/coding` | Coding Agent — 30+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue | @kodax-ai/llm, @kodax-ai/agent, @kodax-ai/skills |
+| `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
 ---
 
@@ -410,7 +420,7 @@ KodaX/
 
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
 - **12 LLM Providers** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding (Xiaomi Token Plan), Gemini CLI, Codex CLI — plus user-defined OpenAI/Anthropic-compatible providers
-- **Scout-First AMA** - Adaptive multi-agent with H0/H1/H2 harness levels, Scout-complete direct execution, and context-preserving role upgrades
+- **Worker + Evaluator AMA (V2, default)** - Adaptive multi-agent with H0/H1/H2 harness levels. Worker single-loop replaces the V1 Scout/Planner/Generator chain (FEATURE_114, v0.7.36); structural Evaluator gate preserved. Async child steering via `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait (FEATURE_120 / FEATURE_155, v0.7.39).
 - **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
 - **Streaming Output** - Real-time response display
 - **Session Management** - JSONL format with branchable session lineage tree
@@ -669,7 +679,7 @@ kodax -h print         # Print configuration
 #### Simple Mode (runKodaX)
 
 ```typescript
-import { runKodaX, KodaXEvents } from 'kodax';
+import { runKodaX, KodaXEvents } from '@kodax-ai/kodax';
 
 const events: KodaXEvents = {
   onTextDelta: (text) => process.stdout.write(text),
@@ -691,7 +701,7 @@ console.log(result.lastText);
 #### Continuous Session (KodaXClient)
 
 ```typescript
-import { KodaXClient } from 'kodax';
+import { KodaXClient } from '@kodax-ai/kodax';
 
 const client = new KodaXClient({
   provider: 'zhipu-coding',
@@ -713,7 +723,7 @@ console.log(client.getSessionId());
 #### Custom Session Storage
 
 ```typescript
-import { runKodaX, KodaXSessionStorage, KodaXMessage } from 'kodax';
+import { runKodaX, KodaXSessionStorage, KodaXMessage } from '@kodax-ai/kodax';
 
 class MyDatabaseStorage implements KodaXSessionStorage {
   async save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string }) {
@@ -746,188 +756,165 @@ await runKodaX({
 
 ---
 
-## Using Individual Packages
+## SDK Usage
 
-KodaX is built with a modular architecture. Each package can be used independently:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 5 SDK subpath exports (ADR-024, v0.7.39). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
-### @kodax/ai - LLM Abstraction Layer
-
-Independent LLM provider abstraction, reusable in any project:
+```bash
+npm install @kodax-ai/kodax
+```
 
 ```typescript
-import { getProvider, KodaXBaseProvider } from '@kodax/ai';
+import { runKodaX } from '@kodax-ai/kodax';                  // root: CLI helpers + runKodaX
+import { Runner, runFanOut } from '@kodax-ai/kodax/agent';   // generic Agent framework
+import { getProvider } from '@kodax-ai/kodax/llm';           // 12-provider LLM abstraction
+import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';        // tools + prompts + agent loop
+import { InkREPL } from '@kodax-ai/kodax/repl';              // Ink TUI components
+import { SkillRegistry } from '@kodax-ai/kodax/skills';      // zero-dep skill loader
+```
 
-// Get a provider instance
+### `@kodax-ai/kodax/llm` — LLM Abstraction
+
+12 built-in providers (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Zhipu, Zhipu-Coding, MiniMax-Coding, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
+
+```typescript
+import { getProvider, KodaXBaseProvider } from '@kodax-ai/kodax/llm';
+
 const provider = getProvider('anthropic');
-
-// Stream completion
 const stream = await provider.streamCompletion(
   [{ role: 'user', content: 'Hello!' }],
   { onTextDelta: (text) => process.stdout.write(text) }
 );
 
 for await (const result of stream) {
-  if (result.type === 'text') {
-    // Handle text delta
-  } else if (result.type === 'tool_use') {
-    // Handle tool call
-  }
+  if (result.type === 'text') { /* … */ }
+  else if (result.type === 'tool_use') { /* … */ }
 }
 ```
 
-**Key Features**:
-- 12 LLM providers with a unified interface
-- Streaming output support
-- Thinking / reasoning mode support
-- Error handling and retry logic
-- Zero business logic dependencies
+**Key Features**: unified provider interface · streaming · reasoning modes (`off/auto/quick/balanced/deep`) · per-provider retry + error handling · zero business-logic dependencies.
 
-### @kodax/agent - Agent Framework
+### `@kodax-ai/kodax/agent` — Agent Framework (standalone-consumable)
 
-Generic agent framework with session management:
+ADR-021 standalone-consumable: `@kodax-ai/agent` has **zero inbound `@kodax-ai/coding` dependency** — you can wire any tool surface on top of it.
 
 ```typescript
 import {
+  Runner,
+  runFanOut,
+  runWithIdleYield,
+  registerChildTask,
+  type ChildTaskRegistry,
   generateSessionId,
   estimateTokens,
-  type KodaXMessage
-} from '@kodax/agent';
-import { DefaultSummaryCompaction } from '@kodax/core';
+  DefaultSummaryCompaction,
+} from '@kodax-ai/kodax/agent';
 
-// Generate session ID
-const sessionId = generateSessionId();
-
-// Estimate tokens
-const tokens = estimateTokens(messages);
-
-// Pluggable compaction policy (FEATURE_081, v0.7.23).
-// Call `policy.shouldCompact(...)` at round boundaries, then `policy.compact(...)`.
-const policy = new DefaultSummaryCompaction({
-  thresholdRatio: 0.8,
-  keepRecent: 10,
+// Bounded-concurrency fan-out with abort + structured progress events (v0.7.39 FEATURE_120)
+const result = await runFanOut({
+  bundles: [{ id: 'a', task: 'audit-foo' }, { id: 'b', task: 'audit-bar' }],
+  maxParallel: 4,
+  run: async (bundle) => doWork(bundle),
 });
+
+// Idle-yield wait — pause when out of useful work, resume when a wake event arrives
+await runWithIdleYield({ runOnce, computeSnapshot, registry, messageQueue, agentId });
+
+// Pluggable compaction policy (FEATURE_081)
+const policy = new DefaultSummaryCompaction({ thresholdRatio: 0.8, keepRecent: 10 });
 ```
 
-**Key Features**:
-- Session ID generation and title extraction
-- Token estimation (tiktoken-based)
-- Pluggable `CompactionPolicy` + `DefaultSummaryCompaction` (generic) / `LineageCompaction` (coding preset)
-- Generic types for messages and tools
+**Key Features**: `Runner` + per-step lifecycle · `runFanOut` (bounded-concurrency + abort + progress events) · `runWithIdleYield` (chat-while-waiting) · `ChildTaskRegistry` / `TaskAbortRegistry` · session-id generation · tiktoken-based token estimation · `CompactionPolicy` interface.
 
-### @kodax/skills - Skills System
+### `@kodax-ai/kodax/skills` — Skills System
 
-Agent Skills standard implementation with zero external dependencies:
+Zero external dependencies. Markdown-based skill files with natural-language triggers and variable resolution.
 
 ```typescript
 import {
   SkillRegistry,
   discoverSkills,
   executeSkill,
-  type SkillContext
-} from '@kodax/skills';
+  type SkillContext,
+} from '@kodax-ai/kodax/skills';
 
-// Discover skills from paths
 const skills = await discoverSkills(['/path/to/skills']);
-
-// Initialize registry
-const registry = getSkillRegistry();
+const registry = new SkillRegistry();
 await registry.registerSkills(skills);
 
-// Execute a skill
-const context: SkillContext = {
+const result = await executeSkill({
   skillId: 'code-review',
   arguments: { target: 'src/' },
-  workingDirectory: process.cwd()
-};
-
-const result = await executeSkill(context);
+  workingDirectory: process.cwd(),
+});
 ```
 
-**Key Features**:
-- Zero external dependencies
-- Markdown-based skill files
-- Natural language triggering
-- Variable resolution
-- Built-in skills included
+**Key Features**: zero deps · markdown-based skill files · natural-language triggering · variable resolution · built-in skills included.
 
-### @kodax/coding - Coding Agent
+### `@kodax-ai/kodax/coding` — Coding Agent
 
-Complete coding agent with tools and prompts:
+Complete coding agent: 30+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + role prompts (Worker / Evaluator) + agent loop + auto-continue + session management.
 
 ```typescript
-import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax/coding';
+import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
 
-// Use runKodaX for single tasks
+// Single-task helper
 const result = await runKodaX({
   provider: 'zhipu-coding',
   reasoningMode: 'auto',
-  events: {
-    onTextDelta: (text) => process.stdout.write(text)
-  }
+  events: { onTextDelta: (text) => process.stdout.write(text) },
 }, 'Read package.json and explain the dependencies');
 
-// Or use KodaXClient for continuous sessions
+// Continuous session
 const client = new KodaXClient({
   provider: 'anthropic',
   reasoningMode: 'auto',
-  events: { ... }
+  events: { /* … */ },
 });
-
 await client.send('Create a new file');
 await client.send('Add a function to it'); // Has context from previous message
 ```
 
-**Key Features**:
-- 30+ built-in tools across file ops, shell, search, repo intelligence, MCP, worktree, and agent control (see the [Tools](#tools) section)
-- System prompts for coding tasks
-- Agent loop implementation
-- Session management
-- Auto-continue mode
+**Key Features**: 30+ built-in tools (see [Tools](#tools)) · Worker+Evaluator V2 chain (FEATURE_114, v0.7.36 default) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · auto-continue · session lineage.
 
-### @kodax/repl - Interactive Terminal UI
+### `@kodax-ai/kodax/repl` — Interactive Terminal UI
 
-Complete interactive REPL with Ink/React components:
+Ink/React-based interactive REPL. Permission modes, command system, themed streaming display.
 
 ```typescript
-// Usually used as CLI, but can be integrated
-import { InkREPL } from '@kodax/repl';
+import { InkREPL } from '@kodax-ai/kodax/repl';
 
-// The REPL package provides:
-// - Interactive terminal UI
-// - Permission control (4 modes)
-// - Command system (/help, /mode, etc.)
+// Usually used via the `kodax` bin command; can be embedded:
+// - Interactive terminal UI (Ink components)
+// - Permission control (auto/plan/accept-edits modes)
+// - Command system (/help, /mode, /clear, /status, …)
 // - Skills integration
 // - Theme support
 ```
 
-**Key Features**:
-- Ink-based React components
-- 3 permission modes
-- Built-in commands
-- Real-time streaming display
-- Context usage indicator
+**Key Features**: Ink-based React components · 3 permission modes (auto / plan / accept-edits) · built-in commands · real-time streaming display · context-usage indicator.
 
-### Package Dependency Graph
+### Package Dependency Graph (workspace internal)
 
 ```
-@kodax/ai (零业务依赖)
+@kodax-ai/llm    (zero business-logic deps)
     ↓
-@kodax/agent (依赖 @kodax/ai)
+@kodax-ai/agent  (depends @kodax-ai/llm; ADR-021 standalone-consumable)
     ↓
-@kodax/skills (零外部依赖)  →  @kodax/coding (依赖 ai, agent, skills)
-                                        ↓
-                                  @kodax/repl (依赖 coding, ink, react)
+@kodax-ai/skills (zero external deps)  →  @kodax-ai/coding  (depends llm + agent + skills)
+                                                    ↓
+                                              @kodax-ai/repl (depends coding + ink + react)
 ```
 
-**Import Recommendations**:
+**Subpath Recommendations**:
 
-| Use Case | Package | Why |
+| Use Case | Subpath | Why |
 |----------|---------|-----|
-| Only need LLM abstraction | `@kodax/ai` | Minimal dependencies |
-| Building custom agent | `@kodax/agent` | Session + messages + tokenization |
-| Using skills system | `@kodax/skills` | Zero deps, pure skills |
-| Coding tasks | `@kodax/coding` | Complete coding agent |
-| Terminal app | `@kodax/repl` | Full interactive experience |
+| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 12 providers |
+| Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + sessions |
+| Using skills system | `@kodax-ai/kodax/skills` | Zero deps, pure skills |
+| Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
+| Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
 
 ---
 
@@ -1026,10 +1013,12 @@ KodaX ships 30+ built-in tools, grouped below. They are registered as a single f
 ### Agent control & UX
 | Tool | Description |
 |------|-------------|
-| `dispatch_child_task` | Spawn a sub-agent for an independent investigation/edit task |
+| `dispatch_child_task` | Spawn a sub-agent for an independent investigation/edit task. Optional `model_hint: 'fast' \| 'balanced' \| 'deep'` (advisory; routing no-op until FEATURE_102 v0.7.45). |
+| `send_message` | Append an instruction to an in-flight child's queue — surfaces as `<coordinator-instruction>` at the child's next turn boundary. Coordinator-only. (FEATURE_120, v0.7.39) |
+| `task_stop` | Request graceful exit of a specific child. Current tool finishes atomically, then the child sees a `<coordinator-stop-request>` and emits a final summary. Coordinator-only. (FEATURE_120, v0.7.39) |
 | `ask_user_question` | Single/multi-select or free-text prompt back to the user |
 | `exit_plan_mode` | Present a finalized plan for approval (REPL only) |
-| `emit_managed_protocol` | Internal scout/planner/handoff/verdict side-channel |
+| `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (handoff / verdict). V2 chain (Worker→Evaluator) is the default since v0.7.36 (FEATURE_114). |
 
 ---
 
