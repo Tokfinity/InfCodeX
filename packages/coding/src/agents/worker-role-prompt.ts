@@ -85,6 +85,33 @@ export function buildWorkerInstructions(
     '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
     '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
+    '- MODEL HINT (optional, FEATURE_120 v0.7.39): you may set `model_hint` on a dispatch to advertise the child\'s reasoning weight class. `"fast"` for trivial single-file lookups; `"deep"` for multi-file research or analytical synthesis; `"balanced"` (or omit) for everything else. Routing is a no-op today — every child runs on your model — but the hint is recorded for FEATURE_102 (v0.7.45). Mark intentionally; do not blanket-tag every child.',
+  ].join('\n');
+
+  // FEATURE_120 v0.7.39 — Worker can steer in-flight children via
+  // `send_message` (push instructions) and `task_stop` (graceful
+  // abort). Both are coordinator-only (children are filtered out
+  // via CHILD_EXCLUDE_TOOLS_BASE). The protocol section teaches
+  // when to reach for each tool and the anti-patterns that prompt
+  // eval will guard against.
+  const childSteeringRules = [
+    'ASYNC CHILD STEERING (FEATURE_120 v0.7.39 — `send_message` + `task_stop`):',
+    'After `dispatch_child_task` launches a child, you may steer it while it runs:',
+    '- `send_message(to=task_id, content="…")` — append an instruction to the child\'s queue. The child sees it as a `<coordinator-instruction>` block at its next LLM turn boundary. Use SPARINGLY: a child that needed more context is a planning failure — the typical pattern is 0-1 send_message calls per child.',
+    '- `task_stop(task_id, reason="…")` — request the child to exit gracefully. Its currently-executing tool finishes atomically (no hard kill of a 90s `npm test` mid-run); the child then sees a `<coordinator-stop-request>` reminder and emits a final summary.',
+    '',
+    'WHEN TO `send_message`:',
+    '- The user added a follow-up requirement mid-task that materially affects an in-flight child (e.g., "also check the auth module" while a security-audit child is running).',
+    '- You realized the child needs a constraint you forgot to set (e.g., "ignore vendored libraries under `third_party/`").',
+    '- DO NOT use it to chat with the child or to ask follow-up questions — the child has no idle wait for your reply; the next message just lands in its queue at the next drain.',
+    '',
+    'WHEN TO `task_stop`:',
+    '- The child went off-scope (e.g., started writing files when launched read-only, or wandered into unrelated modules).',
+    '- The user cancelled the parent task that justified this child.',
+    '- The child is pathologically slow with no progress signal AND a faster path exists.',
+    '- DO NOT task_stop a child just because it is slow but progressing — wait for it. Premature task_stop wastes the work already done.',
+    '',
+    'PROMPT-INVARIANT: both tools are no-ops in sync-mode dispatch (no childTaskRegistry / childAbortControllers). Async dispatch is the default; sync only fires when `KODAX_ASYNC_DISPATCH=0` is set. Calling either tool in sync mode returns `[Tool Error]`.',
   ].join('\n');
 
   const fanOutPlanGranularity = [
@@ -131,6 +158,7 @@ export function buildWorkerInstructions(
     scopeCommitment,
     mutationDiscipline,
     dispatchRules,
+    childSteeringRules,
     fanOutPlanGranularity,
     handoffRules,
   ]
