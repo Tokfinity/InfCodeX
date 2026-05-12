@@ -22,6 +22,8 @@ import {
 import type { KodaXToolExecutionContext, KodaXChildExecutionResult } from '../types.js';
 import type { ChildTaskRegistry } from '@kodax-ai/agent';
 
+import { CHILD_EXCLUDE_TOOLS_BASE } from '../child-executor.js';
+
 import { toolSendMessage } from './send-message.js';
 
 function makeCtx(
@@ -127,6 +129,15 @@ describe('toolSendMessage — input validation', () => {
     const result = await toolSendMessage({ to: 'child-a', content: '   ' }, ctx);
     expect(result).toMatch(/^\[Tool Error\]/);
     expect(getMessageQueue().size()).toBe(0);
+  });
+});
+
+describe('toolSendMessage — coordinator-only invariant', () => {
+  it('is listed in CHILD_EXCLUDE_TOOLS_BASE so child agents cannot call it', () => {
+    // Pin test: protects against a future rename / typo silently
+    // breaking the coordinator-only constraint. Children must not be
+    // able to steer their siblings.
+    expect(CHILD_EXCLUDE_TOOLS_BASE).toContain('send_message');
   });
 });
 
