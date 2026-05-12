@@ -40,7 +40,7 @@
 | `v0.7.36` | `6` (114/115/119 + 131 + 130 + 143 Skill UX Upgrade + prompt-overlay 错位修正) |
 | `v0.7.37` | `5` (116 + 141 + 146 v0.7.36 Behavioral Eval Follow-ups + 147 npm Publishing Pipeline + 148 Pattern B Multi-Turn Async Discipline) |
 | `v0.7.38` | `9` (149 Queued Prompt Injection Latency & Mid-Turn UX Parity + 117 redesigned as Mutation Context Injection + 151 TodoList Visibility & LLM Self-Seeding Parity + 152 Bash AST Migration + 153 LLM-backed Bash Prefix Extractor + 154 Universal --help Fast-Path + 155 Chat-While-Waiting [moved from v0.7.39] + 156 Idle-Wait Visual Continuity + 157 Windows / macOS Case-Insensitive Workspace Match) |
-| `v0.7.39` | `1` (120; FEATURE_155 moved to v0.7.38) |
+| `v0.7.39` | `1` (120; FEATURE_155 moved to v0.7.38) + ADR-024 (npm 包正名 `@kodax-ai/kodax-cli` → `@kodax-ai/kodax` + 5 SDK subpath exports) |
 | `~~v0.7.39 (legacy slot for FEATURE_096)~~` | `1` |
 | `v0.7.40` | `2` (121 + 134) |
 | `v0.7.41` | `1` (125 KodaX Team Mode — re-scoped from v0.8.10) |
