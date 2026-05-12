@@ -282,74 +282,81 @@ export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
 }
 
 // ---------------------------------------------------------------------------
-// Judges — deterministic, zero-LLM. Tool-call binding is not exposed
-// through `runOneShot.text` (only `toolCalls`), so we look for the tool
-// name as a literal substring AND the target task_id as a literal
-// substring in the model's output text. The model may surface the call
-// as a JSON block / tool_use markdown / fenced code / inline mention —
-// the regex pattern is permissive enough to catch all four shapes.
+// Judges — deterministic, zero-LLM, MULTI-SYNTAX tolerant.
 //
-// Mirrors the sibling FEATURE_151 dataset judge style (regex on text
-// output), not toolCalls inspection — that keeps the eval portable
-// across providers that don't all surface tool calls via the same
-// streaming shape.
+// **First-pass regex (`/tool_name\s*\(/i`) had a 14% false-negative rate**
+// (7/50 runs, all FN) against the v0.7.39 production aliases:
+//   - zhipu/glm51 emits `<task_stop>(args)`, `<task_stop>...</task_stop>`,
+//     `<tool_call[]>{"name":"task_stop", ...}</tool_call[]>`, etc.
+//   - ark/glm51 sometimes emits `<tool_call>{"name":"task_stop", "arguments":{...}}</tool_call>`
+//     (JSON-in-XML, no fn-call parens after the name)
+//   - the original `tool_name\s*\(` requires the name to be IMMEDIATELY
+//     followed by `(`, which misses every JSON-payload / XML-tag form.
+//
+// This breached the EVAL_GUIDELINES anti-pattern 7 threshold (≥10%
+// regex-vs-LLM-judge disagreement = eval data invalid). Fix: tool-name
+// detection is now multi-syntax — accepts any of:
+//
+//   1. `tool_name(args)`           — function-call form
+//   2. `"name": "tool_name"`       — JSON tool_call payload (any quoting)
+//   3. `<tool_name>` / `<tool_name ` — XML element form (zhipu style)
+//   4. `name: tool_name` / `name=tool_name` — keyword form
+//
+// Task-id detection uses literal substring (was `\b…\b` — but JS regex
+// treats `_` as a word char so `\btask_001\b` would not anchor cleanly
+// at underscore boundaries; literal `includes` is the simpler primitive
+// and matches how the model actually surfaces the id).
+//
+// Per EVAL_GUIDELINES anti-pattern 7 §3: every regex-fail cell still
+// gets an offline LLM-judge audit (raw dump preserves text + toolCalls).
+// The multi-syntax regex closes the bulk of the FN gap; LLM-judge
+// audit-of-the-audit catches any residual edge case.
 // ---------------------------------------------------------------------------
 
-function buildSendMessageJudges(taskId: string): readonly PromptJudge[] {
-  const toolPattern = /send_message\s*\(/i;
-  const taskIdPattern = new RegExp(`\\b${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
+function buildToolNamePatterns(toolName: string): readonly RegExp[] {
+  const esc = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return [
-    {
-      name: 'mentions_send_message_tool',
-      category: 'correctness',
-      judge: (out) => {
-        return toolPattern.test(out)
-          ? { passed: true }
-          : { passed: false, reason: 'output does not call `send_message`' };
-      },
-    },
-    {
-      name: `mentions_target_task_id_${taskId}`,
-      category: 'correctness',
-      judge: (out) => {
-        return taskIdPattern.test(out)
-          ? { passed: true }
-          : { passed: false, reason: `output does not reference target task id ${taskId}` };
-      },
-    },
+    new RegExp(`\\b${esc}\\s*\\(`, 'i'),                              // tool_name(
+    new RegExp(`["'\`]name["'\`]\\s*:\\s*["'\`]${esc}["'\`]`, 'i'),   // "name":"tool_name"
+    new RegExp(`<${esc}\\b`, 'i'),                                    // <tool_name>
+    new RegExp(`\\bname\\s*[:=]\\s*${esc}\\b`, 'i'),                  // name: tool_name
   ];
 }
 
-function buildTaskStopJudges(taskId: string): readonly PromptJudge[] {
-  const toolPattern = /task_stop\s*\(/i;
-  const taskIdPattern = new RegExp(`\\b${taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-  return [
-    {
-      name: 'mentions_task_stop_tool',
-      category: 'correctness',
-      judge: (out) => {
-        return toolPattern.test(out)
-          ? { passed: true }
-          : { passed: false, reason: 'output does not call `task_stop`' };
-      },
+function buildToolNameJudge(toolName: string): PromptJudge {
+  const patterns = buildToolNamePatterns(toolName);
+  return {
+    name: `mentions_${toolName}_tool`,
+    category: 'correctness',
+    judge: (out) => {
+      const matched = patterns.some((p) => p.test(out));
+      return matched
+        ? { passed: true }
+        : {
+            passed: false,
+            reason: `output does not invoke \`${toolName}\` (checked fn-call / JSON / XML / kw syntax)`,
+          };
     },
-    {
-      name: `mentions_target_task_id_${taskId}`,
-      category: 'correctness',
-      judge: (out) => {
-        return taskIdPattern.test(out)
-          ? { passed: true }
-          : { passed: false, reason: `output does not reference target task id ${taskId}` };
-      },
+  };
+}
+
+function buildTaskIdJudge(taskId: string): PromptJudge {
+  return {
+    name: `mentions_target_task_id_${taskId}`,
+    category: 'correctness',
+    judge: (out) => {
+      return out.includes(taskId)
+        ? { passed: true }
+        : { passed: false, reason: `output does not reference target task id ${taskId}` };
     },
-  ];
+  };
 }
 
 export function buildJudges(caseId: CaseId): readonly PromptJudge[] {
   switch (caseId) {
     case 'send_message_trigger':
-      return buildSendMessageJudges('task_001');
+      return [buildToolNameJudge('send_message'), buildTaskIdJudge('task_001')];
     case 'task_stop_trigger':
-      return buildTaskStopJudges('task_002');
+      return [buildToolNameJudge('task_stop'), buildTaskIdJudge('task_002')];
   }
 }

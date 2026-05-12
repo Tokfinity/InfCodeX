@@ -172,6 +172,26 @@ OK = process exit 0 是个**极其弱的信号**：
 1. **Negative-case judges 不能只用 regex**。要么改成"绝对结构断言"（例如：第一个 tool_call 的 name ≠ X — 需 harness 暴露 toolCalls），要么必须 pair LLM-judge 兜底。
 2. **所有 eval run 必须落盘 raw output**（见下节 §Raw output preservation）。每跑必 dump，不 dump 等于把数据丢了。
 3. **跑完后强制抽查**：每个 cell 至少抽 1 条 regex-fail 用 LLM-judge（干净 context）独立判一次，对比 regex；如果 disagreement >10%，整个 eval 数据作废重跑。Positive case 也建议抽 1 条 regex-pass 防止假阳性。
+4. **Positive-case 工具调用判定不能用 `tool_name\s*\(` 单一 syntax**。生产 panel 里 zhipu/glm51 等模型实测会用 `<tool_name>(args)` / `<tool_name>...</tool_name>` / `<tool_call>{"name":"tool_name", ...}</tool_call>` 等多种 syntax；要求 `name` 后紧跟 `(` 的 regex 会把 syntax 漂移误判成 FN。规则：tool-name detection 至少覆盖 4 种 syntax —— `tool_name(`、`"name":"tool_name"`、`<tool_name>`、`name=tool_name`/`name: tool_name`。参考实现见 `benchmark/datasets/feature-120-child-steering/cases.ts` `buildToolNamePatterns`。
+5. **真实案例 2026-05-12 (FEATURE_120 Phase 5b)**：第一版 `task_stop\s*\(` regex 让 zhipu/glm51 在 task_stop 触发 case 上误判 0/5；rejudge 后实际 5/5（regex 全部 false negative，zhipu 输出形式如 `<task_stop>(...)`、`<tool_call[]>{"name":"task_stop"...}</tool_call[]>`、XML 嵌套 + YAML 内嵌等）。整体 50 个 run disagreement 14%，超 §3 的 10% 阈值。是 FEATURE_151 Slice I 反模式 7 教训之后的第二次同类事故。
+
+### Judge 模型选择约束（2026-05-12 补充）
+
+**禁止用 anthropic claude / openai gpt 等"外来 strong model"做内部 eval 的 LLM-judge**：
+
+- KodaX 的生产 panel 主体是中国 coding plan 模型（zhipu, kimi, deepseek, minimax, mimo, ark, qwen），eval 决策的实际生产分布对齐它们；用 claude-sonnet/opus 当 judge 会把外来 model 的 "强语义理解 + 严格 instruction following" 偏置带进判定，掩盖 panel-internal 同质化失败模式。
+- 实操是 anthropic 当 judge 会 **过于宽容**（看懂 zhipu 的怪 syntax 也判 PASS），反而和 enhanced regex 出现不必要的 disagreement；或者 **过于严格**（要求 syntax 标准）让 enhanced regex 看起来 over-permissive。两种偏置都让 ship 决策失真。
+
+**允许的 judge 来源**（按优先级）：
+
+1. **Self-judge by the orchestrating Claude session**（主线程的 Claude 模型读 raw dump 直接判定）。零额外 API 调用、可解释、独立于 panel。**前提**：判定文本 + 理由必须落盘 audit JSON，不能只是 in-conversation 结论。适合 ≤50 cells / 一次性 sanity check。
+2. **Panel-internal multi-judge majority vote** —— 用 KodaX 生产 panel 的 3 家（推荐：`zhipu/glm51` + `ds/v4pro` + `kimi-code`，覆盖 3 个独立 family）独立判定，2/3 majority 算 PASS。适合 ship-gate 复核 / 跨版本可重复。
+3. 自定义同源模型（按 case 设计），但**永远不要用 anthropic/openai**。
+
+**反模式**：
+- ❌ "用 claude-sonnet 当 judge 因为它最强" —— 强不等于对齐 panel 分布。
+- ❌ 单一 judge model —— 单一 judge 自身可能有同类 bias（例如 zhipu 当 judge 时对其它 zhipu-family 输出过松）。majority vote 是必要的去 bias 步骤。
+- ❌ Judge 跑完不落盘 —— 和反模式 7 §2 一样，judge 输出本身也是 source of truth，必须 dump。
 
 ---
 
