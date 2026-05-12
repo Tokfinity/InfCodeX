@@ -42,6 +42,7 @@ import { toolMcpReadResource } from './mcp-read-resource.js';
 import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
+import { toolSendMessage } from './send-message.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
 import { toolTodoUpdate } from './todo-update.js';
@@ -477,6 +478,35 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   // `runManagedTaskViaRunnerInner` resumes any agent that exits
   // text-only with pending children when a `<task-completed>`
   // notification lands on the message queue.
+  {
+    name: 'send_message',
+    description:
+      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — DO NOT spam (typical pattern: 0-1 send_message per child). Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description:
+            'Target child task_id (must match an id returned by a prior dispatch_child_task call). Completed children are auto-cleaned and become invalid targets. Broadcast (to: "*") is not yet supported.',
+        },
+        content: {
+          type: 'string',
+          description:
+            'Instruction text to append to the child queue. Will be wrapped in a <coordinator-instruction>…</coordinator-instruction> block in the child\'s next user message.',
+        },
+      },
+      required: ['to', 'content'],
+    },
+    handler: toolSendMessage,
+    toClassifierInput: (input) => {
+      const i = input as { to?: string; content?: string };
+      const target = typeof i?.to === 'string' ? i.to : '<no-to>';
+      const body =
+        typeof i?.content === 'string' ? i.content.slice(0, 120) : '<no-content>';
+      return `SendMessage(${target}): ${body}`;
+    },
+  },
   {
     name: 'web_search',
     description: 'Search the web for discovery-oriented results with explicit trust and freshness signaling.',

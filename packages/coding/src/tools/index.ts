@@ -74,6 +74,7 @@ export { toolMcpCall } from './mcp-call.js';
 export { toolMcpReadResource } from './mcp-read-resource.js';
 export { toolMcpGetPrompt } from './mcp-get-prompt.js';
 export { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
+export { toolSendMessage } from './send-message.js';
 export {
   CONSTRUCTION_TOOL_NAMES,
   isConstructionToolName,
