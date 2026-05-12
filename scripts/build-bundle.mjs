@@ -187,9 +187,20 @@ const commonOptions = {
   // By statically replacing process.env.DEV → "false" the entire if-branch
   // is dead-code-eliminated and react-devtools-core never enters the bundle.
   // (Production `kodax` always has DEV unset; dev mode runs via tsx not bundle.)
+  //
+  // KODAX_VERSION: bake the root package.json version into the bundle so
+  // `getVersion()` in packages/repl/src/common/utils.ts hits the env-var
+  // branch and never reaches the brittle filesystem lookup (which assumes
+  // `../../package.json` from `import.meta.url`, true only for the dev
+  // tsx path — after esbuild + npm install the bundle lives at
+  // node_modules/@kodax-ai/kodax/dist/ and `../../` resolves to the
+  // @kodax-ai/ scope dir, NOT the package root, so the lookup falls back
+  // to '0.0.0' in the banner). Same mechanism Bun --compile uses for the
+  // standalone binary build (see packages/repl/src/common/utils.ts:265).
   define: {
     'process.env.DEV': '"false"',
     'process.env.NODE_ENV': '"production"',
+    'process.env.KODAX_VERSION': JSON.stringify(rootPkg.version),
   },
   // Output ESM with .js extensions in source — keep the import structure
   // that already works in dev (--import tsx).
