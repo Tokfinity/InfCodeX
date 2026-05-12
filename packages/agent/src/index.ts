@@ -358,7 +358,11 @@ export {
 // in `@kodax-ai/coding` and consume these as generics.
 export type {
   ChildTaskRegistry,
+  FanOutOutcome,
+  FanOutProgressEvent,
   IdleYieldSnapshot,
+  RunFanOutOptions,
+  RunFanOutResult,
   RunWithIdleYieldOptions,
   RunWithIdleYieldRunResult,
   WaitForWakeEventOptions,
@@ -371,6 +375,7 @@ export {
   detectIdleYield,
   isIdleYieldEnabled,
   registerChildTask,
+  runFanOut,
   runWithIdleYield,
   waitForWakeEvent,
 } from './orchestration/index.js';
