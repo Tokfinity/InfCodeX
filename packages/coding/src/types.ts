@@ -64,6 +64,7 @@ import type {
   KodaXSessionUiHistoryItemType,
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
+  ChildTaskRegistry,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -1434,9 +1435,15 @@ export interface KodaXToolExecutionContext {
    * (await inline, return finding text). The registry is populated by
    * `runner-driven.ts` per turn so each agent run has its own registry
    * scope.
+   *
+   * **v0.7.39 FEATURE_120 Step 0**: the type alias is now imported from
+   * `@kodax-ai/agent`'s orchestration layer (`ChildTaskRegistry<T>`).
+   * Structure-compatible with the previous `Map<string, Promise<…>>`
+   * inline shape — the rename is a packaging-only change per ADR-021.
+   * Coding-flavor consumers should keep using
+   * `registerChildTask(registry, id, promise)` (also from
+   * `@kodax-ai/agent`) to get the FEATURE_155 Bug A cleanup chain
+   * built-in.
    */
-  childTaskRegistry?: Map<
-    string,
-    Promise<KodaXChildExecutionResult>
-  >;
+  childTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
 }
