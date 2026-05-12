@@ -75,3 +75,37 @@ describe('replBashPathSignalCollector — empty / invalid input', () => {
     expect(signals).toEqual([]);
   });
 });
+
+// ============== FEATURE_158 Step 9 — Issue 131 (Windows-flag) pipeline regression ==============
+
+describe('FEATURE_158 Step 9 — Windows-flag false-positive pipeline regression (Issue 131)', () => {
+  it.runIf(process.platform === 'win32')(
+    'findstr /R argv does NOT trigger protected_path or outside_project signal',
+    () => {
+      // Headline regression: the entire reason FEATURE_158 fixes Issue 131
+      // is that `/R` was being misclassified as a POSIX absolute path.
+      // Post-fix the repl-side collector must produce no false signals.
+      const signals = replBashPathSignalCollector.collect(
+        bash('findstr /R needle file.txt'),
+        process.cwd(),
+      );
+      expect(signals.some((s) => s.kind === 'protected_path')).toBe(false);
+      expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
+      expect(signals.some((s) => s.kind === 'shell_redirect_outside')).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === 'win32').each([
+    ['dir /B'],
+    ['xcopy src dst /Y'],
+    ['where /R . node.exe'],
+    ['fc /B a.bin b.bin'],
+    ['robocopy src dst /MIR'],
+    ['findstr /A:H pattern file'],
+  ])('Windows-flag command "%s" produces no false signals', (cmd) => {
+    const signals = replBashPathSignalCollector.collect(bash(cmd), process.cwd());
+    expect(signals.some((s) => s.kind === 'protected_path')).toBe(false);
+    expect(signals.some((s) => s.kind === 'outside_project')).toBe(false);
+    expect(signals.some((s) => s.kind === 'shell_redirect_outside')).toBe(false);
+  });
+});

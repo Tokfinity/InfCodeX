@@ -844,3 +844,86 @@ describe('AutoModeToolGuardrail — speculative classify (FEATURE_158)', () => {
     expect(askUserCalled).toBe(false); // window disabled, no escalation
   });
 });
+
+// ============== FEATURE_158 Step 9 — release-gate regression suites ==============
+//
+// These tests pin the three parity claims from ADR-025 Consequences:
+//   1. Subagent Tier 0: SharedState propagation means a malicious subagent
+//      can't bypass Tier 0 by spawning another guardrail.
+//   2. Engine downgrade fallback: the design promise that "when classifier
+//      is unreliable, original REPL rules re-engage" lives in TWO places —
+//      the guardrail's escalateOrAsk path (proven below) AND the REPL's
+//      autoModeEngine ref-driven beforeToolExecute (covered structurally
+//      by the cutover in commit 8 — InkREPL integration tests would need
+//      a full React mount harness and are deferred to Step 9 manual QA).
+//   3. Windows-flag command pipeline: the headline Issue 131 (Issue 130
+//      claimed by parallel-thread) bug — flow through the new pipeline
+//      must NOT produce a protected_path signal that escalates.
+
+describe('FEATURE_158 Step 9 — subagent SharedState + Tier 0 propagation', () => {
+  it('Tier 0 fires in BOTH parent and subagent when state is shared', async () => {
+    const sharedState = {
+      engine: 'llm' as const,
+      denials: { consecutive: 0, cumulative: 0 },
+      breaker: { errorTimestamps: [] as readonly number[] },
+    };
+    const parent = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
+    const child = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
+    const parentVerdict = await parent.beforeTool!(callBash('rm -rf /'), ctx());
+    const childVerdict = await child.beforeTool!(callBash('rm -rf /'), ctx());
+    expect(parentVerdict.action).toBe('block');
+    expect(childVerdict.action).toBe('block');
+  });
+
+  it('subagent Tier 0 fires even when parent engine has downgraded', async () => {
+    const sharedState = {
+      engine: 'rules' as const, // already downgraded
+      denials: { consecutive: 3, cumulative: 3 },
+      breaker: { errorTimestamps: [] as readonly number[] },
+    };
+    const child = createAutoModeToolGuardrail({ ...baseConfig(''), sharedState });
+    // mkfs.ext4 /dev/sda1 → Tier 0 should still fire (mkfs_or_format pattern)
+    const verdict = await child.beforeTool!(callBash('mkfs.ext4 /dev/sda1'), ctx());
+    expect(verdict.action).toBe('block');
+    if (verdict.action === 'block') {
+      expect(verdict.reason).toMatch(/Disk format/i);
+    }
+  });
+});
+
+describe('FEATURE_158 Step 9 — engine downgrade re-engages escalate path', () => {
+  it('after denial threshold downgrades engine, classifier no longer consulted (askUser called instead)', async () => {
+    let classifierCalls = 0;
+    let askUserCalls = 0;
+    const provider = new StubProvider(async () => {
+      classifierCalls += 1;
+      return okResult('<block>yes</block><reason>x</reason>');
+    });
+    const askUser: AutoModeAskUser = async () => {
+      askUserCalls += 1;
+      return 'allow';
+    };
+    const g = createAutoModeToolGuardrail({
+      ...baseConfig(''),
+      resolveProvider: () => provider,
+      askUser,
+    });
+    // 3 consecutive blocks downgrade the engine
+    for (let i = 0; i < 3; i += 1) {
+      const v = await g.beforeTool!(callBash('git push --force origin main'), ctx());
+      expect(v.action).toBe('block');
+    }
+    expect(g.getEngineForTest()).toBe('rules');
+    const callsBefore = classifierCalls;
+    // Next call: classifier should NOT be consulted; askUser is called.
+    const v4 = await g.beforeTool!(callBash('ls'), ctx());
+    expect(classifierCalls).toBe(callsBefore); // no new classifier call
+    expect(askUserCalls).toBe(1);
+    expect(v4.action).toBe('allow');
+  });
+});
+
+// (Windows-flag command-pipeline regression tests live in
+//  packages/repl/src/permission/repl-bash-signals.test.ts where they can
+//  legitimately import the REPL-side collector + isBashReadCommand without
+//  crossing the @kodax/coding ↔ @kodax/repl layer boundary.)
