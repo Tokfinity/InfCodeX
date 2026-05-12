@@ -111,17 +111,17 @@ function rewriteRootPackageJson() {
 
   // 6. ADR-024: SDK subpath exports. Root '.' stays as authored. The 5
   //    subpaths point at the multi-entry bundle output from build-bundle.mjs.
-  //    No `types` condition for subpaths — root build does not emit
-  //    dist/sdk-*.d.ts, matching v0.7.38 baseline (root dist/index.d.ts is
-  //    also not actually shipped today; .d.ts generation is a separate
-  //    concern to address when SDK typing surfaces are stabilized).
+  //    `npm run build` emits dist/sdk-*.d.ts via `tsc --emitDeclarationOnly`
+  //    after the esbuild bundle, so each subpath ships a real types entry
+  //    alongside its .js (TypeScript consumers get proper types from
+  //    `import { Runner } from '@kodax-ai/kodax/agent'`).
   pkg.exports = {
     ...(pkg.exports || {}),
-    './agent': { import: './dist/sdk-agent.js' },
-    './llm': { import: './dist/sdk-llm.js' },
-    './coding': { import: './dist/sdk-coding.js' },
-    './repl': { import: './dist/sdk-repl.js' },
-    './skills': { import: './dist/sdk-skills.js' },
+    './agent': { types: './dist/sdk-agent.d.ts', import: './dist/sdk-agent.js' },
+    './llm': { types: './dist/sdk-llm.d.ts', import: './dist/sdk-llm.js' },
+    './coding': { types: './dist/sdk-coding.d.ts', import: './dist/sdk-coding.js' },
+    './repl': { types: './dist/sdk-repl.d.ts', import: './dist/sdk-repl.js' },
+    './skills': { types: './dist/sdk-skills.d.ts', import: './dist/sdk-skills.js' },
     './package.json': './package.json',
   };
 
@@ -155,13 +155,16 @@ function main() {
   log(`Mode: ${isDryRun ? 'DRY RUN' : 'REAL PUBLISH (irreversible)'}`);
   log('');
 
-  // Step 1 + 2: build sub-packages and bundle.
+  // Step 1: build sub-packages, esbuild bundle, and root .d.ts.
+  // `npm run build` is the single safe entry — it chains
+  // build:packages → build:bundle → `tsc --emitDeclarationOnly`. The
+  // trailing tsc step adds dist/*.d.ts WITHOUT touching dist/*.js
+  // (--emitDeclarationOnly is the critical guard — plain `tsc` would
+  // overwrite the esbuild bundle with unbundled tsc output and ship
+  // a broken tarball).
   if (!skipBuild) {
-    log('-- npm run build:packages (compile sub-packages dist/)');
-    runCmd('npm', ['run', 'build:packages']);
-
-    log('-- npm run build:bundle (esbuild bundle)');
-    runCmd('npm', ['run', 'build:bundle']);
+    log('-- npm run build (packages + esbuild bundle + .d.ts)');
+    runCmd('npm', ['run', 'build']);
   } else {
     log('-- --skip-build: assuming dist/ is already current');
   }

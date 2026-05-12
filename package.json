@@ -19,7 +19,7 @@
     }
   },
   "scripts": {
-    "build": "npm run build:packages && tsc",
+    "build": "npm run build:packages && npm run build:bundle && tsc --emitDeclarationOnly",
     "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/skills",
     "build:bundle": "node scripts/build-bundle.mjs",
     "dev": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
