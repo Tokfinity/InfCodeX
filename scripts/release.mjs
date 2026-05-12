@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// FEATURE_150 (v0.7.37) — single-bundle npm release for @kodax-ai/kodax-cli.
+// FEATURE_150 (v0.7.37) — single-bundle npm release for @kodax-ai/kodax.
 //
 // Replaces:
 //   - scripts/release-npm.mjs        (multi-package publish — deleted)
@@ -18,8 +18,9 @@
 //   1. Verify git is clean (no uncommitted changes).
 //   2. Build sub-package dist/ via `npm run build:packages` (esbuild needs them).
 //   3. Build root bundle via `npm run build:bundle`.
-//   4. Rewrite root package.json: name → @kodax-ai/kodax-cli, drop private,
-//      add publishConfig, normalize bin paths. Capture pristine bytes for restore.
+//   4. Rewrite root package.json: name → @kodax-ai/kodax, drop private,
+//      add publishConfig, normalize bin paths, inject SDK subpath exports
+//      (ADR-024). Capture pristine bytes for restore.
 //   5. Run `npm publish` (or --dry-run).
 //   6. Restore pristine package.json bytes (try/finally guarantees this).
 //
@@ -80,7 +81,7 @@ function rewriteRootPackageJson() {
   const pkg = JSON.parse(rawBytes);
 
   // 1. Switch publish identity: monorepo internal name "kodax" → public scope
-  pkg.name = '@kodax-ai/kodax-cli';
+  pkg.name = '@kodax-ai/kodax';
 
   // 2. Remove private flag (npm refuses to publish private packages)
   delete pkg.private;
@@ -107,6 +108,22 @@ function rewriteRootPackageJson() {
   if (!Array.isArray(pkg.files) || pkg.files.length === 0) {
     throw new Error('root package.json#files is missing or empty — refuse to publish (would tarball the whole monorepo)');
   }
+
+  // 6. ADR-024: SDK subpath exports. Root '.' stays as authored. The 5
+  //    subpaths point at the multi-entry bundle output from build-bundle.mjs.
+  //    No `types` condition for subpaths — root build does not emit
+  //    dist/sdk-*.d.ts, matching v0.7.38 baseline (root dist/index.d.ts is
+  //    also not actually shipped today; .d.ts generation is a separate
+  //    concern to address when SDK typing surfaces are stabilized).
+  pkg.exports = {
+    ...(pkg.exports || {}),
+    './agent': { import: './dist/sdk-agent.js' },
+    './llm': { import: './dist/sdk-llm.js' },
+    './coding': { import: './dist/sdk-coding.js' },
+    './repl': { import: './dist/sdk-repl.js' },
+    './skills': { import: './dist/sdk-skills.js' },
+    './package.json': './package.json',
+  };
 
   writeFileSync(rootPkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
   return rawBytes; // for restore
@@ -150,7 +167,7 @@ function main() {
   }
 
   // Step 3: rewrite root package.json
-  log('-- rewriting root package.json (name → @kodax-ai/kodax-cli, drop private, normalize bin)');
+  log('-- rewriting root package.json (name → @kodax-ai/kodax, drop private, normalize bin, inject subpath exports)');
   const pristineBytes = rewriteRootPackageJson();
 
   // Step 4: publish, then restore (try/finally guarantees restore)
@@ -172,8 +189,8 @@ function main() {
   if (isDryRun) {
     log('Dry run complete. Nothing was actually published.');
   } else {
-    log(`Published @kodax-ai/kodax-cli@${version}.`);
-    log(`Verify: npm view @kodax-ai/kodax-cli@${version} version --registry=https://registry.npmjs.org/`);
+    log(`Published @kodax-ai/kodax@${version}.`);
+    log(`Verify: npm view @kodax-ai/kodax@${version} version --registry=https://registry.npmjs.org/`);
     log('(Registry propagation can take 30-120s.)');
   }
 }
