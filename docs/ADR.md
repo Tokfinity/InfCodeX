@@ -723,3 +723,201 @@ ADR-022 Addendum（"v0.7.39 改名 kodax-cli"）被 ADR-024 取代；保留为�
 
 ---
 
+## ADR-025: auto[llm] 信号化分类器 — 决策层级倒置 + Windows-flag 误判结构性修复 (FEATURE_158, v0.7.39)
+
+**Status**: Accepted (2026-05-12)
+
+**TL;DR**：把 `auto` 模式的 REPL 同步硬规则（[`InkREPL.tsx`](../packages/repl/src/ui/InkREPL.tsx) Step 2.5 dangerous-bash + Step 3 protected-path）从**前置 veto** 改为**喂给 LLM 分类器的信号**；同时把 `~/.kodax/` 写、5 条 catastrophic 模式提升为 **Tier 0 绝对禁令**（LLM 不能 override）；引入 **speculative classify** 抹平延迟；保留 engine 降级到 'rules' 后**重新激活原硬规则路径**做兜底。结构性吃掉 [Issue 130](KNOWN_ISSUES.md#130) `looksLikePath` Windows-flag 误判（`findstr /R` / `dir /B` / `where /R` 等被当作 POSIX 绝对路径触发误确认）。对齐 CC `useCanUseTool` 单决策点 + `SAFE_YOLO_ALLOWLISTED_TOOLS` Tier 1 + `yoloClassifier` LLM-final 架构，但保留 KodaX 已有的 denial tracker / circuit breaker / engine 降级三件套。
+
+### 背景
+
+[FEATURE_092 (v0.7.33)](features/v0.7.33.md) 落地了 auto-mode LLM 分类器，但实际运行时 LLM **大概率不被调用**。链路：
+
+```
+REPL.beforeToolExecute (同步硬规则，先于 LLM)
+  ├─ Step 1   bash-read fast-path → ALLOW
+  ├─ Step 2.5 dangerous bash      → CONFIRM（veto）
+  ├─ Step 3   protected path      → CONFIRM（veto）
+  └─ Step 4   confirmTools (auto=空)
+              ↓ (上面都没拦才到这里)
+Runner.beforeTool → AutoModeToolGuardrail (LLM 分类器)
+```
+
+REPL 层规则一旦命中即 short-circuit，LLM **永远拿不到决策权**。实测：
+- 用户报告 `git tag --sort=-creatordate | findstr /R "v[0-9]"` 在 auto 模式被误判为 Protected path。
+- 根因：[`looksLikePath` (permission.ts:608)](../packages/repl/src/permission/permission.ts#L608) 把 Windows 风格 `/R` flag 当 POSIX 绝对路径 → `path.resolve('/R')` 解析为 `C:\R` → 不在 project / temp → 触发 `isAlwaysConfirmPath`。
+- LLM 看到完整命令本可秒判"纯只读 piped 命令"，但 LLM 没被调用。
+
+对照 Claude Code [`useCanUseTool.tsx`](../../claudecode/src/hooks/useCanUseTool.tsx) + [`classifierDecision.ts:SAFE_YOLO_ALLOWLISTED_TOOLS`](../../claudecode/src/utils/permissions/classifierDecision.ts) + [`yoloClassifier.ts`](../../claudecode/src/utils/permissions/yoloClassifier.ts)：CC 在 auto 模式下**只有一个决策点** `hasPermissionsToUseTool`；CC 的 `dangerousPatterns.ts` / `pathValidation.ts` 是**分类器 prompt 的输入信号**，不是分类器之前的硬否决。这就是 CC auto 模式"无打断"体感的结构性来源。
+
+KodaX 的差距不在 LLM 模型能力，而在**决策架构**。
+
+### 决策
+
+`auto` 模式下，权限决策采用三层金字塔（plan / accept-edits 模式**不变**）：
+
+```
+┌─ Tier 1 (零成本直通，REPL 层)          ──────────────────────┐
+│   • bash-read 白名单 + `--help` fast-path                    │
+│   • Read/Grep/Glob/Todo/Task 等 projection==='' 工具         │
+│   不调 LLM、不计费、不打断                                    │
+└──────────────────────────────────────────────────────────────┘
+                          ↓ (未命中)
+┌─ Tier 0 (绝对禁令，Runner 层 LLM 之前)  ─────────────────────┐
+│   硬编码 catastrophic patterns:                              │
+│     1. rm -rf / 或 ~                                         │
+│     2. mkfs.* / fdisk / format C:                            │
+│     3. dd if=... of=/dev/sd*                                 │
+│     4. :(){ :|:& };: (fork bomb)                             │
+│     5. 写入 `~/.kodax/`（credentials 红线，例外见下）        │
+│   直接 BLOCK，LLM 不能 override                              │
+└──────────────────────────────────────────────────────────────┘
+                          ↓ (未命中)
+┌─ Tier 2 (LLM 综合裁决)                  ─────────────────────┐
+│   1. 同步收集信号 (signals[])：                              │
+│      • dangerous_pattern  (原 DEFAULT_DANGEROUS_PATTERNS)    │
+│      • protected_path     (.kodax/ / ~/.kodax/ / 外部)       │
+│      • outside_project    (路径在 project + temp 之外)       │
+│      • shell_redirect_outside / package_install / network    │
+│   2. classify(action, signals[], transcript, user_rules)     │
+│   3. allow / block / escalate                                │
+│   4. escalate 时 UI 用 signals 渲染 Scope / Risk 标签        │
+└──────────────────────────────────────────────────────────────┘
+                          ↓ (LLM 不可达 / engine='rules' 降级)
+┌─ Fallback (重新激活 REPL Step 2.5/3 原硬规则路径)            │
+│   denial 3/20 或 breaker 5/10m 后，行为等价今天的 auto       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Tier 0 `~/.kodax/` 写入例外**：仅 `kodax config set` / `kodax provider add` 等本进程自身管理的 IPC 写入路径不算（通过调用方 ID 而非命令字符串识别）。
+
+**speculative classify**：tool call 进入 Tier 2 时立即发起 classify，并发起 350ms 的"安静窗口"（用户已习惯 ~200ms 视觉延迟）。若分类器在窗口内返回 allow，直接放行不弹 confirm；否则正常 escalate 流程。对齐 CC [`bashPermissions.ts:peekSpeculativeClassifierCheck`](../../claudecode/src/tools/BashTool/bashPermissions.ts) 思路，但实现更窄（不引入 BashPermission 框架）。
+
+**Windows-flag 误判结构性修复**（吃掉 Issue 130 hotfix）：
+1. [`looksLikePath`](../packages/repl/src/permission/permission.ts) 在 `process.platform === 'win32'` 下识别 `/[A-Za-z]` / `/[A-Za-z]:` 形式为 cmd flag，不当路径。
+2. `BASH_SAFE_READ_COMMANDS` 加入 `git tag` / `git stash list` / `git config --get` / `git describe`（CC `DEFAULT_SAFE_PATTERNS` 平价）。
+3. 但**这两条本身就是 signals 输入路径的副产物**——结构性改完后，`looksLikePath` 即使再有边角误识别，LLM 看到 signal 也能正确决策；不再单点故障。
+
+### Reasoning
+
+1. **LLM 决策权回归**。FEATURE_092 设计目标是"LLM 综合判断"，现实是 30% 的 bash 命令 LLM 才能见到。决策层级倒置让 LLM 在 ≥95% 的非 Tier-1 命令上承担最终决策——这才是 FEATURE_092 当初的承诺。
+
+2. **威胁模型对齐**。KodaX 是**单用户本地 CLI**（不是 SaaS），信任边界在 user ↔ agent，不在 user ↔ KodaX。在这个模型下：
+   - 用户故意打 `rm -rf` 不需要系统保护他（Tier 0 只防"LLM 被 prompt 注入劫持"的灾难性场景）。
+   - LLM 看 transcript 综合判断比硬规则更准（用户上一句说"清掉 node_modules" → `rm -rf node_modules` 应该 allow，硬规则不区分上下文）。
+
+3. **平价保证**（重构不能削弱功能）。删除硬规则的退化风险通过三条防线兜住：
+   - Tier 0 守住灾难性场景（不可 override）
+   - LLM 看到所有原规则作为 signals，可主动 block
+   - engine 降级路径**重新激活**原 Step 2.5/3，等价今天的 auto-in-project 行为
+
+4. **不引入新旧代码并行**。Step 2.5/3 不加 feature flag、不保留 legacy code path、不做渐进 cutover。改完即生效，按 commit 粒度滚动；如需回退走 git revert。
+
+5. **速度对齐 CC**。speculative classify 同期落地，否则用户感知延迟反而比今天差（今天硬规则同步即裁决，<10ms；改完每条 bash 都过 LLM，2-8s）。
+
+### Consequences
+
+**变化（新行为）**：
+
+| 维度 | 现状 | 改后 |
+|---|---|---|
+| auto 模式下 LLM 调用率 | bash 命令 ~30% | bash 命令 ~95% (Tier 1 之外) |
+| `~/.kodax/` 写保护 | 软规则可被绕过 | Tier 0 硬禁，IPC 例外 |
+| Confirm 弹窗 Scope/Risk 标签 | 来自 REPL 层 `_alwaysConfirm` 等 marker | 来自 classifier 携带的 signals[] |
+| Engine 降级（denial 3/20 或 breaker 5/10m） | escalate 一切 | 重新激活 Step 2.5/3 全规则路径 |
+| `findstr /R` / `dir /B` / `where /R` 等 Windows flag | 误判 Protected path | 正确识别为 cmd flag，bash-read 直放 |
+| `git tag` / `git stash list` / `git describe` | 走 LLM | Tier 1 fast-path 直放 |
+| 平均延迟（非 Tier 1 bash） | <10ms (规则同步) | ~350ms (speculative 窗口) 或 ~2-8s (escalate) |
+| Token 成本（每会话 auto bash 调用） | ~30% 触发 classifier | ~95%；用 prompt-cache 抹平 ~70% |
+
+**不变（明确保留）**：
+
+- `plan` 模式：所有硬规则、write/edit 阻止、`getPlanModeBlockReason` 完全不变。
+- `accept-edits` 模式：alwaysAllowTools / prefix extractor (FEATURE_153) / outside-project file edit 确认完全不变。
+- Tier 1：`isBashReadCommand` / `isHelpCommand` / Read/Grep/Glob 工具直放。
+- FEATURE_092 已有基建：[denial-tracker](../packages/coding/src/guardrails/auto-mode/denial-tracker.ts) / [circuit-breaker](../packages/coding/src/guardrails/auto-mode/circuit-breaker.ts) / [model-resolver](../packages/coding/src/guardrails/auto-mode/model-resolver.ts) 全部保留。
+- 子代理 `AutoModeSharedState` 共享 engine 状态。
+- SDK 消费者（`executor.ts` 路径）：当 PermissionContext **没有** guardrail 接线时，Step 2.5/3 仍执行（fail-safe，等价 SDK 用户主动选 "auto + 自实现 onConfirm"）。
+- ADR-023 (bash AST 解析) / ADR-021 (agent ↔ coding 边界) 不动。
+
+**测试 churn**：
+- [`permission.test.ts`](../packages/repl/src/permission/permission.test.ts) (109 用例) 中 ~20 用例需更新断言（Step 2.5/3 在 auto 模式下不再 veto）。
+- [`tool-confirmation.test.ts`](../packages/repl/src/common/tool-confirmation.test.ts) (8 用例) 改为消费 signals。
+- [`auto-mode-classifier.eval.ts`](../tests/auto-mode-classifier.eval.ts) (FEATURE_092 dataset) 复跑 + 加 5-10 个 Windows-flag 回归用例。
+- 新增子代理 boundary 回归测试（劫持场景下 Tier 0 兜底）。
+
+### 替代方案讨论
+
+**A. 只做 hotfix (`looksLikePath` Windows-flag + `git tag` 白名单)，不动结构**：被否。
+- 治标不治本——下一个 Windows flag（`xcopy /Y` / `robocopy /MIR`）还会复现。
+- 真正的设计 bug 是**LLM 没被调用**，hotfix 不改决策层级，相当于继续给规则打补丁。
+- 用户明确要求 0.7.39 必修，且不接受 issue + feature 拆分。
+
+**B. v1 原方案"删除 REPL 硬规则，只剩 LLM + 极窄 Tier 0"**：被否。
+- 自查暴露 5 处重大退化：dangerous 9 类规则丢、`~/.kodax/` 写裸奔、engine 降级失去规则兜底、子代理硬规则消失、SDK 消费者裸奔。
+- v2（本 ADR）通过"信号化 + Tier 0 + 降级 fallback"三件套补回所有平价。
+
+**C. 完全照搬 CC 单决策点架构（`hasPermissionsToUseTool` 收编 REPL beforeToolExecute）**：被否。
+- KodaX 的两层（REPL `beforeToolExecute` + Runner `beforeTool` guardrail）来自 [ADR-021 agent ↔ coding 边界](#adr-021)，REPL 不应该承载 LLM 调用职责。
+- 强行合并需要把 guardrail 上拉到 REPL 层或把 REPL 检查下沉到 guardrail，两者都违反 ADR-021。
+- 本方案保留两层结构，只改"REPL 层从 veto 改为 signal-pass-through"，是最小侵入对齐。
+
+**D. 加 feature flag 让用户选择"strict / signal" 模式**：被否。
+- 违反用户记忆"大重构不引入新旧代码并行"。
+- 两条代码路径常驻 = 长期维护负担 + 配置组合爆炸。
+- 改完即生效，回退走 git revert。
+
+**E. Tier 0 清单完全交给 LLM 自洽（无硬编码）**：被否。
+- 防御纵深需要"LLM prompt 注入劫持"场景下的兜底；硬编码 5 条是已知 catastrophic 上限。
+- 清单进 ADR-025 评审通过后**严禁扩张**——每加一条要走新的 ADR addendum。
+
+### 与其他 ADR 的关系
+
+| ADR | 关系 |
+|---|---|
+| ADR-021 (agent ↔ coding 边界) | 保留两层架构，REPL 层只改语义不改职责 |
+| ADR-023 (bash regex → AST) | AST 解析仍是信号收集的输入；`extractPathsFromCommand` 输出喂给 signals.protected_path |
+| FEATURE_092 (auto-mode classifier) | 本 ADR 是 FEATURE_092 的**真正激活**——分类器从"理论存在 30% 命中"变成"实际承担 95% 决策" |
+| FEATURE_153 (LLM prefix extractor) | accept-edits 模式专用，不在本 ADR scope |
+| FEATURE_154 (`--help` fast-path) | Tier 1 一部分，保留 |
+| FEATURE_074 (subagent boundary) | 共享 SharedState 不变；Tier 0 + engine 降级路径在子代理同样生效 |
+
+### 落地节奏（FEATURE_158, v0.7.39）
+
+| Commit | 内容 | Review 锚点 |
+|---|---|---|
+| 1 | ADR-025 Accepted + Tier 0 清单评审通过 + FEATURE_LIST 登记 | 设计 review |
+| 2 | `packages/coding/src/guardrails/auto-mode/signals.ts` 类型 + 收集器 + 单测（无消费方） | 类型/逻辑 review |
+| 3 | `absolute-denylist.ts` (Tier 0) + 单测 | 安全 review (清单 freeze) |
+| 4 | `classify.ts` 接受 `signals[]` + prompt 更新 + speculative classify 基建 | prompt/eval review |
+| 5 | `looksLikePath` Windows-flag 修正 + `git tag` 等加入 `BASH_SAFE_READ_COMMANDS` + 回归测试（结构性修复 [Issue 130](KNOWN_ISSUES.md#130)） | bug parity review |
+| 6 | `AutoModeToolGuardrail.beforeTool` 接 Tier 0 + signals + speculative classify | guardrail review |
+| 7 | `onEngineChange` 通知 REPL + REPL 层在 `mode==='auto' && engine==='llm'` 时跳过 Step 2.5/3；其他组合走原路径 | **cutover commit**（最关键）|
+| 8 | UI 接 signals → Scope/Risk 渲染；移除 `_alwaysConfirm` / `_dangerousCommand` / `_outsideProject` marker（在 auto 路径） | UX parity review |
+| 9 | Eval：FEATURE_092 dataset 全量复跑 + Windows-flag 回归 + 子代理 boundary 回归 + 降级路径回归 | **release gate** |
+| 10 | KNOWN_ISSUES 删 Issue 130 + 加 v0.7.39 follow-up notes（如 speculative 窗口需调） + CHANGELOG | docs review |
+
+**纪律**：
+- 每个 commit 后主动 review 三件事（无新漏洞 / 无 scope 漂移 / 无功能退化）。
+- 不引入新旧并行路径；REPL Step 2.5/3 在 auto 路径删除即删除，不留 feature flag。
+- 前 6 个 commit 可独立 merge / 推迟；commit 7 是 cutover，必须配 commit 8/9 同 release。
+
+### 触发回退的条件
+
+回退（git revert commit 7+）触发条件，任一成立即立项 patch：
+
+1. **安全回退**：上线 4 周内出现 ≥1 例 LLM 误放过原本应该 veto 的命令（用户报告 + git log 复现）。
+2. **延迟回退**：speculative classify p95 > 1500ms（连续 3 天监控）；用户体感"等待感增加"反馈 ≥3 起。
+3. **成本回退**：单会话平均 classifier token 消费 ≥ baseline × 4（prompt-cache 失效或 prompt 膨胀失控）。
+4. **engine 降级误激活**：denial tracker / circuit breaker 在正常使用中误触 ≥1 次 / 周。
+
+**保留兜底**：commit 5 的 Windows-flag 修复 + `git tag` 白名单是**纯加强**，不在回退范围；即使整体 cutover 回滚，这两条仍生效。
+
+### Resolved Decisions (2026-05-12 self-review)
+
+1. **`~/.kodax/` 写"IPC 例外"的实际结论：不需要例外**。 KodaX 内部配置写（`kodax config set` / `kodax provider add`）走 TypeScript `fs.writeFile` 直接调用，**不经过 bash tool**，不命中权限门。Tier 0 第 5 条只在 LLM 通过 bash 工具发出 `echo ... > ~/.kodax/foo` / `cp x ~/.kodax/y` 这类直接 shell 写入时触发——这些场景应当**无条件阻止**：合法配置编辑就该走 slash command 而非 LLM 拼 shell。
+2. **speculative classify 窗口：初始 500ms，环境变量可调**。 Commit 4 落 `KODAX_AUTO_SPECULATIVE_WINDOW_MS` env，默认 500ms（CC 同量级），实施期 micro-bench 三家 classifier p50/p95 后在 FEATURE_158 设计稿固化最终值。
+3. **`/auto-signals` debug 命令推到 v0.7.40 follow-up**。 不阻塞本次 cutover；release 后用户反馈再立。
+
+---
+
