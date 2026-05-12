@@ -75,11 +75,79 @@ _Last Updated: 2026-05-09_
 | 128 | Medium | Resolved | runKodaX 端到端 contract 测试在并发负载下 5000ms 超时偶发 flake | 一直存在 | v0.7.34 | 2026-05-03 | 2026-05-03 |
 | 129 | Medium | Resolved | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | v0.7.38 | 2026-05-09 | 2026-05-09 |
 | 130 | Medium | Resolved | Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖 | v0.7.17 | v0.7.39 | 2026-05-12 | 2026-05-12 |
+| 131 | Medium | Resolved | Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR` 等) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm | 一直存在 | v0.7.39 | 2026-05-12 | 2026-05-12 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 131: Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR`) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm
+
+- **Priority**: Medium（auto 模式下高频打断，破坏"无人值守"承诺；非 corrupt-data，仅 UX）
+- **Status**: Resolved（[FEATURE_158](FEATURE_LIST.md) v0.7.39 结构性吃掉）
+- **Introduced**: 一直存在（`looksLikePath` 的 POSIX-only 启发式 + REPL Step 3 protected-path 同步 veto 是 auto 模式初始设计）
+- **Fixed**: v0.7.39
+- **Created**: 2026-05-12
+- **Resolved**: 2026-05-12
+
+#### Current Behavior
+
+`auto[llm]` 模式下，凡 bash 命令 argv 含 Windows 风格 flag（`/R` / `/B` / `/Y` / `/A:H` / `/MIR` 等）就触发 confirm 对话框：
+
+```
+$ git tag --sort=-creatordate | findstr /R "v[0-9]"
+[auto] confirm: Run bash command?
+  Scope: Protected path
+  Risk:  Command effects depend on its arguments
+  Summary: git tag --sort=-creatordate | findstr /R "v[0-9]"
+```
+
+受影响命令至少包括 `findstr /R` / `dir /B` / `where /R` / `xcopy /Y` / `robocopy /MIR` / `fc /B` —— 所有 Windows 内置工具的开关都中招。
+
+#### Root Cause
+
+两层叠加：
+
+1. **[`looksLikePath` (permission.ts:608)](../packages/repl/src/permission/permission.ts#L608) 启发式 POSIX-only**：`token.startsWith('/')` 直接判作"绝对路径"。Windows cmd flag `/R` 满足这个条件，被 [`extractPathsFromCommand`](../packages/repl/src/permission/permission.ts) 当 path token 收集。
+2. **`path.resolve('/R')` 在 Windows 下解析为 `C:\R`**：当前 drive 根目录，属于"项目外路径"。`isCommandOnProtectedPath` 拿到这个"路径"后命中 protected-path 规则，REPL Step 3 同步 veto 弹 confirm。
+3. **REPL 同步硬规则前置**：即使后面有 LLM 分类器，命令也根本到不了 LLM——决策层级颠倒（rule-first veto vs CC 的 LLM-final-with-signals）。
+
+#### Resolution（FEATURE_158 v0.7.39，结构性而非 hotfix）
+
+**两层防御，任一层独立可吃掉假阳性**：
+
+1. **[`looksLikePath` Windows-flag guard](../packages/repl/src/permission/permission.ts#L608)**（commit 6）：
+   ```typescript
+   const IS_WINDOWS_CMD_FLAG = /^\/[A-Za-z][A-Za-z0-9]*(?::[A-Za-z0-9]+)?$/;
+   if (token.startsWith('/') && token.length > 1) {
+     if (process.platform === 'win32' && IS_WINDOWS_CMD_FLAG.test(token)) {
+       return false;
+     }
+     return true;
+   }
+   ```
+   匹配 `/R` / `/B` / `/A:H` / `/MIR` 等纯字母（可选 `:value`）形式；不影响 `/usr/local/bin` 这类真正的 POSIX 绝对路径（长度 > 1 且含 `/`）。
+2. **`BASH_SAFE_READ_COMMANDS` 扩展**（commit 6）：加入 `git tag` / `git stash list` / `git describe` / `git config --get`，命中即 Tier 1 zero-LLM-cost allow，跳过 path 启发式。
+3. **决策层级倒置**（commit 8 cutover）：`auto[llm]` 模式下 REPL Step 2.5/3 不再 short-circuit；signals 喂给 LLM 分类器统一裁决。即使 `looksLikePath` 未来再出边角误判，LLM 见到完整 signals 也能正确决策——不再单点故障。
+
+#### Workaround (Pre-fix)
+
+- 切到 `auto[rules]` 模式（旧规则路径）回避 LLM 链路——但同样会被 Step 3 触发；本质 workaround 是手动 approve。
+- 改用 PowerShell 等价命令（`Get-ChildItem` 替代 `dir /B`）——非通用解法。
+
+#### Verification
+
+- Unit: [`packages/repl/src/permission/permission.test.ts`](../packages/repl/src/permission/permission.test.ts) `looksLikePath — Windows cmd flag heuristic`
+- Pipeline regression: [`packages/repl/src/permission/repl-bash-signals.test.ts`](../packages/repl/src/permission/repl-bash-signals.test.ts) FEATURE_158 Step 9 块覆盖 `findstr /R` + 6 个 `it.each` Windows-flag 命令
+- Manual: [test guide](test-guides/FEATURE_158_v0.7.39_TEST_GUIDE.md) Scenario 1
+
+#### Related
+
+- [FEATURE_158](FEATURE_LIST.md) — 本 issue 的 owning feature（结构性修复 + auto[llm] 决策层级倒置）
+- [ADR-025](ADR.md#adr-025-autollm-信号化分类器--决策层级倒置--windows-flag-误判结构性修复-feature_158-v0739) — 架构决策
+- Issue 129 (v0.7.38) — `findstr` 白名单的前置工作（read 命令侧）；本 issue 是 cmd flag 启发式侧补完
+
 ---
 ### 130: Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖
 

@@ -608,7 +608,7 @@ function looksLikePath(token: string): boolean {
   // cmd.exe flag tokens like `findstr /R "v[0-9]"`, `dir /B`, `xcopy /Y`,
   // `where /R`, `fc /B`, `robocopy /MIR`. On Windows these `/X` tokens
   // are virtually always cmd flags; treating them as paths produces the
-  // Issue 130 false-positive (path.resolve('/R') → 'C:\R' → triggers
+  // Issue 131 false-positive (path.resolve('/R') → 'C:\R' → triggers
   // protected-path on a non-existent fake path). POSIX behavior
   // unchanged: a `/R` token on Linux/macOS remains a path candidate.
   if (token.startsWith('/') && token.length > 1) {

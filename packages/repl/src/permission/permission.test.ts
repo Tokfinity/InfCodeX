@@ -738,9 +738,9 @@ describe('isToolCallAllowed (FEATURE_153 extractor path)', () => {
   });
 });
 
-// ============== FEATURE_158 — Issue 130 structural fix ==============
+// ============== FEATURE_158 — Issue 131 structural fix ==============
 //
-// Issue 130: Windows cmd.exe flag tokens like `/R`, `/B`, `/Y`, `/A:H`
+// Issue 131: Windows cmd.exe flag tokens like `/R`, `/B`, `/Y`, `/A:H`
 // were misclassified by looksLikePath as POSIX absolute paths,
 // causing path.resolve('/R') → 'C:\R' (an outside-project, non-temp
 // path) which triggered isAlwaysConfirmPath → "Protected path" confirm.
@@ -754,7 +754,7 @@ describe('isToolCallAllowed (FEATURE_153 extractor path)', () => {
 // (`git tag --sort=-creatordate | findstr /R "v[0-9]"`) takes the
 // bash-read fast-path instead of any later guardrail step.
 
-describe('FEATURE_158 — Issue 130 Windows-flag false-positive regression', () => {
+describe('FEATURE_158 — Issue 131 Windows-flag false-positive regression', () => {
   it.runIf(process.platform === 'win32')(
     'does NOT extract `/R` as a path on Windows (findstr flag)',
     async () => {
@@ -800,9 +800,9 @@ describe('FEATURE_158 — Issue 130 Windows-flag false-positive regression', () 
   );
 
   it.runIf(process.platform === 'win32')(
-    'isCommandOnProtectedPath returns false for the original Issue 130 repro (when cwd === projectRoot)',
+    'isCommandOnProtectedPath returns false for the original Issue 131 repro (when cwd === projectRoot)',
     async () => {
-      // The original Issue 130 reproduction runs from the user's project
+      // The original Issue 131 reproduction runs from the user's project
       // root, so the relative token `v[0-9]` (extracted from quoted
       // `"v[0-9]"` by legacyRegexPathScan) resolves INSIDE the project
       // root via path.resolve. With the looksLikePath /R fix, the only
@@ -849,7 +849,7 @@ describe('FEATURE_158 — BASH_SAFE_READ_COMMANDS expansion', () => {
     expect(isBashReadCommand(cmd)).toBe(expected);
   });
 
-  it('git tag piped to findstr (Issue 130 user-reported command) takes bash-read fast-path', () => {
+  it('git tag piped to findstr (Issue 131 user-reported command) takes bash-read fast-path', () => {
     // This is the exact command from the user-reported regression.
     // Result: fast-path bypass — no guardrail step ever runs.
     expect(isBashReadCommand('git tag --sort=-creatordate | findstr /R "v[0-9]"')).toBe(true);
