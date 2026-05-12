@@ -4720,7 +4720,20 @@ async function runManagedTaskViaRunnerInner(
   // enters a fresh turn on resume, so prior spend shouldn't eat into the
   // new run's envelope (same contract as legacy resumeManagedTask:
   // `createManagedBudgetController` always started at 0).
-  const initialHarness: KodaXHarnessProfile = structuralResumeSeed?.harness ?? 'H0_DIRECT';
+  // FEATURE_114 v0.7.36 + v0.7.39 fix — V2 Worker has no analogue of
+  // Scout's `emit_scout_verdict.confirmedHarness` upgrade payload, so a
+  // fresh V2 run that initialized at `H0_DIRECT` would stay there for
+  // its entire lifetime and inherit the H0 budget (100 turns) /
+  // max-rounds (1). Users see this as "默认轮数 200 → 100 退化" after
+  // the V2 default flip in Slice 7. PLANNED is the V2-equivalent
+  // profile (budget=200, max-rounds=8, identical envelope to H2) so
+  // we anchor fresh V2 runs there at init. Resume seeds still
+  // override — they carry the committed harness from the prior
+  // session. V1 path (`KODAX_HARNESS_V2=false`) is bit-for-bit
+  // preserved: it starts at H0_DIRECT and upgrades when Scout emits
+  // a verdict, exactly as before.
+  const initialHarness: KodaXHarnessProfile =
+    structuralResumeSeed?.harness ?? (isHarnessV2Enabled() ? 'PLANNED' : 'H0_DIRECT');
   const budget: ManagedTaskBudgetController = {
     totalBudget: BUDGET_CAP_BY_HARNESS[initialHarness],
     spentBudget: 0,
