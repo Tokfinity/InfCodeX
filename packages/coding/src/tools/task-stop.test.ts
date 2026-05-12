@@ -168,6 +168,28 @@ describe('toolTaskStop — error paths', () => {
     expect(getMessageQueue().size()).toBe(0);
   });
 
+  it('does NOT enqueue an orphan stop-request when abortRegistry is missing the taskId but childTaskRegistry still has it', async () => {
+    // Reproduces the small window between the inner IIFE's `.finally`
+    // (deletes from childAbortControllers) and registerChildTask's
+    // outer `.finally` (deletes from childTaskRegistry). If task_stop
+    // enqueued the stop-request BEFORE checking the abort registry,
+    // a message would orphan in the dead child's queue.
+    const ctx = makeCtx({
+      childAbortControllers: new Map(), // empty — child already finished
+      childTaskRegistry: makeTaskRegistry(['child-a']), // still present
+    });
+
+    const result = await toolTaskStop(
+      { task_id: 'child-a', reason: 'should not orphan' },
+      ctx,
+    );
+
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/Unknown task_id/i);
+    // The fix: no orphan message lands in the queue.
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
   it('rejects when childAbortControllers is unavailable (sync-mode dispatch)', async () => {
     const ctx = makeCtx({ childAbortControllers: undefined });
     const result = await toolTaskStop({ task_id: 'child-a' }, ctx);
