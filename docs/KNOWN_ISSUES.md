@@ -210,38 +210,84 @@ Assistant [11:39 AM]
 
 #### Resolution
 
-三个对称路径都套用 Issue 115 的 `hasExecutingTools` 守卫模式（保留 Executing，过滤 terminal）：
+**两个 commit**完成。第一个 commit 加 `hasExecutingTools` 守卫覆盖三个对称路径；第二个 commit 把 `syncManagedForegroundToolGroup` 重构为三层路径，把 EC1（新 worker 在旧 result 前启动新工具）一并修掉，并修一个 latent 的 nextTools 混淆 bug。
 
-1. **`transitionManagedForegroundPhase`** — 三层一起保留：
-   - `activeToolGroupTools` 过滤出 Executing
-   - `setLiveToolCalls(executingTools)`
-   - `iterationToolCallsRef.current` 用 Executing ID set 过滤
+**Commit 1 — 三层保留 + 三个镜像点守卫**：
 
-2. **`resetManagedForegroundLedgerState`** — ledger 层保留 Executing；live/iteration 层在调用点（iteration 边界 L5615）配套保留
+1. **`transitionManagedForegroundPhase`** — ledger / live / iteration 三层一起保留 Executing
+2. **`resetManagedForegroundLedgerState`** — ledger 层保留；live/iteration 在调用点（iteration 边界）配套保留
+3. **`onManagedTaskStatus` 非 foreground 分支** — 同款守卫（防御性）
 
-3. **`onManagedTaskStatus` 非 foreground 分支** — 同款守卫（防御性，正常流程下 activeToolGroupTools 应已为空）
+注意 `activeToolGroupTools` 保留**全量**（含 terminal）而不只 Executing——因为后续 in-place `.map()` 用这个列表写 history，过滤会丢掉 ✓ 工具。live / iteration 层才过滤 Executing。
 
-修复后事件序列：
+**Commit 2 — `syncManagedForegroundToolGroup` 三层路径**：
+
+原代码的 L1962 守卫 + 兜底 fallthrough 有两个问题：
+- 守卫的 `activeKind !== "tool_group"` 检查限制了它只能处理"kind 切换"orphan，无法处理"phase transition + 新 worker 抢 active slot"的 orphan（EC1）
+- Fallthrough 的 `nextTools = [...currentLedger.activeToolGroupTools, toolCall]` 在 commit 1 保留 refs 后会把旧 worker 的 in-flight 工具混进新 group history（latent bug）
+
+重构为三层：
+
+```typescript
+// Tier 1 Fast path — ref-based ID match
+//   覆盖：same-group delta/result（常态）
+//        Issue 115 kind transition orphan（refs 已保留）
+//        Issue 130 phase transition orphan（refs 已保留，无新工具竞争）
+if (currentLedger.activeToolGroupItemId
+    && currentLedger.activeToolGroupTools.some(t => t.id === toolCall.id)) {
+  // in-place update via refs；allResolved 时清 refs
+  return;
+}
+
+// Tier 2 Orphan history-search — by tool ID across all tool_group history items
+//   覆盖：Issue 130 EC1（新 worker 已抢 active slot，refs 不再指向旧 group）
+//   解耦 orphan recovery 和单 slot ref tracker——不需要多 slot 数据结构
+for (item of managedForegroundTurnItemsRef.current.reverse()) {
+  if (item.type === "tool_group" && item.tools.some(t => t.id === toolCall.id)) {
+    // 原地更新 history item，不动 refs（refs 指向另一个 group）
+    return;
+  }
+}
+
+// Tier 3 Create — brand new tool
+//   关键 bugfix：isReuseOfActiveGroup 守卫确保创建新 group 时不会从
+//   currentLedger.activeToolGroupTools 把保留的旧工具混带进来
+const itemId = startManagedForegroundLedgerBlock("tool_group", workerTitle);
+const isReuseOfActiveGroup = currentLedger.activeKind === "tool_group"
+                              && currentLedger.activeToolGroupItemId === itemId;
+const nextTools = isReuseOfActiveGroup
+  ? [...currentLedger.activeToolGroupTools, toolCall]  // 同 group 的并行工具
+  : [toolCall];                                          // 新 group，不带入保留 refs
 ```
-... 步骤 1-3 改为：保留 V1 在三层引用中
-4. events.onToolResult(V1) 到达
-5. finalizeLiveToolCall('V1', Success) → 找到 V1 → 标 Success
-6. syncManagedForegroundToolGroup(V1 Success) → L1962 守卫命中（activeKind=undefined,
-   activeToolGroupItemId='tg-1', activeToolGroupTools 含 V1）→ tg-1 in-place 更新为
-   ✓ [Worker] emit_verdict (Xms)
+
+**EC1 完整 trace（commit 2 后）**：
+```
+1. Worker V1(emit_verdict) 启动 → Tier 3 create → tg-1 with [V1(Executing)]
+2. Phase transition（commit 1 fix 保留 refs {tg-1, [V1]}，activeKind=undefined）
+3. Evaluator 启动 R1 → syncManagedForegroundToolGroup(R1):
+   - Tier 1 fail (refs 有 V1 不有 R1)
+   - Tier 2 fail (R1 不在任何 history item)
+   - Tier 3: startManagedForegroundLedgerBlock 创建 tg-2，因 activeKind=undefined
+     isReuseOfActiveGroup=false → nextTools=[R1]（不是 [V1, R1]！）
+   → tg-1=[V1(Executing)]，tg-2=[R1(Executing)] 干净分离
+4. V1 result 到达 → syncManagedForegroundToolGroup(V1 Success):
+   - Tier 1 fail (refs 是 tg-2 [R1]，无 V1)
+   - Tier 2: 搜 history → tg-1 含 V1 → 命中 → 原地更新 tg-1=[V1(Success)]
+   → tg-1 显示 ✓，tg-2 仍 ●
+5. R1 result 到达 → Tier 1 命中 tg-2 → tg-2 显示 ✓
 ```
 
 #### Trade-offs / Risks 评估
 
-- **性能**：filter/some 在 n=1-5 的小数组上，纳秒级开销，远低于 16ms 帧预算
-- **EC1（Evaluator 在 V1 result 到达前启动新工具）**：理论 race。runner 同步事件序列下不发生；如发生，原 tg-1 仍会卡 `● running`，V1 ✓ 出现在 Evaluator 的 group——双重错位。目前 **不在 L1854-1868 tool_group 创建分支补守卫**，因为这要求把单 slot 数据结构升级为多 slot，改动面太大。runner 同步性已隐含保证此 EC 不发生
-- **EC4（result 永不到达）**：onStreamEnd / onError 的 `finalizeAllExecutingToolCalls` 会兜底清理为 Cancelled/Error
-- **EC6（多次 phase transition 跨越）**：每次 transition 都过滤 Executing，V1 一路保留；result 到达时正确变 ✓，tool_group title 因 bake-in 仍是 `[Worker]`，时间线语义正确
+- **性能**：Tier 1 O(n) on activeToolGroupTools (n=1-5)；Tier 2 O(m) on managedForegroundTurnItemsRef (m<100 per turn)；都是纳秒级，远低于 16ms 帧预算
+- **EC1（Evaluator 在 V1 result 前启动新工具）**：✅ commit 2 已解决（history-search 兜底）
+- **EC4（result 永不到达）**：onStreamEnd / onError 的 `finalizeAllExecutingToolCalls` 兜底清理
+- **EC6（多次 phase transition 跨越）**：refs 一路保留 + history-search 双保险
+- **Tool ID 唯一性假设**：runner SDK 保证每次 tool call 有唯一 ID（跨 iteration 也保证），Tier 2 按 ID 匹配不歧义
 
 #### Related
 
-- Issue 115 (v0.7.18 已修) — 同根因的 kind transition 变种；本 issue 是其对称路径漏覆盖的补充
-- 设计原则：3 个镜像点的修复模式完全相同（`hasExecutingTools` 守卫 + filter Executing），可考虑后续提取共享 helper
+- Issue 115 (v0.7.18 已修) — 同根因的 kind transition 变种；本 issue 通过 commit 1 补对称路径 + commit 2 重构 syncManagedForegroundToolGroup 把同类 race 一网打尽
 
 ---
 ### 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决
