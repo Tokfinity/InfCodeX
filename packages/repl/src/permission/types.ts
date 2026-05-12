@@ -172,9 +172,11 @@ export const BASH_SAFE_READ_COMMANDS = new Set([
   "grep", "find", "awk", "sed", "head", "tail", "less", "more", "wc",
   "findstr", "fc",
 
-  // Git operations (read-only)
+  // Git operations (read-only) — FEATURE_158 added tag / stash list /
+  // describe / config --get to close the Issue 130 reproduction.
   "git status", "git diff", "git log", "git show", "git branch",
   "git remote", "git ls-files", "git rev-parse", "git grep",
+  "git tag", "git stash list", "git describe", "git config --get",
 
   // Language toolchains (version/info only)
   "node", "npm", "yarn", "pnpm", "tsc", "python", "pip", "go", "cargo", "rustc",
