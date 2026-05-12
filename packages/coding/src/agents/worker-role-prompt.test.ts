@@ -176,3 +176,57 @@ describe('buildWorkerInstructions — FEATURE_155 idle-yield (always-on, Slice C
     expect(out).toContain('EVALUATOR HANDOFF');
   });
 });
+
+// FEATURE_120 v0.7.39 — Worker child steering. These tests pin the
+// section that teaches the Worker when (and when NOT) to call
+// `send_message` / `task_stop` and how to use the `model_hint` field
+// on `dispatch_child_task`. The behavioral validation lives in
+// `tests/child-steering.eval.ts` (Phase 5b); these are structural
+// pins so a future prompt edit doesn't silently drop the section.
+describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 5a)', () => {
+  it('emits the ASYNC CHILD STEERING section with both tools', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('ASYNC CHILD STEERING');
+    expect(out).toContain('FEATURE_120');
+    expect(out).toContain('send_message(to=task_id');
+    expect(out).toContain('task_stop(task_id');
+  });
+
+  it('teaches the spam guard (0-1 send_message per child) + atomic-tool semantics', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toMatch(/typical pattern is 0-1 send_message/i);
+    // Atomic-tool semantics — no hard kill mid-run.
+    expect(out).toMatch(/no hard kill of a 90s `npm test`/i);
+  });
+
+  it('explicit anti-patterns: do-not-chat with send_message, do-not-premature-stop', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toMatch(/DO NOT use it to chat with the child/);
+    expect(out).toMatch(/DO NOT task_stop a child just because it is slow but progressing/);
+  });
+
+  it('points out the sync-mode no-op gate so the LLM does not retry on [Tool Error]', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toMatch(/sync-mode dispatch/);
+    expect(out).toMatch(/KODAX_ASYNC_DISPATCH=0/);
+  });
+
+  it('teaches the model_hint field (no-op routing) so prompt-eval data accumulates', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('MODEL HINT');
+    expect(out).toMatch(/"fast"/);
+    expect(out).toMatch(/"deep"/);
+    expect(out).toMatch(/no-op today/);
+    expect(out).toMatch(/FEATURE_102/);
+  });
+
+  it('orders child steering after dispatch rules and before fan-out plan granularity', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    const dispatchIdx = out.indexOf('DISPATCH RULES');
+    const steeringIdx = out.indexOf('ASYNC CHILD STEERING');
+    const fanOutIdx = out.indexOf('FAN-OUT PLAN GRANULARITY');
+    expect(dispatchIdx).toBeGreaterThanOrEqual(0);
+    expect(steeringIdx).toBeGreaterThan(dispatchIdx);
+    expect(fanOutIdx).toBeGreaterThan(steeringIdx);
+  });
+});
