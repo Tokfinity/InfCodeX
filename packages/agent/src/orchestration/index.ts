@@ -47,3 +47,9 @@ export type {
   RunFanOutResult,
 } from './fan-out.js';
 export { runFanOut } from './fan-out.js';
+
+export type {
+  RouteMessageOptions,
+  RouteMessageResult,
+} from './send-message-router.js';
+export { routeMessage } from './send-message-router.js';
