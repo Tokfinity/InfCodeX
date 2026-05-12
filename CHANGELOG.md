@@ -4,9 +4,7 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
-## [Unreleased]
-
-<!-- last-sync: 2571e414 -->
+## [0.7.39] - 2026-05-12
 
 ### Theme
 
