@@ -604,13 +604,40 @@ function looksLikePath(token: string): boolean {
   if (token.startsWith('~/') || token.startsWith('~\\')) return true;
   // Windows drive-letter absolute (`C:\foo`)
   if (/^[a-zA-Z]:[/\\]/.test(token)) return true;
-  // POSIX absolute (`/foo/bar`)
-  if (token.startsWith('/') && token.length > 1) return true;
+  // POSIX absolute (`/foo/bar`) — but on Windows, exclude single-letter
+  // cmd.exe flag tokens like `findstr /R "v[0-9]"`, `dir /B`, `xcopy /Y`,
+  // `where /R`, `fc /B`, `robocopy /MIR`. On Windows these `/X` tokens
+  // are virtually always cmd flags; treating them as paths produces the
+  // Issue 130 false-positive (path.resolve('/R') → 'C:\R' → triggers
+  // protected-path on a non-existent fake path). POSIX behavior
+  // unchanged: a `/R` token on Linux/macOS remains a path candidate.
+  if (token.startsWith('/') && token.length > 1) {
+    if (process.platform === 'win32' && IS_WINDOWS_CMD_FLAG.test(token)) {
+      return false;
+    }
+    return true;
+  }
   // Hidden-dir-relative (`.agent/plan_mode_doc.md`) — token has a separator
   // and starts with `.`, but not `..` (already matched above).
   if (token.startsWith('.') && /[/\\]/.test(token)) return true;
   return false;
 }
+
+/**
+ * Windows cmd / PowerShell flag shape: `/X`, `/MIR`, `/A:H`, `/COPY:DAT`.
+ * Requires:
+ *   - leading `/`
+ *   - body is alphanumeric (`A-Za-z0-9`)
+ *   - optional `:value` suffix where value is also alphanumeric
+ *   - NO further path separators (`/` or `\`) — those would indicate a
+ *     real path like `/etc/passwd`
+ *
+ * Examples MATCHED (treated as flag, NOT path):
+ *   /R  /B  /Y  /I  /V  /S  /MIR  /A:H  /D:2024  /COPY:DAT
+ * Examples NOT MATCHED (treated as path):
+ *   /usr/local/bin  /etc/passwd  /tmp/foo  /R/file  /A:H/sub
+ */
+const IS_WINDOWS_CMD_FLAG = /^\/[A-Za-z][A-Za-z0-9]*(?::[A-Za-z0-9]+)?$/;
 
 /**
  * Pre-AST regex-based path scanner. Retained as a complementary pass
