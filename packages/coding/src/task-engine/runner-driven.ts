@@ -258,12 +258,20 @@ import { buildManagedTaskCompactionHook } from './_internal/managed-task/compact
 // message so the agent can react. Always-on since Slice C3 — the
 // `KODAX_IDLE_YIELD` env-flag gate was retired together with the
 // `await_child_task` tool because there is no working off-path now.
+// v0.7.39 FEATURE_120 Step 0b: idle-yield primitives lifted from
+// `_internal/managed-task/idle-yield.ts` into `@kodax-ai/agent`'s
+// `orchestration/` module. Bug A-G hotfix behavior carried over
+// verbatim — registry cleanup (Bug A) is now built into
+// `registerChildTask`; the rest live in the agent-side
+// `idle-yield.ts`. Coding consumes the generic primitives
+// specialized on `KodaXChildExecutionResult` (the generic param is
+// inferred from the registry value type).
 import {
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
   waitForWakeEvent,
-} from './_internal/managed-task/idle-yield.js';
+} from '@kodax-ai/agent';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';

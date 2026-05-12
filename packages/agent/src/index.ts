@@ -356,8 +356,20 @@ export {
 // be consumed standalone (ADR-021). Coding-flavor specifics
 // (`KodaXChildExecutionResult` shape, AGENTS.md injection, etc.) stay
 // in `@kodax-ai/coding` and consume these as generics.
-export type { ChildTaskRegistry } from './orchestration/index.js';
-export { registerChildTask } from './orchestration/index.js';
+export type {
+  ChildTaskRegistry,
+  IdleYieldSnapshot,
+  WaitForWakeEventOptions,
+  WakeEvent,
+} from './orchestration/index.js';
+export {
+  composeIdleYieldUserMessage,
+  countLastAssistantToolCalls,
+  detectIdleYield,
+  isIdleYieldEnabled,
+  registerChildTask,
+  waitForWakeEvent,
+} from './orchestration/index.js';
 
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
