@@ -171,6 +171,47 @@ export async function* toolDispatchChildTask(
       return `[Tool Error] ${TOOL_NAME}: task_id "${childId}" is already in flight. Pick a unique id; the existing child will be reclaimed automatically via the idle-yield wait mechanic (its result will arrive as a <task-completed task_id="${childId}"> block in your next user message).`;
     }
 
+    // FEATURE_120 v0.7.39 Phase 3b — allocate per-child AbortController
+    // so `task_stop(task_id)` can request graceful exit of THIS child
+    // specifically (without aborting siblings or the parent). The
+    // child's effective abort signal is the OR of (parent ctx signal,
+    // per-child signal): a parent-wide abort still cancels the child
+    // via a one-shot listener on the parent signal, which is detached
+    // in the cleanup chain below to keep listener counts bounded
+    // across long sessions.
+    const childAbortController = new AbortController();
+    const parentAbortSignal = ctx.abortSignal;
+    let detachParentAbortListener: (() => void) | undefined;
+    if (parentAbortSignal) {
+      if (parentAbortSignal.aborted) {
+        childAbortController.abort(parentAbortSignal.reason);
+      } else {
+        const onParentAbort = (): void => {
+          childAbortController.abort(parentAbortSignal.reason);
+        };
+        parentAbortSignal.addEventListener('abort', onParentAbort, { once: true });
+        detachParentAbortListener = (): void => {
+          parentAbortSignal.removeEventListener('abort', onParentAbort);
+        };
+      }
+    }
+
+    // Register in the abort registry so `task_stop` can reach this
+    // controller. The matching `delete(childId)` happens in the
+    // child Promise's `.finally` chain alongside the registerChildTask
+    // cleanup.
+    const abortRegistry = ctx.childAbortControllers;
+    abortRegistry?.set(childId, childAbortController);
+
+    // Replace the parent signal in `options` with the per-child signal
+    // so the child executor + child Runner.run observe the merged
+    // abort state. Only the async branch needs this — the sync branch
+    // returns to the same LLM call before any task_stop could fire.
+    const childOptions: ChildExecutorOptions = {
+      ...options,
+      abortSignal: childAbortController.signal,
+    };
+
     // Capture the worktree-register callback so it can fire at result
     // time (when the child promise settles, before the registry cleanup
     // `.finally` runs below). Without this, write children's worktrees
@@ -184,7 +225,7 @@ export async function* toolDispatchChildTask(
     // Runner loop reading from `getMessageQueue()` at iteration start.
     const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
       try {
-        const result = await executeChildAgents([bundle], ctx, options);
+        const result = await executeChildAgents([bundle], ctx, childOptions);
         if (result.worktreePaths && result.worktreePaths.size > 0 && registerWorktrees) {
           registerWorktrees(result.worktreePaths);
         }
@@ -212,6 +253,15 @@ export async function* toolDispatchChildTask(
           summary: `crash: ${message.slice(0, 200)}`,
         });
         throw err;
+      } finally {
+        // FEATURE_120 v0.7.39 Phase 3b — drain the per-child abort
+        // registry + detach the parent-signal listener exactly once
+        // per child, whether the child completed, failed, or aborted.
+        // Runs BEFORE the `registerChildTask` cleanup `.finally`
+        // (which deletes from `childTaskRegistry`) because it's
+        // chained on the inner async IIFE, not the registry promise.
+        abortRegistry?.delete(childId);
+        detachParentAbortListener?.();
       }
     })();
     // v0.7.38 FEATURE_155 Bug A hotfix + v0.7.39 FEATURE_120 Step 0

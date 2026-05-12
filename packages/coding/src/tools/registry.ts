@@ -43,6 +43,7 @@ import { toolMcpGetPrompt } from './mcp-get-prompt.js';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolSendMessage } from './send-message.js';
+import { toolTaskStop } from './task-stop.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
 import { toolTodoUpdate } from './todo-update.js';
@@ -505,6 +506,34 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       const body =
         typeof i?.content === 'string' ? i.content.slice(0, 120) : '<no-content>';
       return `SendMessage(${target}): ${body}`;
+    },
+  },
+  {
+    name: 'task_stop',
+    description:
+      'Request graceful exit of a specific in-flight child task launched via dispatch_child_task. The child finishes its current tool call atomically (no hard kill — a 90s npm test won\'t be interrupted), sees an optional <coordinator-stop-request> message explaining why, then emits a final summary. Use when: child went off-scope (e.g. started writing files when launched read-only), user cancelled the parent task that justified the child, or child is pathologically slow with no progress signal. Coordinator-only: child agents cannot call this tool.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: {
+          type: 'string',
+          description:
+            'Target child task_id (from a prior dispatch_child_task call). Completed children are auto-cleaned and become invalid targets.',
+        },
+        reason: {
+          type: 'string',
+          description:
+            'Optional explanation. When provided, the child receives a <coordinator-stop-request> system-reminder with this reason BEFORE the abort fires, so it can frame its final summary accordingly. Omitting the reason still aborts the child; only the explanation is skipped.',
+        },
+      },
+      required: ['task_id'],
+    },
+    handler: toolTaskStop,
+    toClassifierInput: (input) => {
+      const i = input as { task_id?: string; reason?: string };
+      const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
+      const why = typeof i?.reason === 'string' ? i.reason.slice(0, 80) : '';
+      return `TaskStop(${target})${why ? ': ' + why : ''}`;
     },
   },
   {
