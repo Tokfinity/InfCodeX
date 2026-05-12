@@ -20,11 +20,29 @@ const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
   prepareRuntimeConfigMock: vi.fn(),
 }));
 
+// FEATURE_153 (v0.7.38) wired the LLM-backed `bashPrefixExtractor` into
+// `isToolCallAllowed` for the ACP `allow_always` cache lookup. Without
+// a stub, the test-env extractor has no real provider configured and
+// the catch block in `permission.ts:478-491` returns false, causing
+// every "remembered" bash command to fall through to a fresh
+// `requestPermission` round-trip — `supports allow_always` then sees
+// 2 permission requests where 1 is expected. Stub returns the same
+// first-two-words extraction that `generateSavePattern` uses for the
+// stored pattern, so the cache hit fires deterministically without any
+// LLM call. Equality model matches
+// `matchesBashPatternByExtractedPrefix(extracted, 'echo test')`.
 vi.mock('@kodax-ai/coding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/coding')>();
   return {
     ...actual,
     runKodaX: runKodaXMock,
+    createBashPrefixExtractor: () => ({
+      async extract(command: string) {
+        const parts = command.trim().split(/\s+/);
+        const value = parts.slice(0, Math.min(parts.length, 2)).join(' ');
+        return { kind: 'prefix' as const, value };
+      },
+    }),
   };
 });
 
