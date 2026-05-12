@@ -67,6 +67,11 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
 }
 import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
+// FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
+// @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
+// worktree isolation, briefing, role policy) stay below; the wrapper
+// owns only bounded concurrency + abort + progress eventing.
+import { runFanOut } from '@kodax-ai/agent';
 
 /* ---------- Public API ---------- */
 
@@ -138,45 +143,52 @@ export async function executeChildAgents(
   const results: KodaXChildAgentResult[] = [];
   const cancelledChildren: string[] = [];
   const worktreePaths: Map<string, string> = new Map();
-  const sem = createSemaphore(options.maxParallel);
-  let completedCount = 0;
-  const totalCount = allBundles.length;
   const report = options.onProgress ?? (() => {});
 
-  report(`Starting ${totalCount} child tasks in parallel`);
+  report(`Starting ${allBundles.length} child tasks in parallel`);
 
   try {
-    const settled = await Promise.allSettled(
-      allBundles.map((bundle) =>
-        runWithSemaphore(sem, async () => {
-          if (options.abortSignal?.aborted) {
-            cancelledChildren.push(bundle.id);
-            return;
-          }
+    // FEATURE_120 v0.7.39 Step 0d — bounded-concurrency + abort + progress
+    // events are owned by `runFanOut` (agent-layer, ADR-021). This call
+    // preserves the previous semantics:
+    //   - Promise.allSettled-style rejection capture → `result.results`
+    //   - Pre-execution abort check → `result.cancelled`
+    //   - Per-bundle progress callbacks adapted to the legacy string-based
+    //     `onProgress` contract.
+    // Note: `result.results` is in COMPLETION order (not bundle order). We
+    // use the embedded bundle reference on each outcome, not array index,
+    // to attribute crashes back to their bundle — matching the prior
+    // behavior at L171-180 which used `allBundles[i]` keyed on
+    // `Promise.allSettled` index (also order-stable in practice).
+    const fanOut = await runFanOut<KodaXChildContextBundle, KodaXChildAgentResult>({
+      bundles: allBundles,
+      runOne: (bundle) =>
+        bundle.readOnly
+          ? executeReadChild(bundle, parentCtx, options)
+          : executeWriteChild(bundle, parentCtx, options, worktreePaths),
+      maxParallel: options.maxParallel,
+      abortSignal: options.abortSignal,
+      onProgress: (event, ctx) => {
+        if (event.kind === 'start') {
+          report(`[${ctx.completedCount}/${ctx.totalCount}] Running: ${event.bundle.id}`);
+        } else if (event.kind === 'item-done') {
+          report(`[${ctx.completedCount}/${ctx.totalCount}] Done: ${event.bundle.id} → ${event.result.status}`);
+        }
+        // `item-failed` events are absorbed into the crash branch below —
+        // the rejection's bundle.id was already surfaced via `start`, and
+        // the synthesized `[Crash]` result will appear in `results`.
+      },
+    });
 
-          report(`[${completedCount}/${totalCount}] Running: ${bundle.id}`);
-
-          const result = bundle.readOnly
-            ? await executeReadChild(bundle, parentCtx, options)
-            : await executeWriteChild(bundle, parentCtx, options, worktreePaths);
-
-          results.push(result);
-          completedCount++;
-          report(`[${completedCount}/${totalCount}] Done: ${bundle.id} → ${result.status}`);
-        }),
-      ),
-    );
-
-    // Capture rejected promises as failed results
-    for (let i = 0; i < settled.length; i++) {
-      const outcome = settled[i]!;
-      if (outcome.status === 'rejected') {
-        const bundle = allBundles[i]!;
-        const reason = outcome.reason instanceof Error
-          ? outcome.reason.message
-          : String(outcome.reason);
-        results.push(extractChildResult(bundle, `[Crash] ${reason}`, 'failed'));
+    for (const r of fanOut.results) {
+      if (r.status === 'fulfilled') {
+        results.push(r.value);
+      } else {
+        results.push(extractChildResult(r.bundle, `[Crash] ${r.reason.message}`, 'failed'));
       }
+    }
+    for (const b of fanOut.cancelled) {
+      cancelledChildren.push(b.id);
     }
   } finally {
     // Cleanup worktrees for FAILED children only.
@@ -850,45 +862,6 @@ function validateWriteBundles(
   }
 
   return writeBundles;
-}
-
-/* ---------- Semaphore for concurrency control ---------- */
-
-function createSemaphore(maxConcurrent: number): { acquire: () => Promise<() => void> } {
-  let current = 0;
-  const waiting: Array<() => void> = [];
-
-  return {
-    acquire(): Promise<() => void> {
-      return new Promise((resolve) => {
-        const tryAcquire = () => {
-          if (current < maxConcurrent) {
-            current++;
-            resolve(() => {
-              current--;
-              const next = waiting.shift();
-              if (next) queueMicrotask(next);
-            });
-          } else {
-            waiting.push(tryAcquire);
-          }
-        };
-        tryAcquire();
-      });
-    },
-  };
-}
-
-async function runWithSemaphore<T>(
-  sem: { acquire: () => Promise<() => void> },
-  fn: () => Promise<T>,
-): Promise<T> {
-  const release = await sem.acquire();
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
 }
 
 /* ---------- Constants ---------- */
