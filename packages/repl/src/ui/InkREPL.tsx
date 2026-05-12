@@ -1680,12 +1680,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
   const resetManagedForegroundLedgerState = useCallback((options?: { clearOwner?: boolean }) => {
     const current = managedForegroundLedgerRef.current;
-    // Issue 130: preserve Executing tool_group entries across the reset (see
-    // `transitionManagedForegroundPhase` for the full rationale). The
-    // iteration-boundary call site at L5579 pairs with `resetLiveToolCalls`,
-    // so the live-tool layer is handled inline at that call site too —
-    // here we only own the ledger-ref layer.
-    const preservedTools = current.activeToolGroupTools.filter(
+    // Issue 130: preserve the tool_group reference + FULL tools list (not
+    // just Executing) when any entry is still in flight. See the matching
+    // comment in `transitionManagedForegroundPhase` for why filtering
+    // `activeToolGroupTools` to Executing would corrupt the history item
+    // on the next in-place update. The iteration-boundary call site (L5615)
+    // pairs with this for the liveToolCalls / iterationToolCallsRef layers.
+    const hasExecutingInGroup = current.activeToolGroupTools.some(
       (t) => t.status === ToolCallStatus.Executing,
     );
     managedForegroundLedgerRef.current = {
@@ -1695,10 +1696,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             workerId: current.workerId,
             workerTitle: current.workerTitle,
           }),
-      ...(preservedTools.length > 0
+      ...(hasExecutingInGroup
         ? {
             activeToolGroupItemId: current.activeToolGroupItemId,
-            activeToolGroupTools: preservedTools,
+            activeToolGroupTools: current.activeToolGroupTools,
           }
         : { activeToolGroupTools: [] }),
     };
@@ -2039,27 +2040,33 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     flushForegroundTextBuffer();
     // Issue 130: when a phase transition fires while a previous worker's tool
     // is still Executing (e.g. emit_verdict between observer.onRoleEmit and
-    // events.onToolResult), preserve the Executing entries across the reset
-    // so the late-arriving tool_result event can be routed back to its
-    // original tool_group history item via the L1962 in-place-update guard.
-    // Clearing them outright (the pre-fix behavior) leaves the entry stuck
-    // at the `running` placeholder forever — see Issue 115 for the sibling
-    // kind-transition variant of the same bug class.
+    // events.onToolResult), preserve the tool_group reference + tools across
+    // the reset so the late-arriving tool_result event can be routed back
+    // to its original tool_group history item via the L1962 in-place-update
+    // guard. Clearing them outright (pre-fix) leaves the entry stuck at
+    // `running` forever — see Issue 115 for the kind-transition variant.
+    //
+    // Critical: `activeToolGroupTools` is the FULL snapshot of the group
+    // (including already-terminal entries), not just Executing. The L1991
+    // `.map()` in-place update reuses this list verbatim — if we filtered
+    // to Executing only, a later result event would overwrite history with
+    // ONLY the executing entries, dropping ✓ tools from the displayed group.
+    // So we preserve the whole list when ANY entry is still Executing.
     const prevLedger = managedForegroundLedgerRef.current;
-    const preservedTools = prevLedger.activeToolGroupTools.filter(
+    const hasExecutingInGroup = prevLedger.activeToolGroupTools.some(
       (t) => t.status === ToolCallStatus.Executing,
     );
     const executingLiveTools = activeToolCallsRef.current.filter(
       (t) => t.status === ToolCallStatus.Executing,
     );
-    const executingIds = new Set(executingLiveTools.map((t) => t.id));
+    const executingLiveIds = new Set(executingLiveTools.map((t) => t.id));
     managedForegroundLedgerRef.current = {
       workerId: nextWorker?.workerId,
       workerTitle: nextWorker?.workerTitle,
-      ...(preservedTools.length > 0
+      ...(hasExecutingInGroup
         ? {
             activeToolGroupItemId: prevLedger.activeToolGroupItemId,
-            activeToolGroupTools: preservedTools,
+            activeToolGroupTools: prevLedger.activeToolGroupTools,
           }
         : { activeToolGroupTools: [] }),
     };
@@ -2069,7 +2076,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     };
     iterationToolsRef.current = [];
     iterationToolCallsRef.current = iterationToolCallsRef.current.filter(
-      (t) => executingIds.has(t.id),
+      (t) => executingLiveIds.has(t.id),
     );
     setLiveToolCalls(executingLiveTools);
     clearToolInputContent();
@@ -5464,21 +5471,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           // Issue 130: defensive guard. This branch fires when no previous
           // foreground owner existed (`previousForegroundWorker.workerId`
           // is falsy) — so in normal flow there should be no in-flight
-          // tools to preserve. Apply the same hasExecutingTools pattern
-          // for consistency with `transitionManagedForegroundPhase`, in
-          // case a stale ledger somehow carries an Executing entry
-          // across foreground promotion.
+          // tools to preserve. Apply the same has-Executing pattern for
+          // consistency with `transitionManagedForegroundPhase`, in case a
+          // stale ledger somehow carries an Executing entry across
+          // foreground promotion. Preserve the FULL tools list (not just
+          // Executing) — see the rationale in transitionManagedForegroundPhase.
           const prevLedger = managedForegroundLedgerRef.current;
-          const preservedTools = prevLedger.activeToolGroupTools.filter(
+          const hasExecutingInGroup = prevLedger.activeToolGroupTools.some(
             (t) => t.status === ToolCallStatus.Executing,
           );
           managedForegroundLedgerRef.current = {
             workerId: status.activeWorkerId,
             workerTitle: status.activeWorkerTitle,
-            ...(preservedTools.length > 0
+            ...(hasExecutingInGroup
               ? {
                   activeToolGroupItemId: prevLedger.activeToolGroupItemId,
-                  activeToolGroupTools: preservedTools,
+                  activeToolGroupTools: prevLedger.activeToolGroupTools,
                 }
               : { activeToolGroupTools: [] }),
           };
