@@ -74,11 +74,107 @@ _Last Updated: 2026-05-09_
 | 127 | High | Resolved | AMA 每次 query 都弹出"发现未完成的任务"对话框 — managed task checkpoint 清理 race + 错误/取消路径未清理 | v0.7.26 | v0.7.34 | 2026-05-03 | 2026-05-03 |
 | 128 | Medium | Resolved | runKodaX 端到端 contract 测试在并发负载下 5000ms 超时偶发 flake | 一直存在 | v0.7.34 | 2026-05-03 | 2026-05-03 |
 | 129 | Medium | Resolved | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | v0.7.38 | 2026-05-09 | 2026-05-09 |
+| 130 | Medium | Resolved | Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖 | v0.7.17 | v0.7.39 | 2026-05-12 | 2026-05-12 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 130: Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖
+
+- **Priority**: Medium（视觉 bug + 污染 persistence；LLM 上下文不受影响）
+- **Status**: Resolved
+- **Introduced**: v0.7.17（与 Issue 115 同源；当年只在 `startManagedForegroundLedgerBlock` 内加守卫，3 个对称路径漏覆盖）
+- **Fixed**: v0.7.39
+- **Created**: 2026-05-12
+- **Resolved**: 2026-05-12
+
+#### Current Behavior
+
+AMA managed-task 流程中（如 Generator→Evaluator handoff），用户偶发看到某个 `emit_*` 协议工具永远停在 `● running`，但其后已经有下一个 worker 在正常输出：
+
+```
+Tools [11:39 AM]
+✓ [Worker] emit_handoff (8ms)
+
+Tools [11:39 AM]
+● [Worker] emit_verdict (running)
+Running: waiting for tool output
+
+Assistant [11:39 AM]
+[Evaluator] 审查已完成。核心发现是 ...
+```
+
+工具实际已成功执行（否则下一个 worker 拿不到 verdict payload，根本不会接力），仅 UI 跟踪状态丢失。
+
+#### Root Cause
+
+**与 Issue 115 同根，但触发边界不同。** Issue 115 修复了 ledger **kind transition**（tool_group → thinking）时的引用丢失，加了 `hasExecutingTools` 守卫。本 issue 是同一根因在三个**对称路径**上的漏覆盖：
+
+1. **`transitionManagedForegroundPhase`** ([InkREPL.tsx](../packages/repl/src/ui/InkREPL.tsx)) — worker phase 切换（如 Generator→Evaluator）。无条件 `activeToolGroupTools: []` + `setLiveToolCalls([])` + `iterationToolCallsRef.current = []`，三层引用一起丢
+2. **`resetManagedForegroundLedgerState`** + iteration 边界 — 调用点在每轮 LLM iteration 末尾。同型问题
+3. **`onManagedTaskStatus` 非 foreground promotion 分支** — 防御性场景
+
+**事件序列**：
+
+```
+1. Worker → emit_verdict 启动 → onToolUseStart → tool_group `tg-1` 创建，含 emit_verdict(Executing)
+2. wrapEmitterWithRecorder 内 observer.onRoleEmit('evaluator') 同步触发 onManagedTaskStatus
+3. UI 端 transitionManagedForegroundPhase 执行：
+   - managedForegroundLedgerRef = { activeToolGroupTools: [] }       ← refs 丢
+   - setLiveToolCalls([]) → activeToolCallsRef.current = []          ← 路由源丢
+   - iterationToolCallsRef.current = []                              ← 历史快照丢
+4. 工具 execute() return → runner observer 调 events.onToolResult
+5. finalizeLiveToolCall('V1', Success) → activeToolCallsRef 已空 → 找不到 V1 → 返回 null
+6. syncManagedForegroundToolGroup 永远不被调用 → tg-1 history item 永远停在 ● running
+```
+
+**关键区别于 Issue 115**：当年的 kind transition 只清 ledger refs；这次的 phase/iteration transition 还额外清了 `liveToolCalls`，把 `finalizeLiveToolCall` 的查找源也一起清掉了——所以光保留 ledger refs 还不够，必须三层（ledger + liveToolCalls + iterationToolCallsRef）一起保留 Executing 条目。
+
+#### Impact
+
+| 层 | 是否受影响 |
+|---|---|
+| LLM context（Evaluator/下游 worker 读到的对话历史） | ❌ 不受影响——Runner SDK 自管 message store，独立于 UI refs |
+| UI 显示 | ✅ 卡 `● running`（user-visible bug） |
+| Persistence/replay（`kodax -c`） | ⚠️ 污染 transcript——已持久化的 history item 含假 running 状态 |
+
+#### Resolution
+
+三个对称路径都套用 Issue 115 的 `hasExecutingTools` 守卫模式（保留 Executing，过滤 terminal）：
+
+1. **`transitionManagedForegroundPhase`** — 三层一起保留：
+   - `activeToolGroupTools` 过滤出 Executing
+   - `setLiveToolCalls(executingTools)`
+   - `iterationToolCallsRef.current` 用 Executing ID set 过滤
+
+2. **`resetManagedForegroundLedgerState`** — ledger 层保留 Executing；live/iteration 层在调用点（iteration 边界 L5615）配套保留
+
+3. **`onManagedTaskStatus` 非 foreground 分支** — 同款守卫（防御性，正常流程下 activeToolGroupTools 应已为空）
+
+修复后事件序列：
+```
+... 步骤 1-3 改为：保留 V1 在三层引用中
+4. events.onToolResult(V1) 到达
+5. finalizeLiveToolCall('V1', Success) → 找到 V1 → 标 Success
+6. syncManagedForegroundToolGroup(V1 Success) → L1962 守卫命中（activeKind=undefined,
+   activeToolGroupItemId='tg-1', activeToolGroupTools 含 V1）→ tg-1 in-place 更新为
+   ✓ [Worker] emit_verdict (Xms)
+```
+
+#### Trade-offs / Risks 评估
+
+- **性能**：filter/some 在 n=1-5 的小数组上，纳秒级开销，远低于 16ms 帧预算
+- **EC1（Evaluator 在 V1 result 到达前启动新工具）**：理论 race。runner 同步事件序列下不发生；如发生，原 tg-1 仍会卡 `● running`，V1 ✓ 出现在 Evaluator 的 group——双重错位。目前 **不在 L1854-1868 tool_group 创建分支补守卫**，因为这要求把单 slot 数据结构升级为多 slot，改动面太大。runner 同步性已隐含保证此 EC 不发生
+- **EC4（result 永不到达）**：onStreamEnd / onError 的 `finalizeAllExecutingToolCalls` 会兜底清理为 Cancelled/Error
+- **EC6（多次 phase transition 跨越）**：每次 transition 都过滤 Executing，V1 一路保留；result 到达时正确变 ✓，tool_group title 因 bake-in 仍是 `[Worker]`，时间线语义正确
+
+#### Related
+
+- Issue 115 (v0.7.18 已修) — 同根因的 kind transition 变种；本 issue 是其对称路径漏覆盖的补充
+- 设计原则：3 个镜像点的修复模式完全相同（`hasExecutingTools` 守卫 + filter Executing），可考虑后续提取共享 helper
+
 ---
 ### 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决
 
