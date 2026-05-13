@@ -299,6 +299,41 @@ export interface ParsedCompatKeypress {
   isPrintable?: boolean;
   text?: string;
   code?: string;
+  /**
+   * FEATURE_134 (v0.7.40) — bracketed paste detection.
+   * When `true`, the terminal delivered a paste event wrapped in
+   * DEC mode 2004 bracketed-paste markers (`ESC[200~ ... ESC[201~`).
+   * The unwrapped payload is exposed via `text`. The `name` is set to
+   * `"paste"` so existing handlers that filter on name can route it.
+   *
+   * v1 only handles single-chunk pastes (whole sequence in one
+   * stdin 'data' event). Multi-chunk pastes (e.g. very large
+   * clipboard content split by the OS) are not buffered in v1 — they
+   * fall through to the normal sequence parsing path. The known
+   * limitation is documented in
+   * `docs/test-guides/FEATURE_134_v0.7.40_TEST_GUIDE.md`.
+   */
+  isPaste?: boolean;
+}
+
+const BRACKETED_PASTE_START = "\x1b[200~";
+const BRACKETED_PASTE_END = "\x1b[201~";
+
+/**
+ * FEATURE_134 (v0.7.40) — extract bracketed-paste payload from a
+ * single stdin chunk. Returns the unwrapped paste content when the
+ * chunk contains a COMPLETE `ESC[200~ ... ESC[201~` envelope, otherwise
+ * returns null and the caller falls back to normal keypress parsing.
+ *
+ * Exported separately from `parseKeypress` so consumers can detect
+ * paste at the data-event level too (e.g. to bypass `parseKeypress`
+ * altogether for paste paths).
+ */
+export function extractBracketedPaste(sequence: string): string | null {
+  if (!sequence.startsWith(BRACKETED_PASTE_START)) return null;
+  const endIdx = sequence.indexOf(BRACKETED_PASTE_END, BRACKETED_PASTE_START.length);
+  if (endIdx === -1) return null;
+  return sequence.slice(BRACKETED_PASTE_START.length, endIdx);
 }
 
 export default function parseKeypress(input: Buffer | string = ""): ParsedCompatKeypress {
@@ -316,6 +351,29 @@ export default function parseKeypress(input: Buffer | string = ""): ParsedCompat
     sequence = String(sequence);
   } else if (!sequence) {
     sequence = "";
+  }
+
+  // FEATURE_134 (v0.7.40) — single-chunk bracketed paste detection.
+  // Terminals send paste content wrapped in ESC[200~ ... ESC[201~ when
+  // DEC mode 2004 is enabled. We unwrap here so downstream handlers see
+  // a single "paste" keypress with the raw content on `.text`, not a
+  // garbled sequence of control codes followed by character soup.
+  if (typeof sequence === "string") {
+    const pasteContent = extractBracketedPaste(sequence);
+    if (pasteContent !== null) {
+      return {
+        name: "paste",
+        ctrl: false,
+        meta: false,
+        shift: false,
+        option: false,
+        sequence,
+        raw: sequence,
+        isPaste: true,
+        isPrintable: false,
+        text: pasteContent,
+      };
+    }
   }
 
   const kittyResult = parseKittyKeypress(sequence);

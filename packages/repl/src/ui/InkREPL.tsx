@@ -8398,6 +8398,18 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   try {
     const stdout = process.stdout;
     const stdin = process.stdin;
+    // FEATURE_134 v0.7.40 — enable DEC 2004 bracketed paste mode so the
+    // terminal wraps pasted content in ESC[200~/201~. The keypress parser
+    // (`packages/repl/src/ui/utils/keypress-parser.ts`) already aggregates
+    // those markers into a single synthetic `paste` event. The shutdown
+    // guard restores the terminal sequence on `beforeExit` / SIGINT /
+    // SIGTERM / uncaughtException, so a crash never leaves the terminal
+    // in bracketed-paste mode. Also explicitly disabled below after
+    // `waitUntilExit()` for the clean-exit path.
+    const { enableBracketedPasteMode, disableBracketedPasteMode, installBracketedPasteShutdownGuard } =
+      await import("../paste/bracketed-paste-mode.js");
+    enableBracketedPasteMode();
+    installBracketedPasteShutdownGuard();
     // Render Ink app
     // Issue 058/060: Ink 6.x options to reduce flickering
     let exitMessageRequested = false;
@@ -8443,6 +8455,10 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     // Wait for exit
     await waitUntilExit();
     cleanup();
+    // FEATURE_134 v0.7.40 — clean-exit teardown of DEC 2004. The shutdown
+    // guard above also covers signal / crash paths; calling it here is the
+    // common-case path.
+    disableBracketedPasteMode();
     if (stdin.isTTY === true && typeof stdin.setRawMode === "function" && stdin.isRaw) {
       stdin.setRawMode(false);
     }

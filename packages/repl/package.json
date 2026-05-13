@@ -26,6 +26,7 @@
     "chalk": "^5.4.1",
     "clipboardy": "^4.0.0",
     "ink": "^6.7.0",
+    "jimp": "^1.6.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "react": ">=19.0.0",
