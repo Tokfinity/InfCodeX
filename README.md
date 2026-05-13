@@ -81,6 +81,37 @@ If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint, define
 
 `userAgentMode` defaults to `"compat"`, which sends `KodaX` instead of the official SDK User-Agent. Switch it to `"sdk"` only when your gateway expects the upstream SDK header.
 
+#### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
+
+If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. The built-in 11 native providers (Anthropic, OpenAI, plus the 9 Anthropic-/OpenAI-compat clones — DeepSeek, Kimi, Kimi-code, Qwen, Zhipu, Zhipu-coding, MiniMax-coding, MiMo-coding, Ark-coding) already ship with this flag enabled by default; only custom providers need to opt in.
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-vision-provider",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_LLM_API_KEY",
+      "model": "my-vision-model",
+      "capabilityProfile": {
+        "transport": "native-api",
+        "conversationSemantics": "full-history",
+        "mcpSupport": "none",
+        "contextFidelity": "full",
+        "toolCallingFidelity": "full",
+        "sessionSupport": "full",
+        "longRunningSupport": "full",
+        "multimodalSupport": "image-input",
+        "evidenceSupport": "full"
+      }
+    }
+  ]
+}
+```
+
+The serializer layer (`packages/ai/src/providers/anthropic.ts:770` for Anthropic-compat, `openai.ts:904` for OpenAI-compat) forwards image blocks automatically through base-class inheritance. The flag only gates whether KodaX's policy layer pre-rejects multimodal requests — the model-level vision contract remains your upstream provider's responsibility. If the model is actually text-only, you'll see the real upstream API error instead of a KodaX-side rejection.
+
 ### 3. Start in REPL or run a one-shot task
 
 ```bash

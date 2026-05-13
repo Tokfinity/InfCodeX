@@ -131,6 +131,37 @@ import { loadConfig } from '@kodax-ai/kodax/repl';     // REPL 配置 / session 
 
 `userAgentMode` 默认 `"compat"`（发送 `KodaX` 而非上游 SDK 的 User-Agent）；如果你的网关要求原生 SDK header，再切到 `"sdk"`。
 
+#### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
+
+如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置的 11 个 native provider（Anthropic、OpenAI 以及 9 个 Anthropic-/OpenAI-compat clone：DeepSeek、Kimi、Kimi-code、Qwen、Zhipu、Zhipu-coding、MiniMax-coding、MiMo-coding、Ark-coding）已经默认开了这个 flag，只有自定义 provider 需要手动 opt-in。
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-vision-provider",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_LLM_API_KEY",
+      "model": "my-vision-model",
+      "capabilityProfile": {
+        "transport": "native-api",
+        "conversationSemantics": "full-history",
+        "mcpSupport": "none",
+        "contextFidelity": "full",
+        "toolCallingFidelity": "full",
+        "sessionSupport": "full",
+        "longRunningSupport": "full",
+        "multimodalSupport": "image-input",
+        "evidenceSupport": "full"
+      }
+    }
+  ]
+}
+```
+
+序列化层（Anthropic-compat 走 `packages/ai/src/providers/anthropic.ts:770`，OpenAI-compat 走 `openai.ts:904`）通过基类继承自动转发 image block。这个 flag 只控制 KodaX 自身是否预先拒绝多模态请求 —— 上游模型到底支不支持 vision 由 provider 自己决定。如果模型实际是 text-only，你会看到真实的上游 API 错误，而不是 KodaX 一侧的 `[Provider Policy] multimodal requests are unsupported` 预拦截。
+
 库模式下用 `registerCustomProviders()` 显式注册：
 
 ```typescript
