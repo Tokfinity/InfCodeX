@@ -26,7 +26,7 @@ WORKDIR /app
 # Copy workspace structure first (better layer caching)
 COPY package.json package-lock.json .npmrc ./
 COPY packages/agent/package.json   packages/agent/
-COPY packages/ai/package.json      packages/ai/
+COPY packages/llm/package.json     packages/llm/
 COPY packages/coding/package.json  packages/coding/
 COPY packages/repl/package.json    packages/repl/
 COPY packages/skills/package.json  packages/skills/
@@ -64,8 +64,8 @@ COPY --from=builder /app/node_modules/      node_modules/
 COPY --from=builder /app/dist/              dist/
 COPY --from=builder /app/packages/agent/dist/      packages/agent/dist/
 COPY --from=builder /app/packages/agent/package.json packages/agent/
-COPY --from=builder /app/packages/ai/dist/         packages/ai/dist/
-COPY --from=builder /app/packages/ai/package.json  packages/ai/
+COPY --from=builder /app/packages/llm/dist/        packages/llm/dist/
+COPY --from=builder /app/packages/llm/package.json packages/llm/
 COPY --from=builder /app/packages/coding/dist/     packages/coding/dist/
 COPY --from=builder /app/packages/coding/package.json packages/coding/
 COPY --from=builder /app/packages/repl/dist/       packages/repl/dist/

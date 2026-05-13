@@ -110,7 +110,7 @@ const OLD_PROMPT_SECTION = [
   'RULE A — Fan-out (2+ independent non-trivial threads)',
   '  "Non-trivial" means each thread on its own would need multiple file reads or multi-round searching. A bundle of small file lookups is NOT fan-out.',
   '  → Dispatch ONE child per thread, in the SAME turn.',
-  '  Example: "Audit packages/ai, packages/agent, packages/coding for security" → 3 parallel children.',
+  '  Example: "Audit packages/llm, packages/agent, packages/coding for security" → 3 parallel children.',
   '  If you identify N qualifying threads, dispatch ALL N. Do not rationalize "I\'ll handle one myself" — that defeats the parallelism.',
   '',
   'RULE B — Heavy single investigation (context preservation)',
@@ -139,7 +139,7 @@ const A5B_PROMPT_SECTION = [
   'RULE A — Fan-out (2+ independent non-trivial threads)',
   '  "Non-trivial" means each thread on its own would need multiple file reads or multi-round searching. A bundle of small file lookups is NOT fan-out.',
   '  → Dispatch ONE child per thread, in the SAME turn.',
-  '  Example: "Audit packages/ai, packages/agent, packages/coding for security" → 3 parallel children.',
+  '  Example: "Audit packages/llm, packages/agent, packages/coding for security" → 3 parallel children.',
   '  If you identify N qualifying threads, dispatch ALL N. Do not rationalize "I\'ll handle one myself" — that defeats the parallelism.',
   '',
   'RULE B — Heavy single investigation (context preservation)',
@@ -208,7 +208,7 @@ const TOOLS: KodaXToolDefinition[] = [
         id: { type: 'string', description: 'Unique child task identifier' },
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
         readOnly: { type: 'boolean', description: 'true=investigation only (default), false=code changes (Generator only)' },
-        scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/ai/src/")' },
+        scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
       },
       required: ['objective'],
     },
@@ -261,7 +261,7 @@ interface TestTask {
 const TASKS: TestTask[] = [
   {
     id: 'T1',
-    prompt: 'Audit three independent packages of this monorepo for security issues: packages/ai, packages/coding, packages/repl. For each package, find any vulnerabilities (input validation gaps, unsafe shell, secret handling, etc). Report findings per-package.',
+    prompt: 'Audit three independent packages of this monorepo for security issues: packages/llm, packages/coding, packages/repl. For each package, find any vulnerabilities (input validation gaps, unsafe shell, secret handling, etc). Report findings per-package.',
     expectation: 'parallel fan-out: ≥2 dispatch_child_task calls in same response',
     scoreFirstResponse: (toolNames) => {
       const dispatchCount = toolNames.filter((n) => n === 'dispatch_child_task').length;

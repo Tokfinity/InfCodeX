@@ -96,7 +96,7 @@ If the user did not give you a concrete task in their first message, read README
 ```
 KodaX/
 ├── packages/
-│   ├── ai/              # LLM abstraction layer (独立库)
+│   ├── llm/             # LLM abstraction layer (独立库, npm: @kodax-ai/llm)
 │   ├── agent/           # Agent framework
 │   ├── coding/          # Coding tools + prompts
 │   ├── repl/            # Interactive terminal (Ink UI)
@@ -106,11 +106,11 @@ KodaX/
 ```
 
 **Layer Independence**:
-- `@kodax/ai` - Can be used standalone in any project
-- `@kodax/agent` - Can be used with any LLM provider
-- `@kodax/coding` - Can be embedded in other agents
-- `@kodax/repl` - Full REPL experience
-- `@kodax/skills` - Zero external dependencies
+- `@kodax-ai/llm` - Can be used standalone in any project
+- `@kodax-ai/agent` - Can be used with any LLM provider
+- `@kodax-ai/coding` - Can be embedded in other agents
+- `@kodax-ai/repl` - Full REPL experience
+- `@kodax-ai/skills` - Zero external dependencies
 
 ## Documentation Standards
 

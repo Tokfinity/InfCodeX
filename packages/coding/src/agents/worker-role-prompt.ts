@@ -121,7 +121,7 @@ export function buildWorkerInstructions(
     '- COUNT-FIRST RULE: before calling `todo_update`, count the exact number N of `dispatch_child_task` calls you will make. The `op:"init"` items array MUST contain EXACTLY N items — ONE item per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `content:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
     '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 items:',
     '    todo_update({op:"init", items:[',
-    '      {id:"todo_1", content:"Audit packages/ai",     activeForm:"Auditing packages/ai"},',
+    '      {id:"todo_1", content:"Audit packages/llm",    activeForm:"Auditing packages/llm"},',
     '      {id:"todo_2", content:"Audit packages/agent",  activeForm:"Auditing packages/agent"},',
     '      {id:"todo_3", content:"Audit packages/coding", activeForm:"Auditing packages/coding"},',
     '      {id:"todo_4", content:"Audit packages/repl",   activeForm:"Auditing packages/repl"},',

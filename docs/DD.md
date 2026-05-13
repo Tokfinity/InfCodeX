@@ -780,7 +780,7 @@ v0.7.28 的 policy 绑定仅有两个入口：
 | Turn 边界快照 | `getActiveToolDefinitions()` 在每个 turn 开始时取一次 |
 | Provider 透传 | `tools as Anthropic.Messages.Tool[]` 直接进 `tools` 字段；**无 prompt 级 tool 注入** |
 | Dispatch | `executeTool(name, input, ctx)` |
-| Tool input 解析 | `packages/ai/src/providers/tool-input-parser.ts` 共享模块 `parseToolInputWithSalvage()` —— **Native API 10 个 provider 全用**（AnthropicCompat 5 + OpenAICompat 5）；CLI bridge `gemini-cli` / `codex-cli` 不在范围（无 tool 调用机制） |
+| Tool input 解析 | `packages/llm/src/providers/tool-input-parser.ts` 共享模块 `parseToolInputWithSalvage()` —— **Native API 10 个 provider 全用**（AnthropicCompat 5 + OpenAICompat 5）；CLI bridge `gemini-cli` / `codex-cli` 不在范围（无 tool 调用机制） |
 
 **partial-json salvage 覆盖范围**：仅 10 个 Native API provider。当 LLM 调 constructed tool 触顶 max_tokens 截断 mid-string，`parseToolInputWithSalvage` 三阶段恢复（strict `JSON.parse` → `partial-json` 抢救 → `{}` 兜底），handler 仍能拿到可读 partial input。Constructed tool 与 builtin 共享同一 dispatch 路径，**无须特殊适配自动受益**。
 

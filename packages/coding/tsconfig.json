@@ -21,7 +21,7 @@
   },
   "references": [
     {
-      "path": "../ai"
+      "path": "../llm"
     },
     {
       "path": "../agent"

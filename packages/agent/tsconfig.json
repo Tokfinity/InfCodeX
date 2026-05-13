@@ -5,7 +5,7 @@
     "moduleResolution": "NodeNext",
     "paths": {
       "@kodax-ai/llm": [
-        "../ai/src/index.ts"
+        "../llm/src/index.ts"
       ],
       "@kodax-ai/tracing": [
         "../tracing/src/index.ts"
@@ -28,7 +28,7 @@
   },
   "references": [
     {
-      "path": "../ai"
+      "path": "../llm"
     },
     {
       "path": "../tracing"

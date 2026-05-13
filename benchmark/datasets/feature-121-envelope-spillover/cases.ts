@@ -150,7 +150,7 @@ const PREVIEW_INSUFFICIENT_PREVIEW = [
   '## Summary',
   'Audited packages/{ai,agent,coding,repl,skills}. 29 findings total.',
   '## Findings (showing first 4 of 29)',
-  '1. packages/ai/src/providers/zhipu.ts:142 — missing timeout on stream',
+  '1. packages/llm/src/providers/zhipu.ts:142 — missing timeout on stream',
   '2. packages/agent/src/dispatch.ts:88 — TOCTOU on child registry lookup',
   '3. packages/coding/src/tools/grep.ts:51 — unbounded buffer growth',
   '4. packages/repl/src/keypress.ts:203 — stale closure over input ref',

@@ -25,7 +25,7 @@
 1. 启 KodaX。
 2. 发一个**触发 fan-out 的 read-only 任务**，让 Worker 派 ≥1 个 long-running child（≥30 秒）：
    ```
-   并行审计这两个目录：packages/ai/src 和 packages/coding/src。
+   并行审计这两个目录：packages/llm/src 和 packages/coding/src。
    对每个目录单独派 dispatch_child_task，逐文件读取识别 5 个最高风险的代码模式，
    每个 child 用唯一 task_id（例如 audit-ai 和 audit-coding）。
    ```
@@ -65,7 +65,7 @@
 
 1. 沿用 Test 1 的 fan-out 状态（`audit-ai` + `audit-coding` 仍在跑），或重新派发：
    ```
-   再次派两个 read-only child：lint-ai 跑 packages/ai/src 的所有 .ts 文件
+   再次派两个 read-only child：lint-ai 跑 packages/llm/src 的所有 .ts 文件
    全 lint pattern 探查，lint-coding 跑 packages/coding/src 的同样任务。
    每个 child 跑慢一点，详尽探查。
    ```
@@ -114,7 +114,7 @@
    并行派 3 个 dispatch_child_task：
    - id="hint-fast", objective="读 package.json 列出 dependencies 数量",
      model_hint="fast"
-   - id="hint-balanced", objective="审计 packages/ai/src/openai.ts 的 retry 逻辑",
+   - id="hint-balanced", objective="审计 packages/llm/src/openai.ts 的 retry 逻辑",
      model_hint="balanced"
    - id="hint-deep", objective="跨 packages/{ai,coding}/src/ 综述 retry 模式的设计权衡",
      model_hint="deep"
@@ -206,7 +206,7 @@ $env:KODAX_ASYNC_DISPATCH = "0"
 1. 启 KodaX（带上面的 env）。
 2. 发一个尝试 fan-out 的任务：
    ```
-   派两个 read-only child 审计 packages/ai/src，然后用 send_message
+   派两个 read-only child 审计 packages/llm/src，然后用 send_message
    给其中一个追加要求。
    ```
 3. Worker 应该会发现 dispatch 走 sync path（returns finding text 不 returns task_id banner），然后**没有**机会调 send_message——但如果它强行调用（hallucinated id），应该返 `[Tool Error] send_message: Async dispatch is disabled (no childTaskRegistry on context). …`

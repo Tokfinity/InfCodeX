@@ -28,7 +28,7 @@ echo "# Project Rules
 1. 启 KodaX。
 2. 发一个**显式触发 H2 Generator + write fan-out** 的复杂 mutation 任务。在 KodaX 自身仓库示例：
    ```
-   重构 packages/ai/src/anthropic.ts 和 packages/ai/src/openai.ts，
+   重构 packages/llm/src/anthropic.ts 和 packages/llm/src/openai.ts，
    把它们的 retry 逻辑提取到一个共享 helper。请并行处理这两个文件，
    每个文件用独立的 child agent。
    ```

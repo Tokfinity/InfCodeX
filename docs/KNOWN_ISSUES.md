@@ -27,7 +27,7 @@ _Last Updated: 2026-05-09_
 | 055 | Low | Resolved | Built-in Skills 未完全符合 Agent Skills 规范 | v0.4.7 | v0.6.17 | 2026-03-01 | 2026-03-23 |
 | 061 | Low | Resolved | Windows Terminal 流式输出时滚轮滚动异常 | v0.4.5 | v0.6.17 | 2026-03-02 | 2026-03-23 |
 | 077 | Low | Resolved | Skills 系统高级功能未完全实现 | v0.5.5 | v0.6.17 | 2026-03-04 | 2026-03-23 |
-| 082 | Low | Open | packages/ai 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
+| 082 | Low | Open | packages/llm 缺少单元测试 | v0.5.21 | - | 2026-03-08 | - |
 | 083 | Medium | Resolved | 缺少快捷键系统 | v0.5.29 | v0.5.30 | 2026-03-11 | 2026-03-12 |
 
 | 089 | High | Resolved | Feature / Design / Summary 元数据漂移 | v0.6.10 | v0.6.10 | 2026-03-18 | 2026-03-19 |
@@ -756,9 +756,9 @@ KodaX 选择记录 known issue + 一行 workaround，让 tmux 用户主动配置
 
 DeepSeek V4 thinking-mode 修复（v0.7.28）落地了三层保护：
 
-1. **L1**（[openai.ts:807](../packages/ai/src/providers/openai.ts)）：`replayReasoningContent: true` flag 的 provider 把每个 assistant turn 的 `reasoning_content` 字段补齐（默认 `''`），避免 multi-turn 缺字段时 400
-2. **L5**（[anthropic.ts:619-645](../packages/ai/src/providers/anthropic.ts)）：strict signature mode 下，缺签名的跨 provider thinking 块转 `<prior_reasoning>` text 注入 ——目的是切到 anthropic 官方时不丢推理痕迹
-3. **Kimi guard**（[anthropic.ts:704](../packages/ai/src/providers/anthropic.ts)）：assistant tool_use turn 缺 thinking 块时注入 `{ thinking: '...', signature: '' }` 占位
+1. **L1**（[openai.ts:807](../packages/llm/src/providers/openai.ts)）：`replayReasoningContent: true` flag 的 provider 把每个 assistant turn 的 `reasoning_content` 字段补齐（默认 `''`），避免 multi-turn 缺字段时 400
+2. **L5**（[anthropic.ts:619-645](../packages/llm/src/providers/anthropic.ts)）：strict signature mode 下，缺签名的跨 provider thinking 块转 `<prior_reasoning>` text 注入 ——目的是切到 anthropic 官方时不丢推理痕迹
+3. **Kimi guard**（[anthropic.ts:704](../packages/llm/src/providers/anthropic.ts)）：assistant tool_use turn 缺 thinking 块时注入 `{ thinking: '...', signature: '' }` 占位
 
 L1 deepseek V4 路径已实证（直接 API probe 重现 400 + 修复）。但还有三个**未独立实证**的项：
 
@@ -823,8 +823,8 @@ L1 deepseek V4 路径已实证（直接 API probe 重现 400 + 修复）。但�
 
 观察任意真实多模块任务的 KodaX session：
 
-1. `kodax "审查 packages/ai 和 packages/coding 的安全问题"` —— 触发 H1 review-only 路径，Scout 会 fan-out（这条路径正常）
-2. `kodax "在 packages/ai、packages/agent、packages/coding 三个独立模块各加一个空函数"` —— 触发 H2 write，但 Generator 不会派 write child（hypothesis-check 硬编码 false）
+1. `kodax "审查 packages/llm 和 packages/coding 的安全问题"` —— 触发 H1 review-only 路径，Scout 会 fan-out（这条路径正常）
+2. `kodax "在 packages/llm、packages/agent、packages/coding 三个独立模块各加一个空函数"` —— 触发 H2 write，但 Generator 不会派 write child（hypothesis-check 硬编码 false）
 3. `kodax "重构 task-engine 的 H1/H2 路由逻辑"` —— 触发 managed profile（`requiresBrainstorm + code` 命中），即使是 read-only 调研阶段也拿不到 fan-out 提示
 
 #### Root Cause（已通过 isolated eval 实测确认）
@@ -2494,7 +2494,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - API 调用应该有日志记录（至少在重试时）
 
 - **Context**:
-  - 相关代码：`packages/ai/src/providers/anthropic.ts` 流式响应循环
+  - 相关代码：`packages/llm/src/providers/anthropic.ts` 流式响应循环
   - 相关代码：`packages/coding/src/retry-handler.ts` 重试逻辑
   - 现有 3 分钟硬超时可能未生效（或超时后消息未显示）
   - 可能是 `for await...of` 循环在网络断开时静默结束
@@ -2531,8 +2531,8 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
      - 记录流开始时间、结束时间、事件类型等
 
 - **Files Modified**:
-  - `packages/ai/src/providers/anthropic.ts` - 添加 message_stop 检测
-  - `packages/ai/src/providers/openai.ts` - 添加 finish_reason 检测
+  - `packages/llm/src/providers/anthropic.ts` - 添加 message_stop 检测
+  - `packages/llm/src/providers/openai.ts` - 添加 finish_reason 检测
   - `packages/coding/src/error-classification.ts` - 添加 StreamIncompleteError 分类
 
 ---
@@ -2784,14 +2784,14 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ---
 
-### 082: packages/ai 缺少单元测试
+### 082: packages/llm 缺少单元测试
 - **Priority**: Low
 - **Status**: Open
 - **Introduced**: v0.5.21
 - **Created**: 2026-03-08
 
 - **Original Problem**:
-  `packages/ai` 已经补上了一批 provider / reasoning 相关单元测试，但覆盖仍不完整。当前 issue 已从“完全没有单元测试”收敛为“关键基础层测试覆盖仍然偏薄”。
+  `packages/llm` 已经补上了一批 provider / reasoning 相关单元测试，但覆盖仍不完整。当前 issue 已从“完全没有单元测试”收敛为“关键基础层测试覆盖仍然偏薄”。
 
   当前仍需继续补齐的模块：
   - `providers/base.ts` - Provider 基类行为与回退链
@@ -3125,11 +3125,11 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - 在可行情况下，多轮上下文语义应尽量保持一致
 
 - **Context**:
-  - `packages/ai/src/providers/acp-base.ts`
-  - `packages/ai/src/cli-events/acp-client.ts`
-  - `packages/ai/src/providers/gemini-cli.ts`
-  - `packages/ai/src/providers/codex-cli.ts`
-  - `packages/ai/src/providers/registry.ts`
+  - `packages/llm/src/providers/acp-base.ts`
+  - `packages/llm/src/cli-events/acp-client.ts`
+  - `packages/llm/src/providers/gemini-cli.ts`
+  - `packages/llm/src/providers/codex-cli.ts`
+  - `packages/llm/src/providers/registry.ts`
 
 - **Root Cause**:
   1. pseudo ACP bridge 将外部 CLI 视作普通 provider 适配
@@ -3147,23 +3147,23 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - 为 capability metadata 和用户可见 disclosure 新增回归测试，后续若 bridge provider 再次被误标成原生语义，测试会直接失败
 
 - **Files Changed**:
-  - `packages/ai/src/types.ts`
-  - `packages/ai/src/providers/capability-profile.ts`
-  - `packages/ai/src/providers/base.ts`
-  - `packages/ai/src/providers/acp-base.ts`
-  - `packages/ai/src/providers/registry.ts`
-  - `packages/ai/src/providers/registry.js`
-  - `packages/ai/src/providers/index.ts`
-  - `packages/ai/src/providers/custom-provider.ts`
-  - `packages/ai/src/providers/custom-registry.ts`
-  - `packages/ai/src/index.ts`
+  - `packages/llm/src/types.ts`
+  - `packages/llm/src/providers/capability-profile.ts`
+  - `packages/llm/src/providers/base.ts`
+  - `packages/llm/src/providers/acp-base.ts`
+  - `packages/llm/src/providers/registry.ts`
+  - `packages/llm/src/providers/registry.js`
+  - `packages/llm/src/providers/index.ts`
+  - `packages/llm/src/providers/custom-provider.ts`
+  - `packages/llm/src/providers/custom-registry.ts`
+  - `packages/llm/src/index.ts`
   - `packages/coding/src/providers/index.ts`
   - `packages/coding/src/index.ts`
   - `packages/repl/src/common/utils.ts`
   - `packages/repl/src/interactive/commands.ts`
 
 - **Tests Added**:
-  - `packages/ai/src/providers/capability-profile.test.ts`
+  - `packages/llm/src/providers/capability-profile.test.ts`
   - `packages/repl/src/interactive/provider-capabilities.test.ts`
   - `tests/tracker-consistency.test.ts`（持续校验 tracker summary / highest-priority open issue，防止 issue 状态回写再次漂移）
 
@@ -3288,8 +3288,8 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - `src/kodax_cli.ts`
   - `packages/coding/src/agent.ts`
   - `packages/coding/src/reasoning.ts`
-  - `packages/ai/src/providers/anthropic.ts`
-  - `packages/ai/src/providers/openai.ts`
+  - `packages/llm/src/providers/anthropic.ts`
+  - `packages/llm/src/providers/openai.ts`
 
 - **Source Debt IDs**:
   - `C5`, `C6`, `H1`, `H2`, `H3`, `H4`, `H5`, `H6`, `H7`, `H8`, `H9`, `H10`
@@ -3356,7 +3356,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   - session / routing / registry 相关模型应尽量复用统一类型定义
 
 - **Context**:
-  - `packages/ai/src/providers/anthropic.ts`
+  - `packages/llm/src/providers/anthropic.ts`
   - `packages/coding/src/agent.ts`
   - `packages/coding/src/acp/pseudo-acp-server.ts`
   - `packages/skills/src/skill-registry.ts`
@@ -3488,7 +3488,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - **Created**: 2026-03-22
 
 - **Original Problem**:
-  除了已单独跟踪的 `082 packages/ai 缺少单元测试` 之外，当前测试资产本身也存在一批结构性债务，包括超大的测试文件、重复实现 helper、散落的 scratch / 临时验证脚本，以及若干直接依赖硬编码常量的断言。这类问题会降低新增测试的速度，也会让回归定位变得更慢。
+  除了已单独跟踪的 `082 packages/llm 缺少单元测试` 之外，当前测试资产本身也存在一批结构性债务，包括超大的测试文件、重复实现 helper、散落的 scratch / 临时验证脚本，以及若干直接依赖硬编码常量的断言。这类问题会降低新增测试的速度，也会让回归定位变得更慢。
 
 - **Expected Behavior**:
   - 通用测试 helper 应抽到共享位置，而不是在多个测试文件内重复实现
@@ -3926,7 +3926,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - Resolved 090: CLI Provider 桥接语义降级：上下文与 MCP 能力丢失 (High Priority)
 - 新增 provider capability profile，显式区分 Native API 与 CLI bridge，并记录上下文语义和 MCP 支持边界
 - `/model` 与 `/status` 现在会直接披露 bridge provider 的限制：只转发最新一条用户消息，且 MCP 不可用
-- 新增 `packages/ai/src/providers/capability-profile.test.ts` 与 `packages/repl/src/interactive/provider-capabilities.test.ts`，防止桥接 provider 再次被误标为原生语义
+- 新增 `packages/llm/src/providers/capability-profile.test.ts` 与 `packages/repl/src/interactive/provider-capabilities.test.ts`，防止桥接 provider 再次被误标为原生语义
 
 ### 2026-03-19: Issue 089 resolved
 - Resolved 089: Feature / Design / Summary 元数据漂移 (High Priority)

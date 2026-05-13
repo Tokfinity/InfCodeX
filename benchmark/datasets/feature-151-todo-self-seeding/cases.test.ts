@@ -68,7 +68,7 @@ describe('FEATURE_151 todo-self-seeding judges', () => {
     expect(judges.length).toBeGreaterThan(0);
     // Probe: an output without op:'init' should fail the first judge.
     const result = judges[0]?.judge(
-      "I'll start auditing packages/ai/ now. First I'll look at provider adapters...",
+      "I'll start auditing packages/llm/ now. First I'll look at provider adapters...",
     );
     expect(result?.passed).toBe(false);
   });
