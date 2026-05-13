@@ -273,6 +273,7 @@ import {
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
+import { createBlobSummarizer } from '../tools/blob-summarizer.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';
 // CAP-003/004/005/006/007: shared event emit helpers. Both SA (substrate
 // frame) and AMA (this runner-driven path) fire through the same
@@ -4710,6 +4711,18 @@ async function runManagedTaskViaRunnerInner(
     // (shared between SA and AMA paths). The spread above already carries
     // `substrateBaseCtx.childTaskRegistry`; the dispatch tool gates the
     // async-vs-sync branch on `KODAX_ASYNC_DISPATCH !== '0'`.
+    //
+    // FEATURE_121 v0.7.40 follow-up — last-resort LLM blob summarizer
+    // bound to the Worker's own provider/model. Resolves the provider
+    // lazily at call-time (a fresh instance per summarize, avoiding
+    // mutated state on the per-turn LLM adapter's instance). Triggered
+    // only by `dispatch-child-tasks` when `applyToolResultGuardrail`
+    // returns `spillFailed:true` AND raw content > 100KB.
+    summarizeBlob: (content, summaryOpts) => {
+      const provider = resolveProvider(options.provider ?? 'anthropic');
+      const model = options.modelOverride ?? options.model ?? 'unknown';
+      return createBlobSummarizer({ provider, model })(content, summaryOpts);
+    },
   };
 
   // Budget controller. Start with H0 cap (50); `wrapEmitterWithRecorder`

@@ -18,6 +18,14 @@ export interface GuardedToolResult {
   truncated: boolean;
   outputPath?: string;
   policy: ToolResultPolicy;
+  /**
+   * FEATURE_121 v0.7.40 — set when `persistToolOutput` threw and
+   * `content` was returned inline as the data-loss-guard fallback.
+   * Callers that need an LLM-summary follow-up (`dispatch-child-tasks`
+   * for `child_task_summary`) branch on this flag. Undefined/false
+   * means the normal success path ran.
+   */
+  spillFailed?: boolean;
 }
 
 const DEFAULT_POLICY: ToolResultPolicy = {
@@ -223,6 +231,7 @@ export async function applyToolResultGuardrail(
       content,
       truncated: false,
       policy,
+      spillFailed: true,
     };
   }
 

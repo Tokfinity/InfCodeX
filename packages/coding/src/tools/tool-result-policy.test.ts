@@ -94,6 +94,8 @@ describe('tool result guardrail', () => {
     expect(result.content).toBe(largeContent);
     expect(result.truncated).toBe(false);
     expect(result.outputPath).toBeUndefined();
+    // Flag set so `dispatch-child-tasks` LLM-summary fallback can branch.
+    expect(result.spillFailed).toBe(true);
     // The "truncated" banner text MUST NOT appear — its presence would
     // indicate silent data loss (the bug this guard was added for).
     expect(result.content).not.toContain('Tool output truncated');
@@ -128,6 +130,7 @@ describe('tool result guardrail', () => {
     expect(result.content).toBe(content);
     expect(result.truncated).toBe(false);
     expect(result.outputPath).toBeUndefined();
+    expect(result.spillFailed).toBe(true);
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
