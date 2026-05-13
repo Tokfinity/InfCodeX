@@ -358,6 +358,7 @@ export {
 // in `@kodax-ai/coding` and consume these as generics.
 export type {
   ChildTaskRegistry,
+  EnvelopeAggregateEnforcer,
   FanOutOutcome,
   FanOutProgressEvent,
   IdleYieldSnapshot,

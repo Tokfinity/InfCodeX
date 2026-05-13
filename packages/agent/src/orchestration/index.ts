@@ -19,6 +19,7 @@ export type { ChildTaskRegistry } from './task-registry.js';
 export { registerChildTask } from './task-registry.js';
 
 export type {
+  EnvelopeAggregateEnforcer,
   IdleYieldSnapshot,
   WaitForWakeEventOptions,
   WakeEvent,

@@ -272,6 +272,7 @@ import {
 } from '@kodax-ai/agent';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
+import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
 import { buildPromptMessageContent } from '../input-artifacts.js';
 // CAP-003/004/005/006/007: shared event emit helpers. Both SA (substrate
 // frame) and AMA (this runner-driven path) fire through the same
@@ -5521,6 +5522,13 @@ async function runManagedTaskViaRunnerInner(
     // transition logic will pick up where the Worker left off (the
     // handoff slot is empty, so no handoff replay races).
     resumeAgent: () => chain.worker,
+    // FEATURE_121 (v0.7.40) — envelope aggregate budget enforcer.
+    // Per-banner guardrail already happens at enqueue time
+    // (dispatch-child-tasks.ts). This second-line hook fires only when
+    // N banners' combined size after per-banner spillover still exceeds
+    // ENVELOPE_AGGREGATE_LIMIT_BYTES (200KB, claudecode parity), and
+    // forces additional banners to spill until total fits.
+    envelopeAggregateEnforcer: createEnvelopeAggregateBudgetEnforcer(baseCtx),
     onIdleWaiting: (currentAgent) => {
       // FEATURE_156 — surface "alive but suspended" to the REPL.
       // Agent-agnostic identity lookup: today only the Worker can

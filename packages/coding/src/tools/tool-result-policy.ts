@@ -94,6 +94,16 @@ const TOOL_RESULT_POLICIES: Record<string, ToolResultPolicy> = {
     direction: 'head',
     spillToFile: true,
   },
+  // FEATURE_121 (v0.7.40): child task <task-completed> banner summary.
+  // 50KB / head — aligns with `read`. Child role prompts encourage placing
+  // executive summary in the report head, so head-direction preserves the
+  // most decision-relevant content for Worker.
+  child_task_summary: {
+    maxLines: 1500,
+    maxBytes: 50 * 1024,
+    direction: 'head',
+    spillToFile: true,
+  },
 };
 
 export function getToolResultPolicy(toolName: string): ToolResultPolicy {
@@ -123,23 +133,41 @@ function buildToolResultHint(toolName: string): string {
     case 'write':
     case 'edit':
       return 'Inspect the file with read instead of relying on a huge diff preview.';
+    case 'child_task_summary':
+      return 'Use the Read tool on the saved output path to view the full child task report.';
     default:
       return 'Use a narrower follow-up tool call to inspect the missing details.';
   }
+}
+
+export interface ApplyToolResultGuardrailOptions {
+  /**
+   * FEATURE_121 (v0.7.40): force the guardrail down the spill+preview path
+   * regardless of `policy.maxBytes`. Used by envelope aggregate budget
+   * enforcement to reclaim space when N child summaries individually fit
+   * but together exceed the envelope cap.
+   */
+  forceSpill?: boolean;
 }
 
 export async function applyToolResultGuardrail(
   toolName: string,
   content: string,
   ctx: KodaXToolExecutionContext,
+  options?: ApplyToolResultGuardrailOptions,
 ): Promise<GuardedToolResult> {
   const policy = getToolResultPolicy(toolName);
+  // Under forceSpill, we still want the same head/tail preview behaviour, but
+  // we treat any content as "must spill" so we go through the spill path.
+  const effectivePolicy: ToolResultPolicy = options?.forceSpill
+    ? { ...policy, maxBytes: Math.min(policy.maxBytes, 2 * 1024), maxLines: Math.min(policy.maxLines, 20) }
+    : policy;
   const truncation =
-    policy.direction === 'tail'
-      ? truncateTail(content, policy)
-      : truncateHead(content, policy);
+    effectivePolicy.direction === 'tail'
+      ? truncateTail(content, effectivePolicy)
+      : truncateHead(content, effectivePolicy);
 
-  if (!truncation.truncated) {
+  if (!truncation.truncated && !options?.forceSpill) {
     return {
       content,
       truncated: false,
@@ -148,12 +176,54 @@ export async function applyToolResultGuardrail(
   }
 
   let outputPath: string | undefined;
+  let spillFailed = false;
+  let spillError: unknown;
   if (policy.spillToFile) {
     try {
       outputPath = await persistToolOutput(toolName, content, ctx);
-    } catch {
+    } catch (err) {
       outputPath = undefined;
+      spillFailed = true;
+      spillError = err;
     }
+  }
+
+  // FEATURE_121 v0.7.40 — spill-failure data-loss guard.
+  //
+  // When `persistToolOutput` throws (disk full / EACCES / EROFS / EIO /
+  // ENOSPC / SELinux denial), the previous behaviour silently dropped
+  // the truncation tail: caller got a `~50KB` preview with no spill
+  // path and no marker, the remaining bytes were unrecoverable, and
+  // the Worker had no signal that anything was lost.
+  //
+  // Treatment: return full `content` inlined with `truncated: false`.
+  // The agent-layer envelope-budget enforcer will get a second chance
+  // to spill at banner-composition time; if that also fails, the full
+  // payload still rides in the LLM context (over-budget but visible)
+  // rather than silently shrinking. User contract for FEATURE_121:
+  // silent data loss > observable over-budget.
+  //
+  // `truncated: false` is the right field value here even though the
+  // mechanism is "fallback inline" — all current callers
+  // (dispatch-child-tasks.ts × 3, envelope-budget.ts × 1) read only
+  // `.content`. If a future caller branches on `.truncated`, it should
+  // treat this case the same as "small content fit in budget" (which
+  // is exactly the externally-visible behaviour).
+  //
+  // The console.warn is intentionally NOT gated on
+  // KODAX_DEBUG_TOOL_GUARDRAILS — disk failure is a severe operational
+  // event that an operator must see immediately.
+  if (spillFailed) {
+    console.warn(
+      `[ToolGuardrail] persistToolOutput failed for ${toolName}; ` +
+        `inlining ${Buffer.byteLength(content, 'utf-8')} bytes to preserve data. ` +
+        `Cause: ${spillError instanceof Error ? spillError.message : String(spillError)}`,
+    );
+    return {
+      content,
+      truncated: false,
+      policy,
+    };
   }
 
   const preview =

@@ -511,7 +511,15 @@ function normalizeWorkerResult<TOutput>(
   if (result.success) {
     return {
       ...result,
-      summary: result.summary ?? (typeof result.output === 'string' ? truncateText(result.output) : undefined),
+      // FEATURE_121 (v0.7.40): no longer pre-truncate to 1600 chars here.
+      // Downstream `dispatch-child-tasks.ts` enqueue path now runs the summary
+      // through `applyToolResultGuardrail('child_task_summary', ...)` so child
+      // summaries are framework-managed (50KB head + spill-to-file). Other
+      // consumers of `summary` (summary.md / summary.json diagnostic writes,
+      // mergedFindings.evidence, formatDependencyHandoff which has its own
+      // 600-char truncate) accept full content intentionally — see
+      // docs/features/v0.7.40.md FEATURE_121 §"不改动" + 已识别下游消费方表.
+      summary: result.summary ?? (typeof result.output === 'string' ? result.output : undefined),
     };
   }
 
@@ -1027,14 +1035,16 @@ export function createKodaXTaskRunner<TTask extends KodaXAgentWorkerSpec = KodaX
         : 'Worker finished successfully'
     );
 
+    // FEATURE_121 (v0.7.40): pass full lastText as summary. Downstream
+    // dispatch-child-tasks enqueue path runs it through guardrail. See
+    // normalizeWorkerResult above for the rationale.
     return {
       success: transformedResult.success,
       output: transformedResult.lastText,
-      summary: truncateText(
+      summary:
         transformedResult.lastText
           || transformedResult.signalReason
           || (transformedResult.interrupted ? 'Worker interrupted before producing a textual result.' : 'No textual output produced.'),
-      ),
       metadata: {
         sessionId: transformedResult.sessionId,
         signal: transformedResult.signal ?? null,
