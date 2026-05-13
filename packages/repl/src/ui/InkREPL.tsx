@@ -10,7 +10,7 @@
  * - Uses StreamingContext for streaming response management
  */
 
-import React, { useState, useCallback, useRef, useEffect, useMemo, useDeferredValue } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { render, Box, useApp, Text, Static, useStdout, useStdin, useTerminalWrite } from "./tui.js";
 import { AlternateScreen, type ScrollBoxWindow } from "../tui/index.js";
 import { StatusBar } from "./components/StatusBar.js";
@@ -1630,13 +1630,36 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     );
     return start === 0 ? fullDisplayHistory : fullDisplayHistory.slice(start);
   }, [fullDisplayHistory]);
-  // FEATURE_060 Tier 2: defer the heavy transcript items state so that
-  // keyboard input + spinner ticks don't get blocked behind a full
-  // `buildTranscriptRenderModel` rebuild. React schedules this on a
-  // low-priority track; the input + spinner state stays on the
-  // high-priority track and re-renders cheaply against the previous
-  // (already-materialized) deferred value. Mirrors CC's REPL.tsx:1318.
-  const deferredDisplayHistory = useDeferredValue(displayHistory);
+  // FEATURE_060 Tier 2 v0.7.40 follow-up — `useDeferredValue(displayHistory)`
+  // disabled (replaced with direct passthrough). Root-cause hypothesis: on
+  // Windows/ConPTY under Node.js + Ink (react-reconciler without DOM idle
+  // scheduling), the low-priority React track NEVER gets to flush during
+  // heavy agent execution. Each spinner tick + streaming-state update is
+  // a high-priority React update, perpetually starving the deferred work.
+  // User-visible symptom: during agent run, transcript items (user query,
+  // thinking blocks, assistant text, tool calls) stay invisible while
+  // spinner + status bar + TodoListSurface render normally; all items
+  // "pop in" at task end when setIsLoading(false) forces a re-render.
+  //
+  // The other two FEATURE_060 Tier 2 optimizations remain intact:
+  //   1. UUID-anchored 200-item cap in `displayHistory`        (line 1626)
+  //   3. Transcript-mode 30-message visible cap                (line 2565)
+  // These already bound the per-render cost to O(min(N, 200)) for the
+  // 200-cap path and O(min(N, 30)) for transcript-mode — so removing the
+  // useDeferredValue indirection (mid-frame interruptibility) should NOT
+  // bring back the original SSH-resume lag that FEATURE_060 Tier 2 fixed.
+  //
+  // Trade-off accepted: long-session `kodax -c` resume on Windows-SSH may
+  // see a one-time first-paint lag of ~10-50ms. Single-event, recoverable.
+  // Compared to "transcript invisible during every agent run" (user-
+  // reported P0), this is strictly better.
+  //
+  // If a future repro shows the resume regression returns, switch to a
+  // length-thresholded variant:
+  //   const lazyDeferred = useDeferredValue(displayHistory);
+  //   const deferredDisplayHistory = displayHistory.length > 100
+  //     ? lazyDeferred : displayHistory;
+  const deferredDisplayHistory = displayHistory;
   const renderHistory = useMemo(() => {
     return sliceHistoryToRecentRounds(deferredDisplayHistory, MAX_VISIBLE_ROUNDS);
   }, [deferredDisplayHistory]);
@@ -8398,18 +8421,22 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   try {
     const stdout = process.stdout;
     const stdin = process.stdin;
-    // FEATURE_134 v0.7.40 — enable DEC 2004 bracketed paste mode so the
-    // terminal wraps pasted content in ESC[200~/201~. The keypress parser
-    // (`packages/repl/src/ui/utils/keypress-parser.ts`) already aggregates
-    // those markers into a single synthetic `paste` event. The shutdown
-    // guard restores the terminal sequence on `beforeExit` / SIGINT /
-    // SIGTERM / uncaughtException, so a crash never leaves the terminal
-    // in bracketed-paste mode. Also explicitly disabled below after
-    // `waitUntilExit()` for the clean-exit path.
-    const { enableBracketedPasteMode, disableBracketedPasteMode, installBracketedPasteShutdownGuard } =
-      await import("../paste/bracketed-paste-mode.js");
-    enableBracketedPasteMode();
-    installBracketedPasteShutdownGuard();
+    // FEATURE_134 v0.7.40 follow-up — DEC 2004 bracketed paste mode is
+    // owned by `KeypressContext.tsx` (which writes `\x1b[?2004h` via
+    // Ink's managed stdout in a useEffect AFTER Ink's first render, and
+    // writes `\x1b[?2004l` on unmount). The previous FEATURE_134 v1 also
+    // wrote the enable sequence HERE (before `render()`), which on
+    // Windows ConPTY corrupted Ink's startup: ConPTY consumed the
+    // pre-render escape as pending-output state, causing Ink's diff
+    // renderer to write into a buffer that was only flushed on
+    // significant state changes (task completion). User-visible symptom:
+    // transcript middle section blank during agent run, all updates
+    // "popping in" at task end. Removed the redundant pre-render write;
+    // `KeypressContext.tsx:134` is the single source of truth for
+    // bracketed paste lifecycle. The 4 explicit paste sources
+    // (Source 2 `@<path>`, Source 3 macOS Cmd+V, Source 4 Win Alt+V,
+    // Source 5 macOS/Linux Ctrl+V) are unchanged; Source 1 (bracketed
+    // paste) still flows through `KeypressParser.flushPasteAccumulator`.
     // Render Ink app
     // Issue 058/060: Ink 6.x options to reduce flickering
     let exitMessageRequested = false;
@@ -8455,10 +8482,11 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     // Wait for exit
     await waitUntilExit();
     cleanup();
-    // FEATURE_134 v0.7.40 — clean-exit teardown of DEC 2004. The shutdown
-    // guard above also covers signal / crash paths; calling it here is the
-    // common-case path.
-    disableBracketedPasteMode();
+    // FEATURE_134 v0.7.40 follow-up — DEC 2004 disable on clean exit is
+    // now handled by `KeypressContext.tsx` useEffect cleanup (matching
+    // pair to its enable write at line 134). The previous explicit
+    // `disableBracketedPasteMode()` here was the matching pair to the
+    // pre-render enable that's now removed.
     if (stdin.isTTY === true && typeof stdin.setRawMode === "function" && stdin.isRaw) {
       stdin.setRawMode(false);
     }
