@@ -18,6 +18,18 @@ const mocks = vi.hoisted(() => {
     // entry inside the mock.
     navigateUpReturn: null as string | null,
     navigateDownReturn: null as string | null,
+    // FEATURE_134 v0.7.40 — paste-handler mock state.
+    extractImagePathsReturn: [] as readonly string[],
+    handleBracketedPasteReturn: { kind: "text", text: "" } as
+      | { kind: "text"; text: string }
+      | { kind: "images"; blocks: readonly { type: "image"; path: string; mediaType?: string }[] }
+      | { kind: "noop" }
+      | { kind: "error"; message: string },
+    triggerExplicitClipboardImageReturn: { kind: "noop" } as
+      | { kind: "text"; text: string }
+      | { kind: "images"; blocks: readonly { type: "image"; path: string; mediaType?: string }[] }
+      | { kind: "noop" }
+      | { kind: "error"; message: string },
   };
 
   return {
@@ -64,6 +76,10 @@ const mocks = vi.hoisted(() => {
     // Issue 121: minimal stub paste-store; tests assert on its expand()
     pasteStoreExpandMock: vi.fn((text: string) => text),
     pasteStoreGetMock: vi.fn(() => undefined),
+    // FEATURE_134 v0.7.40 — paste-handler mocks.
+    extractImagePathsMock: vi.fn((): readonly string[] => state.extractImagePathsReturn),
+    handleBracketedPasteMock: vi.fn(async () => state.handleBracketedPasteReturn),
+    triggerExplicitClipboardImageMock: vi.fn(async () => state.triggerExplicitClipboardImageReturn),
   };
 });
 
@@ -131,6 +147,15 @@ vi.mock("./autocomplete-replacement.js", () => ({
   buildAutocompleteReplacement: mocks.replacementMock,
 }));
 
+// FEATURE_134 v0.7.40 — mock the paste pipeline so the controller test
+// doesn't need real jimp / file IO. State on `mocks.state` drives the
+// per-test return shape.
+vi.mock("../../paste/index.js", () => ({
+  extractImagePaths: mocks.extractImagePathsMock,
+  handleBracketedPaste: mocks.handleBracketedPasteMock,
+  triggerExplicitClipboardImage: mocks.triggerExplicitClipboardImageMock,
+}));
+
 import {
   resolvePromptEditingCommand,
   resolvePromptEnterBehavior,
@@ -162,6 +187,9 @@ describe("prompt-input-controller", () => {
     mocks.state.enterCompletion = null;
     mocks.state.navigateUpReturn = null;
     mocks.state.navigateDownReturn = null;
+    mocks.state.extractImagePathsReturn = [];
+    mocks.state.handleBracketedPasteReturn = { kind: "text", text: "" };
+    mocks.state.triggerExplicitClipboardImageReturn = { kind: "noop" };
     vi.clearAllMocks();
   });
 
@@ -373,5 +401,184 @@ describe("prompt-input-controller", () => {
 
     expect(controller?.handleKey(createKey({ name: "backspace", sequence: "\u001b\u007f", meta: true }))).toBe(true);
     expect(mocks.deleteWordLeftMock).toHaveBeenCalledTimes(2);
+  });
+
+  // FEATURE_134 v0.7.40 — image paste pipeline integration. The controller
+  // intercepts `name === "paste"` keypresses whose content matches
+  // `extractImagePaths()`, kicks off `handleBracketedPaste()` async, and
+  // inserts `@<path>` refs back into the input buffer once resolved.
+  // Plain-text pastes (no image paths) fall through to the existing
+  // Issue 121 paste-store path untouched.
+  describe("FEATURE_134 image paste integration", () => {
+    function makePasteKey(content: string): KeyInfo {
+      return createKey({
+        name: "paste",
+        sequence: content,
+        insertable: true,
+        isPasted: true,
+      });
+    }
+
+    it("intercepts an image-path paste and inserts @<path> refs via insert()", async () => {
+      const imagePath = "/tmp/kodax-paste/img-abc.png";
+      mocks.state.extractImagePathsReturn = [imagePath];
+      mocks.state.handleBracketedPasteReturn = {
+        kind: "images",
+        blocks: [{ type: "image", path: imagePath, mediaType: "image/png" }],
+      };
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      const handled = controller?.handleKey(makePasteKey(imagePath));
+      expect(handled).toBe(true);
+      expect(mocks.extractImagePathsMock).toHaveBeenCalledWith(imagePath);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.handleBracketedPasteMock).toHaveBeenCalledWith(imagePath);
+      expect(mocks.insertMock).toHaveBeenCalledWith(`@${imagePath} `, { paste: false });
+    });
+
+    it("falls through to the generic text-paste branch when no image paths are found", () => {
+      const textPaste = "https://example.com is interesting";
+      mocks.state.extractImagePathsReturn = [];
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      const handled = controller?.handleKey(makePasteKey(textPaste));
+      expect(handled).toBe(true);
+      expect(mocks.extractImagePathsMock).toHaveBeenCalledWith(textPaste);
+      expect(mocks.handleBracketedPasteMock).not.toHaveBeenCalled();
+      expect(mocks.insertMock).toHaveBeenCalledWith(textPaste, { paste: true });
+    });
+
+    it("inserts multiple @<path> refs joined by space when paste carries N images", async () => {
+      const paths = [
+        "/tmp/img-1.png",
+        "/tmp/img-2.jpg",
+        "/tmp/img-3.webp",
+      ];
+      mocks.state.extractImagePathsReturn = paths;
+      mocks.state.handleBracketedPasteReturn = {
+        kind: "images",
+        blocks: paths.map((p) => ({ type: "image" as const, path: p })),
+      };
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      controller?.handleKey(makePasteKey(paths.join(" ")));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.insertMock).toHaveBeenCalledWith(
+        `@${paths[0]} @${paths[1]} @${paths[2]} `,
+        { paste: false },
+      );
+    });
+
+    it("Ctrl+V triggers the explicit clipboard-image keybind", async () => {
+      const imagePath = "/tmp/kodax-paste/clip-xyz.png";
+      mocks.state.triggerExplicitClipboardImageReturn = {
+        kind: "images",
+        blocks: [{ type: "image", path: imagePath, mediaType: "image/png" }],
+      };
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      const handled = controller?.handleKey(
+        createKey({ name: "v", sequence: "v", ctrl: true }),
+      );
+      expect(handled).toBe(true);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.triggerExplicitClipboardImageMock).toHaveBeenCalled();
+      expect(mocks.insertMock).toHaveBeenCalledWith(`@${imagePath} `, { paste: false });
+    });
+
+    it("Alt+V (meta) also triggers the explicit clipboard-image keybind", async () => {
+      const imagePath = "/tmp/kodax-paste/alt-xyz.png";
+      mocks.state.triggerExplicitClipboardImageReturn = {
+        kind: "images",
+        blocks: [{ type: "image", path: imagePath }],
+      };
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      controller?.handleKey(
+        createKey({ name: "v", sequence: "v", meta: true }),
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.triggerExplicitClipboardImageMock).toHaveBeenCalled();
+      expect(mocks.insertMock).toHaveBeenCalledWith(`@${imagePath} `, { paste: false });
+    });
+
+    it("clipboard noop (no image on clipboard) does not insert anything", async () => {
+      mocks.state.triggerExplicitClipboardImageReturn = { kind: "noop" };
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      controller?.handleKey(createKey({ name: "v", sequence: "v", ctrl: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.triggerExplicitClipboardImageMock).toHaveBeenCalled();
+      expect(mocks.insertMock).not.toHaveBeenCalled();
+    });
+
+    it("paste handler error is logged via console.warn but does not throw", async () => {
+      const imagePath = "/tmp/oops.png";
+      mocks.state.extractImagePathsReturn = [imagePath];
+      mocks.state.handleBracketedPasteReturn = {
+        kind: "error",
+        message: "Failed to decode pasted image",
+      };
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      const handled = controller?.handleKey(makePasteKey(imagePath));
+      expect(handled).toBe(true);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to decode pasted image"),
+      );
+      expect(mocks.insertMock).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 });

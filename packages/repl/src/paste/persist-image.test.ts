@@ -1,0 +1,83 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PASTE_TMP_DIR_ENV, persistImageAsBlock } from './persist-image.js';
+import type { NormalizedImage } from './image-normalize.js';
+
+describe('persistImageAsBlock', () => {
+  let tempDir = '';
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-persist-image-test-'));
+    process.env[PASTE_TMP_DIR_ENV] = tempDir;
+  });
+
+  afterEach(async () => {
+    delete process.env[PASTE_TMP_DIR_ENV];
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      tempDir = '';
+    }
+  });
+
+  it('writes the buffer to disk and returns a KodaXImageBlock referencing the file', async () => {
+    const fakeImage: NormalizedImage = {
+      buffer: Buffer.from('FAKE-PNG-CONTENT'),
+      mediaType: 'image/png',
+      width: 10,
+      height: 10,
+    };
+    const block = await persistImageAsBlock(fakeImage);
+    expect(block.type).toBe('image');
+    expect(block.mediaType).toBe('image/png');
+    expect(block.path.endsWith('.png')).toBe(true);
+    expect(block.path.startsWith(tempDir)).toBe(true);
+
+    const onDisk = await fs.readFile(block.path);
+    expect(onDisk.toString('utf-8')).toBe('FAKE-PNG-CONTENT');
+  });
+
+  it('uses .jpg extension for image/jpeg mediaType', async () => {
+    const fakeImage: NormalizedImage = {
+      buffer: Buffer.from('FAKE-JPEG'),
+      mediaType: 'image/jpeg',
+      width: 10,
+      height: 10,
+    };
+    const block = await persistImageAsBlock(fakeImage);
+    expect(block.path.endsWith('.jpg')).toBe(true);
+    expect(block.mediaType).toBe('image/jpeg');
+  });
+
+  it('generates unique filenames for concurrent persists', async () => {
+    const image: NormalizedImage = {
+      buffer: Buffer.from('x'),
+      mediaType: 'image/png',
+      width: 1,
+      height: 1,
+    };
+    const results = await Promise.all([
+      persistImageAsBlock(image),
+      persistImageAsBlock(image),
+      persistImageAsBlock(image),
+    ]);
+    const paths = new Set(results.map((b) => b.path));
+    expect(paths.size).toBe(3);
+  });
+
+  it('creates the temp directory if it does not exist', async () => {
+    const nestedDir = path.join(tempDir, 'nested', 'paste-dir');
+    process.env[PASTE_TMP_DIR_ENV] = nestedDir;
+    const image: NormalizedImage = {
+      buffer: Buffer.from('content'),
+      mediaType: 'image/png',
+      width: 1,
+      height: 1,
+    };
+    const block = await persistImageAsBlock(image);
+    expect(block.path.startsWith(nestedDir)).toBe(true);
+    const stat = await fs.stat(nestedDir);
+    expect(stat.isDirectory()).toBe(true);
+  });
+});

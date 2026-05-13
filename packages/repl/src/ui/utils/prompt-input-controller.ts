@@ -13,6 +13,19 @@ import {
   maybeTruncateLongInput,
 } from "./paste-store.js";
 import { buildAutocompleteReplacement } from "./autocomplete-replacement.js";
+// FEATURE_134 v0.7.40 — image paste integration. `extractImagePaths` is a
+// sync regex check used as a fast-path gate; `handleBracketedPaste` is the
+// async orchestrator (jimp decode + persist + KodaXImageBlock). Outputs
+// flow back into the input buffer as `@<path>` refs, which the existing
+// `preparePromptInputArtifacts` pipeline (`common/input-artifacts.ts`)
+// converts to `KodaXInputArtifact[]` on submit. So FEATURE_134 only adds
+// the paste → text-ref translation; everything downstream is already
+// wired via the @-ref syntax.
+import {
+  extractImagePaths,
+  handleBracketedPaste,
+  triggerExplicitClipboardImage,
+} from "../../paste/index.js";
 
 export interface PromptInputControllerOptions {
   /**
@@ -342,9 +355,90 @@ export function usePromptInputController({
     [onHistoryRecall, pasteStore, setText],
   );
 
+  // FEATURE_134 v0.7.40 — async image paste handler. Fired from the
+  // synthetic `name === "paste"` event when its content contains image
+  // file paths (per `extractImagePaths` regex), OR from explicit
+  // Alt+V / Ctrl+V triggers. Resolves to `@<absolute-path>` references
+  // inserted at the cursor. Downstream `preparePromptInputArtifacts`
+  // (`common/input-artifacts.ts`) parses these refs back into
+  // `KodaXInputArtifact[]` on submit — so no other change is needed.
+  //
+  // Fire-and-forget: returns immediately so the keypress contract stays
+  // sync. Errors are surfaced via `console.warn` (REPL captures stderr
+  // into the transcript noise; a richer toast UI is a future polish).
+  const insertImageRefsFromPaste = useCallback(
+    async (pasteContent: string): Promise<void> => {
+      try {
+        const outcome = await handleBracketedPaste(pasteContent);
+        if (outcome.kind === "images") {
+          const refs = outcome.blocks.map((b) => `@${b.path}`).join(" ");
+          // paste:false so the insert path doesn't register a placeholder
+          // — these refs are short, structurally meaningful, and the user
+          // should see them verbatim in the input buffer.
+          insert(`${refs} `, { paste: false });
+        } else if (outcome.kind === "error") {
+          // eslint-disable-next-line no-console
+          console.warn(`[KodaX paste] ${outcome.message}`);
+        }
+        // noop / text outcomes: nothing to do here. The fast-path gate
+        // in handleKey only invokes this when extractImagePaths returned
+        // a non-empty list, so an unexpected text fallthrough is rare.
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[KodaX paste] image handling failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    [insert],
+  );
+
+  const triggerExplicitImagePaste = useCallback(async (): Promise<void> => {
+    try {
+      const outcome = await triggerExplicitClipboardImage();
+      if (outcome.kind === "images") {
+        const refs = outcome.blocks.map((b) => `@${b.path}`).join(" ");
+        insert(`${refs} `, { paste: false });
+      } else if (outcome.kind === "error") {
+        // eslint-disable-next-line no-console
+        console.warn(`[KodaX clipboard] ${outcome.message}`);
+      }
+      // noop: clipboard had no image — silent (matches FEATURE_134 design).
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[KodaX clipboard] image handling failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }, [insert]);
+
   const handleKey = useCallback((key: KeyInfo): boolean => {
     if (!focus) {
       return false;
+    }
+
+    // FEATURE_134 v0.7.40 — explicit clipboard-image keybind. Per
+    // claudecode parity: Alt+V on Windows (Ctrl+V is reserved by the
+    // terminal), Ctrl+V on macOS/Linux (where Cmd+V on macOS auto-pastes
+    // via bracketed-paste Source 3). Test runs in REPL — failure mode
+    // is `kind: 'noop'` (no image on clipboard) which is silent.
+    if (key.name === "v" && (key.ctrl || key.meta)) {
+      void triggerExplicitImagePaste();
+      return true;
+    }
+
+    // FEATURE_134 v0.7.40 — bracketed-paste fast path. The synthetic
+    // `paste` event from `keypress-parser.ts` carries the full unwrapped
+    // paste content. If `extractImagePaths` (a sync regex) finds any
+    // file paths that look like images, divert to the async handler.
+    // Otherwise fall through to the generic insertable branch below so
+    // plain-text pastes hit the existing Issue 121 paste-store path.
+    if (key.name === "paste" && key.isPasted) {
+      const imagePaths = extractImagePaths(key.sequence);
+      if (imagePaths.length > 0) {
+        void insertImageRefsFromPaste(key.sequence);
+        return true;
+      }
     }
 
     const isAutocompleteVisible = autocompleteState.visible && suggestions.length > 0;
@@ -575,6 +669,8 @@ export function usePromptInputController({
     handleEnter,
     handleHistoryRecall,
     handleTab,
+    insertImageRefsFromPaste,
+    triggerExplicitImagePaste,
     lines,
     killLineLeft,
     killLineRight,
