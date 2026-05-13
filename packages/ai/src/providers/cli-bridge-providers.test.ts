@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { KodaXCodexCliProvider } from './codex-cli.js';
 import { KodaXGeminiCliProvider } from './gemini-cli.js';
 
@@ -43,6 +43,23 @@ describe('CLI bridge providers', () => {
       path: '/tmp/kodax-paste/paste-abc123.png',
     });
     expect(token).toBe('@/tmp/kodax-paste/paste-abc123.png');
+    provider.disconnect();
+  });
+
+  it('drops Gemini-CLI image block with whitespace in path rather than emit a broken @<path> token (FEATURE_134)', () => {
+    const provider = new KodaXGeminiCliProvider();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const token = (provider as unknown as {
+      serializeImageBlockToPromptToken: (b: { type: 'image'; path: string }) => string | null;
+    }).serializeImageBlockToPromptToken({
+      type: 'image',
+      path: '/home/user/My Documents/paste.png',
+    });
+    expect(token).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('contains whitespace'),
+    );
+    warnSpy.mockRestore();
     provider.disconnect();
   });
 

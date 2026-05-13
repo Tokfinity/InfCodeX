@@ -57,10 +57,23 @@ export class KodaXGeminiCliProvider extends KodaXAcpProvider {
 
     protected override serializeImageBlockToPromptToken(block: KodaXImageBlock): string | null {
         // Gemini CLI's `@<path>` syntax inlines arbitrary file content.
-        // The path must be readable from the CLI's working directory; the
-        // KodaXImageBlock.path is absolute by construction (the REPL paste
-        // pipeline writes to `$TMPDIR/kodax-paste/`, the SDK accepts only
-        // absolute paths), so we forward as-is.
+        // The REPL paste pipeline writes to `$TMPDIR/kodax-paste/paste-<hex>.ext`
+        // (space-free by construction); SDK callers SHOULD pass absolute,
+        // space-free paths.
+        //
+        // Defensive: if a caller passes a path containing whitespace, the
+        // Gemini CLI prompt tokenizer will split the `@<path>` reference
+        // at the first space, silently resolving to a non-existent file —
+        // worse than dropping the image entirely. So we fail loud (warn
+        // + drop) rather than emit a broken token. Use the bracket-quote
+        // form if Gemini CLI adds support in the future.
+        if (/\s/.test(block.path)) {
+            // eslint-disable-next-line no-console
+            console.warn(
+                `[gemini-cli] Image path contains whitespace and cannot be safely passed via @<path> syntax — dropping image block. Path: ${JSON.stringify(block.path)}`,
+            );
+            return null;
+        }
         return `@${block.path}`;
     }
 }

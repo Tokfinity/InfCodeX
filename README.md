@@ -83,7 +83,7 @@ If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint, define
 
 #### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
 
-If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. The built-in 11 native providers (Anthropic, OpenAI, plus the 9 Anthropic-/OpenAI-compat clones — DeepSeek, Kimi, Kimi-code, Qwen, Zhipu, Zhipu-coding, MiniMax-coding, MiMo-coding, Ark-coding) already ship with this flag enabled by default; only custom providers need to opt in.
+If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. The 12 built-in vision-capable providers (Anthropic, OpenAI, the 9 Anthropic-/OpenAI-compat clones — DeepSeek, Kimi, Kimi-code, Qwen, Zhipu, Zhipu-coding, MiniMax-coding, MiMo-coding, Ark-coding — plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; only Codex-CLI and custom providers need to opt in.
 
 ```json
 {
