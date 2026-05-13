@@ -2,7 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PASTE_TMP_DIR_ENV, persistImageAsBlock } from './persist-image.js';
+import {
+  PASTE_TMP_DIR_ENV,
+  PASTE_TMP_TTL_MS,
+  persistImageAsBlock,
+  prunePasteTmpDir,
+} from './persist-image.js';
 import type { NormalizedImage } from './image-normalize.js';
 
 describe('persistImageAsBlock', () => {
@@ -99,5 +104,70 @@ describe('persistImageAsBlock', () => {
     expect(block.path.startsWith(nestedDir)).toBe(true);
     const stat = await fs.stat(nestedDir);
     expect(stat.isDirectory()).toBe(true);
+  });
+});
+
+describe('prunePasteTmpDir', () => {
+  let tempDir = '';
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kodax-prune-test-'));
+    process.env[PASTE_TMP_DIR_ENV] = tempDir;
+  });
+
+  afterEach(async () => {
+    delete process.env[PASTE_TMP_DIR_ENV];
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      tempDir = '';
+    }
+  });
+
+  it('returns 0 and does not throw when the paste tmp dir does not exist', async () => {
+    process.env[PASTE_TMP_DIR_ENV] = path.join(tempDir, 'does-not-exist');
+    const deleted = await prunePasteTmpDir();
+    expect(deleted).toBe(0);
+  });
+
+  it('deletes paste-* files older than PASTE_TMP_TTL_MS', async () => {
+    const oldFile = path.join(tempDir, 'paste-oldhash.png');
+    const newFile = path.join(tempDir, 'paste-newhash.png');
+    await fs.writeFile(oldFile, 'old');
+    await fs.writeFile(newFile, 'new');
+    // Backdate the old file 48h
+    const oldMtime = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await fs.utimes(oldFile, oldMtime, oldMtime);
+
+    const deleted = await prunePasteTmpDir();
+    expect(deleted).toBe(1);
+    await expect(fs.stat(oldFile)).rejects.toThrow();
+    await expect(fs.stat(newFile)).resolves.toBeDefined();
+  });
+
+  it('preserves non-paste files (e.g., user accidentally dropped a notes.txt)', async () => {
+    const unrelated = path.join(tempDir, 'notes.txt');
+    const oldPaste = path.join(tempDir, 'paste-old.png');
+    await fs.writeFile(unrelated, 'user notes');
+    await fs.writeFile(oldPaste, 'old');
+    // Backdate both
+    const backdated = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    await fs.utimes(unrelated, backdated, backdated);
+    await fs.utimes(oldPaste, backdated, backdated);
+
+    const deleted = await prunePasteTmpDir();
+    expect(deleted).toBe(1);
+    await expect(fs.stat(unrelated)).resolves.toBeDefined();
+  });
+
+  it('TTL boundary — files at exactly TTL_MS are deleted (older than cutoff)', async () => {
+    const borderlineFile = path.join(tempDir, 'paste-borderline.png');
+    await fs.writeFile(borderlineFile, 'borderline');
+    const now = Date.now();
+    // Set mtime to just past the TTL boundary
+    const justPast = new Date(now - PASTE_TMP_TTL_MS - 1000);
+    await fs.utimes(borderlineFile, justPast, justPast);
+
+    const deleted = await prunePasteTmpDir(now);
+    expect(deleted).toBe(1);
   });
 });

@@ -8421,6 +8421,15 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   try {
     const stdout = process.stdout;
     const stdin = process.stdin;
+    // FEATURE_134 v0.7.40 follow-up — best-effort GC of cross-session paste
+    // temp files older than PASTE_TMP_TTL_MS (24h). Fire-and-forget; never
+    // blocks REPL startup. Files written by the active session (always
+    // within TTL) are preserved.
+    void import('../paste/index.js')
+      .then((mod) => mod.prunePasteTmpDir())
+      .catch(() => {
+        /* GC failure is non-fatal — OS tmpdir cleanup remains the backstop */
+      });
     // FEATURE_134 v0.7.40 follow-up — DEC 2004 bracketed paste mode is
     // owned by `KeypressContext.tsx` (which writes `\x1b[?2004h` via
     // Ink's managed stdout in a useEffect AFTER Ink's first render, and
