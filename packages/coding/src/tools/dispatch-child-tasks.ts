@@ -112,14 +112,27 @@ async function applyChildSummaryGuardrailWithSummarizer(
   } catch (err) {
     // Summarizer failed too — fall back to the inline-full-content path.
     // Match the same console.warn discipline as the upstream
-    // applyToolResultGuardrail spill-failure guard.
+    // applyToolResultGuardrail spill-failure guard. Prepend an emergency
+    // banner so the Worker can SEE that this oversized inline is a last-
+    // resort dump (spill failed AND summarize failed) rather than mistaking
+    // it for normal authoritative content. Without the banner the Worker
+    // sees a 100KB+ raw blob with zero signal that anything went wrong —
+    // exactly the silent-data-loss-adjacent surface the FEATURE_121
+    // contract is meant to close.
+    const cause = err instanceof Error ? err.message : String(err);
     // eslint-disable-next-line no-console
     console.warn(
       `[dispatch-child-tasks] LLM summarizer failed for ${toolName} ` +
         `(${formatSize(rawContent.length)}); inlining full content. ` +
-        `Cause: ${err instanceof Error ? err.message : String(err)}`,
+        `Cause: ${cause}`,
     );
-    return guarded.content;
+    return [
+      `[SPILL FAILED AND LLM SUMMARIZER FAILED — original ${formatSize(rawContent.length)} inlined as last-resort emergency dump.`,
+      `Summarizer cause: ${cause}.`,
+      `Worker: this payload may exceed context budget. Treat as authoritative source but expect possible downstream truncation. Re-run upstream tool with narrower scope if you need a clean replay.]`,
+      '',
+      guarded.content,
+    ].join('\n');
   }
 }
 

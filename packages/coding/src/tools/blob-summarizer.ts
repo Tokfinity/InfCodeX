@@ -25,7 +25,7 @@
  */
 
 import type {
-  KodaXProvider,
+  KodaXBaseProvider,
   KodaXMessage,
   KodaXTextBlock,
 } from '@kodax-ai/llm';
@@ -87,7 +87,7 @@ export type SummarizeBlob = (
 ) => Promise<string>;
 
 export interface CreateBlobSummarizerOptions {
-  readonly provider: KodaXProvider;
+  readonly provider: KodaXBaseProvider;
   readonly model: string;
   /** Override the 30 s wall. Tests pass small values to keep them fast. */
   readonly timeoutMs?: number;

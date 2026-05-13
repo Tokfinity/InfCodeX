@@ -4703,6 +4703,25 @@ async function runManagedTaskViaRunnerInner(
   // call, the `todo_update` wrapper resets it on success, the agent-
   // transition detector resets it on role switches.
   const todoReminderState = createTodoReminderState();
+
+  // FEATURE_121 v0.7.40 follow-up — lazy-once summarizer factory.
+  // Constructed on first call (when a child task actually triggers the
+  // spill-failure + >100KB path), then memoized for the rest of the run.
+  // Avoids reconstructing the provider closure on every retry while still
+  // keeping construction off the hot path of every Worker turn.
+  let cachedSummarizer: ReturnType<typeof createBlobSummarizer> | undefined;
+  const summarizeBlob: KodaXToolExecutionContext['summarizeBlob'] = (
+    content,
+    summaryOpts,
+  ) => {
+    if (!cachedSummarizer) {
+      const provider = resolveProvider(options.provider ?? 'anthropic');
+      const model = options.modelOverride ?? options.model ?? 'unknown';
+      cachedSummarizer = createBlobSummarizer({ provider, model });
+    }
+    return cachedSummarizer(content, summaryOpts);
+  };
+
   const baseCtx: KodaXToolExecutionContext = {
     ...substrateBaseCtx,
     mutationTracker,
@@ -4713,16 +4732,10 @@ async function runManagedTaskViaRunnerInner(
     // async-vs-sync branch on `KODAX_ASYNC_DISPATCH !== '0'`.
     //
     // FEATURE_121 v0.7.40 follow-up — last-resort LLM blob summarizer
-    // bound to the Worker's own provider/model. Resolves the provider
-    // lazily at call-time (a fresh instance per summarize, avoiding
-    // mutated state on the per-turn LLM adapter's instance). Triggered
-    // only by `dispatch-child-tasks` when `applyToolResultGuardrail`
-    // returns `spillFailed:true` AND raw content > 100KB.
-    summarizeBlob: (content, summaryOpts) => {
-      const provider = resolveProvider(options.provider ?? 'anthropic');
-      const model = options.modelOverride ?? options.model ?? 'unknown';
-      return createBlobSummarizer({ provider, model })(content, summaryOpts);
-    },
+    // bound to the Worker's own provider/model. Triggered only by
+    // `dispatch-child-tasks` when `applyToolResultGuardrail` returns
+    // `spillFailed:true` AND raw content > 100KB.
+    summarizeBlob,
   };
 
   // Budget controller. Start with H0 cap (50); `wrapEmitterWithRecorder`
