@@ -14,7 +14,7 @@
  *
  * So we write the buffer to the KodaX paste temp directory, then return
  * the block referencing that path. Provider serializers
- * (`packages/ai/src/providers/anthropic.ts`, `openai.ts`, etc.) read
+ * (`packages/llm/src/providers/anthropic.ts`, `openai.ts`, etc.) read
  * the file at request time and produce wire-level base64.
  *
  * Temp directory: `tmpdir() + '/kodax-paste'`. Override via

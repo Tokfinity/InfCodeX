@@ -39,7 +39,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/icetomoyo/KodaX.git",
-    "directory": "packages/ai"
+    "directory": "packages/llm"
   },
   "license": "Apache-2.0",
   "files": [

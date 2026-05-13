@@ -459,7 +459,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         id: { type: 'string', description: 'Unique child task identifier' },
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
         readOnly: { type: 'boolean', description: 'true=investigation only (default), false=code changes (Generator only)' },
-        scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/ai/src/")' },
+        scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
         evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence: "file:path", "diff:path", or "finding:text"' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
         // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
@@ -892,7 +892,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
             // an LLM passing `{id, content, status:'pending'}` (mixing
             // init-item shape with update shape) gets a schema-validation
             // error rather than a silent drop. But `KodaXToolDefinition['input_schema']`
-            // does not currently model that field (see `packages/ai/src/types.ts:113`).
+            // does not currently model that field (see `packages/llm/src/types.ts:113`).
             // Runtime validator in `executeInitOp` already destructures only
             // the known keys, so extra fields are dropped harmlessly. Schema-layer
             // hardening tracked as a separate type-extension follow-up.

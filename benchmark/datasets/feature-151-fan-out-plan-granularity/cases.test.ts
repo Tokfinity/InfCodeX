@@ -93,7 +93,7 @@ describe('FEATURE_151 Slice I judges', () => {
     const judges = buildJudges('review_3_modules');
     expect(judges.length).toBeGreaterThan(0);
     const result = judges[0]?.judge(
-      "I'll start dispatching child agents for each package. First, packages/ai...",
+      "I'll start dispatching child agents for each package. First, packages/llm...",
     );
     expect(result?.passed).toBe(false);
   });
@@ -106,7 +106,7 @@ describe('FEATURE_151 Slice I judges', () => {
 todo_update({
   op: "init",
   items: [
-    { id: "todo_1", content: "Audit packages/ai", activeForm: "Auditing packages/ai" },
+    { id: "todo_1", content: "Audit packages/llm", activeForm: "Auditing packages/llm" },
     { id: "todo_2", content: "Audit packages/agent", activeForm: "Auditing packages/agent" },
     { id: "todo_3", content: "Audit packages/coding", activeForm: "Auditing packages/coding" },
     { id: "todo_4", content: "Audit packages/repl", activeForm: "Auditing packages/repl" },

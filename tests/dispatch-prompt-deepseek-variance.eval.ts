@@ -57,7 +57,7 @@
 import { describe, it, expect } from 'vitest';
 import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax-ai/llm';
 
-const T1_TASK = 'Audit three independent packages of this monorepo for security issues: packages/ai, packages/coding, packages/repl. For each package, find any vulnerabilities (input validation gaps, unsafe shell, secret handling, etc). Report findings per-package.';
+const T1_TASK = 'Audit three independent packages of this monorepo for security issues: packages/llm, packages/coding, packages/repl. For each package, find any vulnerabilities (input validation gaps, unsafe shell, secret handling, etc). Report findings per-package.';
 
 const A5B_PROMPT_SECTION = [
   'PARALLEL CHILD AGENTS: dispatch_child_task delegates an investigation to a child agent that has its own context window. Calls in the same turn run in parallel; each child\'s findings return as a separate tool result.',
@@ -67,7 +67,7 @@ const A5B_PROMPT_SECTION = [
   'RULE A — Fan-out (2+ independent non-trivial threads)',
   '  "Non-trivial" means each thread on its own would need multiple file reads or multi-round searching. A bundle of small file lookups is NOT fan-out.',
   '  → Dispatch ONE child per thread, in the SAME turn.',
-  '  Example: "Audit packages/ai, packages/agent, packages/coding for security" → 3 parallel children.',
+  '  Example: "Audit packages/llm, packages/agent, packages/coding for security" → 3 parallel children.',
   '  If you identify N qualifying threads, dispatch ALL N. Do not rationalize "I\'ll handle one myself" — that defeats the parallelism.',
   '',
   'RULE B — Heavy single investigation (context preservation)',

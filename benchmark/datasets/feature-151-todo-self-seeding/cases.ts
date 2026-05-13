@@ -9,7 +9,7 @@
  *
  * Four cases, balanced 2 positive + 2 negative:
  *
- *   1. **multi_step_audit_init** — Audit packages/ai for security (review
+ *   1. **multi_step_audit_init** — Audit packages/llm for security (review
  *      task, ≥2 files). LLM should commit a plan via op:'init'.
  *
  *   2. **rename_3_files_init** — Rename function across 3 files (mutation
@@ -137,7 +137,7 @@ function buildMultiStepAuditVariant(): PromptVariant {
     description: 'Multi-file security audit, expect op:init',
     systemPrompt: GENERATOR_HEADER,
     userMessage:
-      'Please audit packages/ai/ for security issues. The audit should ' +
+      'Please audit packages/llm/ for security issues. The audit should ' +
       'cover: (1) input validation in provider adapters, (2) secret ' +
       'handling in the cost-tracker module, (3) error message leakage in ' +
       'the retry-after logic. Walk through your plan first, then start.',

@@ -60,10 +60,9 @@ If the user did not give a concrete task, read `README.md`, then check `docs/` f
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # LLM abstraction (standalone)
+│   ├── llm/                 # LLM abstraction (standalone, npm: @kodax-ai/llm)
 │   ├── agent/               # Agent framework
 │   ├── coding/              # Coding tools + prompts
-│   ├── core/                # Shared core primitives
 │   ├── mcp/                 # MCP integration
 │   ├── repl/                # Interactive terminal (Ink UI)
 │   ├── repointel-protocol/  # Repo intelligence protocol

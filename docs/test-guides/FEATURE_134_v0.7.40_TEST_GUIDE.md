@@ -275,4 +275,4 @@
 | `packages/repl/src/paste/paste-handler.test.ts` | 5-source orchestration（14 tests）|
 | `packages/repl/src/paste/bracketed-paste-mode.test.ts` | DEC 2004 lifecycle |
 | `packages/repl/src/ui/utils/prompt-input-controller.test.ts` | Alt+V autorepeat single-flight guard（v0.7.40 新增）+ Ctrl+V / Alt+V 触发路径 |
-| `packages/ai/src/providers/capability-profile.test.ts` | 11 vision-capable providers + 2 CLI-bridge text-only providers pin test（v0.7.40 新增）|
+| `packages/llm/src/providers/capability-profile.test.ts` | 12 vision-capable providers (11 native + Gemini-CLI) + Codex-CLI text-only pin test（v0.7.40 新增）|

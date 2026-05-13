@@ -44,13 +44,13 @@ import {
   formatCostReport,
   getSummary,
   recordUsage,
-} from '../packages/ai/src/cost-tracker.js';
+} from '../packages/llm/src/cost-tracker.js';
 import {
   insertCacheBoundary,
   isCacheBoundary,
   lowerCacheBoundaries,
   stripCacheBoundaries,
-} from '../packages/ai/src/cache-control.js';
+} from '../packages/llm/src/cache-control.js';
 
 describe('FEATURE_116 — structural ship gate', () => {
   it('cache-boundary helpers are exported from @kodax-ai/llm', () => {
@@ -174,7 +174,7 @@ describe('FEATURE_116 — mocked 5-turn trajectory', () => {
 
 describe('FEATURE_116 — escape hatch', () => {
   // The escape hatch is exercised in detail by
-  // packages/ai/src/providers/anthropic-cache-control.test.ts (which
+  // packages/llm/src/providers/anthropic-cache-control.test.ts (which
   // instantiates a TestAnthropicProvider). This eval only asserts that
   // the contract surface — env var + helpers — is wired so an operator
   // can flip the kill-switch without code changes.

@@ -169,7 +169,7 @@ const WORKER_PROMPT_FANOUT_SECTIONS = [
   '- COUNT-FIRST RULE: before calling `todo_update`, count the exact number N of `dispatch_child_task` calls you will make. The `op:"init"` items array MUST contain EXACTLY N items — ONE item per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `content:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
   '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 items:',
   '    todo_update({op:"init", items:[',
-  '      {id:"todo_1", content:"Audit packages/ai",     activeForm:"Auditing packages/ai"},',
+  '      {id:"todo_1", content:"Audit packages/llm",     activeForm:"Auditing packages/llm"},',
   '      {id:"todo_2", content:"Audit packages/agent",  activeForm:"Auditing packages/agent"},',
   '      {id:"todo_3", content:"Audit packages/coding", activeForm:"Auditing packages/coding"},',
   '      {id:"todo_4", content:"Audit packages/repl",   activeForm:"Auditing packages/repl"},',
@@ -211,7 +211,7 @@ function buildReview3ModulesVariant(): PromptVariant {
     systemPrompt: SYSTEM_PROMPT,
     userMessage:
       'Review the following 3 packages independently and report findings: ' +
-      '`packages/ai`, `packages/agent`, `packages/coding`. They have no ' +
+      '`packages/llm`, `packages/agent`, `packages/coding`. They have no ' +
       'cross-package dependencies in this scope, so the reviews can run ' +
       'in parallel. Plan first, then dispatch.',
   };
@@ -225,7 +225,7 @@ function buildAudit5PackagesVariant(): PromptVariant {
     userMessage:
       'Audit these 5 packages for security issues — input validation, ' +
       'secret handling, error message leakage. Each package is independent ' +
-      'so this fan-outs cleanly: `packages/ai`, `packages/agent`, ' +
+      'so this fan-outs cleanly: `packages/llm`, `packages/agent`, ' +
       '`packages/coding`, `packages/repl`, `packages/skills`. ' +
       'Plan first, then run the audits in parallel.',
   };

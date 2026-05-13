@@ -1,7 +1,7 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/ai" },
+    { "path": "./packages/llm" },
     { "path": "./packages/tracing" },
     { "path": "./packages/agent" },
     { "path": "./packages/mcp" },

@@ -662,7 +662,7 @@ export function createRolePrompt(
           'RULE A — Fan-out (2+ independent non-trivial threads)',
           '  "Non-trivial" means each thread on its own would need multiple file reads or multi-round searching. A bundle of small file lookups is NOT fan-out.',
           '  → Dispatch ONE child per thread, in the SAME turn.',
-          '  Example: "Audit packages/ai, packages/agent, packages/coding for security" → 3 parallel children.',
+          '  Example: "Audit packages/llm, packages/agent, packages/coding for security" → 3 parallel children.',
           '  If you identify N qualifying threads, dispatch ALL N. Do not rationalize "I\'ll handle one myself" — that defeats the parallelism.',
           '',
           'RULE B — Heavy single investigation (context preservation)',

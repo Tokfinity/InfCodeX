@@ -110,7 +110,7 @@ If your custom provider's underlying model supports image input (vision), add a 
 }
 ```
 
-The serializer layer (`packages/ai/src/providers/anthropic.ts:770` for Anthropic-compat, `openai.ts:904` for OpenAI-compat) forwards image blocks automatically through base-class inheritance. The flag only gates whether KodaX's policy layer pre-rejects multimodal requests — the model-level vision contract remains your upstream provider's responsibility. If the model is actually text-only, you'll see the real upstream API error instead of a KodaX-side rejection.
+The serializer layer (`packages/llm/src/providers/anthropic.ts:770` for Anthropic-compat, `openai.ts:904` for OpenAI-compat) forwards image blocks automatically through base-class inheritance. The flag only gates whether KodaX's policy layer pre-rejects multimodal requests — the model-level vision contract remains your upstream provider's responsibility. If the model is actually text-only, you'll see the real upstream API error instead of a KodaX-side rejection.
 
 ### 3. Start in REPL or run a one-shot task
 

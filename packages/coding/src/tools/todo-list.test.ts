@@ -42,8 +42,8 @@ describe('todo_list — populated store', () => {
     store.init([
       {
         id: 'todo_1',
-        content: 'Audit packages/ai',
-        activeForm: 'Auditing packages/ai',
+        content: 'Audit packages/llm',
+        activeForm: 'Auditing packages/llm',
       },
       { id: 'todo_2', content: 'Update tests' },
     ]);
@@ -69,9 +69,9 @@ describe('todo_list — populated store', () => {
     expect(parsed.items).toHaveLength(2);
     expect(parsed.items[0]).toEqual({
       id: 'todo_1',
-      content: 'Audit packages/ai',
+      content: 'Audit packages/llm',
       status: 'in_progress',
-      activeForm: 'Auditing packages/ai',
+      activeForm: 'Auditing packages/llm',
     });
     expect(parsed.items[1]).toEqual({
       id: 'todo_2',

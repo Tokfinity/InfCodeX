@@ -90,7 +90,7 @@ const TEST_CASES: HarnessTestCase[] = [
   },
   {
     id: 'explain-code',
-    prompt: '解释一下 packages/ai/src/providers/anthropic.ts 的 stream 方法做了什么',
+    prompt: '解释一下 packages/llm/src/providers/anthropic.ts 的 stream 方法做了什么',
     expected: 'H0_DIRECT',
     reason: 'Read and explain, no modification',
   },
@@ -116,7 +116,7 @@ const TEST_CASES: HarnessTestCase[] = [
   },
   {
     id: 'add-error-handling',
-    prompt: '给 packages/ai/src/providers/ 下所有 provider 的 stream 方法添加超时处理，超时时间从 config 读取',
+    prompt: '给 packages/llm/src/providers/ 下所有 provider 的 stream 方法添加超时处理，超时时间从 config 读取',
     expected: 'H1_EXECUTE_EVAL',
     reason: 'Multi-file change with clear pattern, needs review',
   },

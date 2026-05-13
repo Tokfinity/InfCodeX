@@ -54,7 +54,7 @@
 1. 启 KodaX。
 2. 发一个**触发 dispatch_child_task fan-out** 的 review 任务：
    ```
-   并行 review packages/ai、packages/agent、packages/coding 三个包的最新 5 次 commit，
+   并行 review packages/llm、packages/agent、packages/coding 三个包的最新 5 次 commit，
    每个包用独立 child task，最后给我合并报告。
    ```
 3. 观察 Worker 的第一轮：应当 emit `todo_update({op:'init', items:[3 项]})` + 三个 `dispatch_child_task` tool_use。
