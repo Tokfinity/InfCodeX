@@ -1,7 +1,7 @@
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyToolResultGuardrail, getToolResultPolicy } from './tool-result-policy.js';
 import { TOOL_OUTPUT_DIR_ENV } from './truncate.js';
 
@@ -61,5 +61,74 @@ describe('tool result guardrail', () => {
     expect(getToolResultPolicy('read').direction).toBe('head');
     expect(getToolResultPolicy('web_fetch').maxBytes).toBe(24 * 1024);
     expect(getToolResultPolicy('semantic_lookup').spillToFile).toBe(true);
+  });
+
+  // FEATURE_121 v0.7.40 — spill-failure data-loss guard.
+  // When `persistToolOutput` throws (disk full / EACCES / EROFS /
+  // ENOSPC / etc.), the previous behaviour silently dropped the
+  // truncation tail. These tests pin the fail-loud fallback: full
+  // content is returned inlined so nothing is lost.
+
+  it('inlines full content when persistToolOutput fails (data-loss guard)', async () => {
+    // Trick `persistToolOutput` into failing by pointing the output
+    // dir at an existing FILE instead of a directory. The internal
+    // `fs.writeFile(path.join(file, fileName), ...)` then throws
+    // ENOTDIR / ENOENT, which is structurally identical to a
+    // disk-full / EACCES failure mode (the catch block treats every
+    // thrown error the same).
+    const blocker = path.join(tempDir, 'blocker');
+    await fs.writeFile(blocker, 'not-a-dir');
+    process.env[TOOL_OUTPUT_DIR_ENV] = blocker;
+
+    const largeContent = Array.from({ length: 3000 }, (_, i) => `line-${i + 1}`).join('\n');
+
+    // Suppress the intentional console.warn so it doesn't pollute test output.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await applyToolResultGuardrail('child_task_summary', largeContent, {
+      backups: new Map(),
+      executionCwd: process.cwd(),
+    });
+
+    // Full content preserved — no truncation, no spill path, no banner.
+    expect(result.content).toBe(largeContent);
+    expect(result.truncated).toBe(false);
+    expect(result.outputPath).toBeUndefined();
+    // The "truncated" banner text MUST NOT appear — its presence would
+    // indicate silent data loss (the bug this guard was added for).
+    expect(result.content).not.toContain('Tool output truncated');
+    expect(result.content).not.toContain('Full output saved to');
+
+    // Operator-facing warning must be emitted (NOT gated on debug env).
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('persistToolOutput failed for child_task_summary'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('inlines full content when forceSpill=true but persistToolOutput fails', async () => {
+    // Same trick — point output dir at a file. forceSpill=true takes
+    // even small content down the spill path (envelope-budget enforcer
+    // calls applyToolResultGuardrail this way to reclaim envelope
+    // space). The guard must still inline rather than truncate.
+    const blocker = path.join(tempDir, 'blocker');
+    await fs.writeFile(blocker, 'not-a-dir');
+    process.env[TOOL_OUTPUT_DIR_ENV] = blocker;
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const content = 'short banner content that fits under the per-banner cap';
+    const result = await applyToolResultGuardrail(
+      'child_task_summary',
+      content,
+      { backups: new Map(), executionCwd: process.cwd() },
+      { forceSpill: true },
+    );
+
+    expect(result.content).toBe(content);
+    expect(result.truncated).toBe(false);
+    expect(result.outputPath).toBeUndefined();
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

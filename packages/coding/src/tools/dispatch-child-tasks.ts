@@ -40,6 +40,7 @@ import type {
 } from '../types.js';
 import type { ToolProgress } from './types.js';
 import { executeChildAgents, type ChildExecutorOptions } from '../child-executor.js';
+import { applyToolResultGuardrail } from './tool-result-policy.js';
 // FEATURE_155 (v0.7.39) — dispatch banner steers the LLM to idle-yield
 // (end the turn text-only when out of useful work). The v0.7.38
 // `await_child_task` wording branch was retired in Slice C3 because
@@ -48,7 +49,9 @@ import { executeChildAgents, type ChildExecutorOptions } from '../child-executor
 /* ---------- Constants ---------- */
 
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
-const MAX_FINDING_CHARS = 8000;
+// FEATURE_121 (v0.7.40): `MAX_FINDING_CHARS = 8000` was removed — the sync
+// dispatch path now uses `applyToolResultGuardrail('child_task_summary', ...)`
+// (50KB threshold + spill-to-file) for parity with the async/envelope path.
 const TOOL_NAME = 'dispatch_child_task';
 
 /** Returns true if Pattern B async dispatch should be used. */
@@ -247,13 +250,19 @@ export async function* toolDispatchChildTask(
         // even if it's currently mid-stream on another tool.
         const childResult = result.results[0];
         const status = childResult?.status ?? 'failed';
-        const summary =
+        const rawSummary =
           status === 'completed'
             ? (result.mergedFindings[0]?.evidence.join('\n') ?? childResult?.summary ?? '')
             : `failed: ${childResult?.summary ?? 'no result'}`;
+        // FEATURE_121 (v0.7.40): per-banner guardrail. Replaces the previous
+        // `summary.slice(0, 200)` 200-char hard truncate. For ≤50KB output the
+        // full content is inlined; for >50KB the framework writes to
+        // `getAgentConfigPath('tool-results')/<id>.txt` and the envelope
+        // banner carries a preview + spill path that Worker can Read on demand.
+        const guarded = await applyToolResultGuardrail('child_task_summary', rawSummary, ctx);
         enqueueChildTaskNotification({
           taskId: childId,
-          summary: summary.slice(0, 200),
+          summary: guarded.content,
         });
         return result;
       } catch (err) {
@@ -261,9 +270,17 @@ export async function* toolDispatchChildTask(
         // doesn't block waiting for a task that will never settle into the
         // user-visible queue.
         const message = err instanceof Error ? err.message : String(err);
+        // FEATURE_121 (v0.7.40): crash messages are typically small (<1KB) so
+        // the guardrail will inline them; routing through the same path keeps
+        // success / failure envelope semantics uniform.
+        const guarded = await applyToolResultGuardrail(
+          'child_task_summary',
+          `crash: ${message}`,
+          ctx,
+        );
         enqueueChildTaskNotification({
           taskId: childId,
-          summary: `crash: ${message.slice(0, 200)}`,
+          summary: guarded.content,
         });
         throw err;
       } finally {
@@ -322,14 +339,31 @@ export async function* toolDispatchChildTask(
     yield { stage: 'done', message: `Child "${childId}" → ${status}` };
 
     if (!childResult || childResult.status === 'failed') {
-      return `Child task "${childId}" failed: ${childResult?.summary?.slice(0, 1000) ?? 'no result'}`;
+      // FEATURE_121 (v0.7.40): same guardrail as the async branch envelope
+      // path. Replaces the previous `slice(0, 1000)` 1000-char hard
+      // truncate. For ≤50KB content the full message inlines; for >50KB
+      // the framework spills to file and the tool result carries
+      // preview + path that Worker can Read on demand.
+      const failedSummary = childResult?.summary ?? 'no result';
+      const guarded = await applyToolResultGuardrail(
+        'child_task_summary',
+        `Child task "${childId}" failed: ${failedSummary}`,
+        ctx,
+      );
+      return guarded.content;
     }
 
     const finding = result.mergedFindings[0];
-    if (finding) {
-      return finding.evidence.join('\n').slice(0, MAX_FINDING_CHARS);
-    }
-    return childResult.summary.slice(0, MAX_FINDING_CHARS);
+    // FEATURE_121 (v0.7.40): replace MAX_FINDING_CHARS=8000 hard slice
+    // with the unified `child_task_summary` guardrail (50KB threshold +
+    // spill-to-file). Sync legacy path now matches the async/envelope
+    // semantics — 8000 chars was the same silent data loss bug as the
+    // async-path's 200-char banner truncate before FEATURE_121 fix.
+    const raw = finding
+      ? finding.evidence.join('\n')
+      : childResult.summary;
+    const guarded = await applyToolResultGuardrail('child_task_summary', raw, ctx);
+    return guarded.content;
   } finally {
     emitDispatchEnd();
   }

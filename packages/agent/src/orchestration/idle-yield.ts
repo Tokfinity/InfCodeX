@@ -378,10 +378,28 @@ export function waitForWakeEvent<TChildResult = unknown>(
  * Returns `undefined` when the wake yields no spliceable content —
  * the outer loop treats that as a real terminal exit.
  */
-export function composeIdleYieldUserMessage<TChildResult = unknown>(
+/**
+ * FEATURE_121 (v0.7.40) — Envelope aggregate budget enforcer.
+ *
+ * Pure `string[] → string[]` transform applied to drained envelope
+ * fragments before they're joined into a single synthetic user
+ * message. The coding layer provides the implementation that knows
+ * how to spill oversized fragments to disk and replace them with
+ * preview + path markers (see `@kodax-ai/coding`
+ * `createEnvelopeAggregateBudgetEnforcer`). The agent layer only
+ * sees this opaque function type — **no `@kodax-ai/coding` symbols
+ * may leak into this signature**, otherwise ADR-021 layer
+ * independence breaks and `@kodax/agent` cannot build standalone.
+ */
+export type EnvelopeAggregateEnforcer = (
+  fragments: readonly string[],
+) => readonly string[] | Promise<readonly string[]>;
+
+export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   wakeEvent: WakeEvent<TChildResult>,
   drainBackgroundQueue: () => readonly QueuedMessage[],
-): KodaXMessage | undefined {
+  enforceAggregate?: EnvelopeAggregateEnforcer,
+): Promise<KodaXMessage | undefined> {
   const fragments: string[] = [];
 
   if (wakeEvent.kind === 'messages-arrived') {
@@ -420,9 +438,12 @@ export function composeIdleYieldUserMessage<TChildResult = unknown>(
 
   if (fragments.length === 0) return undefined;
 
+  const enforced = enforceAggregate ? await enforceAggregate(fragments) : fragments;
+  if (enforced.length === 0) return undefined;
+
   return {
     role: 'user',
-    content: fragments.join('\n\n'),
+    content: enforced.join('\n\n'),
     // Hidden in REPL display — the agent only ever sees this in its
     // transcript, the human never reads it. Without this flag the
     // REPL would render the synthetic banner as a user message bubble.

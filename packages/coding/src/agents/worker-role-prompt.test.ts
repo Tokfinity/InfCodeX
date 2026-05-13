@@ -230,3 +230,46 @@ describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 
     expect(fanOutIdx).toBeGreaterThan(steeringIdx);
   });
 });
+
+// FEATURE_121 v0.7.40 — Envelope spillover guidance. Pin the dispatch-
+// rules bullet that teaches the Worker how to handle the spillover
+// marker emitted by `applyToolResultGuardrail('child_task_summary', …)`
+// when a child report exceeds the ~50KB inline envelope budget. This is
+// the Layer 1 ($0) unit test per EVAL_GUIDELINES §三层实验金字塔; the
+// behavioral validation lives in `tests/child-task-envelope-spillover.eval.ts`.
+describe('buildWorkerInstructions — FEATURE_121 envelope spillover (v0.7.40)', () => {
+  it('emits the LARGE CHILD OUTPUT dispatch-rules bullet tagged with the feature/version', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('LARGE CHILD OUTPUT (FEATURE_121 v0.7.40)');
+  });
+
+  it('teaches the spillover marker shape so Worker can recognize it in `<task-completed>` blocks', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    // The marker text mirrors `buildToolResultHint` for child_task_summary.
+    expect(out).toContain('Tool output truncated');
+    expect(out).toContain('Full output saved to:');
+    expect(out).toContain('Use the Read tool to view full output');
+  });
+
+  it('teaches preview-first reading order (avoid blind spillover reads)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    // Positive — preview-first.
+    expect(out).toMatch(/preview is usually enough/i);
+    expect(out).toMatch(/read it first/i);
+    // Negative — explicit anti-pattern call-out.
+    expect(out).toMatch(/Do NOT blindly Read every spillover path/);
+    expect(out).toMatch(/wastes context/i);
+  });
+
+  it('lives inside the dispatch rules section (idle-yield context, not a standalone block)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    const dispatchIdx = out.indexOf('DISPATCH RULES');
+    const spilloverIdx = out.indexOf('LARGE CHILD OUTPUT');
+    const fanOutIdx = out.indexOf('FAN-OUT PLAN GRANULARITY');
+    expect(dispatchIdx).toBeGreaterThanOrEqual(0);
+    expect(spilloverIdx).toBeGreaterThan(dispatchIdx);
+    // The spillover bullet belongs with the other dispatch RULEs — must
+    // appear before the next major section (fan-out granularity).
+    expect(spilloverIdx).toBeLessThan(fanOutIdx);
+  });
+});

@@ -591,14 +591,14 @@ describe('composeIdleYieldUserMessage', () => {
     } as QueuedMessage;
   }
 
-  it('returns undefined when wake is "aborted" (caller should have broken out earlier)', () => {
-    const result = composeIdleYieldUserMessage({ kind: 'aborted' }, () => []);
+  it('returns undefined when wake is "aborted" (caller should have broken out earlier)', async () => {
+    const result = await composeIdleYieldUserMessage({ kind: 'aborted' }, () => []);
     expect(result).toBeUndefined();
   });
 
-  it('messages-arrived: passes the QueuedMessage content through verbatim and concatenates trailing drain', () => {
+  it('messages-arrived: passes the QueuedMessage content through verbatim and concatenates trailing drain', async () => {
     const drainCalls: number[] = [];
-    const result = composeIdleYieldUserMessage(
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
         messages: [queuedMessage('hello from queue', 'user')],
@@ -620,8 +620,8 @@ describe('composeIdleYieldUserMessage', () => {
     expect(drainCalls.length).toBe(1);
   });
 
-  it('child-completed: pulls the canonical <task-completed> banner from the drained queue', () => {
-    const result = composeIdleYieldUserMessage(
+  it('child-completed: pulls the canonical <task-completed> banner from the drained queue', async () => {
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-completed',
         taskId: 'child-X',
@@ -638,8 +638,8 @@ describe('composeIdleYieldUserMessage', () => {
     expect(result!.content).toContain('found 3 imports');
   });
 
-  it('child-completed with empty queue: synthesizes a defensive fallback banner', () => {
-    const result = composeIdleYieldUserMessage(
+  it('child-completed with empty queue: synthesizes a defensive fallback banner', async () => {
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-completed',
         taskId: 'child-orphan',
@@ -652,8 +652,8 @@ describe('composeIdleYieldUserMessage', () => {
     expect(result!.content).toContain('(child task completed; no summary available)');
   });
 
-  it('child-failed with empty queue: synthesizes a banner carrying the error message', () => {
-    const result = composeIdleYieldUserMessage(
+  it('child-failed with empty queue: synthesizes a banner carrying the error message', async () => {
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-failed',
         taskId: 'child-crashed',
@@ -666,17 +666,17 @@ describe('composeIdleYieldUserMessage', () => {
     expect(result!.content).toContain('failed: exec failed: SIGTERM');
   });
 
-  it('does not call the drain callback for "aborted" wake (no queue mutation on abort)', () => {
+  it('does not call the drain callback for "aborted" wake (no queue mutation on abort)', async () => {
     let drainCalled = false;
-    composeIdleYieldUserMessage({ kind: 'aborted' }, () => {
+    await composeIdleYieldUserMessage({ kind: 'aborted' }, () => {
       drainCalled = true;
       return [];
     });
     expect(drainCalled).toBe(false);
   });
 
-  it('marks the synthesized message _synthetic so the REPL hides it from the user', () => {
-    const result = composeIdleYieldUserMessage(
+  it('marks the synthesized message _synthetic so the REPL hides it from the user', async () => {
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
         messages: [queuedMessage('foo', 'user')],
@@ -686,8 +686,8 @@ describe('composeIdleYieldUserMessage', () => {
     expect(result?._synthetic).toBe(true);
   });
 
-  it('joins multiple fragments with a blank-line separator', () => {
-    const result = composeIdleYieldUserMessage(
+  it('joins multiple fragments with a blank-line separator', async () => {
+    const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
         messages: [queuedMessage('first', 'user'), queuedMessage('second', 'user')],
@@ -695,5 +695,61 @@ describe('composeIdleYieldUserMessage', () => {
       () => [queuedMessage('third')],
     );
     expect(result?.content).toBe('first\n\nsecond\n\nthird');
+  });
+
+  // FEATURE_121 (v0.7.40): enforceAggregate callback hook
+  it('enforceAggregate: when omitted, fragments are joined verbatim (backward compat)', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('a'), queuedMessage('b')],
+      },
+      () => [queuedMessage('c')],
+    );
+    expect(result?.content).toBe('a\n\nb\n\nc');
+  });
+
+  it('enforceAggregate: when provided, transforms fragments before joining', async () => {
+    const calls: ReadonlyArray<readonly string[]>[] = [];
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('big-1'), queuedMessage('big-2')],
+      },
+      () => [],
+      (fragments) => {
+        calls.push([fragments]);
+        return fragments.map((f) => `[shrunk]${f}`);
+      },
+    );
+    expect(result?.content).toBe('[shrunk]big-1\n\n[shrunk]big-2');
+    expect(calls.length).toBe(1);
+  });
+
+  it('enforceAggregate: supports async transform (returns Promise<string[]>)', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('alpha'), queuedMessage('beta')],
+      },
+      () => [],
+      async (fragments) => {
+        await Promise.resolve();
+        return fragments.map((f) => f.toUpperCase());
+      },
+    );
+    expect(result?.content).toBe('ALPHA\n\nBETA');
+  });
+
+  it('enforceAggregate: if it returns empty array, compose returns undefined', async () => {
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('x')],
+      },
+      () => [],
+      () => [],
+    );
+    expect(result).toBeUndefined();
   });
 });

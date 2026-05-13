@@ -4,6 +4,7 @@ import path from 'path';
 import { getAgentConfigPath } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
+import { maybeRunToolOutputGc } from './tool-output-gc.js';
 
 export const DEFAULT_TOOL_OUTPUT_MAX_LINES = 2000;
 export const DEFAULT_TOOL_OUTPUT_MAX_BYTES = 50 * 1024;
@@ -260,6 +261,12 @@ export async function persistToolOutput(
 
   await fs.mkdir(outputDir, { recursive: true });
   await fs.writeFile(filePath, content, 'utf-8');
+
+  // FEATURE_121 v0.7.40 — fire-and-forget TTL GC. Throttled to once per
+  // hour in-process; never awaited; swallows every error. Keeps
+  // `~/.kodax/tool-results/` from growing unbounded over long install
+  // lifetimes without coupling the write path to GC success.
+  void maybeRunToolOutputGc(outputDir);
 
   return filePath;
 }

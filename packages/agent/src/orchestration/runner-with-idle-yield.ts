@@ -35,7 +35,7 @@ import type { Agent } from '../primitives/agent.js';
 import type { AgentMessage } from '../primitives/agent.js';
 import type { MessageQueue } from '../messaging/index.js';
 
-import { composeIdleYieldUserMessage } from './idle-yield.js';
+import { composeIdleYieldUserMessage, type EnvelopeAggregateEnforcer } from './idle-yield.js';
 import { detectIdleYield } from './idle-yield.js';
 import { waitForWakeEvent } from './idle-yield.js';
 import type { IdleYieldSnapshot } from './idle-yield.js';
@@ -127,6 +127,21 @@ export interface RunWithIdleYieldOptions<
    * exercise the cap branch quickly.
    */
   readonly maxIterations?: number;
+  /**
+   * FEATURE_121 (v0.7.40): optional aggregate budget enforcer for the
+   * synthetic user message built from drained background banners. When
+   * provided, it transforms the fragment array before they're joined
+   * (per-banner per-`<task-completed>` summary chunks remain unchanged
+   * by this wrapper — that's the caller's responsibility at enqueue
+   * time via `applyToolResultGuardrail`). The aggregate hook only kicks
+   * in when N banners' total exceeds the limit set by the coding-layer
+   * implementation (default 200KB per claudecode parity).
+   *
+   * Type is `string[] → string[] | Promise<string[]>` so the agent
+   * layer carries no `@kodax-ai/coding` symbols. See
+   * `EnvelopeAggregateEnforcer` in idle-yield.ts.
+   */
+  readonly envelopeAggregateEnforcer?: EnvelopeAggregateEnforcer;
 }
 
 /**
@@ -199,11 +214,14 @@ export async function runWithIdleYield<
     });
     if (wakeEvent.kind === 'aborted') break;
 
-    const syntheticUserMessage = composeIdleYieldUserMessage(wakeEvent, () =>
-      opts.messageQueue.dequeue({
-        agentId: opts.agentId,
-        maxPriority: 'background',
-      }),
+    const syntheticUserMessage = await composeIdleYieldUserMessage(
+      wakeEvent,
+      () =>
+        opts.messageQueue.dequeue({
+          agentId: opts.agentId,
+          maxPriority: 'background',
+        }),
+      opts.envelopeAggregateEnforcer,
     );
     if (!syntheticUserMessage) break;
 
