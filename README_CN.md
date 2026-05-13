@@ -133,7 +133,7 @@ import { loadConfig } from '@kodax-ai/kodax/repl';     // REPL 配置 / session 
 
 #### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
 
-如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置的 11 个 native provider（Anthropic、OpenAI 以及 9 个 Anthropic-/OpenAI-compat clone：DeepSeek、Kimi、Kimi-code、Qwen、Zhipu、Zhipu-coding、MiniMax-coding、MiMo-coding、Ark-coding）已经默认开了这个 flag，只有自定义 provider 需要手动 opt-in。
+如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置的 12 个 vision-capable provider（Anthropic、OpenAI、9 个 Anthropic-/OpenAI-compat clone：DeepSeek / Kimi / Kimi-code / Qwen / Zhipu / Zhipu-coding / MiniMax-coding / MiMo-coding / Ark-coding，加 Gemini-CLI 通过 CLI 的 `@<path>` file-include 语法）已经默认开了这个 flag。只有 Codex-CLI 和自定义 provider 需要手动 opt-in。
 
 ```json
 {
