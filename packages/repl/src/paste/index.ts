@@ -49,4 +49,9 @@ export {
 
 export { readClipboardImage } from './clipboard-image.js';
 
-export { PASTE_TMP_DIR_ENV, persistImageAsBlock } from './persist-image.js';
+export {
+  PASTE_TMP_DIR_ENV,
+  PASTE_TMP_TTL_MS,
+  persistImageAsBlock,
+  prunePasteTmpDir,
+} from './persist-image.js';
