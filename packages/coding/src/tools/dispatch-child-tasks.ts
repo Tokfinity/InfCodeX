@@ -41,6 +41,11 @@ import type {
 import type { ToolProgress } from './types.js';
 import { executeChildAgents, type ChildExecutorOptions } from '../child-executor.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
+import {
+  LARGE_CONTENT_THRESHOLD_BYTES,
+  DEFAULT_SUMMARY_MAX_CHARS,
+} from './blob-summarizer.js';
+import { formatSize } from './truncate.js';
 // FEATURE_155 (v0.7.39) — dispatch banner steers the LLM to idle-yield
 // (end the turn text-only when out of useful work). The v0.7.38
 // `await_child_task` wording branch was retired in Slice C3 because
@@ -53,6 +58,70 @@ const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 // dispatch path now uses `applyToolResultGuardrail('child_task_summary', ...)`
 // (50KB threshold + spill-to-file) for parity with the async/envelope path.
 const TOOL_NAME = 'dispatch_child_task';
+
+/**
+ * FEATURE_121 v0.7.40 follow-up — child-task summary guardrail with
+ * LLM-summarize last-resort fallback.
+ *
+ * Three-layer failure chain:
+ *
+ *   1. Spill success → preview + marker (Worker can Read full content)
+ *   2. Spill failure + content ≤ 100KB → inline full content
+ *      (data-loss guard; Worker sees full payload, may exceed envelope cap)
+ *   3. Spill failure + content > 100KB AND ctx.summarizeBlob present →
+ *      LLM-summarize to ~8KB + lossy-banner marker
+ *      ↳ Summarizer failure → fall back to layer 2 (inline full content)
+ *      ↳ No summarizer configured → fall back to layer 2
+ *
+ * The 100KB threshold avoids paying an LLM call on contents that would
+ * inline acceptably anyway (≤25K tokens on common 128K models). The
+ * lossy banner explicitly flags compression so the Worker knows fine-
+ * grained detail may be missing; it should NOT silently treat the
+ * summary as the source of truth for diff-precision work.
+ *
+ * Caller passes the toolName ('child_task_summary' for all 4 dispatch
+ * sites) and the raw pre-guardrail content. Returns the banner string
+ * to emit verbatim downstream (enqueueChildTaskNotification or
+ * sync-tool-result return).
+ */
+async function applyChildSummaryGuardrailWithSummarizer(
+  toolName: string,
+  rawContent: string,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  const guarded = await applyToolResultGuardrail(toolName, rawContent, ctx);
+
+  // Normal success path or small-payload inline fallback: return as-is.
+  if (!guarded.spillFailed) return guarded.content;
+  if (rawContent.length <= LARGE_CONTENT_THRESHOLD_BYTES) return guarded.content;
+  if (!ctx.summarizeBlob) return guarded.content;
+
+  // Layer 3: try LLM-summarize the oversized payload.
+  try {
+    const summary = await ctx.summarizeBlob(rawContent, {
+      maxChars: DEFAULT_SUMMARY_MAX_CHARS,
+      abortSignal: ctx.abortSignal,
+    });
+    return [
+      `[SPILL FAILED — original ${formatSize(rawContent.length)} compressed via LLM summarizer; raw content unavailable.`,
+      `Worker: treat this summary as LOSSY. Critical decisions OK; fine-grained detail may be missing.`,
+      `Re-run upstream tool with narrower scope if you need verbatim source.]`,
+      '',
+      summary,
+    ].join('\n');
+  } catch (err) {
+    // Summarizer failed too — fall back to the inline-full-content path.
+    // Match the same console.warn discipline as the upstream
+    // applyToolResultGuardrail spill-failure guard.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[dispatch-child-tasks] LLM summarizer failed for ${toolName} ` +
+        `(${formatSize(rawContent.length)}); inlining full content. ` +
+        `Cause: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return guarded.content;
+  }
+}
 
 /** Returns true if Pattern B async dispatch should be used. */
 function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
@@ -254,15 +323,24 @@ export async function* toolDispatchChildTask(
           status === 'completed'
             ? (result.mergedFindings[0]?.evidence.join('\n') ?? childResult?.summary ?? '')
             : `failed: ${childResult?.summary ?? 'no result'}`;
-        // FEATURE_121 (v0.7.40): per-banner guardrail. Replaces the previous
-        // `summary.slice(0, 200)` 200-char hard truncate. For ≤50KB output the
-        // full content is inlined; for >50KB the framework writes to
+        // FEATURE_121 (v0.7.40): per-banner guardrail + LLM-summarize last-
+        // resort fallback. Replaces the previous `summary.slice(0, 200)`
+        // 200-char hard truncate. For ≤50KB output the full content is
+        // inlined; for >50KB the framework writes to
         // `getAgentConfigPath('tool-results')/<id>.txt` and the envelope
-        // banner carries a preview + spill path that Worker can Read on demand.
-        const guarded = await applyToolResultGuardrail('child_task_summary', rawSummary, ctx);
+        // banner carries a preview + spill path. If spill fails AND content
+        // > 100KB, the helper calls `ctx.summarizeBlob` (Worker-same provider)
+        // to compress to ~8KB rather than inlining MB+ data that would blow
+        // the context window. See `applyChildSummaryGuardrailWithSummarizer`
+        // header for the full failure chain.
+        const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
+          'child_task_summary',
+          rawSummary,
+          ctx,
+        );
         enqueueChildTaskNotification({
           taskId: childId,
-          summary: guarded.content,
+          summary: bannerContent,
         });
         return result;
       } catch (err) {
@@ -272,15 +350,17 @@ export async function* toolDispatchChildTask(
         const message = err instanceof Error ? err.message : String(err);
         // FEATURE_121 (v0.7.40): crash messages are typically small (<1KB) so
         // the guardrail will inline them; routing through the same path keeps
-        // success / failure envelope semantics uniform.
-        const guarded = await applyToolResultGuardrail(
+        // success / failure envelope semantics uniform. The summarize
+        // fallback never triggers here (content <<100KB) but threading
+        // through the same helper keeps the 4 call sites identical.
+        const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
           'child_task_summary',
           `crash: ${message}`,
           ctx,
         );
         enqueueChildTaskNotification({
           taskId: childId,
-          summary: guarded.content,
+          summary: bannerContent,
         });
         throw err;
       } finally {
@@ -339,31 +419,29 @@ export async function* toolDispatchChildTask(
     yield { stage: 'done', message: `Child "${childId}" → ${status}` };
 
     if (!childResult || childResult.status === 'failed') {
-      // FEATURE_121 (v0.7.40): same guardrail as the async branch envelope
-      // path. Replaces the previous `slice(0, 1000)` 1000-char hard
-      // truncate. For ≤50KB content the full message inlines; for >50KB
-      // the framework spills to file and the tool result carries
-      // preview + path that Worker can Read on demand.
+      // FEATURE_121 (v0.7.40): same guardrail + LLM-summarize fallback as
+      // the async branch envelope path. Replaces the previous
+      // `slice(0, 1000)` 1000-char hard truncate.
       const failedSummary = childResult?.summary ?? 'no result';
-      const guarded = await applyToolResultGuardrail(
+      return await applyChildSummaryGuardrailWithSummarizer(
         'child_task_summary',
         `Child task "${childId}" failed: ${failedSummary}`,
         ctx,
       );
-      return guarded.content;
     }
 
     const finding = result.mergedFindings[0];
     // FEATURE_121 (v0.7.40): replace MAX_FINDING_CHARS=8000 hard slice
-    // with the unified `child_task_summary` guardrail (50KB threshold +
-    // spill-to-file). Sync legacy path now matches the async/envelope
-    // semantics — 8000 chars was the same silent data loss bug as the
-    // async-path's 200-char banner truncate before FEATURE_121 fix.
+    // with the unified `child_task_summary` guardrail + LLM-summarize
+    // fallback. Sync legacy path now matches the async/envelope semantics.
     const raw = finding
       ? finding.evidence.join('\n')
       : childResult.summary;
-    const guarded = await applyToolResultGuardrail('child_task_summary', raw, ctx);
-    return guarded.content;
+    return await applyChildSummaryGuardrailWithSummarizer(
+      'child_task_summary',
+      raw,
+      ctx,
+    );
   } finally {
     emitDispatchEnd();
   }

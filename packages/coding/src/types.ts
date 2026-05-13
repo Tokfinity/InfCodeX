@@ -1389,6 +1389,27 @@ export interface KodaXToolExecutionContext {
   exitPlanMode?: (plan: string) => Promise<boolean | 'not-in-plan-mode'>;
   /** Abort signal for cancelling in-flight tool operations (Issue 113) */
   abortSignal?: AbortSignal;
+  /**
+   * FEATURE_121 v0.7.40 — last-resort LLM blob summarizer.
+   *
+   * Injected by `runner-driven.ts` at task-engine init using the
+   * Worker's own provider/model (same panel, same key). The dispatch
+   * tool calls this only when `applyToolResultGuardrail` returned
+   * `spillFailed: true` AND the raw content exceeds
+   * `LARGE_CONTENT_THRESHOLD_BYTES` (100 KB) — i.e., spill is broken
+   * AND inlining the full payload would risk blowing context. The
+   * callback compresses to roughly 2-10 KB while preserving structural
+   * tokens (paths / line-numbers / error codes). On failure the caller
+   * falls back to the existing inline-full-content path; callees are
+   * expected to throw `BlobSummarizerError` on empty / aborted /
+   * upstream-error.
+   *
+   * See `packages/coding/src/tools/blob-summarizer.ts`.
+   */
+  summarizeBlob?: (
+    content: string,
+    options?: { readonly maxChars?: number; readonly abortSignal?: AbortSignal },
+  ) => Promise<string>;
   managedProtocolRole?: Exclude<KodaXTaskRole, 'direct'>;
   emitManagedProtocol?: (payload: Partial<KodaXManagedProtocolPayload>) => void;
   /** FEATURE_067 v2: Parent agent's provider/model for child agent inheritance. */
