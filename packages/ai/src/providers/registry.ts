@@ -91,17 +91,21 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     // The pre-V4 aliases `deepseek-chat` / `deepseek-reasoner` are slated
     // for deprecation on 2026-07-24 and have been removed from KodaX —
     // existing configs pointing at them should switch to v4-flash.
+    // Vision: inherits `KodaXOpenAICompatProvider` `image_url` serialization
+    // (openai.ts:904). Upstream model-level vision support varies per model
+    // — flag means KodaX does not artificially block the request; users see
+    // real API errors if a specific model is text-only. v0.7.40 FEATURE_134.
     model: 'deepseek-v4-flash',
     models: ['deepseek-v4-pro'],
     reasoningCapability: 'native-effort',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   kimi: {
     apiKeyEnv: 'KIMI_API_KEY',
     model: 'kimi-k2.6',
     models: ['k2.5'],
     reasoningCapability: 'native-effort',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'kimi-code': {
     apiKeyEnv: 'KIMI_API_KEY',
@@ -110,29 +114,32 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     // promoted (K2.6 as of 2026-04). We surface a single stable label so
     // users aren't tempted to pick a specific version that the server will
     // silently ignore.
+    // Vision: inherits Anthropic-compat image-block serialization
+    // (anthropic.ts:770). User-validated 2026-05-13 — kimi-for-coding
+    // endpoint accepts and processes image input. v0.7.40 FEATURE_134.
     model: 'kimi-for-coding',
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   qwen: {
     apiKeyEnv: 'QWEN_API_KEY',
     model: 'qwen3.5-plus',
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   zhipu: {
     apiKeyEnv: 'ZHIPU_API_KEY',
     model: 'glm-5',
     models: ['glm-5.1', 'glm-5-turbo'],
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'zhipu-coding': {
     apiKeyEnv: 'ZHIPU_API_KEY',
     model: 'glm-5',
     models: ['glm-5.1', 'glm-5-turbo'],
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'minimax-coding': {
     apiKeyEnv: 'MINIMAX_API_KEY',
@@ -146,7 +153,7 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
       'MiniMax-M2',
     ],
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'mimo-coding': {
     // Xiaomi MiMo Token Plan subscription endpoint (Anthropic-compat).
@@ -156,7 +163,7 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     model: 'mimo-v2.5-pro',
     models: ['mimo-v2.5'],
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'ark-coding': {
     // Volcengine Ark Coding Plan subscription endpoint (Anthropic-compat).
@@ -178,7 +185,7 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
       'doubao-seed-2.0-lite',
     ],
     reasoningCapability: 'native-budget',
-    capabilityProfile: NATIVE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'gemini-cli': {
     apiKeyEnv: 'GEMINI_API_KEY',

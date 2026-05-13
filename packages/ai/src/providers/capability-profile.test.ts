@@ -61,6 +61,41 @@ describe('provider capability profiles', () => {
     );
   });
 
+  it('marks Anthropic-compat + OpenAI-compat providers as image-input capable (FEATURE_134 v0.7.40)', () => {
+    // Anthropic-compat clones inherit anthropic.ts:770 image block forwarding.
+    // OpenAI-compat clones inherit openai.ts:904 image_url forwarding. The
+    // flag means KodaX does not artificially block multimodal requests at
+    // the SA-path policy gate; per-model vision support is the upstream
+    // provider's contract.
+    const visionCapableNativeProviders = [
+      'anthropic',
+      'openai',
+      'deepseek',
+      'kimi',
+      'kimi-code',
+      'qwen',
+      'zhipu',
+      'zhipu-coding',
+      'minimax-coding',
+      'mimo-coding',
+      'ark-coding',
+    ] as const;
+    for (const provider of visionCapableNativeProviders) {
+      expect(getProviderConfiguredCapabilityProfile(provider)?.multimodalSupport).toBe(
+        'image-input',
+      );
+    }
+  });
+
+  it('keeps CLI-bridge providers (gemini-cli, codex-cli) text-only — different serialization path', () => {
+    expect(getProviderConfiguredCapabilityProfile('gemini-cli')?.multimodalSupport).toBe(
+      'none',
+    );
+    expect(getProviderConfiguredCapabilityProfile('codex-cli')?.multimodalSupport).toBe(
+      'none',
+    );
+  });
+
   it('returns null for unknown providers instead of inventing a native profile', () => {
     expect(getProviderConfiguredCapabilityProfile('unknown-provider')).toBeNull();
   });
