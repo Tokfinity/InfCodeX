@@ -17,6 +17,11 @@ const EXPECTED_CLI_BRIDGE_PROFILE = {
   evidenceSupport: 'limited',
 } as const;
 
+const EXPECTED_IMAGE_INPUT_CLI_BRIDGE_PROFILE = {
+  ...EXPECTED_CLI_BRIDGE_PROFILE,
+  multimodalSupport: 'image-input',
+} as const;
+
 const EXPECTED_NATIVE_PROFILE = {
   transport: 'native-api',
   conversationSemantics: 'full-history',
@@ -36,8 +41,10 @@ const EXPECTED_IMAGE_INPUT_NATIVE_PROFILE = {
 
 describe('provider capability profiles', () => {
   it('marks CLI bridge providers as lossy bridge transports in snapshot metadata', () => {
+    // gemini-cli was widened to image-input in FEATURE_134 v0.7.40 since
+    // Gemini CLI 2.x supports `@<path>` file-include syntax in prompts.
     expect(getProviderConfiguredCapabilityProfile('gemini-cli')).toEqual(
-      EXPECTED_CLI_BRIDGE_PROFILE,
+      EXPECTED_IMAGE_INPUT_CLI_BRIDGE_PROFILE,
     );
     expect(getProviderConfiguredCapabilityProfile('codex-cli')).toEqual(
       EXPECTED_CLI_BRIDGE_PROFILE,
@@ -46,7 +53,7 @@ describe('provider capability profiles', () => {
     const providers = getProviderList();
     expect(
       providers.find((provider) => provider.name === 'gemini-cli')?.capabilityProfile,
-    ).toEqual(EXPECTED_CLI_BRIDGE_PROFILE);
+    ).toEqual(EXPECTED_IMAGE_INPUT_CLI_BRIDGE_PROFILE);
     expect(
       providers.find((provider) => provider.name === 'codex-cli')?.capabilityProfile,
     ).toEqual(EXPECTED_CLI_BRIDGE_PROFILE);
@@ -61,13 +68,15 @@ describe('provider capability profiles', () => {
     );
   });
 
-  it('marks Anthropic-compat + OpenAI-compat providers as image-input capable (FEATURE_134 v0.7.40)', () => {
+  it('marks Anthropic-compat + OpenAI-compat + Gemini-CLI providers as image-input capable (FEATURE_134 v0.7.40)', () => {
     // Anthropic-compat clones inherit anthropic.ts:770 image block forwarding.
-    // OpenAI-compat clones inherit openai.ts:904 image_url forwarding. The
-    // flag means KodaX does not artificially block multimodal requests at
-    // the SA-path policy gate; per-model vision support is the upstream
+    // OpenAI-compat clones inherit openai.ts:904 image_url forwarding.
+    // Gemini-CLI gets image input through the CLI's `@<path>` syntax wired by
+    // `KodaXGeminiCliProvider.serializeImageBlockToPromptToken`.
+    // The flag means KodaX does not artificially block multimodal requests
+    // at the SA-path policy gate; per-model vision support is the upstream
     // provider's contract.
-    const visionCapableNativeProviders = [
+    const visionCapableProviders = [
       'anthropic',
       'openai',
       'deepseek',
@@ -79,18 +88,16 @@ describe('provider capability profiles', () => {
       'minimax-coding',
       'mimo-coding',
       'ark-coding',
+      'gemini-cli',
     ] as const;
-    for (const provider of visionCapableNativeProviders) {
+    for (const provider of visionCapableProviders) {
       expect(getProviderConfiguredCapabilityProfile(provider)?.multimodalSupport).toBe(
         'image-input',
       );
     }
   });
 
-  it('keeps CLI-bridge providers (gemini-cli, codex-cli) text-only — different serialization path', () => {
-    expect(getProviderConfiguredCapabilityProfile('gemini-cli')?.multimodalSupport).toBe(
-      'none',
-    );
+  it('keeps codex-cli text-only (no `codex exec --json` image input surface)', () => {
     expect(getProviderConfiguredCapabilityProfile('codex-cli')?.multimodalSupport).toBe(
       'none',
     );

@@ -39,6 +39,16 @@ export const CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE: KodaXProviderCapabilityProf
   evidenceSupport: 'limited',
 };
 
+// FEATURE_134 v0.7.40 — CLI bridges that DO accept image input via a
+// file-include prompt syntax (Gemini CLI 2.x `@<path>`). The flag controls
+// the SA-path policy gate (`provider-policy.ts:298`). Codex CLI's
+// `codex exec --json --full-auto` mode has no image surface, so codex-cli
+// continues to use the plain `CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE`.
+export const IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE: KodaXProviderCapabilityProfile = {
+  ...CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+  multimodalSupport: 'image-input',
+};
+
 export function normalizeCapabilityProfile(
   profile: KodaXProviderCapabilityProfile,
 ): NormalizedKodaXProviderCapabilityProfile {
