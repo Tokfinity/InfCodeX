@@ -388,7 +388,7 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 | Admission contract | `admission/` | Admission pipeline + 7 quality invariants（FEATURE_101） |
 | Messaging | `messaging/` | 2-tier priority queue + agentId routing（FEATURE_115） |
 | Orchestration | `orchestration/` | Pattern B dispatch / child-task registry / idle-yield 状态机（detectIdleYield + waitForWakeEvent + composeIdleYieldUserMessage）/ Runner.runWithIdleYield 包装 / SendMessage router / TaskStop / Peer router（FEATURE_119/120/123/128/155 — v0.7.39 FEATURE_120 Step 0 完成包归属迁移） |
-| Scratchpad | `scratchpad/` | 去耦合大输出通道（FEATURE_121） |
+| ~~Scratchpad~~ | ~~`scratchpad/`~~ | ~~去耦合大输出通道（FEATURE_121）~~ — **2026-05-12 取消**：FEATURE_121 v0.7.40 rescoped 为 "Envelope Spillover Gap-Fix"（复用 `@kodax/coding/tools/tool-result-policy.ts` 现有 spillover 体系 + `@kodax/agent/orchestration/idle-yield.ts` 加聚合 cap），**不新建 `scratchpad/` 子目录、不引入新工具**。详见 [features/v0.7.40.md](features/v0.7.40.md#feature_121-envelope-spillover-gap-fix--child-task-summary-接入-tool-result-policy) |
 | Memory | `memory/` | 4-type taxonomy + scope resolver（FEATURE_124） |
 | Team | `team/` | Multi-instance state broadcast + system-prompt injection（FEATURE_125） |
 | Construction | `construction/` | Self-Construction runtime / agent-resolver / sandbox-runner（FEATURE_087/088/089/090/101） |
@@ -402,7 +402,7 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 | 类别 | 子目录 | 例子 |
 |---|---|---|
 | Coding tools | `tools/` | Read / Write / Edit / MultiEdit / Bash / Grep / Glob / WebFetch / WebSearch / SemanticLookup / RepoOverview |
-| Tool wrappers for agent platform tools | `tools/` | dispatch_child_task / send_message / task_stop / write_scratchpad / read_scratchpad / list_agents / todo_update（**工具壳留 coding，调 agent 端原语**；tool 描述文本含 coding-specific prompt） |
+| Tool wrappers for agent platform tools | `tools/` | dispatch_child_task / send_message / task_stop / list_agents / todo_update（**工具壳留 coding，调 agent 端原语**；tool 描述文本含 coding-specific prompt）—— FEATURE_121 v0.7.40 rescope 后无 `write_scratchpad` / `read_scratchpad`（envelope spillover 由 framework 自动处理，Worker 直接用 Read 工具读 spill 文件） |
 | Coding role prompts | `prompts/` / `agents/*-role-prompt.ts` | Worker / Scout / Planner / Generator / Evaluator role prompts |
 | H2 task-engine 状态机 | `task-engine/` | managed-task / runner-driven / role-prompt builder（coding AMA-specific） |
 | Coding agent 实例 | `agents/` | defaultCodingAgent / scoutAgent / generatorAgent / evaluatorAgent |
@@ -416,7 +416,7 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 
 ### Tool wrapper 的双层模式
 
-通用 agent 平台工具（dispatch_child_task / send_message / task_stop / write_scratchpad / read_scratchpad / list_agents 等）使用**双层模式**：
+通用 agent 平台工具（dispatch_child_task / send_message / task_stop / list_agents 等）使用**双层模式**：
 
 - **底层 primitive** 在 `@kodax/agent/<domain>/`：路由 / 队列 / 注册表 / 协议（不含 prompt）
 - **工具壳** 在 `@kodax/coding/tools/`：tool schema + handler 调底层 primitive；tool description 含 coding-specific prompt（如 "use this when reviewing a coding PR"）
