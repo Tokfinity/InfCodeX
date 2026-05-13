@@ -22,13 +22,20 @@
  * (acceptable: each file is at most TARGET_RAW_SIZE_BYTES ≈ 3.75MB and
  * the OS clears tmpdir on boot).
  *
+ * Content-hash filename: filenames are derived from a sha256 prefix of
+ * the buffer so identical content (e.g., user pressing Alt+V multiple
+ * times on the same screenshot, or OS-level key autorepeat firing the
+ * Alt+V handler twice within a frame) produces a stable path instead of
+ * a fresh UUID each time. This caps temp-dir bloat per unique image at
+ * one file per session.
+ *
  * Override via `KODAX_PASTE_TMP_DIR` env var (used by tests).
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { KodaXImageBlock } from '@kodax-ai/llm';
 import type { NormalizedImage } from './image-normalize.js';
 
@@ -44,7 +51,8 @@ export async function persistImageAsBlock(
   const dir = resolvePasteTmpDir();
   await mkdir(dir, { recursive: true });
   const ext = image.mediaType === 'image/jpeg' ? '.jpg' : '.png';
-  const filename = `paste-${randomUUID()}${ext}`;
+  const hash = createHash('sha256').update(image.buffer).digest('hex').slice(0, 16);
+  const filename = `paste-${hash}${ext}`;
   const fullPath = path.join(dir, filename);
   await writeFile(fullPath, image.buffer);
   return {

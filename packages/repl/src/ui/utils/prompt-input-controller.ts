@@ -393,7 +393,19 @@ export function usePromptInputController({
     [insert],
   );
 
+  // FEATURE_134 v0.7.40 — single-flight guard. OS-level Alt+V autorepeat
+  // (Windows conhost in particular emits repeat events even on a brief
+  // press) would otherwise fire N concurrent clipboard reads → N temp
+  // files. The guard drops re-entrant invocations while the previous
+  // clipboard read is in flight; pairs with the content-hash filename in
+  // `persist-image.ts` so even repeated explicit presses on the same
+  // screenshot reuse one file rather than accumulating duplicates.
+  const explicitImagePasteInflightRef = useRef<boolean>(false);
   const triggerExplicitImagePaste = useCallback(async (): Promise<void> => {
+    if (explicitImagePasteInflightRef.current) {
+      return;
+    }
+    explicitImagePasteInflightRef.current = true;
     try {
       const outcome = await triggerExplicitClipboardImage();
       if (outcome.kind === "images") {
@@ -409,6 +421,8 @@ export function usePromptInputController({
       console.warn(
         `[KodaX clipboard] image handling failed: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      explicitImagePasteInflightRef.current = false;
     }
   }, [insert]);
 

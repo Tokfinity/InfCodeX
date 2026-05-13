@@ -50,7 +50,7 @@ describe('persistImageAsBlock', () => {
     expect(block.mediaType).toBe('image/jpeg');
   });
 
-  it('generates unique filenames for concurrent persists', async () => {
+  it('reuses the same path for identical content (content-hash filename)', async () => {
     const image: NormalizedImage = {
       buffer: Buffer.from('x'),
       mediaType: 'image/png',
@@ -63,7 +63,27 @@ describe('persistImageAsBlock', () => {
       persistImageAsBlock(image),
     ]);
     const paths = new Set(results.map((b) => b.path));
-    expect(paths.size).toBe(3);
+    expect(paths.size).toBe(1);
+    const entries = await fs.readdir(tempDir);
+    expect(entries.length).toBe(1);
+  });
+
+  it('produces distinct paths for different content', async () => {
+    const a: NormalizedImage = {
+      buffer: Buffer.from('alpha'),
+      mediaType: 'image/png',
+      width: 1,
+      height: 1,
+    };
+    const b: NormalizedImage = {
+      buffer: Buffer.from('beta'),
+      mediaType: 'image/png',
+      width: 1,
+      height: 1,
+    };
+    const blockA = await persistImageAsBlock(a);
+    const blockB = await persistImageAsBlock(b);
+    expect(blockA.path).not.toBe(blockB.path);
   });
 
   it('creates the temp directory if it does not exist', async () => {

@@ -536,6 +536,43 @@ describe("prompt-input-controller", () => {
       expect(mocks.insertMock).toHaveBeenCalledWith(`@${imagePath} `, { paste: false });
     });
 
+    it("Alt+V autorepeat fires the clipboard read only once (single-flight guard)", async () => {
+      // Simulates OS-level key autorepeat firing two Alt+V events within the
+      // same tick before the first clipboard read settles. Without the
+      // single-flight guard each event creates a separate temp file.
+      let resolveClipboard: (() => void) | undefined;
+      const blockedClipboardPromise = new Promise<void>((resolve) => {
+        resolveClipboard = resolve;
+      });
+      const imagePath = "/tmp/kodax-paste/repeat-xyz.png";
+      mocks.triggerExplicitClipboardImageMock.mockImplementationOnce(
+        async () => {
+          await blockedClipboardPromise;
+          return {
+            kind: "images",
+            blocks: [{ type: "image", path: imagePath }],
+          };
+        },
+      );
+
+      let controller: ReturnType<typeof usePromptInputController> | undefined;
+      const Harness = () => {
+        controller = usePromptInputController({ onSubmit: vi.fn() });
+        return null;
+      };
+      render(React.createElement(Harness));
+
+      controller?.handleKey(createKey({ name: "v", sequence: "v", meta: true }));
+      controller?.handleKey(createKey({ name: "v", sequence: "v", meta: true }));
+      controller?.handleKey(createKey({ name: "v", sequence: "v", meta: true }));
+      resolveClipboard?.();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(mocks.triggerExplicitClipboardImageMock).toHaveBeenCalledTimes(1);
+      expect(mocks.insertMock).toHaveBeenCalledTimes(1);
+    });
+
     it("clipboard noop (no image on clipboard) does not insert anything", async () => {
       mocks.state.triggerExplicitClipboardImageReturn = { kind: "noop" };
 
