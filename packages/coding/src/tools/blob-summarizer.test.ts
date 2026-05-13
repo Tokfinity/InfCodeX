@@ -3,7 +3,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXProvider, KodaXStreamResult } from '@kodax-ai/llm';
+import type { KodaXBaseProvider, KodaXStreamResult } from '@kodax-ai/llm';
 
 import {
   BlobSummarizerError,
@@ -12,12 +12,12 @@ import {
   createBlobSummarizer,
 } from './blob-summarizer.js';
 
-function makeMockProvider(impl: KodaXProvider['stream']): KodaXProvider {
+function makeMockProvider(impl: KodaXBaseProvider['stream']): KodaXBaseProvider {
   return {
     name: 'mock',
-    config: {} as KodaXProvider['config'],
-    stream: vi.fn(impl) as KodaXProvider['stream'],
-  } as unknown as KodaXProvider;
+    config: {} as KodaXBaseProvider['config'],
+    stream: vi.fn(impl) as KodaXBaseProvider['stream'],
+  } as unknown as KodaXBaseProvider;
 }
 
 function makeStreamResult(text: string): KodaXStreamResult {
@@ -36,7 +36,7 @@ function makeStreamResult(text: string): KodaXStreamResult {
 describe('createBlobSummarizer', () => {
   it('returns trimmed summary text from the provider stream call', async () => {
     const stream = vi.fn(async () => makeStreamResult('  compressed summary text  '));
-    const provider = { stream, name: 'mock' } as unknown as KodaXProvider;
+    const provider = { stream, name: 'mock' } as unknown as KodaXBaseProvider;
 
     const summarize = createBlobSummarizer({ provider, model: 'mock-model' });
     const result = await summarize('content '.repeat(20_000));
@@ -68,7 +68,7 @@ describe('createBlobSummarizer', () => {
           }, { once: true });
         });
       }),
-    } as unknown as KodaXProvider;
+    } as unknown as KodaXBaseProvider;
 
     const callerCtrl = new AbortController();
     const summarize = createBlobSummarizer({ provider, model: 'mock-model' });
@@ -93,7 +93,7 @@ describe('createBlobSummarizer', () => {
     const provider = {
       name: 'mock',
       stream: vi.fn(async () => makeStreamResult('')),
-    } as unknown as KodaXProvider;
+    } as unknown as KodaXBaseProvider;
 
     const summarize = createBlobSummarizer({ provider, model: 'mock-model' });
 
@@ -105,7 +105,7 @@ describe('createBlobSummarizer', () => {
     const provider = {
       name: 'mock',
       stream: vi.fn(async () => makeStreamResult('summary')),
-    } as unknown as KodaXProvider;
+    } as unknown as KodaXBaseProvider;
 
     const summarize = createBlobSummarizer({ provider, model: 'mock-model' });
 
@@ -120,7 +120,7 @@ describe('createBlobSummarizer', () => {
       stream: vi.fn(async () => {
         throw upstream;
       }),
-    } as unknown as KodaXProvider;
+    } as unknown as KodaXBaseProvider;
 
     const summarize = createBlobSummarizer({ provider, model: 'mock-model' });
 
@@ -147,7 +147,7 @@ describe('createBlobSummarizer', () => {
         // Never resolves; rely on caller-side timeout abort propagation.
         return new Promise<KodaXStreamResult>(() => {});
       }),
-    } as unknown as KodaXProvider;
+    } as unknown as KodaXBaseProvider;
 
     const summarize = createBlobSummarizer({
       provider,
