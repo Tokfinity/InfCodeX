@@ -21,6 +21,7 @@ import {
 } from '../constants.js';
 import {
   CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+  IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
   cloneCapabilityProfile,
   IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   NATIVE_PROVIDER_CAPABILITY_PROFILE,
@@ -188,11 +189,17 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
   },
   'gemini-cli': {
+    // FEATURE_134 v0.7.40: Gemini CLI 2.x supports `@<path>` file-include
+    // syntax in prompts (including image files). KodaX's ACP bridge
+    // `KodaXGeminiCliProvider.serializeImageBlockToPromptToken` returns
+    // `@<abs-path>` for each image block on the latest user message,
+    // letting Gemini's CLI side resolve the file content. Other CLI-bridge
+    // providers (codex-cli) still default to text-only.
     apiKeyEnv: 'GEMINI_API_KEY',
     model: GEMINI_CLI_DEFAULT_MODEL,
     models: GEMINI_CLI_MODELS.filter((model) => model !== GEMINI_CLI_DEFAULT_MODEL),
     reasoningCapability: 'prompt-only',
-    capabilityProfile: CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+    capabilityProfile: IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
   },
   'codex-cli': {
     apiKeyEnv: 'OPENAI_API_KEY',

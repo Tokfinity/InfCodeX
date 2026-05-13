@@ -6,6 +6,7 @@ import {
 } from './capability-profile.js';
 import { stripCacheBoundaries } from '../cache-control.js';
 import type {
+    KodaXImageBlock,
     KodaXMessage,
     KodaXProviderCapabilityProfile,
     KodaXReasoningRequest,
@@ -75,6 +76,29 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
     }
 
     /**
+     * FEATURE_134 (v0.7.40) — extension point for CLI bridges that have a
+     * file-include syntax in their prompt grammar. Default implementation
+     * returns `null`, which makes the prompt flatten path drop image blocks
+     * silently (preserving the pre-FEATURE_134 behavior for CLIs that do
+     * not accept image input — Codex CLI's `codex exec --json --full-auto`
+     * mode currently has no image attachment surface).
+     *
+     * Subclasses that DO accept image input should override and return a
+     * single-token string the CLI will resolve to file content — for
+     * Gemini CLI 2.x that is `@<absolutePath>` (the `@file` reference
+     * syntax inlines arbitrary file content, including images).
+     *
+     * Callers must pass a `block.path` that already exists on disk;
+     * KodaX does not stat-check at this point because the image blocks
+     * come from `KodaXImageBlock` instances that the REPL or SDK has
+     * already validated (`preparePromptInputArtifacts` rewrites missing
+     * images to placeholders before they ever reach this layer).
+     */
+    protected serializeImageBlockToPromptToken(_block: KodaXImageBlock): string | null {
+        return null;
+    }
+
+    /**
      * FEATURE_116 (v0.7.37) — Strip any `cache-boundary` markers from
      * KodaXMessage content arrays before they reach the ACP CLI bridge.
      * The CLI subprocess does not understand KodaX-internal cache markers;
@@ -127,15 +151,27 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
 
         // Flatten the latest KodaX message into a string because ACP prompt()
         // primarily accepts prompt blocks rather than full KodaX messages.
+        // FEATURE_134 v0.7.40: image blocks are routed through the
+        // `serializeImageBlockToPromptToken` extension point — subclasses with
+        // an underlying CLI that understands a file-include syntax (Gemini
+        // CLI's `@<path>`) override it to inject a token; the default returns
+        // null which preserves the prior silent-drop behavior for CLIs that
+        // have no image-input path.
         const latestMessage = messages[messages.length - 1];
         let promptText = '';
         if (latestMessage && typeof latestMessage.content === 'string') {
             promptText = latestMessage.content;
         } else if (latestMessage && Array.isArray(latestMessage.content)) {
-            promptText = latestMessage.content
-                .filter(b => b.type === 'text')
-                .map(b => (b as KodaXTextBlock).text)
-                .join('\n');
+            const parts: string[] = [];
+            for (const b of latestMessage.content) {
+                if (b.type === 'text') {
+                    parts.push((b as KodaXTextBlock).text);
+                } else if (b.type === 'image') {
+                    const token = this.serializeImageBlockToPromptToken(b as KodaXImageBlock);
+                    if (token) parts.push(token);
+                }
+            }
+            promptText = parts.join('\n');
         }
 
         // Build client event hooks once and route updates into the active stream.
