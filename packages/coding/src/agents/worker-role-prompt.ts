@@ -115,6 +115,45 @@ export function buildWorkerInstructions(
     'PROMPT-INVARIANT: both tools are no-ops in sync-mode dispatch (no childTaskRegistry / childAbortControllers). Async dispatch is the default; sync only fires when `KODAX_ASYNC_DISPATCH=0` is set. Calling either tool in sync mode returns `[Tool Error]`.',
   ].join('\n');
 
+  // FEATURE_161 v0.7.41 — teach the Worker that repo-intelligence pull
+  // tools exist and when to prefer them over raw read/grep. Eval
+  // `tests/repointel-tool-adoption.eval.ts` validated this section across
+  // 6 production aliases × 5 cases × 5 runs (300 calls, 2026-05-14): 4 of
+  // 6 aliases lifted from <80% A_baseline to ≥80% B_with_f7 pull-tool
+  // first-tool rate (+30-40pp on ds/v4flash, ds/v4pro, kimi, mmx/m27;
+  // zhipu/glm51 and ark/glm51 were already at 92-96% baseline and gain
+  // marginal +4-8pp). Decision matrix verdict: F7_USEFUL_FOR_WEAK.
+  //
+  // Section is unconditional. When `repoIntelligenceMode === 'off'` the
+  // 8 pull tools get stripped from the LLM-visible tool list (see
+  // `agent-runtime/tool-resolution.ts`); the model will discover unknown
+  // tool calls fail and fall back to read/grep. Off mode is opt-in and
+  // rare, so the prompt-waste cost is acceptable vs. the threading cost
+  // of plumbing mode into this context-light builder.
+  const repoIntelligenceTools = [
+    'REPO INTELLIGENCE TOOLS (FEATURE_161 v0.7.41 — prefer these over read+grep for module-level exploration):',
+    '- `module_context(target_path|module)` — compact module capsule with deps, entry files, top symbols, tests, docs. Replaces 5-10 `read`/`grep` calls when you need to understand "what does this module do / what depends on what".',
+    '- `symbol_context(symbol)` — definition + probable callers/callees + imports for one symbol. Replaces multiple `grep -n "symbolName"` + `read` rounds when tracing usage.',
+    '- `impact_estimate(symbol|module|path)` — blast-radius estimate combining symbol/module info with current changed-scope overlap. Use BEFORE planning a rename/refactor instead of guessing from grep.',
+    '- `process_context(entry|module)` — static execution trace from an entry point. Use to understand "how does this flow execute" instead of chasing N file reads.',
+    '- `repo_overview()` — workspace-wide structure snapshot. Use ONCE when onboarding to a new area.',
+    '- `changed_scope()` — list of changed files in current git state, with area/category labels. Use before any review/audit task to scope.',
+    '- `changed_diff_bundle(paths[])` — paged diff for multiple changed files in one call. Use for review tasks instead of multiple `bash git diff` calls.',
+    '- `changed_diff(path)` — paged diff for one file. Use when one file dominates the review.',
+    '',
+    'WHEN TO PREFER REPO-INTEL TOOLS:',
+    '- About to read 3+ files in the same module → call `module_context` first.',
+    '- About to grep for a symbol\'s callers → call `symbol_context` first.',
+    '- About to estimate impact of a change → call `impact_estimate` first.',
+    '- About to review a multi-file change → call `changed_scope` + `changed_diff_bundle` instead of `git diff` + N reads.',
+    '',
+    'WHEN TO STICK WITH read/grep:',
+    '- Single-file targeted edit or lookup (≤2 files).',
+    '- Need exact line numbers or code text (capsules summarize; files give you exact bytes).',
+    '- Pull-tool returned `[Tool Error]` / `unavailable` (repo-intel daemon not running) — fall back to read/grep without retrying the same pull-tool.',
+    '- Rationale: pull-tool capsules typically run 2-3KB vs 20-200KB for the equivalent multi-file read exploration (Layer 1 ROI analysis 2026-05-14, median ratio 15.4x). Token savings compound across a full task.',
+  ].join('\n');
+
   const fanOutPlanGranularity = [
     'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
     '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool call MUST be `todo_update({op:"init", ...})`. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
@@ -158,6 +197,7 @@ export function buildWorkerInstructions(
     planFirstContract,
     scopeCommitment,
     mutationDiscipline,
+    repoIntelligenceTools,
     dispatchRules,
     childSteeringRules,
     fanOutPlanGranularity,

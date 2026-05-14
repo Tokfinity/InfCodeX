@@ -3087,7 +3087,14 @@ function applyRepoSignalsToDecision(
   }
 
   if (repoSignals.lowConfidence) {
-    repoNotes.push('Repository intelligence for the active area is low-confidence; validate critical conclusions with direct file evidence.');
+    // FEATURE_163 v0.7.41 — reverse-guidance fix. Previous wording said
+    // "validate critical conclusions with direct file evidence" which
+    // pushed the model toward `read`/`grep` even when a `module_context`
+    // or `symbol_context` refresh would be cheaper AND more accurate
+    // for the low-confidence area. The new wording flips the recovery
+    // path to pull-tools first (matching FEATURE_161 Worker teaching),
+    // with raw read/grep only when a specific claim is load-bearing.
+    repoNotes.push('Repository intelligence for the active area is low-confidence; re-query `module_context` / `symbol_context` (or `impact_estimate` for blast-radius questions) for a refined capsule before falling back to raw `read`/`grep`. Use direct file evidence only when a specific load-bearing claim needs byte-level verification.');
   }
 
   if (

@@ -120,6 +120,41 @@ describe('buildWorkerInstructions', () => {
     expect(handoffIdx).toBeGreaterThan(fanOutIdx);
   });
 
+  // FEATURE_161 v0.7.41 — REPO INTELLIGENCE TOOLS section. Pin presence
+  // of the section + the 8 pull-tool names + the "when to prefer" /
+  // "when to stick with read/grep" branches. Eval-validated wording
+  // (see tests/repointel-tool-adoption.eval.ts) — a future prompt edit
+  // that drops any of these signals must re-run the panel eval.
+  it('emits the REPO INTELLIGENCE TOOLS section (FEATURE_161)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('REPO INTELLIGENCE TOOLS');
+    expect(out).toContain('FEATURE_161');
+    // All 8 pull-tool names must be advertised by name.
+    expect(out).toContain('`module_context');
+    expect(out).toContain('`symbol_context');
+    expect(out).toContain('`impact_estimate');
+    expect(out).toContain('`process_context');
+    expect(out).toContain('`repo_overview');
+    expect(out).toContain('`changed_scope');
+    expect(out).toContain('`changed_diff_bundle');
+    expect(out).toContain('`changed_diff(');
+    // Decision-aid branches (the "when to use what" structure that
+    // moved 4/6 panel aliases from <80% to ≥80% pull-tool first-tool
+    // selection — F7 lift is wording-dependent).
+    expect(out).toContain('WHEN TO PREFER REPO-INTEL TOOLS');
+    expect(out).toContain('WHEN TO STICK WITH read/grep');
+  });
+
+  it('orders REPO INTELLIGENCE TOOLS after MUTATION DISCIPLINE and before DISPATCH RULES', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    const mutationIdx = out.indexOf('MUTATION DISCIPLINE');
+    const repoIntelIdx = out.indexOf('REPO INTELLIGENCE TOOLS');
+    const dispatchIdx = out.indexOf('DISPATCH RULES');
+    expect(mutationIdx).toBeGreaterThanOrEqual(0);
+    expect(repoIntelIdx).toBeGreaterThan(mutationIdx);
+    expect(dispatchIdx).toBeGreaterThan(repoIntelIdx);
+  });
+
   it('includes a revise-failure retrospective when flagged', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, true);
     expect(out).toContain('previous attempt at this task failed');
