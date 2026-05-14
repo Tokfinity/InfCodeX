@@ -259,12 +259,24 @@ describe('round-boundary/reshapeToUserConversation', () => {
     expect(out).toBe(result);
   });
 
-  it('preserves prior user conversation in clean history', () => {
+  it('preserves prior user conversation when present in result.messages (V2 shape)', () => {
+    // v0.7.40 Option A: the prior round dialog is observable in
+    // `result.messages` (Runner.run emits `runnerInput` which prepends
+    // initialMessages). Reshape preserves it verbatim instead of
+    // re-deriving from `options.session.initialMessages`. This mirrors
+    // production V2 AMA shape: `[system, ...prior, user_q, ...tools..., final_asst]`.
     const priorMessages: KodaXMessage[] = [
       { role: 'user', content: 'earlier question' },
       { role: 'assistant', content: 'earlier answer' },
     ];
+    const v2ShapedMessages: KodaXMessage[] = [
+      { role: 'system', content: 'You are the Worker. Role prompt body.' },
+      ...priorMessages,
+      { role: 'user', content: 'round 2 Q' },
+      { role: 'assistant', content: 'round 2 answer' },
+    ];
     const result = makeResult({
+      messages: v2ShapedMessages,
       managedTask: makeManagedTask('completed'),
       lastText: 'round 2 answer',
     });
@@ -273,6 +285,204 @@ describe('round-boundary/reshapeToUserConversation', () => {
       ...priorMessages,
       { role: 'user', content: 'round 2 Q' },
       { role: 'assistant', content: 'round 2 answer' },
+    ]);
+  });
+
+  it('preserves tool_use / tool_result chains across rounds (v0.7.40 Option A)', () => {
+    // v0.7.40 Option A: the central cache/re-read fix — round-boundary
+    // reshape MUST keep `tool_use` and `tool_result` blocks so the next
+    // round's worker (a) doesn't re-read files it already read and (b)
+    // hits the provider's prompt cache on the existing prefix.
+    const v2WorkerShapedMessages: KodaXMessage[] = [
+      { role: 'system', content: 'You are the Worker. Investigate.' },
+      { role: 'user', content: 'review packages/llm/src/index.ts' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Reading the file.' },
+          { type: 'tool_use', id: 'tu_1', name: 'read', input: { path: 'packages/llm/src/index.ts' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu_1', content: 'export const FOO = 1;\nexport const BAR = 2;' },
+        ],
+      },
+      { role: 'assistant', content: 'The file exports FOO and BAR.' },
+    ];
+    const result = makeResult({
+      messages: v2WorkerShapedMessages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'The file exports FOO and BAR.',
+    });
+    const out = reshapeToUserConversation(
+      result,
+      makeOptions(),
+      'review packages/llm/src/index.ts',
+    );
+    // System message stripped, tool chain preserved, final answer at end.
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'review packages/llm/src/index.ts' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Reading the file.' },
+          { type: 'tool_use', id: 'tu_1', name: 'read', input: { path: 'packages/llm/src/index.ts' } },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'tu_1', content: 'export const FOO = 1;\nexport const BAR = 2;' },
+        ],
+      },
+      { role: 'assistant', content: 'The file exports FOO and BAR.' },
+    ]);
+  });
+
+  it('replaces (not appends) terminal tool_use assistant with synthetic final-text — verdict-only path', () => {
+    // V2 AMA Evaluator commonly ends the chain with an `emit_verdict`
+    // tool_use call — no plain-text content. The user-facing answer
+    // lives in `result.lastText` (sanitised from the verdict's
+    // `user_answer` field). Reshape MUST REPLACE the terminal
+    // tool_use-only assistant (not append after it) — appending would
+    // create two consecutive `role: 'assistant'` messages which
+    // Anthropic's API rejects on the next request.
+    const verdictOnlyMessages: KodaXMessage[] = [
+      { role: 'system', content: 'You are the Evaluator.' },
+      { role: 'user', content: 'review the code' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tu_v',
+            name: 'emit_verdict',
+            input: { status: 'accept', user_answer: 'looks good' },
+          },
+        ],
+      },
+    ];
+    const result = makeResult({
+      messages: verdictOnlyMessages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'looks good',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'review the code');
+    // System stripped, user retained, tool_use-only assistant REPLACED
+    // (not appended) with the synthetic final-text assistant.
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'review the code' },
+      { role: 'assistant', content: 'looks good' },
+    ]);
+    // No two consecutive `role: 'assistant'` messages anywhere.
+    for (let i = 1; i < out.messages!.length; i++) {
+      expect(out.messages![i].role === 'assistant' && out.messages![i - 1].role === 'assistant').toBe(false);
+    }
+  });
+
+  it('preserves CompactionSummary system messages (does not strip them)', () => {
+    // Step 1 strips the leading role-prompt system but only when it
+    // is NOT a CompactionSummary. The discriminator is the
+    // `[对话历史摘要]\n\n` prefix that `@kodax-ai/session-lineage` writes.
+    const compactionPrefix = '[对话历史摘要]\n\n';
+    const messagesWithCompactionSystem: KodaXMessage[] = [
+      { role: 'system', content: `${compactionPrefix}Summary of prior rounds: …` },
+      { role: 'user', content: 'follow-up' },
+      { role: 'assistant', content: 'reply' },
+    ];
+    const result = makeResult({
+      messages: messagesWithCompactionSystem,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'reply',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'follow-up');
+    // CompactionSummary survives at position 0 — round 2 needs it.
+    expect(out.messages![0].role).toBe('system');
+    expect(out.messages![0].content as string).toContain(compactionPrefix);
+  });
+
+  it('does not duplicate the final-text assistant when transcript already ends with it', () => {
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'role prompt body' },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'the answer' },
+    ];
+    const result = makeResult({
+      messages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'the answer',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'q');
+    // System stripped, no synthetic append (last asst already has final text).
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'the answer' },
+    ]);
+  });
+
+  it('handles empty result.messages array — produces [user, assistant] from prompt + finalText', () => {
+    // Edge case: `result.messages = []`. The `!result.messages` guard
+    // at the top of `reshapeToUserConversation` only catches undefined;
+    // an empty array passes through to `preserveTranscriptForRoundExit`.
+    const result = makeResult({
+      messages: [],
+      managedTask: makeManagedTask('completed'),
+      lastText: 'the answer',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'q');
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'the answer' },
+    ]);
+  });
+
+  it('handles transcript with only a CompactionSummary system message', () => {
+    // Step 1 must NOT strip the CompactionSummary; step 3 appends user
+    // prompt; step 4 appends synthetic assistant. Output preserves the
+    // condensed history at position 0 so the next round still sees it.
+    const compactionPrefix = '[对话历史摘要]\n\n';
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `${compactionPrefix}Prior summary…` },
+    ];
+    const result = makeResult({
+      messages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'reply',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'q');
+    expect(out.messages).toEqual([
+      { role: 'system', content: `${compactionPrefix}Prior summary…` },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'reply' },
+    ]);
+  });
+
+  it('replaces last assistant containing only thinking blocks with synthetic final-text', () => {
+    // Edge case: assistant content is an array of `thinking` blocks
+    // only (no text, no tool_use). Step 4 case (b) fires because
+    // content is not a string === finalText → replace. This avoids
+    // emitting two consecutive assistants on the next round.
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: 'role prompt' },
+      { role: 'user', content: 'q' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'let me think…' },
+        ],
+      },
+    ];
+    const result = makeResult({
+      messages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'final',
+    });
+    const out = reshapeToUserConversation(result, makeOptions(), 'q');
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'final' },
     ]);
   });
 

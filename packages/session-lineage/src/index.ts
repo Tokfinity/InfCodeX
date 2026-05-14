@@ -84,6 +84,7 @@ export type {
 } from './compaction/summary-generator.js';
 
 export {
+  COMPACTION_SUMMARY_PREFIX,
   needsCompaction,
   compact,
 } from './compaction/compaction.js';
