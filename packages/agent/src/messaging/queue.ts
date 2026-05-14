@@ -21,6 +21,8 @@ import type {
   DequeueFilter,
   EnqueueInput,
   MessagePriority,
+  QueueEvent,
+  QueueEventListener,
   QueuedMessage,
 } from './types.js';
 
@@ -45,9 +47,77 @@ function priorityWithinMax(
   return PRIORITY_RANK[target] <= PRIORITY_RANK[max];
 }
 
+function matchesFilter(message: QueuedMessage, filter: DequeueFilter): boolean {
+  if (message.agentId !== filter.agentId) return false;
+  if (!priorityWithinMax(message.priority, filter.maxPriority)) return false;
+  if (filter.mode !== undefined && message.mode !== filter.mode) return false;
+  if (filter.id !== undefined && message.id !== filter.id) return false;
+  // Predicate runs LAST so it never sees messages outside the caller's
+  // scope (saves cost on hot paths + prevents predicate from accidentally
+  // observing cross-agent / cross-priority traffic).
+  if (filter.predicate && !filter.predicate(message)) return false;
+  return true;
+}
+
 export class MessageQueue {
   private messages: QueuedMessage[] = [];
   private nextSeq = 1;
+  /**
+   * FEATURE_159 (v0.7.40) — observable subscription set. Same pattern as
+   * Claude Code's `messageQueueManager.ts` `createSignal()` substrate,
+   * but the listener carries a structured `QueueEvent` so SDK
+   * observability consumers (logger, tracer, metrics) can react per-
+   * event without re-diffing snapshots. `useSyncExternalStore` consumers
+   * still work — they ignore the event argument.
+   *
+   * Cached `snapshotRef` keeps reference identity stable across reads
+   * when nothing changed — required by React 18's `useSyncExternalStore`
+   * to avoid render loops.
+   */
+  private listeners = new Set<QueueEventListener>();
+  private snapshotRef: readonly QueuedMessage[] = Object.freeze([]);
+
+  private notify(event: QueueEvent): void {
+    this.snapshotRef = Object.freeze([...this.messages]);
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // Subscribers must not be able to break each other's notifications.
+        // React's useSyncExternalStore listener never throws, and KodaX's
+        // own subscribers wrap in try/catch — defensive swallow keeps the
+        // queue invariant intact if a buggy SDK consumer is added later.
+      }
+    }
+  }
+
+  /**
+   * Subscribe to queue mutations. Compatible with React 18's
+   * `useSyncExternalStore(subscribe, getSnapshot)` — the hook passes a
+   * `() => void` callback, which is structurally assignable to the
+   * `QueueEventListener` parameter because TypeScript treats
+   * callback parameter discards as compatible. SDK consumers that
+   * declare a typed `(event: QueueEvent) => void` listener see the
+   * structured event.
+   *
+   * Listener is called synchronously after every mutation; returns an
+   * unsubscribe function.
+   */
+  subscribe = (listener: QueueEventListener): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  /**
+   * Returns the current frozen queue snapshot. Reference identity is
+   * stable across reads when the queue has not mutated, which is the
+   * contract React's `useSyncExternalStore` relies on.
+   */
+  getSnapshot = (): readonly QueuedMessage[] => {
+    return this.snapshotRef;
+  };
 
   /** Returns the assigned id of the enqueued message. */
   enqueue(input: EnqueueInput): string {
@@ -61,6 +131,7 @@ export class MessageQueue {
       enqueuedAt: Date.now(),
     };
     this.messages = [...this.messages, message];
+    this.notify({ kind: 'enqueued', message });
     return id;
   }
 
@@ -73,10 +144,7 @@ export class MessageQueue {
     for (let i = 0; i < this.messages.length; i++) {
       const message = this.messages[i];
       if (!message) continue;
-      if (
-        message.agentId === filter.agentId &&
-        priorityWithinMax(message.priority, filter.maxPriority)
-      ) {
+      if (matchesFilter(message, filter)) {
         candidates.push({ originalIndex: i, message });
       }
     }
@@ -95,10 +163,18 @@ export class MessageQueue {
         ? candidates.slice(0, limit)
         : candidates;
 
+    if (taken.length === 0) {
+      // Nothing matched — no mutation, no notify. Keeps subscribers from
+      // re-rendering on no-op drains (e.g. polling waitForWakeEvent).
+      return [];
+    }
+
     const takenIndices = new Set(taken.map((t) => t.originalIndex));
     this.messages = this.messages.filter((_, i) => !takenIndices.has(i));
+    const drained = taken.map((t) => t.message);
+    this.notify({ kind: 'dequeued', messages: drained });
 
-    return taken.map((t) => t.message);
+    return drained;
   }
 
   /**
@@ -111,10 +187,7 @@ export class MessageQueue {
     for (let i = 0; i < this.messages.length; i++) {
       const message = this.messages[i];
       if (!message) continue;
-      if (
-        message.agentId === filter.agentId &&
-        priorityWithinMax(message.priority, filter.maxPriority)
-      ) {
+      if (matchesFilter(message, filter)) {
         candidates.push({ originalIndex: i, message });
       }
     }
@@ -151,7 +224,10 @@ export class MessageQueue {
 
   /** Remove all queued messages — used in tests / process abort scenarios. */
   clear(): void {
+    if (this.messages.length === 0) return;
+    const cleared = this.messages;
     this.messages = [];
+    this.notify({ kind: 'cleared', messages: cleared });
   }
 }
 

@@ -9,6 +9,7 @@ import {
   _resetMessageQueueForTests,
   getMessageQueue,
 } from './queue.js';
+import type { QueueEvent } from './types.js';
 
 describe('MessageQueue', () => {
   describe('enqueue + dequeue basics', () => {
@@ -258,6 +259,257 @@ describe('MessageQueue', () => {
         'task-notification',
         'system-reminder',
       ]);
+    });
+  });
+
+  // FEATURE_159 (v0.7.40) — mode + id filter additions to DequeueFilter.
+  describe('FEATURE_159 mode filter', () => {
+    it('mode filter narrows drain to a single mode', () => {
+      const q = new MessageQueue();
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'p1' });
+      q.enqueue({ priority: 'background', mode: 'task-notification', content: 'tn1' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'p2' });
+
+      const prompts = q.dequeue({ maxPriority: 'background', mode: 'prompt' });
+      expect(prompts.map((m) => m.content)).toEqual(['p1', 'p2']);
+      // task-notification stays.
+      expect(q.size()).toBe(1);
+      expect(q.peek({ maxPriority: 'background' })[0]?.mode).toBe('task-notification');
+    });
+
+    it('mode filter on peek / count / has', () => {
+      const q = new MessageQueue();
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'p' });
+      q.enqueue({ priority: 'background', mode: 'task-notification', content: 'tn' });
+
+      expect(q.count({ maxPriority: 'background', mode: 'prompt' })).toBe(1);
+      expect(q.count({ maxPriority: 'background', mode: 'task-notification' })).toBe(1);
+      expect(q.has({ maxPriority: 'background', mode: 'system-reminder' })).toBe(false);
+      expect(q.peek({ maxPriority: 'background', mode: 'prompt' })[0]?.content).toBe('p');
+    });
+  });
+
+  // FEATURE_159 (v0.7.40) — id filter enables Esc-pop-this-uuid surgery.
+  describe('FEATURE_159 id filter', () => {
+    it('id filter removes a single message by id', () => {
+      const q = new MessageQueue();
+      const id1 = q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'b' });
+      const id3 = q.enqueue({ priority: 'user', mode: 'prompt', content: 'c' });
+
+      const removed = q.dequeue({ maxPriority: 'user', id: id1 });
+      expect(removed.map((m) => m.id)).toEqual([id1]);
+      expect(q.size()).toBe(2);
+
+      const removed2 = q.dequeue({ maxPriority: 'user', id: id3 });
+      expect(removed2.map((m) => m.content)).toEqual(['c']);
+      // The middle entry survives both targeted removals.
+      expect(q.peek({ maxPriority: 'user' }).map((m) => m.content)).toEqual(['b']);
+    });
+
+    it('id filter combined with mode / agentId still respects scope', () => {
+      const q = new MessageQueue();
+      const subId = q.enqueue({
+        priority: 'user',
+        mode: 'prompt',
+        content: 'sub',
+        agentId: 'sub-1',
+      });
+      // Wrong agentId scope — must NOT drain even though id matches.
+      const removed = q.dequeue({ maxPriority: 'user', id: subId });
+      expect(removed).toEqual([]);
+      expect(q.size()).toBe(1);
+
+      const removedCorrect = q.dequeue({
+        maxPriority: 'user',
+        id: subId,
+        agentId: 'sub-1',
+      });
+      expect(removedCorrect.map((m) => m.id)).toEqual([subId]);
+    });
+  });
+
+  // FEATURE_159 (v0.7.40) — predicate escape-hatch for SDK consumers.
+  describe('FEATURE_159 predicate filter', () => {
+    it('predicate runs AFTER typed filters and is AND-ed with them', () => {
+      const q = new MessageQueue();
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'keep' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'drop-me' });
+      q.enqueue({ priority: 'background', mode: 'task-notification', content: 'drop-me' });
+
+      const removed = q.dequeue({
+        maxPriority: 'background',
+        mode: 'prompt',
+        predicate: (m) => m.content === 'drop-me',
+      });
+      // Only the prompt-mode 'drop-me' is removed; background 'drop-me'
+      // doesn't match the typed mode filter so predicate never inspects it.
+      expect(removed.map((m) => m.content)).toEqual(['drop-me']);
+      expect(q.peek({ maxPriority: 'background' }).map((m) => m.content)).toEqual([
+        'keep',
+        'drop-me',
+      ]);
+    });
+
+    it('predicate never observes messages outside agentId scope', () => {
+      const q = new MessageQueue();
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'main' });
+      q.enqueue({
+        priority: 'user',
+        mode: 'prompt',
+        content: 'sub',
+        agentId: 'sub-1',
+      });
+
+      const seen: string[] = [];
+      q.dequeue({
+        maxPriority: 'user',
+        predicate: (m) => {
+          seen.push(m.content);
+          return true;
+        },
+      });
+
+      // agentId=undefined filter excludes sub-1; predicate only sees 'main'.
+      expect(seen).toEqual(['main']);
+    });
+  });
+
+  // FEATURE_159 (v0.7.40) — observable surface for useSyncExternalStore + SDK.
+  describe('FEATURE_159 subscribe + getSnapshot', () => {
+    it('subscribe fires after every mutation', () => {
+      const q = new MessageQueue();
+      let calls = 0;
+      const unsubscribe = q.subscribe(() => {
+        calls++;
+      });
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'b' });
+      q.dequeue({ maxPriority: 'user' });
+
+      expect(calls).toBe(3);
+      unsubscribe();
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'c' });
+      expect(calls).toBe(3);
+    });
+
+    it('subscribe carries typed QueueEvent payload', () => {
+      const q = new MessageQueue();
+      const events: QueueEvent[] = [];
+      q.subscribe((event) => {
+        events.push(event);
+      });
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'b' });
+      q.dequeue({ maxPriority: 'user' });
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'c' });
+      q.clear();
+
+      expect(events).toHaveLength(5);
+      expect(events[0]).toMatchObject({ kind: 'enqueued' });
+      expect(events[0]).toHaveProperty('message');
+      expect((events[0] as { message: { content: string } }).message.content).toBe('a');
+
+      expect(events[2]).toMatchObject({ kind: 'dequeued' });
+      const dequeued = events[2] as { kind: 'dequeued'; messages: readonly { content: string }[] };
+      expect(dequeued.messages.map((m) => m.content)).toEqual(['a', 'b']);
+
+      expect(events[4]).toMatchObject({ kind: 'cleared' });
+      const cleared = events[4] as { kind: 'cleared'; messages: readonly { content: string }[] };
+      expect(cleared.messages.map((m) => m.content)).toEqual(['c']);
+    });
+
+    it('no-op dequeue does NOT fire subscribers', () => {
+      const q = new MessageQueue();
+      let calls = 0;
+      q.subscribe(() => {
+        calls++;
+      });
+
+      // Empty queue — nothing to drain.
+      q.dequeue({ maxPriority: 'user' });
+      expect(calls).toBe(0);
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      expect(calls).toBe(1);
+
+      // Mode mismatch — no message removed, no notify.
+      q.dequeue({ maxPriority: 'user', mode: 'task-notification' });
+      expect(calls).toBe(1);
+    });
+
+    it('clear() fires subscribers only when something was actually cleared', () => {
+      const q = new MessageQueue();
+      let calls = 0;
+      q.subscribe(() => {
+        calls++;
+      });
+
+      q.clear();
+      expect(calls).toBe(0);
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      q.clear();
+      expect(calls).toBe(2); // one for enqueue, one for clear.
+    });
+
+    it('getSnapshot returns stable reference across no-op reads', () => {
+      const q = new MessageQueue();
+      const snap0 = q.getSnapshot();
+      const snap0Repeat = q.getSnapshot();
+      expect(snap0).toBe(snap0Repeat);
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      const snap1 = q.getSnapshot();
+      expect(snap1).not.toBe(snap0);
+      expect(snap1.map((m) => m.content)).toEqual(['a']);
+
+      const snap1Repeat = q.getSnapshot();
+      expect(snap1Repeat).toBe(snap1);
+    });
+
+    it('snapshot is frozen (defends against caller mutation)', () => {
+      const q = new MessageQueue();
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      const snap = q.getSnapshot();
+      expect(Object.isFrozen(snap)).toBe(true);
+    });
+
+    it('one subscriber throwing does not break others', () => {
+      const q = new MessageQueue();
+      let goodCalls = 0;
+      q.subscribe(() => {
+        throw new Error('bad subscriber');
+      });
+      q.subscribe(() => {
+        goodCalls++;
+      });
+
+      // Should not throw despite the broken subscriber.
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      expect(goodCalls).toBe(1);
+    });
+
+    it('useSyncExternalStore-style bare-callback subscribers ignore event payload', () => {
+      // React passes `() => void`; structurally compatible with the typed
+      // listener signature. This test pins that the call site keeps
+      // compiling and working when the consumer doesn't care about the
+      // event content.
+      const q = new MessageQueue();
+      let storeChangeCount = 0;
+      const subscribe = (onStoreChange: () => void): (() => void) =>
+        q.subscribe(onStoreChange);
+      const unsubscribe = subscribe(() => {
+        storeChangeCount++;
+      });
+
+      q.enqueue({ priority: 'user', mode: 'prompt', content: 'a' });
+      q.dequeue({ maxPriority: 'user' });
+      expect(storeChangeCount).toBe(2);
+      unsubscribe();
     });
   });
 });
