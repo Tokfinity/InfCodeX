@@ -1,11 +1,19 @@
 /**
- * FEATURE_115 v0.7.36 Phase 1B — pending-inputs ↔ MessageQueue mirror invariant.
+ * FEATURE_159 v0.7.40 — MessageQueue as single source of truth.
  *
- * StreamingContext keeps `pendingInputs: string[]` as the canonical React
- * state for UI rendering and `MAX_PENDING_INPUTS` gating; every mutation
- * also resyncs the agent-side `MessageQueue` main-thread `user` priority
- * slice. The runner-driven mid-turn drain (Phase 1C) consumes from the
- * queue, so the two surfaces must stay in lockstep.
+ * Pre-FEATURE_159 (v0.7.36 FEATURE_115 Phase 1B): React `pendingInputs`
+ * was canonical; manager methods drained + re-enqueued the queue's main-
+ * thread user slice to mirror React state — see commit history for the
+ * legacy "queue-mirror" pattern.
+ *
+ * Post-FEATURE_159: MessageQueue is canonical. Manager methods write to
+ * the queue directly; a `queue.subscribe` callback inside the manager
+ * mirrors the filtered slice back into React `state.pendingInputs`. The
+ * end-to-end behavior (queue contents match REPL UI) is unchanged, so
+ * the legacy invariants below remain valid. New cases at the bottom
+ * cover the reverse direction: any third-party queue mutation
+ * (idle-yield wake, mid-turn drain, SDK consumer) immediately updates
+ * the REPL state.
  */
 import {
   _resetMessageQueueForTests,
@@ -21,7 +29,7 @@ function mainThreadUserContents(): string[] {
     .map((m) => m.content);
 }
 
-describe("StreamingContext pending-inputs ↔ MessageQueue mirror", () => {
+describe("StreamingContext queue-as-source-of-truth (FEATURE_159)", () => {
   beforeEach(() => {
     _resetMessageQueueForTests();
   });
@@ -156,6 +164,101 @@ describe("StreamingContext pending-inputs ↔ MessageQueue mirror", () => {
       mgr.addPendingInput("clear-me");
       mgr.abort({ preservePendingInputs: false });
       expect(mgr.getState().pendingInputs).toEqual([]);
+    });
+  });
+
+  // FEATURE_159 — reverse-direction invariants. The legacy mirror only
+  // supported React → queue propagation; the canonical-queue design adds
+  // queue → React. These cases pin the new behavior so a future
+  // refactor can't accidentally drop the subscribe wiring.
+  describe("FEATURE_159 — third-party queue mutation updates REPL state", () => {
+    it("a direct queue.enqueue (e.g. SDK consumer) appears in pendingInputs", () => {
+      const mgr = createStreamingManager();
+      // Bypass the manager — write to the queue as if a non-React
+      // consumer (idle-yield resumer / SDK caller / mid-turn drain) had.
+      getMessageQueue().enqueue({
+        priority: "user",
+        mode: "prompt",
+        content: "out-of-band",
+      });
+      expect(mgr.getState().pendingInputs).toEqual(["out-of-band"]);
+    });
+
+    it("a direct queue.dequeue (e.g. wake-drain) clears pendingInputs", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("ready-to-drain");
+      expect(mgr.getState().pendingInputs).toEqual(["ready-to-drain"]);
+
+      // Simulate idle-yield wake draining the user-priority slice.
+      getMessageQueue().dequeue({ maxPriority: "user", mode: "prompt" });
+      expect(mgr.getState().pendingInputs).toEqual([]);
+    });
+
+    it("out-of-slice queue events do NOT cause spurious React mutations", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("anchor");
+      const before = mgr.getState().pendingInputs;
+
+      // Subagent task-notification — different priority + mode + agentId.
+      getMessageQueue().enqueue({
+        priority: "background",
+        mode: "task-notification",
+        content: "child-done",
+      });
+      getMessageQueue().enqueue({
+        priority: "user",
+        mode: "prompt",
+        content: "subagent-msg",
+        agentId: "sub-1",
+      });
+
+      // Reference identity preserved because the filtered slice didn't
+      // change — guards against spurious React renders.
+      expect(mgr.getState().pendingInputs).toBe(before);
+      expect(mgr.getState().pendingInputs).toEqual(["anchor"]);
+    });
+
+    it("dispose() releases the queue subscription", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("before-dispose");
+      expect(mgr.getState().pendingInputs).toEqual(["before-dispose"]);
+
+      mgr.dispose();
+      // Out-of-band queue mutation after dispose must NOT update the
+      // disposed manager's state.
+      getMessageQueue().enqueue({
+        priority: "user",
+        mode: "prompt",
+        content: "after-dispose",
+      });
+      expect(mgr.getState().pendingInputs).toEqual(["before-dispose"]);
+    });
+  });
+
+  // FEATURE_159 — wake-drain visibility regression guard.
+  // The original bug: idle-yield's waitForWakeEvent drained the queue
+  // but the REPL's "Queue N" indicator never cleared (React mirror lag).
+  // This test pins that the indicator does clear in the queue-canonical
+  // model.
+  describe("FEATURE_159 — wake-drain visibility regression guard", () => {
+    it("Queue N indicator clears synchronously when wake-drain takes the slice", () => {
+      const mgr = createStreamingManager();
+      mgr.addPendingInput("user typed this while worker was busy");
+      expect(mgr.getState().pendingInputs.length).toBe(1);
+
+      // Simulate idle-yield's wake-drain shape: drain main-thread
+      // user-priority prompt mode messages.
+      const drained = getMessageQueue().dequeue({
+        agentId: undefined,
+        maxPriority: "background",
+        mode: "prompt",
+      });
+      expect(drained.map((m) => m.content)).toEqual([
+        "user typed this while worker was busy",
+      ]);
+
+      // The legacy bug: state.pendingInputs.length would stay 1 here.
+      expect(mgr.getState().pendingInputs.length).toBe(0);
     });
   });
 });
