@@ -13,9 +13,9 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-158` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table) |
-| Total tracked features | `149` |
-| Completed | `88` |
+| Tracked feature IDs | `001-159` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table) |
+| Total tracked features | `150` |
+| Completed | `89` |
 | Cancelled | `5` |
 | Absorbed | `3` |
 | InProgress | `1` |
@@ -277,6 +277,7 @@
 | `097` | AMA Runner Realtime Todo List — Claude-Aligned Visibility Surface | `v0.7.34` | [v0.7.34](features/v0.7.34.md#feature_097-ama-runner-realtime-todo-list--claude-aligned-visibility-surface) |
 | `121` | Envelope Spillover Gap-Fix — Child Task Summary 接入 Tool Result Policy (+ LLM Blob Summarizer Fallback) | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_121-envelope-spillover-gap-fix--child-task-summary-接入-tool-result-policy) |
 | `134` | Image / Screenshot Paste Input — REPL Vision Bridge (5 paste sources + jimp normalize + vision flag widened to 11 providers) | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_134-image--screenshot-paste-input--repl-vision-bridge) |
+| `159` | MessageQueue as Single Source of Truth + Idle-Yield Mode-Split — claudecode-parity observable substrate, queue→React mirror, prompt vs synthetic banner split | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_159-messagequeue-as-single-source-of-truth--idle-yield-mode-split) |
 
 > `FEATURE_051` close-out posture: keep the current REPL status/footer/task/message surfaces frozen, limit follow-up work to invisible substrate maturity for transcript, scroll/selection, and input behavior, and treat the design doc as a completed close-out record rather than an open rollout plan.
 
