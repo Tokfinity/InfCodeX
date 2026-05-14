@@ -12,13 +12,18 @@
  * is 50KB head + spill-to-file.
  *
  * The aggregate enforcer is the second line of defense: when N banners each
- * < 50KB still combine to exceed the envelope limit (e.g. 5×40KB = 200KB),
- * this hook forces additional banners to spill until the joined envelope
- * fits under the limit.
+ * < 50KB (bytes, per-banner) still combine to exceed the envelope limit in
+ * chars (e.g. 5×40_000 chars = 200_000 chars), this hook forces additional
+ * banners to spill until the joined envelope fits under the limit.
  *
- * Limit constant `ENVELOPE_AGGREGATE_LIMIT_BYTES` defaults to 200KB to
- * mirror claudecode's `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` (see
- * `c:/Works/claudecode/src/constants/toolLimits.ts:49`).
+ * Limit constant `ENVELOPE_AGGREGATE_LIMIT_CHARS` defaults to 200_000 chars
+ * to mirror claudecode's `MAX_TOOL_RESULTS_PER_MESSAGE_CHARS` (see
+ * `c:/Works/claudecode/src/constants/toolLimits.ts:49`). The unit is chars
+ * (`string.length`), not bytes — this matches claudecode's `contentSize()`
+ * in `toolResultStorage.ts:521` which sums `.length`, and is intentionally
+ * a rough token heuristic rather than a precise byte budget. The byte-correct
+ * first line of defense is `truncate.ts` (per-banner 50KB via
+ * `Buffer.byteLength`), so single oversized fragments never reach here.
  *
  * Layer independence: this file lives in `@kodax-ai/coding`. The
  * `@kodax-ai/agent` side never imports it; it only accepts a callback of
@@ -32,7 +37,7 @@ import type { EnvelopeAggregateEnforcer } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
 
-export const ENVELOPE_AGGREGATE_LIMIT_BYTES = 200 * 1024;
+export const ENVELOPE_AGGREGATE_LIMIT_CHARS = 200_000;
 
 export function createEnvelopeAggregateBudgetEnforcer(
   ctx: KodaXToolExecutionContext,
@@ -40,7 +45,7 @@ export function createEnvelopeAggregateBudgetEnforcer(
   return async (fragments) => {
     // Fast path: total within budget, nothing to do.
     const total = fragments.reduce((sum, f) => sum + f.length, 0);
-    if (total <= ENVELOPE_AGGREGATE_LIMIT_BYTES) return fragments;
+    if (total <= ENVELOPE_AGGREGATE_LIMIT_CHARS) return fragments;
 
     // Reclaim by force-spilling the largest fragments first until total fits.
     const indexed = fragments.map((content, idx) => ({ idx, content, size: content.length }));
@@ -50,7 +55,7 @@ export function createEnvelopeAggregateBudgetEnforcer(
     let runningTotal = total;
 
     for (const item of indexed) {
-      if (runningTotal <= ENVELOPE_AGGREGATE_LIMIT_BYTES) break;
+      if (runningTotal <= ENVELOPE_AGGREGATE_LIMIT_CHARS) break;
       // forceSpill clamps the effective preview window to a small head/tail
       // window and routes through the spill-to-file path regardless of
       // `policy.maxBytes`. The replaced fragment is a short preview + the

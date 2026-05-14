@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  ENVELOPE_AGGREGATE_LIMIT_BYTES,
+  ENVELOPE_AGGREGATE_LIMIT_CHARS,
   createEnvelopeAggregateBudgetEnforcer,
 } from './envelope-budget.js';
 import { TOOL_OUTPUT_DIR_ENV } from './truncate.js';
@@ -29,7 +29,7 @@ describe('createEnvelopeAggregateBudgetEnforcer', () => {
     executionCwd: process.cwd(),
   });
 
-  it('passes fragments through verbatim when total ≤ ENVELOPE_AGGREGATE_LIMIT_BYTES', async () => {
+  it('passes fragments through verbatim when total ≤ ENVELOPE_AGGREGATE_LIMIT_CHARS', async () => {
     const enforce = createEnvelopeAggregateBudgetEnforcer(ctx());
     const fragments = ['a'.repeat(10_000), 'b'.repeat(20_000), 'c'.repeat(5_000)];
     const result = await enforce(fragments);
@@ -41,7 +41,7 @@ describe('createEnvelopeAggregateBudgetEnforcer', () => {
 
   it('force-spills the largest fragments first until total ≤ limit', async () => {
     const enforce = createEnvelopeAggregateBudgetEnforcer(ctx());
-    // 5 fragments × 56_000 bytes (7 chars × 8000 reps) = 280_000 > 200_000 limit
+    // 5 fragments × 56_000 chars (7 chars × 8000 reps) = 280_000 > 200_000 limit
     const fragments = Array.from({ length: 5 }, (_, i) => `frag-${i}-`.repeat(8_000));
     const result = await enforce(fragments);
     expect(result.length).toBe(5);
@@ -50,15 +50,15 @@ describe('createEnvelopeAggregateBudgetEnforcer', () => {
     expect(spilled.length).toBeGreaterThanOrEqual(1);
     // After spillover the total must be at or below the limit
     const total = result.reduce((sum, f) => sum + f.length, 0);
-    expect(total).toBeLessThanOrEqual(ENVELOPE_AGGREGATE_LIMIT_BYTES);
+    expect(total).toBeLessThanOrEqual(ENVELOPE_AGGREGATE_LIMIT_CHARS);
   });
 
   it('preserves fragment order (preview replaces fragment at its original index)', async () => {
     const enforce = createEnvelopeAggregateBudgetEnforcer(ctx());
     // Three fragments; the middle one is the largest, should be spilled.
-    const small1 = 'small-1-'.repeat(100); // ~800 bytes
+    const small1 = 'small-1-'.repeat(100); // ~800 chars
     const huge = 'X'.repeat(220_000); // > limit single-handedly
-    const small2 = 'small-2-'.repeat(100); // ~800 bytes
+    const small2 = 'small-2-'.repeat(100); // ~800 chars
     const fragments = [small1, huge, small2];
     const result = await enforce(fragments);
     expect(result.length).toBe(3);
