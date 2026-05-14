@@ -882,19 +882,46 @@ function buildModuleLanguages(files: FallbackFileAnalysis[]): RepoLanguageSuppor
  * subtract small offsets from module.confidence (e.g. impact-estimate
  * derivation).
  *
- * Mutates the modules array in place (pragmatic — there's only one
- * call site, immediately before the index is sealed into the
- * `RepoIntelligenceIndex` return value).
+ * **Mutation contract** (consumer-visible side effect): mutates each
+ * matching module's `confidence` in place. `buildProcesses` (the next
+ * step in `buildIndexFromSnapshot`) reads `module.confidence - 0.08`
+ * to derive its process capsule confidence (see
+ * `buildProcesses` at the end of this file), so the post-aggregation
+ * confidence value is the one that propagates into process capsules.
+ * That cascade is intentional — process confidence should reflect
+ * the aggregated trust signal, not the constant seed. **Do not insert
+ * any code between this call and `buildProcesses` that depends on the
+ * pre-aggregation seed value.**
+ *
+ * **Implicit moduleId contract**: symbols whose `moduleId` does not
+ * appear in `modules` are silently dropped from aggregation. The sole
+ * production call site (`buildIndexFromSnapshot`) constructs `symbols`
+ * via `buildSymbolRecords(analyses, modulesById)`, which assigns
+ * `moduleId` from `modulesById` keys, so this case cannot occur in
+ * the current pipeline. The `orphanSymbolCount` debug counter logs
+ * non-zero values to surface accidental decoupling if a future caller
+ * passes a `modules` / `symbols` pair sourced independently.
  */
 function applyAggregateModuleConfidence(
   modules: ModuleCapsule[],
   symbols: readonly RepoSymbolRecord[],
 ): void {
+  const moduleIdSet = new Set(modules.map((module) => module.moduleId));
   const byModuleId = new Map<string, RepoSymbolRecord[]>();
+  let orphanSymbolCount = 0;
   for (const symbol of symbols) {
+    if (!moduleIdSet.has(symbol.moduleId)) {
+      orphanSymbolCount++;
+      continue;
+    }
     const bucket = byModuleId.get(symbol.moduleId) ?? [];
     bucket.push(symbol);
     byModuleId.set(symbol.moduleId, bucket);
+  }
+  if (orphanSymbolCount > 0) {
+    debugLogRepoIntelligence(
+      `applyAggregateModuleConfidence dropped ${orphanSymbolCount} symbols with moduleId outside the modules set; module / symbol arrays may have drifted out of sync`,
+    );
   }
   for (const module of modules) {
     const symbolsInModule = byModuleId.get(module.moduleId);
