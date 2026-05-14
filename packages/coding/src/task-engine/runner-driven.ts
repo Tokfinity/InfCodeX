@@ -3942,8 +3942,36 @@ function buildManagedTaskPayload(args: {
 
   const decidedByAssignmentId =
     harness === 'H0_DIRECT' ? 'direct' : verdictStatus ? 'evaluator' : 'generator';
+  // FEATURE_159 follow-up (v0.7.40): fallback to '' instead of `prompt`.
+  // The legacy `?? prompt` fallback was a copy from SA fast-path days when
+  // the Scout always provided a `userAnswer`, so `?? prompt` was a never-
+  // reached safety net. Under V2 chain (FEATURE_114) Worker runs first and
+  // a Worker round can legitimately end without `emit_verdict` (e.g. the
+  // chain hands off to Generator or Evaluator on the next iteration). In
+  // that case `userAnswer` and `verdict.reason` are both undefined, and
+  // `?? prompt` populated `verdict.summary` with the user's raw query
+  // verbatim.
+  //
+  // Downstream this surfaced as an end-user UX bug: when the Worker round
+  // produced no plain-text assistant turn (e.g. only tool_use + thinking,
+  // or only emit_handoff), `resolveCompletedAssistantText` (REPL
+  // message-utils.ts) iterates candidates and skips empty ones — falling
+  // through to `managedTask.verdict.summary` as the third candidate. With
+  // the legacy fallback that candidate held the user's own query, so the
+  // REPL rendered a prefix-less `Assistant: <Q verbatim>` item (the user
+  // sees their own question echoed back as the assistant's reply).
+  //
+  // Empty-string fallback is safe for all consumers we verified:
+  //   - REPL `resolveCompletedAssistantText`: empty candidate is skipped
+  //     (sanitize-and-pick-first-truthy loop).
+  //   - `runner-driven.ts` transcript dump: `if (task.verdict?.summary)`
+  //     gate already filters falsy, the "Last verdict" block silently
+  //     drops.
+  //   - `scorecard.ts`: `directive?.reason ?? task.verdict.summary` —
+  //     audit artefact, empty string is acceptable when no verdict ran.
+  //   - `json-guards.ts`: only checks `typeof === 'string'`.
   const verdictSummary =
-    userAnswer ?? recorder.verdict?.payload.verdict?.reason ?? prompt;
+    userAnswer ?? recorder.verdict?.payload.verdict?.reason ?? '';
 
   const task: KodaXManagedTask = {
     contract,
@@ -5480,6 +5508,21 @@ async function runManagedTaskViaRunnerInner(
   //     the banner sits in the background queue waiting for
   //     `composeIdleYieldUserMessage` to drain it. Without this
   //     gate the loop would break and strand the banner.
+  //
+  //     FEATURE_159 follow-up: the filter MUST narrow to
+  //     `mode:'task-notification'`. `maxPriority:'background'` is
+  //     inclusive of user priority (see
+  //     `packages/agent/src/messaging/queue.ts` `priorityWithinMax`
+  //     — rank ≤ 1 includes user + background), so without the mode
+  //     narrow, a user-priority `mode:'prompt'` queued follow-up
+  //     leaks into this banner-only gate. That makes
+  //     `detectIdleYield` return true even with zero pending
+  //     children, splicing the user's prompt into the same round via
+  //     `composeIdleYieldUserMessage` (which surfaces it as the
+  //     mode-split real user message) instead of letting
+  //     `runQueuedPromptSequence` start a fresh round through
+  //     `stageQueuedPrompt`. End-user symptom: agent echoes Q1
+  //     verbatim then stops; Q2 never gets answered.
   //   - Bug F (abort listener cleanup): owned by the agent-layer
   //     `waitForWakeEvent`.
   const runResult = await runWithIdleYield({
@@ -5524,10 +5567,13 @@ async function runManagedTaskViaRunnerInner(
         hasEmittedHandoff: Boolean(recorder.handoff),
         hasEmittedTerminalVerdict:
           verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
-        // Bug E: queue arm alongside registry arm.
+        // Bug E: queue arm alongside registry arm. Strictly
+        // task-notification banners — see comment above for the
+        // FEATURE_159 follow-up that narrowed this filter.
         hasPendingBackgroundMessages: getMessageQueue().has({
           agentId: undefined,
           maxPriority: 'background',
+          mode: 'task-notification',
         }),
       };
     },
