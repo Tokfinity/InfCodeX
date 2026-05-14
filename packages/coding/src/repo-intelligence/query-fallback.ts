@@ -861,6 +861,50 @@ function buildModuleLanguages(files: FallbackFileAnalysis[]): RepoLanguageSuppor
   return buildRepoLanguageSupport(files);
 }
 
+/**
+ * FEATURE_162 v0.7.41 — second-pass aggregation of per-symbol confidence
+ * into each module's `confidence` field.
+ *
+ * **Why this exists**: the OSS fallback's `buildModules` originally
+ * seeded module confidence as a static `areaFiles.length > 0 ? 0.54 : 0.25`.
+ * That value didn't reflect analysis quality — it was effectively
+ * a constant. Downstream consumers (the `< 0.72` gate in
+ * `agent-runtime/middleware/repo-intelligence.ts`) treat confidence as
+ * a real trust signal, so the static seed silenced the gate.
+ *
+ * **Fix**: after `buildSymbolRecords` has populated per-symbol
+ * confidences (which encode tier + per-symbol resolution boost), walk
+ * each module and overwrite its confidence with the mean of its
+ * symbols' confidences. Modules with no symbols (docs-only / config-only
+ * "areas") keep the seed value as a no-symbol baseline.
+ *
+ * Clamps to `[0.32, 0.95]` to preserve assumptions in code paths that
+ * subtract small offsets from module.confidence (e.g. impact-estimate
+ * derivation).
+ *
+ * Mutates the modules array in place (pragmatic — there's only one
+ * call site, immediately before the index is sealed into the
+ * `RepoIntelligenceIndex` return value).
+ */
+function applyAggregateModuleConfidence(
+  modules: ModuleCapsule[],
+  symbols: readonly RepoSymbolRecord[],
+): void {
+  const byModuleId = new Map<string, RepoSymbolRecord[]>();
+  for (const symbol of symbols) {
+    const bucket = byModuleId.get(symbol.moduleId) ?? [];
+    bucket.push(symbol);
+    byModuleId.set(symbol.moduleId, bucket);
+  }
+  for (const module of modules) {
+    const symbolsInModule = byModuleId.get(module.moduleId);
+    if (!symbolsInModule || symbolsInModule.length === 0) continue;
+    const sum = symbolsInModule.reduce((acc, symbol) => acc + symbol.confidence, 0);
+    const avg = sum / symbolsInModule.length;
+    module.confidence = Math.min(0.95, Math.max(0.32, avg));
+  }
+}
+
 function buildSymbolRecordId(moduleId: string, filePath: string, name: string, line: number): string {
   return hashValues([moduleId, filePath, name, line]);
 }
@@ -1161,6 +1205,15 @@ async function buildIndexFromSnapshot(
   const modules = buildModules(snapshot, analyses);
   const modulesById = new Map(modules.map((module) => [module.moduleId, module]));
   const symbols = buildSymbolRecords(analyses, modulesById);
+  // FEATURE_162 v0.7.41 — second-pass module confidence aggregation.
+  // `buildModules` seeds each module's confidence with a placeholder
+  // because symbols don't exist yet. Now that `buildSymbolRecords` has
+  // populated `symbols`, aggregate per-symbol confidences (which already
+  // encode parser tier + per-symbol resolution) into each module so the
+  // value actually measures analysis quality, not module complexity.
+  // Mirrors the daemon-side fix in `repointel-core/heavy-query.ts`
+  // (`computeModuleConfidence`).
+  applyAggregateModuleConfidence(modules, symbols);
   const processes = buildProcesses(modules, analyses, symbols);
   const languages = buildRepoLanguageSupport(analyses);
   const generatedAt = new Date().toISOString();
