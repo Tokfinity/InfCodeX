@@ -1,0 +1,828 @@
+{
+  "case": "symbol_usage_trace",
+  "stage": "phase3-f7-plus-f2-multialias-5cases-3runs",
+  "description": "User asks for callers of a function — classic symbol_context case (replaces grep + read rounds).",
+  "preferredPullTools": [
+    "symbol_context",
+    "impact_estimate"
+  ],
+  "userMessage": "Find all callers of the function `buildWorkerInstructions` in `packages/coding/src/agents/worker-role-prompt.ts`. I want to know which roles invoke it.",
+  "cells": [
+    {
+      "alias": "zhipu/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace all callers of `buildWorkerInstructions` using symbol context and grep to give you a complete picture.",
+          "durationMs": 2651
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll look up the symbol context for `buildWorkerInstructions` to find its callers and definition.",
+          "durationMs": 4443
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the callers of `buildWorkerInstructions` using symbol context to find every role that invokes it.",
+          "durationMs": 4266
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll look up the symbol context for `buildWorkerInstructions` to find all its callers and usage patterns.",
+          "durationMs": 5391
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 6469
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 5124
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2999
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the callers of `buildWorkerInstructions` using symbol context and then validate with direct file evidence.",
+          "durationMs": 3510
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the callers of `buildWorkerInstructions` using the repo intelligence tools and verify with direct evidence.",
+          "durationMs": 3450
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2445
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3610
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4343
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "A_baseline",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1860
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1849
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1783
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1855
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1957
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1927
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1970
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1901
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2060
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1819
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1986
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1987
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2989
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 4082
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 3099
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "B_with_f7",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2064
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 5852
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 6825
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "C_old_reverse",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2027
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 7448
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2941
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2232
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2141
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2092
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3400
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 7336
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3528
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3108
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2714
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2443
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2433
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2686
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2728
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 5015
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 5891
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3019
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1845
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1317
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1467
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1315
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1076
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1454
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "C_old_reverse",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1305
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1461
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1331
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1606
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1748
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 967
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1437
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1442
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1490
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "B_with_f7",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1347
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1140
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 999
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "C_old_reverse",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1424
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1704
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1173
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1394
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1507
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1221
+        }
+      ]
+    }
+  ]
+}

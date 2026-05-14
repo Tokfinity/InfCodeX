@@ -1,0 +1,828 @@
+{
+  "case": "rename_impact",
+  "stage": "phase3-f7-plus-f2-multialias-5cases-3runs",
+  "description": "User asks impact analysis before a rename — exactly the impact_estimate use case.",
+  "preferredPullTools": [
+    "impact_estimate",
+    "symbol_context"
+  ],
+  "userMessage": "If I rename `dispatch_child_task` to `dispatch_worker_task` everywhere, what is the blast radius? I want to know affected modules and call sites before I start.",
+  "cells": [
+    {
+      "alias": "zhipu/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the blast radius of renaming `dispatch_child_task` to `dispatch_worker_task`. Let me start by gathering symbol-level intelligence and searching for all occurrences across the codebase.",
+          "durationMs": 11884
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1890
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the blast radius of renaming `dispatch_child_task` to `dispatch_worker_task`. Let me start by gathering symbol context, impact estimates, and searching for all references simultaneously.",
+          "durationMs": 5807
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll estimate the blast radius of renaming `dispatch_child_task` → `dispatch_worker_task` using the repo intelligence tools. Let me gather symbol-level and module-level impact simultaneously.",
+          "durationMs": 4421
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 5990
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3082
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4653
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4834
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2378
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll estimate the blast radius of renaming `dispatch_child_task` → `dispatch_worker_task`. Let me gather intelligence from multiple angles simultaneously.",
+          "durationMs": 2512
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll estimate the blast radius of renaming `dispatch_child_task` → `dispatch_worker_task` using the repo intelligence tools, then cross-reference with raw evidence for exact call sites.",
+          "durationMs": 3789
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the blast-radius estimate and the symbol's definition/callers in parallel. This will give us the full picture before you touch anything.",
+          "durationMs": 3333
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "A_baseline",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2310
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1990
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1260
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1254
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1317
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1216
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1302
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1304
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1337
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1250
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1343
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1297
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 7085
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 7082
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 9083
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 10986
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 6847
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3666
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3258
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1737
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1857
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3222
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2062
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2083
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3296
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the blast radius of renaming `dispatch_child_task` to `dispatch_worker_task` by looking at the symbol definition, its callers, and all references across the repo.",
+          "durationMs": 10096
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the blast radius of renaming `dispatch_child_task` by checking the symbol's definition, call sites, and cross-module impact. Let me run several lookups in parallel.",
+          "durationMs": 4671
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll use the repo intelligence tools to map out the blast radius before you touch anything. Let me run the symbol lookup and impact estimate in parallel.",
+          "durationMs": 5136
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll use the repo intelligence tools to estimate the blast radius before you start renaming. Let me check the symbol context and impact estimate in parallel.",
+          "durationMs": 2917
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2695
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll use the repo intelligence tools to map out the full blast radius of renaming `dispatch_child_task` → `dispatch_worker_task`. Let me kick off the key lookups in parallel.",
+          "durationMs": 9411
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the blast radius of renaming `dispatch_child_task` using the repo intelligence tools. Let me start with the impact estimate and symbol context in parallel.",
+          "durationMs": 3980
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll run the impact estimate and symbol context in parallel to give you a complete picture before you touch anything.",
+          "durationMs": 4691
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 5848
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the symbol's definition, call sites, and estimate the blast radius before you touch anything. Let me gather the intelligence in parallel.",
+          "durationMs": 3928
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2930
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "A_baseline",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "repo_overview",
+          "firstToolFromBinding": "repo_overview",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me systematically map the blast radius. First, I'll search for all occurrences and understand the repository structure.",
+          "durationMs": 1544
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2508
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1583
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1270
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1121
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1378
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me check the blast radius systematically.",
+          "durationMs": 1581
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1455
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1209
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1637
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1232
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1464
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me trace the blast radius of this function across the repository.",
+          "durationMs": 1230
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1328
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "grep",
+          "firstToolFromBinding": "grep",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me find all occurrences of `dispatch_child_task` and trace its impact.",
+          "durationMs": 1318
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1115
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1075
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1367
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1335
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1234
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1190
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1044
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me analyze the blast radius for renaming `dispatch_child_task` to `dispatch_worker_task`.",
+          "durationMs": 1440
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "impact_estimate",
+          "firstToolFromBinding": "impact_estimate",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me trace the blast radius for this rename. I'll start with the impact estimate and also search for all occurrences directly.",
+          "durationMs": 1414
+        }
+      ]
+    }
+  ]
+}

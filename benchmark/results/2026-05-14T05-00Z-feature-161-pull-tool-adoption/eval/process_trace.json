@@ -1,0 +1,829 @@
+{
+  "case": "process_trace",
+  "stage": "phase3-f7-plus-f2-multialias-5cases-3runs",
+  "description": "User asks how a flow executes — process_context case.",
+  "preferredPullTools": [
+    "process_context",
+    "module_context",
+    "symbol_context"
+  ],
+  "userMessage": "Explain how a request flows through `packages/coding/src/task-engine/runner-driven.ts` from entry to first tool call. I am trying to add a new middleware step.",
+  "cells": [
+    {
+      "alias": "zhipu/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow through that file. Let me start by gathering the module context, file contents, and process context in parallel.",
+          "durationMs": 5209
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "I'll trace the execution flow through `runner-driven.ts` step by step. Let me start by reading the file and gathering related context.",
+          "durationMs": 4414
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the runner-driven module thoroughly to trace the request flow. Let me start by gathering the module context and reading the file.",
+          "durationMs": 4594
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow from entry to first tool call using repo intelligence tools. Let me start by getting the module context and then trace the process.",
+          "durationMs": 3184
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow through the runner-driven task engine. Let me start by gathering module-level context, then drill into the specific file.",
+          "durationMs": 2813
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow from entry to first tool call. Let me gather the module context and process trace simultaneously.",
+          "durationMs": 3154
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow through that file. Let me start by gathering module and process context, then read the actual file for precise details.",
+          "durationMs": 4590
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow through that file for you. Let me start by gathering the module context and then read the file itself.",
+          "durationMs": 3877
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow through `runner-driven.ts` from entry to the first tool call. Let me start by gathering module context and then follow the code path.",
+          "durationMs": 3479
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow from entry to first tool call using repo intelligence tools first, then verify key details with direct file reads.",
+          "durationMs": 5949
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow from entry to first tool call. Let me gather the module context and then drill into the details.",
+          "durationMs": 3719
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow from entry to first tool call using repo intelligence tools, then verify key details with targeted reads.",
+          "durationMs": 4214
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2618
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2344
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1650
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll analyze the request flow through `runner-driven.ts` to help you understand where to add a new middleware step. Let me start by getting context on this module and then trace the execution path.",
+          "durationMs": 5129
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll investigate the request flow through that file to help you understand where to add middleware. Let me start by getting context on the module and then trace the execution path.",
+          "durationMs": 3217
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1537
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1481
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1542
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1762
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2397
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1573
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2042
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2702
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1984
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 2032
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "B_with_f7",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me trace the execution flow for you — I'll use `process_context` on the runner-driven module and read the file itself.",
+          "durationMs": 4695
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "todo_update",
+          "firstToolFromBinding": "todo_update",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "I'll investigate the execution flow through that file so you can understand where a middleware step fits best.",
+          "durationMs": 6549
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3878
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3343
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4286
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "Let me trace the execution flow through that file and explore the relevant module structure.",
+          "durationMs": 5712
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 4829
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "process_context",
+          "firstToolFromBinding": "process_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 8025
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "symbol_context",
+          "firstToolFromBinding": "symbol_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 10423
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 7419
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "I'll start by reading the target file and gathering its module context to understand the full flow.",
+          "durationMs": 4302
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "I'll start by reading the target file and its surrounding module context to understand the full flow.",
+          "durationMs": 6373
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 6362
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 6137
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the execution flow for you. Let me gather the module context, the static execution trace, and the actual file contents in parallel.",
+          "durationMs": 6580
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering module-level context and the execution trace, then read the actual file for precise details.",
+          "durationMs": 5111
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3960
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering module-level intelligence and a static execution trace, then drill into the source for exact line-level detail.",
+          "durationMs": 5576
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3966
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4957
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll trace the flow from entry to first tool call in `runner-driven.ts`. Let me start by gathering module context and the file itself in parallel.",
+          "durationMs": 9467
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me read the file and gather context on the surrounding module.",
+          "durationMs": 2379
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let's start by understanding the file and its context.",
+          "durationMs": 1489
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1622
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "B_with_f7",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1278
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1330
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1160
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "C_old_reverse",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1419
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1249
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and understanding its context.",
+          "durationMs": 1588
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1239
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1160
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and understanding its module context.",
+          "durationMs": 1248
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "A_baseline",
+      "pullToolRate": 0,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and understanding its structure, then trace the flow.",
+          "durationMs": 1614
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1192
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me first read the file and understand its structure.",
+          "durationMs": 1431
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "B_with_f7",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by examining the file and surrounding context.",
+          "durationMs": 1468
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1257
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and gathering context about the module.",
+          "durationMs": 1678
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "C_old_reverse",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and understanding its context.",
+          "durationMs": 1647
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1485
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "Let me start by reading the file and understanding its module context.",
+          "durationMs": 1869
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 0.3333333333333333,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1488
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "module_context",
+          "firstToolFromBinding": "module_context",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1211
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "read",
+          "firstToolFromBinding": "read",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 1163
+        }
+      ]
+    }
+  ]
+}
