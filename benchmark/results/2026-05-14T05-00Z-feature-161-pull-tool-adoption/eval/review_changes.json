@@ -1,0 +1,829 @@
+{
+  "case": "review_changes",
+  "stage": "phase3-f7-plus-f2-multialias-5cases-3runs",
+  "description": "User asks to review current uncommitted changes — classic changed_scope + changed_diff_bundle case.",
+  "preferredPullTools": [
+    "changed_scope",
+    "changed_diff_bundle",
+    "changed_diff"
+  ],
+  "userMessage": "Review the uncommitted changes in the current working directory. Tell me what files changed, what areas they touch, and whether the diff looks risky.",
+  "cells": [
+    {
+      "alias": "zhipu/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the full picture of what's changed in the working directory, combining the repo overview and the changed scope analysis.",
+          "durationMs": 4572
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the changed scope and then drill into the diffs. Let me gather everything in parallel.",
+          "durationMs": 3332
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the scope of uncommitted changes and the repo structure simultaneously.",
+          "durationMs": 3095
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the current uncommitted changes and the repo overview to understand context.",
+          "durationMs": 3815
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the current change scope and then drill into the diffs. Let me kick off both the scope overview and the repo structure in parallel.",
+          "durationMs": 3872
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the current change scope and a repo overview for context, then drill into the diffs.",
+          "durationMs": 3813
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the changed scope and a repo overview to understand the landscape, then drill into the diffs.",
+          "durationMs": 3183
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting an overview of the changed scope and any diffs. Let me gather the information in parallel.",
+          "durationMs": 2915
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the changed scope and a repo overview to understand the context, then drill into the diffs.",
+          "durationMs": 4753
+        }
+      ]
+    },
+    {
+      "alias": "zhipu/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the changed scope and then drill into the diffs. Let me get the overview first.",
+          "durationMs": 3248
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the changed scope and a repo overview to contextualize the review.",
+          "durationMs": 5114
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the current change scope and then drill into the diffs. Let me gather everything in parallel.",
+          "durationMs": 3072
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1423
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1199
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1194
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1221
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1208
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1282
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1274
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1187
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1140
+        }
+      ]
+    },
+    {
+      "alias": "kimi",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1113
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1226
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1141
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "A_baseline",
+      "pullToolRate": 0.6666666666666666,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll review the uncommitted changes for you.",
+          "durationMs": 5877
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 8618
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "bash",
+          "firstToolFromBinding": "bash",
+          "firstToolFromTextRegex": null,
+          "isPullTool": false,
+          "text": "",
+          "durationMs": 4351
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2442
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2612
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2644
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2828
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2507
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2464
+        }
+      ]
+    },
+    {
+      "alias": "mmx/m27",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4130
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 8691
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 12026
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the overall picture of what's changed, then drill into the actual diffs.",
+          "durationMs": 3549
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting an overview of what's changed and the repo structure, then drill into the diffs.",
+          "durationMs": 6074
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering both the high-level scope and the repo structure to give you a complete picture.",
+          "durationMs": 1946
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the overall picture of what's changed, then drill into the diffs.",
+          "durationMs": 1952
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by checking what's changed in the working directory and then drill into the diffs.",
+          "durationMs": 5873
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the scope of uncommitted changes, then drill into the diffs for a risk assessment.",
+          "durationMs": 1977
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 3385
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 4327
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 2026
+        }
+      ]
+    },
+    {
+      "alias": "ark/glm51",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by scoping the uncommitted changes and then drill into the diffs.",
+          "durationMs": 2634
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting the scope of uncommitted changes, then drill into the diffs.",
+          "durationMs": 2299
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by gathering the full scope of uncommitted changes, then drill into the diffs.",
+          "durationMs": 2406
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "repo_overview",
+          "firstToolFromBinding": "repo_overview",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1532
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "repo_overview",
+          "firstToolFromBinding": "repo_overview",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by getting an overview of the repository and then examine the uncommitted changes.",
+          "durationMs": 1178
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 999
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 959
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1380
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 888
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1065
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by analyzing the changed files in the workspace.",
+          "durationMs": 1119
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 878
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4pro",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1118
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by checking the current git state and getting a scope of changes.",
+          "durationMs": 1066
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 848
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "A_baseline",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "repo_overview",
+          "firstToolFromBinding": "repo_overview",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 995
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "repo_overview",
+          "firstToolFromBinding": "repo_overview",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "I'll start by examining the repository overview and the uncommitted changes.",
+          "durationMs": 1415
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 983
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "B_with_f7",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 928
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1021
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1026
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "C_old_reverse",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1049
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1056
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 971
+        }
+      ]
+    },
+    {
+      "alias": "ds/v4flash",
+      "variant": "D_new_tools_first",
+      "pullToolRate": 1,
+      "runs": [
+        {
+          "runIndex": 0,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 901
+        },
+        {
+          "runIndex": 1,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 1165
+        },
+        {
+          "runIndex": 2,
+          "firstToolCallName": "changed_scope",
+          "firstToolFromBinding": "changed_scope",
+          "firstToolFromTextRegex": null,
+          "isPullTool": true,
+          "text": "",
+          "durationMs": 948
+        }
+      ]
+    }
+  ]
+}
