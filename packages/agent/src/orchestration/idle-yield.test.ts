@@ -581,46 +581,56 @@ describe('countLastAssistantToolCalls', () => {
 });
 
 describe('composeIdleYieldUserMessage', () => {
-  function queuedMessage(content: string, priority: 'user' | 'background' = 'background'): QueuedMessage {
+  // FEATURE_159 v0.7.40: helper now takes an explicit mode so tests can
+  // exercise both the task-notification (synthetic-hidden) AND prompt
+  // (user-visible) sides of the mode-split.
+  function queuedMessage(
+    content: string,
+    priority: 'user' | 'background' = 'background',
+    mode: QueuedMessage['mode'] = 'task-notification',
+  ): QueuedMessage {
     return {
       id: 'qm-' + Math.random().toString(36).slice(2, 8),
       priority,
-      mode: 'task-notification',
+      mode,
       content,
       enqueuedAt: Date.now(),
     } as QueuedMessage;
   }
 
-  it('returns undefined when wake is "aborted" (caller should have broken out earlier)', async () => {
+  it('returns empty array when wake is "aborted" (caller should have broken out earlier)', async () => {
     const result = await composeIdleYieldUserMessage({ kind: 'aborted' }, () => []);
-    expect(result).toBeUndefined();
+    expect(result).toEqual([]);
   });
 
-  it('messages-arrived: passes the QueuedMessage content through verbatim and concatenates trailing drain', async () => {
+  // FEATURE_159: task-notification + late-drain banner from
+  // `messages-arrived` wake → one synthetic message (preserves prior
+  // hidden-banner contract for pure-banner wakes).
+  it('messages-arrived (banners only): emits one synthetic message with all banner content', async () => {
     const drainCalls: number[] = [];
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
-        messages: [queuedMessage('hello from queue', 'user')],
+        messages: [queuedMessage('hello from queue', 'user', 'task-notification')],
       },
       () => {
         drainCalls.push(1);
-        return [queuedMessage('<task-completed task_id="late"/>', 'background')];
+        return [queuedMessage('<task-completed task_id="late"/>', 'background', 'task-notification')];
       },
     );
-    expect(result).toBeDefined();
-    expect(result!.role).toBe('user');
-    expect(result!._synthetic).toBe(true);
-    expect(result!.content).toContain('hello from queue');
-    expect(result!.content).toContain('<task-completed task_id="late"/>');
+    expect(result).toHaveLength(1);
+    expect(result[0]!.role).toBe('user');
+    expect(result[0]!._synthetic).toBe(true);
+    expect(result[0]!.content).toContain('hello from queue');
+    expect(result[0]!.content).toContain('<task-completed task_id="late"/>');
     // Late drain should be appended AFTER the wake-event content.
-    expect((result!.content as string).indexOf('hello from queue')).toBeLessThan(
-      (result!.content as string).indexOf('<task-completed'),
+    expect((result[0]!.content as string).indexOf('hello from queue')).toBeLessThan(
+      (result[0]!.content as string).indexOf('<task-completed'),
     );
     expect(drainCalls.length).toBe(1);
   });
 
-  it('child-completed: pulls the canonical <task-completed> banner from the drained queue', async () => {
+  it('child-completed: pulls the canonical <task-completed> banner from the drained queue (synthetic)', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-completed',
@@ -633,12 +643,13 @@ describe('composeIdleYieldUserMessage', () => {
         ),
       ],
     );
-    expect(result).toBeDefined();
-    expect(result!.content).toContain('child-X');
-    expect(result!.content).toContain('found 3 imports');
+    expect(result).toHaveLength(1);
+    expect(result[0]!._synthetic).toBe(true);
+    expect(result[0]!.content).toContain('child-X');
+    expect(result[0]!.content).toContain('found 3 imports');
   });
 
-  it('child-completed with empty queue: synthesizes a defensive fallback banner', async () => {
+  it('child-completed with empty queue: synthesizes a defensive fallback banner (synthetic)', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-completed',
@@ -647,12 +658,13 @@ describe('composeIdleYieldUserMessage', () => {
       },
       () => [],
     );
-    expect(result).toBeDefined();
-    expect(result!.content).toContain('child-orphan');
-    expect(result!.content).toContain('(child task completed; no summary available)');
+    expect(result).toHaveLength(1);
+    expect(result[0]!._synthetic).toBe(true);
+    expect(result[0]!.content).toContain('child-orphan');
+    expect(result[0]!.content).toContain('(child task completed; no summary available)');
   });
 
-  it('child-failed with empty queue: synthesizes a banner carrying the error message', async () => {
+  it('child-failed with empty queue: synthesizes a banner carrying the error message (synthetic)', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'child-failed',
@@ -661,9 +673,10 @@ describe('composeIdleYieldUserMessage', () => {
       },
       () => [],
     );
-    expect(result).toBeDefined();
-    expect(result!.content).toContain('child-crashed');
-    expect(result!.content).toContain('failed: exec failed: SIGTERM');
+    expect(result).toHaveLength(1);
+    expect(result[0]!._synthetic).toBe(true);
+    expect(result[0]!.content).toContain('child-crashed');
+    expect(result[0]!.content).toContain('failed: exec failed: SIGTERM');
   });
 
   it('does not call the drain callback for "aborted" wake (no queue mutation on abort)', async () => {
@@ -675,26 +688,31 @@ describe('composeIdleYieldUserMessage', () => {
     expect(drainCalled).toBe(false);
   });
 
-  it('marks the synthesized message _synthetic so the REPL hides it from the user', async () => {
+  it('marks the synthesized banner _synthetic so the REPL hides it from the user', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
-        messages: [queuedMessage('foo', 'user')],
+        messages: [queuedMessage('foo', 'user', 'task-notification')],
       },
       () => [],
     );
-    expect(result?._synthetic).toBe(true);
+    expect(result).toHaveLength(1);
+    expect(result[0]!._synthetic).toBe(true);
   });
 
-  it('joins multiple fragments with a blank-line separator', async () => {
+  it('joins multiple banner fragments with a blank-line separator', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
-        messages: [queuedMessage('first', 'user'), queuedMessage('second', 'user')],
+        messages: [
+          queuedMessage('first', 'user', 'task-notification'),
+          queuedMessage('second', 'user', 'task-notification'),
+        ],
       },
       () => [queuedMessage('third')],
     );
-    expect(result?.content).toBe('first\n\nsecond\n\nthird');
+    expect(result).toHaveLength(1);
+    expect(result[0]!.content).toBe('first\n\nsecond\n\nthird');
   });
 
   // FEATURE_121 (v0.7.40): enforceAggregate callback hook
@@ -706,10 +724,10 @@ describe('composeIdleYieldUserMessage', () => {
       },
       () => [queuedMessage('c')],
     );
-    expect(result?.content).toBe('a\n\nb\n\nc');
+    expect(result[0]!.content).toBe('a\n\nb\n\nc');
   });
 
-  it('enforceAggregate: when provided, transforms fragments before joining', async () => {
+  it('enforceAggregate: when provided, transforms banner fragments before joining', async () => {
     const calls: ReadonlyArray<readonly string[]>[] = [];
     const result = await composeIdleYieldUserMessage(
       {
@@ -722,7 +740,7 @@ describe('composeIdleYieldUserMessage', () => {
         return fragments.map((f) => `[shrunk]${f}`);
       },
     );
-    expect(result?.content).toBe('[shrunk]big-1\n\n[shrunk]big-2');
+    expect(result[0]!.content).toBe('[shrunk]big-1\n\n[shrunk]big-2');
     expect(calls.length).toBe(1);
   });
 
@@ -738,10 +756,10 @@ describe('composeIdleYieldUserMessage', () => {
         return fragments.map((f) => f.toUpperCase());
       },
     );
-    expect(result?.content).toBe('ALPHA\n\nBETA');
+    expect(result[0]!.content).toBe('ALPHA\n\nBETA');
   });
 
-  it('enforceAggregate: if it returns empty array, compose returns undefined', async () => {
+  it('enforceAggregate: if it returns empty array, compose returns empty array', async () => {
     const result = await composeIdleYieldUserMessage(
       {
         kind: 'messages-arrived',
@@ -750,6 +768,98 @@ describe('composeIdleYieldUserMessage', () => {
       () => [],
       () => [],
     );
-    expect(result).toBeUndefined();
+    expect(result).toEqual([]);
+  });
+
+  // FEATURE_159 (v0.7.40) — mode-split behavior. Prompt-mode messages
+  // surface as REAL user input (visible in transcript); only
+  // task-notification / system-reminder modes stay synthetic.
+  describe('FEATURE_159 mode-split', () => {
+    it('prompt-only wake: emits one real user message (NOT synthetic)', async () => {
+      const result = await composeIdleYieldUserMessage(
+        {
+          kind: 'messages-arrived',
+          messages: [queuedMessage('user typed this', 'user', 'prompt')],
+        },
+        () => [],
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]!.role).toBe('user');
+      expect(result[0]!._synthetic).toBeUndefined();
+      expect(result[0]!.content).toBe('user typed this');
+    });
+
+    it('mixed prompt + task-notification: emits two messages (synthetic banner FIRST, then real user)', async () => {
+      const result = await composeIdleYieldUserMessage(
+        {
+          kind: 'messages-arrived',
+          messages: [
+            queuedMessage('<task-completed task_id="X">done</task-completed>', 'background', 'task-notification'),
+            queuedMessage('user follow-up question', 'user', 'prompt'),
+          ],
+        },
+        () => [],
+      );
+      expect(result).toHaveLength(2);
+      // Banner first — agent reads it as "tail of prior turn".
+      expect(result[0]!._synthetic).toBe(true);
+      expect(result[0]!.content).toContain('<task-completed task_id="X">');
+      // User prompt second — appears as real user bubble in transcript.
+      expect(result[1]!._synthetic).toBeUndefined();
+      expect(result[1]!.content).toBe('user follow-up question');
+    });
+
+    it('multiple prompts join with --- separator so chunked typing reads as one user turn with structure', async () => {
+      const result = await composeIdleYieldUserMessage(
+        {
+          kind: 'messages-arrived',
+          messages: [
+            queuedMessage('first thought', 'user', 'prompt'),
+            queuedMessage('second thought', 'user', 'prompt'),
+          ],
+        },
+        () => [],
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]!._synthetic).toBeUndefined();
+      expect(result[0]!.content).toBe('first thought\n\n---\n\nsecond thought');
+    });
+
+    it('enforceAggregate applies ONLY to synthetic banners, NEVER to user prompts', async () => {
+      let calls = 0;
+      const result = await composeIdleYieldUserMessage(
+        {
+          kind: 'messages-arrived',
+          messages: [
+            queuedMessage('huge banner payload', 'background', 'task-notification'),
+            queuedMessage('my exact prompt', 'user', 'prompt'),
+          ],
+        },
+        () => [],
+        (fragments) => {
+          calls++;
+          return fragments.map((f) => `[shrunk]${f}`);
+        },
+      );
+      expect(calls).toBe(1); // called once, only for synthetic side
+      expect(result).toHaveLength(2);
+      expect(result[0]!._synthetic).toBe(true);
+      expect(result[0]!.content).toContain('[shrunk]huge banner payload');
+      // User prompt untouched — never silently truncated.
+      expect(result[1]!._synthetic).toBeUndefined();
+      expect(result[1]!.content).toBe('my exact prompt');
+    });
+
+    it('system-reminder mode is treated like task-notification (stays synthetic)', async () => {
+      const result = await composeIdleYieldUserMessage(
+        {
+          kind: 'messages-arrived',
+          messages: [queuedMessage('SR: reminder body', 'background', 'system-reminder')],
+        },
+        () => [],
+      );
+      expect(result).toHaveLength(1);
+      expect(result[0]!._synthetic).toBe(true);
+    });
   });
 });
