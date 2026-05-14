@@ -14,35 +14,47 @@ import React, {
   useEffect,
   type ReactNode,
 } from "react";
-import { getMessageQueue } from "@kodax-ai/agent";
+import { getMessageQueue, type QueuedMessage } from "@kodax-ai/agent";
 import { StreamingState } from "../types.js";
 import { MAX_PENDING_INPUTS } from "../utils/pending-inputs.js";
 
 /**
- * Mirror the React-state pending-inputs queue into the agent-side
- * MessageQueue (FEATURE_115 v0.7.36).
+ * FEATURE_159 (v0.7.40) — queue-as-source-of-truth.
  *
- * React state is the canonical source for UI rendering and the
- * MAX_PENDING_INPUTS gating; the MessageQueue is the agent-side surface
- * that downstream consumers (runner-driven mid-turn drain in Phase 1C)
- * subscribe to. To keep them in lockstep without a remove-by-id API,
- * we drain the main-thread `user` priority slice and re-enqueue the
- * authoritative React-state contents after every mutation. Background
- * priority and subagent-scoped messages are untouched.
+ * Pre-FEATURE_159 (v0.7.36 FEATURE_115): React `pendingInputs: string[]`
+ * was the canonical source; we drained + re-enqueued the agent-side
+ * MessageQueue after every React mutation (`syncPendingInputsToQueue`).
+ * That direction failed two ways: (1) when idle-yield's
+ * `waitForWakeEvent` drained the queue, React state stayed stale → UI
+ * showed phantom "Queue N"; (2) the next round's `runQueuedPromptSequence`
+ * then re-shifted from React state → duplicate processing of an already-
+ * consumed prompt.
  *
- * O(N) where N ≤ MAX_PENDING_INPUTS = 5; negligible overhead.
+ * Post-FEATURE_159: MessageQueue is canonical. React `pendingInputs`
+ * mirrors a filtered slice (main-thread + user priority + mode='prompt')
+ * via a `queue.subscribe` callback. The manager methods write to the
+ * queue directly; the queue's notify triggers the subscribe callback,
+ * which rebuilds the React slice and fires `notify()`. Any consumer
+ * (wake-drain, mid-turn yield, queued-prompt-sequence, test harness)
+ * that mutates the queue automatically updates the UI.
+ *
+ * Predicate `isMainThreadPrompt` is the canonical filter for the REPL's
+ * slice — reused by manager methods that need to know "what's mine".
  */
-function syncPendingInputsToQueue(contents: readonly string[]): void {
-  const queue = getMessageQueue();
-  // Drain only main-thread (`agentId === undefined`) user-priority messages.
-  queue.dequeue({ maxPriority: "user" });
-  for (const content of contents) {
-    queue.enqueue({
-      priority: "user",
-      mode: "prompt",
-      content,
-    });
-  }
+function isMainThreadPrompt(message: QueuedMessage): boolean {
+  return (
+    message.agentId === undefined &&
+    message.priority === "user" &&
+    message.mode === "prompt"
+  );
+}
+
+function getMainThreadPrompts(): readonly QueuedMessage[] {
+  return getMessageQueue().getSnapshot().filter(isMainThreadPrompt);
+}
+
+function getMainThreadPromptContents(): string[] {
+  return getMainThreadPrompts().map((m) => m.content);
 }
 
 // === Types ===
@@ -327,6 +339,14 @@ export interface StreamingManager {
   shiftPendingInput: () => string | undefined;
   clearPendingInputs: () => void;
   consumePendingInputs: () => string[];
+
+  /**
+   * FEATURE_159 (v0.7.40) — release the queue subscription set up at
+   * construction time. Production providers call this on unmount;
+   * tests call it between cases to prevent stale listeners on the
+   * process-global MessageQueue singleton.
+   */
+  dispose: () => void;
 }
 
 /**
@@ -337,7 +357,13 @@ export interface StreamingManager {
  * - Sync with Spinner animation to avoid race conditions - 涓?Spinner 鍔ㄧ敾鍚屾锛岄伩鍏嶇珵鎬佹潯浠?
  */
 export function createStreamingManager(): StreamingManager {
-  let state: StreamingContextValue = { ...DEFAULT_STREAMING_STATE };
+  // FEATURE_159 (v0.7.40) — initial state seeds pendingInputs from queue
+  // snapshot in case the manager is recreated mid-session (queue persists
+  // across React remount; we don't want to lose pending prompts).
+  let state: StreamingContextValue = {
+    ...DEFAULT_STREAMING_STATE,
+    pendingInputs: getMainThreadPromptContents(),
+  };
   const listeners = new Set<StreamingStateListener>();
 
   // === Batch update buffer (Issue 048) - 鎵归噺鏇存柊缂撳啿鍖?(Issue 048) ===
@@ -361,6 +387,51 @@ export function createStreamingManager(): StreamingManager {
     for (const listener of listeners) {
       listener(state);
     }
+  };
+
+  // FEATURE_159 (v0.7.40) — queue → React mirror. Every queue mutation
+  // (enqueue from `addPendingInput`, dequeue from wake-drain / shift /
+  // consume / Esc-pop, clear from reset) rebuilds the REPL's slice and
+  // fires `notify()`. The earlier React → queue mirror direction is
+  // deleted; the queue is canonical.
+  //
+  // Reference-equality guard: only update state + notify when the
+  // filtered slice's length OR contents changed. Without this guard,
+  // out-of-slice events (subagent task-notifications, sub-agent prompts)
+  // would force a no-op React rerender on every event.
+  const syncReactStateFromQueue = (): void => {
+    const next = getMainThreadPromptContents();
+    if (next.length === state.pendingInputs.length) {
+      let equal = true;
+      for (let i = 0; i < next.length; i++) {
+        if (next[i] !== state.pendingInputs[i]) {
+          equal = false;
+          break;
+        }
+      }
+      if (equal) return;
+    }
+    state = { ...state, pendingInputs: next };
+    notify();
+  };
+
+  const unsubscribeFromQueue = getMessageQueue().subscribe(() => {
+    syncReactStateFromQueue();
+  });
+
+  /**
+   * Drain the REPL's slice of the queue (main-thread user prompts) and
+   * return their contents. Used by `clearPendingInputs` / `consumePendingInputs`
+   * / `abort(preservePendingInputs:false)` / `reset`. Out-of-slice
+   * messages (subagent task-notifications, sub-agent prompts) are
+   * preserved — they're not the REPL's to discard.
+   */
+  const drainOurSlice = (): string[] => {
+    const drained = getMessageQueue().dequeue({
+      maxPriority: "user",
+      mode: "prompt",
+    });
+    return drained.map((m) => m.content);
   };
 
   /**
@@ -484,14 +555,18 @@ export function createStreamingManager(): StreamingManager {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
+      // FEATURE_159 (v0.7.40): queue is canonical. When NOT preserving,
+      // drain the REPL's slice — `syncReactStateFromQueue` will land the
+      // updated `pendingInputs:[]` on the next notify (synchronous via
+      // queue.subscribe). FEATURE_149 (v0.7.38) preserve-queue path
+      // means we leave the slice untouched.
+      if (!options?.preservePendingInputs) {
+        drainOurSlice();
+      }
       state = {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
-        // FEATURE_149 (v0.7.38): preserve queue for fast-abort callers
-        // (handleSubmit when interruptBehavior:'cancel' tool is mid-flight).
-        // Default behavior (Esc / exit) clears as before.
-        pendingInputs: options?.preservePendingInputs ? state.pendingInputs : [],
       };
       notify();
     },
@@ -507,7 +582,14 @@ export function createStreamingManager(): StreamingManager {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
-      state = { ...DEFAULT_STREAMING_STATE };
+      // FEATURE_159 (v0.7.40): drain our queue slice as part of full
+      // reset. Other agents' queue entries (subagent task-notifications)
+      // are not ours to clear.
+      drainOurSlice();
+      state = {
+        ...DEFAULT_STREAMING_STATE,
+        pendingInputs: getMainThreadPromptContents(),
+      };
       bufferSealed = false;
       notify();
     },
@@ -720,79 +802,63 @@ export function createStreamingManager(): StreamingManager {
       notify();
     },
 
+    // FEATURE_159 (v0.7.40) — all five pending-input methods now route
+    // through the queue. The queue's `subscribe` callback handles React
+    // state sync + `notify()`; manager methods don't touch `state`
+    // directly. `flushPendingUpdates()` is still called so any in-flight
+    // streaming buffer doesn't race the user's queue mutation.
+    //
+    // MAX_PENDING_INPUTS gating reads the live snapshot (queue is
+    // canonical) rather than `state.pendingInputs.length`, so a stale
+    // React render in the same tick can't allow over-quota enqueue.
     addPendingInput: (input: string) => {
       const trimmed = input.trim();
-      if (!trimmed || state.pendingInputs.length >= MAX_PENDING_INPUTS) {
-        return;
-      }
+      if (!trimmed) return;
+      if (getMainThreadPrompts().length >= MAX_PENDING_INPUTS) return;
 
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: [...state.pendingInputs, trimmed],
-      };
-      syncPendingInputsToQueue(state.pendingInputs);
-      notify();
+      getMessageQueue().enqueue({
+        priority: "user",
+        mode: "prompt",
+        content: trimmed,
+      });
     },
 
     removeLastPendingInput: () => {
-      if (state.pendingInputs.length === 0) {
-        return;
-      }
+      const prompts = getMainThreadPrompts();
+      const last = prompts[prompts.length - 1];
+      if (!last) return;
 
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: state.pendingInputs.slice(0, -1),
-      };
-      syncPendingInputsToQueue(state.pendingInputs);
-      notify();
+      getMessageQueue().dequeue({
+        maxPriority: "user",
+        mode: "prompt",
+        id: last.id,
+      });
     },
 
     shiftPendingInput: () => {
-      if (state.pendingInputs.length === 0) {
-        return undefined;
-      }
-
       flushPendingUpdates();
-      const [nextInput, ...rest] = state.pendingInputs;
-      state = {
-        ...state,
-        pendingInputs: rest,
-      };
-      syncPendingInputsToQueue(state.pendingInputs);
-      notify();
-      return nextInput;
+      const drained = getMessageQueue().dequeue({
+        maxPriority: "user",
+        mode: "prompt",
+        limit: 1,
+      });
+      return drained[0]?.content;
     },
 
     clearPendingInputs: () => {
-      if (state.pendingInputs.length === 0) {
-        return;
-      }
-
       flushPendingUpdates();
-      state = {
-        ...state,
-        pendingInputs: [],
-      };
-      syncPendingInputsToQueue(state.pendingInputs);
-      notify();
+      drainOurSlice();
     },
 
     consumePendingInputs: () => {
-      if (state.pendingInputs.length === 0) {
-        return [];
-      }
-
       flushPendingUpdates();
-      const pendingInputs = state.pendingInputs;
-      state = {
-        ...state,
-        pendingInputs: [],
-      };
-      syncPendingInputsToQueue(state.pendingInputs);
-      notify();
-      return pendingInputs;
+      return drainOurSlice();
+    },
+
+    dispose: () => {
+      unsubscribeFromQueue();
     },
   };
 }
@@ -830,6 +896,16 @@ export function StreamingProvider({
 
     return unsubscribe;
   }, [onStateChange]);
+
+  // FEATURE_159 (v0.7.40) — release the manager's queue subscription on
+  // provider unmount so the process-global MessageQueue doesn't retain
+  // a stale listener after hot reload / test teardown.
+  useEffect(() => {
+    const manager = managerRef.current;
+    return () => {
+      manager.dispose();
+    };
+  }, []);
 
   // === Actions ===
 

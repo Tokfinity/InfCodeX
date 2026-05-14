@@ -14,3 +14,9 @@ export type { UseInputHistoryOptions, UseInputHistoryReturn } from "./useInputHi
 export { useAutocomplete, AutocompleteContextProvider, useAutocompleteContext } from "./useAutocomplete.js";
 export type { UseAutocompleteOptions, UseAutocompleteReturn } from "./useAutocomplete.js";
 // Note: File is useAutocomplete.tsx but imports use .js extension for ESM
+
+export {
+  useQueuedPrompts,
+  useQueuedPromptContents,
+  _resetQueuedPromptsCacheForTests,
+} from "./useQueuedPrompts.js";
