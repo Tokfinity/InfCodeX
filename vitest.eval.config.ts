@@ -29,13 +29,13 @@ export default defineConfig({
   plugins: [stripShebang()],
   resolve: {
     alias: {
-      '@kodax/skills/shared/yaml': resolveFromRoot('packages', 'skills', 'src', 'shared', 'yaml.ts'),
-      '@kodax/ai': resolveFromRoot('packages', 'ai', 'src', 'index.ts'),
-      '@kodax/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
-      '@kodax/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
-      '@kodax/repl': resolveFromRoot('packages', 'repl', 'src', 'index.ts'),
-      '@kodax/repointel-protocol': resolveFromRoot('packages', 'repointel-protocol', 'src', 'index.ts'),
-      '@kodax/skills': resolveFromRoot('packages', 'skills', 'src', 'index.ts'),
+      '@kodax-ai/skills/shared/yaml': resolveFromRoot('packages', 'skills', 'src', 'shared', 'yaml.ts'),
+      '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
+      '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
+      '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
+      '@kodax-ai/repl': resolveFromRoot('packages', 'repl', 'src', 'index.ts'),
+      '@kodax-ai/repointel-protocol': resolveFromRoot('packages', 'repointel-protocol', 'src', 'index.ts'),
+      '@kodax-ai/skills': resolveFromRoot('packages', 'skills', 'src', 'index.ts'),
     },
   },
   test: {

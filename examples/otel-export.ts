@@ -1,7 +1,7 @@
 /**
  * FEATURE_083 (v0.7.24) — OpenTelemetry export example.
  *
- * Shows how to plug KodaX's `@kodax/tracing` primitives into any external
+ * Shows how to plug KodaX's `@kodax-ai/tracing` primitives into any external
  * observability system (OpenTelemetry, Langfuse, Datadog, a custom sink,
  * ...) by implementing the `TracingProcessor` interface.
  *
@@ -19,7 +19,7 @@ import {
   Runner,
   createAgent,
   type AgentMessage,
-} from '@kodax/agent';
+} from '@kodax-ai/agent';
 import {
   Tracer,
   addTracingProcessor,
@@ -28,7 +28,7 @@ import {
   type Span,
   type Trace,
   type TracingProcessor,
-} from '@kodax/tracing';
+} from '@kodax-ai/tracing';
 
 /**
  * Pseudo OpenTelemetry exporter. In a real app replace the `export*` stubs

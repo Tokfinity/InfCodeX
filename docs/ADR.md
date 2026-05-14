@@ -16,25 +16,25 @@ KodaX 保持分层 monorepo，包结构经 v0.7.35.1 修正后为 **8 包**：
 
 | 包 | 角色 | 说明 |
 |---|---|---|
-| `@kodax/ai` | LLM 抽象 + provider 适配 | retry-after / cache markers / capability |
-| `@kodax/tracing` | Trace / Span / Processor | 独立可替换 OpenTelemetry / Langfuse |
-| `@kodax/session-lineage` | Session 持久化 + Lineage + Compaction 实现 | 承接 v0.7.35.1 从 `@kodax/agent` 回流的 session 实体 |
-| `@kodax/agent` | **通用 Agent 框架（智能体底座）** | Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware；不绑定 coding |
-| `@kodax/skills` | Zero-dep skill packs | — |
-| `@kodax/mcp` | MCP integration | progressive disclosure 5 模式 |
-| `@kodax/coding` | **Coding agent 实例 + coding-specific 资产** | Coding tools / role prompts / H2 task-engine / coding-preset / repo-intelligence |
-| `@kodax/repl` | Ink TUI | — |
-| `@kodax/repointel-protocol` | Repo intel 协议包 | 跨仓库共享协议 |
+| `@kodax-ai/llm` | LLM 抽象 + provider 适配 | retry-after / cache markers / capability |
+| `@kodax-ai/tracing` | Trace / Span / Processor | 独立可替换 OpenTelemetry / Langfuse |
+| `@kodax-ai/session-lineage` | Session 持久化 + Lineage + Compaction 实现 | 承接 v0.7.35.1 从 `@kodax-ai/agent` 回流的 session 实体 |
+| `@kodax-ai/agent` | **通用 Agent 框架（智能体底座）** | Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware；不绑定 coding |
+| `@kodax-ai/skills` | Zero-dep skill packs | — |
+| `@kodax-ai/mcp` | MCP integration | progressive disclosure 5 模式 |
+| `@kodax-ai/coding` | **Coding agent 实例 + coding-specific 资产** | Coding tools / role prompts / H2 task-engine / coding-preset / repo-intelligence |
+| `@kodax-ai/repl` | Ink TUI | — |
+| `@kodax-ai/repointel-protocol` | Repo intel 协议包 | 跨仓库共享协议 |
 
 Reasoning:
 
-- 包名 = 内容承诺：`@kodax/agent` 是通用 agent 平台，`@kodax/coding` 是 coding-specific 实例
-- `@kodax/agent` 不依赖 `@kodax/coding`、不依赖 `@kodax/repl` 就能跑一个 agent
-- 未来 `@kodax/data-analysis-agent` / `@kodax/ops-agent` 等按 `@kodax/coding` 模式独立成包，统一依赖 `@kodax/agent`
+- 包名 = 内容承诺：`@kodax-ai/agent` 是通用 agent 平台，`@kodax-ai/coding` 是 coding-specific 实例
+- `@kodax-ai/agent` 不依赖 `@kodax-ai/coding`、不依赖 `@kodax-ai/repl` 就能跑一个 agent
+- 未来 `@kodax-ai/data-analysis-agent` / `@kodax-ai/ops-agent` 等按 `@kodax-ai/coding` 模式独立成包，统一依赖 `@kodax-ai/agent`
 - task engine 的增强应建立在现有层次之上，而不是把层全部揉平
 - 详细包归属规则见 ADR-021
 
-**v0.7.35.1 之前（FEATURE_082 设计）**：曾包含 `@kodax/core`（含 Layer A primitives + 后续漂入的 runtime）和**设计但从未创建**的 `@kodax/capabilities`。v0.7.35.1 (FEATURE_142) 把 `@kodax/core` 30 文件全部并入 `@kodax/agent`，并撤销 `@kodax/capabilities` 死设计，理由见 [v0.7.35.1 设计稿](features/v0.7.35.1.md) §FEATURE_142。
+**v0.7.35.1 之前（FEATURE_082 设计）**：曾包含 `@kodax/core`（含 Layer A primitives + 后续漂入的 runtime）和**设计但从未创建**的 `@kodax/capabilities`。v0.7.35.1 (FEATURE_142) 把 `@kodax/core` 30 文件全部并入 `@kodax-ai/agent`，并撤销 `@kodax/capabilities` 死设计，理由见 [v0.7.35.1 设计稿](features/v0.7.35.1.md) §FEATURE_142。
 
 ---
 
@@ -374,13 +374,13 @@ Migration:
 
 ---
 
-## ADR-021: Agent Framework Boundary（@kodax/agent vs @kodax/coding）
+## ADR-021: Agent Framework Boundary（@kodax-ai/agent vs @kodax-ai/coding）
 
 **Status**: Accepted (FEATURE_142 v0.7.35.1)
 
-KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是**通用 Agent 框架（智能体底座）**，`@kodax/coding` 是 **coding-specific** 实例。两者不可互相侵入，下面是判断规则。
+KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax-ai/agent` 是**通用 Agent 框架（智能体底座）**，`@kodax-ai/coding` 是 **coding-specific** 实例。两者不可互相侵入，下面是判断规则。
 
-### 落 `@kodax/agent` 的内容（通用 agent 平台原语）
+### 落 `@kodax-ai/agent` 的内容（通用 agent 平台原语）
 
 | 类别 | 子目录 | 例子 |
 |---|---|---|
@@ -388,16 +388,16 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 | Admission contract | `admission/` | Admission pipeline + 7 quality invariants（FEATURE_101） |
 | Messaging | `messaging/` | 2-tier priority queue + agentId routing（FEATURE_115） |
 | Orchestration | `orchestration/` | Pattern B dispatch / child-task registry / idle-yield 状态机（detectIdleYield + waitForWakeEvent + composeIdleYieldUserMessage）/ Runner.runWithIdleYield 包装 / SendMessage router / TaskStop / Peer router（FEATURE_119/120/123/128/155 — v0.7.39 FEATURE_120 Step 0 完成包归属迁移） |
-| ~~Scratchpad~~ | ~~`scratchpad/`~~ | ~~去耦合大输出通道（FEATURE_121）~~ — **2026-05-12 取消**：FEATURE_121 v0.7.40 rescoped 为 "Envelope Spillover Gap-Fix"（复用 `@kodax/coding/tools/tool-result-policy.ts` 现有 spillover 体系 + `@kodax/agent/orchestration/idle-yield.ts` 加聚合 cap），**不新建 `scratchpad/` 子目录、不引入新工具**。详见 [features/v0.7.40.md](features/v0.7.40.md#feature_121-envelope-spillover-gap-fix--child-task-summary-接入-tool-result-policy) |
+| ~~Scratchpad~~ | ~~`scratchpad/`~~ | ~~去耦合大输出通道（FEATURE_121）~~ — **2026-05-12 取消**：FEATURE_121 v0.7.40 rescoped 为 "Envelope Spillover Gap-Fix"（复用 `@kodax-ai/coding/tools/tool-result-policy.ts` 现有 spillover 体系 + `@kodax-ai/agent/orchestration/idle-yield.ts` 加聚合 cap），**不新建 `scratchpad/` 子目录、不引入新工具**。详见 [features/v0.7.40.md](features/v0.7.40.md#feature_121-envelope-spillover-gap-fix--child-task-summary-接入-tool-result-policy) |
 | Memory | `memory/` | 4-type taxonomy + scope resolver（FEATURE_124） |
 | Team | `team/` | Multi-instance state broadcast + system-prompt injection（FEATURE_125） |
 | Construction | `construction/` | Self-Construction runtime / agent-resolver / sandbox-runner（FEATURE_087/088/089/090/101） |
 | Runtime middleware | `runtime-middleware/` | 通用 substrate middleware（compaction-trigger / max-tokens-continuation / permission-gate 接口层） |
 | Tokenizer | `tokenizer.ts` | js-tiktoken 适配 |
 
-**判定规则**：任何"非 coding agent 也需要"的 agent 平台能力 → `@kodax/agent`。
+**判定规则**：任何"非 coding agent 也需要"的 agent 平台能力 → `@kodax-ai/agent`。
 
-### 落 `@kodax/coding` 的内容（coding-specific）
+### 落 `@kodax-ai/coding` 的内容（coding-specific）
 
 | 类别 | 子目录 | 例子 |
 |---|---|---|
@@ -412,24 +412,24 @@ KodaX 包结构按"包名 = 内容承诺"原则严格执行。`@kodax/agent` 是
 | Coding-side provider wiring | `providers/` | Coding 端的 wire-level provider 配置 |
 | File-mutation safety net | `multi-instance/` | content-hash-cache / active-file-warning（绑 Edit / Read tool 实现） |
 
-**判定规则**：任何"只对 coding agent 有意义"的内容 → `@kodax/coding`。
+**判定规则**：任何"只对 coding agent 有意义"的内容 → `@kodax-ai/coding`。
 
 ### Tool wrapper 的双层模式
 
 通用 agent 平台工具（dispatch_child_task / send_message / task_stop / list_agents 等）使用**双层模式**：
 
-- **底层 primitive** 在 `@kodax/agent/<domain>/`：路由 / 队列 / 注册表 / 协议（不含 prompt）
-- **工具壳** 在 `@kodax/coding/tools/`：tool schema + handler 调底层 primitive；tool description 含 coding-specific prompt（如 "use this when reviewing a coding PR"）
+- **底层 primitive** 在 `@kodax-ai/agent/<domain>/`：路由 / 队列 / 注册表 / 协议（不含 prompt）
+- **工具壳** 在 `@kodax-ai/coding/tools/`：tool schema + handler 调底层 primitive；tool description 含 coding-specific prompt（如 "use this when reviewing a coding PR"）
 
-理由：tool description 是 prompt 工程的一部分，含 coding 偏置；底层路由 / 队列等机制对所有 agent 通用。未来真有 ≥3 个非 coding agent 包后，可以再抽 `@kodax/agent/tools/` 通用工具壳层。当前 1 个 consumer，按 KodaX 哲学不预先抽。
+理由：tool description 是 prompt 工程的一部分，含 coding 偏置；底层路由 / 队列等机制对所有 agent 通用。未来真有 ≥3 个非 coding agent 包后，可以再抽 `@kodax-ai/agent/tools/` 通用工具壳层。当前 1 个 consumer，按 KodaX 哲学不预先抽。
 
 ### 何时考虑再开 `@kodax/core`（types-only 子包）
 
-撤销 `@kodax/core`（v0.7.35.1）后，未来 **当且仅当**下面三条**至少一条**成立时，才考虑从 `@kodax/agent` 拆出 `@kodax/core` types-only 子包：
+撤销 `@kodax/core`（v0.7.35.1）后，未来 **当且仅当**下面三条**至少一条**成立时，才考虑从 `@kodax-ai/agent` 拆出 `@kodax/core` types-only 子包：
 
 1. 出现 ≥3 个 type-only declaration 消费者（例如 IDE 插件 typecheck 用户的 agent manifest 但不跑）
-2. 出现真实跨包横切设施需求（例如 errors 类被 `@kodax/ai` / `@kodax/agent` / `@kodax/coding` 都需要统一 shape）
-3. 出现 ≥3 个非 coding agent 包（`@kodax/data-analysis-agent` / `@kodax/ops-agent` / 等），它们之间需要共享 Layer A types 但不互相依赖
+2. 出现真实跨包横切设施需求（例如 errors 类被 `@kodax-ai/llm` / `@kodax-ai/agent` / `@kodax-ai/coding` 都需要统一 shape）
+3. 出现 ≥3 个非 coding agent 包（`@kodax-ai/data-analysis-agent` / `@kodax-ai/ops-agent` / 等），它们之间需要共享 Layer A types 但不互相依赖
 
 **严禁预先开包**。FEATURE_082 v0.7.24 在 1 个 consumer 时强行建立 4 层模型（`ai → core → capabilities → coding`），导致 `@kodax/capabilities` 成为死设计 + `@kodax/core` 名实倒挂——这是 KodaX `NEVER add abstractions until 3+ concrete use cases` 哲学违反的实证后果，本 ADR 写明以避免重蹈。
 
@@ -457,7 +457,7 @@ FEATURE_147 (v0.7.37) 完成了 `@kodax/*` → `@kodax-ai/*` scope 重命名，�
 
 1. **`@kodax-ai/coding` 漏声明 4 个 runtime deps**（`typescript` / `tsx` / `iconv-lite` / `glob`）。Dev 环境靠 monorepo root hoisting 隐藏；终端用户 `npx @kodax-ai/cli` 第一次 `import 'typescript'` 直接 `ERR_MODULE_NOT_FOUND`。
 2. **`@kodax-ai/repl` 漏声明 26 个 vendored Ink fork transitive deps**（`yoga-layout` / `react-reconciler` / `ws` / `scheduler` / 等等）。Vendored fork 模式下原 Ink 包的 transitive deps 没人替我们装。
-3. **`@kodax-ai/skills` 6 个 helper script 残留旧 scope 引用 `@kodax/coding`**。即使改成 `@kodax-ai/coding`，bundle 模式下该包不再发布到 npm，仍然解析不到。
+3. **`@kodax-ai/skills` 6 个 helper script 残留旧 scope 引用 `@kodax-ai/coding`**。即使改成 `@kodax-ai/coding`，bundle 模式下该包不再发布到 npm，仍然解析不到。
 
 ### 决策
 
