@@ -284,6 +284,7 @@ import {
   emitProviderRateLimit,
   emitSessionStart,
   emitStreamEnd,
+  hasQueuedFollowUp,
   isVisibleToolName,
 } from '../agent-runtime/event-emitter.js';
 // CAP-008: shared initial-messages resolver. Three-tier fallback
@@ -3093,25 +3094,20 @@ export function buildRunnerLlmAdapter(
     options.events?.onIterationStart?.(iteration, MAX_ITER_HINT);
 
     // F1 parity (v0.7.26) — yield to queued user input at iteration
-    // boundary. Mirrors legacy `agent.ts:2305` `hasQueuedFollowUp(events)`
-    // check. Without this, the user hits Enter mid-run but their new
+    // boundary. Without this, the user hits Enter mid-run but their new
     // prompt sits in the queue until the current Scout/Generator/
     // Evaluator chain fully completes. Returning an empty reply with no
     // tool calls makes Runner exit the loop naturally — the Runner sees
     // "no more work" rather than an error, and the outer REPL can pick
     // up the queued prompt immediately.
     //
-    // FEATURE_115 v0.7.36: also yield when the agent-side message queue
-    // has user-priority messages targeting this main-thread agent.
-    // StreamingContext mirrors React state into the queue (Phase 1B), so
-    // today the two checks normally agree; the queue check future-proofs
-    // out-of-band enqueues (e.g. SDK consumers without a React surface)
-    // and is the foundational mid-turn yield point that FEATURE_119
-    // (await_child_task) extends to background priority via Sleep-gated
-    // drain.
-    const hasReactPendingInputs = options.events?.hasPendingInputs?.() === true;
-    const hasQueueUserMessages = getMessageQueue().has({ maxPriority: 'user' });
-    if (hasReactPendingInputs || hasQueueUserMessages) {
+    // FEATURE_159 v0.7.40: `hasQueuedFollowUp` is the single predicate
+    // — it reads MessageQueue (the canonical source) and falls back to
+    // `events.hasPendingInputs?.()` for SDK consumers with custom
+    // queueing. Mid-turn yield, terminal yield (run-substrate.ts), and
+    // cancellation yield (tool-cancellation.ts) all consult the same
+    // predicate so behavior is uniform across substrate sites.
+    if (hasQueuedFollowUp(options.events ?? {})) {
       return {
         text: '',
         toolCalls: [],

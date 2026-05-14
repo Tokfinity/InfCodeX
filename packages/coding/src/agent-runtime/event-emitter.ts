@@ -47,6 +47,7 @@
 
 import type { KodaXEvents, KodaXContextTokenSnapshot } from '../types.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
+import { getMessageQueue } from '@kodax-ai/agent';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 
@@ -74,8 +75,31 @@ export function isVisibleToolName(name: string): boolean {
   );
 }
 
+/**
+ * CAP-038 + FEATURE_159 (v0.7.40) — queue-aware queued-follow-up
+ * predicate.
+ *
+ * Pre-FEATURE_159: only consulted `events.hasPendingInputs?.()` — the
+ * REPL implemented this hook to expose its React `pendingInputs` array.
+ * That coupling required the REPL to mirror its array into the agent-
+ * side MessageQueue (legacy `syncPendingInputsToQueue`) so other
+ * substrate consumers could see the same queued input.
+ *
+ * Post-FEATURE_159: MessageQueue is the canonical source of queued
+ * user prompts. We OR-in a queue probe for `mode:'prompt'`
+ * main-thread user-priority entries — so any origin (REPL,
+ * idle-yield wake-resumed prompts, SDK consumer that enqueues
+ * directly) triggers the same yield. The `events.hasPendingInputs?.()`
+ * fallback is kept for SDK consumers that implement custom
+ * queueing without routing through MessageQueue (BC-preserved).
+ */
 export function hasQueuedFollowUp(events: KodaXEvents): boolean {
-  return events.hasPendingInputs?.() === true;
+  if (events.hasPendingInputs?.() === true) return true;
+  return getMessageQueue().has({
+    agentId: undefined,
+    maxPriority: 'user',
+    mode: 'prompt',
+  });
 }
 
 /**

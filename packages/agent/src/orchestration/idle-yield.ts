@@ -395,58 +395,109 @@ export type EnvelopeAggregateEnforcer = (
   fragments: readonly string[],
 ) => readonly string[] | Promise<readonly string[]>;
 
+/**
+ * FEATURE_159 (v0.7.40) — mode-split synthetic.
+ *
+ * Pre-FEATURE_159: every wake-drained message was wrapped in a single
+ * `_synthetic: true` user message. This was correct for child-task
+ * notifications (the agent needs to see them; the human doesn't), but
+ * WRONG for user-typed prompts that arrived via chat-while-waiting —
+ * those got hidden from the transcript so users couldn't see their own
+ * messages echoed in the conversation history.
+ *
+ * Post-FEATURE_159: fragments are partitioned by `msg.mode`. Two
+ * separate messages may be emitted:
+ *   1. Synthetic banner (`_synthetic: true`) — concatenates
+ *      `task-notification` + `system-reminder` content. Hidden from
+ *      REPL display; the agent sees it as context. Spliced FIRST so it
+ *      reads as the "tail of the prior turn" before the new prompt.
+ *   2. Real user message (no `_synthetic`) — concatenates `prompt`
+ *      content from chat-while-waiting. Renders as a normal user
+ *      bubble in transcript. Spliced AFTER the banner so the chain
+ *      reads naturally as "previous turn outputs → user follow-up".
+ *
+ * Aggregate budget enforcer applies ONLY to the synthetic banner
+ * fragments (the side that can carry child-task envelopes of arbitrary
+ * size). User prompts pass through unchanged — the user's intent must
+ * never be silently truncated.
+ *
+ * Return type changed from `KodaXMessage | undefined` to
+ * `readonly KodaXMessage[]` (possibly empty). Callers must spread the
+ * result into their next-iteration input.
+ */
 export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   wakeEvent: WakeEvent<TChildResult>,
   drainBackgroundQueue: () => readonly QueuedMessage[],
   enforceAggregate?: EnvelopeAggregateEnforcer,
-): Promise<KodaXMessage | undefined> {
-  const fragments: string[] = [];
+): Promise<readonly KodaXMessage[]> {
+  const promptFragments: string[] = [];
+  const syntheticFragments: string[] = [];
+
+  const intake = (msg: QueuedMessage): void => {
+    if (typeof msg.content !== 'string' || msg.content.length === 0) return;
+    if (msg.mode === 'prompt') {
+      promptFragments.push(msg.content);
+    } else {
+      // 'task-notification' / 'system-reminder' / future synthetic modes.
+      syntheticFragments.push(msg.content);
+    }
+  };
 
   if (wakeEvent.kind === 'messages-arrived') {
-    for (const msg of wakeEvent.messages) {
-      if (typeof msg.content === 'string' && msg.content.length > 0) {
-        fragments.push(msg.content);
-      }
-    }
+    for (const msg of wakeEvent.messages) intake(msg);
   }
 
   if (wakeEvent.kind !== 'aborted') {
     const drained = drainBackgroundQueue();
-    for (const msg of drained) {
-      if (typeof msg.content === 'string' && msg.content.length > 0) {
-        fragments.push(msg.content);
-      }
-    }
+    for (const msg of drained) intake(msg);
   }
 
   // Defensive fallback — child-* wake with empty queue. Only shape
   // that can reach this branch is a misbehaving dispatch path that
   // resolved the promise without enqueuing; surface a minimal banner
-  // so agent still sees the result instead of silently looping
-  // again.
-  if (fragments.length === 0) {
+  // (synthetic, not user-visible) so the agent still observes the
+  // resolution rather than silently looping again.
+  if (promptFragments.length === 0 && syntheticFragments.length === 0) {
     if (wakeEvent.kind === 'child-completed') {
-      fragments.push(
+      syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\n(child task completed; no summary available)\n</task-completed>`,
       );
     } else if (wakeEvent.kind === 'child-failed') {
-      fragments.push(
+      syntheticFragments.push(
         `<task-completed task_id="${wakeEvent.taskId}">\nfailed: ${wakeEvent.error.message}\n</task-completed>`,
       );
     }
   }
 
-  if (fragments.length === 0) return undefined;
+  const messages: KodaXMessage[] = [];
 
-  const enforced = enforceAggregate ? await enforceAggregate(fragments) : fragments;
-  if (enforced.length === 0) return undefined;
+  if (syntheticFragments.length > 0) {
+    // Aggregate budget enforcer applies only here — task-notification
+    // envelopes are the side that can balloon into MB of child output.
+    const enforced = enforceAggregate
+      ? await enforceAggregate(syntheticFragments)
+      : syntheticFragments;
+    if (enforced.length > 0) {
+      messages.push({
+        role: 'user',
+        content: enforced.join('\n\n'),
+        // Hidden in REPL display — agent-only context.
+        _synthetic: true,
+      });
+    }
+  }
 
-  return {
-    role: 'user',
-    content: enforced.join('\n\n'),
-    // Hidden in REPL display — the agent only ever sees this in its
-    // transcript, the human never reads it. Without this flag the
-    // REPL would render the synthetic banner as a user message bubble.
-    _synthetic: true,
-  };
+  if (promptFragments.length > 0) {
+    messages.push({
+      role: 'user',
+      // No `_synthetic` flag — this IS the user's typed input echoed
+      // into the transcript as a normal user bubble. Multiple drained
+      // prompts (rare: user typed N before wake) are joined with the
+      // same `\n\n---\n\n` separator the REPL's `popAllEditable` uses,
+      // so the agent sees a structured boundary between them.
+      content: promptFragments.join('\n\n---\n\n'),
+    });
+  }
+
+  return messages;
 }

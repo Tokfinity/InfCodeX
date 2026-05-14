@@ -214,7 +214,12 @@ export async function runWithIdleYield<
     });
     if (wakeEvent.kind === 'aborted') break;
 
-    const syntheticUserMessage = await composeIdleYieldUserMessage(
+    // FEATURE_159 (v0.7.40) — `composeIdleYieldUserMessage` now returns
+    // an array; mode-split may emit two separate messages (synthetic
+    // banner + real user prompt). Empty array = wake yielded no
+    // content; treat as terminal exit (same as the legacy `undefined`
+    // path).
+    const resumeMessages = await composeIdleYieldUserMessage(
       wakeEvent,
       () =>
         opts.messageQueue.dequeue({
@@ -223,9 +228,9 @@ export async function runWithIdleYield<
         }),
       opts.envelopeAggregateEnforcer,
     );
-    if (!syntheticUserMessage) break;
+    if (resumeMessages.length === 0) break;
 
-    currentInput = [...runResult.messages, syntheticUserMessage];
+    currentInput = [...runResult.messages, ...resumeMessages];
     currentAgent = opts.resumeAgent(runResult);
   }
 
