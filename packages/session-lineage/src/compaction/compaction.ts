@@ -19,7 +19,14 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
 const PRUNE_PROTECTED_TOOLS = new Set(['skill']);
 const MAX_SUMMARIZATION_TOKENS_PER_CHUNK = 50000;
 const SUMMARIZATION_RETRY_DELAY_MS = 2000;
-const COMPACTION_SUMMARY_PREFIX = '[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\n';
+/**
+ * Marker prefix on the synthesized summary system message. Other packages
+ * use this literal as the discriminator to tell CompactionSummary system
+ * messages apart from role-prompt system messages \u2014 exported so callers
+ * (notably `@kodax-ai/coding`'s `preserveTranscriptForRoundExit`) cannot
+ * drift from the producer side.
+ */
+export const COMPACTION_SUMMARY_PREFIX = '[\u5bf9\u8bdd\u5386\u53f2\u6458\u8981]\n\n';
 
 /** User messages below this token threshold are never truncated */
 const USER_MESSAGE_PROTECTION_TOKENS = 800;

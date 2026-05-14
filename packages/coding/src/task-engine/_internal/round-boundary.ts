@@ -7,6 +7,7 @@
  * See docs/features/v0.7.25.md#feature_076 for the full design.
  */
 
+import { COMPACTION_SUMMARY_PREFIX } from '@kodax-ai/session-lineage';
 import type {
   KodaXInputArtifact,
   KodaXMessage,
@@ -108,25 +109,62 @@ export function buildUserFacingMessages(
 }
 
 /**
- * FEATURE_076 round-boundary reshape.
+ * FEATURE_076 round-boundary reshape (v0.7.40 cache-friendly revision).
  *
- * Converts the raw `runManagedTask` result (which may contain worker
- * execution trace, Scout role-prompt wrapping, Evaluator isolated session,
- * etc.) into a clean user-facing `{user, assistant}` dialog.
+ * Converts the raw `runManagedTask` result into a transcript suitable
+ * for the next round's LLM input, dropping two specific sources of
+ * cross-round pollution while preserving everything that the next
+ * round's worker would otherwise have to re-derive:
+ *
+ *   - **Drops**: the leading stale role-prompt system message (Runner.run
+ *     leaves the last-active agent's role prompt at `transcript[0]`;
+ *     round 2's entry agent will inject its own at position 0, so
+ *     keeping the previous one creates two conflicting system
+ *     instructions back-to-back). CompactionSummary system messages
+ *     (recognised by the `COMPACTION_SUMMARY_PREFIX` literal) are
+ *     preserved.
+ *
+ *   - **Drops**: V1-legacy role-prompt-wrapped trailing
+ *     `{user, assistant}` pairs ("You are the Evaluator role..."
+ *     phrased as a user message). V2 AMA never produces these; the
+ *     `normalizeLoadedSessionMessages` filter still runs as a defensive
+ *     pass so a V1 session entering a V2 process gets cleaned up in
+ *     the same round it lands.
+ *
+ *   - **Preserves**: `tool_use` / `tool_result` chains, intermediate
+ *     assistant text, prior-round dialog. The next round's LLM sees
+ *     what files were read, what edits were made, what bash commands
+ *     ran — eliminating cross-round file re-reads and keeping the
+ *     provider's prompt-cache prefix continuous across rounds. This
+ *     is the v0.7.40 revision of FEATURE_076; the prior behaviour
+ *     (replace everything with a synthetic `[user, assistant]` pair)
+ *     was correct for the cross-round-coherence bug it targeted but
+ *     simultaneously erased structurally useful context.
+ *
+ *   - **Appends a synthetic user-facing final assistant message** so
+ *     the user-visible answer is unambiguous. V2 AMA's last assistant
+ *     message is typically an `emit_verdict` tool_use block (no plain
+ *     text); the verdict's `user_answer` field is sanitised into
+ *     `result.lastText`. Surfacing it as a plain assistant message
+ *     keeps both the transcript renderer and round 2's LLM seeing the
+ *     same natural-language conclusion. Dedup'd when the transcript
+ *     already ends with a matching plain-text assistant message.
+ *
+ *   - **Appends the round's user prompt** when V1 normalisation
+ *     stripped it (V2 sessions retain it through their natural
+ *     `runnerInput` shape, so the append is usually skipped). This
+ *     preserves the prior contract that the round's user prompt is
+ *     observable in `context.messages` after reshape.
  *
  * Debug-preserve cases — return the original result unchanged:
  *   - `result.messages` is undefined
  *   - `verdict.status` is `'running'` or `'planned'` (Q1)
  *   - `result.interrupted && !finalText`
  *
- * Reshape behavior otherwise:
- *   1. Pre-extract artifact ledger from raw messages (tool_result blocks
- *      disappear after reshape)
- *   2. Build clean dialog via `buildUserFacingMessages`
- *   3. Full recompute of `contextTokenSnapshot` (Q2)
- *   4. Return new result with `messages` / `artifactLedger` /
- *      `contextTokenSnapshot` replaced; all other fields passthrough
- *      (success / signal / sessionId / lastText / managedTask / etc.)
+ * See `docs/features/v0.7.40.md` for the cache/re-read regression
+ * motivation and `docs/features/v0.7.25.md#feature_076` for the
+ * original cross-round-coherence motivation that this revision
+ * preserves.
  */
 export function reshapeToUserConversation(
   result: KodaXResult,
@@ -146,29 +184,125 @@ export function reshapeToUserConversation(
     return result;
   }
 
-  const originalInitialMessages = options.session?.initialMessages ?? [];
   const inputArtifacts = options.context?.inputArtifacts;
 
   const preservedArtifactLedger =
     result.artifactLedger ?? extractArtifactLedger(result.messages);
 
-  const cleanMessages = buildUserFacingMessages(
-    originalInitialMessages,
+  const preservedMessages = preserveTranscriptForRoundExit(
+    result.messages,
     prompt,
     finalText,
     inputArtifacts,
   );
 
   const recomputedSnapshot = result.contextTokenSnapshot
-    ? recomputeContextTokenSnapshot(cleanMessages, result.contextTokenSnapshot)
+    ? recomputeContextTokenSnapshot(preservedMessages, result.contextTokenSnapshot)
     : undefined;
 
   return {
     ...result,
-    messages: cleanMessages,
+    messages: preservedMessages,
     artifactLedger: preservedArtifactLedger,
     contextTokenSnapshot: recomputedSnapshot,
   };
+}
+
+/**
+ * Round-exit transcript preservation: drop stale role-prompt scaffolding
+ * (leading system + V1 user-wrapped tails) while keeping `tool_use` /
+ * `tool_result` chains intact so the next round avoids re-reads and
+ * keeps prompt-cache prefix continuity. Always terminates with a
+ * synthetic plain-text assistant message carrying the round's
+ * user-facing answer.
+ */
+export function preserveTranscriptForRoundExit(
+  rawMessages: readonly KodaXMessage[],
+  prompt: string,
+  finalText: string,
+  inputArtifacts?: readonly KodaXInputArtifact[],
+): KodaXMessage[] {
+  // Step 1: strip stale leading role-prompt system message. Preserve
+  // CompactionSummary system messages (they carry condensed history).
+  let messages: readonly KodaXMessage[] = rawMessages;
+  const first = messages[0];
+  if (
+    first?.role === 'system'
+    && typeof first.content === 'string'
+    && !first.content.startsWith(COMPACTION_SUMMARY_PREFIX)
+  ) {
+    messages = messages.slice(1);
+  }
+
+  // Step 2: strip V1-legacy role-prompt-wrapped user-tail. No-op for
+  // V2 AMA where role prompts are system-message-shaped.
+  messages = normalizeLoadedSessionMessages(messages);
+
+  // Step 3: ensure the round's user prompt is observable. V2 AMA's
+  // `runnerInput` naturally appends it before Runner.run executes, so
+  // it is already present in `messages`. V1 paths may have lost it
+  // when normalisation stripped the role-prompt-wrapped trailing
+  // `{user, assistant}` pair (V1 stored the user prompt inside the
+  // role-prompt wrapper itself, not as a separate user message).
+  const hasPromptAlready = messages.some(
+    (m) => m.role === 'user' && extractComparableUserMessageText(m) === prompt,
+  );
+  if (!hasPromptAlready) {
+    messages = [
+      ...messages,
+      {
+        role: 'user',
+        content: buildPromptMessageContent(prompt, inputArtifacts),
+      },
+    ];
+  }
+
+  // Step 4: ensure the transcript ends with a plain-text assistant
+  // message carrying the sanitised final answer. Three cases:
+  //
+  //   (a) Last is assistant whose string content already equals
+  //       `finalText` — no-op (Worker path with plain-text final reply).
+  //
+  //   (b) Last is assistant with array content OR a string ≠ finalText
+  //       — REPLACE the last message. V2 AMA's terminal assistant is
+  //       typically `emit_verdict` / `emit_handoff` tool_use blocks
+  //       (KodaX protocol machinery, not user content); the sanitised
+  //       answer lives in `result.lastText` (extracted from
+  //       `verdict.user_answer`). Replacing serves two ends: (i) we
+  //       avoid two consecutive `role: 'assistant'` messages, which
+  //       Anthropic's API rejects on the next round's request, and
+  //       (ii) we keep KodaX protocol tool_use blocks out of the next
+  //       round's worker context (those calls would not be re-issued
+  //       and seeing them in transcript could confuse role inference).
+  //
+  //   (c) Last is user / tool_result-bearing user / empty — APPEND a
+  //       synthetic `{assistant: finalText}` so the transcript ends
+  //       on assistant. Empty `finalText` still produces this
+  //       assistant message to match prior reshape behaviour (the
+  //       previous implementation also appended an empty-string asst
+  //       in this state).
+  const lastMsg = messages[messages.length - 1];
+  if (
+    lastMsg?.role === 'assistant'
+    && typeof lastMsg.content === 'string'
+    && lastMsg.content === finalText
+  ) {
+    // (a) already correctly ended; no-op.
+  } else if (lastMsg?.role === 'assistant') {
+    // (b) replace.
+    messages = [
+      ...messages.slice(0, -1),
+      { role: 'assistant', content: finalText },
+    ];
+  } else {
+    // (c) append.
+    messages = [
+      ...messages,
+      { role: 'assistant', content: finalText },
+    ];
+  }
+
+  return [...messages];
 }
 
 /**
