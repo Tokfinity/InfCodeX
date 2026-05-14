@@ -319,6 +319,29 @@ function confidenceLabel(value: number): string {
   return 'low';
 }
 
+/**
+ * OSS per-symbol confidence — tier-aware but capped well below the
+ * daemon's 0.99 ceiling because OSS extraction is regex-based, not
+ * tree-sitter. The numbers feed `applyAggregateModuleConfidence` →
+ * module.confidence → routing `lowConfidence` (< 0.72 threshold).
+ *
+ * Pre-FEATURE_162 OSS hardcoded {0.52, 0.64} which produced uniform
+ * aggregates with no signal differentiation across modules; this
+ * replacement is calibrated to keep OSS reliably below the 0.72
+ * threshold (OSS quality IS lower than daemon) while still letting
+ * tier and export-status differentiate the aggregate.
+ *
+ * Exported for unit-test access — pure function, no side effects.
+ */
+export function fallbackSymbolConfidence(
+  tier: LanguageCapabilityTier,
+  exported: boolean,
+): number {
+  const base = tier === 'high' ? 0.62 : tier === 'medium' ? 0.54 : 0.46;
+  const boost = exported ? 0.12 : 0;
+  return Math.min(0.78, base + boost);
+}
+
 function resolveStorageRoot(workspaceRoot: string): string {
   return path.join(workspaceRoot, getRepoIntelligenceDir());
 }
@@ -1094,7 +1117,7 @@ function buildSymbolRecords(
         calls: fileLevelCalls.filter((call) => call !== symbol.name).slice(0, 8),
         callTargets: [],
         importPaths: analysis.importPaths,
-        confidence: Math.min(0.74, symbol.exported ? 0.64 : 0.52),
+        confidence: fallbackSymbolConfidence(analysis.capabilityTier, symbol.exported),
       };
       if (!modulesById.has(record.moduleId)) {
         continue;
@@ -1664,6 +1687,13 @@ export async function getRepoRoutingSignals(
     ?? index.languages[0]?.capabilityTier
     ?? 'low';
 
+  const activeModuleConfidence = activeModule
+    ? Math.max(0.3, activeModule.confidence - 0.08)
+    : 0.22;
+  const activeImpactConfidence = activeModule
+    ? Math.max(0.28, activeModule.confidence - 0.12)
+    : 0.18;
+
   return {
     workspaceRoot: index.workspaceRoot,
     changedFileCount,
@@ -1679,8 +1709,8 @@ export async function getRepoRoutingSignals(
       'Fallback repo routing uses OSS baseline heuristics.',
     ],
     activeModuleId: activeModule?.moduleId,
-    activeModuleConfidence: activeModule ? Math.max(0.3, activeModule.confidence - 0.08) : 0.22,
-    activeImpactConfidence: activeModule ? Math.max(0.28, activeModule.confidence - 0.12) : 0.18,
+    activeModuleConfidence,
+    activeImpactConfidence,
     impactedModuleCount,
     impactedSymbolCount: activeModule?.topSymbols.length ?? 0,
     predominantCapabilityTier,
@@ -1692,7 +1722,7 @@ export async function getRepoRoutingSignals(
     ),
     plannerBias: changedLineCount >= 400 || touchedModuleCount >= 3,
     investigationBias: changedFileCount === 0 || !activeModule,
-    lowConfidence: true,
+    lowConfidence: activeModuleConfidence < 0.72 || activeImpactConfidence < 0.72,
   };
 }
 
