@@ -5552,7 +5552,7 @@ async function runManagedTaskViaRunnerInner(
     // Per-banner guardrail already happens at enqueue time
     // (dispatch-child-tasks.ts). This second-line hook fires only when
     // N banners' combined size after per-banner spillover still exceeds
-    // ENVELOPE_AGGREGATE_LIMIT_BYTES (200KB, claudecode parity), and
+    // ENVELOPE_AGGREGATE_LIMIT_CHARS (200_000, claudecode parity), and
     // forces additional banners to spill until total fits.
     envelopeAggregateEnforcer: createEnvelopeAggregateBudgetEnforcer(baseCtx),
     onIdleWaiting: (currentAgent) => {
