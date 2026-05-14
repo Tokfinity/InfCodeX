@@ -24,7 +24,7 @@ export default defineConfig({
     alias: {
       '@kodax-ai/skills/shared/yaml': path.resolve(__dirname, '..', 'skills', 'src', 'shared', 'yaml.ts'),
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),
-      '@kodax-ai/llm': path.resolve(__dirname, '..', 'ai', 'src', 'index.ts'),
+      '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': path.resolve(__dirname, '..', 'coding', 'src', 'index.ts'),
       '@kodax-ai/mcp': path.resolve(__dirname, '..', 'mcp', 'src', 'index.ts'),
       '@kodax-ai/repointel-protocol': path.resolve(__dirname, '..', 'repointel-protocol', 'src', 'index.ts'),
