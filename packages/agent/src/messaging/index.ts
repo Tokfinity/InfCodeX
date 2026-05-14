@@ -9,6 +9,8 @@ export type {
   EnqueueInput,
   MessageMode,
   MessagePriority,
+  QueueEvent,
+  QueueEventListener,
   QueuedMessage,
 } from './types.js';
 
