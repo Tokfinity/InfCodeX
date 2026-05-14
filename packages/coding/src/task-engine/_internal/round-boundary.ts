@@ -238,16 +238,48 @@ export function preserveTranscriptForRoundExit(
   // V2 AMA where role prompts are system-message-shaped.
   messages = normalizeLoadedSessionMessages(messages);
 
-  // Step 3: ensure the round's user prompt is observable. V2 AMA's
-  // `runnerInput` naturally appends it before Runner.run executes, so
-  // it is already present in `messages`. V1 paths may have lost it
-  // when normalisation stripped the role-prompt-wrapped trailing
-  // `{user, assistant}` pair (V1 stored the user prompt inside the
-  // role-prompt wrapper itself, not as a separate user message).
+  // Step 3: ensure the transcript carries a user-side signal — either
+  // the round's exact prompt or, in long-compacted sessions, the
+  // CompactionSummary plus any surviving user message in the
+  // protection window. Two skip conditions; otherwise append.
+  //
+  //   Skip (a): the round's exact prompt is already present. V2 AMA's
+  //   `runnerInput` appends it before Runner.run executes, so this is
+  //   the normal hit-path.
+  //
+  //   Skip (b): a CompactionSummary system message sits at the head
+  //   AND at least one user message survives further down. In
+  //   long-running sessions the user prompt may have been summarised
+  //   out (it sits at the start of the transcript; compaction's
+  //   protection window is anchored at the tail, so the prompt gets
+  //   folded into the summary). The summary itself already carries
+  //   the task intent and the protected user message preserves
+  //   user/assistant alternation, so re-appending the prompt at the
+  //   tail would only add a `[…work…, user_prompt, asst]` shape that
+  //   reads as if the user spoke mid-task.
+  //
+  // Append otherwise — this ensures the output always has a user
+  // message before any trailing assistant, satisfying Anthropic's
+  // alternation constraint on the next round's request.
   const hasPromptAlready = messages.some(
     (m) => m.role === 'user' && extractComparableUserMessageText(m) === prompt,
   );
-  if (!hasPromptAlready) {
+
+  let shouldAppendPrompt = !hasPromptAlready;
+  if (shouldAppendPrompt) {
+    const hasCompactionSummaryHead =
+      messages[0]?.role === 'system'
+      && typeof messages[0].content === 'string'
+      && messages[0].content.startsWith(COMPACTION_SUMMARY_PREFIX);
+    if (hasCompactionSummaryHead) {
+      const hasAnyUser = messages.some((m) => m.role === 'user');
+      if (hasAnyUser) {
+        shouldAppendPrompt = false;
+      }
+    }
+  }
+
+  if (shouldAppendPrompt) {
     messages = [
       ...messages,
       {

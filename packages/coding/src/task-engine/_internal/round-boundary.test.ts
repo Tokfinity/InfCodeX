@@ -459,6 +459,60 @@ describe('round-boundary/reshapeToUserConversation', () => {
     ]);
   });
 
+  it('does NOT re-append user prompt when CompactionSummary head is present (long-session edge case)', () => {
+    // After compaction the original user prompt may have been folded
+    // into the summary (compaction's protection window is anchored at
+    // the tail, so older messages including the prompt get
+    // summarised). Re-appending the prompt at the transcript tail
+    // would produce `[summary, …work…, user_prompt, asst]` — reads as
+    // if the user spoke mid-task. Trust the summary instead.
+    const compactionPrefix = '[对话历史摘要]\n\n';
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `${compactionPrefix}User asked: review packages/llm. Worker completed.` },
+      // Note: original `{user: 'review packages/llm'}` was summarised away.
+      { role: 'assistant', content: 'Continuing from summary…' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tu_2',
+            name: 'read',
+            input: { path: 'packages/llm/src/foo.ts' },
+          },
+        ],
+      },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu_2', content: 'export const X = 1;' }] },
+      { role: 'assistant', content: 'Reviewed.' },
+    ];
+    const result = makeResult({
+      messages,
+      managedTask: makeManagedTask('completed'),
+      lastText: 'Reviewed.',
+    });
+    const out = reshapeToUserConversation(
+      result,
+      makeOptions(),
+      'review packages/llm', // original prompt, no longer in transcript
+    );
+    // Output should NOT have the original prompt re-appended at tail.
+    // Output structure: CompactionSummary at head, work preserved, ends with asst.
+    const userMessagesInOutput = (out.messages ?? []).filter((m) => m.role === 'user');
+    // The only user messages should be tool_result-bearing user messages from the chain;
+    // the original prompt should NOT appear as a separate text user message at the tail.
+    const tailUser = userMessagesInOutput[userMessagesInOutput.length - 1];
+    if (tailUser) {
+      // If a user message exists, it must be tool_result-bearing, not a re-appended prompt.
+      expect(typeof tailUser.content === 'string' && tailUser.content === 'review packages/llm').toBe(false);
+    }
+    // Transcript ends on assistant (carrying final answer).
+    const lastMsg = out.messages![out.messages!.length - 1];
+    expect(lastMsg.role).toBe('assistant');
+    expect((lastMsg.content as string) === 'Reviewed.' || (lastMsg.content as string) === 'Reviewed.').toBe(true);
+    // CompactionSummary preserved at head.
+    expect((out.messages![0].content as string).startsWith(compactionPrefix)).toBe(true);
+  });
+
   it('replaces last assistant containing only thinking blocks with synthetic final-text', () => {
     // Edge case: assistant content is an array of `thinking` blocks
     // only (no text, no tool_use). Step 4 case (b) fires because
