@@ -169,6 +169,7 @@ import type {
   KodaXToolExecutionContext,
   ManagedMutationTracker,
 } from '../types.js';
+import { estimateTokens } from '../tokenizer.js';
 import type { ReasoningPlan } from '../reasoning.js';
 import {
   applyFollowupEscalationToOptions,
@@ -2983,6 +2984,18 @@ export function buildRunnerLlmAdapter(
    */
   getScoutReasoningHint?: () => KodaXReasoningMode | undefined,
   /**
+   * v0.7.40 — optional API-accurate context-size snapshot ref. The
+   * adapter writes this ref after each successful LLM stream so the
+   * AMA compaction hook (`buildManagedTaskCompactionHook`) can read
+   * `usage.totalTokens` + delta-adjusted message growth instead of
+   * the transcript-only estimate. Without this wiring, the hook
+   * systematically underestimated context by the system + tools
+   * schema overhead (~20-35k after FEATURE_114 4→2 role
+   * consolidation) and never triggered compaction. See
+   * `_internal/managed-task/compaction.ts` for the consumer side.
+   */
+  contextTokenSnapshotRef?: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef,
+  /**
    * FEATURE_097 (v0.7.34) §5 ② — Layer 2 throttle reminder hook. When
    * provided, the adapter:
    *   1. detects agent transitions and resets the counter on each one
@@ -3595,6 +3608,27 @@ export function buildRunnerLlmAdapter(
         lastUsage: streamResult.usage,
         source: 'api',
       };
+    }
+
+    // v0.7.40 — refresh the API-accurate snapshot ref so the AMA
+    // compaction hook can compute `resolveContextTokenCount(transcript,
+    // snapshot)` on its next call. `messages` here is the adapter's
+    // input (the transcript at LLM-call time); subsequent Runner
+    // appends (assistant + tool_results) become the delta on top of
+    // this baseline. Mirrors SA path's `createCompletedTurnTokenSnapshot`
+    // in `run-substrate.ts`. Inlined rather than imported to keep the
+    // snapshot-construction logic colocated with its single consumer.
+    if (contextTokenSnapshotRef && streamResult.usage) {
+      const baselineEstimatedTokens = estimateTokens(messages as KodaXMessage[]);
+      const apiTotal = streamResult.usage.totalTokens;
+      if (typeof apiTotal === 'number' && Number.isFinite(apiTotal) && apiTotal >= 0) {
+        contextTokenSnapshotRef.current = {
+          currentTokens: apiTotal,
+          baselineEstimatedTokens,
+          source: 'api',
+          usage: streamResult.usage,
+        };
+      }
     }
 
     // Record turn usage into the cost tracker so `/cost` reflects AMA spend.
@@ -4997,6 +5031,15 @@ async function runManagedTaskViaRunnerInner(
   const tokenStateRef: { current: RunnerAdapterTokenState } = {
     current: { totalTokens: 0, source: 'estimate' },
   };
+  // v0.7.40 — API-accurate snapshot ref shared between the LLM adapter
+  // (writer: refreshes after each `streamResult.usage`) and the AMA
+  // compaction hook (reader: uses for trigger-threshold check via
+  // `resolveContextTokenCount`). See `_internal/managed-task/compaction.ts`
+  // for the bugfix history (transcript-only estimate vs API-reported
+  // total tokens parity gap).
+  const contextTokenSnapshotRef: import('./_internal/managed-task/compaction.js').ContextTokenSnapshotRef = {
+    current: undefined,
+  };
   // Build the full role-prompt context so every role's
   // system prompt carries the full surface (decision summary + contract
   // + metadata + verification + tool policy + evidence strategies +
@@ -5301,6 +5344,7 @@ async function runManagedTaskViaRunnerInner(
     adapterOverride,
     tokenStateRef,
     () => recorder.scout?.payload.scout?.downstreamReasoningHint,
+    contextTokenSnapshotRef,
     todoStore,
     todoReminderState,
   );
@@ -5355,7 +5399,14 @@ async function runManagedTaskViaRunnerInner(
   // it through Runner's
   // `compactionHook` (fired after each tool-result append). Without this
   // wiring, long AMA sessions hit context window overflow and 400.
-  const compactionHook = await buildManagedTaskCompactionHook(options);
+  //
+  // v0.7.40 — pass `contextTokenSnapshotRef` so the hook's trigger
+  // check uses API-accurate token accounting (`usage.totalTokens` +
+  // delta) instead of the transcript-only estimate that silently
+  // missed the threshold by the system + tools schema overhead.
+  const compactionHook = await buildManagedTaskCompactionHook(options, {
+    contextTokenSnapshotRef,
+  });
 
   // H1 structural resume: when a checkpoint seeded the recorder with a
   // completed scout (and optionally contract), skip straight to the
