@@ -5,7 +5,7 @@ import {
   loadReasoningOverride,
   saveReasoningOverride,
   type ProviderName,
-} from '@kodax/coding';
+} from '@kodax-ai/coding';
 
 const TARGET_PROVIDERS: ProviderName[] = [
   'zhipu-coding',

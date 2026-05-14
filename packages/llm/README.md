@@ -1,15 +1,15 @@
-# @kodax/ai
+# @kodax-ai/llm
 
 独立的 LLM 抽象层，可被其他项目复用。
 
 ## 概述
 
-`@kodax/ai` 是 KodaX 的基础层，提供统一的 LLM Provider 抽象。这个包完全独立，可以被其他项目直接使用。
+`@kodax-ai/llm` 是 KodaX 的基础层，提供统一的 LLM Provider 抽象。这个包完全独立，可以被其他项目直接使用。
 
 ## 安装
 
 ```bash
-npm install @kodax/ai
+npm install @kodax-ai/llm
 ```
 
 ## 支持的 Provider
@@ -30,7 +30,7 @@ npm install @kodax/ai
 ### 基本使用
 
 ```typescript
-import { getProvider, KodaXMessage, KodaXToolDefinition } from '@kodax/ai';
+import { getProvider, KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
 
 // 获取 Provider 实例
 const provider = getProvider('zhipu-coding');
@@ -64,7 +64,7 @@ console.log(result.text);
 ### 自定义 Provider
 
 ```typescript
-import { KodaXBaseProvider, registerProvider, KodaXProviderConfig } from '@kodax/ai';
+import { KodaXBaseProvider, registerProvider, KodaXProviderConfig } from '@kodax-ai/llm';
 
 class MyProvider extends KodaXBaseProvider {
   readonly name = 'my-provider';

@@ -88,19 +88,19 @@ KodaX / InfCodeX uses a **monorepo architecture** with npm workspaces:
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # @kodax/ai - Independent LLM abstraction layer
-│   │   └── providers/       # 11 LLM providers (Anthropic, OpenAI, DeepSeek, etc.)
+│   ├── llm/                 # @kodax-ai/llm - Independent LLM abstraction layer
+│   │   └── providers/       # 12 LLM providers (Anthropic, OpenAI, DeepSeek, etc.)
 │   │
-│   ├── agent/               # @kodax/agent - Generic Agent framework
+│   ├── agent/               # @kodax-ai/agent - Generic Agent framework
 │   │   └── session/         # Session management, message handling
 │   │
-│   ├── skills/              # @kodax/skills - Skills standard implementation
+│   ├── skills/              # @kodax-ai/skills - Skills standard implementation
 │   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
 │   │
-│   ├── coding/              # @kodax/coding - Coding Agent (tools + prompts)
+│   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
 │   │   └── tools/           # Tool implementations and execution helpers
 │   │
-│   └── repl/                # @kodax/repl - Interactive terminal UI
+│   └── repl/                # @kodax-ai/repl - Interactive terminal UI
 │       ├── ui/              # Ink/React components, themes
 │       └── interactive/     # Commands, REPL logic
 │

@@ -1,10 +1,10 @@
-# @kodax/coding
+# @kodax-ai/coding
 
 KodaX Coding Agent - 完整的 Coding Agent 实现，包含工具和 Prompts。
 
 ## 概述
 
-`@kodax/coding` 是 KodaX 的核心 Coding Agent，提供：
+`@kodax-ai/coding` 是 KodaX 的核心 Coding Agent，提供：
 - 完整的 Agent 主循环
 - 8 个内置工具
 - 系统提示词
@@ -13,7 +13,7 @@ KodaX Coding Agent - 完整的 Coding Agent 实现，包含工具和 Prompts。
 ## 安装
 
 ```bash
-npm install @kodax/coding
+npm install @kodax-ai/coding
 ```
 
 ## 内置工具
@@ -34,7 +34,7 @@ npm install @kodax/coding
 ### 简单模式（runKodaX）
 
 ```typescript
-import { runKodaX, KodaXEvents } from '@kodax/coding';
+import { runKodaX, KodaXEvents } from '@kodax-ai/coding';
 
 const events: KodaXEvents = {
   onTextDelta: (text) => process.stdout.write(text),
@@ -54,7 +54,7 @@ console.log(result.lastText);
 ### 连续会话（KodaXClient）
 
 ```typescript
-import { KodaXClient } from '@kodax/coding';
+import { KodaXClient } from '@kodax-ai/coding';
 
 const client = new KodaXClient({
   provider: 'zhipu-coding',
@@ -78,7 +78,7 @@ console.log('Messages:', client.getMessages().length);
 ### 自定义工具
 
 ```typescript
-import { registerTool, KodaXToolExecutionContext } from '@kodax/coding';
+import { registerTool, KodaXToolExecutionContext } from '@kodax-ai/coding';
 
 registerTool('my-tool', async (
   input: Record<string, unknown>,
@@ -96,7 +96,7 @@ registerTool('my-tool', async (
 ### 自定义会话存储
 
 ```typescript
-import { runKodaX, KodaXSessionStorage, KodaXMessage } from '@kodax/coding';
+import { runKodaX, KodaXSessionStorage, KodaXMessage } from '@kodax-ai/coding';
 
 class DatabaseStorage implements KodaXSessionStorage {
   async save(id: string, data: { messages: KodaXMessage[]; title: string; gitRoot: string }) {
@@ -128,7 +128,7 @@ await runKodaX({
 ## 权限模式
 
 ```typescript
-import { runKodaX, PermissionMode } from '@kodax/coding';
+import { runKodaX, PermissionMode } from '@kodax-ai/coding';
 
 // 计划模式（只读）
 await runKodaX({
@@ -194,9 +194,9 @@ export {
 
 ## 依赖
 
-- `@kodax/ai` - LLM 抽象层
-- `@kodax/agent` - Agent 框架
-- `@kodax/skills` - Skills 系统
+- `@kodax-ai/llm` - LLM 抽象层
+- `@kodax-ai/agent` - Agent 框架
+- `@kodax-ai/skills` - Skills 系统
 
 ## License
 

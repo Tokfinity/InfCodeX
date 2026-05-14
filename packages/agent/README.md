@@ -1,20 +1,20 @@
-# @kodax/agent
+# @kodax-ai/agent
 
 通用 Agent 框架，提供会话管理和消息处理能力。
 
 ## 概述
 
-`@kodax/agent` 是 KodaX 的 Agent 框架层，提供：
+`@kodax-ai/agent` 是 KodaX 的 Agent 框架层，提供：
 - 会话管理
 - 消息处理和压缩
 - Token 估算
 
-这个包依赖于 `@kodax/ai`，但不包含具体业务逻辑。
+这个包依赖于 `@kodax-ai/llm`，但不包含具体业务逻辑。
 
 ## 安装
 
 ```bash
-npm install @kodax/agent
+npm install @kodax-ai/agent
 ```
 
 ## 使用示例
@@ -22,7 +22,7 @@ npm install @kodax/agent
 ### 会话管理
 
 ```typescript
-import { SessionManager, KodaXMessage } from '@kodax/agent';
+import { SessionManager, KodaXMessage } from '@kodax-ai/agent';
 
 const sessionManager = new SessionManager({
   storageDir: './sessions',
@@ -47,7 +47,7 @@ await sessionManager.save(sessionId);
 ### Token 估算
 
 ```typescript
-import { estimateTokens, KodaXMessage } from '@kodax/agent';
+import { estimateTokens, KodaXMessage } from '@kodax-ai/agent';
 
 const messages: KodaXMessage[] = [
   { role: 'user', content: 'Hello, world!' },
@@ -60,10 +60,10 @@ console.log(`Estimated tokens: ${tokenCount}`);
 
 ### 消息压缩
 
-> v0.7.27 起，原 `compactMessages()` 工具函数已移除。请使用 `@kodax/core` 的可插拔 `CompactionPolicy`：`DefaultSummaryCompaction`（通用）或 `LineageCompaction`（coding preset，来自 `@kodax/session-lineage`）。
+> v0.7.27 起，原 `compactMessages()` 工具函数已移除。请使用 `@kodax-ai/agent` 的可插拔 `CompactionPolicy`：`DefaultSummaryCompaction`（通用）或 `LineageCompaction`（coding preset，来自 `@kodax-ai/session-lineage`）。
 
 ```typescript
-import { DefaultSummaryCompaction } from '@kodax/core';
+import { DefaultSummaryCompaction } from '@kodax-ai/agent';
 
 // 定义可插拔的 compaction policy。Agent loop 在 round 边界调用
 // policy.shouldCompact(...)，需要时再调用 policy.compact(...)。
@@ -99,7 +99,7 @@ export { MAX_CONTEXT_TOKENS, DEFAULT_MAX_ITER };
 
 ## 依赖
 
-- `@kodax/ai` - LLM 抽象层
+- `@kodax-ai/llm` - LLM 抽象层
 - `js-tiktoken` - Token 计数
 
 ## License
