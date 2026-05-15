@@ -145,7 +145,12 @@ import { toolMcpDescribe } from '../tools/mcp-describe.js';
 import { toolMcpCall } from '../tools/mcp-call.js';
 import { toolMcpReadResource } from '../tools/mcp-read-resource.js';
 import { toolMcpGetPrompt } from '../tools/mcp-get-prompt.js';
-import { getToolDefinition, MCP_TOOL_NAMES } from '../tools/registry.js';
+import {
+  getToolDefinition,
+  getRegisteredToolDefinition,
+  listToolDefinitions,
+  MCP_TOOL_NAMES,
+} from '../tools/registry.js';
 import type {
   KodaXEvents,
   KodaXHarnessProfile,
@@ -2056,6 +2061,143 @@ function wrapDispatchChildTaskForRole(
   };
 }
 
+// =============================================================================
+// FEATURE_168 (v0.7.42) — AMA agent tool wiring source of truth
+// =============================================================================
+//
+// Each AMA role's effective tool surface is computed as
+//   listToolDefinitions() − AMA_BASELINE_EXCLUDE − <ROLE>_EXTRA_EXCLUDE
+// with role-specific wraps applied via the `overrides` map at build time
+// (mutation-guards on bash/write/edit/multi_edit for Generator/Worker,
+// readonly bash for Evaluator, role-specific drain wraps for dispatch).
+//
+// Why exclude-based: prior include-based wiring (each role's tools array
+// manually push'd) silently dropped 17 registered tools across multiple
+// features — FEATURE_120 (send_message / task_stop), FEATURE_161 (4 of
+// 8 repo-intel pull tools the Worker prompt teaches), and the four web
+// tools (web_search / web_fetch / code_search / semantic_lookup). The
+// AMA path is shielded from SA-path defaults so wiring drift went
+// undetected by every test layer (handler unit tests pass, prompt
+// teaches the tool, registry registers it, CHILD_EXCLUDE excludes the
+// non-existent child copy — no test asserted "agent.tools actually
+// contains a schema with this name"). Defaulting to "all registered
+// tools available unless excluded" makes that drift architecturally
+// impossible: new tools land in every AMA role automatically, and
+// security-sensitive omissions become explicit (one new EXCLUDE entry
+// rather than five missing push lines).
+
+export type AmaRole = 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker';
+
+/** Tools every AMA role excludes — specialized paths (SA-root, construction). */
+const AMA_BASELINE_EXCLUDE: ReadonlySet<string> = new Set([
+  // SA-path root entry only; AMA roles dispatch via role-specific emitters
+  // (emit_scout_verdict / emit_contract / emit_handoff / emit_verdict).
+  'emit_managed_protocol',
+  // Construction / agent-construction / self-modify — activated only when
+  // `toolConstructionMode=true` (see `agent-runtime/tool-resolution.ts:81`).
+  // AMA roles never run in construction mode.
+  'scaffold_tool',
+  'validate_tool',
+  'stage_construction',
+  'test_tool',
+  'activate_tool',
+  'scaffold_agent',
+  'validate_agent',
+  'stage_agent_construction',
+  'test_agent',
+  'activate_agent',
+  'stage_self_modify',
+]);
+
+/** Scout: H0 executor + dispatcher. Full surface, no extra excludes. */
+const SCOUT_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Planner: drafts the contract for Generator to execute. Read-only inspection
+ * surface only — never mutate, dispatch, exec shell, or interact with user.
+ */
+const PLANNER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
+  'bash',
+  'write',
+  'edit',
+  'multi_edit',
+  'insert_after_anchor',
+  'undo',
+  'dispatch_child_task',
+  'send_message',
+  'task_stop',
+  'worktree_create',
+  'worktree_remove',
+  'exit_plan_mode',
+  'ask_user_question',
+]);
+
+/** Generator: full execution surface (V1 path). No extra excludes. */
+const GENERATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
+
+/**
+ * Evaluator: independent auditor — verification only. Architecturally
+ * hard-exclude every mutation surface so the security boundary does not
+ * depend on prompt discipline. The Evaluator role-prompt teaches read-only
+ * verification, but a prompt-jailbroken or tool-confused Evaluator must
+ * still be physically unable to write, dispatch, or change plan state.
+ */
+const EVALUATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
+  // No file mutations
+  'write',
+  'edit',
+  'multi_edit',
+  'insert_after_anchor',
+  'undo',
+  // No dispatch / steering (independent audit must not depend on child agents)
+  'dispatch_child_task',
+  'send_message',
+  'task_stop',
+  'worktree_create',
+  'worktree_remove',
+  // No state changes that would affect the Worker/Generator's plan-view
+  'exit_plan_mode',
+  'todo_update',
+  // No user interaction — independent audit must not block on user input
+  'ask_user_question',
+]);
+
+/** Worker (V2 single-loop primary agent): collapses Scout+Generator, full surface. */
+const WORKER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
+
+const ROLE_EXTRA_EXCLUDE: Record<AmaRole, ReadonlySet<string>> = {
+  scout: SCOUT_EXTRA_EXCLUDE,
+  planner: PLANNER_EXTRA_EXCLUDE,
+  generator: GENERATOR_EXTRA_EXCLUDE,
+  evaluator: EVALUATOR_EXTRA_EXCLUDE,
+  worker: WORKER_EXTRA_EXCLUDE,
+};
+
+/**
+ * The effective exclude set for an AMA role — baseline ∪ role-specific.
+ * Exported for contract tests in `runner-driven-tool-wiring.test.ts`.
+ */
+export function getAmaRoleEffectiveExclude(role: AmaRole): ReadonlySet<string> {
+  return new Set([...AMA_BASELINE_EXCLUDE, ...ROLE_EXTRA_EXCLUDE[role]]);
+}
+
+/**
+ * The names of all registry-borne tools an AMA role can see, computed by
+ * subtracting the role's effective exclude set from `listToolDefinitions()`.
+ * Excludes emit tools (which are NOT registry-borne — Runner-driven path
+ * builds them via `protocol-emitters.ts` and splices them in separately).
+ *
+ * Exported for the FEATURE_168 contract test that pins each role's
+ * expected tool surface.
+ */
+export function getAmaRoleExpectedToolNames(role: AmaRole): readonly string[] {
+  const exclude = getAmaRoleEffectiveExclude(role);
+  return listToolDefinitions()
+    .map((def) => def.name)
+    .filter((name) => !exclude.has(name))
+    .sort();
+}
+
 interface CodingToolBundle {
   readonly read: RunnableTool;
   readonly grep: RunnableTool;
@@ -2179,6 +2321,74 @@ function buildCodingToolBundle(
       : undefined,
     mcp,
   };
+}
+
+/**
+ * FEATURE_168 (v0.7.42) — build an AMA role's runtime tool list from the
+ * registry, applying role-specific wraps and the role's effective exclude set.
+ *
+ * Caller MUST splice the role's emit tool in separately (emit tools are not
+ * registry-borne — they're built per-run in `buildRunnerAgentChain` via
+ * `wrapEmitterWithRecorder`).
+ *
+ * @param role       Target AMA role (drives the exclude set).
+ * @param ctx        Tool execution context.
+ * @param budget     Optional budget controller.
+ * @param events     Optional events bus for tool progress.
+ * @param overrides  Role-specific wraps keyed by tool name. Any tool present
+ *                   in this map replaces the default `wrapCodingToolAsRunnable`
+ *                   wrap. Used for mutation-guards on bash/write/edit/
+ *                   multi_edit, readonly bash for Evaluator, and
+ *                   dispatch_child_task per-role drain wrappers.
+ */
+function buildAgentToolsFromRegistry(
+  role: AmaRole,
+  ctx: KodaXToolExecutionContext,
+  budget: ManagedTaskBudgetController | undefined,
+  events: KodaXEvents | undefined,
+  overrides: ReadonlyMap<string, RunnableTool>,
+): RunnableTool[] {
+  const exclude = getAmaRoleEffectiveExclude(role);
+  const tools: RunnableTool[] = [];
+
+  for (const def of listToolDefinitions()) {
+    if (exclude.has(def.name)) continue;
+
+    const override = overrides.get(def.name);
+    if (override) {
+      tools.push(override);
+      continue;
+    }
+
+    // Streaming tools (async-generator handlers, currently only
+    // `dispatch_child_task`) require role-specific drain wraps and MUST
+    // be supplied via overrides — otherwise the generator never resolves
+    // and the tool call hangs.
+    const registration = getRegisteredToolDefinition(def.name);
+    if (!registration) continue;
+
+    const handler = registration.handler;
+    if (handler.constructor.name === 'AsyncGeneratorFunction') {
+      throw new Error(
+        `buildAgentToolsFromRegistry: streaming tool "${def.name}" requires a role-specific wrap in overrides for role "${role}"`,
+      );
+    }
+
+    tools.push(
+      wrapCodingToolAsRunnable(
+        def,
+        handler as (
+          input: Record<string, unknown>,
+          execCtx: KodaXToolExecutionContext,
+        ) => Promise<string>,
+        ctx,
+        budget,
+        events,
+      ),
+    );
+  }
+
+  return tools;
 }
 
 // =============================================================================
@@ -2587,85 +2797,57 @@ export function buildRunnerAgentChain(
       promptContext,
       verification,
     ),
+    // FEATURE_168 (v0.7.42) — Scout's tool surface is derived from the
+    // registry minus `AMA_BASELINE_EXCLUDE ∪ SCOUT_EXTRA_EXCLUDE`. SCOUT_EXTRA
+    // is empty: Scout is the H0 executor + dispatcher, so it carries the full
+    // execution surface (bash/write/edit/multi_edit raw — v0.7.26 Scout-tool-
+    // restoration discipline). Dispatch is role-wrapped for the read-only
+    // enforcement (`managedProtocolRole='scout'` enforces read-only fan-out
+    // inside dispatch_child_task). The throttle+evaluator-aware todo_update
+    // built above is supplied as an override so the FEATURE_097 §5 ② reminder
+    // reset still fires on Scout's H0 turns.
     tools: [
       scoutEmit,
-      codingTools.read,
-      codingTools.grep,
-      codingTools.glob,
-      // v0.7.26 Scout-tool-restoration: legacy v0.7.22 gave Scout the
-      // full default tool set (`_internal/prompts/tool-policy.ts:232`
-      // returned `undefined` for Scout so `buildManagedWorkerToolPolicy`
-      // emitted no restrictions; Scout ran via the SA-mode entry with
-      // unwrapped bash/write/edit). The three-level H0/H1/H2 quality
-      // framework was enforced by prompt ONLY — tools layer deliberately
-      // didn't police it. FEATURE_084 regressed this: Scout's bash got
-      // wrapped with `wrapReadOnlyBash` and write/edit were dropped,
-      // which broke H0_DIRECT execution for any task involving writes
-      // (LLM sees "verification-only" block, concludes it is read-only,
-      // loops or escalates to dispatch_child_task which is also
-      // read-only). Restore the v22 surface.
-      codingTools.bash,
-      codingTools.write,
-      codingTools.edit,
-      // P2a (v0.7.26) — Scout H0_DIRECT execution benefits from
-      // skeleton+multi_edit just as much as Generator does. Unwrapped
-      // for parity with v0.7.22's Scout default tool set.
-      codingTools.multiEdit,
-      codingTools.exitPlanMode,
-      // FEATURE_097 (v0.7.34) — Scout receives todo_update because in H0
-      // it is also the executor (continues calling tools after
-      // emit_scout_verdict). Scout role-prompt limits use to "after
-      // emit_scout_verdict, when continuing as H0_DIRECT executor"
-      // (Heavy variant, eval-confirmed 2026-05-04). The tool soft-fails
-      // with `not active` when no plan list was seeded (obligations<2).
-      codingTools.todoUpdate,
-      // FEATURE_151 (v0.7.38) Slice D — Scout can `todo_list` to inspect
-      // the canonical list at any point (e.g. to confirm the post-init
-      // state matches what it intended after a verdict-driven replace).
-      codingTools.todoList,
-      // Shard 6d-Q: Scout may dispatch read-only child investigations
-      // (evidence scans, repo reconnaissance) in parallel before
-      // emitting its verdict. The dispatch tool itself enforces
-      // `read_only` in Scout context.
-      scoutDispatch,
-      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed.
-      // Scout (V1 path) waits for dispatched children via the
-      // runner-driven idle-yield outer loop, same mechanic V2
-      // Worker uses. The runner detects the no-tool-calls exit
-      // with pending children and resumes Scout when a
-      // `<task-completed task_id="…">` notification arrives.
+      ...buildAgentToolsFromRegistry(
+        'scout',
+        ctx,
+        budget,
+        events,
+        new Map<string, RunnableTool>([
+          ['dispatch_child_task', scoutDispatch],
+          ['todo_update', codingTools.todoUpdate],
+        ]),
+      ),
     ],
     handoffs: undefined,
     reasoning: { default: 'quick', max: 'balanced', escalateOnRevise: false },
   };
-  // M1 parity (v0.7.26) — restore Planner's v0.7.22 inspection surface.
-  // Legacy `buildManagedWorkerToolPolicy('planner')` exposed read / grep
-  // / glob + repo_overview + changed_scope + changed_diff_bundle +
-  // MCP_TOOL_NAMES (tool-policy.ts:237-243). The earlier Runner-driven
-  // Planner was limited to read/grep/glob, so H2 planning had no
-  // repo-overview / scoped-diff signal and had to draft contracts from
-  // Scout memory alone. Each optional tool is only attached when its
-  // registry definition exists, so minimal test fixtures still work.
+  // FEATURE_168 (v0.7.42) — Planner's tool surface is derived from the
+  // registry minus the PLANNER_EXTRA_EXCLUDE set defined at the top of this
+  // file. Planner is planning-only — no mutation (write/edit/multi_edit/
+  // insert_after_anchor/undo), no shell (bash), no dispatch (dispatch_child_
+  // task / send_message / task_stop), no worktree management, no exit_plan_
+  // mode, no user interaction. What remains: read/grep/glob + all 8 repo-
+  // intel pull tools (repo_overview / changed_scope / changed_diff /
+  // changed_diff_bundle / module_context / symbol_context / process_context
+  // / impact_estimate — note the latter 4 were absent in v0.7.41 despite
+  // being in legacy `PLANNER_ALLOWED_TOOLS`, recovered by this refactor),
+  // 5 MCP tools, web tools (web_search / web_fetch / code_search /
+  // semantic_lookup), and todo_update/todo_list. The throttle+evaluator-
+  // aware todo_update is supplied as an override so the FEATURE_097 §5 ②
+  // reminder reset still fires when Planner replaces the plan.
   const plannerTools: RunnableTool[] = [
     contractEmit,
-    codingTools.read,
-    codingTools.grep,
-    codingTools.glob,
+    ...buildAgentToolsFromRegistry(
+      'planner',
+      ctx,
+      budget,
+      events,
+      new Map<string, RunnableTool>([
+        ['todo_update', codingTools.todoUpdate],
+      ]),
+    ),
   ];
-  if (codingTools.repoOverview) plannerTools.push(codingTools.repoOverview);
-  if (codingTools.changedScope) plannerTools.push(codingTools.changedScope);
-  if (codingTools.changedDiffBundle) plannerTools.push(codingTools.changedDiffBundle);
-  if (codingTools.changedDiff) plannerTools.push(codingTools.changedDiff);
-  // FEATURE_097 (v0.7.34) — Planner refines Scout obligations into a
-  // detailed contract; it uses todo_update with a prior `replace()` call
-  // (handled at runner-driven seeding hooks) to swap the displayed plan.
-  // Per-step status updates after replace use this tool.
-  plannerTools.push(codingTools.todoUpdate);
-  // FEATURE_151 (v0.7.38) Slice D — Planner may `todo_list` to compare its
-  // refined success_criteria against the runner-seeded list before deciding
-  // whether to call `todo_update({op:"init", ...})` to replace it.
-  plannerTools.push(codingTools.todoList);
-  plannerTools.push(...codingTools.mcp);
   const planner: WritableAgent = {
     name: PLANNER_AGENT_NAME,
     instructions: () => resolveRoleInstructions(
@@ -2707,42 +2889,30 @@ export function buildRunnerAgentChain(
         verification,
       );
     },
+    // FEATURE_168 (v0.7.42) — Generator's tool surface is derived from the
+    // registry minus `AMA_BASELINE_EXCLUDE` (no extra excludes — full
+    // execution surface). Mutation-guard wraps applied to bash/write/edit/
+    // multi_edit so `plan.decision.primaryTask='review'` or scout-scoped
+    // review-only intent still blocks accidental mutations. Dispatch is
+    // role-wrapped for FEATURE_067 v2 parity (write-fan-out worktree
+    // tracking). FEATURE_097 §5 ② throttle reset + Slice 3c per-step
+    // deterministic evaluator wraps flow through `codingTools.todoUpdate`.
     tools: [
       handoffEmit,
-      codingTools.read,
-      codingTools.grep,
-      codingTools.glob,
-      wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef),
-      wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef),
-      wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef),
-      // P2a (v0.7.26) — multi_edit follows the same mutation-guard rules
-      // as edit/write. review-only intent blocks all three; docs-scoped
-      // intent enforces the DOCS_ONLY path allow-list.
-      wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef),
-      // FEATURE_074 parity — Generator is the only role that mutates files,
-      // so it is the only role that needs to ask the user to exit plan mode
-      // before making edits. Without this tool the LLM sees no way to
-      // request approval and either (a) writes without approval or
-      // (b) stalls asking "how do I exit plan mode?".
-      codingTools.exitPlanMode,
-      // FEATURE_097 (v0.7.34) — Generator is the canonical H1/H2
-      // executor and the primary driver of todo_update transitions
-      // (pending → in_progress → completed) per major step.
-      codingTools.todoUpdate,
-      // FEATURE_151 (v0.7.38) Slice D — Generator may `todo_list` to
-      // recover the canonical id set after an Unknown-id error or to
-      // compare its working plan against the displayed list.
-      codingTools.todoList,
-      // Shard 6d-Q: Generator may dispatch write-capable child tasks for
-      // parallel fan-out. Worktree paths flow through
-      // `childWriteWorktreePathsRef` so the Evaluator can inject the
-      // write diffs at verdict time (FEATURE_067 v2 parity).
-      generatorDispatch,
-      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed.
-      // Generator waits for dispatched children via the runner-driven
-      // idle-yield outer loop. Worktree-write children's diffs still
-      // flow through `childWriteWorktreePathsRef` at result time;
-      // only the explicit reclaim tool goes away.
+      ...buildAgentToolsFromRegistry(
+        'generator',
+        ctx,
+        budget,
+        events,
+        new Map<string, RunnableTool>([
+          ['bash', wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef)],
+          ['write', wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef)],
+          ['edit', wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef)],
+          ['multi_edit', wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef)],
+          ['dispatch_child_task', generatorDispatch],
+          ['todo_update', codingTools.todoUpdate],
+        ]),
+      ),
     ],
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
@@ -2757,23 +2927,26 @@ export function buildRunnerAgentChain(
       promptContext,
       verification,
     ),
+    // FEATURE_168 (v0.7.42) — Evaluator's tool surface is derived from the
+    // registry minus `AMA_BASELINE_EXCLUDE ∪ EVALUATOR_EXTRA_EXCLUDE`.
+    // EVALUATOR_EXTRA_EXCLUDE is the strictest set in this file — every file
+    // mutation, dispatch, plan-state change, and user-interaction tool is
+    // hard-excluded so the audit security boundary is architectural, not
+    // prompt-dependent. What remains: read/grep/glob + readonly bash + all 8
+    // repo-intel pull tools + 5 MCP tools + 4 web tools + todo_list. Note
+    // `todo_update` is excluded (audit role must not mutate Worker's plan)
+    // — pre-v0.7.42 Evaluator already did not have it, just made explicit.
     tools: [
       verdictEmit,
-      codingTools.read,
-      codingTools.grep,
-      codingTools.glob,
-      wrapReadOnlyBash(codingTools.bash, 'Evaluator'),
-      // FEATURE_151 (v0.7.38) Slice D follow-up (2026-05-09): Evaluator
-      // gets `todo_list` so verdict reasoning can factor in remaining
-      // plan state (e.g. lenient on partial completion when 4 steps
-      // remain vs strict on the last step). Read-only — does NOT reset
-      // the throttle reminder counter (that gates on `todo_update`),
-      // does NOT show in user transcript (HIDDEN_TODO_TOOL_NAMES),
-      // and consistent with Evaluator's read-only role boundary.
-      // FUTURE AMA changes that add new roles or split existing ones
-      // MUST decide explicitly whether the new role gets `todo_list`;
-      // do NOT default-include it just because it's read-only.
-      codingTools.todoList,
+      ...buildAgentToolsFromRegistry(
+        'evaluator',
+        ctx,
+        budget,
+        events,
+        new Map<string, RunnableTool>([
+          ['bash', wrapReadOnlyBash(codingTools.bash, 'Evaluator')],
+        ]),
+      ),
     ],
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: false },
@@ -2831,36 +3004,32 @@ export function buildRunnerAgentChain(
       }
       return resolved;
     },
+    // FEATURE_168 (v0.7.42) — Worker's tool surface is derived from the
+    // registry minus `AMA_BASELINE_EXCLUDE` (no extra excludes — Worker
+    // collapses Scout+Generator and carries the union of their execution
+    // surfaces). Mutation-guard wraps applied to bash/write/edit/multi_edit
+    // for `plan.decision.primaryTask='review'` discipline. Dispatch is
+    // role-wrapped (V2 dispatch uses the same write-fan-out wiring as
+    // Generator). FEATURE_120 send_message / task_stop now land in the
+    // schema (previously missing — see CHANGELOG / commit log). FEATURE_161
+    // module_context / symbol_context / process_context / impact_estimate
+    // pull tools also now land in the schema (previously missing).
     tools: [
       handoffEmit,
-      codingTools.read,
-      codingTools.grep,
-      codingTools.glob,
-      // Mutation guards mirror Generator's wrappers — `plan.decision.
-      // primaryTask='review'` (or scoutMutationIntent='review-only')
-      // still blocks accidental mutations even when the Worker
-      // collapses Scout+Generator. Without these wrappers a
-      // primaryTask='review' run could accidentally mutate via bash
-      // / write / edit / multi_edit.
-      wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef),
-      wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef),
-      wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef),
-      wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef),
-      codingTools.exitPlanMode,
-      codingTools.todoUpdate,
-      codingTools.todoList,
-      // Worker dispatch wrapper allows write fan-out (Generator-equivalent).
-      workerDispatch,
-      // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` deleted from
-      // every chain (Worker / Scout / Generator). Idle-yield (always on
-      // since Slice C3 retired `KODAX_IDLE_YIELD`) is the only wait
-      // mechanic: Worker exits text-only after dispatching, the
-      // runner-driven outer loop resumes when a child completes
-      // (idle-yield primitives now live in `@kodax-ai/agent`'s
-      // `orchestration/idle-yield.ts` post-FEATURE_120 Step 0b lift).
-      // Children settle via `<task-completed task_id="…">`
-      // notifications spliced into the next user message by
-      // `composeIdleYieldUserMessage`.
+      ...buildAgentToolsFromRegistry(
+        'worker',
+        ctx,
+        budget,
+        events,
+        new Map<string, RunnableTool>([
+          ['bash', wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef)],
+          ['write', wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef)],
+          ['edit', wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef)],
+          ['multi_edit', wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef)],
+          ['dispatch_child_task', workerDispatch],
+          ['todo_update', codingTools.todoUpdate],
+        ]),
+      ),
     ],
     handoffs: undefined,
     // Worker plans + executes, so it warrants the deeper reasoning
