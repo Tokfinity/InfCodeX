@@ -2062,7 +2062,7 @@ function wrapDispatchChildTaskForRole(
 }
 
 // =============================================================================
-// FEATURE_168 (v0.7.42) — AMA agent tool wiring source of truth
+// FEATURE_168 (v0.7.40 hotfix) — AMA agent tool wiring source of truth
 // =============================================================================
 //
 // Each AMA role's effective tool surface is computed as
@@ -2324,7 +2324,7 @@ function buildCodingToolBundle(
 }
 
 /**
- * FEATURE_168 (v0.7.42) — build an AMA role's runtime tool list from the
+ * FEATURE_168 (v0.7.40 hotfix) — build an AMA role's runtime tool list from the
  * registry, applying role-specific wraps and the role's effective exclude set.
  *
  * Caller MUST splice the role's emit tool in separately (emit tools are not
@@ -2797,7 +2797,7 @@ export function buildRunnerAgentChain(
       promptContext,
       verification,
     ),
-    // FEATURE_168 (v0.7.42) — Scout's tool surface is derived from the
+    // FEATURE_168 (v0.7.40 hotfix) — Scout's tool surface is derived from the
     // registry minus `AMA_BASELINE_EXCLUDE ∪ SCOUT_EXTRA_EXCLUDE`. SCOUT_EXTRA
     // is empty: Scout is the H0 executor + dispatcher, so it carries the full
     // execution surface (bash/write/edit/multi_edit raw — v0.7.26 Scout-tool-
@@ -2822,7 +2822,7 @@ export function buildRunnerAgentChain(
     handoffs: undefined,
     reasoning: { default: 'quick', max: 'balanced', escalateOnRevise: false },
   };
-  // FEATURE_168 (v0.7.42) — Planner's tool surface is derived from the
+  // FEATURE_168 (v0.7.40 hotfix) — Planner's tool surface is derived from the
   // registry minus the PLANNER_EXTRA_EXCLUDE set defined at the top of this
   // file. Planner is planning-only — no mutation (write/edit/multi_edit/
   // insert_after_anchor/undo), no shell (bash), no dispatch (dispatch_child_
@@ -2889,7 +2889,7 @@ export function buildRunnerAgentChain(
         verification,
       );
     },
-    // FEATURE_168 (v0.7.42) — Generator's tool surface is derived from the
+    // FEATURE_168 (v0.7.40 hotfix) — Generator's tool surface is derived from the
     // registry minus `AMA_BASELINE_EXCLUDE` (no extra excludes — full
     // execution surface). Mutation-guard wraps applied to bash/write/edit/
     // multi_edit so `plan.decision.primaryTask='review'` or scout-scoped
@@ -2927,7 +2927,7 @@ export function buildRunnerAgentChain(
       promptContext,
       verification,
     ),
-    // FEATURE_168 (v0.7.42) — Evaluator's tool surface is derived from the
+    // FEATURE_168 (v0.7.40 hotfix) — Evaluator's tool surface is derived from the
     // registry minus `AMA_BASELINE_EXCLUDE ∪ EVALUATOR_EXTRA_EXCLUDE`.
     // EVALUATOR_EXTRA_EXCLUDE is the strictest set in this file — every file
     // mutation, dispatch, plan-state change, and user-interaction tool is
@@ -2935,7 +2935,7 @@ export function buildRunnerAgentChain(
     // prompt-dependent. What remains: read/grep/glob + readonly bash + all 8
     // repo-intel pull tools + 5 MCP tools + 4 web tools + todo_list. Note
     // `todo_update` is excluded (audit role must not mutate Worker's plan)
-    // — pre-v0.7.42 Evaluator already did not have it, just made explicit.
+    // — pre-FEATURE_168 Evaluator already did not have it, just made explicit.
     tools: [
       verdictEmit,
       ...buildAgentToolsFromRegistry(
@@ -3004,7 +3004,7 @@ export function buildRunnerAgentChain(
       }
       return resolved;
     },
-    // FEATURE_168 (v0.7.42) — Worker's tool surface is derived from the
+    // FEATURE_168 (v0.7.40 hotfix) — Worker's tool surface is derived from the
     // registry minus `AMA_BASELINE_EXCLUDE` (no extra excludes — Worker
     // collapses Scout+Generator and carries the union of their execution
     // surfaces). Mutation-guard wraps applied to bash/write/edit/multi_edit
