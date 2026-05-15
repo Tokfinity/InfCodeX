@@ -211,6 +211,29 @@ export interface KodaXEvents {
   onCompactEnd?: () => void;
   /** Whether the caller has queued follow-up input waiting for the next round */
   hasPendingInputs?: () => boolean;
+  /**
+   * FEATURE_164 (v0.7.41) — mid-turn user message injection.
+   *
+   * Fired by the Runner-driven path's `beforeNextTurn` hook AFTER it
+   * drains queued user prompts (mode:'prompt') from the canonical
+   * MessageQueue and splices them into the transcript before the next
+   * LLM call. Replaces the legacy v0.7.26 "mid-iteration yield" path
+   * that returned an empty `{text:'', toolCalls:[]}` to force the round
+   * to terminate — that path polluted the transcript with an empty
+   * assistant turn and confused the model when the next round picked
+   * up the same prompts.
+   *
+   * REPL implementations use this hook to render the injected
+   * prompts as user-role history items immediately, so the user sees
+   * their typed query as part of the conversation without waiting for
+   * the round to end. SDK consumers that don't care about UI visibility
+   * can omit this hook — the messages still reach the LLM via the
+   * transcript injection.
+   *
+   * Fires once per Runner iteration boundary, with the array of
+   * prompt contents in queue order. Empty arrays are not surfaced.
+   */
+  onMidTurnUserMessages?: (contents: readonly string[]) => void;
   onRetry?: (reason: string, attempt: number, maxAttempts: number) => void;
   onProviderRateLimit?: (attempt: number, maxRetries: number, delayMs: number) => void;
   /**

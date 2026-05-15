@@ -2069,14 +2069,27 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
       },
     });
     await runManagedTaskViaRunner(opts, 'do X', mock);
-    const scoutEvent = statuses.find((s) => s.phase === 'worker' && s.activeWorkerId === 'scout');
+    // Filter for slot-emit "completed a turn" events specifically —
+    // FEATURE_166 v0.7.41 follow-up added an `agentSwitched` emit
+    // that ALSO matches `phase==='worker' && activeWorkerId===<role>`
+    // but fires before the role's slot tool and so carries the
+    // pre-increment round. The "round events" this test asserts on
+    // are the slot-emit anchors (round counter incremented in
+    // onRoleEmit at line ~1552). The `'completed a turn'` note
+    // string is unique to those slot emits.
+    const isRoundEvent = (s: Record<string, unknown>, role: string): boolean =>
+      s.phase === 'worker'
+      && s.activeWorkerId === role
+      && typeof s.note === 'string'
+      && (s.note as string).includes('completed a turn');
+    const scoutEvent = statuses.find((s) => isRoundEvent(s, 'scout'));
     expect(scoutEvent?.activeWorkerTitle).toBe('Scout');
     expect(scoutEvent?.currentRound).toBe(1);
     expect(scoutEvent?.maxRounds).toBeGreaterThanOrEqual(6);
-    const genEvent = statuses.find((s) => s.phase === 'worker' && s.activeWorkerId === 'generator');
+    const genEvent = statuses.find((s) => isRoundEvent(s, 'generator'));
     expect(genEvent?.activeWorkerTitle).toBe('Generator');
     expect(genEvent?.currentRound).toBe(2);
-    const evalEvent = statuses.find((s) => s.phase === 'worker' && s.activeWorkerId === 'evaluator');
+    const evalEvent = statuses.find((s) => isRoundEvent(s, 'evaluator'));
     expect(evalEvent?.activeWorkerTitle).toBe('Evaluator');
     expect(evalEvent?.currentRound).toBe(3);
   });
@@ -4243,20 +4256,27 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
   }, 30_000);
 
   // v0.7.38 FEATURE_155 hotfix follow-up — Bug B verification at the
-  // outer-loop / chain level. The production trace
-  // (`fix(v0.7.38)` commit `c1bdaf4e` motivation) showed the runner
-  // re-entering `Runner.run` after Evaluator emit_verdict accept,
-  // because (a) pendingChildTaskCount > 0 and (b) neither
-  // `hasEmittedHandoff` nor `hasEmittedTerminalVerdict` was actually
-  // reading the right source-of-truth field. This test exercises
-  // exactly the production-bug shape: dispatch + emit_handoff in one
-  // turn, then Evaluator emit_verdict accept, then a text-only
-  // Evaluator turn (the `lastAssistantToolCallCount === 0` arm),
-  // while a child is still in flight. Pass criterion: the loop
-  // STOPS after verdict — `evaluator(turn=2)` MUST NOT run a third
-  // time even though a wake event would fire if the gate were
-  // broken.
-  it('outer loop terminates after Evaluator emits accept verdict, even with pending children (Bug B regression)', async () => {
+  // outer-loop / chain level. Originally exercised the production-trace
+  // shape directly: dispatch + emit_handoff in ONE turn → Evaluator
+  // accept → loop should terminate (the `hasEmittedTerminalVerdict`
+  // gate added in c1bdaf4e).
+  //
+  // v0.7.41 FEATURE_165 update: the same one-batch shape now FAILS at
+  // the emit_handoff layer because the new pending-children gate
+  // (`runner-driven.ts` around line 2402) rejects emit_handoff while
+  // any dispatched child is still in flight. So Bug B's exact trigger
+  // is no longer reachable — Worker can never reach Evaluator with
+  // the registry still non-empty.
+  //
+  // The unit-level pin for `hasEmittedTerminalVerdict` lives in
+  // `packages/agent/src/orchestration/idle-yield.test.ts` and is
+  // unaffected. This integration test now verifies the COMBINED
+  // behaviour: when Worker tries the (formerly-bug) one-batch
+  // dispatch + emit_handoff pattern, FEATURE_165's gate redirects
+  // through idle-yield, and once Worker eventually emits a clean
+  // handoff (registry empty), Evaluator accept terminates the loop
+  // exactly once — no post-verdict re-entry.
+  it('emit_handoff gate redirects premature one-batch shape through idle-yield, then terminates after accept (FEATURE_155 Bug B + FEATURE_165 gate combined regression)', async () => {
     let resolveChild!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
       new Promise<KodaXChildExecutionResult>((resolve) => {
@@ -4265,14 +4285,17 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     );
 
     const evaluatorTurns: number[] = [];
+    let lastWorkerTurn = 0;
 
     const mock = makeChainMockLlm({
       worker: (turn) => {
+        lastWorkerTurn = turn;
         if (turn === 1) {
-          // One response carries BOTH dispatch (child stays unsettled
-          // for now) AND emit_handoff to the Evaluator. The chain
-          // transitions to Evaluator with the child still in the
-          // registry.
+          // Production-trace shape — Worker tries to dispatch AND
+          // emit_handoff in one batch. Post-FEATURE_165 the gate
+          // returns isError on emit_handoff (registry now has the
+          // dispatched child), so handoff is NOT signalled and the
+          // chain stays on Worker.
           return {
             toolBlocks: [
               {
@@ -4291,7 +4314,7 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
                 name: 'emit_handoff',
                 input: {
                   status: 'ready',
-                  summary: 'handed off',
+                  summary: 'attempted',
                   evidence: [],
                   followup: ['none'],
                 },
@@ -4299,19 +4322,35 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
             ],
           };
         }
-        return { textBlocks: [{ text: 'worker done' }] };
+        if (turn === 2) {
+          // Gate fired in turn 1; Worker ends text-only so the outer
+          // idle-yield loop engages. Schedule child completion so a
+          // wake event fires shortly.
+          setTimeout(() => {
+            resolveChild(buildSuccessChildResult('bug-b-probe', ['late finding']));
+          }, 30);
+          return { textBlocks: [{ text: 'awaiting child completion' }] };
+        }
+        // Resumed after wake — registry empty, gate passes.
+        return {
+          toolBlocks: [
+            {
+              type: 'tool_use',
+              id: 'w-3',
+              name: 'emit_handoff',
+              input: {
+                status: 'ready',
+                summary: 'done',
+                evidence: ['late finding'],
+                followup: [],
+              },
+            },
+          ],
+        };
       },
       evaluator: (turn) => {
         evaluatorTurns.push(turn);
         if (turn === 1) {
-          // Evaluator immediately emits accept verdict — child is
-          // still in flight in the registry (Bug B's exact shape).
-          // Also schedule the child to complete shortly after this
-          // turn so that, if the gate is broken, a wake event would
-          // fire and trigger turn 2 (the failure mode).
-          setTimeout(() => {
-            resolveChild(buildSuccessChildResult('bug-b-probe', ['late finding']));
-          }, 50);
           return {
             toolBlocks: [{
               type: 'tool_use',
@@ -4326,32 +4365,28 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
           };
         }
         // The failure mode: this branch runs if the outer loop
-        // re-entered Runner.run after the accept verdict. Returning
-        // text-only here mirrors the production trace's degenerate
-        // ack ("已处理"). The assertion below fails the test if we
-        // reach turn 2+.
+        // re-entered Runner.run after the accept verdict. The
+        // assertion below fails the test if we reach turn 2+.
         return { textBlocks: [{ text: `degenerate ack turn ${turn}` }] };
       },
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'long audit task', mock);
 
-    // The verdict went through and is the final user-facing answer.
     expect(result.success).toBe(true);
     expect(result.signal).toBe('COMPLETE');
     expect(result.lastText).toBe('Audit complete.');
 
-    // CORE ASSERTION (Bug B): the outer loop must NOT re-enter
-    // Runner.run after the Evaluator emit_verdict accept. ONE
-    // Runner.run invocation can take Evaluator through 2 turns (the
-    // tool_use turn for emit_verdict, then a single final-text turn
-    // after the synthetic tool_result) — that's standard Runner
-    // behaviour, not idle-yield re-entry. What we forbid is a 3rd+
-    // Evaluator turn driven by a post-verdict idle-yield resume.
+    // CORE ASSERTION (Bug B): Evaluator runs ≤ 2 turns. After
+    // emit_verdict accept, the outer loop's `hasEmittedTerminalVerdict`
+    // gate must prevent re-entry.
     expect(evaluatorTurns.length).toBeLessThanOrEqual(2);
-    // Settle the pending child to avoid leaking an unresolved promise
-    // into other tests (mockExec is reset on each test via beforeEach
-    // but the in-flight IIFE may still be awaiting it).
+
+    // FEATURE_165 ASSERTION: Worker reached at least turn 3 — i.e.
+    // the first emit_handoff (with pending child) was rejected and
+    // Worker recovered via idle-yield, then succeeded post-wake.
+    expect(lastWorkerTurn).toBeGreaterThanOrEqual(3);
+
     resolveChild(buildSuccessChildResult('bug-b-probe', ['late finding']));
   }, 30_000);
 
@@ -4733,4 +4768,438 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     const lastEmit = statusEvents[statusEvents.length - 1];
     expect(lastEmit?.idleWaiting).not.toBe(true);
   }, 30_000);
+});
+
+// FEATURE_165 (v0.7.41) — emit_handoff pending-children gate.
+//
+// Production trace (2026-05-15, zhipu/glm51 worker): Worker dispatched
+// 3 children, said "等待 3 个并行子任务完成", then called emit_handoff
+// in the same turn. The outer idle-yield loop saw `hasEmittedHandoff=true`
+// and exited without waiting — children were orphaned, banners stranded
+// in the background queue. Root cause: no runtime gate; only the
+// Evaluator role got a prompt-side "CHILD-TASK WAIT DISCIPLINE" block
+// in the v0.7.38 hotfix (c1bdaf4), Worker was never protected.
+//
+// Gate spec (`runner-driven.ts` around line 2402):
+//   - Inserted between `wrapEmitterWithRecorder(emitHandoff, 'handoff', ...)`
+//     and the downstream `chain.worker.tools` / `chain.generator.tools`
+//     consumers. When invoked with a non-empty `ctx.childTaskRegistry`,
+//     short-circuits to `{ content: <error>, isError: true }` WITHOUT
+//     calling the base emitter — so `recorder.handoff` stays undefined
+//     (the `wrapEmitterWithRecorder` body guards
+//     `recorder[slot] = result.metadata` behind
+//     `!result.isError && result.metadata`).
+//   - This makes `hasEmittedHandoff` stay false on the outer-loop
+//     snapshot → idle-yield engages → children's banners reach the
+//     next Worker turn as designed.
+//   - And `detectHandoffSignal` reads `result.metadata.handoffTarget`,
+//     so a metadata-less error never triggers an agent switch.
+describe('FEATURE_165 v0.7.41 — emit_handoff pending-children gate', () => {
+  function makeCtxWithRegistry(
+    registry?: Map<string, Promise<KodaXChildExecutionResult>>,
+  ): KodaXToolExecutionContext {
+    return {
+      backups: new Map<string, string>(),
+      gitRoot: process.cwd(),
+      executionCwd: process.cwd(),
+      childTaskRegistry: registry,
+    };
+  }
+
+  function makeToolCtx(agentName: string): import('@kodax-ai/agent').RunnerToolContext {
+    return { agent: { name: agentName } as unknown as import('@kodax-ai/agent').Agent };
+  }
+
+  function findEmitHandoff(
+    agent: { tools?: readonly KodaXToolDefinition[] },
+  ): RunnableTool {
+    const tool = agent.tools?.find((t) => t.name === 'emit_handoff');
+    if (!tool) throw new Error("emit_handoff not found on agent");
+    return tool as RunnableTool;
+  }
+
+  // A never-resolving promise to populate the registry without leaking
+  // a real child executor. Vitest's afterEach for this file does not
+  // tear down dangling promises; that's fine because the registry is
+  // discarded with the test-scope ctx.
+  function pendingPromise<T = unknown>(): Promise<T> {
+    return new Promise<T>(() => {});
+  }
+
+  it('returns isError when ≥1 child is pending in the registry', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    registry.set('child_alpha', pendingPromise());
+    registry.set('child_beta', pendingPromise());
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(registry), {});
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute(
+      { status: 'ready', summary: 'done' },
+      makeToolCtx('worker'),
+    );
+    expect(result.isError).toBe(true);
+    const text = String(result.content);
+    expect(text).toContain('cannot hand off');
+    expect(text).toContain('2 child');
+    expect(text).toContain('child_alpha');
+    expect(text).toContain('child_beta');
+  });
+
+  // CRITICAL invariant — the gate MUST NOT populate `metadata`, because
+  // `wrapEmitterWithRecorder` would otherwise still write
+  // `recorder.handoff` and the outer-loop's `hasEmittedHandoff` gate
+  // would still fire, defeating the whole purpose of the patch.
+  it('omits metadata when gate fires (recorder.handoff stays undefined)', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    registry.set('child_x', pendingPromise());
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(registry), {});
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute({ status: 'ready' }, makeToolCtx('worker'));
+    expect(result.isError).toBe(true);
+    expect(result.metadata).toBeUndefined();
+  });
+
+  it('truncates pending-id list to 5 entries with a "+N more" tail', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    for (let i = 1; i <= 8; i += 1) {
+      registry.set(`child_${i.toString().padStart(2, '0')}`, pendingPromise());
+    }
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(registry), {});
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute({ status: 'ready' }, makeToolCtx('worker'));
+    const text = String(result.content);
+    expect(text).toContain('8 child');
+    expect(text).toContain('+3 more');
+    expect(text).toContain('child_01');
+    expect(text).toContain('child_05');
+    // Tail entries beyond the 5-id preview MUST NOT appear inline —
+    // they're summarized by the "+N more" tail. (Guard against
+    // future regressions that drop the slice and dump the entire map.)
+    expect(text).not.toContain('child_06');
+    expect(text).not.toContain('child_07');
+    expect(text).not.toContain('child_08');
+  });
+
+  it('passes through to the base emitter when registry is empty', async () => {
+    const chain = buildRunnerAgentChain(
+      makeCtxWithRegistry(new Map<string, Promise<KodaXChildExecutionResult>>()),
+      {},
+    );
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute(
+      { status: 'ready', summary: 'done', evidence: [], followup: [] },
+      makeToolCtx('worker'),
+    );
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata).toBeDefined();
+    const meta = result.metadata as {
+      role?: string;
+      handoffTarget?: string;
+      payload?: { handoff?: { status?: string } };
+    };
+    // emit_handoff is registered as the 'generator' role (V2 Worker
+    // reuses it via shared `handoffEmit`); resolveHandoffTarget maps
+    // generator → Evaluator.
+    expect(meta.role).toBe('generator');
+    // handoffTarget points at the runtime evaluator agent name, not the
+    // role label — the runner's `detectHandoffSignal` matches against
+    // `currentAgent.handoffs[*].target.name`.
+    expect(meta.handoffTarget).toMatch(/evaluator/i);
+    expect(meta.payload?.handoff?.status).toBe('ready');
+  });
+
+  it('passes through when registry is undefined (sync-dispatch mode)', async () => {
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(undefined), {});
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute({ status: 'ready' }, makeToolCtx('worker'));
+    expect(result.isError).toBeFalsy();
+    expect(result.metadata).toBeDefined();
+  });
+
+  it('applies equally to V1 Generator and V2 Worker (shared handoffEmit)', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    registry.set('child_shared', pendingPromise());
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(registry), {});
+
+    const genResult = await findEmitHandoff(chain.generator).execute(
+      { status: 'ready' },
+      makeToolCtx('generator'),
+    );
+    expect(genResult.isError).toBe(true);
+    expect(String(genResult.content)).toContain('cannot hand off');
+    expect(genResult.metadata).toBeUndefined();
+
+    const wkResult = await findEmitHandoff(chain.worker).execute(
+      { status: 'ready' },
+      makeToolCtx('worker'),
+    );
+    expect(wkResult.isError).toBe(true);
+    expect(String(wkResult.content)).toContain('cannot hand off');
+    expect(wkResult.metadata).toBeUndefined();
+  });
+
+  // Escape-hatch surface: when a child is stuck and the agent must
+  // bail with status='blocked', the error must tell the agent to
+  // task_stop first (otherwise the agent has no way out of the loop).
+  it('error content surfaces task_stop as the abandon-instead-of-wait path', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    registry.set('child_stuck', pendingPromise());
+    const chain = buildRunnerAgentChain(makeCtxWithRegistry(registry), {});
+    const tool = findEmitHandoff(chain.worker);
+    const result = await tool.execute(
+      { status: 'blocked' },
+      makeToolCtx('worker'),
+    );
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toContain('task_stop');
+  });
+
+  // Race-condition regression — code-reviewer flagged 2026-05-15 that
+  // when the LLM emits dispatch_child_task and emit_handoff in the SAME
+  // tool_use batch, `runner.ts` runs them via Promise.all so dispatch's
+  // async-generator body (which calls `registry.set` only when
+  // `gen.next()` is awaited) might race against emit_handoff's gate
+  // sync-prefix check. Specifically: if dispatch.execute's sync prefix
+  // runs `const gen = toolDispatchChildTask(...)` (no body run) and
+  // then `await gen.next()` (yields), control flows to handoffEmit's
+  // sync prefix where `registry.size === 0` and the gate passes
+  // incorrectly.
+  //
+  // The test below runs the two wrapped tools side-by-side via
+  // `Promise.all`, mirroring the parallel batch shape, and asserts the
+  // gate observes the registered child regardless of microtask
+  // ordering. The mocked `executeChildAgents` keeps the dispatch
+  // promise pending (never resolves) so the registry stays populated
+  // for the duration of the test — emulating the production scenario
+  // where children are mid-flight when the LLM tries the premature
+  // handoff.
+  it('gate fires when dispatch and emit_handoff are issued in the same Promise.all batch (race regression)', async () => {
+    // Force async dispatch so the registry path activates.
+    const prevAsyncDispatch = process.env.KODAX_ASYNC_DISPATCH;
+    delete process.env.KODAX_ASYNC_DISPATCH;
+    // Mock executeChildAgents → never-resolving promise so the child
+    // stays in the registry for the gate to observe AFTER the
+    // dispatch wrapper has registered it.
+    mockExec.mockReturnValue(new Promise<KodaXChildExecutionResult>(() => {}));
+
+    try {
+      const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+      const ctx: KodaXToolExecutionContext = {
+        backups: new Map<string, string>(),
+        gitRoot: process.cwd(),
+        executionCwd: process.cwd(),
+        childTaskRegistry: registry,
+      };
+      const chain = buildRunnerAgentChain(ctx, {});
+      const dispatchTool = chain.worker.tools?.find((t) => t.name === 'dispatch_child_task');
+      if (!dispatchTool) throw new Error('dispatch_child_task missing on worker');
+      const emitTool = findEmitHandoff(chain.worker);
+
+      // Issue both tool executes in parallel — same shape as Runner's
+      // `Promise.all(parallelIndices.map((i) => executeOneCall(i)))`
+      // for a [dispatch, emit_handoff] batch.
+      const [_dispResult, emitResult] = await Promise.all([
+        (dispatchTool as RunnableTool).execute(
+          { id: 'race-probe', objective: 'race probe', readOnly: true },
+          makeToolCtx('worker'),
+        ),
+        emitTool.execute(
+          { status: 'ready', summary: 'attempted' },
+          makeToolCtx('worker'),
+        ),
+      ]);
+
+      // Gate MUST fire: the dispatched child must be visible to the
+      // gate before it returns. If this fails, the gate has a race
+      // condition and emit_handoff leaks through with valid metadata,
+      // re-introducing the production bug.
+      expect(emitResult.isError).toBe(true);
+      expect(emitResult.metadata).toBeUndefined();
+      expect(String(emitResult.content)).toContain('cannot hand off');
+      expect(String(emitResult.content)).toContain('race-probe');
+    } finally {
+      if (prevAsyncDispatch === undefined) delete process.env.KODAX_ASYNC_DISPATCH;
+      else process.env.KODAX_ASYNC_DISPATCH = prevAsyncDispatch;
+      mockExec.mockReset();
+    }
+  });
+});
+
+describe('FEATURE_166 v0.7.41 follow-up — agent-switch label flip', () => {
+  // V2 Worker→Evaluator handoff label-lag fix. The runner-driven outer
+  // loop now provides an `onAgentSwitched` callback to `Runner.run`;
+  // that callback maps the new agent's name to a `KodaXTaskRole` and
+  // calls `observer.agentSwitched(role)`, which emits a fresh status
+  // event with `activeWorkerTitle: ROLE_TO_TITLE[role]`. The REPL reads
+  // this on the next render frame and the new agent's first streaming
+  // output displays under the correct label.
+  //
+  // Without the hook, the label stays on whichever role last fired
+  // `onRoleEmit` (Worker, from emit_handoff success at line ~1093).
+  // Production session 20260515_185354 confirmed: Evaluator's
+  // text-only review summary surfaced under `[Worker]` because zhipu
+  // never emitted emit_verdict to flip the label.
+  //
+  // The test below uses the same withHarnessV2 + makeChainMockLlm
+  // shape as the FEATURE_114 V2 tests above.
+  async function withHarnessV2<T>(
+    value: 'true' | 'false' | undefined,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = process.env.KODAX_HARNESS_V2;
+    if (value === undefined) delete process.env.KODAX_HARNESS_V2;
+    else process.env.KODAX_HARNESS_V2 = value;
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
+      else process.env.KODAX_HARNESS_V2 = prev;
+    }
+  }
+
+  it('emits a phase=worker status with activeWorkerTitle="Evaluator" AFTER Worker emit_handoff and BEFORE Evaluator emit_verdict', async () => {
+    await withHarnessV2('true', async () => {
+      const statuses: Array<Record<string, unknown>> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              textBlocks: [{ text: 'Done.' }],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'e1',
+                name: 'emit_verdict',
+                input: { status: 'accept', user_answer: 'ok' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+        },
+      });
+      await runManagedTaskViaRunner(opts, 'task', mock);
+
+      // Locate the Worker emit_handoff status (V2-rewritten role
+      // 'worker', tagged with the `${title} completed a turn` note
+      // string from `onRoleEmit` at line ~1560).
+      const handoffIdx = statuses.findIndex(
+        (s) =>
+          s.phase === 'worker'
+          && s.activeWorkerId === 'worker'
+          && typeof s.note === 'string'
+          && (s.note as string).includes('completed a turn'),
+      );
+      expect(handoffIdx).toBeGreaterThanOrEqual(0);
+
+      // Locate the FEATURE_166 agentSwitched emit — note shape
+      // `${title} taking over`, activeWorkerTitle='Evaluator'.
+      const switchedIdx = statuses.findIndex(
+        (s) =>
+          s.phase === 'worker'
+          && s.activeWorkerId === 'evaluator'
+          && s.note === 'Evaluator taking over',
+      );
+      expect(switchedIdx).toBeGreaterThanOrEqual(0);
+
+      // The Evaluator emit_verdict status (role='evaluator', `completed a turn`).
+      const verdictIdx = statuses.findIndex(
+        (s) =>
+          s.phase === 'worker'
+          && s.activeWorkerId === 'evaluator'
+          && typeof s.note === 'string'
+          && (s.note as string).includes('completed a turn'),
+      );
+      expect(verdictIdx).toBeGreaterThanOrEqual(0);
+
+      // Ordering pin: agent-switched MUST land AFTER Worker emit_handoff
+      // AND BEFORE Evaluator emit_verdict. This is the whole point —
+      // pre-FEATURE_166 the verdict was the FIRST place the label flipped.
+      expect(switchedIdx).toBeGreaterThan(handoffIdx);
+      expect(switchedIdx).toBeLessThan(verdictIdx);
+
+      // persistToHistory:false on the agent-switched emit so it
+      // doesn't pollute lineage / transcript replay. The slot-tool
+      // emits remain the authoritative anchors.
+      expect((statuses[switchedIdx] as Record<string, unknown>).persistToHistory).toBe(false);
+    });
+  });
+
+  it('does not emit agent-switched when no handoff happens (single-role H0 direct run)', async () => {
+    // V1 Scout H0 path: no handoff at all (Scout-only run). The
+    // observer's agentSwitched callback should never fire because
+    // the agent runtime never invokes the onAgentSwitched hook
+    // without a handoffSignal.
+    await withHarnessV2('false', async () => {
+      const statuses: Array<Record<string, unknown>> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+      const mock = makeChainMockLlm({
+        scout: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 's1',
+                name: 'emit_scout_verdict',
+                input: {
+                  confirmed_harness: 'H0_DIRECT',
+                  direct_completion_ready: 'yes',
+                  summary: 'Trivial',
+                  scope: [],
+                  required_evidence: [],
+                  harness_rationale: 'Trivial.',
+                },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
+        },
+      });
+      await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
+
+      // No `taking over` notes — that string is unique to the
+      // FEATURE_166 agentSwitched emit shape, so absence pins the
+      // "hook did not fire" invariant.
+      const switchedStatuses = statuses.filter(
+        (s) => typeof s.note === 'string' && (s.note as string).endsWith(' taking over'),
+      );
+      expect(switchedStatuses).toEqual([]);
+    });
+  });
+
+  it('NULL_OBSERVER provides a no-op agentSwitched so chain-only test paths do not throw', () => {
+    // The NULL_OBSERVER is used in topology-only tests that build the
+    // chain without runtime events. agentSwitched must exist (or
+    // calling it would throw `undefined is not a function`) but be
+    // a no-op. This is a structural pin — without it, the
+    // ObserverBridge contract addition could silently break any
+    // existing test that passes NULL_OBSERVER.
+    //
+    // We can't import NULL_OBSERVER directly (not exported), but
+    // buildRunnerAgentChain accepts the default `observer:
+    // NULL_OBSERVER` parameter, so reaching this line without
+    // throwing is itself the assertion.
+    expect(() => buildRunnerAgentChain(makeCtx(), {})).not.toThrow();
+  });
 });

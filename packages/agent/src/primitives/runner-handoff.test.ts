@@ -363,4 +363,144 @@ describe('Runner integration — handoff chain', () => {
     expect(result.output).toBe('generator final answer');
     expect(result.output).not.toBe('scout transient');
   });
+
+  // ----------------------------------------------------------------
+  // FEATURE_166 (v0.7.41 follow-up) — onAgentSwitched hook
+  //
+  // The hook fires after `detectHandoffSignal` swaps `currentAgent`
+  // and after the transcript inputFilter + system replacement run,
+  // but before the next iteration's `runGenerationTurn`. Production
+  // session 20260515_185354 confirmed the missing hook causes a
+  // [Worker]→[Evaluator] label-lag that surfaces on every Evaluator
+  // turn that does not emit_verdict-first.
+  // ----------------------------------------------------------------
+
+  it('FEATURE_166: onAgentSwitched fires once per handoff with from/to/iteration', async () => {
+    const evalTool = makeEmitTool('emit_verdict', undefined);
+    const evaluator: Agent = createAgent({
+      name: 'f166-evaluator',
+      instructions: 'eval-sys',
+      tools: [evalTool],
+    });
+    const handoffTool = makeEmitTool('emit_handoff', 'f166-evaluator');
+    const worker: Agent = createAgent({
+      name: 'f166-worker',
+      instructions: 'worker-sys',
+      tools: [handoffTool],
+      handoffs: [createHandoff({ target: evaluator, kind: 'continuation' })],
+    });
+
+    let turn = 0;
+    const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
+      turn += 1;
+      if (agent.name === 'f166-worker') {
+        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_handoff', input: {} }] };
+      }
+      if (turn === 2) {
+        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_verdict', input: {} }] };
+      }
+      return { text: 'evaluator final', toolCalls: [] };
+    };
+
+    const switches: Array<{ from: string; to: string; iteration: number }> = [];
+    await Runner.run(worker, 'q', {
+      llm,
+      onAgentSwitched: ({ from, to, iteration }) => {
+        switches.push({ from: from.name, to: to.name, iteration });
+      },
+    });
+
+    // Single handoff Worker → Evaluator. Hook fires once with the
+    // matching identities. `iteration` is the for-loop index at
+    // which the handoff was detected (Worker's turn, before the
+    // Evaluator's first runGenerationTurn).
+    expect(switches).toEqual([{ from: 'f166-worker', to: 'f166-evaluator', iteration: 0 }]);
+  });
+
+  it('FEATURE_166: hook does not fire when no handoff happens (single-agent run)', async () => {
+    const solo: Agent = createAgent({ name: 'f166-solo', instructions: 'solo' });
+    const llm = async (): Promise<RunnerLlmResult> => ({ text: 'done', toolCalls: [] });
+    const onAgentSwitched = vi.fn();
+    await Runner.run(solo, 'q', { llm, onAgentSwitched });
+    expect(onAgentSwitched).not.toHaveBeenCalled();
+  });
+
+  it('FEATURE_166: hook is awaited before the new agent\'s first runGenerationTurn fires', async () => {
+    // Pin: hook is awaited so callers can flush ordered side effects
+    // (status emits, lineage writes) before the new agent's first
+    // streaming output begins. Without await, a non-trivial caller
+    // hook would race against runGenerationTurn and the label flip
+    // could still surface AFTER the new agent's first tokens.
+    const evalTool = makeEmitTool('emit_verdict', undefined);
+    const evaluator: Agent = createAgent({
+      name: 'f166-async-eval',
+      instructions: 'eval',
+      tools: [evalTool],
+    });
+    const handoffTool = makeEmitTool('emit_handoff', 'f166-async-eval');
+    const worker: Agent = createAgent({
+      name: 'f166-async-worker',
+      instructions: 'worker',
+      tools: [handoffTool],
+      handoffs: [createHandoff({ target: evaluator, kind: 'continuation' })],
+    });
+
+    const eventLog: string[] = [];
+    let turn = 0;
+    const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
+      turn += 1;
+      eventLog.push(`llm:${agent.name}`);
+      if (agent.name === 'f166-async-worker') {
+        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_handoff', input: {} }] };
+      }
+      return { text: 'eval-final', toolCalls: [] };
+    };
+
+    await Runner.run(worker, 'q', {
+      llm,
+      onAgentSwitched: async () => {
+        // Simulate an async status flush.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        eventLog.push('switched');
+      },
+    });
+
+    // 'switched' MUST appear before the Evaluator's first LLM call.
+    const switchedIdx = eventLog.indexOf('switched');
+    const firstEvalIdx = eventLog.indexOf('llm:f166-async-eval');
+    expect(switchedIdx).toBeGreaterThanOrEqual(0);
+    expect(firstEvalIdx).toBeGreaterThan(switchedIdx);
+  });
+
+  it('FEATURE_166: hook errors propagate verbatim (caller-controlled contract)', async () => {
+    const evalTool = makeEmitTool('emit_verdict', undefined);
+    const evaluator: Agent = createAgent({
+      name: 'f166-err-eval',
+      instructions: 'eval',
+      tools: [evalTool],
+    });
+    const handoffTool = makeEmitTool('emit_handoff', 'f166-err-eval');
+    const worker: Agent = createAgent({
+      name: 'f166-err-worker',
+      instructions: 'worker',
+      tools: [handoffTool],
+      handoffs: [createHandoff({ target: evaluator, kind: 'continuation' })],
+    });
+
+    const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
+      if (agent.name === 'f166-err-worker') {
+        return { text: '', toolCalls: [{ id: 'c1', name: 'emit_handoff', input: {} }] };
+      }
+      return { text: 'unreachable', toolCalls: [] };
+    };
+
+    await expect(
+      Runner.run(worker, 'q', {
+        llm,
+        onAgentSwitched: () => {
+          throw new Error('caller-side fault');
+        },
+      }),
+    ).rejects.toThrow('caller-side fault');
+  });
 });

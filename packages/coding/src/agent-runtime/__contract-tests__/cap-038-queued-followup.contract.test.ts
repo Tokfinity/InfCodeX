@@ -17,9 +17,12 @@
  *
  * Time-ordering constraint: consulted at end-of-turn terminal decision
  * (4 call sites in agent.ts: success exit, COMPLETE signal, BLOCKED
- * signal, error path) PLUS the mid-turn-yield boundary in
- * `runner-driven.ts` (FEATURE_159 unification) to keep the loop running
- * when the host has a queued user input ready.
+ * signal, error path). The Runner-driven (AMA V2) path NO LONGER
+ * consults this predicate at the mid-turn-yield boundary — FEATURE_164
+ * v0.7.41 retired the empty-turn yield in favour of `beforeNextTurn`
+ * mid-turn user-message injection. SA path retains the predicate at
+ * its terminal sites; this test pins the predicate's queue-vs-events
+ * dispatch logic for those remaining consumers.
  *
  * FEATURE_159 v0.7.40: predicate now reads MessageQueue (the canonical
  * source of queued prompts) AS WELL AS `events.hasPendingInputs?.()`.
@@ -27,7 +30,8 @@
  * queueing without routing through MessageQueue. Strict `=== true`
  * comparison is still load-bearing on the events path.
  *
- * STATUS: ACTIVE since FEATURE_100 P2; widened in FEATURE_159 v0.7.40.
+ * STATUS: ACTIVE since FEATURE_100 P2; widened in FEATURE_159 v0.7.40;
+ * AMA V2 caller retired in FEATURE_164 v0.7.41.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

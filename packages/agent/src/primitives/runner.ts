@@ -197,6 +197,62 @@ export interface RunOptions {
    * trust = runtime trust).
    */
   readonly parentToolCapabilities?: readonly ToolCapability[];
+  /**
+   * FEATURE_164 (v0.7.41) — mid-turn message injection hook.
+   *
+   * Called AFTER tool execution + compaction + handoff handling have
+   * completed for the current iteration, but BEFORE the next iteration's
+   * `runGenerationTurn` starts. The hook returns an array of additional
+   * messages (typically user-role prompts the caller wants to splice in)
+   * which the Runner pushes to the transcript and Session before the
+   * next LLM call.
+   *
+   * Designed to support claudecode-style "chat-while-waiting": when the
+   * user types a new query while the agent is mid-task, the caller's
+   * hook can drain the input queue and inject it as a user message at
+   * the tool-result boundary — Worker continues its loop, the LLM
+   * sees the new user message in its next call, and no empty turn is
+   * emitted. Replaces the legacy "return `{text: '', toolCalls: []}`"
+   * pattern that polluted the transcript with an empty assistant turn.
+   *
+   * The hook fires only when the current iteration ran tool calls (the
+   * terminal-no-tool branch returns before reaching here). Empty return
+   * value is the no-op fast path. Returning a transcript-replacement
+   * is intentionally NOT supported — callers wanting that semantic
+   * should use `compactionHook` instead.
+   */
+  readonly beforeNextTurn?: (ctx: {
+    readonly agent: Agent;
+    readonly transcript: readonly AgentMessage[];
+    readonly iteration: number;
+  }) => Promise<readonly AgentMessage[]>;
+  /**
+   * FEATURE_166 (v0.7.41 follow-up) — agent-switch hook.
+   *
+   * Fires AFTER `currentAgent` has been swapped to the handoff target
+   * (`handoffSignal.to`) AND after the transcript inputFilter +
+   * system-message replacement have run, but BEFORE the next
+   * iteration's `runGenerationTurn`. Lets callers react to a role
+   * transition between
+   * turns — most notably the coding observer, which uses this signal to
+   * flip the REPL's `activeWorkerTitle` ahead of the new agent's first
+   * streaming output (without this hook, the label only flips when the
+   * new agent's first slot-tool succeeds, so the label LAGS through
+   * Evaluator's thinking / pre-verdict text and any verification
+   * tool calls; production session 20260515_185354 trace confirms).
+   *
+   * Awaitable so callers can perform async side effects (e.g. flushing
+   * a status emit through an event bus). Errors propagate verbatim —
+   * the hook is caller-controlled, matching `beforeNextTurn` semantics.
+   *
+   * Fires at most once per iteration (only the first matching handoff
+   * in a tool-result batch transitions ownership; see line ~782).
+   */
+  readonly onAgentSwitched?: (ctx: {
+    readonly from: Agent;
+    readonly to: Agent;
+    readonly iteration: number;
+  }) => void | Promise<void>;
 }
 
 /**
@@ -799,6 +855,44 @@ async function genericRun<TData>(
           role: 'system',
           content: buildSystemPrompt(currentAgent, rawHandoffInstructions),
         };
+      }
+      // FEATURE_166 (v0.7.41 follow-up) — fire the agent-switch hook
+      // AFTER the transcript filter + system replacement complete, so
+      // callers observing the transition see the new agent's full
+      // post-handoff state. Skip silently when the caller didn't
+      // register a hook.
+      if (opts.onAgentSwitched) {
+        await opts.onAgentSwitched({
+          from: handoffSignal.from,
+          to: currentAgent,
+          iteration,
+        });
+      }
+    }
+
+    // FEATURE_164 (v0.7.41) — mid-turn message injection hook.
+    // Fires AFTER tool execution + compaction + handoff handling, BEFORE
+    // the next iteration's `runGenerationTurn`. Caller-returned messages
+    // are appended to the transcript (and session, when configured) so
+    // the next LLM call sees them as the most recent context.
+    //
+    // Errors propagate verbatim — the hook is caller-controlled so a
+    // throw here means the caller asked for the run to fail. Unlike
+    // `compactionHook` (where a buggy compactor must NOT abort the run),
+    // injection failures are explicit caller decisions.
+    if (opts.beforeNextTurn) {
+      const extraMessages = await opts.beforeNextTurn({
+        agent: currentAgent,
+        transcript,
+        iteration,
+      });
+      if (extraMessages.length > 0) {
+        for (const message of extraMessages) {
+          transcript.push(message);
+          if (opts.session) {
+            await appendMessageEntry(opts.session, message);
+          }
+        }
       }
     }
   }

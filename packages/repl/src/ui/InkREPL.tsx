@@ -5375,6 +5375,42 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       setCurrentTool(undefined);
     },
     hasPendingInputs: () => pendingInputsRef.current.length > 0,
+    // FEATURE_164 (v0.7.41) — mid-turn user message injection visibility.
+    // The Runner-driven path's `beforeNextTurn` hook fires this after it
+    // drains user-typed prompts from MessageQueue mid-Q1-round and splices
+    // them into the agent transcript. Render each as a user history item
+    // so the user sees their typed query echoed inline with the ongoing
+    // conversation, rather than waiting for the round to end.
+    //
+    // Plan-A fix (v0.7.41): when a managed worker owns the foreground
+    // turn, route through the foreground ledger (not `addHistoryItem`).
+    // Static history renders ABOVE the managed-foreground stack while
+    // the worker is running, so an `addHistoryItem` call here would pin
+    // Q2 above Worker turn-1's output instead of interleaving between
+    // turn 1 and turn 2. Round-end finalization (`recordCompletedAgentRound`)
+    // commits the foreground ledger in its natural temporal order, which
+    // places the Q2 user item exactly between the two worker turns it
+    // was injected between — same precedent as `emitInfoItemToCorrectLayer`
+    // (MED-6 HARD RULE).
+    onMidTurnUserMessages: (contents: readonly string[]) => {
+      if (userInterruptedRef.current) {
+        return;
+      }
+      for (const content of contents) {
+        const normalized = content.trim();
+        if (!normalized) continue;
+        if (managedForegroundOwnerRef.current.workerId) {
+          appendManagedForegroundLedgerItem({
+            id: `mid-turn-user-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type: "user",
+            text: normalized,
+            timestamp: Date.now(),
+          });
+        } else {
+          addHistoryItem({ type: "user", text: normalized });
+        }
+      }
+    },
     onError: (error: Error) => {
       const latestExecutingTool = findLatestExecutingTool();
       if (latestExecutingTool?.name) {
