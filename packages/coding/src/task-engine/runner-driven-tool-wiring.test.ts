@@ -1,5 +1,5 @@
 /**
- * FEATURE_168 (v0.7.42) — AMA agent tool-wiring contract tests.
+ * FEATURE_168 (v0.7.40 hotfix) — AMA agent tool-wiring contract tests.
  *
  * Pins the runtime tool surface of each AMA role to the
  * `getAmaRoleExpectedToolNames(role)` derivation (registry minus
