@@ -295,6 +295,28 @@ export interface KodaXEvents {
     sessionId?: string;
     lastTextPreview: string;
   }) => void;
+  /**
+   * FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback.
+   *
+   * Fires when the runner-driven outer loop detects that the Evaluator
+   * exited a turn without `emit_verdict` AND the B1 retry exhausted its
+   * cap. The runner THEN writes a synthesized terminal verdict into
+   * `recorder.verdict` (B2) and fires this event so SDK consumers
+   * (REPL status line, telemetry sinks, dashboards) can surface the
+   * fallback rather than mistake it for a real `accept`. The verdict
+   * carries a stable `reason` so post-hoc filtering can isolate
+   * synthesized terminations.
+   *
+   * Fires AFTER `recorder.verdict` is committed but BEFORE
+   * `formatDeterministicEvaluatorResult` builds the final `KodaXResult`
+   * — consumers see the synth signal in causal order before the result
+   * surfaces.
+   */
+  onEvaluatorFallbackSynthesized?: (
+    info: import(
+      './task-engine/_internal/managed-task/evaluator-verdict-retry.js'
+    ).EvaluatorFallbackSynthesizedInfo,
+  ) => void;
   /** Returns a formatted cost report for the current session. Set by agent at session start. */
   getCostReport?: { current: (() => string) | null };
 

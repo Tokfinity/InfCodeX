@@ -182,6 +182,55 @@ export function detectIdleYield(snapshot: IdleYieldSnapshot): boolean {
 }
 
 /**
+ * FEATURE_167 (v0.7.41) — terminal-verdict-missing predicate.
+ *
+ * Companion to `detectIdleYield`, gating the OPPOSITE half of the
+ * outer-loop exit decision: when the inner Runner.run loop exits
+ * with no tool calls AFTER a handoff has fired but BEFORE the
+ * Evaluator has emitted a terminal verdict, the run is structurally
+ * INCOMPLETE — the audit step is missing. `detectIdleYield` correctly
+ * returns false in this state (the gate at line 174 short-circuits on
+ * `hasEmittedHandoff`), so the outer loop currently terminates with
+ * `recorder.verdict === undefined`. Downstream `deriveFinalStatus`
+ * then falls back to `signal:'COMPLETE'`, falsely reporting success
+ * for a failed audit (production session 20260515_185354).
+ *
+ * This predicate identifies that exact missing-verdict state so the
+ * outer loop can branch into a retry path (inject a "call emit_verdict"
+ * prompt and re-invoke the Evaluator) before falling through to a
+ * synthesized fallback verdict.
+ *
+ * **Disjoint from `detectIdleYield`** by construction:
+ *
+ *   - `detectIdleYield` requires `!hasEmittedHandoff`
+ *   - `detectMissingTerminalVerdict` requires `hasEmittedHandoff`
+ *
+ * Both also require `lastAssistantToolCallCount === 0`. Both gate on
+ * `!hasEmittedTerminalVerdict`. The two predicates partition the
+ * "Evaluator turn just exited text-only" space cleanly — no run can
+ * satisfy both.
+ *
+ * **Pending children take precedence over verdict retry.** Predicate
+ * is intentionally `pendingChildTaskCount <= 0 && !hasPendingBackgroundMessages`
+ * so that if Evaluator dispatched audit children and is correctly
+ * idle-yielding for them (FEATURE_155 Bug C discipline), the
+ * verdict-missing retry does NOT fire — `detectIdleYield` handles
+ * that path instead. Only when there's nothing left to wait on does
+ * the verdict-missing branch take over.
+ */
+export function detectMissingTerminalVerdict(
+  snapshot: IdleYieldSnapshot,
+): boolean {
+  if (snapshot.lastAssistantToolCallCount > 0) return false;
+  if (!snapshot.hasEmittedHandoff) return false;
+  if (snapshot.hasEmittedTerminalVerdict) return false;
+  // Defer to idle-yield when there's pending wait work.
+  if (snapshot.pendingChildTaskCount > 0) return false;
+  if (snapshot.hasPendingBackgroundMessages) return false;
+  return true;
+}
+
+/**
  * Discriminated union surfacing the reason a wake completed.
  *
  * Generic over `TChildResult` so coding-flavor consumers can carry
