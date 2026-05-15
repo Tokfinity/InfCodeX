@@ -285,7 +285,6 @@ import {
   emitProviderRateLimit,
   emitSessionStart,
   emitStreamEnd,
-  hasQueuedFollowUp,
   isVisibleToolName,
 } from '../agent-runtime/event-emitter.js';
 // CAP-008: shared initial-messages resolver. Three-tier fallback
@@ -1263,6 +1262,32 @@ export interface ObserverBridge {
     role: KodaXTaskRole | undefined,
     pendingCount: number,
   ) => void;
+  /**
+   * FEATURE_166 (v0.7.41 follow-up) — fire on agent handoff transitions
+   * to flip the REPL's `activeWorkerTitle` ahead of the new agent's
+   * first streaming output.
+   *
+   * Without this, the label only updates when the new agent's first
+   * `emit_*` slot tool succeeds (see `wrapEmitterWithRecorder` →
+   * `onRoleEmit` at line ~1093). For Evaluator turns that emit any
+   * pre-verdict text / thinking / non-verdict tool call, the label
+   * lags through every such piece of output. Production session
+   * 20260515_185354 confirmed: Worker→Evaluator handoff followed by
+   * Evaluator's text-only summary renders the entire summary under
+   * the stale `[Worker]` label.
+   *
+   * Pure UI-state flip: NO recorder mutation, NO budget-extension
+   * dialog, NO history persistence (`persistToHistory: false`). The
+   * authoritative role-emit on slot success (`onRoleEmit`) continues
+   * to drive evidence entries, checkpoints, and budget accounting —
+   * this hook is strictly a fast-path for the visible label.
+   *
+   * Agent-agnostic — `role` may be `undefined` when the new agent's
+   * name doesn't map to a known `KodaXTaskRole`; in that case the
+   * consumer should leave the label untouched rather than render an
+   * unmapped fallback.
+   */
+  readonly agentSwitched: (role: KodaXTaskRole | undefined) => void;
 }
 
 /**
@@ -1634,6 +1659,42 @@ function buildObserverBridge(
           pendingCount > 0
             ? `${resolvedTitle ?? 'Agent'} idle — waiting for ${pendingCount} child task${pendingCount === 1 ? '' : 's'}`
             : `${resolvedTitle ?? 'Agent'} idle — resuming`,
+        persistToHistory: false,
+        ...buildManagedStatusBudgetFields(budget, budgetApprovalRef.current),
+      });
+    },
+    agentSwitched: (role) => {
+      // FEATURE_166 (v0.7.41 follow-up) — emit a lightweight status
+      // event so the REPL flips `activeWorkerTitle` ahead of the new
+      // agent's first streaming output.
+      //
+      // Pure UI label flip. Compared to `onRoleEmit`:
+      //   - NO recorder mutation (slot stays driven by the
+      //     authoritative emit_* tool path)
+      //   - NO budget-extension dialog (no slot-success boundary
+      //     crossed here)
+      //   - NO checkpoint write (handoff_taken invariant + lineage
+      //     entries handled by the agent runtime's handoff path)
+      //   - NO evidence entry (those are slot-emission anchored)
+      //   - `persistToHistory: false` mirrors `idleWaiting` — this
+      //     is transient REPL state, not a lineage milestone
+      //
+      // When `role` is undefined (unmapped agent name), skip rather
+      // than overwrite the existing label with a fallback — the
+      // ObserverBridge contract says the consumer leaves the label
+      // untouched in that case.
+      if (!events?.onManagedTaskStatus) return;
+      if (!role) return;
+      events.onManagedTaskStatus({
+        agentMode: 'ama',
+        harnessProfile: harnessRef.current,
+        currentRound: roundRef.current,
+        maxRounds: maxRoundsRef.current,
+        upgradeCeiling: harnessRef.current,
+        phase: 'worker',
+        activeWorkerId: role,
+        activeWorkerTitle: ROLE_TO_TITLE[role],
+        note: `${ROLE_TO_TITLE[role]} taking over`,
         persistToHistory: false,
         ...buildManagedStatusBudgetFields(budget, budgetApprovalRef.current),
       });
@@ -2146,6 +2207,7 @@ const NULL_OBSERVER: ObserverBridge = {
   notifyBudgetApprovalRequest: () => undefined,
   notifyChildFanout: () => undefined,
   idleWaiting: () => undefined,
+  agentSwitched: () => undefined,
 };
 
 /**
@@ -2400,7 +2462,97 @@ export function buildRunnerAgentChain(
     todoStore,
     pendingFailedResetRef,
   );
-  const handoffEmit = wrapEmitterWithRecorder(emitHandoff, 'handoff', recorder, observer, budget);
+  // FEATURE_165 (v0.7.41) — pending-children gate on emit_handoff.
+  //
+  // The outer idle-yield loop's `detectIdleYield` treats
+  // `hasEmittedHandoff=true` as a terminal exit (Worker hands off →
+  // Evaluator owns the rest). This is correct for the normal flow,
+  // but if the LLM calls emit_handoff while `dispatch_child_task`
+  // children are still in flight, the registry is non-empty at exit,
+  // banners are stranded in the background queue, and the user-visible
+  // run-summary is missing the child outputs (production trace
+  // 2026-05-15: zhipu/glm51 worker emit_handoff'd mid-fanout, 3
+  // children orphaned).
+  //
+  // Gate behaviour: when invoked with a non-empty `childTaskRegistry`,
+  // returns `isError:true` AND omits `metadata`. Two invariants the
+  // rest of the pipeline depends on are observed by this shape:
+  //
+  //   1. `wrapEmitterWithRecorder` (line ~821) guards
+  //      `recorder[slot] = result.metadata` behind
+  //      `if (!result.isError && result.metadata)`, so `recorder.handoff`
+  //      stays `undefined` when the gate fires. The outer-loop
+  //      `computeSnapshot` (line ~5645) reads `Boolean(recorder.handoff)`,
+  //      so `hasEmittedHandoff` stays false → idle-yield engages →
+  //      `<task-completed>` banners get woven into the next Worker turn
+  //      as designed.
+  //
+  //   2. `detectHandoffSignal`
+  //      (`agent/src/primitives/runner-handoff.ts:53`) reads
+  //      `result.metadata.handoffTarget`; without metadata, no handoff
+  //      signal fires, so `currentAgent` does NOT switch from Worker →
+  //      Evaluator on this turn. Worker sees the error tool_result on
+  //      its next turn and (per role prompt) ends text-only so
+  //      idle-yield picks up.
+  //
+  // Scope: gates BOTH V1 Generator and V2 Worker uses of `handoffEmit`
+  // (the variable is shared at lines 2558 / 2682). Evaluator's
+  // `emit_verdict` has its own analogous discipline via the prompt's
+  // CHILD-TASK WAIT DISCIPLINE block (FEATURE_155 v0.7.38) AND the
+  // outer-loop's `hasEmittedTerminalVerdict` gate — those are
+  // unaffected here.
+  //
+  // Same-batch race (resolved empirically — `runner-driven.test.ts`
+  // FEATURE_165 race-regression test pins the behaviour): when the
+  // LLM emits `[dispatch_child_task, emit_handoff]` in ONE tool_use
+  // batch, `runner.ts:737-739` runs both via `Promise.all`. The
+  // `wrapDispatchChildTaskForRole` wrapper calls `gen.next()` on
+  // `toolDispatchChildTask`'s async generator BEFORE its first
+  // `await` — V8 / modern engines run async-generator bodies
+  // synchronously through the first `yield`, so `registerChildTask`
+  // (registry.set) executes before `gen.next()` returns control to
+  // the awaiter. By the time `emit_handoff`'s wrapper sync prefix
+  // (this gate) runs, the registry is already populated. The race
+  // regression test exercises this exact `Promise.all` shape and
+  // expects the gate to fire — if a future Node version defers
+  // async-generator body execution, that test pins the regression.
+  //
+  // Budget accounting: when the gate fires, `incrementManagedBudgetUsage`
+  // inside `wrapEmitterWithRecorder` does NOT run (we short-circuit
+  // before delegating). Matches the broader pattern that a failed /
+  // rejected tool call does not consume the recorder slot, so it
+  // should not consume the budget either.
+  const handoffEmitBase = wrapEmitterWithRecorder(
+    emitHandoff,
+    'handoff',
+    recorder,
+    observer,
+    budget,
+  );
+  const handoffEmit: RunnableTool = {
+    ...handoffEmitBase,
+    execute: async (input, runnerCtx): Promise<RunnerToolResult> => {
+      const registry = ctx.childTaskRegistry;
+      if (registry && registry.size > 0) {
+        const pendingIds = [...registry.keys()].slice(0, 5).join(', ');
+        const more = registry.size > 5 ? `, +${registry.size - 5} more` : '';
+        return {
+          content:
+            `[emit_handoff] cannot hand off while ${registry.size} child task(s) `
+            + `are still in flight: ${pendingIds}${more}. Each dispatched child `
+            + `must produce a matching <task-completed task_id="…"> in your `
+            + `transcript before you can hand off — otherwise the Evaluator `
+            + `audits a half-finished run and the child work is orphaned. End `
+            + `your turn with text only; the runner will resume you when each `
+            + `child completes. To abandon a child instead of waiting, call `
+            + `task_stop(task_id, reason="…") first and wait for the resulting `
+            + `<task-completed> (it carries error="stopped: …").`,
+          isError: true,
+        };
+      }
+      return handoffEmitBase.execute(input, runnerCtx);
+    },
+  };
   const verdictEmit = wrapEmitterWithRecorder(
     emitVerdict,
     'verdict',
@@ -3106,27 +3258,25 @@ export function buildRunnerLlmAdapter(
     iteration += 1;
     options.events?.onIterationStart?.(iteration, MAX_ITER_HINT);
 
-    // F1 parity (v0.7.26) — yield to queued user input at iteration
-    // boundary. Without this, the user hits Enter mid-run but their new
-    // prompt sits in the queue until the current Scout/Generator/
-    // Evaluator chain fully completes. Returning an empty reply with no
-    // tool calls makes Runner exit the loop naturally — the Runner sees
-    // "no more work" rather than an error, and the outer REPL can pick
-    // up the queued prompt immediately.
+    // FEATURE_164 (v0.7.41) — mid-iteration yield retired here.
     //
-    // FEATURE_159 v0.7.40: `hasQueuedFollowUp` is the single predicate
-    // — it reads MessageQueue (the canonical source) and falls back to
-    // `events.hasPendingInputs?.()` for SDK consumers with custom
-    // queueing. Mid-turn yield, terminal yield (run-substrate.ts), and
-    // cancellation yield (tool-cancellation.ts) all consult the same
-    // predicate so behavior is uniform across substrate sites.
-    if (hasQueuedFollowUp(options.events ?? {})) {
-      return {
-        text: '',
-        toolCalls: [],
-        thinkingBlocks: undefined,
-      };
-    }
+    // The legacy v0.7.26 F1 parity check used to fire `hasQueuedFollowUp`
+    // at this exact boundary and `return { text:'', toolCalls:[] }` to
+    // force Runner.run to exit the loop. v0.7.40 FEATURE_159 made it
+    // worse by routing the predicate through MessageQueue directly —
+    // any user-typed prompt entering the queue mid-Q1 triggered the
+    // empty-turn yield, polluting the transcript with `{type:'text',
+    // text:''}` placeholder, surfacing `[No response text was produced
+    // for this round]` in the REPL, and feeding the model an empty
+    // assistant turn before the next user message.
+    //
+    // Replacement: claudecode-style mid-turn injection via the agent
+    // package's `beforeNextTurn` hook (see the Runner.run wiring in
+    // `runManagedTaskViaRunnerInner`). The hook drains queued user
+    // prompts AFTER tool execution and BEFORE the next LLM call,
+    // splicing them as real user messages into the transcript — Worker
+    // keeps running, the LLM sees the new prompts in its next turn,
+    // and no empty assistant turn ever reaches the transcript.
 
     let streamResult: {
       textBlocks?: readonly { text: string }[];
@@ -5586,6 +5736,60 @@ async function runManagedTaskViaRunnerInner(
         compactionHook,
         guardrails: [...runnerGuardrails],
         toolObserver: runnerToolObserver,
+        // FEATURE_164 (v0.7.41) — mid-turn user-prompt injection.
+        // Replaces the legacy mid-iteration empty-turn yield (see the
+        // retirement note in `streamingLLM` above). On every tool-turn
+        // boundary, drain main-thread `mode:'prompt'` messages from the
+        // canonical MessageQueue and splice them into the transcript
+        // as real user messages — Worker continues its loop, the next
+        // LLM call sees the new prompts in natural conversation order,
+        // and the REPL gets a chance to render them via
+        // `events.onMidTurnUserMessages` so the user sees their typed
+        // query echoed without waiting for the round to end.
+        //
+        // Scope is intentionally narrow: only `agentId:undefined`
+        // (main-thread) `mode:'prompt'` messages. Background banners
+        // (task-notification) remain on the idle-yield path, which is
+        // the only safe place to drain them given the fast-child race
+        // (see Bug E hotfix at `hasPendingBackgroundMessages`).
+        beforeNextTurn: async () => {
+          const drained = getMessageQueue().dequeue({
+            agentId: undefined,
+            maxPriority: 'user',
+            mode: 'prompt',
+          });
+          if (drained.length === 0) return [];
+          const contents = drained.map((m) => m.content);
+          options.events?.onMidTurnUserMessages?.(contents);
+          return drained.map((m) => ({
+            role: 'user' as const,
+            content: m.content,
+          }));
+        },
+        // FEATURE_166 (v0.7.41 follow-up) — agent-switch UI label flip.
+        // Fires once per handoff after the agent runtime has fully
+        // committed the transition (target's system prompt installed,
+        // inputFilter applied). Map the new agent's name to a role
+        // and ask the observer to update the REPL's
+        // `activeWorkerTitle` so the next streaming output renders
+        // under the correct label instead of the stale Worker label.
+        //
+        // The mapping is intentionally a local switch (NOT
+        // `agentNameToManagedRole` at line ~3048) because that helper
+        // is wired into the fenced-fallback synth path and adding
+        // Worker there would change verdict-synthesis behaviour. The
+        // shape duplicates `onIdleWaiting`'s mapping below — both
+        // need Worker recognised; the fallback helper does not.
+        onAgentSwitched: ({ to }) => {
+          const switchedRole: KodaXTaskRole | undefined =
+            to.name === SCOUT_AGENT_NAME ? 'scout'
+              : to.name === PLANNER_AGENT_NAME ? 'planner'
+                : to.name === GENERATOR_AGENT_NAME ? 'generator'
+                  : to.name === EVALUATOR_AGENT_NAME ? 'evaluator'
+                    : to.name === WORKER_AGENT_NAME ? 'worker'
+                      : undefined;
+          observer.agentSwitched(switchedRole);
+        },
         // Iteration cap for the entire chain. Core's default (20) is
         // meant for stand-alone single-agent runs and is far too low
         // for a multi-role investigation + execution + verify chain.

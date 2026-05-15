@@ -650,6 +650,190 @@ describe('Runner', () => {
     });
   });
 
+  describe('beforeNextTurn hook (FEATURE_164)', () => {
+    function makeEchoTool(): RunnableTool {
+      return {
+        name: 'echo',
+        description: 'Echo the provided text back to the caller',
+        input_schema: {
+          type: 'object',
+          properties: { text: { type: 'string' } },
+          required: ['text'],
+        },
+        execute: async (input) => ({
+          content: `echoed:${(input as { text?: string }).text ?? ''}`,
+        }),
+      };
+    }
+
+    it('does nothing when hook is omitted (back-compat default)', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'no-hook-agent',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        return { text: 'done', toolCalls: [] };
+      });
+      const result = await Runner.run(agent, 'hi', { llm });
+      expect(result.output).toBe('done');
+      // 5 messages: system, user, assistant(tool_use), user(tool_result), assistant(final)
+      expect(result.messages).toHaveLength(5);
+    });
+
+    it('injects returned messages into transcript before the next LLM call', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'inject-agent',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      let secondCallSawInjection = false;
+      const llm = vi.fn(async (messages): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        // Second call: transcript should include the injected user message
+        // between the tool_result and this generation point.
+        const last = messages[messages.length - 1]!;
+        secondCallSawInjection = last.role === 'user' && last.content === 'injected by hook';
+        return { text: 'done', toolCalls: [] };
+      });
+      const beforeNextTurn = vi.fn(async () => [
+        { role: 'user' as const, content: 'injected by hook' },
+      ]);
+      const result = await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+      expect(beforeNextTurn).toHaveBeenCalledTimes(1);
+      expect(secondCallSawInjection).toBe(true);
+      // Transcript: system, user, assistant(tool_use), user(tool_result), user(injected), assistant(final)
+      expect(result.messages).toHaveLength(6);
+      expect(result.messages[4]!.role).toBe('user');
+      expect(result.messages[4]!.content).toBe('injected by hook');
+      expect(result.output).toBe('done');
+    });
+
+    it('is a no-op when hook returns an empty array', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'empty-inject',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        return { text: 'done', toolCalls: [] };
+      });
+      const beforeNextTurn = vi.fn(async () => []);
+      const result = await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+      expect(beforeNextTurn).toHaveBeenCalledTimes(1);
+      expect(result.messages).toHaveLength(5);
+    });
+
+    it('is NOT called on terminal (no-tool) iteration', async () => {
+      const agent = createAgent({ name: 'terminal-only', instructions: 'sys' });
+      const beforeNextTurn = vi.fn(async () => []);
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => ({ text: 'done', toolCalls: [] }));
+      await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+      expect(beforeNextTurn).not.toHaveBeenCalled();
+    });
+
+    it('persists injected messages to the Session when configured', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'inject-session',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      const session = createInMemorySession();
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        return { text: 'done', toolCalls: [] };
+      });
+      await Runner.run(agent, 'hi', {
+        llm,
+        session,
+        beforeNextTurn: async () => [{ role: 'user' as const, content: 'mid-turn user input' }],
+      });
+      const persisted: Array<{ role: string; content: unknown }> = [];
+      for await (const entry of session.entries()) {
+        if (entry.type === 'message') {
+          const p = entry.payload as { role: string; content: unknown };
+          persisted.push({ role: p.role, content: p.content });
+        }
+      }
+      // Sequence: user(initial), assistant(tool_use), user(tool_result), user(mid-turn), assistant(final)
+      expect(persisted.find((m) => m.content === 'mid-turn user input')).toBeDefined();
+    });
+
+    it('hook errors propagate (caller-controlled failure)', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'hook-err',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn === 1) {
+          return { text: '', toolCalls: [{ id: 'c1', name: 'echo', input: { text: 'x' } }] };
+        }
+        return { text: 'done', toolCalls: [] };
+      });
+      const beforeNextTurn = vi.fn(async () => {
+        throw new Error('caller asked for failure');
+      });
+      await expect(
+        Runner.run(agent, 'hi', { llm, beforeNextTurn }),
+      ).rejects.toThrow('caller asked for failure');
+    });
+
+    it('hook receives current iteration number for diagnostics', async () => {
+      const echoTool = makeEchoTool();
+      const agent = createAgent({
+        name: 'iter-diag',
+        instructions: 'sys',
+        tools: [echoTool],
+      });
+      let turn = 0;
+      const llm = vi.fn(async (): Promise<RunnerLlmResult> => {
+        turn += 1;
+        if (turn <= 2) {
+          return {
+            text: '',
+            toolCalls: [{ id: `c${turn}`, name: 'echo', input: { text: 'x' } }],
+          };
+        }
+        return { text: 'done', toolCalls: [] };
+      });
+      const seenIterations: number[] = [];
+      const beforeNextTurn = vi.fn(async (ctx) => {
+        seenIterations.push(ctx.iteration);
+        return [];
+      });
+      await Runner.run(agent, 'hi', { llm, beforeNextTurn });
+      // Hook called twice (after iter 0 tool turn, after iter 1 tool turn);
+      // iter 2 is terminal so hook not called.
+      expect(seenIterations).toEqual([0, 1]);
+    });
+  });
+
   describe('runStream', () => {
     it('yields one message event per assistant message then complete', async () => {
       const agent = createAgent({ name: 'stream-hello', instructions: 'sys' });
