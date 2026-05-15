@@ -13,8 +13,8 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-159` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table) |
-| Total tracked features | `150` |
+| Tracked feature IDs | `001-159, 165-168` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-164 not yet claimed) |
+| Total tracked features | `154` |
 | Completed | `89` |
 | Cancelled | `5` |
 | Absorbed | `3` |
@@ -278,6 +278,10 @@
 | `121` | Envelope Spillover Gap-Fix — Child Task Summary 接入 Tool Result Policy (+ LLM Blob Summarizer Fallback) | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_121-envelope-spillover-gap-fix--child-task-summary-接入-tool-result-policy) |
 | `134` | Image / Screenshot Paste Input — REPL Vision Bridge (5 paste sources + jimp normalize + vision flag widened to 11 providers) | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_134-image--screenshot-paste-input--repl-vision-bridge) |
 | `159` | MessageQueue as Single Source of Truth + Idle-Yield Mode-Split — claudecode-parity observable substrate, queue→React mirror, prompt vs synthetic banner split | `v0.7.40` | [v0.7.40](features/v0.7.40.md#feature_159-messagequeue-as-single-source-of-truth--idle-yield-mode-split) |
+| `165` | Worker `emit_handoff` pending-children gate — runtime gate blocks handoff while child registry non-empty; Worker prompt explicitly steers to `task_stop`-or-wait | `v0.7.41` (hotfix) | [v0.7.41](features/v0.7.41.md#feature_165--worker-emit_handoff-pending-children-gatev0741-hotfix) |
+| `166` | Post-handoff role label flip — REPL surface flips `[Worker]` → `[Evaluator]` immediately on `agentSwitched` event (was lagged a turn) | `v0.7.41` | [v0.7.41](features/v0.7.41.md#feature_166--post-handoff-role-label-flipshipped) |
+| `167` | Evaluator terminal-verdict 兜底 — parser fallback + retry gate + synthetic verdict when Evaluator exits text-only without calling `emit_verdict` | `v0.7.41` (design phase) | [v0.7.41](features/v0.7.41.md#feature_167--evaluator-terminal-verdict-兜底design-phase) |
+| `168` | AMA Agent Tool Wiring — exclude-based wiring with registry as source of truth; recovers 17 silently-dropped tools (FEATURE_120 `send_message`/`task_stop`, FEATURE_161 4× deep-capsule pull tools, 4× web tools, +4 others); architectural Evaluator security boundary | `v0.7.42` | [v0.7.42](features/v0.7.42.md#feature_168--ama-agent-tool-wiring) |
 
 > `FEATURE_051` close-out posture: keep the current REPL status/footer/task/message surfaces frozen, limit follow-up work to invisible substrate maturity for transcript, scroll/selection, and input behavior, and treat the design doc as a completed close-out record rather than an open rollout plan.
 
