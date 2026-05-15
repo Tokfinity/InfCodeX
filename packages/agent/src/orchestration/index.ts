@@ -28,6 +28,7 @@ export {
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
+  detectMissingTerminalVerdict,
   isIdleYieldEnabled,
   waitForWakeEvent,
 } from './idle-yield.js';

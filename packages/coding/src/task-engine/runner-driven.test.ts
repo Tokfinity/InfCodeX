@@ -1010,6 +1010,327 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
   });
 });
 
+// =============================================================================
+// FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback
+//
+// Pins the runtime contract for the three branches of the smoking-gun
+// fix (session 20260515_185354 — V2 AMA Worker→Evaluator handoff
+// succeeds, Evaluator emits text-only response, run terminates with
+// `recorder.verdict===undefined` and `deriveFinalStatus` falls back to
+// `signal:'COMPLETE'`):
+//
+//   1. B1 retry recovers: text-only first turn → retry-prompt
+//      injected → second turn emits real `emit_verdict` → no synth.
+//   2. B2 synth fallback: text-only across the entire cap → recorder
+//      gets a synthesized accept verdict + `onEvaluatorFallbackSynthesized`
+//      event fires with the right shape.
+//   3. zhipu cap-of-1: structural intent-floor model gets only one
+//      retry before falling through to B2 (probe-derived; memory
+//      [[project_zhipu_send_message_floor]]).
+//   4. Negative case: when Evaluator emits a real terminal verdict
+//      on turn 1, neither B1 retry nor B2 synth fires.
+// =============================================================================
+describe('FEATURE_167 v0.7.41 — Evaluator terminal-verdict fallback (B1+B2)', () => {
+  async function withHarnessV2<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = process.env.KODAX_HARNESS_V2;
+    process.env.KODAX_HARNESS_V2 = 'true';
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
+      else process.env.KODAX_HARNESS_V2 = prev;
+    }
+  }
+
+  it('B1 recovers: text-only turn 1 → retry-prompt injected → turn 2 emits emit_verdict (NO synth event)', async () => {
+    await withHarnessV2(async () => {
+      const synthEvents: Array<{
+        retriesAttempted: number;
+        cap: number;
+        modelAlias?: string;
+        userFacingText: string;
+        reason: string;
+      }> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onEvaluatorFallbackSynthesized: (
+            info: typeof synthEvents[number],
+          ) => synthEvents.push(info),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+
+      let evaluatorTurnsSeen = 0;
+      let retryPromptObservedAtTurn = 0;
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              textBlocks: [{ text: 'Done.' }],
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn, transcript) => {
+          evaluatorTurnsSeen = turn;
+          if (turn === 1) {
+            // Smoking-gun shape — text only, no emit_verdict tool call.
+            return {
+              textBlocks: [{ text: 'Review complete. No issues observed.' }],
+              toolBlocks: [],
+            };
+          }
+          if (turn === 2) {
+            // Turn 2 — the retry. Confirm the retry prompt is the last
+            // user message in the transcript before recovering.
+            const last = transcript[transcript.length - 1];
+            const lastContent = typeof last?.content === 'string' ? last.content : '';
+            if (lastContent.includes('Your previous response ended without calling')) {
+              retryPromptObservedAtTurn = turn;
+            }
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'e-retry',
+                name: 'emit_verdict',
+                input: {
+                  status: 'accept',
+                  reason: 'Recovered after retry.',
+                  user_answer: 'Review complete. No issues observed.',
+                },
+              }],
+            };
+          }
+          // After emit_verdict succeeded, Runner may re-invoke the agent
+          // once more before recognising terminal exit; return text-only
+          // so the Runner inner loop terminates cleanly.
+          return {
+            textBlocks: [{ text: 'Review complete. No issues observed.' }],
+            toolBlocks: [],
+          };
+        },
+      });
+
+      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
+      // Retry succeeded on turn 2; Runner may re-invoke once more for
+      // post-terminal confirmation. Lower bound = 2 (the retry that
+      // recovered); upper bound = 3 (one extra post-verdict turn).
+      // Bounded range catches the regression where B1 spuriously
+      // fires extra retries after recovery.
+      expect(evaluatorTurnsSeen).toBeGreaterThanOrEqual(2);
+      expect(evaluatorTurnsSeen).toBeLessThanOrEqual(3);
+      expect(retryPromptObservedAtTurn).toBe(2);
+      expect(result.success).toBe(true);
+      expect(result.signal).toBe('COMPLETE');
+      // Real `emit_verdict` populated the recorder — NOT a synth.
+      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+      expect(result.managedProtocolPayload?.verdict?.reason).toBe('Recovered after retry.');
+      // Synth event must NOT fire — real tool call recovered.
+      expect(synthEvents).toHaveLength(0);
+    });
+  });
+
+  it('B2 synth: text-only across cap → synthesized accept verdict + onEvaluatorFallbackSynthesized fires with right shape', async () => {
+    await withHarnessV2(async () => {
+      const synthEvents: Array<{
+        retriesAttempted: number;
+        cap: number;
+        modelAlias?: string;
+        userFacingText: string;
+        reason: string;
+      }> = [];
+      const opts = {
+        ...makeOptions(),
+        // Default cap = 2 (no zhipu alias)
+        events: {
+          onEvaluatorFallbackSynthesized: (
+            info: typeof synthEvents[number],
+          ) => synthEvents.push(info),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+
+      let evaluatorTurnsSeen = 0;
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          evaluatorTurnsSeen = turn;
+          // ALL turns text-only — exhaust cap, force B2 synth.
+          return {
+            textBlocks: [{ text: 'Review complete. The Worker answer holds.' }],
+            toolBlocks: [],
+          };
+        },
+      });
+
+      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
+      // Default cap=2 → Evaluator runs 1 initial + 2 retries = 3 turns.
+      expect(evaluatorTurnsSeen).toBe(3);
+      // Synth event fires exactly once with the canonical shape.
+      expect(synthEvents).toHaveLength(1);
+      const evt = synthEvents[0]!;
+      expect(evt.retriesAttempted).toBe(2);
+      expect(evt.cap).toBe(2);
+      expect(evt.modelAlias).toBeUndefined();
+      expect(evt.userFacingText).toContain('Review complete');
+      expect(evt.reason).toContain('failed to emit a terminal verdict');
+      expect(evt.reason).toContain('2 retries');
+      // Synth verdict landed in recorder + managed payload.
+      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+      expect(result.managedProtocolPayload?.verdict?.reason).toContain(
+        'failed to emit a terminal verdict',
+      );
+      // The Evaluator's review text reaches the user as user_answer.
+      expect(result.managedProtocolPayload?.verdict?.userAnswer).toContain(
+        'Review complete',
+      );
+      // Final signal is COMPLETE (not BLOCKED) — accept-with-synth.
+      expect(result.success).toBe(true);
+      expect(result.signal).toBe('COMPLETE');
+    });
+  });
+
+  it('zhipu alias gets cap=1 (intent-floor structural — wasted budget on retry-2)', async () => {
+    await withHarnessV2(async () => {
+      const synthEvents: Array<{
+        retriesAttempted: number;
+        cap: number;
+        modelAlias?: string;
+        userFacingText: string;
+        reason: string;
+      }> = [];
+      const baseOpts = makeOptions();
+      const opts = {
+        ...baseOpts,
+        // Resolved alias path: `options.modelOverride ?? options.model`.
+        // `makeOptions` sets `provider:'anthropic'` so model field is
+        // open; we set it to a zhipu family alias.
+        model: 'zhipu/glm51',
+        events: {
+          onEvaluatorFallbackSynthesized: (
+            info: typeof synthEvents[number],
+          ) => synthEvents.push(info),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+
+      let evaluatorTurnsSeen = 0;
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          evaluatorTurnsSeen = turn;
+          return {
+            textBlocks: [{ text: 'Review complete. Intent-floor case.' }],
+            toolBlocks: [],
+          };
+        },
+      });
+
+      await runManagedTaskViaRunner(opts, 'audit task', mock);
+      // zhipu cap=1 → Evaluator runs 1 initial + 1 retry = 2 turns total.
+      expect(evaluatorTurnsSeen).toBe(2);
+      expect(synthEvents).toHaveLength(1);
+      const evt = synthEvents[0]!;
+      expect(evt.retriesAttempted).toBe(1);
+      expect(evt.cap).toBe(1);
+      expect(evt.modelAlias).toBe('zhipu/glm51');
+    });
+  });
+
+  it('negative: when Evaluator emits real emit_verdict on turn 1, NO B1 retry and NO B2 synth fire', async () => {
+    await withHarnessV2(async () => {
+      const synthEvents: Array<{
+        retriesAttempted: number;
+        cap: number;
+      }> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onEvaluatorFallbackSynthesized: (
+            info: typeof synthEvents[number],
+          ) => synthEvents.push(info),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+
+      let evaluatorTurnsSeen = 0;
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w1',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+        },
+        evaluator: (turn) => {
+          evaluatorTurnsSeen = turn;
+          if (turn === 1) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'e1',
+                name: 'emit_verdict',
+                input: { status: 'accept', user_answer: 'all good' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'all good' }], toolBlocks: [] };
+        },
+      });
+
+      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
+      // Real emit_verdict on turn 1 — no retries fired. Runner may
+      // re-invoke the agent once more for terminal confirmation (the
+      // V2 chain doesn't strictly halt on isTerminal=true, see the
+      // existing "After accept, Worker MAY be re-invoked" pattern in
+      // the H0_DIRECT test at line ~813), so we permit ≥1 turns.
+      expect(evaluatorTurnsSeen).toBeGreaterThanOrEqual(1);
+      expect(synthEvents).toHaveLength(0);
+      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+      // Reason carries the LLM-provided value (or undefined when the
+      // mock didn't supply one). The synth marker MUST NOT appear —
+      // its presence would indicate a spurious B2 fallback was fired.
+      const reason = result.managedProtocolPayload?.verdict?.reason;
+      if (reason !== undefined) {
+        expect(reason).not.toContain('failed to emit a terminal verdict');
+      }
+    });
+  });
+});
+
 describe('parity — Runner path and legacy SA path produce compatible KodaXResult shape', () => {
   // The goal of Shard 5a parity is NOT byte-level equivalence (the legacy
   // AMA state machine emits dozens of observer events and populates a

@@ -274,8 +274,14 @@ import { buildManagedTaskCompactionHook } from './_internal/managed-task/compact
 // the registry value type).
 import {
   countLastAssistantToolCalls,
+  detectMissingTerminalVerdict,
   runWithIdleYield,
 } from '@kodax-ai/agent';
+// FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
+import {
+  EVALUATOR_VERDICT_RETRY_PROMPT,
+  resolveEvaluatorVerdictRetryCap,
+} from './_internal/managed-task/evaluator-verdict-retry.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
@@ -5848,6 +5854,104 @@ async function runManagedTaskViaRunnerInner(
     },
   };
 
+  // FEATURE_167 (v0.7.41): one-shot Runner invocation closure, used by
+  // both the idle-yield outer loop AND the B1 evaluator-verdict retry
+  // path post-loop. Lifting it to a named function lets the B1 retries
+  // reuse the same llm / guardrails / observer / compactionHook / agent-
+  // switch hook the chain itself runs with, so the retry's transcript +
+  // tool emissions / status updates are indistinguishable from a "normal"
+  // turn (the LLM never knows it's the B2-prelude).
+  //
+  // Returned type retains the full `RunResult` shape (output + messages
+  // + sessionId), not the wrapper's narrower `RunWithIdleYieldRunResult`.
+  // The B1 path reads `messages` to thread the next retry's input; the
+  // existing `runWithIdleYield` call sees the same shape (the wrapper
+  // only requires `messages`, so the wider type is structurally OK).
+  const runOnce = (agent: Agent, input: readonly KodaXMessage[]) =>
+    Runner.run(agent, input, {
+      llm,
+      abortSignal: options.abortSignal,
+      compactionHook,
+      guardrails: [...runnerGuardrails],
+      toolObserver: runnerToolObserver,
+      // FEATURE_164 (v0.7.41) — mid-turn user-prompt injection.
+      // Replaces the legacy mid-iteration empty-turn yield (see the
+      // retirement note in `streamingLLM` above). On every tool-turn
+      // boundary, drain main-thread `mode:'prompt'` messages from the
+      // canonical MessageQueue and splice them into the transcript
+      // as real user messages — Worker continues its loop, the next
+      // LLM call sees the new prompts in natural conversation order,
+      // and the REPL gets a chance to render them via
+      // `events.onMidTurnUserMessages` so the user sees their typed
+      // query echoed without waiting for the round to end.
+      //
+      // Scope is intentionally narrow: only `agentId:undefined`
+      // (main-thread) `mode:'prompt'` messages. Background banners
+      // (task-notification) remain on the idle-yield path, which is
+      // the only safe place to drain them given the fast-child race
+      // (see Bug E hotfix at `hasPendingBackgroundMessages`).
+      beforeNextTurn: async () => {
+        const drained = getMessageQueue().dequeue({
+          agentId: undefined,
+          maxPriority: 'user',
+          mode: 'prompt',
+        });
+        if (drained.length === 0) return [];
+        const contents = drained.map((m) => m.content);
+        options.events?.onMidTurnUserMessages?.(contents);
+        return drained.map((m) => ({
+          role: 'user' as const,
+          content: m.content,
+        }));
+      },
+      // FEATURE_166 (v0.7.41 follow-up) — agent-switch UI label flip.
+      // Fires once per handoff after the agent runtime has fully
+      // committed the transition (target's system prompt installed,
+      // inputFilter applied). Map the new agent's name to a role
+      // and ask the observer to update the REPL's
+      // `activeWorkerTitle` so the next streaming output renders
+      // under the correct label instead of the stale Worker label.
+      //
+      // The mapping is intentionally a local switch (NOT
+      // `agentNameToManagedRole` at line ~3048) because that helper
+      // is wired into the fenced-fallback synth path and adding
+      // Worker there would change verdict-synthesis behaviour. The
+      // shape duplicates `onIdleWaiting`'s mapping below — both
+      // need Worker recognised; the fallback helper does not.
+      onAgentSwitched: ({ to }) => {
+        const switchedRole: KodaXTaskRole | undefined =
+          to.name === SCOUT_AGENT_NAME ? 'scout'
+            : to.name === PLANNER_AGENT_NAME ? 'planner'
+              : to.name === GENERATOR_AGENT_NAME ? 'generator'
+                : to.name === EVALUATOR_AGENT_NAME ? 'evaluator'
+                  : to.name === WORKER_AGENT_NAME ? 'worker'
+                    : undefined;
+        observer.agentSwitched(switchedRole);
+      },
+      // Iteration cap for the entire chain. Core's default (20) is
+      // meant for stand-alone single-agent runs and is far too low
+      // for a multi-role investigation + execution + verify chain.
+      // This is a hard SAFETY ceiling — the real throttle is the
+      // budget controller (H0=100 / H1=H2=200 base, +100/+200 on
+      // 90%-threshold user approval). A 500-turn ceiling allows
+      // 2-3 extensions plus ample room for tool-heavy iterations
+      // (each LLM turn can carry multiple parallel tool calls).
+      // The budget-extension dialog (Shard 6b) catches the user at
+      // the 90% threshold long before this cap, so reaching 500
+      // genuinely indicates a prompt / tool-design bug worth
+      // flagging.
+      maxToolLoopIterations: 500,
+    }).catch(async (err: unknown) => {
+      // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
+      // any LLM / Runner error before the rejection propagates.
+      // Without this, a non-success terminal exit leaves a fresh
+      // checkpoint.json on disk, which the next query's
+      // findValidCheckpoint scan picks up and triggers the "found
+      // incomplete task" prompt.
+      await cleanupRunCheckpoint();
+      throw err;
+    });
+
   // FEATURE_155 (v0.7.39) idle-yield outer loop, wrapped by
   // FEATURE_120 v0.7.39 Step 0c's `runWithIdleYield` generic helper.
   //
@@ -5898,90 +6002,7 @@ async function runManagedTaskViaRunnerInner(
   const runResult = await runWithIdleYield({
     initialAgent: entryAgent,
     initialInput: runnerInput,
-    runOnce: (agent, input) =>
-      Runner.run(agent, input, {
-        llm,
-        abortSignal: options.abortSignal,
-        compactionHook,
-        guardrails: [...runnerGuardrails],
-        toolObserver: runnerToolObserver,
-        // FEATURE_164 (v0.7.41) — mid-turn user-prompt injection.
-        // Replaces the legacy mid-iteration empty-turn yield (see the
-        // retirement note in `streamingLLM` above). On every tool-turn
-        // boundary, drain main-thread `mode:'prompt'` messages from the
-        // canonical MessageQueue and splice them into the transcript
-        // as real user messages — Worker continues its loop, the next
-        // LLM call sees the new prompts in natural conversation order,
-        // and the REPL gets a chance to render them via
-        // `events.onMidTurnUserMessages` so the user sees their typed
-        // query echoed without waiting for the round to end.
-        //
-        // Scope is intentionally narrow: only `agentId:undefined`
-        // (main-thread) `mode:'prompt'` messages. Background banners
-        // (task-notification) remain on the idle-yield path, which is
-        // the only safe place to drain them given the fast-child race
-        // (see Bug E hotfix at `hasPendingBackgroundMessages`).
-        beforeNextTurn: async () => {
-          const drained = getMessageQueue().dequeue({
-            agentId: undefined,
-            maxPriority: 'user',
-            mode: 'prompt',
-          });
-          if (drained.length === 0) return [];
-          const contents = drained.map((m) => m.content);
-          options.events?.onMidTurnUserMessages?.(contents);
-          return drained.map((m) => ({
-            role: 'user' as const,
-            content: m.content,
-          }));
-        },
-        // FEATURE_166 (v0.7.41 follow-up) — agent-switch UI label flip.
-        // Fires once per handoff after the agent runtime has fully
-        // committed the transition (target's system prompt installed,
-        // inputFilter applied). Map the new agent's name to a role
-        // and ask the observer to update the REPL's
-        // `activeWorkerTitle` so the next streaming output renders
-        // under the correct label instead of the stale Worker label.
-        //
-        // The mapping is intentionally a local switch (NOT
-        // `agentNameToManagedRole` at line ~3048) because that helper
-        // is wired into the fenced-fallback synth path and adding
-        // Worker there would change verdict-synthesis behaviour. The
-        // shape duplicates `onIdleWaiting`'s mapping below — both
-        // need Worker recognised; the fallback helper does not.
-        onAgentSwitched: ({ to }) => {
-          const switchedRole: KodaXTaskRole | undefined =
-            to.name === SCOUT_AGENT_NAME ? 'scout'
-              : to.name === PLANNER_AGENT_NAME ? 'planner'
-                : to.name === GENERATOR_AGENT_NAME ? 'generator'
-                  : to.name === EVALUATOR_AGENT_NAME ? 'evaluator'
-                    : to.name === WORKER_AGENT_NAME ? 'worker'
-                      : undefined;
-          observer.agentSwitched(switchedRole);
-        },
-        // Iteration cap for the entire chain. Core's default (20) is
-        // meant for stand-alone single-agent runs and is far too low
-        // for a multi-role investigation + execution + verify chain.
-        // This is a hard SAFETY ceiling — the real throttle is the
-        // budget controller (H0=100 / H1=H2=200 base, +100/+200 on
-        // 90%-threshold user approval). A 500-turn ceiling allows
-        // 2-3 extensions plus ample room for tool-heavy iterations
-        // (each LLM turn can carry multiple parallel tool calls).
-        // The budget-extension dialog (Shard 6b) catches the user at
-        // the 90% threshold long before this cap, so reaching 500
-        // genuinely indicates a prompt / tool-design bug worth
-        // flagging.
-        maxToolLoopIterations: 500,
-      }).catch(async (err: unknown) => {
-        // Issue 127: clean up checkpoint on abort (Esc / Ctrl-C) and
-        // any LLM / Runner error before the rejection propagates.
-        // Without this, a non-success terminal exit leaves a fresh
-        // checkpoint.json on disk, which the next query's
-        // findValidCheckpoint scan picks up and triggers the "found
-        // incomplete task" prompt.
-        await cleanupRunCheckpoint();
-        throw err;
-      }),
+    runOnce,
     computeSnapshot: (rr) => {
       // Bug B+D: read from recorder, NOT managedProtocolPayloadRef.
       const verdictStatusForGate = recorder.verdict?.payload?.verdict?.status;
@@ -6059,7 +6080,138 @@ async function runManagedTaskViaRunnerInner(
   // late-cleanup placement, just with broader error coverage.
   await cleanupRunCheckpoint();
 
-  const lastText = extractUserFacingText(runResult);
+  // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback.
+  //
+  // The runner-driven outer loop above (runWithIdleYield) exits when:
+  //   (a) the run is genuinely terminal (verdict emitted), OR
+  //   (b) `hasEmittedHandoff=true` but the assistant produced no tool
+  //       calls and no children are pending — the Evaluator-text-only
+  //       smoking gun (session 20260515_185354).
+  //
+  // Case (b) is what we recover here. Without intervention,
+  // `deriveFinalStatus` would see `recorder.verdict===undefined` and
+  // synthesize a `signal:'COMPLETE'` final status, silently turning a
+  // failed audit into a reported success.
+  //
+  // 3-layer defense per the FEATURE_167 design doc:
+  //   - B0 (fenced parser): SKIPPED — probe C3 showed 0/25 emissions
+  //     across the 5-alias panel. No model writes the fence; carrying
+  //     the parser would be dead code.
+  //   - B1 (retry-prompt loop): inject the canonical
+  //     `EVALUATOR_VERDICT_RETRY_PROMPT` as a user message + re-run
+  //     `chain.evaluator` via the same `runOnce` closure the main loop
+  //     uses, up to `resolveEvaluatorVerdictRetryCap(alias)` times.
+  //     Probe C2 data showed kimi recovers 100% at retry 1, ds/v4pro
+  //     and mmx/m27 plateau at 80% within 1-2 retries; zhipu cap=1
+  //     because the intent-vs-action floor is structurally unrecoverable
+  //     ([[project_zhipu_send_message_floor]]).
+  //   - B2 (synth fallback): if B1 exhausts cap without a verdict,
+  //     synthesize one. Status is `'accept'` because the Evaluator did
+  //     produce a useful review text — marking it `'blocked'` would
+  //     false-fail the run for what was really a tool-protocol failure
+  //     on top of correct review content. The
+  //     `onEvaluatorFallbackSynthesized` event lets SDK consumers
+  //     distinguish the synthesized verdict from a real `accept`.
+  //
+  // Ordering invariant: write `recorder.verdict` BEFORE firing the
+  // telemetry event so consumers see causal order (recorder committed
+  // → event fires → `deriveFinalStatus` reads the committed verdict).
+  // The abort signal short-circuits the loop at entry of each retry
+  // so a mid-B1 Esc/Ctrl-C doesn't burn extra LLM turns.
+  let effectiveRunResult = runResult;
+  if (
+    !options.abortSignal?.aborted &&
+    detectMissingTerminalVerdict({
+      lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
+      pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
+      hasEmittedHandoff: Boolean(recorder.handoff),
+      hasEmittedTerminalVerdict: (() => {
+        const s = recorder.verdict?.payload?.verdict?.status;
+        return s === 'accept' || s === 'blocked';
+      })(),
+      hasPendingBackgroundMessages: getMessageQueue().has({
+        agentId: undefined,
+        maxPriority: 'background',
+        mode: 'task-notification',
+      }),
+    })
+  ) {
+    const resolvedAlias = options.modelOverride ?? options.model;
+    const verdictRetryCap = resolveEvaluatorVerdictRetryCap(resolvedAlias);
+    let retriesAttempted = 0;
+    let currentMessages = runResult.messages;
+    let currentOutput = runResult.output;
+
+    // Capture the recorder.verdict OBJECT identity before retries. Each
+    // successful `emit_verdict` tool call assigns a fresh
+    // `ProtocolEmitterMetadata` to `recorder.verdict` (see line ~967),
+    // so identity comparison correctly detects "a new tool call
+    // happened in this retry" regardless of whether the new status
+    // equals the prior one. Checking status alone would falsely break
+    // the loop when a stale `revise` from a prior round is still
+    // in the recorder and the current Evaluator turn didn't emit —
+    // the synth path would never fire, and the stale revise would
+    // propagate as if it were the final answer.
+    const priorVerdictObject = recorder.verdict;
+
+    for (let i = 0; i < verdictRetryCap; i++) {
+      if (options.abortSignal?.aborted) break;
+      const retryInput: KodaXMessage[] = [
+        ...currentMessages,
+        { role: 'user', content: EVALUATOR_VERDICT_RETRY_PROMPT },
+      ];
+      const retryResult = await runOnce(chain.evaluator, retryInput);
+      retriesAttempted++;
+      currentMessages = retryResult.messages;
+      currentOutput = retryResult.output;
+      if (recorder.verdict !== priorVerdictObject) {
+        // Retry succeeded — Evaluator emitted a structured verdict
+        // (fresh object reference, regardless of status value).
+        break;
+      }
+    }
+
+    // The retry calls may have written a new checkpoint mid-loop;
+    // clear it now so a successful B1 recovery doesn't leave an orphan
+    // for the next session to discover.
+    await cleanupRunCheckpoint();
+
+    effectiveRunResult = { ...runResult, messages: currentMessages, output: currentOutput };
+
+    // B2 synth fallback — fires only if STILL no fresh verdict after
+    // exhausting cap. Identity comparison matches the loop break
+    // condition: recorder unchanged from before retries === no real
+    // emit_verdict landed. A stale `revise` from a prior round
+    // counts as "no fresh emit" here and correctly triggers B2.
+    if (recorder.verdict === priorVerdictObject) {
+      const userFacingText = extractUserFacingText(effectiveRunResult);
+      const synthReason =
+        `Evaluator failed to emit a terminal verdict after ${retriesAttempted} retries.`;
+      recorder.verdict = {
+        role: 'evaluator',
+        payload: {
+          verdict: {
+            source: 'evaluator',
+            status: 'accept',
+            reason: synthReason,
+            followups: [],
+            userFacingText,
+            userAnswer: userFacingText,
+          },
+        },
+        isTerminal: true,
+      };
+      options.events?.onEvaluatorFallbackSynthesized?.({
+        retriesAttempted,
+        cap: verdictRetryCap,
+        modelAlias: resolvedAlias,
+        userFacingText,
+        reason: synthReason,
+      });
+    }
+  }
+
+  const lastText = extractUserFacingText(effectiveRunResult);
   const { signal, verdictStatus, reason, userAnswer } = deriveFinalStatus(recorder);
 
   // Evaluator's user_answer may carry internal role
@@ -6130,7 +6282,7 @@ async function runManagedTaskViaRunnerInner(
       : undefined;
     const budgetExhausted = budget.totalBudget > 0 && budget.spentBudget >= budget.totalBudget;
     const suspiciousSignals = detectScoutSuspiciousSignals({
-      messages: runResult.messages,
+      messages: effectiveRunResult.messages,
       lastText: resolvedText,
       hasScoutPayload: Boolean(recorder.scout),
       scoutMutationIntent,
@@ -6141,7 +6293,7 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onScoutSuspiciousCompletion?.({
         confidence: 'uncertain',
         signals: suspiciousSignals,
-        sessionId: runResult.sessionId,
+        sessionId: effectiveRunResult.sessionId,
         lastTextPreview: (resolvedText ?? '').slice(0, SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT),
       });
     }
@@ -6167,8 +6319,8 @@ async function runManagedTaskViaRunnerInner(
     lastText: resolvedText,
     signal,
     signalReason: reason,
-    messages: [...runResult.messages],
-    sessionId: runResult.sessionId ?? `runner-${Date.now()}`,
+    messages: [...effectiveRunResult.messages],
+    sessionId: effectiveRunResult.sessionId ?? `runner-${Date.now()}`,
     managedProtocolPayload,
     managedTask,
     contextTokenSnapshot,

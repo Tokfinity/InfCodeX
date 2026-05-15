@@ -379,6 +379,7 @@ export {
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
+  detectMissingTerminalVerdict,
   isIdleYieldEnabled,
   registerChildTask,
   requestTaskStop,
