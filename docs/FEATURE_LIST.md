@@ -13,13 +13,13 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-159, 165-168` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-164 not yet claimed) |
-| Total tracked features | `154` |
-| Completed | `89` |
+| Tracked feature IDs | `001-159, 165-168, 170` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-164 not yet claimed; 169 claimed by parallel thread for v0.7.40 Worker dispatch objective quality, will be tracked when that thread commits) |
+| Total tracked features | `155` |
+| Completed | `93` |
 | Cancelled | `5` |
 | Absorbed | `3` |
 | InProgress | `1` |
-| Planned | `60` |
+| Planned | `61` |
 | Current released version | `v0.7.40` |
 
 > Note: `Planned` includes 8 strikethrough rows (`095` absorbed → 057, `059` absorbed → 084, `063` cancelled, `073` cancelled, `109` cancelled, `111` absorbed → 115, `122` cancelled, `127` cancelled never-planned) that remain in the planned table for traceability. The `Cancelled` and `Absorbed` counters above slice the same rows by lifecycle reason. `125` was re-scoped from v0.8.10 mode-based design to v0.7.41 LLM-First auto coordination — see its row for rationale.
@@ -42,7 +42,7 @@
 | `v0.7.38` | `9` (149 Queued Prompt Injection Latency & Mid-Turn UX Parity + 117 redesigned as Mutation Context Injection + 151 TodoList Visibility & LLM Self-Seeding Parity + 152 Bash AST Migration + 153 LLM-backed Bash Prefix Extractor + 154 Universal --help Fast-Path + 155 Chat-While-Waiting [moved from v0.7.39] + 156 Idle-Wait Visual Continuity + 157 Windows / macOS Case-Insensitive Workspace Match) |
 | `v0.7.39` | `2` (120 + 158 auto[llm] Signal Inversion; FEATURE_155 moved to v0.7.38) + ADR-024 (npm 包正名 `@kodax-ai/kodax-cli` → `@kodax-ai/kodax` + 5 SDK subpath exports) + ADR-025 (auto[llm] 信号化分类器 + 决策层级倒置) |
 | `~~v0.7.39 (legacy slot for FEATURE_096)~~` | `1` |
-| `v0.7.41` | `1` (125 KodaX Team Mode — re-scoped from v0.8.10) |
+| `v0.7.41` | `2` (125 KodaX Team Mode — re-scoped from v0.8.10; 170 Todo V2 Migration — per-task CRUD + extension hooks aligned to claudecode V2 TaskCreate/TaskUpdate, keep op:'init' for fan-out batch) |
 | `~~v0.7.41~~` | `1` |
 | `v0.7.42` | `1` (094) |
 | `v0.7.43` | `1` (124) |
@@ -113,6 +113,7 @@
 | `123` | Peer-to-Peer SendMessage — Child Agent Inter-Communication on Top of FEATURE_120 Routing | Internal / Architecture | Medium | `v0.7.44` | [v0.7.44](features/v0.7.44.md#feature_123-peer-to-peer-sendmessage) |
 | `128` | Dispatch-to-Self-Construction Bridge — subagent_type Field + Dynamic Agent List Cache | Internal / Architecture | Medium | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_128-dispatch-to-self-construction-bridge) |
 | `125` | KodaX Team Mode — Multi-Instance Auto Coordination (LLM-First Awareness + Content Hash Safety Net) | Core / Architecture | High | `v0.7.41` | [v0.7.41](features/v0.7.41.md#feature_125-kodax-team-mode--multi-instance-auto-coordination) | **Re-scoped 2026-05-06 from v0.8.10 mode-based design**: claude code Team Mode 调研证实它**没解决冲突**（默认共享 leader cwd / 无 lock / 无 worktree / 完全靠 LLM 自律）—— KodaX 不照搬。**KodaX 自创 LLM-First 设计**：4 层架构（state broadcast → 注入其他 session 状态到 system prompt → tool-time soft warning → content hash safety net），用户**零认知负担**（自动感知，无需 `/team create`），LLM 拿到信息**自决协调**，runtime 仅在 race condition 物理边界（content hash mismatch）兜底。~530 行实现（vs 原 v0.8.10 mode-based ~600 行）。这是 KodaX 比 claude code 在多 session 协作维度做得**更好**的差异化设计 |
+| `170` | Todo V2 Migration — Per-Task CRUD + Extension Hooks | Core / Tooling | Medium-High | `v0.7.41` | [v0.7.41](features/v0.7.41.md#feature_170--todo-v2-migration-per-task-crud--extension-hooksdesign-phase) | **Design phase 2026-05-15**: 当前 `todo_update({op:'init'\|'update'})` 双 op 无法做 per-task insert / delete / content-edit；Worker prompt 承诺 "insert / cancel / adjust" 但唯一可用路径 `op:'init'` 是 full replace（contradiction）。Migration 加 `todo_create` + 扩展 `todo_update` 接 content/activeForm/evaluator/metadata patch + `status:'deleted'` delete；**保留 `op:'init'` 作为 fan-out plan-first batch**（FEATURE_151 v0.7.38 contract）。Hooks 复用已有 `ExtensionHookMap` `void / string-reason / false` 返回类型 mirror `tool:before`，与 claudecode V2 `executeTaskCreatedHooks` / `executeTaskCompletedHooks` 行为对齐但返回 shape 走 KodaX `{ok:true} / {ok:false, reason}` 统一 envelope（不 throw）。6-commit ~400+250 LoC；prompt 改 5 段触发 FEATURE_104 eval。**显式不做**：file persistence / proper-lockfile / blocks DAG / owner+swarm / TaskOutput·TaskStop / `KODAX_TODO_V2` dual-path flag |
 | `126` | PM Mode Tool Restriction (Data-Driven) — Hard Enforcement of PM Behavior via Tool Whitelist | Enhancement / Quality | Low | `v0.8.x` | TBD (placeholder, contingent on FEATURE_122 production data) |
 | `131` | Tool Safety Patch Pack — File Mutation Queue + Edit Unicode Normalization | Core / Tool Safety | High | `v0.7.36` | [v0.7.36](features/v0.7.36.md#feature_131-tool-safety-patch-pack--file-mutation-queue--edit-unicode-normalization) | **Async Safety Pack 之二**（与 FEATURE_119 + FEATURE_130 同期 ship）。Part A: `file-mutation-queue.ts` path-keyed 串行队列防 Pattern B 多 child 并行同文件 race 静默丢改动（Windows 大小写不敏感 + POSIX 保留组件大小写）。Part B: `edit-diff.ts:normalizeForFuzzyMatch` NFKC + smart quotes (`""''`) / em-dash (`—`) / en-dash (`–`) / 全角/IDEO 空格 → ASCII 正规化解决 KodaX 实战 silent edit-fail 主因（用户从 Word/网页/聊天复制代码 + 输入法自动替换 typographic 字符）。Cross-process content-hash 安全网（FEATURE_125）显式留 v0.7.41 |
 | `130` | Provider Retry-After Header + Exponential Backoff | Internal / Robustness | High | `v0.7.36` | [v0.7.36](features/v0.7.36.md#feature_130-provider-retry-after-header--exponential-backoff) | **Async Safety Pack 之一**（与 FEATURE_119 + FEATURE_131 同期 ship）。跨 12 provider 标准化处理 4 种 retry-after header 形态：integer-seconds / HTTP-date / Anthropic `retry-after-ms` / 无 header → exponential backoff fallback。Helper `parseRetryAfter` + `extractHeadersFromError` 集中在 `@kodax/ai/retry/retry-after.ts`，每个 `KodaXBaseProvider` 子类自动继承。`KodaXProviderStreamOptions.onRetryAfter` + `KodaXEvents.onRetryAfter` + `RetryRecord` cost-tracker channel + Ink REPL `[Rate limited]` 倒计时 status push。**必须与 FEATURE_119 同期 ship** — Pattern B 多 child 并行直接拉高 429 概率（特别是 5 个共享 quota 的 coding plan provider：kimi/zhipu/mimo/ark/minimax-coding）|
