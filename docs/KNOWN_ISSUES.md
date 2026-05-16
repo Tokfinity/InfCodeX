@@ -76,7 +76,7 @@ _Last Updated: 2026-05-16_
 | 129 | Medium | Resolved | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | v0.7.38 | 2026-05-09 | 2026-05-09 |
 | 130 | Medium | Resolved | Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖 | v0.7.17 | v0.7.39 | 2026-05-12 | 2026-05-12 |
 | 131 | Medium | Resolved | Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR` 等) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm | 一直存在 | v0.7.39 | 2026-05-12 | 2026-05-12 |
-| 132 | Low | Open | `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race causes intermittent flake under heavy parallel load | v0.7.32 | - | 2026-05-16 | - |
+| 132 | Low | Resolved | `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — Windows fs visibility race + silent error swallow in persistCell | v0.7.32 | v0.7.41 | 2026-05-16 | 2026-05-16 |
 | 133 | Low | Open | `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load — failure mode not yet captured | 待调研 | - | 2026-05-16 | - |
 
 ---
@@ -137,9 +137,43 @@ Cache key（[runtime.ts:296-305](../packages/coding/src/repo-intelligence/runtim
 ### 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — Windows fs visibility race + silent error swallow in persistCell
 
 - **Priority**: Low（测试 flake only；benchmark / eval 路径，不影响生产 user-facing 行为）
-- **Status**: Open（**调研完成，定位到 silent catch + Windows fs visibility race**，per 用户指示 2026-05-16 暂不修代码）
+- **Status**: **Resolved**（v0.7.41，2026-05-16）
 - **Introduced**: v0.7.32（[FEATURE_107](FEATURE_LIST.md#feature_107) 引入 h2-boundary runner）
 - **Created**: 2026-05-16
+- **Resolved**: 2026-05-16
+
+#### Resolution（v0.7.41）
+
+修复策略：**eager-read 提前 + retry 加宽**，结构性消除 race 而非只 absorb。
+
+- **核心改动 1**：在 `agent-task-runner.ts` 的 `runAgentTaskInWorktree` 中，`findEvalSessionJsonl` 找到 path 后**立即** call `readSessionJsonlWithRetry` 把内容读进内存（[agent-task-runner.ts:372-381](../benchmark/harness/agent-task-runner.ts#L372-L381)）。AgentTaskResult 新加 `sessionJsonlContent: string \| null` 字段（与 `sessionJsonlPath` 并列保留，向后兼容）
+- **核心改动 2**：`readSessionJsonlWithRetry` helper —— exponential backoff `[50, 100, 200, 400, 800]` ms，6 次 read 尝试，总 budget ~1.55s；耗尽后 `console.warn` + return null（非静默）
+- **核心改动 3**：`h2-boundary-runner.ts` 的 `persistCell` 改为消费 `task.sessionJsonlContent`，**不再 readFile**——race 表面完全消除
+
+#### Why eager-read + bigger retry budget（而非只在 persistCell 加 retry）
+
+调研期间的第一版 fix 是"persistCell 加 3 次 × 50ms backoff retry"——跑 5 次 full-suite **1/5 仍复现**：
+
+```
+[h2-boundary] session.jsonl read failed after 3 retries for cell plumbing-smoke-002/ds/v4flash/H2-B:
+Error: ENOENT: ... fake-1778905166107.jsonl
+```
+
+证实两个事实：
+1. **150ms 重试 budget 不够**——Windows AV 在并行 5,935 测试压力下 lock window 超过 150ms（至少 200-400ms 量级）
+2. **race 窗口大小才是 root**——`findEvalSessionJsonl` 与 `persistCell.readFile` 之间隔了 `listFilesChangedInWorktree`（git diff 子进程）+ `cleanupWorktree`（2 个 git 子进程 + fs.rm）+ 3 个 fs.writeFile，~200-400ms 全是 race 时间窗口
+
+最终方案把 read 提前到 fs.stat 成功后**立即触发**（race 窗口压缩到 ~10-30ms），且 retry budget 加到 1.55s（既能 absorb 大量长 lock，又因为大概率第 1 次就读到，common case 0ms overhead）。
+
+#### Verification
+
+- Solo: `npx vitest run benchmark/harness/h2-boundary-runner.test.ts` → 4/4 green / 9.32s
+- Full suite ×5（heavy parallel load）: 全部 h2-boundary 通过，无 `[agent-task-runner] session jsonl read failed` warning 触发
+
+#### Related
+
+- Issue 133（同期 known flake，runtime.test.ts）—— 单独跟踪，未受本 fix 影响
+- precedent commit `d4a47bc9`（v0.7.37）—— bump per-test timeout 模式；本 issue 选择了 fix race 而非 fix symptom（timeout 已 60s 不是瓶颈）
 
 #### Current Behavior
 
@@ -4000,11 +4034,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 60 (27 Open, 33 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 60 (26 Open, 34 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-05-16: Issue 132 resolved (v0.7.41)
+- Resolved 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — eager-read + retry budget enlargement
+- Strategy: structurally eliminate the race window (read content immediately after `findEvalSessionJsonl`'s `fs.stat` succeeds, before git diff / worktree cleanup / 3x fs.writeFile add 200-400ms) instead of just absorbing it
+- AgentTaskResult adds `sessionJsonlContent: string | null` (alongside existing `sessionJsonlPath`); persistCell now consumes content directly (no readFile)
+- retry budget: 6 attempts × `[50, 100, 200, 400, 800]` ms backoff = ~1.55s total (outlasts Windows AV scan windows observed >150ms in initial fix attempt)
+- Verification: 5 sequential full-suite runs (heavy parallel load) green; no warning fired
 
 ### 2026-05-16: Issue 132 + Issue 133 added (test flake tracking)
 - Added 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race causes intermittent flake under heavy parallel load (Low, Open，调研中，per user 暂不动 runner 代码)

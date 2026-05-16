@@ -107,6 +107,12 @@ export interface AgentTaskResult {
   /** Path to the captured session jsonl (under the isolated HOME).
    *  Caller can post-mortem this file before it's torn down. */
   readonly sessionJsonlPath: string | null;
+  /** Pre-read content of the session jsonl, captured immediately after
+   *  the subprocess exit to minimize the Windows-fs-visibility race window
+   *  (Issue 132). `null` if no session file was produced OR if read
+   *  exhausted retries. Callers that persist the session should prefer
+   *  this field over re-reading from `sessionJsonlPath`. */
+  readonly sessionJsonlContent: string | null;
   /** Files modified inside the worktree, relative to worktree root. */
   readonly filesChanged: readonly string[];
   /** Captured stdout (truncated to last 64KB to keep result objects small). */
@@ -149,6 +155,40 @@ function providerEnv(alias: ModelAlias): { name: string; value: string } {
     );
   }
   return { name: target.apiKeyEnv, value: apiKey };
+}
+
+/**
+ * Read a freshly-created session jsonl with exponential-backoff retry.
+ *
+ * Issue 132 (v0.7.41): on Windows under heavy parallel test load, the file
+ * is briefly locked by AV/indexer right after the subprocess creates it.
+ * `fs.stat` returns success (file is metadata-visible) but `fs.readFile`
+ * collides with the scan and throws ENOENT/EBUSY. The lock window has
+ * been observed to last >150ms; up to ~1.5s budget covers worst-case
+ * Defender scans without leaking the warning into the common case.
+ *
+ * Backoff: 50, 100, 200, 400, 800 ms (5 sleeps, 6 read attempts).
+ * Returns null + warns if all retries are exhausted — never throws.
+ */
+async function readSessionJsonlWithRetry(filePath: string): Promise<string | null> {
+  const backoffsMs = [50, 100, 200, 400, 800];
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= backoffsMs.length; attempt++) {
+    try {
+      return await fs.readFile(filePath, 'utf8');
+    } catch (err) {
+      lastError = err;
+      const nextBackoff = backoffsMs[attempt];
+      if (nextBackoff !== undefined) {
+        await new Promise((resolve) => setTimeout(resolve, nextBackoff));
+      }
+    }
+  }
+  console.warn(
+    `[agent-task-runner] session jsonl read failed after ${backoffsMs.length + 1} retries for ${filePath}:`,
+    lastError,
+  );
+  return null;
 }
 
 /**
@@ -329,6 +369,16 @@ export async function runAgentTaskInWorktree(
     const durationMs = Date.now() - startedAt;
     const sessionsDir = path.join(isolatedHome, '.kodax', 'sessions');
     const sessionJsonlPath = await findEvalSessionJsonl(sessionsDir);
+    // Issue 132 (v0.7.41): eagerly read session content here, right after
+    // the subprocess exit and before the git diff / worktree cleanup /
+    // results persisting that would otherwise add 200-400ms of race
+    // window. On Windows under heavy parallel test load, the AV/indexer
+    // may briefly lock the freshly-created file; retries with exponential
+    // backoff (up to ~1.5s total) outlast typical scan windows. Callers
+    // persist from `sessionJsonlContent` so they never re-open the file.
+    const sessionJsonlContent = sessionJsonlPath
+      ? await readSessionJsonlWithRetry(sessionJsonlPath)
+      : null;
     const filesChanged = await listFilesChangedInWorktree(handle);
 
     return {
@@ -340,6 +390,7 @@ export async function runAgentTaskInWorktree(
       timedOut,
       durationMs,
       sessionJsonlPath,
+      sessionJsonlContent,
       filesChanged,
       stdoutTail: tail(stdout, TAIL_BYTES),
       stderrTail: tail(stderr, TAIL_BYTES),
