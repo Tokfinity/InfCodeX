@@ -87,6 +87,17 @@ export function buildWorkerInstructions(
     '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
     '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report exceeds the inline envelope budget (~50KB), the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
     '- MODEL HINT (optional, FEATURE_120 v0.7.39): you may set `model_hint` on a dispatch to advertise the child\'s reasoning weight class. `"fast"` for trivial single-file lookups; `"deep"` for multi-file research or analytical synthesis; `"balanced"` (or omit) for everything else. Routing is a no-op today — every child runs on your model — but the hint is recorded for FEATURE_102 (v0.7.45). Mark intentionally; do not blanket-tag every child.',
+    // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0
+    // v2 audit VALID (bash disagreement 8.9%, pull-correct 3.3%): C bash=0%
+    // (vs A=9% baseline-low ceiling-flatten), pull-correct mention 41→76%
+    // (+35pp lift), 5/6 alias C ≥ 70%.
+    '- DISPATCH OBJECTIVE QUALITY (FEATURE_169 — F0a): when writing a child\'s `objective`, prefer stating the goal abstractly. Avoid hand-feeding specific bash commands ("use `git diff X`", "run `git log`") — the child picks its own tools, and hand-feeding bash bypasses the child\'s pull-tool guidance. If you need to convey a specific git revision or scope (e.g., v0.7.39..HEAD), state it as data ("scope: v0.7.39..HEAD") rather than a command directive.',
+    '- DISPATCH OBJECTIVE GUIDANCE (FEATURE_169 — F0b): WHEN RELEVANT (review / change-audit / module-exploration objectives only — not trivial probes), briefly note the recommended pull-tool family in the objective. Examples:',
+    '    - Review tasks: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
+    '    - Module exploration: "use `module_context` to map the module surface before reading individual files"',
+    '    - Symbol tracing: "start with `symbol_context` to find callers"',
+    '    - Process flow / execution trace: "use `process_context` to map the flow before reading runner files"',
+    '    - Rename / refactor impact: "use `impact_estimate` to estimate blast radius first"',
   ].join('\n');
 
   // FEATURE_120 v0.7.39 — Worker can steer in-flight children via
@@ -152,6 +163,17 @@ export function buildWorkerInstructions(
     '- Need exact line numbers or code text (capsules summarize; files give you exact bytes).',
     '- Pull-tool returned `[Tool Error]` / `unavailable` (repo-intel daemon not running) — fall back to read/grep without retrying the same pull-tool.',
     '- Rationale: pull-tool capsules typically run 2-3KB vs 20-200KB for the equivalent multi-file read exploration (Layer 1 ROI analysis 2026-05-14, median ratio 15.4x). Token savings compound across a full task.',
+    '',
+    // FEATURE_169 v0.7.40 — F3 change-review positive reframe. Suite B v2
+    // audit VALID (pull 5%, bash_git_diff 0%, neg-correct 7.7%): 6/6 alias
+    // C=100% pull-tool rate on review tasks (vs 92% baseline), neg
+    // bash-expected 94% healthy. Disambiguates "review" intent from generic
+    // "git ops" intent — the former goes through repo-intel capsules, the
+    // latter stays in bash.
+    'CHANGE-REVIEW POSITIVE REFRAME (FEATURE_169 v0.7.40 — review-specific):',
+    '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call), followed by `changed_diff_bundle(paths[])` for the files you need to read.',
+    '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel daemon already structured for you.',
+    '- `bash git …` is reserved for NON-review git ops: status, commit, tag, push, log (commit history), branch operations.',
   ].join('\n');
 
   const fanOutPlanGranularity = [
