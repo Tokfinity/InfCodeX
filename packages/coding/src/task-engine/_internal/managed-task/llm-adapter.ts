@@ -1,0 +1,954 @@
+/**
+ * LLM adapter — bridges the runner-driven AMA chain to the KodaX provider
+ * stream surface.
+ *
+ * Hosts `buildRunnerLlmAdapter` (the per-run factory that returns a
+ * `(messages, agent) => RunnerLlmResult` adapter consumed by `Runner.run`)
+ * plus the C1-parity helpers (`agentNameToManagedRole`,
+ * `flattenNormalizedForEmitterInput`) that drive the fenced-block fallback
+ * path. The adapter owns: system-message folding, throttle reminder
+ * injection, per-role reasoning ladder resolution, the second-tier
+ * retry/recovery loop, max_tokens L4 escalation + L5 continuation, the
+ * P2b write-turn cap, cost accounting, iteration events, and tool-call
+ * fence-fallback synthesis.
+ *
+ * Extracted from `task-engine/runner-driven.ts` lines ~1340–2187 of the
+ * pre-FEATURE_171 monolith as part of FEATURE_171 (v0.7.41) modular
+ * split. Zero behavior change — bodies are byte-identical to the
+ * previous in-file declarations.
+ */
+
+import type {
+  KodaXContentBlock,
+  KodaXMessage,
+  KodaXReasoningRequest,
+  KodaXRedactedThinkingBlock,
+  KodaXThinkingBlock,
+  KodaXTokenUsage,
+  KodaXToolDefinition,
+  KodaXToolUseBlock,
+} from '@kodax-ai/llm';
+import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
+import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
+import {
+  EVALUATOR_AGENT_NAME,
+  GENERATOR_AGENT_NAME,
+  PLANNER_AGENT_NAME,
+  SCOUT_AGENT_NAME,
+} from '../../../agents/task-engine-agents.js';
+import { resolveProvider } from '../../../providers/index.js';
+import { KODAX_MAX_MAXTOKENS_RETRIES } from '../../../constants.js';
+import {
+  bucketProviderPayloadSize,
+  cleanupIncompleteToolCalls,
+  describeTransientProviderRetry,
+  emitResilienceDebug,
+  estimateProviderPayloadBytes,
+  validateAndFixToolHistory,
+} from '../../../agent.js';
+import {
+  ProviderRecoveryCoordinator,
+  StableBoundaryTracker,
+  classifyResilienceError,
+  resolveResilienceConfig,
+  telemetryBoundary,
+  telemetryClassify,
+  telemetryDecision,
+  telemetryRecovery,
+} from '../../../resilience/index.js';
+import { waitForRetryDelay } from '../../../retry-handler.js';
+import {
+  createCostTracker,
+  formatCostReport,
+  getSummary as getCostSummary,
+  recordUsage as recordCostUsage,
+  type CostTracker,
+} from '../../../agent-runtime/middleware/cost-tracker.js';
+import { estimateTokens } from '../../../tokenizer.js';
+import {
+  reasoningModeToDepth,
+  resolveReasoningMode,
+  resolveRoleReasoning,
+  type ReasoningRole,
+} from '../../../reasoning.js';
+import type {
+  KodaXEvents,
+  KodaXManagedProtocolPayload,
+  KodaXOptions,
+  KodaXReasoningMode,
+  KodaXTaskRole,
+} from '../../../types.js';
+import {
+  emitProviderRateLimit,
+  emitStreamEnd,
+} from '../../../agent-runtime/event-emitter.js';
+import { getManagedBlockNameForRole } from '../../../managed-protocol.js';
+import {
+  attemptProtocolTextFallback,
+  getEmitToolNameForRole,
+} from './parse-helpers.js';
+import {
+  MANAGED_CONTROL_PLANE_MARKERS,
+  sanitizeManagedStreamingText,
+} from './sanitize.js';
+import type { ContextTokenSnapshotRef } from './compaction.js';
+import { maybeApplyP2bWriteTurnCap } from './write-turn-cap.js';
+import type { TodoStore } from '../../todo-store.js';
+import {
+  buildTodoReminderText,
+  detectAgentTransition,
+  resetTodoReminderState,
+  shouldFireTodoReminder,
+  tickTodoReminder,
+  type TodoReminderState,
+} from '../../todo-throttle-reminder.js';
+
+/**
+ * Cumulative token state captured by the LLM adapter across a full
+ * runner chain, exposed back to `runManagedTaskViaRunner` so it can
+ * populate `result.contextTokenSnapshot`. The REPL UI uses the snapshot
+ * to refresh its token counter after every run.
+ */
+export interface RunnerAdapterTokenState {
+  totalTokens: number;
+  lastUsage?: KodaXTokenUsage;
+  source: 'api' | 'estimate';
+}
+
+/**
+ * C1 parity helper — map a registered Runner Agent name to its managed
+ * task role. Used by the fenced-block fallback path in the LLM adapter
+ * to decide which emit tool to synthesize when the LLM wrote the
+ * fence but skipped the tool call.
+ */
+function agentNameToManagedRole(
+  name: string,
+): Exclude<KodaXTaskRole, 'direct'> | undefined {
+  switch (name) {
+    case SCOUT_AGENT_NAME: return 'scout';
+    case PLANNER_AGENT_NAME: return 'planner';
+    case GENERATOR_AGENT_NAME: return 'generator';
+    case EVALUATOR_AGENT_NAME: return 'evaluator';
+    default: return undefined;
+  }
+}
+
+/**
+ * C1 parity helper — unwrap the per-role slice from a normalized
+ * managed-protocol payload so it matches the emit tool's snake_case
+ * input schema. The real emitter re-runs `coerceManagedProtocolToolPayload`
+ * on this input, so the shape just needs to round-trip cleanly; we
+ * intentionally emit snake_case keys matching the tool schema.
+ */
+function flattenNormalizedForEmitterInput(
+  payload: Partial<KodaXManagedProtocolPayload>,
+): Record<string, unknown> {
+  if (payload.scout) {
+    const s = payload.scout;
+    return {
+      summary: s.summary,
+      scope: s.scope,
+      required_evidence: s.requiredEvidence,
+      review_files_or_areas: s.reviewFilesOrAreas,
+      evidence_acquisition_mode: s.evidenceAcquisitionMode,
+      confirmed_harness: s.confirmedHarness,
+      harness_rationale: s.harnessRationale,
+      blocking_evidence: s.blockingEvidence,
+      direct_completion_ready: s.directCompletionReady,
+      skill_map: s.skillMap
+        ? {
+          skill_summary: s.skillMap.skillSummary,
+          execution_obligations: s.skillMap.executionObligations,
+          verification_obligations: s.skillMap.verificationObligations,
+          ambiguities: s.skillMap.ambiguities,
+          projection_confidence: s.skillMap.projectionConfidence,
+        }
+        : undefined,
+    };
+  }
+  if (payload.contract) {
+    return {
+      summary: payload.contract.summary,
+      success_criteria: payload.contract.successCriteria,
+      required_evidence: payload.contract.requiredEvidence,
+      constraints: payload.contract.constraints,
+    };
+  }
+  if (payload.handoff) {
+    return {
+      status: payload.handoff.status,
+      summary: payload.handoff.summary,
+      evidence: payload.handoff.evidence,
+      followup: payload.handoff.followup,
+    };
+  }
+  if (payload.verdict) {
+    return {
+      status: payload.verdict.status,
+      reason: payload.verdict.reason,
+      followup: payload.verdict.followups,
+      user_answer: payload.verdict.userAnswer,
+      next_harness: payload.verdict.nextHarness,
+    };
+  }
+  return {};
+}
+
+export function buildRunnerLlmAdapter(
+  options: KodaXOptions,
+  overrideStream?: (
+    messages: readonly KodaXMessage[],
+    tools: readonly KodaXToolDefinition[],
+    system: string,
+  ) => Promise<{ textBlocks?: readonly { text: string }[]; toolBlocks?: readonly KodaXToolUseBlock[] }>,
+  tokenStateRef?: { current: RunnerAdapterTokenState },
+  /**
+   * FEATURE_078: optional callback that returns Scout's current
+   * `downstream_reasoning_hint` (L3 input). Called once per per-role
+   * adapter invocation so the resolver sees the hint as soon as the
+   * Scout payload is populated. Returning `undefined` bypasses L3 and
+   * falls back to L2 (`agent.reasoning.default`) clamped by L1
+   * (user ceiling). The callback closes over the AMA frame's recorder.
+   */
+  getScoutReasoningHint?: () => KodaXReasoningMode | undefined,
+  /**
+   * v0.7.40 — optional API-accurate context-size snapshot ref. The
+   * adapter writes this ref after each successful LLM stream so the
+   * AMA compaction hook (`buildManagedTaskCompactionHook`) can read
+   * `usage.totalTokens` + delta-adjusted message growth instead of
+   * the transcript-only estimate. Without this wiring, the hook
+   * systematically underestimated context by the system + tools
+   * schema overhead (~20-35k after FEATURE_114 4→2 role
+   * consolidation) and never triggered compaction. See
+   * `_internal/managed-task/compaction.ts` for the consumer side.
+   */
+  contextTokenSnapshotRef?: ContextTokenSnapshotRef,
+  /**
+   * FEATURE_097 (v0.7.34) §5 ② — Layer 2 throttle reminder hook. When
+   * provided, the adapter:
+   *   1. detects agent transitions and resets the counter on each one
+   *   2. checks `shouldFireTodoReminder` before each provider call;
+   *      if it fires, appends the `<system-reminder>` text to `system`
+   *      so the model sees it before its next response
+   *   3. ticks the counter forward (one round = one adapter call)
+   * Omitting either argument disables the reminder logic entirely
+   * (older callers / unit-test fixtures).
+   */
+  todoStore?: TodoStore,
+  todoReminderState?: TodoReminderState,
+): (messages: readonly KodaXMessage[], agent: Agent) => Promise<RunnerLlmResult> {
+  // FEATURE_072 parity: the REPL's token-count indicator reads
+  // `onIterationEnd` to refresh after each worker LLM turn. Track a
+  // monotonically-increasing iteration counter across the entire runner
+  // chain so the REPL sees progress for every role's turn.
+  let iteration = 0;
+  const MAX_ITER_HINT = 20; // matches core/src/runner-tool-loop.ts MAX_TOOL_LOOP_ITERATIONS
+
+  // Cost tracker — one per session; `recordUsage` is called after every
+  // provider.stream usage payload. REPL /cost reads through
+  // `events.getCostReport.current`.
+  let costTracker: CostTracker = createCostTracker();
+  if (options.events?.getCostReport) {
+    options.events.getCostReport.current = () =>
+      formatCostReport(getCostSummary(costTracker));
+  }
+
+  return async (messages, agent) => {
+    // Strip every leading contiguous system message and concatenate their
+    // content. v0.7.22-style flows pushed a single agent-instructions system
+    // prompt and nothing else, so taking only `messages[0]` was enough. The
+    // Runner-driven path stacks [compaction-summary, post-compact-ledger,
+    // post-compact-file-content, ...] after compaction+inject, and after a
+    // handoff `replaceSystemMessage` only swaps [0] — the rest stay leading
+    // system entries. Keeping only the first one would strand agent role
+    // instructions (Scout/Planner/Generator/Evaluator) behind the summary and
+    // still leak secondary system messages into the transcript, which the
+    // provider layer now merges but which would otherwise confuse strict
+    // proxies that reject any non-leading system message.
+    let cut = 0;
+    while (cut < messages.length && messages[cut]?.role === 'system') {
+      cut += 1;
+    }
+    const systemParts: string[] = [];
+    for (let i = 0; i < cut; i += 1) {
+      const content = messages[i]!.content;
+      const text = typeof content === 'string' ? content : '';
+      if (text.trim().length > 0) {
+        systemParts.push(text);
+      }
+    }
+    let system = systemParts.join('\n\n');
+    const transcript = messages.slice(cut);
+
+    // FEATURE_097 (v0.7.34) §5 ② — Layer 2 throttle reminder. Detect
+    // agent transitions to reset the counter (per-task scope, but a
+    // role swap is a natural reset point — Scout → Planner → Generator
+    // → Evaluator each represent a fresh attempt at making progress on
+    // the list). Then, if the threshold has been hit and we're armed,
+    // append the reminder text to `system` so the model reads it
+    // alongside its role instructions on this exact turn. Finally,
+    // tick the counter forward — one adapter call = one round.
+    if (todoStore && todoReminderState) {
+      if (detectAgentTransition(todoReminderState, agent.name)) {
+        resetTodoReminderState(todoReminderState);
+      }
+      if (shouldFireTodoReminder(todoReminderState, todoStore)) {
+        const reminder = buildTodoReminderText(todoStore);
+        system = system.length > 0 ? `${system}\n\n${reminder}` : reminder;
+      }
+      tickTodoReminder(todoReminderState);
+    }
+
+    const wireTools: KodaXToolDefinition[] = (agent.tools ?? []).map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.input_schema,
+    }));
+
+    // FEATURE_078 (v0.7.29): resolve per-role reasoning through the L1-L4
+    // chain rather than reading `agent.reasoning?.default` directly:
+    //   L1 (user ceiling)   ← `--reasoning <mode>` / options.reasoningMode
+    //   L2 (agent default)  ← agent.reasoning.default + .max
+    //   L3 (scout hint)     ← Scout's downstream_reasoning_hint, if any
+    //   L4 (revise escalate) — handled later by escalateThinkingDepth
+    // Pre-FEATURE_078 path was L2 only; that path is preserved when no
+    // user ceiling override + no scout hint is in play (resolver collapses).
+    const userCeiling = resolveReasoningMode(options);
+    const scoutHint = getScoutReasoningHint?.();
+    const role: ReasoningRole =
+      agent.name === SCOUT_AGENT_NAME ? 'scout'
+      : agent.name === PLANNER_AGENT_NAME ? 'planner'
+      : agent.name === GENERATOR_AGENT_NAME ? 'generator'
+      : agent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
+      : 'sa';
+    const reasoningMode = resolveRoleReasoning(role, userCeiling, agent.reasoning, scoutHint);
+    const providerReasoning: KodaXReasoningRequest | undefined =
+      reasoningMode === 'off'
+        ? { enabled: false, mode: 'off' }
+        : {
+            enabled: true,
+            mode: reasoningMode,
+            depth: reasoningModeToDepth(reasoningMode),
+          };
+
+    iteration += 1;
+    options.events?.onIterationStart?.(iteration, MAX_ITER_HINT);
+
+    // FEATURE_164 (v0.7.41) — mid-iteration yield retired here.
+    //
+    // The legacy v0.7.26 F1 parity check used to fire `hasQueuedFollowUp`
+    // at this exact boundary and `return { text:'', toolCalls:[] }` to
+    // force Runner.run to exit the loop. v0.7.40 FEATURE_159 made it
+    // worse by routing the predicate through MessageQueue directly —
+    // any user-typed prompt entering the queue mid-Q1 triggered the
+    // empty-turn yield, polluting the transcript with `{type:'text',
+    // text:''}` placeholder, surfacing `[No response text was produced
+    // for this round]` in the REPL, and feeding the model an empty
+    // assistant turn before the next user message.
+    //
+    // Replacement: claudecode-style mid-turn injection via the agent
+    // package's `beforeNextTurn` hook (see the Runner.run wiring in
+    // `runManagedTaskViaRunnerInner`). The hook drains queued user
+    // prompts AFTER tool execution and BEFORE the next LLM call,
+    // splicing them as real user messages into the transcript — Worker
+    // keeps running, the LLM sees the new prompts in its next turn,
+    // and no empty assistant turn ever reaches the transcript.
+
+    let streamResult: {
+      textBlocks?: readonly { text: string }[];
+      toolBlocks?: readonly KodaXToolUseBlock[];
+      thinkingBlocks?: readonly (
+        | KodaXThinkingBlock
+        | KodaXRedactedThinkingBlock
+      )[];
+      usage?: KodaXTokenUsage;
+    };
+    if (overrideStream) {
+      streamResult = await overrideStream(transcript, wireTools, system);
+    } else {
+      const provider = resolveProvider(options.provider ?? 'anthropic');
+      const providerName = options.provider ?? provider.name ?? 'anthropic';
+      // Shard 6d-P: restore the legacy second-tier retry/recovery loop
+      // (agent.ts:1955-2198). Without this, any transient stream error
+      // (network/terminated/stream-incomplete/idle-timeout) aborts the
+      // whole managed run on the first failure — no retry, no
+      // `onProviderRecovery` event, and the REPL's onError handler ends
+      // up printing the raw error via console.log which Ink places below
+      // the user prompt instead of inline with the worker output.
+      //
+      // Mirrors the legacy loop: classify → decide → onProviderRecovery →
+      // optional non-streaming fallback → executeRecovery (prune
+      // incomplete tool_use turns) → waitForRetryDelay → retry.
+      const resilienceCfg = resolveResilienceConfig(providerName);
+      const API_HARD_TIMEOUT_MS = resilienceCfg.requestTimeoutMs;
+      const API_IDLE_TIMEOUT_MS = resilienceCfg.streamIdleTimeoutMs;
+      const boundaryTracker = new StableBoundaryTracker();
+      const supportsFallback = typeof provider.supportsNonStreamingFallback === 'function'
+        ? provider.supportsNonStreamingFallback()
+        : false;
+      const recoveryCoordinator = new ProviderRecoveryCoordinator(boundaryTracker, {
+        ...resilienceCfg,
+        enableNonStreamingFallback: resilienceCfg.enableNonStreamingFallback && supportsFallback,
+      });
+      // P2b (v0.7.26) — cap max_output_tokens on turns where the tool
+      // inventory exposes `write` / `edit` / `multi_edit` for providers
+      // that reproducibly RST the streaming connection during large
+      // tool_use buffering (zhipu-coding / kimi-code / minimax-coding
+      // observed). Rationale: an 8K ceiling physically prevents the
+      // model from emitting a tool_use payload large enough to hit the
+      // RST window, closing the "Scout jumps to Python to avoid write
+      // streaming issues" escape path at the provider layer instead of
+      // relying on prompt compliance. Works together with P2a
+      // (multi_edit makes skeleton + batched edits cheap, so the cap
+      // doesn't force awkward workflows).
+      //
+      // Override list: `KODAX_RST_PRONE_PROVIDERS` (comma-separated).
+      // Override cap:  `KODAX_WRITE_TURN_MAX_TOKENS` (integer).
+      // L4 escalation (64K) still fires on stop_reason=max_tokens and
+      // takes precedence if the LLM genuinely needs more headroom.
+      // `hasAppliedP2bWriteCap` tracks per-turn application so we can
+      // clear the override on cleanup (prevents the cap from leaking to
+      // the NEXT adapter invocation on the same provider instance).
+      const hasAppliedP2bWriteCap = maybeApplyP2bWriteTurnCap(
+        provider,
+        providerName,
+        wireTools,
+      );
+      let providerMessages: KodaXMessage[] = [...transcript];
+      // Clean incomplete tool calls and validate tool history before
+      // every provider call (CAP-002). Both helpers come from
+      // `agent-runtime/history-cleanup.ts` and are shared with the
+      // SA-mode substrate (see catch-terminals.ts:runCatchCleanup).
+      providerMessages = cleanupIncompleteToolCalls(providerMessages);
+      providerMessages = validateAndFixToolHistory(providerMessages);
+      let attempt = 0;
+      let raw!: Awaited<ReturnType<typeof provider.stream>>;
+      // FEATURE_085 parity for the Scout/Runner path: mirror the main
+      // agent loop's max_tokens escalation (cd213e4). When a capped-budget
+      // turn returns stop_reason:max_tokens we retry the SAME stream call
+      // once with KODAX_ESCALATED_MAX_OUTPUT_TOKENS (64K). At most one
+      // escalation per adapter invocation — if 64K still hits the cap,
+      // we surface the partial result so the Runner's outer loop can see
+      // it and decide next steps. Full L5 continuation (meta "break into
+      // smaller pieces") is handled by prompt-level guidance in system.ts
+      // + write/edit tool descriptions rather than framework plumbing
+      // through the Runner turn boundary.
+      let hasEscalatedForCurrentAdapterCall = false;
+      while (true) {
+        attempt += 1;
+        boundaryTracker.beginRequest(
+          providerName,
+          provider.getModel?.() ?? options.modelOverride ?? 'unknown',
+          providerMessages,
+          attempt,
+          false,
+        );
+        telemetryBoundary(boundaryTracker.snapshot());
+
+        const retryTimeoutController = new AbortController();
+        let hardTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+          retryTimeoutController.abort(new Error('API Hard Timeout (10 minutes)'));
+        }, API_HARD_TIMEOUT_MS);
+        const idleEnabled = API_IDLE_TIMEOUT_MS > 0;
+        let idleTimer: ReturnType<typeof setTimeout> | undefined;
+        if (idleEnabled) {
+          idleTimer = setTimeout(() => {
+            retryTimeoutController.abort(
+              new Error(`Stream stalled or delayed response (${API_IDLE_TIMEOUT_MS}ms idle)`),
+            );
+          }, API_IDLE_TIMEOUT_MS);
+        }
+        const resetIdleTimer = () => {
+          if (!idleEnabled) return;
+          if (idleTimer) clearTimeout(idleTimer);
+          if (!retryTimeoutController.signal.aborted) {
+            idleTimer = setTimeout(() => {
+              retryTimeoutController.abort(
+                new Error(`Stream stalled or delayed response (${API_IDLE_TIMEOUT_MS}ms idle)`),
+              );
+            }, API_IDLE_TIMEOUT_MS);
+          }
+        };
+        const retrySignal = options.abortSignal
+          ? AbortSignal.any([options.abortSignal, retryTimeoutController.signal])
+          : retryTimeoutController.signal;
+
+        const payloadBytes = estimateProviderPayloadBytes(providerMessages, system);
+        emitResilienceDebug('[resilience:request]', {
+          provider: providerName,
+          attempt,
+          fallbackActive: false,
+          payloadBytes,
+          payloadBucket: bucketProviderPayloadSize(payloadBytes),
+        });
+
+        // Wire the boundary tracker into the stream callbacks — the
+        // coordinator inspects these markers to decide whether a failure
+        // happened before the first delta, mid-stream, post-tool, etc.
+        const streamOptions = {
+          onTextDelta: (text: string) => {
+            boundaryTracker.markTextDelta(text);
+            resetIdleTimer();
+            // M2 parity (v0.7.26) — scrub managed control-plane markers
+            // and incomplete managed fences from the streamed delta
+            // before surfacing to `events.onTextDelta`. Without this,
+            // mid-turn `[managed-task] ...` / `<scout_verdict>` tags
+            // briefly appear in REPL live output even though they're
+            // stripped from the final turn text. Matches legacy
+            // behaviour where managed-worker streams routed through
+            // `sanitizeManagedStreamingText` before the REPL saw them.
+            // The sanitize call trims — only apply it when we actually
+            // detect a marker in this delta to preserve mid-token
+            // whitespace in the common clean-delta case.
+            const hasMarker = text.includes('```')
+              || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));
+            const outText = hasMarker ? sanitizeManagedStreamingText(text) : text;
+            if (outText.length === 0) return;
+            options.events?.onTextDelta?.(outText);
+          },
+          onThinkingDelta: (text: string) => {
+            boundaryTracker.markThinkingDelta(text);
+            resetIdleTimer();
+            options.events?.onThinkingDelta?.(text);
+          },
+          onThinkingEnd: (thinking: string) => {
+            options.events?.onThinkingEnd?.(thinking);
+          },
+          onToolInputDelta: options.events?.onToolInputDelta,
+        };
+
+        try {
+          raw = await provider.stream(
+            providerMessages,
+            [...wireTools],
+            system,
+            providerReasoning,
+            streamOptions,
+            retrySignal,
+          );
+          // max_tokens escalation: if the capped budget hit the cap and
+          // we haven't yet escalated this adapter call, stage
+          // KODAX_ESCALATED_MAX_OUTPUT_TOKENS for the next iteration and
+          // re-enter the loop. Skipped when the user explicitly set
+          // KODAX_MAX_OUTPUT_TOKENS or the effective budget already meets
+          // the escalated threshold. Mirrors agent.ts:2264-2284.
+          if (
+            raw.stopReason === 'max_tokens'
+            && !hasEscalatedForCurrentAdapterCall
+            && !process.env.KODAX_MAX_OUTPUT_TOKENS
+            && provider.getEffectiveMaxOutputTokens() < KODAX_ESCALATED_MAX_OUTPUT_TOKENS
+          ) {
+            hasEscalatedForCurrentAdapterCall = true;
+            provider.setMaxOutputTokensOverride(KODAX_ESCALATED_MAX_OUTPUT_TOKENS);
+            options.events?.onRetry?.(
+              `Output budget reached, escalating to ${KODAX_ESCALATED_MAX_OUTPUT_TOKENS} tokens and retrying the same turn`,
+              1,
+              1,
+            );
+            if (hardTimer) clearTimeout(hardTimer);
+            if (idleTimer) clearTimeout(idleTimer);
+            hardTimer = undefined;
+            idleTimer = undefined;
+            // Escalation is a same-turn re-issue (change max_tokens, replay same messages),
+            // not an error recovery. Reverse the `attempt += 1` at the top of the loop so
+            // this iteration does not consume a slot from `resilienceCfg.maxRetries`. The
+            // next iteration's attempt will be the same as this one, and subsequent real
+            // errors still get the full retry budget.
+            attempt -= 1;
+            continue;
+          }
+          break;
+        } catch (rawError) {
+          let error = rawError instanceof Error ? rawError : new Error(String(rawError));
+          if (
+            error.name === 'AbortError'
+              && retryTimeoutController.signal.aborted
+              && !options.abortSignal?.aborted
+          ) {
+            const reason = (retryTimeoutController.signal as { reason?: { message?: string } })
+              .reason?.message ?? 'Stream stalled';
+            const { KodaXNetworkError } = await import('@kodax-ai/llm');
+            error = new KodaXNetworkError(reason, true);
+          }
+
+          const failureStage = boundaryTracker.inferFailureStage();
+          const classified = classifyResilienceError(error, failureStage);
+          telemetryClassify(error, classified);
+          const decision = recoveryCoordinator.decideRecoveryAction(error, classified, attempt);
+          telemetryDecision(decision, attempt);
+
+          options.events?.onProviderRecovery?.({
+            stage: decision.failureStage,
+            errorClass: decision.reasonCode,
+            attempt,
+            maxAttempts: resilienceCfg.maxRetries,
+            delayMs: decision.delayMs,
+            recoveryAction: decision.action,
+            ladderStep: decision.ladderStep,
+            fallbackUsed: decision.shouldUseNonStreaming,
+            serverRetryAfterMs: decision.serverRetryAfterMs,
+          });
+          // Dedicated rate-limit event so REPL can render a distinct 429
+          // banner (separate from the generic retry UI).
+          if (decision.reasonCode === 'rate_limit' && options.events) {
+            emitProviderRateLimit(
+              options.events,
+              attempt,
+              resilienceCfg.maxRetries,
+              decision.delayMs,
+            );
+          }
+          if (!options.events?.onProviderRecovery && decision.action !== 'manual_continue') {
+            options.events?.onRetry?.(
+              `${describeTransientProviderRetry(error)} · retry ${attempt}/${resilienceCfg.maxRetries} in ${Math.round(decision.delayMs / 1000)}s`,
+              attempt,
+              resilienceCfg.maxRetries,
+            );
+          }
+
+          if (decision.shouldUseNonStreaming && typeof provider.complete === 'function') {
+            const fallbackTimeoutController = new AbortController();
+            const fallbackSignal = options.abortSignal
+              ? AbortSignal.any([options.abortSignal, fallbackTimeoutController.signal])
+              : fallbackTimeoutController.signal;
+            const fallbackHardTimer = setTimeout(() => {
+              fallbackTimeoutController.abort(new Error('API Hard Timeout (10 minutes)'));
+            }, API_HARD_TIMEOUT_MS);
+            try {
+              if (idleTimer) clearTimeout(idleTimer);
+              if (hardTimer) clearTimeout(hardTimer);
+              hardTimer = undefined;
+              idleTimer = undefined;
+              boundaryTracker.beginRequest(
+                providerName,
+                provider.getModel?.() ?? options.modelOverride ?? 'unknown',
+                providerMessages,
+                attempt,
+                true,
+              );
+              telemetryBoundary(boundaryTracker.snapshot());
+              raw = await provider.complete(
+                providerMessages,
+                [...wireTools],
+                system,
+                providerReasoning,
+                {
+                  onTextDelta: (text: string) => {
+                    boundaryTracker.markTextDelta(text);
+                    options.events?.onTextDelta?.(text);
+                  },
+                  onThinkingDelta: (text: string) => {
+                    boundaryTracker.markThinkingDelta(text);
+                    options.events?.onThinkingDelta?.(text);
+                  },
+                  onThinkingEnd: (thinking: string) => {
+                    options.events?.onThinkingEnd?.(thinking);
+                  },
+                  signal: fallbackSignal,
+                },
+                fallbackSignal,
+              );
+              break;
+            } catch (fallbackError) {
+              error = fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
+            } finally {
+              clearTimeout(fallbackHardTimer);
+            }
+          }
+
+          // sanitize_thinking_and_retry is a single-shot history-mutation
+          // recovery (drop thinking blocks once, retry once) and must
+          // bypass the regular retry-budget gate. It's gated by its own
+          // `thinkingSanitizationUsed` latch inside the coordinator, so
+          // it can fire at most once per request chain regardless of how
+          // many normal retries already happened. v0.7.28.
+          if (decision.action === 'sanitize_thinking_and_retry') {
+            const recovery = recoveryCoordinator.executeRecovery(providerMessages, decision);
+            telemetryRecovery(decision.action, recovery);
+            providerMessages = recovery.messages;
+            if (hardTimer) clearTimeout(hardTimer);
+            if (idleTimer) clearTimeout(idleTimer);
+            hardTimer = undefined;
+            idleTimer = undefined;
+            // Don't bill an attempt slot for the sanitize step — same
+            // rationale as the L1 escalation reversal at line ~2546.
+            attempt -= 1;
+            await waitForRetryDelay(decision.delayMs, options.abortSignal);
+            continue;
+          }
+
+          if (decision.action === 'manual_continue' || attempt >= resilienceCfg.maxRetries) {
+            // Preserve in-flight providerMessages on the thrown error so the
+            // outer wrapper's session-snapshot save can persist real history
+            // instead of `[]`. Non-enumerable so JSON-serializing telemetry
+            // does not dump conversation history into logs. The outer catch
+            // uses Array.isArray as a guard.
+            Object.defineProperty(error, '__kodaxRecoveredMessages', {
+              value: providerMessages,
+              enumerable: false,
+            });
+            throw error;
+          }
+
+          const recovery = recoveryCoordinator.executeRecovery(providerMessages, decision);
+          telemetryRecovery(decision.action, recovery);
+          providerMessages = recovery.messages;
+
+          if (hardTimer) clearTimeout(hardTimer);
+          if (idleTimer) clearTimeout(idleTimer);
+          hardTimer = undefined;
+          idleTimer = undefined;
+          await waitForRetryDelay(decision.delayMs, options.abortSignal);
+          continue;
+        } finally {
+          if (hardTimer) clearTimeout(hardTimer);
+          if (idleTimer) clearTimeout(idleTimer);
+        }
+      }
+
+      // M6 parity (v0.7.26) — L5 continuation ladder. When L1 escalation
+      // is exhausted and the model still hit max_tokens mid-text (no
+      // tool blocks, has text), inject a synthetic user "Continue from
+      // where you left off" message and re-stream up to
+      // KODAX_MAX_MAXTOKENS_RETRIES times, accumulating text +
+      // thinkingBlocks across turns. Mirrors legacy agent.ts:2316-2334.
+      // Without this, long Generator replies that blow through the
+      // escalated 64K cap get truncated silently — the assistant stops
+      // mid-sentence and the Runner exits with a partial answer.
+      let l5Retries = 0;
+      let accumulatedText = (raw.textBlocks ?? []).map((b) => b.text).join('');
+      type ThinkingBlock = KodaXThinkingBlock | KodaXRedactedThinkingBlock;
+      const accumulatedThinking: ThinkingBlock[] | undefined = raw.thinkingBlocks
+        ? [...raw.thinkingBlocks]
+        : undefined;
+      while (
+        raw.stopReason === 'max_tokens'
+        && (raw.toolBlocks?.length ?? 0) === 0
+        && accumulatedText.trim().length > 0
+        && l5Retries < KODAX_MAX_MAXTOKENS_RETRIES
+      ) {
+        l5Retries += 1;
+        options.events?.onTextDelta?.('\n\n[max_tokens reached, continuing...]\n\n');
+        // Push the partial assistant turn + synthetic user continuation
+        // onto the outgoing transcript. The provider will see the full
+        // mid-thought state and pick up seamlessly.
+        //
+        // Thinking blocks accumulated so far must ride along on the
+        // synthetic assistant turn. Without them, providers in strict
+        // thinking-mode (deepseek V4) reject the next replay with
+        // "reasoning_content must be passed back to the API" — the
+        // synthetic turn would be a thinking-less assistant message in
+        // a thinking-enabled request, which violates their per-turn
+        // contract. Mirrors what agent.ts:2294 does for the legacy
+        // path: thinking + text + tool_use stack on the assistant
+        // message in history.
+        const assistantContent: KodaXContentBlock[] = [
+          ...(accumulatedThinking ?? []),
+          { type: 'text', text: accumulatedText },
+        ];
+        providerMessages = [
+          ...providerMessages,
+          { role: 'assistant', content: assistantContent } as KodaXMessage,
+          {
+            role: 'user',
+            content: [{
+              type: 'text',
+              text:
+                'Output token limit hit. Resume directly — no apology, no recap of what you were doing. '
+                + 'Pick up mid-thought if that is where the cut happened. '
+                + 'Break remaining work into smaller pieces.',
+            }],
+          } as KodaXMessage,
+        ];
+        options.events?.onRetry?.(
+          `max_tokens mid-text, appending continuation ${l5Retries}/${KODAX_MAX_MAXTOKENS_RETRIES}`,
+          l5Retries,
+          KODAX_MAX_MAXTOKENS_RETRIES,
+        );
+        const l5Signal = options.abortSignal ?? undefined;
+        try {
+          raw = await provider.stream(
+            providerMessages,
+            [...wireTools],
+            system,
+            providerReasoning,
+            {
+              onTextDelta: (text: string) => {
+                const hasMarker = text.includes('```')
+                  || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));
+                const outText = hasMarker ? sanitizeManagedStreamingText(text) : text;
+                if (outText.length === 0) return;
+                options.events?.onTextDelta?.(outText);
+              },
+              onThinkingDelta: (text: string) => {
+                options.events?.onThinkingDelta?.(text);
+              },
+              onThinkingEnd: (thinking: string) => {
+                options.events?.onThinkingEnd?.(thinking);
+              },
+              onToolInputDelta: options.events?.onToolInputDelta,
+            },
+            l5Signal,
+          );
+        } catch {
+          // L5 retries are best-effort — any failure here falls back to
+          // the partial result we already have.
+          break;
+        }
+        const nextText = (raw.textBlocks ?? []).map((b) => b.text).join('');
+        if (nextText) accumulatedText += nextText;
+        if (raw.thinkingBlocks && accumulatedThinking) {
+          accumulatedThinking.push(...raw.thinkingBlocks);
+        }
+        // Exit early on tool calls or natural stop.
+        if ((raw.toolBlocks?.length ?? 0) > 0 || raw.stopReason !== 'max_tokens') {
+          break;
+        }
+      }
+
+      streamResult = {
+        textBlocks: accumulatedText ? [{ text: accumulatedText }] : raw.textBlocks,
+        toolBlocks: raw.toolBlocks,
+        thinkingBlocks: accumulatedThinking ?? raw.thinkingBlocks,
+        usage: raw.usage,
+      };
+
+      // P2b cleanup — if we applied the write-turn cap, ensure the
+      // override doesn't leak to the next adapter invocation on this
+      // same provider instance. Base provider clears on success inside
+      // withRateLimit, but failure paths keep the override. Clearing
+      // unconditionally here is safe: L4 escalation sets and clears
+      // its own override within the retry loop, and any fresh
+      // invocation will re-apply its own policy.
+      if (hasAppliedP2bWriteCap) {
+        provider.setMaxOutputTokensOverride(undefined);
+      }
+    }
+
+    // Update cumulative token state for the final contextTokenSnapshot.
+    if (tokenStateRef && streamResult.usage) {
+      const current = tokenStateRef.current;
+      tokenStateRef.current = {
+        totalTokens: streamResult.usage.totalTokens ?? current.totalTokens,
+        lastUsage: streamResult.usage,
+        source: 'api',
+      };
+    }
+
+    // v0.7.40 — refresh the API-accurate snapshot ref so the AMA
+    // compaction hook can compute `resolveContextTokenCount(transcript,
+    // snapshot)` on its next call. `messages` here is the adapter's
+    // input (the transcript at LLM-call time); subsequent Runner
+    // appends (assistant + tool_results) become the delta on top of
+    // this baseline. Mirrors SA path's `createCompletedTurnTokenSnapshot`
+    // in `run-substrate.ts`. Inlined rather than imported to keep the
+    // snapshot-construction logic colocated with its single consumer.
+    if (contextTokenSnapshotRef && streamResult.usage) {
+      const baselineEstimatedTokens = estimateTokens(messages as KodaXMessage[]);
+      const apiTotal = streamResult.usage.totalTokens;
+      if (typeof apiTotal === 'number' && Number.isFinite(apiTotal) && apiTotal >= 0) {
+        contextTokenSnapshotRef.current = {
+          currentTokens: apiTotal,
+          baselineEstimatedTokens,
+          source: 'api',
+          usage: streamResult.usage,
+        };
+      }
+    }
+
+    // Record turn usage into the cost tracker so `/cost` reflects AMA spend.
+    if (streamResult.usage) {
+      const providerName = options.provider ?? 'anthropic';
+      costTracker = recordCostUsage(costTracker, {
+        provider: providerName,
+        model: options.modelOverride ?? options.model ?? 'unknown',
+        inputTokens: streamResult.usage.inputTokens,
+        outputTokens: streamResult.usage.outputTokens,
+        cacheReadTokens: streamResult.usage.cachedReadTokens,
+        cacheWriteTokens: streamResult.usage.cachedWriteTokens,
+      });
+    }
+
+    // onStreamEnd fires after the provider finishes the current turn's
+    // stream. The Runner-driven adapter funnels every turn through this
+    // single return-path so the event fires once per stream.
+    if (options.events) emitStreamEnd(options.events);
+
+    // Fire onIterationEnd so the REPL token-count indicator can refresh
+    // after each worker turn. `scope: 'worker'` mirrors the FEATURE_072
+    // tagging — every Runner-driven iteration runs inside a worker role,
+    // never the top-level REPL agent.
+    if (options.events?.onIterationEnd) {
+      const usage = streamResult.usage;
+      const tokenCount = usage?.totalTokens ?? usage?.outputTokens ?? 0;
+      options.events.onIterationEnd({
+        iter: iteration,
+        maxIter: MAX_ITER_HINT,
+        tokenCount,
+        tokenSource: usage ? 'api' : 'estimate',
+        usage,
+        scope: 'worker',
+      });
+    }
+
+    const text = (streamResult.textBlocks ?? []).map((b) => b.text).join('');
+    const toolCalls = (streamResult.toolBlocks ?? []).map((b) => ({
+      id: b.id,
+      name: b.name,
+      input: b.input ?? {},
+    }));
+
+    // C1 parity (v0.7.26) — fenced-block fallback. v0.7.22 ran
+    // `managedProtocolPayload?.scout ?? parseManagedTaskScoutDirective(text)`
+    // at 4 call sites so an LLM that writes a well-formed `kodax-task-*`
+    // block but forgets to call the emit tool still advances the
+    // pipeline. The Runner-driven path lost this until now — a missed
+    // emit stalls the entire run (task never records Scout/Handoff/
+    // Verdict, Runner loops until the 500-iteration safety cap trips).
+    //
+    // Strategy: detect "LLM didn't call the expected emit_* tool this
+    // turn, but assistant text contains the role's kodax-task-* fence"
+    // → parse the fence via `attemptProtocolTextFallback`, synthesize a
+    // matching tool_call entry. The Runner will dispatch it through
+    // the agent's already-registered emit tool + `wrapEmitterWithRecorder`,
+    // so recorder / budget / handoff bookkeeping flows through the
+    // exact same code path as a real tool call. Zero new state
+    // machinery. Mirrors v0.7.22's `?? parseManagedTask*Directive`
+    // fallback at task-engine.ts:3242 / 3297 / 3371 / 3416.
+    const fallbackRole = agentNameToManagedRole(agent.name);
+    if (fallbackRole && text.length > 0) {
+      const expectedEmit = getEmitToolNameForRole(fallbackRole);
+      const alreadyEmitted = expectedEmit
+        ? toolCalls.some((tc) => tc.name === expectedEmit)
+        : false;
+      if (expectedEmit && !alreadyEmitted) {
+        const synthesized = attemptProtocolTextFallback(fallbackRole, text);
+        if (synthesized) {
+          toolCalls.push({
+            id: `fallback-${fallbackRole}-${Date.now()}`,
+            name: expectedEmit,
+            // Re-serialize the normalized payload as the synthetic tool
+            // input. The real emitter will re-run `coerceManagedProtocolToolPayload`,
+            // which is idempotent on already-normalized input (keys
+            // already snake_case via the block body; camelCase fields
+            // the normalizer produced round-trip cleanly via the
+            // tool's schema).
+            input: flattenNormalizedForEmitterInput(synthesized.payload) as Record<string, unknown>,
+          });
+          options.events?.onRetry?.(
+            `[fallback] ${fallbackRole} emitted ${getManagedBlockNameForRole(fallbackRole) ?? 'fenced block'} without calling ${expectedEmit}; synthesizing tool call from block body`,
+            0,
+            0,
+          );
+        }
+      }
+    }
+    // Forward thinking blocks so
+    // `buildAssistantMessageFromLlmResult` can prepend them to the
+    // assistant content. Required for Anthropic extended thinking —
+    // provider returns 400 if prior assistant turns with tool_use are
+    // missing the thinking block in history.
+    const thinkingBlocks = streamResult.thinkingBlocks;
+    return { text, toolCalls, thinkingBlocks };
+  };
+}
