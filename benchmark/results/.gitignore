@@ -1,5 +1,6 @@
-# Persisted prompt-benchmark runs (FEATURE_104 v2). Ignored by default;
-# commit a specific snapshot directory only when you want it as a
-# regression baseline alongside a prompt-change PR.
+# Persisted prompt-benchmark runs (FEATURE_104 v2). Local-only — never
+# committed under any circumstance, including "baseline" snapshots. This
+# file is the only tracked artifact under benchmark/results/. The same
+# rule is also enforced at the root .gitignore.
 *
 !.gitignore
