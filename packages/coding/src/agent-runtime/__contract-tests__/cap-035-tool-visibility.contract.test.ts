@@ -51,4 +51,12 @@ describe('CAP-035: tool name visibility classification contract', () => {
     expect(isVisibleToolName('todo_update')).toBe(false);
     expect(isVisibleToolName('todo_list')).toBe(false);
   });
+
+  // FEATURE_170 (v0.7.41) — todo_create is the per-item insertion path
+  // (mirrors claudecode V2 TaskCreate). Same scaffolding stance as
+  // todo_update: the user sees inserted items via TodoListSurface; the
+  // raw tool call is pure transcript noise. Surface must stay hidden.
+  it('CAP-TOOL-VISIBILITY-001e: FEATURE_170 todo_create tool hidden', () => {
+    expect(isVisibleToolName('todo_create')).toBe(false);
+  });
 });

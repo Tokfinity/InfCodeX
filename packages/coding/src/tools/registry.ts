@@ -48,6 +48,7 @@ import { toolTaskStop } from './task-stop.js';
 // (default ON since Slice B1.D) is the canonical wait mechanic.
 import { toolTodoUpdate } from './todo-update.js';
 import { toolTodoList } from './todo-list.js';
+import { toolTodoCreate } from './todo-create.js';
 import {
   toolScaffoldTool,
   toolValidateTool,
@@ -922,6 +923,49 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       //   op="update" → requires `id` + `status`
     },
     handler: toolTodoUpdate,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'todo_create',
+    description:
+      'FEATURE_170 (v0.7.41) — insert ONE new pending item into the visible plan list. ' +
+      'Use this MID-TASK when you realise the plan needs an additional step but the existing items must be preserved. ' +
+      'Do NOT use this for the initial plan commitment — `todo_update({op:"init", items:[...]})` is the batch-seed path for fan-out plan-first or task entry. ' +
+      'Rules: ' +
+      '(1) The store auto-generates the id (monotonic `todo_N`). Do NOT pass an id — any caller-supplied id is rejected at the schema layer. ' +
+      '(2) `content` is required (imperative description, e.g. "Add edge-case test for null input"). ' +
+      '(3) Supply `activeForm` (present-continuous form, e.g. "Adding edge-case test for null input") so the spinner can show the user what you are working on when this item is later flipped to `in_progress` via todo_update. ' +
+      '(4) Optional `evaluator: "build" | "test" | "lint"` hint runs the corresponding deterministic check when the item flips to "completed" (FEATURE_114) — use sparingly, only on milestone steps with a real ground-truth check. ' +
+      '(5) Optional `metadata` opaque object is carried alongside the item for extension hooks / observability — the UI does NOT render it. ' +
+      'Returns {ok: true, id: "todo_<n>"} on success. ' +
+      'Returns {ok: false, reason: "..."} when the store is not wired, validation fails, or an extension hook blocks the create.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        content: {
+          type: 'string',
+          description: 'Imperative description of what needs to be done (e.g. "Run failing tests").',
+        },
+        activeForm: {
+          type: 'string',
+          description:
+            'Optional present-continuous form (e.g. "Running failing tests"). Shown by the spinner when this item later flips to `in_progress`.',
+        },
+        evaluator: {
+          type: 'string',
+          enum: ['build', 'test', 'lint'],
+          description:
+            'Optional (FEATURE_114) per-step deterministic evaluator. When set and the item later flips to "completed" via todo_update, the runner runs `npm run build` / `npm test` / `npm run lint` accordingly; failure surfaces stderr in your next tool result. Use sparingly — only on milestone steps with a real ground-truth check.',
+        },
+        metadata: {
+          type: 'object',
+          description:
+            'Optional opaque key-value bag carried alongside the item. Used by extension hooks / eval harnesses. The UI does NOT render metadata. Omit if you have nothing structured to attach.',
+        },
+      },
+      required: ['content'],
+    },
+    handler: toolTodoCreate,
     toClassifierInput: () => '',
   },
   {

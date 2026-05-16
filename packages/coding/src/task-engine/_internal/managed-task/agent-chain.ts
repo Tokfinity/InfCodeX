@@ -44,6 +44,7 @@ import { toolMultiEdit } from '../../../tools/multi-edit.js';
 import { toolExitPlanMode } from '../../../tools/exit-plan-mode.js';
 import { toolTodoUpdate } from '../../../tools/todo-update.js';
 import { toolTodoList } from '../../../tools/todo-list.js';
+import { toolTodoCreate } from '../../../tools/todo-create.js';
 import { toolGlob } from '../../../tools/glob.js';
 import { toolGrep } from '../../../tools/grep.js';
 import { toolRead } from '../../../tools/read.js';
@@ -134,6 +135,12 @@ interface CodingToolBundle {
    * (especially after Unknown-id errors or long quiet stretches).
    */
   readonly todoList: RunnableTool;
+  /**
+   * FEATURE_170 (v0.7.41) — per-item insertion path. Companion to
+   * todo_update (status transition) and todo_update({op:'init'})
+   * (batch seed). The store auto-generates the monotonic id.
+   */
+  readonly todoCreate: RunnableTool;
   /** M1 parity (v0.7.26) — repo-intel + MCP surface restored to Planner.
    * v0.7.22's `buildManagedWorkerToolPolicy('planner')` exposed
    * `changed_scope`, `repo_overview`, `changed_diff_bundle`, `read`,
@@ -166,6 +173,7 @@ function buildCodingToolBundle(
   const exitPlanMode = getToolDefinition('exit_plan_mode');
   const todoUpdate = getToolDefinition('todo_update');
   const todoList = getToolDefinition('todo_list');
+  const todoCreate = getToolDefinition('todo_create');
   if (
     !read
     || !grep
@@ -177,9 +185,10 @@ function buildCodingToolBundle(
     || !exitPlanMode
     || !todoUpdate
     || !todoList
+    || !todoCreate
   ) {
     throw new Error(
-      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list) to be registered',
+      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list/todo_create) to be registered',
     );
   }
   // M1 parity (v0.7.26) — optionally wrap repo-intel + MCP tools so
@@ -218,6 +227,7 @@ function buildCodingToolBundle(
     exitPlanMode: wrapCodingToolAsRunnable(exitPlanMode, toolExitPlanMode, baseCtx, budget, events),
     todoUpdate: wrapCodingToolAsRunnable(todoUpdate, toolTodoUpdate, baseCtx, budget, events),
     todoList: wrapCodingToolAsRunnable(todoList, toolTodoList, baseCtx, budget, events),
+    todoCreate: wrapCodingToolAsRunnable(todoCreate, toolTodoCreate, baseCtx, budget, events),
     repoOverview: repoOverviewDef
       ? wrapCodingToolAsRunnable(repoOverviewDef, toolRepoOverview, baseCtx, budget, events)
       : undefined,
@@ -402,11 +412,17 @@ export function buildRunnerAgentChain(
   // path resets the counter so a model spamming malformed updates does
   // NOT escape the reminder. Read the JSON envelope to discriminate.
   if (todoReminderState) {
-    const baseTodoUpdate = codingTools.todoUpdate;
-    const wrappedTodoUpdate: RunnableTool = {
-      ...baseTodoUpdate,
+    // FEATURE_170 (v0.7.41) — extend the throttle-reset behavior to
+    // `todo_create` too. After migration the LLM commonly emits N
+    // todo_create calls (per-item) instead of a single todo_update(init).
+    // Without resetting on todo_create, a model that diligently inserts
+    // every item via todo_create still triggers the "you have not
+    // committed a plan" reminder after the 8-round counter elapses —
+    // spurious nag at the worst possible time.
+    const wrapForReset = (base: RunnableTool): RunnableTool => ({
+      ...base,
       execute: async (input, runnerCtx): Promise<RunnerToolResult> => {
-        const result = await baseTodoUpdate.execute(input, runnerCtx);
+        const result = await base.execute(input, runnerCtx);
         if (!result.isError && typeof result.content === 'string') {
           try {
             const parsed = JSON.parse(result.content) as { ok?: boolean };
@@ -421,8 +437,12 @@ export function buildRunnerAgentChain(
         }
         return result;
       },
+    });
+    const mutable = codingTools as {
+      -readonly [K in keyof typeof codingTools]: typeof codingTools[K];
     };
-    (codingTools as { -readonly [K in keyof typeof codingTools]: typeof codingTools[K] }).todoUpdate = wrappedTodoUpdate;
+    mutable.todoUpdate = wrapForReset(codingTools.todoUpdate);
+    mutable.todoCreate = wrapForReset(codingTools.todoCreate);
   }
   // FEATURE_114 v0.7.36 Slice 3c — deterministic per-step evaluator.
   // When `todoStore` + `runtimeCwd` are wired, wrap `todo_update` so a
@@ -717,6 +737,7 @@ export function buildRunnerAgentChain(
         new Map<string, RunnableTool>([
           ['dispatch_child_task', scoutDispatch],
           ['todo_update', codingTools.todoUpdate],
+          ['todo_create', codingTools.todoCreate],
         ]),
       ),
     ],
@@ -746,6 +767,7 @@ export function buildRunnerAgentChain(
       events,
       new Map<string, RunnableTool>([
         ['todo_update', codingTools.todoUpdate],
+        ['todo_create', codingTools.todoCreate],
       ]),
     ),
   ];
@@ -812,6 +834,7 @@ export function buildRunnerAgentChain(
           ['multi_edit', wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef)],
           ['dispatch_child_task', generatorDispatch],
           ['todo_update', codingTools.todoUpdate],
+          ['todo_create', codingTools.todoCreate],
         ]),
       ),
     ],
@@ -929,6 +952,7 @@ export function buildRunnerAgentChain(
           ['multi_edit', wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef)],
           ['dispatch_child_task', workerDispatch],
           ['todo_update', codingTools.todoUpdate],
+          ['todo_create', codingTools.todoCreate],
         ]),
       ),
     ],

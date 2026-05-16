@@ -101,6 +101,12 @@ const EVALUATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
   // No state changes that would affect the Worker/Generator's plan-view
   'exit_plan_mode',
   'todo_update',
+  // FEATURE_170 (v0.7.41) — Evaluator must not insert plan items either.
+  // Independent audit is verification-only; any plan-view mutation
+  // (insertion / status flip / removal) is reserved for Worker/Generator/
+  // Scout. Architecturally exclude `todo_create` for the same reason
+  // todo_update is excluded.
+  'todo_create',
   // No user interaction — independent audit must not block on user input
   'ask_user_question',
 ]);

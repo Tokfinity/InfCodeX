@@ -66,6 +66,10 @@ import { rebaseContextTokenSnapshot } from '../token-accounting.js';
 const HIDDEN_TODO_TOOL_NAMES: ReadonlySet<string> = new Set([
   'todo_update',
   'todo_list',
+  // FEATURE_170 (v0.7.41) — `todo_create` is also plan-list scaffolding.
+  // Same rationale as todo_update: the user sees inserted items via the
+  // TodoListSurface; the raw tool call is pure transcript noise.
+  'todo_create',
 ]);
 
 export function isVisibleToolName(name: string): boolean {
