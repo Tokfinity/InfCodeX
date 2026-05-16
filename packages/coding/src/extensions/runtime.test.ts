@@ -16,6 +16,10 @@ import {
 declare global {
   // eslint-disable-next-line no-var
   var __kodaxExtensionEvents: string[] | undefined;
+  // eslint-disable-next-line no-var
+  var __kodaxTodoEvents: Array<{ event: string; payload: unknown }> | undefined;
+  // eslint-disable-next-line no-var
+  var __kodaxTodoHookCalls: Array<{ hook: string; payload: unknown }> | undefined;
 }
 
 describe('KodaXExtensionRuntime', () => {
@@ -24,6 +28,8 @@ describe('KodaXExtensionRuntime', () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-ext-'));
     globalThis.__kodaxExtensionEvents = [];
+    globalThis.__kodaxTodoEvents = [];
+    globalThis.__kodaxTodoHookCalls = [];
   });
 
   afterEach(async () => {
@@ -32,6 +38,8 @@ describe('KodaXExtensionRuntime', () => {
       await runtime.dispose();
     }
     delete globalThis.__kodaxExtensionEvents;
+    delete globalThis.__kodaxTodoEvents;
+    delete globalThis.__kodaxTodoHookCalls;
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -672,6 +680,151 @@ describe('KodaXExtensionRuntime', () => {
     expect(warnSpy).toHaveBeenCalled();
 
     warnSpy.mockRestore();
+    await runtime.dispose();
+  });
+
+  // ===========================================================================
+  // FEATURE_170 v0.7.41 — todo:* events + hooks contract
+  // ===========================================================================
+
+  it('delivers todo:created / todo:updated / todo:deleted events to subscribers', async () => {
+    const extensionPath = path.join(tempDir, 'todo-events-ext.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.on('todo:created', (payload) => {
+          globalThis.__kodaxTodoEvents = globalThis.__kodaxTodoEvents ?? [];
+          globalThis.__kodaxTodoEvents.push({ event: 'todo:created', payload });
+        });
+        api.on('todo:updated', (payload) => {
+          globalThis.__kodaxTodoEvents.push({ event: 'todo:updated', payload });
+        });
+        api.on('todo:deleted', (payload) => {
+          globalThis.__kodaxTodoEvents.push({ event: 'todo:deleted', payload });
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    const item = { id: 'todo_1', content: 'Step 1', status: 'pending' as const };
+
+    await emitActiveExtensionEvent('todo:created', {
+      id: item.id,
+      item,
+      source: 'tool',
+    });
+    await emitActiveExtensionEvent('todo:updated', {
+      id: item.id,
+      before: item,
+      after: { ...item, status: 'in_progress' as const },
+      changedFields: ['status'],
+      source: 'tool',
+    });
+    await emitActiveExtensionEvent('todo:deleted', {
+      id: item.id,
+      item,
+      source: 'tool',
+    });
+
+    expect(globalThis.__kodaxTodoEvents).toHaveLength(3);
+    expect(globalThis.__kodaxTodoEvents?.[0]).toMatchObject({
+      event: 'todo:created',
+      payload: { id: 'todo_1', source: 'tool' },
+    });
+    expect(globalThis.__kodaxTodoEvents?.[1]).toMatchObject({
+      event: 'todo:updated',
+      payload: { changedFields: ['status'], source: 'tool' },
+    });
+    expect(globalThis.__kodaxTodoEvents?.[2]).toMatchObject({
+      event: 'todo:deleted',
+      payload: { id: 'todo_1', source: 'tool' },
+    });
+
+    await runtime.dispose();
+  });
+
+  it('propagates todo:before-create blocking string reason', async () => {
+    const extensionPath = path.join(tempDir, 'todo-hook-ext.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.hook('todo:before-create', (context) => {
+          globalThis.__kodaxTodoHookCalls = globalThis.__kodaxTodoHookCalls ?? [];
+          globalThis.__kodaxTodoHookCalls.push({ hook: 'todo:before-create', payload: context });
+          if (String(context.seed.content).includes('forbidden')) {
+            return 'extension policy: forbidden content';
+          }
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    const blocked = await runActiveExtensionHook('todo:before-create', {
+      seed: { content: 'do the forbidden thing' },
+    });
+    const allowed = await runActiveExtensionHook('todo:before-create', {
+      seed: { content: 'do the allowed thing' },
+    });
+
+    expect(blocked).toBe('extension policy: forbidden content');
+    expect(allowed).toBeUndefined();
+    expect(globalThis.__kodaxTodoHookCalls).toHaveLength(2);
+
+    await runtime.dispose();
+  });
+
+  it('propagates todo:before-complete blocking false (no reason)', async () => {
+    const extensionPath = path.join(tempDir, 'todo-hook-false-ext.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.hook('todo:before-complete', () => false);
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    const result = await runActiveExtensionHook('todo:before-complete', {
+      id: 'todo_1',
+      item: { id: 'todo_1', content: 'X', status: 'in_progress' },
+    });
+    expect(result).toBe(false);
+
+    await runtime.dispose();
+  });
+
+  it('todo:before-* hooks allow when handler returns void', async () => {
+    const extensionPath = path.join(tempDir, 'todo-hook-void-ext.mjs');
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.hook('todo:before-create', () => undefined);
+        api.hook('todo:before-complete', () => undefined);
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    await expect(
+      runActiveExtensionHook('todo:before-create', { seed: { content: 'X' } }),
+    ).resolves.toBeUndefined();
+    await expect(
+      runActiveExtensionHook('todo:before-complete', {
+        id: 'todo_1',
+        item: { id: 'todo_1', content: 'X', status: 'in_progress' },
+      }),
+    ).resolves.toBeUndefined();
+
     await runtime.dispose();
   });
 });

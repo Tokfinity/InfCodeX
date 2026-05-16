@@ -230,6 +230,70 @@ export interface ExtensionEventMap {
   };
   'complete': { success: boolean; signal?: 'COMPLETE' | 'BLOCKED' | 'DECIDE' };
   'error': { error: Error };
+  // FEATURE_170 v0.7.41 — todo CRUD observability. Broadcast-only (no
+  // blocking semantics). Fired after the store mutation completes. The
+  // matching blocking gates live in ExtensionHookMap below.
+  //
+  // `'todo:updated'` fires for *every* observable mutation including
+  // status flips driven by runner-side autoCompleteOnAccept /
+  // markInProgressFailed / resetFailed — extensions wanting to observe
+  // only LLM-initiated updates should filter via `source`.
+  'todo:created': { id: string; item: KodaXTodoItem; source: TodoMutationSource };
+  'todo:updated': {
+    id: string;
+    before: KodaXTodoItem;
+    after: KodaXTodoItem;
+    changedFields: readonly (keyof KodaXTodoItem)[];
+    source: TodoMutationSource;
+  };
+  'todo:deleted': { id: string; item: KodaXTodoItem; source: TodoMutationSource };
+}
+
+/**
+ * FEATURE_170 v0.7.41 — provenance tag for todo:* events / hooks. Lets
+ * extension authors distinguish LLM-driven mutations (`tool`) from
+ * runner-side automation (`internal`) — e.g. an extension that audits
+ * todo churn should ignore `internal` flips to avoid false positives.
+ */
+export type TodoMutationSource = 'tool' | 'internal';
+
+/**
+ * FEATURE_170 v0.7.41 — seed shape passed to `'todo:before-create'`.
+ * Mirrors `TodoAddSeed` from todo-store.ts (kept structurally compatible
+ * to avoid coupling extension authors to the internal task-engine type).
+ */
+export interface ExtensionTodoCreateSeed {
+  readonly content: string;
+  readonly activeForm?: string;
+  readonly evaluator?: 'build' | 'test' | 'lint';
+  readonly owner?: string;
+  readonly sourceObligationIndex?: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+/**
+ * FEATURE_170 v0.7.41 — minimal todo item shape exposed to extensions
+ * via the todo:* events. Kept structurally identical to the engine's
+ * `TodoItem` so the runtime can pass values straight through without
+ * conversion, but redeclared here so extension consumers don't import
+ * from `packages/coding/src/types.ts` (which is task-engine internal).
+ */
+export interface KodaXTodoItem {
+  readonly id: string;
+  readonly content: string;
+  readonly status:
+    | 'pending'
+    | 'in_progress'
+    | 'completed'
+    | 'failed'
+    | 'skipped'
+    | 'cancelled';
+  readonly owner?: string;
+  readonly sourceObligationIndex?: number;
+  readonly note?: string;
+  readonly evaluator?: 'build' | 'test' | 'lint';
+  readonly activeForm?: string;
+  readonly metadata?: Record<string, unknown>;
 }
 
 export interface ExtensionHookMap {
@@ -245,6 +309,30 @@ export interface ExtensionHookMap {
   'session:hydrate': (
     context: ExtensionSessionHydrateHookContext,
   ) => Promise<void> | void;
+  // FEATURE_170 v0.7.41 — todo blocking gates.
+  //
+  // Return semantics (mirrors `tool:before`):
+  //   - `void` / `undefined`  → allow (default)
+  //   - `string`              → block; the string is the reason surfaced
+  //                             back to the LLM in the tool result envelope
+  //   - `false`               → block without a reason (envelope uses
+  //                             'blocked-by-hook' as the fallback reason)
+  //
+  // KodaX does NOT throw on block (unlike claudecode's
+  // executeTaskCompletedHooks). Block translates to `{ok:false, reason}`
+  // in the todo_create / todo_update tool result. This preserves the
+  // unified KodaX tool-result envelope.
+  //
+  // The runner-side autoCompleteOnAccept / markInProgressFailed paths
+  // (Evaluator-driven, not LLM-driven) bypass `todo:before-complete`
+  // entirely — see the `source: 'internal'` event payload. Hook
+  // authority is reserved for LLM-initiated mutations.
+  'todo:before-create': (
+    context: { seed: ExtensionTodoCreateSeed },
+  ) => Promise<void | string | false> | void | string | false;
+  'todo:before-complete': (
+    context: { id: string; item: KodaXTodoItem },
+  ) => Promise<void | string | false> | void | string | false;
 }
 
 export interface ExtensionRuntimeController {
