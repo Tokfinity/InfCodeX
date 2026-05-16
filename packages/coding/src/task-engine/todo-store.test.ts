@@ -631,6 +631,38 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
     expect(events).toEqual([]);
   });
 
+  it('is a no-op when patch.note equals current value', () => {
+    const events: TodoList[] = [];
+    const store = createTodoStore({ onChange: (items) => { events.push(items); } });
+    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.patch('todo_1', { note: 'first note' }); // sets note
+    events.length = 0;
+    store.patch('todo_1', { note: 'first note' }); // same note again — no-op
+    expect(events).toEqual([]);
+  });
+
+  it('is a no-op when patch.evaluator equals current value', () => {
+    const events: TodoList[] = [];
+    const store = createTodoStore({ onChange: (items) => { events.push(items); } });
+    store.init([{ id: 'todo_1', content: 'X', evaluator: 'build' }]);
+    events.length = 0;
+    store.patch('todo_1', { evaluator: 'build' });
+    expect(events).toEqual([]);
+  });
+
+  it('does NOT expose owner / sourceObligationIndex in TodoPatch (caller-immutable)', () => {
+    // Compile-time check: TodoPatch does not include owner or
+    // sourceObligationIndex. The runtime can't witness a "should not"
+    // type rule, so this test documents the contract by exercising the
+    // expected behavior: an item's owner stays put after a content patch.
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', content: 'X', owner: 'main', sourceObligationIndex: 7 }]);
+    store.patch('todo_1', { content: 'Y' });
+    const item = store.getAll()[0]!;
+    expect(item.owner).toBe('main');
+    expect(item.sourceObligationIndex).toBe(7);
+  });
+
   it('fires onChange when at least one field changes', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });

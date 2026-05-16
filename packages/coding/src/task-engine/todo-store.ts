@@ -70,8 +70,13 @@ export interface TodoAddSeed {
  * FEATURE_170 v0.7.41 — input shape for `patch()`. Every field optional;
  * only those present in the patch object are applied. `metadata` is
  * shallow-merged (mirrors React setState mental model); explicit
- * `metadata: null` clears it (caller must cast through `unknown` if TS
- * complains since the public schema only permits Record).
+ * `metadata: null` clears it.
+ *
+ * `owner` and `sourceObligationIndex` are intentionally NOT patchable
+ * post-creation — they identify provenance (which dispatch_child_task
+ * branch / which Scout obligation produced the item) and must stay
+ * stable for downstream consumers. Pass them via `add()` or `init()`
+ * seed and treat them as immutable thereafter.
  */
 export interface TodoPatch {
   readonly content?: string;
