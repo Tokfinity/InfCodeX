@@ -67,6 +67,7 @@
     "glob": "^11.0.1",
     "iconv-lite": "^0.6.3",
     "indent-string": "^5.0.0",
+    "jimp": "^1.6.0",
     "ink": "^6.7.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",

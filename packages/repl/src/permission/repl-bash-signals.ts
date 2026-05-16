@@ -29,6 +29,7 @@
  */
 
 import path from 'node:path';
+import os from 'node:os';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
 import type { RunnerToolCall } from '@kodax-ai/agent';
@@ -77,9 +78,6 @@ function resolveProtectedZone(
 function getSystemTempDirs(): readonly string[] {
   const dirs = new Set<string>();
   try {
-    // Lazy import to avoid pulling os at module-eval time.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const os = require('node:os');
     dirs.add(os.tmpdir());
   } catch {
     /* defensive */
