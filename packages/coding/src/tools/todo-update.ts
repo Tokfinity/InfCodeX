@@ -1,5 +1,6 @@
 /**
- * KodaX `todo_update` Tool — FEATURE_097 (v0.7.34) + FEATURE_151 (v0.7.38).
+ * KodaX `todo_update` Tool — FEATURE_097 (v0.7.34) + FEATURE_151 (v0.7.38)
+ * + FEATURE_170 (v0.7.41).
  *
  * Drives the todo plan list visible in the AMA REPL surface. The tool is
  * injected into Scout (H0 path), Generator, and Planner tool sets at
@@ -14,59 +15,87 @@
  * one is needed (e.g. the work expanded mid-task), the LLM can now
  * commit a plan via `op: 'init'`.
  *
+ * FEATURE_170 (v0.7.41) extends `op: 'update'` to a full per-item PATCH
+ * (mirrors claudecode V2 `TaskUpdate`) and adds the pseudo-status
+ * `'deleted'` as a delete path (mirrors V2 `TaskDelete`). Optional
+ * `'todo:before-complete'` extension hook gates `→ completed`
+ * transitions. After every successful mutation the tool emits the
+ * matching `'todo:updated'` / `'todo:deleted'` event with
+ * `source: 'tool'`.
+ *
  * Contract:
  *
  *   Input (op-discriminated union):
  *
  *     op?: 'init' | 'update'   — defaults to 'update' for back-compat.
  *
- *   ── op === 'update' (or omitted) — single-item state transition:
- *     id        string     — required. Must match a current todo id.
- *     status    enum       — required. one of: in_progress | completed | failed | skipped.
- *                                     pending is intentionally excluded — items
- *                                     start at pending automatically and only
- *                                     `resetFailed()` (Runner-driven) sends them
- *                                     back to that state.
- *     note      string?    — optional. Free-text reason / detail. When omitted,
- *                                     any pre-existing note on the item is
- *                                     preserved.
- *     activeForm string?   — optional. Present-continuous form ("Running tests").
- *                                     Drives the spinner verb when status flips
- *                                     to in_progress (FEATURE_149).
+ *   ── op === 'update' (or omitted) — single-item PATCH / state transition:
+ *     id          string     — required. Must match a current todo id.
+ *     status      enum?      — optional. One of: in_progress | completed |
+ *                              failed | skipped | cancelled | deleted.
+ *                              `pending` is intentionally excluded — items
+ *                              start at pending automatically and only
+ *                              `resetFailed()` (Runner-driven) sends them
+ *                              back to that state. `deleted` is the
+ *                              FEATURE_170 delete path: removes the item
+ *                              from the visible list.
+ *     note        string?    — optional. Free-text reason / detail. When
+ *                              omitted, any pre-existing note on the item
+ *                              is preserved.
+ *     activeForm  string?    — optional. Present-continuous form
+ *                              ("Running tests"). Drives the spinner
+ *                              verb when status flips to in_progress
+ *                              (FEATURE_149).
+ *     content     string?    — FEATURE_170 v0.7.41. Optional. When supplied,
+ *                              replaces the item's imperative description
+ *                              (e.g. plan refinement: "Run failing tests"
+ *                              → "Run failing tests AND clean up tmp").
+ *     evaluator   enum?      — FEATURE_170 v0.7.41. Optional `'build' |
+ *                              'test' | 'lint'`. When supplied, replaces
+ *                              the item's deterministic evaluator hint.
+ *     metadata    object?    — FEATURE_170 v0.7.41. Optional opaque
+ *                              key-value bag. Shallow-merged into any
+ *                              existing metadata. Pass `null` (explicit)
+ *                              to clear.
  *
  *   ── op === 'init' (FEATURE_151) — whole-list seed/replace:
- *     items     [{id, content, activeForm?}]  — required. >= 1 entry.
- *                                     Each id must be a non-empty string and
- *                                     unique within the list. content non-empty.
- *                                     Calling on an already-populated store
- *                                     fully REPLACES — items not present in
- *                                     the new list are dropped (matches Claude
- *                                     Code TodoWrite semantics).
+ *     items     [{id, content, activeForm?, evaluator?}]  — required.
+ *                                     >= 1 entry. Each id must be a
+ *                                     non-empty string and unique within
+ *                                     the list. content non-empty.
+ *                                     Calling on an already-populated
+ *                                     store fully REPLACES — items not
+ *                                     present in the new list are dropped.
  *
  *   Output (string, JSON-stringified):
- *     {ok: true}                                — success
- *     {ok: true, count: N}                      — success on op:'init'; N is
- *                                                   the number of items now in
- *                                                   the store
- *     {ok: false, reason: "Unknown todo id ..."} — id not in store on update;
- *                                                   reason includes the full set
- *                                                   of currently valid ids so the
- *                                                   model can self-correct on the
- *                                                   next turn
- *     {ok: false, reason: "..."}                — validation error (bad status,
- *                                                   missing id, todo store not
- *                                                   wired in this run, malformed
- *                                                   init items, etc.)
+ *     {ok: true}                                — op:'update' success.
+ *     {ok: true, count: N}                      — op:'init' success.
+ *     {ok: false, reason: "Unknown todo id ..."} — id not in store on update.
+ *     {ok: false, reason: "..."}                — validation error OR
+ *                                                   extension hook
+ *                                                   `'todo:before-complete'`
+ *                                                   blocked the completion.
  *
- * Why we return `{ok:false}` instead of throwing on unknown id / bad
- * input: a single hallucinated id should not crash the Runner loop.
- * Returning a structured error lets the LLM recover on the next turn.
+ * Why we return `{ok:false}` instead of throwing: a single hallucinated
+ * id should not crash the Runner loop. Returning a structured error lets
+ * the LLM recover on the next turn.
  * (Hermetic test coverage: see todo-update.test.ts.)
  */
 
-import type { KodaXToolExecutionContext, TodoEvaluatorHint, TodoStatus } from '../types.js';
+import { emitActiveExtensionEvent, runActiveExtensionHook } from '../extensions/runtime.js';
+import type { KodaXTodoItem } from '../extensions/types.js';
+import type {
+  KodaXToolExecutionContext,
+  TodoEvaluatorHint,
+  TodoItem,
+  TodoStatus,
+} from '../types.js';
 
-const ALLOWED_STATUSES: ReadonlySet<string> = new Set([
+// `deleted` is a tool-level pseudo-status: it does NOT live in the
+// engine's `TodoStatus` union (the store has a dedicated `remove(id)`).
+// Tool layer routes `status:'deleted'` through `store.remove()` to keep
+// the engine surface minimal.
+const ALLOWED_STATUSES_FOR_UPDATE: ReadonlySet<string> = new Set([
   'in_progress',
   'completed',
   'failed',
@@ -77,6 +106,10 @@ const ALLOWED_STATUSES: ReadonlySet<string> = new Set([
   // store enters items at pending automatically; explicit pending transitions
   // are the runner's job (resetFailed) not the LLM's.
   'cancelled',
+  // FEATURE_170 v0.7.41: pseudo-status; the tool layer translates into
+  // `store.remove(id)`. Distinct from 'cancelled' (cancelled keeps the
+  // item visible with strikethrough; deleted removes it entirely).
+  'deleted',
 ]);
 
 const ALLOWED_EVALUATOR_HINTS: ReadonlySet<string> = new Set(['build', 'test', 'lint']);
@@ -92,7 +125,7 @@ interface TodoUpdateInput {
   op?: unknown;
   /** op:'init' payload — array of `{id, content, activeForm?}`. */
   items?: unknown;
-  // op:'update' (v0.7.34) parameters:
+  // op:'update' (v0.7.34 + FEATURE_170 patch fields) parameters:
   id?: unknown;
   status?: unknown;
   note?: unknown;
@@ -103,6 +136,15 @@ interface TodoUpdateInput {
    * existing.
    */
   activeForm?: unknown;
+  /** FEATURE_170 v0.7.41 — patch imperative description. */
+  content?: unknown;
+  /** FEATURE_170 v0.7.41 — patch deterministic evaluator hint. */
+  evaluator?: unknown;
+  /**
+   * FEATURE_170 v0.7.41 — patch opaque metadata. `null` (explicit) clears;
+   * object shallow-merges into existing.
+   */
+  metadata?: unknown;
 }
 
 interface InitItemInput {
@@ -120,6 +162,28 @@ interface InitItemInput {
 
 function jsonResult(payload: Record<string, unknown>): string {
   return JSON.stringify(payload);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    value !== null
+    && typeof value === 'object'
+    && !Array.isArray(value)
+  );
+}
+
+function changedFieldsOf(
+  before: TodoItem,
+  after: TodoItem,
+): readonly (keyof KodaXTodoItem)[] {
+  const fields: (keyof KodaXTodoItem)[] = [];
+  if (before.content !== after.content) fields.push('content');
+  if (before.status !== after.status) fields.push('status');
+  if (before.activeForm !== after.activeForm) fields.push('activeForm');
+  if (before.note !== after.note) fields.push('note');
+  if (before.evaluator !== after.evaluator) fields.push('evaluator');
+  if (before.metadata !== after.metadata) fields.push('metadata');
+  return Object.freeze(fields);
 }
 
 /**
@@ -152,7 +216,7 @@ function executeInitOp(
   }
 
   const seenIds = new Set<string>();
-  const seeds: Array<{ id: string; content: string; activeForm?: string }> = [];
+  const seeds: Array<{ id: string; content: string; activeForm?: string; evaluator?: TodoEvaluatorHint }> = [];
   for (let i = 0; i < rawItems.length; i++) {
     const raw = rawItems[i] as InitItemInput | undefined;
     if (raw === null || raw === undefined || typeof raw !== 'object') {
@@ -219,7 +283,7 @@ export async function toolTodoUpdate(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const { op, id, status, note, activeForm } = input as TodoUpdateInput;
+  const { op, id, status, note, activeForm, content, evaluator, metadata } = input as TodoUpdateInput;
 
   if (!ctx.todoStore) {
     // Configuration error — runner-driven did not wire a store for this run.
@@ -248,7 +312,7 @@ export async function toolTodoUpdate(
     return executeInitOp(input as TodoUpdateInput, ctx);
   }
 
-  // op === 'update' — single-item state transition (v0.7.34 behavior).
+  // op === 'update' — single-item PATCH + state transition.
   if (typeof id !== 'string' || id.length === 0) {
     return jsonResult({
       ok: false,
@@ -256,12 +320,31 @@ export async function toolTodoUpdate(
     });
   }
 
-  if (typeof status !== 'string' || !ALLOWED_STATUSES.has(status)) {
+  // FEATURE_170 v0.7.41 — status becomes optional when a pure patch is
+  // supplied (content/activeForm/note/evaluator/metadata only). At least
+  // one of {status, content, activeForm, note, evaluator, metadata} must
+  // be present, or the call is a no-op the LLM didn't mean to make.
+  if (status !== undefined && (typeof status !== 'string' || !ALLOWED_STATUSES_FOR_UPDATE.has(status))) {
     return jsonResult({
       ok: false,
       reason:
         `Invalid status: ${JSON.stringify(status)}. ` +
-        `Allowed: in_progress | completed | failed | skipped | cancelled.`,
+        `Allowed: in_progress | completed | failed | skipped | cancelled | deleted.`,
+    });
+  }
+  if (
+    status === undefined
+    && content === undefined
+    && activeForm === undefined
+    && note === undefined
+    && evaluator === undefined
+    && metadata === undefined
+  ) {
+    return jsonResult({
+      ok: false,
+      reason:
+        "Empty op:'update' payload. Supply at least one of: status, content, " +
+        'activeForm, note, evaluator, metadata.',
     });
   }
 
@@ -276,6 +359,34 @@ export async function toolTodoUpdate(
     return jsonResult({
       ok: false,
       reason: 'Invalid activeForm: when provided, must be a string (present-continuous, e.g. "Running tests").',
+    });
+  }
+
+  if (content !== undefined && (typeof content !== 'string' || content.length === 0)) {
+    return jsonResult({
+      ok: false,
+      reason: 'Invalid content: when provided, must be a non-empty string (imperative description).',
+    });
+  }
+
+  if (
+    evaluator !== undefined
+    && (typeof evaluator !== 'string' || !ALLOWED_EVALUATOR_HINTS.has(evaluator))
+  ) {
+    return jsonResult({
+      ok: false,
+      reason:
+        `Invalid evaluator: when provided, must be one of 'build' | 'test' | 'lint'. ` +
+        `Got ${JSON.stringify(evaluator)}.`,
+    });
+  }
+
+  // metadata: undefined preserves, null clears, plain object shallow-merges.
+  // Arrays / primitives are not valid metadata payloads.
+  if (metadata !== undefined && metadata !== null && !isPlainObject(metadata)) {
+    return jsonResult({
+      ok: false,
+      reason: 'Invalid metadata: when provided, must be a plain object or null (to clear).',
     });
   }
 
@@ -294,13 +405,80 @@ export async function toolTodoUpdate(
     });
   }
 
-  ctx.todoStore.updateStatus(
-    id,
-    status as TodoStatus,
-    note as string | undefined,
-    activeForm as string | undefined,
-  );
-  // Note: store fires its onChange callback internally — no need for the
-  // tool to also emit onTodoUpdate.
+  // ── FEATURE_170 v0.7.41 delete path ──────────────────────────────────
+  // `status:'deleted'` is the tool-level signal to remove the item from
+  // the list. Patch fields are ignored on delete (the item is leaving;
+  // mutating it first would be wasted work).
+  if (status === 'deleted') {
+    const before = ctx.todoStore.getAll().find((it) => it.id === id);
+    const removed = ctx.todoStore.remove(id);
+    if (!removed || !before) {
+      // Shouldn't happen — we just verified `has(id)` above. Defensive.
+      return jsonResult({ ok: false, reason: `Failed to delete ${JSON.stringify(id)}.` });
+    }
+    await emitActiveExtensionEvent('todo:deleted', {
+      id,
+      item: before as KodaXTodoItem,
+      source: 'tool',
+    });
+    return jsonResult({ ok: true });
+  }
+
+  // ── Standard patch path ──────────────────────────────────────────────
+  const before = ctx.todoStore.getAll().find((it) => it.id === id);
+  if (!before) {
+    return jsonResult({ ok: false, reason: `Failed to read ${JSON.stringify(id)} before patch.` });
+  }
+
+  // FEATURE_170 — `'todo:before-complete'` gates the LLM-driven
+  // completion transition. Runner-side auto-completion
+  // (`autoCompleteOnAccept`) bypasses this hook by design — hook
+  // authority is reserved for LLM-initiated mutations (see
+  // ExtensionHookMap JSDoc).
+  //
+  // Fire only when this PATCH would actually transition the status to
+  // `completed` (i.e. status param === 'completed' and current status
+  // is not already 'completed'). Idempotent re-writes do not fire the
+  // hook — matches the store's no-op detection.
+  if (status === 'completed' && before.status !== 'completed') {
+    const hookResult = await runActiveExtensionHook('todo:before-complete', {
+      id,
+      item: before as KodaXTodoItem,
+    });
+    if (typeof hookResult === 'string') {
+      return jsonResult({ ok: false, reason: hookResult });
+    }
+    if (hookResult === false) {
+      return jsonResult({ ok: false, reason: 'blocked-by-hook' });
+    }
+  }
+
+  // Apply the patch in one shot. `store.patch` handles preserve-vs-replace
+  // semantics for every optional field and shallow-merges metadata
+  // (null clears, plain object merges).
+  ctx.todoStore.patch(id, {
+    ...(status !== undefined ? { status: status as TodoStatus } : {}),
+    ...(content !== undefined ? { content: content as string } : {}),
+    ...(activeForm !== undefined ? { activeForm: activeForm as string } : {}),
+    ...(note !== undefined ? { note: note as string } : {}),
+    ...(evaluator !== undefined ? { evaluator: evaluator as TodoEvaluatorHint } : {}),
+    ...(metadata !== undefined
+      ? { metadata: metadata as Record<string, unknown> | null }
+      : {}),
+  });
+
+  const after = ctx.todoStore.getAll().find((it) => it.id === id);
+  if (after) {
+    const changedFields = changedFieldsOf(before, after);
+    if (changedFields.length > 0) {
+      await emitActiveExtensionEvent('todo:updated', {
+        id,
+        before: before as KodaXTodoItem,
+        after: after as KodaXTodoItem,
+        changedFields,
+        source: 'tool',
+      });
+    }
+  }
   return jsonResult({ ok: true });
 }

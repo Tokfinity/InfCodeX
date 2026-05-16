@@ -847,19 +847,25 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_update',
     description:
-      'Drive the visible plan checklist so the user sees real-time progress. Two operating modes selected by `op`: ' +
-      '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, content, activeForm?}, ...]` (>= 1 entry; ids must be unique non-empty strings, content non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. Match Claude Code TodoWrite guidance: skip op:"init" for trivial single-step / informational tasks. ' +
-      '(B) `op="update"` (default; omit `op` for back-compat) — single-item state transition. Use this every time you start or finish a major step. Rules: ' +
-      '(1) Set status="in_progress" BEFORE starting work on an item. ' +
-      '(2) Set status="completed" AFTER finishing that item. ' +
-      '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. ' +
-      '(4) Use status="failed" if an attempt clearly failed and needs retry. ' +
-      '(5) Use status="skipped" only when the item turned out to be unnecessary (e.g. Planner merged two obligations into one). ' +
-      '(6) Use status="cancelled" (FEATURE_114) when you decide mid-execution to drop an item the user no longer needs — UI shows strikethrough; distinct from "skipped" which is for Planner-driven merging. ' +
-      '(7) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item content (e.g. content "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. ' +
-      '(8) On op="init" items ONLY (ignored on op="update"), you may attach an optional `evaluator: "build" | "test" | "lint"` hint (FEATURE_114) — when an item with this hint flips to "completed", the runner runs the corresponding deterministic check and surfaces stderr in your next tool result on failure. Use sparingly — only on milestone steps with a real ground-truth check. ' +
-      'If the call returns ok=false with reason "Unknown todo id", inspect the listed valid ids and retry with a correct one. ' +
-      'If the call returns ok=false with reason "todo_update is not active", the current run has no plan list and you may continue working without further todo_update calls.',
+      'Drive the visible plan checklist so the user sees real-time progress. Two operating modes selected by `op`: '
+      + '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, content, activeForm?, evaluator?}, ...]` (>= 1 entry; ids must be unique non-empty strings, content non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. Match Claude Code TodoWrite guidance: skip op:"init" for trivial single-step / informational tasks. '
+      + '(B) `op="update"` (default; omit `op` for back-compat) — single-item PATCH + state transition. Use this every time you start or finish a major step. The status field is OPTIONAL when you only want to patch content / activeForm / note / evaluator / metadata. Rules: '
+      + '(1) Set status="in_progress" BEFORE starting work on an item. '
+      + '(2) Set status="completed" AFTER finishing that item. '
+      + '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. '
+      + '(4) Use status="failed" if an attempt clearly failed and needs retry. '
+      + '(5) Use status="skipped" only when the item turned out to be unnecessary (e.g. Planner merged two obligations into one). '
+      + '(6) Use status="cancelled" (FEATURE_114) when you decide mid-execution to drop an item the user no longer needs — UI shows strikethrough; distinct from "skipped" which is for Planner-driven merging. '
+      + '(7) FEATURE_170 v0.7.41: Use status="deleted" to remove the item from the visible list entirely. Prefer "deleted" over "cancelled" when the item turned out to be wholly off-plan (no breadcrumb desired); prefer "cancelled" when the user benefits from seeing the strikethrough record. '
+      + '(8) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item content (e.g. content "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. '
+      + '(9) FEATURE_170 v0.7.41 — on op="update" you may now also patch fields without changing status: '
+      + '`content` (non-empty string) replaces the imperative description for mid-task plan refinement; '
+      + '`evaluator` ("build" | "test" | "lint") replaces the deterministic evaluator hint (also accepted on op="init" items); '
+      + '`metadata` (object | null) shallow-merges into existing metadata, or pass null to clear. '
+      + 'Combining patch fields with a status transition in one call is supported. '
+      + 'If the call returns ok=false with reason "Unknown todo id", inspect the listed valid ids and retry with a correct one. '
+      + 'If the call returns ok=false with reason "todo_update is not active", the current run has no plan list and you may continue working without further todo_update calls. '
+      + 'If the call returns ok=false with reason "blocked-by-hook" (or an extension-supplied string), an extension policy has rejected the completion transition — re-read the visible plan and revise your approach before retrying.',
     input_schema: {
       type: 'object',
       properties: {
@@ -905,8 +911,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         },
         status: {
           type: 'string',
-          enum: ['in_progress', 'completed', 'failed', 'skipped', 'cancelled'],
-          description: 'op="update" only. New status. "pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict. "cancelled" (FEATURE_114) signals a Worker-driven mid-execution decision to drop the item; UI shows strikethrough.',
+          enum: ['in_progress', 'completed', 'failed', 'skipped', 'cancelled', 'deleted'],
+          description:
+            'op="update" only. New status. Optional — when omitted you may still patch content/activeForm/note/evaluator/metadata. '
+            + '"pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict. '
+            + '"cancelled" (FEATURE_114) signals a Worker-driven mid-execution decision to drop the item; UI shows strikethrough. '
+            + '"deleted" (FEATURE_170) removes the item from the visible list entirely — use when the item turned out to be wholly irrelevant and you do not want a strikethrough breadcrumb. The matching extension event is `todo:deleted`.',
         },
         note: {
           type: 'string',
@@ -917,10 +927,27 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           description:
             'op="update" only. Present-continuous form of the item content (e.g. "Running failing tests"). Required when status="in_progress" so the spinner can show the user what you are doing right now. Omitted on completed/failed/skipped (the previous activeForm is preserved but irrelevant once the item leaves in_progress).',
         },
+        content: {
+          type: 'string',
+          description:
+            'op="update" only (FEATURE_170 v0.7.41). Optional. When provided, REPLACES the item\'s imperative description. Use for mid-task plan refinement (e.g. "Run failing tests" → "Run failing tests AND clean up tmp"). Must be a non-empty string.',
+        },
+        evaluator: {
+          type: 'string',
+          enum: ['build', 'test', 'lint'],
+          description:
+            'op="update" only (FEATURE_170 v0.7.41). Optional. When provided, REPLACES the item\'s deterministic evaluator hint (FEATURE_114). When the item later flips to "completed", the runner runs the corresponding deterministic check and surfaces stderr on failure.',
+        },
+        metadata: {
+          type: 'object',
+          description:
+            'op="update" only (FEATURE_170 v0.7.41). Optional opaque key-value bag. SHALLOW-MERGED into any existing metadata (top-level keys overwrite, nested objects are not deep-merged). Pass null explicitly to clear all metadata. The UI does NOT render metadata; it is for extension hooks / eval harnesses.',
+        },
       },
       // No top-level required fields — the handler validates per-op:
       //   op="init"   → requires `items`
-      //   op="update" → requires `id` + `status`
+      //   op="update" → requires `id` plus at least one of
+      //     {status, content, activeForm, note, evaluator, metadata}.
     },
     handler: toolTodoUpdate,
     toClassifierInput: () => '',

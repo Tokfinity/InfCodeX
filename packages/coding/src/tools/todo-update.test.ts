@@ -2,8 +2,12 @@
  * Hermetic tests for the todo_update tool (FEATURE_097, v0.7.34). No LLM calls.
  * Coverage targets §5 决策细节 ⑤ (unknown-id self-recovery contract).
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  createExtensionRuntime,
+  getActiveExtensionRuntime,
+} from '../extensions/index.js';
 import { createTodoStore } from '../task-engine/todo-store.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { toolTodoUpdate } from './todo-update.js';
@@ -526,5 +530,332 @@ describe("todo_update FEATURE_114 v0.7.36 Slice 1 — cancelled status + evaluat
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.reason).toContain('items[0].evaluator');
+  });
+});
+
+// FEATURE_170 (v0.7.41) — per-item PATCH fields, status:'deleted' delete
+// path, 'todo:before-complete' hook gating, and 'todo:updated' /
+// 'todo:deleted' event emission with source:'tool'.
+
+describe('todo_update FEATURE_170 — patch fields without status transition', () => {
+  it('patches content alone (no status change) and returns {ok:true}', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', content: 'Rename function AND update callers' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    const item = store.getAll().find((it) => it.id === 'todo_1');
+    expect(item?.content).toBe('Rename function AND update callers');
+    expect(item?.status).toBe('pending'); // unchanged
+  });
+
+  it('patches evaluator alone (mirrors op:init evaluator hint)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', evaluator: 'test' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.evaluator).toBe('test');
+  });
+
+  it('patches metadata (shallow-merge into empty) and returns {ok:true}', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', metadata: { owner: 'worker-1', tag: 'auth' } },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toEqual({
+      owner: 'worker-1',
+      tag: 'auth',
+    });
+  });
+
+  it('shallow-merges metadata across two patch calls (claudecode TaskUpdate parity)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_1', metadata: { owner: 'worker-1' } }, ctx);
+    await toolTodoUpdate({ id: 'todo_1', metadata: { tag: 'auth' } }, ctx);
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toEqual({
+      owner: 'worker-1',
+      tag: 'auth',
+    });
+  });
+
+  it('clears metadata when caller passes explicit null', async () => {
+    const { ctx, store } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_1', metadata: { owner: 'worker-1' } }, ctx);
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toEqual({ owner: 'worker-1' });
+    const result = await toolTodoUpdate({ id: 'todo_1', metadata: null }, ctx);
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toBeUndefined();
+  });
+
+  it('combines patch fields with a status transition in one call', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      {
+        id: 'todo_1',
+        status: 'in_progress',
+        content: 'Renamed function (refined scope)',
+        activeForm: 'Renaming function (refined scope)',
+        metadata: { startedAt: 'iso-timestamp-stub' },
+      },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    const item = store.getAll().find((it) => it.id === 'todo_1');
+    expect(item?.status).toBe('in_progress');
+    expect(item?.content).toBe('Renamed function (refined scope)');
+    expect(item?.activeForm).toBe('Renaming function (refined scope)');
+    expect(item?.metadata).toEqual({ startedAt: 'iso-timestamp-stub' });
+  });
+
+  it('rejects empty op:update payload (no status, no patch fields)', async () => {
+    const { ctx } = makeContextWithStore();
+    const result = await toolTodoUpdate({ id: 'todo_1' }, ctx);
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toMatch(/Empty op:'update' payload/);
+  });
+
+  it('rejects empty-string content (must be non-empty)', async () => {
+    const { ctx } = makeContextWithStore();
+    const result = await toolTodoUpdate({ id: 'todo_1', content: '' }, ctx);
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toMatch(/content.*non-empty/);
+  });
+
+  it('rejects invalid evaluator on op:update', async () => {
+    const { ctx } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', evaluator: 'typecheck' },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toMatch(/evaluator/);
+  });
+
+  it('rejects non-object metadata (array)', async () => {
+    const { ctx } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', metadata: [1, 2, 3] as unknown as Record<string, unknown> },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toMatch(/metadata/);
+  });
+});
+
+describe("todo_update FEATURE_170 — status:'deleted' delete path", () => {
+  it("removes the item from the store and returns {ok:true}", async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_2', status: 'deleted' },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.has('todo_2')).toBe(false);
+    expect(store.getAll().map((it) => it.id)).toEqual(['todo_1', 'todo_3']);
+  });
+
+  it('does NOT reuse the deleted id on subsequent add (monotonic counter)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_2', status: 'deleted' }, ctx);
+    // store.add() should mint a fresh id past the highest seeded.
+    const newId = store.add({ content: 'New step' });
+    expect(newId).not.toBe('todo_2');
+  });
+
+  it('returns {ok:false} on delete of unknown id (no store mutation)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_99', status: 'deleted' },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toContain('todo_99');
+    expect(store.getAll()).toHaveLength(3); // unchanged
+  });
+});
+
+describe("todo_update FEATURE_170 — 'todo:before-complete' hook + events", () => {
+  let runtime: ReturnType<typeof createExtensionRuntime> | null = null;
+
+  beforeEach(() => {
+    runtime = null;
+  });
+
+  afterEach(async () => {
+    const active = getActiveExtensionRuntime();
+    if (active) {
+      await active.dispose();
+    }
+    if (runtime) {
+      await runtime.dispose();
+      runtime = null;
+    }
+  });
+
+  it("blocks status='completed' via hook string and returns {ok:false, reason:<string>}", async () => {
+    runtime = createExtensionRuntime().activate();
+    runtime.registerHook('todo:before-complete', (hookCtx) => {
+      if (hookCtx.item.content.includes('forbidden')) {
+        return 'policy: cannot complete items mentioning forbidden';
+      }
+    });
+    const { ctx, store } = makeContextWithStore([
+      { id: 'todo_1', content: 'forbidden step' },
+      { id: 'todo_2', content: 'safe step' },
+    ]);
+    const blocked = await toolTodoUpdate(
+      { id: 'todo_1', status: 'completed' },
+      ctx,
+    );
+    const blockedParsed = JSON.parse(blocked) as { ok: boolean; reason: string };
+    expect(blockedParsed.ok).toBe(false);
+    expect(blockedParsed.reason).toBe('policy: cannot complete items mentioning forbidden');
+    // Store must not have been mutated.
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.status).toBe('pending');
+
+    // Safe item still goes through.
+    const ok = await toolTodoUpdate(
+      { id: 'todo_2', status: 'completed' },
+      ctx,
+    );
+    expect(JSON.parse(ok)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_2')?.status).toBe('completed');
+  });
+
+  it("blocks via hook=false with reason:'blocked-by-hook'", async () => {
+    runtime = createExtensionRuntime().activate();
+    runtime.registerHook('todo:before-complete', () => false);
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', status: 'completed' },
+      ctx,
+    );
+    const parsed = JSON.parse(result) as { ok: boolean; reason: string };
+    expect(parsed.ok).toBe(false);
+    expect(parsed.reason).toBe('blocked-by-hook');
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.status).toBe('pending');
+  });
+
+  it("does NOT fire 'todo:before-complete' for idempotent completed→completed re-write", async () => {
+    runtime = createExtensionRuntime().activate();
+    let hookCalls = 0;
+    runtime.registerHook('todo:before-complete', () => {
+      hookCalls++;
+    });
+    const { ctx } = makeContextWithStore();
+    // First completion fires the hook (pending → completed).
+    await toolTodoUpdate({ id: 'todo_1', status: 'completed' }, ctx);
+    expect(hookCalls).toBe(1);
+    // Second completion is idempotent — hook must NOT fire again.
+    await toolTodoUpdate({ id: 'todo_1', status: 'completed' }, ctx);
+    expect(hookCalls).toBe(1);
+  });
+
+  it("does NOT fire 'todo:before-complete' for non-completion transitions", async () => {
+    runtime = createExtensionRuntime().activate();
+    let hookCalls = 0;
+    runtime.registerHook('todo:before-complete', () => {
+      hookCalls++;
+    });
+    const { ctx } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_1', status: 'in_progress' }, ctx);
+    await toolTodoUpdate({ id: 'todo_1', status: 'failed', note: 'oops' }, ctx);
+    expect(hookCalls).toBe(0);
+  });
+
+  it("fires 'todo:updated' with {id, before, after, changedFields, source:'tool'}", async () => {
+    runtime = createExtensionRuntime().activate();
+    const received: Array<{
+      id: string;
+      source: string;
+      beforeStatus: string;
+      afterStatus: string;
+      changedFields: readonly string[];
+    }> = [];
+    runtime.on('todo:updated', (payload) => {
+      received.push({
+        id: payload.id,
+        source: payload.source,
+        beforeStatus: payload.before.status,
+        afterStatus: payload.after.status,
+        changedFields: [...payload.changedFields],
+      });
+    });
+
+    const { ctx } = makeContextWithStore();
+    await toolTodoUpdate(
+      { id: 'todo_1', status: 'in_progress', activeForm: 'Running' },
+      ctx,
+    );
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      id: 'todo_1',
+      source: 'tool',
+      beforeStatus: 'pending',
+      afterStatus: 'in_progress',
+    });
+    expect(received[0]?.changedFields).toEqual(
+      expect.arrayContaining(['status', 'activeForm']),
+    );
+  });
+
+  it("does NOT fire 'todo:updated' on no-op patch (same value, no diff)", async () => {
+    runtime = createExtensionRuntime().activate();
+    let events = 0;
+    runtime.on('todo:updated', () => {
+      events++;
+    });
+    const { ctx } = makeContextWithStore();
+    // First in_progress flip fires.
+    await toolTodoUpdate({ id: 'todo_1', status: 'in_progress' }, ctx);
+    expect(events).toBe(1);
+    // Second identical call is a no-op (store.patch returns early).
+    await toolTodoUpdate({ id: 'todo_1', status: 'in_progress' }, ctx);
+    expect(events).toBe(1);
+  });
+
+  it("fires 'todo:deleted' with {id, item, source:'tool'} on status='deleted'", async () => {
+    runtime = createExtensionRuntime().activate();
+    const received: Array<{ id: string; source: string; itemContent: string }> = [];
+    runtime.on('todo:deleted', (payload) => {
+      received.push({
+        id: payload.id,
+        source: payload.source,
+        itemContent: payload.item.content,
+      });
+    });
+
+    const { ctx } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_2', status: 'deleted' }, ctx);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({
+      id: 'todo_2',
+      source: 'tool',
+      itemContent: 'Update callers',
+    });
+  });
+
+  it("does NOT fire 'todo:updated' when 'todo:before-complete' blocks", async () => {
+    runtime = createExtensionRuntime().activate();
+    runtime.registerHook('todo:before-complete', () => 'blocked');
+    let events = 0;
+    runtime.on('todo:updated', () => {
+      events++;
+    });
+    const { ctx } = makeContextWithStore();
+    await toolTodoUpdate({ id: 'todo_1', status: 'completed' }, ctx);
+    expect(events).toBe(0);
   });
 });
