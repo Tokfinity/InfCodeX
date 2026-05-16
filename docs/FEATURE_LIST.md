@@ -13,7 +13,7 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-159, 165-168, 170-171` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-164 not yet claimed; 169 claimed by parallel thread for v0.7.40 Worker dispatch objective quality, will be tracked when that thread commits) |
+| Tracked feature IDs | `001-159, 165-171` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-164 not yet claimed) |
 | Total tracked features | `156` |
 | Completed | `93` |
 | Cancelled | `5` |
@@ -42,6 +42,7 @@
 | `v0.7.38` | `9` (149 Queued Prompt Injection Latency & Mid-Turn UX Parity + 117 redesigned as Mutation Context Injection + 151 TodoList Visibility & LLM Self-Seeding Parity + 152 Bash AST Migration + 153 LLM-backed Bash Prefix Extractor + 154 Universal --help Fast-Path + 155 Chat-While-Waiting [moved from v0.7.39] + 156 Idle-Wait Visual Continuity + 157 Windows / macOS Case-Insensitive Workspace Match) |
 | `v0.7.39` | `2` (120 + 158 auto[llm] Signal Inversion; FEATURE_155 moved to v0.7.38) + ADR-024 (npm 包正名 `@kodax-ai/kodax-cli` → `@kodax-ai/kodax` + 5 SDK subpath exports) + ADR-025 (auto[llm] 信号化分类器 + 决策层级倒置) |
 | `~~v0.7.39 (legacy slot for FEATURE_096)~~` | `1` |
+| `v0.7.40` | `5` (121 Envelope Spillover Gap-Fix + LLM Blob Summarizer + 134 REPL Image Paste / 12 vision providers + 159 MessageQueue Single-Source-of-Truth + Idle-Yield Mode-Split + 168 AMA Agent Tool Wiring hotfix + 169 Pull-Tool Prompt Adoption Hardening hotfix) |
 | `v0.7.41` | `3` (171 `runner-driven.ts` Modular Split — **基建前置，必须先于 125/170 实施**, 12 子模块 / 4 commits R1-R4 / 零行为变更; 125 KodaX Team Mode — re-scoped from v0.8.10; 170 Todo V2 Migration — per-task CRUD + extension hooks aligned to claudecode V2 TaskCreate/TaskUpdate, keep op:'init' for fan-out batch) |
 | `~~v0.7.41~~` | `1` |
 | `v0.7.42` | `1` (094) |
@@ -284,6 +285,7 @@
 | `166` | Post-handoff role label flip — REPL surface flips `[Worker]` → `[Evaluator]` immediately on `agentSwitched` event (was lagged a turn) | `v0.7.41` | [v0.7.41](features/v0.7.41.md#feature_166--post-handoff-role-label-flipshipped) |
 | `167` | Evaluator terminal-verdict 兜底 — parser fallback + retry gate + synthetic verdict when Evaluator exits text-only without calling `emit_verdict` | `v0.7.41` (design phase) | [v0.7.41](features/v0.7.41.md#feature_167--evaluator-terminal-verdict-兜底design-phase) |
 | `168` | AMA Agent Tool Wiring — exclude-based wiring with registry as source of truth; recovers 17 silently-dropped tools (FEATURE_120 `send_message`/`task_stop`, FEATURE_161 4× deep-capsule pull tools, 4× web tools, +4 others); architectural Evaluator security boundary | `v0.7.40` (hotfix) | [v0.7.40](features/v0.7.40.md#feature_168--ama-agent-tool-wiringexclude-based-registry-as-source-of-truth) |
+| `169` | Pull-Tool Prompt Adoption Hardening — Worker dispatch anti hand-feed bash + recommend pull-tool family, child agent pull-tools reverse-steering, change-review reframe (F0a / F0b / F1v2 / F3; F2 3-tier order rejected post-eval) | `v0.7.40` (hotfix) | [v0.7.40](features/v0.7.40.md#feature_169--pull-tool-prompt-adoption-hardening-worker-dispatch-objective--child-reverse-steering--change-review-reframe) |
 
 > `FEATURE_051` close-out posture: keep the current REPL status/footer/task/message surfaces frozen, limit follow-up work to invisible substrate maturity for transcript, scroll/selection, and input behavior, and treat the design doc as a completed close-out record rather than an open rollout plan.
 
