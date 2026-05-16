@@ -403,6 +403,20 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
     return dispose;
   }
 
+  on<TEvent extends keyof ExtensionEventMap>(
+    event: TEvent,
+    handler: (payload: ExtensionEventMap[TEvent]) => Promise<void> | void,
+    options: { source?: ExtensionContributionSource } = {},
+  ): () => void {
+    const source = options.source ?? this.createRuntimeSource(
+      `runtime:event:${String(event)}`,
+      String(event),
+    );
+    const dispose = this.registerEventHandler(event, handler, source);
+    this.runtimeDisposables.push(dispose);
+    return dispose;
+  }
+
   listCommands(): ExtensionCommandDefinition[] {
     return Array.from(this.commands.values())
       .map((records) => records[records.length - 1]?.value)

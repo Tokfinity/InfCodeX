@@ -172,6 +172,9 @@ describe('FEATURE_168 — Evaluator security boundary (architectural, not prompt
     // State changes affecting Worker/Generator's plan view
     'exit_plan_mode',
     'todo_update',
+    // FEATURE_170 (v0.7.41) — per-item plan insertion is also a plan-view
+    // mutation; independent audit must not insert items either.
+    'todo_create',
     // User interaction
     'ask_user_question',
   ] as const;
@@ -220,6 +223,9 @@ describe('FEATURE_168 — Planner security boundary (read-only inspection)', () 
     expect(names).toContain('glob');
     expect(names).toContain('todo_update');
     expect(names).toContain('todo_list');
+    // FEATURE_170 (v0.7.41) — Planner also gets todo_create for plan
+    // refinement during contract drafting.
+    expect(names).toContain('todo_create');
   });
 });
 

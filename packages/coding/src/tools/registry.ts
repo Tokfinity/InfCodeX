@@ -929,7 +929,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'todo_create',
     description:
       'FEATURE_170 (v0.7.41) — insert ONE new pending item into the visible plan list. ' +
-      'Use this MID-TASK when you realise the plan needs an additional step but the existing items must be preserved. ' +
+      'Use this MID-TASK when you realize the plan needs an additional step but the existing items must be preserved. ' +
       'Do NOT use this for the initial plan commitment — `todo_update({op:"init", items:[...]})` is the batch-seed path for fan-out plan-first or task entry. ' +
       'Rules: ' +
       '(1) The store auto-generates the id (monotonic `todo_N`). Do NOT pass an id — any caller-supplied id is rejected at the schema layer. ' +

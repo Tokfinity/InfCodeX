@@ -217,4 +217,46 @@ describe('todo_create extension hook gating', () => {
     expect(parsed.ok).toBe(true);
     expect(store.hasItems()).toBe(true);
   });
+
+  it("fires 'todo:created' event with {id, item, source:'tool'} after store.add succeeds", async () => {
+    runtime = createExtensionRuntime().activate();
+    const received: Array<{ id: string; source: string; itemContent: string }> = [];
+    runtime.on('todo:created', (payload) => {
+      received.push({
+        id: payload.id,
+        source: payload.source,
+        itemContent: payload.item.content,
+      });
+    });
+
+    const { ctx } = makeContextWithStore();
+    const out = await toolTodoCreate(
+      { content: 'Test event payload' },
+      ctx,
+    );
+    const parsed = JSON.parse(out) as { ok: boolean; id: string };
+    expect(parsed.ok).toBe(true);
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual({
+      id: parsed.id,
+      source: 'tool',
+      itemContent: 'Test event payload',
+    });
+  });
+
+  it("does NOT fire 'todo:created' when a hook blocks the create", async () => {
+    runtime = createExtensionRuntime().activate();
+    runtime.registerHook('todo:before-create', () => 'blocked-by-policy');
+    let eventCount = 0;
+    runtime.on('todo:created', () => {
+      eventCount++;
+    });
+
+    const { ctx } = makeContextWithStore();
+    const out = await toolTodoCreate({ content: 'X' }, ctx);
+    const parsed = JSON.parse(out) as { ok: boolean };
+    expect(parsed.ok).toBe(false);
+    expect(eventCount).toBe(0);
+  });
 });
