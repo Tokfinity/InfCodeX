@@ -30,7 +30,6 @@
 import type {
   KodaXContentBlock,
   KodaXMessage,
-  KodaXTextBlock,
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
@@ -317,6 +316,58 @@ import os from 'node:os';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import { mkdir } from 'node:fs/promises';
 
+// FEATURE_171 (v0.7.41) — runner-driven.ts modular split. The shared
+// interfaces and four leaf modules below were extracted from this file
+// without behavior change; runner-driven.ts re-exports the public names
+// (`AmaRole`, `getAmaRoleEffectiveExclude`, `getAmaRoleExpectedToolNames`,
+// `maybeApplyP2bWriteTurnCap`) plus the structural interfaces tests
+// reach for via `Parameters<typeof ...>` so import paths in tests and
+// downstream callers do not change.
+import {
+  SCOUT_INSTRUCTIONS_FALLBACK,
+  PLANNER_INSTRUCTIONS_FALLBACK,
+  GENERATOR_INSTRUCTIONS_FALLBACK,
+  EVALUATOR_INSTRUCTIONS_FALLBACK,
+  WORKER_INSTRUCTIONS_FALLBACK,
+  resolveRoleInstructions,
+  renderRuntimeVerificationBlock,
+  buildCompletionContractStatus,
+} from './_internal/managed-task/role-prompts.js';
+import {
+  getAmaRoleEffectiveExclude,
+  getAmaRoleExpectedToolNames,
+} from './_internal/managed-task/role-exclude.js';
+import { maybeApplyP2bWriteTurnCap } from './_internal/managed-task/write-turn-cap.js';
+import {
+  extractUserFacingText,
+  deriveFinalStatus,
+  buildManagedProtocolPayload,
+} from './_internal/managed-task/status-derivation.js';
+import type {
+  AmaRole,
+  ObserverBridge,
+  RolePromptContextFactory,
+  RunnerChainPromptContext,
+  VerdictRecorder,
+} from './_internal/managed-task/types.js';
+
+// Re-export the public surface so existing callers
+// (`task-engine.ts`, `runner-driven.test.ts`,
+// `runner-driven-tool-wiring.test.ts`, `p2b-write-turn-cap.test.ts`)
+// continue to import everything from `./runner-driven.js`.
+export {
+  getAmaRoleEffectiveExclude,
+  getAmaRoleExpectedToolNames,
+  maybeApplyP2bWriteTurnCap,
+};
+export type {
+  AmaRole,
+  ObserverBridge,
+  RolePromptContextFactory,
+  RunnerChainPromptContext,
+  VerdictRecorder,
+};
+
 /**
  * Env-flag check. `KODAX_MANAGED_TASK_RUNTIME=runner` enables the Runner-
  * driven path. Case-insensitive match.
@@ -327,370 +378,18 @@ export function isRunnerDrivenRuntimeEnabled(): boolean {
 }
 
 // =============================================================================
-// Role instructions — self-contained strings (no ManagedRolePromptContext).
-// Kept minimal deliberately: enough to steer the LLM through the protocol
-// without reproducing the full legacy `createRolePrompt` surface.
+// Role instructions — moved to `./_internal/managed-task/role-prompts.ts`
+// (FEATURE_171 v0.7.41 split). Five `*_INSTRUCTIONS_FALLBACK` constants,
+// `renderScoutSkillMapBlock`, `resolveRoleInstructions`,
+// `renderRuntimeVerificationBlock` and `buildCompletionContractStatus`
+// are imported at the top of this file.
 // =============================================================================
 
-/**
- * Fallback role instructions — used when `buildRunnerAgentChain` is invoked
- * without a full prompt context (e.g. unit tests asserting the agent
- * topology). The real runtime path (`runManagedTaskViaRunner`) always
- * provides a `RolePromptContextFactory`, which routes through
- * `createRolePrompt` for the full v0.7.22-parity role prompt (decision
- * summary, contract, metadata, verification, tool-policy, evidence
- * strategies, dispatch_child_task guidance, H0/H1/H2 framework,
- * handoff/verdict/contract block specs, shared closing rules).
- */
-const SCOUT_INSTRUCTIONS_FALLBACK = [
-  'You are Scout, the AMA entry role. Analyse the user task, then choose a harness tier:',
-  '  - H0_DIRECT: trivial lookup / factual / review — Scout answers directly, no handoff',
-  '  - H1_EXECUTE_EVAL: execution task, small scope — hand off to Generator, Evaluator verifies',
-  '  - H2_PLAN_EXECUTE_EVAL: larger task, needs structured plan — hand off to Planner first',
-  '',
-  'You may call these tools to gather context: read, grep, glob, bash, dispatch_child_task.',
-  '',
-  'When ready, call `emit_scout_verdict` exactly once with `confirmed_harness` set.',
-].join('\n');
-
-const PLANNER_INSTRUCTIONS_FALLBACK = [
-  'You are Planner (H2 role). Call `emit_contract` exactly once with summary, success_criteria, ',
-  'required_evidence, constraints. You may call: read, grep, glob.',
-].join('\n');
-
-const GENERATOR_INSTRUCTIONS_FALLBACK = [
-  'You are Generator (H1/H2 execution role). Execute the task and call `emit_handoff` exactly ',
-  'once with status/summary/evidence/followup. You may call: read, grep, glob, bash, write, ',
-  'edit, dispatch_child_task.',
-].join('\n');
-
-const EVALUATOR_INSTRUCTIONS_FALLBACK = [
-  'You are Evaluator (H1/H2 verifier). Call `emit_verdict` exactly once with status ',
-  '(accept|revise|blocked). You may call: read, grep, glob, bash (read-only verification ',
-  'preferred).',
-].join('\n');
-
-// FEATURE_114 v0.7.36 — minimal Worker instructions for the
-// topology-only test path (no `promptContext`). Real Worker prompts
-// are produced by `createRolePrompt('worker', ...)` via
-// `worker-role-prompt.ts`. Mirrors the other *_FALLBACK constants
-// above; the production path never reaches this string.
-const WORKER_INSTRUCTIONS_FALLBACK = [
-  'You are Worker (AMA Harness V2 single-loop primary agent). Plan via ',
-  '`todo_update`, execute via tool calls, then call `emit_handoff` exactly ',
-  'once with status/summary/evidence/followup. You may call: read, grep, glob, ',
-  'bash, write, edit, multi_edit, todo_update, todo_list, dispatch_child_task, ',
-  'exit_plan_mode.',
-].join('\n');
-
-/**
- * Factory that resolves the `ManagedRolePromptContext` for a given role
- * from the current recorder state. Called by the dynamic `instructions`
- * closure on every agent invocation, so Scout's post-emit skillMap /
- * scope reach downstream role prompts in real time.
- */
-export type RolePromptContextFactory = (
-  role: KodaXTaskRole,
-  recorder: VerdictRecorder,
-) => ManagedRolePromptContext | undefined;
-
-/**
- * Optional prompt context plumbed into `buildRunnerAgentChain`. When
- * present, the chain builder uses `createRolePrompt` to produce a full
- * v0.7.22-parity role prompt for every turn. When absent (test paths),
- * the fallback constants above are used instead.
- */
-export interface RunnerChainPromptContext {
-  /** Original user task. Becomes `rolePromptContext.originalTask`. */
-  readonly prompt: string;
-  /**
-   * Routing decision. Legacy callers / tests pass a static
-   * `KodaXTaskRoutingDecision` captured at chain construction. The
-   * runtime path passes a `() => KodaXTaskRoutingDecision` thunk so the
-   * Generator / Evaluator see the post-Scout plan (M4 parity) instead of
-   * the stale pre-Scout decision captured when the agent graph was
-   * frozen. Without the thunk, a plan=H2 + Scout=H1 run leaks H2-only
-   * prompt guidance into H1 workers.
-   */
-  readonly decision: KodaXTaskRoutingDecision | (() => KodaXTaskRoutingDecision);
-  /** Optional structured task metadata. */
-  readonly metadata?: Record<string, KodaXJsonValue>;
-  /**
-   * Optional static tool policy. Kept for tests / topology-only call sites
-   * that don't need per-role policy. When both `toolPolicy` and
-   * `toolPolicyFactory` are absent, the prompt's "## Tool Policy" section
-   * is omitted (matches legacy behavior when a role falls through to
-   * `undefined` in `buildManagedWorkerToolPolicy`).
-   */
-  readonly toolPolicy?: KodaXTaskToolPolicy;
-  /**
-   * P1 parity — per-role tool policy factory. Called lazily at each
-   * Runner invocation so the Generator branch can see Scout's mutation
-   * intent (which is only known after Scout emits). Without this, every
-   * managed worker's prompt drops the "## Tool Policy" section. See
-   * `buildManagedWorkerToolPolicy` for the switch body.
-   */
-  readonly toolPolicyFactory?: (
-    role: KodaXTaskRole,
-    recorder: VerdictRecorder,
-  ) => KodaXTaskToolPolicy | undefined;
-  /** Optional role-context factory for skillMap / scoutScope / childWriteReviewPrompt injection. */
-  readonly contextFactory?: RolePromptContextFactory;
-  /**
-   * Pre-computed repo-intelligence context block (Repository Overview /
-   * Changed Scope / Active Module / Impact / Fallback Guidance /
-   * Premium Context sections). Built once per `runManagedTaskViaRunner`
-   * entry via `buildAutoRepoIntelligenceContext` and prepended to every
-   * role's system prompt so Scout/Planner/Generator/Evaluator see repo
-   * context from turn 1.
-   */
-  readonly repoIntelligenceContext?: string;
-}
-
-/**
- * Shard 6d-T: render Scout's skill map as an appended "Execution
- * Obligations" block. Mirrors legacy `task-engine.ts` behaviour where
- * Scout's skillMap.{skillSummary, executionObligations, ambiguities}
- * was surfaced to Generator as a concrete obligation list before
- * execution. Without this block, `skillMap.executionObligations` is
- * parsed into `scoutDecision.skillMap` but never reaches the model
- * doing the work.
- *
- * Passing `includeVerification: true` additionally surfaces
- * `verificationObligations` — used by Evaluator, whose QA plan
- * legacy also branched on Scout's verification guidance.
- */
-function renderScoutSkillMapBlock(
-  recorder: VerdictRecorder,
-  { includeVerification }: { includeVerification: boolean },
-): string | undefined {
-  const skillMap = recorder.scout?.payload.scout?.skillMap;
-  if (!skillMap) return undefined;
-  const exec = skillMap.executionObligations ?? [];
-  const verify = skillMap.verificationObligations ?? [];
-  const ambig = skillMap.ambiguities ?? [];
-  const hasExec = exec.length > 0;
-  const hasVerify = includeVerification && verify.length > 0;
-  const hasAmbig = ambig.length > 0;
-  if (!skillMap.skillSummary && !hasExec && !hasVerify && !hasAmbig) {
-    return undefined;
-  }
-  const lines = ['', '=== Scout Skill Map (required obligations) ==='];
-  if (skillMap.skillSummary) {
-    lines.push(`skill_summary: ${skillMap.skillSummary}`);
-  }
-  if (hasExec) {
-    lines.push('execution_obligations:');
-    for (const item of exec) lines.push(`- ${item}`);
-  }
-  if (hasVerify) {
-    lines.push('verification_obligations:');
-    for (const item of verify) lines.push(`- ${item}`);
-  }
-  if (hasAmbig) {
-    lines.push('ambiguities_to_resolve:');
-    for (const item of ambig) lines.push(`- ${item}`);
-  }
-  lines.push(
-    'You must address every obligation above. If any obligation cannot be met, ',
-    'surface it in your emit payload (`followup` for Generator, `reason` for Evaluator).',
-  );
-  return lines.join('\n');
-}
-
-/**
- * Resolve the system prompt for a role. When the full `promptContext`
- * (prompt + decision) is present, delegate to `createRolePrompt` for the
- * v0.7.22-parity prompt (decision summary, contract, metadata,
- * verification, tool-policy, evidence strategies, dispatch_child_task
- * guidance, H0/H1/H2 framework, handoff/verdict/contract block specs).
- * Otherwise fall back to the minimal static constants — keeps test
- * fixtures that call `buildRunnerAgentChain(ctx, {})` working.
- */
-function resolveRoleInstructions(
-  role: KodaXTaskRole,
-  agentName: string,
-  fallback: string,
-  recorder: VerdictRecorder,
-  promptContext: RunnerChainPromptContext | undefined,
-  verification: KodaXTaskVerificationContract | undefined,
-): string {
-  if (!promptContext) {
-    // Legacy minimal-instructions path for tests / topology-only calls.
-    // Still append the skillMap block if Scout has emitted one, so
-    // downstream roles get Scout's execution obligations even in the
-    // fallback path.
-    if (role === 'generator') {
-      const block = renderScoutSkillMapBlock(recorder, { includeVerification: false });
-      return block ? `${fallback}\n${block}` : fallback;
-    }
-    if (role === 'evaluator') {
-      const skillBlock = renderScoutSkillMapBlock(recorder, { includeVerification: true });
-      const runtimeBlock = renderRuntimeVerificationBlock(verification);
-      let out = fallback;
-      if (skillBlock) out += `\n${skillBlock}`;
-      if (runtimeBlock) out += `\n${runtimeBlock}`;
-      return out;
-    }
-    return fallback;
-  }
-  const ctx = promptContext.contextFactory
-    ? promptContext.contextFactory(role, recorder)
-    : { originalTask: promptContext.prompt };
-  // P1 parity — resolve per-role tool policy at invocation time so the
-  // Generator branch can see Scout's mutation intent. Falls back to the
-  // static `toolPolicy` for tests / topology-only paths.
-  const toolPolicy = promptContext.toolPolicyFactory
-    ? promptContext.toolPolicyFactory(role, recorder)
-    : promptContext.toolPolicy;
-  // M4 parity — resolve routing decision lazily. When the caller supplies
-  // a thunk, the Generator / Evaluator see the post-Scout decision
-  // (`applyScoutDecisionToPlan` output) rather than the pre-Scout
-  // snapshot. Tests pass a static decision for topology checks.
-  const decision = typeof promptContext.decision === 'function'
-    ? promptContext.decision()
-    : promptContext.decision;
-  const basePrompt = createRolePrompt(
-    role,
-    promptContext.prompt,
-    decision,
-    verification,
-    toolPolicy,
-    agentName,
-    promptContext.metadata,
-    ctx,
-    undefined, // workerId — unused by createRolePrompt body
-    false, // isTerminalAuthority — Runner-driven path always runs with Evaluator
-  );
-  // FEATURE_086: prepend the pre-computed repo-intelligence context
-  // block so every role sees repo overview /
-  // changed scope / active module / impact metadata from turn 1. Legacy
-  // `runKodaX` injected this via `buildAutoRepoIntelligenceContext` inside
-  // `buildReasoningExecutionState`; the Runner-driven path (FEATURE_084
-  // Shard 6d-L) routed around `runKodaX` and lost the injection.
-  const repoBlock = promptContext.repoIntelligenceContext?.trim();
-  return repoBlock
-    ? `${repoBlock}\n\n${basePrompt}`
-    : basePrompt;
-}
-
-/**
- * Shard 6d-S: render `verification.runtime` into an Evaluator-facing
- * block listing the startup command, ready signal, base URL, declared
- * UI flows, API checks, DB checks, and fixtures. Legacy
- * `buildRuntimeExecutionGuide` wrote an equivalent markdown file to
- * `runtime-execution.md`; the Runner path also needs to surface the
- * same obligations inline so the Evaluator actively probes the runtime
- * instead of writing a verdict from static file reads. Without this
- * block, `taskVerification.runtime` is persisted to
- * `runtime-contract.json` but never reaches the model making the
- * accept/revise/blocked call.
- */
-function renderRuntimeVerificationBlock(
-  verification: KodaXTaskVerificationContract | undefined,
-): string | undefined {
-  const runtime = verification?.runtime;
-  if (!runtime) return undefined;
-  const hasAny = Boolean(
-    runtime.startupCommand
-      || runtime.readySignal
-      || runtime.baseUrl
-      || (runtime.uiFlows?.length ?? 0) > 0
-      || (runtime.apiChecks?.length ?? 0) > 0
-      || (runtime.dbChecks?.length ?? 0) > 0
-      || (runtime.fixtures?.length ?? 0) > 0,
-  );
-  if (!hasAny) return undefined;
-  const lines = ['', '=== Runtime Verification Contract ==='];
-  if (runtime.cwd) lines.push(`- cwd: ${runtime.cwd}`);
-  if (runtime.startupCommand) lines.push(`- startup_command: ${runtime.startupCommand}`);
-  if (runtime.readySignal) lines.push(`- ready_signal: ${runtime.readySignal}`);
-  if (runtime.baseUrl) lines.push(`- base_url: ${runtime.baseUrl}`);
-  if (runtime.env && Object.keys(runtime.env).length > 0) {
-    lines.push(`- env_keys: ${Object.keys(runtime.env).join(', ')}`);
-  }
-  if (runtime.uiFlows?.length) {
-    lines.push('ui_flows (execute with bash via the app\'s own test harness; capture evidence):');
-    runtime.uiFlows.forEach((flow, idx) => lines.push(`  ${idx + 1}. ${flow}`));
-  }
-  if (runtime.apiChecks?.length) {
-    lines.push('api_checks (curl / wget / app-specific CLI):');
-    runtime.apiChecks.forEach((check, idx) => lines.push(`  ${idx + 1}. ${check}`));
-  }
-  if (runtime.dbChecks?.length) {
-    lines.push('db_checks (psql / sqlite / equivalent):');
-    runtime.dbChecks.forEach((check, idx) => lines.push(`  ${idx + 1}. ${check}`));
-  }
-  if (runtime.fixtures?.length) {
-    lines.push('fixtures:');
-    runtime.fixtures.forEach((fixture, idx) => lines.push(`  ${idx + 1}. ${fixture}`));
-  }
-  lines.push(
-    'Before accepting, start the runtime (if declared), wait for the ready signal, and ',
-    'exercise every declared flow/check. Reject (status=revise or blocked) if any check ',
-    'cannot be executed or fails.',
-  );
-  return lines.join('\n');
-}
-
-/**
- * Shard 6d-S: derive `completionContractStatus` from the final verdict.
- * Keys are criterion ids (from `verification.criteria`) plus synthetic
- * `ui_flow:<n>` / `api_check:<n>` / `db_check:<n>` keys for the runtime
- * contract entries. Status maps 1:1 from verdict status:
- *   - 'accept'   → 'ready'
- *   - 'revise'   → 'incomplete'
- *   - 'blocked'  → 'blocked'
- *   - no verdict → 'missing' (every declared check is unverified)
- * Returns undefined when no verification contract is declared — matches
- * legacy's absent-field semantics so downstream consumers stay opt-in.
- */
-function buildCompletionContractStatus(
-  verification: KodaXTaskVerificationContract | undefined,
-  verdictStatus: 'accept' | 'revise' | 'blocked' | undefined,
-): Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'> | undefined {
-  if (!verification) return undefined;
-  const criteria = verification.criteria ?? [];
-  const runtime = verification.runtime;
-  const uiFlows = runtime?.uiFlows ?? [];
-  const apiChecks = runtime?.apiChecks ?? [];
-  const dbChecks = runtime?.dbChecks ?? [];
-  if (criteria.length === 0 && uiFlows.length === 0 && apiChecks.length === 0 && dbChecks.length === 0) {
-    return undefined;
-  }
-  const status: 'ready' | 'incomplete' | 'blocked' | 'missing' =
-    verdictStatus === 'accept'
-      ? 'ready'
-      : verdictStatus === 'blocked'
-        ? 'blocked'
-        : verdictStatus === 'revise'
-          ? 'incomplete'
-          : 'missing';
-  const out: Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'> = {};
-  for (const criterion of criteria) out[criterion.id] = status;
-  uiFlows.forEach((_flow, idx) => {
-    out[`ui_flow:${idx + 1}`] = status;
-  });
-  apiChecks.forEach((_check, idx) => {
-    out[`api_check:${idx + 1}`] = status;
-  });
-  dbChecks.forEach((_check, idx) => {
-    out[`db_check:${idx + 1}`] = status;
-  });
-  return out;
-}
-
 // =============================================================================
-// Verdict recorder — observes emit tool calls to reconstruct the final
-// KodaXResult.managedTask payload from the Runner chain.
+// VerdictRecorder interface — moved to `./_internal/managed-task/types.ts`
+// (FEATURE_171). The interface is re-exported at the top of this file so
+// existing import paths keep working.
 // =============================================================================
-
-export interface VerdictRecorder {
-  scout?: ProtocolEmitterMetadata;
-  contract?: ProtocolEmitterMetadata;
-  handoff?: ProtocolEmitterMetadata;
-  verdict?: ProtocolEmitterMetadata;
-}
 
 /**
  * Role-mapping for `onManagedTaskStatus` emissions. Each emit tool
@@ -1240,66 +939,8 @@ const MAX_ROUNDS_BY_HARNESS: Record<KodaXHarnessProfile, number> = {
   PLANNED: 8,
 };
 
-export interface ObserverBridge {
-  readonly preflight: () => void;
-  readonly onRoleEmit: (role: KodaXTaskRole, recorder: VerdictRecorder) => void;
-  readonly completed: (signal: KodaXResult['signal'], reason?: string) => void;
-  readonly notifyBudgetApprovalRequest: () => void;
-  // Shard 6d-Q (v0.7.22 parity): fire a status event when a child task
-  // dispatch starts so the REPL's AmaWorkStrip can render
-  // "Scout/Generator fanning out ${class} × ${count}" badge.
-  readonly notifyChildFanout: (
-    fanoutClass: 'finding-validation' | 'evidence-scan' | 'module-triage',
-    count?: number,
-  ) => void;
-  /**
-   * v0.7.38 FEATURE_156 — fire when the runner-driven outer loop is
-   * about to park in `waitForWakeEvent` (idle-yield from FEATURE_155).
-   * Surfaces "alive but suspended pending external wake" so the REPL's
-   * status-bar can render "Worker - waiting for N children" instead
-   * of falling back to the last role-emit label, which gives the user
-   * no signal about what the spinner is waiting on.
-   *
-   * Agent-agnostic — caller passes the role of whichever agent just
-   * exited idle (today always 'worker'; the field doesn't lock in
-   * that invariant).
-   *
-   * No paired "resumed" emit needed: the next iteration's
-   * `onRoleEmit` naturally clears `idleWaiting` because it doesn't
-   * set the field, and the consumer branches on `=== true` so
-   * undefined transitions out of the waiting label.
-   */
-  readonly idleWaiting: (
-    role: KodaXTaskRole | undefined,
-    pendingCount: number,
-  ) => void;
-  /**
-   * FEATURE_166 (v0.7.41 follow-up) — fire on agent handoff transitions
-   * to flip the REPL's `activeWorkerTitle` ahead of the new agent's
-   * first streaming output.
-   *
-   * Without this, the label only updates when the new agent's first
-   * `emit_*` slot tool succeeds (see `wrapEmitterWithRecorder` →
-   * `onRoleEmit` at line ~1093). For Evaluator turns that emit any
-   * pre-verdict text / thinking / non-verdict tool call, the label
-   * lags through every such piece of output. Production session
-   * 20260515_185354 confirmed: Worker→Evaluator handoff followed by
-   * Evaluator's text-only summary renders the entire summary under
-   * the stale `[Worker]` label.
-   *
-   * Pure UI-state flip: NO recorder mutation, NO budget-extension
-   * dialog, NO history persistence (`persistToHistory: false`). The
-   * authoritative role-emit on slot success (`onRoleEmit`) continues
-   * to drive evidence entries, checkpoints, and budget accounting —
-   * this hook is strictly a fast-path for the visible label.
-   *
-   * Agent-agnostic — `role` may be `undefined` when the new agent's
-   * name doesn't map to a known `KodaXTaskRole`; in that case the
-   * consumer should leave the label untouched rather than render an
-   * unmapped fallback.
-   */
-  readonly agentSwitched: (role: KodaXTaskRole | undefined) => void;
-}
+// ObserverBridge interface — moved to `./_internal/managed-task/types.ts`
+// (FEATURE_171). Re-exported at the top of this file.
 
 /**
  * Shard 6d-R: derive a per-role evidence entry at emit time. Legacy
@@ -2068,141 +1709,14 @@ function wrapDispatchChildTaskForRole(
 }
 
 // =============================================================================
-// FEATURE_168 (v0.7.40 hotfix) — AMA agent tool wiring source of truth
+// FEATURE_168 / FEATURE_171 — AMA agent tool wiring source of truth.
+//
+// Per-role exclude sets, `AmaRole` type, `getAmaRoleEffectiveExclude` and
+// `getAmaRoleExpectedToolNames` moved to
+// `./_internal/managed-task/role-exclude.ts` (FEATURE_171 v0.7.41 split).
+// The two helpers and the `AmaRole` type are re-exported at the top of
+// this file so existing import paths keep working.
 // =============================================================================
-//
-// Each AMA role's effective tool surface is computed as
-//   listToolDefinitions() − AMA_BASELINE_EXCLUDE − <ROLE>_EXTRA_EXCLUDE
-// with role-specific wraps applied via the `overrides` map at build time
-// (mutation-guards on bash/write/edit/multi_edit for Generator/Worker,
-// readonly bash for Evaluator, role-specific drain wraps for dispatch).
-//
-// Why exclude-based: prior include-based wiring (each role's tools array
-// manually push'd) silently dropped 17 registered tools across multiple
-// features — FEATURE_120 (send_message / task_stop), FEATURE_161 (4 of
-// 8 repo-intel pull tools the Worker prompt teaches), and the four web
-// tools (web_search / web_fetch / code_search / semantic_lookup). The
-// AMA path is shielded from SA-path defaults so wiring drift went
-// undetected by every test layer (handler unit tests pass, prompt
-// teaches the tool, registry registers it, CHILD_EXCLUDE excludes the
-// non-existent child copy — no test asserted "agent.tools actually
-// contains a schema with this name"). Defaulting to "all registered
-// tools available unless excluded" makes that drift architecturally
-// impossible: new tools land in every AMA role automatically, and
-// security-sensitive omissions become explicit (one new EXCLUDE entry
-// rather than five missing push lines).
-
-export type AmaRole = 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker';
-
-/** Tools every AMA role excludes — specialized paths (SA-root, construction). */
-const AMA_BASELINE_EXCLUDE: ReadonlySet<string> = new Set([
-  // SA-path root entry only; AMA roles dispatch via role-specific emitters
-  // (emit_scout_verdict / emit_contract / emit_handoff / emit_verdict).
-  'emit_managed_protocol',
-  // Construction / agent-construction / self-modify — activated only when
-  // `toolConstructionMode=true` (see `agent-runtime/tool-resolution.ts:81`).
-  // AMA roles never run in construction mode.
-  'scaffold_tool',
-  'validate_tool',
-  'stage_construction',
-  'test_tool',
-  'activate_tool',
-  'scaffold_agent',
-  'validate_agent',
-  'stage_agent_construction',
-  'test_agent',
-  'activate_agent',
-  'stage_self_modify',
-]);
-
-/** Scout: H0 executor + dispatcher. Full surface, no extra excludes. */
-const SCOUT_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
-
-/**
- * Planner: drafts the contract for Generator to execute. Read-only inspection
- * surface only — never mutate, dispatch, exec shell, or interact with user.
- */
-const PLANNER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
-  'bash',
-  'write',
-  'edit',
-  'multi_edit',
-  'insert_after_anchor',
-  'undo',
-  'dispatch_child_task',
-  'send_message',
-  'task_stop',
-  'worktree_create',
-  'worktree_remove',
-  'exit_plan_mode',
-  'ask_user_question',
-]);
-
-/** Generator: full execution surface (V1 path). No extra excludes. */
-const GENERATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
-
-/**
- * Evaluator: independent auditor — verification only. Architecturally
- * hard-exclude every mutation surface so the security boundary does not
- * depend on prompt discipline. The Evaluator role-prompt teaches read-only
- * verification, but a prompt-jailbroken or tool-confused Evaluator must
- * still be physically unable to write, dispatch, or change plan state.
- */
-const EVALUATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
-  // No file mutations
-  'write',
-  'edit',
-  'multi_edit',
-  'insert_after_anchor',
-  'undo',
-  // No dispatch / steering (independent audit must not depend on child agents)
-  'dispatch_child_task',
-  'send_message',
-  'task_stop',
-  'worktree_create',
-  'worktree_remove',
-  // No state changes that would affect the Worker/Generator's plan-view
-  'exit_plan_mode',
-  'todo_update',
-  // No user interaction — independent audit must not block on user input
-  'ask_user_question',
-]);
-
-/** Worker (V2 single-loop primary agent): collapses Scout+Generator, full surface. */
-const WORKER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
-
-const ROLE_EXTRA_EXCLUDE: Record<AmaRole, ReadonlySet<string>> = {
-  scout: SCOUT_EXTRA_EXCLUDE,
-  planner: PLANNER_EXTRA_EXCLUDE,
-  generator: GENERATOR_EXTRA_EXCLUDE,
-  evaluator: EVALUATOR_EXTRA_EXCLUDE,
-  worker: WORKER_EXTRA_EXCLUDE,
-};
-
-/**
- * The effective exclude set for an AMA role — baseline ∪ role-specific.
- * Exported for contract tests in `runner-driven-tool-wiring.test.ts`.
- */
-export function getAmaRoleEffectiveExclude(role: AmaRole): ReadonlySet<string> {
-  return new Set([...AMA_BASELINE_EXCLUDE, ...ROLE_EXTRA_EXCLUDE[role]]);
-}
-
-/**
- * The names of all registry-borne tools an AMA role can see, computed by
- * subtracting the role's effective exclude set from `listToolDefinitions()`.
- * Excludes emit tools (which are NOT registry-borne — Runner-driven path
- * builds them via `protocol-emitters.ts` and splices them in separately).
- *
- * Exported for the FEATURE_168 contract test that pins each role's
- * expected tool surface.
- */
-export function getAmaRoleExpectedToolNames(role: AmaRole): readonly string[] {
-  const exclude = getAmaRoleEffectiveExclude(role);
-  return listToolDefinitions()
-    .map((def) => def.name)
-    .filter((name) => !exclude.has(name))
-    .sort();
-}
 
 interface CodingToolBundle {
   readonly read: RunnableTool;
@@ -3130,89 +2644,9 @@ export interface RunnerAdapterTokenState {
   source: 'api' | 'estimate';
 }
 
-/**
- * P2b (v0.7.26) — default list of providers that have shown
- * reproducible mid-stream TCP RST during large tool_use buffering.
- * Users can override via the `KODAX_RST_PRONE_PROVIDERS` env var
- * (comma-separated provider names).
- */
-const DEFAULT_RST_PRONE_PROVIDERS: ReadonlySet<string> = new Set([
-  'zhipu-coding',
-  'kimi-code',
-  'minimax-coding',
-  // mimo-coding is added prophylactically: same architectural pattern as
-  // the three above (Chinese-cloud subscription gateway with /anthropic
-  // shim) and not yet stress-tested on long write/edit turns. Remove via
-  // KODAX_RST_PRONE_PROVIDERS env var once the endpoint proves stable.
-  'mimo-coding',
-]);
-
-/** P2b — default per-turn ceiling applied when a write/edit tool is
- * in scope for an RST-prone provider. 8 KiB is comfortably below the
- * observed RST window while still large enough to fit a skeleton or a
- * single-section edit. Override via `KODAX_WRITE_TURN_MAX_TOKENS`. */
-const DEFAULT_WRITE_TURN_MAX_OUTPUT_TOKENS = 8192;
-
-/**
- * P2b — tool names whose presence in a turn's inventory indicates the
- * model MAY emit a large tool_use payload whose streaming buffering
- * could trip an RST on a weak provider.
- */
-const P2B_CAPPED_TOOL_NAMES: ReadonlySet<string> = new Set([
-  'write',
-  'edit',
-  'multi_edit',
-]);
-
-function resolveRstProneProviderSet(): ReadonlySet<string> {
-  const override = process.env.KODAX_RST_PRONE_PROVIDERS;
-  if (override === undefined) return DEFAULT_RST_PRONE_PROVIDERS;
-  // Empty string is an explicit "disable the cap" signal, distinct
-  // from unset (which keeps defaults).
-  const trimmed = override.trim();
-  if (trimmed.length === 0) return new Set();
-  return new Set(trimmed.split(',').map((s) => s.trim()).filter(Boolean));
-}
-
-function resolveWriteTurnMaxTokens(): number {
-  const raw = process.env.KODAX_WRITE_TURN_MAX_TOKENS;
-  if (!raw) return DEFAULT_WRITE_TURN_MAX_OUTPUT_TOKENS;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_WRITE_TURN_MAX_OUTPUT_TOKENS;
-}
-
-/**
- * P2b — decide whether this turn's tool inventory + provider warrant
- * the write-turn max_output_tokens cap, and apply it via the provider's
- * one-shot override. Returns `true` iff the cap was applied (the caller
- * clears the override in a finally block to prevent leakage). The cap
- * is NOT applied when the user has explicitly set KODAX_MAX_OUTPUT_TOKENS
- * — that signals "I want the higher budget even on risky providers."
- */
-export function maybeApplyP2bWriteTurnCap(
-  provider: { setMaxOutputTokensOverride: (v: number | undefined) => void; getEffectiveMaxOutputTokens: () => number },
-  providerName: string,
-  wireTools: readonly { name: string }[],
-): boolean {
-  // Explicit user override wins — never silently narrow their budget.
-  if (process.env.KODAX_MAX_OUTPUT_TOKENS) return false;
-
-  const proneProviders = resolveRstProneProviderSet();
-  if (!proneProviders.has(providerName)) return false;
-
-  const hasWriteTool = wireTools.some((t) => P2B_CAPPED_TOOL_NAMES.has(t.name));
-  if (!hasWriteTool) return false;
-
-  const cap = resolveWriteTurnMaxTokens();
-  const effective = provider.getEffectiveMaxOutputTokens();
-  if (effective <= cap) {
-    // Already at or below the cap (another override is in force, e.g.
-    // L4 escalation from a prior turn). Don't expand it.
-    return false;
-  }
-  provider.setMaxOutputTokensOverride(cap);
-  return true;
-}
+// P2b write-turn max_output_tokens cap — moved to
+// `./_internal/managed-task/write-turn-cap.ts` (FEATURE_171 v0.7.41 split).
+// `maybeApplyP2bWriteTurnCap` is re-exported at the top of this file.
 
 /**
  * C1 parity helper — map a registered Runner Agent name to its managed
@@ -4054,79 +3488,13 @@ export function buildRunnerLlmAdapter(
 }
 
 // =============================================================================
-// Result conversion: RunResult + VerdictRecorder → KodaXResult
+// Result conversion: RunResult + VerdictRecorder → KodaXResult.
+//
+// `extractUserFacingText`, `extractUserFacingRaw`, `deriveFinalStatus`
+// and `buildManagedProtocolPayload` moved to
+// `./_internal/managed-task/status-derivation.ts` (FEATURE_171 v0.7.41
+// split). Imported at the top of this file.
 // =============================================================================
-
-function extractUserFacingText(result: { messages: readonly KodaXMessage[]; output: string }): string {
-  const raw = extractUserFacingRaw(result);
-  // Strip internal managed control-plane markers and any
-  // stray ```kodax-task-*``` fences (complete or truncated) that the LLM
-  // might emit in assistant text despite using structured emit tools.
-  // Legacy task-engine.ts applied this at 14 call sites; re-added at the
-  // single Runner-driven extraction point.
-  return sanitizeManagedUserFacingText(raw);
-}
-
-function extractUserFacingRaw(result: { messages: readonly KodaXMessage[]; output: string }): string {
-  if (result.output.trim().length > 0) return result.output;
-  const last = result.messages[result.messages.length - 1];
-  if (!last || last.role !== 'assistant') return '';
-  if (typeof last.content === 'string') return last.content;
-  return (last.content as KodaXContentBlock[])
-    .filter((b): b is KodaXTextBlock => b.type === 'text')
-    .map((b) => b.text)
-    .join('');
-}
-
-/**
- * Derive the final signal + managedTask.verdict.status from the recorder.
- * Priority:
- *   1. Evaluator verdict if present (accept / revise / blocked)
- *   2. Scout H0 direct completion (maps to completed)
- *   3. Fallback: undefined (treated as converged by round-boundary for the
- *      SA fast-path pattern)
- */
-function deriveFinalStatus(recorder: VerdictRecorder): {
-  signal: KodaXResult['signal'];
-  verdictStatus?: 'accept' | 'revise' | 'blocked';
-  reason?: string;
-  userAnswer?: string;
-} {
-  const verdictPayload = recorder.verdict?.payload.verdict;
-  if (verdictPayload) {
-    if (verdictPayload.status === 'blocked') {
-      return {
-        signal: 'BLOCKED',
-        verdictStatus: 'blocked',
-        reason: verdictPayload.reason,
-      };
-    }
-    return {
-      signal: 'COMPLETE',
-      verdictStatus: verdictPayload.status,
-      reason: verdictPayload.reason,
-      userAnswer: verdictPayload.userAnswer,
-    };
-  }
-  return { signal: 'COMPLETE' };
-}
-
-/**
- * Build the minimal `managedProtocolPayload` slice the round-boundary
- * reshape expects. Shard 5b populates whatever the recorder captured;
- * missing slices stay undefined.
- */
-function buildManagedProtocolPayload(
-  recorder: VerdictRecorder,
-): KodaXManagedProtocolPayload | undefined {
-  const slices: Partial<KodaXManagedProtocolPayload> = {};
-  if (recorder.scout?.payload.scout) slices.scout = recorder.scout.payload.scout;
-  if (recorder.contract?.payload.contract) slices.contract = recorder.contract.payload.contract;
-  if (recorder.handoff?.payload.handoff) slices.handoff = recorder.handoff.payload.handoff;
-  if (recorder.verdict?.payload.verdict) slices.verdict = recorder.verdict.payload.verdict;
-  if (Object.keys(slices).length === 0) return undefined;
-  return slices as KodaXManagedProtocolPayload;
-}
 
 // =============================================================================
 // managedTask payload construction — Shard 6a
