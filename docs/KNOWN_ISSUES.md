@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-05-09_
+_Last Updated: 2026-05-16_
 
 ---
 
@@ -76,11 +76,110 @@ _Last Updated: 2026-05-09_
 | 129 | Medium | Resolved | Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 — `2>NUL` stderr 重定向 + 缺 `findstr` 白名单 + 管道一票否决 | 一直存在 | v0.7.38 | 2026-05-09 | 2026-05-09 |
 | 130 | Medium | Resolved | Managed foreground ledger phase/iteration 切换时丢失 in-flight tool_group 引用 — Issue 115 对称路径漏覆盖 | v0.7.17 | v0.7.39 | 2026-05-12 | 2026-05-12 |
 | 131 | Medium | Resolved | Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR` 等) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm | 一直存在 | v0.7.39 | 2026-05-12 | 2026-05-12 |
+| 132 | Low | Open | `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race causes intermittent flake under heavy parallel load | v0.7.32 | - | 2026-05-16 | - |
+| 133 | Low | Open | `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load — failure mode not yet captured | 待调研 | - | 2026-05-16 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake
+
+- **Priority**: Low（测试 flake only；不影响 user-facing 行为，仅在并行 suite 高负载下偶发）
+- **Status**: Open（**独立调研中**，per 用户指示不推迟到后续版本）
+- **Introduced**: 待调研（commit history 显示文件最近一次改动是 v0.7.37 FEATURE_142 `a840f22b`，但 flake 表现实际何时起飞需调研）
+- **Created**: 2026-05-16
+
+#### Current Behavior
+
+跑 `npm test` 全套（512 files / 5,935 tests，Windows 并行模式）偶尔出现这个 case 失败；单独 `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` 始终通过（5 tests / 288ms）。多次 full-suite 跑结果跳跃（pass → fail → pass）。
+
+#### 推测根因（**未实证**，待调研补充）
+
+候选假设：
+1. **`vi.mock('./premium-client.js')` 跨 file 污染**：runtime.test.ts 用 `vi.mock` + `vi.mocked(callPremiumDaemon)`；并行 worker 中其他文件若也涉及同模块可能干扰
+2. **`KODAX_REPOINTEL_ENDPOINT` env 变量在并行 worker 间共享**：测试 beforeEach 保存 / afterEach 恢复，但其他测试在中间窗口设值会污染
+3. **`mkdtempSync` + `createWorkspaceFixture` fs I/O 偶发竞争**：Windows 高 I/O 负载下 mkdir 路径 timing 异常
+
+#### 暂不修复 — 调研先
+
+用户指示 2026-05-16：**独立调研，但是不要往之后的版本推**。即作为单独 issue 跟踪，不绑定 v0.7.41 或后续版本 milestone，按调研结论决定修复路径。
+
+#### Workaround
+
+- 跑测试时若复现，单独 `npx vitest run` 该文件验证；不构成实际功能问题
+- 建议优先调研路径：在 `runtime.test.ts` 头部加 `console.error(process.env.KODAX_REPOINTEL_ENDPOINT)` 验证 env 污染假设
+
+#### Related
+
+- Issue 132（同期 known flake，h2-boundary-runner.test.ts）—— 两个 flake 都在 heavy parallel load 下偶发，但失败模式不同
+- precedent commit `d4a47bc9`（v0.7.37）—— "logic is sound — single-test runs always pass" 同款判断
+
+---
+### 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race
+
+- **Priority**: Low（测试 flake only；benchmark / eval 路径，不影响生产 user-facing 行为）
+- **Status**: Open（**调研中**，per 用户指示 2026-05-16 暂不修代码，先确认 root cause）
+- **Introduced**: v0.7.32（[FEATURE_107](FEATURE_LIST.md#feature_107) 引入 h2-boundary runner）
+- **Created**: 2026-05-16
+
+#### Current Behavior
+
+跑 `npm test` 全套时这个 case 偶发失败：
+
+```
+FAIL benchmark/harness/h2-boundary-runner.test.ts > h2-boundary-runner — end-to-end plumbing (fake kodax)
+  > H2-B variant propagates KODAX_PLANNER_INPUTFILTER=strip-reasoning to the spawn
+Error: ENOENT: no such file or directory,
+  open 'C:\Users\iceto\AppData\Local\Temp\h2-boundary-test-z4Sswz\results\plumbing-smoke-002\ds_v4flash\H2-B\session.jsonl'
+  at h2-boundary-runner.test.ts:193:19
+```
+
+单跑通过（4 tests / 9s）；并行高负载下偶发。Test 本身有 `{ timeout: 60_000 }` 不是 vitest 超时——是 `fs.readFile` 直接 ENOENT。
+
+#### 推测根因（**已 code-read 但未实证**）
+
+执行链（[h2-boundary-runner.ts:138-145](../benchmark/harness/h2-boundary-runner.ts#L138-L145)）：
+
+```typescript
+if (task.sessionJsonlPath) {
+  try {
+    const content = await fs.readFile(task.sessionJsonlPath, 'utf8');
+    await fs.writeFile(path.join(cellDir, 'session.jsonl'), content, 'utf8');
+  } catch {
+    // session jsonl may have been cleaned up early; non-fatal.
+  }
+}
+```
+
+Hypothesized race：
+1. fake kodax 子进程 `writeFileSync` 写 session jsonl 后 `exit(0)`
+2. Parent 收到子进程结束信号
+3. Parent `persistCell` 读 `task.sessionJsonlPath` —— Windows + heavy I/O 下文件 visibility 延迟 → read ENOENT
+4. **Catch 块静默吞错**，目标 `cellDir/session.jsonl` 不再创建
+5. `cleanupAgentTaskArtifacts`（run 内已调用）删除源
+6. 测试读 `cellDir/session.jsonl` → ENOENT，且源已不在
+
+#### 暂不修复 — 调研先
+
+用户指示 2026-05-16：**暂还不动，需要先调研**。修复需要改 runner 代码（非测试代码），需先确认：
+- Windows fs.writeFileSync 在子进程 exit 后到父进程 fs.readFile 之间的真实可见性延迟
+- 是否要给 `fs.readFile(task.sessionJsonlPath)` 加 retry/backoff
+- Silent catch 的"cleaned up early"语义是否真实存在 use case，还是单纯掩盖 race
+
+修复候选方案在 [docs/features/](features/) 立项时再细化（不绑定具体版本，per 用户指示）。
+
+#### Workaround
+
+- Full suite 跑出该失败时，单独 `npx vitest run benchmark/harness/h2-boundary-runner.test.ts` 验证 production 逻辑无问题
+- benchmark 实战跑时若同样 ENOENT，重跑即可（cell 级独立）
+
+#### Related
+
+- Issue 133（同期 known flake，runtime.test.ts）—— 两个都是 heavy parallel load 偶发但失败模式不同
+- precedent commit `d4a47bc9`（v0.7.37）—— bump per-test timeout 模式；本 issue 已 60s timeout 不适用，根因是 silent error swallow
+
 ---
 ### 131: Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR`) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm
 
@@ -3862,11 +3961,16 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 58 (25 Open, 33 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 60 (27 Open, 33 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-05-16: Issue 132 + Issue 133 added (test flake tracking)
+- Added 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race causes intermittent flake under heavy parallel load (Low, Open，调研中，per user 暂不动 runner 代码)
+- Added 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load (Low, Open，独立调研，per user 不推迟到后续版本 milestone)
+- 同期 `compaction.test.ts` "keeps partial summary progress when a later summary attempt fails" 加 `{ timeout: 15_000 }` 直接 fix（precedent commit `d4a47bc9` 模式）
 
 ### 2026-05-09: Issue 129 added & resolved
 - Added 129: Auto 模式下纯只读管道命令被误判为"修改文件"并强制确认 (Medium)
