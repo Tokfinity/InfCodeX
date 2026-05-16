@@ -705,6 +705,33 @@ kodax -h team          # Multi-agent parallel execution
 kodax -h print         # Print configuration
 ```
 
+### Environment Variables
+
+KodaX recognizes a number of environment variables for tuning runtime behavior. The most commonly used ones are listed below; for the full list, search the repo for `process.env.KODAX_`.
+
+#### `KODAX_MAX_OUTPUT_TOKENS`
+
+Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. The runtime's automatic safety caps (e.g. the v0.7.28 P2b RST-prone write-turn cap that limits write/edit turns to 8K tokens on Zhipu/Kimi/MiniMax) are **bypassed** when this variable is set, so the user override is also a way to opt out of those caps.
+
+```bash
+# Allow up to 48K output tokens per turn (use a higher cap when generating long files)
+export KODAX_MAX_OUTPUT_TOKENS=48000
+kodax "generate the full implementation"
+
+# Unset to restore default behavior
+unset KODAX_MAX_OUTPUT_TOKENS
+```
+
+Precedence used by every provider's `getEffectiveMaxOutputTokens()` (see `packages/llm/src/providers/base.ts`):
+
+1. One-shot per-request override (agent-loop escalation / context-overflow recovery — internal)
+2. **`KODAX_MAX_OUTPUT_TOKENS`** (this variable, explicit user intent)
+3. Active model descriptor's `maxOutputTokens` (FEATURE_098 per-model cap)
+4. Provider config default
+5. Global `KODAX_MAX_TOKENS` fallback
+
+Related variables: `KODAX_MAX_TOKENS` (global fallback when no provider/model cap applies), `KODAX_RST_PRONE_PROVIDERS` and `KODAX_WRITE_TURN_MAX_TOKENS` (v0.7.28 P2b write-turn safety cap configuration), `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (escalation budget used by the agent loop when a turn returns `stop_reason: max_tokens`).
+
 ## Advanced Library Usage
 
 #### Simple Mode (runKodaX)
