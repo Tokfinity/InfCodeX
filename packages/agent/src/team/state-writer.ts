@@ -81,7 +81,19 @@ export interface SessionMeta {
   readonly gitRemote?: string;
 }
 
-/** Stored shape of `state.json` on disk — additive over SessionStateSnapshot. */
+/**
+ * Stored shape of `state.json` on disk — additive over SessionStateSnapshot.
+ *
+ * Reader contract (S2 `instance-discovery.ts`): parse the JSON, verify
+ * `version === '1'` before reading any other field. On an unknown
+ * version, log + skip the instance — this lets a newer writer coexist
+ * with an older reader during an in-place upgrade.
+ *
+ * Fields are camelCase + a nested `meta` object (cwd / startedAt /
+ * gitBranch / gitRemote). Do NOT assume the snake_case / flat shape
+ * shown in early design-doc drafts — the typed interface here is the
+ * ground truth; the doc has been updated to match.
+ */
 export interface PersistedSessionState extends SessionStateSnapshot {
   readonly version: '1';
   readonly pid: number;

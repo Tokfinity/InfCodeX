@@ -2,9 +2,12 @@
  * FEATURE_125 (v0.7.41) — state-writer hermetic tests.
  *
  * No real fs. Every test injects an `InMemoryFs` and a controllable
- * clock, then asserts file shape / lifecycle invariants. The real fs
- * adapter is exercised in `state-writer.integration.test.ts`
- * (separately, with a unique temp dir per test).
+ * clock, then asserts file shape / lifecycle invariants.
+ *
+ * TODO(FEATURE_125-S6): add `state-writer.integration.test.ts` that
+ * drives the real fs adapter with a unique temp dir per test. Deferred
+ * to S6 alongside the multi-process integration test so both real-fs
+ * surfaces (writer + discovery) are covered in one file.
  */
 
 import * as path from 'node:path';
@@ -272,6 +275,10 @@ describe('createStateWriter — update()', () => {
       throw new Error('EBUSY');
     };
     expect(() => writer.update({ agentPhase: 'running_tool' })).not.toThrow();
+    // In-memory state must still reflect the patch despite the disk failure —
+    // the agent loop sees the up-to-date state; only sibling sessions are
+    // briefly behind until the next interval tick retries.
+    expect(writer.getState().agentPhase).toBe('running_tool');
   });
 });
 
@@ -337,6 +344,8 @@ describe('createStateWriter — heartbeat interval', () => {
   });
 
   it('a flaky interval tick (write throws) does not kill the timer', () => {
+    let now = 1_700_000_000_000;
+    const clock = () => now;
     let throwOnNextWrite = false;
     const flaky = new InMemoryFs();
     const origAtomic = flaky.atomicWriteSync.bind(flaky);
@@ -351,14 +360,29 @@ describe('createStateWriter — heartbeat interval', () => {
       pid: 999,
       meta: baseMeta,
       initialState: baseState,
+      clock,
       fs: flaky,
       instancesRoot: INSTANCES_ROOT,
       heartbeatIntervalMs: 50,
     });
+    const mtimeAfterRegistration = flaky.mtimes.get(PATHS.heartbeat);
+
     throwOnNextWrite = true;
+    now += 50;
     expect(() => vi.advanceTimersByTime(50)).not.toThrow();
-    // Next tick succeeds — proving the timer is still alive.
+    // The state.json write threw, so updatedAt may or may not have advanced —
+    // but the heartbeat touch comes BEFORE writeState in the tick callback,
+    // so the heartbeat mtime SHOULD still have advanced on the first tick.
+
+    // Second tick: must succeed, must touch heartbeat with a fresh mtime.
+    now += 50;
     vi.advanceTimersByTime(50);
+    const finalMtime = flaky.mtimes.get(PATHS.heartbeat);
+    expect(finalMtime).toBeGreaterThan(mtimeAfterRegistration ?? 0);
+    // updatedAt on disk must also have advanced — proves writeState ran on
+    // the second (recovered) tick.
+    expect(findStateFile(flaky).parsed.updatedAt).toBe(now);
+
     void writer.shutdown();
   });
 });
