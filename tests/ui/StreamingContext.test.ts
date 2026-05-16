@@ -5,7 +5,8 @@
  * Following Gemini CLI's StreamingContext architecture.
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { _resetMessageQueueForTests } from "@kodax-ai/agent";
 import { StreamingState } from "@kodax-ai/repl";
 import {
   type StreamingContextValue,
@@ -36,7 +37,16 @@ describe("StreamingManager", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    // FEATURE_159 (v0.7.40): createStreamingManager seeds from the
+    // process-global MessageQueue. Reset between cases so addPendingInput
+    // from a prior test doesn't leak into the next manager's initial state.
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial state", () => {
@@ -447,7 +457,13 @@ describe("StreamingManager - Thinking Feature", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial thinking state", () => {
@@ -676,7 +692,13 @@ describe("StreamingManager - Tool Feature", () => {
   let manager: StreamingManager;
 
   beforeEach(() => {
+    _resetMessageQueueForTests();
     manager = createStreamingManager();
+  });
+
+  afterEach(() => {
+    manager.dispose();
+    _resetMessageQueueForTests();
   });
 
   describe("initial tool state", () => {

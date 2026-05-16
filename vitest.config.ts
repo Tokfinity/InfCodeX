@@ -24,6 +24,7 @@ export default defineConfig({
     // aliases (Vite prefix-match order).
     alias: {
       '@kodax-ai/skills/shared/yaml': resolveFromRoot('packages', 'skills', 'src', 'shared', 'yaml.ts'),
+      '@kodax-ai/agent/messaging/queue': resolveFromRoot('packages', 'agent', 'src', 'messaging', 'queue.ts'),
       '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
@@ -38,6 +39,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    // FEATURE_159 (v0.7.40) — global MessageQueue singleton reset before
+    // each test. See `vitest.setup.queue.ts` for the rationale.
+    setupFiles: [resolveFromRoot('vitest.setup.queue.ts')],
     include: [
       'packages/*/src/**/*.test.ts',
       'packages/*/src/**/*.test.tsx',

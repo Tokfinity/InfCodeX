@@ -222,7 +222,11 @@ describe('compaction', () => {
     expect(result.anchor?.artifactLedgerId).toMatch(/^ledger_/);
   });
 
-  it('keeps partial summary progress when a later summary attempt fails', async () => {
+  // Solo wall-clock ~2.9s (long conversation + 2-attempt retry inside compact()).
+  // Under heavy parallel suite load on Windows this can exceed vitest's 5s
+  // default — follows precedent commit d4a47bc9 (v0.7.37) "bump per-test
+  // timeouts on flaky suites under heavy parallel load".
+  it('keeps partial summary progress when a later summary attempt fails', { timeout: 15_000 }, async () => {
     const provider = new FakeSummaryProvider('partial summary', 2);
     const contextWindow = 200000;
     const config = {
