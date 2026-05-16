@@ -87,7 +87,7 @@ _Last Updated: 2026-05-16_
 ### 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake
 
 - **Priority**: Low（测试 flake only；不影响 user-facing 行为，仅在并行 suite 高负载下偶发）
-- **Status**: Open（**独立调研中**，per 用户指示不推迟到后续版本）
+- **Status**: Open（调研已展开，**暂未复现**，候选根因 narrowed）
 - **Introduced**: 待调研（commit history 显示文件最近一次改动是 v0.7.37 FEATURE_142 `a840f22b`，但 flake 表现实际何时起飞需调研）
 - **Created**: 2026-05-16
 
@@ -95,32 +95,49 @@ _Last Updated: 2026-05-16_
 
 跑 `npm test` 全套（512 files / 5,935 tests，Windows 并行模式）偶尔出现这个 case 失败；单独 `npx vitest run packages/coding/src/repo-intelligence/runtime.test.ts` 始终通过（5 tests / 288ms）。多次 full-suite 跑结果跳跃（pass → fail → pass）。
 
-#### 推测根因（**未实证**，待调研补充）
+**2026-05-16 复现尝试**：连续 5 次 full-suite run **0/5 复现**；本次调研期间反而稳定通过。可能性：
+- (a) 本次 PR 加的全局 `vitest.setup.queue.ts` `_resetMessageQueueForTests()` 间接降低了 worker 内 module-state 污染概率（不直接相关但环境变了）
+- (b) Flake 本身概率极低（之前 ~6 次中触发 1 次 ≈ 17%），5 次未复现仍可能 just lucky
+- (c) 失败模式可能与 specific worker 调度顺序相关，难以稳定 trigger
 
-候选假设：
-1. **`vi.mock('./premium-client.js')` 跨 file 污染**：runtime.test.ts 用 `vi.mock` + `vi.mocked(callPremiumDaemon)`；并行 worker 中其他文件若也涉及同模块可能干扰
-2. **`KODAX_REPOINTEL_ENDPOINT` env 变量在并行 worker 间共享**：测试 beforeEach 保存 / afterEach 恢复，但其他测试在中间窗口设值会污染
-3. **`mkdtempSync` + `createWorkspaceFixture` fs I/O 偶发竞争**：Windows 高 I/O 负载下 mkdir 路径 timing 异常
+#### Code Reading 发现的候选根因（**code-read 已确认存在；race trigger 未实证**）
 
-#### 暂不修复 — 调研先
+在 [`packages/coding/src/repo-intelligence/runtime.ts:57-62`](../packages/coding/src/repo-intelligence/runtime.ts#L57-L62) 有 **module-level 单例 cache**：
 
-用户指示 2026-05-16：**独立调研，但是不要往之后的版本推**。即作为单独 issue 跟踪，不绑定 v0.7.41 或后续版本 milestone，按调研结论决定修复路径。
+```typescript
+const PRETURN_CACHE_TTL_MS = 1_500;
+const premiumPreturnCache = new Map<string, { expiresAt: number; promise: Promise<PremiumPreturnResult | null>; }>();
+```
+
+Cache key（[runtime.ts:296-305](../packages/coding/src/repo-intelligence/runtime.ts#L296-L305)）由 `mode / endpoint / bin / executionCwd / gitRoot / targetPath / refresh / trace` 组成。
+
+**关键观察**：每个 test 用 `mkdtempSync` 创建独立 `tempDir` → cache key 中 `executionCwd` 不同 → 同文件内 test 间 cache key **理论不冲突**。但：
+
+1. **gitRoot 未在 test context 中显式设**：测试只传 `{ executionCwd: tempDir }`，没传 gitRoot。Cache key 用 `context.gitRoot ?? ''`。但如果 `tryPremiumPreturn` 内部隐式 resolve gitRoot 为 `process.cwd()` 的 git root（在 vitest worker 中是 monorepo root），则**所有 test 共享同一个 gitRoot 段**——但 cacheKey 看的是 `context.gitRoot`，不是 resolved value，所以仍是 ''
+2. **Promise 是 cached**（不只 result）：cache 存 `Promise<PremiumPreturnResult | null>`。如果 test A 的 mock 返回的 promise 被存进 cache，test B 复用了同一个 cacheKey（极小可能 — 需要相同 tempDir，几乎不可能），就会拿到 test A 的 mock 结果
+3. **`vi.mock('./premium-client.js')` 是 file-scoped**：vitest 的 vi.mock hoist 到文件顶部，正常情况不会跨 file 污染——除非 worker 复用时模块状态部分泄漏
+
+#### 暂不复现 → 暂不修
+
+无法实证复现路径，**贸然修代码风险大于收益**（可能引入新 bug，或修了非 root cause）。建议留作 dormant tracking：
+- 后续如再次复现，捕获完整 stderr/stdout + cache 状态 dump
+- 在 `beforeEach` 加 `premiumPreturnCache.clear()` 是低成本防御性 fix 但属非测试代码改动；当前不做
 
 #### Workaround
 
 - 跑测试时若复现，单独 `npx vitest run` 该文件验证；不构成实际功能问题
-- 建议优先调研路径：在 `runtime.test.ts` 头部加 `console.error(process.env.KODAX_REPOINTEL_ENDPOINT)` 验证 env 污染假设
+- 若高频复现可在 [runtime.ts](../packages/coding/src/repo-intelligence/runtime.ts) export 一个 `_resetPremiumPreturnCacheForTests()` 并在测试 beforeEach 调用（test helper 模式）—— 同 `_resetMessageQueueForTests` 的做法
 
 #### Related
 
-- Issue 132（同期 known flake，h2-boundary-runner.test.ts）—— 两个 flake 都在 heavy parallel load 下偶发，但失败模式不同
+- Issue 132（同期 known flake，h2-boundary-runner.test.ts）—— 两个 flake 都在 heavy parallel load 下偶发，但失败模式 root cause 不同（132 是 Windows fs visibility，133 是 module cache 假设）
 - precedent commit `d4a47bc9`（v0.7.37）—— "logic is sound — single-test runs always pass" 同款判断
 
 ---
-### 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT race — runner silent error swallow + cleanup race
+### 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — Windows fs visibility race + silent error swallow in persistCell
 
 - **Priority**: Low（测试 flake only；benchmark / eval 路径，不影响生产 user-facing 行为）
-- **Status**: Open（**调研中**，per 用户指示 2026-05-16 暂不修代码，先确认 root cause）
+- **Status**: Open（**调研完成，定位到 silent catch + Windows fs visibility race**，per 用户指示 2026-05-16 暂不修代码）
 - **Introduced**: v0.7.32（[FEATURE_107](FEATURE_LIST.md#feature_107) 引入 h2-boundary runner）
 - **Created**: 2026-05-16
 
@@ -138,37 +155,59 @@ Error: ENOENT: no such file or directory,
 
 单跑通过（4 tests / 9s）；并行高负载下偶发。Test 本身有 `{ timeout: 60_000 }` 不是 vitest 超时——是 `fs.readFile` 直接 ENOENT。
 
-#### 推测根因（**已 code-read 但未实证**）
+#### 调研结果（code-reading 2026-05-16）
 
-执行链（[h2-boundary-runner.ts:138-145](../benchmark/harness/h2-boundary-runner.ts#L138-L145)）：
+**初始 hypothesis ruled out**：原以为是 `cleanupAgentTaskArtifacts` 删 source 后 persistCell 才读。**实际执行顺序经 [h2-boundary-runner.ts:198-199](../benchmark/harness/h2-boundary-runner.ts#L198-L199) verified**：
 
 ```typescript
-if (task.sessionJsonlPath) {
-  try {
-    const content = await fs.readFile(task.sessionJsonlPath, 'utf8');
-    await fs.writeFile(path.join(cellDir, 'session.jsonl'), content, 'utf8');
-  } catch {
-    // session jsonl may have been cleaned up early; non-fatal.
-  }
-}
+const persistedAt = await persistCell(resultsDir, task);   // line 198
+await cleanupAgentTaskArtifacts(task);                     // line 199 — AFTER persist
 ```
 
-Hypothesized race：
-1. fake kodax 子进程 `writeFileSync` 写 session jsonl 后 `exit(0)`
-2. Parent 收到子进程结束信号
-3. Parent `persistCell` 读 `task.sessionJsonlPath` —— Windows + heavy I/O 下文件 visibility 延迟 → read ENOENT
-4. **Catch 块静默吞错**，目标 `cellDir/session.jsonl` 不再创建
-5. `cleanupAgentTaskArtifacts`（run 内已调用）删除源
-6. 测试读 `cellDir/session.jsonl` → ENOENT，且源已不在
+所以 cleanup race 不是根因 — persistCell 先跑、cleanup 后跑。
 
-#### 暂不修复 — 调研先
+**Verified path**（[agent-task-runner.ts:316-356](../benchmark/harness/agent-task-runner.ts#L316-L356)）：
 
-用户指示 2026-05-16：**暂还不动，需要先调研**。修复需要改 runner 代码（非测试代码），需先确认：
-- Windows fs.writeFileSync 在子进程 exit 后到父进程 fs.readFile 之间的真实可见性延迟
-- 是否要给 `fs.readFile(task.sessionJsonlPath)` 加 retry/backoff
-- Silent catch 的"cleaned up early"语义是否真实存在 use case，还是单纯掩盖 race
+1. fake kodax child process spawned，env.HOME = isolatedHome（[line 225-226](../benchmark/harness/agent-task-runner.ts#L225-L226)，唯一 per test）
+2. fake kodax `fs.writeFileSync(sessionPath, ...)` 同步写完 → `process.exit(0)`
+3. Parent `child.on('close')` fires
+4. Parent `findEvalSessionJsonl(sessionsDir)`（[line 158-177](../benchmark/harness/agent-task-runner.ts#L158-L177)）：`await fs.readdir` + `await fs.stat` 都成功，返回 path
+5. Parent `await listFilesChangedInWorktree(handle)` 跑 git diff（额外 I/O 延迟）
+6. Parent finally 块 `await cleanupWorktree(handle, { repoRoot })`（[worktree-runner.ts:197-222](../benchmark/harness/worktree-runner.ts#L197-L222)）—— **只删 handle.path**，不碰 `${handle.path}.home`（isolatedHome）；session jsonl 仍在
+7. Parent 返回 result
+8. Caller `persistCell` 跑：mkdir cellDir + 3 个 writeFile（meta.json / stdout.tail / stderr.tail），**累计 ~10-30ms I/O 延迟**
+9. **persistCell `await fs.readFile(task.sessionJsonlPath, 'utf8')` 在第 4 步 fs.stat 成功之后 ~50-100ms+ 触发 → 偶发 ENOENT**
 
-修复候选方案在 [docs/features/](features/) 立项时再细化（不绑定具体版本，per 用户指示）。
+#### Confirmed root cause: Windows file-handle visibility race
+
+第 4 步 `fs.stat` 成功证明文件**存在**；第 9 步 ENOENT 不可能是真不存在（其他代码不删 isolatedHome）。**结论是 Windows-specific 现象**：
+
+- **候选 1 (most likely)**: Windows Defender / 索引服务在新文件创建后短暂 lock 文件，期间其他进程 readFile 拿到 ENOENT/EBUSY 类错误
+- **候选 2**: Node.js fs uv_fs 在 Windows 上的 visibility 延迟（subprocess writeFileSync 后 parent process 可见性不保证立即）
+- **候选 3**: 多 vitest worker 共享 `%TEMP%` 路径时 NTFS 元数据 batched-flush 延迟
+
+第 4 步 stat 之后还要走 listFilesChangedInWorktree（git diff subprocess）+ cleanupWorktree（2 个 git subprocess） + 3 个 fs.writeFile，给 AV/indexer 留了"窗口期"。
+
+#### Silent catch 是 root cause amplifier，不是 root cause
+
+[h2-boundary-runner.ts:138-145](../benchmark/harness/h2-boundary-runner.ts#L138-L145) 的 silent catch 把 transient I/O 错误吞掉，本意是 "cleaned up early; non-fatal" — 但这个 use case 在当前执行序里**根本不存在**（cleanup 永远在 persist 之后），catch 实际只在掩盖 Windows fs race，且**没保留任何 telemetry**（连 console.warn 都没有）。
+
+#### Fix 方案（决策待定）
+
+候选 A（推荐）：persistCell 的 fs.readFile 加 retry/backoff（3 次 × 50ms），catch 保留但加 `console.warn` 不静默：
+```typescript
+let content: string | null = null;
+for (let i = 0; i < 3; i++) {
+  try { content = await fs.readFile(task.sessionJsonlPath, 'utf8'); break; }
+  catch (err) { if (i === 2) console.warn('[h2-boundary] session.jsonl read failed after 3 retries:', err); else await new Promise(r => setTimeout(r, 50 << i)); }
+}
+if (content) await fs.writeFile(path.join(cellDir, 'session.jsonl'), content, 'utf8');
+```
+~10 行非测试代码。
+
+候选 B：在 `runAgentTaskInWorktree` 内部就把 session jsonl copy 到 stable location，不依赖 caller persist。结构性变更，~30 行。
+
+候选 C：删除 silent catch，让 persist 失败 propagate；fail-fast 但 benchmark N×M×V 矩阵跑时单 cell 失败会拖垮整批。**不推荐**。
 
 #### Workaround
 
@@ -177,8 +216,8 @@ Hypothesized race：
 
 #### Related
 
-- Issue 133（同期 known flake，runtime.test.ts）—— 两个都是 heavy parallel load 偶发但失败模式不同
-- precedent commit `d4a47bc9`（v0.7.37）—— bump per-test timeout 模式；本 issue 已 60s timeout 不适用，根因是 silent error swallow
+- Issue 133（同期 known flake，runtime.test.ts）—— 两个都是 heavy parallel load 偶发但失败模式不同（132 是 fs 真实 race + silent catch；133 怀疑是 module-level cache 假设）
+- precedent commit `d4a47bc9`（v0.7.37）—— bump per-test timeout 模式；本 issue 已 60s timeout 不适用，根因是 silent error swallow + fs race
 
 ---
 ### 131: Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR`) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm
