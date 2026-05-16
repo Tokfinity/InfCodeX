@@ -14,6 +14,8 @@ import {
 } from './text-anchor.js';
 import { findExactMatchPositions, formatLineList } from './multi-edit.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
+import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
+import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 
 export type EditToolErrorCode =
   | 'EDIT_NOT_FOUND'
@@ -63,6 +65,17 @@ async function runEditOnce(
   replaceAll: boolean,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
+  // FEATURE_125 v0.7.41 — Layer 4 hard gate. If the LLM read this file
+  // earlier in the task and a peer (or the user in an external editor)
+  // has since modified it, refuse the edit. Returning a [Tool Error]
+  // here mirrors the existing edit error envelope so the tool-result
+  // policy and error parsers treat it identically to a NOT_FOUND case.
+  if (ctx.contentHashCache) {
+    const stale = ctx.contentHashCache.checkStale(filePath);
+    if (stale.stale) {
+      return `[Tool Error] edit: ${buildStaleWriteReason(filePath, stale)}`;
+    }
+  }
   const content = await fs.readFile(filePath, 'utf-8');
   const exactMatches = findExactMatchPositions(content, oldStr);
   let replacementPlan: {
@@ -147,6 +160,11 @@ async function runEditOnce(
   getFileBackups().set(filePath, content);
   await fs.writeFile(filePath, replacementPlan.newContent, 'utf-8');
 
+  // FEATURE_125 v0.7.41 — update content-hash cache with the post-edit
+  // content so the LLM's own subsequent edit on this file does not
+  // false-alarm against the changes it just applied.
+  ctx.contentHashCache?.recordWrite(filePath, replacementPlan.newContent);
+
   const diff = generateDiff(content, replacementPlan.newContent, filePath);
   const changes = countChanges(diff);
 
@@ -170,7 +188,14 @@ async function runEditOnce(
     result += `\n\n${preview}`;
   }
 
-  return result;
+  // FEATURE_125 v0.7.41 — Layer 3 soft warning prepended to the
+  // successful edit result when another session is editing the same
+  // path. Does not block — the edit already applied; the banner tells
+  // the LLM to consider re-reading next round.
+  const warningBanner = ctx.siblingSnapshot
+    ? formatActiveFileWarning(filePath, ctx.siblingSnapshot)
+    : null;
+  return warningBanner ? `${warningBanner}\n\n${result}` : result;
 }
 
 export function parseEditToolError(result: string): EditToolErrorCode | undefined {

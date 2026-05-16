@@ -29,6 +29,8 @@ import {
   findUniqueUnicodeNormalizedBlockMatch,
 } from './text-anchor.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
+import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
+import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
 
 const MAX_SAFE_EDIT_CHARS = 64 * 1024;
 const MAX_SAFE_EDIT_LINES = 400;
@@ -81,6 +83,16 @@ export async function toolMultiEdit(
 
   // FEATURE_131 Part A: serialize same-file mutations.
   return withFileMutation(filePath, async () => {
+    // FEATURE_125 v0.7.41 — Layer 4 hard gate. Check BEFORE reading
+    // the file so a peer-modified file is detected without paying the
+    // read cost. checkStale itself re-reads the file to hash, but
+    // that's a single read regardless of how many edits are batched.
+    if (ctx.contentHashCache) {
+      const stale = ctx.contentHashCache.checkStale(filePath);
+      if (stale.stale) {
+        return `[Tool Error] multi_edit: ${buildStaleWriteReason(filePath, stale)}`;
+      }
+    }
     const originalContent = await fs.readFile(filePath, 'utf-8');
 
     // Apply sequentially in memory. Any failure aborts the whole batch
@@ -106,6 +118,10 @@ export async function toolMultiEdit(
     getFileBackups().set(filePath, originalContent);
     await fs.writeFile(filePath, runningContent, 'utf-8');
 
+    // FEATURE_125 v0.7.41 — update content-hash cache with the post-batch
+    // content so subsequent edits in the same task don't false-alarm.
+    ctx.contentHashCache?.recordWrite(filePath, runningContent);
+
     const diff = generateDiff(originalContent, runningContent, filePath);
     const changes = countChanges(diff);
     const totalReplacements = replacementCounts.reduce((a, b) => a + b, 0);
@@ -119,7 +135,11 @@ export async function toolMultiEdit(
       result += `\n\n${preview}`;
     }
 
-    return result;
+    // FEATURE_125 v0.7.41 — Layer 3 soft warning prepended on overlap.
+    const warningBanner = ctx.siblingSnapshot
+      ? formatActiveFileWarning(filePath, ctx.siblingSnapshot)
+      : null;
+    return warningBanner ? `${warningBanner}\n\n${result}` : result;
   });
 }
 

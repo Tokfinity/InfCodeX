@@ -1537,6 +1537,26 @@ export interface KodaXToolExecutionContext {
   contentHashCache?: import('./multi-instance/content-hash-cache.js').ContentHashCache;
 
   /**
+   * FEATURE_125 v0.7.41 — Team Mode Layer 3 input.
+   *
+   * Snapshot of sibling KodaX instances captured at the start of the
+   * current LLM round by the runner-driven adapter. Mutation tools
+   * (Edit / MultiEdit / Write) read this when present to detect
+   * `activeFiles` overlap and prepend a soft warning to their tool
+   * result. The snapshot is per-round (no automatic refresh during a
+   * single tool execution) — slight staleness is acceptable; the
+   * warning is informational, not a hard gate.
+   *
+   * When undefined (Team Mode disabled, solo session, or tool invoked
+   * outside a managed task), the warning layer is bypassed silently.
+   * The hard-block layer (`contentHashCache`) is independent and
+   * still applies.
+   *
+   * See `packages/coding/src/multi-instance/active-file-warning.ts`.
+   */
+  siblingSnapshot?: readonly import('@kodax-ai/agent').DiscoveredInstance[];
+
+  /**
    * FEATURE_119 v0.7.36 Pattern B: registry of in-flight async child
    * dispatches. When set, `dispatch_child_task` runs in fire-and-forget
    * mode (returns a `task_id` immediately without awaiting). The Worker
