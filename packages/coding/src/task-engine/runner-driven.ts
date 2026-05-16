@@ -121,6 +121,16 @@ import {
   detectMissingTerminalVerdict,
   runWithIdleYield,
 } from '@kodax-ai/agent';
+// FEATURE_125 (v0.7.41) — Team Mode runner-side adapter.
+// Per-LLM-round sibling discovery + system-prompt block + content-hash
+// safety net for cross-session edits.
+import {
+  buildOtherInstancesPromptBlock,
+  discoverInstances,
+  getActiveTeamModeWriter,
+  type DiscoveredInstance,
+} from '@kodax-ai/agent';
+import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
 import {
   EVALUATOR_VERDICT_RETRY_PROMPT,
@@ -596,6 +606,22 @@ async function runManagedTaskViaRunnerInner(
     return cachedSummarizer(content, summaryOpts);
   };
 
+  // FEATURE_125 v0.7.41 — Team Mode wiring:
+  //   - `contentHashCache` is per-managed-task (one instance per
+  //     runner-driven entry; tools `recordRead` on Read and
+  //     `checkStale` / `recordWrite` on Edit/MultiEdit/Write). When
+  //     KODAX_DISABLE_MULTI_INSTANCE=1 or `getActiveTeamModeWriter()`
+  //     returns null we still create the cache — the cache has no
+  //     cross-process state, so the safety net is also valuable
+  //     against user-manual edits in the same session.
+  //   - `siblingSnapshotRef` is a mutable holder kept in sync by
+  //     `rolePromptContextFactory` once per LLM round. Tools read it
+  //     via the getter defined below so each tool call sees the
+  //     freshest snapshot without rebuilding baseCtx.
+  const contentHashCache = createContentHashCache();
+  const siblingSnapshotRef: {
+    current: readonly DiscoveredInstance[] | undefined;
+  } = { current: undefined };
   const baseCtx: KodaXToolExecutionContext = {
     ...substrateBaseCtx,
     mutationTracker,
@@ -610,7 +636,16 @@ async function runManagedTaskViaRunnerInner(
     // `dispatch-child-tasks` when `applyToolResultGuardrail` returns
     // `spillFailed:true` AND raw content > 100KB.
     summarizeBlob,
+    contentHashCache,
   };
+  // Mount `siblingSnapshot` as a live getter so tools always see the
+  // latest per-round snapshot. The factory below updates the ref in
+  // place — no need to rebuild baseCtx between rounds.
+  Object.defineProperty(baseCtx, 'siblingSnapshot', {
+    get: () => siblingSnapshotRef.current,
+    enumerable: true,
+    configurable: true,
+  });
 
   // Budget controller. Start with H0 cap (50); `wrapEmitterWithRecorder`
   // upgrades the cap when Scout confirms a non-H0 tier. Mirrors the
@@ -937,10 +972,33 @@ async function runManagedTaskViaRunnerInner(
   }
   const rolePromptContextFactory: RolePromptContextFactory = (role, currentRecorder) => {
     const scoutPayload = currentRecorder.scout?.payload.scout;
+    // FEATURE_125 v0.7.41 — Per-LLM-round sibling discovery. Only fires
+    // when the Team Mode writer was bootstrapped (REPL session normally;
+    // disabled via KODAX_DISABLE_MULTI_INSTANCE=1). The active writer's
+    // pid is excluded so we never describe ourselves to the LLM.
+    // `discoverInstances` does one readdir + N stat — cheap enough to
+    // call on every role-prompt build without caching. Failure is
+    // swallowed so a transient fs hiccup never blocks the LLM call.
+    let teamModeBlock: string | undefined;
+    try {
+      const writer = getActiveTeamModeWriter();
+      if (writer) {
+        const siblings = discoverInstances({ excludePid: writer.pid });
+        siblingSnapshotRef.current = siblings;
+        if (siblings.length > 0) {
+          teamModeBlock = buildOtherInstancesPromptBlock(siblings);
+        }
+      } else {
+        siblingSnapshotRef.current = undefined;
+      }
+    } catch {
+      siblingSnapshotRef.current = undefined;
+    }
     const ctx: ManagedRolePromptContext = {
       originalTask: prompt,
       workspace: managedWorkspace,
       capabilityContextBlock: prebuiltCapabilityContextBlock,
+      ...(teamModeBlock ? { teamModeSection: teamModeBlock } : {}),
       // FEATURE_143 (v0.7.36): routing-notes overlay flows here so the
       // role-prompt builder can emit it as a system-prompt section.
       // Pre-FEATURE_143 this was stitched onto the user prompt head;

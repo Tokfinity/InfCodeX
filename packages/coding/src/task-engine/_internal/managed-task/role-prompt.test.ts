@@ -569,3 +569,97 @@ describe('createRolePrompt — Evaluator wait-for-children + final-answer contra
     }
   });
 });
+
+// FEATURE_125 (v0.7.41) — Team Mode prompt block injection. The runner-
+// driven adapter renders `=== Other active KodaX sessions ===` per LLM
+// round via `buildOtherInstancesPromptBlock(discoverInstances())` and
+// passes it via `rolePromptContext.teamModeSection`. The role-prompt
+// builder must surface it on every managed-task role so worker / scout /
+// planner / generator / evaluator all see the same sibling context.
+describe('FEATURE_125 — teamModeSection wiring across roles', () => {
+  const SAMPLE_BLOCK = [
+    '=== Other active KodaX sessions ===',
+    '',
+    'You are not alone — the user has 1 other KodaX session running:',
+    '',
+    '- pid 42 @ /repo (started 1 min ago)',
+    '  Phase: running_tool',
+    '  Intent: "refactoring auth"',
+  ].join('\n');
+
+  function renderWithTeamBlock(role: 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker'): string {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      teamModeSection: SAMPLE_BLOCK,
+    };
+    return createRolePrompt(
+      role,
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      `kodax/role/${role}`,
+      undefined,
+      ctx,
+      undefined,
+      false,
+    );
+  }
+
+  for (const role of ['scout', 'planner', 'generator', 'evaluator', 'worker'] as const) {
+    it(`role=${role} includes the team-mode block when supplied`, () => {
+      const rendered = renderWithTeamBlock(role);
+      expect(rendered).toContain('=== Other active KodaX sessions ===');
+      expect(rendered).toContain('pid 42 @ /repo');
+      expect(rendered).toContain('Intent: "refactoring auth"');
+    });
+
+    it(`role=${role} places the team-mode block in the orientation header (before the original task)`, () => {
+      const rendered = renderWithTeamBlock(role);
+      const blockIdx = rendered.indexOf('=== Other active KodaX sessions ===');
+      const taskIdx = rendered.indexOf('Original user request:');
+      expect(blockIdx).toBeGreaterThanOrEqual(0);
+      expect(taskIdx).toBeGreaterThanOrEqual(0);
+      expect(blockIdx).toBeLessThan(taskIdx);
+    });
+  }
+
+  it('omits the block entirely when teamModeSection is undefined (solo session)', () => {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const rendered = createRolePrompt(
+      'scout',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/scout',
+      undefined,
+      buildContext({ provider: 'p', model: 'm' }),
+      undefined,
+      false,
+    );
+    expect(rendered).not.toContain('Other active KodaX sessions');
+  });
+
+  it('omits the block when teamModeSection is whitespace-only', () => {
+    const decision = buildFallbackRoutingDecision(userQuestion);
+    const ctx: ManagedRolePromptContext = {
+      ...buildContext({ provider: 'p', model: 'm' }),
+      teamModeSection: '   \n  \n',
+    };
+    const rendered = createRolePrompt(
+      'worker',
+      userQuestion,
+      decision,
+      undefined,
+      undefined,
+      'kodax/role/worker',
+      undefined,
+      ctx,
+      undefined,
+      false,
+    );
+    expect(rendered).not.toContain('Other active KodaX sessions');
+  });
+});

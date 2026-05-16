@@ -103,6 +103,17 @@ export interface ManagedRolePromptContext {
    * `createRolePrompt`; legacy roles ignore it.
    */
   isResumeAfterReviseFailure?: boolean;
+  /**
+   * FEATURE_125 v0.7.41 — Team Mode "Other active KodaX sessions" block.
+   * Pre-rendered by the runner-driven adapter once per LLM round via
+   * `buildOtherInstancesPromptBlock(discoverInstances(...))`. Empty string
+   * (or omitted) means no siblings were alive at round start; the block
+   * is skipped in the section list — same composition pattern as
+   * `capabilityContextBlock` / `promptOverlay`. NOT cached in the stable
+   * prefix: sibling state changes between rounds, so the block must be
+   * re-rendered per LLM call.
+   */
+  teamModeSection?: string;
 }
 
 /**

@@ -201,6 +201,15 @@ export function createRolePrompt(
     ? rolePromptContext.promptOverlay.trim()
     : undefined;
 
+  // FEATURE_125 v0.7.41 — "Other active KodaX sessions" block. Rendered
+  // by the runner-driven adapter once per LLM round (sibling state can
+  // change between rounds, so this is NOT in the stable prefix).
+  // Empty/omitted means no live siblings; section is dropped from the
+  // composition via the trailing `.filter(Boolean)`.
+  const teamModeSection = rolePromptContext?.teamModeSection?.trim()
+    ? rolePromptContext.teamModeSection
+    : undefined;
+
   // v0.7.26 fix — managed workers bypass `buildSystemPrompt` (legacy SA
   // path), so the base `SYSTEM_PROMPT` discipline sections (tmp-directory
   // rule, mkdir warning, cross-platform notes) never reached the LLM. The
@@ -477,6 +486,7 @@ export function createRolePrompt(
         workspaceSection,
         capabilityContextSection,
         promptOverlaySection,
+        teamModeSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -713,6 +723,7 @@ export function createRolePrompt(
         workspaceSection,
         capabilityContextSection,
         promptOverlaySection,
+        teamModeSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -758,6 +769,7 @@ export function createRolePrompt(
         workspaceSection,
         capabilityContextSection,
         promptOverlaySection,
+        teamModeSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -834,6 +846,7 @@ export function createRolePrompt(
         workspaceSection,
         capabilityContextSection,
         promptOverlaySection,
+        teamModeSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
@@ -939,6 +952,7 @@ export function createRolePrompt(
         workspaceSection,
         capabilityContextSection,
         promptOverlaySection,
+        teamModeSection,
         decisionSummary,
         originalTaskSection,
         roundInstructionSection,
