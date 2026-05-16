@@ -682,6 +682,31 @@ describe("todo_update FEATURE_170 — status:'deleted' delete path", () => {
     expect(parsed.reason).toContain('todo_99');
     expect(store.getAll()).toHaveLength(3); // unchanged
   });
+
+  it('ignores incidentally-malformed patch fields when status="deleted" (reviewer MEDIUM fix)', async () => {
+    // Regression pin: prior to the C4 review fix, the patch-field
+    // validators ran before the delete branch, so `{status:'deleted',
+    // note:42}` would be rejected with a misleading "Invalid note" error
+    // and the intended delete silently dropped. The delete branch now
+    // runs first and ignores all patch fields per its documented
+    // semantics.
+    const { ctx, store } = makeContextWithStore();
+    const result = await toolTodoUpdate(
+      {
+        id: 'todo_2',
+        status: 'deleted',
+        // Each of these would individually trip a patch-field validator,
+        // but on the delete path they must all be ignored.
+        note: 42 as unknown as string,
+        content: '' as unknown as string,
+        evaluator: 'typecheck' as unknown as string,
+        metadata: [1, 2, 3] as unknown as Record<string, unknown>,
+      },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.has('todo_2')).toBe(false);
+  });
 });
 
 describe("todo_update FEATURE_170 — 'todo:before-complete' hook + events", () => {

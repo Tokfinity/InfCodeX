@@ -348,6 +348,43 @@ export async function toolTodoUpdate(
     });
   }
 
+  if (!ctx.todoStore.has(id)) {
+    const validIds = ctx.todoStore.allIds();
+    const validList =
+      validIds.length === 0
+        ? 'no todos currently exist'
+        : validIds.join(', ');
+    return jsonResult({
+      ok: false,
+      reason:
+        `Unknown todo id: ${JSON.stringify(id)}. ` +
+        `Current valid ids: ${validList}. ` +
+        `Please retry with one of the valid ids, or skip this update.`,
+    });
+  }
+
+  // ── FEATURE_170 v0.7.41 delete path ──────────────────────────────────
+  // `status:'deleted'` is the tool-level signal to remove the item from
+  // the list. Patch fields are ignored on delete (the item is leaving;
+  // mutating it first would be wasted work). The patch-field validators
+  // intentionally run AFTER this branch so an incidentally-malformed patch
+  // field (e.g. `{id, status:'deleted', note: 42}`) does not block a
+  // legitimate delete with a misleading error about the ignored field.
+  if (status === 'deleted') {
+    const before = ctx.todoStore.getAll().find((it) => it.id === id);
+    const removed = ctx.todoStore.remove(id);
+    if (!removed || !before) {
+      // Shouldn't happen — we just verified `has(id)` above. Defensive.
+      return jsonResult({ ok: false, reason: `Failed to delete ${JSON.stringify(id)}.` });
+    }
+    await emitActiveExtensionEvent('todo:deleted', {
+      id,
+      item: before as KodaXTodoItem,
+      source: 'tool',
+    });
+    return jsonResult({ ok: true });
+  }
+
   if (note !== undefined && typeof note !== 'string') {
     return jsonResult({
       ok: false,
@@ -388,40 +425,6 @@ export async function toolTodoUpdate(
       ok: false,
       reason: 'Invalid metadata: when provided, must be a plain object or null (to clear).',
     });
-  }
-
-  if (!ctx.todoStore.has(id)) {
-    const validIds = ctx.todoStore.allIds();
-    const validList =
-      validIds.length === 0
-        ? 'no todos currently exist'
-        : validIds.join(', ');
-    return jsonResult({
-      ok: false,
-      reason:
-        `Unknown todo id: ${JSON.stringify(id)}. ` +
-        `Current valid ids: ${validList}. ` +
-        `Please retry with one of the valid ids, or skip this update.`,
-    });
-  }
-
-  // ── FEATURE_170 v0.7.41 delete path ──────────────────────────────────
-  // `status:'deleted'` is the tool-level signal to remove the item from
-  // the list. Patch fields are ignored on delete (the item is leaving;
-  // mutating it first would be wasted work).
-  if (status === 'deleted') {
-    const before = ctx.todoStore.getAll().find((it) => it.id === id);
-    const removed = ctx.todoStore.remove(id);
-    if (!removed || !before) {
-      // Shouldn't happen — we just verified `has(id)` above. Defensive.
-      return jsonResult({ ok: false, reason: `Failed to delete ${JSON.stringify(id)}.` });
-    }
-    await emitActiveExtensionEvent('todo:deleted', {
-      id,
-      item: before as KodaXTodoItem,
-      source: 'tool',
-    });
-    return jsonResult({ ok: true });
   }
 
   // ── Standard patch path ──────────────────────────────────────────────

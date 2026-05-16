@@ -939,9 +939,16 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
             'op="update" only (FEATURE_170 v0.7.41). Optional. When provided, REPLACES the item\'s deterministic evaluator hint (FEATURE_114). When the item later flips to "completed", the runner runs the corresponding deterministic check and surfaces stderr on failure.',
         },
         metadata: {
+          // Note: the handler also accepts JSON `null` as an explicit clear
+          // signal (sets metadata back to undefined on the item). JSON Schema
+          // `type:'object'` does NOT include null in its strict sense — providers
+          // that pre-validate tool inputs against the schema may need a
+          // `nullable:true` extension. KodaXToolDefinition['input_schema'] does
+          // not currently model that field (see `packages/llm/src/types.ts`);
+          // handler is authoritative.
           type: 'object',
           description:
-            'op="update" only (FEATURE_170 v0.7.41). Optional opaque key-value bag. SHALLOW-MERGED into any existing metadata (top-level keys overwrite, nested objects are not deep-merged). Pass null explicitly to clear all metadata. The UI does NOT render metadata; it is for extension hooks / eval harnesses.',
+            'op="update" only (FEATURE_170 v0.7.41). Optional opaque key-value bag. SHALLOW-MERGED into any existing metadata (top-level keys overwrite, nested objects are not deep-merged). Pass null explicitly to clear all metadata (handler accepts null even though the JSON Schema is `type:"object"`). The UI does NOT render metadata; it is for extension hooks / eval harnesses.',
         },
       },
       // No top-level required fields — the handler validates per-op:
