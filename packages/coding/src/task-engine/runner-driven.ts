@@ -51,22 +51,15 @@ import {
   emitResilienceDebug,
   saveSessionSnapshot,
 } from '../agent.js';
-import {
-  resolveHandoffTarget,
-  type ProtocolEmitterMetadata,
-} from '../agents/protocol-emitters.js';
 import type {
   KodaXHarnessProfile,
   KodaXManagedProtocolPayload,
-  KodaXManagedTask,
   KodaXOptions,
   KodaXResult,
   KodaXRoleRoundSummary,
-  KodaXTaskContract,
   KodaXTaskEvidenceArtifact,
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
-  KodaXTaskRoleAssignment,
   KodaXTaskRoutingDecision,
   KodaXToolExecutionContext,
   ManagedMutationTracker,
@@ -79,24 +72,13 @@ import type { ManagedTaskBudgetController } from './_internal/managed-task/budge
 import {
   buildManagedStatusBudgetFields,
 } from './_internal/managed-task/budget.js';
-import type {
-  ManagedTaskCheckpoint,
-  ValidatedCheckpoint,
-} from './_internal/managed-task/checkpoint.js';
-import {
-  deleteCheckpoint,
-  findValidCheckpoint,
-  getGitHeadCommit,
-  writeCheckpoint,
-} from './_internal/managed-task/checkpoint.js';
+import { deleteCheckpoint } from './_internal/managed-task/checkpoint.js';
 import {
   getManagedTaskSurface,
   getManagedTaskWorkspaceRoot,
 } from './_internal/managed-task/workspace.js';
 import {
-  buildManagedTaskArtifactRecords,
   getManagedSkillArtifactPaths,
-  mergeEvidenceArtifacts,
   writeManagedSkillArtifacts,
   writeManagedTaskArtifacts,
   writeManagedTaskSnapshotArtifacts,
@@ -106,10 +88,6 @@ import {
   buildManagedWorkerToolPolicy,
   inferScoutMutationIntent,
 } from './_internal/managed-task/tool-policy.js';
-import {
-  createVerificationScorecard,
-  type ScorecardVerdictDirective,
-} from './_internal/managed-task/scorecard.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
@@ -189,9 +167,6 @@ import { mkdir } from 'node:fs/promises';
 // reach for via `Parameters<typeof ...>` so import paths in tests and
 // downstream callers do not change.
 import {
-  buildCompletionContractStatus,
-} from './_internal/managed-task/role-prompts.js';
-import {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
 } from './_internal/managed-task/role-exclude.js';
@@ -229,6 +204,14 @@ import {
   buildRunnerLlmAdapter,
   type RunnerAdapterTokenState,
 } from './_internal/managed-task/llm-adapter.js';
+import { buildManagedTaskPayload } from './_internal/managed-task/payload-builder.js';
+import {
+  buildResumePreamble,
+  buildStructuralResumeSeed,
+  handlePreRunCheckpoint,
+  writeCurrentCheckpoint,
+  type StructuralResumeSeed,
+} from './_internal/managed-task/checkpoint-flow.js';
 
 // Re-export the public surface so existing callers
 // (`task-engine.ts`, `runner-driven.test.ts`,
@@ -324,709 +307,22 @@ export function isRunnerDrivenRuntimeEnabled(): boolean {
 // =============================================================================
 
 // =============================================================================
-// managedTask payload construction — Shard 6a
+// managedTask payload construction — moved to
+// `./_internal/managed-task/payload-builder.ts` (FEATURE_171 v0.7.41 split).
+// `harnessToBudget`, `buildManagedTaskPayload`, `deriveQualityAssuranceMode`,
+// `buildScoutDecisionRuntime` and `buildSkillMapRuntime` were lifted there
+// with byte-parity behavior. `buildManagedTaskPayload` is imported at the
+// top of this file (private to the runner-driven flow — not re-exported).
 // =============================================================================
 
-/**
- * Map the harness tier to the assignment-id convention legacy consumers
- * expect. H0 uses 'direct', H1/H2 use the role name.
- */
-function harnessToBudget(harness: KodaXHarnessProfile): number {
-  // Legacy per-harness global work budget constants (approximate; tests
-  // only assert aggregate totals, not exact ceilings).
-  if (harness === 'H0_DIRECT') return 50;
-  if (harness === 'H1_EXECUTE_EVAL') return 400;
-  return 600;
-}
-
-/**
- * Build the full `KodaXManagedTask` payload from the recorder, role
- * sequence, and run metadata. Fields are populated to the minimum
- * necessary for round-boundary reshape + REPL consumers + the subset of
- * test assertions mapped in Shard 6a's inventory.
- */
-function buildManagedTaskPayload(args: {
-  readonly prompt: string;
-  readonly options: KodaXOptions;
-  readonly recorder: VerdictRecorder;
-  readonly rolesEmitted: readonly KodaXTaskRole[];
-  readonly baseCtx: KodaXToolExecutionContext;
-  readonly signal: KodaXResult['signal'];
-  readonly verdictStatus?: 'accept' | 'revise' | 'blocked';
-  readonly userAnswer?: string;
-  readonly budget?: ManagedTaskBudgetController;
-  readonly plan?: ReasoningPlan;
-  readonly entries?: readonly KodaXTaskEvidenceEntry[];
-  readonly degradedContinue?: boolean;
-  readonly childWriteWorktreePaths?: ReadonlyMap<string, string>;
-  /**
-   * Stable taskId for the run. Callers that need deterministic snapshot
-   * paths (runManagedTaskViaRunnerInner, checkpoint writer, skill-artifact
-   * persistence) must pass the same id for every invocation in a run; if
-   * omitted a fresh id is generated (back-compat for legacy callers).
-   */
-  readonly taskId?: string;
-  /**
-   * v0.7.26 C4 parity — extra evidence artefact records (e.g. skill
-   * artifacts) that the caller has already persisted to disk and wants
-   * merged into `evidence.artifacts` alongside the built-in snapshot set.
-   */
-  readonly extraArtifacts?: readonly KodaXTaskEvidenceArtifact[];
-  /**
-   * F4 parity (v0.7.26) — pre-floor routing decision (before
-   * `applyCurrentDiffReviewRoutingFloor` runs). Populates
-   * `runtime.rawRoutingDecision`.
-   */
-  readonly rawRoutingDecision?: KodaXTaskRoutingDecision;
-  /**
-   * F4 parity — human-readable explanation when the routing floor or
-   * Scout overrides the initial decision. Populates
-   * `runtime.routingOverrideReason`.
-   */
-  readonly routingOverrideReason?: string;
-  /**
-   * F4 parity — tool-output truncation ledger captured from the
-   * tool-result-truncation guardrail's `afterTool` hook. Populates
-   * `runtime.toolOutputTruncated` + `runtime.toolOutputTruncationNotes`.
-   */
-  readonly toolOutputTruncated?: boolean;
-  readonly toolOutputTruncationNotes?: readonly string[];
-}): KodaXManagedTask {
-  const {
-    prompt,
-    options,
-    recorder,
-    rolesEmitted,
-    baseCtx,
-    signal,
-    verdictStatus,
-    userAnswer,
-    budget,
-    plan,
-    entries,
-    degradedContinue,
-    childWriteWorktreePaths,
-    taskId: providedTaskId,
-    extraArtifacts,
-    rawRoutingDecision,
-    routingOverrideReason,
-    toolOutputTruncated,
-    toolOutputTruncationNotes,
-  } = args;
-
-  // Shard 6d-L: Scout's emitted harness still wins over the plan's
-  // recommendation (FEATURE_061 — Scout is the routing authority). Fall
-  // back to plan.decision.harnessProfile when Scout has not emitted yet,
-  // then to H0_DIRECT.
-  const harness: KodaXHarnessProfile =
-    recorder.scout?.payload.scout?.confirmedHarness
-      ?? plan?.decision.harnessProfile
-      ?? 'H0_DIRECT';
-  const contractPayload = recorder.contract?.payload.contract;
-
-  const nowIso = new Date().toISOString();
-  // v0.7.26 C4 parity — honour the caller-supplied taskId so every
-  // `buildManagedTaskPayload` call within a single run reuses the same
-  // workspaceDir. Prior behaviour generated a fresh id on every invocation,
-  // so every observer snapshot wrote to a different folder and skill
-  // artifacts could not be referenced by a stable path.
-  const taskId = providedTaskId ?? `runner-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const surface = getManagedTaskSurface(options);
-  // Resolve the per-task workspace directory (e.g. `<cwd>/.agent/
-  // managed-tasks/<taskId>/`) so downstream snapshot files and
-  // `evidence.artifacts` point at a stable, writable location — matches
-  // legacy `task-engine.ts:2106` and is required for checkpoint/resume
-  // parity.
-  const workspaceDir = path.join(getManagedTaskWorkspaceRoot(options, surface), taskId);
-
-  const contractStatus =
-    signal === 'BLOCKED' ? 'blocked' : verdictStatus === 'accept' ? 'completed' : 'running';
-
-  // Shard 6d-L: honour the reasoning plan's routing decision when filling
-  // `contract.*`. Legacy (`task-engine.ts:2160-2180`) populated every
-  // contract field from `plan.decision`; the earlier Runner-driven payload
-  // hard-coded `primaryTask:'conversation'` / `complexity:simple` /
-  // `riskLevel:'low'` and broke every downstream branch that read these
-  // values (agent.ts has ~10 `decision.primaryTask === 'review' | 'bugfix'
-  // | ...` branches). When the plan is absent we still fall back to the
-  // placeholders — keeps callers without a plan (test harness, direct
-  // API use) working.
-  const decision = plan?.decision;
-  const contract: KodaXTaskContract = {
-    taskId,
-    surface,
-    objective: prompt,
-    createdAt: nowIso,
-    updatedAt: nowIso,
-    status: contractStatus,
-    primaryTask: decision?.primaryTask ?? 'conversation',
-    workIntent: decision?.workIntent ?? 'new',
-    complexity:
-      decision?.complexity
-        ?? (harness === 'H0_DIRECT' ? 'simple' : harness === 'H1_EXECUTE_EVAL' ? 'moderate' : 'complex'),
-    riskLevel: decision?.riskLevel ?? 'low',
-    harnessProfile: harness,
-    recommendedMode: decision?.recommendedMode ?? 'conversation',
-    requiresBrainstorm: decision?.requiresBrainstorm ?? false,
-    reason: decision?.reason ?? 'Runner-driven AMA path',
-    contractSummary: contractPayload?.summary,
-    successCriteria: contractPayload?.successCriteria ?? [],
-    requiredEvidence: contractPayload?.requiredEvidence ?? [],
-    constraints: contractPayload?.constraints ?? [],
-    verification: options.context?.taskVerification,
-  };
-
-  // De-dup roles while preserving first-occurrence order. The assignment
-  // list is a historical record of who participated, not a schedule.
-  const roleOrder: KodaXTaskRole[] = [];
-  for (const r of rolesEmitted) {
-    if (!roleOrder.includes(r)) roleOrder.push(r);
-  }
-  // H0_DIRECT convention: use 'direct' as the role when Scout answers
-  // without handoff. The legacy path emits a single 'direct' assignment.
-  const assignmentRoles: KodaXTaskRole[] =
-    harness === 'H0_DIRECT' && roleOrder.length <= 1 ? ['direct'] : roleOrder;
-  const roleAssignments: KodaXTaskRoleAssignment[] = assignmentRoles.map((role) => ({
-    id: role,
-    role,
-    title: role.charAt(0).toUpperCase() + role.slice(1),
-    dependsOn: [],
-    status: contractStatus,
-  }));
-
-  const decidedByAssignmentId =
-    harness === 'H0_DIRECT' ? 'direct' : verdictStatus ? 'evaluator' : 'generator';
-  // FEATURE_159 follow-up (v0.7.40): fallback to '' instead of `prompt`.
-  // The legacy `?? prompt` fallback was a copy from SA fast-path days when
-  // the Scout always provided a `userAnswer`, so `?? prompt` was a never-
-  // reached safety net. Under V2 chain (FEATURE_114) Worker runs first and
-  // a Worker round can legitimately end without `emit_verdict` (e.g. the
-  // chain hands off to Generator or Evaluator on the next iteration). In
-  // that case `userAnswer` and `verdict.reason` are both undefined, and
-  // `?? prompt` populated `verdict.summary` with the user's raw query
-  // verbatim.
-  //
-  // Downstream this surfaced as an end-user UX bug: when the Worker round
-  // produced no plain-text assistant turn (e.g. only tool_use + thinking,
-  // or only emit_handoff), `resolveCompletedAssistantText` (REPL
-  // message-utils.ts) iterates candidates and skips empty ones — falling
-  // through to `managedTask.verdict.summary` as the third candidate. With
-  // the legacy fallback that candidate held the user's own query, so the
-  // REPL rendered a prefix-less `Assistant: <Q verbatim>` item (the user
-  // sees their own question echoed back as the assistant's reply).
-  //
-  // Empty-string fallback is safe for all consumers we verified:
-  //   - REPL `resolveCompletedAssistantText`: empty candidate is skipped
-  //     (sanitize-and-pick-first-truthy loop).
-  //   - `runner-driven.ts` transcript dump: `if (task.verdict?.summary)`
-  //     gate already filters falsy, the "Last verdict" block silently
-  //     drops.
-  //   - `scorecard.ts`: `directive?.reason ?? task.verdict.summary` —
-  //     audit artefact, empty string is acceptable when no verdict ran.
-  //   - `json-guards.ts`: only checks `typeof === 'string'`.
-  const verdictSummary =
-    userAnswer ?? recorder.verdict?.payload.verdict?.reason ?? '';
-
-  const task: KodaXManagedTask = {
-    contract,
-    roleAssignments,
-    workItems: [],
-    evidence: {
-      workspaceDir,
-      // Every managed task advertises a fixed set of 10 snapshot files
-      // the writeManagedTaskArtifacts
-      // pass is expected to produce. Downstream consumers (`resumeManagedTask`,
-      // harness observers, the REPL transcript dump) index evidence by
-      // artifact path, so we surface the records here even when the actual
-      // files are written asynchronously at terminal exit.
-      //
-      // v0.7.26 C4 parity — merge any caller-supplied artefact records
-      // (e.g. skill-execution.md / skill-map.md persisted by
-      // `writeManagedSkillArtifacts`) alongside the built-in snapshot set
-      // so the REPL + resume flow can resolve them by path.
-      artifacts: mergeEvidenceArtifacts(
-        buildManagedTaskArtifactRecords(workspaceDir),
-        extraArtifacts,
-      ),
-      // Shard 6d-R: surface the per-role turn ledger and routing notes.
-      // Legacy `task-engine.ts` fed these fields from each role completion
-      // + `plan.decision.routingNotes`. Without them, snapshot consumers
-      // (`buildManagedTaskRoundHistory`, REPL transcript dump, resume)
-      // see empty history + no routing context.
-      entries: entries ? [...entries] : [],
-      routingNotes: plan?.decision.routingNotes ? [...plan.decision.routingNotes] : [],
-    },
-    verdict: {
-      status:
-        signal === 'BLOCKED'
-          ? 'blocked'
-          : verdictStatus === 'accept'
-            ? 'completed'
-            : 'running',
-      decidedByAssignmentId,
-      summary: verdictSummary,
-      signal,
-      continuationSuggested: recorder.handoff?.payload.handoff?.status === 'ready' && verdictStatus !== 'accept',
-    },
-    runtime: {
-      globalWorkBudget: budget?.totalBudget ?? harnessToBudget(harness),
-      budgetUsage: budget?.spentBudget ?? rolesEmitted.length,
-      // `harnessTransitions` in legacy semantics records harness-tier
-      // upgrades (e.g. H1 → H2 on revise+next_harness=H2), not individual
-      // role transitions. For the Runner path we synthesise one transition
-      // when Scout picks a non-H0 tier (the only case tests observe today).
-      harnessTransitions:
-        harness !== 'H0_DIRECT'
-          ? [
-              {
-                from: 'H0_DIRECT',
-                to: harness,
-                round: 1,
-                source: 'scout',
-                reason: 'Scout confirmed harness tier',
-                approved: true,
-              },
-            ]
-          : [],
-      // Shard 6d-O: fill runtime fields the legacy path populated so
-      // downstream consumers (REPL harness UI, evaluator guardrails,
-      // resume flow, session storage) see the same shape they did on
-      // the legacy path. Empty-ish runtime defaulted to placeholder
-      // values before this shard; the harness UI silently fell back to
-      // defaults and lost context for `amaProfile` / `upgradeCeiling` /
-      // `scoutDecision` etc.
-      amaProfile: plan?.amaControllerDecision?.profile,
-      amaTactics: plan?.amaControllerDecision?.tactics,
-      amaControllerReason: plan?.amaControllerDecision?.reason,
-      routingAttempts: plan?.decision.routingAttempts,
-      routingSource: plan?.decision.routingSource,
-      currentHarness: harness,
-      upgradeCeiling: plan?.decision.upgradeCeiling ?? harness,
-      qualityAssuranceMode: deriveQualityAssuranceMode(plan, harness),
-      scoutDecision: recorder.scout?.payload.scout
-        ? buildScoutDecisionRuntime(recorder.scout.payload.scout)
-        : undefined,
-      skillMap: buildSkillMapRuntime(recorder.scout?.payload.scout?.skillMap),
-      // Shard 6d-U: propagate the degraded-continue signal. `true` when the
-      // Evaluator requested an upgrade beyond `plan.decision.upgradeCeiling`
-      // (rewritten back to Generator) or when budget-extension approval was
-      // denied / skipped during revise. `undefined` when no degradation.
-      degradedContinue: degradedContinue || undefined,
-      // Shard 6d-S: derive per-criterion / per-runtime-check completion
-      // status from the final verdict. Absent when no verification
-      // contract was declared.
-      completionContractStatus: buildCompletionContractStatus(
-        options.context?.taskVerification,
-        verdictStatus,
-      ),
-      // Shard 6d-Q: surface the dispatch_child_task write-fan-out ledger
-      // so Evaluator diff injection (FEATURE_067 v2 parity) can find
-      // per-child worktree paths. Undefined when no children dispatched.
-      childWriteWorktreePaths:
-        childWriteWorktreePaths && childWriteWorktreePaths.size > 0
-          ? childWriteWorktreePaths
-          : undefined,
-      // F4 parity (v0.7.26) — surface routing provenance + tool
-      // truncation state. `rawRoutingDecision` is the pre-floor snapshot
-      // (before `applyCurrentDiffReviewRoutingFloor`); `finalRoutingDecision`
-      // mirrors the active plan.decision; `routingOverrideReason` carries
-      // any human-readable override explanation. Truncation tracking
-      // lets downstream review UIs highlight when tool output was
-      // clipped.
-      rawRoutingDecision,
-      finalRoutingDecision: plan?.decision,
-      routingOverrideReason,
-      toolOutputTruncated: toolOutputTruncated || undefined,
-      toolOutputTruncationNotes:
-        toolOutputTruncationNotes && toolOutputTruncationNotes.length > 0
-          ? [...toolOutputTruncationNotes]
-          : undefined,
-    },
-  };
-
-  // H2 parity (v0.7.26) — populate the verification scorecard after the
-  // task shape is built, mirroring legacy `createVerificationScorecard`.
-  // Without this, `task.runtime.scorecard` stayed undefined and
-  // `scorecard.json` persisted as `null`, starving downstream consumers
-  // (review-scale UI, session-storage replay, rubric-family branches).
-  const verdictPayload = recorder.verdict?.payload.verdict;
-  const scorecardDirective: ScorecardVerdictDirective | undefined = verdictPayload
-    ? { status: verdictPayload.status, reason: verdictPayload.reason }
-    : undefined;
-  const scorecard = createVerificationScorecard(task, scorecardDirective);
-  return scorecard && task.runtime
-    ? { ...task, runtime: { ...task.runtime, scorecard } }
-    : task;
-}
-
-/**
- * Shard 6d-O: quality-assurance mode mirrors legacy
- * `resolveManagedTaskQualityAssuranceMode` (task-engine.ts:1108).
- * Runner simplification — legacy's branch depended on
- * `plan.decision.mutationSurface` / `assuranceIntent` /
- * `needsIndependentQA` / `riskLevel` / etc.; we reproduce the key
- * decisions:
- *   - H1 / H2 → 'required' (evaluator-mandatory).
- *   - H0 with explicit verification obligations or plan flags → 'required'.
- *   - Otherwise → 'optional'.
- */
-function deriveQualityAssuranceMode(
-  plan: ReasoningPlan | undefined,
-  harness: KodaXHarnessProfile,
-): 'required' | 'optional' {
-  if (harness !== 'H0_DIRECT') return 'required';
-  const decision = plan?.decision;
-  if (!decision) return 'optional';
-  if (decision.assuranceIntent === 'explicit-check') return 'required';
-  if (decision.needsIndependentQA === true) return 'required';
-  if (decision.riskLevel === 'high') return 'required';
-  if (decision.primaryTask === 'qa' || decision.primaryTask === 'plan') return 'required';
-  if (decision.recommendedMode === 'pr-review' || decision.recommendedMode === 'strict-audit') return 'required';
-  return 'optional';
-}
-
-function buildScoutDecisionRuntime(
-  scout: NonNullable<KodaXManagedProtocolPayload['scout']>,
-): NonNullable<KodaXManagedTask['runtime']>['scoutDecision'] | undefined {
-  if (!scout.summary && !scout.confirmedHarness) return undefined;
-  return {
-    summary: scout.summary ?? '',
-    recommendedHarness: scout.confirmedHarness ?? 'H0_DIRECT',
-    readyForUpgrade: scout.directCompletionReady !== 'yes',
-    scope: scout.scope,
-    requiredEvidence: scout.requiredEvidence,
-    reviewFilesOrAreas: scout.reviewFilesOrAreas,
-    evidenceAcquisitionMode: scout.evidenceAcquisitionMode,
-    harnessRationale: scout.harnessRationale,
-    blockingEvidence: scout.blockingEvidence,
-    directCompletionReady: scout.directCompletionReady,
-    skillSummary: scout.skillMap?.skillSummary,
-    executionObligations: scout.skillMap?.executionObligations,
-    verificationObligations: scout.skillMap?.verificationObligations,
-    ambiguities: scout.skillMap?.ambiguities,
-    projectionConfidence: scout.skillMap?.projectionConfidence,
-  };
-}
-
-function buildSkillMapRuntime(
-  scoutSkillMap: NonNullable<KodaXManagedProtocolPayload['scout']>['skillMap'],
-): KodaXManagedTask['runtime'] extends infer R
-  ? R extends { skillMap?: infer M } ? M : never
-  : never {
-  if (!scoutSkillMap) return undefined as never;
-  return {
-    summary: scoutSkillMap.skillSummary,
-    executionObligations: scoutSkillMap.executionObligations ?? [],
-    verificationObligations: scoutSkillMap.verificationObligations ?? [],
-    ambiguities: scoutSkillMap.ambiguities ?? [],
-    projectionConfidence: scoutSkillMap.projectionConfidence,
-  } as never;
-}
-
 // =============================================================================
-// Main entry
+// Pre-run checkpoint flow + structural resume — moved to
+// `./_internal/managed-task/checkpoint-flow.ts` (FEATURE_171 v0.7.41 split).
+// `handlePreRunCheckpoint`, `buildResumePreamble`, `StructuralResumeSeed`,
+// `buildStructuralResumeSeed` and `writeCurrentCheckpoint` were lifted
+// there with byte-parity behavior. Imported at the top of this file
+// (private to the runner-driven flow — not re-exported).
 // =============================================================================
-
-/**
- * Shard 6c + H1 structural resume (v0.7.26).
- *
- * Legacy behaviour (task-engine.ts:~6644 + `resumeManagedTask`): ask the
- * user whether to continue or restart, then either replay the partial
- * state (seeded plan, scoutDecision, budget) or drop the checkpoint.
- *
- *   - "restart" → delete stale checkpoint, start fresh.
- *   - "resume" → keep the checkpoint, return `{ resumeFrom }` so the
- *     caller can seed the recorder via `buildStructuralResumeSeed` and
- *     (depending on what roles already completed) start Runner.run at
- *     planner / generator / evaluator instead of scout. The textual
- *     preamble (`buildResumePreamble`) is still prepended for readability
- *     and to give any resumed-scout retries the prior findings in plain
- *     text.
- *   - "cancel" → delete the checkpoint + throw — the user asked to abort.
- *   - no askUser callback → silently clean up; non-interactive contexts
- *     can't prompt for a decision.
- */
-async function handlePreRunCheckpoint(
-  options: KodaXOptions,
-): Promise<{ resumeFrom: ValidatedCheckpoint } | undefined> {
-  let validated: ValidatedCheckpoint | undefined;
-  try {
-    validated = await findValidCheckpoint(options);
-  } catch {
-    return undefined;
-  }
-  if (!validated) return undefined;
-
-  const deleteSafely = async (): Promise<void> => {
-    try {
-      await deleteCheckpoint(validated!.workspaceDir);
-    } catch {
-      // Delete failure is non-fatal; the next run will see the same
-      // stale checkpoint and reach this branch again.
-    }
-  };
-
-  if (!options.events?.askUser) {
-    await deleteSafely();
-    return undefined;
-  }
-
-  const useChinese = /[\u4e00-\u9fff]/.test(validated.managedTask.contract.objective ?? '');
-  const answer = await options.events.askUser({
-    question: useChinese ? '发现未完成的任务' : 'Found incomplete task',
-    options: [
-      {
-        // H1 parity (v0.7.26) — text-level resume. The next run's prompt
-        // receives a reconstructed preamble (Scout findings, contract,
-        // last verdict) so the LLM can pick up where it left off
-        // without re-investigating. Full structural replay of the
-        // recorder state is deliberately out of scope for this MVP.
-        label: useChinese ? '继续未完成的工作' : 'Resume',
-        value: 'resume',
-        description: useChinese
-          ? '在先前 Scout/执行结果的基础上继续（上下文保留）'
-          : 'Continue with preserved prior Scout / execution context',
-      },
-      {
-        label: useChinese ? '重新开始' : 'Restart',
-        value: 'restart',
-        description: useChinese ? '丢弃之前的进度，重新开始' : 'Discard previous progress and start fresh',
-      },
-      {
-        label: useChinese ? '取消' : 'Cancel',
-        value: 'cancel',
-        description: useChinese ? '中止当前请求' : 'Abort the current request',
-      },
-    ],
-    default: 'resume',
-  });
-  if (answer === 'cancel') {
-    await deleteSafely();
-    throw new Error('Runner-driven path: user cancelled due to pre-existing checkpoint');
-  }
-  if (answer === 'resume') {
-    // Keep the checkpoint in place — it gets rewritten fresh on the
-    // next role emit. The caller builds a preamble from the validated
-    // state and feeds it into the prompt.
-    return { resumeFrom: validated };
-  }
-  await deleteSafely();
-  return undefined;
-}
-
-/**
- * H1 parity (v0.7.26) — reconstruct a human-readable preamble from the
- * checkpoint's managedTask state. The next run pre-pends this onto the
- * user prompt so Scout / Generator / Evaluator see the prior
- * investigation + findings and can pick up the work instead of
- * rediscovering it. Text-level resume — not a full structural replay
- * of the recorder — but a meaningful quality-of-life improvement over
- * the prior "restart from scratch" behaviour.
- */
-function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
-  const task = checkpoint.managedTask;
-  const lines: string[] = [
-    '=== RESUMING INCOMPLETE TASK ===',
-    `Checkpoint from: ${checkpoint.checkpoint.createdAt}`,
-    `Original objective: ${task.contract.objective}`,
-    `Harness: ${task.contract.harnessProfile}`,
-    `Roles already executed: ${checkpoint.checkpoint.completedWorkerIds.join(', ') || 'none'}`,
-  ];
-  const scout = task.runtime?.scoutDecision;
-  if (scout) {
-    lines.push('', '--- Scout findings (already complete) ---');
-    if (scout.summary) lines.push(`Summary: ${scout.summary}`);
-    if (scout.harnessRationale) lines.push(`Harness rationale: ${scout.harnessRationale}`);
-    if (scout.scope && scout.scope.length > 0) {
-      lines.push(`Scope: ${scout.scope.join(', ')}`);
-    }
-    if (scout.reviewFilesOrAreas && scout.reviewFilesOrAreas.length > 0) {
-      lines.push(`Review files/areas: ${scout.reviewFilesOrAreas.join(', ')}`);
-    }
-    if (scout.executionObligations && scout.executionObligations.length > 0) {
-      lines.push('Execution obligations:');
-      for (const ob of scout.executionObligations) lines.push(`  - ${ob}`);
-    }
-  }
-  const contract = task.contract.contractSummary;
-  if (contract) {
-    lines.push('', '--- Contract (already produced) ---');
-    lines.push(contract);
-    if (task.contract.successCriteria.length > 0) {
-      lines.push('Success criteria:');
-      for (const c of task.contract.successCriteria) lines.push(`  - ${c}`);
-    }
-  }
-  if (task.verdict?.summary) {
-    lines.push('', '--- Last verdict ---');
-    lines.push(`Status: ${task.verdict.status}`);
-    lines.push(`Summary: ${task.verdict.summary}`);
-  }
-  lines.push(
-    '',
-    'Use this preserved context to avoid redundant investigation. Continue the work from where it was interrupted.',
-    '=== END RESUME CONTEXT ===',
-    '',
-  );
-  return lines.join('\n');
-}
-
-/**
- * H1 structural resume seed (v0.7.26) — reconstruct recorder slots, harness
- * tier, budget, and the agent entry-point from a validated checkpoint.
- *
- * Legacy `resumeManagedTask` synthesised a `ManagedTaskScoutDirective`
- * from `managedTask.runtime.scoutDecision`, applied it to the plan, then
- * filtered out `completedWorkerIds` so the resumed round skipped
- * already-completed workers. The Runner-driven path equivalent:
- *
- *   1. If Scout completed, re-emit the captured Scout directive into the
- *      recorder so `rolePromptContextFactory` → `previousRoleSummaries`
- *      + `scoutScope` still reach downstream roles.
- *   2. If the saved harness is H2 and `contract.contractSummary` is set,
- *      also seed the contract slot so the Planner turn can be skipped.
- *   3. Pick the entry agent based on which slots are seeded:
- *        - no scout      → scout (plain restart with preamble context)
- *        - scout + H0    → scout (re-emit H0 with saved findings)
- *        - scout + H1    → generator
- *        - scout + H2, no contract → planner
- *        - scout + H2 + contract  → generator
- *   4. Carry forward the harness tier + budget so budget caps + role-
- *      specific tool allow-lists are correct from turn 1. Budget spent is
- *      reset — the LLM is starting a fresh turn even if logically
- *      resuming, so old spend shouldn't eat into the new run's envelope.
- *
- * Handoff and verdict slots are deliberately NOT seeded: the legacy
- * resume also didn't replay them (it re-ran the terminal round). This
- * keeps the semantics simple — resume picks up at the last *role* that
- * needs to run, not at a specific revise-cycle iteration inside the
- * Evaluator loop.
- */
-interface StructuralResumeSeed {
-  readonly recorderSlots: {
-    readonly scout?: ProtocolEmitterMetadata;
-    readonly contract?: ProtocolEmitterMetadata;
-  };
-  readonly harness: KodaXHarnessProfile;
-  readonly rolesEmitted: readonly KodaXTaskRole[];
-  readonly startingRole: 'scout' | 'planner' | 'generator';
-}
-
-function buildStructuralResumeSeed(validated: ValidatedCheckpoint): StructuralResumeSeed {
-  const task = validated.managedTask;
-  const checkpoint = validated.checkpoint;
-  const scoutDecision = task.runtime?.scoutDecision;
-  const harness: KodaXHarnessProfile = task.contract.harnessProfile ?? 'H0_DIRECT';
-
-  const recorderSlots: { scout?: ProtocolEmitterMetadata; contract?: ProtocolEmitterMetadata } = {};
-  const rolesEmitted: KodaXTaskRole[] = [];
-
-  if (checkpoint.scoutCompleted && scoutDecision) {
-    const scoutPayload: Partial<KodaXManagedProtocolPayload> = {
-      scout: {
-        summary: scoutDecision.summary,
-        scope: scoutDecision.scope ?? [],
-        requiredEvidence: scoutDecision.requiredEvidence ?? [],
-        reviewFilesOrAreas: scoutDecision.reviewFilesOrAreas,
-        evidenceAcquisitionMode: scoutDecision.evidenceAcquisitionMode,
-        confirmedHarness: scoutDecision.recommendedHarness,
-        harnessRationale: scoutDecision.harnessRationale,
-        blockingEvidence: scoutDecision.blockingEvidence,
-        directCompletionReady: scoutDecision.directCompletionReady,
-        skillMap: scoutDecision.skillSummary
-          ? {
-            skillSummary: scoutDecision.skillSummary,
-            executionObligations: scoutDecision.executionObligations ?? [],
-            verificationObligations: scoutDecision.verificationObligations ?? [],
-            ambiguities: scoutDecision.ambiguities ?? [],
-            projectionConfidence: scoutDecision.projectionConfidence,
-          }
-          : undefined,
-      },
-    };
-    const { handoffTarget, isTerminal } = resolveHandoffTarget('scout', scoutPayload);
-    recorderSlots.scout = {
-      role: 'scout',
-      payload: scoutPayload,
-      handoffTarget,
-      isTerminal,
-    };
-    rolesEmitted.push('scout');
-  }
-
-  const contractSummary = task.contract.contractSummary;
-  if (
-    harness === 'H2_PLAN_EXECUTE_EVAL'
-    && contractSummary
-    && contractSummary.trim().length > 0
-  ) {
-    const contractPayload: Partial<KodaXManagedProtocolPayload> = {
-      contract: {
-        summary: contractSummary,
-        successCriteria: task.contract.successCriteria ?? [],
-        requiredEvidence: task.contract.requiredEvidence ?? [],
-        constraints: task.contract.constraints ?? [],
-      },
-    };
-    const { handoffTarget, isTerminal } = resolveHandoffTarget('planner', contractPayload);
-    recorderSlots.contract = {
-      role: 'planner',
-      payload: contractPayload,
-      handoffTarget,
-      isTerminal,
-    };
-    rolesEmitted.push('planner');
-  }
-
-  let startingRole: 'scout' | 'planner' | 'generator' = 'scout';
-  if (recorderSlots.scout) {
-    if (harness === 'H0_DIRECT') {
-      startingRole = 'scout';
-    } else if (harness === 'H1_EXECUTE_EVAL') {
-      startingRole = 'generator';
-    } else {
-      startingRole = recorderSlots.contract ? 'generator' : 'planner';
-    }
-  }
-
-  return { recorderSlots, harness, rolesEmitted, startingRole };
-}
-
-/**
- * Shard 6c: write a crash-safe checkpoint after each role transition.
- * Allows legacy tools and future resume logic to inspect partial state.
- */
-async function writeCurrentCheckpoint(args: {
-  readonly options: KodaXOptions;
-  readonly managedTask: KodaXManagedTask;
-  readonly currentRound: number;
-  readonly completedWorkerIds: readonly string[];
-  readonly scoutCompleted: boolean;
-}): Promise<string | undefined> {
-  const { options, managedTask, currentRound, completedWorkerIds, scoutCompleted } = args;
-  try {
-    const surface = getManagedTaskSurface(options);
-    const workspaceRoot = getManagedTaskWorkspaceRoot(options, surface);
-    const workspaceDir = path.join(workspaceRoot, managedTask.contract.taskId);
-    const gitCommit = (await getGitHeadCommit(options.context?.gitRoot)) ?? 'unknown';
-    const checkpoint: ManagedTaskCheckpoint = {
-      version: 1,
-      taskId: managedTask.contract.taskId,
-      createdAt: managedTask.contract.createdAt,
-      gitCommit,
-      objective: managedTask.contract.objective,
-      harnessProfile: managedTask.contract.harnessProfile,
-      currentRound,
-      completedWorkerIds: [...completedWorkerIds],
-      scoutCompleted,
-    };
-    await writeCheckpoint(workspaceDir, checkpoint);
-    return workspaceDir;
-  } catch {
-    // Checkpoint write is best-effort — failures should not abort the run.
-    return undefined;
-  }
-}
 
 /**
  * Internal test surface — exports otherwise-private helpers so the
