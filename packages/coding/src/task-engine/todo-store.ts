@@ -45,6 +45,41 @@ export interface TodoInit {
    * See `TodoItem.evaluator` JSDoc.
    */
   readonly evaluator?: TodoEvaluatorHint;
+  /**
+   * FEATURE_170 v0.7.41 — opaque per-task metadata bag. Carried through
+   * `init()` so a fan-out plan-first seed can also pre-attach metadata.
+   * See `TodoItem.metadata` JSDoc.
+   */
+  readonly metadata?: Record<string, unknown>;
+}
+
+/**
+ * FEATURE_170 v0.7.41 — input shape for `add()`. No `id` (auto-generated
+ * by the store), no `status` (always created as `pending`).
+ */
+export interface TodoAddSeed {
+  readonly content: string;
+  readonly activeForm?: string;
+  readonly evaluator?: TodoEvaluatorHint;
+  readonly owner?: string;
+  readonly sourceObligationIndex?: number;
+  readonly metadata?: Record<string, unknown>;
+}
+
+/**
+ * FEATURE_170 v0.7.41 — input shape for `patch()`. Every field optional;
+ * only those present in the patch object are applied. `metadata` is
+ * shallow-merged (mirrors React setState mental model); explicit
+ * `metadata: null` clears it (caller must cast through `unknown` if TS
+ * complains since the public schema only permits Record).
+ */
+export interface TodoPatch {
+  readonly content?: string;
+  readonly activeForm?: string;
+  readonly status?: TodoStatus;
+  readonly note?: string;
+  readonly evaluator?: TodoEvaluatorHint;
+  readonly metadata?: Record<string, unknown> | null;
 }
 
 export interface TodoStoreOptions {
@@ -84,6 +119,26 @@ export interface TodoStore {
    * `note`.
    */
   updateStatus(id: string, status: TodoStatus, note?: string, activeForm?: string): boolean;
+  /**
+   * FEATURE_170 v0.7.41 — insert a new pending item with a store-generated
+   * id. Returns the new id. Counter is monotonic across the lifetime of
+   * the store (does NOT reuse ids of items deleted via `remove()`).
+   * Status is always `pending`.
+   */
+  add(seed: TodoAddSeed): string;
+  /**
+   * FEATURE_170 v0.7.41 — apply a partial update. Every key in `patch` is
+   * optional; only the ones present are applied. `metadata` is shallow-
+   * merged; an explicit `metadata: null` clears it. Returns true iff the
+   * id existed (even if patch caused no real diff — same return semantics
+   * as `updateStatus`).
+   */
+  patch(id: string, patch: TodoPatch): boolean;
+  /**
+   * FEATURE_170 v0.7.41 — drop one item. Returns true iff it existed.
+   * Does NOT reuse the id (monotonic counter, see `add()`).
+   */
+  remove(id: string): boolean;
   /** Planner H2 path: full-replace the list (used after the planner refines obligations). */
   replace(items: readonly TodoItem[]): void;
   /**
@@ -112,6 +167,11 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
   // The internal array is mutable; consumers see frozen snapshots only.
   let items: TodoItem[] = [];
   const onChange = options.onChange;
+  // FEATURE_170 v0.7.41 — monotonic id counter for `add()`. Bumped past
+  // the highest `^todo_(\d+)$` suffix among the most recent `init()`
+  // seeds (or 0 when seeds contain no recognizable numeric suffix).
+  // Never decreases; `remove()` does NOT reuse ids.
+  let idCounter = 0;
 
   function freeze(arr: readonly TodoItem[]): TodoList {
     return Object.freeze(arr.slice()) as TodoList;
@@ -119,6 +179,22 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
 
   function notifyIfChanged(changed: boolean): void {
     if (changed && onChange) onChange(freeze(items));
+  }
+
+  function recomputeCounterFromSeeds(seeds: readonly { readonly id: string }[]): void {
+    // Initialize from seeds: highest `^todo_(\d+)$` numeric suffix, or 0
+    // when none match (custom non-numeric ids are tolerated). Per
+    // design spec, the counter is monotonic — re-running init() with
+    // smaller ids cannot regress it.
+    let highest = 0;
+    for (const s of seeds) {
+      const m = /^todo_(\d+)$/.exec(s.id);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > highest) highest = n;
+      }
+    }
+    if (highest > idCounter) idCounter = highest;
   }
 
   return {
@@ -146,7 +222,10 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
         // seed to TodoItem. Slice 3 will wire `runDeterministicEvaluator`
         // to consume this on `pending → completed`.
         evaluator: seed.evaluator,
+        // FEATURE_170 v0.7.41 — opaque metadata carried verbatim from seed.
+        metadata: seed.metadata,
       }));
+      recomputeCounterFromSeeds(seeds);
       // init always notifies — even an empty seed list represents an
       // intentional "the task is starting, here is the (empty) plan" event.
       notifyIfChanged(true);
@@ -182,6 +261,64 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
         return true;
       }
       items = items.map((it, i) => (i === idx ? next : it));
+      notifyIfChanged(true);
+      return true;
+    },
+    add(seed): string {
+      idCounter += 1;
+      const id = `todo_${idCounter}`;
+      const item: TodoItem = {
+        id,
+        content: seed.content,
+        status: 'pending' as TodoStatus,
+        owner: seed.owner,
+        sourceObligationIndex: seed.sourceObligationIndex,
+        activeForm: seed.activeForm,
+        evaluator: seed.evaluator,
+        metadata: seed.metadata,
+      };
+      items = [...items, item];
+      notifyIfChanged(true);
+      return id;
+    },
+    patch(id, partial): boolean {
+      const idx = items.findIndex((it) => it.id === id);
+      if (idx < 0) return false;
+      const prev = items[idx]!;
+      // Build next item from the partial, omitting undefined keys so that
+      // "field not specified" preserves the prior value (matches the
+      // updateStatus preserve-vs-replace semantics already documented).
+      let next: TodoItem = { ...prev };
+      if (partial.content !== undefined) next = { ...next, content: partial.content };
+      if (partial.activeForm !== undefined) next = { ...next, activeForm: partial.activeForm };
+      if (partial.status !== undefined) next = { ...next, status: partial.status };
+      if (partial.note !== undefined) next = { ...next, note: partial.note };
+      if (partial.evaluator !== undefined) next = { ...next, evaluator: partial.evaluator };
+      // metadata: shallow-merge on object; `null` clears; `undefined` preserves.
+      if (partial.metadata === null) {
+        next = { ...next, metadata: undefined };
+      } else if (partial.metadata !== undefined) {
+        next = { ...next, metadata: { ...(prev.metadata ?? {}), ...partial.metadata } };
+      }
+      // No-op detection: shallow-compare the fields we may have touched.
+      // Skips onChange firing so React doesn't re-render on idempotent
+      // patches (same as updateStatus does).
+      const isNoop =
+        next.content === prev.content
+        && next.activeForm === prev.activeForm
+        && next.status === prev.status
+        && next.note === prev.note
+        && next.evaluator === prev.evaluator
+        && next.metadata === prev.metadata;
+      if (isNoop) return true;
+      items = items.map((it, i) => (i === idx ? next : it));
+      notifyIfChanged(true);
+      return true;
+    },
+    remove(id): boolean {
+      const idx = items.findIndex((it) => it.id === id);
+      if (idx < 0) return false;
+      items = items.filter((_, i) => i !== idx);
       notifyIfChanged(true);
       return true;
     },

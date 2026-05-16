@@ -560,6 +560,14 @@ export interface TodoItem {
    * now" feel CC achieves.
    */
   readonly activeForm?: string;
+  /**
+   * FEATURE_170 v0.7.41 — opaque per-task metadata bag carried alongside
+   * the item. Surface for downstream consumers (extension hooks, eval
+   * harnesses, future swarm features) to attach arbitrary structured
+   * context without forcing a schema change. UI does NOT render this.
+   * Empty / undefined when the LLM does not supply it.
+   */
+  readonly metadata?: Record<string, unknown>;
 }
 
 export type TodoList = readonly TodoItem[];
