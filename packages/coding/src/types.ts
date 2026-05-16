@@ -1517,6 +1517,26 @@ export interface KodaXToolExecutionContext {
   todoStore?: import('./task-engine/todo-store.js').TodoStore;
 
   /**
+   * FEATURE_125 v0.7.41 — Team Mode Layer 4 race-condition safety net.
+   *
+   * Cross-process content-hash cache. The Read tool records a sha256
+   * of the file content at read time; Edit / MultiEdit / Write tools
+   * check the recorded hash against the current on-disk hash before
+   * mutating. A mismatch (peer or user-manual edit landed in the gap)
+   * causes the tool to reject with a `{ok:false, reason:"...re-read first"}`
+   * envelope rather than overwrite blindly.
+   *
+   * Created once per managed-task in `runner-driven.ts`, passed
+   * through to every tool execution. When undefined (e.g., a tool is
+   * called outside a managed task or `KODAX_DISABLE_MULTI_INSTANCE=1`
+   * was set), the safety net is bypassed — tools fall back to the
+   * single-process semantics.
+   *
+   * See `packages/coding/src/multi-instance/content-hash-cache.ts`.
+   */
+  contentHashCache?: import('./multi-instance/content-hash-cache.js').ContentHashCache;
+
+  /**
    * FEATURE_119 v0.7.36 Pattern B: registry of in-flight async child
    * dispatches. When set, `dispatch_child_task` runs in fire-and-forget
    * mode (returns a `task_id` immediately without awaiting). The Worker
