@@ -136,6 +136,31 @@ AMA 当前只保留 3 个执行层级：
 
 它保持 headless，供多个 surface 复用。
 
+#### 3.5.1 AMA Runner-driven 路径模块化（FEATURE_171, v0.7.41）
+
+AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven.ts` 按职责拆为 12 个聚焦模块（`_internal/managed-task/` 目录），主文件从 6406 行压缩到 1897 行（**-70.4%**）。详见 [ADR-026](ADR.md#adr-026-runner-drivents-模块化拆分--6406-行单文件--12-个聚焦模块-feature_171-v0741)。
+
+| 模块 | 行数 | 职责 |
+|---|---|---|
+| `runner-driven.ts` | 1897 | 主循环 + 顶部 re-export（公共导入面） |
+| `_internal/managed-task/types.ts` | 180 | 共享类型（`VerdictRecorder` / `ObserverBridge` / `AmaRole` / `RolePromptContextFactory` / `RunnerChainPromptContext`），打破 verdict-recorder ↔ observer-bridge 循环依赖 |
+| `_internal/managed-task/role-prompts.ts` | 297 | 5 个 `*_INSTRUCTIONS_FALLBACK` + `resolveRoleInstructions` + `buildCompletionContractStatus` |
+| `_internal/managed-task/role-exclude.ts` | 142 | FEATURE_168 per-role exclude sets + `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` |
+| `_internal/managed-task/write-turn-cap.ts` | 100 | P2b `maybeApplyP2bWriteTurnCap` |
+| `_internal/managed-task/status-derivation.ts` | 97 | `extractUserFacingText` / `deriveFinalStatus` / `buildManagedProtocolPayload` |
+| `_internal/managed-task/tool-wrappers.ts` | 312 | `wrapCodingToolAsRunnable` + 3 个 mutation-guard wrappers |
+| `_internal/managed-task/dispatch-child.ts` | 119 | `wrapDispatchChildTaskForRole`（per-role child-task wrapper） |
+| `_internal/managed-task/observer-bridge.ts` | 541 | `buildObserverBridge` / `buildRunnerRoutingNote` / `applyScoutDecisionToPlanRunner` + budget cap 常量 |
+| `_internal/managed-task/verdict-recorder.ts` | 532 | `wrapEmitterWithRecorder` + `H1_MAX_SAME_HARNESS_REVISES` + FEATURE_165 handoff pending-children gate |
+| `_internal/managed-task/agent-chain.ts` | 1010 | `buildCodingToolBundle` + `buildAgentToolsFromRegistry` + `buildRunnerAgentChain` + `buildRunnerScoutAgent` |
+| `_internal/managed-task/llm-adapter.ts` | 954 | `buildRunnerLlmAdapter`（含 FEATURE_085 max_tokens L1-L5 escalation + FEATURE_167 Evaluator terminal-verdict fallback retry hook） |
+| `_internal/managed-task/payload-builder.ts` | 444 | `buildManagedTaskPayload` + `deriveQualityAssuranceMode` + `buildScoutDecisionRuntime` + `buildSkillMapRuntime` |
+| `_internal/managed-task/checkpoint-flow.ts` | 350 | `handlePreRunCheckpoint` + `buildResumePreamble` + `buildStructuralResumeSeed` + `writeCurrentCheckpoint` |
+
+**外部导入面零变更**：`runner-driven.ts` 顶部 re-export 块保留 4 个调用方（`task-engine.ts`、3 个 test 文件）需要的所有公共符号（`buildRunnerAgentChain` / `buildRunnerScoutAgent` / `buildRunnerLlmAdapter` / `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` / `maybeApplyP2bWriteTurnCap` + 7 个 type）。
+
+**依赖拓扑无循环**：`types.ts` 是共享类型顶点，所有 12 个模块单向依赖它；`verdict-recorder.ts → observer-bridge.ts` 是单向依赖（共享类型上沉到 `types.ts`）。
+
 ### 3.6 Durable Task State
 
 所有非平凡 managed task 都有持久化事实面，例如：

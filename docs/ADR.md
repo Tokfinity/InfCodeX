@@ -921,3 +921,245 @@ KodaX 的差距不在 LLM 模型能力，而在**决策架构**。
 
 ---
 
+## ADR-026: `runner-driven.ts` 模块化拆分 — 6406 行单文件 → 12 个聚焦模块 (FEATURE_171, v0.7.41)
+
+**Status**: Accepted (2026-05-16)
+
+**TL;DR**：把 `packages/coding/src/task-engine/runner-driven.ts`（6406 行单文件、AMA 路径承载所有职责）按职责拆成 12 个聚焦模块（`_internal/managed-task/` 目录），主文件压缩到 1897 行（**70.4% 削减**）。**零行为变更**——所有提取为 byte-parity（regex 写法与 inline `import()` 类型注解的等价表达不算漂移）。分 4 个 commit (R1/R2/R3/R4) 落地，每个 commit 单独通过 code-reviewer 子代理 byte-parity 审计（4 次全 PASS、0 缺陷）；4314 个测试每个 commit 后全跑通过。**不引入新旧并行路径**——直接替换 + 顶部 re-export 保留公共导入面（4 个调用方 import path 零变更）。
+
+### 背景
+
+`runner-driven.ts` 是 FEATURE_084 (v0.7.26) 引入的 AMA Runner-driven 路径主入口。随后历经 FEATURE_114 (Harness V2 单循环 Worker)、FEATURE_155 (idle-yield)、FEATURE_120 (async chat-while-waiting)、FEATURE_159 (MessageQueue canonical)、FEATURE_161/162/163 (pull-tool adoption)、FEATURE_165 (handoff pending-children gate)、FEATURE_166 (post-handoff label flip)、FEATURE_167 (Evaluator terminal-verdict fallback)、FEATURE_168 (AMA tool wiring) 等近 10 个 feature 叠加，单文件膨胀到 6406 行。
+
+**问题信号**：
+
+- LLM 上下文 cost：单次 review 该文件需 ~22K tokens，触发 compaction 风险高；reviewer 容易漏 spot-check 末段代码。
+- 修改成本：FEATURE_167 retry-config 落地时，单文件改动牵涉 580 行 diff（main runner + recorder + adapter 三块），人类 review 已接近上限。
+- 测试隔离差：runner-driven.test.ts 198 个测试加载整个文件，单测 setup 耗时 ~600ms，远高于其他 task-engine 测试。
+- 职责泄漏：role-prompts / role-exclude / write-turn-cap / status-derivation / tool-wrappers / dispatch-child / observer-bridge / verdict-recorder / agent-chain / llm-adapter / payload-builder / checkpoint-flow 12 个独立职责挤在一个文件里，layered import 拓扑被压扁。
+
+**Trigger**：v0.7.41 排期内有 3-5 个 feature 计划继续修改 runner-driven 路径（FEATURE_165 完工后还有 follow-up），不拆下去单文件会突破 7000 行。
+
+### 决策
+
+把 `runner-driven.ts` 按职责拆成 12 个聚焦模块，全部放在 `packages/coding/src/task-engine/_internal/managed-task/` 目录下，分 4 个 commit 落地：
+
+```
+packages/coding/src/task-engine/
+├── runner-driven.ts                          (1897 lines, was 6406)
+│   ├─ 顶部 re-export 块保留公共导入面
+│   │  (4 个调用方 import path 零变更)
+│   └─ 主体保留: isRunnerDrivenRuntimeEnabled
+│                __runnerDrivenTestables
+│                runManagedTaskViaRunner (公共入口)
+│                runManagedTaskViaRunnerInner (主循环)
+└── _internal/managed-task/
+    ├── types.ts                              (180 lines, R1)
+    │  ↳ VerdictRecorder / AmaRole / ObserverBridge /
+    │    RolePromptContextFactory / RunnerChainPromptContext
+    │    — 打破 verdict-recorder ↔ observer-bridge 循环依赖
+    ├── role-prompts.ts                       (297 lines, R1)
+    │  ↳ 5 个 *_INSTRUCTIONS_FALLBACK + resolveRoleInstructions +
+    │    buildCompletionContractStatus + renderScoutSkillMapBlock
+    ├── role-exclude.ts                       (142 lines, R1)
+    │  ↳ FEATURE_168 per-role exclude sets + getAmaRoleEffectiveExclude
+    ├── write-turn-cap.ts                     (100 lines, R1)
+    │  ↳ P2b maybeApplyP2bWriteTurnCap
+    ├── status-derivation.ts                  (97 lines, R1)
+    │  ↳ extractUserFacingText / deriveFinalStatus /
+    │    buildManagedProtocolPayload
+    ├── tool-wrappers.ts                      (312 lines, R2)
+    │  ↳ wrapCodingToolAsRunnable / wrapGeneratorBashWithMutationGuard /
+    │    wrapGeneratorWriteWithMutationGuard / wrapReadOnlyBash
+    ├── dispatch-child.ts                     (119 lines, R2)
+    │  ↳ wrapDispatchChildTaskForRole (per-role child-task wrapper)
+    ├── observer-bridge.ts                    (541 lines, R2)
+    │  ↳ NULL_OBSERVER / buildObserverBridge / buildRunnerRoutingNote /
+    │    applyScoutDecisionToPlanRunner + BUDGET_CAP_BY_HARNESS /
+    │    BUDGET_EXTENSION_BY_HARNESS / MAX_ROUNDS_BY_HARNESS 常量
+    ├── verdict-recorder.ts                   (532 lines, R2)
+    │  ↳ wrapEmitterWithRecorder + H1_MAX_SAME_HARNESS_REVISES +
+    │    BudgetExtensionContext + FEATURE_165 handoff pending-children gate
+    ├── agent-chain.ts                        (1010 lines, R3)
+    │  ↳ CodingToolBundle / buildCodingToolBundle /
+    │    buildAgentToolsFromRegistry / RunnerAgentChain /
+    │    buildRunnerAgentChain / buildRunnerScoutAgent
+    ├── llm-adapter.ts                        (954 lines, R3)
+    │  ↳ RunnerAdapterTokenState + agentNameToManagedRole +
+    │    flattenNormalizedForEmitterInput + buildRunnerLlmAdapter
+    │    (含 FEATURE_085 max_tokens L1-L5 escalation ladder +
+    │     FEATURE_167 Evaluator terminal-verdict fallback retry hook)
+    ├── payload-builder.ts                    (444 lines, R4)
+    │  ↳ harnessToBudget (private) + buildManagedTaskPayload (主入口) +
+    │    deriveQualityAssuranceMode + buildScoutDecisionRuntime +
+    │    buildSkillMapRuntime
+    └── checkpoint-flow.ts                    (350 lines, R4)
+       ↳ handlePreRunCheckpoint + buildResumePreamble +
+         StructuralResumeSeed + buildStructuralResumeSeed +
+         writeCurrentCheckpoint
+```
+
+**Re-export 策略**：
+
+`runner-driven.ts` 顶部添加 import + re-export 块：
+
+```typescript
+export {
+  // R1 leaf modules
+  getAmaRoleEffectiveExclude,
+  getAmaRoleExpectedToolNames,
+  maybeApplyP2bWriteTurnCap,
+  // R3 agent-chain + llm-adapter
+  buildRunnerAgentChain,
+  buildRunnerScoutAgent,
+  buildRunnerLlmAdapter,
+};
+export type {
+  AmaRole,
+  ObserverBridge,
+  RolePromptContextFactory,
+  RunnerChainPromptContext,
+  VerdictRecorder,
+  RunnerAgentChain,
+  RunnerAdapterTokenState,
+};
+```
+
+四个现存调用方（`task-engine.ts`、`runner-driven.test.ts`、`runner-driven-tool-wiring.test.ts`、`p2b-write-turn-cap.test.ts`）的 import path 零变更。R4 提取的 `buildManagedTaskPayload` 和 4 个 checkpoint helper **不**再导出——它们对外部没有需要（只服务于 runner-driven 内部主循环）；`buildStructuralResumeSeed` 通过 `__runnerDrivenTestables` 暴露给测试。
+
+**依赖拓扑**（无循环）：
+
+```
+types.ts (R1)
+   ↑
+   ├── role-prompts.ts, role-exclude.ts, write-turn-cap.ts, status-derivation.ts (R1 leaves)
+   ├── tool-wrappers.ts, dispatch-child.ts (R2 leaves)
+   ├── observer-bridge.ts (R2)
+   │     ↑
+   │     └── verdict-recorder.ts (R2, 单向)
+   ├── agent-chain.ts (R3) — 也依赖 R1 + R2 模块
+   ├── llm-adapter.ts (R3) — 也依赖 compaction.ts
+   ├── payload-builder.ts (R4) — 也依赖 workspace/artifacts/scorecard/role-prompts/budget
+   └── checkpoint-flow.ts (R4) — 也依赖 checkpoint.ts + workspace
+            ↑
+runner-driven.ts (主循环 + 顶部 re-export)
+```
+
+`verdict-recorder.ts → observer-bridge.ts` 是有意的**单向**依赖（recorder import bridge 中的 `BUDGET_CAP_BY_HARNESS` / `BUDGET_EXTENSION_BY_HARNESS` / `applyScoutDecisionToPlanRunner`）；两者共享的类型上沉到 `types.ts` 打破循环。
+
+### Reasoning
+
+1. **职责粒度对齐**。每个文件单一职责，文件长度 100-1010 行（中位数 ~300 行），LLM 单次 review 不超过 6K tokens。Reviewer 一次能完整 audit 一个模块的所有 invariant。
+
+2. **测试隔离改善**。后续可针对 agent-chain / llm-adapter / payload-builder 写独立单测（不依赖 Runner.run），降低 runner-driven.test.ts 198 个测试的 setup 耗时。R1-R4 阶段不写新测试以保持 byte-parity 审计简单；新测试是 R4 后的 follow-up。
+
+3. **byte-parity 优先于美化**。提取过程**不重命名**、**不简化**、**不修 dead code**（包括 `baseCtx` 这个 pre-existing 未使用的 destructure），唯一允许的差异：
+   - 函数加 `export` 关键字（必须，否则 `runner-driven.ts` 无法 import）
+   - inline `import('./xxx').Type` → 顶部 `import type { Type } from './xxx'`（TypeScript 编译后字节相同）
+   - `/[一-鿿]/` → `/[一-鿿]/`（同 RegExp 对象，[code-reviewer 报告确认](https://...) 行为完全一致）
+
+4. **不引入新旧并行路径**。**没有** feature flag，**没有** 渐进 cutover，**没有** dual-path code。R1/R2/R3/R4 每个 commit 都是"提取 + 主文件删除 + 顶部 re-export"的原子替换。如需回退走 `git revert <commit>`。对齐用户记忆 [feedback_no_parallel_refactor_paths](https://...)：拒绝 dual-path 渐进 cutover。
+
+5. **每个 commit 都触发独立 review**。R1/R2/R3/R4 落地后立即 spawn code-reviewer 子代理做 byte-parity 审计：
+   - 函数体逐字符比对（用 `git show <prev>:runner-driven.ts` 取原文）
+   - 常量值平价（magic numbers、prompt strings、retry caps）
+   - 公共导出面（4 个调用方 import 仍可解析）
+   - 依赖方向（无循环）
+   - import hygiene（删除的 import 真的没人用）
+   - CJK / regex notation（特别针对 R4）
+   - `__runnerDrivenTestables` object identity 保留
+   
+   4 次审计结果：**全 APPROVE，0 个 CRITICAL/HIGH/MEDIUM 缺陷**。对齐用户记忆 [feedback_review_each_commit](https://...)：多步重构每个 commit 主动 review 三件事。
+
+6. **测试每个 commit 后全跑**。R1/R2/R3/R4 commit 前都跑 198 个 runner-driven 测试 + 4314 个 coding/agent/repl 测试，全过。任何 commit 失败立即停推，不进入下一阶段。
+
+### Consequences
+
+**变化（结构性收益）**：
+
+| 维度 | 现状 (v0.7.40) | 改后 (v0.7.41) |
+|---|---|---|
+| `runner-driven.ts` 行数 | 6406 | 1897（-70.4%）|
+| 单文件最大 import block | 280+ symbols | ~80 symbols |
+| 单次 review 该文件 token cost | ~22K | ~6.5K |
+| 12 个职责的物理隔离 | 单文件 | 12 个聚焦模块 |
+| 测试 setup 耗时（per-file mean） | ~600ms | ~300ms（待后续单测） |
+| LLM-friendly 度（自然语言"找 X 在哪"） | 必须 grep | 文件名即职责 |
+
+**不变（明确保留）**：
+
+- AMA Runner-driven 路径所有行为：Scout → {Generator | Planner} → Evaluator chain；H0/H1/H2 harness；budget cap + extension dialog；handoff routing；compaction hook；mutation tracker；session continuity；idle-yield outer loop；FEATURE_167 evaluator terminal-verdict fallback；FEATURE_168 tool wiring 等。
+- 4 个调用方 import path（`task-engine.ts` / 3 个 test 文件）。
+- `__runnerDrivenTestables` 暴露面（`wrapEmitterWithRecorder` / `H1_MAX_SAME_HARNESS_REVISES` / `buildStructuralResumeSeed`）。
+- 测试套（198 个 runner-driven + 4314 个全套）100% pass。
+- ADR-021 (agent ↔ coding 边界) 不动；FEATURE_171 完全在 coding 层内拆分。
+- 现有 prompt eval（FEATURE_092 dataset 等）不动；FEATURE_171 不触发 prompt 内容变化。
+
+### 替代方案讨论
+
+**A. 不拆，继续在单文件加 feature**：被否。
+- v0.7.41 起码再加 3-5 个 feature touch 该文件，年内会破 7000 行。
+- LLM compaction 风险逐渐升高，reviewer 已开始抱怨。
+
+**B. 拆但保留 `runner-driven.ts` 作为门面，使用 barrel re-export `export * from './_internal/managed-task/*.js'`**：被否。
+- barrel export 让 tree-shaking 失效，runner-driven 不是 npm 入口但下游 import 链会带额外 module load。
+- 显式 re-export 4 个调用方实际用到的符号，刚好需要、可观测。
+
+**C. 拆得更细（每个函数一个文件）**：被否。
+- 12 个模块对应 12 个职责，粒度合理。再细会导致 cross-file context 增加，反而难 reason。
+- LLM-friendly 的临界点：每个文件 100-1000 行（一屏到几屏），太细反而碎片化。
+
+**D. 加 feature flag 让用户选 monolith vs split path**：被否。
+- 违反 [feedback_no_parallel_refactor_paths](https://...)：拒绝 dual-path 渐进 cutover。
+- 拆分是纯重构，零行为变更，没有"两条路径都要保留"的需求。
+- 改完即生效，回退走 `git revert`。
+
+**E. 同时清理 pre-existing dead code（如 `baseCtx` 未使用的 destructure）**：被否。
+- byte-parity 审计的核心价值在于"提取 vs 原文" 1:1 对照；混入 dead code 清理会让 reviewer 误判 logic drift。
+- dead code 清理作为 follow-up commit 单独处理。
+
+### 与其他 ADR 的关系
+
+| ADR | 关系 |
+|---|---|
+| ADR-021 (agent ↔ coding 边界) | 完全保留——FEATURE_171 在 coding 层内部重构，不动 agent ↔ coding 接口 |
+| ADR-022 (npm 单包分发) | 不冲突——`_internal/managed-task/` 是 coding 包内部目录，对外仍是单一 `runner-driven.js` 导入面 |
+| ADR-025 (auto-mode 信号化分类器) | 无关——auto-mode 不在 AMA Runner-driven 路径，guardrail 在 Runner.beforeTool 注入 |
+| FEATURE_084 (Runner-driven AMA 替代 legacy state machine) | 本 ADR 是 FEATURE_084 的**模块化清理**，保留所有 v0.7.26 引入的行为 |
+| FEATURE_165/166/167/168 (v0.7.41 同期 feature) | 这些 feature 落地后再拆，避免 commit interleave 复杂化 byte-parity 审计 |
+
+### 落地节奏（FEATURE_171, v0.7.41）
+
+| Commit | 内容 | Review 锚点 |
+|---|---|---|
+| R1 (`2fef1c31`) | 4 个 leaf module + 共享 `types.ts`（180 行 type-only）打破循环依赖 | byte-parity review |
+| R2 (`f0be2d4e`) | tool-wrappers + dispatch-child + observer-bridge + verdict-recorder（中等耦合度，依赖 R1 types） | byte-parity review |
+| R3 (`bfb2b818`) | agent-chain + llm-adapter（两个最大块，1964 行合计） | byte-parity review |
+| R4 (`62dc1c58`) | payload-builder + checkpoint-flow（最后两块，含 CJK regex / 全角标点） | byte-parity + CJK review |
+| R5 (本 commit) | ADR-026 Accepted + HLD.md 更新 + FEATURE_171 mark Done | docs review |
+
+**纪律**：
+- 每个 R-commit 后跑全套测试（198 runner-driven + 4314 总套），任一失败立即停。
+- 每个 R-commit 后立即 spawn code-reviewer 子代理 byte-parity audit；reviewer 报 CRITICAL/HIGH 则 revert + 重做（实际 0 次触发）。
+- 不引入新旧并行路径——R1-R4 是原子替换，不留 monolith fallback。
+- 不修 pre-existing dead code——byte-parity 优先。
+
+### 触发回退的条件
+
+回退（`git revert R1..R4`）触发条件，任一成立即立项 patch：
+
+1. **行为回归**：v0.7.41 release 后 4 周内出现 ≥1 例可复现的 AMA path 行为差异（用户报告或 issue），且追溯 root cause 到 FEATURE_171 任一 commit。
+2. **测试回归**：某次 main branch CI 失败，bisect 定位到 R1-R4 任一 commit（实际不该发生，因为本地全跑过；保险条款）。
+3. **build 回归**：在某 OS / Node 版本组合上 `tsc -b` 失败且仅在 v0.7.41 出现。
+
+**保留兜底**：模块化拆分本身**不该**有行为差异——任何回退都意味着提取过程出 bug；优先做 minimal hotfix 而非整体 revert。
+
+### Resolved Decisions (2026-05-16 self-review)
+
+1. **`buildManagedTaskPayload` 和 4 个 checkpoint helper 不 re-export**。 它们对外部没有需要——只服务于 `runner-driven.ts` 内部主循环。`buildStructuralResumeSeed` 通过 `__runnerDrivenTestables` 暴露给测试已足够。如未来 SDK 有外部需求再加。
+2. **不在拆分阶段加新测试**。 byte-parity 审计已覆盖；新测试是 R4 后的 follow-up（v0.7.42+），不阻塞本 ADR。
+3. **保留 R4 `baseCtx` 未使用 destructure（pre-existing）**。 不在 byte-parity 审计期间混入 dead code 清理；作为 follow-up commit 单独处理。
+4. **不引入 `_internal/managed-task/index.ts` barrel export**。 12 个模块通过 `runner-driven.ts` 顶部 import 各自接线，barrel 反而模糊依赖关系。
+
+---
+
