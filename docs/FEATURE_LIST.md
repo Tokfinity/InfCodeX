@@ -42,7 +42,7 @@
 | `v0.7.38` | `9` (149 Queued Prompt Injection Latency & Mid-Turn UX Parity + 117 redesigned as Mutation Context Injection + 151 TodoList Visibility & LLM Self-Seeding Parity + 152 Bash AST Migration + 153 LLM-backed Bash Prefix Extractor + 154 Universal --help Fast-Path + 155 Chat-While-Waiting [moved from v0.7.39] + 156 Idle-Wait Visual Continuity + 157 Windows / macOS Case-Insensitive Workspace Match) |
 | `v0.7.39` | `2` (120 + 158 auto[llm] Signal Inversion; FEATURE_155 moved to v0.7.38) + ADR-024 (npm 包正名 `@kodax-ai/kodax-cli` → `@kodax-ai/kodax` + 5 SDK subpath exports) + ADR-025 (auto[llm] 信号化分类器 + 决策层级倒置) |
 | `~~v0.7.39 (legacy slot for FEATURE_096)~~` | `1` |
-| `v0.7.41` | `2` (125 KodaX Team Mode — re-scoped from v0.8.10; 170 Todo V2 Migration — per-task CRUD + extension hooks aligned to claudecode V2 TaskCreate/TaskUpdate, keep op:'init' for fan-out batch; FEATURE_171 已 ship 见已完成表) |
+| `v0.7.41` | `1` planned + `1` ✅ shipped (125 KodaX Team Mode — re-scoped from v0.8.10, planned; **170 Todo V2 Migration — ✅ Shipped 2026-05-16 across 5 C-slices + 5 follow-ups, commits `e45ddaa8`→`20e02103`: new tool `todo_create`, `todo_update` extended with patch fields + `status:'deleted'` per-item delete, ExtensionHookMap added `'todo:before-create'` / `'todo:before-complete'`, ExtensionEventMap added `'todo:created'` / `'todo:updated'` / `'todo:deleted'`, aligned to claudecode V2 TaskCreate/TaskUpdate, op:'init' retained for fan-out batch; Layer 1 unit + integration tests + tool-wiring contract pin in place; Layer 2 LLM behavioral eval gated on v0.7.41 release per FEATURE_104**; FEATURE_171 已 ship 见已完成表) |
 | `~~v0.7.41~~` | `1` |
 | `v0.7.42` | `1` (094) |
 | `v0.7.43` | `1` (124) |
