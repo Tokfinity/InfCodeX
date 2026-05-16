@@ -389,6 +389,23 @@ export {
   waitForWakeEvent,
 } from './orchestration/index.js';
 
+// ============== Team Mode — multi-instance coordination (v0.7.41 FEATURE_125) ==============
+// State broadcast primitives let sibling KodaX sessions discover each other
+// and inject each other's intent / active files into worker system prompts.
+// Generic agent-platform machinery per ADR-021 — usable by any downstream
+// agent that wants multi-instance awareness, not coding-specific.
+export type {
+  CurrentTodoSummary,
+  PersistedSessionState,
+  RecentlyModifiedFile,
+  SessionMeta,
+  SessionStateSnapshot,
+  StateWriter,
+  StateWriterFs,
+  StateWriterOptions,
+} from './team/state-writer.js';
+export { createStateWriter } from './team/state-writer.js';
+
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
 // `@kodax-ai/coding/src/agent-runtime/`. Per the narrowed Batch D scope, only
