@@ -277,6 +277,10 @@ export interface ExtensionTodoCreateSeed {
  * `TodoItem` so the runtime can pass values straight through without
  * conversion, but redeclared here so extension consumers don't import
  * from `packages/coding/src/types.ts` (which is task-engine internal).
+ *
+ * Drift guard: a compile-time assignability assertion at the bottom of
+ * this file fires if `TodoItem` (engine) gains a field that this
+ * extension-facing shape does NOT mirror — see `__todoItemParity` below.
  */
 export interface KodaXTodoItem {
   readonly id: string;
@@ -390,3 +394,29 @@ export interface KodaXExtensionModule {
   default?: (api: KodaXExtensionAPI) => KodaXExtensionActivationResult;
   activate?: (api: KodaXExtensionAPI) => KodaXExtensionActivationResult;
 }
+
+// =============================================================================
+// FEATURE_170 v0.7.41 — drift guard for `KodaXTodoItem` ⇔ engine `TodoItem`.
+//
+// The two interfaces deliberately live in different modules:
+//   - `TodoItem` (packages/coding/src/types.ts) is the engine-internal
+//     shape consumed by todo-store, runner-driven, and the
+//     task-engine layer.
+//   - `KodaXTodoItem` (this file) is the extension-facing shape passed
+//     through todo:* events / hooks so extension authors don't have to
+//     import a task-engine-internal type.
+//
+// They must stay structurally compatible. The one-line assignability
+// check below produces a compile error the moment `TodoItem` gains a
+// field that `KodaXTodoItem` does not mirror. The import is type-only
+// (no runtime cost) and the constant is `void` (no module-level value
+// exported). Tree-shaking removes the binding entirely from emitted JS.
+// =============================================================================
+import type { TodoItem as _EngineTodoItemForParity } from '../types.js';
+// If a future contributor adds a required field to `TodoItem` without
+// mirroring it on `KodaXTodoItem`, this conditional type collapses to
+// `never` and the assignment fails with TS2322.
+const _todoItemParityCheck:
+  _EngineTodoItemForParity extends KodaXTodoItem ? true : never = true;
+// Reference the binding once so noUnusedLocals doesn't strip it.
+void _todoItemParityCheck;

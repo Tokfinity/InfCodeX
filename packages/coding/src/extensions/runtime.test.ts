@@ -827,4 +827,48 @@ describe('KodaXExtensionRuntime', () => {
 
     await runtime.dispose();
   });
+
+  it('todo:before-* hook fault is isolated — throw becomes recorded failure, hook returns undefined (allow)', async () => {
+    const extensionPath = path.join(tempDir, 'todo-hook-throw-ext.mjs');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await writeFile(
+      extensionPath,
+      `export default function(api) {
+        api.hook('todo:before-create', () => {
+          throw new Error('extension bug — should not block the mutation');
+        });
+        api.hook('todo:before-complete', () => {
+          throw new Error('extension bug — should not block completion');
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    // Both throwing hooks must resolve to undefined (allow), NOT propagate
+    // the error — this is the fault-isolation contract that already
+    // exists for `tool:before` and must hold for the new hooks too.
+    await expect(
+      runActiveExtensionHook('todo:before-create', { seed: { content: 'X' } }),
+    ).resolves.toBeUndefined();
+    await expect(
+      runActiveExtensionHook('todo:before-complete', {
+        id: 'todo_1',
+        item: { id: 'todo_1', content: 'X', status: 'in_progress' },
+      }),
+    ).resolves.toBeUndefined();
+
+    const failures = runtime.getDiagnostics().failures;
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: 'hook', target: 'todo:before-create' }),
+        expect.objectContaining({ stage: 'hook', target: 'todo:before-complete' }),
+      ]),
+    );
+
+    warnSpy.mockRestore();
+    await runtime.dispose();
+  });
 });
