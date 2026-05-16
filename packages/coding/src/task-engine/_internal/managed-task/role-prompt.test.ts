@@ -328,8 +328,11 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     // Pinned tokens from `buildWorkerInstructions` — if the entry
     // wire breaks, these disappear and the V2 path silently falls
     // back to a context-only prompt with no planning guidance.
-    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36)');
-    expect(rendered).toContain('SCOPE COMMITMENT (FEATURE_106 hard rule)');
+    // FEATURE_170 v0.7.41 — section headers gained a "+ FEATURE_170 v0.7.41"
+    // suffix to advertise the per-item API additions; pin the v0.7.36 base
+    // anchor so the upstream entry-wire pin still locates the section.
+    expect(rendered).toContain('PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36');
+    expect(rendered).toContain('SCOPE COMMITMENT (FEATURE_106 hard rule');
     expect(rendered).toContain('MUTATION DISCIPLINE');
     expect(rendered).toContain('DISPATCH RULES');
     expect(rendered).toContain('EVALUATOR HANDOFF');

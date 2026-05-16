@@ -154,9 +154,10 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
     // "done" via accept. Nudge to close out / add a follow-up substep.
     return [
       '<system-reminder>',
-      `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. ` +
-        `All listed items are already in a terminal state, but you may want to call todo_update ` +
-        `if any new substep emerged.`,
+      `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. `
+        + `All listed items are already in a terminal state. If a new substep emerged, `
+        + `call todo_create({content:"...", activeForm:"..."}) to insert it (FEATURE_170 v0.7.41); `
+        + `do NOT re-seed via todo_update({op:"init"}) — that wipes the completed items.`,
       // FEATURE_151 (v0.7.38) — match Claude Code's `<system-reminder>`
       // suppression discipline (mirrors `messages.ts:3668`).
       'NEVER mention this reminder to the user.',

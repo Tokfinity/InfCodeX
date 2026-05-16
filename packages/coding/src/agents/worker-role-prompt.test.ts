@@ -64,7 +64,10 @@ describe('buildWorkerInstructions', () => {
   it('emits the plan-first contract section', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('PLAN-FIRST CONTRACT');
-    expect(out).toContain('FIRST tool call MUST be `todo_update`');
+    // FEATURE_170 v0.7.41 — wording sharpened to point at the explicit
+    // op:'init' batch-seed form (mid-task insertion is the new
+    // todo_create path, separate API).
+    expect(out).toContain('FIRST tool call MUST be `todo_update({op:"init", items:[...]})`');
   });
 
   it('emits the SCOPE COMMITMENT block (FEATURE_106 port)', () => {
@@ -272,6 +275,59 @@ describe('buildWorkerInstructions — FEATURE_120 child steering (v0.7.39 Phase 
 // when a child report exceeds the ~50KB inline envelope budget. This is
 // the Layer 1 ($0) unit test per EVAL_GUIDELINES §三层实验金字塔; the
 // behavioral validation lives in `tests/child-task-envelope-spillover.eval.ts`.
+// FEATURE_170 v0.7.41 — Worker prompt teaches the per-item Todo V2 API
+// (todo_create insert + todo_update patch/deleted/cancelled). Pin the
+// 4-bullet split inside PLAN-FIRST CONTRACT + the late-discovered-child
+// addendum inside FAN-OUT PLAN GRANULARITY + the SCOPE COMMITMENT
+// rewording. These are structural pins; behavioral eval is gated on
+// FEATURE_104 (release-time).
+describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => {
+  it('teaches todo_create for mid-task insertion (NOT op:init)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('INSERT ONE NEW STEP mid-task: `todo_create');
+    expect(out).toContain('FEATURE_170 v0.7.41');
+    // The split must explicitly call out the wipes-progress hazard of
+    // op:init for incremental insertion.
+    expect(out).toMatch(/wipes the user-visible progress/);
+  });
+
+  it('teaches todo_update patch fields without changing status', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('EDIT ONE STEP');
+    expect(out).toContain('content?, activeForm?, evaluator?, metadata?');
+  });
+
+  it('teaches the deleted vs cancelled distinction', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('status:"deleted"');
+    expect(out).toContain('status:"cancelled"');
+    // The user-visible difference (breadcrumb vs no breadcrumb) is the
+    // load-bearing signal that lets the LLM pick correctly.
+    expect(out).toMatch(/no breadcrumb/);
+    expect(out).toMatch(/STRIKETHROUGH ONE STEP \(keep visible breadcrumb\)/);
+  });
+
+  it('SCOPE COMMITMENT routes belated obligations through todo_create (not slip into a later step)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('SCOPE COMMITMENT');
+    expect(out).toMatch(/call `todo_create.*to add the new item explicitly/);
+  });
+
+  it('FAN-OUT PLAN GRANULARITY teaches todo_create for the late N+1th child', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('LATE-DISCOVERED CHILD (FEATURE_170 v0.7.41)');
+    expect(out).toContain('todo_create({content:"...", activeForm:"..."})');
+    // Negative pin — never re-seed via op:init during fan-out.
+    expect(out).toMatch(/Do NOT call `todo_update\(\{op:"init"/);
+  });
+
+  it('revise-failure retrospective points new fundamentally-different steps at todo_create', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, true);
+    expect(out).toContain('previous attempt at this task failed');
+    expect(out).toMatch(/use `todo_create` to add the new step/);
+  });
+});
+
 describe('buildWorkerInstructions — FEATURE_121 envelope spillover (v0.7.40)', () => {
   it('emits the LARGE CHILD OUTPUT dispatch-rules bullet tagged with the feature/version', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);

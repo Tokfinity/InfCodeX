@@ -47,23 +47,28 @@ export function buildWorkerInstructions(
 ): string {
   void verification; // kept on the signature for parity with legacy roles
   const reviseFailureRetrospective = isResumeAfterReviseFailure
-    ? 'A previous attempt at this task failed under Evaluator review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying.'
+    ? 'A previous attempt at this task failed under Evaluator review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying. If the retry requires a fundamentally different step (not a fix of the failed one), use `todo_create` to add the new step rather than overloading the failed item with a different objective.'
     : '';
 
   const planFirstContract = [
-    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36):',
+    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41):',
     '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
-    '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update` with the full plan.',
-    '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
-    '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled`). Mark exactly ONE item `in_progress` at a time.',
+    '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update({op:"init", items:[...]})` with the full plan.',
+    '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update({op:"init", ...})` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+    '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
     '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
-    '- Replan iteratively: insert / cancel / adjust items via `todo_update` as the picture firms up. Do NOT reset the entire list mid-task; reserve full reset for explicit "start over" decisions.',
+    '- Replan iteratively as the picture firms up — FEATURE_170 v0.7.41 split the API for clarity:',
+    '    * INSERT ONE NEW STEP mid-task: `todo_create({content:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
+    '    * EDIT ONE STEP\'S TEXT / EVALUATOR / METADATA: `todo_update({id, content?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
+    '    * REMOVE ONE STEP entirely (no breadcrumb): `todo_update({id, status:"deleted"})`. Prefer over `cancelled` when the item was wholly off-plan.',
+    '    * STRIKETHROUGH ONE STEP (keep visible breadcrumb): `todo_update({id, status:"cancelled", note:"..."})`. Prefer over `deleted` when the user benefits from seeing the discarded record.',
+    '    * FULL REPLAN (rare — reserved for explicit "start over"): `todo_update({op:"init", items:[...]})`. NEVER use full replan for mid-task insertion — it wipes the user-visible progress on items already completed.',
   ].join('\n');
 
   const scopeCommitment = [
-    'SCOPE COMMITMENT (FEATURE_106 hard rule):',
-    '- Whatever scope you commit to in your first `todo_update` is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_update` to add items explicitly, do not slip them into a later step\'s description.',
-    '- If the user request is review/audit, your `todo_update` plan IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
+    'SCOPE COMMITMENT (FEATURE_106 hard rule + FEATURE_170 v0.7.41):',
+    '- Whatever scope you commit to in your first `todo_update({op:"init", ...})` is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_create({content:"..."})` to add the new item explicitly, do not slip it into a later step\'s description.',
+    '- If the user request is review/audit, your initial `todo_update({op:"init", ...})` plan IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
   ].join('\n');
 
   const mutationDiscipline = [
@@ -194,6 +199,7 @@ export function buildWorkerInstructions(
     '    BAD: items:[{content:"Review all packages"},{content:"Aggregate findings"}]        (2 items hides per-package progress)',
     '    BAD: any items array shorter than the number of dispatch_child_task calls.',
     '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
+    '- LATE-DISCOVERED CHILD (FEATURE_170 v0.7.41): if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({content:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Do NOT call `todo_update({op:"init", ...})` to re-seed — that wipes the completed children\'s breadcrumbs.',
     '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
   ].join('\n');
 
