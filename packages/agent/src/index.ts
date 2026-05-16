@@ -413,6 +413,13 @@ export type {
 export { discoverInstances } from './team/instance-discovery.js';
 export type { RenderOptions } from './team/system-prompt-injection.js';
 export { buildOtherInstancesPromptBlock } from './team/system-prompt-injection.js';
+export type { TeamModeBootstrapOptions, TeamModeHandle } from './team/bootstrap.js';
+export { bootstrapTeamMode } from './team/bootstrap.js';
+export {
+  getActiveTeamModeWriter,
+  setActiveTeamModeWriter,
+  updateActiveTeamMode,
+} from './team/active-team-mode.js';
 
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from

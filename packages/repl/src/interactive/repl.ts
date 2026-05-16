@@ -52,6 +52,7 @@ import {
 } from '../permission/types.js';
 import { bootstrapAutoMode, type AutoModeBootstrapResult } from './auto-mode-bootstrap.js';
 import { createBashPrefixExtractor, type BashPrefixExtractor } from '@kodax-ai/coding';
+import { bootstrapTeamMode, type TeamModeHandle } from '@kodax-ai/agent';
 import { isToolCallAllowed, isAlwaysConfirmPath, isBashReadCommand, getPlanModeBlockReason } from '../permission/permission.js';
 import { replBashPathSignalCollector } from '../permission/repl-bash-signals.js';
 import { getGitRoot, prepareRuntimeConfig, getProviderModel, getProviderAvailableModels, KODAX_VERSION } from '../common/utils.js';
@@ -336,6 +337,20 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const gitRoot = startupRuntime.workspaceRoot ?? await getGitRoot() ?? undefined;
   const storage = options.storage ?? new MemorySessionStorage();
 
+  // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
+  // coordination). Returns null when KODAX_DISABLE_MULTI_INSTANCE=1
+  // is set; otherwise registers this session under
+  // `<configHome>/instances/<pid>/`, reaps stale peer directories
+  // from crashed sessions, and installs the writer in the
+  // process-level singleton. Tools / runner-driven adapter consume
+  // the singleton via `getActiveTeamModeWriter()`.
+  const teamModeHandle: TeamModeHandle | null = bootstrapTeamMode({
+    meta: {
+      cwd: process.cwd(),
+      startedAt: Date.now(),
+    },
+  });
+
   // Load config (priority: CLI args > config file > defaults) - 加载配置（优先级：CLI参数 > 配置文件 > 默认值）
   const config = prepareRuntimeConfig();
 
@@ -609,6 +624,10 @@ Keyboard Shortcuts:
   const callbacks: CommandCallbacks = {
     exit: () => {
       isRunning = false;
+      // FEATURE_125 — release the instance directory + clear the
+      // process-level singleton on /exit so the next session's
+      // discovery scan does not have to reap us as a stale peer.
+      void teamModeHandle?.shutdown();
       rl.close();
     },
     saveSession: async () => {
@@ -1089,6 +1108,13 @@ Keyboard Shortcuts:
   // Handle cleanup on exit - 处理退出时清理状态栏
   const cleanup = () => {
     statusBar?.hide();
+    // FEATURE_125 — fire-and-forget Team Mode shutdown. The
+    // state-writer's shutdown() does its work synchronously
+    // (clearInterval + fs.rmSync) before the trailing
+    // `await Promise.resolve()`, so the instance directory is
+    // gone by the time the 'exit' handler returns even though
+    // the promise is unawaited.
+    void teamModeHandle?.shutdown();
     rl.close();
   };
 
