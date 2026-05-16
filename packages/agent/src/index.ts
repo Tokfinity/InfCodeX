@@ -405,6 +405,12 @@ export type {
   StateWriterOptions,
 } from './team/state-writer.js';
 export { createStateWriter } from './team/state-writer.js';
+export type {
+  DiscoveredInstance,
+  DiscoveryOptions,
+  InstanceDiscoveryFs,
+} from './team/instance-discovery.js';
+export { discoverInstances } from './team/instance-discovery.js';
 
 // ============== Runtime middleware (v0.7.35.1 FEATURE_142 Batch D) ==============
 // Generic, agent-flavor-agnostic substrate middleware uplifted from
