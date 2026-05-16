@@ -91,6 +91,38 @@ async function isProbablyBinary(filePath: string, fileSize: number): Promise<boo
   }
 }
 
+/**
+ * FEATURE_125 (v0.7.41) — record the on-disk content hash for the
+ * Team Mode safety net. Called AFTER a successful tool result is
+ * formed so an error in hash recording never affects the tool's
+ * primary contract. The hash captures the bytes on disk at this
+ * moment; a future Edit/Write tool's `checkStale` compares against
+ * this snapshot to detect cross-session races.
+ *
+ * Swallow all errors: a transient read failure here just means the
+ * safety net doesn't engage for this file in this task (the worst
+ * case is the next edit proceeds as it would have pre-FEATURE_125).
+ * Bounded by READ_HASH_MAX_BYTES to keep one extra full-file read
+ * cheap; files above the cap are not hashed (Edit on huge files is
+ * rare and the cost outweighs the benefit).
+ */
+const READ_HASH_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+async function maybeRecordContentHash(
+  ctx: KodaXToolExecutionContext,
+  filePath: string,
+  fileSizeBytes: number,
+): Promise<void> {
+  if (!ctx.contentHashCache) return;
+  if (fileSizeBytes > READ_HASH_MAX_BYTES) return;
+  try {
+    const fullContent = await fs.readFile(filePath, 'utf-8');
+    ctx.contentHashCache.recordRead(filePath, fullContent);
+  } catch {
+    // Swallow — see JSDoc.
+  }
+}
+
 export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
   let stat;
@@ -190,6 +222,12 @@ export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExe
       Buffer.byteLength(output, 'utf-8') <= DEFAULT_TOOL_OUTPUT_MAX_BYTES ||
       effectiveLines.length === 0
     ) {
+      // FEATURE_125 v0.7.41 — record content hash for the Team Mode
+      // safety net. Best-effort, awaited (synchronous to the caller's
+      // perspective) so the next Edit/Write tool call in the same
+      // turn sees the recorded hash. Errors swallowed inside the
+      // helper; never affects tool output.
+      await maybeRecordContentHash(ctx, filePath, stat.size);
       return output;
     }
 
