@@ -135,13 +135,21 @@ async function persistCell(
   );
   await fs.writeFile(path.join(cellDir, 'stdout.tail.txt'), task.stdoutTail, 'utf8');
   await fs.writeFile(path.join(cellDir, 'stderr.tail.txt'), task.stderrTail, 'utf8');
-  if (task.sessionJsonlPath) {
-    try {
-      const content = await fs.readFile(task.sessionJsonlPath, 'utf8');
-      await fs.writeFile(path.join(cellDir, 'session.jsonl'), content, 'utf8');
-    } catch {
-      // session jsonl may have been cleaned up early; non-fatal.
-    }
+  // Issue 132 (v0.7.41): consume the pre-read content captured in
+  // agent-task-runner immediately after subprocess exit. The previous
+  // implementation read from `sessionJsonlPath` here, which was prone to
+  // a Windows-fs-visibility race because ~200-400ms of activity
+  // (git diff + worktree cleanup + 3 fs.writeFile above) elapses between
+  // the file being created and this point. Reading once at the earliest
+  // possible moment (with retries inside agent-task-runner) eliminates
+  // the race surface here. If `sessionJsonlContent` is null, agent-task-
+  // runner has already warned about the read failure — no need to re-warn.
+  if (task.sessionJsonlContent !== null) {
+    await fs.writeFile(
+      path.join(cellDir, 'session.jsonl'),
+      task.sessionJsonlContent,
+      'utf8',
+    );
   }
   return cellDir;
 }
