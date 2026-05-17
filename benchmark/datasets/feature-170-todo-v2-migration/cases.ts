@@ -187,7 +187,71 @@ const PLAN_FIRST_CONTRACT_PROPOSED = [
   '    * FULL REPLAN (rare — reserved for explicit "start over"): `todo_update({op:"init", items:[...]})`. NEVER use full replan for mid-task insertion — it wipes the user-visible progress on items already completed.',
 ].join('\n');
 
-function buildSystemPrompt(variant: 'baseline' | 'proposed'): string {
+// ---------------------------------------------------------------------------
+// Prompt-iteration pilot variants (2026-05-17) — hypothesis-testing for zhipu
+// C3 -60pp regression (project_zhipu_send_message_floor + cognitive load).
+// All four are SIMPLIFICATIONS of v_proposed; none add new constraints
+// (per `feedback_prompt_strengthening_cross_case_regression` memory).
+//
+// V2 = merge REMOVE+STRIKETHROUGH bullets, demote `cancelled` to parenthetical
+// V3 = drop `cancelled` from teaching entirely (most aggressive)
+// V4 = keep both bullets but delete "Prefer over" comparative clauses
+// ---------------------------------------------------------------------------
+
+const PLAN_FIRST_CONTRACT_V2 = [
+  'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41):',
+  '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
+  '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update({op:"init", items:[...]})` with the full plan.',
+  '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update({op:"init", ...})` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+  '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
+  '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
+  '- Replan iteratively as the picture firms up — FEATURE_170 v0.7.41 split the API for clarity:',
+  '    * INSERT ONE NEW STEP mid-task: `todo_create({content:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
+  '    * EDIT ONE STEP\'S TEXT / EVALUATOR / METADATA: `todo_update({id, content?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
+  '    * REMOVE ONE STEP: `todo_update({id, status:"deleted"})`. (If you want a visible breadcrumb instead of full removal, use `status:"cancelled"` with a `note`.)',
+  '    * FULL REPLAN (rare — reserved for explicit "start over"): `todo_update({op:"init", items:[...]})`. NEVER use full replan for mid-task insertion — it wipes the user-visible progress on items already completed.',
+].join('\n');
+
+const PLAN_FIRST_CONTRACT_V3 = [
+  'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41):',
+  '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
+  '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update({op:"init", items:[...]})` with the full plan.',
+  '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update({op:"init", ...})` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+  '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
+  '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
+  '- Replan iteratively — FEATURE_170 v0.7.41 split the API:',
+  '    * INSERT ONE NEW STEP mid-task: `todo_create({content})`',
+  '    * EDIT ONE STEP: `todo_update({id, content?, ...})`',
+  '    * REMOVE ONE STEP: `todo_update({id, status:"deleted"})`',
+  '    * FULL REPLAN (rare): `todo_update({op:"init", items:[...]})`. NEVER use for mid-task insertion.',
+].join('\n');
+
+const PLAN_FIRST_CONTRACT_V4 = [
+  'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41):',
+  '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
+  '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update({op:"init", items:[...]})` with the full plan.',
+  '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update({op:"init", ...})` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+  '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
+  '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
+  '- Replan iteratively as the picture firms up — FEATURE_170 v0.7.41 split the API for clarity:',
+  '    * INSERT ONE NEW STEP mid-task: `todo_create({content:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
+  '    * EDIT ONE STEP\'S TEXT / EVALUATOR / METADATA: `todo_update({id, content?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
+  '    * REMOVE ONE STEP entirely (no breadcrumb): `todo_update({id, status:"deleted"})`.',
+  '    * STRIKETHROUGH ONE STEP (keep visible breadcrumb): `todo_update({id, status:"cancelled", note:"..."})`.',
+  '    * FULL REPLAN (rare — reserved for explicit "start over"): `todo_update({op:"init", items:[...]})`. NEVER use full replan for mid-task insertion — it wipes the user-visible progress on items already completed.',
+].join('\n');
+
+export type PromptVariantKind = 'baseline' | 'proposed' | 'v2' | 'v3' | 'v4';
+
+function buildSystemPrompt(variant: PromptVariantKind): string {
+  let contract: string;
+  switch (variant) {
+    case 'baseline': contract = PLAN_FIRST_CONTRACT_BASELINE; break;
+    case 'proposed': contract = PLAN_FIRST_CONTRACT_PROPOSED; break;
+    case 'v2': contract = PLAN_FIRST_CONTRACT_V2; break;
+    case 'v3': contract = PLAN_FIRST_CONTRACT_V3; break;
+    case 'v4': contract = PLAN_FIRST_CONTRACT_V4; break;
+  }
   return [
     "You are the Worker — KodaX's primary agent for this task.",
     '',
@@ -195,7 +259,7 @@ function buildSystemPrompt(variant: 'baseline' | 'proposed'): string {
     'Working Directory: /repo',
     'Platform: Linux (5.15)',
     '',
-    variant === 'baseline' ? PLAN_FIRST_CONTRACT_BASELINE : PLAN_FIRST_CONTRACT_PROPOSED,
+    contract,
     '',
     TOOL_DOCS,
   ].join('\n');
@@ -312,15 +376,25 @@ const PLAN_3_ITEMS_TODO2_IN_PROGRESS_PRIOR: ReadonlyArray<KodaXMessage> = [
   },
 ];
 
+function variantIdOf(v: PromptVariantKind): string {
+  switch (v) {
+    case 'baseline': return 'v_baseline';
+    case 'proposed': return 'v_proposed';
+    case 'v2': return 'v_proposed_v2';
+    case 'v3': return 'v_proposed_v3';
+    case 'v4': return 'v_proposed_v4';
+  }
+}
+
 function buildVariantForCase(
   caseId: CaseId,
-  variant: 'baseline' | 'proposed',
+  variant: PromptVariantKind,
 ): PromptVariant {
   const systemPrompt = buildSystemPrompt(variant);
   switch (caseId) {
     case 'mid_task_insert_via_todo_create':
       return {
-        id: variant === 'baseline' ? 'v_baseline' : 'v_proposed',
+        id: variantIdOf(variant),
         description:
           variant === 'baseline'
             ? 'pre-C5 prompt: only knows op:init batch + op:update status'
@@ -333,7 +407,7 @@ function buildVariantForCase(
       };
     case 'mid_task_content_patch':
       return {
-        id: variant === 'baseline' ? 'v_baseline' : 'v_proposed',
+        id: variantIdOf(variant),
         description:
           variant === 'baseline'
             ? 'pre-C5 prompt — only op:init + status; no per-item content patch'
@@ -347,7 +421,7 @@ function buildVariantForCase(
       };
     case 'mid_task_delete_obsolete':
       return {
-        id: variant === 'baseline' ? 'v_baseline' : 'v_proposed',
+        id: variantIdOf(variant),
         description:
           variant === 'baseline'
             ? 'pre-C5 prompt — only knows status enum without deleted'
@@ -360,7 +434,7 @@ function buildVariantForCase(
       };
     case 'initial_plan_commitment':
       return {
-        id: variant === 'baseline' ? 'v_baseline' : 'v_proposed',
+        id: variantIdOf(variant),
         description:
           variant === 'baseline'
             ? 'pre-C5 prompt — initial commitment via op:init'
@@ -373,7 +447,7 @@ function buildVariantForCase(
       };
     case 'status_flip_backwards_compat':
       return {
-        id: variant === 'baseline' ? 'v_baseline' : 'v_proposed',
+        id: variantIdOf(variant),
         description: 'status flip — must work the same across both prompts',
         systemPrompt,
         priorMessages: PLAN_3_ITEMS_TODO2_IN_PROGRESS_PRIOR,
@@ -381,6 +455,22 @@ function buildVariantForCase(
           "Great — please mark that step done and move on to the next step.",
       };
   }
+}
+
+/**
+ * Pilot variants for the 2026-05-17 prompt iteration probe — compares the
+ * current v_proposed (V1 control) against three simplification candidates
+ * (V2 merged REMOVE+STRIKETHROUGH / V3 drop cancelled / V4 keep dual no
+ * Prefer-over). Skips v_baseline to keep cost down; we already have the
+ * baseline measurements from the prior Phase 1 run.
+ */
+export function buildPromptVariantsIteration(caseId: CaseId): readonly PromptVariant[] {
+  return [
+    buildVariantForCase(caseId, 'proposed'),
+    buildVariantForCase(caseId, 'v2'),
+    buildVariantForCase(caseId, 'v3'),
+    buildVariantForCase(caseId, 'v4'),
+  ];
 }
 
 export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
@@ -398,13 +488,23 @@ export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
 function buildToolNamePatterns(toolName: string): readonly RegExp[] {
   const esc = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return [
-    new RegExp(`\\b${esc}\\s*\\(`, 'i'),
+    // 1. fn-call form `read(...)` — exclude shell-wrapper false positives
+    //    (Layer B 2026-05-17 finding: `<command>read(...)` was misjudged PASS).
+    new RegExp(`(?<!<command>\\s*|<bash>\\s*|<shell>\\s*)\\b${esc}\\s*\\(`, 'i'),
     new RegExp(`["'\`]name["'\`]\\s*:\\s*["'\`]${esc}["'\`]`, 'i'),
-    new RegExp(`<${esc}\\b`, 'i'),
+    // 3. XML-style `<read>...</read>` OR self-closing `<read ... />`.
+    //    Require either a closing tag within 2000 chars or `/>` self-close
+    //    at the end of the opener (ds-style `<read path=".." />`).
+    //    Rejects truncated `<read>` (no close) responses.
+    new RegExp(`<${esc}\\b(?:[\\s\\S]{0,2000}?</${esc}>|[^>]*/>)`, 'i'),
     new RegExp(`\\bname\\s*[:=]\\s*${esc}\\b`, 'i'),
     new RegExp(`<tool_name>\\s*${esc}\\s*</tool_name>`, 'i'),
     new RegExp(`<tool>\\s*${esc}\\s*</tool>`, 'i'),
-    new RegExp(`<tool_call>\\s*${esc}\\b`, 'i'),
+    // 7. ark-style `<tool_call>read<arg_key>...</tool_call>` — require
+    //    closing `</tool_call\s*>` within 2000 chars (zhipu emits trailing
+    //    whitespace `</tool_call >`); rejects broken-JSON
+    //    `<tool_call>read",{...` (Layer B 2026-05-17 finding).
+    new RegExp(`<tool_call>\\s*${esc}\\b[\\s\\S]{0,2000}?</tool_call\\s*>`, 'i'),
     new RegExp(`\\b${esc}\\s*:\\s*\\d+\\s*[>{]`, 'i'),
     new RegExp(`tool\\s*=>\\s*["'\`]${esc}["'\`]`, 'i'),
   ];

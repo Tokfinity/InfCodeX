@@ -185,7 +185,59 @@ function makeSibling(args: {
   };
 }
 
-function buildActiveFileAcknowledgeVariant(): PromptVariant {
+// ---------------------------------------------------------------------------
+// Prompt-iteration pilot variants (2026-05-17) — hypothesis-testing for
+// kimi case 2 narrate-without-tool 0% pass-rate. Block produced by
+// `buildOtherInstancesPromptBlock` is patched at the "Coordination guidance"
+// section. All variants are pure simplification/restructuring — no MUST,
+// no new constraints (per `feedback_prompt_strengthening_cross_case_regression`).
+//
+// V1 = production v0.7.41 block (control)
+// V2 = recently_modified wording more concrete & actionable (still informational)
+// V3 = bullet order swapped: recently_modified before active_files
+// ---------------------------------------------------------------------------
+
+const V1_GUIDANCE = [
+  'Coordination guidance:',
+  '- If your task overlaps with their active_files, consider working on different files first, reading their active file before editing, or coordinating via the user. Use your judgment — concurrent work on disjoint files is fine.',
+  '- Their recentlyModifiedFiles may have just changed; re-read before relying on memory of their content.',
+  "- Don't fight them — let them finish what they started.",
+].join('\n');
+
+const V2_GUIDANCE = [
+  'Coordination guidance:',
+  '- If your task overlaps with their active_files, consider working on different files first, reading their active file before editing, or coordinating via the user. Use your judgment — concurrent work on disjoint files is fine.',
+  '- Their recentlyModifiedFiles have likely changed since you last saw them. Read the current content before reasoning about them.',
+  "- Don't fight them — let them finish what they started.",
+].join('\n');
+
+const V3_GUIDANCE = [
+  'Coordination guidance:',
+  '- Their recentlyModifiedFiles may have just changed; re-read before relying on memory of their content.',
+  '- If your task overlaps with their active_files, consider working on different files first, reading their active file before editing, or coordinating via the user. Use your judgment — concurrent work on disjoint files is fine.',
+  "- Don't fight them — let them finish what they started.",
+].join('\n');
+
+export type PromptVariantKind = 'v1' | 'v2' | 'v3';
+
+function patchGuidance(block: string, variant: PromptVariantKind): string {
+  if (variant === 'v1') return block;
+  const target = variant === 'v2' ? V2_GUIDANCE : V3_GUIDANCE;
+  if (!block.includes(V1_GUIDANCE)) {
+    throw new Error('patchGuidance: production block did not contain the v1 guidance block — possible drift');
+  }
+  return block.replace(V1_GUIDANCE, target);
+}
+
+function variantIdOf(v: PromptVariantKind): string {
+  switch (v) {
+    case 'v1': return 'v_block_v1';
+    case 'v2': return 'v_block_v2';
+    case 'v3': return 'v_block_v3';
+  }
+}
+
+function buildActiveFileAcknowledgeVariant(variant: PromptVariantKind): PromptVariant {
   const sibling = makeSibling({
     pid: 8888,
     startedAtMsAgo: 5 * 60_000,
@@ -193,16 +245,12 @@ function buildActiveFileAcknowledgeVariant(): PromptVariant {
     intent: 'refactoring password hashing in auth module',
     activeFiles: ['src/auth.ts'],
   });
-  const block = buildOtherInstancesPromptBlock([sibling]);
+  const block = patchGuidance(buildOtherInstancesPromptBlock([sibling]), variant);
   return {
-    id: 'v0.7.41',
+    id: variant === 'v1' ? 'v0.7.41' : variantIdOf(variant),
     description:
       'team-mode block flags sibling pid 8888 actively editing src/auth.ts; expect Worker to read src/auth.ts first',
-    systemPrompt: [
-      WORKER_SYSTEM_HEADER,
-      '',
-      block,
-    ].join('\n'),
+    systemPrompt: [WORKER_SYSTEM_HEADER, '', block].join('\n'),
     userMessage:
       'Users are reporting that the password validation logic in `src/auth.ts` ' +
       'rejects strings containing legitimate punctuation characters like `:` ' +
@@ -211,7 +259,7 @@ function buildActiveFileAcknowledgeVariant(): PromptVariant {
   };
 }
 
-function buildRecentlyModifiedRereadVariant(): PromptVariant {
+function buildRecentlyModifiedRereadVariant(variant: PromptVariantKind): PromptVariant {
   const sibling = makeSibling({
     pid: 9999,
     startedAtMsAgo: 12 * 60_000,
@@ -219,16 +267,12 @@ function buildRecentlyModifiedRereadVariant(): PromptVariant {
     intent: 'just landed a timestamp-formatting fix',
     recentlyModified: [{ path: 'src/utils.ts', agoMs: 15_000 }],
   });
-  const block = buildOtherInstancesPromptBlock([sibling]);
+  const block = patchGuidance(buildOtherInstancesPromptBlock([sibling]), variant);
   return {
-    id: 'v0.7.41',
+    id: variant === 'v1' ? 'v0.7.41' : variantIdOf(variant),
     description:
       'team-mode block flags sibling pid 9999 recently modified src/utils.ts; expect Worker to read src/utils.ts first',
-    systemPrompt: [
-      WORKER_SYSTEM_HEADER,
-      '',
-      block,
-    ].join('\n'),
+    systemPrompt: [WORKER_SYSTEM_HEADER, '', block].join('\n'),
     userMessage:
       'Can you tell me what the `formatTimestamp` function in `src/utils.ts` ' +
       'currently does? I want to know the actual current implementation, ' +
@@ -236,17 +280,25 @@ function buildRecentlyModifiedRereadVariant(): PromptVariant {
   };
 }
 
-function buildVariantForCase(caseId: CaseId): PromptVariant {
+function buildVariantForCase(caseId: CaseId, variant: PromptVariantKind): PromptVariant {
   switch (caseId) {
     case 'peer_active_file_acknowledge_read_first':
-      return buildActiveFileAcknowledgeVariant();
+      return buildActiveFileAcknowledgeVariant(variant);
     case 'peer_recently_modified_reread':
-      return buildRecentlyModifiedRereadVariant();
+      return buildRecentlyModifiedRereadVariant(variant);
   }
 }
 
 export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
-  return [buildVariantForCase(caseId)];
+  return [buildVariantForCase(caseId, 'v1')];
+}
+
+export function buildPromptVariantsIteration(caseId: CaseId): readonly PromptVariant[] {
+  return [
+    buildVariantForCase(caseId, 'v1'),
+    buildVariantForCase(caseId, 'v2'),
+    buildVariantForCase(caseId, 'v3'),
+  ];
 }
 
 // ---------------------------------------------------------------------------
@@ -281,13 +333,25 @@ export function buildPromptVariants(caseId: CaseId): readonly PromptVariant[] {
 function buildToolNamePatterns(toolName: string): readonly RegExp[] {
   const esc = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return [
-    new RegExp(`\\b${esc}\\s*\\(`, 'i'),                              // read(
+    // 1. fn-call `read(...)` — exclude shell wrappers (`<command>read(...)` /
+    //    `<bash>read(...)`); Layer B 2026-05-17 finding: mmx case-2 run 1
+    //    misjudged PASS because shell `<command>read(...)` matched.
+    new RegExp(`(?<!<command>\\s*|<bash>\\s*|<shell>\\s*)\\b${esc}\\s*\\(`, 'i'),
     new RegExp(`["'\`]name["'\`]\\s*:\\s*["'\`]${esc}["'\`]`, 'i'),   // "name":"read"
-    new RegExp(`<${esc}\\b`, 'i'),                                    // <read>
+    // 3. XML-style `<read>...</read>` OR self-closing `<read ... />`.
+    //    Require either a closing tag within 2000 chars (`</read>`) or
+    //    `/>` self-close at end of opener tag (ds-style `<read path=".." />`).
+    //    Rejects truncated `<read>` (no close) responses.
+    new RegExp(`<${esc}\\b(?:[\\s\\S]{0,2000}?</${esc}>|[^>]*/>)`, 'i'),
     new RegExp(`\\bname\\s*[:=]\\s*${esc}\\b`, 'i'),                  // name=read
     new RegExp(`<tool_name>\\s*${esc}\\s*</tool_name>`, 'i'),         // <tool_name>read</tool_name>   (zhipu)
     new RegExp(`<tool>\\s*${esc}\\s*</tool>`, 'i'),                   // <tool>read</tool>            (kimi alt)
-    new RegExp(`<tool_call>\\s*${esc}\\b`, 'i'),                       // <tool_call>read<arg_key>     (ark)
+    // 7. ark `<tool_call>read<arg_key>...</tool_call>` — require closing
+    //    `</tool_call\s*>` within 2000 chars (allow whitespace before `>`;
+    //    zhipu emits `</tool_call >` with trailing space); rejects broken-JSON
+    //    `<tool_call>read",{` (Layer B 2026-05-17 finding: ark case-1 run 3
+    //    misjudged PASS).
+    new RegExp(`<tool_call>\\s*${esc}\\b[\\s\\S]{0,2000}?</tool_call\\s*>`, 'i'),
     new RegExp(`\\b${esc}\\s*:\\s*\\d+\\s*[>{]`, 'i'),                // read:0>{...} / read:0{...}   (kimi)
     new RegExp(`tool\\s*=>\\s*["'\`]${esc}["'\`]`, 'i'),              // tool => "read"               (mmx)
   ];
