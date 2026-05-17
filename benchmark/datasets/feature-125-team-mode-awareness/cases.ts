@@ -218,11 +218,47 @@ const V3_GUIDANCE = [
   "- Don't fight them — let them finish what they started.",
 ].join('\n');
 
-export type PromptVariantKind = 'v1' | 'v2' | 'v3';
+// ---------------------------------------------------------------------------
+// V2-decomposition micro-variants (2026-05-17 follow-up pilot).
+//
+// V2 changed TWO things vs V1 simultaneously:
+//   Change A (tone):  `may have just changed`
+//                  → `have likely changed since you last saw them`
+//   Change B (verb):  `re-read before relying on memory of their content`
+//                  → `Read the current content before reasoning about them.`
+//                     (also splits into 2 sentences)
+//
+// Pilot showed V2 gave kimi c2 +60pp BUT kimi c1 -60pp (narrate-without-tool
+// regression). To isolate which change caused which effect:
+//   V2a = V1 + Change A only (tone shift, keep V1 verb + single-sentence)
+//   V2b = V1 + Change B only (verb + 2-sentence, keep V1 tone "may")
+// ---------------------------------------------------------------------------
+
+const V2A_GUIDANCE = [
+  'Coordination guidance:',
+  '- If your task overlaps with their active_files, consider working on different files first, reading their active file before editing, or coordinating via the user. Use your judgment — concurrent work on disjoint files is fine.',
+  '- Their recentlyModifiedFiles have likely changed since you last saw them; re-read before relying on memory of their content.',
+  "- Don't fight them — let them finish what they started.",
+].join('\n');
+
+const V2B_GUIDANCE = [
+  'Coordination guidance:',
+  '- If your task overlaps with their active_files, consider working on different files first, reading their active file before editing, or coordinating via the user. Use your judgment — concurrent work on disjoint files is fine.',
+  '- Their recentlyModifiedFiles may have just changed. Read the current content before reasoning about them.',
+  "- Don't fight them — let them finish what they started.",
+].join('\n');
+
+export type PromptVariantKind = 'v1' | 'v2' | 'v3' | 'v2a' | 'v2b';
 
 function patchGuidance(block: string, variant: PromptVariantKind): string {
   if (variant === 'v1') return block;
-  const target = variant === 'v2' ? V2_GUIDANCE : V3_GUIDANCE;
+  let target: string;
+  switch (variant) {
+    case 'v2': target = V2_GUIDANCE; break;
+    case 'v3': target = V3_GUIDANCE; break;
+    case 'v2a': target = V2A_GUIDANCE; break;
+    case 'v2b': target = V2B_GUIDANCE; break;
+  }
   if (!block.includes(V1_GUIDANCE)) {
     throw new Error('patchGuidance: production block did not contain the v1 guidance block — possible drift');
   }
@@ -233,6 +269,8 @@ function variantIdOf(v: PromptVariantKind): string {
   switch (v) {
     case 'v1': return 'v_block_v1';
     case 'v2': return 'v_block_v2';
+    case 'v2a': return 'v_block_v2a';
+    case 'v2b': return 'v_block_v2b';
     case 'v3': return 'v_block_v3';
   }
 }
@@ -298,6 +336,21 @@ export function buildPromptVariantsIteration(caseId: CaseId): readonly PromptVar
     buildVariantForCase(caseId, 'v1'),
     buildVariantForCase(caseId, 'v2'),
     buildVariantForCase(caseId, 'v3'),
+  ];
+}
+
+/**
+ * Micro-decomposition pilot (2026-05-17 follow-up): isolate which of V2's
+ * two simultaneous changes caused kimi case 1 narrate-without-tool
+ * regression. V2a tests tone-only (may → likely); V2b tests verb+sentence-
+ * split-only (re-read; → Read . Read).
+ */
+export function buildPromptVariantsMicroPilot(caseId: CaseId): readonly PromptVariant[] {
+  return [
+    buildVariantForCase(caseId, 'v1'),
+    buildVariantForCase(caseId, 'v2'),
+    buildVariantForCase(caseId, 'v2a'),
+    buildVariantForCase(caseId, 'v2b'),
   ];
 }
 
