@@ -462,15 +462,68 @@ export const HistoryItemRenderer: React.FC<HistoryItemRendererProps> = memo(({
 });
 
 /**
- * MessageList
+ * FEATURE_172 P1.3 (v0.7.41) — custom React.memo comparator for transcript rows.
+ *
+ * The default `Object.is` comparator on `memo()` is useless here: `row` is a
+ * fresh object every time `buildTranscriptRenderModel` runs (i.e. every
+ * streaming flush), so every row re-renders even when its visual content is
+ * unchanged.
+ *
+ * This comparator compares the row by its visible fields (the only ones the
+ * renderer reads). When 200 items × ~5 rows = 1000 rows are on screen and only
+ * the active round's ~5 rows change per flush, we skip ~995 row renders per
+ * flush — the React-layer counterpart to the P1.1 data-layer cache.
+ *
+ * `selectionRange` is compared structurally (start/end) since `Map.get()`
+ * returns a fresh range object when selection changes.
+ *
+ * Exported for unit testing; the rest of the renderer is internal.
  */
-const TranscriptRowRenderer: React.FC<{
+export interface TranscriptRowRendererProps {
   row: TranscriptRow;
   theme: Theme;
   animateSpinners?: boolean;
   selectedItem?: boolean;
   selectionRange?: TranscriptRowSelectionRange;
-}> = memo(({ row, theme, animateSpinners = true, selectedItem = false, selectionRange }) => {
+}
+
+export function areTranscriptRowPropsEqual(
+  prev: TranscriptRowRendererProps,
+  next: TranscriptRowRendererProps,
+): boolean {
+  if (prev.theme !== next.theme) return false;
+  if ((prev.animateSpinners ?? true) !== (next.animateSpinners ?? true)) return false;
+  if ((prev.selectedItem ?? false) !== (next.selectedItem ?? false)) return false;
+
+  const a = prev.row;
+  const b = next.row;
+  if (a === b) {
+    // Same row reference + selection equal → safe to skip.
+  } else {
+    if (a.key !== b.key) return false;
+    if (a.text !== b.text) return false;
+    if (a.color !== b.color) return false;
+    if (a.bold !== b.bold) return false;
+    if (a.italic !== b.italic) return false;
+    if (a.indent !== b.indent) return false;
+    if (a.spinner !== b.spinner) return false;
+    if (a.itemId !== b.itemId) return false;
+  }
+
+  const ra = prev.selectionRange;
+  const rb = next.selectionRange;
+  if (ra === rb) return true;
+  if (!ra || !rb) return false;
+  return ra.start === rb.start && ra.end === rb.end;
+}
+
+const TranscriptRowRenderer: React.FC<TranscriptRowRendererProps> = memo(({
+  row,
+  theme,
+  animateSpinners = true,
+  selectedItem = false,
+  selectionRange,
+}) => {
   const color = resolveTranscriptColor(theme, row.color);
   const normalizedText = row.text === " " ? "" : row.text;
   const baseText = normalizedText || " ";
@@ -536,7 +589,7 @@ const TranscriptRowRenderer: React.FC<{
       </Text>
     </Box>
   );
-});
+}, areTranscriptRowPropsEqual);
 
 const StaticTranscriptItemRenderer: React.FC<{
   section: TranscriptSection;
