@@ -850,26 +850,101 @@ export function buildDynamicTranscriptSection(
   };
 }
 
-export function buildTranscriptRenderModel(
-  options: TranscriptRenderModelOptions,
-): TranscriptRenderModel {
+/**
+ * FEATURE_172 P1.1 (v0.7.41) — render-model split helpers.
+ *
+ * The data layer is partitioned into three pure functions so the InkREPL
+ * useMemo chain can cache the expensive static portion independently
+ * from the streaming-state-dependent dynamic portion:
+ *
+ *   buildTranscriptStaticPortion  — items[..activeRoundStart] → row sections
+ *                                   Depends ONLY on items + viewportWidth +
+ *                                   maxLines + show* flags. Recomputes
+ *                                   rarely (round boundary, resize).
+ *   buildTranscriptDynamicPortion — activeItems[..] + streaming-state
+ *                                   → row sections + preview. Recomputes
+ *                                   per 80ms StreamingContext flush; cheap
+ *                                   because activeItems is typically 1-5.
+ *   composeTranscriptRenderModel  — Stitches the two portions back into
+ *                                   the canonical TranscriptRenderModel
+ *                                   shape downstream MessageList consumes.
+ *
+ * `buildTranscriptRenderModel` is preserved as the original entry point
+ * (now implemented in terms of these three) so all 65 existing
+ * transcript-layout.test.ts cases + 8 golden snapshots + 22 edge cases
+ * pass byte-equal — refactor parity, not behavior change.
+ */
+export interface TranscriptStaticBuildOptions {
+  items: HistoryItem[];
+  viewportWidth: number;
+  maxLines?: number;
+  showDetailedTools?: boolean;
+  showAllContent?: boolean;
+  windowed?: boolean;
+}
+
+export interface TranscriptStaticPortion {
+  staticSections: TranscriptSection[];
+  activeItems: HistoryItem[];
+}
+
+export function buildTranscriptStaticPortion(
+  options: TranscriptStaticBuildOptions,
+): TranscriptStaticPortion {
   const {
     items,
     viewportWidth,
     maxLines = 1000,
+    showDetailedTools = false,
+    showAllContent = false,
     windowed = false,
+  } = options;
+
+  if (windowed) {
+    // Owned-viewport mode: entire transcript is dynamic (app manages scroll
+    // window via virtualization). No items go to the static cache.
+    return { staticSections: [], activeItems: items };
+  }
+
+  const activeRoundStartIndex = findActiveRoundStartIndex(items);
+  const staticItems = items.slice(0, activeRoundStartIndex);
+  const activeItems = items.slice(activeRoundStartIndex);
+  const staticSections = buildStaticTranscriptSections(
+    staticItems,
+    viewportWidth,
+    maxLines,
+    showDetailedTools,
+    showAllContent,
+  );
+  return { staticSections, activeItems };
+}
+
+export interface TranscriptDynamicBuildOptions
+  extends Omit<TranscriptBuildOptions, "items"> {
+  activeItems: HistoryItem[];
+  showDetailedTools?: boolean;
+  showAllContent?: boolean;
+  expandedItemKeys?: ReadonlySet<string>;
+}
+
+export interface TranscriptDynamicPortion {
+  sections: TranscriptSection[];
+  previewSections: TranscriptSection[];
+}
+
+export function buildTranscriptDynamicPortion(
+  options: TranscriptDynamicBuildOptions,
+): TranscriptDynamicPortion {
+  const {
+    activeItems,
+    viewportWidth,
+    maxLines = 1000,
     showDetailedTools = false,
     showAllContent = false,
     expandedItemKeys,
     ...dynamicOptions
   } = options;
 
-  const activeRoundStartIndex = findActiveRoundStartIndex(items);
-  const staticItems = windowed ? [] : items.slice(0, activeRoundStartIndex);
-  const activeItems = windowed ? items : items.slice(activeRoundStartIndex);
-  const staticSections = windowed
-    ? []
-    : buildStaticTranscriptSections(staticItems, viewportWidth, maxLines, showDetailedTools, showAllContent);
   const sections = buildHistoryItemTranscriptSections(
     activeItems,
     viewportWidth,
@@ -893,13 +968,41 @@ export function buildTranscriptRenderModel(
     ? [pendingSection]
     : [];
 
+  return { sections, previewSections };
+}
+
+export function composeTranscriptRenderModel(
+  staticPortion: TranscriptStaticPortion,
+  dynamicPortion: TranscriptDynamicPortion,
+): TranscriptRenderModel {
   return {
-    staticSections,
-    sections,
-    rows: flattenTranscriptSections(sections),
-    previewSections,
-    previewRows: flattenTranscriptSections(previewSections),
+    staticSections: staticPortion.staticSections,
+    sections: dynamicPortion.sections,
+    rows: flattenTranscriptSections(dynamicPortion.sections),
+    previewSections: dynamicPortion.previewSections,
+    previewRows: flattenTranscriptSections(dynamicPortion.previewSections),
   };
+}
+
+export function buildTranscriptRenderModel(
+  options: TranscriptRenderModelOptions,
+): TranscriptRenderModel {
+  // Implemented in terms of the split helpers — preserves byte-equal output
+  // (verified by transcript-layout.test.ts + transcript-render-golden.test.ts).
+  const staticPortion = buildTranscriptStaticPortion({
+    items: options.items,
+    viewportWidth: options.viewportWidth,
+    maxLines: options.maxLines,
+    showDetailedTools: options.showDetailedTools,
+    showAllContent: options.showAllContent,
+    windowed: options.windowed,
+  });
+  const { items: _items, ...rest } = options;
+  const dynamicPortion = buildTranscriptDynamicPortion({
+    ...rest,
+    activeItems: staticPortion.activeItems,
+  });
+  return composeTranscriptRenderModel(staticPortion, dynamicPortion);
 }
 
 export function flattenTranscriptSections(sections: TranscriptSection[]): TranscriptRow[] {
