@@ -34,6 +34,17 @@ export interface JudgeResult {
  */
 export type JudgeCategory = 'format' | 'correctness' | 'style' | 'safety' | 'custom';
 
+/**
+ * Optional binding context passed to judges that need to inspect the
+ * structured tool_call payload (per `feedback_audit_must_see_binding`:
+ * binding-only providers emit `text=""` but the harness still captures
+ * the tool_call name + parsed input). Existing text-only judges ignore
+ * this argument and continue to work unchanged.
+ */
+export interface JudgeContext {
+  readonly toolCalls?: ReadonlyArray<{ readonly name: string; readonly input: unknown }>;
+}
+
 export interface PromptJudge {
   readonly name: string;
   /**
@@ -42,7 +53,7 @@ export interface PromptJudge {
    * correctness but tied on style" instead of just "v2 wins overall".
    */
   readonly category?: JudgeCategory;
-  judge(output: string): JudgeResult;
+  judge(output: string, context?: JudgeContext): JudgeResult;
 }
 
 /**
@@ -202,9 +213,10 @@ export interface AggregatedJudgeRun {
 export function runJudges(
   output: string,
   judges: readonly PromptJudge[],
+  context?: JudgeContext,
 ): AggregatedJudgeRun {
   const results: JudgeRunResult[] = judges.map((j) => {
-    const r = j.judge(output);
+    const r = j.judge(output, context);
     return {
       name: j.name,
       category: j.category ?? 'correctness',

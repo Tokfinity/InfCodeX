@@ -188,7 +188,7 @@ export async function runABComparison(
         continue;
       }
 
-      const judgeRun = runJudges(text, input.judges);
+      const judgeRun = runJudges(text, input.judges, { toolCalls });
       outcomes.push({
         variantId: variant.id,
         alias,
@@ -464,7 +464,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
               >,
               formatPassed: false,
             }
-          : runJudges(text, input.judges);
+          : runJudges(text, input.judges, { toolCalls });
 
         runsRaw.push({
           variantId: variant.id,
