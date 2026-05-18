@@ -32,7 +32,7 @@ import { QueuedCommandsSurface } from "./components/QueuedCommandsSurface.js";
 import { NotificationsSurface } from "./components/NotificationsSurface.js";
 import { StatusNoticesSurface } from "./components/StatusNoticesSurface.js";
 import { StashNotice } from "./components/StashNotice.js";
-import { Spinner } from "./components/LoadingIndicator.js";
+import { Spinner, SpinnerStatsTail } from "./components/LoadingIndicator.js";
 import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
 import {
@@ -7811,6 +7811,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                 {promptActivityViewModel.showSpinner ? " " : ""}
                 {promptActivityViewModel.text}
               </Text>
+            ) : null}
+            {/*
+              v0.7.41 — query-total stats tail.
+              Rendered when the activity-bar is showing the busy spinner
+              (i.e. the round is actively running). Reads roundStartedAt
+              + currentResponse straight from streamingState rather than
+              the promptStreamingState projection — the projection zeroes
+              currentResponse during foregroundManagedOwnsLivePreview but
+              the streaming context still accumulates real bytes, so the
+              tokens-since-round-start figure should reflect them. Format:
+              `(MmSs · ↓ N tokens)`; for queries crossing 1h the elapsed
+              rolls to `HhMmSs`.
+            */}
+            {promptActivityViewModel?.showSpinner
+              && streamingState.roundStartedAt != null ? (
+              <SpinnerStatsTail
+                roundStartedAt={streamingState.roundStartedAt}
+                charCount={streamingState.currentResponse.length}
+                theme={getTheme("dark")}
+              />
             ) : null}
           </Box>
           {(isLoading && todoPlanViewModel.shouldRender) ? (

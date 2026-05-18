@@ -122,6 +122,16 @@ export interface StreamingContextValue {
   /** 鏄惁姝ｅ湪鍘嬬缉涓婁笅鏂?*/
   isCompacting: boolean;
   pendingInputs: string[];
+
+  /**
+   * v0.7.41 — wall-clock timestamp captured when the current streaming
+   * round started (set by `startStreaming()`, cleared to `null` by
+   * `stopStreaming()` / `abort()` / `reset()`). Powers the inline
+   * spinner-row "(Ns · ↓ T tokens)" stats tail (claudecode parity,
+   * `c:/Works/claudecode/src/screens/REPL.tsx:932-953`
+   * `loadingStartTimeRef`).
+   */
+  roundStartedAt: number | null;
 }
 
 /**
@@ -243,6 +253,7 @@ const DEFAULT_STREAMING_STATE: StreamingContextValue = {
   maxIter: 200, // Default max iterations - 榛樿鏈€澶ц凯浠ｆ鏁?
   isCompacting: false,
   pendingInputs: [],
+  roundStartedAt: null,
 };
 
 // === Streaming Manager ===
@@ -504,6 +515,10 @@ export function createStreamingManager(): StreamingManager {
         currentResponse: "", // Issue 116: ensure clean slate
         abortController: new AbortController(),
         error: undefined,
+        // v0.7.41 — capture wall-clock for spinner-tail elapsed display.
+        // Always reset on startStreaming, matching the `currentResponse: ""`
+        // round-start semantics (a fresh round starts elapsed from zero).
+        roundStartedAt: Date.now(),
       };
       notify();
     },
@@ -514,6 +529,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
+        roundStartedAt: null,
       };
       notify();
     },
@@ -567,6 +583,7 @@ export function createStreamingManager(): StreamingManager {
         ...state,
         state: StreamingState.Idle,
         abortController: undefined,
+        roundStartedAt: null,
       };
       notify();
     },
