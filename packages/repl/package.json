@@ -2,6 +2,7 @@
   "name": "@kodax-ai/repl",
   "version": "0.7.41",
   "description": "KodaX REPL - 完整的交互式终端体验",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

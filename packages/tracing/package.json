@@ -2,6 +2,7 @@
   "name": "@kodax-ai/tracing",
   "version": "0.7.41",
   "description": "KodaX Tracing - Trace / Span / SpanData / TracingProcessor (FEATURE_083)",
+  "private": true,
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
