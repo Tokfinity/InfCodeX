@@ -35,7 +35,11 @@ import { execSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildTranscriptDynamicPortion,
   buildTranscriptRenderModel,
+  buildTranscriptStaticPortion,
+  composeTranscriptRenderModel,
+  materializeTranscriptRenderModel,
   type TranscriptRenderModelOptions,
 } from "../../packages/repl/src/ui/utils/transcript-layout.js";
 import { ToolCallStatus, type HistoryItem } from "../../packages/repl/src/ui/types.js";
@@ -185,10 +189,11 @@ for (const n of TIERS) {
     },
   }));
 
-  // Scenario B: streaming tick.
+  // Scenario B: streaming tick (pre-P1.1 pathological case).
   // streamingResponse grows by 80 chars per call (≈ 80ms of streaming text),
   // exactly matching the StreamingContext FLUSH_INTERVAL = 80 behavior.
-  // This is THE pathological case from the user's SSH lag report.
+  // This is THE pathological case from the user's SSH lag report — every
+  // tick rebuilds the FULL model (including the expensive static portion).
   scenarios.push(runScenario({
     scenario: "streaming-tick",
     itemCount: n,
@@ -206,6 +211,42 @@ for (const n of TIERS) {
       return () => {
         streamingResponse += "x".repeat(80);
         buildTranscriptRenderModel({ ...baseOpts, streamingResponse });
+      };
+    },
+  }));
+
+  // Scenario C: streaming tick with cached static portion (post-P1.1).
+  // Simulates the React useMemo split: the static portion is built ONCE
+  // (cached across streaming flushes), and only the dynamic portion +
+  // compose + materialize run on each tick. This is what InkREPL's
+  // promptMainScreenRenderModel useMemo now does after the P1.1 split.
+  // Expected: order-of-magnitude drop vs Scenario B at 200+ items.
+  scenarios.push(runScenario({
+    scenario: "streaming-tick-cached-static",
+    itemCount: n,
+    setup: () => {
+      // One-shot static build (cached across all iterations).
+      const staticPortion = buildTranscriptStaticPortion({
+        items,
+        viewportWidth: VIEWPORT_WIDTH,
+        windowed: false,
+      });
+      let streamingResponse = "";
+      return () => {
+        streamingResponse += "x".repeat(80);
+        const dynamicPortion = buildTranscriptDynamicPortion({
+          activeItems: staticPortion.activeItems,
+          viewportWidth: VIEWPORT_WIDTH,
+          isLoading: true,
+          isThinking: false,
+          thinkingCharCount: 0,
+          thinkingContent: "",
+          streamingResponse,
+          showLiveProgressRows: true,
+        });
+        materializeTranscriptRenderModel(
+          composeTranscriptRenderModel(staticPortion, dynamicPortion),
+        );
       };
     },
   }));

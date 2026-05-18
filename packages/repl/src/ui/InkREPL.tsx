@@ -232,7 +232,10 @@ import {
   buildAlternateScreenExitSequence,
 } from "../tui/core/termio.js";
 import {
+  buildTranscriptDynamicPortion,
   buildTranscriptRenderModel,
+  buildTranscriptStaticPortion,
+  composeTranscriptRenderModel,
   computeTranscriptCapStart,
   materializeTranscriptRenderModel,
   sliceHistoryToRecentRounds,
@@ -2754,10 +2757,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       : undefined),
     [bannerProps, fullscreenPolicy.enabled, showBanner],
   );
+  // FEATURE_172 P1.1 (v0.7.41) — split static / dynamic cache keys.
+  // The static portion (committed rounds) recomputes only when items / viewport /
+  // max change. The dynamic portion (current round + streaming) recomputes per
+  // 80ms StreamingContext flush. Before this split, every flush invalidated the
+  // whole model, so 200 items @ 28ms × 12.5Hz saturated the render loop.
+  const promptStaticPortion = useMemo(
+    () => buildTranscriptStaticPortion({
+      items: effectivePromptDisplayItems,
+      viewportWidth: terminalWidth,
+      maxLines: transcriptMaxLines,
+      showDetailedTools: false,
+      showAllContent: false,
+      windowed: false,
+    }),
+    [effectivePromptDisplayItems, terminalWidth, transcriptMaxLines],
+  );
   const promptMainScreenRenderModel = useMemo(
-    () => prependTranscriptSection(
-      materializeTranscriptRenderModel(buildTranscriptRenderModel({
-        items: effectivePromptDisplayItems,
+    () => {
+      const dynamicPortion = buildTranscriptDynamicPortion({
+        activeItems: promptStaticPortion.activeItems,
         viewportWidth: terminalWidth,
         isLoading: effectivePromptIsLoading,
         maxLines: transcriptMaxLines,
@@ -2782,19 +2801,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         managedBudgetUsage: effectivePromptIsLoading ? managedTaskStatus?.budgetUsage : undefined,
         managedBudgetApprovalRequired: effectivePromptIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
         lastLiveActivityLabel: effectivePromptStreamingState.lastLiveActivityLabel,
-        // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
         currentTodoActiveForm,
-        windowed: false,
         showFullThinking: false,
         showDetailedTools: false,
         showAllContent: false,
         showLiveProgressRows: promptNeedsFallbackLiveStatus,
-      })),
-      fullscreenBannerSection,
-    ),
+      });
+      return prependTranscriptSection(
+        materializeTranscriptRenderModel(
+          composeTranscriptRenderModel(promptStaticPortion, dynamicPortion),
+        ),
+        fullscreenBannerSection,
+      );
+    },
     [
       currentConfig.agentMode,
-      effectivePromptDisplayItems,
       effectivePromptIsLoading,
       effectivePromptStreamingState.activeToolCalls,
       effectivePromptStreamingState.currentIteration,
@@ -2817,6 +2838,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       managedTaskStatus?.maxRounds,
       managedTaskStatus?.phase,
       promptNeedsFallbackLiveStatus,
+      promptStaticPortion,
       fullscreenBannerSection,
       terminalWidth,
       transcriptMaxLines,
