@@ -102,7 +102,7 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens } from "@kodax-ai/agent";
+import { estimateTokens, bootstrapTeamMode, type TeamModeHandle } from "@kodax-ai/agent";
 import {
   PermissionMode,
   ConfirmResult,
@@ -8292,6 +8292,35 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   let sessionTitle = "";
   const gitRoot = (await getGitRoot().catch(() => null)) ?? undefined;
 
+  // FEATURE_125 v0.7.41 — Bootstrap Team Mode (multi-instance auto
+  // coordination). Mirrors the wiring in the legacy `runInteractiveMode`
+  // path so Ink REPL users also get the per-instance state broadcast +
+  // sibling-awareness system-prompt block. Returns null when
+  // KODAX_DISABLE_MULTI_INSTANCE=1 is set; otherwise registers this
+  // session under `<configHome>/instances/<pid>/`, reaps stale peer
+  // directories from crashed sessions, and installs the writer in the
+  // process-level singleton. Tools / runner-driven adapter consume the
+  // singleton via `getActiveTeamModeWriter()`.
+  const teamModeHandle: TeamModeHandle | null = bootstrapTeamMode({
+    meta: {
+      cwd: process.cwd(),
+      startedAt: Date.now(),
+    },
+  });
+  // Fire-and-forget cleanup on abnormal exit (Ctrl+C, SIGTERM, crash).
+  // state-writer.shutdown clearInterval + fs.rmSync run synchronously
+  // before the trailing `await Promise.resolve()`, so the instance dir
+  // is removed before the handler returns even though the promise is
+  // not awaited. The clean-exit path (after `waitUntilExit`) also calls
+  // shutdown; both are idempotent.
+  if (teamModeHandle) {
+    const teamModeCleanup = (): void => {
+      void teamModeHandle.shutdown();
+    };
+    process.on('exit', teamModeCleanup);
+    process.on('SIGTERM', teamModeCleanup);
+  }
+
   // FEATURE_087/088 (v0.7.28): bootstrap ConstructionRuntime + rehydrate
   // any previously-activated constructed tools BEFORE the Ink component
   // renders, so the first system prompt build sees the rehydrated tool
@@ -8527,6 +8556,13 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
     // Wait for exit
     await waitUntilExit();
     cleanup();
+    // FEATURE_125 v0.7.41 — release the instance directory + clear the
+    // process-level singleton so the next session's discovery scan does
+    // not have to reap us as a stale peer. state-writer.shutdown does
+    // its work synchronously (clearInterval + fs.rmSync) before the
+    // trailing `await Promise.resolve()`, so the directory is gone by
+    // the time the handler returns even though the promise is unawaited.
+    void teamModeHandle?.shutdown();
     // FEATURE_134 v0.7.40 follow-up — DEC 2004 disable on clean exit is
     // now handled by `KeypressContext.tsx` useEffect cleanup (matching
     // pair to its enable write at line 134). The previous explicit
