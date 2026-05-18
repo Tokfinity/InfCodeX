@@ -2845,48 +2845,64 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentTodoActiveForm,
     ],
   );
+  // FEATURE_172 P1.2 (v0.7.41) — same static/dynamic split for transcript view.
+  // Static cache key includes `showAllInTranscript` because toggling it changes
+  // `showDetailedTools` / `showAllContent`, which affect the committed (static)
+  // sections' formatting. Streaming-state changes still skip the static rebuild.
+  const transcriptStaticPortion = useMemo(
+    () => buildTranscriptStaticPortion({
+      items: transcriptDisplayItems,
+      viewportWidth: terminalWidth,
+      maxLines: transcriptMaxLines,
+      showDetailedTools: showAllInTranscript,
+      showAllContent: showAllInTranscript,
+      windowed: false,
+    }),
+    [transcriptDisplayItems, terminalWidth, transcriptMaxLines, showAllInTranscript],
+  );
   const transcriptMainScreenRenderModel = useMemo(
     () => {
       if (!isTranscriptMode || useRendererViewportShell) {
         return undefined;
       }
 
+      const dynamicPortion = buildTranscriptDynamicPortion({
+        activeItems: transcriptStaticPortion.activeItems,
+        viewportWidth: terminalWidth,
+        isLoading: transcriptDisplayIsLoading,
+        maxLines: transcriptMaxLines,
+        isThinking: transcriptStreamingState.isThinking,
+        thinkingCharCount: transcriptStreamingState.thinkingCharCount,
+        thinkingContent: transcriptStreamingState.thinkingContent,
+        streamingResponse: transcriptStreamingState.currentResponse,
+        currentTool: transcriptStreamingState.currentTool,
+        activeToolCalls: transcriptStreamingState.activeToolCalls,
+        toolInputCharCount: transcriptStreamingState.toolInputCharCount,
+        toolInputContent: transcriptStreamingState.toolInputContent,
+        iterationHistory: transcriptStreamingState.iterationHistory,
+        currentIteration: transcriptStreamingState.currentIteration,
+        isCompacting: transcriptStreamingState.isCompacting,
+        managedAgentMode: currentConfig.agentMode,
+        managedPhase: transcriptDisplayIsLoading ? managedTaskStatus?.phase : undefined,
+        managedHarnessProfile: transcriptDisplayIsLoading ? managedTaskStatus?.harnessProfile : undefined,
+        managedWorkerTitle: transcriptDisplayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined,
+        managedRound: transcriptDisplayIsLoading ? managedTaskStatus?.currentRound : undefined,
+        managedMaxRounds: transcriptDisplayIsLoading ? managedTaskStatus?.maxRounds : undefined,
+        managedGlobalWorkBudget: transcriptDisplayIsLoading ? managedTaskStatus?.globalWorkBudget : undefined,
+        managedBudgetUsage: transcriptDisplayIsLoading ? managedTaskStatus?.budgetUsage : undefined,
+        managedBudgetApprovalRequired: transcriptDisplayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
+        lastLiveActivityLabel: transcriptStreamingState.lastLiveActivityLabel,
+        currentTodoActiveForm,
+        showFullThinking: true,
+        showDetailedTools: showAllInTranscript,
+        showAllContent: showAllInTranscript,
+        showLiveProgressRows: !foregroundManagedLedgerHasContent,
+        expandedItemKeys: expandedTranscriptItemIds,
+      });
       return prependTranscriptSection(
-        materializeTranscriptRenderModel(buildTranscriptRenderModel({
-          items: transcriptDisplayItems,
-          viewportWidth: terminalWidth,
-          isLoading: transcriptDisplayIsLoading,
-          maxLines: transcriptMaxLines,
-          isThinking: transcriptStreamingState.isThinking,
-          thinkingCharCount: transcriptStreamingState.thinkingCharCount,
-          thinkingContent: transcriptStreamingState.thinkingContent,
-          streamingResponse: transcriptStreamingState.currentResponse,
-          currentTool: transcriptStreamingState.currentTool,
-          activeToolCalls: transcriptStreamingState.activeToolCalls,
-          toolInputCharCount: transcriptStreamingState.toolInputCharCount,
-          toolInputContent: transcriptStreamingState.toolInputContent,
-          iterationHistory: transcriptStreamingState.iterationHistory,
-          currentIteration: transcriptStreamingState.currentIteration,
-          isCompacting: transcriptStreamingState.isCompacting,
-          managedAgentMode: currentConfig.agentMode,
-          managedPhase: transcriptDisplayIsLoading ? managedTaskStatus?.phase : undefined,
-          managedHarnessProfile: transcriptDisplayIsLoading ? managedTaskStatus?.harnessProfile : undefined,
-          managedWorkerTitle: transcriptDisplayIsLoading ? managedTaskStatus?.activeWorkerTitle : undefined,
-          managedRound: transcriptDisplayIsLoading ? managedTaskStatus?.currentRound : undefined,
-          managedMaxRounds: transcriptDisplayIsLoading ? managedTaskStatus?.maxRounds : undefined,
-          managedGlobalWorkBudget: transcriptDisplayIsLoading ? managedTaskStatus?.globalWorkBudget : undefined,
-          managedBudgetUsage: transcriptDisplayIsLoading ? managedTaskStatus?.budgetUsage : undefined,
-          managedBudgetApprovalRequired: transcriptDisplayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
-          lastLiveActivityLabel: transcriptStreamingState.lastLiveActivityLabel,
-          // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
-          currentTodoActiveForm,
-          windowed: false,
-          showFullThinking: true,
-          showDetailedTools: showAllInTranscript,
-          showAllContent: showAllInTranscript,
-          showLiveProgressRows: !foregroundManagedLedgerHasContent,
-          expandedItemKeys: expandedTranscriptItemIds,
-        })),
+        materializeTranscriptRenderModel(
+          composeTranscriptRenderModel(transcriptStaticPortion, dynamicPortion),
+        ),
         fullscreenBannerSection,
       );
     },
@@ -2906,8 +2922,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       managedTaskStatus?.phase,
       terminalWidth,
       transcriptDisplayIsLoading,
-      transcriptDisplayItems,
       transcriptMaxLines,
+      transcriptStaticPortion,
       transcriptStreamingState.activeToolCalls,
       transcriptStreamingState.currentIteration,
       transcriptStreamingState.currentResponse,
