@@ -16,20 +16,33 @@
  */
 
 /**
- * P2b (v0.7.26) — default list of providers that have shown
- * reproducible mid-stream TCP RST during large tool_use buffering.
- * Users can override via the `KODAX_RST_PRONE_PROVIDERS` env var
- * (comma-separated provider names).
+ * P2b (v0.7.26 → narrowed in v0.7.42) — default list of providers that
+ * have shown reproducible mid-stream TCP RST during large tool_use
+ * buffering. Users can override via the `KODAX_RST_PRONE_PROVIDERS` env
+ * var (comma-separated provider names).
+ *
+ * History — original v0.7.26 list also included `kimi-code`,
+ * `minimax-coding`, and `mimo-coding` on a prophylactic basis (same
+ * Chinese-cloud /anthropic-shim architecture as zhipu-coding). The
+ * 2026-04 bench round measured each of them completing a 64K stream
+ * cleanly with `stop_reason=tool_use` (kimi-code 525s / minimax-coding
+ * 464s / mimo-coding 309s) and observed no server-side kill window
+ * comparable to zhipu-coding's 308s. Per-provider bench citations live
+ * in `packages/llm/src/providers/registry.ts` on each provider class.
+ *
+ * Keeping them on the prophylactic list had a user-visible side effect:
+ * every Worker write/edit turn was silently narrowed to 8K, then the
+ * L4 escalation banner ("Output budget reached, escalating to 64000")
+ * fired on practically every long-form generation. v0.7.42 trims the
+ * list back to the one provider where the cap is bench-justified
+ * (zhipu-coding). If a future regression brings RST back for any of
+ * the removed providers, opt-in via the env var still works without a
+ * code change:
+ *
+ *   KODAX_RST_PRONE_PROVIDERS="zhipu-coding,kimi-code,minimax-coding,mimo-coding"
  */
 const DEFAULT_RST_PRONE_PROVIDERS: ReadonlySet<string> = new Set([
   'zhipu-coding',
-  'kimi-code',
-  'minimax-coding',
-  // mimo-coding is added prophylactically: same architectural pattern as
-  // the three above (Chinese-cloud subscription gateway with /anthropic
-  // shim) and not yet stress-tested on long write/edit turns. Remove via
-  // KODAX_RST_PRONE_PROVIDERS env var once the endpoint proves stable.
-  'mimo-coding',
 ]);
 
 /** P2b — default per-turn ceiling applied when a write/edit tool is

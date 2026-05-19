@@ -711,7 +711,7 @@ KodaX recognizes a number of environment variables for tuning runtime behavior. 
 
 #### `KODAX_MAX_OUTPUT_TOKENS`
 
-Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. The runtime's automatic safety caps (e.g. the v0.7.28 P2b RST-prone write-turn cap that limits write/edit turns to 8K tokens on Zhipu/Kimi/MiniMax) are **bypassed** when this variable is set, so the user override is also a way to opt out of those caps.
+Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. The runtime's automatic safety caps (the v0.7.28 P2b RST-prone write-turn cap that limits write/edit turns to 8K tokens — narrowed in v0.7.42 to only `zhipu-coding`, the one provider with a measured server-side kill window; previously also covered `kimi-code` / `minimax-coding` / `mimo-coding` prophylactically) are **bypassed** when this variable is set, so the user override is also a way to opt out of those caps.
 
 ```bash
 # Allow up to 48K output tokens per turn (use a higher cap when generating long files)

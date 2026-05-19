@@ -70,7 +70,7 @@ describe('P2b write-turn max_output_tokens cap', () => {
   it('applies the cap when edit is the write-ish tool in scope', async () => {
     const fn = loadHelper();
     const provider = makeStubProvider(65_536);
-    const applied = fn(provider, 'kimi-code', [{ name: 'edit' }]);
+    const applied = fn(provider, 'zhipu-coding', [{ name: 'edit' }]);
     expect(applied).toBe(true);
     expect(provider.override).toBe(8192);
   });
@@ -78,7 +78,46 @@ describe('P2b write-turn max_output_tokens cap', () => {
   it('applies the cap when multi_edit is in scope', async () => {
     const fn = loadHelper();
     const provider = makeStubProvider(65_536);
-    const applied = fn(provider, 'minimax-coding', [{ name: 'multi_edit' }]);
+    const applied = fn(provider, 'zhipu-coding', [{ name: 'multi_edit' }]);
+    expect(applied).toBe(true);
+    expect(provider.override).toBe(8192);
+  });
+
+  // v0.7.42 — pins the narrowed default RST-prone list. Before v0.7.42
+  // the list also contained `kimi-code` / `minimax-coding` / `mimo-coding`
+  // on a prophylactic basis; 2026-04 bench (see registry.ts per-provider
+  // notes) measured each of them completing 64K streams cleanly. They are
+  // no longer capped by default. Re-add via KODAX_RST_PRONE_PROVIDERS env
+  // var if a regression appears.
+  it('v0.7.42: kimi-code is NOT in the default RST-prone list', async () => {
+    const fn = loadHelper();
+    const provider = makeStubProvider(65_536);
+    const applied = fn(provider, 'kimi-code', [{ name: 'write' }]);
+    expect(applied).toBe(false);
+    expect(provider.override).toBeUndefined();
+  });
+
+  it('v0.7.42: minimax-coding is NOT in the default RST-prone list', async () => {
+    const fn = loadHelper();
+    const provider = makeStubProvider(65_536);
+    const applied = fn(provider, 'minimax-coding', [{ name: 'edit' }]);
+    expect(applied).toBe(false);
+    expect(provider.override).toBeUndefined();
+  });
+
+  it('v0.7.42: mimo-coding is NOT in the default RST-prone list', async () => {
+    const fn = loadHelper();
+    const provider = makeStubProvider(65_536);
+    const applied = fn(provider, 'mimo-coding', [{ name: 'multi_edit' }]);
+    expect(applied).toBe(false);
+    expect(provider.override).toBeUndefined();
+  });
+
+  it('v0.7.42: opt-in via KODAX_RST_PRONE_PROVIDERS restores the cap for kimi-code', async () => {
+    process.env.KODAX_RST_PRONE_PROVIDERS = 'zhipu-coding,kimi-code,minimax-coding,mimo-coding';
+    const fn = loadHelper();
+    const provider = makeStubProvider(65_536);
+    const applied = fn(provider, 'kimi-code', [{ name: 'write' }]);
     expect(applied).toBe(true);
     expect(provider.override).toBe(8192);
   });
