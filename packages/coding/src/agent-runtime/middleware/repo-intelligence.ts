@@ -120,21 +120,45 @@ export async function buildAutoRepoIntelligenceContext(
       executionCwd: options.context?.executionCwd,
       gitRoot: options.context?.gitRoot ?? undefined,
     };
-    const generatedContext = await buildRepoIntelligenceContext({
-      executionCwd: options.context?.executionCwd,
-      gitRoot: options.context?.gitRoot ?? undefined,
-    }, {
-      includeRepoOverview,
-      includeChangedScope,
-      refreshOverview: isNewSession,
-      changedScope: 'all',
-    });
-
     const includeActiveModule =
       decision.primaryTask === 'review'
       || decision.primaryTask === 'bugfix'
       || decision.primaryTask === 'edit'
       || decision.primaryTask === 'refactor';
+
+    // v0.7.41 L1 — first-round NEVER forces `refresh:true` on the daemon.
+    // Previously `refresh: isNewSession` paid the 30s `PREMIUM_REFRESH_TIMEOUT_MS`
+    // budget on every new session (~10-15s wall-time tax). The daemon's own
+    // background polling keeps its on-disk state fresh; the 4s budget path
+    // returns that state immediately. Users who need a forced rebuild can use
+    // `/refresh` (future) or restart the daemon.
+    //
+    // P1.a — Phase 1: OSS overview build and premium preturn fetch run in
+    // parallel (OSS reads local git+fs; preturn talks to the local daemon).
+    // Behavioural pins preserved:
+    //   - preturn is only attempted when `includeActiveModule && premium-native`
+    //   - `.catch(() => null)` keeps a failed preturn from poisoning the build
+    //   - emit order: preturn → module → impact
+    const preturnPromise = includeActiveModule && autoRepoMode === 'premium-native'
+      ? getRepoPreturnBundle(repoContext, {
+          targetPath: activeModuleTargetPath,
+          refresh: false,
+          mode: autoRepoMode,
+        }).catch(() => null)
+      : Promise.resolve(null);
+    const [generatedContext, preturn] = await Promise.all([
+      buildRepoIntelligenceContext({
+        executionCwd: options.context?.executionCwd,
+        gitRoot: options.context?.gitRoot ?? undefined,
+      }, {
+        includeRepoOverview,
+        includeChangedScope,
+        refreshOverview: false,
+        changedScope: 'all',
+      }),
+      preturnPromise,
+    ]);
+
     let moduleContext = '';
     let impactContext = '';
     let fallbackGuidance = '';
@@ -143,26 +167,37 @@ export async function buildAutoRepoIntelligenceContext(
     let moduleResult: Awaited<ReturnType<typeof getModuleContext>> | null = null;
     let impactResult: Awaited<ReturnType<typeof getImpactEstimate>> | null = null;
 
-    if (includeActiveModule && autoRepoMode === 'premium-native') {
-      const preturn = await getRepoPreturnBundle(repoContext, {
-        targetPath: activeModuleTargetPath,
-        refresh: isNewSession,
-        mode: autoRepoMode,
-      }).catch(() => null);
-      if (preturn) {
-        emitRepoIntelligenceTrace(events, options, 'preturn', preturn, preturn.summary);
-        moduleResult = preturn.moduleContext ?? null;
-        impactResult = preturn.impactEstimate ?? null;
-        premiumContext = preturn.repoContext ?? '';
-      }
+    if (preturn) {
+      emitRepoIntelligenceTrace(events, options, 'preturn', preturn, preturn.summary);
+      moduleResult = preturn.moduleContext ?? null;
+      impactResult = preturn.impactEstimate ?? null;
+      premiumContext = preturn.repoContext ?? '';
     }
 
     if (includeActiveModule) {
-      moduleResult = moduleResult ?? await getModuleContext(repoContext, {
-        targetPath: activeModuleTargetPath,
-        refresh: isNewSession,
-        mode: autoRepoMode,
-      }).catch(() => null);
+      // v0.7.41 P1.a — Phase 2: module/impact direct-call fallbacks only fire
+      // for slots NOT already filled by the preturn bundle (preserves the
+      // pre-refactor `??` short-circuit — if preturn populated moduleResult,
+      // we still skip the getModuleContext call). When both are missing they
+      // race in parallel instead of running sequentially.
+      const [moduleFallback, impactFallback] = await Promise.all([
+        !moduleResult
+          ? getModuleContext(repoContext, {
+              targetPath: activeModuleTargetPath,
+              refresh: false,
+              mode: autoRepoMode,
+            }).catch(() => null)
+          : Promise.resolve(null),
+        !impactResult
+          ? getImpactEstimate(repoContext, {
+              targetPath: activeModuleTargetPath,
+              refresh: false,
+              mode: autoRepoMode,
+            }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      moduleResult = moduleResult ?? moduleFallback;
+      impactResult = impactResult ?? impactFallback;
 
       if (moduleResult) {
         emitRepoIntelligenceTrace(
@@ -174,12 +209,6 @@ export async function buildAutoRepoIntelligenceContext(
         );
         moduleContext = ['## Active Module Intelligence', renderModuleContext(moduleResult)].join('\n');
       }
-
-      impactResult = impactResult ?? await getImpactEstimate(repoContext, {
-        targetPath: activeModuleTargetPath,
-        refresh: isNewSession,
-        mode: autoRepoMode,
-      }).catch(() => null);
 
       if (impactResult) {
         emitRepoIntelligenceTrace(

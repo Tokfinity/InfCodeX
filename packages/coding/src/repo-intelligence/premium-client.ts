@@ -22,11 +22,14 @@ import { debugLogRepoIntelligence } from './internal.js';
 const PREMIUM_FAILURE_TTL_MS = 2_000;
 const PREMIUM_REQUEST_TIMEOUT_MS = 4_000;
 /**
- * v0.7.27 — `refresh: true` forces the daemon to rebuild its semantic
- * index before answering. On a medium repo (~800 source files) this
- * takes ~10s; the normal 4s budget is inadequate and produces
- * deterministic AbortError → OSS fallback on the **first turn** of
- * every new session (where `isNewSession` → `refresh: true`).
+ * `refresh: true` forces the daemon to rebuild its semantic index before
+ * answering. On a medium repo (~800 source files) this takes ~10s; the normal
+ * 4s budget is inadequate and produces deterministic AbortError.
+ *
+ * v0.7.27 introduced this 30s budget for `isNewSession → refresh:true` on
+ * every first turn. v0.7.41 (L1) removed that linkage — first-round middleware
+ * now uses `refresh:false` so the 30s budget is only paid by explicit callers
+ * (eval harness, `/repointel warm`, tool-driven semantic_lookup rebuilds).
  *
  * 30s matches what `repointel warm` / `repointel daemon` subcommands
  * expect from a cold index rebuild.
@@ -130,6 +133,11 @@ function normalizeMode(value: string | undefined): KodaXRepoIntelligenceMode {
   ) {
     return value;
   }
+  // Default is 'auto' — premium-native if daemon is reachable, OSS fallback
+  // otherwise. The fallback path is cheap (~10ms TCP RST on localhost +
+  // 2s `PREMIUM_FAILURE_TTL_MS` failure cache → 0ms within TTL → ~5-10ms per
+  // >2s gap). Trading that for the auto-detection of installed repointel is
+  // the right default per README:182.
   return 'auto';
 }
 

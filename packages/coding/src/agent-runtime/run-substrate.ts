@@ -475,20 +475,31 @@ export async function runSubstrate(
     createExtensionRuntimeSessionController(runtimeSessionState),
   );
 
-  await runtime?.hydrateSession(sessionId);
-
   const autoRepoMode = resolveKodaXAutoRepoMode(options.context?.repoIntelligenceMode);
-  const repoRoutingSignals = options.context?.repoRoutingSignals
-    ?? (
-      autoRepoMode !== 'off' && (options.context?.executionCwd || options.context?.gitRoot)
-        ? await getRepoRoutingSignals({
+
+  // v0.7.41 P1.b — hydrateSession (MCP extension state restoration) and the
+  // routing-signals daemon lookup are independent, so run them concurrently
+  // to collapse two sequential awaits into one wall-time slot. Pin:
+  //   - if hydrate throws, Promise.all rejects with the same error (the outer
+  //     catch / caller behaviour stays identical to a plain `await hydrate`)
+  //   - routing has `.catch(() => null)` so its independent failure cannot
+  //     mask the hydration error
+  //   - caller-supplied `options.context.repoRoutingSignals` short-circuit
+  //     preserved via `Promise.resolve(injected)`
+  const routingSignalsPromise = options.context?.repoRoutingSignals
+    ? Promise.resolve(options.context.repoRoutingSignals)
+    : (autoRepoMode !== 'off' && (options.context?.executionCwd || options.context?.gitRoot))
+      ? getRepoRoutingSignals({
           executionCwd,
           gitRoot: options.context?.gitRoot ?? undefined,
         }, {
           mode: autoRepoMode,
         }).catch(() => null)
-        : null
-    );
+      : Promise.resolve(null);
+  const [, repoRoutingSignals] = await Promise.all([
+    runtime?.hydrateSession(sessionId),
+    routingSignalsPromise,
+  ]);
   emitRepoIntelligenceTrace(
     events,
     options,

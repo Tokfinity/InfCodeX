@@ -92,6 +92,7 @@ import {
   getRegisteredToolDefinition,
   createBashPrefixExtractor,
   resolveProvider,
+  prewarmRepoIntelligenceCaches,
 } from "@kodax-ai/coding";
 import type {
   AgentsFile,
@@ -5197,6 +5198,24 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useEffect(() => {
     void initializeSkillRegistry(context.gitRoot);
   }, [context.gitRoot]);
+
+  // v0.7.41 L2 — prewarm repo-intelligence session caches at REPL mount.
+  // Uses `refresh:false` (4s budget) — see prewarmRepoIntelligenceCaches docs.
+  // Cache-coherent with L1 (middleware also uses refresh:false on first round),
+  // so user-path either coalesces onto the in-flight prewarm Promise (~2s) or
+  // hits the warmed P3+ cache (~0ms). Safe to opt out via
+  // `KODAX_PREWARM_REPO_INTELLIGENCE=0`.
+  useEffect(() => {
+    if (process.env.KODAX_PREWARM_REPO_INTELLIGENCE === '0') return;
+    prewarmRepoIntelligenceCaches(
+      {
+        executionCwd: context.gitRoot ?? process.cwd(),
+        gitRoot: context.gitRoot ?? undefined,
+      },
+      { mode: currentConfig.repoIntelligenceMode },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context.gitRoot, currentConfig.repoIntelligenceMode]);
 
   // Process special syntax (shell commands, file references)
   // Create KodaXEvents for streaming updates

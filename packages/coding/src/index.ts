@@ -367,6 +367,7 @@ export {
   getSymbolContext,
   getProcessContext,
   getImpactEstimate,
+  prewarmRepoIntelligenceCaches,
 } from './repo-intelligence/runtime.js';
 
 export type {
