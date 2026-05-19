@@ -1163,114 +1163,203 @@ runner-driven.ts (主循环 + 顶部 re-export)
 
 ---
 
-## ADR-027: REPL Render Path — JSX-Driven + claudecode Parity (FEATURE_172, v0.7.41)
+## ADR-027: REPL 数据层 streaming cache miss 修复 (FEATURE_172 Phase 1, v0.7.41)
 
-**Status**: Drafting (2026-05-18; pending user review before Phase 1 starts)
+**Status**: Partially Superseded by ADR-028 (2026-05-19).  
+**已 ship 部分**:Phase 1 数据层 cache miss 修复(5 commits `19c6aff3` → `343a85ce`)— 保留为 nice-to-have,无功能回退。  
+**已撤回部分**:Phase 2-5 计划 + D2.A/B/C selection 机制 port — 见 ADR-028 重新设计。
 
-### 触发
+### 已 ship 部分
 
-SSH 长 session 渲染卡顿 — `kodax -c` 复用 200+ history items 时,流式输出阶段每 2–3 秒才刷新一帧。Root cause 静态分析定位到 `packages/repl/src/ui/InkREPL.tsx:2757` 的 `promptMainScreenRenderModel` useMemo 把 streaming state(`currentResponse` / `thinkingContent` / `activeToolCalls`)挂进了 cache key,导致 `buildTranscriptRenderModel` 在每次 `StreamingContext.flush()`(80ms 间隔)都重跑;每次重跑内部调 `buildStaticTranscriptSections` 对所有 200 条 history 做 O(N) text-wrap。
+`packages/repl/src/ui/InkREPL.tsx` 的 `promptMainScreenRenderModel` 和 `transcriptMainScreenRenderModel` useMemo 把 streaming state(`currentResponse` / `thinkingContent` / `activeToolCalls`)挂进了 cache key,导致 `buildTranscriptRenderModel` 在每次 `StreamingContext.flush()`(80ms 间隔)都重跑;每次重跑内部调 `buildStaticTranscriptSections` 对所有 200 条 history 做 O(N) text-wrap(200 items 实测 28ms,800 items 实测 94ms)。
 
-### 决策
+修复:`buildTranscriptRenderModel` 拆 `buildTranscriptStaticPortion` / `buildTranscriptDynamicPortion` / `composeTranscriptRenderModel` 三个 pure helper;`InkREPL` 静态 portion useMemo 只挂 `[items, vw, maxLines]`,streaming-state 变化不再 invalidate 静态缓存。`TranscriptRowRenderer` 加 `areTranscriptRowPropsEqual` field-level comparator 接进 `React.memo`。
 
-REPL 渲染从**数据驱动 `TranscriptRow[]` 预计算**迁移到 **JSX-driven + 每条 message `React.memo`**,owned 模式鼠标选择走 **claudecode `nodeCache` + 原生 `Screen.cells` 读取 + `noSelect` / `softWrap` 位图**。代号 **D2.C**。
+实测(`benchmark/perf-baselines/baseline-26d47084.json`,Win11 / Node v24.13.1):
 
-### Why D2.C(对比 D2.A / D2.B 否决)
-
-调研阶段评估三个候选:
-
-| 方案 | 思路 | 状态 |
+| Items | streaming-tick 数据层 p95 | streaming-tick-cached-static p95 |
 |---|---|---|
-| D2.A | `Cell` schema 加 `sourceMessageId` 反指针(或并行 `SourceMap`) | 否决 — 侵入 `tui/substrate/ink/` vendored 层,无 claudecode 参考实现,自创设计风险高 |
-| D2.B | 每个 `<MessageRow>` 通过 ref 上报 wrapped lines 给中央注册表 | 否决 — 自创设计 ~800 行 plumbing,各组件都要带 measurement 代码 |
-| **D2.C** | claudecode 风格 `nodeCache: WeakMap<DOMElement, ScreenRect>`(树遍历命中组件)+ 原生 `Screen.cells` 读字符(选择文本) + `noSelect`/`softWrap` 位图(gutter 跳过 / 软换行 \n 处理) | **采纳** — 直接镜像 `c:/Works/claudecode/src/ink/{selection,hit-test}.ts`,~500 行 port-from-reference |
+| 200 | 29.16ms | 0.44ms |
+| 800 | 94.18ms | 0.52ms |
 
-D2.C 的核心优势:**port 已经在生产环境验证过的实现**,不是发明新设计。`c:/Works/claudecode/src/ink/selection.ts` 918 行完整状态机(anchor/focus + 多击词/行选择 + 拖拽自动滚动 + scrolledOff 缓冲 + OSC 52 复制)直接可参考。
+**功能回归审计 PASS**:1402 + 17 repl tests 全过、8 个 golden snapshot byte-equal、22 hit-test/selection edge tests 全过。
 
-### 零功能回退 — Pre-refactor audit 结论
+### 撤回部分(2026-05-19 调研发现错误)
 
-按 [[feedback_refactor_parity_baseline]] 要求,启动前完成 audit 验证 D2.C 不弱化任何现有 user-facing 能力:
+原 ADR-027(2026-05-18 drafting)把 SSH 2-3s/frame 卡顿的根因**整体**定位在数据层 cache miss + selection 机制 D2.C port,Phase 节奏 21 工作日 5 phase。
 
-- **`selection.text`** 唯一消费方:`InkREPL.tsx:3765-3790` 的 `copyTextToClipboard(text: string)` → `common/clipboard.ts`。**无** quote / forward / export 读取
-- **`selection.rowRanges`** 唯一消费方:`MessageList.tsx:469-534` 的 `TranscriptRowRenderer` 视觉高亮(读 row.key 做 map 索引,**不读 messageId**)
-- **`messageId`/`itemId`** 在鼠标拖拽路径**显式禁用** — `finalizeTranscriptMouseSelection` 调用时 `updateSelectedItem: false`,`focusedRow.itemId` 分支永不触发
-- **键盘 `j/k` item 导航 + 整条 message 复制**(`selectedTranscriptItem` / `copySelectedTranscriptItem` / `copySelectedTranscriptToolInput`) 走 `buildTranscriptCopyText(item)` 直接读 `HistoryItem`,与鼠标 selection 路径**完全隔离** → 不受 D2.C 影响
-- **Hyperlink 点击 / hover tooltip / 右键菜单 / 搜索跳转 / 滚动条 thumb / screen reader** 全部**不使用 `TranscriptScreenBuffer`** → 不受影响
-- **Search index**(`transcript-search.ts`)+ **transcript dump**(`transcript-scrollback-dump.ts`)走 `HistoryItem.text`,与 row[] 解耦 → 不受影响
+2026-05-19 深度调研(三个并行 Explore agent 全管线 trace + claudecode 完整对照)发现:
 
-D2.C 改的是 selection state 内部表示(从 `(rowKey, charIndex)` → `(screen-col, screen-row)`)和高亮渲染机制(从 React row-split → cell-buffer overlay),**用户感知 100% 一致**。
+1. **数据层 cache miss 只是 ~3-5% 总开销** — 不是 SSH 2-3s 的主导因素
+2. **D2.A/B/C 三选 D2.C 是关于 selection 机制 port** — 跟 SSH 渲染性能**无关**
+3. **真正的 ~80% 总开销** 来自 KodaX `tui/substrate/ink/` 渲染底层缺失了 claudecode 的 7 项核心优化:`nodeCache` blit / Packed Int32Array Screen / `markDirty` propagation / `screen.damage` bounding box / `Output.charCache` 跨帧 / `StylePool.transition` 缓存 / 16ms throttle
+4. **原 Phase 2-5 计划完全没覆盖**这些底层优化 — 即使全做完,SSH 仍会卡
 
-### 保障策略(6 层)
+错误根因:静态代码分析定位 root cause 时**没 trace 到 engine 层 `onRender` 完整管线**(`tui/core/engine.js:347-516` + `tui/core/internals/renderer.js` + `tui/substrate/ink/cell-screen.ts setCellAt` O(N²))。Bench 设计也是错的 — 只测 `buildTranscriptRenderModel` inner function 而不是 end-to-end `onRender` wall-time。
 
-按 [[feedback_refactor_parity_baseline]] + [[feedback_review_each_commit]]:
+### 教训(写入 feedback memory)
 
-| Layer | 内容 | Gate |
-|---|---|---|
-| **Layer 0 — Baseline capture** | 现有 `tui/core/{selection,hit-test,screen}.test.ts` + `ui/utils/transcript-{search,selection-gestures,state.selection,text-selection}.test.ts` 覆盖审计;补 golden 测试覆盖 9 种 HistoryItem 渲染 + 鼠标 hit-test 边界 + 选择 anchor/focus 组合 + scroll/sticky 状态 + search 高亮 + history cap;`ink-testing-library` frame buffer 字节级 golden;benchmark suite 200/400/800 items × 100 ticks baseline | 全 golden 由当前代码产出,diff utility 就绪 |
-| **Layer 1 — TDD per phase** | 每 phase 新测试先写(RED),实现后通过(GREEN) | 各 phase 测试覆盖率 ≥80% |
-| **Layer 2 — Phase gates** | 每 phase 完成必须:(a) Layer 0 全 golden byte-equal PASS;(b) phase-specific 测试 PASS;(c) benchmark 不退化 >5% | 三项任一不过 → phase 不算完,不进下一 phase |
-| **Layer 3 — E2E** | `tests/e2e/`(目前**无**)新增:legacy 长 session、owned 鼠标拖选、owned 键盘 copy-mode、owned 搜索跳转、streaming 中断、terminal resize | 重构前先跑通对照基线 |
-| **Layer 4 — Performance** | benchmark 目标:200 items / tick ≤2ms(claudecode parity 估值),vs baseline ~9-22ms | benchmark 报告并归档到 `benchmark/results/` |
-| **Layer 5 — 24h soak** | 全 phase 完成 + 全 gate 过后,作者用新代码 dogfood 24h | 0 issue 后才打 v0.7.41 tag |
+- bench 必须测端到端 wall-time,只测一个 inner function 会高估修复效果
+- claudecode 对标必须 trace 到底层数据结构 / 缓存层,看到"已 port cell-renderer" 不代表对齐
+- ADR 跨多次调研时必须可迭代 — 不要让基于不全调研的决策"既成事实化"
+- 复杂渲染管线诊断必须用多 agent 并行 + 互相对照 + 对比参考实现
+
+参考:[[feedback_layer1_measurement_before_optimization]] / [[feedback_no_guessing_api_names]]
+
+### 后续
+
+- 数据层 cache miss 修复(Phase 1)**保留** — 是真实优化,无回退
+- SSH 2-3s 卡顿的完整修复见 **ADR-028**(底层渲染 perf port,Phase A-E,13-20 工作日)
+- `docs/features/v0.7.41.md` FEATURE_172 status 同步更新
+
+---
+
+## ADR-028: KodaX 渲染底层 — Port claudecode 的 7 项核心 perf 优化 (FEATURE_172 Phase A-E, v0.7.41+)
+
+**Status**: Drafting (2026-05-19; pending user SSH 实测 + 工作日预算确认)
+
+### 背景
+
+ADR-027 把 SSH `kodax -c` 长 session 2-3s/frame 卡顿的根因定位在数据层 `buildTranscriptRenderModel` cache miss,Phase 1 修复后实测数据层 200 items 从 28ms 降到 0.5ms,但**未端到端验证 SSH 体验**。
+
+2026-05-19 三个并行 Explore agent 全管线 trace + claudecode 完整对照后发现:数据层只占总开销 ~3-5%,真正瓶颈在 KodaX `tui/substrate/ink/` 渲染底层。
+
+### 每帧 cost 分解(200 history items / SSH)
+
+| # | 阶段 | KodaX 当前 cost | claudecode cost | 占比 | KodaX 缺失的优化 |
+|---|---|---|---|---|---|
+| ① | `buildTranscriptRenderModel` text-wrap | ~0.5ms(P1 后) | N/A | ~0% | (已修复) |
+| ② | React reconciliation | ~30-50ms | ~5-10ms | ~5% | `markDirty` propagation + per-row memo(P1.3 部分修) |
+| ③ | Yoga calculateLayout | ~20ms | ~5ms | ~3% | Yoga 内部 incremental(已有) |
+| ④ | `Output.getGrid` 每帧重建 | ~50-100ms | ~5ms | ~12% | **`Output.charCache` 跨帧** |
+| ⑤ | `setCellAt` `cells.slice()` per cell | ~80ms(4000 cells × N slice) | ~0.5ms | ~12% | **Packed `Int32Array` Screen + `TypedArray.set` blit** |
+| ⑥ | `diffEach` 全屏 walk | ~16-65ms | ~1ms | ~10% | **`screen.damage` bounding box** |
+| ⑦ | `renderNodeToOutput` 全树递归 | O(N) per frame | O(dirty) | **~55%** | **`nodeCache` blit short-circuit** |
+| ⑧ | SSH round-trip / ConPTY | ~100-300ms(同) | ~100-300ms(同) | — | (不可在 KodaX 改) |
+| **总 wall-time** | | **~400-800ms/frame**(80ms tick 跑不动 → 堆积 → 2-3s) | **~115-330ms/frame**(80ms tick 跑得动) | — | — |
+
+(KodaX cost 是基于 cell-screen.ts:103 `setCellAt`、output.js:80 `getGrid`、render-node-to-output.js:71 `renderNodeToOutput` 三个 agent 的代码 trace + claudecode 对照推断。Phase A 开工前必须先端到端 wall-time bench 校准实测值。)
+
+### 决策 — 按优先级 port claudecode 7 项优化
+
+**Critical(必做,决定 SSH 流畅与否)**:
+
+- **C1. `nodeCache` blit short-circuit**(最大杠杆 ~55%)  
+  `WeakMap<DOMElement, ScreenRect>` 缓存每个 React node 的 (x, y, w, h)。clean subtree(`!node.dirty` && layout 未变 && `prevScreen` 在)调 `output.blit(prevScreen, x, y, w, h)` `TypedArray.set` 拷贝 + return,**不进 children 递归**。  
+  参考:`c:/Works/claudecode/src/ink/node-cache.ts`(55 行)+ `src/ink/render-node-to-output.ts:454-481` blit 短路逻辑
+
+- **C2. Packed `Int32Array` Screen**(~12% + C1 的 enabler)  
+  替换 `Cell[]` 数组 + `cells.slice()` per cell(O(N²))为 `Int32Array(width*height*2)`(charId + style+hyperlink+width 打包)。blit 用 `TypedArray.set`,diff 用整数比较。**C1 的 `output.blit` 需要 TypedArray.set,所以 C2 是 C1 的前置。**  
+  参考:`c:/Works/claudecode/src/ink/screen.ts`
+
+- **C3. `markDirty` propagation + renderer dirty-only recursion**(~5%,C1 的 enabler)  
+  `commitTextUpdate` 时 `markDirty(textNode)` 走 ancestors;`renderNodeToOutput` 检查 `node.dirty`,clean subtree 走 C1 blit 短路。  
+  参考:`c:/Works/claudecode/src/ink/reconciler.ts` commitTextUpdate
+
+- **C4. `screen.damage` bounding box**(~10%)  
+  `Output` 记录本帧实际写入的 cell 范围;`diffEach` 只扫这个矩形,不走 max(prev.h, next.h) 全屏。  
+  参考:`c:/Works/claudecode/src/ink/output.ts` damage tracking
+
+**Important(强烈建议)**:
+
+- **I1. `Output.charCache` 跨帧持久化**(~12%,和 C4 配合放大)  
+  Line 文本的 tokenize + grapheme clustering 结果跨帧缓存,clean line 不重 tokenize。  
+  参考:`c:/Works/claudecode/src/ink/output.ts` charCache
+
+- **I2. `StylePool.transition` 缓存**(~2-5%)  
+  ANSI escape 转换字符串缓存(`Map<fromId * 0x100000 + toId, string>`),零分配 after warmup。  
+  参考:`c:/Works/claudecode/src/ink/screen.ts:153-162`
+
+**Nice-to-have(锦上添花)**:
+
+- **N1. `FRAME_INTERVAL_MS` 33→16**(30 FPS → 62.5 FPS)— 一行常量改动,需 Phase B 完成后才有意义
+- **N2. `renderScrolledChildren` viewport culling 强化** — render-time 视口外 children 完全跳过
+
+### 不做(已评估否决)
+
+- **完整 port claudecode ink fork** — KodaX 当前已 fork ~25k 行 tui/,完整 rewrite scope 过大,违反"add code cautiously"
+- **D2.A / D2.B / D2.C selection 机制 port**(ADR-027 撤回内容)— 跟 SSH 卡顿**无关**,纯 UX parity issue,可按需独立排期(非本 ADR scope)
+- **只做 C1 不做 C2** — `output.blit` 需要 `TypedArray.set`,Cell 对象数组无法直接用,杠杆失效
 
 ### Phase 节奏
 
-| Phase | 内容 | 工作日 |
-|---|---|---|
-| Layer 0 | Baseline capture + benchmark baseline + e2e scripts | 3 |
-| Phase 0 | 本 ADR + `docs/features/v0.7.41.md` § FEATURE_172 设计 | 1 |
-| Phase 1 | JSX 渲染层(per-message `React.memo` 组件 + 外科手术式 comparator,claudecode `areMessageRowPropsEqual` 镜像) | 4 |
-| Phase 2 | Streaming preview 拆为 `<StreamingPreview>` 兄弟组件(直接订阅 `StreamingContext`) | 2 |
-| Phase 3 | Port claudecode `nodeCache` + `noSelect`/`softWrap` 位图 + `selection.ts` 状态机 + `dispatchClick`/`dispatchHover` + `applySelectionOverlay` + OSC 52 到 KodaX `tui/` fork | 5 |
-| Phase 4 | 用新机制替换 `InkREPL.tsx` 鼠标 drag→buildTranscriptScreenSelection 路径,删 `transcript-text-selection.ts` / `tui/core/{screen,hit-test,selection}.ts` 旧实现 | 3 |
-| Phase 5 | 清理 `TranscriptRow[]` SoT 残留(`materializeTranscriptRenderModel` / `buildDynamicTranscriptSection` 等),保留 row[] 仅作为 `capHistoryByTranscriptRows` budget cache | 2 |
-| Layer 5 | 24h soak | 1 |
-| **总计** | | **21 工作日** |
+每 Phase 一个 atomic commit + golden byte-equal + end-to-end wall-time bench 三次取中位(perf 噪声大):
 
-所有 phase 在 `KodaX` 分支,每 phase 一个 atomic commit push 到 origin。**无 runtime dual-path**(遵循 [[feedback_no_parallel_refactor_paths]])。
+| Phase | 内容 | 工作日估算 | 风险 | 前置 |
+|---|---|---|---|---|
+| **Phase A** | C2 Packed Int32Array Screen — 重写 `tui/substrate/ink/cell-screen.ts` + 所有 consumer + golden bit-equal tests | 3-5 | **高** — substrate 数据结构,影响面广 | (无)|
+| **Phase B** | C1 + C3 nodeCache blit + markDirty propagation + render-node-to-output dirty-only walk(最大性能杠杆) | 4-6 | **高** — 渲染核心改动 | Phase A |
+| **Phase C** | C4 `screen.damage` bounding box | 2-3 | 中 | Phase A |
+| **Phase D** | I1 + I2 Output.charCache + StylePool.transition cache | 2-3 | 低 | Phase A |
+| **Phase E** | N1 + N2 throttle 调整 + viewport culling 强化 | 1-2 | 低 | Phase B |
+| **Soak** | 24h dogfood + 端到端 SSH wall-time bench 三次取中位 | 1 | — | A-E 全过 |
+| **总计** | | **13-20 工作日(3-4 周)** | — | — |
 
-### NoSelect 等价机制
+(参考 ADR-027 错过的工作量预估 21 工作日:那 21 工作日是错配 — Phase 1-2 解 3-5% cost、Phase 3-5 是 selection 机制 port 跟 perf 无关。本 ADR 的 13-20 工作日**全部覆盖 perf 杠杆**。)
 
-claudecode 用 `<NoSelect>` + `noSelect: Uint8Array` 位图标记不可选区域(gutter / sigil / 行号)。KodaX 当前把这个责任 inline 在 `row.textStartColumn = 1 + indent + (spinner ? 2 : 0)`(`transcript-text-selection.ts:36-43`)。
+### 保障(Layer 0/1/2/5,参考 ADR-027 验证过的结构)
 
-D2.C 实施时必须:
-1. Layer 0 阶段**精确列出**所有 KodaX 不可选屏幕区域:Spinner braille 字符(`⠋⠙⠹...`)、行首缩进/sigil 装饰(`│ ` `└ ` `▸ ` 等)、行号 / Header 装饰、活跃 spinner 行
-2. Phase 3 实施时**所有上述区域用 `<NoSelect>` 等价机制包装** → 位图记录 → 选择路径跳过
+- **Layer 0 — Baseline**:补 **端到端 wall-time bench**(`ink-testing-library` 跑 engine.onRender 全链路 + 测 stdout.write 调用次数 + 总 bytes)。当前 `benchmark/perf/repl-render-perf.bench.ts` 只测 inner function,**必须扩展**才能有 phase gate 数据。
+- **Layer 1 — TDD per phase**:每 phase RED → GREEN。golden byte-equal 是硬底线。
+- **Layer 2 — Phase gates**:每 phase 完成必须(a) Layer 0 golden 全 byte-equal PASS;(b) end-to-end wall-time bench 不退化 >5% vs 上 phase 末;(c) phase-specific 测试 PASS。
+- **Layer 5 — 24h soak + SSH 实测**:用户 SSH 长 session 实测体验改善。
 
-这是**已知工程任务**,不是 unknown risk。
+### 端到端 Bench Contract(Phase A 启动前)
 
-### Rollback 契约
+| 场景 | 当前实测(P1 后) | Phase A 目标 | Phase B 目标 | Phase C-E 目标 |
+|---|---|---|---|---|
+| 200 items streaming-tick end-to-end wall-time(含 onRender + applyDiff)| **TODO 待实测** | ≤200ms p95 | ≤50ms p95 | ≤30ms p95 |
+| 800 items streaming-tick end-to-end wall-time | **TODO 待实测** | ≤500ms p95 | ≤100ms p95 | ≤50ms p95 |
+| stdout.write 总 bytes / frame | **TODO 待实测** | 同当前(C2 不影响 bytes) | -50%(C1 blit 后只写 damage 区域) | -80% |
 
-每 phase = 一个 atomic commit pushed to origin。`git revert <commit>` 回到上 phase 末状态。**无 runtime feature flag** — 所有变更 merge-or-revert atomic。
+**bench harness 必须新写,本 ADR 优先级 P0**。当前 `benchmark/perf/repl-render-perf.bench.ts` 是 Phase 1 设计的,只测 buildTranscriptRenderModel 内层,**不能用于 Phase A-E gating**。
 
-Layer 5 soak 后如发现 non-fixable 回归:
-- **可接受 partial rollback**:`git revert` Phase 3+4+5,保留 Phase 1+2(per-row memo + streaming sibling) — 这两步本身已是独立 perf 增益,即使无 claudecode 选择 port 也能解 SSH lag
-- **极端 full rollback**:revert 全部 phase,v0.7.41 不变化 ship(兜底,实操不应触发)
+### Replace ADR-027 D2.C — selection 机制独立 ADR
 
-### Consequence
+ADR-027 的 D2.C(port claudecode `selection.ts` + `nodeCache + hit-test`)是**两个独立 concern 错误绑定**:
+- `nodeCache` 是渲染 perf 优化(本 ADR C1)
+- `selection.ts` 是 mouse selection UX 对齐(跟 perf 无关)
 
-- **删除**:`TranscriptScreenBuffer` + `buildTranscriptScreenBuffer` + 旧 `tui/core/hit-test.ts` + 旧 `tui/core/selection.ts` + `ui/utils/transcript-text-selection.ts`(由 claudecode-port 等价实现替换)
-- **新增**:`tui/substrate/ink/render-node-to-output.ts` 加 `nodeCache: WeakMap<DOMElement, ScreenRect>` 填充逻辑;`tui/core/screen.ts` 新 Screen schema 携带 `noSelect`/`softWrap` 位图;新 `tui/core/selection.ts`(~918 行 port);engine 加 `dispatchClick`/`dispatchHover`/`applySelectionOverlay`/`copySelectionNoClear`
-- **保留**:`TranscriptRow[]` 仅作为 `capHistoryByTranscriptRows` budget cache(唯一 Phase 5 后仍消费 row[] 的子系统);如 budget 计算也能改成基于 `HistoryItem` 估算,row[] 完全删除(Phase 5 评估)
-- **架构走向**:KodaX `tui/` fork 推进到 **claudecode-parity 引擎完整能力**(之前已部分对齐 cell-renderer / write-synchronized / shared spinner clock,本 ADR 把对齐面扩展到 selection + hit-test 层)
+selection 机制 port 如果未来需要做,**独立立 ADR**(暂命名 ADR-XXX),不再绑定 perf scope。
+
+### Rollback
+
+每 Phase atomic commit pushed to origin。`git revert <commit>` 回上 phase 末。**无 dual-path runtime flag**([[feedback_no_parallel_refactor_paths]])。
+
+Phase A/B 之间不能跳 — C2 是 C1 的前置(`output.blit` 需要 `TypedArray.set`)。
+Phase C/D 互相独立 — 可并行(不同文件)。
+Phase E 是 nice-to-have — 任何时机都可独立做。
+
+如 Layer 5 实测 Phase A+B 后已经流畅,Phase C-E 可降级 future work,本 ADR 转 "Accepted, deferred"。
+
+### 替代方案 — 如 Phase 1 实测已够流畅
+
+用户 SSH 实测 Phase 1 修复后,如已从 2-3s/frame 降到 ≤500ms/frame 且主观可接受:
+- Phase A-E **不必做**
+- 本 ADR 转 "Accepted, deferred to v0.8.x"
+- KodaX 在 200-500 items 区间继续运行;1000+ items 时再启动 Phase A-E
+
+(实测路径:用户 SSH 200/400/800 items session 主观判断 + 可选 `time` 命令 + 可选 KodaX 内部 timing log)
 
 ### 与其他 ADR 的关系
 
 | ADR | 关系 |
 |---|---|
-| ADR-021 (agent ↔ coding 边界) | 不冲突 — 本 ADR 完全在 `@kodax-ai/repl` 内部 |
-| ADR-022 (npm 单包分发) | 不冲突 |
-| ADR-026 (`runner-driven.ts` 模块化拆分) | 类似的"大重构 + 多 commit + atomic per phase"节奏先例;本 ADR 借鉴 R1-R5 节奏设计 + byte-parity 思路(扩展为 golden-byte-parity) |
-| FEATURE_057 Track F (cell-level renderer) | 本 ADR 是 FEATURE_057 路线的**自然延伸** — Track F 让 stdout 写入 claudecode-parity,本次让 selection / hit-test 也 claudecode-parity |
-| FEATURE_125 / 170 / 171 (v0.7.41 同期 shipped) | 已 ship,无 commit interleave 风险 |
+| ADR-027 | 本 ADR supersedes 027 关于 SSH lag 根因诊断 + Phase 2-5 计划。027 Phase 1 数据层修复保留 |
+| FEATURE_057 Track F (cell-level renderer) | C2 Packed Int32Array Screen 是 Track F 自然延伸 — Track F port 了 `log-update.ts`,本 ADR port 配套的 `screen.ts` + `output.ts` + `render-node-to-output.ts` |
+| ADR-021 (agent ↔ coding) | 不冲突 — 本 ADR 完全在 `@kodax-ai/repl tui/` 内部 |
+| ADR-026 (`runner-driven.ts` 拆分) | 类似的"多 commit atomic per phase + byte-parity gate"节奏先例 |
 
 ### References
 
-- claudecode 源参考:`c:/Works/claudecode/src/ink/selection.ts`(918 行完整状态机)、`c:/Works/claudecode/src/ink/hit-test.ts`、`c:/Works/claudecode/src/ink/components/AlternateScreen.tsx`
-- KodaX 当前实现:`packages/repl/src/ui/InkREPL.tsx`(8630 行)、`packages/repl/src/tui/core/{screen,hit-test,selection}.ts`、`packages/repl/src/ui/utils/transcript-{layout,text-selection}.ts`
-- 同 release window claudecode-parity 先例:spinner stats tail commit `58682cbf`(v0.7.41,2026-05-18)
-- 详细设计 + phase tracking:`docs/features/v0.7.41.md` § FEATURE_172
-- 手测回归指南:`docs/test-guides/FEATURE_172_v0.7.41_REGRESSION_GUIDE.md`(Layer 0 阶段产出)
+- 三 agent 调研结论 chat 2026-05-19(KodaX pipeline trace / SSH path / claudecode pipeline)
+- claudecode 关键文件:
+  - `c:/Works/claudecode/src/ink/node-cache.ts`(55 行,C1 参考)
+  - `c:/Works/claudecode/src/ink/screen.ts`(Packed Int32Array Screen,C2 参考)
+  - `c:/Works/claudecode/src/ink/reconciler.ts` commitTextUpdate(C3 参考)
+  - `c:/Works/claudecode/src/ink/render-node-to-output.ts:454-481`(C1 blit short-circuit 实现)
+  - `c:/Works/claudecode/src/ink/output.ts`(I1 charCache 参考)
+- KodaX 当前实现:`packages/repl/src/tui/substrate/ink/{cell-renderer,cell-screen,output-to-screen,viewport-state}.ts` + `tui/core/internals/{renderer,render-node-to-output,output,reconciler,dom}.js` + `tui/core/engine.js`
 
 ---
 
