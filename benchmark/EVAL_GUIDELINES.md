@@ -261,6 +261,31 @@ Total: $Z
 
 ---
 
+## Canonical alias panel（2026-05-19 锁定）
+
+新 prompt-eval 的 Layer 2 / Layer 3 跑面默认就这 **5 个 alias**：
+
+| Alias short id | Provider · model | Family | 档位 |
+|---|---|---|---|
+| `zhipu/glm51` | zhipu-coding · glm-5.1 | Zhipu | high-end |
+| `kimi`        | kimi-code · kimi-for-coding | Moonshot | high-end |
+| `mmx/m27`     | minimax-coding · MiniMax-M2.7 | MiniMax | high-end |
+| `ds/v4pro`    | deepseek · deepseek-v4-pro | DeepSeek | high-end |
+| `ds/v4flash`  | deepseek · deepseek-v4-flash | DeepSeek | floor |
+
+**为什么是这 5 个**：
+- 覆盖 4 个独立 provider family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补
+- DeepSeek 双档（flash floor + pro high-end）能在同 family 内捕到"模型档位是否吃 prompt 改动"
+- 排除 `mimo/v25(pro)` / `ark/glm51` 等可选 alias —— 不是禁止用，是不在 default panel；有跨 panel 验证需要时再加
+
+**Pilot 阶段（探索 trigger 是否成立）**：仍按 anti-pattern 4 用 1 alias × 1 case × 1 run，**alias 选 `ds/v4flash`**（最便宜 floor model，单 call ~$0.005）。Pilot 触发后 Layer 2 才放量到 5 alias。
+
+**例外**：
+- 某 feature 只影响特定 provider（例如 zhipu-only quirk）时 panel 收窄到 `zhipu/glm51` 单 alias，需在 eval docstring 显式说明
+- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 8 alias 含 mimo / ark / kimi 三家全档位
+
+---
+
 ## 现成的 eval 工具（KodaX 现状）
 
 KodaX 已有 [benchmark/harness/](harness/) 但**主要支持 Layer 3.5**（端到端跑），不直接支持 Layer 2 single-turn probe。
