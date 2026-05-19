@@ -216,20 +216,66 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       return freeze(items);
     },
     init(seeds): void {
-      items = seeds.map((seed) => ({
-        id: seed.id,
-        content: seed.content,
-        status: 'pending' as TodoStatus,
-        owner: seed.owner,
-        sourceObligationIndex: seed.sourceObligationIndex,
-        activeForm: seed.activeForm,
-        // FEATURE_114 v0.7.36 — carry the optional evaluator hint from
-        // seed to TodoItem. Slice 3 will wire `runDeterministicEvaluator`
-        // to consume this on `pending → completed`.
-        evaluator: seed.evaluator,
-        // FEATURE_170 v0.7.41 — opaque metadata carried verbatim from seed.
-        metadata: seed.metadata,
-      }));
+      // v0.7.42 — id-match terminal-success preservation. Mid-task re-init
+      // (Worker calls `todo_update({op:'init'})` to refine scope) used to
+      // wipe every item back to `pending`, including ids that matched a
+      // previously `completed` / `skipped` / `cancelled` item. UI then
+      // showed `0/N completed` even when prior work was actually done,
+      // and the LLM's throttle reminder re-listed already-finished work
+      // as `open` — both inviting redundant execution.
+      //
+      // Preservation rules:
+      //   - Seed id matches existing item AND existing status is terminal-
+      //     success (`completed` | `skipped` | `cancelled`) → KEEP that
+      //     status. The `note` is preserved alongside (e.g. cancelled
+      //     reason).
+      //   - Seed id matches existing item AND existing status is
+      //     non-terminal (`pending` | `in_progress` | `failed`) → reset
+      //     to `pending`. Rationale: those statuses describe in-flight
+      //     execution intent; re-init means "refresh the plan" so the
+      //     execution intent is moot. `failed` becomes `pending` so the
+      //     LLM gets a clean retry without the prior `note` polluting.
+      //   - Seed id has no match in existing items → enter as `pending`
+      //     (new item).
+      //   - Existing items whose ids are NOT in the seed list are
+      //     dropped (init() is still a destructive replace for the
+      //     LIST shape; only per-id statuses survive).
+      //
+      // `reset()` remains the explicit "wipe everything" path for true
+      // start-over scenarios (Evaluator replan verdict → store.reset()
+      // → next contract slot re-seeds). Behavior of `reset()` is
+      // unchanged.
+      const prevById = new Map<string, TodoItem>(items.map((it) => [it.id, it]));
+      items = seeds.map((seed) => {
+        const prev = prevById.get(seed.id);
+        const preserveStatus =
+          prev !== undefined
+          && (
+            prev.status === 'completed'
+            || prev.status === 'skipped'
+            || prev.status === 'cancelled'
+          );
+        return {
+          id: seed.id,
+          content: seed.content,
+          status: preserveStatus ? prev.status : ('pending' as TodoStatus),
+          // Preserve the note alongside the status (e.g. `cancelled`
+          // items often carry a Worker-supplied reason that the user
+          // should keep seeing across a refine-the-plan call). When
+          // status is reset to `pending`, the note is cleared — a
+          // pending item with a stale `failed` note would mislead.
+          ...(preserveStatus && prev.note !== undefined ? { note: prev.note } : {}),
+          owner: seed.owner,
+          sourceObligationIndex: seed.sourceObligationIndex,
+          activeForm: seed.activeForm,
+          // FEATURE_114 v0.7.36 — carry the optional evaluator hint from
+          // seed to TodoItem. Slice 3 will wire `runDeterministicEvaluator`
+          // to consume this on `pending → completed`.
+          evaluator: seed.evaluator,
+          // FEATURE_170 v0.7.41 — opaque metadata carried verbatim from seed.
+          metadata: seed.metadata,
+        };
+      });
       recomputeCounterFromSeeds(seeds);
       // init always notifies — even an empty seed list represents an
       // intentional "the task is starting, here is the (empty) plan" event.

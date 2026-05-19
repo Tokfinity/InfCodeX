@@ -1753,6 +1753,18 @@ async function runManagedTaskViaRunnerInner(
         },
         isTerminal: true,
       };
+      // v0.7.42 — mirror the `wrapEmitterWithRecorder` verdict-slot
+      // `accept` branch's auto-completion side-effect. The synth path
+      // assigns directly to `recorder.verdict` and so bypasses the
+      // wrapper's slot setter (which would have called
+      // `autoCompleteOnAccept` for a real `emit_verdict` tool call).
+      // Without this mirror, the plan-list UI shows `0/N completed`
+      // even when the run terminated as `accept` — Worker did the
+      // work but never closed individual items, and the synth bypass
+      // means the runner-side safety net never fired either. Pairing
+      // the auto-complete here keeps "final terminal verdict status"
+      // and "items rendered to user" structurally consistent.
+      todoStore.autoCompleteOnAccept();
       options.events?.onEvaluatorFallbackSynthesized?.({
         retriesAttempted,
         cap: verdictRetryCap,

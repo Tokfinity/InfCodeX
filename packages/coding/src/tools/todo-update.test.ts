@@ -293,11 +293,19 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
     expect(store.getAll()).toHaveLength(1);
   });
 
-  it('REPLACES an already-populated store (CC TodoWrite parity)', async () => {
+  it('REPLACES an already-populated store with new ids (drops items not in seed list)', async () => {
+    // v0.7.42 update: store-layer id-match preserve (todo-store.ts:init)
+    // keeps completed/skipped/cancelled status when the SAME id is
+    // re-seeded. This test covers the complementary path — seeds with
+    // ENTIRELY NEW ids cause the old items (including the mutated
+    // completed one) to be dropped from the list. The "CC TodoWrite
+    // parity" framing of the original v0.7.34 test is preserved here
+    // for the new-id case; id-match preserve is exercised in the
+    // dedicated todo-store.test.ts suite. Tool-layer dirty-reject was
+    // prototyped + reverted in v0.7.42 (see FEATURE_175 SHIP gate
+    // failure), so op:'init' on a dirty store still succeeds.
     const { ctx, store } = makeContextWithStore();
-    // Pre-populated with todo_1, todo_2, todo_3 from `makeContextWithStore`.
     expect(store.getAll()).toHaveLength(3);
-    // Mutate one to verify replace really wipes state, not merges.
     store.updateStatus('todo_1', 'completed');
     const result = await toolTodoUpdate(
       {
@@ -313,7 +321,8 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
     const all = store.getAll();
     expect(all).toHaveLength(2);
     expect(all.map((it) => it.id)).toEqual(['p_1', 'p_2']);
-    // todo_1's completed status is GONE — fully replaced.
+    // todo_1's completed status is gone because its id is not in the new
+    // seed list — id-preserve only protects matched ids.
     expect(all.every((it) => it.status === 'pending')).toBe(true);
   });
 
@@ -453,6 +462,39 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
     // Same "not active" message as the v0.7.34 update path — store unwired
     // is store unwired regardless of which op the LLM tried.
     expect(parsed.reason.toLowerCase()).toContain('not active');
+  });
+});
+
+// v0.7.42 — dirty-store reject was PROTOTYPED here and REVERTED after
+// FEATURE_175 Layer 2 panel ran zhipu/glm51 0/5 on both cases (intent-
+// vs-action floor; see SHIP gate (b) in
+// benchmark/datasets/feature-175-init-reject-recovery/cases.ts). The
+// store-layer id-match preserve in todo-store.ts:init() covers the
+// dominant case (same ids re-seeded); the pivot path (entirely new
+// ids) still drops prior items via init's destructive-replace
+// semantic. The 7 dirty-reject tests that lived here in the prototype
+// were removed alongside the executeInitOp guard. Pinning the absence
+// of the reject so a future re-introduction triggers a deliberate
+// re-evaluation.
+describe("todo_update v0.7.42 op:'init' on dirty store still succeeds (no reject)", () => {
+  it("op:'init' on a store with completed/failed/cancelled items returns ok:true (no dirty-reject)", async () => {
+    const { ctx, store } = makeContextWithStore();
+    store.updateStatus('todo_1', 'completed');
+    store.updateStatus('todo_2', 'failed', 'first try blew up');
+    store.updateStatus('todo_3', 'cancelled', 'pivoted');
+    const result = await toolTodoUpdate(
+      {
+        op: 'init',
+        items: [
+          { id: 'p_1', content: 'New plan step 1' },
+          { id: 'p_2', content: 'New plan step 2' },
+        ],
+      },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true, count: 2 });
+    // All three old ids are gone (new seed list uses fresh ids).
+    expect(store.allIds()).toEqual(['p_1', 'p_2']);
   });
 });
 

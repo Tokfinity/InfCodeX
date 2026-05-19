@@ -699,3 +699,95 @@ describe('todo-store remove() — FEATURE_170 v0.7.41', () => {
     expect(events[0]!.map((it) => it.id)).toEqual(['todo_1', 'todo_3']);
   });
 });
+
+// v0.7.42 — init() id-match terminal-success preservation. Mid-task re-init
+// used to silently wipe completed/skipped/cancelled items back to pending,
+// causing the plan UI to show 0/N completed even after real work landed.
+// init() now preserves those three statuses (and their notes) when the
+// new seed list reuses the same id. Non-terminal statuses (pending /
+// in_progress / failed) are still normalized to pending — they describe
+// in-flight intent that the re-seed implicitly drops.
+describe('todo-store init() preserves terminal-success on id match (v0.7.42)', () => {
+  it('preserves completed/skipped/cancelled on id match, resets in_progress/failed/pending', () => {
+    const store = createTodoStore();
+    store.init([
+      { id: 'todo_1', content: 'Wire EChart' },
+      { id: 'todo_2', content: 'Overlay data' },
+      { id: 'todo_3', content: 'Fix marker zoom' },
+      { id: 'todo_4', content: 'Verify' },
+      { id: 'todo_5', content: 'Cleanup' },
+    ]);
+    // Drive the store into the 5 status flavors that exist after a
+    // mid-task re-init: completed (terminal-success), skipped
+    // (terminal-success), cancelled (terminal-success), in_progress
+    // (non-terminal), failed (non-terminal).
+    store.updateStatus('todo_1', 'completed');
+    store.updateStatus('todo_2', 'skipped');
+    store.updateStatus('todo_3', 'cancelled', 'no longer needed');
+    store.updateStatus('todo_4', 'in_progress');
+    store.updateStatus('todo_5', 'failed', 'prior reason');
+
+    // Worker re-emits op:'init' with the same 5 ids (e.g. to refine
+    // content / add an evaluator hint).
+    store.init([
+      { id: 'todo_1', content: 'Wire EChart' },
+      { id: 'todo_2', content: 'Overlay data' },
+      { id: 'todo_3', content: 'Fix marker zoom' },
+      { id: 'todo_4', content: 'Verify' },
+      { id: 'todo_5', content: 'Cleanup' },
+    ]);
+    const items = store.getAll();
+    expect(items.map((it) => it.status)).toEqual([
+      'completed', // preserved (terminal-success)
+      'skipped',   // preserved (terminal-success)
+      'cancelled', // preserved (terminal-success)
+      'pending',   // reset from in_progress
+      'pending',   // reset from failed
+    ]);
+  });
+
+  it('preserves note alongside preserved cancelled status', () => {
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.updateStatus('todo_1', 'cancelled', 'user changed their mind');
+    store.init([{ id: 'todo_1', content: 'X (refined)' }]);
+    const it = store.getAll()[0]!;
+    expect(it.status).toBe('cancelled');
+    expect(it.note).toBe('user changed their mind');
+    expect(it.content).toBe('X (refined)'); // content patched, status sticky
+  });
+
+  it('clears note when status is reset from failed to pending', () => {
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.updateStatus('todo_1', 'failed', 'first attempt error trace');
+    store.init([{ id: 'todo_1', content: 'X' }]);
+    const it = store.getAll()[0]!;
+    expect(it.status).toBe('pending');
+    // A pending item carrying a stale "failed" note would mislead the
+    // throttle-reminder render and the LLM's next-turn context — the
+    // re-init implicitly retries the item with a clean slate.
+    expect(it.note).toBeUndefined();
+  });
+
+  it('seeds new ids as pending alongside preserved id matches', () => {
+    const store = createTodoStore();
+    store.init([
+      { id: 'todo_1', content: 'A' },
+      { id: 'todo_2', content: 'B' },
+    ]);
+    store.updateStatus('todo_1', 'completed');
+    // Re-init adds a third item — the existing completed must survive.
+    store.init([
+      { id: 'todo_1', content: 'A' },
+      { id: 'todo_2', content: 'B' },
+      { id: 'todo_3', content: 'C (new)' },
+    ]);
+    const items = store.getAll();
+    expect(items.map((it) => `${it.id}:${it.status}`)).toEqual([
+      'todo_1:completed',
+      'todo_2:pending',
+      'todo_3:pending',
+    ]);
+  });
+});

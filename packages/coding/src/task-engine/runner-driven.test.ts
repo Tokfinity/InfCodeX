@@ -1329,6 +1329,109 @@ describe('FEATURE_167 v0.7.41 — Evaluator terminal-verdict fallback (B1+B2)', 
       }
     });
   });
+
+  // v0.7.42 — B2 synth fallback used to write `recorder.verdict` directly,
+  // bypassing the `wrapEmitterWithRecorder` slot-setter side-effect that
+  // would have called `todoStore.autoCompleteOnAccept()` on a real
+  // `emit_verdict` tool call. The plan-list UI then showed `0/N completed`
+  // even when the run terminated as `accept`. The fix mirrors the slot-
+  // setter side-effect at the synth site.
+  it('B2 synth: autoCompleteOnAccept also fires on synth verdict (plan items flip to completed)', async () => {
+    await withHarnessV2(async () => {
+      // Listen on the public onTodoUpdate event bus to capture the
+      // canonical end-of-run plan-list snapshot the REPL would see.
+      const todoSnapshots: Array<ReadonlyArray<{ id: string; status: string }>> = [];
+      const synthEvents: Array<unknown> = [];
+      const opts = {
+        ...makeOptions(),
+        events: {
+          onTodoUpdate: (items: ReadonlyArray<{ id: string; status: string }>) => {
+            todoSnapshots.push(items.map((it) => ({ id: it.id, status: it.status })));
+          },
+          onEvaluatorFallbackSynthesized: (info: unknown) => synthEvents.push(info),
+        },
+      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+
+      const mock = makeChainMockLlm({
+        worker: (turn) => {
+          if (turn === 1) {
+            // Seed a 3-item plan on turn 1.
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w-init',
+                name: 'todo_update',
+                input: {
+                  op: 'init',
+                  items: [
+                    { id: 'todo_1', content: 'Wire EChart', activeForm: 'Wiring EChart' },
+                    { id: 'todo_2', content: 'Overlay data', activeForm: 'Overlaying data' },
+                    { id: 'todo_3', content: 'Verify', activeForm: 'Verifying' },
+                  ],
+                },
+              }],
+            };
+          }
+          if (turn === 2) {
+            // Close out todo_1 only — the smoking-gun shape: Worker
+            // completed some items but not all when handing off.
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w-step',
+                name: 'todo_update',
+                input: { id: 'todo_1', status: 'completed' },
+              }],
+            };
+          }
+          if (turn === 3) {
+            return {
+              toolBlocks: [{
+                type: 'tool_use',
+                id: 'w-handoff',
+                name: 'emit_handoff',
+                input: { status: 'ready', summary: 'done (1/3 closed by LLM; 2/3 left for runner to finalize)' },
+              }],
+            };
+          }
+          return { textBlocks: [{ text: 'idle' }], toolBlocks: [] };
+        },
+        evaluator: () => {
+          // Force B2 synth: every Evaluator turn is text-only.
+          return {
+            textBlocks: [{ text: 'Review complete. Plan items look right.' }],
+            toolBlocks: [],
+          };
+        },
+      });
+
+      const result = await runManagedTaskViaRunner(opts, 'build map', mock);
+
+      // Sanity-pin we actually went through the synth path. Without
+      // this guard, an upstream change that makes B1 always recover
+      // would silently invalidate the side-effect assertion below.
+      expect(synthEvents).toHaveLength(1);
+      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+      expect(result.managedProtocolPayload?.verdict?.reason).toContain(
+        'failed to emit a terminal verdict',
+      );
+
+      // The final onTodoUpdate snapshot must show ALL three items
+      // completed — todo_1 by the LLM's earlier todo_update, todo_2
+      // and todo_3 by autoCompleteOnAccept mirroring the synth verdict.
+      // Pre-fix this assertion was `[completed, pending, pending]`
+      // (autoCompleteOnAccept never ran on the synth path), which
+      // mapped to the user-visible "PLANNED ... 1/3 completed" stale
+      // UI even after the run ended successfully.
+      expect(todoSnapshots.length).toBeGreaterThan(0);
+      const finalSnapshot = todoSnapshots[todoSnapshots.length - 1]!;
+      expect(finalSnapshot).toEqual([
+        { id: 'todo_1', status: 'completed' },
+        { id: 'todo_2', status: 'completed' },
+        { id: 'todo_3', status: 'completed' },
+      ]);
+    });
+  });
 });
 
 describe('parity — Runner path and legacy SA path produce compatible KodaXResult shape', () => {

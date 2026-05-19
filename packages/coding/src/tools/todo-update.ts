@@ -204,6 +204,19 @@ function executeInitOp(
         '{id, content, activeForm?} objects (>= 1 entry).',
     });
   }
+  // NOTE (v0.7.42, 2026-05-19): tool-layer dirty-store reject was
+  // PROTOTYPED here and reverted after FEATURE_175 Layer 2 panel
+  // (zhipu/glm51 0/5 on C1 + C2 — intent-vs-action floor; see SHIP
+  // gate (b) in benchmark/datasets/feature-175-init-reject-recovery/
+  // cases.ts). With the reject in place, zhipu acknowledges the
+  // reject reason in prose but cannot emit a recovery tool call,
+  // turning "wrong-but-works" into "stuck-with-intent". The
+  // store-layer id-match preserve in todo-store.ts:init() already
+  // covers the dominant case (same ids re-seeded); the pivot path
+  // (entirely new ids) still drops prior items, but that's the
+  // intended init() destructive-replace semantic. See
+  // docs/features/v0.7.42.md §FEATURE_175 for the full revert
+  // rationale + eval data pointers.
 
   const rawItems = input.items as readonly InitItemInput[];
   if (rawItems.length === 0) {
