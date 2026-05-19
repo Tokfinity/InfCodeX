@@ -147,15 +147,9 @@ export function GlobalShortcuts({
     if (isInteractiveDialogActive) {
       return false;
     }
-    // Cycle uses canonical 'auto', not the deprecated 'auto-in-project' alias
-    // — landing the alias in persisted config triggered a startup deprecation
-    // `console.warn` that drifted the cell-renderer cursor model by one row.
+    // Canonical names only — persisting 'auto-in-project' here triggered a startup deprecation warn that drifted the cursor by one row.
     const modeCycle: PermissionMode[] = ['plan', 'accept-edits', 'auto'];
-    const aliasedCurrent =
-      currentConfig.permissionMode === 'auto-in-project'
-        ? 'auto'
-        : currentConfig.permissionMode;
-    const currentIndex = modeCycle.indexOf(aliasedCurrent);
+    const currentIndex = modeCycle.indexOf(currentConfig.permissionMode);
     const nextIndex = (currentIndex + 1) % modeCycle.length;
     const newMode = modeCycle[nextIndex];
 
