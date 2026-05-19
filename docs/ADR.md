@@ -1306,13 +1306,62 @@ ADR-027 把 SSH `kodax -c` 长 session 2-3s/frame 卡顿的根因定位在数据
 
 ### 端到端 Bench Contract(Phase A 启动前)
 
-| 场景 | 当前实测(P1 后) | Phase A 目标 | Phase B 目标 | Phase C-E 目标 |
-|---|---|---|---|---|
-| 200 items streaming-tick end-to-end wall-time(含 onRender + applyDiff)| **TODO 待实测** | ≤200ms p95 | ≤50ms p95 | ≤30ms p95 |
-| 800 items streaming-tick end-to-end wall-time | **TODO 待实测** | ≤500ms p95 | ≤100ms p95 | ≤50ms p95 |
-| stdout.write 总 bytes / frame | **TODO 待实测** | 同当前(C2 不影响 bytes) | -50%(C1 blit 后只写 damage 区域) | -80% |
+**Bench harness shipped** 2026-05-19:`benchmark/perf/repl-render-engine-e2e.bench.ts` — 通过 KodaX 真实 `render()` 入口 + mock stdout(timestamped writes)+ `onRender` callback 同步,测端到端 wall-time(rerender → React reconcile → Yoga → renderNodeToOutput → outputToScreen → cellLogUpdate.render → applyDiff → stdout.write 完成全链路)。run via `npm run bench:perf:e2e`。
 
-**bench harness 必须新写,本 ADR 优先级 P0**。当前 `benchmark/perf/repl-render-perf.bench.ts` 是 Phase 1 设计的,只测 buildTranscriptRenderModel 内层,**不能用于 Phase A-E gating**。
+**Baseline 实测**(`benchmark/perf-baselines/baseline-e2e-<sha>.json`,Win11 / Node v24.13.1 / x64,viewport 120×40,30 ticks × 45ms gap per tier):
+
+**mainscreen mode**(Windows SSH 路径 / `KODAX_FULLSCREEN=0` / `<Static>` 启用):
+
+| items | wallTime p50 | wallTime p95 | rendererTime p95 | bytes p95 / tick |
+|---|---|---|---|---|
+| 50 | 7.51ms | 9.03ms | 2.62ms | 0B |
+| 100 | 13.31ms | 15.29ms | 4.28ms | 0B |
+| 200 | 21.83ms | **25.39ms** | 4.70ms | 0B |
+| 400 | 39.83ms | 47.04ms | 5.32ms | 0B |
+| 800 | 75.61ms | **84.35ms** | 6.60ms | 0B |
+
+**windowed mode**(Linux SSH 路径 / virtual fullscreen / `<Static>` bypass):
+
+| items | wallTime p50 | wallTime p95 | rendererTime p95 | bytes p95 / tick |
+|---|---|---|---|---|
+| 50 | 44.44ms | 45.79ms | 6.09ms | 10B |
+| 100 | 47.74ms | 49.72ms | 5.64ms | 10B |
+| 200 | 56.75ms | **90.17ms** | 6.51ms | 10B |
+| 400 | 41.49ms | 45.67ms | 6.89ms | 0B |
+| 800 | 78.59ms | 84.77ms | 8.14ms | 0B |
+
+**关键发现**:
+
+1. **bytes per tick ≈ 0-10B** — KodaX cell-renderer **确实**在做增量 diff。SSH bandwidth **不是**主要瓶颈(每帧只写几 byte 给 SSH 链路)
+2. **rendererTime(engine 内部 Yoga + renderNodeToOutput + outputToScreen)只有 5-8ms** — 这层已经很快
+3. **wall-time 跟 rendererTime 的差(20-80ms)**全部在 `applyCellFrame`(`cellLogUpdate.render` + `diffEach` + `applyDiff`)— 真正的瓶颈在这里
+4. **windowed mode at 200 items: 90ms p95** — **已经超过 80ms flush 窗口**,会开始 backlog
+5. **mainscreen at 800 items: 84ms p95** — 同上,刚好饱和
+6. **windowed mode 在小 items(50-100)反而比 mainscreen 慢 5×** — `<Static>` bypass 后所有 items 进主 React tree,固定 overhead 大
+
+### Phase 路线修正(基于实测数据)
+
+实测显示 **Phase 1 后 200 items mainscreen wall-time = 25ms p95**,远小于 ADR-028 草稿假设的"400-800ms/frame"。两种解释:
+
+(a) **Phase 1 实际改善比想象大** — 数据层 + React.memo 联合让 mainscreen path 在 200 items 已可接受;800 items 需要 Phase A-E
+(b) **bench 没复现 2-3s 症状** — 可能与:viewport rows / 实际 message 复杂度 / 多 commit 在 throttle window 内 coalesce / 真实 streaming 频率 ≠ 45ms 间隔 / SSH round-trip 叠加 等因素相关
+
+**修正后的 Phase 启动门槛**:
+
+- 用户 SSH 实测 Phase 1 后体验 → 若 200 items 流畅,Phase A-E 转 deferred 到 800+ items 卡顿场景
+- 若仍卡 → 用 bench 复现并定位(可能需要扩 bench 覆盖更复杂 fixture)
+- bench gate 目标重设:
+
+| Items | 当前 mainscreen p95(P1 后) | Phase B 目标 | Phase D 目标 |
+|---|---|---|---|
+| 200 | 25.39ms | ≤10ms | ≤5ms |
+| 400 | 47.04ms | ≤15ms | ≤8ms |
+| 800 | 84.35ms | ≤25ms | ≤10ms |
+
+| Items | 当前 windowed p95(P1 后) | Phase B 目标 | Phase D 目标 |
+|---|---|---|---|
+| 200 | 90.17ms | ≤15ms | ≤8ms |
+| 800 | 84.77ms | ≤30ms | ≤12ms |
 
 ### Replace ADR-027 D2.C — selection 机制独立 ADR
 

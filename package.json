@@ -38,6 +38,7 @@
     "test:watch": "vitest",
     "test:eval": "vitest run -c vitest.eval.config.ts",
     "bench:perf": "tsx benchmark/perf/repl-render-perf.bench.ts",
+    "bench:perf:e2e": "tsx benchmark/perf/repl-render-engine-e2e.bench.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "clean:packages": "npm run clean --workspaces"
   },
