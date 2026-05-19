@@ -719,6 +719,15 @@ export interface KodaXChildAgentResult {
   sessionId?: string;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
+  /**
+   * True when the child's `runKodaX` exited via CAP-083 AbortError silent
+   * terminal (`KodaXResult.interrupted === true`). Surfaces the
+   * "success but empty lastText" path that produces empty
+   * `<task-completed task_id="X"></task-completed>` banners.
+   * Diagnostic field — populated by child-executor on the success branch
+   * and consumed by dispatch-child-tasks' empty-summary fallback.
+   */
+  interrupted?: boolean;
 }
 
 export interface KodaXParentReductionContract {

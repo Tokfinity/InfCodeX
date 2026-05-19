@@ -395,3 +395,199 @@ describe('FEATURE_120 v0.7.39 Phase 4 — dispatch_child_task.model_hint', () =>
     await registry.get('mh-num')?.catch(() => undefined);
   });
 });
+
+// Empty-summary fallback — guards against `<task-completed task_id="X">\n\n</task-completed>`
+// (project memory `project_dispatch_child_empty_banner_bug`). Root cause:
+// `runKodaX` returns `{success:true, lastText:''}` via CAP-083 AbortError
+// silent terminal (or other "success but empty" paths), and the pre-fix
+// `??` chain let the empty string fall through into the banner.
+//
+// These tests exercise the three pipeline shapes from the async-success
+// branch + the sync legacy branch:
+//   1. empty `mergedFindings[0].evidence` + empty `childResult.summary`
+//      → fallback fires
+//   2. whitespace-only summary → fallback fires (visual emptiness)
+//   3. normal non-empty content → fallback does NOT fire (no regression)
+function buildEmptySuccessResult(
+  childId: string,
+  opts?: { interrupted?: boolean; iterations?: number; whitespace?: boolean },
+): KodaXChildExecutionResult {
+  const text = opts?.whitespace ? '   \n\t  \n' : '';
+  return {
+    results: [
+      {
+        childId,
+        fanoutClass: 'evidence-scan',
+        status: 'completed',
+        disposition: 'valid',
+        summary: text,
+        evidenceRefs: [],
+        contradictions: [],
+        actualIterations: opts?.iterations ?? 0,
+        interrupted: opts?.interrupted ?? false,
+      },
+    ],
+    mergedFindings: [
+      {
+        childId,
+        objective: 'test',
+        evidence: [text],
+        artifacts: [],
+      },
+    ],
+    mergedArtifacts: [],
+    totalTokensUsed: 0,
+    cancelledChildren: [],
+  };
+}
+
+describe('empty-summary fallback — dispatch_child_task pipeline', () => {
+  beforeEach(() => {
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+    delete process.env.KODAX_ASYNC_DISPATCH;
+    delete process.env.KODAX_DISPATCH_CHILD_TRACE;
+  });
+  afterEach(() => {
+    _resetMessageQueueForTests();
+    delete process.env.KODAX_ASYNC_DISPATCH;
+    delete process.env.KODAX_DISPATCH_CHILD_TRACE;
+  });
+
+  it('async-success path: empty lastText/summary triggers diagnostic fallback (not empty banner)', async () => {
+    mockExec.mockResolvedValueOnce(
+      buildEmptySuccessResult('empty-1', { interrupted: true, iterations: 0 }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'empty-1', objective: 'probe' }, ctx),
+    );
+    await registry.get('empty-1');
+
+    const queue = getMessageQueue();
+    const peeked = queue.peek({ maxPriority: 'background' });
+    expect(peeked).toHaveLength(1);
+    const banner = peeked[0]?.content ?? '';
+    // Outer wrapper still present.
+    expect(banner).toContain('<task-completed task_id="empty-1">');
+    expect(banner).toContain('</task-completed>');
+    // Diagnostic fallback body — was empty before fix.
+    expect(banner).toContain('produced no observable text output');
+    expect(banner).toContain('interrupted=true');
+    expect(banner).toContain('iterations=0');
+    // Strip outer tag whitespace; the inner content MUST NOT be empty.
+    const inner = banner
+      .replace(/^<task-completed task_id="[^"]+">\s*/, '')
+      .replace(/\s*<\/task-completed>$/, '');
+    expect(inner.trim().length).toBeGreaterThan(0);
+  });
+
+  it('async-success path: whitespace-only summary also triggers fallback', async () => {
+    mockExec.mockResolvedValueOnce(
+      buildEmptySuccessResult('empty-2', { whitespace: true }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'empty-2', objective: 'probe' }, ctx),
+    );
+    await registry.get('empty-2');
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('produced no observable text output');
+  });
+
+  it('async-success path: non-empty findings bypass the fallback (no regression)', async () => {
+    mockExec.mockResolvedValueOnce(buildSuccessResult('good-1', ['real findings here']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'good-1', objective: 'probe' }, ctx),
+    );
+    await registry.get('good-1');
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('real findings here');
+    expect(banner).not.toContain('produced no observable text output');
+  });
+
+  it('sync legacy path: empty findings produce diagnostic fallback, not empty string', async () => {
+    process.env.KODAX_ASYNC_DISPATCH = '0';
+    mockExec.mockResolvedValueOnce(
+      buildEmptySuccessResult('sync-empty', { interrupted: false, iterations: 3 }),
+    );
+    // Sync mode: registry undefined.
+    const ctx = buildBaseCtx(undefined);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'sync-empty', objective: 'probe' }, ctx),
+    );
+
+    expect(result).toContain('produced no observable text output');
+    expect(result).toContain('iterations=3');
+    expect(result.trim().length).toBeGreaterThan(0);
+  });
+
+  it('crash path: empty Error.message still produces a non-empty banner', async () => {
+    mockExec.mockRejectedValueOnce(new Error(''));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'crash-empty', objective: 'probe' }, ctx),
+    );
+    await registry.get('crash-empty')?.catch(() => undefined);
+    await Promise.resolve();
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('crash:');
+    expect(banner).toContain('unknown error');
+  });
+
+  it('KODAX_DISPATCH_CHILD_TRACE=1 writes a JSON trace file', async () => {
+    process.env.KODAX_DISPATCH_CHILD_TRACE = '1';
+    mockExec.mockResolvedValueOnce(buildSuccessResult('trace-1', ['hi']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'trace-1', objective: 'probe' }, ctx),
+    );
+    await registry.get('trace-1');
+
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const fsPromises = await import('fs/promises');
+    const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
+    const files = await fsPromises.readdir(traceDir).catch(() => [] as string[]);
+    const matching = files.filter((f) => f.includes('trace-1'));
+    expect(matching.length).toBeGreaterThan(0);
+    // Cleanup
+    await Promise.all(
+      matching.map((f) => fsPromises.unlink(join(traceDir, f)).catch(() => undefined)),
+    );
+  });
+
+  it('KODAX_DISPATCH_CHILD_TRACE unset writes no trace file', async () => {
+    mockExec.mockResolvedValueOnce(buildSuccessResult('trace-off', ['hi']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'trace-off', objective: 'probe' }, ctx),
+    );
+    await registry.get('trace-off');
+
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const fsPromises = await import('fs/promises');
+    const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
+    const files = await fsPromises.readdir(traceDir).catch(() => [] as string[]);
+    const matching = files.filter((f) => f.includes('trace-off'));
+    expect(matching.length).toBe(0);
+  });
+});

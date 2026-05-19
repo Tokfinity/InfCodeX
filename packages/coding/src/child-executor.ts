@@ -255,13 +255,20 @@ async function executeReadChild(
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
-    return extractChildResult(bundle, result.lastText, result.success ? 'completed' : 'failed', iterations);
+    return extractChildResult(
+      bundle,
+      result.lastText,
+      result.success ? 'completed' : 'failed',
+      iterations,
+      result.interrupted === true,
+    );
   } catch (error) {
     return extractChildResult(
       bundle,
       error instanceof Error ? error.message : String(error),
       'failed',
       0,
+      false,
     );
   }
 }
@@ -341,7 +348,13 @@ async function executeWriteChild(
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
 
     return {
-      ...extractChildResult(bundle, result.lastText, result.success ? 'completed' : 'failed', iterations),
+      ...extractChildResult(
+        bundle,
+        result.lastText,
+        result.success ? 'completed' : 'failed',
+        iterations,
+        result.interrupted === true,
+      ),
       artifactPaths: diff ? [`worktree:${wtPath}`] : undefined,
     };
   } catch (error) {
@@ -350,6 +363,7 @@ async function executeWriteChild(
       error instanceof Error ? error.message : String(error),
       'failed',
       0,
+      false,
     );
   }
 }
@@ -658,6 +672,7 @@ function extractChildResult(
   summary: string,
   status: KodaXChildAgentResult['status'],
   actualIterations?: number,
+  interrupted?: boolean,
 ): KodaXChildAgentResult {
   return {
     childId: bundle.id,
@@ -668,6 +683,7 @@ function extractChildResult(
     evidenceRefs: bundle.evidenceRefs,
     contradictions: [],
     actualIterations,
+    interrupted,
   };
 }
 

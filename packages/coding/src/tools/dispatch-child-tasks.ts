@@ -142,6 +142,142 @@ function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
   return ctx.childTaskRegistry !== undefined;
 }
 
+/**
+ * Empty-summary diagnostic fallback. Produces a visible banner body when
+ * the child's `runKodaX` returned `{success:true, lastText:''}` (typical
+ * CAP-083 AbortError silent terminal path) or otherwise contributed no
+ * text to the merged findings.
+ *
+ * Pre-fix behavior: `rawSummary` chained `??` against three string sources
+ * — but `??` only catches nullish, so empty string `''` fell through and
+ * the Worker saw `<task-completed task_id="X">\n\n</task-completed>` with
+ * zero observable content. Worker could not distinguish "child genuinely
+ * ran but produced no text" from "child aborted before first LLM call"
+ * from "envelope guardrail dropped the payload".
+ *
+ * Post-fix: caller checks `rawSummary.trim().length === 0` and substitutes
+ * this fallback BEFORE handing to `applyChildSummaryGuardrailWithSummarizer`.
+ * Banner now carries a diagnostic envelope (status / iterations / interrupted
+ * / provider / model) so Worker (and humans tailing transcripts) can react
+ * meaningfully — typically: re-dispatch with the same objective.
+ *
+ * The fallback is deliberately verbose; for normal non-empty summaries the
+ * Worker pays nothing (this function is only called on the empty branch).
+ */
+function buildEmptySummaryFallback(args: {
+  readonly childId: string;
+  readonly status: KodaXChildExecutionResult['results'][number]['status'] | undefined;
+  readonly iterations: number | undefined;
+  readonly interrupted: boolean;
+  readonly evidenceRefsCount: number;
+  readonly mergedFindingsCount: number;
+  readonly resultsCount: number;
+  readonly provider: string | undefined;
+  readonly model: string | undefined;
+}): string {
+  const interruptedHint = args.interrupted
+    ? 'Child exited via the AbortError silent terminal (CAP-083) — typically means an upstream abortSignal fired before the child produced any text. Most common upstream causes: provider stream RST, parent-turn cleanup that propagated an abort, or a task_stop call.'
+    : 'No interrupted flag — likely the model returned no text in its final assistant turn, or the envelope guardrail dropped all content.';
+  return [
+    `(child task "${args.childId}" completed but produced no observable text output.`,
+    `Diagnostic: status=${args.status ?? 'unknown'} interrupted=${args.interrupted} iterations=${args.iterations ?? 'n/a'} results=${args.resultsCount} mergedFindings=${args.mergedFindingsCount} evidenceRefs=${args.evidenceRefsCount} provider=${args.provider ?? '?'} model=${args.model ?? '?'}.`,
+    interruptedHint,
+    `Treat as inconclusive. Set KODAX_DISPATCH_CHILD_TRACE=1 to capture a JSON trace under \`os.tmpdir()/kodax-dispatch-trace/\` for the next reproduction.)`,
+  ].join('\n');
+}
+
+/**
+ * Optional diagnostic trace writer. Gated on
+ * `process.env.KODAX_DISPATCH_CHILD_TRACE === '1'`. Writes one JSON file per
+ * settled child to `os.tmpdir()/kodax-dispatch-trace/{ISO}_{childId}.json`.
+ *
+ * Why not stderr / logger: KodaX runs inside an Ink TUI; stderr is
+ * captured by the renderer and not observable to the user. A flat
+ * filesystem trace stays out of the render path and survives process
+ * exit for later inspection.
+ *
+ * Best-effort: any I/O failure is swallowed silently — telemetry must
+ * never break dispatch.
+ */
+async function writeDispatchTraceIfEnabled(args: {
+  readonly childId: string;
+  readonly bundle: KodaXChildContextBundle;
+  readonly result: KodaXChildExecutionResult | undefined;
+  readonly rawSummary: string;
+  readonly bannerContent: string;
+  readonly fallbackApplied: boolean;
+  readonly provider: string | undefined;
+  readonly model: string | undefined;
+  readonly error?: unknown;
+  readonly durationMs: number;
+  readonly path: 'sync' | 'async-success' | 'async-crash';
+}): Promise<void> {
+  if (process.env.KODAX_DISPATCH_CHILD_TRACE !== '1') return;
+  try {
+    const [{ tmpdir }, { join }, fsPromises] = await Promise.all([
+      import('os'),
+      import('path'),
+      import('fs/promises'),
+    ]);
+    const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
+    await fsPromises.mkdir(traceDir, { recursive: true });
+    const isoSafe = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeChildId = args.childId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
+    const filePath = join(traceDir, `${isoSafe}_${safeChildId}.json`);
+
+    const childResult = args.result?.results?.[0];
+    const payload = {
+      timestamp: new Date().toISOString(),
+      path: args.path,
+      childId: args.childId,
+      durationMs: args.durationMs,
+      provider: args.provider ?? null,
+      model: args.model ?? null,
+      bundle: {
+        objective: args.bundle.objective,
+        readOnly: args.bundle.readOnly,
+        scopeSummary: args.bundle.scopeSummary ?? null,
+        evidenceRefsCount: args.bundle.evidenceRefs.length,
+        constraintsCount: args.bundle.constraints.length,
+        modelHint: args.bundle.modelHint ?? null,
+      },
+      result: args.result === undefined
+        ? null
+        : {
+            resultsCount: args.result.results.length,
+            mergedFindingsCount: args.result.mergedFindings.length,
+            cancelledChildrenCount: args.result.cancelledChildren.length,
+            childResult: childResult === undefined
+              ? null
+              : {
+                  status: childResult.status,
+                  disposition: childResult.disposition,
+                  summaryLength: childResult.summary.length,
+                  summaryPreview: childResult.summary.slice(0, 200),
+                  evidenceRefsCount: childResult.evidenceRefs.length,
+                  contradictionsCount: childResult.contradictions.length,
+                  actualIterations: childResult.actualIterations ?? null,
+                  interrupted: childResult.interrupted ?? null,
+                },
+          },
+      rawSummaryLength: args.rawSummary.length,
+      rawSummaryPreview: args.rawSummary.slice(0, 400),
+      bannerContentLength: args.bannerContent.length,
+      bannerContentPreview: args.bannerContent.slice(0, 400),
+      fallbackApplied: args.fallbackApplied,
+      error: args.error
+        ? {
+            message: args.error instanceof Error ? args.error.message : String(args.error),
+            name: args.error instanceof Error ? args.error.name : 'unknown',
+          }
+        : null,
+    };
+    await fsPromises.writeFile(filePath, JSON.stringify(payload, null, 2));
+  } catch {
+    // Best-effort — never break dispatch on telemetry I/O failure.
+  }
+}
+
 /* ---------- Tool handler (async generator) ---------- */
 
 export async function* toolDispatchChildTask(
@@ -321,6 +457,7 @@ export async function* toolDispatchChildTask(
     // ctx in the future to route to a specific scope; keep it undefined
     // for now — the queue's default-undefined target matches the main
     // Runner loop reading from `getMessageQueue()` at iteration start.
+    const asyncDispatchStartTs = Date.now();
     const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
       try {
         const result = await executeChildAgents([bundle], ctx, childOptions);
@@ -332,10 +469,39 @@ export async function* toolDispatchChildTask(
         // even if it's currently mid-stream on another tool.
         const childResult = result.results[0];
         const status = childResult?.status ?? 'failed';
-        const rawSummary =
-          status === 'completed'
-            ? (result.mergedFindings[0]?.evidence.join('\n') ?? childResult?.summary ?? '')
-            : `failed: ${childResult?.summary ?? 'no result'}`;
+        // Truthy-with-trim chain instead of `??` — `??` only catches
+        // nullish, so `''` slipped through and produced
+        // `<task-completed task_id="X">\n\n</task-completed>` banners
+        // with zero observable content (see project memory
+        // `project_dispatch_child_empty_banner_bug`). The
+        // `.trim().length > 0` filter also catches whitespace-only summaries
+        // that would have rendered as visually-empty banners.
+        const evidenceText = result.mergedFindings[0]?.evidence.join('\n') ?? '';
+        const childSummary = childResult?.summary ?? '';
+        let rawSummary: string;
+        let fallbackApplied = false;
+        if (status === 'completed') {
+          if (evidenceText.trim().length > 0) {
+            rawSummary = evidenceText;
+          } else if (childSummary.trim().length > 0) {
+            rawSummary = childSummary;
+          } else {
+            rawSummary = buildEmptySummaryFallback({
+              childId,
+              status,
+              iterations: childResult?.actualIterations,
+              interrupted: childResult?.interrupted === true,
+              evidenceRefsCount: childResult?.evidenceRefs.length ?? 0,
+              mergedFindingsCount: result.mergedFindings.length,
+              resultsCount: result.results.length,
+              provider: parentConfig?.provider,
+              model: parentConfig?.model,
+            });
+            fallbackApplied = true;
+          }
+        } else {
+          rawSummary = `failed: ${childSummary.trim().length > 0 ? childSummary : 'no result'}`;
+        }
         // FEATURE_121 (v0.7.40): per-banner guardrail + LLM-summarize last-
         // resort fallback. Replaces the previous `summary.slice(0, 200)`
         // 200-char hard truncate. For ≤50KB output the full content is
@@ -355,6 +521,18 @@ export async function* toolDispatchChildTask(
           taskId: childId,
           summary: bannerContent,
         });
+        await writeDispatchTraceIfEnabled({
+          childId,
+          bundle,
+          result,
+          rawSummary,
+          bannerContent,
+          fallbackApplied,
+          provider: parentConfig?.provider,
+          model: parentConfig?.model,
+          durationMs: Date.now() - asyncDispatchStartTs,
+          path: 'async-success',
+        });
         return result;
       } catch (err) {
         // Re-enqueue a background notification even on crash so the Worker
@@ -366,14 +544,28 @@ export async function* toolDispatchChildTask(
         // success / failure envelope semantics uniform. The summarize
         // fallback never triggers here (content <<100KB) but threading
         // through the same helper keeps the 4 call sites identical.
+        const crashRaw = `crash: ${message.length > 0 ? message : 'unknown error (Error.message was empty)'}`;
         const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
           'child_task_summary',
-          `crash: ${message}`,
+          crashRaw,
           ctx,
         );
         enqueueChildTaskNotification({
           taskId: childId,
           summary: bannerContent,
+        });
+        await writeDispatchTraceIfEnabled({
+          childId,
+          bundle,
+          result: undefined,
+          rawSummary: crashRaw,
+          bannerContent,
+          fallbackApplied: false,
+          provider: parentConfig?.provider,
+          model: parentConfig?.model,
+          error: err,
+          durationMs: Date.now() - asyncDispatchStartTs,
+          path: 'async-crash',
         });
         throw err;
       } finally {
@@ -435,26 +627,80 @@ export async function* toolDispatchChildTask(
       // FEATURE_121 (v0.7.40): same guardrail + LLM-summarize fallback as
       // the async branch envelope path. Replaces the previous
       // `slice(0, 1000)` 1000-char hard truncate.
-      const failedSummary = childResult?.summary ?? 'no result';
-      return await applyChildSummaryGuardrailWithSummarizer(
+      const failedSummary = childResult?.summary && childResult.summary.trim().length > 0
+        ? childResult.summary
+        : 'no result';
+      const failedRaw = `Child task "${childId}" failed: ${failedSummary}`;
+      const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
         'child_task_summary',
-        `Child task "${childId}" failed: ${failedSummary}`,
+        failedRaw,
         ctx,
       );
+      await writeDispatchTraceIfEnabled({
+        childId,
+        bundle,
+        result,
+        rawSummary: failedRaw,
+        bannerContent,
+        fallbackApplied: false,
+        provider: parentConfig?.provider,
+        model: parentConfig?.model,
+        durationMs: Date.now() - dispatchStartTs,
+        path: 'sync',
+      });
+      return bannerContent;
     }
 
     const finding = result.mergedFindings[0];
     // FEATURE_121 (v0.7.40): replace MAX_FINDING_CHARS=8000 hard slice
     // with the unified `child_task_summary` guardrail + LLM-summarize
     // fallback. Sync legacy path now matches the async/envelope semantics.
-    const raw = finding
-      ? finding.evidence.join('\n')
-      : childResult.summary;
-    return await applyChildSummaryGuardrailWithSummarizer(
+    //
+    // Empty-summary fallback (project memory
+    // `project_dispatch_child_empty_banner_bug`): when both `finding.evidence`
+    // and `childResult.summary` are empty/whitespace-only, substitute the
+    // diagnostic envelope so the Worker sees observable content instead of
+    // an empty string. Mirrors the async-success path.
+    const findingText = finding ? finding.evidence.join('\n') : '';
+    const fallbackSummary = childResult.summary;
+    let raw: string;
+    let fallbackApplied = false;
+    if (findingText.trim().length > 0) {
+      raw = findingText;
+    } else if (fallbackSummary.trim().length > 0) {
+      raw = fallbackSummary;
+    } else {
+      raw = buildEmptySummaryFallback({
+        childId,
+        status,
+        iterations: childResult.actualIterations,
+        interrupted: childResult.interrupted === true,
+        evidenceRefsCount: childResult.evidenceRefs.length,
+        mergedFindingsCount: result.mergedFindings.length,
+        resultsCount: result.results.length,
+        provider: parentConfig?.provider,
+        model: parentConfig?.model,
+      });
+      fallbackApplied = true;
+    }
+    const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
       'child_task_summary',
       raw,
       ctx,
     );
+    await writeDispatchTraceIfEnabled({
+      childId,
+      bundle,
+      result,
+      rawSummary: raw,
+      bannerContent,
+      fallbackApplied,
+      provider: parentConfig?.provider,
+      model: parentConfig?.model,
+      durationMs: Date.now() - dispatchStartTs,
+      path: 'sync',
+    });
+    return bannerContent;
   } finally {
     emitDispatchEnd();
   }
