@@ -442,36 +442,67 @@ function buildEmptySuccessResult(
 }
 
 describe('empty-summary fallback — dispatch_child_task pipeline', () => {
+  // Per-describe-run unique suffix so trace-file assertions don't collide
+  // with stray files from a previous crashed test process (M2 fix in the
+  // post-commit review pass). Without this, the "env unset writes no
+  // trace" assertion could go flaky if an earlier run aborted before
+  // afterEach cleanup ran.
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // Track every childId used in this describe block so afterEach can
+  // remove any matching trace file regardless of whether the test body
+  // reached its inline cleanup (M1 fix — old version had cleanup inside
+  // the `it` body, so an early `expect` failure leaked files).
+  const childIdsUsed: string[] = [];
+  const childId = (base: string): string => {
+    const id = `${base}-${runId}`;
+    childIdsUsed.push(id);
+    return id;
+  };
+
   beforeEach(() => {
     mockExec.mockReset();
     _resetMessageQueueForTests();
     delete process.env.KODAX_ASYNC_DISPATCH;
     delete process.env.KODAX_DISPATCH_CHILD_TRACE;
   });
-  afterEach(() => {
+  afterEach(async () => {
     _resetMessageQueueForTests();
     delete process.env.KODAX_ASYNC_DISPATCH;
     delete process.env.KODAX_DISPATCH_CHILD_TRACE;
+    // Sweep any trace files this test produced. Best-effort — directory
+    // may not exist if no test in this run hit the writer.
+    if (childIdsUsed.length === 0) return;
+    const { tmpdir } = await import('os');
+    const { join } = await import('path');
+    const fsPromises = await import('fs/promises');
+    const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
+    const files = await fsPromises.readdir(traceDir).catch(() => [] as string[]);
+    await Promise.all(
+      files
+        .filter((f) => childIdsUsed.some((id) => f.includes(id)))
+        .map((f) => fsPromises.unlink(join(traceDir, f)).catch(() => undefined)),
+    );
   });
 
   it('async-success path: empty lastText/summary triggers diagnostic fallback (not empty banner)', async () => {
+    const id = childId('empty-1');
     mockExec.mockResolvedValueOnce(
-      buildEmptySuccessResult('empty-1', { interrupted: true, iterations: 0 }),
+      buildEmptySuccessResult(id, { interrupted: true, iterations: 0 }),
     );
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'empty-1', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('empty-1');
+    await registry.get(id);
 
     const queue = getMessageQueue();
     const peeked = queue.peek({ maxPriority: 'background' });
     expect(peeked).toHaveLength(1);
     const banner = peeked[0]?.content ?? '';
     // Outer wrapper still present.
-    expect(banner).toContain('<task-completed task_id="empty-1">');
+    expect(banner).toContain(`<task-completed task_id="${id}">`);
     expect(banner).toContain('</task-completed>');
     // Diagnostic fallback body — was empty before fix.
     expect(banner).toContain('produced no observable text output');
@@ -485,46 +516,98 @@ describe('empty-summary fallback — dispatch_child_task pipeline', () => {
   });
 
   it('async-success path: whitespace-only summary also triggers fallback', async () => {
+    const id = childId('empty-2');
     mockExec.mockResolvedValueOnce(
-      buildEmptySuccessResult('empty-2', { whitespace: true }),
+      buildEmptySuccessResult(id, { whitespace: true }),
     );
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'empty-2', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('empty-2');
+    await registry.get(id);
 
     const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
     expect(banner).toContain('produced no observable text output');
   });
 
   it('async-success path: non-empty findings bypass the fallback (no regression)', async () => {
-    mockExec.mockResolvedValueOnce(buildSuccessResult('good-1', ['real findings here']));
+    const id = childId('good-1');
+    mockExec.mockResolvedValueOnce(buildSuccessResult(id, ['real findings here']));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'good-1', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('good-1');
+    await registry.get(id);
 
     const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
     expect(banner).toContain('real findings here');
     expect(banner).not.toContain('produced no observable text output');
   });
 
+  // L5: evidence array `[childSummary='', ...evidenceRefs]` joins to a
+  // non-empty string when any evidenceRef survives. Fallback must NOT
+  // fire in this shape — the bundle's known evidence is real content
+  // even if the child agent itself emitted no final text. Pins the
+  // contract so a future "simplification" that uses `r.summary.trim()`
+  // instead of `evidence.join(...).trim()` would fail this test.
+  it('async-success path: empty childSummary but non-empty evidenceRefs bypasses fallback', async () => {
+    const id = childId('refs-only');
+    const result: KodaXChildExecutionResult = {
+      results: [
+        {
+          childId: id,
+          fanoutClass: 'evidence-scan',
+          status: 'completed',
+          disposition: 'valid',
+          summary: '', // child emitted no text
+          evidenceRefs: ['file:src/foo.ts'],
+          contradictions: [],
+          actualIterations: 1,
+          interrupted: false,
+        },
+      ],
+      mergedFindings: [
+        {
+          childId: id,
+          objective: 'test',
+          // mergeChildResults builds: [r.summary, ...r.evidenceRefs]
+          evidence: ['', 'file:src/foo.ts'],
+          artifacts: [],
+        },
+      ],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(result);
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
+    );
+    await registry.get(id);
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('file:src/foo.ts');
+    expect(banner).not.toContain('produced no observable text output');
+  });
+
   it('sync legacy path: empty findings produce diagnostic fallback, not empty string', async () => {
+    const id = childId('sync-empty');
     process.env.KODAX_ASYNC_DISPATCH = '0';
     mockExec.mockResolvedValueOnce(
-      buildEmptySuccessResult('sync-empty', { interrupted: false, iterations: 3 }),
+      buildEmptySuccessResult(id, { interrupted: false, iterations: 3 }),
     );
     // Sync mode: registry undefined.
     const ctx = buildBaseCtx(undefined);
 
     const result = await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'sync-empty', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
 
     expect(result).toContain('produced no observable text output');
@@ -533,14 +616,15 @@ describe('empty-summary fallback — dispatch_child_task pipeline', () => {
   });
 
   it('crash path: empty Error.message still produces a non-empty banner', async () => {
+    const id = childId('crash-empty');
     mockExec.mockRejectedValueOnce(new Error(''));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'crash-empty', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('crash-empty')?.catch(() => undefined);
+    await registry.get(id)?.catch(() => undefined);
     await Promise.resolve();
 
     const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
@@ -549,45 +633,50 @@ describe('empty-summary fallback — dispatch_child_task pipeline', () => {
   });
 
   it('KODAX_DISPATCH_CHILD_TRACE=1 writes a JSON trace file', async () => {
+    const id = childId('trace-on');
     process.env.KODAX_DISPATCH_CHILD_TRACE = '1';
-    mockExec.mockResolvedValueOnce(buildSuccessResult('trace-1', ['hi']));
+    mockExec.mockResolvedValueOnce(buildSuccessResult(id, ['hi']));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'trace-1', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('trace-1');
+    await registry.get(id);
 
     const { tmpdir } = await import('os');
     const { join } = await import('path');
     const fsPromises = await import('fs/promises');
     const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
     const files = await fsPromises.readdir(traceDir).catch(() => [] as string[]);
-    const matching = files.filter((f) => f.includes('trace-1'));
+    const matching = files.filter((f) => f.includes(id));
     expect(matching.length).toBeGreaterThan(0);
-    // Cleanup
-    await Promise.all(
-      matching.map((f) => fsPromises.unlink(join(traceDir, f)).catch(() => undefined)),
-    );
+    // Trace JSON should carry the new `branch` discriminator (renamed
+    // from `path` in the review pass to avoid shadowing the `path` Node
+    // module name in payload skim).
+    const content = await fsPromises.readFile(join(traceDir, matching[0]!), 'utf-8');
+    const parsed = JSON.parse(content) as { branch: string };
+    expect(parsed.branch).toBe('async-success');
+    // Cleanup is handled by afterEach via childIdsUsed registry.
   });
 
   it('KODAX_DISPATCH_CHILD_TRACE unset writes no trace file', async () => {
-    mockExec.mockResolvedValueOnce(buildSuccessResult('trace-off', ['hi']));
+    const id = childId('trace-off');
+    mockExec.mockResolvedValueOnce(buildSuccessResult(id, ['hi']));
     const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
     const ctx = buildBaseCtx(registry);
 
     await drainGeneratorReturn(
-      toolDispatchChildTask({ id: 'trace-off', objective: 'probe' }, ctx),
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
     );
-    await registry.get('trace-off');
+    await registry.get(id);
 
     const { tmpdir } = await import('os');
     const { join } = await import('path');
     const fsPromises = await import('fs/promises');
     const traceDir = join(tmpdir(), 'kodax-dispatch-trace');
     const files = await fsPromises.readdir(traceDir).catch(() => [] as string[]);
-    const matching = files.filter((f) => f.includes('trace-off'));
+    const matching = files.filter((f) => f.includes(id));
     expect(matching.length).toBe(0);
   });
 });

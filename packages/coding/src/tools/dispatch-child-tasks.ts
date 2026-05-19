@@ -32,6 +32,7 @@
 
 import { enqueueChildTaskNotification, registerChildTask } from '@kodax-ai/agent';
 import type {
+  KodaXChildAgentResult,
   KodaXChildContextBundle,
   KodaXChildModelHint,
   KodaXAmaFanoutClass,
@@ -166,7 +167,7 @@ function shouldUseAsyncDispatch(ctx: KodaXToolExecutionContext): boolean {
  */
 function buildEmptySummaryFallback(args: {
   readonly childId: string;
-  readonly status: KodaXChildExecutionResult['results'][number]['status'] | undefined;
+  readonly status: KodaXChildAgentResult['status'] | undefined;
   readonly iterations: number | undefined;
   readonly interrupted: boolean;
   readonly evidenceRefsCount: number;
@@ -210,7 +211,12 @@ async function writeDispatchTraceIfEnabled(args: {
   readonly model: string | undefined;
   readonly error?: unknown;
   readonly durationMs: number;
-  readonly path: 'sync' | 'async-success' | 'async-crash';
+  /**
+   * Which dispatch branch produced this trace. Named `branch` (not `path`)
+   * to avoid the shadowing trap with the `path` Node module imported just
+   * below — readers skimming the trace JSON shouldn't have to disambiguate.
+   */
+  readonly branch: 'sync' | 'async-success' | 'async-crash';
 }): Promise<void> {
   if (process.env.KODAX_DISPATCH_CHILD_TRACE !== '1') return;
   try {
@@ -228,7 +234,7 @@ async function writeDispatchTraceIfEnabled(args: {
     const childResult = args.result?.results?.[0];
     const payload = {
       timestamp: new Date().toISOString(),
-      path: args.path,
+      branch: args.branch,
       childId: args.childId,
       durationMs: args.durationMs,
       provider: args.provider ?? null,
@@ -272,7 +278,12 @@ async function writeDispatchTraceIfEnabled(args: {
           }
         : null,
     };
-    await fsPromises.writeFile(filePath, JSON.stringify(payload, null, 2));
+    // mode 0o600 — owner read/write only. Trace payloads carry bundle
+    // objectives + summary previews that may include codebase fragments
+    // the user wouldn't intend to share with other accounts on the same
+    // box. POSIX honors the mode; Windows ignores it (NTFS ACLs are
+    // separate), which is acceptable since KodaX is single-user.
+    await fsPromises.writeFile(filePath, JSON.stringify(payload, null, 2), { mode: 0o600 });
   } catch {
     // Best-effort — never break dispatch on telemetry I/O failure.
   }
@@ -531,7 +542,7 @@ export async function* toolDispatchChildTask(
           provider: parentConfig?.provider,
           model: parentConfig?.model,
           durationMs: Date.now() - asyncDispatchStartTs,
-          path: 'async-success',
+          branch: 'async-success',
         });
         return result;
       } catch (err) {
@@ -565,7 +576,7 @@ export async function* toolDispatchChildTask(
           model: parentConfig?.model,
           error: err,
           durationMs: Date.now() - asyncDispatchStartTs,
-          path: 'async-crash',
+          branch: 'async-crash',
         });
         throw err;
       } finally {
@@ -646,7 +657,7 @@ export async function* toolDispatchChildTask(
         provider: parentConfig?.provider,
         model: parentConfig?.model,
         durationMs: Date.now() - dispatchStartTs,
-        path: 'sync',
+        branch: 'sync',
       });
       return bannerContent;
     }
@@ -698,7 +709,7 @@ export async function* toolDispatchChildTask(
       provider: parentConfig?.provider,
       model: parentConfig?.model,
       durationMs: Date.now() - dispatchStartTs,
-      path: 'sync',
+      branch: 'sync',
     });
     return bannerContent;
   } finally {
