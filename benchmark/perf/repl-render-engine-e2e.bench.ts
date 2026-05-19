@@ -220,11 +220,12 @@ async function runStreamingScenario(opts: {
   itemCount: number;
   ticks: number;
   windowed: boolean;
-  viewportRows?: number;
+  viewportCols: number;
+  viewportRows: number;
 }): Promise<ScenarioResult> {
-  const { itemCount, ticks, windowed, viewportRows = 40 } = opts;
+  const { itemCount, ticks, windowed, viewportCols, viewportRows } = opts;
   const items = makeFixtureItems(itemCount);
-  const stdout = new MockStdout(120, 40);
+  const stdout = new MockStdout(viewportCols, viewportRows);
 
   let lastRendererTime = 0;
   let onRenderFiredAt = 0;
@@ -233,7 +234,7 @@ async function runStreamingScenario(opts: {
   function buildTree(streamingResponse: string): React.ReactElement {
     return React.createElement(MessageList, {
       items,
-      viewportWidth: 120,
+      viewportWidth: viewportCols,
       viewportRows,
       maxLines: 1000,
       isLoading: true,
@@ -324,9 +325,29 @@ async function main() {
   const TIERS = [50, 100, 200, 400, 800] as const;
   const TICKS_PER_TIER = 30; // 30 ticks × ~50ms = ~1.5s per tier; 5 tiers ≈ 8s
 
+  // Viewport: env-configurable. Default 120×40; override via
+  //   KODAX_BENCH_VIEWPORT=148x43 npm run bench:perf:e2e
+  // The default approximates a typical local terminal; the override lets users
+  // match a specific SSH client viewport (e.g. the 148×43 from the trace that
+  // surfaced FEATURE_172's real root cause).
+  const viewportEnv = process.env.KODAX_BENCH_VIEWPORT?.trim();
+  let viewportCols = 120;
+  let viewportRows = 40;
+  if (viewportEnv) {
+    const m = /^(\d+)[x×](\d+)$/i.exec(viewportEnv);
+    if (m) {
+      viewportCols = Number(m[1]);
+      viewportRows = Number(m[2]);
+    } else {
+      process.stderr.write(
+        `Warning: KODAX_BENCH_VIEWPORT='${viewportEnv}' invalid (expected WxH, e.g. 148x43); using default ${viewportCols}x${viewportRows}\n`,
+      );
+    }
+  }
+
   process.stderr.write(
     `FEATURE_172 ADR-028 — end-to-end render pipeline bench\n` +
-      `Node ${process.version} · ${process.platform}/${process.arch} · viewport 120×40\n` +
+      `Node ${process.version} · ${process.platform}/${process.arch} · viewport ${viewportCols}×${viewportRows}\n` +
       `Each tick = rerender(streaming += 80 chars) → onRender callback fires\n` +
       `Wall-time covers: React reconcile + Yoga + renderNodeToOutput + outputToScreen + cellLogUpdate.render + applyDiff + stdout.write\n\n`,
   );
@@ -350,6 +371,8 @@ async function main() {
         itemCount: n,
         ticks: TICKS_PER_TIER,
         windowed,
+        viewportCols,
+        viewportRows,
       });
       const elapsed = (performance.now() - t0) / 1000;
       process.stderr.write(`done in ${elapsed.toFixed(1)}s\n`);
@@ -378,14 +401,15 @@ async function main() {
     platform: process.platform,
     arch: process.arch,
     timestamp: new Date().toISOString(),
-    viewport: { width: 120, height: 40 },
+    viewport: { width: viewportCols, height: viewportRows },
     ticks_per_tier: TICKS_PER_TIER,
     scenarios,
   };
 
   const outDir = resolve(__dirname, "../perf-baselines");
   mkdirSync(outDir, { recursive: true });
-  const outFile = resolve(outDir, `baseline-e2e-${sha}.json`);
+  const vSuffix = `${viewportCols}x${viewportRows}`;
+  const outFile = resolve(outDir, `baseline-e2e-${sha}-${vSuffix}.json`);
   writeFileSync(outFile, JSON.stringify(output, null, 2));
 
   // Human-readable summary
