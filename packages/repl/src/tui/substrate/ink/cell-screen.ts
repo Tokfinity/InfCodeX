@@ -1,5 +1,5 @@
 /**
- * Cell-level screen buffer (FEATURE_057 Track F, Phase 1).
+ * Cell-level screen buffer (FEATURE_057 Track F, Phase 1; FEATURE_172 / ADR-028 Phase A.1).
  *
  * This is the cell-grid data structure that backs the new diff renderer.
  * It is intentionally NAMED `cell-screen.ts` (not `screen.ts`) because
@@ -11,6 +11,24 @@
  * HyperlinkPool interning yet — Phase 2 layers those in if profiling shows
  * they pay off. Per the design doc out-of-scope list, the `damage` field
  * from the CC reference is also deliberately omitted here.
+ *
+ * **Phase A.1 (FEATURE_172) — `ScreenBuilder` for the hot construction path.**
+ * The original `setCellAt(Screen, ...)` returns a fresh `Screen` per call
+ * (immutable contract). On a typical 148×43 frame with 500 non-empty cells,
+ * that's 500 × 6364 element copies + 500 fresh arrays + 500 Screen objects
+ * per frame — the dominant cost in `outputToScreen`'s hot path (≈ 2.7s/frame
+ * on a 200-item SSH session, measured via `KODAX_RENDER_TRACE=1`).
+ *
+ * `ScreenBuilder` lets the (single) production caller — `output-to-screen.ts`
+ * — construct a screen with O(1) per-write cost: one mutable backing array
+ * is allocated up front, `setCellAt` writes in place, and `build()` hands
+ * ownership of the array to a freshly-typed `Screen`. The builder MUST NOT
+ * be reused after `build()`; doing so would mutate cells the consumer now
+ * observes as immutable.
+ *
+ * The immutable `setCellAt(Screen, ...)` survives unchanged for tests and
+ * future callers that genuinely need value semantics — Phase A.1 only
+ * routes the hot loop through the builder.
  */
 
 /**
@@ -104,6 +122,57 @@ export function setCellAt(
   const nextCells = screen.cells.slice();
   nextCells[y * screen.width + x] = cell;
   return { ...screen, cells: nextCells };
+}
+
+/**
+ * Mutable builder for the hot `outputToScreen` construction path.
+ *
+ * Allocates one `Cell[]` of `width * height` up front; `setCellAt` writes
+ * in place. `build()` hands ownership of the backing array to a freshly-
+ * typed `Screen` and the builder MUST NOT be used again afterwards (a
+ * second `setCellAt` or `build()` call would mutate cells the consumer
+ * now treats as immutable).
+ *
+ * This is intentionally NOT a class — `ScreenBuilder` is a one-shot
+ * adapter for `output-to-screen.ts`, not a long-lived domain object.
+ */
+export interface ScreenBuilder {
+  readonly width: number;
+  readonly height: number;
+  setCellAt(x: number, y: number, cell: Cell): void;
+  build(): Screen;
+}
+
+export function createScreenBuilder(width: number, height: number): ScreenBuilder {
+  if (width < 0 || height < 0) {
+    throw new RangeError(
+      `Screen dimensions must be non-negative (got width=${width}, height=${height})`,
+    );
+  }
+  const cells = new Array<Cell>(width * height).fill(EMPTY_CELL);
+  let consumed = false;
+  return {
+    width,
+    height,
+    setCellAt(x: number, y: number, cell: Cell): void {
+      if (consumed) {
+        throw new Error("ScreenBuilder.setCellAt called after build()");
+      }
+      if (x < 0 || y < 0 || x >= width || y >= height) {
+        throw new RangeError(
+          `ScreenBuilder.setCellAt out of bounds: (${x}, ${y}) on ${width}x${height}`,
+        );
+      }
+      cells[y * width + x] = cell;
+    },
+    build(): Screen {
+      if (consumed) {
+        throw new Error("ScreenBuilder.build called twice");
+      }
+      consumed = true;
+      return { width, height, cells };
+    },
+  };
 }
 
 /**

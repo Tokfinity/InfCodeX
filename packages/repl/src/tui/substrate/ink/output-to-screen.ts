@@ -21,8 +21,7 @@
 import {
   CellWidth,
   EMPTY_CELL,
-  createScreen,
-  setCellAt,
+  createScreenBuilder,
   type Cell,
   type Screen,
 } from "./cell-screen.js";
@@ -176,17 +175,23 @@ export function outputToScreen(output: OutputLike): Screen {
   const width: number = output.width;
   const height: number = output.height;
 
-  let screen = createScreen(width, height);
+  // FEATURE_172 / ADR-028 Phase A.1: build via the mutable `ScreenBuilder`.
+  // The previous immutable `let screen = setCellAt(screen, ...)` path
+  // re-allocated the entire `width*height` cells array per non-empty cell —
+  // O(N²) in cell-count, the dominant render cost measured at 2.7s/frame
+  // for 200-item SSH sessions on a 148×43 viewport. The builder writes
+  // each cell in O(1) and yields a frozen `Screen` at `build()`.
+  const builder = createScreenBuilder(width, height);
 
   // `Output.getGrid()` does NOT clamp writes to `output.width` — a write
   // operation whose text overflows the right edge causes the row array to
   // grow past `width` (the legacy `get()` path tolerated this via
   // `filter(undefined).trimEnd()`). Clamp at the adapter boundary here so
-  // we never hand out-of-grid coordinates to `setCellAt`, which throws by
-  // design to surface internal grid bugs. The same clamp is applied to
-  // `y` for symmetry — `getGrid()` only allocates `height` rows, but a
-  // future change to the vendored Output should not be able to crash the
-  // renderer either.
+  // we never hand out-of-grid coordinates to `builder.setCellAt`, which
+  // throws by design to surface internal grid bugs. The same clamp is
+  // applied to `y` for symmetry — `getGrid()` only allocates `height`
+  // rows, but a future change to the vendored Output should not be able
+  // to crash the renderer either.
   const yLimit = Math.min(grid.length, height);
   for (let y = 0; y < yLimit; y++) {
     const row = grid[y];
@@ -196,10 +201,9 @@ export function outputToScreen(output: OutputLike): Screen {
       const sc = row[x];
       if (!sc) continue;
       const cell = styledCharToCell(sc);
-      // Skip writes for cells that match EMPTY_CELL exactly — `createScreen`
-      // already populates every coordinate with EMPTY_CELL, so re-writing
-      // the same cell just allocates an identical row array. Avoiding it
-      // shaves allocation cost on the hot path (idle/background frames).
+      // Skip writes for cells that match EMPTY_CELL exactly — the builder
+      // is already initialized with EMPTY_CELL at every coordinate, so
+      // re-writing the same cell is pure overhead.
       if (
         cell.char === EMPTY_CELL.char &&
         cell.width === EMPTY_CELL.width &&
@@ -208,9 +212,9 @@ export function outputToScreen(output: OutputLike): Screen {
       ) {
         continue;
       }
-      screen = setCellAt(screen, x, y, cell);
+      builder.setCellAt(x, y, cell);
     }
   }
 
-  return screen;
+  return builder.build();
 }

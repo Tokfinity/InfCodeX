@@ -4,6 +4,7 @@ import {
   CellWidth,
   cellAt,
   createScreen,
+  createScreenBuilder,
   diffEach,
   EMPTY_CELL,
   Screen,
@@ -143,6 +144,72 @@ describe("substrate/ink/cell-screen (FEATURE_057 Track F Phase 1)", () => {
       }
       const at00 = diffs.find((d) => d.x === 0 && d.y === 0);
       expect(at00).toMatchObject({ prev: { char: "A" }, next: EMPTY_CELL });
+    });
+  });
+
+  describe("createScreenBuilder (FEATURE_172 / ADR-028 Phase A.1)", () => {
+    it("starts filled with EMPTY_CELL and produces a Screen byte-equal to createScreen + setCellAt", () => {
+      // Reference: immutable path
+      let reference = createScreen(3, 2);
+      reference = setCellAt(reference, 0, 0, makeCell("a"));
+      reference = setCellAt(reference, 2, 1, makeCell("z"));
+
+      // Builder path
+      const builder = createScreenBuilder(3, 2);
+      builder.setCellAt(0, 0, makeCell("a"));
+      builder.setCellAt(2, 1, makeCell("z"));
+      const built = builder.build();
+
+      expect(built.width).toBe(reference.width);
+      expect(built.height).toBe(reference.height);
+      expect(built.cells).toEqual(reference.cells);
+    });
+
+    it("supports zero dimensions (mirrors createScreen contract)", () => {
+      const built = createScreenBuilder(0, 0).build();
+      expect(built.width).toBe(0);
+      expect(built.height).toBe(0);
+      expect(built.cells).toHaveLength(0);
+    });
+
+    it("rejects negative dimensions at construction", () => {
+      expect(() => createScreenBuilder(-1, 2)).toThrow(RangeError);
+      expect(() => createScreenBuilder(2, -1)).toThrow(RangeError);
+    });
+
+    it("throws for out-of-bounds writes (mirrors setCellAt contract)", () => {
+      const b = createScreenBuilder(2, 2);
+      expect(() => b.setCellAt(2, 0, makeCell("x"))).toThrow(RangeError);
+      expect(() => b.setCellAt(0, 2, makeCell("x"))).toThrow(RangeError);
+      expect(() => b.setCellAt(-1, 0, makeCell("x"))).toThrow(RangeError);
+    });
+
+    it("rejects setCellAt after build (single-shot ownership transfer)", () => {
+      const b = createScreenBuilder(2, 2);
+      b.setCellAt(0, 0, makeCell("x"));
+      b.build();
+      expect(() => b.setCellAt(1, 1, makeCell("y"))).toThrow(/after build/);
+    });
+
+    it("rejects build called twice", () => {
+      const b = createScreenBuilder(2, 2);
+      b.build();
+      expect(() => b.build()).toThrow(/twice/);
+    });
+
+    it("O(1) per setCellAt: 10_000 writes on a 200x200 grid complete promptly", () => {
+      // Sanity guard against accidental O(N) per-write regression. The
+      // exact ms threshold is a soft bound (10x the measured ~5ms baseline);
+      // the test fails if someone re-introduces an array-slice per write.
+      const b = createScreenBuilder(200, 200);
+      const cell: Cell = makeCell("x");
+      const t0 = performance.now();
+      for (let i = 0; i < 10_000; i++) {
+        b.setCellAt(i % 200, Math.floor(i / 200) % 200, cell);
+      }
+      b.build();
+      const elapsed = performance.now() - t0;
+      expect(elapsed).toBeLessThan(100);
     });
   });
 
