@@ -52,6 +52,41 @@ describe("viewport-budget", () => {
     expect(budget.messageRows).toBeGreaterThan(0);
   });
 
+  // v0.7.42 layout bugfix — when the caller passes a multi-line budget text
+  // (as InkREPL does via `formatPendingInputsBudgetText`), the reserved row
+  // count must scale with queue depth. Prior to the fix the caller passed a
+  // single-summary line and `pendingInputRows` was 1 regardless of depth, so
+  // queue depth ≥ 2 silently pushed composer + status bar off screen.
+  it("scales pendingInputRows with queue depth so composer/status stay on screen", () => {
+    const oneItem = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 120,
+      inputText: "",
+      pendingInputSummary: ["⏳ [1/1] alpha", "  ↑ pull all into editor · Esc drops latest"].join("\n"),
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+    });
+    const threeItems = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 120,
+      inputText: "",
+      pendingInputSummary: [
+        "⏳ [1/3] alpha",
+        "⏳ [2/3] beta",
+        "⏳ [3/3] gamma",
+        "  ↑ pull all into editor · Esc drops latest",
+      ].join("\n"),
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+    });
+
+    expect(oneItem.pendingInputRows).toBe(2);
+    expect(threeItems.pendingInputRows).toBe(4);
+    expect(threeItems.messageRows).toBeLessThan(oneItem.messageRows);
+  });
+
   it("reserves footer space for header and status notice surfaces", () => {
     const withoutSurfaces = calculateViewportBudget({
       terminalRows: 24,

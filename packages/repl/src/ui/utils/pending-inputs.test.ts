@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatPendingInputsSummary,
   formatPendingInputsLines,
+  formatPendingInputsBudgetText,
 } from "./pending-inputs.js";
 
 describe("pending-inputs", () => {
@@ -53,6 +54,35 @@ describe("pending-inputs", () => {
       expect(lines[0].preview).toContain("...");
       expect(lines[0].preview.length).toBeLessThanOrEqual(72);
       expect(lines[1].preview).toBe("short");
+    });
+  });
+
+  // v0.7.42 layout bugfix — budget text mirrors QueuedCommandsSurface row
+  // count exactly (N items + 1 hint row).
+  describe("formatPendingInputsBudgetText", () => {
+    it("returns undefined when the queue is empty", () => {
+      expect(formatPendingInputsBudgetText([])).toBeUndefined();
+    });
+
+    it("emits one line per item plus a trailing hint line", () => {
+      const text = formatPendingInputsBudgetText(["alpha", "beta"]);
+      expect(text).toBeDefined();
+      const rows = (text ?? "").split("\n");
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toBe("⏳ [1/2] alpha");
+      expect(rows[1]).toBe("⏳ [2/2] beta");
+      // Verbatim match — any drift here vs. QueuedCommandsSurface hint row
+      // re-opens the v0.7.42 layout bug (budget under-reserves by 1 row).
+      expect(rows[2]).toBe("  ↑ pull all into editor · Esc drops latest");
+    });
+
+    it("scales with queue depth so budget reserves N+1 rows", () => {
+      const single = formatPendingInputsBudgetText(["one"]) ?? "";
+      const double = formatPendingInputsBudgetText(["one", "two"]) ?? "";
+      const triple = formatPendingInputsBudgetText(["one", "two", "three"]) ?? "";
+      expect(single.split("\n")).toHaveLength(2);
+      expect(double.split("\n")).toHaveLength(3);
+      expect(triple.split("\n")).toHaveLength(4);
     });
   });
 });

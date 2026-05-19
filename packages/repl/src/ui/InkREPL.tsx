@@ -212,7 +212,7 @@ import {
   type EffectiveTuiRendererMode,
   type FullscreenPolicy,
 } from "./utils/terminal-host-profile.js";
-import { formatPendingInputsSummary, MAX_PENDING_INPUTS } from "./utils/pending-inputs.js";
+import { formatPendingInputsBudgetText, MAX_PENDING_INPUTS } from "./utils/pending-inputs.js";
 import {
   SLASH_MID_TASK_GUARD_DEDUPE_KEY,
   SLASH_MID_TASK_GUARD_MESSAGE,
@@ -3449,8 +3449,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     [statusBarViewModel],
   );
   const statusBarText = visibleStatusBarViewModel.text;
+  // v0.7.42 layout bugfix — budget must see the same row count as the
+  // `QueuedCommandsSurface` renders (N items + 1 hint row). Passing the
+  // single-line summary (the old `formatPendingInputsSummary`) under-reserved
+  // by N rows for queue depth ≥ 2, pushing composer + status bar off screen
+  // instead of compressing the transcript above.
   const pendingInputSummary = useMemo(
-    () => formatPendingInputsSummary(streamingState.pendingInputs),
+    () => formatPendingInputsBudgetText(streamingState.pendingInputs),
     [streamingState.pendingInputs]
   );
   const footerHeaderViewModel = useMemo(
