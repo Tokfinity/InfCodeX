@@ -197,6 +197,15 @@ describe("substrate/ink/cell-screen (FEATURE_057 Track F Phase 1)", () => {
       expect(() => b.build()).toThrow(/twice/);
     });
 
+    it("repeated writes to the same coordinate: last-write-wins", () => {
+      const b = createScreenBuilder(2, 2);
+      b.setCellAt(0, 0, makeCell("a"));
+      b.setCellAt(0, 0, makeCell("b"));
+      b.setCellAt(0, 0, makeCell("c"));
+      const built = b.build();
+      expect(cellAt(built, 0, 0)?.char).toBe("c");
+    });
+
     it("O(1) per setCellAt: 10_000 writes on a 200x200 grid complete promptly", () => {
       // Sanity guard against accidental O(N) per-write regression. The
       // exact ms threshold is a soft bound (10x the measured ~5ms baseline);
