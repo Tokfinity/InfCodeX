@@ -1,7 +1,7 @@
 import { Stream } from "node:stream";
 import { openSync, writeSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ComponentType, PropsWithChildren, ReactNode } from "react";
 import InkBox from "./primitives/Box.js";
@@ -14,7 +14,9 @@ import KodaXRenderer, {
 // FEATURE_172 / ADR-028 — opt-in render-pipeline tracing.
 //
 // Enable with `KODAX_RENDER_TRACE=1 kodax -c` (default file
-// `~/.kodax-render-trace.log`) or `KODAX_RENDER_TRACE=/path/to/file kodax -c`.
+// `<tmpdir>/kodax-render-trace-<pid>.log` — `/tmp/...` on Linux/macOS,
+// `%TEMP%\...` on Windows) or `KODAX_RENDER_TRACE=/path/to/file kodax -c`
+// for a custom path.
 //
 // Writes one line per render frame with:
 //   - renderTime: engine internal cost (Yoga + renderNodeToOutput + outputToScreen)
@@ -39,7 +41,7 @@ function resolveTraceFd(): number | null {
   }
   const path =
     flag === "1" || flag === "true"
-      ? join(homedir() || ".", ".kodax-render-trace.log")
+      ? join(tmpdir(), `kodax-render-trace-${process.pid}.log`)
       : flag;
   try {
     traceFd = openSync(path, "a");
