@@ -214,9 +214,28 @@ export async function buildManagedTaskCompactionHook(
       // Below threshold — but microcompact may still have done some
       // free pruning. Return the microcompacted view when it differs
       // so Runner picks up the new transcript.
-      return microcompactChanged
-        ? (workingMessages as readonly AgentMessage[])
-        : undefined;
+      if (microcompactChanged) {
+        // FEATURE_177 v0.7.42 — microcompact replaces tool_result
+        // contents older than maxAge turns with `[Cleared: ...]`
+        // stubs. Without this hook firing, the per-task
+        // readFileStateCache would keep returning "refer to your
+        // earlier read" stubs pointing at tool_results whose actual
+        // content has been wiped — the LLM would have no access to
+        // either the cached file content or the disk content. Fire
+        // onPostCompact (clears the cache) so the next Read goes to
+        // disk and the new tool_result carries real content the LLM
+        // can act on. Errors swallowed — same fire-and-forget posture
+        // as the full-compaction branch below.
+        if (onPostCompact) {
+          try {
+            onPostCompact();
+          } catch {
+            // intentionally ignored
+          }
+        }
+        return workingMessages as readonly AgentMessage[];
+      }
+      return undefined;
     }
 
     // Phase 2: LLM-based intelligent compact. Skipped when the circuit
@@ -381,6 +400,20 @@ export async function buildManagedTaskCompactionHook(
         } catch {
           // intentionally ignored
         }
+      }
+    } else if (microcompactChanged && onPostCompact) {
+      // FEATURE_177 v0.7.42 — needsCompact-but-LLM-threw-and-graceful-
+      // didn't-prune edge: microcompact still cleared old tool_results
+      // (≥20 turns) to `[Cleared: ...]` stubs. Fire onPostCompact so
+      // the readFileStateCache drops entries pointing at those now-
+      // cleared blocks. Without this, the cache would keep returning
+      // "refer to your earlier read" stubs whose target tool_result is
+      // a `[Cleared: ...]` placeholder — the LLM gets no content from
+      // either the cache or the transcript.
+      try {
+        onPostCompact();
+      } catch {
+        // intentionally ignored
       }
     }
 

@@ -409,4 +409,157 @@ describe('buildManagedTaskCompactionHook — v0.7.40 parity gaps', () => {
       expect(result).toEqual(degradedMessages);
     });
   });
+
+  describe('FEATURE_177 v0.7.42 — onPostCompact fires for read-file-state cache invalidation', () => {
+    it('fires onPostCompact after a full LLM compaction succeeds', async () => {
+      const messages = buildLargeTranscript();
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      compactMock.mockResolvedValueOnce({
+        compacted: true,
+        messages: [{ role: 'user', content: 'compacted' }],
+        tokensBefore: 150_000,
+        tokensAfter: 50_000,
+        entriesRemoved: 3,
+        summary: 's',
+        details: { readFiles: [], modifiedFiles: [] },
+        artifactLedger: [],
+        memorySeed: {
+          objective: undefined,
+          constraints: [],
+          progress: { completed: [], inProgress: [], blockers: [] },
+          keyDecisions: [],
+          nextSteps: [],
+          keyContext: [],
+          importantTargets: [],
+          tombstones: [],
+        },
+      } satisfies CompactionResult);
+
+      const onPostCompact = vi.fn();
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      await hook!(messages);
+      expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onPostCompact after gracefulCompactDegradation prunes (LLM failed)', async () => {
+      const messages = buildLargeTranscript();
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      compactMock.mockRejectedValueOnce(new Error('LLM 400'));
+      gracefulDegradationMock.mockReturnValueOnce([
+        { role: 'user', content: 'graceful' },
+      ]);
+
+      const onPostCompact = vi.fn();
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      await hook!(messages);
+      expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it('fires onPostCompact when microcompact mutates below trigger (no LLM compact)', async () => {
+      // This is the cache-stale-from-microcompact gap the user
+      // surfaced: microcompact clears tool_results aged >= 20 turns
+      // to `[Cleared: ...]` stubs without firing the compaction event
+      // surface. If the readFileStateCache is not also cleared, it
+      // returns "refer to your earlier read" stubs pointing at
+      // tool_results whose actual content has been wiped → LLM is
+      // stuck with neither cache content nor transcript content.
+      const messages: KodaXMessage[] = [
+        { role: 'user', content: 'tiny' },
+      ];
+      const microcompacted: KodaXMessage[] = [
+        { role: 'user', content: 'tiny (post-microcompact)' },
+      ];
+      microcompactMock.mockReturnValueOnce(microcompacted);
+
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(50_000, messages), // below 120k trigger
+      };
+
+      const onPostCompact = vi.fn();
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      const result = await hook!(messages);
+
+      expect(result).toEqual(microcompacted);
+      expect(compactMock).not.toHaveBeenCalled();
+      expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT fire onPostCompact when microcompact made no changes and no LLM compaction', async () => {
+      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
+      microcompactMock.mockReturnValueOnce(messages); // identity = no change
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(50_000, messages),
+      };
+
+      const onPostCompact = vi.fn();
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      await hook!(messages);
+      expect(onPostCompact).not.toHaveBeenCalled();
+    });
+
+    it('fires onPostCompact when LLM throws + graceful no-op + microcompact mutated (above-trigger edge)', async () => {
+      // needsCompact=true, LLM throws, graceful returns identity,
+      // microcompact already did some work. Without the second branch
+      // in compaction.ts:404, this edge would silently keep the
+      // micro-pruned transcript while leaving the read cache pointing
+      // at now-cleared tool_results.
+      const messages = buildLargeTranscript();
+      const microcompacted: KodaXMessage[] = [
+        { role: 'user', content: 'tiny (post-microcompact)' },
+      ];
+      microcompactMock.mockReturnValueOnce(microcompacted);
+
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      compactMock.mockRejectedValueOnce(new Error('LLM threw'));
+      // Graceful returns the same reference it got → degraded=false.
+      gracefulDegradationMock.mockImplementation((wm: KodaXMessage[]) => wm);
+
+      const onPostCompact = vi.fn();
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      await hook!(messages);
+      expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+
+    it('swallows errors thrown by onPostCompact (cache bug must not crash the hook)', async () => {
+      const messages: KodaXMessage[] = [{ role: 'user', content: 'tiny' }];
+      microcompactMock.mockReturnValueOnce([
+        { role: 'user', content: 'micro' },
+      ]);
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(50_000, messages),
+      };
+
+      const onPostCompact = vi.fn(() => {
+        throw new Error('cache went bang');
+      });
+      const hook = await buildManagedTaskCompactionHook(makeOptions(), {
+        contextTokenSnapshotRef: snapshotRef,
+        onPostCompact,
+      });
+      // Must not throw.
+      await expect(hook!(messages)).resolves.toBeDefined();
+      expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+  });
 });
