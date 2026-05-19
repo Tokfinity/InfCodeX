@@ -30,6 +30,10 @@
   <a href="README.md">English README</a>
 </p>
 
+<p align="center">
+  <img src="kodax.gif" alt="KodaX 实战演示" width="880">
+</p>
+
 ---
 
 ## 30 秒上手

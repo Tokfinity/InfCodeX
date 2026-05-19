@@ -30,6 +30,10 @@
   <a href="README_CN.md">中文 README</a>
 </p>
 
+<p align="center">
+  <img src="kodax.gif" alt="KodaX in action" width="880">
+</p>
+
 ---
 
 ## Install in 30 seconds
