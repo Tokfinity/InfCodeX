@@ -124,6 +124,19 @@ export interface BuildManagedTaskCompactionHookOptions {
    * backwards-compat with callers that don't yet wire the snapshot.
    */
   readonly contextTokenSnapshotRef?: ContextTokenSnapshotRef;
+  /**
+   * FEATURE_177 v0.7.42 — fires once after a compaction actually
+   * modified `workingMessages` (i.e., the same condition that gates
+   * `onCompactedMessages`). Used by `runner-driven.ts` to clear the
+   * per-task `readFileStateCache`: the cache returns stubs that point
+   * the LLM back at earlier `tool_result` blocks, but those blocks may
+   * have been summarized away during compaction, so the stub would no
+   * longer be actionable. Clearing forces the next Read to return real
+   * content. Errors thrown by the callback are swallowed in the same
+   * spirit as the existing `events?.onCompacted*` fire-and-forget
+   * pattern so a buggy side-effect can't crash the compaction hook.
+   */
+  readonly onPostCompact?: () => void;
 }
 
 /**
@@ -150,6 +163,7 @@ export async function buildManagedTaskCompactionHook(
     ?? 200_000;
   const events = options.events;
   const snapshotRef = hookOptions.contextTokenSnapshotRef;
+  const onPostCompact = hookOptions.onPostCompact;
 
   let consecutiveFailures = 0;
 
@@ -357,6 +371,17 @@ export async function buildManagedTaskCompactionHook(
       });
       events?.onCompact?.(tokensBeforeForEvent);
       events?.onCompactedMessages?.(workingMessages, compactionUpdate);
+      // FEATURE_177 v0.7.42 — fire post-compact side-effect (clears
+      // the read-file-state cache; see `runner-driven.ts` setup).
+      // Errors swallowed so a buggy side-effect can't break the
+      // compaction hook itself.
+      if (onPostCompact) {
+        try {
+          onPostCompact();
+        } catch {
+          // intentionally ignored
+        }
+      }
     }
 
     // Rebase the snapshot to the compacted state so the next

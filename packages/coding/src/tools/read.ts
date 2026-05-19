@@ -3,6 +3,7 @@ import { createReadStream } from 'fs';
 import { createInterface } from 'readline';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
+import { buildReadFileUnchangedStub } from '../multi-instance/read-file-state-cache.js';
 import {
   DEFAULT_TOOL_OUTPUT_MAX_BYTES,
   formatSize,
@@ -150,6 +151,21 @@ export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExe
   const limit = Math.max(1, Math.floor(rawLimit));
   const startLine = offset - 1;
 
+  // FEATURE_177 v0.7.42 — anti-loop dedup. When the LLM re-reads the
+  // same (file, offset, limit) and the file hasn't been touched since,
+  // return a short stub instead of the full content. Breaks the
+  // `narrate-then-re-read` loop observed on models with structural
+  // decoder floors (kimi-code 2026-05). The cache is per-managed-task
+  // (created in `runner-driven.ts`); when undefined the lookup is
+  // skipped and disk read proceeds normally. Killswitch:
+  // `KODAX_READ_DEDUP_KILLSWITCH=1`.
+  if (ctx.readFileStateCache) {
+    const cached = ctx.readFileStateCache.lookup(filePath, offset, limit);
+    if (cached.kind === 'hit') {
+      return buildReadFileUnchangedStub(filePath, offset, limit);
+    }
+  }
+
   const lines: string[] = [];
   const stream = createReadStream(filePath, { encoding: 'utf-8' });
   const reader = createInterface({
@@ -228,6 +244,11 @@ export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExe
       // turn sees the recorded hash. Errors swallowed inside the
       // helper; never affects tool output.
       await maybeRecordContentHash(ctx, filePath, stat.size);
+      // FEATURE_177 v0.7.42 — record (filePath, offset, limit, mtime)
+      // for the anti-loop dedup. The next re-read with these same
+      // params + unchanged mtime returns a stub instead of paying disk
+      // I/O and re-flooding the conversation with identical content.
+      ctx.readFileStateCache?.record(filePath, offset, limit, stat.mtimeMs);
       return output;
     }
 

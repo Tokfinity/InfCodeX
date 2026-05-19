@@ -56,6 +56,10 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
     // == false above) so storing the new content's hash here is the
     // honest record.
     ctx.contentHashCache?.recordWrite(filePath, content);
+    // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
+    // sees real content. Belt-and-suspenders against same-second
+    // mtime collisions on coarse-resolution filesystems.
+    ctx.readFileStateCache?.forget(filePath);
 
     const diff = generateDiff(oldContent, content, filePath);
     const changes = countChanges(diff);

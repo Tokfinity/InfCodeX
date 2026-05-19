@@ -164,6 +164,13 @@ async function runEditOnce(
   // content so the LLM's own subsequent edit on this file does not
   // false-alarm against the changes it just applied.
   ctx.contentHashCache?.recordWrite(filePath, replacementPlan.newContent);
+  // FEATURE_177 v0.7.42 — drop the read-state cache for this file so
+  // the next Read returns real content (the LLM needs to see the
+  // post-edit lines, not the pre-edit stub). The mtime check would
+  // catch this already, but explicit forget is cheap insurance against
+  // any FS-driver case where mtime doesn't tick (e.g., same-second
+  // write on a filesystem with 1s mtime resolution).
+  ctx.readFileStateCache?.forget(filePath);
 
   const diff = generateDiff(content, replacementPlan.newContent, filePath);
   const changes = countChanges(diff);

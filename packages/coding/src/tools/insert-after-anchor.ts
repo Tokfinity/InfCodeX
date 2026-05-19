@@ -53,6 +53,9 @@ export async function toolInsertAfterAnchor(
     ctx.backups.set(filePath, content);
     getFileBackups().set(filePath, content);
     await fs.writeFile(filePath, nextContent, 'utf-8');
+    // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
+    // sees the post-insert content.
+    ctx.readFileStateCache?.forget(filePath);
 
     const diff = generateDiff(content, nextContent, filePath);
     const changes = countChanges(diff);

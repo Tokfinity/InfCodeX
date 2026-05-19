@@ -131,6 +131,7 @@ import {
   type DiscoveredInstance,
 } from '@kodax-ai/agent';
 import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
+import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
 // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
 import {
   EVALUATOR_VERDICT_RETRY_PROMPT,
@@ -622,6 +623,13 @@ async function runManagedTaskViaRunnerInner(
   //     via the getter defined below so each tool call sees the
   //     freshest snapshot without rebuilding baseCtx.
   const contentHashCache = createContentHashCache();
+  // FEATURE_177 v0.7.42 — per-task read-file-state cache (anti-loop).
+  // Same lifetime / wiring story as contentHashCache: created here,
+  // mounted on baseCtx for every tool execution, cleared by the
+  // compaction post-hook (see `buildManagedTaskCompactionHook` call
+  // below at line ~1284). Disabled at runtime by
+  // KODAX_READ_DEDUP_KILLSWITCH=1 — the factory returns a no-op shim.
+  const readFileStateCache = createReadFileStateCache();
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
   } = { current: undefined };
@@ -640,6 +648,7 @@ async function runManagedTaskViaRunnerInner(
     // `spillFailed:true` AND raw content > 100KB.
     summarizeBlob,
     contentHashCache,
+    readFileStateCache,
   };
   // Mount `siblingSnapshot` as a live getter so tools always see the
   // latest per-round snapshot. The factory below updates the ref in
@@ -1283,6 +1292,14 @@ async function runManagedTaskViaRunnerInner(
   // missed the threshold by the system + tools schema overhead.
   const compactionHook = await buildManagedTaskCompactionHook(options, {
     contextTokenSnapshotRef,
+    // FEATURE_177 v0.7.42 — clear the read-file-state cache after a
+    // real compaction. The cache returns stubs that point the LLM at
+    // earlier `tool_result` blocks; after summarization those blocks
+    // may no longer be in context, so the stub would no longer be
+    // actionable. Clearing forces the next Read to serve real content.
+    onPostCompact: () => {
+      readFileStateCache.clear();
+    },
   });
 
   // H1 structural resume: when a checkpoint seeded the recorder with a

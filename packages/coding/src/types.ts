@@ -1546,6 +1546,21 @@ export interface KodaXToolExecutionContext {
   contentHashCache?: import('./multi-instance/content-hash-cache.js').ContentHashCache;
 
   /**
+   * FEATURE_177 v0.7.42 — per-task read-file-state cache (anti-loop).
+   *
+   * Tracks `(filePath, offset, limit)` tuples the LLM has already read
+   * in this task. On a re-read with unchanged mtime, the Read tool
+   * returns a short stub instead of the full content — breaking
+   * `narrate-then-re-read` loops on models with structural decoder
+   * floors (kimi-code 2026-05). Edit / Write / MultiEdit call `forget`
+   * after a successful mutation; the compaction post-hook calls
+   * `clear`. Disabled by `KODAX_READ_DEDUP_KILLSWITCH=1`.
+   *
+   * See `packages/coding/src/multi-instance/read-file-state-cache.ts`.
+   */
+  readFileStateCache?: import('./multi-instance/read-file-state-cache.js').ReadFileStateCache;
+
+  /**
    * FEATURE_125 v0.7.41 — Team Mode Layer 3 input.
    *
    * Snapshot of sibling KodaX instances captured at the start of the

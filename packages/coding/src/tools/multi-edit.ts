@@ -121,6 +121,10 @@ export async function toolMultiEdit(
     // FEATURE_125 v0.7.41 — update content-hash cache with the post-batch
     // content so subsequent edits in the same task don't false-alarm.
     ctx.contentHashCache?.recordWrite(filePath, runningContent);
+    // FEATURE_177 v0.7.42 — drop the read-state cache so the next Read
+    // sees the post-batch content rather than a stub pointing at the
+    // pre-edit tool_result.
+    ctx.readFileStateCache?.forget(filePath);
 
     const diff = generateDiff(originalContent, runningContent, filePath);
     const changes = countChanges(diff);
