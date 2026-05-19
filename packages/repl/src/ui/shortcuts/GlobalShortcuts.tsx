@@ -149,7 +149,13 @@ export function GlobalShortcuts({
     }
     // Canonical names only — persisting 'auto-in-project' here triggered a startup deprecation warn that drifted the cursor by one row.
     const modeCycle: PermissionMode[] = ['plan', 'accept-edits', 'auto'];
-    const currentIndex = modeCycle.indexOf(currentConfig.permissionMode);
+    // Map the deprecated alias to its canonical position so legacy configs
+    // advance from 'auto's slot, not via the indexOf=-1 wrap fallback.
+    const aliasedCurrent =
+      currentConfig.permissionMode === 'auto-in-project'
+        ? 'auto'
+        : currentConfig.permissionMode;
+    const currentIndex = modeCycle.indexOf(aliasedCurrent);
     const nextIndex = (currentIndex + 1) % modeCycle.length;
     const newMode = modeCycle[nextIndex];
 
