@@ -1,4 +1,10 @@
-<h1 align="center">KodaX</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+    <img src="assets/logo-light.svg" alt="KodaX" width="640">
+  </picture>
+</p>
 
 <p align="center">
   <b>Open-source AI coding agent on every LLM you can reach.</b><br>
