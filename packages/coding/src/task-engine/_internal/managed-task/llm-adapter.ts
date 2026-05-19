@@ -92,7 +92,6 @@ import {
   sanitizeManagedStreamingText,
 } from './sanitize.js';
 import type { ContextTokenSnapshotRef } from './compaction.js';
-import { maybeApplyP2bWriteTurnCap } from './write-turn-cap.js';
 import type { TodoStore } from '../../todo-store.js';
 import {
   buildTodoReminderText,
@@ -390,30 +389,14 @@ export function buildRunnerLlmAdapter(
         ...resilienceCfg,
         enableNonStreamingFallback: resilienceCfg.enableNonStreamingFallback && supportsFallback,
       });
-      // P2b (v0.7.26) — cap max_output_tokens on turns where the tool
-      // inventory exposes `write` / `edit` / `multi_edit` for providers
-      // that reproducibly RST the streaming connection during large
-      // tool_use buffering (zhipu-coding / kimi-code / minimax-coding
-      // observed). Rationale: an 8K ceiling physically prevents the
-      // model from emitting a tool_use payload large enough to hit the
-      // RST window, closing the "Scout jumps to Python to avoid write
-      // streaming issues" escape path at the provider layer instead of
-      // relying on prompt compliance. Works together with P2a
-      // (multi_edit makes skeleton + batched edits cheap, so the cap
-      // doesn't force awkward workflows).
-      //
-      // Override list: `KODAX_RST_PRONE_PROVIDERS` (comma-separated).
-      // Override cap:  `KODAX_WRITE_TURN_MAX_TOKENS` (integer).
-      // L4 escalation (64K) still fires on stop_reason=max_tokens and
-      // takes precedence if the LLM genuinely needs more headroom.
-      // `hasAppliedP2bWriteCap` tracks per-turn application so we can
-      // clear the override on cleanup (prevents the cap from leaking to
-      // the NEXT adapter invocation on the same provider instance).
-      const hasAppliedP2bWriteCap = maybeApplyP2bWriteTurnCap(
-        provider,
-        providerName,
-        wireTools,
-      );
+      // P2b write-turn cap retired in v0.7.42. The 2026-04 bench
+      // (9622a909) proved RST is time-based on zhipu-coding (308s
+      // server kill window), not payload-size-based on any provider —
+      // so the correct defense layer is `streamMaxDurationMs` + non-
+      // streaming fallback (configured per-provider in registry.ts),
+      // not a `max_output_tokens` shrink on the write-turn boundary.
+      // The L4 escalation + L5 continuation paths below handle any
+      // remaining max_tokens cases regardless of provider.
       let providerMessages: KodaXMessage[] = [...transcript];
       // Clean incomplete tool calls and validate tool history before
       // every provider call (CAP-002). Both helpers come from
@@ -812,17 +795,6 @@ export function buildRunnerLlmAdapter(
         thinkingBlocks: accumulatedThinking ?? raw.thinkingBlocks,
         usage: raw.usage,
       };
-
-      // P2b cleanup — if we applied the write-turn cap, ensure the
-      // override doesn't leak to the next adapter invocation on this
-      // same provider instance. Base provider clears on success inside
-      // withRateLimit, but failure paths keep the override. Clearing
-      // unconditionally here is safe: L4 escalation sets and clears
-      // its own override within the retry loop, and any fresh
-      // invocation will re-apply its own policy.
-      if (hasAppliedP2bWriteCap) {
-        provider.setMaxOutputTokensOverride(undefined);
-      }
     }
 
     // Update cumulative token state for the final contextTokenSnapshot.

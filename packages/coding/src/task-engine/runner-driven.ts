@@ -170,17 +170,21 @@ import { resolveExecutionCwd } from '../runtime-paths.js';
 import { mkdir } from 'node:fs/promises';
 
 // FEATURE_171 (v0.7.41) — runner-driven.ts modular split. The shared
-// interfaces and four leaf modules below were extracted from this file
+// interfaces and leaf modules below were extracted from this file
 // without behavior change; runner-driven.ts re-exports the public names
-// (`AmaRole`, `getAmaRoleEffectiveExclude`, `getAmaRoleExpectedToolNames`,
-// `maybeApplyP2bWriteTurnCap`) plus the structural interfaces tests
-// reach for via `Parameters<typeof ...>` so import paths in tests and
-// downstream callers do not change.
+// (`AmaRole`, `getAmaRoleEffectiveExclude`, `getAmaRoleExpectedToolNames`)
+// plus the structural interfaces tests reach for via
+// `Parameters<typeof ...>` so import paths in tests and downstream
+// callers do not change.
+//
+// v0.7.42: the `write-turn-cap.ts` leaf (P2b RST-prone provider cap)
+// was retired; the `streamMaxDurationMs` + non-streaming fallback
+// chain in `registry.ts` is the bench-driven defense for the one
+// real RST case (zhipu-coding 308s server kill window).
 import {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
 } from './_internal/managed-task/role-exclude.js';
-import { maybeApplyP2bWriteTurnCap } from './_internal/managed-task/write-turn-cap.js';
 import {
   extractUserFacingText,
   deriveFinalStatus,
@@ -225,12 +229,11 @@ import {
 
 // Re-export the public surface so existing callers
 // (`task-engine.ts`, `runner-driven.test.ts`,
-// `runner-driven-tool-wiring.test.ts`, `p2b-write-turn-cap.test.ts`)
-// continue to import everything from `./runner-driven.js`.
+// `runner-driven-tool-wiring.test.ts`) continue to import everything
+// from `./runner-driven.js`.
 export {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
-  maybeApplyP2bWriteTurnCap,
   buildRunnerAgentChain,
   buildRunnerScoutAgent,
   buildRunnerLlmAdapter,

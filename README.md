@@ -559,7 +559,7 @@ KodaX recognizes a number of environment variables for tuning runtime behavior. 
 
 #### `KODAX_MAX_OUTPUT_TOKENS`
 
-Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. The runtime's automatic safety caps (the v0.7.28 P2b RST-prone write-turn cap that limits write/edit turns to 8K tokens — narrowed in v0.7.42 to only `zhipu-coding`, the one provider with a measured server-side kill window; previously also covered `kimi-code` / `minimax-coding` / `mimo-coding` prophylactically) are **bypassed** when this variable is set, so the user override is also a way to opt out of those caps.
+Overrides the per-turn `max_tokens` value sent to **every** provider (Anthropic, OpenAI, Zhipu, Kimi, MiniMax, Qwen, DeepSeek, MiMo, Gemini, Codex, …). Set to a positive integer; unset or non-numeric values are ignored. This is an **explicit user intent**: when set, it wins over the provider's model descriptor cap, over the provider config default, and over the global `KODAX_MAX_TOKENS` fallback. RST defense is handled at the provider config layer (`streamMaxDurationMs` watchdog + non-streaming fallback in `packages/llm/src/providers/registry.ts`), so this variable is purely an output-budget knob.
 
 ```bash
 # Allow up to 48K output tokens per turn (use a higher cap when generating long files)
@@ -578,7 +578,9 @@ Precedence used by every provider's `getEffectiveMaxOutputTokens()` (see `packag
 4. Provider config default
 5. Global `KODAX_MAX_TOKENS` fallback
 
-Related variables: `KODAX_MAX_TOKENS` (global fallback when no provider/model cap applies), `KODAX_RST_PRONE_PROVIDERS` and `KODAX_WRITE_TURN_MAX_TOKENS` (v0.7.28 P2b write-turn safety cap configuration), `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (escalation budget used by the agent loop when a turn returns `stop_reason: max_tokens`).
+Related variables: `KODAX_MAX_TOKENS` (global fallback when no provider/model cap applies), `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (escalation budget used by the agent loop when a turn returns `stop_reason: max_tokens`).
+
+> **Retired in v0.7.42**: `KODAX_RST_PRONE_PROVIDERS` and `KODAX_WRITE_TURN_MAX_TOKENS` (the v0.7.28 P2b write-turn cap mechanism) are no longer recognized. The 2026-04 bench measured RST as time-based (zhipu-coding 308s server kill window), not payload-size-based, so the cap was retired in favor of the per-provider `streamMaxDurationMs` watchdog + non-streaming fallback chain (configured in `registry.ts`). Existing env exports become silent no-ops; remove them from shell profiles when convenient.
 
 ## Advanced Library Usage
 

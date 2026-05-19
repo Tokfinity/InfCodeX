@@ -138,7 +138,9 @@ AMA 当前只保留 3 个执行层级：
 
 #### 3.5.1 AMA Runner-driven 路径模块化（FEATURE_171, v0.7.41）
 
-AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven.ts` 按职责拆为 12 个聚焦模块（`_internal/managed-task/` 目录），主文件从 6406 行压缩到 1897 行（**-70.4%**）。详见 [ADR-026](ADR.md#adr-026-runner-drivents-模块化拆分--6406-行单文件--12-个聚焦模块-feature_171-v0741)。
+AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven.ts` 按职责拆为 11 个聚焦模块（`_internal/managed-task/` 目录），主文件从 6406 行压缩到 ~1897 行（**-70.4%**）。详见 [ADR-026](ADR.md#adr-026-runner-drivents-模块化拆分--6406-行单文件--12-个聚焦模块-feature_171-v0741)。
+
+> **v0.7.42 update**：FEATURE_171 R1 抽出的 `write-turn-cap.ts`（P2b RST-prone provider cap helper）在 v0.7.42 被 retired——2026-04 bench 证明 RST 是 zhipu-coding 时间触发的（308s server kill window），不是 payload-size 触发的，正确防御层是 `streamMaxDurationMs` watchdog + non-streaming fallback（在 `registry.ts` 层），不是 `max_output_tokens` 收窄。模块表少一行。
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
@@ -146,7 +148,6 @@ AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven
 | `_internal/managed-task/types.ts` | 180 | 共享类型（`VerdictRecorder` / `ObserverBridge` / `AmaRole` / `RolePromptContextFactory` / `RunnerChainPromptContext`），打破 verdict-recorder ↔ observer-bridge 循环依赖 |
 | `_internal/managed-task/role-prompts.ts` | 297 | 5 个 `*_INSTRUCTIONS_FALLBACK` + `resolveRoleInstructions` + `buildCompletionContractStatus` |
 | `_internal/managed-task/role-exclude.ts` | 142 | FEATURE_168 per-role exclude sets + `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` |
-| `_internal/managed-task/write-turn-cap.ts` | 100 | P2b `maybeApplyP2bWriteTurnCap` |
 | `_internal/managed-task/status-derivation.ts` | 97 | `extractUserFacingText` / `deriveFinalStatus` / `buildManagedProtocolPayload` |
 | `_internal/managed-task/tool-wrappers.ts` | 312 | `wrapCodingToolAsRunnable` + 3 个 mutation-guard wrappers |
 | `_internal/managed-task/dispatch-child.ts` | 119 | `wrapDispatchChildTaskForRole`（per-role child-task wrapper） |
@@ -157,7 +158,7 @@ AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven
 | `_internal/managed-task/payload-builder.ts` | 444 | `buildManagedTaskPayload` + `deriveQualityAssuranceMode` + `buildScoutDecisionRuntime` + `buildSkillMapRuntime` |
 | `_internal/managed-task/checkpoint-flow.ts` | 350 | `handlePreRunCheckpoint` + `buildResumePreamble` + `buildStructuralResumeSeed` + `writeCurrentCheckpoint` |
 
-**外部导入面零变更**：`runner-driven.ts` 顶部 re-export 块保留 4 个调用方（`task-engine.ts`、3 个 test 文件）需要的所有公共符号（`buildRunnerAgentChain` / `buildRunnerScoutAgent` / `buildRunnerLlmAdapter` / `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` / `maybeApplyP2bWriteTurnCap` + 7 个 type）。
+**外部导入面零变更**：`runner-driven.ts` 顶部 re-export 块保留 3 个调用方（`task-engine.ts`、2 个 test 文件）需要的所有公共符号（`buildRunnerAgentChain` / `buildRunnerScoutAgent` / `buildRunnerLlmAdapter` / `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` + 7 个 type）。v0.7.42 retire `maybeApplyP2bWriteTurnCap` 后从 6 个公共符号降到 5 个。
 
 **依赖拓扑无循环**：`types.ts` 是共享类型顶点，所有 12 个模块单向依赖它；`verdict-recorder.ts → observer-bridge.ts` 是单向依赖（共享类型上沉到 `types.ts`）。
 
