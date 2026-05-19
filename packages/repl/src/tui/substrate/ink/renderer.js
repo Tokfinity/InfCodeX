@@ -36,11 +36,8 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
                 frame: undefined,
             };
         }
-        // FEATURE_172: Output.width tracks viewport (not yoga content) so
-        // prev/next Screen widths always match — removes the width-shrink
-        // path that produced Windows-SSH ghost cells. Height stays yoga.
         const output = new Output({
-            width: terminalSize?.columns ?? node.yogaNode.getComputedWidth(),
+            width: node.yogaNode.getComputedWidth(),
             height: node.yogaNode.getComputedHeight(),
         });
         renderNodeToOutput(node, output, {

@@ -51,13 +51,11 @@ describe("substrate/ink/renderer (FEATURE_057 Track F, Phase 6: cell renderer is
       expect(result.frame!.viewport).toEqual({ width: 10, height: 4 });
     });
 
-    it("terminalSize override: frame.screen.width AND viewport.width track terminal columns; screen.height stays yoga content", () => {
+    it("terminalSize override: frame.viewport tracks terminal dims, not content dims", () => {
       const node = fakeRootNode(3, 1);
       const result = renderer(node, false, { rows: 24, columns: 80 });
-      // FEATURE_172 ghost-cells fix: screen.width follows terminal columns
-      // (was yoga content width=3) so prev/next Screen widths always match.
-      // screen.height stays at yoga content (1) — only width changed.
-      expect(result.frame!.screen.width).toBe(80);
+      // Screen still uses the 3x1 yoga size (content), viewport is 80x24 (terminal).
+      expect(result.frame!.screen.width).toBe(3);
       expect(result.frame!.screen.height).toBe(1);
       expect(result.frame!.viewport).toEqual({ width: 80, height: 24 });
     });
