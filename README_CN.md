@@ -68,17 +68,60 @@ kodax
 
 ## 为什么用 KodaX
 
-🇨🇳 &nbsp; **原生支持 6 家国内 LLM provider** —— Kimi（含 Kimi-Code）、智谱（GLM Coding Plan）、MiniMax Coding、小米 MiMo Token Plan、火山方舟 Coding、DeepSeek。**不是 OpenAI 转发**，是 first-class 适配器，并跨 provider 做了 [prompt eval 校准](benchmark/EVAL_GUIDELINES.md)（canonical 5-alias panel）。
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <h3>🇨🇳 6 家国内 LLM 原生</h3>
+      <sub>智谱 · Kimi · MiniMax · 小米 MiMo · 火山方舟 · 通义千问</sub>
+      <br><br>
+      first-class 适配器，跨 provider 在 5-alias canonical panel 做过 <a href="benchmark/EVAL_GUIDELINES.md">prompt-eval 校准</a> —— 不是 OpenAI-compat 转发。
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>📦 单文件二进制</h3>
+      <sub>Bun --compile · Win / macOS / Linux · x64 + arm64</sub>
+      <br><br>
+      目标机器不装 Node。一份文件随处跑 —— 受管环境、内网、CI runner、断网机器都行。
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>🌳 可分叉会话血缘</h3>
+      <sub>fork · rewind · 并行编辑</sub>
+      <br><br>
+      对话历史是 DAG 不是链表。即将发布的 <b>KodaX Space</b> 桌面端基于此。
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h3>🤖 默认多 agent</h3>
+      <sub>V2 Worker + Evaluator + 异步子 agent</sub>
+      <br><br>
+      <code>dispatch_child_task</code>、<code>send_message</code>、<code>task_stop</code>，多实例自动协调（content-hash safety net）。
+    </td>
+    <td align="center" valign="top">
+      <h3>🧩 Skills + 自构造</h3>
+      <sub>Markdown skill，自然语言触发</sub>
+      <br><br>
+      5 阶自改造阶梯（scaffold → validate → stage → test → activate），由 8 条 admission invariant 守护。
+    </td>
+    <td align="center" valign="top">
+      <h3>🛠 30+ 内置工具</h3>
+      <sub>文件 · shell · 搜索 · MCP · ACP</sub>
+      <br><br>
+      repo intelligence、语义搜索、git worktree、web fetch，统一从干净的 tool definition 接口暴露。
+    </td>
+  </tr>
+</table>
 
-📦 &nbsp; **单文件二进制分发** —— Bun 编译的可执行文件，5 平台 + arm64。**目标机器不需要装 Node**。适合受管环境、内网分发、CI runner。
+## 同类产品对比
 
-🌳 &nbsp; **可分叉会话血缘（git for AI chat）** —— 从任意历史 turn fork 出新分支，rewind 截掉某 turn 之后内容，跨 session 并行编辑。即将发布的 **KodaX Space** 桌面端基于此。
+| 能力 | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
+|---|---|---|---|---|---|---|
+| 开源协议 | ✅ Apache&nbsp;2.0 | ❌ source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ 闭源 | ✅ Apache&nbsp;2.0 |
+| 免 Node 单文件 | ✅ Bun | ❌ 需 Node | ❌ 需 Python | ✅ Rust | ❌ Electron | ❌ 插件 |
+| 国内 6 家原生<br><sub>（智谱·Kimi·MiniMax·MiMo·方舟·Qwen）</sub> | ✅ 6 家原生 | ❌ | ⚠ 走 LiteLLM | ❌ OpenAI 主线 | ❌ 无 provider 菜单 | ⚠ Kimi/Qwen/DeepSeek |
+| 可分叉会话血缘 | ✅ fork & rewind | ⚠ routines/sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
+| Multi-agent + MCP + 30+ 工具 | ✅ 三项全有 | ✅ 三项全有 | ⚠ 有 tools, 无 MCP | ✅ 三项全有 | ⚠ Composer + MCP | ✅ 三项全有 |
 
-🤖 &nbsp; **多 agent 默认开** —— Worker + Evaluator 自适应多 agent 链（V2），异步子 agent 操控 `dispatch_child_task` / `send_message` / `task_stop`，多实例自动协调（content-hash safety net）。多 agent 是 2026 主流模式，KodaX 已 production-ready。
-
-🧩 &nbsp; **Skills 系统 + 自构造** —— Markdown 格式的 skill 加自然语言触发，加 5 阶 agent 自改造阶梯（scaffold → validate → stage → test → activate），由 8 条 admission invariant 守护。
-
-🛠 &nbsp; **30+ 内置工具** —— 文件操作、shell、语义搜索、repo intelligence、MCP 能力、git worktree、web fetch —— 通过干净的 tool definition 接口暴露，可扩展可裁剪。
+<sub>数据于 2026-05 对照官方公开文档核对（[Claude Code](https://github.com/anthropics/claude-code) · [Aider](https://aider.chat/docs/llms.html) · [Codex CLI](https://github.com/openai/codex) · [Cursor](https://cursor.com) · [Cline](https://github.com/cline/cline)）。⚠ 表示部分支持 / 需额外配置 / 非 first-class。欢迎 PR 修正。</sub>
 
 ## 详细配置
 

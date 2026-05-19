@@ -68,17 +68,60 @@ That's it. You're in the REPL — ask anything in natural language.
 
 ## Why KodaX
 
-🇨🇳 &nbsp; **Native support for 6 China-aligned LLM providers** — Kimi (Code), Zhipu (GLM Coding Plan), MiniMax Coding, Xiaomi MiMo Token Plan, Volcengine Ark Coding, DeepSeek. Not OpenAI proxies — first-class adapters with cross-provider [prompt eval calibration](benchmark/EVAL_GUIDELINES.md) on a canonical 5-alias panel.
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <h3>🇨🇳 6 China-native LLMs</h3>
+      <sub>Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen</sub>
+      <br><br>
+      First-class adapters with cross-provider <a href="benchmark/EVAL_GUIDELINES.md">prompt-eval calibration</a> on a canonical 5-alias panel — not OpenAI-compat shims.
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>📦 Single-file binary</h3>
+      <sub>Bun --compile · Win / macOS / Linux · x64 + arm64</sub>
+      <br><br>
+      No Node required on the target machine. Drop one file, run anywhere — restricted envs, CI runners, air-gapped boxes.
+    </td>
+    <td width="33%" align="center" valign="top">
+      <h3>🌳 Branchable session lineage</h3>
+      <sub>Fork · rewind · parallel edit</sub>
+      <br><br>
+      Conversation history is a DAG, not a list. Powers the upcoming <b>KodaX Space</b> desktop app.
+    </td>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
+      <h3>🤖 Multi-agent by default</h3>
+      <sub>V2 Worker + Evaluator + async children</sub>
+      <br><br>
+      <code>dispatch_child_task</code>, <code>send_message</code>, <code>task_stop</code>, multi-instance auto-coordination with content-hash safety net.
+    </td>
+    <td align="center" valign="top">
+      <h3>🧩 Skills + self-construction</h3>
+      <sub>Markdown skills, NL triggers</sub>
+      <br><br>
+      5-stage self-modification staircase (scaffold → validate → stage → test → activate) gated by an 8-invariant admission contract.
+    </td>
+    <td align="center" valign="top">
+      <h3>🛠 30+ built-in tools</h3>
+      <sub>File · shell · search · MCP · ACP</sub>
+      <br><br>
+      Repo intelligence, semantic search, git worktree, web fetch — all addressable through one clean tool surface.
+    </td>
+  </tr>
+</table>
 
-📦 &nbsp; **Single-file binary distribution** — Bun-compiled executable for Windows / macOS / Linux × x64 + arm64. **No Node required on the target machine.** Great for restricted environments and CI runners.
+## How KodaX compares
 
-🌳 &nbsp; **Branchable session lineage (git for AI chat)** — Fork the conversation from any historical turn, rewind to cut off later turns, parallel-edit across sessions. Powers the upcoming **KodaX Space** desktop app.
+| Feature | **KodaX** | Claude Code | Aider | Codex CLI | Cursor | Cline |
+|---|---|---|---|---|---|---|
+| Open source | ✅ Apache&nbsp;2.0 | ❌ Source-available | ✅ Apache&nbsp;2.0 | ✅ Apache&nbsp;2.0 | ❌ Proprietary | ✅ Apache&nbsp;2.0 |
+| Node-free single binary | ✅ Bun | ❌ Node | ❌ Python | ✅ Rust | ❌ Electron | ❌ Extension |
+| Native China providers<br><sub>(Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen)</sub> | ✅ 6 native | ❌ | ⚠ via LiteLLM | ❌ OpenAI-first | ❌ no provider menu | ⚠ Kimi / Qwen / DeepSeek |
+| Branchable session lineage | ✅ fork & rewind | ⚠ routines / sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
+| Multi-agent + MCP + 30+ tools | ✅ all three | ✅ all three | ⚠ tools, no MCP | ✅ all three | ⚠ Composer + MCP | ✅ all three |
 
-🤖 &nbsp; **Multi-agent by default** — Worker + Evaluator adaptive multi-agent chain (V2), async child steering via `dispatch_child_task` / `send_message` / `task_stop`, multi-instance auto-coordination with content-hash safety net. Multi-agent is the dominant 2026 pattern; KodaX ships it production-ready.
-
-🧩 &nbsp; **Skills system + self-construction** — Markdown-based skills with natural-language triggers, and a 5-stage agent-self-modification staircase (scaffold → validate → stage → test → activate) guarded by an 8-invariant admission contract.
-
-🛠 &nbsp; **30+ built-in tools** — file ops, shell, semantic search, repo intelligence, MCP capabilities, git worktree, web fetch — all addressable through a clean tool definition surface so you can extend or trim them.
+<sub>Data verified May 2026 against public docs ([Claude Code](https://github.com/anthropics/claude-code) · [Aider](https://aider.chat/docs/llms.html) · [Codex CLI](https://github.com/openai/codex) · [Cursor](https://cursor.com) · [Cline](https://github.com/cline/cline)). ⚠ = partial / requires extra setup / not first-class. Corrections welcome via PR.</sub>
 
 ## Detailed Setup
 
