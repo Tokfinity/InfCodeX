@@ -78,11 +78,115 @@ _Last Updated: 2026-05-16_
 | 131 | Medium | Resolved | Auto[llm] 模式 Windows cmd flag (`/R` / `/B` / `/Y` / `/MIR` 等) 被 `looksLikePath` 误识别为 POSIX 绝对路径 → "Protected path" 假阳性 confirm | 一直存在 | v0.7.39 | 2026-05-12 | 2026-05-12 |
 | 132 | Low | Resolved | `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — Windows fs visibility race + silent error swallow in persistCell | v0.7.32 | v0.7.41 | 2026-05-16 | 2026-05-16 |
 | 133 | Low | Open | `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load — failure mode not yet captured | 待调研 | - | 2026-05-16 | - |
+| 134 | High | Resolved | Plan list shows `0/N completed` mid-task when Worker re-calls `op:'init'` — `todoStore.init()` unconditional reset wipes completed/skipped/cancelled status | v0.7.34 | v0.7.42 | 2026-05-19 | 2026-05-19 |
+| 135 | Medium | Resolved | FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept` | v0.7.41 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 135: FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept`
+
+- **Priority**: Medium（与 Issue 134 叠加放大 user-facing 症状；独立暴露率较低，需 Evaluator text-only 终止 → B2 synth 触发才会单发）
+- **Status**: **Resolved**（v0.7.42，2026-05-19 / FEATURE_175 fix #2）
+- **Introduced**: v0.7.41（FEATURE_167 B2 synth fallback 首次落地）
+- **Created**: 2026-05-19
+- **Resolved**: 2026-05-19
+
+#### Symptom
+
+Evaluator text-only 终止 → FEATURE_167 B1 retry exhaust → B2 synth fallback 写出 `recorder.verdict={status:'accept', ...}` → 任务记录为 `signal:'COMPLETE' / verdict.status='accept'`，但 UI plan 列表的"X/N completed"指标永远 stuck 在 synth 前的快照（如 `0/N`、`2/4`），不反映"全部完成"的终态。
+
+#### Root cause
+
+FEATURE_167 [`runner-driven.ts:1739`](../packages/coding/src/task-engine/runner-driven.ts#L1739) 的 B2 synth 用 **直接对 `recorder.verdict` 属性赋值** 的方式落 verdict：
+
+```typescript
+recorder.verdict = { role: 'evaluator', payload: { verdict: { status: 'accept', ... } } };
+```
+
+这绕开了 [`verdict-recorder.ts:328`](../packages/coding/src/task-engine/_internal/managed-task/verdict-recorder.ts#L328) `wrapEmitterWithRecorder.execute` 的 slot setter — 而 slot setter 里 `slot === 'verdict' && status === 'accept'` 分支恰恰是调 `todoStore.autoCompleteOnAccept()` 的地方（[verdict-recorder.ts:370-371](../packages/coding/src/task-engine/_internal/managed-task/verdict-recorder.ts#L370-L371)）。正常 `emit_verdict` 工具调用走 wrapper → 触发兜底；synth 路径直赋值 → 兜底 never fires。
+
+#### Resolution（v0.7.42 / FEATURE_175 fix #2）
+
+[`runner-driven.ts:1755-1768`](../packages/coding/src/task-engine/runner-driven.ts#L1755-L1768)：synth 落 `recorder.verdict` 之后立刻调一次 `todoStore.autoCompleteOnAccept()`，**镜像** wrapper slot setter 的 side-effect：
+
+```typescript
+recorder.verdict = { /* synth payload */ };
+todoStore.autoCompleteOnAccept(); // mirror wrapper side-effect
+options.events?.onEvaluatorFallbackSynthesized?.({...});
+```
+
+#### Verification
+
+- 新增 `runner-driven.test.ts` FEATURE_167 区 1 个 integration test：Worker init 3 items → 标 todo_1 completed → emit_handoff → Evaluator text-only all turns → 验 `synthEvents.length=1` + 最终 `onTodoUpdate` snapshot 是 `[completed, completed, completed]`
+- 既有 4 个 FEATURE_167 测试全绿（B1/B2/zhipu cap=1/negative real-emit）
+
+#### Related
+
+- [FEATURE_175](FEATURE_LIST.md#feature_175) — 修复 vehicle，本 issue 是其中 fix #2
+- Issue 134（同 FEATURE_175 fix #1）—— 两个 issue 叠加在生产 session 同时复现：Worker mid-task 再 init 把 status 推回 pending（Issue 134），run 终态 B2 synth 没兜底（Issue 135），合力让 UI 永远停在 0/N
+- [FEATURE_167](features/v0.7.41.md#feature_167-evaluator-terminal-verdict-fallback) — Introduced 此 bug 的来源 feature
+
+---
+### 134: Plan list shows `0/N completed` mid-task when Worker re-calls `op:'init'` — `todoStore.init()` unconditional reset wipes completed/skipped/cancelled
+
+- **Priority**: High（用户实战 session 2026-05-19 直接看到、原话"列表失效"；FEATURE_097 落地以来一直存在的 silent UX bug）
+- **Status**: **Resolved**（v0.7.42，2026-05-19 / FEATURE_175 fix #1）
+- **Introduced**: v0.7.34（FEATURE_097 TodoStore 首次落地）
+- **Created**: 2026-05-19
+- **Resolved**: 2026-05-19
+
+#### Symptom
+
+V2 PLANNED 模式跑了 12m54s 的多轮任务，plan 列表停在 `0/4 completed`、4 个 `□` pending — 但 transcript 里 Worker 已经完成了大部分工作（visible "修复内容" table + handoff payload 都显示完成）。用户原话："**中间我有一些对话，造成计划可能有修改，然后这个计划列表好像就失效了，没有被正常更新**"。
+
+#### Root cause
+
+[`todo-store.ts:218-237`](../packages/coding/src/task-engine/todo-store.ts#L218-L237) pre-fix 实现：`init(seeds)` 无条件把所有 item 重建为 `status: 'pending'`：
+
+```typescript
+init(seeds): void {
+  items = seeds.map((seed) => ({
+    id: seed.id,
+    content: seed.content,
+    status: 'pending' as TodoStatus,  // ← 不管原 id 是不是 completed，全归零
+    ...
+  }));
+  ...
+}
+```
+
+Worker mid-task 中途为了 refine scope（用户加新需求、Worker 自己补 step）会调 `todo_update({op:'init', items:[...]})` 重 seed plan。哪怕新 seeds 用同 id 携带 content，**之前标 `completed`/`skipped`/`cancelled` 的 item 也被推回 `pending`**。从用户视角就是"plan 列表突然全部回到未完成"。
+
+worker-role-prompt.ts:65 有 `"NEVER use full replan for mid-task insertion — it wipes the user-visible progress"` 的警告，但**只是 prompt 层震慑**，工具/store 层完全不拦。LLM 实际行为不可控（尤其 zhipu/glm51 family）。
+
+#### Resolution（v0.7.42 / FEATURE_175 fix #1）
+
+[`todo-store.ts:218-285`](../packages/coding/src/task-engine/todo-store.ts#L218-L285)：init() 改为 **id-match terminal-success preservation**：
+
+- 同 id + 终态成功（completed / skipped / cancelled）→ 保留 status + note
+- 同 id + 非终态（pending / in_progress / failed）→ reset to pending（in-flight 意图随 re-init 失效；failed 的 note 清掉防误导）
+- 新 id → pending（新 item）
+- 未在 seeds 里的旧 id → drop（init 仍然是 LIST shape 的 destructive replace；这是真正 pivot 路径）
+
+`reset()` 路径不动 — true start-over（Evaluator replan verdict）仍然走 `store.reset()` 显式 wipe。
+
+> 同 FEATURE_175 还 prototype 了 fix #3（tool-layer dirty-store reject）覆盖"换 id 集" 路径，但 Layer 2 panel 跑出 zhipu intent-vs-action floor 触发 SHIP gate hard-fail，**REVERTED 同 session**。详见 [features/v0.7.42.md §FEATURE_175](features/v0.7.42.md#feature_175-plan-list-resilience--opinit-mid-task-status-preservation--b2-synth-auto-completion).
+
+#### Verification
+
+- `todo-store.test.ts` 新 describe 4 个 unit test：preserve 集合（completed/skipped/cancelled + note）、reset 集合（in_progress/failed + note 清空）、新 id pending、混合场景
+- 既有 71 个 `store.init` 调用点 monorepo 全绿（皆 fresh store init，preserve 分支不触发）
+- Layer 2 eval pilot ds/v4flash × C1 → 1/1 PASS 验证 scene 触发
+
+#### Related
+
+- [FEATURE_175](FEATURE_LIST.md#feature_175) — 修复 vehicle，本 issue 是其中 fix #1
+- Issue 135（同 FEATURE_175 fix #2）—— 两个 issue 在生产 session 叠加放大同一个 UX 症状（"列表显示 0/N"），但 root cause 各自独立
+- [FEATURE_097](features/v0.7.34.md) — Introduced 此 bug 的来源 feature（TodoStore 首次落地时未考虑 mid-task re-init 路径）
+
 ---
 ### 133: `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake
 
@@ -4034,7 +4138,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 60 (26 Open, 34 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 62 (26 Open, 36 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
