@@ -14,13 +14,13 @@
 
 | Item | Value |
 |---|---|
-| Tracked feature IDs | `001-159, 164-173` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-163 not yet claimed) |
-| Total tracked features | `62` |
+| Tracked feature IDs | `001-159, 164-173, 184` (026, 118, 129, 133, 135-136, 138, 140 removed/never-claimed; 150 shipped via CHANGELOG/v0.7.37.md only — not in master table; 160-163, 174-183 tracked elsewhere — recent v0.7.42 work, see version doc) |
+| Total tracked features | `63` |
 | Completed | `0` |
 | Cancelled | `6` |
 | Absorbed | `3` |
 | InProgress | `1` |
-| Planned | `61` |
+| Planned | `62` |
 | Current released version | `v0.7.41` |
 
 > Note: `Planned` includes 9 strikethrough rows (`095` absorbed → 057, `059` absorbed → 084, `063` cancelled, `073` cancelled, `094` cancelled 2026-05-19 after necessity probe, `109` cancelled, `111` absorbed → 115, `122` cancelled, `127` cancelled never-planned) that remain in the planned table for traceability. The `Cancelled` and `Absorbed` counters above slice the same rows by lifecycle reason. `125` was re-scoped from v0.8.10 mode-based design to v0.7.41 LLM-First auto coordination — see its row for rationale.
@@ -51,7 +51,7 @@
 | `v0.7.43` | `1` (124) |
 | `~~v0.7.43~~` | `1` |
 | `v0.7.44` | `1` (123) |
-| `v0.7.45` | `1` |
+| `v0.7.45` | `2` (184 Sidecar Verifier Substrate + 102 Adaptive Multi-Provider Orchestration; 184 是 102 的架构前置) |
 | `v0.7.46` | `1` |
 | `v0.7.47` | `1` |
 | `~~v0.7.48~~` | `1` (109 Cancelled — scope 全部已被 124/090/101/104 覆盖；ablation eval 成本过高) |
@@ -128,6 +128,7 @@
 | `127` | ~~Per-Agent Model Tier Routing — read-only child default fast model~~ | ~~Internal / Cost~~ | ~~Low~~ | — | — | **Cancelled (never planned)**: 5 轮调研后判断"read-only child 默认 fast model" 是 hard-coded 策略 + Claude Code 特定场景优化（Anthropic 三档 Haiku/Sonnet/Opus + 34M+ Explore spawns/week），不是 read-only 的本质需求。改为：dispatch_child_task schema 加 `model_hint?: 'fast'|'balanced'|'deep'` 可选字段（FEATURE_120 一并加）+ Worker LLM 根据任务自决是否标 hint + 实际 routing 行为合并到 FEATURE_102 (v0.7.45) 的 capability profile。**不预设 hard-coded 默认**，符合 KodaX minimalist 哲学 |
 | `095` | ~~SSH-Friendly Cell-Level Diff Renderer for Ink Substrate~~ | ~~Refactor~~ | ~~Medium~~ | ~~`v0.7.39`~~ | [v0.7.30](features/v0.7.30.md#track-f-cell-level-diff-renderer-for-ssh-friendly-output-absorbs-feature_095) | **Absorbed into FEATURE_057**: cell-level screen buffer 是 057 §10 renderer-native selection / §11 ScrollBox parity / Track E output ownership 收口的实际前置基础设施，并入 057 作为 Track F 统一设计与交付 |
 | `096` | Windows-SSH ConPTY Host Auto-Downgrade to Main-Screen Policy | Enhancement | Medium | `v0.7.30` | [v0.7.30](features/v0.7.30.md#feature_096-windows-ssh-conpty-host-auto-downgrade-to-main-screen-policy) | **Migrated 2026-04-28**: 原计划 `v0.7.39` 单独交付，2026-04-28 提前迁入 `v0.7.30` 与 FEATURE_057 同版交付，理由见顶部 last-updated 说明 |
+| `184` | Sidecar Verifier Substrate — claudecode-Shape Main Agent + Stop Hook Primitive | Internal / Architecture | Critical | `v0.7.45` | [v0.7.45](features/v0.7.45.md#feature_184-sidecar-verifier-substrate--claudecode-shape-main-agent--stop-hook-primitive) | **架构前置 for FEATURE_102**：把 Worker → Evaluator handoff state machine 重构为 claudecode-style 单循环 Main Agent + agent-layer Stop Hook primitive + Sidecar Verifier。根本解决 zhipu/glm51 intent-vs-action floor 导致的 verification gate 静默失效（FEATURE_167 B2 兜底 synth `accept` 对 zhipu 0/5 emit_verdict 静默失效问题）。**4 phased commits**：Phase A `@kodax-ai/agent` RunOptions.stopHook primitive（~80 LoC + 120 test，零行为变化可独立 ship）→ Phase B `ExtensionHookMap.turn:complete` bridge + CAP-021 contract test（~50 LoC + 80 test，可独立 ship）→ Phase C Main Agent shape migration 删 Evaluator-as-role state machine（净减 ~423 LoC，**必须与 D 同 release**）→ Phase D Sidecar Verifier 实现（`sideQuery`-based + model 与 main agent 解耦绕开 zhipu floor，~200 LoC + 250 test + Layer 2 prompt eval ~$15）。**关键设计**：sidecar context 装配 = 当轮全部 user queries + 24-msg rolling buffer + file edit summary（必须看到 main agent **改了什么**而非只看它**声明做了什么**）；reanimate budget 硬 cap=2；fail-open default accept；UI 暴露 `⊙ Verifying...` dim spinner 对标 claudecode `hook_stopped_continuation` attachment 风格。**死代码清单**：FEATURE_165 handoff gate / FEATURE_166 label flip / FEATURE_167 B0/B1/B2 fallback / EVALUATOR_AGENT_NAME 注册 / Evaluator role-prompt case / verdict-recorder emit_verdict 分支。**SHIP gate**：(a) Main Agent + Sidecar Verifier ≥ Worker+Evaluator handoff 的 mutation-correctness rate / (b) Verifier emit_sidecar_verdict 命中率 ≥90% / (c) zhipu Verifier 角色 emit rate 与 strong-family 持平（验证 model 解耦解了 floor）。详见 [ADR-030](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) |
 | `102` | Adaptive Multi-Provider Orchestration Runtime | Internal / Core | High | `v0.7.45` | [v0.7.45](features/v0.7.45.md#feature_102-adaptive-multi-provider-orchestration-runtime) |
 | `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.46` | [v0.7.46](features/v0.7.46.md#feature_105-verifiable-advisor-consult-primitive) |
 | `108` | Session-Driven Reflective Prompt Patcher | Internal / Test Infrastructure | Medium | `v0.7.47` | [v0.7.47](features/v0.7.47.md#feature_108-session-driven-reflective-prompt-patcher) |

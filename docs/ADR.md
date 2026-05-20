@@ -1469,3 +1469,114 @@ ADR-020 把 SA/AMA 合并到统一 substrate Runner。本 ADR 是 SA/AMA semanti
 
 ---
 
+## ADR-030: claudecode-Shape Main Agent + Sidecar Verifier Substrate (FEATURE_184, v0.7.45)
+
+**Status**: Proposed 2026-05-20
+
+### 背景
+
+当前 AMA H2 harness 把 verification 实现为一个 **role**：Worker → `emit_handoff` → Evaluator → `emit_verdict` → 状态机回归。Evaluator 与 Worker 同 Runner session、继承完整 message history、按 H1/H2 模式做 spot-check 或 full verification，verdict ∈ {accept, revise, blocked} 驱动下游 `recorder.verdict`、`deriveFinalStatus`、TodoStore auto-handle、UI label、session-restore filter。
+
+这套设计在 2026-05 暴露三个结构性问题：
+
+1. **zhipu/glm51 intent-vs-action floor**（[memory: project_zhipu_send_message_floor](../../memory/project_zhipu_send_message_floor.md) / [project_feature_167](../../memory/project_feature_167_evaluator_verdict_fallback.md)）— Evaluator 继承 assignment 的 model，因此 assignment=zhipu 时 Evaluator=zhipu。实测 first-turn `emit_verdict` 0/5、retry 0/5。FEATURE_167 B2 合成 `accept` 兜底等同 **整个 verification gate 对 zhipu 静默失效**。换 prompt 不可调（[`feedback_model_structural_floor_not_prompt_tunable`](../../memory/feedback_model_structural_floor_not_prompt_tunable.md) 验过 3 wordings × 5 runs = 0 PASS）。
+2. **Role-as-handoff 脚手架脆弱**：[`role-prompt.ts:843-927`](../../packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts) Evaluator case 拼装 ~15 个 section，其中 contract / metadata / handoff timing / CHILD-TASK WAIT DISCIPLINE 等接近一半都是"给 role-as-handoff-target 准备的脚手架"。v0.7.38 的 child-task wait discipline hotfix 就是时序契约脆弱的化石证据。
+3. **与 claudecode 不对齐**：claudecode 没有 Evaluator role；其 `queryLoop`（[query.ts:241](file:///c:/Works/claudecode/src/query.ts)）是单循环，模型不再 emit `tool_use` → 终止。verification 通过 **`Stop hooks` + `blockingErrors`**（[stopHooks.ts:269-280, query.ts:1282-1305](file:///c:/Works/claudecode/src/query/stopHooks.ts)）实现：脚本判 "没做完" 返回 `blockingErrors` → harness 合成 user message → loop continue。`preventContinuation` 是 halt-and-surface 形态。**没有任何 role 状态机**。
+
+### 决策
+
+把 KodaX 主 Agent 改造为 claudecode-shape 单循环，同时在 agent 层提供 **Stop Hook primitive**（`RunOptions.stopHook`），让 Sidecar Verifier 作为 Stop hook 的 LLM-driven 实现替换 Evaluator-as-role。
+
+**核心架构变化**：
+
+```
+当前（v0.7.42）：
+  User → Worker(role) → emit_handoff → Evaluator(role, same session) → emit_verdict
+         ↑__________________ revise 回路 ________________________________|
+
+v0.7.45 后：
+  User → Main Agent(single queryLoop) → 模型自然停（无 tool_use 或 signal:COMPLETE）→
+         agent-layer stopHook → Sidecar Verifier(独立 sideQuery LLM call, 独立 context) →
+            accept → 交付 user
+            revise → harness 合成 user msg + continue loop (≤ 2 次 reanimate)
+            blocked → halt + surface 给 user
+```
+
+**关键设计选择**：
+
+- **Stop hook 在 `@kodax-ai/agent` 层**：与 `compactionHook` / `beforeNextTurn` / `onAgentSwitched` 并列，进 `RunOptions`。理由：`genericRun` (claudecode `queryLoop` 等价物) 已经在 agent 层 [`runner.ts`](../../packages/agent/src/primitives/runner.ts)；FEATURE_159 MessageQueue 立下 "SDK-grade observable substrate" 先例；ADR-021 明文 "agent framework should be independently consumable"；FEATURE_121 layer-independence 测试保证不漏到 coding 层。
+- **Sidecar Verifier 在 `@kodax-ai/coding` 层**：concrete LLM judging 是 coding-specific（要看 file edits、tool_use 摘要、scout artifact），不该 generalize 到 agent 层。
+- **Extension API 桥接**：[`ExtensionHookMap`](../../packages/coding/src/extensions/types.ts) 新增 `turn:complete` hook，返回值 `void | string | {abort, reason}` 三态对应 accept / blockingErrors / preventContinuation。让用户写的 extension 也能消费同一接口。
+- **Reanimate 预算**：硬 cap 2 次（同 [`feedback_eval_pilot_before_scale`](../../memory/feedback_eval_pilot_before_scale.md) 风格的保守预算）。耗尽 → halt + surface 给 user 让用户决定继续提示还是修改需求。
+- **Sidecar context 装配**：当轮全部 user query（完整）+ rolling buffer（last N 条 message） + key artifact（file edit path+diff hint、tool_use 名称序列、scout/handoff metadata）。**不**全量 history 重放（成本不可控）。
+- **Sidecar model 与 main agent 解耦**：Sidecar Verifier 可独立选 model family（默认 strong family），绕开 zhipu intent-vs-action floor。
+
+### 替代方案考量
+
+#### A. 保留 Evaluator-as-role，仅修 B2 兜底从 accept 改 revise
+
+**否决**：能修 "静默假阳" 病征但不解 zhipu structural floor 根因 — Evaluator-as-role 仍然要 emit_verdict，zhipu 仍然 0/5，B2 改 revise 后变成"永远 revise 不收敛"。是症状治疗而非根治。
+
+#### B. 把 Evaluator 改成 SDK 上层调用，main agent 不变
+
+**否决**：意味着 KodaX 维护两套 verification 形态（CLI 用 role-handoff、SDK 用 Stop hook 风格），违反 [`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)。
+
+#### C. 通用 "SidecarRegistry" 模块吃所有 sidecar（compaction / stall / auto-mode / verifier / btw）
+
+**否决**：[调查](../../memory/) 显示三个真 LLM sidecar（compaction / F178 stall / auto-mode classifier）在 4 个维度（trigger 时机 / output 形态 / 延迟契约 / context 装配）上**全不重合**：
+
+| | 触发 | 输出 | 延迟 | 上下文 |
+|---|---|---|---|---|
+| Compaction | between-turns / token 阈值 | replace messages | fully blocking | 全 transcript |
+| Stall (F178) | post-tool / L1 信号 | nudge string | fire-and-forget 5s | 16-msg window |
+| Auto-mode | pre-tool / 每次工具调用 | verdict allow/block/escalate | speculative 500ms | 极简投影 |
+| Verifier (本 ADR) | turn-end / signal:COMPLETE | accept/revise/blocked | speculative 但宽容 | 当轮 query + buffer + artifact |
+
+这是 eval 验过的 load-bearing design choices，不是巧合。强行抽 `SidecarModule` = swiss-army 参数 surface 81 种组合无简化收益，违反 CLAUDE.md "abstract after 3+ uses"（这恰是反面教材 — 3 个用例证明**不能**抽象）。
+
+**真正的共享底层已经存在**：[`sideQuery`](../../packages/llm/src/side-query.ts) 提供独立 cost-bucket / timeout / abort propagation / provider isolation。Verifier 直接用 `sideQuery` + Stop hook 这两个共享 primitive，不再多造 module。
+
+#### D. Dual-path：保留 Evaluator-as-role 同时加 Sidecar Verifier
+
+**否决**：违反 [`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)。Recorder.verdict 同时有两个 source 会让 deriveFinalStatus 二义性、TodoStore 双触发、UI label 模糊。
+
+### 实施分相
+
+**FEATURE_184 phased commits**（参照 FEATURE_178 4-commit 模式）：
+
+| Phase | Scope | LoC 估算 | 阻塞下游 |
+|---|---|---|---|
+| **A** | `@kodax-ai/agent` `RunOptions.stopHook` primitive + `genericRun` 入口调用 + 7 个 regression test | ~80 | Phase B/C |
+| **B** | `@kodax-ai/coding` `ExtensionHookMap.turn:complete` bridge + CAP contract test（CAP-021）| ~50 | Phase C |
+| **C** | Main Agent shape migration：删除 Worker→Evaluator handoff state machine（`EVALUATOR_AGENT_NAME` 注册 / role-prompt evaluator case / FEATURE_165 handoff gate / FEATURE_166 label flip / FEATURE_167 B0/B1/B2 fallback）+ Stop hook 在位但 verifier 未注册（"无验证主 Agent"中间态可独立 ship） | ~400 删 + ~50 改 | — |
+| **D** | Sidecar Verifier 作为 Stop hook 的 LLM consumer + 接 `recorder.verdict` 替代下游 + `<verifier-status>` UI affordance | ~200 + prompt eval | — |
+
+Phase A 独立可 ship（claudecode-style infra in agent 层，零行为变化）。Phase B 独立可 ship（extension surface 增量）。Phase C 是大重构核心，**ship 时无 verification gate**，等价于 [`feedback_refactor_parity_baseline`](../../memory/feedback_refactor_parity_baseline.md) 的"重构平价是质量底线" — Phase C 不能 ship 到 Phase D ready 之前。**Phase C + D 必须同 release 落地**，但可分多 commit/push 独立 review。
+
+### 与既有 ADR/FEATURE 的关系
+
+- **ADR-006**（H2 = Planner → Generator ↔ Evaluator）：被本 ADR superseded for AMA H2 worker path。Planner 仍是 in-flow role（不进 sidecar），Generator/Worker 改 claudecode-shape，Evaluator 角色废止 → 替换为 Sidecar Verifier。
+- **ADR-020**（Unified Agent Execution Substrate, FEATURE_100）：兼容。Sidecar Verifier 用同一 Runner substrate，只是不再作为 role 进入 chain。
+- **ADR-021**（@kodax-ai/agent vs @kodax-ai/coding 边界）：本 ADR 落 stopHook 到 agent 层符合该 ADR 的层职责规则。
+- **ADR-029**（Compaction trigger top-of-loop）：无冲突。compactionHook 和 stopHook 并列在 `RunOptions`，触发时机正交（top-of-loop vs end-of-turn）。
+- **FEATURE_114**（AMA Harness V2 Worker+Evaluator）：v0.7.36 把 Evaluator 保留为 structural gate；本 ADR 是该决策的反转 — FEATURE_114 当时的论据是 "Evaluator stays a separate structural gate even in V2"，但 v0.7.42 zhipu 数据证明 role-form 的 gate 不可靠，sidecar-form 用 model-decoupling 才能让 gate 真实有效。
+- **FEATURE_165/166/167**：本 ADR 落地后这三个 feature 的代码全部 die（handoff gate / label flip / terminal-verdict fallback）。三者的测试套保留转化为 "Sidecar Verifier 接管之后的等价行为" 回归测试。
+- **FEATURE_178 stall sidecar**：当前硬接在 [`runner-driven.ts:651`](../../packages/coding/src/task-engine/runner-driven.ts) 通过 `RunnerToolObserver`。FEATURE_187（v0.7.46+，optional follow-up）可把 stall sidecar 也迁到 agent 层 `onToolCall` hook，统一 sidecar 接入面。本 ADR 不强制做 stall 迁移 — F178 当前位置不违反任何 ADR。
+
+### 用户可见影响
+
+- 单 turn task 体验**几乎无变化**：模型 emit text 完成 → Sidecar Verifier 在背景 3-10s 内完成判定 → 90% 场景 accept 直接释放给用户。仅在判 revise 时多一轮模型自动修复。
+- UI 增加 `⊙ Verifying...` 短指示器（dim, 不抢眼）。Reanimate 触发时显示 `↻ Retrying with: <reason>` system-style line（dim）。Blocked 显示 `⚠ Cannot verify: <reason>` prominent line。形态对标 claudecode 的 `hook_stopped_continuation` attachment 风格。
+- Session restore 行为：旧 session 的 `decidedByAssignmentId: "evaluator"` 历史记录仍可读，但新 session 不再产生该字段 — sidecar verdict 落到独立的 `sidecarVerdict` field（不冲突 schema）。
+
+### References
+
+- 设计调研三路 Explore（KodaX Evaluator role / claudecode 完成机制 / KodaX 现有 sidecar mechanisms / agent-coding 边界）2026-05-20 session
+- 设计对话 transcript（用户 Q1-Q5 + 三路 Explore 综合，详见 v0.7.45 设计稿）
+- 关键 memory: [`project_feature_167`](../../memory/project_feature_167_evaluator_verdict_fallback.md)、[`feedback_model_structural_floor_not_prompt_tunable`](../../memory/feedback_model_structural_floor_not_prompt_tunable.md)、[`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)、[`feedback_refactor_parity_baseline`](../../memory/feedback_refactor_parity_baseline.md)、[`feedback_behavioral_vs_semantic_equivalence`](../../memory/feedback_behavioral_vs_semantic_equivalence.md)
+- claudecode 参照：`src/query.ts:241,824,1062,1278`、`src/query/stopHooks.ts:269-280,325`
+- KodaX 当前 Evaluator wiring：`packages/coding/src/agents/task-engine-agents.ts:41`、`packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts:843-927`、`packages/coding/src/agents/protocol-emitters.ts:90`、`packages/coding/src/task-engine/runner-driven.ts:1721+`（B0/B1/B2 fallback）
+- v0.7.45 设计稿 §FEATURE_184
+
+---
+
