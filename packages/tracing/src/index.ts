@@ -20,6 +20,7 @@ export type {
   GuardrailSpanData,
   EvidenceSpanData,
   FanoutSpanData,
+  StopHookSpanData,
   SpanData,
 } from './span-data.js';
 

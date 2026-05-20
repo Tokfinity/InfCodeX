@@ -108,6 +108,24 @@ export interface FanoutSpanData {
 }
 
 /**
+ * FEATURE_184 (v0.7.45) — Stop hook observability.
+ *
+ * Emitted when the Runner's `RunOptions.stopHook` is invoked or fails.
+ * `outcome` records what the hook returned (or `'error'` for thrown
+ * exceptions — fail-open path), `reanimateCount` is the running count
+ * after this invocation. `reason` carries the abort/reanimate text
+ * when relevant, truncated by consumers as needed.
+ */
+export interface StopHookSpanData {
+  readonly kind: 'stop-hook';
+  readonly outcome: 'accept' | 'reanimate' | 'abort' | 'budget-exhausted' | 'error';
+  readonly reanimateCount: number;
+  readonly reanimateBudget: number;
+  readonly reason?: string;
+  readonly error?: string;
+}
+
+/**
  * Discriminated union of all span payload shapes. Additional variants may
  * be added in future features — consumers should check `kind` before
  * reading specific fields.
@@ -120,4 +138,5 @@ export type SpanData =
   | CompactionSpanData
   | GuardrailSpanData
   | EvidenceSpanData
-  | FanoutSpanData;
+  | FanoutSpanData
+  | StopHookSpanData;

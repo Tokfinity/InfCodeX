@@ -273,7 +273,89 @@ export interface RunOptions {
     readonly to: Agent;
     readonly iteration: number;
   }) => void | Promise<void>;
+  /**
+   * FEATURE_184 (v0.7.45) — Stop Hook primitive.
+   *
+   * Fires when the model terminates a turn with no `tool_use` blocks
+   * (text-only response). The hook receives the post-output-guardrail
+   * transcript and the final assistant text, and returns one of:
+   *
+   * - `undefined` → accept the termination, fall through to the normal
+   *   terminal path (assertTerminal + return). This is the no-op default.
+   * - `string` → "blockingErrors" / reanimate. Runner synthesizes a
+   *   `{role: 'user', content: <string>}` message, appends it to the
+   *   transcript + session, and continues the loop. Bounded by
+   *   `stopHookReanimateBudget` (default 2); exceeded budget converts
+   *   the string return to a forced abort.
+   * - `{abort: true, reason}` → preventContinuation / halt-and-surface.
+   *   Run returns immediately with `output = reason` and
+   *   `stoppedByHook = true`. assertTerminal still fires before the
+   *   return so invariant violations on the halted state surface
+   *   normally.
+   *
+   * Errors thrown by the hook are caught and treated as `undefined`
+   * (fail-open). A span is emitted for observability. Matches the
+   * `compactionHook` failure semantics — a buggy hook must never
+   * abort the run.
+   *
+   * Design reference: claudecode `query.ts:1282-1305` blockingErrors +
+   * `query.ts:1278` preventContinuation. Generalizes the deterministic
+   * shell-script Stop hook surface to an LLM-driven Sidecar Verifier
+   * (the v0.7.45 first consumer; see FEATURE_184 Phase D).
+   */
+  readonly stopHook?: StopHookFn;
+  /**
+   * FEATURE_184 (v0.7.45) — Reanimate budget for `stopHook`. Default 2.
+   *
+   * When `stopHook` returns a string AND `reanimateCount` has already
+   * reached this budget, the string return is forcibly converted to an
+   * abort with reason `"reanimate budget exhausted: <string>"`. Prevents
+   * unbounded reanimate loops when the hook + model disagree on
+   * completion forever.
+   */
+  readonly stopHookReanimateBudget?: number;
 }
+
+/**
+ * FEATURE_184 (v0.7.45) — Stop hook context handed to the caller's
+ * `stopHook` when the model terminates a turn text-only.
+ */
+export interface StopHookContext {
+  /** Transcript snapshot at the moment the hook fires. Includes the
+   *  just-pushed final assistant message. Readonly — the hook must not
+   *  mutate; to influence the run return a `string` (reanimate) or
+   *  `{abort, reason}` instead. */
+  readonly transcript: readonly AgentMessage[];
+  /** Convenience field: the final assistant message's text content. */
+  readonly lastAssistantText: string;
+  /** Why the turn ended. For Phase A this is always `'natural-end'`
+   *  (model emitted no `tool_use`). Future signal sources (explicit
+   *  COMPLETE protocol emission, harness-injected stop) can extend
+   *  the union without breaking existing hooks. */
+  readonly signal: 'natural-end';
+  /** How many times the hook has already reanimated this run. Starts
+   *  at 0; incremented after each `string` return. Hooks can use this
+   *  for telemetry but enforcement is Runner-side. */
+  readonly reanimateCount: number;
+  /** Total reanimate budget for this run (`stopHookReanimateBudget`
+   *  or default 2). Exposed for transparency. */
+  readonly reanimateBudget: number;
+}
+
+/**
+ * FEATURE_184 (v0.7.45) — Stop hook return surface.
+ */
+export type StopHookResult =
+  | undefined
+  | string
+  | { readonly abort: true; readonly reason: string };
+
+/**
+ * FEATURE_184 (v0.7.45) — Stop hook signature.
+ */
+export type StopHookFn = (
+  ctx: StopHookContext,
+) => StopHookResult | Promise<StopHookResult>;
 
 /**
  * Result returned by `Runner.run`.
@@ -283,6 +365,12 @@ export interface RunResult<TData = unknown> {
   readonly messages: readonly AgentMessage[];
   readonly sessionId?: string;
   readonly data?: TData;
+  /** FEATURE_184 (v0.7.45): `true` when the run terminated because
+   *  the caller's `stopHook` returned `{abort: true}` OR because the
+   *  hook's `string` return exceeded `stopHookReanimateBudget`. The
+   *  abort reason is in `output`. Sidecar Verifier sets this when it
+   *  outputs a `blocked` verdict (halt + surface to user). */
+  readonly stoppedByHook?: boolean;
 }
 
 /**
@@ -584,6 +672,24 @@ async function genericRun<TData>(
   const manifestCap = getAdmittedAgentBindings(startAgent)?.manifest.maxIterations;
   const iterationCap =
     typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
+  // FEATURE_184 (v0.7.45) — Stop hook reanimate budget. Per-run counter
+  // tracks how many times the hook converted a text-only termination
+  // into a synthetic-user-message continuation. Bounded by
+  // `stopHookReanimateBudget` (default 2). Exceeding the cap forces
+  // the next `string` return to be treated as an abort. Negative
+  // values are clamped to 0 ("zero reanimates allowed" — first string
+  // return is immediately treated as budget-exhausted abort) rather
+  // than throwing, so a typo'd `-1` doesn't crash the run.
+  const reanimateBudget = Math.max(
+    0,
+    Math.floor(opts.stopHookReanimateBudget ?? 2),
+  );
+  let reanimateCount = 0;
+  // FEATURE_184 (v0.7.45): tracks whether ALL iterations so far have
+  // been text-only reanimates (no real tool calls). Used to emit a
+  // more accurate error if the iteration cap is reached via a reanimate
+  // loop rather than a runaway tool loop.
+  let allIterationsWereReanimates = true;
   for (let iteration = 0; iteration < iterationCap; iteration += 1) {
     // FEATURE_179 (v0.7.42): compaction hook fires at the TOP of every
     // iteration, BEFORE the LLM call. Mirrors claudecode `query.ts` and
@@ -644,6 +750,136 @@ async function genericRun<TData>(
       if (opts.session) {
         await appendMessageEntry(opts.session, assistantMessage);
       }
+      const finalText =
+        typeof assistantMessage.content === 'string'
+          ? assistantMessage.content
+          : extractLastText(assistantMessage);
+
+      // FEATURE_184 (v0.7.45) — Stop hook fires here, AFTER output
+      // guardrails (so the hook sees the guardrail-filtered text) and
+      // AFTER the assistant message is committed to transcript +
+      // session (so the hook sees consistent persisted state), but
+      // BEFORE assertTerminal (so a reanimate doesn't prematurely
+      // assert the run's terminal invariants). Errors caught and
+      // treated as `undefined` — fail-open mirrors `compactionHook`'s
+      // semantic: a buggy hook must never abort the run.
+      if (opts.stopHook) {
+        let stopResult: StopHookResult;
+        let hookError: unknown;
+        try {
+          stopResult = await opts.stopHook({
+            transcript,
+            lastAssistantText: finalText,
+            signal: 'natural-end',
+            reanimateCount,
+            reanimateBudget,
+          });
+        } catch (error) {
+          hookError = error;
+          stopResult = undefined;
+        }
+
+        if (hookError !== undefined) {
+          agentSpan?.addChild('stop-hook', {
+            kind: 'stop-hook',
+            outcome: 'error',
+            reanimateCount,
+            reanimateBudget,
+            error: hookError instanceof Error ? hookError.message : String(hookError),
+          }).end();
+        }
+
+        if (typeof stopResult === 'string') {
+          // Reanimate path: convert to forced abort if budget exhausted.
+          if (reanimateCount >= reanimateBudget) {
+            agentSpan?.addChild('stop-hook', {
+              kind: 'stop-hook',
+              outcome: 'budget-exhausted',
+              reanimateCount,
+              reanimateBudget,
+              reason: stopResult,
+            }).end();
+            if (invariantSession) {
+              const dispatch = invariantSession.assertTerminal();
+              enforceInvariant(dispatch.results);
+            }
+            return {
+              output: `reanimate budget exhausted: ${stopResult}`,
+              messages: transcript,
+              sessionId: opts.session?.id,
+              stoppedByHook: true,
+            };
+          }
+          // Inject synthetic user message + continue loop. Emit the
+          // span with the PRE-increment count to align with
+          // `StopHookContext.reanimateCount` semantics (0-indexed).
+          const syntheticUserMessage: AgentMessage = {
+            role: 'user',
+            content: stopResult,
+          };
+          transcript.push(syntheticUserMessage);
+          if (opts.session) {
+            await appendMessageEntry(opts.session, syntheticUserMessage);
+          }
+          agentSpan?.addChild('stop-hook', {
+            kind: 'stop-hook',
+            outcome: 'reanimate',
+            reanimateCount,
+            reanimateBudget,
+            reason: stopResult,
+          }).end();
+          reanimateCount += 1;
+          continue;
+        }
+
+        if (
+          stopResult !== undefined
+          && typeof stopResult === 'object'
+          && stopResult.abort === true
+        ) {
+          agentSpan?.addChild('stop-hook', {
+            kind: 'stop-hook',
+            outcome: 'abort',
+            reanimateCount,
+            reanimateBudget,
+            reason: stopResult.reason,
+          }).end();
+          if (invariantSession) {
+            const dispatch = invariantSession.assertTerminal();
+            enforceInvariant(dispatch.results);
+          }
+          return {
+            output: stopResult.reason,
+            messages: transcript,
+            sessionId: opts.session?.id,
+            stoppedByHook: true,
+          };
+        }
+
+        if (stopResult !== undefined && typeof stopResult === 'object') {
+          // Malformed shape: object that isn't `{abort: true}`. JS callers
+          // (or hooks returning conditional logic errors) may produce
+          // `{abort: false}` / `{abort: 'yes'}` / etc. Treat as accept
+          // (fail-open consistency) but emit an error span so the misuse
+          // is observable rather than silent.
+          agentSpan?.addChild('stop-hook', {
+            kind: 'stop-hook',
+            outcome: 'error',
+            reanimateCount,
+            reanimateBudget,
+            error: `unexpected stopResult shape: ${JSON.stringify(stopResult)}`,
+          }).end();
+        } else if (hookError === undefined) {
+          // stopResult === undefined → accept, fall through to terminal path.
+          agentSpan?.addChild('stop-hook', {
+            kind: 'stop-hook',
+            outcome: 'accept',
+            reanimateCount,
+            reanimateBudget,
+          }).end();
+        }
+      }
+
       // FEATURE_101 (v0.7.31.1): fire assertTerminal hooks before
       // returning. Reject violations abort the run; warns are
       // surfaced via getViolations() for trace consumers but do
@@ -652,10 +888,6 @@ async function genericRun<TData>(
         const dispatch = invariantSession.assertTerminal();
         enforceInvariant(dispatch.results);
       }
-      const finalText =
-        typeof assistantMessage.content === 'string'
-          ? assistantMessage.content
-          : extractLastText(assistantMessage);
       return {
         output: finalText,
         messages: transcript,
@@ -665,7 +897,11 @@ async function genericRun<TData>(
 
     // Tool-using turn — append assistant message (tool_use blocks), then
     // execute each call (before/after guardrail hooks around each), append
-    // the tool_result user message, loop.
+    // the tool_result user message, loop. Flag this iteration as a real
+    // tool-using turn so an iteration-cap throw later can distinguish
+    // runaway tool loops from runaway stop-hook reanimate loops
+    // (FEATURE_184).
+    allIterationsWereReanimates = false;
     transcript.push(assistantMessage);
     if (opts.session) {
       await appendMessageEntry(opts.session, assistantMessage);
@@ -919,6 +1155,16 @@ async function genericRun<TData>(
     }
   }
 
+  // FEATURE_184 (v0.7.45): distinguish runaway tool loops from runaway
+  // stop-hook reanimate loops. If every iteration was a text-only
+  // reanimate (set by tool-using turns to false), the cap was reached
+  // by the hook + LLM disagreeing forever — surface that distinctly
+  // so the caller doesn't chase a tool-call bug that doesn't exist.
+  if (allIterationsWereReanimates && reanimateCount > 0) {
+    throw new Error(
+      `Runner.run: agent "${currentAgent.name}" exceeded MAX_TOOL_LOOP_ITERATIONS (${iterationCap}) via stop-hook reanimate loop (reanimateCount=${reanimateCount}, budget=${reanimateBudget}). The stop hook + LLM never converged on a terminal output. Lower stopHookReanimateBudget or fix the hook.`,
+    );
+  }
   throw new Error(
     `Runner.run: agent "${currentAgent.name}" exceeded MAX_TOOL_LOOP_ITERATIONS (${iterationCap}) — the LLM kept requesting tool calls without terminating. This likely indicates a prompt or tool design bug.`,
   );
