@@ -400,9 +400,15 @@ export async function runSubstrate(
   // Resolve the initial provider first so we know the context window —
   // loadCompactionConfig uses it to pick an adaptive triggerPercent
   // (short-window models compact earlier; user config can still override).
+  // Pass the per-model value so providers with model-specific windows
+  // (zhipu glm-5-turbo 128K, ark-coding deepseek-v4-pro 1M, …) get the
+  // right adaptive bucket instead of the default-model window.
   const initialProvider = resolveProvider(turnState.currentProviderName);
   assertProviderConfigured(initialProvider, turnState.currentProviderName);
-  const compactionConfig = await loadCompactionConfig(initialProvider.getContextWindow());
+  const initialContextWindow =
+    initialProvider.getEffectiveContextWindow?.(turnState.currentModelOverride)
+    ?? initialProvider.getContextWindow();
+  const compactionConfig = await loadCompactionConfig(initialContextWindow);
 
   // CAP-043: autoResume / resume — pick the most recent persisted
   // session when no explicit id was supplied. Folded into

@@ -151,8 +151,13 @@ export async function buildManagedTaskCompactionHook(
 ): Promise<RunnerCompactionHook | undefined> {
   const provider = resolveProvider(options.provider ?? 'anthropic');
   const activeModel = options.modelOverride ?? options.model;
+  // Pass per-model contextWindow so loadCompactionConfig's adaptive
+  // triggerPercent bucket matches the active model. Without this, a
+  // task started on ark-coding/deepseek-v4-pro (1M) would inherit
+  // ark-coding/glm-5.1's bucket (200K → 60%) and fire compaction
+  // ~150K tokens too early. User-config triggerPercent still wins.
   const compactionConfig: CompactionConfig = await loadCompactionConfig(
-    provider.getContextWindow(),
+    provider.getEffectiveContextWindow?.(activeModel) ?? provider.getContextWindow(),
   );
   if (!compactionConfig.enabled) {
     return undefined;
