@@ -176,25 +176,35 @@ export class SkillRegistry implements ISkillRegistry {
       return '';
     }
 
+    // 2026-05-20 — claudecode-parity invocation path. Skills are invoked
+    // via a dedicated `skill` tool (see packages/coding/src/tools/skill.ts)
+    // that returns the expanded skill content as tool_result, NOT by
+    // reading `SKILL.md` via the generic `read` tool. Mirrors
+    // c:/Works/claudecode/src/tools/SkillTool/prompt.ts:173-195.
+    //
+    // Why this matters: the previous "use the read tool to load the
+    // SKILL.md" wording forced the model to interpret raw markdown, which
+    // routed through generic file-reading and let the model escalate to
+    // shell-out for skills like `agent-browser` (whose markdown happens
+    // to describe a CLI). With a dedicated `skill` tool, the registry
+    // does the loading + variable resolution; the model sees structured
+    // skill output and can act on it directly.
     const lines = [
       '## Available Skills',
       '',
       'When users ask you to perform tasks, check if any of the available skills below match the request. Skills provide specialized capabilities and step-by-step instructions for specific workflows.',
       '',
-      "When users reference a \"slash command\" or \"/<something>\" (e.g. \"/feature-list-tracker\", \"/skill:foo\"), they are referring to a skill. Use the read tool to load the skill's `SKILL.md` and follow its instructions.",
+      'When users reference a "slash command" or "/<something>" (e.g. "/feature-list-tracker", "/skill:foo"), they are referring to a skill. Invoke it via the `skill` tool with the skill name.',
       '',
-      "**BLOCKING REQUIREMENT**: When a skill matches the user's request, you MUST read the relevant skill's `SKILL.md` BEFORE generating any other response about the task. Loading the skill is not optional and not something to defer — it is the FIRST action you take.",
+      "**BLOCKING REQUIREMENT**: When a skill matches the user's request, you MUST invoke it via the `skill` tool BEFORE generating any other response about the task. Loading the skill is not optional and not something to defer — it is the FIRST action you take.",
       '',
-      'NEVER mention a skill without actually reading its `SKILL.md`. Do not guess at skill names — only use skills listed below.',
+      'NEVER mention a skill without actually calling the `skill` tool. Do not guess at skill names — only use skills listed below. Do NOT call `read` on a `SKILL.md` path to load a skill — that is the legacy path and bypasses the resolver.',
       '',
     ];
 
     for (const skill of visibleSkills) {
       const hint = skill.argumentHint ? ` ${skill.argumentHint}` : '';
-      // Inject absolute path to prevent skill amnesia after context compaction
-      // Use forward slashes for cross-platform prompt robustness
-      const skillFilePath = `${skill.path}/SKILL.md`.replace(/\\/g, '/');
-      lines.push(`- ${skill.name}:${hint} ${skill.description}\n  (Location: ${skillFilePath})`);
+      lines.push(`- ${skill.name}:${hint} ${skill.description}`);
     }
 
     lines.push('');

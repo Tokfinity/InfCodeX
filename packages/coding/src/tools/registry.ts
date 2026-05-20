@@ -13,6 +13,7 @@ import {
   mcpToClassifierInput,
 } from './classifier-projection.js';
 import { toolRead } from './read.js';
+import { toolSkill } from './skill.js';
 import { toolWrite } from './write.js';
 import { toolEdit } from './edit.js';
 import { toolMultiEdit } from './multi-edit.js';
@@ -211,6 +212,31 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolRead,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'skill',
+    description: [
+      'Invoke a discovered skill by name. Returns the skill\'s expanded content (variables resolved) as the tool_result so you can follow its instructions in your next turn.',
+      '- Use this whenever a skill listed in your "Available Skills" matches the user\'s request. The BLOCKING REQUIREMENT in the skills section binds on THIS tool, not on read.',
+      '- DO NOT call `read` on a `SKILL.md` path to load a skill — skill loading is `skill`\'s job; `read` is for plain files.',
+      '- `args` is an optional free-form string the skill resolver can substitute into its template (e.g. `args: "123"` for `/review-pr 123`). Most skills ignore it.',
+    ].join('\n'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        skill: {
+          type: 'string',
+          description: 'The skill name (e.g. "commit", "review-pr"). Leading slash is tolerated.',
+        },
+        args: {
+          type: 'string',
+          description: 'Optional arguments forwarded to the skill resolver.',
+        },
+      },
+      required: ['skill'],
+    },
+    handler: toolSkill,
     toClassifierInput: () => '',
   },
   {
