@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
 import { extractArtifactLedger, mergeArtifactLedger } from './file-tracker.js';
+import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG } from './microcompaction.js';
 
 describe('extractArtifactLedger', () => {
   it('records user-attached image inputs in the artifact ledger', () => {
@@ -330,5 +331,125 @@ describe('FEATURE_185 (v0.7.42): mergeArtifactLedger preserves rich metadata', (
 
     const merged = mergeArtifactLedger(prior, next);
     expect(merged[0]!.metadata?.hits).toEqual([]);
+  });
+});
+
+describe('FEATURE_185 (v0.7.42): end-to-end enrichment survives microcompact', () => {
+  // Pipeline this test models:
+  //   1. Tool runs, raw tool_result in messages (iter N).
+  //   2. Round-end: extractArtifactLedger captures hits into ledger metadata.
+  //   3. Many later turns age out iter N.
+  //   4. Top-of-loop microcompact (run-substrate.ts:621) clears the
+  //      tool_result content to `[Cleared: ...]`.
+  //   5. Compaction time: extractArtifactLedger re-runs on microcompacted
+  //      messages — parser correctly rejects placeholder, new entry has no
+  //      hits.
+  //   6. mergeArtifactLedger(roundEndLedger, compactionLedger) MUST preserve
+  //      the iter-N enrichment (this is the F185.1 keystone fix).
+  //
+  // Without this guarantee, every compaction would silently lose enrichment
+  // and re-grep would still be the model's only way to recall hits.
+  it('grep hits captured at round-end survive microcompact + re-extract + merge', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'grep_iter_n',
+          name: 'grep',
+          input: { pattern: 'authenticate', path: 'src/' },
+        }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'grep_iter_n',
+          content: [
+            'src/auth.ts:42: function authenticate(user) {',
+            'src/auth.ts:78:   await authenticate(req.user);',
+            'src/login.ts:13: import { authenticate } from "../auth";',
+          ].join('\n'),
+        }],
+      },
+    ];
+
+    // Step 2 — round-end extract (raw result intact)
+    const ledgerAtRoundEnd = extractArtifactLedger(messages);
+    expect(ledgerAtRoundEnd).toHaveLength(1);
+    const roundEndHits = ledgerAtRoundEnd[0]!.metadata?.hits as unknown[] | undefined;
+    expect(roundEndHits).toBeDefined();
+    expect(roundEndHits!.length).toBe(3);
+
+    // Step 3 — age the tool_result past microcompact's maxAge (default 20).
+    // Each user-after-assistant counts as one turn.
+    for (let i = 0; i < 25; i++) {
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: `assistant turn ${i}` }] });
+      messages.push({ role: 'user', content: [{ type: 'text', text: `user prompt ${i}` }] });
+    }
+
+    // Step 4 — top-of-loop microcompact
+    const microcompacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG) as KodaXMessage[];
+    const earlyToolResultBlock = (microcompacted[1]!.content as KodaXToolResultBlock[])[0]!;
+    expect(typeof earlyToolResultBlock.content).toBe('string');
+    expect(earlyToolResultBlock.content).toMatch(/^\[Cleared:/);
+
+    // Step 5 — compaction-time re-extract on microcompacted messages
+    const ledgerAtCompaction = extractArtifactLedger(microcompacted);
+    expect(ledgerAtCompaction).toHaveLength(1);
+    // Re-extracted entry MUST NOT carry stale hits — parser refuses
+    // placeholder content. If this fails, the parser is mis-detecting
+    // `[Cleared: ...]` as legitimate grep output.
+    expect(ledgerAtCompaction[0]!.metadata?.hits).toBeUndefined();
+
+    // Step 6 — merge: enrichment MUST survive
+    const merged = mergeArtifactLedger(ledgerAtRoundEnd, ledgerAtCompaction);
+    expect(merged).toHaveLength(1);
+    const mergedHits = merged[0]!.metadata?.hits as Array<{ path: string; line: number; preview: string }> | undefined;
+    expect(mergedHits).toBeDefined();
+    expect(mergedHits!.length).toBe(3);
+    expect(mergedHits![0]!.path).toBe('src/auth.ts');
+    expect(mergedHits![0]!.line).toBe(42);
+  });
+
+  it('bash exit_code + tail captured at round-end survive microcompact + merge', () => {
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'bash_iter_n',
+          name: 'bash',
+          input: { command: 'npm run lint' },
+        }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'bash_iter_n',
+          content: 'Command: npm run lint\nExit: 1\nESLint found 3 problems\nsrc/foo.ts:42:5 error',
+        }],
+      },
+    ];
+
+    const ledgerAtRoundEnd = extractArtifactLedger(messages);
+    expect(ledgerAtRoundEnd[0]!.metadata?.exitCode).toBe(1);
+    expect(ledgerAtRoundEnd[0]!.metadata?.tail).toContain('ESLint found 3 problems');
+
+    for (let i = 0; i < 25; i++) {
+      messages.push({ role: 'assistant', content: [{ type: 'text', text: `a${i}` }] });
+      messages.push({ role: 'user', content: [{ type: 'text', text: `u${i}` }] });
+    }
+
+    const microcompacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG) as KodaXMessage[];
+    const ledgerAtCompaction = extractArtifactLedger(microcompacted);
+    // After clearance the re-extract sees a placeholder, so no fresh enrichment.
+    expect(ledgerAtCompaction[0]!.metadata?.exitCode).toBeUndefined();
+    expect(ledgerAtCompaction[0]!.metadata?.tail).toBeUndefined();
+
+    const merged = mergeArtifactLedger(ledgerAtRoundEnd, ledgerAtCompaction);
+    expect(merged[0]!.metadata?.exitCode).toBe(1);
+    expect(merged[0]!.metadata?.tail).toContain('ESLint found 3 problems');
   });
 });

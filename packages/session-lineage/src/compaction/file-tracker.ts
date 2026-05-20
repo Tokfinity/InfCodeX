@@ -1,5 +1,30 @@
 /**
- * @kodax-ai/agent File Tracking
+ * @kodax-ai/agent File Tracking — artifactLedger extraction.
+ *
+ * FEATURE_185 (v0.7.42) extends the previous input-only extractor to also
+ * read each tool_use's matching tool_result, enriching `metadata` with parsed
+ * hits / matchedPaths / exitCode / tail. Pipeline:
+ *
+ *   Round end (REPL: repl.ts:1279/1371)
+ *     → extractArtifactLedger(result.messages)
+ *     → tool_result still raw (top-of-loop microcompact hasn't run on these)
+ *     → buildArtifactEntry parses result content into metadata
+ *     → mergeArtifactLedger commits enrichment to context.artifactLedger
+ *     → storage.save persists the enriched ledger
+ *
+ *   Top-of-loop microcompact (run-substrate.ts:621, iteration N+1)
+ *     → clears tool_result.content older than maxAge to `[Cleared: ...]`
+ *
+ *   Compaction time (compaction.ts:257)
+ *     → extractArtifactLedger(toProcess) re-runs on cleared messages
+ *     → buildArtifactEntry's parsers refuse `[Cleared: ...]` → no fresh hits
+ *     → mergeArtifactLedger preserves the round-end enrichment via
+ *       per-key non-empty preference (see `mergeLedgerMetadata`).
+ *
+ * The metadata-aware merge is the keystone — without it, every compaction
+ * would silently downgrade ledger entries to input-only. End-to-end
+ * preservation is exercised by the "end-to-end enrichment survives
+ * microcompact" tests in file-tracker.test.ts.
  */
 
 import { randomUUID } from 'node:crypto';
