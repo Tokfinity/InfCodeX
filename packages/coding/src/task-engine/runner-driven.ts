@@ -1283,8 +1283,12 @@ async function runManagedTaskViaRunnerInner(
   // Load the compaction hook once per run. `intelligentCompact` runs
   // before every provider.stream call; the Runner-driven path routes
   // it through Runner's
-  // `compactionHook` (fired after each tool-result append). Without this
-  // wiring, long AMA sessions hit context window overflow and 400.
+  // `compactionHook` (FEATURE_179 v0.7.42: fired at the TOP of every
+  // tool-loop iteration, BEFORE the LLM call — was previously fired after
+  // each tool-result append, which skipped text-only end-of-turn + idle-
+  // yield sessions and let them grow 60K+ past threshold before next
+  // tool call triggered). Without this wiring, long AMA sessions hit
+  // context window overflow and 400.
   //
   // v0.7.40 — pass `contextTokenSnapshotRef` so the hook's trigger
   // check uses API-accurate token accounting (`usage.totalTokens` +

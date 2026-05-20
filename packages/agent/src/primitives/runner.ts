@@ -136,14 +136,34 @@ export interface RunOptions {
    */
   readonly toolObserver?: RunnerToolObserver;
   /**
-   * v0.7.26 parity: compaction hook. Called AFTER each iteration's
-   * tool_result has been appended to the transcript (or after the
-   * assistant message when there are no tool calls), before the next
-   * LLM turn. Return the replacement transcript to trigger compaction;
-   * return the same array (or undefined) to skip. Legacy agent.ts ran
-   * `intelligentCompact` on the same boundary, so Runner-driven parity
-   * requires this hook point. The Runner owns the transcript mutably,
-   * so this is the only point consumers can insert a compacted view.
+   * Compaction hook. Fires at the TOP of every tool-loop iteration,
+   * BEFORE the LLM call. Return the replacement transcript to trigger
+   * compaction; return the same array (or undefined) to skip. The Runner
+   * owns the transcript mutably, so this is the only point consumers can
+   * insert a compacted view before the next provider.stream invocation.
+   *
+   * **Trigger frequency**: every iteration of every Runner.run() call.
+   * - Iteration 0 fires BEFORE the first LLM call (covers idle-yield
+   *   resume / new user activation where the transcript already exceeds
+   *   threshold from accumulated prior turns).
+   * - Iteration N (N≥1) fires after the previous iteration's tool_result
+   *   was appended, same "before next LLM call" timing as the legacy
+   *   post-tool-result firing point.
+   * - Text-only iterations are covered: the next Runner.run() invocation
+   *   (when the user/parent re-engages) runs iter 0 → hook fires before
+   *   the new LLM call.
+   *
+   * **Why not after tool_result append (legacy v0.7.26 location)**: that
+   * boundary skipped text-only termination — Runner exits at line ~611
+   * without firing the hook, so idle-yield + text-only end-of-turn
+   * sessions grew unbounded between checks. claudecode (`query.ts:307-454`),
+   * pi-mono (`agent-session.ts:949`), opencode (`processor.ts:609-613`),
+   * and KodaX SA (`run-substrate.ts:621-627`) all check at the per-LLM-
+   * call boundary. FEATURE_179 (v0.7.42) brought the AMA Runner path
+   * into line — the failure scenario was a Worker session that grew
+   * 165K → 180K through text-only end-of-turn + idle-yield, then
+   * triggered at 181K (61K over the 120K threshold) only after the next
+   * tool call landed.
    */
   readonly compactionHook?: (
     transcript: readonly AgentMessage[],
@@ -565,6 +585,34 @@ async function genericRun<TData>(
   const iterationCap =
     typeof manifestCap === 'number' ? Math.min(optsCap, manifestCap) : optsCap;
   for (let iteration = 0; iteration < iterationCap; iteration += 1) {
+    // FEATURE_179 (v0.7.42): compaction hook fires at the TOP of every
+    // iteration, BEFORE the LLM call. Mirrors claudecode `query.ts` and
+    // KodaX SA `run-substrate.ts:621-627`. The legacy post-tool-result
+    // firing point (later in this function) was deleted because it
+    // skipped text-only iterations — see the `compactionHook` doc-comment
+    // for the full motivation and failure mode.
+    //
+    // Errors swallowed (same policy as before): compaction failure must
+    // never abort the run, but emit a span so operators see the misbehave.
+    if (opts.compactionHook) {
+      try {
+        const compacted = await opts.compactionHook(transcript);
+        if (compacted && compacted !== transcript) {
+          transcript = [...compacted];
+        }
+      } catch (error) {
+        agentSpan?.addChild('compaction:hook-error', {
+          kind: 'compaction',
+          policyName: 'hook',
+          tokensUsed: 0,
+          budget: 0,
+          replacedMessageCount: 0,
+          summaryLength: 0,
+          error: error instanceof Error ? error.message : String(error),
+        }).end();
+      }
+    }
+
     const { result: turn, wasPlainString } = await runGenerationTurn(
       currentAgent,
       transcript,
@@ -773,35 +821,9 @@ async function genericRun<TData>(
       await appendMessageEntry(opts.session, toolResultMessage);
     }
 
-    // v0.7.26 parity: compaction hook fires AFTER the tool_result message
-    // is appended (so the hook sees the complete turn), before the next
-    // LLM call. Legacy agent.ts:1737-1845 ran `intelligentCompact` on the
-    // same boundary. When the hook returns a new transcript we replace
-    // the live variable — subsequent iterations run on the compacted
-    // history. Errors are swallowed (treated as "skip compaction") so a
-    // hook bug can never abort the run.
-    if (opts.compactionHook) {
-      try {
-        const compacted = await opts.compactionHook(transcript);
-        if (compacted && compacted !== transcript) {
-          transcript = [...compacted];
-        }
-      } catch (error) {
-        // Compaction failure must never abort the run, but silent catch
-        // loses too much signal — compaction is a known bug-surface area
-        // (see CHANGELOG M3 post-compact reinjection). Surface the error
-        // as a compaction span so operators notice the hook misbehaving.
-        agentSpan?.addChild('compaction:hook-error', {
-          kind: 'compaction',
-          policyName: 'hook',
-          tokensUsed: 0,
-          budget: 0,
-          replacedMessageCount: 0,
-          summaryLength: 0,
-          error: error instanceof Error ? error.message : String(error),
-        }).end();
-      }
-    }
+    // FEATURE_179: compaction hook moved to TOP of the for-loop (above).
+    // See compactionHook doc-comment for motivation. This site previously
+    // fired AFTER tool_result append but skipped text-only termination.
 
     // FEATURE_084 Shard 4: handoff detection. If any tool result carries a
     // handoffTarget metadata field that resolves to a declared handoff on
