@@ -2,7 +2,7 @@
  * KodaX Tool Types
  */
 
-import type { KodaXToolDefinition } from '@kodax-ai/llm';
+import type { KodaXToolDefinition, KodaXToolResultContentItem } from '@kodax-ai/llm';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 /**
@@ -14,17 +14,31 @@ export interface ToolProgress {
   readonly message: string;
 }
 
-/** Standard tool handler — returns a single result string. */
+/**
+ * Final result a tool may return. Either a plain string (the default for
+ * text-only tools) OR a typed-array form for multimodal returns (e.g.
+ * `read` on an image path returns `[{type:'text',...}, {type:'image',...}]`).
+ * Providers serialize each shape to their wire format; OpenAI-compat
+ * gateways downgrade image items to a placeholder rather than rejecting.
+ *
+ * The array form mirrors claudecode's FileReadTool image return — Claude
+ * Code packs image data into `tool_result` content so the model can
+ * re-fetch images via the tool path. See
+ * `c:/Works/claudecode/src/tools/FileReadTool/FileReadTool.ts:866-891`.
+ */
+export type ToolResult = string | readonly KodaXToolResultContentItem[];
+
+/** Standard tool handler — returns a final result (text or multimodal). */
 export type ToolHandlerSync = (
   input: Record<string, unknown>,
   context: KodaXToolExecutionContext,
-) => Promise<string>;
+) => Promise<ToolResult>;
 
-/** Streaming tool handler — yields progress updates, returns final result string. */
+/** Streaming tool handler — yields progress updates, returns final result. */
 export type ToolHandlerStreaming = (
   input: Record<string, unknown>,
   context: KodaXToolExecutionContext,
-) => AsyncGenerator<ToolProgress, string, void>;
+) => AsyncGenerator<ToolProgress, ToolResult, void>;
 
 /** Union of both handler types. Existing tools use ToolHandlerSync; new long-running tools may use ToolHandlerStreaming. */
 export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;

@@ -18,10 +18,45 @@ export interface KodaXToolUseBlock {
   input: Record<string, unknown>;
 }
 
+/**
+ * Tool-result content blocks — a structural subset of the full
+ * `KodaXContentBlock` union, restricted to what providers actually accept
+ * inside a tool_result envelope. Anthropic / OpenAI multimodal APIs accept
+ * text and image blocks inside tool_result; thinking / tool_use / nested
+ * tool_result / cache-boundary are not valid there.
+ *
+ * Carrying these as a stricter subtype (instead of the full union) lets
+ * provider serializers narrow without exhaustive type assertions and
+ * documents to tool authors what they can actually return.
+ */
+export interface KodaXToolResultTextItem {
+  type: 'text';
+  text: string;
+}
+
+export interface KodaXToolResultImageItem {
+  type: 'image';
+  /** Absolute path to the image file. Provider serializers read it into base64 at wire-send time. */
+  path: string;
+  mediaType?: string;
+}
+
+export type KodaXToolResultContentItem =
+    | KodaXToolResultTextItem
+    | KodaXToolResultImageItem;
+
 export interface KodaXToolResultBlock {
   type: 'tool_result';
   tool_use_id: string;
-  content: string;
+  /**
+   * Either a plain text string (backwards-compatible default) OR an array
+   * of content items. The array form lets multimodal-capable tools (e.g.
+   * `read` on an image path) emit images via tool_result, mirroring
+   * claudecode's `Read` tool behavior. Providers serialize each variant
+   * to their wire format; text-only providers (e.g. older OpenAI-compat
+   * gateways) downgrade image items to a placeholder rather than rejecting.
+   */
+  content: string | readonly KodaXToolResultContentItem[];
   is_error?: boolean;
 }
 

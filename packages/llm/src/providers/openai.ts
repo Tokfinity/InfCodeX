@@ -874,10 +874,30 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
     for (const block of contentBlocks) {
       if (block.type === 'tool_result') {
+        // OpenAI Chat Completions tool messages take `content: string` and
+        // do not accept image blocks inline. When the tool_result content
+        // is the array form (e.g. `read` on an image path), downgrade:
+        // emit text items as-is and replace image items with a textual
+        // placeholder noting the path. This preserves the tool-result
+        // contract for text-only OpenAI-compat gateways (DeepSeek, Zhipu
+        // text channel, MiniMax, etc.) without rejecting the request.
+        let toolContent: string;
+        if (typeof block.content === 'string') {
+          toolContent = block.content;
+        } else {
+          toolContent = block.content
+            .map((item) => {
+              if (item.type === 'text') return item.text;
+              // type === 'image' — provider can't render the image inline;
+              // surface its path so the model knows what was attempted.
+              return `[Image at ${item.path}${item.mediaType ? ` (${item.mediaType})` : ''}] (provider does not support image content in tool_result; if the image was previously visible to you in the conversation, refer to it directly via native vision)`;
+            })
+            .join('\n');
+        }
         results.push({
           role: 'tool',
           tool_call_id: block.tool_use_id,
-          content: block.content,
+          content: toolContent,
         } as unknown as OpenAI.Chat.ChatCompletionMessageParam);
       }
     }

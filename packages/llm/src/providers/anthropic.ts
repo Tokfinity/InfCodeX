@@ -747,10 +747,36 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       // 2. tool_result MUST come before text in user messages
       for (const b of m.content) {
         if (b.type === 'tool_result' && m.role === 'user') {
+          // Tool_result content can be (a) a plain string — passed through
+          // as-is (Anthropic accepts string), or (b) an array of typed
+          // content items — each item lowered to Anthropic's wire shape.
+          // Image items are read from disk and base64-encoded just like
+          // top-level image blocks above.
+          let serializedContent: Anthropic.Messages.ToolResultBlockParam['content'];
+          if (typeof b.content === 'string') {
+            serializedContent = b.content;
+          } else {
+            const items: Array<Anthropic.Messages.TextBlockParam | Anthropic.Messages.ImageBlockParam> = [];
+            for (const item of b.content) {
+              if (item.type === 'text') {
+                items.push({ type: 'text', text: item.text });
+              } else if (item.type === 'image') {
+                items.push({
+                  type: 'image',
+                  source: {
+                    type: 'base64',
+                    media_type: resolveImageMediaType(item.path, item.mediaType),
+                    data: await readImageFileAsBase64(item.path),
+                  },
+                } as Anthropic.Messages.ImageBlockParam);
+              }
+            }
+            serializedContent = items;
+          }
           content.push({
             type: 'tool_result',
             tool_use_id: b.tool_use_id,
-            content: b.content,
+            content: serializedContent,
             ...(b.is_error === true ? { is_error: true } : {}),
           } as Anthropic.Messages.ToolResultBlockParam);
         }

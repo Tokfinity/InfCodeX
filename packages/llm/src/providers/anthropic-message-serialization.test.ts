@@ -69,6 +69,53 @@ describe('anthropic message serialization', () => {
     }
   });
 
+  // 2026-05-20 — claudecode parity: tool_result content can be an array
+  // of text + image items (e.g. `read` on an image path). Anthropic
+  // serializer reads image bytes from disk and base64-encodes them
+  // inline. Verifies the new array-content path lowers to the correct
+  // Anthropic wire shape.
+  it('serializes tool_result with multimodal content array (text + image)', async () => {
+    const cwd = await createTempDir('kodax-anthropic-toolresult-image-');
+    const imagePath = path.join(cwd, 'pic.png');
+    await writeFile(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const expectedBase64 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString('base64');
+
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_42', name: 'read', input: { path: imagePath } }],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool_42',
+            content: [
+              { type: 'text', text: `[Read image: ${imagePath}]` },
+              { type: 'image', path: imagePath, mediaType: 'image/png' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    await provider.stream(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const userMsg = kwargs.messages.find((m: { role: string }) => m.role === 'user');
+    const toolResult = userMsg.content.find((b: { type: string }) => b.type === 'tool_result');
+    expect(Array.isArray(toolResult.content)).toBe(true);
+    expect(toolResult.content).toHaveLength(2);
+    expect(toolResult.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining(imagePath) });
+    expect(toolResult.content[1]).toMatchObject({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: expectedBase64 },
+    });
+  });
+
   it('preserves inline system summaries and tool_result error flags', async () => {
     const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
     const provider = new TestAnthropicProvider({

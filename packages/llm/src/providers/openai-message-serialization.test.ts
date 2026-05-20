@@ -100,6 +100,58 @@ describe('openai message serialization', () => {
     });
   });
 
+  // 2026-05-20 — claudecode parity for read-on-image. KodaX `read` now
+  // returns an array-form tool_result for image paths (text + image
+  // items). OpenAI Chat Completions tool messages take `content: string`
+  // and don't accept image blocks inline, so the OpenAI-compat serializer
+  // downgrades: text items pass through, image items become a textual
+  // placeholder noting the path. This keeps the tool-result envelope
+  // valid for DeepSeek / Zhipu / MiniMax / Qwen text channels.
+  it('downgrades multimodal tool_result to text placeholder (no image_url inside tool message)', async () => {
+    const cwd = await createTempDir('kodax-openai-toolresult-image-');
+    const imagePath = path.join(cwd, 'pic.png');
+    await writeFile(imagePath, 'fake-image');
+    const create = vi.fn().mockResolvedValue({
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] } }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    });
+    const provider = new TestOpenAIProvider({ chat: { completions: { create } } });
+    const messages: KodaXMessage[] = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'tool_42', name: 'read', input: { path: imagePath } }],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool_42',
+            content: [
+              { type: 'text', text: `[Read image: ${imagePath}]` },
+              { type: 'image', path: imagePath, mediaType: 'image/png' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    await provider.complete(messages, TOOLS, 'sys');
+
+    const kwargs = create.mock.calls[0]?.[0];
+    const toolMsg = kwargs.messages.find((m: { role: string }) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(typeof toolMsg.content).toBe('string');
+    // Text item passed through verbatim
+    expect(toolMsg.content).toContain(`[Read image: ${imagePath}]`);
+    // Image item lowered to a textual placeholder mentioning the path and mime
+    expect(toolMsg.content).toContain(`[Image at ${imagePath}`);
+    expect(toolMsg.content).toContain('image/png');
+    expect(toolMsg.content).toContain('does not support image content in tool_result');
+    // No image_url block sneaked in (OpenAI rejects images inside tool messages)
+    expect(toolMsg.content).not.toContain('image_url');
+  });
+
   // Regression: third-party Qwen proxies reject any `role: 'system'` that is
   // not at position 0 ("System message must at the begin"). Post-compact
   // attachments + compaction summaries + handoff replaceSystemMessage could

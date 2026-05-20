@@ -21,6 +21,7 @@ import type {
   KodaXTextBlock,
   KodaXThinkingBlock,
   KodaXToolResultBlock,
+  KodaXToolResultContentItem,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
 import type { Span } from '@kodax-ai/tracing';
@@ -107,11 +108,18 @@ export interface RunnerToolContext {
 }
 
 /**
- * Value returned by `RunnableTool.execute`. The `content` string is what the
- * LLM sees in the next turn as `tool_result`.
+ * Value returned by `RunnableTool.execute`. The `content` is what the LLM
+ * sees in the next turn as `tool_result`:
+ *
+ *   - `string` — plain text (the default for most tools).
+ *   - `readonly KodaXToolResultContentItem[]` — an array of typed items
+ *     (text + image), used by multimodal tools like `read` on an image
+ *     path. Provider serializers lower each item to the wire format
+ *     (Anthropic accepts inline; OpenAI-compat downgrades image to text
+ *     placeholder).
  */
 export interface RunnerToolResult {
-  readonly content: string;
+  readonly content: string | readonly KodaXToolResultContentItem[];
   readonly isError?: boolean;
   readonly metadata?: Record<string, unknown>;
 }

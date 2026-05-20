@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import { createReadStream } from 'fs';
+import path from 'node:path';
 import { createInterface } from 'readline';
+import type { KodaXToolResultContentItem } from '@kodax-ai/llm';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionPath } from '../runtime-paths.js';
 import { buildReadFileUnchangedStub } from '../multi-instance/read-file-state-cache.js';
@@ -14,6 +16,27 @@ import {
 } from './truncate.js';
 
 const BINARY_SAMPLE_BYTES = 4096;
+
+// Image extension → MIME type, used by the multimodal branch (claudecode
+// parity, 2026-05-20). When `read` is invoked on one of these extensions
+// the tool returns a `tool_result` content array with a text descriptor
+// followed by an `image` block whose path the provider serializer reads
+// into base64 at wire-send time. Mirrors
+// c:/Works/claudecode/src/tools/FileReadTool/FileReadTool.ts:866-891.
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+// Cap on inline image size. 10 MB is generous for screenshots / diagrams
+// and well below most providers' single-request token limits (Anthropic
+// estimates ~2000 tokens per image regardless of byte size). Beyond this,
+// `read` returns an explanatory text error rather than silently sending
+// huge payloads.
+const READ_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 function buildReadNotes(options: {
   offset: number;
@@ -124,7 +147,10 @@ async function maybeRecordContentHash(
   }
 }
 
-export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExecutionContext): Promise<string> {
+export async function toolRead(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string | readonly KodaXToolResultContentItem[]> {
   const filePath = resolveExecutionPath(input.path as string, ctx);
   let stat;
   try {
@@ -139,6 +165,29 @@ export async function toolRead(input: Record<string, unknown>, ctx: KodaXToolExe
 
   if (!stat.isFile()) {
     return `[Tool Error] Path is not a file: ${filePath}`;
+  }
+
+  // Image branch — claudecode parity. Return a tool_result content array
+  // so the provider serializer can lower the image into a vision block
+  // the model perceives natively. Anthropic providers (Anthropic SDK +
+  // kimi-for-coding) carry the image inline in tool_result; OpenAI-compat
+  // providers downgrade gracefully to a text placeholder. This sits
+  // BEFORE `isProbablyBinary` because PNG/JPEG bytes always trigger the
+  // binary detector — the whole point of this branch is to route them
+  // out of the text-only error path.
+  const ext = path.extname(filePath).toLowerCase();
+  const imageMimeType = IMAGE_MIME_TYPES[ext];
+  if (imageMimeType) {
+    if (stat.size > READ_IMAGE_MAX_BYTES) {
+      return `[Tool Error] Image too large to inline (${formatSize(stat.size)} > ${formatSize(READ_IMAGE_MAX_BYTES)}): ${filePath}. Resize before reading.`;
+    }
+    return [
+      {
+        type: 'text',
+        text: `[Read image: ${filePath} (${formatSize(stat.size)}, ${imageMimeType})] — image content delivered as inline vision below; describe what you see in your next response.`,
+      },
+      { type: 'image', path: filePath, mediaType: imageMimeType },
+    ];
   }
 
   if (await isProbablyBinary(filePath, stat.size)) {

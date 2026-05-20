@@ -91,7 +91,7 @@ export function wrapCodingToolAsRunnable(
   handler: (
     input: Record<string, unknown>,
     ctx: KodaXToolExecutionContext,
-  ) => Promise<string>,
+  ) => Promise<RunnerToolResult['content']>,
   baseCtx: KodaXToolExecutionContext,
   budget?: ManagedTaskBudgetController,
   events?: KodaXEvents,

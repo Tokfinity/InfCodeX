@@ -195,13 +195,18 @@ function stageArtifactPreview(artifactJson: string | undefined): string {
 const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'read',
-    description: 'Read a text file with bounded output. Large files are capped per call; use offset/limit to continue in smaller slices.',
+    description: [
+      'Read a file from the local filesystem with bounded output.',
+      '- Text files: returns line-numbered content. Large files are capped per call; use offset/limit to continue in smaller slices.',
+      '- Image files (PNG, JPG, JPEG, GIF, WEBP): returns the image as inline vision content. The model is multimodal — when an image is delivered through this tool, you can see the picture directly in your next turn. Describe what you see; do NOT claim binary files are unsupported.',
+      '- For pasted/attached images already inlined in the user message, you already perceive them via native vision — no `read` call is needed. Use `read` on an image path only when the file is on disk and not yet in the conversation (e.g., a fresh path the user mentioned in text without attaching).',
+    ].join('\n'),
     input_schema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'The absolute path to the file' },
-        offset: { type: 'number', description: 'Line number to start from' },
-        limit: { type: 'number', description: 'Number of lines to read' },
+        offset: { type: 'number', description: 'Line number to start from (text files only)' },
+        limit: { type: 'number', description: 'Number of lines to read (text files only)' },
       },
       required: ['path'],
     },

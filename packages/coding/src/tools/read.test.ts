@@ -85,6 +85,77 @@ describe('toolRead', () => {
     expect(result).toContain('Binary file not supported');
   });
 
+  // 2026-05-20 — claudecode parity: `read` on image extensions returns a
+  // multimodal `tool_result` content array (text descriptor + image block)
+  // instead of the legacy `[Tool Error] Binary file not supported`. This
+  // is the fail-safe that lets the model actually see attached images
+  // even when it routes through the read tool (e.g., post-compaction
+  // when the original inline image block was stripped to a marker).
+  describe('image branch (claudecode parity)', () => {
+    it('returns a multimodal content array for PNG files (not a Binary-error string)', async () => {
+      const filePath = path.join(tempDir, 'pic.png');
+      // 89 50 4E 47 = "\x89PNG" magic. Bytes after are filler for
+      // `formatSize` to render something reasonable.
+      await fs.writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array(120).fill(0)]));
+
+      const result = await toolRead({ path: filePath }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+
+      // Critical: must NOT hit the binary-error fallback.
+      expect(typeof result).not.toBe('string');
+      expect(Array.isArray(result)).toBe(true);
+
+      const items = result as ReadonlyArray<{ type: string; text?: string; path?: string; mediaType?: string }>;
+      expect(items).toHaveLength(2);
+
+      expect(items[0]).toMatchObject({ type: 'text' });
+      expect(items[0].text).toContain('image/png');
+      expect(items[0].text).toContain(filePath);
+
+      expect(items[1]).toMatchObject({
+        type: 'image',
+        path: filePath,
+        mediaType: 'image/png',
+      });
+    });
+
+    it.each<[string, string]>([
+      ['.jpg', 'image/jpeg'],
+      ['.jpeg', 'image/jpeg'],
+      ['.gif', 'image/gif'],
+      ['.webp', 'image/webp'],
+    ])('handles %s as %s', async (ext, expectedMime) => {
+      const filePath = path.join(tempDir, `pic${ext}`);
+      await fs.writeFile(filePath, Buffer.from(Array(64).fill(0xff)));
+
+      const result = await toolRead({ path: filePath }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+
+      expect(Array.isArray(result)).toBe(true);
+      const items = result as ReadonlyArray<{ type: string; mediaType?: string }>;
+      expect(items[1]).toMatchObject({ type: 'image', mediaType: expectedMime });
+    });
+
+    it('returns a text error (not the multimodal array) for images over the 10 MB cap', async () => {
+      const filePath = path.join(tempDir, 'huge.png');
+      // 11 MB > READ_IMAGE_MAX_BYTES (10 MB)
+      await fs.writeFile(filePath, Buffer.alloc(11 * 1024 * 1024, 0xff));
+
+      const result = await toolRead({ path: filePath }, {
+        backups: new Map(),
+        executionCwd: tempDir,
+      });
+
+      expect(typeof result).toBe('string');
+      expect(result).toContain('Image too large to inline');
+      expect(result).toContain('Resize before reading');
+    });
+  });
+
   // FEATURE_125 v0.7.41 — Read tool records the on-disk content hash
   // when `ctx.contentHashCache` is wired, so a subsequent
   // Edit/Write tool's `checkStale` can detect cross-session races.
