@@ -102,6 +102,140 @@ describe('buildPostCompactAttachments', () => {
   });
 });
 
+describe('FEATURE_185 (v0.7.42): hits/matched-paths rendering', () => {
+  it('renders parsed hits inline after the search head', () => {
+    const ledger = [
+      createLedgerEntry('search_scope', 'authenticate', {
+        sourceTool: 'grep',
+        metadata: {
+          path: 'src/',
+          hits: [
+            { path: 'src/auth.ts', line: 42, preview: 'function authenticate(user) {' },
+            { path: 'src/auth.ts', line: 78, preview: '  await authenticate(req.user);' },
+            { path: 'src/login.ts', line: 13, preview: 'import { authenticate } from "../auth";' },
+          ],
+          resultMode: 'content',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('grep "authenticate"');
+    expect(content).toContain('3 hits');
+    expect(content).toContain('src/auth.ts:42');
+    expect(content).toContain('src/auth.ts:78');
+    expect(content).toContain('src/login.ts:13');
+  });
+
+  it('renders matchCount when no individual hits captured (count-mode result)', () => {
+    const ledger = [
+      createLedgerEntry('search_scope', 'TODO', {
+        sourceTool: 'grep',
+        metadata: { path: '.', matchCount: 42, resultMode: 'count' },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('grep "TODO"');
+    expect(content).toContain('42 matches');
+  });
+
+  it('renders truncation overflow indicator when more than preview limit hits', () => {
+    const hits = Array.from({ length: 15 }, (_, i) => ({
+      path: `src/file${i + 1}.ts`,
+      line: i + 1,
+      preview: `line ${i + 1}`,
+    }));
+    const ledger = [
+      createLedgerEntry('search_scope', 'common-pattern', {
+        sourceTool: 'grep',
+        metadata: { path: '.', hits, resultMode: 'content' },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('15 hits');
+    // preview limit is 8 → 7 more in overflow
+    expect(content).toContain('+7 more');
+    expect(content).toContain('src/file1.ts:1');
+    expect(content).toContain('src/file8.ts:8');
+    // 9-15 should NOT appear (only overflow indicator)
+    expect(content).not.toContain('src/file15.ts:15');
+  });
+
+  it('falls back to plain search render when metadata has neither hits nor matchCount', () => {
+    const ledger = [
+      createLedgerEntry('search_scope', 'session', {
+        sourceTool: 'grep',
+        metadata: { path: 'src/auth/' },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('grep "session" src/auth/');
+    expect(content).not.toContain(' hits');
+    expect(content).not.toContain(' matches');
+  });
+
+  it('renders glob matched paths as a separate Glob line', () => {
+    const ledger = [
+      createLedgerEntry('path_scope', 'packages/', {
+        sourceTool: 'glob',
+        action: 'glob',
+        metadata: {
+          pattern: '**/*.ts',
+          matchedPaths: [
+            'packages/coding/src/auth.ts',
+            'packages/coding/src/login.ts',
+            'packages/session-lineage/src/session.ts',
+          ],
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('Glob:');
+    expect(content).toContain('packages/coding/src/auth.ts');
+    expect(content).toContain('packages/coding/src/login.ts');
+  });
+
+  it('caps glob path preview at LEDGER_GLOB_PATHS_PREVIEW_LIMIT with overflow', () => {
+    const matchedPaths = Array.from({ length: 30 }, (_, i) => `packages/dir/file${i + 1}.ts`);
+    const ledger = [
+      createLedgerEntry('path_scope', 'packages/', {
+        sourceTool: 'glob',
+        action: 'glob',
+        metadata: { pattern: '**/*.ts', matchedPaths },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('Glob:');
+    expect(content).toContain('+24 more'); // 30 - 6 shown
+    expect(content).toContain('file1.ts');
+    expect(content).toContain('file6.ts');
+    expect(content).not.toContain('file30.ts');
+  });
+
+  it('does not render Glob line when matchedPaths is missing or empty', () => {
+    // Add at least one other ledger entry so a ledger message IS produced;
+    // this isolates the "Glob line absent" assertion from "no ledger at all".
+    const ledger = [
+      createLedgerEntry('file_modified', 'src/auth.ts', { action: 'edit' }),
+      createLedgerEntry('path_scope', 'packages/', {
+        sourceTool: 'glob',
+        action: 'glob',
+        metadata: { pattern: '**/*.ts' }, // No matchedPaths field
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    expect(result.ledgerMessage).not.toBeNull();
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('Modified:');
+    expect(content).not.toContain('Glob:');
+  });
+});
+
 describe('injectPostCompactAttachments', () => {
   it('returns original messages when no attachments', () => {
     const messages: KodaXMessage[] = [

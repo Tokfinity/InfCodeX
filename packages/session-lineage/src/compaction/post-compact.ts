@@ -57,6 +57,17 @@ export const DEFAULT_POST_COMPACT_CONFIG: PostCompactConfig = {
 /** Prefix used for all post-compact injected system messages. Used for dedup. */
 const POST_COMPACT_MESSAGE_PREFIX = '[Post-compact:';
 
+/**
+ * FEATURE_185 (v0.7.42): per-search-entry hit preview cap shown in the rendered
+ * ledger summary. Hits themselves are bounded earlier in
+ * `result-extractors.ts:MAX_HITS_PER_ENTRY` (50); this further trims for
+ * post-compact display so a single search entry can't dominate the line.
+ */
+const LEDGER_HITS_PREVIEW_LIMIT = 8;
+
+/** FEATURE_185 (v0.7.42): glob matched-path display cap per entry. */
+const LEDGER_GLOB_PATHS_PREVIEW_LIMIT = 6;
+
 export interface PostCompactAttachments {
   readonly ledgerMessage: KodaXMessage | null;
   readonly fileMessages: readonly KodaXMessage[];
@@ -209,9 +220,52 @@ function renderLedgerSummary(
   if (searches.length > 0) {
     const items = searches.slice(-5).map((e) => {
       const scope = e.metadata?.path ?? '';
-      return scope ? `${e.sourceTool} "${e.target}" ${scope}` : `${e.sourceTool} "${e.target}"`;
+      const head = scope ? `${e.sourceTool} "${e.target}" ${scope}` : `${e.sourceTool} "${e.target}"`;
+      // FEATURE_185 (v0.7.42): if the original tool_result was parsed into
+      // structured `hits` (path:line:preview) via result-extractors, surface
+      // a compact preview so the model can recall what matched without
+      // re-running the search. Cap shown hits to keep ledger lines bounded.
+      const hits = e.metadata?.hits;
+      if (Array.isArray(hits) && hits.length > 0) {
+        const previews = hits.slice(0, LEDGER_HITS_PREVIEW_LIMIT).map((h) => {
+          if (h && typeof h === 'object' && 'path' in h && 'line' in h) {
+            const path = String((h as { path: unknown }).path);
+            const line = (h as { line: unknown }).line;
+            return typeof line === 'number' && line > 0 ? `${path}:${line}` : path;
+          }
+          return '';
+        }).filter(Boolean);
+        const overflow = hits.length > LEDGER_HITS_PREVIEW_LIMIT
+          ? ` (+${hits.length - LEDGER_HITS_PREVIEW_LIMIT} more)`
+          : '';
+        return `${head} → ${hits.length} hits: ${previews.join(', ')}${overflow}`;
+      }
+      const matchCount = e.metadata?.matchCount;
+      if (typeof matchCount === 'number') {
+        return `${head} → ${matchCount} matches`;
+      }
+      return head;
     });
-    lines.push(`Search: ${items.join(', ')}`);
+    lines.push(`Search: ${items.join('; ')}`);
+  }
+
+  // FEATURE_185 (v0.7.42): glob `matchedPaths` rendered as a separate group
+  // since file-tracker stores them under `path_scope` kind (not `search_scope`).
+  const globsWithPaths = ledger.filter((e) =>
+    e.kind === 'path_scope'
+    && e.sourceTool === 'glob'
+    && Array.isArray(e.metadata?.matchedPaths)
+    && (e.metadata!.matchedPaths as unknown[]).length > 0);
+  if (globsWithPaths.length > 0) {
+    const items = globsWithPaths.slice(-3).map((e) => {
+      const paths = e.metadata!.matchedPaths as string[];
+      const shown = paths.slice(0, LEDGER_GLOB_PATHS_PREVIEW_LIMIT).join(', ');
+      const overflow = paths.length > LEDGER_GLOB_PATHS_PREVIEW_LIMIT
+        ? ` (+${paths.length - LEDGER_GLOB_PATHS_PREVIEW_LIMIT} more)`
+        : '';
+      return `${e.target}: ${shown}${overflow}`;
+    });
+    lines.push(`Glob: ${items.join('; ')}`);
   }
 
   if (commands.length > 0) {
