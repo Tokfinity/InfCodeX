@@ -90,6 +90,7 @@ import {
 } from './_internal/managed-task/tool-policy.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
+import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 import {
   SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT,
@@ -1566,6 +1567,15 @@ async function runManagedTaskViaRunnerInner(
                     : undefined;
         observer.agentSwitched(switchedRole);
       },
+      // FEATURE_184 (v0.7.45) Phase B — Extension `turn:complete`
+      // bridge. Delegates the agent-layer Stop hook to registered
+      // extension handlers (first non-undefined return short-circuits).
+      // Zero-extension behavior: bridge returns undefined → falls
+      // through to agent's terminal path, byte-identical to v0.7.42.
+      // Phase D's first-party Sidecar Verifier will wrap this bridge
+      // (try verifier first, defer to extensions on undefined) — not
+      // yet wired.
+      stopHook: createExtensionTurnCompleteStopHook(() => sessionIdRef.current),
       // Iteration cap for the entire chain. Core's default (20) is
       // meant for stand-alone single-agent runs and is far too low
       // for a multi-role investigation + execution + verify chain.

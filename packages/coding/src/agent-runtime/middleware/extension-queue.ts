@@ -55,6 +55,7 @@
  */
 
 import type { KodaXMessage, KodaXToolResultBlock } from '@kodax-ai/llm';
+import type { StopHookFn, StopHookResult } from '@kodax-ai/agent';
 
 import type {
   KodaXContextTokenSnapshot,
@@ -111,6 +112,52 @@ export async function settleExtensionTurn(
       runtimeSessionState.thinkingLevel = level;
     },
   });
+}
+
+/**
+ * FEATURE_184 (v0.7.45) — Stop Hook bridge.
+ *
+ * Returns a `StopHookFn` that delegates to the extension runtime's
+ * `turn:complete` hook chain. The agent-layer Runner calls this hook
+ * on text-only termination; the bridge invokes registered extension
+ * handlers (first non-`void` return short-circuits — matches the
+ * `runActiveExtensionHook` short-circuit policy at runtime.ts:773-786).
+ *
+ * Zero-extension behavior: `runActiveExtensionHook` returns `undefined`
+ * when no handlers are registered, which the StopHookFn surface
+ * interprets as `accept`. Byte-identical to v0.7.42 when no
+ * `turn:complete` handler is registered.
+ *
+ * First-party consumers (Sidecar Verifier, FEATURE_184 Phase D) wire
+ * their own `StopHookFn` directly — they do NOT go through this
+ * bridge. Composition (first-party then extensions) is the caller's
+ * responsibility if both surfaces need to fire in one run.
+ */
+export function createExtensionTurnCompleteStopHook(
+  getSessionId: () => string | undefined,
+): StopHookFn {
+  return async (ctx): Promise<StopHookResult> => {
+    // Defer silently when sessionId is absent (e.g. very early in the
+    // run before session initialization committed). Passing an empty
+    // string to extensions would silently route session-keyed state
+    // lookups to the wrong bucket — fail-open is the safer choice.
+    const sessionId = getSessionId();
+    if (!sessionId) return undefined;
+
+    const result = await runActiveExtensionHook('turn:complete', {
+      sessionId,
+      lastAssistantText: ctx.lastAssistantText,
+      signal: ctx.signal,
+      reanimateCount: ctx.reanimateCount,
+      reanimateBudget: ctx.reanimateBudget,
+    });
+    // `runActiveExtensionHook` returns `ExtensionTurnCompleteHookResult |
+    // undefined`. The `void` arm of that union is structurally
+    // `undefined` at runtime but TypeScript distinguishes them in
+    // narrowing — coerce explicitly so `StopHookResult` (no `void`) is
+    // satisfied. Valid `string` / `{abort, reason}` returns pass through.
+    return result ?? undefined;
+  };
 }
 
 export function createExtensionRuntimeSessionController(state: RuntimeSessionState) {

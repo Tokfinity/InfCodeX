@@ -170,6 +170,9 @@ export type {
   RunEvent,
   RunOptions,
   RunResult,
+  StopHookContext,
+  StopHookFn,
+  StopHookResult,
 } from './primitives/runner.js';
 export {
   Runner,
