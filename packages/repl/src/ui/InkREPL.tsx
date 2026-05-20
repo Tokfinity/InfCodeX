@@ -299,6 +299,7 @@ import {
   buildPromptActivityViewModel,
   buildPromptPlaceholderText,
 } from "./view-models/surface-liveness.js";
+import { resolveEffectiveCompactionInfo } from "./view-models/compaction-info.js";
 import { buildSurfaceStatusBarProps } from "./view-models/surface-status.js";
 import { buildTranscriptSearchChrome } from "./view-models/transcript-search.js";
 import {
@@ -346,7 +347,19 @@ interface InkREPLProps {
   config: CurrentConfig;
   context: InteractiveContext;
   storage: SessionStorage;
-  compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean };
+  compactionInfo?: {
+    contextWindow: number;
+    triggerPercent: number;
+    enabled: boolean;
+    /**
+     * Raw user-config override (`compaction.contextWindow`) if set.
+     * When defined, wins unconditionally over provider per-model values —
+     * mirrors the `/compact` / runtime cascade documented in CAP-056. The
+     * cascade lives in the React layer so `/model` swaps re-resolve
+     * against the active model's contextWindow.
+     */
+    userOverrideContextWindow?: number;
+  };
   rendererMode: EffectiveTuiRendererMode;
   fullscreenPolicy: FullscreenPolicy;
   onExit: () => void;
@@ -417,7 +430,19 @@ interface BannerProps {
   sessionId: string;
   workingDir: string;
   terminalWidth: number;
-  compactionInfo?: { contextWindow: number; triggerPercent: number; enabled: boolean };
+  compactionInfo?: {
+    contextWindow: number;
+    triggerPercent: number;
+    enabled: boolean;
+    /**
+     * Raw user-config override (`compaction.contextWindow`) if set.
+     * When defined, wins unconditionally over provider per-model values —
+     * mirrors the `/compact` / runtime cascade documented in CAP-056. The
+     * cascade lives in the React layer so `/model` swaps re-resolve
+     * against the active model's contextWindow.
+     */
+    userOverrideContextWindow?: number;
+  };
 }
 
 type StreamingEvents = import("@kodax-ai/coding").KodaXEvents & {
@@ -1482,6 +1507,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // State
   const [isLoading, setIsLoading] = useState(false);
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig>(config);
+
+  // Reactive contextWindow resolution. See
+  // `view-models/compaction-info.ts` for the documented cascade — the
+  // tests there pin the contract (user override → per-model → startup
+  // fallback). Status bar + live banners consume this; the Static top
+  // banner is render-once by Ink design and stays at session start.
+  const effectiveCompactionInfo = useMemo(
+    () => resolveEffectiveCompactionInfo(
+      compactionInfo,
+      { provider: currentConfig.provider, model: currentConfig.model },
+      resolveProvider,
+    ),
+    [compactionInfo, currentConfig.provider, currentConfig.model],
+  );
   const [isRunning, setIsRunning] = useState(true);
   const [showBanner, setShowBanner] = useState(true); // Show banner in Ink UI
   const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
@@ -2439,9 +2478,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // Issue 070: Calculate context token usage for status bar display
   // Issue 070: calculate context token usage for the status bar.
   const contextUsage = useMemo(() => {
-    if (!compactionInfo) return undefined;
+    if (!effectiveCompactionInfo) return undefined;
 
-    const { contextWindow, triggerPercent } = compactionInfo;
+    const { contextWindow, triggerPercent } = effectiveCompactionInfo;
     const currentTokens =
       liveTokenCount ??
       context.contextTokenSnapshot?.currentTokens ??
@@ -2452,7 +2491,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       contextWindow,
       triggerPercent,
     };
-  }, [context.messages, context.contextTokenSnapshot, compactionInfo, liveTokenCount]);
+  }, [context.messages, context.contextTokenSnapshot, effectiveCompactionInfo, liveTokenCount]);
 
   const confirmInstruction = useMemo(() => {
     if (!confirmRequest) return undefined;
@@ -2744,9 +2783,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     sessionId: context.sessionId,
     workingDir: options.context?.gitRoot || process.cwd(),
     terminalWidth,
-    compactionInfo: compactionInfo ?? undefined,
+    // Live banners (non-Static) get the per-model resolved value so
+    // `/model` swaps update the displayed context window. The Static
+    // top banner captures whatever was current at first render and
+    // stays at that snapshot by Ink design — that is acceptable as a
+    // session-start record.
+    compactionInfo: effectiveCompactionInfo ?? undefined,
   }), [
-    compactionInfo,
+    effectiveCompactionInfo,
     context.sessionId,
     currentConfig,
     options.context?.gitRoot,
@@ -8425,7 +8469,14 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   }
 
   // Load compaction config before rendering so the <Static> banner has it immediately
-  let compactionInfo: { contextWindow: number; triggerPercent: number; enabled: boolean } | undefined;
+  let compactionInfo:
+    | {
+        contextWindow: number;
+        triggerPercent: number;
+        enabled: boolean;
+        userOverrideContextWindow?: number;
+      }
+    | undefined;
   try {
     const compConfig = await loadCompactionConfig(gitRoot);
     const providerInstance = resolveProvider(initialProvider);
@@ -8437,6 +8488,10 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       contextWindow: effectiveContextWindow,
       triggerPercent: compConfig.triggerPercent,
       enabled: compConfig.enabled,
+      // Track the raw user override separately so the React layer can
+      // honour it across `/model` swaps (per-model resolution must NOT
+      // override an explicit `compaction.contextWindow` setting).
+      userOverrideContextWindow: compConfig.contextWindow,
     };
   } catch {
     // Silently ignore configuration loading errors for banner
