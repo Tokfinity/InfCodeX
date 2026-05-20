@@ -657,9 +657,39 @@ export function applySessionCompaction(
   // `injectPostCompactAttachments` before emitting onCompactedMessages), drop
   // them here — attachments live on the CompactionEntry, never as inline
   // message entries. Idempotent: if the caller already stripped, this is a no-op.
-  const keptMessages = compactedMessages.some(isPostCompactAttachment)
+  let keptMessages = compactedMessages.some(isPostCompactAttachment)
     ? compactedMessages.filter((m) => !isPostCompactAttachment(m))
     : compactedMessages;
+
+  // FEATURE_180 (v0.7.42): dedup duplicate system messages by content hash.
+  // Forensic finding from 788-session scan: 47% of sessions persist 2+ copies
+  // of the Repository Intelligence block (~13K tokens each); worst observed
+  // case had 65 copies. Root cause is multiple write paths (compaction commit
+  // + handoff replaceSystemMessage + V2 swap) each appending the same
+  // instructions block as a new lineage entry. Without dedup at the
+  // applySessionCompaction boundary, RI accumulates monotonically across
+  // compaction cycles — every compaction inflates the kept transcript by
+  // another 13K of redundant system payload, defeating compaction's purpose.
+  // Dedup uses string-identity on `content` (cheaper than crypto hash and
+  // sufficient — RI blocks are bytewise identical when they originate from
+  // the same `provider.systemPrompt` build). Non-system messages are never
+  // deduped (legitimate repeated user/assistant content must be preserved).
+  const seenSystemContent = new Set<string>();
+  const filteredForDedup: KodaXMessage[] = [];
+  let droppedDups = 0;
+  for (const m of keptMessages) {
+    if (m.role === 'system' && typeof m.content === 'string') {
+      if (seenSystemContent.has(m.content)) {
+        droppedDups++;
+        continue;
+      }
+      seenSystemContent.add(m.content);
+    }
+    filteredForDedup.push(m);
+  }
+  if (droppedDups > 0) {
+    keptMessages = filteredForDedup;
+  }
 
   const next = createSessionLineage(keptMessages, base);
   const activePath = getSessionLineagePath(next);

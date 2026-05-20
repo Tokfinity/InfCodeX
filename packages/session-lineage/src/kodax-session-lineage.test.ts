@@ -991,3 +991,147 @@ describe('FEATURE_072 Phase B: attachments routing + strip invariant + benchmark
     expect(p95).toBeLessThan(5); // 5ms safety margin over the 1ms target
   });
 });
+
+describe('FEATURE_180 (v0.7.42): system message content-hash dedup at applySessionCompaction', () => {
+  // Forensic background: 788-session scan found 47% of sessions persist 2+
+  // duplicate copies of the Repository Intelligence system block (~13K each;
+  // worst case 65 copies). Multiple write paths (compaction commit + handoff
+  // replaceSystemMessage + V2 swap) each append the same instructions block
+  // as a new lineage entry. The dedup at applySessionCompaction is the single
+  // chokepoint where every compaction-emitted message array passes through.
+
+  const RI_BLOCK = 'A'.repeat(50) + '\n## Repository Intelligence\n' + 'B'.repeat(100);
+  const userMsg: KodaXMessage = { role: 'user', content: 'task' };
+  const keptUser: KodaXMessage = { role: 'user', content: 'follow up' };
+
+  it('drops exact duplicate system messages while keeping the first occurrence', () => {
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: RI_BLOCK },           // keep
+      { role: 'system', content: '[对话历史摘要]\n\nS' }, // keep (different content)
+      { role: 'system', content: RI_BLOCK },           // drop (duplicate of first)
+      keptUser,
+      { role: 'system', content: RI_BLOCK },           // drop (still duplicate)
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    const riOccurrences = derived.filter(
+      (m) => m.role === 'system' && m.content === RI_BLOCK,
+    ).length;
+    expect(riOccurrences).toBe(1);
+    // Summary system message still present
+    expect(derived.some((m) => m.role === 'system' && m.content === '[对话历史摘要]\n\nS'))
+      .toBe(true);
+    // User message preserved
+    expect(derived.some((m) => m.role === 'user' && m.content === 'follow up'))
+      .toBe(true);
+  });
+
+  it('preserves system messages with different content (e.g. handoff role switch)', () => {
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: 'Worker instructions A' },
+      { role: 'system', content: '[对话历史摘要]\n\nS' },
+      { role: 'system', content: 'Evaluator instructions B' }, // different role basePrompt
+      keptUser,
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    const systemContents = derived.filter((m) => m.role === 'system').map((m) => m.content);
+    expect(systemContents).toContain('Worker instructions A');
+    expect(systemContents).toContain('Evaluator instructions B');
+    expect(systemContents).toContain('[对话历史摘要]\n\nS');
+  });
+
+  it('does NOT dedup duplicate user/assistant messages (legitimate repeated content must survive)', () => {
+    // User may genuinely repeat themselves; assistant may emit identical
+    // boilerplate. Dedup is strictly for system blocks where bytewise
+    // identity = redundant copy from multiple write paths.
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: '[对话历史摘要]\n\nS' },
+      { role: 'user', content: 'same question' },
+      { role: 'assistant', content: 'noted' },
+      { role: 'user', content: 'same question' },          // duplicate user
+      { role: 'assistant', content: 'noted' },             // duplicate assistant
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    const userDups = derived.filter((m) => m.role === 'user' && m.content === 'same question').length;
+    const asstDups = derived.filter((m) => m.role === 'assistant' && m.content === 'noted').length;
+    expect(userDups).toBe(2);
+    expect(asstDups).toBe(2);
+  });
+
+  it('handles array-content system messages (not deduped — only string-content is checked)', () => {
+    // System messages with array content are rare in practice but must not
+    // crash the dedup pass. We choose not to serialize array content for
+    // comparison: the cost would multiply and the duplication issue is
+    // empirically all string-content blocks (RI / summary).
+    const arrayContent = [{ type: 'text' as const, text: RI_BLOCK }];
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: arrayContent },
+      { role: 'system', content: arrayContent },
+      keptUser,
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    // Both array-content system messages preserved (not deduped)
+    const arrayContentSystems = derived.filter(
+      (m) => m.role === 'system' && Array.isArray(m.content),
+    );
+    expect(arrayContentSystems.length).toBe(2);
+  });
+
+  it('is a no-op when there are no duplicates (zero behaviour change for normal sessions)', () => {
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: '[对话历史摘要]\n\nS' },
+      keptUser,
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    expect(derived.length).toBe(2);
+    expect(derived[0]?.role).toBe('system');
+    expect(derived[1]?.content).toBe('follow up');
+  });
+
+  it('composes with the existing [Post-compact:] strip (no regression on FEATURE_072)', () => {
+    // Both filters run: Post-compact strip first, then dedup.
+    const compacted: KodaXMessage[] = [
+      { role: 'system', content: '[Post-compact: ledger]' }, // strip (Post-compact)
+      { role: 'system', content: RI_BLOCK },                 // keep
+      { role: 'system', content: '[对话历史摘要]\n\nS' },     // keep
+      { role: 'system', content: RI_BLOCK },                 // drop (duplicate RI)
+      keptUser,
+    ];
+    const lineage = applySessionCompaction(
+      createSessionLineage([userMsg]),
+      compacted,
+      { summary: 'S' },
+    );
+    const derived = getSessionMessagesFromLineage(lineage);
+    const postCompact = derived.filter(
+      (m) => typeof m.content === 'string' && m.content.startsWith('[Post-compact:'),
+    );
+    expect(postCompact.length).toBe(0);
+    const ri = derived.filter((m) => m.role === 'system' && m.content === RI_BLOCK);
+    expect(ri.length).toBe(1);
+  });
+});
