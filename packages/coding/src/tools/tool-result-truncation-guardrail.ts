@@ -55,6 +55,14 @@ export function createToolResultTruncationGuardrail(
       if (result.isError) {
         return { action: 'allow' };
       }
+      // Multimodal tool results (e.g. image-aware read) carry image items
+      // the guardrail's string-only spill API can't preserve. Truncating
+      // would silently drop the image; skip the guardrail and let the
+      // result pass through. Image-bearing payloads are rarely the source
+      // of context blow-up anyway.
+      if (typeof result.content !== 'string') {
+        return { action: 'allow' };
+      }
       const guarded = await applyToolResultGuardrail(call.name, result.content, ctx);
       if (!guarded.truncated) {
         return { action: 'allow' };

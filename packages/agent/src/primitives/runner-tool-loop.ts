@@ -208,7 +208,7 @@ export async function executeRunnerToolCall(
     const result = await tool.execute(call.input, executeCtx);
     if (toolSpan) {
       if (result.isError) {
-        toolSpan.setError(new Error(result.content));
+        toolSpan.setError(new Error(typeof result.content === 'string' ? result.content : '[non-text content]'));
       }
       toolSpan.end();
     }

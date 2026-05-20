@@ -27,7 +27,7 @@
  *   - Sanitize pipeline — `_internal/managed-task/sanitize.ts` strips leaked fences / control markers
  */
 
-import type { KodaXMessage } from '@kodax-ai/llm';
+import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
 import type { Agent } from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import {
@@ -1460,7 +1460,7 @@ async function runManagedTaskViaRunnerInner(
     },
     onToolResult: (
       call: { name: string; id: string },
-      result: { content: string; metadata?: unknown },
+      result: { content: string | readonly KodaXToolResultContentItem[]; metadata?: unknown },
     ) => {
       // FEATURE_178 v0.7.42 — feed the tool_result content into the
       // orchestrator's transcript buffer so subsequent sidecar prompts
@@ -1487,7 +1487,7 @@ async function runManagedTaskViaRunnerInner(
       options.events?.onToolResult?.({
         id: call.id,
         name: call.name,
-        content: result.content,
+        content: typeof result.content === 'string' ? result.content : result.content.filter(i => i.type === 'text').map(i => i.type === 'text' ? i.text : '').join(''),
       });
     },
   };

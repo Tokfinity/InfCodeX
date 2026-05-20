@@ -166,7 +166,7 @@ function serializeMessage(msg: KodaXMessage): string {
       const inputJson = safeJsonStringify(block.input);
       lines.push(`  tool_use(${neutralize(block.name)}): ${neutralize(inputJson)}`);
     } else if (block.type === 'tool_result') {
-      lines.push(`  tool_result: ${neutralize(block.content)}`);
+      lines.push(`  tool_result: ${neutralize(typeof block.content === 'string' ? block.content : block.content.filter(i => i.type === 'text').map(i => i.type === 'text' ? i.text : '').join(''))}`);
     }
     // thinking / redacted_thinking / image — already stripped upstream;
     // if they slip through here, just skip them (don't leak to classifier).

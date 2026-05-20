@@ -2579,8 +2579,11 @@ function summarizeRecentMessageEvidence(messages: KodaXMessage[]): string[] {
     }
 
     for (const block of message.content) {
-      if (block.type === 'tool_result' && looksLikeRuntimeEvidence(block.content)) {
-        evidence.push(`- recent tool result: ${truncateEvidence(block.content)}`);
+      if (block.type === 'tool_result') {
+        const blockText = typeof block.content === 'string' ? block.content : block.content.filter(i => i.type === 'text').map(i => i.type === 'text' ? i.text : '').join('');
+        if (looksLikeRuntimeEvidence(blockText)) {
+          evidence.push(`- recent tool result: ${truncateEvidence(blockText)}`);
+        }
       } else if (block.type === 'text' && looksLikeRuntimeEvidence(block.text)) {
         evidence.push(`- recent assistant evidence: ${truncateEvidence(block.text)}`);
       }

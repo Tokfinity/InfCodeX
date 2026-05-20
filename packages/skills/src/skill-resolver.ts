@@ -200,8 +200,8 @@ export class VariableResolver implements IVariableResolver {
   private resolveEnvVars(content: string): string {
     const env: Record<string, string | undefined> = {
       ...this.context.environment,
-      CLAUDE_SESSION_ID: this.context.sessionId,
-      KODAX_SESSION_ID: this.context.sessionId,
+      CLAUDE_SESSION_ID: this.context.sessionId ?? '',
+      KODAX_SESSION_ID: this.context.sessionId ?? '',
       KODAX_WORKING_DIR: this.context.workingDirectory,
     };
 

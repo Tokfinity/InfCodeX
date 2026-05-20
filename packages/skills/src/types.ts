@@ -161,7 +161,14 @@ export interface ISkillRegistry {
 export interface SkillContext {
   workingDirectory: string;
   projectRoot?: string;
-  sessionId: string;
+  /**
+   * Optional. Used to substitute `${CLAUDE_SESSION_ID}` / `${KODAX_SESSION_ID}`
+   * template variables in skill markdown. Tool-invocation callers (e.g. the
+   * `skill` tool) may not have a session bound — in that case the resolver
+   * falls back to an empty replacement so the substitution doesn't leak the
+   * literal `${...}` to the LLM.
+   */
+  sessionId?: string;
   environment?: Record<string, string>;
   messages?: unknown[];
 }

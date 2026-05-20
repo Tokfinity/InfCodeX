@@ -124,7 +124,7 @@ export function microcompact(
       const toolResult = block as KodaXToolResultBlock;
 
       // Already cleared
-      if (toolResult.content.startsWith('[Cleared:') || toolResult.content.startsWith('[Pruned:')) {
+      if (typeof toolResult.content === 'string' && (toolResult.content.startsWith('[Cleared:') || toolResult.content.startsWith('[Pruned:'))) {
         return block;
       }
 

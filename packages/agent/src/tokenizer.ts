@@ -56,7 +56,15 @@ export function estimateTokens(messages: KodaXMessage[]): number {
         } else if (block.type === 'tool_result') {
           // 工具结果
           total += 4; // tool_use_id 引用开销
-          total += countTextTokens(block.content);
+          total += typeof block.content === 'string'
+            ? countTextTokens(block.content)
+            : block.content.reduce(
+                // Image items inside a tool_result get the same 1500-token
+                // budget as top-level image blocks below — same provider-side
+                // payload, same local estimate.
+                (sum, item) => sum + (item.type === 'text' ? countTextTokens(item.text) : 1500),
+                0,
+              );
         } else if (block.type === 'thinking') {
           // 思考块
           total += countTextTokens(block.thinking);
