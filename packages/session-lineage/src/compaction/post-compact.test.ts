@@ -103,7 +103,7 @@ describe('buildPostCompactAttachments', () => {
 });
 
 describe('FEATURE_185 (v0.7.42): hits/matched-paths rendering', () => {
-  it('renders parsed hits inline after the search head', () => {
+  it('renders parsed hits inline after the search head, with preview text', () => {
     const ledger = [
       createLedgerEntry('search_scope', 'authenticate', {
         sourceTool: 'grep',
@@ -125,6 +125,29 @@ describe('FEATURE_185 (v0.7.42): hits/matched-paths rendering', () => {
     expect(content).toContain('src/auth.ts:42');
     expect(content).toContain('src/auth.ts:78');
     expect(content).toContain('src/login.ts:13');
+    // F185 pilot revision: preview text must accompany path:line so the
+    // model can disambiguate def vs use without re-grepping.
+    expect(content).toContain('function authenticate(user) {');
+    expect(content).toContain('await authenticate(req.user)');
+    expect(content).toContain('import { authenticate }');
+  });
+
+  it('omits preview when hit lacks preview string (backward-compat)', () => {
+    const ledger = [
+      createLedgerEntry('search_scope', 'foo', {
+        sourceTool: 'grep',
+        metadata: {
+          hits: [
+            { path: 'src/a.ts', line: 1 }, // no preview field
+          ],
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('src/a.ts:1');
+    // Doesn't emit empty-quoted preview.
+    expect(content).not.toContain('src/a.ts:1 ""');
   });
 
   it('renders matchCount when no individual hits captured (count-mode result)', () => {

@@ -69,6 +69,13 @@ const LEDGER_HITS_PREVIEW_LIMIT = 8;
 const LEDGER_GLOB_PATHS_PREVIEW_LIMIT = 6;
 
 /**
+ * FEATURE_185 (v0.7.42): per-hit preview character cap. Parser stores
+ * up to HIT_PREVIEW_MAX_CHARS=80 in metadata; render-time tightens
+ * further so the rendered line stays scannable.
+ */
+const LEDGER_HIT_PREVIEW_DISPLAY_LIMIT = 60;
+
+/**
  * FEATURE_185 (v0.7.42): per-bash-entry tail display cap. Source extractor
  * already caps at BASH_TAIL_MAX_CHARS = 240; this further trims for render
  * so a long failure tail can't dominate the post-compact line. Newlines
@@ -241,13 +248,20 @@ function renderLedgerSummary(
       // re-running the search. Cap shown hits to keep ledger lines bounded.
       const hits = e.metadata?.hits;
       if (Array.isArray(hits) && hits.length > 0) {
+        // F185 pilot 1 (2026-05-20) on ds/v4flash showed `path:line`-only
+        // rendering caused the model to grep again — it had no way to
+        // disambiguate def vs use without the matched-line preview. The
+        // parser already stores 80-char preview text per hit; render it
+        // alongside path:line so the model can pick the right one.
         const previews = hits.slice(0, LEDGER_HITS_PREVIEW_LIMIT).map((h) => {
-          if (h && typeof h === 'object' && 'path' in h && 'line' in h) {
-            const path = String((h as { path: unknown }).path);
-            const line = (h as { line: unknown }).line;
-            return typeof line === 'number' && line > 0 ? `${path}:${line}` : path;
-          }
-          return '';
+          if (!h || typeof h !== 'object' || !('path' in h) || !('line' in h)) return '';
+          const path = String((h as { path: unknown }).path);
+          const line = (h as { line: unknown }).line;
+          const previewText = 'preview' in h && typeof (h as { preview: unknown }).preview === 'string'
+            ? truncateForRender((h as { preview: string }).preview, LEDGER_HIT_PREVIEW_DISPLAY_LIMIT)
+            : '';
+          const head = typeof line === 'number' && line > 0 ? `${path}:${line}` : path;
+          return previewText ? `${head} "${previewText}"` : head;
         }).filter(Boolean);
         const overflow = hits.length > LEDGER_HITS_PREVIEW_LIMIT
           ? ` (+${hits.length - LEDGER_HITS_PREVIEW_LIMIT} more)`
