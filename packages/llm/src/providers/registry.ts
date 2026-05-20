@@ -170,9 +170,9 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
     // Volcengine Ark Coding Plan subscription endpoint (Anthropic-compat).
     // Multi-model gateway routing by the request `model` field — unlike
     // kimi-for-coding the gateway honors per-request model selection. Bench
-    // (2026-04) confirmed all 9 listed models route correctly with the
-    // standard `x-api-key` header (no Bearer needed despite the official
-    // Claude Code config recommending `ANTHROPIC_AUTH_TOKEN`).
+    // (2026-04) confirmed model routing with the standard `x-api-key` header
+    // (no Bearer needed despite the official Claude Code config recommending
+    // `ANTHROPIC_AUTH_TOKEN`). DeepSeek V4 added 2026-05.
     apiKeyEnv: 'ARK_API_KEY',
     model: 'glm-5.1',
     models: [
@@ -181,6 +181,8 @@ export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = 
       'kimi-k2.5',
       'minimax-latest',
       'deepseek-v3.2',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
       'doubao-seed-2.0-code',
       'doubao-seed-2.0-pro',
       'doubao-seed-2.0-lite',
@@ -400,8 +402,11 @@ class ArkCodingProvider extends KodaXAnthropicCompatProvider {
       // current MiniMax GA coding model (M2.7 as of 2026-04). Pinned to
       // 204_800 to match the `minimax-coding` provider's M2.x family.
       { id: 'minimax-latest', displayName: 'MiniMax Latest', contextWindow: 204_800 },
-      // V3 series 128K window; V4 (1M) is not yet exposed via Ark.
+      // V3 series 128K window; V4 series ships 1M (matches direct DeepSeek
+      // provider). Ark gateway exposed V4 via Coding Plan as of 2026-05.
       { id: 'deepseek-v3.2', displayName: 'DeepSeek V3.2', contextWindow: 128_000 },
+      { id: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', contextWindow: 1_000_000 },
+      { id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', contextWindow: 1_000_000 },
       { id: 'doubao-seed-2.0-code', displayName: 'Doubao Seed 2.0 Code', contextWindow: 256_000 },
       { id: 'doubao-seed-2.0-pro', displayName: 'Doubao Seed 2.0 Pro', contextWindow: 256_000 },
       { id: 'doubao-seed-2.0-lite', displayName: 'Doubao Seed 2.0 Lite', contextWindow: 256_000 },

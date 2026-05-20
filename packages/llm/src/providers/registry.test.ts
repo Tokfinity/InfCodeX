@@ -52,7 +52,8 @@ describe('provider registry', () => {
     const ark = getProvider('ark-coding');
     expect(ark.name).toBe('ark-coding');
 
-    // Default + alts together must cover all 9 models the gateway routes to.
+    // Default + alts together must cover all 11 models the gateway routes
+    // to (V4 Pro / V4 Flash added 2026-05).
     const models = ark.getAvailableModels();
     expect(models).toEqual([
       'glm-5.1',
@@ -61,20 +62,24 @@ describe('provider registry', () => {
       'kimi-k2.5',
       'minimax-latest',
       'deepseek-v3.2',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
       'doubao-seed-2.0-code',
       'doubao-seed-2.0-pro',
       'doubao-seed-2.0-lite',
     ]);
 
     // Per-model context window pins (user-confirmed against Volcengine
-    // console catalog, 2026-04). Default GLM family at 200K, Kimi/Doubao
-    // at 256K, MiniMax at 204_800, DeepSeek V3.2 at 128K.
+    // console catalog). Default GLM family at 200K, Kimi/Doubao at 256K,
+    // MiniMax at 204_800, DeepSeek V3.2 at 128K, DeepSeek V4 at 1M.
     expect(ark.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
     expect(ark.getEffectiveContextWindow('glm-4.7')).toBe(200_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('kimi-k2.5')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('minimax-latest')).toBe(204_800);
     expect(ark.getEffectiveContextWindow('deepseek-v3.2')).toBe(128_000);
+    expect(ark.getEffectiveContextWindow('deepseek-v4-pro')).toBe(1_000_000);
+    expect(ark.getEffectiveContextWindow('deepseek-v4-flash')).toBe(1_000_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-code')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-pro')).toBe(256_000);
     expect(ark.getEffectiveContextWindow('doubao-seed-2.0-lite')).toBe(256_000);

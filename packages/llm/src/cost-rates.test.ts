@@ -28,7 +28,7 @@ describe('cost-rates', () => {
       });
     });
 
-    it('should have ark-coding subscription placeholder rates for all 9 routed models', () => {
+    it('should have ark-coding subscription placeholder rates for all 11 routed models', () => {
       const ark = DEFAULT_COST_RATES['ark-coding'];
       expect(ark).toBeDefined();
       const expectedModels = [
@@ -38,6 +38,8 @@ describe('cost-rates', () => {
         'kimi-k2.5',
         'minimax-latest',
         'deepseek-v3.2',
+        'deepseek-v4-pro',
+        'deepseek-v4-flash',
         'doubao-seed-2.0-code',
         'doubao-seed-2.0-pro',
         'doubao-seed-2.0-lite',
