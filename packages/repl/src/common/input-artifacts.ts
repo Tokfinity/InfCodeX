@@ -29,8 +29,20 @@ function resolveImageMediaType(filePath: string): string | undefined {
 
 const IMAGE_UNAVAILABLE_PLACEHOLDER = '[Image unavailable]';
 
-function buildImageAnchor(index: number): string {
-  return `[Image #${index}]`;
+// claudecode parity (2026-05-20): no anchor / no [Image #N] reference is
+// emitted into the user-message text. Models see pure user text + image
+// blocks appended in order. The `[Image #N]` anchor approach read as a
+// footnote-style external reference and primed the model toward "I should
+// fetch this via a tool" instead of "I see this inline" — see
+// c:/Works/claudecode/src/utils/processUserInput/processTextPrompt.ts:67-86.
+// For multi-image disambiguation the model uses block order in the message,
+// not text labels, exactly like claudecode does.
+//
+// Missing files still get `[Image unavailable]` because that surfaces the
+// real problem (user typed an `@path` that didn't resolve) — silent drop
+// would be worse.
+function buildImageAnchor(_index: number): string {
+  return '';
 }
 
 export function preparePromptInputArtifacts(

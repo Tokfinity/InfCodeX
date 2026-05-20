@@ -44,7 +44,12 @@ describe('preparePromptInputArtifacts', () => {
     expect(prepared.messageContent).toEqual([
       {
         type: 'text',
-        text: 'Please review [Image #1] and explain the issue.',
+        // claudecode parity (2026-05-20): no `[Image #N]` anchor is emitted
+        // into the user-message text. Models see pure user text + image
+        // blocks appended in order. The double space at the `@path` site
+        // is acceptable — models tokenize whitespace and treat it as a
+        // single delimiter.
+        text: 'Please review  and explain the issue.',
       },
       {
         type: 'image',
@@ -54,7 +59,7 @@ describe('preparePromptInputArtifacts', () => {
     ]);
   });
 
-  it('reuses stable image anchors for duplicate image refs', async () => {
+  it('handles duplicate image refs by emitting a single artifact (no anchors)', async () => {
     const cwd = await createTempDir('kodax-input-artifacts-');
     const imagePath = path.join(cwd, 'statusbar.png');
     await writeFile(imagePath, 'fake-image');
@@ -69,7 +74,7 @@ describe('preparePromptInputArtifacts', () => {
     expect(prepared.messageContent).toEqual([
       {
         type: 'text',
-        text: 'Compare [Image #1] with [Image #1] and summarize the difference.',
+        text: 'Compare  with  and summarize the difference.',
       },
       {
         type: 'image',
