@@ -1,0 +1,296 @@
+import { describe, it, expect } from 'vitest';
+import type {
+  KodaXMessage,
+  KodaXProviderConfig,
+  KodaXProviderStreamOptions,
+  KodaXStreamResult,
+  KodaXToolDefinition,
+  KodaXToolUseBlock,
+} from '@kodax-ai/llm';
+import { KodaXBaseProvider } from '@kodax-ai/llm';
+import { createStallDetector } from './stall-detector.js';
+import { createStallOrchestrator } from './stall-orchestrator.js';
+import {
+  REPORT_TOOL,
+  SIDECAR_SYSTEM_PROMPT,
+} from './stall-sidecar-prompts.js';
+
+const FAKE_REPORT_TOOL: KodaXToolDefinition = REPORT_TOOL;
+
+class CannedSidecarProvider extends KodaXBaseProvider {
+  readonly name = 'canned-sidecar';
+  readonly supportsThinking = false;
+  protected readonly config: KodaXProviderConfig = {
+    apiKeyEnv: 'CANNED_SIDECAR',
+    model: 'canned',
+    supportsThinking: false,
+    contextWindow: 100000,
+  };
+
+  public captured: { messages: KodaXMessage[]; system: string }[] = [];
+
+  constructor(
+    private readonly verdict: { isStuck: boolean; nudge?: string; suggestedTool?: string },
+  ) {
+    super();
+  }
+
+  async stream(
+    messages: KodaXMessage[],
+    _tools: KodaXToolDefinition[],
+    system: string,
+    _thinking?: boolean,
+    _opts?: KodaXProviderStreamOptions,
+  ): Promise<KodaXStreamResult> {
+    this.captured.push({ messages, system });
+    const block: KodaXToolUseBlock = {
+      type: 'tool_use',
+      id: 'tu_v',
+      name: 'report_stall_judgment',
+      input: {
+        isStuck: this.verdict.isStuck,
+        reason: 'canned',
+        suggestedTool: this.verdict.suggestedTool ?? '',
+        nudge: this.verdict.nudge ?? '',
+      },
+    };
+    return {
+      textBlocks: [],
+      toolBlocks: [block],
+      thinkingBlocks: [],
+    };
+  }
+}
+
+async function flushMicrotasks(): Promise<void> {
+  // The orchestrator stores the sidecar promise in pendingPromises;
+  // tests can await all of them via `Promise.all(debug.pendingSidecarPromises())`.
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe('FEATURE_178 (v0.7.42): createStallOrchestrator', () => {
+  describe('no-stall path — sidecar never invoked', () => {
+    it('does not fire sidecar on the first two tool calls (no stall signal)', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: true, nudge: 'n' });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      const fired1 = orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      const fired2 = orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      expect(fired1).toBe(false);
+      expect(fired2).toBe(false);
+      // Sidecar wasn't invoked — captured is empty.
+      expect(provider.captured).toHaveLength(0);
+    });
+  });
+
+  describe('stall path — sidecar invoked, verdict consumed', () => {
+    it('fires sidecar on 3rd identical call; isStuck=true → nudge queued', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({
+        isStuck: true,
+        nudge: 'Call task_stop and report.',
+      });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      const fired3 = orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } });
+      expect(fired3).toBe(true);
+
+      // Drain the fire-and-forget sidecar promise.
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+
+      expect(provider.captured).toHaveLength(1);
+      const userMsg = provider.captured[0].messages[0];
+      expect(userMsg.role).toBe('user');
+      expect(typeof userMsg.content).toBe('string');
+      // Envelope is the prefix of the user message.
+      expect(userMsg.content as string).toContain('[Stall detector signal]');
+      // Transcript renders the tool_use turns.
+      expect(userMsg.content as string).toContain('=== MAIN AGENT TRANSCRIPT');
+
+      // Nudge is queued for consumption.
+      expect(orch.debug.hasPendingNudge()).toBe(true);
+      const consumed = orch.consumePendingNudge();
+      expect(consumed).toBe('Call task_stop and report.');
+      // Consuming clears the ref.
+      expect(orch.debug.hasPendingNudge()).toBe(false);
+      expect(orch.consumePendingNudge()).toBeUndefined();
+    });
+
+    it('fires sidecar but isStuck=false → no nudge queued', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: false });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } });
+
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+
+      expect(provider.captured).toHaveLength(1);
+      expect(orch.debug.hasPendingNudge()).toBe(false);
+      expect(orch.consumePendingNudge()).toBeUndefined();
+    });
+  });
+
+  describe('transcript buffer', () => {
+    it('records tool_use AND tool_result into the transcript', () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: false });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      expect(orch.debug.transcriptSize()).toBe(0);
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      expect(orch.debug.transcriptSize()).toBe(1);
+      orch.recordToolResult({ id: 't1' }, 'file contents here');
+      expect(orch.debug.transcriptSize()).toBe(2);
+    });
+
+    it('truncates the transcript at the window size (16)', () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: false });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      // 20 turns = 40 messages — overflow the 16-msg window.
+      for (let i = 0; i < 20; i++) {
+        orch.recordToolUse({ name: 't', id: `t${i}`, input: { i } });
+        orch.recordToolResult({ id: `t${i}` }, `result ${i}`);
+      }
+      expect(orch.debug.transcriptSize()).toBe(16);
+    });
+
+    it('includes the transcript in the sidecar prompt when stall fires', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: true, nudge: 'x' });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolResult({ id: 't1' }, 'first read content');
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      orch.recordToolResult({ id: 't2' }, 'second read content');
+      orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } });
+
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+
+      expect(provider.captured).toHaveLength(1);
+      const userMsg = provider.captured[0].messages[0].content as string;
+      expect(userMsg).toContain('tool_use: read');
+      expect(userMsg).toContain('first read content');
+      expect(userMsg).toContain('second read content');
+    });
+  });
+
+  describe('verdict callback', () => {
+    it('fires onVerdict with the signal + verdict on every stall sidecar call', async () => {
+      const captured: { signal: unknown; verdict: unknown }[] = [];
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: true, nudge: 'n' });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+        onVerdict: (signal, verdict) => captured.push({ signal, verdict }),
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } });
+
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+
+      expect(captured).toHaveLength(1);
+      const entry = captured[0];
+      const sig = entry.signal as { kind: string; envelope?: string };
+      const ver = entry.verdict as { isStuck: boolean; trace: string };
+      expect(sig.kind).toBe('stall');
+      expect(sig.envelope).toContain('[Stall detector signal]');
+      expect(ver.isStuck).toBe(true);
+      expect(ver.trace).toBe('sidecar_ok');
+    });
+  });
+
+  describe('reset() — compaction post-hook companion', () => {
+    it('drops transcript + pending nudge', async () => {
+      const detector = createStallDetector({ disabled: false });
+      const provider = new CannedSidecarProvider({ isStuck: true, nudge: 'n' });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      orch.recordToolUse({ name: 'read', id: 't1', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't2', input: { path: 'a.ts' } });
+      orch.recordToolUse({ name: 'read', id: 't3', input: { path: 'a.ts' } });
+      await Promise.all(orch.debug.pendingSidecarPromises());
+      await flushMicrotasks();
+      expect(orch.debug.hasPendingNudge()).toBe(true);
+      expect(orch.debug.transcriptSize()).toBeGreaterThan(0);
+
+      orch.reset();
+      expect(orch.debug.hasPendingNudge()).toBe(false);
+      expect(orch.debug.transcriptSize()).toBe(0);
+    });
+  });
+
+  describe('killswitch — detector disabled means no sidecar fires', () => {
+    it('skips sidecar invocation when detector is disabled', async () => {
+      const detector = createStallDetector({ disabled: true });
+      const provider = new CannedSidecarProvider({ isStuck: true, nudge: 'n' });
+      const orch = createStallOrchestrator({
+        detector,
+        provider,
+        systemPrompt: SIDECAR_SYSTEM_PROMPT,
+        reportTool: FAKE_REPORT_TOOL,
+      });
+
+      for (let i = 0; i < 5; i++) {
+        orch.recordToolUse({ name: 'read', id: `t${i}`, input: { path: 'a.ts' } });
+      }
+      await flushMicrotasks();
+      // Detector is a no-op shim → never fires stall → sidecar never called.
+      expect(provider.captured).toHaveLength(0);
+      expect(orch.debug.hasPendingNudge()).toBe(false);
+    });
+  });
+});

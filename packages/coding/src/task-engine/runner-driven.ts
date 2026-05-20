@@ -133,6 +133,11 @@ import {
 import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
 import { createStallDetector } from '../multi-instance/stall-detector.js';
+import { createStallOrchestrator } from '../multi-instance/stall-orchestrator.js';
+import {
+  REPORT_TOOL as STALL_REPORT_TOOL,
+  SIDECAR_SYSTEM_PROMPT as STALL_SIDECAR_SYSTEM_PROMPT,
+} from '../multi-instance/stall-sidecar-prompts.js';
 // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
 import {
   EVALUATOR_VERDICT_RETRY_PROMPT,
@@ -631,19 +636,24 @@ async function runManagedTaskViaRunnerInner(
   // below at line ~1284). Disabled at runtime by
   // KODAX_READ_DEDUP_KILLSWITCH=1 — the factory returns a no-op shim.
   const readFileStateCache = createReadFileStateCache();
-  // FEATURE_178 v0.7.42 — L1 stall detector (anti-loop, rule-based).
-  // Pairs with readFileStateCache: F177 suppresses re-read *content*,
-  // F178 catches the case where the model keeps emitting the same
-  // tool call despite the cache stub. Same lifetime (per-task), same
-  // compaction-reset wiring (clears state when summary discards the
-  // referenced tool_results). Killswitch: KODAX_STALL_DETECT=0.
-  //
-  // This commit wires the data plane only — observer records every
-  // tool_use, compaction post-hook resets state. The L2 sidecar
-  // invocation + nudge injection lands in the follow-up commit so
-  // any production behaviour change is isolated to that commit's
-  // diff and can be reverted independently.
+  // FEATURE_178 v0.7.42 — anti-loop stall detector + sidecar
+  // orchestrator. The detector (rule-based L1) records every tool
+  // invocation and fires when `(toolName, input)` repeats hit a
+  // threshold. The orchestrator wraps the detector with the L2
+  // sidecar invocation (validated SHIP-SIDECAR-ALL in eval `1909d5d2`)
+  // and a small transcript buffer; on a stall + isStuck=true verdict
+  // it queues a nudge string that the next `beforeTool` gate consumes
+  // as a synthesized tool_result. Same lifetime as readFileStateCache;
+  // compaction post-hook resets both. Killswitch:
+  // KODAX_STALL_DETECT=0 returns a no-op detector (the orchestrator
+  // never sees a stall signal, never fires the sidecar).
   const stallDetector = createStallDetector();
+  const stallOrchestrator = createStallOrchestrator({
+    detector: stallDetector,
+    provider: resolveProvider(options.provider ?? 'anthropic'),
+    systemPrompt: STALL_SIDECAR_SYSTEM_PROMPT,
+    reportTool: STALL_REPORT_TOOL,
+  });
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
   } = { current: undefined };
@@ -1316,15 +1326,17 @@ async function runManagedTaskViaRunnerInner(
     // may no longer be in context, so the stub would no longer be
     // actionable. Clearing forces the next Read to serve real content.
     //
-    // FEATURE_178 v0.7.42 — same logic for the stall detector. After
-    // compaction, the earlier tool_result content the model was
+    // FEATURE_178 v0.7.42 — same logic for the stall orchestrator.
+    // After compaction, the earlier tool_result content the model was
     // implicitly referencing is gone. A "repeat" call against the
     // same path after compaction is now legitimate (re-priming the
-    // model with content it can no longer see). Reset the detector
-    // so we don't fire on legitimate post-compact re-reads.
+    // model with content it can no longer see). Reset the detector,
+    // transcript buffer, AND any pending nudge so we don't fire on
+    // legitimate post-compact re-reads or inject a now-stale nudge.
     onPostCompact: () => {
       readFileStateCache.clear();
       stallDetector.reset();
+      stallOrchestrator.reset();
     },
   });
 
@@ -1395,10 +1407,25 @@ async function runManagedTaskViaRunnerInner(
     // Tri-state contract preserved verbatim: undefined → allow;
     // CANCELLED_TOOL_RESULT_MESSAGE → cancel; other string → block
     // with that string as the synthesized tool_result content.
-    beforeTool: options.events
-      ? async (call: { name: string; id: string; input: Record<string, unknown> }) => {
+    beforeTool: async (call: { name: string; id: string; input: Record<string, unknown> }) => {
+      // FEATURE_178 v0.7.42 — consume any pending nudge first. If the
+      // previous tool's onToolCall fired a stall signal and the L2
+      // sidecar resolved with isStuck=true, the nudge text is sitting
+      // in the orchestrator's pending ref. Returning it as a string
+      // here blocks the current tool with the nudge as its synthesized
+      // tool_result — the model sees the nudge instead of the actual
+      // tool output and rethinks. This is the only path that converts
+      // an L1+L2 verdict into model-visible behaviour.
+      const pendingNudge = stallOrchestrator.consumePendingNudge();
+      if (pendingNudge !== undefined) {
+        return pendingNudge;
+      }
+      // Existing permission / policy override path. Only runs when
+      // `options.events` is set (interactive callers); SDK / tests
+      // bypass entirely.
+      if (options.events) {
         const override = await getToolExecutionOverride(
-          options.events!,
+          options.events,
           call.name,
           call.input,
           call.id,
@@ -1409,16 +1436,15 @@ async function runManagedTaskViaRunnerInner(
         if (override === CANCELLED_TOOL_RESULT_MESSAGE) return false;
         return override;
       }
-      : undefined,
+      return true;
+    },
     onToolCall: (call: { name: string; id: string; input: Record<string, unknown> }) => {
-      // FEATURE_178 v0.7.42 — record every tool invocation into the L1
-      // stall detector so it can spot (toolName, input) repetition
-      // across the task. We record on the *call* side (not result side)
-      // so the signal is available even for cancelled / blocked tools.
-      // `recordToolUse` is sync + side-effect-only; the signal it
-      // returns is acted on by the L2 sidecar wiring in the follow-up
-      // commit (this commit ships only the data plane).
-      stallDetector.recordToolUse(call.name, call.input);
+      // FEATURE_178 v0.7.42 — record into the orchestrator (which
+      // records into the L1 detector AND the transcript buffer, and
+      // fires the L2 sidecar non-awaited when stall is detected). The
+      // sidecar verdict surfaces on the NEXT beforeTool call via
+      // consumePendingNudge(); this call returns immediately.
+      stallOrchestrator.recordToolUse(call);
       // CAP-035: filter internal control-plane tools (emit_managed_protocol,
       // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
       // AMA emitted every tool call regardless of visibility — REPL
@@ -1436,6 +1462,15 @@ async function runManagedTaskViaRunnerInner(
       call: { name: string; id: string },
       result: { content: string; metadata?: unknown },
     ) => {
+      // FEATURE_178 v0.7.42 — feed the tool_result content into the
+      // orchestrator's transcript buffer so subsequent sidecar prompts
+      // include the actual return values, not just bare tool_use
+      // blocks. We string-coerce to keep the buffer type-clean — the
+      // sidecar only reads text.
+      stallOrchestrator.recordToolResult(
+        { id: call.id },
+        typeof result.content === 'string' ? result.content : '[non-text content]',
+      );
       // F4 parity — track whether any tool result was truncated by the
       // tool-result-truncation guardrail. `result.metadata.truncated`
       // is set by the guardrail's rewrite step. Observed values feed
