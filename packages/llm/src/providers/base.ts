@@ -119,9 +119,45 @@ export abstract class KodaXBaseProvider {
    * Returns undefined when no cap is configured. Consumed by the
    * resilience layer to abort a doomed stream before the server-side
    * kill window fires; routed through `non_streaming_fallback`.
+   *
+   * Cascade (highest to lowest):
+   *   1. Active model descriptor's `streamMaxDurationMs`
+   *   2. Provider config default
+   *   3. undefined (watchdog disabled)
    */
-  public getStreamMaxDurationMs(): number | undefined {
+  public getStreamMaxDurationMs(model?: string): number | undefined {
+    const descriptorValue = this.getModelDescriptor(model)?.streamMaxDurationMs;
+    if (descriptorValue !== undefined) {
+      return descriptorValue;
+    }
     return this.config.streamMaxDurationMs;
+  }
+
+  /**
+   * Resolves whether OpenAI-compat `reasoning_content` should echo back
+   * on replayed assistant messages for the given model. Same cascade as
+   * `getStreamMaxDurationMs`. Defaults to false when neither layer sets it.
+   */
+  public getEffectiveReplayReasoningContent(model?: string): boolean {
+    const descriptorValue = this.getModelDescriptor(model)?.replayReasoningContent;
+    if (descriptorValue !== undefined) {
+      return descriptorValue;
+    }
+    return this.config.replayReasoningContent ?? false;
+  }
+
+  /**
+   * Resolves whether Anthropic-style thinking signatures must verify
+   * strictly (Anthropic proper only). Same cascade as
+   * `getStreamMaxDurationMs`. Defaults to false (lenient) when neither
+   * layer sets it — matches third-party Anthropic-compat behavior.
+   */
+  public getEffectiveStrictThinkingSignature(model?: string): boolean {
+    const descriptorValue = this.getModelDescriptor(model)?.strictThinkingSignature;
+    if (descriptorValue !== undefined) {
+      return descriptorValue;
+    }
+    return this.config.strictThinkingSignature ?? false;
   }
 
   abstract stream(

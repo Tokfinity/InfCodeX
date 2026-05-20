@@ -62,6 +62,13 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     contextWindow: custom.contextWindow,
     maxOutputTokens: custom.maxOutputTokens,
     thinkingBudgetCap: custom.thinkingBudgetCap,
+    // Provider-level defaults for the three two-layer cascade fields.
+    // false / undefined match the legacy implicit defaults so existing
+    // custom providers see zero behavior change. Per-model entries in
+    // `models[]` can override individually via KodaXModelDescriptor.
+    replayReasoningContent: custom.replayReasoningContent ?? false,
+    strictThinkingSignature: custom.strictThinkingSignature ?? false,
+    streamMaxDurationMs: custom.streamMaxDurationMs,
   };
 }
 

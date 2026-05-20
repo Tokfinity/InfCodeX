@@ -173,6 +173,144 @@ describe('KodaXBaseProvider', () => {
     expect(provider.getContextWindow()).toBe(200_000);
   });
 
+  it('cascades streamMaxDurationMs from per-model descriptor → provider → undefined', () => {
+    class ScopedProvider extends KodaXBaseProvider {
+      readonly name = 'scoped';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'SCOPED_KEY',
+        model: 'default-model',
+        models: [
+          { id: 'override-model', streamMaxDurationMs: 123_456 },
+          { id: 'inherit-model' },
+        ],
+        supportsThinking: false,
+        streamMaxDurationMs: 300_000,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    const provider = new ScopedProvider();
+    expect(provider.getStreamMaxDurationMs('override-model')).toBe(123_456);
+    expect(provider.getStreamMaxDurationMs('inherit-model')).toBe(300_000);
+    expect(provider.getStreamMaxDurationMs('default-model')).toBe(300_000);
+    expect(provider.getStreamMaxDurationMs()).toBe(300_000);
+
+    class NoProviderCap extends KodaXBaseProvider {
+      readonly name = 'nocap';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'NOCAP_KEY',
+        model: 'default-model',
+        models: [{ id: 'specific', streamMaxDurationMs: 200_000 }],
+        supportsThinking: false,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    const nocap = new NoProviderCap();
+    expect(nocap.getStreamMaxDurationMs('specific')).toBe(200_000);
+    expect(nocap.getStreamMaxDurationMs('default-model')).toBeUndefined();
+    expect(nocap.getStreamMaxDurationMs()).toBeUndefined();
+  });
+
+  it('cascades replayReasoningContent from per-model → provider → false', () => {
+    class ScopedProvider extends KodaXBaseProvider {
+      readonly name = 'scoped';
+      readonly supportsThinking = true;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'SCOPED_KEY',
+        model: 'default-model',
+        models: [
+          { id: 'force-off', replayReasoningContent: false },
+          { id: 'force-on', replayReasoningContent: true },
+          { id: 'inherit' },
+        ],
+        supportsThinking: true,
+        replayReasoningContent: true,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    const provider = new ScopedProvider();
+    expect(provider.getEffectiveReplayReasoningContent('force-on')).toBe(true);
+    // Per-model false MUST win even though provider says true (the real-world
+    // case: a gateway routing both DeepSeek V4 and OpenAI proper).
+    expect(provider.getEffectiveReplayReasoningContent('force-off')).toBe(false);
+    expect(provider.getEffectiveReplayReasoningContent('inherit')).toBe(true);
+    expect(provider.getEffectiveReplayReasoningContent('default-model')).toBe(true);
+    expect(provider.getEffectiveReplayReasoningContent()).toBe(true);
+
+    class NoProviderDefault extends KodaXBaseProvider {
+      readonly name = 'no-default';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'NO_DEFAULT_KEY',
+        model: 'default-model',
+        supportsThinking: false,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    expect(new NoProviderDefault().getEffectiveReplayReasoningContent()).toBe(false);
+  });
+
+  it('cascades strictThinkingSignature from per-model → provider → false', () => {
+    class ScopedProvider extends KodaXBaseProvider {
+      readonly name = 'scoped';
+      readonly supportsThinking = true;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'SCOPED_KEY',
+        model: 'default-model',
+        models: [
+          { id: 'force-lenient', strictThinkingSignature: false },
+          { id: 'force-strict', strictThinkingSignature: true },
+          { id: 'inherit' },
+        ],
+        supportsThinking: true,
+        strictThinkingSignature: true,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    const provider = new ScopedProvider();
+    expect(provider.getEffectiveStrictThinkingSignature('force-strict')).toBe(true);
+    expect(provider.getEffectiveStrictThinkingSignature('force-lenient')).toBe(false);
+    expect(provider.getEffectiveStrictThinkingSignature('inherit')).toBe(true);
+    expect(provider.getEffectiveStrictThinkingSignature('default-model')).toBe(true);
+
+    class NoProviderDefault extends KodaXBaseProvider {
+      readonly name = 'no-default';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'NO_DEFAULT_KEY',
+        model: 'default-model',
+        supportsThinking: false,
+      };
+      async stream(
+        _m: KodaXMessage[], _t: KodaXToolDefinition[], _s: string,
+        _r?: boolean | KodaXReasoningRequest,
+        _o?: KodaXProviderStreamOptions, _sig?: AbortSignal,
+      ): Promise<KodaXStreamResult> { throw new Error('unused'); }
+    }
+    expect(new NoProviderDefault().getEffectiveStrictThinkingSignature()).toBe(false);
+  });
+
   it('FEATURE_130: fires structured onRetryAfter with parsed source and provider name', async () => {
     const provider = new TestProvider();
     const onRetryAfter = vi.fn();

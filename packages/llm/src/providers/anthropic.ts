@@ -185,7 +185,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
       const maxOutputTokens = this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = await this.convertMessages(messages);
+      const convertedMessages = await this.convertMessages(messages, model);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
@@ -518,7 +518,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
       const maxOutputTokens = this.getEffectiveMaxOutputTokens(model);
-      const convertedMessages = await this.convertMessages(messages);
+      const convertedMessages = await this.convertMessages(messages, model);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
         : 'none';
@@ -668,10 +668,16 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       .join('\n\n');
   }
 
-  private async convertMessages(messages: KodaXMessage[]): Promise<Anthropic.Messages.MessageParam[]> {
+  private async convertMessages(
+    messages: KodaXMessage[],
+    model?: string,
+  ): Promise<Anthropic.Messages.MessageParam[]> {
     // Filter out 'system' role messages - Anthropic API only supports 'user' and 'assistant' in messages array
     // System messages are handled via the separate 'system' parameter
     const converted: Anthropic.Messages.MessageParam[] = [];
+    // Resolve strict-signature once per call so all three downstream
+    // branches share the same answer for the active model.
+    const strictSignature = this.getEffectiveStrictThinkingSignature(model);
 
     for (const m of messages.filter((message) => message.role !== 'system')) {
       const role: 'user' | 'assistant' = m.role === 'user' ? 'user' : 'assistant';
@@ -703,7 +709,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       const crossProviderReasoning: string[] = [];
       for (const b of m.content) {
         if (b.type === 'thinking') {
-          const trustedSignature = !this.config.strictThinkingSignature
+          const trustedSignature = !strictSignature
             || (typeof b.signature === 'string' && b.signature.length > 0);
           if (trustedSignature) {
             content.push({ type: 'thinking', thinking: b.thinking, signature: b.signature ?? '' } as any);
@@ -714,7 +720,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
             crossProviderReasoning.push(b.thinking);
           }
         } else if (b.type === 'redacted_thinking') {
-          if (!this.config.strictThinkingSignature) {
+          if (!strictSignature) {
             // Lenient: third-party server doesn't decrypt the data
             // field, so passing it through is harmless.
             content.push({ type: 'redacted_thinking', data: b.data } as any);
@@ -823,7 +829,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       if (
         role === 'assistant' &&
         this.config.supportsThinking &&
-        !this.config.strictThinkingSignature
+        !strictSignature
       ) {
         const hasToolUse = content.some(b => (b as any).type === 'tool_use');
         const hasThinking = content.some(b =>

@@ -374,6 +374,24 @@ export interface KodaXModelDescriptor {
   maxOutputTokens?: number;
   thinkingBudgetCap?: number;
   reasoningCapability?: KodaXReasoningCapability;
+  /**
+   * Per-model override for `replayReasoningContent`. Falls through to the
+   * provider-level flag when undefined. Lets a single gateway endpoint
+   * route models that need the flag (DeepSeek V4) alongside models that
+   * would 400 if the flag were on (OpenAI proper).
+   */
+  replayReasoningContent?: boolean;
+  /**
+   * Per-model override for `strictThinkingSignature`. Falls through to
+   * the provider-level flag when undefined.
+   */
+  strictThinkingSignature?: boolean;
+  /**
+   * Per-model override for `streamMaxDurationMs`. Falls through to the
+   * provider-level cap when undefined; undefined at both levels disables
+   * the watchdog.
+   */
+  streamMaxDurationMs?: number;
 }
 
 export type KodaXProtocolFamily = 'anthropic' | 'openai';
@@ -404,6 +422,28 @@ export interface KodaXCustomProviderConfig {
   contextWindow?: number;
   maxOutputTokens?: number;
   thinkingBudgetCap?: number;
+  /**
+   * Provider-level default for OpenAI-compat `reasoning_content` echo.
+   * Required by DeepSeek V4 thinking mode (replay 400s without it).
+   * Defaults to false — must stay false for OpenAI proper or any gateway
+   * that rejects unknown fields. Per-model values in `models[]` can
+   * override on a model-by-model basis.
+   */
+  replayReasoningContent?: boolean;
+  /**
+   * Provider-level default for strict Anthropic thinking-signature
+   * verification. Only Anthropic proper cryptographically verifies
+   * signatures — third-party Anthropic-compat gateways must keep this
+   * false (default). Per-model values in `models[]` can override.
+   */
+  strictThinkingSignature?: boolean;
+  /**
+   * Provider-level default streaming wall-clock cap (ms). Set just below
+   * a known server-side kill window (zhipu-coding 308s → 300_000). Leave
+   * unset to disable the watchdog. Per-model values in `models[]` can
+   * override.
+   */
+  streamMaxDurationMs?: number;
 }
 
 export interface KodaXProviderConfig {

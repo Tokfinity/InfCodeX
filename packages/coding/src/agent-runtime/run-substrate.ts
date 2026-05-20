@@ -728,7 +728,8 @@ export async function runSubstrate(
         const streamTimers = buildStreamTimers({
           hardTimeoutMs: API_HARD_TIMEOUT_MS,
           idleTimeoutMs: API_IDLE_TIMEOUT_MS,
-          streamMaxDurationMs: streamProvider.getStreamMaxDurationMs?.() ?? 0,
+          streamMaxDurationMs:
+            streamProvider.getStreamMaxDurationMs?.(turnState.currentModelOverride) ?? 0,
           callerAbortSignal: options.abortSignal,
         });
         const retryTimeoutController = streamTimers.retryTimeoutController;

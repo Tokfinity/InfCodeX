@@ -391,9 +391,12 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const cleanMessages = this.stripCacheBoundariesFromMessages(messages);
       const { system: mergedSystem, rest: nonSystemMessages } =
         this.normalizeSystemForWire(system, cleanMessages);
+      // Resolve the active model up front so the message serializer can
+      // pick per-model replayReasoningContent overrides (KodaXModelDescriptor).
+      const model = streamOptions?.modelOverride ?? this.config.model;
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
-        ...await this.convertMessages(nonSystemMessages),
+        ...await this.convertMessages(nonSystemMessages, model),
       ];
       const openaiTools = tools.map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }));
 
@@ -414,7 +417,6 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
       // 传递 signal 给 SDK，确保底层 HTTP 请求能被取消
       const normalizedReasoning = this.normalizeReasoning(reasoning);
-      const model = streamOptions?.modelOverride ?? this.config.model;
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningCapability(model)
@@ -634,9 +636,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       const cleanMessages = this.stripCacheBoundariesFromMessages(messages);
       const { system: mergedSystem, rest: nonSystemMessages } =
         this.normalizeSystemForWire(system, cleanMessages);
+      const model = streamOptions?.modelOverride ?? this.config.model;
       const fullMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
         { role: 'system', content: mergedSystem },
-        ...await this.convertMessages(nonSystemMessages),
+        ...await this.convertMessages(nonSystemMessages, model),
       ];
       const openaiTools = tools.map((tool) => ({
         type: 'function' as const,
@@ -648,7 +651,6 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       }));
 
       const normalizedReasoning = this.normalizeReasoning(reasoning);
-      const model = streamOptions?.modelOverride ?? this.config.model;
       const initialCapability =
         isReasoningEnabled(normalizedReasoning)
           ? this.getReasoningCapability(model)
@@ -777,6 +779,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   private serializeAssistantMessage(
     contentBlocks: KodaXContentBlock[],
+    model?: string,
   ): OpenAI.Chat.ChatCompletionMessageParam[] {
     const text = contentBlocks
       .filter((block): block is KodaXTextBlock => block.type === 'text')
@@ -853,7 +856,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
     // empty string when no thinking text is available, so any provider
     // opting into the flag (Qwen/Zhipu/Kimi/MiniMax all share the same
     // field convention) gets the same "field-present" invariant.
-    if (this.config.replayReasoningContent) {
+    if (this.getEffectiveReplayReasoningContent(model)) {
       message.reasoning_content = thinking || '';
     }
 
@@ -959,7 +962,10 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       : [];
   }
 
-  private async convertMessages(messages: KodaXMessage[]): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
+  private async convertMessages(
+    messages: KodaXMessage[],
+    model?: string,
+  ): Promise<OpenAI.Chat.ChatCompletionMessageParam[]> {
     const converted: OpenAI.Chat.ChatCompletionMessageParam[] = [];
 
     for (const message of messages) {
@@ -977,7 +983,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       }
 
       if (message.role === 'assistant') {
-        converted.push(...this.serializeAssistantMessage(message.content));
+        converted.push(...this.serializeAssistantMessage(message.content, model));
         continue;
       }
 
