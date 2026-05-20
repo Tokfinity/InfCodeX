@@ -485,3 +485,71 @@ describe('FEATURE_072 regression guard: microcompact must never mutate in place'
     expect(output).toBe(input);
   });
 });
+
+describe('FEATURE_183 (v0.7.42): microcompact respects PROTECTED_TOOL_NAMES via DEFAULT_MICROCOMPACTION_CONFIG', () => {
+  // Sister coverage to the F183 prune tests in compaction.test.ts. F183
+  // syncs DEFAULT_MICROCOMPACTION_CONFIG.protectedTools to read from the
+  // canonical PROTECTED_TOOL_NAMES Set (was hardcoded `['ask_user_question']`
+  // pre-F183). These tests verify the sync actually flowed through —
+  // exercising microcompact's protectedTools branch end-to-end.
+
+  it('does NOT clear an old todo_create tool_result (F183 todo state protection)', () => {
+    // Place a todo_create call far past maxAge so without protection it
+    // WOULD be cleared. Assert content survives because the default
+    // config now includes 'todo_create'.
+    const messages: KodaXMessage[] = [
+      createToolUseMessage('todo_create', 'todo_t1', { content: 'Add edge-case test' }),
+      createToolResultMessage('todo_t1', '{"ok":true,"id":"todo_1"}'),
+      ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
+    ];
+
+    const result = microcompact(messages);
+    const toolResult = (result[1].content as { type: string; content: string }[])
+      .find((b) => b.type === 'tool_result');
+    expect(toolResult?.content).toBe('{"ok":true,"id":"todo_1"}');
+    expect(toolResult?.content.startsWith('[Cleared:')).toBe(false);
+  });
+
+  it('does NOT clear an old mcp_call tool_result (F183 MCP protection)', () => {
+    const messages: KodaXMessage[] = [
+      createToolUseMessage('mcp_call', 'mcp_t1', { tool: 'database.query' }),
+      createToolResultMessage('mcp_t1', '{"rows":[{"id":42,"name":"alice"}]}'),
+      ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
+    ];
+
+    const result = microcompact(messages);
+    const toolResult = (result[1].content as { type: string; content: string }[])
+      .find((b) => b.type === 'tool_result');
+    expect(toolResult?.content).toBe('{"rows":[{"id":42,"name":"alice"}]}');
+  });
+
+  it('does NOT clear an old changed_scope tool_result (F183 repo-intelligence protection)', () => {
+    const messages: KodaXMessage[] = [
+      createToolUseMessage('changed_scope', 'ri_t1', {}),
+      createToolResultMessage('ri_t1', 'capsule: 3 files changed across packages/coding/, ~80 lines'),
+      ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
+    ];
+
+    const result = microcompact(messages);
+    const toolResult = (result[1].content as { type: string; content: string }[])
+      .find((b) => b.type === 'tool_result');
+    expect(toolResult?.content).toBe('capsule: 3 files changed across packages/coding/, ~80 lines');
+  });
+
+  it('STILL clears an old grep result — F183 doesn\'t accidentally promote exploration tools', () => {
+    // No-regression check: grep is intentionally compactable. If F183
+    // mistakenly added it to PROTECTED, this assertion would fail.
+    const messages: KodaXMessage[] = [
+      createToolUseMessage('grep', 'g_t1', { pattern: 'auth', path: 'src/' }),
+      createToolResultMessage('g_t1', 'src/auth.ts:42\nsrc/user.ts:87\nsrc/db/login.ts:13'),
+      ...filler(DEFAULT_MICROCOMPACTION_CONFIG.maxAge + 1),
+    ];
+
+    const result = microcompact(messages);
+    const toolResult = (result[1].content as { type: string; content: string }[])
+      .find((b) => b.type === 'tool_result');
+    expect(toolResult?.content.startsWith('[Cleared:')).toBe(true);
+    // Preview should include the path:pattern format from buildToolContextMap.
+    expect(toolResult?.content).toContain('grep');
+  });
+});

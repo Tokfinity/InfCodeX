@@ -48,7 +48,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
     }
   });
 
-  it('all expected control-plane / delegation / user-interaction tools are protected', () => {
+  it('all expected control-plane / delegation / user-interaction / todo tools are protected', () => {
     // Spot-pin the rest of the PROTECTED set with the registry's tool
     // names so a registry rename is caught immediately. Lists kept literal
     // (not pulled from a constant) so this test fails loudly on rename.
@@ -60,6 +60,11 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'task_stop',
       'send_message',
       'emit_managed_protocol',
+      // Todo state — the model's self-maintained plan list. Results
+      // serialise the full items[] array; clearing them erases task memory.
+      'todo_create',
+      'todo_update',
+      'todo_list',
       'worktree_create',
       'worktree_remove',
       'undo',
@@ -88,6 +93,47 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
         PROTECTED_TOOL_NAMES.has(name),
         `'${name}' must remain compactable — do NOT add to PROTECTED_TOOL_NAMES`,
       ).toBe(false);
+    }
+  });
+
+  it('reverse-direction parity: every PROTECTED_TOOL_NAMES member references a real registry tool name', async () => {
+    // Pre-F183 review found a gap: the forward checks (registry → PROTECTED)
+    // catch newly added registry tools that weren't added to PROTECTED, but
+    // not the reverse — PROTECTED members could silently point to renamed
+    // or removed registry entries without breaking any test. Reverse check
+    // closes the gap.
+    //
+    // Strategy: assemble the full set of known registry tool names by
+    // unioning every "name source" coding exposes (registry constants
+    // for MCP / repo-intel, plus a literal list for individually
+    // registered tools). If a future tool gets added/renamed and is in
+    // PROTECTED_TOOL_NAMES but not here, this test fails — flagging
+    // the missing-source as a registry-introspection gap to fix.
+    //
+    // This is necessarily imperfect because session-lineage can't reach
+    // into coding's runtime registry (circular dep). The literal list is
+    // the source of truth for orphan detection until we hoist a shared
+    // constant table.
+    const knownRegistryNames = new Set<string>([
+      ...MCP_TOOL_NAMES,
+      ...REPO_INTELLIGENCE_WORKING_TOOL_NAMES,
+      // Individually registered + present in coding/src/tools/registry.ts
+      // (snapshot 2026-05-20).
+      'read', 'skill', 'write', 'edit', 'multi_edit', 'insert_after_anchor',
+      'bash', 'glob', 'grep',
+      'emit_managed_protocol', 'dispatch_child_task',
+      'send_message', 'task_stop',
+      'web_search', 'web_fetch',
+      'code_search', 'semantic_lookup',
+      'worktree_create', 'worktree_remove', 'undo',
+      'ask_user_question', 'exit_plan_mode',
+      'todo_update', 'todo_create', 'todo_list',
+    ]);
+    for (const name of PROTECTED_TOOL_NAMES) {
+      expect(
+        knownRegistryNames.has(name),
+        `PROTECTED_TOOL_NAMES contains '${name}' but no known registry source declares it — orphaned protection name?`,
+      ).toBe(true);
     }
   });
 });

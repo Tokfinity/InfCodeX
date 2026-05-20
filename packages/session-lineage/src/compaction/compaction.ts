@@ -42,11 +42,15 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  * here. The `protected-tools-registry-parity.test.ts` asserts both sides
  * stay in sync — any name drift breaks the test.
  *
- * **Categories** (size context: 1 baseline → 23):
+ * **Categories** (size context: 1 baseline → 26):
  *   - skill content (1)        — already protected pre-F183
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
  *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
  *   - control plane (1)        — emit_managed_protocol
+ *   - todo state (3)           — todo_create, todo_update, todo_list — the
+ *                                model's self-maintained plan; results
+ *                                serialise the entire `items[]` list and
+ *                                clearing them erases task memory mid-run
  *   - worktree / undo (3)      — worktree_create, worktree_remove, undo
  *   - MCP (5)                  — mcp_search/describe/call/read_resource/get_prompt
  *   - repo intelligence (8)    — repo_overview, changed_scope, changed_diff,
@@ -65,6 +69,14 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   'send_message',
   // Control plane
   'emit_managed_protocol',
+  // Todo state — the model's self-maintained plan list. todo_create /
+  // todo_update / todo_list results contain the full serialised item set
+  // (`{ok, items: [{id, content, status, activeForm?, note?, ...}, ...]}`).
+  // Clearing erases task memory mid-run — exactly the failure mode F183
+  // is here to prevent (claudecode parity: `TodoWriteTool` is protected).
+  'todo_create',
+  'todo_update',
+  'todo_list',
   // Worktree / undo (low-frequency but high-value control events)
   'worktree_create',
   'worktree_remove',

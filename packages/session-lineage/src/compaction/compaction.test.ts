@@ -660,7 +660,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 23 F183-canonical members exactly', () => {
+  it('contains the 26 F183-canonical members exactly', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -676,6 +676,10 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'send_message',
         // Control plane
         'emit_managed_protocol',
+        // Todo state (model-maintained plan list)
+        'todo_create',
+        'todo_update',
+        'todo_list',
         // Worktree / undo
         'worktree_create',
         'worktree_remove',
@@ -697,7 +701,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'impact_estimate',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(23);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(26);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {
@@ -725,13 +729,23 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   });
 
   it('prune integration: protected tools mixed in are NOT [Pruned:]-replaced while grep tools ARE', async () => {
-    // Reuse the same fixture shape as the legacy "prunes older tool results"
-    // test that is known to hit the structured-prune fast-path (14 tool
-    // pairs × 6500 tokens each → cumulative protectedToolTokens exceeds
-    // STRUCTURED_PRUNE_PROTECT_TOKENS=40K so older bash-grep tool results
-    // get marked for pruning). We inject 3 PROTECTED-set members
-    // (mcp_call / changed_scope / emit_managed_protocol — one per
-    // category) at fixed positions and assert:
+    // Two-layer reasoning:
+    //   (1) `collectStructuredPruneIds` accumulates non-protected tool tokens
+    //       from the tail backward; once cumulative > 40K (= STRUCTURED_PRUNE
+    //       _PROTECT_TOKENS) the older results enter idsToPrune. Protected
+    //       tools are skipped from that accumulator (the F183 path under
+    //       test). So with 14 buildToolPair × 10000 words, the cumulative
+    //       non-protected count crosses the threshold and prune fires.
+    //   (2) After structured prune marks 8 older greps with [Pruned: ...]
+    //       placeholders, the resulting prunedQueue is ~50K tokens, well
+    //       below the F182 fast-path threshold (triggerTokens × 0.8 ≈ 67K),
+    //       AND the system anchor message supplies `previousSummary` so
+    //       fast-path conditions all hold. Fast-path returns
+    //       [createSummaryMessage(prevSummary), ...prunedQueue] verbatim —
+    //       no LLM summarisation runs, so we can assert on the exact
+    //       content of the protected blocks.
+    // We inject 3 PROTECTED-set members (mcp_call / changed_scope /
+    // emit_managed_protocol — one per category) at fixed positions and assert:
     //   (a) their contents survive verbatim (no [Pruned:] replacement)
     //   (b) the grep/bash tools surrounding them ARE [Pruned:]-replaced
     //       as before (no regression — F183 doesn't accidentally promote
