@@ -60,6 +60,14 @@ export function estimateTokens(messages: KodaXMessage[]): number {
         } else if (block.type === 'thinking') {
           // 思考块
           total += countTextTokens(block.thinking);
+        } else if (block.type === 'image') {
+          // Image block: conservative-high estimate so the auto-compact trigger
+          // reflects real provider-side token consumption (Anthropic vision ~1.5K
+          // per medium image, OpenAI vision 85-765 depending on detail). Without
+          // this, image-heavy sessions silently push past the API context window
+          // before the local trigger fires. Mirrors claudecode IMAGE_MAX_TOKEN_SIZE
+          // (2000) / pi-mono (4800 chars).
+          total += 1500;
         }
       }
     }

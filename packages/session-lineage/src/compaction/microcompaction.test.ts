@@ -377,7 +377,10 @@ describe('microcompaction', () => {
     expect(result).toBe(messages);
   });
 
-  it('replaces image blocks with descriptive text marker', () => {
+  it('preserves image blocks past maxAge (no replacement)', () => {
+    // Regression: image blocks must survive microcompact so Anthropic prompt-cache
+    // prefixes stay valid and multimodal context is not dropped. Aligns with
+    // claudecode / pi-mono / opencode — all preserve images at this layer.
     const messages: KodaXMessage[] = [
       {
         role: 'user',
@@ -387,15 +390,13 @@ describe('microcompaction', () => {
         ],
       },
       createTextMessage('assistant', 'The error shows...'),
-      ...filler(30),
+      ...filler(50),
     ];
 
     const result = microcompact(messages, { enabled: true, maxAge: 1, protectedTools: [] });
-    const blocks = result[0]?.content as { type: string; text?: string }[];
-    // Image replaced with text marker
-    expect(blocks[0]?.type).toBe('text');
-    expect(blocks[0]?.text).toBe('[Image: error-dialog.png]');
-    // Original text block untouched
+    const blocks = result[0]?.content as { type: string; path?: string; text?: string }[];
+    expect(blocks[0]?.type).toBe('image');
+    expect(blocks[0]?.path).toBe('/tmp/screenshots/error-dialog.png');
     expect(blocks[1]?.type).toBe('text');
     expect(blocks[1]?.text).toBe('What is this error?');
   });
@@ -422,10 +423,10 @@ describe('microcompaction', () => {
     ];
 
     const result = microcompact(messages, { enabled: true, maxAge: 1, protectedTools: [] });
-    // Image → text marker
-    const userBlocks = result[0]?.content as { type: string; text?: string }[];
-    expect(userBlocks[0]?.type).toBe('text');
-    expect(userBlocks[0]?.text).toBe('[Image: screenshot.png]');
+    // Image → preserved as-is
+    const userBlocks = result[0]?.content as { type: string; path?: string }[];
+    expect(userBlocks[0]?.type).toBe('image');
+    expect(userBlocks[0]?.path).toBe('/tmp/screenshot.png');
     // Thinking → preserved (not cleared)
     const assistBlocks = result[1]?.content as { type: string; thinking?: string }[];
     expect(assistBlocks[0]?.type).toBe('thinking');

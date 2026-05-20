@@ -8,8 +8,9 @@
  *   turns are replaced with `[Cleared: ...]` placeholders
  * - CAP-MICROCOMPACT-001b: thinking blocks are NOT cleared
  *   (preserves signature for API continuity)
- * - CAP-MICROCOMPACT-001c: image blocks older than `maxAge` are
- *   replaced with `[Image: <filename>]` text markers
+ * - CAP-MICROCOMPACT-001c: image blocks are preserved across all ages
+ *   (replacing them would invalidate Anthropic prompt-cache prefixes and
+ *   drop multimodal context; aligns with claudecode / pi-mono / opencode)
  * - CAP-MICROCOMPACT-001d: protected tools (`ask_user_question`) never
  *   cleared regardless of age
  * - CAP-MICROCOMPACT-001e: recent messages within maxAge unchanged
@@ -94,7 +95,7 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
     expect(thinkingBlock?.thinking).toBe('extensive reasoning text');
   });
 
-  it('CAP-MICROCOMPACT-001c: image blocks older than maxAge are replaced with `[Image: <filename>]` text markers', () => {
+  it('CAP-MICROCOMPACT-001c: image blocks are preserved across all ages (no replacement)', () => {
     const messages: KodaXMessage[] = [
       {
         role: 'user',
@@ -113,10 +114,10 @@ describe('CAP-014: microcompact per-turn cleanup contract', () => {
     }
     const compacted = microcompact(messages, DEFAULT_MICROCOMPACTION_CONFIG);
     const firstUser = compacted[0] as KodaXMessage;
-    const blocks = firstUser.content as ReadonlyArray<{ type: string; text?: string }>;
-    const replaced = blocks[0]!;
-    expect(replaced.type).toBe('text');
-    expect(replaced.text).toBe('[Image: screenshot.png]');
+    const blocks = firstUser.content as ReadonlyArray<{ type: string; path?: string }>;
+    const preserved = blocks[0]!;
+    expect(preserved.type).toBe('image');
+    expect(preserved.path).toBe('/tmp/screenshot.png');
   });
 
   it('CAP-MICROCOMPACT-001d: protected tools (ask_user_question) are never cleared regardless of age', () => {

@@ -1,15 +1,18 @@
 /**
  * KodaX Microcompaction - Time-driven context cleanup
  *
- * Clears old tool result content, thinking blocks, and image blocks
- * from messages to slow context growth.
+ * Clears old tool result content from messages to slow context growth.
  * Pure function, no LLM calls, runs after each agent turn.
  *
  * Design:
  * - Tracks "turns" (role switches from assistant to user)
  * - Clears tool_result blocks older than maxAge turns
- * - Clears thinking block text (preserves signature for API continuity)
- * - Replaces image blocks with descriptive text markers
+ * - Preserves thinking blocks (token cost is marginal; Kimi requires non-empty
+ *   reasoning_content on every tool-call assistant message)
+ * - Preserves image blocks (replacing them invalidates Anthropic prompt-cache
+ *   prefixes and discards multimodal context; all reference agents — claudecode,
+ *   pi-mono, opencode — also preserve images at this layer. Token cost is handled
+ *   by the LLM compaction layer that produces a summary when budget pressure hits.)
  * - Preserves protected tools (e.g., ask_user_question)
  * - Placeholder format matches compaction pruning: `[Cleared: grep src/auth.ts "pattern"]`
  * - Immutable: returns new array, never mutates input
@@ -102,13 +105,9 @@ export function microcompact(
       // compared to tool_result clearing, and old messages are typically summarized
       // by LLM compaction before microcompact's maxAge threshold matters.
 
-      // Replace old image blocks with descriptive text marker
-      if (block.type === 'image' && typeof block.path === 'string') {
-        blockChanged = true;
-        const fileName = block.path.split(/[\\/]/).pop() ?? block.path;
-        return { type: 'text', text: `[Image: ${fileName}]` } as KodaXContentBlock;
-      }
-
+      // Image blocks are preserved — see module header. Replacing them
+      // invalidates Anthropic prompt-cache prefixes (every block hashed into
+      // the cache key) and drops multimodal context the model still needs.
       if (block.type !== 'tool_result') {
         return block;
       }
