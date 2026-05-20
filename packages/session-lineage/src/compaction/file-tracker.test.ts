@@ -164,6 +164,107 @@ describe('FEATURE_185 (v0.7.42): result-side enrichment', () => {
     expect(entry.metadata?.hits).toBeUndefined();
     expect(entry.metadata?.resultMode).toBe('count');
   });
+
+  it('bash ledger entry captures exit code 0 and tail', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_6',
+      toolName: 'bash',
+      input: { command: 'npm test' },
+      resultContent: 'Command: npm test\nExit: 0\n123 passed (123)',
+    }));
+
+    expect(ledger).toHaveLength(1);
+    const entry = ledger[0]!;
+    expect(entry.kind).toBe('command_scope');
+    expect(entry.metadata?.exitCode).toBe(0);
+    expect(entry.metadata?.tail).toContain('123 passed');
+    expect(entry.metadata?.cancelled).toBeUndefined();
+    expect(entry.metadata?.timeout).toBeUndefined();
+  });
+
+  it('bash ledger entry captures non-zero exit code (failure)', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_7',
+      toolName: 'bash',
+      input: { command: 'npm run lint' },
+      resultContent: 'Command: npm run lint\nExit: 1\nESLint found 3 problems\nsrc/foo.ts:42:5 error',
+    }));
+
+    expect(ledger).toHaveLength(1);
+    const entry = ledger[0]!;
+    expect(entry.metadata?.exitCode).toBe(1);
+    expect(entry.metadata?.tail).toContain('ESLint found 3 problems');
+  });
+
+  it('bash ledger entry flags cancelled commands', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_8',
+      toolName: 'bash',
+      input: { command: 'long-running' },
+      resultContent: '[Cancelled] Operation cancelled by user',
+    }));
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.metadata?.cancelled).toBe(true);
+    expect(ledger[0]!.metadata?.exitCode).toBeUndefined();
+  });
+
+  it('bash ledger entry flags timeout commands with tail', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_9',
+      toolName: 'bash',
+      input: { command: 'sleep 100' },
+      resultContent: [
+        'Command: sleep 100',
+        '[Timeout] Command interrupted after 30s',
+        'Partial output (tail):',
+        'still processing',
+      ].join('\n'),
+    }));
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.metadata?.timedOut).toBe(true);
+    expect(ledger[0]!.metadata?.tail).toContain('Partial output');
+  });
+
+  it('bash result-side `timedOut` flag does not collide with input.timeout numeric', () => {
+    const ledger = extractArtifactLedger(buildToolPair({
+      toolUseId: 'tool_use_9b',
+      toolName: 'bash',
+      input: { command: 'sleep 100', timeout: 30 }, // input has timeout=30 (configured limit)
+      resultContent: [
+        'Command: sleep 100',
+        '[Timeout] Command interrupted after 30s',
+        'Partial output (tail):',
+        'still processing',
+      ].join('\n'),
+    }));
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.metadata?.timeout).toBe(30);     // input config preserved
+    expect(ledger[0]!.metadata?.timedOut).toBe(true);  // extracted flag separate
+  });
+
+  it('bash ledger entry without result content keeps prior input-only fields', () => {
+    const ledger = extractArtifactLedger([
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'tool_use_10',
+            name: 'bash',
+            input: { command: 'npm test', timeout: 60 },
+          },
+        ],
+      },
+    ]);
+
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]!.metadata?.timeout).toBe(60); // input.timeout — not the bool flag
+    expect(ledger[0]!.metadata?.exitCode).toBeUndefined();
+    expect(ledger[0]!.metadata?.tail).toBeUndefined();
+  });
 });
 
 describe('FEATURE_185 (v0.7.42): mergeArtifactLedger preserves rich metadata', () => {

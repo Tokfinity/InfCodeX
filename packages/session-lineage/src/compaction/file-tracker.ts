@@ -11,7 +11,7 @@ import type {
 } from '@kodax-ai/llm';
 import type { FileOperations } from './types.js';
 import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
-import { extractGrepHits, extractGlobPaths } from './result-extractors.js';
+import { extractGrepHits, extractGlobPaths, extractBashResult } from './result-extractors.js';
 
 const LEDGER_MAX_ENTRIES = 256;
 const PATH_LIKE_KEYS = [
@@ -286,13 +286,37 @@ function buildArtifactEntry(
       return null;
     }
     const parsed = parseCommandTarget(command);
+    const metadata = toLedgerMetadata(input, ['timeout']) ?? {};
+    // FEATURE_185 (v0.7.42): result-side enrichment for bash. Capture
+    // exit_code + tail so the model can recall "npm test exited 1 with
+    // FAIL auth.test.ts" without re-running. Cancellation / timeout
+    // flags surface as boolean metadata so render-time can disambiguate
+    // "didn't run yet" from "ran but was killed".
+    if (resultContent !== undefined) {
+      const extracted = extractBashResult(resultContent);
+      if (extracted) {
+        if (extracted.exitCode !== undefined) {
+          metadata.exitCode = extracted.exitCode as KodaXJsonValue;
+        }
+        if (extracted.tail !== undefined && extracted.tail.length > 0) {
+          metadata.tail = extracted.tail;
+        }
+        if (extracted.cancelled) metadata.cancelled = true;
+        // FEATURE_185 (v0.7.42): use `timedOut` not `timeout` to avoid
+        // colliding with the existing input-side `timeout` field (which
+        // holds the configured timeout-in-seconds; collision would either
+        // erase the configured value or surface a numeric flag).
+        if (extracted.timeout) metadata.timedOut = true;
+        if (extracted.captureCapped) metadata.captureCapped = true;
+      }
+    }
     return createLedgerEntry(
       'command_scope',
       block.name,
       parsed.action,
       parsed.target,
       `Ran ${parsed.action} on ${parsed.target}`,
-      toLedgerMetadata(input, ['timeout']),
+      Object.keys(metadata).length > 0 ? metadata : undefined,
     );
   }
 

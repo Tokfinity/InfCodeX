@@ -68,6 +68,20 @@ const LEDGER_HITS_PREVIEW_LIMIT = 8;
 /** FEATURE_185 (v0.7.42): glob matched-path display cap per entry. */
 const LEDGER_GLOB_PATHS_PREVIEW_LIMIT = 6;
 
+/**
+ * FEATURE_185 (v0.7.42): per-bash-entry tail display cap. Source extractor
+ * already caps at BASH_TAIL_MAX_CHARS = 240; this further trims for render
+ * so a long failure tail can't dominate the post-compact line. Newlines
+ * collapsed to ` | ` to keep the rendered line single-row friendly.
+ */
+const LEDGER_COMMAND_TAIL_DISPLAY_LIMIT = 160;
+
+function truncateForRender(text: string, limit: number): string {
+  const collapsed = text.replace(/\s*\r?\n\s*/g, ' | ').trim();
+  if (collapsed.length <= limit) return collapsed;
+  return collapsed.slice(0, limit - 1) + '…';
+}
+
 export interface PostCompactAttachments {
   readonly ledgerMessage: KodaXMessage | null;
   readonly fileMessages: readonly KodaXMessage[];
@@ -269,12 +283,40 @@ function renderLedgerSummary(
   }
 
   if (commands.length > 0) {
-    const items = commands.slice(-5).map((e) =>
-      e.action && e.action !== e.target
+    const items = commands.slice(-5).map((e) => {
+      const head = e.action && e.action !== e.target
         ? `${e.action} ${e.displayTarget ?? e.target}`
-        : e.displayTarget ?? e.target,
-    );
-    lines.push(`Commands: ${items.join(', ')}`);
+        : e.displayTarget ?? e.target;
+      // FEATURE_185 (v0.7.42): surface exit_code + cancelled/timeout flags.
+      // Successful commands (exit 0) intentionally render as the head alone
+      // — adding "(exit 0)" everywhere would clutter for the common case.
+      // Non-zero / cancelled / timeout get explicit markers so the model
+      // sees "this earlier attempt FAILED" without parsing tail bytes.
+      const md = e.metadata;
+      if (!md) return head;
+      const flags: string[] = [];
+      if (md.cancelled === true) flags.push('cancelled');
+      // FEATURE_185 (v0.7.42): `timedOut` is the boolean flag (input-side
+      // `timeout` is a number — the configured limit — and would mis-fire
+      // the `=== true` branch as false).
+      if (md.timedOut === true) flags.push('timeout');
+      const exitCode = md.exitCode;
+      if (typeof exitCode === 'number' && exitCode !== 0) {
+        flags.push(`exit ${exitCode}`);
+      } else if (exitCode === null) {
+        flags.push('exit null');
+      }
+      // Tail only emitted for failed/cancelled/timeout — for green runs
+      // the head already captures everything decision-relevant.
+      const tail = typeof md.tail === 'string' ? md.tail : '';
+      const showTail = flags.length > 0 && tail.length > 0;
+      const tailSlice = showTail
+        ? ` tail: "${truncateForRender(tail, LEDGER_COMMAND_TAIL_DISPLAY_LIMIT)}"`
+        : '';
+      const flagStr = flags.length > 0 ? ` (${flags.join(', ')})` : '';
+      return `${head}${flagStr}${tailSlice}`;
+    });
+    lines.push(`Commands: ${items.join('; ')}`);
   }
 
   if (lines.length === 0) return null;

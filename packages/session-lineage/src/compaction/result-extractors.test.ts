@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest';
 import {
   extractGrepHits,
   extractGlobPaths,
+  extractBashResult,
   HIT_PREVIEW_MAX_CHARS,
   MAX_HITS_PER_ENTRY,
   MAX_GLOB_PATHS_PER_ENTRY,
+  BASH_TAIL_MAX_CHARS,
 } from './result-extractors.js';
 
 describe('extractGrepHits', () => {
@@ -186,5 +188,139 @@ describe('extractGlobPaths', () => {
     const r = extractGlobPaths(raw);
     expect(r?.paths).toHaveLength(2);
     expect(r?.paths).toEqual(['src/auth.ts', 'src/login.ts']);
+  });
+});
+
+describe('extractBashResult', () => {
+  it('parses exit code 0 and trailing stdout tail', () => {
+    const raw = [
+      'Command: npm test',
+      'Exit: 0',
+      'Test Files  7 passed (7)',
+      '     Tests  123 passed (123)',
+      '  Duration  8.95s',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBe(0);
+    expect(r?.tail).toContain('123 passed');
+    expect(r?.cancelled).toBeUndefined();
+    expect(r?.timeout).toBeUndefined();
+  });
+
+  it('parses non-zero exit code (failed command)', () => {
+    const raw = [
+      'Command: npm run lint',
+      'Exit: 1',
+      'Error: ESLint found 3 problems',
+      'src/foo.ts:42:5  error  unused-vars',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBe(1);
+    expect(r?.tail).toContain('ESLint found 3 problems');
+    expect(r?.tail).toContain('unused-vars');
+  });
+
+  it('handles negative exit codes', () => {
+    const raw = 'Command: failing\nExit: -1\nsome output';
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBe(-1);
+  });
+
+  it('parses null exit code (process killed before exit)', () => {
+    const raw = 'Command: long-running\nExit: null\noutput before kill';
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBeNull();
+  });
+
+  it('strips Command and Exit header lines from tail', () => {
+    const raw = [
+      'Command: echo hello',
+      'Exit: 0',
+      'hello',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.tail).toBe('hello');
+    expect(r?.tail).not.toContain('Command:');
+    expect(r?.tail).not.toContain('Exit:');
+  });
+
+  it('truncates the tail to BASH_TAIL_MAX_CHARS, taking the trailing slice', () => {
+    const longBody = 'a'.repeat(BASH_TAIL_MAX_CHARS + 200);
+    const raw = `Command: long\nExit: 0\n${longBody}END_MARKER`;
+    const r = extractBashResult(raw);
+    expect(r?.tail!.length).toBeLessThanOrEqual(BASH_TAIL_MAX_CHARS);
+    expect(r?.tail!.startsWith('…')).toBe(true);
+    expect(r?.tail!.endsWith('END_MARKER')).toBe(true);
+  });
+
+  it('flags cancelled commands', () => {
+    const r = extractBashResult('[Cancelled] Operation cancelled by user');
+    expect(r?.cancelled).toBe(true);
+    expect(r?.timeout).toBeUndefined();
+    expect(r?.exitCode).toBeUndefined();
+  });
+
+  it('flags timeout commands', () => {
+    const raw = [
+      'Command: long-running',
+      '[Timeout] Command interrupted after 30s',
+      'Partial output (tail):',
+      'still processing...',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.timeout).toBe(true);
+    expect(r?.tail).toContain('Partial output');
+  });
+
+  it('flags captureCapped when stdout exceeded internal buffer', () => {
+    const raw = [
+      'Command: huge-output',
+      'Exit: 0',
+      'large output content...',
+      '[stdout capture capped: earlier 5.2MB omitted]',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.captureCapped).toBe(true);
+    expect(r?.exitCode).toBe(0);
+  });
+
+  it('handles background-mode result (no Exit line)', () => {
+    const raw = [
+      'Command started in background.',
+      'PID: 12345',
+      'Output: /tmp/kodax-bg-abc123.log',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBeUndefined();
+    expect(r?.tail).toContain('PID:');
+  });
+
+  it('returns undefined for placeholders', () => {
+    expect(extractBashResult('[Cleared: bash npm test]')).toBeUndefined();
+    expect(extractBashResult('[Pruned: bash]')).toBeUndefined();
+    expect(extractBashResult('[Tool Error] bash: unable to launch')).toBeUndefined();
+  });
+
+  it('returns undefined for non-string / empty input', () => {
+    expect(extractBashResult(undefined)).toBeUndefined();
+    expect(extractBashResult(null)).toBeUndefined();
+    expect(extractBashResult({})).toBeUndefined();
+    expect(extractBashResult('')).toBeUndefined();
+    expect(extractBashResult('   ')).toBeUndefined();
+  });
+
+  it('captures stderr-only command output via tail', () => {
+    const raw = [
+      'Command: failing-cmd',
+      'Exit: 1',
+      '',
+      '[stderr]',
+      'error: something went wrong',
+      'check log for details',
+    ].join('\n');
+    const r = extractBashResult(raw);
+    expect(r?.exitCode).toBe(1);
+    expect(r?.tail).toContain('[stderr]');
+    expect(r?.tail).toContain('something went wrong');
   });
 });

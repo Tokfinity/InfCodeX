@@ -236,6 +236,148 @@ describe('FEATURE_185 (v0.7.42): hits/matched-paths rendering', () => {
   });
 });
 
+describe('FEATURE_185 (v0.7.42): bash exit_code + tail rendering', () => {
+  it('renders successful bash commands with just the head (no exit/tail clutter)', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'test', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'test --coverage',
+        metadata: {
+          exitCode: 0,
+          tail: '123 passed (123)',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('Commands:');
+    expect(content).toContain('npm test --coverage');
+    expect(content).not.toContain('exit 0');     // green case: no exit marker
+    expect(content).not.toContain('tail:');       // green case: no tail
+  });
+
+  it('renders failed bash commands with exit code + tail', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'lint', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'run lint',
+        metadata: {
+          exitCode: 1,
+          tail: 'ESLint found 3 problems\nsrc/foo.ts:42:5 error  unused-vars',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('npm run lint');
+    expect(content).toContain('(exit 1)');
+    expect(content).toContain('ESLint found 3 problems');
+  });
+
+  it('renders cancelled commands with explicit flag', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'sleep', {
+        sourceTool: 'bash',
+        action: 'sleep',
+        displayTarget: '100',
+        metadata: { cancelled: true },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('(cancelled)');
+  });
+
+  it('renders timeout commands with `timeout` flag (from result-side timedOut)', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'tests', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'test',
+        metadata: {
+          timedOut: true,
+          tail: 'still processing test #12 when killed',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('(timeout)');
+    expect(content).toContain('still processing');
+  });
+
+  it('renders multiple flags together (timeout + capture-capped)', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'build', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'run build',
+        metadata: {
+          timedOut: true,
+          exitCode: null,
+          tail: 'webpack still compiling',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('(timeout, exit null)');
+  });
+
+  it('collapses tail newlines to ` | ` for single-row render readability', () => {
+    const ledger = [
+      createLedgerEntry('command_scope', 'lint', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'run lint',
+        metadata: {
+          exitCode: 1,
+          tail: 'line one\nline two\nline three',
+        },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).toContain('line one | line two | line three');
+  });
+
+  it('truncates tail at LEDGER_COMMAND_TAIL_DISPLAY_LIMIT with ellipsis', () => {
+    const longTail = 'x'.repeat(300);
+    const ledger = [
+      createLedgerEntry('command_scope', 'foo', {
+        sourceTool: 'bash',
+        action: 'foo',
+        displayTarget: 'arg',
+        metadata: { exitCode: 1, tail: longTail },
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    // Display cap is 160; tail in quotes; some trailing chars truncated.
+    // The full 300-char run shouldn't appear verbatim.
+    expect(content.includes('x'.repeat(300))).toBe(false);
+    expect(content).toContain('…');
+  });
+
+  it('does not collide with input-side `timeout` numeric (backward-compat)', () => {
+    // Legacy entries may have `metadata.timeout` as a number (input config);
+    // the renderer should NOT treat it as the timedOut flag.
+    const ledger = [
+      createLedgerEntry('command_scope', 'test', {
+        sourceTool: 'bash',
+        action: 'npm',
+        displayTarget: 'test',
+        metadata: { timeout: 60 }, // numeric, NOT the boolean flag
+      }),
+    ];
+    const result = buildPostCompactAttachments(ledger, 50000);
+    const content = result.ledgerMessage?.content as string;
+    expect(content).not.toContain('(timeout)'); // numeric is NOT a flag
+  });
+});
+
 describe('injectPostCompactAttachments', () => {
   it('returns original messages when no attachments', () => {
     const messages: KodaXMessage[] = [

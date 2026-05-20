@@ -58,6 +58,9 @@ export const HIT_PREVIEW_MAX_CHARS = 80;
 /** Per-entry cap for glob paths. */
 export const MAX_GLOB_PATHS_PER_ENTRY = 80;
 
+/** FEATURE_185 (v0.7.42): per-bash-entry tail cap in characters. */
+export const BASH_TAIL_MAX_CHARS = 240;
+
 const PLACEHOLDER_PREFIXES = ['[Cleared:', '[Pruned:', '[Tool Error]'];
 const TRUNCATION_MARKER = '[Grep output truncated:';
 
@@ -198,6 +201,108 @@ function looksLikePath(line: string): boolean {
   if (line.startsWith('[')) return false; // tool messages
   // Has at least one path separator OR a file extension.
   return line.includes('/') || line.includes('\\') || /\.\w{1,8}$/.test(line);
+}
+
+/** FEATURE_185 (v0.7.42): parsed shape of a `bash` tool result. */
+export interface BashResultExtraction {
+  /** Exit code (`Exit: N` line) — `null` when process killed before exit. */
+  readonly exitCode?: number | null;
+  /** Last {@link BASH_TAIL_MAX_CHARS} characters of stdout/stderr (excluding header). */
+  readonly tail?: string;
+  /** True when the result contained `[Cancelled]` marker. */
+  readonly cancelled?: boolean;
+  /** True when the result contained `[Timeout]` marker. */
+  readonly timeout?: boolean;
+  /** True when stdout/stderr capture exceeded the bash tool's internal limit. */
+  readonly captureCapped?: boolean;
+}
+
+/**
+ * Parse a `bash` tool result emitted by `packages/coding/src/tools/bash.ts`.
+ *
+ * Result shape on success:
+ *   `Command: {cmd}\nExit: {code}\n{stdout}[\n[stderr]\n{stderr}]`
+ *
+ * Result shape on timeout (settle from setTimeout branch):
+ *   `Command: {cmd}\n[Timeout] Command interrupted after {N}s ...`
+ *
+ * Result shape on abort:
+ *   `[Cancelled] Operation cancelled by user`
+ *
+ * Background mode emits a different shape (PID + output file path) which
+ * carries no exit-code semantics; we treat it as an empty result.
+ *
+ * @returns `undefined` if the input is a placeholder / non-string;
+ *          a populated `BashResultExtraction` otherwise (even on
+ *          cancelled/timeout — those flags ARE the result signal).
+ */
+export function extractBashResult(rawResult: unknown): BashResultExtraction | undefined {
+  const content = rejectPlaceholder(rawResult);
+  if (content === null) return undefined;
+
+  const out: {
+    -readonly [K in keyof BashResultExtraction]: BashResultExtraction[K];
+  } = {};
+
+  if (/\[Cancelled\]/.test(content)) {
+    out.cancelled = true;
+  }
+  if (/\[Timeout\]\s+Command interrupted/.test(content)) {
+    out.timeout = true;
+  }
+  if (/\[stdout capture capped:/.test(content)
+    || /\[Output capture capped/.test(content)) {
+    out.captureCapped = true;
+  }
+
+  // Background-mode result has no Exit line; treat as empty signal.
+  if (/^Command started in background\./.test(content)) {
+    return Object.keys(out).length > 0 ? out : { tail: buildTail(content) };
+  }
+
+  // Exit: N (or `null` when process killed before exit naturally).
+  const exitMatch = /^Exit:\s+(-?\d+|null)\s*$/m.exec(content);
+  if (exitMatch) {
+    const v = exitMatch[1]!;
+    out.exitCode = v === 'null' ? null : parseInt(v, 10);
+  }
+
+  const tail = buildTail(content);
+  if (tail) out.tail = tail;
+
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Internal: pick the most informative tail slice from a bash result.
+ *
+ * Strategy: strip the leading header (`Command:` + `Exit:` lines) so the
+ * tail doesn't waste bytes restating what's already in ledger metadata
+ * (target/action/exitCode). What remains is stdout + optional [stderr]
+ * + capture-cap markers — the actual diagnostic surface. Take the last
+ * {@link BASH_TAIL_MAX_CHARS} characters. Trim whitespace and collapse
+ * empty leading lines.
+ */
+function buildTail(content: string): string {
+  const lines = content.split(/\r?\n/);
+  // Skip leading header lines: `Command: ...` / `Exit: ...` / `[Timeout]` opener.
+  let startIdx = 0;
+  while (startIdx < lines.length) {
+    const line = lines[startIdx]!;
+    if (/^Command:\s/.test(line)
+      || /^Exit:\s/.test(line)
+      || /^\[Timeout\]\s+Command interrupted/.test(line)
+      || line.trim() === '') {
+      startIdx++;
+      continue;
+    }
+    break;
+  }
+  const body = lines.slice(startIdx).join('\n').trimEnd();
+  if (body.length === 0) return '';
+  if (body.length <= BASH_TAIL_MAX_CHARS) return body;
+  // Take the trailing slice — most informative for failed commands.
+  return '…' + body.slice(-(BASH_TAIL_MAX_CHARS - 1));
 }
 
 /**
