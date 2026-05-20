@@ -264,9 +264,11 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     baseUrl: 'https://open.bigmodel.cn/api/anthropic',
     models: [
       { id: 'glm-5.1', displayName: 'GLM-5.1' },
-      // GLM-5 Turbo on the coding endpoint is the same 128K-context budget
-      // tier as on the public endpoint. FEATURE_098.
-      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo', contextWindow: 128_000 },
+      // User-confirmed (2026-05): GLM-5 Turbo ships the same 200K window as
+      // GLM-5 / GLM-5.1 on this endpoint. The original FEATURE_098 128K pin
+      // mirrored docs that were either outdated or wrong — same correction
+      // pattern as kimi/k2.5. Inheriting the 200K provider-level default.
+      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
     ],
     supportsThinking: true,
     contextWindow: 200000,
@@ -509,10 +511,11 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     models: [
       { id: 'glm-5.1', displayName: 'GLM-5.1' },
-      // GLM-5 Turbo is the 128K-context budget tier; the GLM-5 / GLM-5.1
-      // pair (provider default) is 200K. FEATURE_098 pin so compaction
-      // doesn't overshoot when the user picks turbo.
-      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo', contextWindow: 128_000 },
+      // User-confirmed (2026-05): GLM-5 Turbo ships the same 200K window
+      // as GLM-5 / GLM-5.1 on the public endpoint. The original FEATURE_098
+      // 128K pin mirrored docs that were either outdated or wrong — same
+      // correction pattern as kimi/k2.5. Inherits the 200K provider default.
+      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
     ],
     supportsThinking: true,
     contextWindow: 200000,

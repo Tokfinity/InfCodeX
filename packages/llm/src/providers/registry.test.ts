@@ -134,9 +134,13 @@ describe('provider registry', () => {
     const zhipu = getProvider('zhipu');
     expect(zhipu.getEffectiveContextWindow('glm-5')).toBe(200_000);
     expect(zhipu.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
-    expect(zhipu.getEffectiveContextWindow('glm-5-turbo')).toBe(128_000);
+    // User-confirmed (2026-05): GLM-5 Turbo is also 200K, not 128K. The
+    // historical FEATURE_098 128K pin mirrored docs that were outdated
+    // or wrong — same correction pattern as kimi/k2.5 above. Both
+    // endpoints (public + coding) now inherit the 200K provider default.
+    expect(zhipu.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
 
     const zhipuCoding = getProvider('zhipu-coding');
-    expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(128_000);
+    expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
   });
 });
