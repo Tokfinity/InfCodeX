@@ -1259,7 +1259,11 @@ export interface KodaXManagedTask {
 }
 
 export interface KodaXManagedVerdictPayload {
-  source: 'evaluator' | 'worker';
+  /** FEATURE_184 (v0.7.45): `'sidecar'` is the new architectural source —
+   *  Sidecar Verifier replaces the in-chain Evaluator role. `'evaluator'`
+   *  / `'worker'` are retained for backward-compat reads of session jsonl
+   *  written before v0.7.45. New writes use `'sidecar'`. */
+  source: 'evaluator' | 'worker' | 'sidecar';
   status: 'accept' | 'revise' | 'blocked';
   reason?: string;
   debugReason?: string;
