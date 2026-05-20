@@ -19,7 +19,7 @@
  */
 
 import type { KodaXMessage, KodaXContentBlock, KodaXToolResultBlock } from '@kodax-ai/llm';
-import { buildToolContextMap } from './compaction.js';
+import { buildToolContextMap, PROTECTED_TOOL_NAMES } from './compaction.js';
 
 export interface MicrocompactionConfig {
   readonly enabled: boolean;
@@ -27,10 +27,19 @@ export interface MicrocompactionConfig {
   readonly protectedTools: readonly string[];  // Tools never cleared
 }
 
+/**
+ * FEATURE_183 (v0.7.42): align `protectedTools` with the canonical
+ * PROTECTED_TOOL_NAMES from compaction.ts so microcompact and the
+ * slow-path pruneToolResults agree on which tools are off-limits. Pre-F183
+ * the two sets had drifted (microcompact = `['ask_user_question']`, prune
+ * = `['skill']`), meaning a tool could be cleared by one path and
+ * protected by the other depending on whether maxAge or pruning ran
+ * first — semantically incoherent.
+ */
 export const DEFAULT_MICROCOMPACTION_CONFIG: MicrocompactionConfig = {
   enabled: true,
   maxAge: 20,
-  protectedTools: ['ask_user_question'],
+  protectedTools: Array.from(PROTECTED_TOOL_NAMES),
 };
 
 /**

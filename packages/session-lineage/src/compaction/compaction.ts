@@ -16,7 +16,83 @@ import { extractBashIntent } from './bash-intent.js';
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const STRUCTURED_PRUNE_MINIMUM_TOKENS = 20000;
 const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
-const PRUNE_PROTECTED_TOOLS = new Set(['skill']);
+
+/**
+ * FEATURE_183 (v0.7.42) — tool names whose tool_result content is NEVER
+ * pruned / microcompact-cleared.
+ *
+ * **Rationale**: KodaX historically used a near-empty blacklist (`{'skill'}`),
+ * meaning *every* other tool_result was eligible for prune / clear. Forensic
+ * analysis (788-session scan) + claudecode parity review showed this
+ * over-aggressively destroyed high-value context — child-task verdicts, user
+ * Q&A, MCP outputs, repo-intelligence capsules, control-plane payloads — all
+ * silently replaced with `[Cleared: ...]` placeholders the model could not
+ * reconstruct.
+ *
+ * **Design**: flip from blacklist to whitelist semantics implicitly by listing
+ * everything *worth keeping*. The 12 tools still missing here are the
+ * "exploration / execution" set (read, edit, write, multi_edit,
+ * insert_after_anchor, bash, glob, grep, code_search, semantic_lookup,
+ * web_search, web_fetch) — high-frequency, large-result, low-density-of-decision
+ * tools where pruning to a preview is the right call.
+ *
+ * **Cross-package coupling**: these names mirror @kodax-ai/coding's
+ * registry-declared tool names. session-lineage cannot import from coding
+ * (would create a circular tsc -b dependency), so the names are duplicated
+ * here. The `protected-tools-registry-parity.test.ts` asserts both sides
+ * stay in sync — any name drift breaks the test.
+ *
+ * **Categories** (size context: 1 baseline → 23):
+ *   - skill content (1)        — already protected pre-F183
+ *   - user-interaction (2)     — ask_user_question, exit_plan_mode
+ *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
+ *   - control plane (1)        — emit_managed_protocol
+ *   - worktree / undo (3)      — worktree_create, worktree_remove, undo
+ *   - MCP (5)                  — mcp_search/describe/call/read_resource/get_prompt
+ *   - repo intelligence (8)    — repo_overview, changed_scope, changed_diff,
+ *                                changed_diff_bundle, module_context,
+ *                                symbol_context, process_context, impact_estimate
+ */
+const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
+  // Pre-F183
+  'skill',
+  // User-interaction + plan
+  'ask_user_question',
+  'exit_plan_mode',
+  // Task delegation / control flow
+  'dispatch_child_task',
+  'task_stop',
+  'send_message',
+  // Control plane
+  'emit_managed_protocol',
+  // Worktree / undo (low-frequency but high-value control events)
+  'worktree_create',
+  'worktree_remove',
+  'undo',
+  // MCP — user-configured external tools, results high-reuse
+  'mcp_search',
+  'mcp_describe',
+  'mcp_call',
+  'mcp_read_resource',
+  'mcp_get_prompt',
+  // Repo intelligence — already-condensed high-density capsules
+  'repo_overview',
+  'changed_scope',
+  'changed_diff',
+  'changed_diff_bundle',
+  'module_context',
+  'symbol_context',
+  'process_context',
+  'impact_estimate',
+]);
+
+/**
+ * Exported as the canonical PROTECTED set so peer modules
+ * (microcompaction.ts default config, registry-parity test, future
+ * Stage 3 ledger work) can pull a single source-of-truth.
+ */
+export const PROTECTED_TOOL_NAMES: ReadonlySet<string> = PRUNE_PROTECTED_TOOLS;
+
 const MAX_SUMMARIZATION_TOKENS_PER_CHUNK = 50000;
 const SUMMARIZATION_RETRY_DELAY_MS = 2000;
 /**
@@ -697,6 +773,19 @@ function pruneToolResults(
       }
 
       if (block.type !== 'tool_result' || typeof block.content !== 'string') {
+        return block;
+      }
+
+      // FEATURE_183 (v0.7.42): protected tools are immune to BOTH
+      // structured-prune AND oversize-prune. Pre-F183 the oversize path
+      // ignored the protected set entirely — meaning a single >50K-token
+      // result from `skill` / `mcp_call` / `dispatch_child_task` would still
+      // be replaced with `[Pruned: ...]`. That's exactly the failure mode
+      // PROTECTED is supposed to prevent. The structured-prune layer already
+      // skips protected tools in `collectStructuredPruneIds`; this same
+      // belt-and-suspenders check on the oversize path closes the gap.
+      const toolInfoForProtection = toolContextMap.get(block.tool_use_id);
+      if (toolInfoForProtection && PRUNE_PROTECTED_TOOLS.has(toolInfoForProtection.name)) {
         return block;
       }
 

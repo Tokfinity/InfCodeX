@@ -88,6 +88,7 @@ export {
   needsCompaction,
   compact,
   isEmptyLikeSummary,
+  PROTECTED_TOOL_NAMES,
 } from './compaction/compaction.js';
 
 export {

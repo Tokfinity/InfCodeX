@@ -9,7 +9,7 @@ import type {
   KodaXToolResultBlock,
 } from '@kodax-ai/llm';
 import { KodaXBaseProvider } from '@kodax-ai/llm';
-import { compact, isEmptyLikeSummary, needsCompaction, truncateUserText } from './compaction.js';
+import { compact, isEmptyLikeSummary, needsCompaction, PROTECTED_TOOL_NAMES, truncateUserText } from './compaction.js';
 import { generateSummary } from './summary-generator.js';
 
 class FakeSummaryProvider extends KodaXBaseProvider {
@@ -646,5 +646,210 @@ describe('FEATURE_182 (v0.7.42): fast-path requires a non-empty previousSummary'
     // pre-F182 first-compaction behaviour). Critical: the result is not
     // undefined / not a crash.
     expect(result.summary).toBeDefined();
+  });
+});
+
+describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () => {
+  // Pre-F183 the prune-protected set was `{'skill'}` only — every other tool
+  // result was eligible to be prune'd to a `[Pruned: ...]` placeholder during
+  // compaction. This caused silent context destruction of high-value
+  // payloads (child-task verdicts, MCP outputs, repo-intelligence capsules,
+  // ask_user_question Q&A, etc.).
+  //
+  // F183 expands the set to 22 tool names across 7 categories. These tests
+  // pin the membership + sanity-check the actual prune semantics against
+  // representative protected tools.
+
+  it('contains the 23 F183-canonical members exactly', () => {
+    // Snapshot the full membership so any future drift (add / drop) is
+    // caught immediately by this test rather than discovered in production.
+    expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
+      [
+        // Pre-F183
+        'skill',
+        // User-interaction + plan
+        'ask_user_question',
+        'exit_plan_mode',
+        // Task delegation / control flow
+        'dispatch_child_task',
+        'task_stop',
+        'send_message',
+        // Control plane
+        'emit_managed_protocol',
+        // Worktree / undo
+        'worktree_create',
+        'worktree_remove',
+        'undo',
+        // MCP
+        'mcp_search',
+        'mcp_describe',
+        'mcp_call',
+        'mcp_read_resource',
+        'mcp_get_prompt',
+        // Repo intelligence
+        'repo_overview',
+        'changed_scope',
+        'changed_diff',
+        'changed_diff_bundle',
+        'module_context',
+        'symbol_context',
+        'process_context',
+        'impact_estimate',
+      ].sort(),
+    );
+    expect(PROTECTED_TOOL_NAMES.size).toBe(23);
+  });
+
+  it('exposes the set as a ReadonlySet (frozen API surface)', () => {
+    // ReadonlySet at the type level. The runtime cast keeps a single
+    // canonical Map; callers must not add/delete. We do not freeze the
+    // underlying Set at runtime (some legacy test paths construct new
+    // arrays from it) but the type system locks the surface.
+    expect(PROTECTED_TOOL_NAMES instanceof Set).toBe(true);
+    expect(PROTECTED_TOOL_NAMES.has('skill')).toBe(true);
+  });
+
+  it('still leaves the 12 "execution / exploration" tools compactable', () => {
+    // Sanity: these high-volume / large-result / low-decision-density tools
+    // MUST remain compactable. If F183 accidentally moved one of them into
+    // PROTECTED, context budget regressions would silently follow.
+    const compactable = [
+      'read', 'write', 'edit', 'multi_edit', 'insert_after_anchor',
+      'bash',
+      'glob', 'grep', 'code_search', 'semantic_lookup',
+      'web_search', 'web_fetch',
+    ];
+    for (const name of compactable) {
+      expect(PROTECTED_TOOL_NAMES.has(name)).toBe(false);
+    }
+  });
+
+  it('prune integration: protected tools mixed in are NOT [Pruned:]-replaced while grep tools ARE', async () => {
+    // Reuse the same fixture shape as the legacy "prunes older tool results"
+    // test that is known to hit the structured-prune fast-path (14 tool
+    // pairs × 6500 tokens each → cumulative protectedToolTokens exceeds
+    // STRUCTURED_PRUNE_PROTECT_TOKENS=40K so older bash-grep tool results
+    // get marked for pruning). We inject 3 PROTECTED-set members
+    // (mcp_call / changed_scope / emit_managed_protocol — one per
+    // category) at fixed positions and assert:
+    //   (a) their contents survive verbatim (no [Pruned:] replacement)
+    //   (b) the grep/bash tools surrounding them ARE [Pruned:]-replaced
+    //       as before (no regression — F183 doesn't accidentally promote
+    //       protection to the whole conversation).
+    const provider = new FakeSummaryProvider();
+    const contextWindow = 120000;
+    const config = {
+      enabled: true,
+      triggerPercent: 70,
+      protectionPercent: 1,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 50000,
+    };
+
+    // Helper: build a protected tool_use + tool_result pair carrying a
+    // distinctive payload we can grep for in the output.
+    function buildProtectedPair(
+      id: string,
+      toolName: string,
+      payloadMarker: string,
+    ): KodaXMessage[] {
+      return [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id, name: toolName, input: { marker: payloadMarker } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: id,
+              content: `${payloadMarker} ` + makeLongText('p', 5500),
+            },
+          ],
+        },
+      ];
+    }
+
+    // Mirror the legacy test: 14 tool pairs in the "to-process" range so
+    // structured prune triggers. Inject 3 protected pairs at intervals.
+    const PROTECTED_MARKER_MCP = 'PROTECTED_MCP_PAYLOAD_42';
+    const PROTECTED_MARKER_RI = 'PROTECTED_RI_PAYLOAD_77';
+    const PROTECTED_MARKER_CTRL = 'PROTECTED_CTRL_PAYLOAD_91';
+
+    // FEATURE_182 requires a non-empty previousSummary for fast-path to
+    // be taken; without it, slow-path summarises the prefix entirely
+    // (including protected tools) which would invalidate the structured-
+    // prune assertions here. Same pattern as the legacy "prunes older
+    // tool results" test.
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: '[对话历史摘要]\n\nPrior summary anchor so fast-path is taken (F182).' },
+      { role: 'assistant', content: 'retain assistant note' },
+      // Older portion (will mostly get [Pruned:] markers under structured
+      // prune since they're past the budget threshold from the tail).
+      // word counts bumped vs legacy 6500 — F183 protects 3 mid-stream
+      // tools, narrowing the budget room for structured prune. Higher word
+      // count per grep ensures cumulative non-protected tokens still
+      // exceed STRUCTURED_PRUNE_PROTECT_TOKENS=40K and prune fires.
+      ...buildToolPair(1, 10000),
+      ...buildToolPair(2, 10000),
+      ...buildProtectedPair('mcp_1', 'mcp_call', PROTECTED_MARKER_MCP),
+      ...buildToolPair(3, 10000),
+      ...buildToolPair(4, 10000),
+      ...buildToolPair(5, 10000),
+      ...buildProtectedPair('ri_1', 'changed_scope', PROTECTED_MARKER_RI),
+      ...buildToolPair(6, 10000),
+      ...buildToolPair(7, 10000),
+      ...buildToolPair(8, 10000),
+      ...buildProtectedPair('ctrl_1', 'emit_managed_protocol', PROTECTED_MARKER_CTRL),
+      ...buildToolPair(9, 10000),
+      ...buildToolPair(10, 10000),
+      ...buildToolPair(11, 10000),
+      ...buildToolPair(12, 10000),
+      ...buildToolPair(13, 10000),
+      ...buildToolPair(14, 10000),
+    ];
+
+    const result = await compact(messages, config, provider, contextWindow);
+    expect(result.compacted).toBe(true);
+
+    // Extract all tool_result content blocks from the final messages.
+    const toolResults = result.messages
+      .filter((m): m is KodaXMessage & { role: 'user'; content: NonNullable<KodaXMessage['content']> } =>
+        m.role === 'user' && Array.isArray(m.content),
+      )
+      .flatMap((m) => m.content as KodaXContentBlock[])
+      .filter((b): b is { type: 'tool_result'; tool_use_id: string; content: string } =>
+        b.type === 'tool_result' && typeof b.content === 'string',
+      );
+
+    // (a) Protected payloads survive verbatim — none replaced by [Pruned:].
+    const protectedExpectations = [
+      { id: 'mcp_1', name: 'mcp_call', marker: PROTECTED_MARKER_MCP },
+      { id: 'ri_1', name: 'changed_scope', marker: PROTECTED_MARKER_RI },
+      { id: 'ctrl_1', name: 'emit_managed_protocol', marker: PROTECTED_MARKER_CTRL },
+    ];
+    for (const c of protectedExpectations) {
+      const matching = toolResults.find((b) => b.tool_use_id === c.id);
+      expect(matching, `${c.name} result missing entirely`).toBeDefined();
+      expect(
+        matching?.content.startsWith('[Pruned:'),
+        `${c.name} must NOT be [Pruned:] — it's in PROTECTED_TOOL_NAMES`,
+      ).toBe(false);
+      expect(
+        matching?.content.startsWith(c.marker),
+        `${c.name} original marker must remain at content head — verbatim survival`,
+      ).toBe(true);
+    }
+
+    // (b) No regression: grep (compactable) tools in the older portion
+    //     should still get [Pruned:] markers — F183 doesn't accidentally
+    //     promote protection conversation-wide.
+    const hasPrunedGrep = toolResults.some(
+      (b) => b.content.startsWith('[Pruned: cat output-'),
+    );
+    expect(hasPrunedGrep, 'compactable grep/bash results should still be [Pruned:]').toBe(true);
   });
 });
