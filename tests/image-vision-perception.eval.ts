@@ -1,6 +1,7 @@
 /**
- * Eval: image vision perception — regression guard for Fix B (image
- * perception block in `sharedWorkerDiscipline`).
+ * Eval: image vision perception — permanent regression sweep + structural
+ * floor probe for the "Worker denies seeing PNG / reaches for
+ * agent-browser" failure mode.
  *
  * ## Background
  *
@@ -12,47 +13,66 @@
  *
  * Wire-level probe (4 transport variants against `api.kimi.com/coding/`)
  * confirmed Kimi K2-for-coding sees images natively. So the bug is upstream
- * of the wire — KodaX's agentic prompt + 30+ tool catalog primes the model
- * into tool-mode where it never realises it has native vision and tries to
- * "open" the image with a file-reading tool.
+ * of the wire — something in KodaX's agentic prompt / tool catalog /
+ * skills primer can push the model into tool-mode for binary inputs.
  *
- * Initial single-turn Layer 2 probe (V1 baseline on kimi) did NOT reproduce
- * the bug on a fresh agentic context — kimi passed cleanly. The likely
- * production trigger is multi-turn priming and/or compaction-stale `[Image:
- * filename.png]` markers that we can't deterministically synthesise.
+ * ## What we tried + why Fix B got REVERTED (2026-05-20)
  *
- * ## Shipped fix
+ * A first defensive-parity attempt added an "Image perception:" block to
+ * `sharedWorkerDiscipline` (commit bc04581c) telling all roles "you can
+ * see image blocks natively; don't reach for tools; on compaction-stale
+ * markers, ask user to re-attach". Original Layer 2 regression eval
+ * (V_baseline + V_fix only, lenient regex matching SVG markup OR
+ * image-content keywords) showed V_fix ≥ V_baseline everywhere, so it
+ * shipped.
  *
- * `packages/coding/src/task-engine/_internal/managed-task/role-prompt.ts`
- * `sharedWorkerDiscipline` gains a third "Image perception:" section
- * alongside the existing "Workspace discipline:" and "Cross-platform shell:"
- * sections. The block tells every AMA role (Scout/Planner/Generator/Worker/
- * Evaluator):
- *   1. Image content blocks are visible via native vision; no tool needed.
- *   2. Do NOT reach for `agent-browser` / `read` / etc to "open" them.
- *   3. If a prior turn replaced the image with a `[Image: filename]` text
- *      marker (compaction), surface that and ask user to re-attach — don't
- *      hallucinate content.
+ * Rigorous re-eval (this file's current form, after tightening regex to
+ * require image-content keywords AND adding Layer 3 priming +
+ * compaction-state variants) revealed:
  *
- * Fix A (remove `[Image #N]` anchor) was DROPPED after audit: anchors are
- * load-bearing for multi-image disambiguation ("describe @a vs @b" would
- * become "describe  vs ").
+ *   - Fresh state: V_fix == V_baseline (kimi+zhipu both 100%, mmx noisy).
+ *     No measurable benefit, no harm.
+ *   - Priming state (kimi V_*_primed): both 100%. kimi recovers from
+ *     canned "I can't read PNG + read tool failed" priming on its own.
+ *   - Compaction state (zhipu V_*_compacted): BOTH variants fail at the
+ *     image-content level. V_baseline_compacted tends to honest
+ *     `NO_IMAGE_PERCEIVED` refusals (safe). V_fix_compacted tends to
+ *     CONFIDENT HALLUCINATIONS — under bc04581c it described page04_v2
+ *     (a split-screen 屏幕内外 diagram) as a 3-4-5 right triangle / scout
+ *     badge / heart shape and wrote SVG accordingly.
  *
- * ## This eval — regression guard, not failure reproducer
+ *   The original "100% V_fix" claim on bc04581c was a lenient-regex false
+ *   positive — the model output only matched `<path>` markup, no image-
+ *   content keyword. Same for the original mmx 0→33% lift.
  *
- * Because the bug doesn't reproduce single-turn, this eval can't directly
- * validate the fix. What it CAN do is guard against regressions:
+ * Decision (2026-05-20, user-approved): REVERT Fix B. It had no
+ * measurable in-vitro lift, and in zhipu compaction state it converted
+ * honest refusal into confident lie — a real regression by the user's
+ * "不会引入别的问题或者功能退化" criterion.
  *
- *   R1 (vision still works): on cases with an image attached, V_fix
- *       passRate ≥ V_baseline passRate (Δ ≥ -10pp, accounting for noise).
+ * This file stays as a permanent regression sweep so the next attempt
+ * (whoever picks this up) starts from a rigorous baseline.
  *
- *   R2 (no over-trigger): on the text-only negative case (NO image
- *       attached), V_fix doesn't introduce hallucination ("I see / 我看到
- *       图片" type phrases) over V_baseline. Hallucination rate Δ ≤ +10pp.
+ * ## What the eval measures now
  *
- * If both regression guards hold, Fix B is safe to ship as defensive
- * parity with claudecode (which has no anchor and explicit vision priming
- * by default per Anthropic's tuning).
+ *   R1 (no measurable harm from any future prompt change): for fresh and
+ *       primed states on kimi+zhipu, V_baseline pass rate matches
+ *       V_<future-variant> pass rate. Already saturated on canon.
+ *
+ *   R2 (no hallucination introduction): on the text-only negative case
+ *       (NO image attached), no variant introduces "I see your image"
+ *       phrasing. Already 100% on kimi+zhipu.
+ *
+ *   R3 (structural floor markers): zhipu compaction state cells should
+ *       reproduce the documented structural floor (NO_IMAGE_PERCEIVED
+ *       refusal OR hallucinated SVG of an unrelated shape) on
+ *       case_diagram. If a future change makes this work at the image-
+ *       content level, that's real lift to celebrate (and to ship).
+ *
+ *   R4 (regex catches hallucination): the tightened
+ *       `imageContentKeywords` policy requires at least one case-specific
+ *       phrase to PASS. SVG markup alone is no longer a pass. This is
+ *       the policy that exposed bc04581c's false positive.
  *
  * ## Variants
  *
@@ -75,35 +95,61 @@
  *       component. Negative regression check: model must not claim to see
  *       an image that wasn't attached.
  *
- * ## Mechanical assertion
+ * ## Mechanical assertion (CURRENT, post-2026-05-20 tightening)
  *
  *   Image cases (case_diagram / case_counter):
- *     PASS: ≥1 positive keyword (SVG markup OR image-specific) AND no
- *           negative keyword (denial / tool-reach).
+ *     PASS: ≥1 image-content keyword match (case-specific phrases like
+ *           "屏幕内外" / "human-vs-AI 视角" / "counter-demo" / "L0 联动")
+ *           AND no negative keyword. SVG markup alone is NO LONGER a
+ *           PASS — it doesn't prove the model actually saw THIS image.
  *
  *   Text-only case (case_text_only):
- *     PASS: no hallucination marker (no claim of "the image shows / 我看到
- *           你发的图 / based on the screenshot you attached").
+ *     PASS: no hallucination marker ("the image shows / 我看到你发的图 /
+ *           based on the screenshot you attached").
  *
  *   Per EVAL_GUIDELINES.md anti-pattern 7: regex result is paired with
  *   self-judge audit (orchestrating Claude reads raw dump). Disagreement
  *   >10% → data void.
  *
+ * ## Variants
+ *
+ *   V_baseline             : fresh state, no Fix B priming.
+ *   V_fix                  : fresh state + Image perception block (post-
+ *                            revert kept for the case where someone
+ *                            re-attempts a similar fix — wire SHIPPED_
+ *                            IMAGE_PERCEPTION_BLOCK to whatever they ship).
+ *   V_baseline_primed      : canned turn 1 = assistant denied + read tool
+ *                            errored, then current turn re-attaches image.
+ *                            Catches multi-turn priming. kimi recovers.
+ *   V_fix_primed           : same priming + Fix B block.
+ *   V_baseline_compacted   : canned turn 1 image was replaced with a text
+ *                            marker (microcompaction.ts:106-110 simulates
+ *                            this after maxAge=20 turns) and read failed,
+ *                            then current turn re-attaches real image.
+ *                            zhipu's documented structural-floor cell:
+ *                            tends to NO_IMAGE_PERCEIVED on case_diagram.
+ *   V_fix_compacted        : same compaction + Fix B block. Documented
+ *                            failure mode (2026-05-20): zhipu converts
+ *                            refusal into confident hallucination here.
+ *
  * ## Sample size + budget
  *
- *   Pilot (`pilot` describe): kimi × 3 case × 2 variant × 1 run = 6 calls
- *     (free under subscription). Confirms cases run + regex behaves.
- *
- *   Panel (`panel` describe): 3 vision-capable alias × 3 case × 2 variant
- *     × 3 run = 54 calls. zhipu/kimi/mmx — all subscription, ~$0 marginal.
- *     ds/v4flash + ds/v4pro intentionally OMITTED because deepseek's API
- *     400s on `image_url` content (separate provider-registry bug worth
- *     filing).
+ *   priming-pilot   : kimi × case_diagram × {V_*_primed} × 1 = 2 calls
+ *   compaction-pilot: {kimi, zhipu} × {case_diagram, case_counter} ×
+ *                     {V_*_compacted} × 3 = 24 calls
+ *   pilot           : kimi × 3 cases × 4 variants × 1 = 10 calls
+ *                     (primed/compacted skipped on text-only)
+ *   panel           : 3 vision-capable alias × 3 cases × 6 variants ×
+ *                     3 runs ≈ 144 calls (subscription, ~$0 marginal).
+ *                     ds/v4flash + ds/v4pro OMITTED — deepseek API 400s
+ *                     on `image_url` content (separate provider bug).
  *
  * ## Run
  *
- *   Pilot only:  npm run test:eval -- image-vision-perception -t pilot
- *   Full panel:  npm run test:eval -- image-vision-perception -t panel
+ *   Priming pilot:    npm run test:eval -- image-vision-perception -t priming-pilot
+ *   Compaction pilot: npm run test:eval -- image-vision-perception -t compaction-pilot
+ *   Full pilot:       npm run test:eval -- image-vision-perception -t "^pilot"
+ *   Full panel:       npm run test:eval -- image-vision-perception -t panel
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -150,9 +196,17 @@ interface VisionCase {
   readonly imagePath?: string;
   readonly mediaType?: 'image/png' | 'image/jpeg';
   readonly userQuestion: string;
-  readonly positiveKeywords: readonly RegExp[];
+  // Image-grounded content keywords. PASS requires ≥1 match (proves model
+  // actually saw THIS image, not a generic SVG fallback). For text-only
+  // cases this is empty.
+  readonly imageContentKeywords: readonly RegExp[];
+  // Keywords used for the text-only case (hallucination markers) or for
+  // recording-only signal on image cases. Negative match always FAILs.
   readonly negativeKeywords: readonly RegExp[];
-  readonly minPositiveMatches: number;
+  // Whether this case requires at least one imageContentKeyword match to
+  // pass. text-only sets this false (the assertion is purely "no negative
+  // match"). Image cases set this true to catch hallucination.
+  readonly requiresImageContent: boolean;
 }
 
 // Shared denial / tool-reach phrases. Used on image cases (these would be
@@ -181,36 +235,35 @@ const HALLUCINATION_NEGATIVES: readonly RegExp[] = [
   /图(里|中|上).{0,8}(显示|可以看到|展示)/,
 ];
 
-const SVG_MARKUP_REGEXES: readonly RegExp[] = [
-  /<path[\s>]/i,
-  /\bd\s*=\s*["']\s*[MmLlHhVvCcSsQqTtAaZz][^"']{4,}/,
-  /<svg[\s>]/i,
-];
-
 const CASES: readonly VisionCase[] = [
   {
     id: 'case_diagram',
     imagePath: 'C:/tmp/page04_v2.png',
     mediaType: 'image/png',
     userQuestion: IMAGE_USER_QUESTION,
-    positiveKeywords: [
-      ...SVG_MARKUP_REGEXES,
+    // ALL image-content-specific — proves model saw THIS image. SVG markup
+    // alone is no longer sufficient because a hallucinating model can emit
+    // valid SVG for a completely unrelated shape (see compaction-pilot
+    // 2026-05-19: zhipu under V_fix_compacted output a 3-4-5 triangle SVG
+    // when the image is the 屏幕内外 split-screen diagram).
+    imageContentKeywords: [
       /屏幕内外/,
       /split[-\s]?screen/i,
       /(human|人类).{0,12}(AI|视角)/i,
       /数字矩阵|玻璃屏幕/,
-      /perspective/i,
+      /(perspective|视角)/i,
+      /活跃用户模拟器|主动型助手/,
+      /玻璃屏|手指(点击|tap)/,
     ],
     negativeKeywords: IMAGE_DENIAL_NEGATIVES,
-    minPositiveMatches: 1,
+    requiresImageContent: true,
   },
   {
     id: 'case_counter',
     imagePath: 'C:/tmp/counter-demo-initial.png',
     mediaType: 'image/png',
     userQuestion: IMAGE_USER_QUESTION,
-    positiveKeywords: [
-      ...SVG_MARKUP_REGEXES,
+    imageContentKeywords: [
       /counter[\s—–\-]{0,3}demo/i,
       /L0[\s—–\-]{0,3}联动/,
       /\biframe/i,
@@ -218,17 +271,14 @@ const CASES: readonly VisionCase[] = [
       /sandbox/i,
     ],
     negativeKeywords: IMAGE_DENIAL_NEGATIVES,
-    minPositiveMatches: 1,
+    requiresImageContent: true,
   },
   {
     id: 'case_text_only',
-    // No imagePath — text-only message. Regression guard for Fix B
-    // over-trigger: model must NOT hallucinate having seen an image.
     userQuestion: TEXT_ONLY_USER_QUESTION,
-    // No positive requirement — the assertion is "no negative match".
-    positiveKeywords: [],
+    imageContentKeywords: [],
     negativeKeywords: HALLUCINATION_NEGATIVES,
-    minPositiveMatches: 0,
+    requiresImageContent: false,
   },
 ];
 
@@ -286,15 +336,119 @@ function workerLikeSystemPrompt(includeFixB: boolean): string {
 }
 
 interface VariantSpec {
-  readonly id: 'V_baseline' | 'V_fix';
+  readonly id:
+    | 'V_baseline' | 'V_fix'
+    | 'V_baseline_primed' | 'V_fix_primed'
+    | 'V_baseline_compacted' | 'V_fix_compacted';
   readonly system: string;
   readonly tools: readonly KodaXToolDefinition[];
+  readonly primed: boolean;
+  readonly compacted: boolean;
+}
+
+// Layer 3 priming history — synthesises the conversation state we suspect
+// is the actual production trigger: an earlier assistant turn already
+// denied seeing the image and reached for a file-reading tool. The current
+// turn is the user re-attaching the same image and asking the question.
+//
+// `V_*_primed` variants attach this history before the current user turn.
+// If V_baseline_primed regex-FAILs (denial / tool-reach) and V_fix_primed
+// regex-PASSes on the same alias × case, we have direct evidence Fix B
+// breaks priming. If V_baseline_primed also passes, the bug isn't
+// multi-turn priming and Fix B is pure defensive parity (still safe to
+// ship, but eval can't claim it "fixes" anything observable).
+function buildPrimingHistory(c: VisionCase): readonly KodaXMessage[] {
+  if (!c.imagePath || !c.mediaType) return [];
+  return [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: `[Image #1] ${c.userQuestion}` },
+        { type: 'image', path: c.imagePath, mediaType: c.mediaType },
+      ],
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '用户发了一张 PNG 图片给我，但我无法直接读取/查看 PNG 图片内容（read 工具不支持二进制文件）。让我尝试通过 read 工具读取这个文件路径看看。',
+        },
+        {
+          type: 'tool_use',
+          id: 'toolu_priming_read_001',
+          name: 'read',
+          input: { path: c.imagePath },
+        },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_priming_read_001',
+          content: 'Error: file appears to be binary (PNG). The read tool only supports UTF-8 text files.',
+          is_error: true,
+        },
+      ],
+    },
+  ];
+}
+
+// Compacted-state priming: image was replaced with a text marker in the
+// prior turn (microcompaction.ts:106-110 does this after maxAge=20 turns)
+// AND the file-tracker ledger leaked the full path. This is the EXACT
+// scenario Fix B's third bullet was written to address. If this doesn't
+// trigger baseline failure, the bug needs a state we cannot synthesize.
+function buildCompactionHistory(c: VisionCase): readonly KodaXMessage[] {
+  if (!c.imagePath || !c.mediaType) return [];
+  return [
+    {
+      role: 'user',
+      content: [
+        // No actual image block — only the compaction text marker, as
+        // microcompaction.ts would have left it.
+        { type: 'text', text: `[Image: ${c.imagePath.split('/').pop() ?? 'paste.png'}]\n[Image #1] 请帮我看看这张图。` },
+      ],
+    },
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'text',
+          text: '看到用户附了一张图，但当前消息里只有文本占位符。我尝试用 read 工具读取该文件路径。',
+        },
+        {
+          type: 'tool_use',
+          id: 'toolu_compaction_read_001',
+          name: 'read',
+          input: { path: c.imagePath },
+        },
+      ],
+    },
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_compaction_read_001',
+          content: 'Error: file appears to be binary (PNG). Cannot read as text.',
+          is_error: true,
+        },
+      ],
+    },
+  ];
 }
 
 function buildVariants(): readonly VariantSpec[] {
   return [
-    { id: 'V_baseline', system: workerLikeSystemPrompt(false), tools: KODAX_TOOLS },
-    { id: 'V_fix', system: workerLikeSystemPrompt(true), tools: KODAX_TOOLS },
+    { id: 'V_baseline', system: workerLikeSystemPrompt(false), tools: KODAX_TOOLS, primed: false, compacted: false },
+    { id: 'V_fix', system: workerLikeSystemPrompt(true), tools: KODAX_TOOLS, primed: false, compacted: false },
+    { id: 'V_baseline_primed', system: workerLikeSystemPrompt(false), tools: KODAX_TOOLS, primed: true, compacted: false },
+    { id: 'V_fix_primed', system: workerLikeSystemPrompt(true), tools: KODAX_TOOLS, primed: true, compacted: false },
+    { id: 'V_baseline_compacted', system: workerLikeSystemPrompt(false), tools: KODAX_TOOLS, primed: false, compacted: true },
+    { id: 'V_fix_compacted', system: workerLikeSystemPrompt(true), tools: KODAX_TOOLS, primed: false, compacted: true },
   ];
 }
 
@@ -337,22 +491,22 @@ function judgeResponse(
       reason: `negative match: ${negativeMatches.map((re) => re.source).join(' | ')}`,
     };
   }
-  if (c.minPositiveMatches === 0) {
+  if (!c.requiresImageContent) {
     return {
       passed: true,
       reason: 'no-image case: no hallucination marker matched',
     };
   }
-  const positiveMatches = c.positiveKeywords.filter((re) => re.test(haystack));
-  if (positiveMatches.length < c.minPositiveMatches) {
+  const contentMatches = c.imageContentKeywords.filter((re) => re.test(haystack));
+  if (contentMatches.length < 1) {
     return {
       passed: false,
-      reason: `positive keyword count ${positiveMatches.length} < ${c.minPositiveMatches} (matched: ${positiveMatches.map((re) => re.source).join(', ') || 'none'})`,
+      reason: `no image-content-specific keyword matched (likely hallucination or empty response). text head: "${text.slice(0, 120).replace(/\n/g, ' ')}"`,
     };
   }
   return {
     passed: true,
-    reason: `matched ${positiveMatches.length} positive keywords: ${positiveMatches.map((re) => re.source).join(', ')}`,
+    reason: `matched ${contentMatches.length} image-content keywords: ${contentMatches.map((re) => re.source).join(', ')}`,
   };
 }
 
@@ -372,7 +526,15 @@ async function runCell(
     ]
     : [{ type: 'text', text: c.userQuestion }];
 
-  const messages: KodaXMessage[] = [{ role: 'user', content: userContent }];
+  const history = variant.primed
+    ? buildPrimingHistory(c)
+    : variant.compacted
+      ? buildCompactionHistory(c)
+      : [];
+  const messages: KodaXMessage[] = [
+    ...history,
+    { role: 'user', content: userContent },
+  ];
 
   const runResults: CellRun[] = [];
   for (let runIndex = 0; runIndex < runs; runIndex += 1) {
@@ -427,19 +589,32 @@ async function runCell(
 // Suite runner.
 // ---------------------------------------------------------------------------
 
+interface SuiteFilter {
+  readonly variantIds?: ReadonlyArray<VariantSpec['id']>;
+  readonly caseIds?: readonly string[];
+}
+
 async function runSuite(
-  label: 'pilot' | 'panel',
+  label: string,
   aliases: readonly ModelAlias[],
   runsPerCell: number,
+  filter: SuiteFilter = {},
 ): Promise<{
   cells: readonly CellResult[];
   dumpPath: string;
 }> {
-  const variants = buildVariants();
+  const variants = buildVariants().filter(
+    (v) => !filter.variantIds || filter.variantIds.includes(v.id),
+  );
+  const selectedCases = CASES.filter(
+    (c) => !filter.caseIds || filter.caseIds.includes(c.id),
+  );
   const cells: CellResult[] = [];
 
-  for (const c of CASES) {
+  for (const c of selectedCases) {
     for (const variant of variants) {
+      // Skip primed/compacted variants on text-only case — no image to prime against.
+      if ((variant.primed || variant.compacted) && !c.imagePath) continue;
       for (const alias of aliases) {
         // eslint-disable-next-line no-console
         console.log(`[${label}] ${alias} × ${variant.id} × ${c.id} × ${runsPerCell}-run starting...`);
@@ -466,9 +641,9 @@ async function runSuite(
           imagePath: c.imagePath ?? null,
           mediaType: c.mediaType ?? null,
           userQuestion: c.userQuestion,
-          positiveKeywords: c.positiveKeywords.map((re) => re.source),
+          imageContentKeywords: c.imageContentKeywords.map((re) => re.source),
           negativeKeywords: c.negativeKeywords.map((re) => re.source),
-          minPositiveMatches: c.minPositiveMatches,
+          requiresImageContent: c.requiresImageContent,
         })),
         variants: variants.map((v) => ({
           id: v.id,
@@ -524,6 +699,62 @@ const PILOT_ALIAS: ModelAlias = 'kimi';
 const PANEL_ALIASES: readonly ModelAlias[] = ['zhipu/glm51', 'kimi', 'mmx/m27'];
 
 describe('Eval: image vision perception (Fix B regression guard)', () => {
+  // Layer 3 pilot — smallest possible call to verify multi-turn priming
+  // actually drives the failure mode we are trying to fix. If
+  // V_baseline_primed FAILs (denial / tool-reach) and V_fix_primed
+  // PASSes, the primed variants are valid eval inputs and we can spend
+  // budget on the panel. If both pass, priming isn't the trigger — Fix B
+  // is still safe defensive parity but eval cannot demonstrate lift.
+  describe('priming-pilot', () => {
+    const aliases = availableAliases(PILOT_ALIAS);
+    if (aliases.length === 0) {
+      it('skips: pilot alias api key missing', () => {});
+      return;
+    }
+    it(
+      'kimi × case_diagram × {V_baseline_primed, V_fix_primed} × 1 run = 2 calls',
+      { timeout: 10 * 60_000 },
+      async () => {
+        const { cells } = await runSuite('priming-pilot', aliases, 1, {
+          variantIds: ['V_baseline_primed', 'V_fix_primed'],
+          caseIds: ['case_diagram'],
+        });
+        // eslint-disable-next-line no-console
+        console.log(summarize('priming-pilot', cells));
+        expect(cells.length).toBe(2);
+      },
+    );
+  });
+
+  // Compaction-state trigger: image was replaced with a text marker
+  // (per microcompaction.ts:106-110 after maxAge=20 turns) AND assistant
+  // tried a read tool that errored. The current turn re-attaches the
+  // real image. This is the EXACT scenario Fix B's third bullet addresses.
+  // 2026-05-19 finding: zhipu under V_baseline_compacted emits
+  // NO_IMAGE_PERCEIVED (honest refusal); under V_fix_compacted it
+  // hallucinated SVG content for an unrelated image. Tightened regex
+  // (requires imageContentKeyword match) catches the hallucination.
+  describe('compaction-pilot', () => {
+    const aliases = availableAliases('kimi', 'zhipu/glm51');
+    if (aliases.length === 0) {
+      it('skips: no compaction-pilot alias api keys present', () => {});
+      return;
+    }
+    it(
+      `${aliases.length} alias × {case_diagram, case_counter} × {V_baseline_compacted, V_fix_compacted} × 3 runs`,
+      { timeout: 30 * 60_000 },
+      async () => {
+        const { cells } = await runSuite('compaction-pilot', aliases, 3, {
+          variantIds: ['V_baseline_compacted', 'V_fix_compacted'],
+          caseIds: ['case_diagram', 'case_counter'],
+        });
+        // eslint-disable-next-line no-console
+        console.log(summarize('compaction-pilot', cells));
+        expect(cells.length).toBe(aliases.length * 2 * 2);
+      },
+    );
+  });
+
   describe('pilot', () => {
     const aliases = availableAliases(PILOT_ALIAS);
     if (aliases.length === 0) {
@@ -531,7 +762,7 @@ describe('Eval: image vision perception (Fix B regression guard)', () => {
       return;
     }
     it(
-      'kimi × 3 cases × 2 variants × 1 run',
+      'kimi × 3 cases × 4 variants × 1 run',
       { timeout: 30 * 60_000 },
       async () => {
         const { cells } = await runSuite('pilot', aliases, 1);
@@ -549,8 +780,8 @@ describe('Eval: image vision perception (Fix B regression guard)', () => {
       return;
     }
     it(
-      `2 variants × 3 cases × ${aliases.length}-alias × 3 runs/cell`,
-      { timeout: 90 * 60_000 },
+      `4 variants × 3 cases (primed skip text_only) × ${aliases.length}-alias × 3 runs/cell`,
+      { timeout: 120 * 60_000 },
       async () => {
         const { cells, dumpPath } = await runSuite('panel', aliases, 3);
         // eslint-disable-next-line no-console
