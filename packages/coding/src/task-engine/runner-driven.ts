@@ -132,6 +132,7 @@ import {
 } from '@kodax-ai/agent';
 import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
+import { createStallDetector } from '../multi-instance/stall-detector.js';
 // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
 import {
   EVALUATOR_VERDICT_RETRY_PROMPT,
@@ -630,6 +631,19 @@ async function runManagedTaskViaRunnerInner(
   // below at line ~1284). Disabled at runtime by
   // KODAX_READ_DEDUP_KILLSWITCH=1 — the factory returns a no-op shim.
   const readFileStateCache = createReadFileStateCache();
+  // FEATURE_178 v0.7.42 — L1 stall detector (anti-loop, rule-based).
+  // Pairs with readFileStateCache: F177 suppresses re-read *content*,
+  // F178 catches the case where the model keeps emitting the same
+  // tool call despite the cache stub. Same lifetime (per-task), same
+  // compaction-reset wiring (clears state when summary discards the
+  // referenced tool_results). Killswitch: KODAX_STALL_DETECT=0.
+  //
+  // This commit wires the data plane only — observer records every
+  // tool_use, compaction post-hook resets state. The L2 sidecar
+  // invocation + nudge injection lands in the follow-up commit so
+  // any production behaviour change is isolated to that commit's
+  // diff and can be reverted independently.
+  const stallDetector = createStallDetector();
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
   } = { current: undefined };
@@ -1301,8 +1315,16 @@ async function runManagedTaskViaRunnerInner(
     // earlier `tool_result` blocks; after summarization those blocks
     // may no longer be in context, so the stub would no longer be
     // actionable. Clearing forces the next Read to serve real content.
+    //
+    // FEATURE_178 v0.7.42 — same logic for the stall detector. After
+    // compaction, the earlier tool_result content the model was
+    // implicitly referencing is gone. A "repeat" call against the
+    // same path after compaction is now legitimate (re-priming the
+    // model with content it can no longer see). Reset the detector
+    // so we don't fire on legitimate post-compact re-reads.
     onPostCompact: () => {
       readFileStateCache.clear();
+      stallDetector.reset();
     },
   });
 
@@ -1389,6 +1411,14 @@ async function runManagedTaskViaRunnerInner(
       }
       : undefined,
     onToolCall: (call: { name: string; id: string; input: Record<string, unknown> }) => {
+      // FEATURE_178 v0.7.42 — record every tool invocation into the L1
+      // stall detector so it can spot (toolName, input) repetition
+      // across the task. We record on the *call* side (not result side)
+      // so the signal is available even for cancelled / blocked tools.
+      // `recordToolUse` is sync + side-effect-only; the signal it
+      // returns is acted on by the L2 sidecar wiring in the follow-up
+      // commit (this commit ships only the data plane).
+      stallDetector.recordToolUse(call.name, call.input);
       // CAP-035: filter internal control-plane tools (emit_managed_protocol,
       // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
       // AMA emitted every tool call regardless of visibility — REPL

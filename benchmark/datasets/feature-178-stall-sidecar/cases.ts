@@ -90,75 +90,28 @@
  *   passes — anti-pattern 4 (探索期就开多 alias).
  */
 
-import type { KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import type { KodaXMessage } from '@kodax-ai/llm';
 
-// ─── Sidecar SYSTEM_PROMPT ─────────────────────────────────────────────
+// ─── Sidecar prompt assets ─────────────────────────────────────────────
+//
+// Re-exported from the production module so the eval's contract (the
+// exact SYSTEM_PROMPT / tool def / transcript renderer it validated)
+// is grounded in the production strings. Any future drift breaks both
+// at once. SHIP-SIDECAR-ALL was pinned against these exact bytes —
+// material edits invalidate the eval's evidence.
+export {
+  SIDECAR_SYSTEM_PROMPT,
+  REPORT_TOOL,
+  renderTranscript,
+  buildSidecarUserMessage as buildSidecarUserMessageFromParams,
+} from '../../../packages/coding/src/multi-instance/stall-sidecar-prompts.js';
 
-export const SIDECAR_SYSTEM_PROMPT = [
-  'You are a stall-detector for an autonomous coding agent. A DIFFERENT agent (the "main agent") has been running and has issued the same tool call multiple times in a row. A rule-based detector flagged this as a potential stall. Your job is to do a second-pass judgment by reading the main agent\'s recent transcript.',
-  '',
-  '# IMPORTANT — role separation',
-  '',
-  'The transcript shown to you contains the MAIN AGENT\'s past messages and tool calls. You are NOT the author of those messages. You are a third-party observer judging whether that agent is stuck. Do not say "I read the file" or "my behavior" — the actions in the transcript belong to the main agent, not you. Your only action is to call `report_stall_judgment` once.',
-  '',
-  '# Decision criteria',
-  '',
-  'Classify the repetition as **isStuck=true** ONLY when the main agent has made no real progress between the repeated calls:',
-  '- Same tool + same input args repeatedly invoked',
-  '- No new information gathered between calls (tool_results are identical or stub-served, OR no other tool was called between repeats)',
-  '- No substantive textual reasoning that indicates a forward step',
-  '- The cache may have already served a "[Read Cache] unchanged" stub — if the model continues calling read on that target after the stub, that is a strong stall signal',
-  '',
-  'Classify as **isStuck=false** when the repetition is part of a legitimate iterative workflow:',
-  '- The model called other distinct tools between the repeats (progressing on other axes)',
-  '- The repeated call follows a substantive textual reasoning step ("now verifying that the edit landed", "let me re-check after my batch of changes")',
-  '- The model is updating todo items in batches — re-marking the same todo as completed alongside new ones is wasteful but not stuck',
-  '- The model is performing legitimate verification (read same file after an edit it just made)',
-  '',
-  '# Output format',
-  '',
-  'Call the `report_stall_judgment` tool exactly once. Do not narrate. Do not call any other tool.',
-  '',
-  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop, emit_handoff). Keep nudge ≤ 600 chars.',
-  '',
-  'If isStuck=false, leave nudge empty.',
-].join('\n');
+import {
+  REPORT_TOOL as REPORT_TOOL_REF,
+  buildSidecarUserMessage as buildSidecarUserMessageFromParamsImport,
+} from '../../../packages/coding/src/multi-instance/stall-sidecar-prompts.js';
 
-// ─── Report tool — forces structured output ────────────────────────────
-
-export const REPORT_TOOL: KodaXToolDefinition = {
-  name: 'report_stall_judgment',
-  description:
-    'Report your second-pass judgment of whether the main agent is in a real stall. Call this exactly once.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      isStuck: {
-        type: 'boolean',
-        description:
-          'true = main agent has lost progress and needs a nudge; false = repetition is part of a legitimate flow.',
-      },
-      reason: {
-        type: 'string',
-        description:
-          'One-sentence rationale citing the specific evidence in the recent history (≤200 chars).',
-      },
-      suggestedTool: {
-        type: 'string',
-        description:
-          'When isStuck=true, the specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop, emit_handoff. Empty string when isStuck=false.',
-      },
-      nudge: {
-        type: 'string',
-        description:
-          'When isStuck=true, a single concrete instruction the main agent will see as a synthetic user message. Reference suggestedTool by name. ≤600 chars. Empty string when isStuck=false.',
-      },
-    },
-    required: ['isStuck', 'reason', 'suggestedTool', 'nudge'],
-  },
-};
-
-export const TOOLS = [REPORT_TOOL];
+export const TOOLS = [REPORT_TOOL_REF];
 
 // ─── Cases ─────────────────────────────────────────────────────────────
 
@@ -176,82 +129,16 @@ export interface StallCase {
 }
 
 /**
- * Render the main agent transcript as third-person text. Embedding the
- * transcript in the user message (instead of as priorMessages) is critical:
- * if assistant-role messages are passed via priorMessages, the sidecar
- * model interprets them as ITS OWN past actions ("I read the file") and
- * mis-attributes the stall behaviour. Rendering as text makes the
- * judge/judged separation unambiguous.
- */
-export function renderTranscript(messages: readonly KodaXMessage[]): string {
-  const lines: string[] = ['=== MAIN AGENT TRANSCRIPT (you are reading, not authoring) ==='];
-  let assistantTurnIdx = 0;
-  for (const m of messages) {
-    if (m.role === 'system') {
-      const text = typeof m.content === 'string'
-        ? m.content
-        : m.content
-          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-          .map((b) => b.text)
-          .join('\n');
-      lines.push('', `[SYSTEM]`, text);
-      continue;
-    }
-    if (m.role === 'user') {
-      if (typeof m.content === 'string') {
-        lines.push('', `[USER → MAIN AGENT]`, m.content);
-      } else {
-        const toolResults = m.content.filter((b) => b.type === 'tool_result');
-        if (toolResults.length > 0) {
-          for (const tr of toolResults) {
-            const trBlock = tr as { tool_use_id: string; content: string };
-            lines.push('', `[TOOL_RESULT for ${trBlock.tool_use_id}]`, trBlock.content);
-          }
-        } else {
-          const text = m.content
-            .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
-            .map((b) => b.text)
-            .join('\n');
-          if (text) lines.push('', `[USER → MAIN AGENT]`, text);
-        }
-      }
-      continue;
-    }
-    if (m.role === 'assistant') {
-      assistantTurnIdx++;
-      lines.push('', `[MAIN AGENT — assistant turn ${assistantTurnIdx}]`);
-      if (typeof m.content === 'string') {
-        lines.push(`text: ${m.content}`);
-        continue;
-      }
-      for (const b of m.content) {
-        if (b.type === 'text') {
-          lines.push(`text: ${b.text}`);
-        } else if (b.type === 'tool_use') {
-          const useBlock = b as { id: string; name: string; input: unknown };
-          lines.push(
-            `tool_use: ${useBlock.name}(${JSON.stringify(useBlock.input)}) [id=${useBlock.id}]`,
-          );
-        }
-      }
-    }
-  }
-  lines.push('', '=== END TRANSCRIPT ===');
-  return lines.join('\n');
-}
-
-/**
- * Build the final user message a sidecar invocation will see. Driver code
- * calls this — keeps the case data minimal and the rendering centralised.
+ * Eval-specific wrapper around the production
+ * `buildSidecarUserMessageFromParams` that keeps the eval driver's
+ * fixture-type ergonomics — the driver iterates over `StallCase`s and
+ * passes them through directly.
  */
 export function buildSidecarUserMessage(c: StallCase): string {
-  return [
-    c.signalEnvelope,
-    '',
-    renderTranscript(c.recentMessages),
-    '',
-    'Judge whether the main agent in the transcript above is in a real stall. Call report_stall_judgment exactly once.',
-  ].join('\n');
+  return buildSidecarUserMessageFromParamsImport({
+    signalEnvelope: c.signalEnvelope,
+    recentMessages: c.recentMessages,
+  });
 }
 
 /**
