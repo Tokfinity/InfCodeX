@@ -241,11 +241,6 @@ export function createRolePrompt(
     '- List: `dir` (Windows) vs `ls` (Unix/Mac).',
     '- Delete: `del` (Windows) vs `rm` (Unix/Mac).',
     '- If you see "not recognized", "不是内部或外部命令", or a similar lookup error, the command does not exist on this platform. Try the platform equivalent.',
-    '',
-    'Image perception:',
-    '- When a user message contains an image content block (pasted screenshot, diagram, photo, sketch, UI mockup), you can see the image directly through native vision. Describe what you see and answer the question — do NOT claim you cannot read PNG/JPEG/binary files, and do NOT say the `read` tool is needed.',
-    '- Do NOT invoke `agent-browser`, `read`, `view`, or any other tool to "open" or "decode" an attached image. `agent-browser` is for live web URLs only; no tool call can decode an image that is already inlined into the conversation.',
-    '- If the user attached an image to clarify intent (e.g. "describe this", "convert to SVG", "what is wrong here"), execute the task against the image directly. If a prior turn replaced an image with a text marker like `[Image: filename.png]` (history compaction), say so and ask the user to re-attach — do not invent content.',
   ].join('\n');
   const originalTaskSection = `Original user request:\n${originalTask}`;
   const roundInstructionSection = prompt !== originalTask
