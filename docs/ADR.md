@@ -1580,3 +1580,82 @@ Phase A 独立可 ship（claudecode-style infra in agent 层，零行为变化�
 
 ---
 
+## ADR-031: Task-Level Hits Ledger 与 Cross-Session Memdir 分层独立（FEATURE_185, v0.7.42）
+
+**Status**: Accepted 2026-05-20
+
+### 背景
+
+v0.7.42 上下文层连续 ship 了若干 compaction-相关 feature（F177 read-cache、F178 stall sidecar、F179 top-of-loop、F180 RI dedup、F181/F182 summary 抗丢失、F183 PROTECTED 扩容）。本 ADR 关注最后一块拼图 **FEATURE_185**：把 `grep` / `code_search` / `glob` / `bash` 的结构化结果保留在 `artifactLedger.metadata`，渲染进 `[Post-compact: recent operations]` system 消息，让模型 compact 之后**不必 re-grep / re-run** 也能回答历史问题。
+
+v0.7.43 设计稿 §FEATURE_124 同时规划了 **memdir**（claudecode-parity 的 per-project markdown memory：4-type taxonomy + `~/.kodax/projects/<repo>/memory/*.md` + LLM 直接读写）。两者都"把信息保存下来供后续 LLM 读取"，乍看有重叠风险。本 ADR 锁定**为什么不合并**。
+
+### 决策
+
+**F185 ledger 与 F124 memdir 故意是两套独立机制，按 lifecycle 与作用域正交切分**：
+
+| 维度 | F185 Hits Ledger | F124 Memdir |
+|---|---|---|
+| **作用域** | Task 内（同一 `runManagedTask` 调用） | Project 全局（per git-root，跨 session） |
+| **生命周期** | Task 结束随 session entry 序列化进 jsonl，task 复用时载入；不跨 project 流转 | 永久驻留 `~/.kodax/projects/<repo>/memory/`，由用户/LLM 主动 prune |
+| **写入者** | Runner（自动 — 每次 `tool_use` + 对应 `tool_result` 进 `extractArtifactLedger` pre-pass，无 LLM 决策） | LLM（显式 — 用 `Write` 工具写 `.md` 文件） |
+| **粒度** | 单条 hit / 单次 command exit + tail，结构化 record | 自由格式 markdown，4 type 分类 |
+| **更新方式** | 增量 merge by dedup-key（同一个 `target` 多次跑 keep latest enrichment） | 文件级 overwrite by LLM 决定 |
+| **预算** | 共享 `POST_COMPACT_TOKEN_BUDGET=50K × ledgerShare=15%` ≈ 7.5K tokens / task | `MEMORY.md` 索引 ≤200 行 / 25KB；per-file 自由 |
+| **触发渲染** | 每次 LLM-summarised compaction 之后立刻注入 system 消息 | Session 启动时一次性注入 system 消息（claudecode 也是这样） |
+| **示例** | "上次 grep authenticate 在 auth.ts:42 / 78 / login.ts:13" | "user prefers integration tests over mocked unit tests" |
+
+### 替代方案考量
+
+#### 方案 A：把 ledger metadata 写到 memdir 的 `project_*.md`
+
+LLM 在 compaction 时把 hits 写入 `~/.kodax/projects/<repo>/memory/project_recent_searches.md`。
+
+**否决理由**：
+- 引入 LLM 写入决策 → ledger 更新依赖 model attention，但 model 在长 session 末尾 attention 已稀缺（这正是 F178/F179 要解决的 stall/compaction 触发问题）。F185 必须是 100% 机械可靠的 batch-extract。
+- 触发节拍冲突：memdir 是 session-end manual prune，ledger 是 round-end automatic enrich。强行合并要么 memdir 失去用户控制（被 runner 频繁写入），要么 ledger 失去自动化（被 LLM 偶尔遗漏写入）。
+- 作用域错配：搜过 `authenticate` 出现在哪些 path:line 是 **task-internal scaffolding info**，不是 cross-session insight。把它持久化进 memdir 会污染 memory 信噪比，让用户每次 prune 时面对一堆 search artefact。
+
+#### 方案 B：在 ledger 写入时 LLM-judge "是否值得 promote 进 memdir"
+
+每条 ledger entry 加一个 LLM 评分（"this finding is/isn't worth long-term retention"），超阈值 promote。
+
+**否决理由**：
+- 每 turn 多一个 LLM call → 上下文层延迟 + 成本失控。
+- 评分判别本身是 hard problem，且当前 evidence 还不足（没数据表明 hits ledger 内容的 long-term reusable rate 多高）。违反 [`CLAUDE.md`](../CLAUDE.md) "NEVER add abstractions without 3+ use cases"。
+- "promotion path" 这种 implicit cross-layer flow 让人难调试 — 反例：FEATURE_180 RI dedup 之前的 cross-layer leak 就是 implicit flow 出过事的化石证据。
+
+#### 方案 C（采纳）：分层 + 显式接口
+
+两套独立，**不互相调用、不共享 storage**，只在 system-prompt 注入点和平共处：
+- session 启动注入 → memdir markdown blocks
+- compaction 之后注入 → ledger summary block
+
+两块在 system prompt 里**并排存在**，LLM 自行判断哪块跟当前任务相关。这跟 claudecode 的实际做法一致（claudecode 同时有 `extractMemories` markdown 注入 + tool result placeholder，从不让两者互调）。
+
+### 与既有 ADR / Feature 的关系
+
+| 既有 | 关系 |
+|---|---|
+| **F121 spill-to-file**（v0.7.40） | F185 互补：F121 让超大 raw output 落盘（避免 inline 爆 context），F185 让 path:line + tail 结构化进 ledger（避免 spill 之后失忆）。spill file 是 "需要时按 path 查"，ledger 是 "不用查就有梗概"。 |
+| **F183 PROTECTED 扩容**（同版） | F185 互补：F183 是"对的 tool（todo/MCP/RI/control-plane）不让 microcompact 清"；F185 是"被允许 clear 的 tool（grep/bash/...）也别全丢，先抽结构化字段"。两者一起把"压缩销毁丢信息"的攻击面降到最小。 |
+| **F124 memdir**（v0.7.43 规划） | 本 ADR 锁定 lifecycle/作用域正交，**不合并**。 |
+| **F104 prompt-eval discipline**（v0.7.29） | F185.4 Layer 2 panel 是 F104 harness 的标准应用：5-alias canonical panel + pre-registered gate + pilot-then-scale + offline re-judge with normaliser。 |
+| **ADR-029 top-of-loop compaction**（同版） | F179 把 compaction trigger 提前到 LLM call 之前，F185 让 compaction *之后* 的 system prompt 信息密度更高。两者节拍对齐：compaction 越早触发，ledger enrichment 越早被模型用上。 |
+
+### 后续验证
+
+- [v0.7.45+ 真实 session 复盘] 在用户实际跑长 session 时观察 `[Post-compact: ...]` 注入的 ledger summary 是否：
+  - 显著降低 long-session 中重复 grep 同一 pattern 的频率（baseline 待 F172 wall-time 实测期一并采集）
+  - 不被 ledger budget overrun（7.5K tokens × per task）挤掉重要 file_modified / file_read entries
+- [Layer 2 follow-up] F124 memdir ship 后做一个 cross-feature panel（5 alias × 4 case：grep recall, bash recall, memdir cite, mixed）确认两套机制不互相干扰、不让 model 选错块。
+
+### References
+
+- 配套实施：4 commits `15b1ea3c` + `83976149` + `da8d7b28` + `bddc3d58`（同 commit message 内嵌设计 rationale 与 SHIP gate 决策矩阵）
+- v0.7.42 上下文 §FEATURE_185（详细 pipeline + render 格式 + eval 结果）
+- v0.7.43 设计稿 §FEATURE_124 memdir（确认 lifecycle / 作用域正交）
+- 关键 memory：[`feedback_review_threat_model`](../../memory/feedback_review_threat_model.md)（KodaX-specific gap 判断）、[`feedback_layer1_measurement_before_optimization`](../../memory/feedback_layer1_measurement_before_optimization.md)（Layer 2 panel 验证 SHIP gate）、[`feedback_regex_audit_per_new_eval`](../../memory/feedback_regex_audit_per_new_eval.md)（pilot 1 暴露 + 修复 normaliser）
+
+---
+
