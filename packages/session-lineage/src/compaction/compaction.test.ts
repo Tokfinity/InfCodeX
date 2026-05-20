@@ -180,7 +180,16 @@ describe('compaction', () => {
       pruningThresholdTokens: 50000,
     };
 
+    // FEATURE_182 (v0.7.42): provide a previousSummary so the fast-path is
+    // taken (where [Pruned:...] markers persist into final output). Pre-F182
+    // this test relied on the implicit "first-compaction always takes
+    // fast-path when prunable" behaviour, but F182 now forces slow-path
+    // when previousSummary is empty (otherwise the fallback template gets
+    // cemented forever). The fast-path scenario this test was designed for
+    // is "subsequent compaction with a prior real summary", which is what
+    // the explicit previousSummary system message below now configures.
     const messages: KodaXMessage[] = [
+      { role: 'system', content: '[对话历史摘要]\n\nPrior summary from a previous compaction cycle. The user asked us to investigate a long-running task and we have made progress.' },
       { role: 'assistant', content: 'retain assistant note' },
       ...buildToolPair(1, 6500),
       ...buildToolPair(2, 6500),
@@ -490,5 +499,152 @@ describe('FEATURE_181 (v0.7.42): empty LLM summary does not overwrite a non-empt
     // Result produced without crash. summary may be empty / fallback content
     // depending on pruneResult vs slow-path entry — F181 is irrelevant here.
     expect(result).toBeDefined();
+  });
+});
+
+describe('FEATURE_182 (v0.7.42): fast-path requires a non-empty previousSummary', () => {
+  // C.1 forensic finding (788-session scan): 48% of compactions took the
+  // fast-path. Pre-F182 the fast-path branch returned
+  // buildFallbackCompactionSummary when previousSummary was empty, which
+  // cemented the generic "Continue the current task" template as the session
+  // summary. Subsequent compactions then saw the template as previousSummary
+  // and re-took fast-path indefinitely — the LLM was never asked to seed a
+  // real summary. F182 adds a `previousSummary &&` guard so first-compaction
+  // is forced through the slow-path; a real LLM summary then anchors all
+  // future fast-paths.
+
+  const REAL_SUMMARY_TEXT = [
+    '## Goal',
+    'User is investigating a kimi loop bug. We have traced it to compaction.',
+    '',
+    '## Constraints & Preferences',
+    '- Must run regression sweep before shipping',
+    '',
+    '## Progress',
+    '### Completed',
+    '- [x] Identified 091743 session as repro',
+    '- [x] Confirmed compaction destroys tool_result content',
+    '',
+    '### In Progress',
+    '- [ ] Wire stall detector',
+    '',
+    '## Next Steps',
+    '1. Add F178 sidecar integration',
+    '',
+    '## Key Context',
+    '- packages/agent/src/primitives/runner.ts',
+  ].join('\n');
+
+  function buildPrunableConversation(): KodaXMessage[] {
+    // Heavy tool-result payload so pruneToolResults marks hasPruned=true and
+    // the prunedQueue fits under triggerTokens * 0.8 — exactly the
+    // pre-condition that fast-path was designed for. With F182, slow-path is
+    // forced when previousSummary is absent.
+    return [
+      { role: 'assistant', content: 'retain assistant note' },
+      ...buildToolPair(1, 6500),
+      ...buildToolPair(2, 6500),
+      ...buildToolPair(3, 6500),
+      ...buildToolPair(4, 6500),
+      ...buildToolPair(5, 6500),
+      ...buildToolPair(6, 6500),
+      ...buildToolPair(7, 6500),
+      ...buildToolPair(8, 6500),
+      ...buildToolPair(9, 6500),
+      ...buildToolPair(10, 6500),
+      ...buildToolPair(11, 6500),
+      ...buildToolPair(12, 6500),
+      ...buildToolPair(13, 6500),
+      ...buildToolPair(14, 6500),
+    ];
+  }
+
+  it('first compaction with no prior summary forces slow-path (LLM is invoked)', async () => {
+    // The exact same fixture as the legacy "prunes older tool results" test
+    // but WITHOUT the prior-summary system message. Pre-F182 this took
+    // fast-path and the LLM was never called. Post-F182 this enters slow-path
+    // and provider.callCount must be > 0.
+    const provider = new FakeSummaryProvider(REAL_SUMMARY_TEXT);
+    const contextWindow = 120000;
+    const config = {
+      enabled: true,
+      triggerPercent: 70,
+      protectionPercent: 1,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 50000,
+    };
+
+    const messages = buildPrunableConversation();
+    const result = await compact(messages, config, provider, contextWindow);
+
+    expect(result.compacted).toBe(true);
+    // The critical assertion — LLM was invoked because previousSummary was
+    // empty, so fast-path was skipped.
+    expect(provider.callCount).toBeGreaterThan(0);
+    // The resulting summary is the LLM output, not the generic fallback.
+    expect(result.summary).toBeDefined();
+    expect(result.summary || '').toContain('kimi loop bug');
+  });
+
+  it('fast-path still taken when previousSummary is non-empty (no regression)', async () => {
+    // The parity case: same prunable fixture + a prior summary. F182 must
+    // leave fast-path intact here — provider.callCount stays 0, summary is
+    // the retained previousSummary verbatim. Matches the legacy "prunes
+    // older tool results" test behaviour.
+    const provider = new FakeSummaryProvider(REAL_SUMMARY_TEXT);
+    const contextWindow = 120000;
+    const config = {
+      enabled: true,
+      triggerPercent: 70,
+      protectionPercent: 1,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 50000,
+    };
+
+    const PRIOR_SUMMARY = 'Prior summary anchor that fast-path must retain verbatim.';
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `[对话历史摘要]\n\n${PRIOR_SUMMARY}` },
+      ...buildPrunableConversation(),
+    ];
+    const result = await compact(messages, config, provider, contextWindow);
+
+    expect(result.compacted).toBe(true);
+    // Fast-path was taken — LLM never called.
+    expect(provider.callCount).toBe(0);
+    // Prior summary retained verbatim, not the LLM template.
+    expect(result.summary).toBe(PRIOR_SUMMARY);
+  });
+
+  it('composes with F181: first compaction + empty LLM output falls back gracefully', async () => {
+    // Pre-F182 + empty LLM: fast-path returned the generic fallback
+    // template (acceptable but stuck).
+    // Post-F182 + empty LLM: slow-path runs, every chunk returns empty, F181
+    // keeps `summary = ''` because there is no prior to retain, the loop
+    // terminates when workingProcess is exhausted, and finalSummary || ...
+    // line still falls back to buildFallbackCompactionSummary. Same
+    // user-visible behaviour as pre-F182 for the no-prior + empty-LLM edge
+    // case — no regression.
+    const provider = new FakeSummaryProvider(
+      '## Goal\nNo active goal. The conversation appears empty with no prior context.',
+    );
+    const contextWindow = 120000;
+    const config = {
+      enabled: true,
+      triggerPercent: 70,
+      protectionPercent: 1,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 50000,
+    };
+
+    const messages = buildPrunableConversation();
+    const result = await compact(messages, config, provider, contextWindow);
+
+    expect(result.compacted).toBe(true);
+    // LLM WAS invoked (slow-path forced by F182).
+    expect(provider.callCount).toBeGreaterThan(0);
+    // Summary is the fallback template (acceptable degraded state, matches
+    // pre-F182 first-compaction behaviour). Critical: the result is not
+    // undefined / not a crash.
+    expect(result.summary).toBeDefined();
   });
 });

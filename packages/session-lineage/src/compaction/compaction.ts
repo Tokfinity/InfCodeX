@@ -183,8 +183,23 @@ export async function compact(
   const triggerTokens = getTriggerTokens(config, contextWindow);
 
   const pruningGapRatio = config.pruningGapRatio ?? 0.8;
-  if (pruneResult.hasPruned && estimateTokens(prunedQueue) <= triggerTokens * pruningGapRatio) {
-    const retainedSummary = previousSummary || buildFallbackCompactionSummary(totalFileOps, artifactLedger);
+  // FEATURE_182 (v0.7.42): fast-path is ONLY safe when a previousSummary
+  // exists to retain. Without one, fast-path returns
+  // buildFallbackCompactionSummary which cements the generic "Continue the
+  // current task" template as the session summary forever (subsequent
+  // fast-path compactions then reuse that template as previousSummary).
+  // 48% of compactions take fast-path per the 788-session scan; many are
+  // session-first compactions that get permanently stuck on the fallback.
+  // Force slow-path in this case so LLM seeds a real summary at least
+  // once. If slow-path also breaks early (currentMessages ≤ targetTokens),
+  // the existing fallback at finalSummary || ... line still applies — same
+  // outcome as before, no regression.
+  if (
+    previousSummary
+    && pruneResult.hasPruned
+    && estimateTokens(prunedQueue) <= triggerTokens * pruningGapRatio
+  ) {
+    const retainedSummary = previousSummary;
     const finalMessages = [createSummaryMessage(retainedSummary), ...prunedQueue];
     const tokensAfter = estimateTokens(finalMessages);
     const memorySeed = extractCompactMemorySeed(retainedSummary, totalFileOps);
