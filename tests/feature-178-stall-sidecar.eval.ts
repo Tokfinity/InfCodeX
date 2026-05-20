@@ -87,11 +87,36 @@ describe(`Eval: FEATURE_178 stall sidecar (${MODE})`, () => {
 
   it(
     'runs all probes and dumps raw output',
-    { timeout: 900_000 },
+    { timeout: SCALE ? 2_400_000 : 600_000 },
     async () => {
       mkdirSync(DUMP_ROOT, { recursive: true });
 
       const rows: ProbeRow[] = [];
+      // Incremental dump path — written after every row so partial runs
+      // (timeouts / process kill) preserve data instead of losing all
+      // 100+ probe results because the final-write never happened.
+      const incrementalDumpPath = join(DUMP_ROOT, `${MODE}-incremental-${Date.now()}.json`);
+      const flushIncremental = () => {
+        writeFileSync(
+          incrementalDumpPath,
+          JSON.stringify(
+            {
+              mode: MODE,
+              timestamp: new Date().toISOString(),
+              aliases,
+              runs: RUNS,
+              completedRows: rows.length,
+              expectedRows: CASES.length * aliases.length * RUNS,
+              rows,
+            },
+            null,
+            2,
+          ),
+          'utf-8',
+        );
+      };
+      // eslint-disable-next-line no-console
+      console.log(`[F178] incremental dump: ${incrementalDumpPath}`);
 
       for (const c of CASES) {
         for (const alias of aliases) {
@@ -135,6 +160,11 @@ describe(`Eval: FEATURE_178 stall sidecar (${MODE})`, () => {
               suggestedToolValid: cls.suggestedToolValid,
               primaryPassed,
             });
+            // Flush after every row so a timeout / crash preserves all
+            // completed probes (the 2026-05-20 first scale lost 100+
+            // probes when the 15min ceiling killed the test before the
+            // final-write at the end).
+            flushIncremental();
           }
         }
       }
