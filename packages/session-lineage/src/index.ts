@@ -87,6 +87,7 @@ export {
   COMPACTION_SUMMARY_PREFIX,
   needsCompaction,
   compact,
+  isEmptyLikeSummary,
 } from './compaction/compaction.js';
 
 export {

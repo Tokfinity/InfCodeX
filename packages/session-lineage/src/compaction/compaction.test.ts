@@ -9,7 +9,7 @@ import type {
   KodaXToolResultBlock,
 } from '@kodax-ai/llm';
 import { KodaXBaseProvider } from '@kodax-ai/llm';
-import { compact, needsCompaction, truncateUserText } from './compaction.js';
+import { compact, isEmptyLikeSummary, needsCompaction, truncateUserText } from './compaction.js';
 import { generateSummary } from './summary-generator.js';
 
 class FakeSummaryProvider extends KodaXBaseProvider {
@@ -318,5 +318,177 @@ describe('summary generator', () => {
     expect(provider.prompts[0]).toContain('You may remove:');
     expect(provider.prompts[0]).toContain('Additional instructions: Focus on risks');
     expect(provider.prompts[0]).not.toContain('Preserve all existing information');
+  });
+});
+
+describe('FEATURE_181 (v0.7.42): isEmptyLikeSummary heuristic', () => {
+  // Detection criteria — see isEmptyLikeSummary docstring.
+
+  it('treats empty / whitespace-only strings as empty', () => {
+    expect(isEmptyLikeSummary('')).toBe(true);
+    expect(isEmptyLikeSummary('   ')).toBe(true);
+    expect(isEmptyLikeSummary('\n\n  \t')).toBe(true);
+  });
+
+  it('treats very short outputs (< 80 chars) as empty', () => {
+    expect(isEmptyLikeSummary('## Goal\nSomething brief')).toBe(true);
+    expect(isEmptyLikeSummary('A'.repeat(79))).toBe(true);
+  });
+
+  it('detects "No active goal" marker (the most common LLM empty-output pattern)', () => {
+    const obs = '## Goal\nNo active goal. The conversation appears to be empty with no prior context provided.';
+    expect(isEmptyLikeSummary(obs)).toBe(true);
+  });
+
+  it('detects "conversation is empty" / "no prior context" / "nothing to summarize" markers', () => {
+    expect(isEmptyLikeSummary('## Goal\nThe conversation is empty. No information is available from the prior history block.'))
+      .toBe(true);
+    expect(isEmptyLikeSummary('## Goal\nThere is no prior context to summarize. The transcript has been compacted away.'))
+      .toBe(true);
+    expect(isEmptyLikeSummary('## Goal\nNothing to summarize — all messages appear to be placeholder strings.'))
+      .toBe(true);
+  });
+
+  it('case-insensitive on the marker phrases', () => {
+    expect(isEmptyLikeSummary('## Goal\nNO ACTIVE GOAL. The conversation appears empty per the placeholder content.'))
+      .toBe(true);
+  });
+
+  it('does NOT mark a real summary as empty', () => {
+    const realSummary = '## Goal\nThe user asked to review changes between v0.7.40 and v0.7.41 and write a summary report. Worker is in the middle of dispatching three child tasks to deep-dive boundary changes, LLM rename refactor, and REPL gemini integration.\n## Constraints\n- Must produce a markdown report.\n- Reviewer must reuse repo intelligence rather than re-grep.';
+    expect(isEmptyLikeSummary(realSummary)).toBe(false);
+  });
+
+  it('does NOT mark a long substantive summary that happens to mention "empty" in unrelated context', () => {
+    // Defensive check: if a real summary mentions "empty" referring to some
+    // other concept (e.g., "the empty config file was created"), it should
+    // not trigger empty-detection.
+    const realSummary = '## Goal\nUser wants to investigate why the test fixture directory was checked in as an empty file rather than an actual config. Worker has confirmed by reading the original commit that this was intentional.\n## Next steps\n- Document the rationale in the test guide.\n- Add a regression test that verifies the fixture stays empty.';
+    expect(isEmptyLikeSummary(realSummary)).toBe(false);
+  });
+});
+
+describe('FEATURE_181 (v0.7.42): empty LLM summary does not overwrite a non-empty previousSummary', () => {
+  // Production integration of isEmptyLikeSummary in the slow-path summarization
+  // loop. compact() extracts previousSummary from a system message prefixed
+  // with COMPACTION_SUMMARY_PREFIX (line ~140-150 of compaction.ts); the fake
+  // provider returns the empty-marker pattern to simulate the failure mode
+  // where microcompact + pruneToolResults stripped facts before the LLM ran.
+
+  const PRIOR_REAL_SUMMARY =
+    'PRIOR_REAL_SUMMARY: The user was investigating a kimi loop bug. Worker '
+    + 'had identified the root cause as compaction destroying tool_result '
+    + 'content. We confirmed via session forensics that 091743 exhibited the '
+    + 'same pattern across multiple turns of the same task.';
+
+  const EMPTY_SUMMARY_TEXT =
+    '## Goal\nNo active goal. The conversation is empty with no prior context provided.';
+
+  function buildPrunedConversation(turns: number): KodaXMessage[] {
+    // Mimic post-microcompact + post-pruneToolResults state: assistant
+    // tool_use blocks + user [Cleared:...] placeholder. Large word count so
+    // total exceeds compaction trigger window.
+    const out: KodaXMessage[] = [];
+    for (let i = 0; i < turns; i++) {
+      out.push({
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: `t${i}`, name: 'read', input: { path: `f${i}.ts` } },
+        ],
+      });
+      out.push({
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: `t${i}`, content: makeLongText('placeholder', 50) },
+        ],
+      });
+    }
+    return out;
+  }
+
+  it('keeps the prior real summary when the LLM returns an empty-like output on the next chunk', async () => {
+    // Fake provider returns the empty-like marker (will trigger F181 guard).
+    const provider = new FakeSummaryProvider(EMPTY_SUMMARY_TEXT);
+    const config = {
+      enabled: true,
+      triggerPercent: 60,
+      protectionPercent: 20,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 500,
+    };
+    const contextWindow = 100000;
+
+    // Build messages large enough to trigger compaction, with prior summary
+    // embedded as the system message compact() recognises.
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `${'[对话历史摘要]\n\n'}${PRIOR_REAL_SUMMARY}` },
+      ...buildLongConversation(200, 220), // ~88K tokens > 60K trigger
+    ];
+
+    const result = await compact(messages, config, provider, contextWindow);
+
+    expect(provider.callCount).toBeGreaterThan(0);
+    expect(result.compacted).toBe(true);
+    // The empty-like LLM output must NOT have replaced the prior summary.
+    expect(result.summary).toBeDefined();
+    expect(isEmptyLikeSummary(result.summary || '')).toBe(false);
+    expect(result.summary || '').toContain('PRIOR_REAL_SUMMARY');
+  });
+
+  it('still consumes chunks (loop terminates) when every LLM call returns empty-like', async () => {
+    // Without F181 progress guarantee, infinite loop could occur — every
+    // chunk gets the same empty-like summary and workingProcess never
+    // advances. F181 explicitly advances workingProcess by summarizedMessages
+    // even when keeping the prior summary; this test enforces that.
+    const provider = new FakeSummaryProvider(EMPTY_SUMMARY_TEXT);
+    const config = {
+      enabled: true,
+      triggerPercent: 60,
+      protectionPercent: 20,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 500,
+    };
+    const contextWindow = 100000;
+
+    const messages: KodaXMessage[] = [
+      { role: 'system', content: `${'[对话历史摘要]\n\n'}${PRIOR_REAL_SUMMARY}` },
+      ...buildLongConversation(200, 220), // > 60K trigger
+    ];
+
+    // Race against a 10s deadline — should complete in well under 1s in
+    // practice (no real I/O), but the deadline is the contract: no infinite loop.
+    const result = await Promise.race([
+      compact(messages, config, provider, contextWindow),
+      new Promise<never>((_, rej) =>
+        setTimeout(() => rej(new Error('compact loop did not terminate within 10s')), 10000),
+      ),
+    ]);
+    expect(result.compacted).toBeDefined();
+    // The fake provider should have been called at least once.
+    expect(provider.callCount).toBeGreaterThan(0);
+  });
+
+  it('first compaction (no prior summary) — empty marker flows through (F182 will harden)', async () => {
+    // F181 only guards "non-empty previousSummary getting overwritten".
+    // First compaction with no prior summary lets the empty-like LLM output
+    // flow through to the finalSummary || fallback line. This is the C.1 /
+    // F182 territory (force slow-path or richer fallback when empty). Here we
+    // just pin that F181 does not accidentally block first-compaction paths.
+    const provider = new FakeSummaryProvider(EMPTY_SUMMARY_TEXT);
+    const config = {
+      enabled: true,
+      triggerPercent: 60,
+      protectionPercent: 20,
+      rollingSummaryPercent: 10,
+      pruningThresholdTokens: 500,
+    };
+    const contextWindow = 100000;
+
+    const messages = buildLongConversation(10, 220); // no prior summary
+
+    const result = await compact(messages, config, provider, contextWindow);
+    // Result produced without crash. summary may be empty / fallback content
+    // depending on pruneResult vs slow-path entry — F181 is irrelevant here.
+    expect(result).toBeDefined();
   });
 });

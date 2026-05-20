@@ -65,6 +65,38 @@ interface SummaryAttemptResult {
   failed: boolean;
 }
 
+/**
+ * FEATURE_181 (v0.7.42): detect LLM "I have no content to summarize" output.
+ *
+ * Empty-like markers observed across 788 sessions (7.8% of compactions):
+ *   - "No active goal" / "no active goal"
+ *   - "conversation is empty" / "The conversation is empty"
+ *   - "no prior context"
+ *   - "nothing to summarize" / "no content to summarize"
+ *
+ * Also catches very short outputs (< 80 chars) — a meaningful goal summary
+ * is empirically ≥150 chars even for simple tasks. Conservative threshold:
+ * false positives only cause us to KEEP the previous summary, never lose
+ * information.
+ *
+ * Exported for unit testing.
+ */
+export function isEmptyLikeSummary(summary: string): boolean {
+  if (!summary) return true;
+  const trimmed = summary.trim();
+  if (trimmed.length < 80) return true;
+  const lower = trimmed.toLowerCase();
+  const emptyMarkers = [
+    'no active goal',
+    'conversation is empty',
+    'no prior context',
+    'nothing to summarize',
+    'no content to summarize',
+    'no content provided',
+  ];
+  return emptyMarkers.some((m) => lower.includes(m));
+}
+
 export function needsCompaction(
   messages: KodaXMessage[],
   config: CompactionConfig,
@@ -217,6 +249,27 @@ export async function compact(
 
     if (summaryAttempt.summarizedMessages === 0) {
       break;
+    }
+
+    // FEATURE_181 (v0.7.42): empty-like LLM summary must NOT overwrite a
+    // non-empty previous summary. Empty output happens 7.8% of the time
+    // (788-session scan) when the toSummarize chunk consists entirely of
+    // [Cleared:...] / [Pruned:...] placeholders — microcompact +
+    // pruneToolResults already stripped the facts before the LLM ran. The
+    // LLM correctly reports "no content to summarize" but overwriting a
+    // real prior summary with that empty marker erases the only memory of
+    // earlier islands. This caused the 091743 kimi loop: post-compact
+    // summary said "No active goal" and the model re-attempted file reads
+    // it had no record of having done. Always consume the chunk (move
+    // workingProcess forward) but keep the previous summary if the new
+    // one is empty-like.
+    if (isEmptyLikeSummary(summaryAttempt.summary) && summary) {
+      workingProcess = workingProcess.slice(summaryAttempt.summarizedMessages);
+      entriesRemoved += summaryAttempt.summarizedMessages;
+      if (summaryAttempt.failed) {
+        break;
+      }
+      continue;
     }
 
     summary = summaryAttempt.summary;
