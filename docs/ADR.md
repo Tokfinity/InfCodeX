@@ -1412,3 +1412,60 @@ Phase E 是 nice-to-have — 任何时机都可独立做。
 
 ---
 
+## ADR-029: AMA Compaction Trigger Parity — Top-of-Loop (FEATURE_179, v0.7.42)
+
+**Status**: Accepted 2026-05-20
+
+### 背景
+
+kimi-loop 调查（FEATURE_177/178 上下文）暴露了一个 AMA path 独有的 compaction trigger 时序问题：
+
+- **SA path**（substrate runner 直接执行 Tool loop）一直在**每次 iteration 顶部、LLM call 之前** check `needsCompaction` → 触发压缩。
+- **AMA path**（agent-runtime + managed-task + Runner.run wrapper）此前在**每次 `tool_result` append 之后** check —— 即在 LLM 已经返回结果、tool 已经跑完之后才检查。
+
+后果：
+1. **Text-only end-of-turn** 不触发 compaction。模型一回合只输出 text、不发 tool call → runner 没有 tool_result append → compaction check 不发生 → 下次 LLM call 仍然带着 over-window 的 history → HTTP 400 / context overflow。
+2. **Idle-yield 长 wait**：模型 emit `await_child_task` / `task_stop` 后进入 idle-yield 等待 child message。等待期不跑 tool → 不 check compaction → 等待结束恢复时 context 可能已经远超 trigger。
+
+实测某 zhipu/glm51 长 session 在 text-only 总结回合后 history 涨到 +60K tokens 才在下个 tool 调用时被发现并 emergency-compact，但那次 LLM call 已经先 400 了。
+
+### 决策
+
+把 `compactionHook` 从 "after each tool_result append" 上移到 **"top of every tool-loop iteration, before LLM call"**。具体改动在 `packages/agent/src/primitives/runner.ts`：原本在 line ~783 post-tool-result 触发的 hook 移到 line 587 iteration 入口。
+
+这让 AMA path 的触发节拍 == SA path 的触发节拍：
+
+- **Text-only 回合**：下一轮 iteration 顶部 check → 提前压缩
+- **Idle-yield 恢复**：恢复后第一次进入 iteration 顶部 check → 立刻压缩
+- **正常 tool-loop**：每轮 iteration 开始都 check，比之前"等到 tool 跑完才 check"提前一步
+
+### 替代方案考量 — 为什么不是 dual-trigger
+
+考虑过保留旧的 post-tool-result trigger 同时加一个 top-of-loop trigger（"两个触发点都触发"）。否决理由：
+
+- 违反 [memory: feedback_no_parallel_refactor_paths](../../memory/feedback_no_parallel_refactor_paths.md)，长期维护两个 trigger 时机会让 compaction 顺序问题难诊断。
+- 真正的语义是 "top-of-loop"，post-tool-result trigger 只是历史包袱（pre-managed-task agent.ts 那时 SA/AMA 还没分家，trigger 时机由 agent.ts 直接负责）。
+- 两套并存意味着 idempotent check 需要承担 double-execution。`needsCompaction` 不便宜（要 `estimateTokens(messages)`）。
+
+### 实施
+
+`runner.ts` 一处搬迁 + 1 处 doc-comment 重写。完整测试：
+
+- 7 个新 regression tests in `runner-compaction-hook.test.ts`（cover text-only / idle / mixed / hook-throw 等场景）
+- 145 个 agent 全测 PASS（含 SA + AMA + handoff + structural-resume）
+- `coding/src/task-engine/runner-driven.ts` 上游 wire 只改了一行 comment（hook 接同样的 callback，时机变了不影响 callback 内容）
+
+### 与 ADR-020 (Unified Agent Execution Substrate) 的关系
+
+ADR-020 把 SA/AMA 合并到统一 substrate Runner。本 ADR 是 SA/AMA semantic parity 的最后一块拼图：**trigger 时机也对齐**，不只是 tool dispatch / observer 接口对齐。从此 SA 和 AMA 的 compaction 触发是 bit-for-bit 同步的（同一个 `Runner.run` loop 入口、同一个 hook 调用点）。
+
+### References
+
+- commit `02836a72`
+- `packages/agent/src/primitives/runner.ts:587` (new hook location)
+- `packages/agent/src/primitives/runner-compaction-hook.test.ts` (regression suite)
+- v0.7.42 上下文 §FEATURE_179
+- 配套 forensic finding：B = repeated RI（→F180）、C.2 = empty summary（→F181）、C.1 = fast-path stuck on fallback（→F182）。F179 是触发时序的根因修复，F180-182 是压缩内容质量的修复，两组合在一起 cover 大部分 kimi-loop-class 的 compaction 病例
+
+---
+
