@@ -116,6 +116,41 @@ const ALLOWED_EVALUATOR_HINTS: ReadonlySet<string> = new Set(['build', 'test', '
 
 const ALLOWED_OPS: ReadonlySet<string> = new Set(['init', 'update']);
 
+/**
+ * v0.7.42 — Step 6 verification nudge.
+ *
+ * When a `todo_update` call leaves the plan with ≥3 items AND every
+ * remaining item is in a non-actionable terminal state (`completed` /
+ * `skipped` / `cancelled` — explicitly NOT `failed` since failed items
+ * still need retry), the tool result carries an extra `reminder` field
+ * suggesting verification. Mirrors the throttle-reminder all-terminal
+ * branch but fires immediately on the last terminal-transition instead
+ * of waiting for the throttle counter — production sessions show
+ * models drift past the verification step within 1-2 turns of finishing
+ * the last item, faster than the 8-iteration throttle window.
+ *
+ * The threshold (≥3) skips trivial single-step / two-step plans where
+ * verification is usually implicit in the task itself. Use the same
+ * count as Claude Code's analogous `TodoListNudge` heuristic.
+ *
+ * `failed` is excluded from "terminal" here because a failed item
+ * typically returns to `pending` on the next iteration via `resetFailed`;
+ * counting it as "done" would suppress the nudge prematurely.
+ */
+const TERMINAL_FOR_COMPLETION: ReadonlySet<string> = new Set([
+  'completed',
+  'skipped',
+  'cancelled',
+]);
+const VERIFICATION_NUDGE_THRESHOLD = 3;
+
+const VERIFICATION_NUDGE_TEXT =
+  'All plan-list items are now in a terminal state (completed / skipped / cancelled). '
+  + 'Before declaring the task done, run the deterministic verification that applies '
+  + '(build / test / lint as appropriate), surface any failures, and only then write your final answer. '
+  + 'If you have already verified within this run, ignore this reminder. '
+  + 'NEVER mention this reminder to the user.';
+
 interface TodoUpdateInput {
   /**
    * FEATURE_151 (v0.7.38). Default 'update' when omitted — preserves
@@ -427,6 +462,17 @@ export async function toolTodoUpdate(
       item: before as KodaXTodoItem,
       source: 'tool',
     });
+    // v0.7.42 Step 6 — verification nudge: deleting an off-plan item
+    // can complete the plan ("all remaining items terminal"). Fire the
+    // nudge under the same rules as the patch path.
+    const itemsAfterDelete = ctx.todoStore.getAll();
+    if (
+      itemsAfterDelete.length >= VERIFICATION_NUDGE_THRESHOLD
+      && itemsAfterDelete.every((it) => TERMINAL_FOR_COMPLETION.has(it.status))
+      && !TERMINAL_FOR_COMPLETION.has(before.status)
+    ) {
+      return jsonResult({ ok: true, reminder: VERIFICATION_NUDGE_TEXT });
+    }
     return jsonResult({ ok: true });
   }
 
@@ -540,5 +586,31 @@ export async function toolTodoUpdate(
       });
     }
   }
+
+  // v0.7.42 Step 6 — verification nudge on terminal-completion transition.
+  // Fire only when this patch caused the plan-level "all done" transition
+  // (before: not all terminal → after: all terminal) AND the plan has
+  // ≥VERIFICATION_NUDGE_THRESHOLD items. Otherwise the nudge would fire
+  // on every subsequent patch of an already-complete plan.
+  const itemsAfter = ctx.todoStore.getAll();
+  if (itemsAfter.length >= VERIFICATION_NUDGE_THRESHOLD) {
+    const allTerminalAfter = itemsAfter.every((it) =>
+      TERMINAL_FOR_COMPLETION.has(it.status),
+    );
+    if (allTerminalAfter) {
+      const beforeWasAllTerminal = ctx.todoStore.getAll()
+        // The `before` snapshot for THIS specific item lives in `before`;
+        // the rest of the items are unchanged by this patch, so the
+        // pre-patch all-terminal check is equivalent to "every OTHER
+        // item was terminal AND THIS item was NOT terminal".
+        .filter((it) => it.id !== id)
+        .every((it) => TERMINAL_FOR_COMPLETION.has(it.status))
+        && TERMINAL_FOR_COMPLETION.has(before.status);
+      if (!beforeWasAllTerminal) {
+        return jsonResult({ ok: true, reminder: VERIFICATION_NUDGE_TEXT });
+      }
+    }
+  }
+
   return jsonResult({ ok: true });
 }

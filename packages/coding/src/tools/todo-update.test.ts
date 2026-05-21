@@ -672,6 +672,124 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
     });
   });
 
+  // v0.7.42 Step 6 — verification nudge: appended to tool result when a
+  // patch leaves a plan with ≥3 items in all-terminal state (the
+  // transition moment), so the LLM is reminded to run build/test/lint
+  // before declaring the task done.
+  describe('verification nudge (v0.7.42 Step 6)', () => {
+    it('appends nudge when patch completes the last item of a 3-item plan', async () => {
+      // makeContextWithStore seeds todo_1/2/3 by default.
+      const { ctx, store } = makeContextWithStore();
+      store.updateStatus('todo_1', 'completed');
+      store.updateStatus('todo_2', 'completed');
+      const result = await toolTodoUpdate(
+        { id: 'todo_3', status: 'completed' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeDefined();
+      expect(parsed.reminder).toMatch(/verification/i);
+      expect(parsed.reminder).toMatch(/build.*test.*lint|terminal state/);
+      expect(parsed.reminder).toMatch(/NEVER mention this reminder/);
+    });
+
+    it('does NOT append nudge when the plan still has open items', async () => {
+      const { ctx, store } = makeContextWithStore();
+      store.updateStatus('todo_1', 'completed');
+      // todo_3 still pending after this patch.
+      const result = await toolTodoUpdate(
+        { id: 'todo_2', status: 'completed' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeUndefined();
+    });
+
+    it('does NOT append nudge on small (<3 items) plans even when all terminal', async () => {
+      const { ctx, store } = makeContextWithStore([
+        { id: 'todo_1', subject: 'A' },
+        { id: 'todo_2', subject: 'B' },
+      ]);
+      store.updateStatus('todo_1', 'completed');
+      const result = await toolTodoUpdate(
+        { id: 'todo_2', status: 'completed' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeUndefined();
+    });
+
+    it('does NOT re-fire nudge on subsequent patches of an already-complete plan', async () => {
+      const { ctx, store } = makeContextWithStore();
+      store.updateStatus('todo_1', 'completed');
+      store.updateStatus('todo_2', 'completed');
+      store.updateStatus('todo_3', 'completed');
+      // All terminal pre-patch. Patch field-only (no status transition) on
+      // an already-complete plan should NOT re-fire the nudge.
+      const noOp = await toolTodoUpdate(
+        { id: 'todo_3', subject: 'C revised' },
+        ctx,
+      );
+      const noOpParsed = JSON.parse(noOp) as { ok: boolean; reminder?: string };
+      expect(noOpParsed.ok).toBe(true);
+      expect(noOpParsed.reminder).toBeUndefined();
+    });
+
+    it('treats failed as OPEN (not terminal-for-completion) — nudge waits for retry', async () => {
+      const { ctx, store } = makeContextWithStore();
+      store.updateStatus('todo_1', 'completed');
+      store.updateStatus('todo_2', 'completed');
+      // todo_3 flips to failed (typically retried via resetFailed). Should
+      // NOT count as plan-complete; no nudge.
+      const result = await toolTodoUpdate(
+        { id: 'todo_3', status: 'failed', note: 'test failure' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeUndefined();
+    });
+
+    it('counts skipped + cancelled toward "all done"', async () => {
+      const { ctx, store } = makeContextWithStore();
+      store.updateStatus('todo_1', 'completed');
+      store.updateStatus('todo_2', 'skipped');
+      // The triggering patch: cancel todo_3 — plan ends all-terminal.
+      const result = await toolTodoUpdate(
+        { id: 'todo_3', status: 'cancelled', note: 'no longer needed' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeDefined();
+      expect(parsed.reminder).toMatch(/verification/i);
+    });
+
+    it('fires nudge when status:"deleted" prunes the last open off-plan item', async () => {
+      const { ctx, store } = makeContextWithStore([
+        { id: 'todo_1', subject: 'A' },
+        { id: 'todo_2', subject: 'B' },
+        { id: 'todo_3', subject: 'C' },
+        { id: 'todo_4', subject: 'D (off-plan)' },
+      ]);
+      store.updateStatus('todo_1', 'completed');
+      store.updateStatus('todo_2', 'completed');
+      store.updateStatus('todo_3', 'completed');
+      // Trigger the all-terminal transition via delete.
+      const result = await toolTodoUpdate(
+        { id: 'todo_4', status: 'deleted' },
+        ctx,
+      );
+      const parsed = JSON.parse(result) as { ok: boolean; reminder?: string };
+      expect(parsed.ok).toBe(true);
+      expect(parsed.reminder).toBeDefined();
+      expect(parsed.reminder).toMatch(/terminal state/);
+    });
+  });
+
   it('combines patch fields with a status transition in one call', async () => {
     const { ctx, store } = makeContextWithStore();
     const result = await toolTodoUpdate(
