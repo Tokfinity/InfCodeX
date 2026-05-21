@@ -1471,7 +1471,7 @@ ADR-020 把 SA/AMA 合并到统一 substrate Runner。本 ADR 是 SA/AMA semanti
 
 ## ADR-030: claudecode-Shape Main Agent + Sidecar Verifier Substrate (FEATURE_184, v0.7.45)
 
-**Status**: Proposed 2026-05-20
+**Status**: Accepted 2026-05-21 — Phases A/B/C.1/C.2/C.3/D.1/D.2/D.4 all landed; Phase D.3 (UI affordance) deferred. Layer 2 SHIP gate (a)+(b)+(c)+(d) met on second prompt iteration (treatment 100/100 cells across 5 alias × 4 case × 5 run; LLM-judge audit 0% disagreement). Full ship details: [v0.7.45.md §Phase D.4 SHIP outcome](features/v0.7.45.md#phase-d4-ship-outcome-2026-05-21).
 
 ### 背景
 
