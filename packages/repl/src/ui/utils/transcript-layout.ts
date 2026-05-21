@@ -57,7 +57,7 @@ export interface TranscriptBuildOptions {
   currentIteration?: number;
   isCompacting?: boolean;
   managedAgentMode?: string;
-  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   managedHarnessProfile?: string;
   managedWorkerTitle?: string;
   managedRound?: number;
@@ -693,9 +693,11 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
       ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Routing] `
       : managedPhase === "preflight"
         ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${preflightRole}] `
-        : managedHarnessProfile
-          ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
-          : "";
+        : managedPhase === "verifying"
+          ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} Verifying] `
+          : managedHarnessProfile
+            ? `[${managedAgentMode ? managedAgentMode.toUpperCase() : 'AMA'} ${managedHarnessShort ?? managedHarnessProfile}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ''}] `
+            : "";
     const activeToolCount = activeToolCalls.filter((tool) => tool.status === ToolCallStatus.Executing).length;
     const completedToolCount = activeToolCalls.filter((tool) => tool.status === ToolCallStatus.Success).length;
     const erroredToolCount = activeToolCalls.filter((tool) => tool.status === ToolCallStatus.Error).length;
@@ -704,6 +706,14 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
 
     if (isCompacting) {
       loadingText = "Compacting";
+    } else if (managedPhase === "verifying") {
+      // FEATURE_184 Phase D.3 — sidecar verifier is running out-of-chain
+      // (3-10s on inherit-main provider). No main-loop tool / thinking
+      // signals fire during this window, so override the default cascade
+      // to keep the spinner readable instead of falling through to
+      // "Thinking..." which would misattribute the work to the Worker.
+      prefix = managedPrefix;
+      loadingText = "checking agent output";
     } else if (shouldRenderLiveToolBlock) {
       const summaryParts: string[] = [];
       if (activeToolCount > 0) {

@@ -836,6 +836,7 @@ export type KodaXManagedTaskPhase =
   | 'round'
   | 'worker'
   | 'upgrade'
+  | 'verifying'
   | 'completed';
 
 export type KodaXManagedLiveEventPresentation =

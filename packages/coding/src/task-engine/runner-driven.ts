@@ -1609,6 +1609,10 @@ async function runManagedTaskViaRunnerInner(
             mode: 'task-notification',
           });
         if (!isIdleYieldTurn) {
+          // FEATURE_184 Phase D.3 — surface a "Verifying..." spinner via
+          // the observer so the user sees something during the sidecar
+          // LLM call (typically 3-10s on inherit-main provider).
+          observer.sidecarStarted();
           const sidecarResult = await sidecarVerifierHook(ctx);
           if (sidecarResult !== undefined) return sidecarResult;
         }

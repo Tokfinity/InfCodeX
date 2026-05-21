@@ -180,4 +180,23 @@ export interface ObserverBridge {
    * unmapped fallback.
    */
   readonly agentSwitched: (role: KodaXTaskRole | undefined) => void;
+  /**
+   * FEATURE_184 Phase D.3 (v0.7.42 follow-up) — fire when the Sidecar
+   * Verifier Stop hook is about to await the verifier LLM call. The
+   * verifier runs out-of-chain (3-10s on inherit-main provider) and
+   * the REPL would otherwise show stale "Worker" spinner state for
+   * the entire window. Emit `phase: 'verifying'` so the spinner row
+   * renders `[AMA Verifying] ...`.
+   *
+   * Pure UI label flip (same shape as `agentSwitched`):
+   *   - NO recorder mutation
+   *   - NO budget-extension dialog
+   *   - NO checkpoint write
+   *   - `persistToHistory: false` — transient REPL state
+   *
+   * No paired "done" emit needed: the next status event (either
+   * `completed` for accept/blocked, or the next round's role-emit
+   * for revise+reanimate) naturally overrides the verifying phase.
+   */
+  readonly sidecarStarted: () => void;
 }

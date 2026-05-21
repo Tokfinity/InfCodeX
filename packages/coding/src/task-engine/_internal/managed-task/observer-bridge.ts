@@ -522,6 +522,20 @@ export function buildObserverBridge(
         ...buildManagedStatusBudgetFields(budget, budgetApprovalRef.current),
       });
     },
+    sidecarStarted: () => {
+      // FEATURE_184 Phase D.3 — emit `phase: 'verifying'` so the REPL
+      // spinner shows `[AMA Verifying]` while the sidecar verifier LLM
+      // call is in flight (typically 3-10s on inherit-main provider).
+      // Without this, the spinner would keep the prior Worker label
+      // for the full window with no signal that the agent has stopped
+      // and a verification call is running.
+      if (!events?.onManagedTaskStatus) return;
+      emit({
+        phase: 'verifying',
+        note: 'Verifying agent output',
+        persistToHistory: false,
+      });
+    },
   };
 }
 
@@ -538,4 +552,5 @@ export const NULL_OBSERVER: ObserverBridge = {
   notifyChildFanout: () => undefined,
   idleWaiting: () => undefined,
   agentSwitched: () => undefined,
+  sidecarStarted: () => undefined,
 };

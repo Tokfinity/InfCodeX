@@ -76,7 +76,7 @@ export interface MessageListProps {
   /** Managed-task agent mode shown in live transcript state */
   agentMode?: "sa" | "ama";
   /** Managed-task phase shown in live transcript state */
-  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   /** Managed-task harness profile shown in live transcript state */
   managedHarnessProfile?: string;
   /** Managed-task active worker title shown in live transcript state */

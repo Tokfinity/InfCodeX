@@ -13,7 +13,7 @@ export interface SurfaceLivenessStreamingState {
 }
 
 export interface SurfaceLivenessManagedState {
-  phase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  phase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   harnessProfile?: string;
   workerTitle?: string;
 }

@@ -242,7 +242,7 @@ export interface StatusBarProps {
   };
   /** Whether current busy/thinking status should be visible in the bar */
   showBusyStatus?: boolean;
-  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "completed";
+  managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   managedHarnessProfile?: string;
   managedWorkerTitle?: string;
   managedRound?: number;

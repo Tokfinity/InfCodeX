@@ -597,6 +597,28 @@ describe("transcript-layout", () => {
     expect(text).not.toContain("[AMA H1");
   });
 
+  it("renders a Verifying prefix while the sidecar verifier is running (FEATURE_184 D.3)", () => {
+    // While the Sidecar Verifier Stop hook awaits its LLM call, the
+    // observer emits `phase: 'verifying'`. The spinner row must not
+    // misattribute the wait to the Worker — it should render
+    // `[AMA Verifying] checking agent output...` even when the
+    // harnessProfile + workerTitle from the prior turn are still set.
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 100,
+      isLoading: true,
+      managedAgentMode: "ama",
+      managedPhase: "verifying",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Worker",
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("[AMA Verifying] checking agent output...");
+    expect(text).not.toContain("[AMA H2");
+    expect(text).not.toContain("Worker");
+  });
+
   it("does not leak round 1/2 in the initial AMA live thinking row", () => {
     const rows = buildTranscriptRows({
       items: [],
