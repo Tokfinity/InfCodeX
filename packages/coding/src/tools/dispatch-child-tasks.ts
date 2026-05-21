@@ -41,6 +41,12 @@ import type {
 } from '../types.js';
 import type { ToolProgress } from './types.js';
 import { executeChildAgents, type ChildExecutorOptions } from '../child-executor.js';
+import {
+  applyChildSnapshotEvent,
+  finalizeChildSnapshot,
+  initChildSnapshot,
+  type ChildProgressStatus,
+} from '../child-progress-snapshot.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
 import {
   LARGE_CONTENT_THRESHOLD_BYTES,
@@ -527,6 +533,25 @@ export async function* toolDispatchChildTask(
     const abortRegistry = ctx.childAbortControllers;
     abortRegistry?.set(childId, childAbortController);
 
+    // FEATURE_177 v0.7.45 — initialise the per-child progress snapshot
+    // BEFORE launching the child so a concurrent `task_output(childId)`
+    // query during the dispatch generator's own yield phase sees
+    // `status:'running'` instead of `not_found`. The closure handed to
+    // `childOptions.snapshotUpdater` writes through the same Map
+    // instance for the lifetime of the child. Snapshot stays in the
+    // Map past `childTaskRegistry` cleanup so post-completion peeks
+    // work (bounded by `CHILD_PROGRESS_SNAPSHOT_CAP` FIFO prune).
+    const snapshotMap = ctx.childProgressSnapshots;
+    if (snapshotMap) {
+      initChildSnapshot(snapshotMap, {
+        childId,
+        startedAt: Date.now(),
+        maxIterations: options.maxIterationsPerChild,
+        parentRole: options.parentRole,
+        readOnly: bundle.readOnly,
+      });
+    }
+
     // Replace the parent signal in `options` with the per-child signal
     // so the child executor + child Runner.run observe the merged
     // abort state. Only the async branch needs this — the sync branch
@@ -534,6 +559,13 @@ export async function* toolDispatchChildTask(
     const childOptions: ChildExecutorOptions = {
       ...options,
       abortSignal: childAbortController.signal,
+      // FEATURE_177 — hand the snapshot writer to the child events
+      // bridge. `snapshotMap` may be `undefined` if the runner did not
+      // provision the map (e.g., a test ctx); the closure noop's in
+      // that case via `applyChildSnapshotEvent`'s undefined-check.
+      snapshotUpdater: snapshotMap
+        ? (event) => applyChildSnapshotEvent(snapshotMap, childId, event)
+        : undefined,
     };
 
     // Capture the worktree-register callback so it can fire at result
@@ -548,6 +580,15 @@ export async function* toolDispatchChildTask(
     // for now — the queue's default-undefined target matches the main
     // Runner loop reading from `getMessageQueue()` at iteration start.
     const asyncDispatchStartTs = Date.now();
+    // FEATURE_177: hoisted terminal state for the `.finally` snapshot
+    // finalize. Defaults guarantee a non-`running` terminal even if the
+    // try/catch bodies throw before populating either variable
+    // (code-review HIGH-1). The success/crash branches overwrite both
+    // with their authoritative values immediately before the throw or
+    // return; `.finally` then writes through to the snapshot exactly
+    // once per child lifecycle.
+    let terminalStatus: ChildProgressStatus = 'failed';
+    let terminalText: string | undefined;
     const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
       try {
         const result = await executeChildAgents([bundle], ctx, childOptions);
@@ -645,6 +686,13 @@ export async function* toolDispatchChildTask(
           durationMs: Date.now() - asyncDispatchStartTs,
           branch: 'async-success',
         });
+        // FEATURE_177: pin terminal state for `.finally` snapshot
+        // finalize. `status === 'completed'` maps to the success
+        // terminal; anything else (blocked / failed) collapses to
+        // `failed` from the snapshot's perspective — the diagnostic
+        // mode= envelope inside `rawSummary` carries the distinction.
+        terminalStatus = status === 'completed' ? 'completed' : 'failed';
+        terminalText = rawSummary;
         return result;
       } catch (err) {
         // Re-enqueue a background notification even on crash so the Worker
@@ -679,6 +727,17 @@ export async function* toolDispatchChildTask(
           durationMs: Date.now() - asyncDispatchStartTs,
           branch: 'async-crash',
         });
+        // FEATURE_177: pin terminal state for `.finally` snapshot
+        // finalize. AbortError (parent abort OR task_stop) routes to
+        // the `aborted` terminal; everything else (provider crash,
+        // assertion failure, programmer error) is `failed`. The
+        // distinction matters for the Worker's diagnostic envelope —
+        // `aborted` means "intentional", `failed` means "unexpected".
+        const isAbortError =
+          err instanceof Error &&
+          (err.name === 'AbortError' || err.message.toLowerCase().includes('aborted'));
+        terminalStatus = isAbortError ? 'aborted' : 'failed';
+        terminalText = crashRaw;
         throw err;
       } finally {
         // FEATURE_120 v0.7.39 Phase 3b — drain the per-child abort
@@ -689,6 +748,20 @@ export async function* toolDispatchChildTask(
         // chained on the inner async IIFE, not the registry promise.
         abortRegistry?.delete(childId);
         detachParentAbortListener?.();
+        // FEATURE_177 v0.7.45 — write terminal status + finalText into
+        // the snapshot exactly once per child. MUST be in `.finally`
+        // (not the success/crash bodies) so a thrown handler inside
+        // either branch still leaves the snapshot in a non-`running`
+        // terminal state. If `terminalText` is `undefined`
+        // (defensive — happens only if the try body threw before the
+        // status pin), the default `'failed'` status with no body lets
+        // the Worker's task_output reader at least know the child
+        // settled.
+        finalizeChildSnapshot(snapshotMap, childId, {
+          status: terminalStatus,
+          finalText: terminalText,
+          endedAt: Date.now(),
+        });
       }
     })();
     // v0.7.38 FEATURE_155 Bug A hotfix + v0.7.39 FEATURE_120 Step 0

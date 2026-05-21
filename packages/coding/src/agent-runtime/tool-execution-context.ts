@@ -124,5 +124,13 @@ export function buildToolExecutionContext(
     // request graceful exit of a specific child. Paired lifetime with
     // `childTaskRegistry` — same async-mode gating.
     childAbortControllers: new Map(),
+    // FEATURE_177 v0.7.45 — per-child progress snapshot map backing the
+    // `task_output` tool. Initialised here so dispatch + tool both see
+    // the same Map instance. Lifecycle paired with `childTaskRegistry`
+    // (one map per parent runner). Children's SA contexts do not
+    // inherit this field — `child-executor.executeReadChild/WriteChild`
+    // pass a fresh `KodaXOptions` to `runKodaX` and only forward
+    // workspace/system-prompt context, not the parent's registries.
+    childProgressSnapshots: new Map(),
   };
 }

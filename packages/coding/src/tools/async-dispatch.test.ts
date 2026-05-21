@@ -879,3 +879,176 @@ describe('empty-summary fallback — dispatch_child_task pipeline', () => {
     expect(matching.length).toBe(0);
   });
 });
+
+// FEATURE_177 v0.7.45 — snapshot lifecycle wiring. Verifies that the
+// dispatch tool initialises the per-child snapshot at launch and
+// finalises it (status + finalText) in the inner-IIFE `.finally` for
+// both the success and crash paths.
+describe('FEATURE_177 — child progress snapshot lifecycle', () => {
+  beforeEach(() => {
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+    delete process.env.KODAX_ASYNC_DISPATCH;
+  });
+  afterEach(() => {
+    _resetMessageQueueForTests();
+    delete process.env.KODAX_ASYNC_DISPATCH;
+  });
+
+  it('initialises snapshot status=running at dispatch (before child settles)', async () => {
+    let resolveExec!: (r: KodaXChildExecutionResult) => void;
+    mockExec.mockReturnValue(
+      new Promise<KodaXChildExecutionResult>((resolve) => {
+        resolveExec = resolve;
+      }),
+    );
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const snapshots = new Map<
+      string,
+      import('../child-progress-snapshot.js').ChildProgressSnapshot
+    >();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-1', objective: 'probe' }, ctx),
+    );
+    // Snapshot must exist immediately after the dispatch banner, BEFORE
+    // the child promise settles. This is the contract that lets a
+    // concurrent task_output call see `running` instead of `not_found`.
+    expect(snapshots.has('snap-1')).toBe(true);
+    expect(snapshots.get('snap-1')?.status).toBe('running');
+
+    // Settle and let the .finally chain run.
+    resolveExec(buildSuccessResult('snap-1', ['ok']));
+    await registry.get('snap-1');
+    await Promise.resolve();
+  });
+
+  it('finalises snapshot status=completed + finalText on success', async () => {
+    mockExec.mockResolvedValue(buildSuccessResult('snap-2', ['evidence A', 'evidence B']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const snapshots = new Map<
+      string,
+      import('../child-progress-snapshot.js').ChildProgressSnapshot
+    >();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-2', objective: 'probe' }, ctx),
+    );
+    await registry.get('snap-2');
+    await Promise.resolve();
+
+    const snap = snapshots.get('snap-2');
+    expect(snap).toBeDefined();
+    expect(snap?.status).toBe('completed');
+    expect(snap?.endedAt).toBeDefined();
+    // finalText carries the pre-guardrail rawSummary — for the success
+    // path that's the merged-findings evidence text.
+    expect(snap?.finalText).toContain('evidence A');
+    expect(snap?.finalText).toContain('evidence B');
+  });
+
+  it('finalises snapshot status=failed + finalText (diagnostic envelope) on silent-drop', async () => {
+    // Silent-drop: executor returns EMPTY_RESULT with no results entries.
+    mockExec.mockResolvedValue({
+      results: [],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    });
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const snapshots = new Map<
+      string,
+      import('../child-progress-snapshot.js').ChildProgressSnapshot
+    >();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-3', objective: 'probe' }, ctx),
+    );
+    await registry.get('snap-3');
+    await Promise.resolve();
+
+    const snap = snapshots.get('snap-3');
+    expect(snap?.status).toBe('failed');
+    // The failed-empty envelope from buildFailedEmptySummaryFallback —
+    // mode= field is the key diagnostic the Worker uses.
+    expect(snap?.finalText).toMatch(/mode=/);
+  });
+
+  it('finalises snapshot status=failed + finalText (crash envelope) on executor reject', async () => {
+    mockExec.mockRejectedValue(new Error('boom'));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const snapshots = new Map<
+      string,
+      import('../child-progress-snapshot.js').ChildProgressSnapshot
+    >();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-4', objective: 'probe' }, ctx),
+    );
+    await registry.get('snap-4')?.catch(() => undefined);
+    await Promise.resolve();
+
+    const snap = snapshots.get('snap-4');
+    expect(snap?.status).toBe('failed');
+    expect(snap?.finalText).toMatch(/crash: boom/);
+  });
+
+  it('snapshot persists after registry entry is cleaned (post-completion peek works)', async () => {
+    mockExec.mockResolvedValue(buildSuccessResult('snap-5', ['done']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const snapshots = new Map<
+      string,
+      import('../child-progress-snapshot.js').ChildProgressSnapshot
+    >();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-5', objective: 'probe' }, ctx),
+    );
+    await registry.get('snap-5');
+    await Promise.resolve();
+
+    // Registry entry is cleaned by registerChildTask's built-in finally;
+    // snapshot should remain (post-completion task_output reads).
+    expect(registry.has('snap-5')).toBe(false);
+    expect(snapshots.has('snap-5')).toBe(true);
+    expect(snapshots.get('snap-5')?.status).toBe('completed');
+  });
+
+  it('does not crash dispatch when childProgressSnapshots is undefined (defensive)', async () => {
+    mockExec.mockResolvedValue(buildSuccessResult('snap-6', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    // Explicitly omit childProgressSnapshots from ctx — covers older test
+    // ctx shapes and the future ext-runtime path that may not provision
+    // the substrate.
+    const ctx: KodaXToolExecutionContext = buildBaseCtx(registry);
+
+    const banner = await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'snap-6', objective: 'probe' }, ctx),
+    );
+    expect(banner).toContain('task_id:snap-6');
+    await registry.get('snap-6');
+    await Promise.resolve();
+    // No snapshot map → no exception, the rest of dispatch proceeds.
+  });
+});

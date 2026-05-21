@@ -45,6 +45,7 @@ import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolSendMessage } from './send-message.js';
 import { toolTaskStop } from './task-stop.js';
+import { toolTaskOutput } from './task-output.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
 import { toolTodoUpdate } from './todo-update.js';
@@ -576,6 +577,39 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
       const why = typeof i?.reason === 'string' ? i.reason.slice(0, 80) : '';
       return `TaskStop(${target})${why ? ': ' + why : ''}`;
+    },
+  },
+  {
+    name: 'task_output',
+    description:
+      'Peek at the current state of a child task launched via dispatch_child_task. Returns a structured snapshot (status, iteration count, recent tool-call breadcrumbs, and final text once the child settles). Use when interleaving useful work between idle-yields and you need to decide whether to dispatch a sibling, call task_stop on a stuck child, or just keep waiting. Default block:false returns the current snapshot immediately. Set block:true to wait up to timeout_ms for the child to finish — but prefer idle-yield (end the turn text-only) for waits; block:true is for tightly-scoped synchronous patterns only. Coordinator-only: child agents cannot call this tool. Completed children\'s snapshots remain queryable for the lifetime of the parent runner; very old snapshots may be evicted under a per-runner cap.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_id: {
+          type: 'string',
+          description:
+            'Target child task_id (from a prior dispatch_child_task call). Returns retrieval_status=not_found if the task was never dispatched or its snapshot has been evicted.',
+        },
+        block: {
+          type: 'boolean',
+          description:
+            'When true, wait for the child to settle (up to timeout_ms) before returning the snapshot. When false (default), return the current snapshot immediately without waiting. Use block:false for status peeks during interleaved work; block:true only for tightly-scoped synchronous patterns. Idle-yield (end turn text-only) is the canonical wait — do not use block:true as a substitute for it.',
+        },
+        timeout_ms: {
+          type: 'number',
+          description:
+            'Max wait time in milliseconds when block:true. Default 30000 (30s), max 120000 (120s). Ignored when block:false. On timeout, returns the current snapshot with retrieval_status=timeout.',
+        },
+      },
+      required: ['task_id'],
+    },
+    handler: toolTaskOutput,
+    toClassifierInput: (input) => {
+      const i = input as { task_id?: string; block?: boolean };
+      const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
+      const mode = i?.block === true ? ' (block)' : '';
+      return `TaskOutput(${target})${mode}`;
     },
   },
   {

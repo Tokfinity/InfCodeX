@@ -1643,4 +1643,26 @@ export interface KodaXToolExecutionContext {
    * `childTaskRegistry`).
    */
   childAbortControllers?: TaskAbortRegistry;
+
+  /**
+   * FEATURE_177 v0.7.45 substrate for the `task_output` tool. Per-child
+   * runtime snapshot a parent agent can query mid-flight to peek at
+   * iteration count + recent tool-call breadcrumbs without waiting for
+   * the child's `<task-completed>` banner.
+   *
+   * Populated by `dispatch_child_task` at launch (`initChildSnapshot`)
+   * and at terminal (`finalizeChildSnapshot` in the child promise's
+   * inner-IIFE `.finally`). The `task_output` tool reads from this map.
+   *
+   * Snapshots survive the child task settling (so post-completion peeks
+   * work) and are bounded by `CHILD_PROGRESS_SNAPSHOT_CAP` (FIFO prune
+   * by `startedAt` when the cap is exceeded). No TTL — snapshots are
+   * cleared with the ctx itself when the parent runner exits.
+   *
+   * Undefined in legacy sync-mode dispatch (same gate as
+   * `childTaskRegistry`). Children's own SA contexts do NOT inherit
+   * this map (verified by `buildToolExecutionContext` not forwarding
+   * it into child `runKodaX` calls).
+   */
+  childProgressSnapshots?: Map<string, import('./child-progress-snapshot.js').ChildProgressSnapshot>;
 }

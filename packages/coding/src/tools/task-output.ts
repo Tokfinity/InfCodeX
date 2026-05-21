@@ -1,0 +1,203 @@
+/**
+ * task_output — coordinator → in-flight child task snapshot query
+ * (FEATURE_177 v0.7.45).
+ *
+ * Lets a parent agent (Worker / Scout / Generator) peek at the current
+ * state of a child task launched via `dispatch_child_task`. Returns a
+ * structured envelope mirroring claudecode's `TaskOutput` shape:
+ *
+ *   <retrieval_status>success|timeout|not_found</retrieval_status>
+ *   <task_id>...</task_id>
+ *   <status>running|completed|failed|aborted</status>
+ *   <iterations>n/maxN</iterations>
+ *   <duration_ms>...</duration_ms>
+ *   <recent_tool_calls>...</recent_tool_calls>
+ *   <output>...</output>   (only when status terminal)
+ *
+ * Data source: `ctx.childProgressSnapshots` — populated by the dispatch
+ * tool at launch and `.finally`-finalized at terminal. Snapshots survive
+ * `childTaskRegistry` cleanup, so post-completion peeks work.
+ *
+ * Parent-only: filtered from child agent tool lists via
+ * `CHILD_EXCLUDE_TOOLS_BASE` (child-executor.ts) and `PLANNER_EXTRA_EXCLUDE`
+ * (role-exclude.ts — Planner drafts contracts, doesn't dispatch).
+ *
+ * Substrate gap vs claudecode: KodaX has no per-child JSONL or disk
+ * `<projectTempDir>/sessions/<sessionId>/tasks/<taskId>.output` file,
+ * so `<output>` carries the same pre-guardrail string the
+ * `<task-completed>` banner uses (the diagnostic envelope for
+ * empty/failed paths, the lastText for completed) — not a real-time
+ * assistant-text tail. The breadcrumb ring buffer is the only
+ * mid-flight content; for granular tracing, parents fall back to
+ * `KODAX_DISPATCH_CHILD_TRACE=1` post-mortem JSON.
+ *
+ * The `block` parameter races the child promise against `timeout_ms`.
+ * On success the snapshot is read AFTER the registry promise settles
+ * (snapshot is the source of truth — registry entries are deleted on
+ * settle via `registerChildTask`'s built-in cleanup chain). On timeout
+ * the snapshot is read AS-IS at the timeout boundary.
+ */
+
+import type { KodaXToolExecutionContext } from '../types.js';
+import type {
+  ChildProgressSnapshot,
+  ChildToolCallBreadcrumb,
+} from '../child-progress-snapshot.js';
+
+const TOOL_NAME = 'task_output';
+
+const DEFAULT_TIMEOUT_MS = 30000;
+const MAX_TIMEOUT_MS = 120000;
+/** Cap on inlined `<output>` content. Mirrors the per-snapshot
+ * `finalText` size which is already guardrailed by the dispatch
+ * pipeline, but the tool result also enforces a tail cap so a 50KB
+ * spillover preview cannot blow the parent's per-tool budget. */
+const OUTPUT_TAIL_BYTES = 8192;
+
+export async function toolTaskOutput(
+  input: Record<string, unknown>,
+  ctx: KodaXToolExecutionContext,
+): Promise<string> {
+  // --- Validate input ---
+  const taskId = typeof input.task_id === 'string' ? input.task_id.trim() : '';
+  if (!taskId) {
+    return `[Tool Error] ${TOOL_NAME}: Missing required parameter: task_id (child task_id from dispatch_child_task)`;
+  }
+
+  const blockRaw = input.block;
+  const block =
+    typeof blockRaw === 'boolean'
+      ? blockRaw
+      : typeof blockRaw === 'string'
+        ? blockRaw === 'true'
+        : false;
+
+  const timeoutRaw = input.timeout_ms;
+  let timeoutMs = DEFAULT_TIMEOUT_MS;
+  if (typeof timeoutRaw === 'number' && Number.isFinite(timeoutRaw)) {
+    timeoutMs = Math.max(0, Math.min(MAX_TIMEOUT_MS, Math.floor(timeoutRaw)));
+  }
+
+  // --- Reject when async dispatch is disabled (no snapshot map) ---
+  const snapshots = ctx.childProgressSnapshots;
+  if (!snapshots) {
+    return `[Tool Error] ${TOOL_NAME}: Async dispatch is disabled (no childProgressSnapshots on context). Children run synchronously and complete inside their dispatch_child_task call — there is no in-flight target to query.`;
+  }
+
+  // --- Optional block: race the registry promise vs timeout ---
+  let retrievalStatus: 'success' | 'timeout' | 'not_found' = 'success';
+  if (block) {
+    const registry = ctx.childTaskRegistry;
+    const inFlight = registry?.get(taskId);
+    if (inFlight) {
+      const timeout = new Promise<'__timeout__'>((resolve) =>
+        setTimeout(() => resolve('__timeout__'), timeoutMs),
+      );
+      // Swallow rejections — the child's `.finally` block writes the
+      // terminal state into the snapshot regardless of whether the
+      // promise resolves or rejects. We only need the race for timing.
+      const settle = inFlight.then(
+        () => '__settled__' as const,
+        () => '__settled__' as const,
+      );
+      const winner = await Promise.race([settle, timeout]);
+      if (winner === '__timeout__') {
+        retrievalStatus = 'timeout';
+      }
+    }
+    // If `registry.get(taskId)` is undefined here, the child already
+    // settled (and its registry entry was cleaned) before block:true
+    // could await. The snapshot still holds the terminal state, so we
+    // fall through to read it; retrievalStatus stays 'success'.
+  }
+
+  const snap = snapshots.get(taskId);
+  if (!snap) {
+    return renderNotFound(taskId);
+  }
+
+  return renderSnapshot(snap, retrievalStatus);
+}
+
+function renderNotFound(taskId: string): string {
+  return [
+    `<retrieval_status>not_found</retrieval_status>`,
+    `<task_id>${escapeXmlContent(taskId)}</task_id>`,
+    `<error>No snapshot for task_id "${escapeXmlContent(taskId)}". The task may never have been dispatched, or it settled long enough ago that its snapshot was evicted under the per-runner cap (see CHILD_PROGRESS_SNAPSHOT_CAP).</error>`,
+  ].join('\n');
+}
+
+function renderSnapshot(
+  snap: ChildProgressSnapshot,
+  retrievalStatus: 'success' | 'timeout' | 'not_found',
+): string {
+  const now = Date.now();
+  const referenceEnd = snap.endedAt ?? now;
+  const duration = Math.max(0, referenceEnd - snap.startedAt);
+
+  const lines: string[] = [
+    `<retrieval_status>${retrievalStatus}</retrieval_status>`,
+    `<task_id>${escapeXmlContent(snap.childId)}</task_id>`,
+    `<status>${snap.status}</status>`,
+    `<iterations>${snap.iterations}/${snap.maxIterations}</iterations>`,
+    `<duration_ms>${duration}</duration_ms>`,
+  ];
+
+  if (snap.recentToolCalls.length > 0) {
+    lines.push(`<recent_tool_calls>`);
+    for (const call of snap.recentToolCalls) {
+      lines.push(`  ${formatBreadcrumb(call)}`);
+    }
+    lines.push(`</recent_tool_calls>`);
+  } else if (snap.status === 'running') {
+    // Empty during the brief window after dispatch + before the first
+    // child tool call lands. Explicit marker so the LLM doesn't read
+    // "no recent_tool_calls block" as "child crashed".
+    lines.push(`<recent_tool_calls>(no tool calls yet — child has not started executing)</recent_tool_calls>`);
+  }
+
+  if (snap.status !== 'running' && snap.finalText !== undefined) {
+    const body = tailToBytes(snap.finalText, OUTPUT_TAIL_BYTES);
+    const tag = snap.status === 'completed' ? 'output' : 'error';
+    lines.push(`<${tag}>`);
+    lines.push(body);
+    lines.push(`</${tag}>`);
+  }
+
+  return lines.join('\n');
+}
+
+function formatBreadcrumb(call: ChildToolCallBreadcrumb): string {
+  const hint = call.inputHint ? ` ${call.inputHint}` : '';
+  return `[iter ${call.iteration}] ${call.toolName}${hint}`;
+}
+
+/**
+ * Byte-aware tail. Uses Buffer to handle multi-byte chars cleanly.
+ * Returns the LAST `maxBytes` bytes (claudecode-style), prefixed with
+ * a truncation marker when shortened. Mid-codepoint slicing is
+ * mitigated by skipping leading continuation bytes after the cut.
+ */
+function tailToBytes(content: string, maxBytes: number): string {
+  const buf = Buffer.from(content, 'utf8');
+  if (buf.byteLength <= maxBytes) {
+    return content;
+  }
+  let start = buf.byteLength - maxBytes;
+  // Skip any UTF-8 continuation bytes (10xxxxxx) at the cut so we don't
+  // start mid-codepoint. The lead byte of a multi-byte sequence has
+  // bits 11xx_xxxx, continuation bytes are 10xx_xxxx — bumping `start`
+  // until the byte is NOT a continuation byte gives us a safe boundary.
+  while (start < buf.byteLength && (buf[start] & 0b1100_0000) === 0b1000_0000) {
+    start++;
+  }
+  const tail = buf.subarray(start).toString('utf8');
+  return `[...truncated to last ${maxBytes} bytes...]\n${tail}`;
+}
+
+function escapeXmlContent(value: string): string {
+  // Minimal escape — task_id is the only field user-influenced, and
+  // `dispatch_child_task` already validates it as a simple string. The
+  // escape is defensive in case future callers pass arbitrary IDs.
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}

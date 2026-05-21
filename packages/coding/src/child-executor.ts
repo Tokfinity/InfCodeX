@@ -114,6 +114,17 @@ export interface ChildExecutorOptions {
    * a fresh threshold and bypassing the parent's downgrade.
    */
   readonly guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
+
+  /**
+   * FEATURE_177 v0.7.45: optional bridge that feeds per-child events
+   * (iteration start, tool-use start) into the parent's snapshot map.
+   * Closes over `ctx.childProgressSnapshots` at the dispatch site so
+   * the writer and `task_output` reader share one Map instance. Absent
+   * on the sync-dispatch path (no in-flight state to peek at).
+   */
+  readonly snapshotUpdater?: (
+    event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
+  ) => void;
 }
 
 export async function executeChildAgents(
@@ -225,6 +236,7 @@ async function executeReadChild(
     bundle.id,
     options.onProgress,
     options.planModeBlockCheck,
+    options.snapshotUpdater,
   );
 
   const provider = options.parentOptions.provider ?? 'anthropic';
@@ -308,6 +320,7 @@ async function executeWriteChild(
     bundle.id,
     options.onProgress,
     options.planModeBlockCheck,
+    options.snapshotUpdater,
   );
   const provider = options.parentOptions.provider ?? 'anthropic';
 
@@ -581,6 +594,7 @@ export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
   // tool no longer exists, so excluding it from children is moot.
   'send_message',           // FEATURE_120: coordinator-only — children cannot steer siblings
   'task_stop',              // FEATURE_120: coordinator-only — children cannot stop siblings
+  'task_output',            // FEATURE_177: coordinator-only — children cannot peek at sibling progress
   'ask_user_question',      // Children cannot prompt the user
   'worktree_create',        // Worktree lifecycle managed by parent
   'worktree_remove',        // Worktree lifecycle managed by parent
@@ -612,6 +626,9 @@ export function buildChildEvents(
   childId: string,
   onProgress?: (status: string) => void,
   planModeBlockCheck?: PlanModeBlockCheck,
+  snapshotUpdater?: (
+    event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
+  ) => void,
 ): KodaXEvents | undefined {
   let iterationCount = 0;
   let maxIterations = 200;
@@ -646,6 +663,12 @@ export function buildChildEvents(
     onIterationStart: (iter: number, maxIter: number) => {
       iterationCount = iter;
       maxIterations = maxIter;
+      // FEATURE_177: feed iteration into snapshot. Not throttled — one
+      // event per iteration is at most a few times per second and we
+      // want the snapshot iteration count to be exact, not approximate.
+      if (snapshotUpdater) {
+        snapshotUpdater({ kind: 'iteration', iteration: iter, maxIterations: maxIter });
+      }
     },
     // Combined progress: "sec-coding [3/200] → read src/foo.ts" (throttled)
     onToolUseStart: (tool) => {
@@ -657,10 +680,22 @@ export function buildChildEvents(
             ?? ''
           : '')
         : '';
-      const hint = typeof inputHint === 'string' && inputHint
-        ? ` ${inputHint.slice(0, 60)}`
-        : '';
+      const hintStr = typeof inputHint === 'string' ? inputHint.slice(0, 60) : '';
+      const hint = hintStr ? ` ${hintStr}` : '';
       throttledProgress(`${childId} [${iterationCount}/${maxIterations}] → ${tool.name}${hint}`);
+      // FEATURE_177: feed tool-call breadcrumb into snapshot. Independent
+      // of the REPL throttle — breadcrumbs are bounded by the
+      // ring-buffer cap, so emitting one per tool call cannot grow the
+      // snapshot unbounded.
+      if (snapshotUpdater) {
+        snapshotUpdater({
+          kind: 'tool-start',
+          iteration: iterationCount,
+          toolName: tool.name,
+          inputHint: hintStr,
+          startedAt: Date.now(),
+        });
+      }
     },
   };
 }
