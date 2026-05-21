@@ -873,8 +873,18 @@ function validateWriteBundles(
 ): readonly KodaXChildContextBundle[] {
   if (writeBundles.length === 0) return [];
 
-  // Only Generator can do write fan-out (via H2 harness or tool dispatch)
-  if (parentRole !== 'generator') {
+  // Only Generator (V1 AMA Generator slot) or Worker (V2 AMA single-loop
+  // primary) can do write fan-out, via H2 harness or `tool-dispatch`. Keep
+  // this allow-list in sync with the `role` parameter accepted by
+  // `wrapDispatchChildTaskForRole` (task-engine/_internal/managed-task/
+  // dispatch-child.ts). If the wrapper accepts a role this gate rejects,
+  // write bundles are silently dropped — `executeChildAgents` returns
+  // `EMPTY_RESULT`, `dispatch-child-tasks.ts` unpacks
+  // `result.results[0] === undefined`, and the Worker sees `failed: no
+  // result` with no diagnostic signal. The async branch's empty-banner
+  // fallback covers the success-empty case; the failed-empty diagnostic
+  // envelope covers the post-fix residual paths.
+  if (parentRole !== 'generator' && parentRole !== 'worker') {
     return [];
   }
   if (parentHarness !== 'H2_PLAN_EXECUTE_EVAL' && parentHarness !== 'tool-dispatch') {

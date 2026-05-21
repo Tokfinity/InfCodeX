@@ -188,6 +188,80 @@ function buildEmptySummaryFallback(args: {
 }
 
 /**
+ * Symmetric counterpart to `buildEmptySummaryFallback` for the failed-empty
+ * path: `status==='failed'` AND `childSummary` is empty/whitespace-only. The
+ * pre-fix code substituted the literal `'no result'` here, leaving the Worker
+ * to invent infrastructure-failure narratives ("clearly a persistent
+ * concurrency issue with child task dispatch") with no diagnostic signal to
+ * back the hypothesis.
+ *
+ * The envelope classifies the most common failure modes from the dispatch
+ * pipeline's perspective:
+ *
+ *   - **silent-drop**: `resultsCount===0`. The child bundle was rejected
+ *     before `runFanOut` could even invoke the runner — typically a
+ *     validation gate (e.g. `validateWriteBundles` blocking write fan-out
+ *     for a role not on its allow-list, the empty-bundles early return, or
+ *     a role-gating reject inside `dispatch-child-tasks.ts` itself). This
+ *     class is invisible without trace; before the fix the Worker would
+ *     loop trying the same dispatch shape.
+ *   - **startup-crash**: `iterations===0`. The child runner started but the
+ *     first assistant turn produced no text — typically a provider stream
+ *     error caught by run-substrate CAP-084 (returns `success:false,
+ *     lastText:''`). Most common upstream: rate limit on the first call,
+ *     network RST, auth failure, or a guardrail rejecting the first tool
+ *     call.
+ *   - **mid-run-failure**: `iterations>0`. The child made progress then
+ *     errored — same CAP-084 path but later, after some assistant turns
+ *     accumulated. `turnState.lastText` was still empty when the error
+ *     fired (e.g., the error came mid-tool-result before any text block
+ *     in the assistant message).
+ *   - **unknown**: classifier couldn't pin a mode. Trace is the next step.
+ *
+ * The fallback fires only on the empty branch; non-empty `childSummary`
+ * uses the unmodified `failed: <summary>` shape.
+ */
+function buildFailedEmptySummaryFallback(args: {
+  readonly childId: string;
+  readonly status: KodaXChildAgentResult['status'] | undefined;
+  readonly iterations: number | undefined;
+  readonly interrupted: boolean;
+  readonly resultsCount: number;
+  readonly mergedFindingsCount: number;
+  readonly readOnly: boolean;
+  readonly parentRole: string | undefined;
+  readonly provider: string | undefined;
+  readonly model: string | undefined;
+}): string {
+  const mode: 'silent-drop' | 'startup-crash' | 'mid-run-failure' | 'unknown' =
+    args.resultsCount === 0
+      ? 'silent-drop'
+      : (args.iterations ?? null) === 0
+        ? 'startup-crash'
+        : (args.iterations ?? 0) > 0
+          ? 'mid-run-failure'
+          : 'unknown';
+  const modeHint = (() => {
+    if (mode === 'silent-drop') {
+      return `Bundle never reached the child runner — typically a validation gate dropped it. Check executeChildAgents early-return paths (validateWriteBundles, empty-bundles guard) against parentRole=${args.parentRole ?? '?'} readOnly=${args.readOnly}.`;
+    }
+    if (mode === 'startup-crash') {
+      return 'Child runner errored before any assistant turn — most often run-substrate CAP-084 (success:false, lastText:\'\') triggered by a provider stream error on the first LLM call (rate limit / network / auth / context-size 4xx).';
+    }
+    if (mode === 'mid-run-failure') {
+      return `Child runner produced ${args.iterations} assistant turn(s) then errored without retaining text — typically a mid-stream provider error or a tool-execution failure that left turnState.lastText empty.`;
+    }
+    return 'Failure mode could not be classified — no childResult and no exception captured.';
+  })();
+  return [
+    `(child task "${args.childId}" FAILED with no result text.`,
+    `Diagnostic: status=${args.status ?? 'failed'} mode=${mode} iterations=${args.iterations ?? 'n/a'} interrupted=${args.interrupted} results=${args.resultsCount} mergedFindings=${args.mergedFindingsCount} readOnly=${args.readOnly} parentRole=${args.parentRole ?? '?'} provider=${args.provider ?? '?'} model=${args.model ?? '?'}.`,
+    modeHint,
+    `Treat as inconclusive — do NOT invent an infrastructure narrative without evidence. Set KODAX_DISPATCH_CHILD_TRACE=1 for a JSON trace at \`os.tmpdir()/kodax-dispatch-trace/\` to disambiguate the next reproduction.)`,
+  ].join('\n');
+}
+
+/**
  * Optional diagnostic trace writer. Gated on
  * `process.env.KODAX_DISPATCH_CHILD_TRACE === '1'`. Writes one JSON file per
  * settled child to `os.tmpdir()/kodax-dispatch-trace/{ISO}_{childId}.json`.
@@ -306,8 +380,13 @@ export async function* toolDispatchChildTask(
   }
 
   const role = ctx.managedProtocolRole;
+  // Scout, Generator (V1 AMA), and Worker (V2 AMA single-loop) are the only
+  // roles permitted to dispatch children. Planner / Evaluator are blocked.
+  // Keep this list in sync with `validateWriteBundles` in
+  // `../child-executor.ts` and the `role` union in
+  // `../task-engine/_internal/managed-task/dispatch-child.ts`.
   if (role === 'planner' || role === 'evaluator') {
-    return `[Tool Error] ${TOOL_NAME}: ${role} cannot dispatch child tasks. Only Scout and Generator may use this tool.`;
+    return `[Tool Error] ${TOOL_NAME}: ${role} cannot dispatch child tasks. Only Scout, Generator, and Worker may use this tool.`;
   }
 
   const readOnly = (input.read_only ?? input.readOnly) !== false;
@@ -511,7 +590,29 @@ export async function* toolDispatchChildTask(
             fallbackApplied = true;
           }
         } else {
-          rawSummary = `failed: ${childSummary.trim().length > 0 ? childSummary : 'no result'}`;
+          // FEATURE_176 symmetric: failed-empty path used to substitute the
+          // literal 'no result', giving the Worker no signal to distinguish
+          // a validation-drop / startup CAP-084 / mid-run failure. Now emits
+          // the same diagnostic envelope shape as the success-empty branch
+          // so subsequent investigation has at least one mode classification
+          // + iteration count + readOnly/parentRole context to grep.
+          if (childSummary.trim().length > 0) {
+            rawSummary = `failed: ${childSummary}`;
+          } else {
+            rawSummary = buildFailedEmptySummaryFallback({
+              childId,
+              status,
+              iterations: childResult?.actualIterations,
+              interrupted: childResult?.interrupted === true,
+              resultsCount: result.results.length,
+              mergedFindingsCount: result.mergedFindings.length,
+              readOnly: bundle.readOnly,
+              parentRole: role,
+              provider: parentConfig?.provider,
+              model: parentConfig?.model,
+            });
+            fallbackApplied = true;
+          }
         }
         // FEATURE_121 (v0.7.40): per-banner guardrail + LLM-summarize last-
         // resort fallback. Replaces the previous `summary.slice(0, 200)`
@@ -638,10 +739,29 @@ export async function* toolDispatchChildTask(
       // FEATURE_121 (v0.7.40): same guardrail + LLM-summarize fallback as
       // the async branch envelope path. Replaces the previous
       // `slice(0, 1000)` 1000-char hard truncate.
-      const failedSummary = childResult?.summary && childResult.summary.trim().length > 0
-        ? childResult.summary
-        : 'no result';
-      const failedRaw = `Child task "${childId}" failed: ${failedSummary}`;
+      // FEATURE_176 symmetric: failed-empty path also uses the diagnostic
+      // envelope so the Worker's banner carries mode classification +
+      // iteration count instead of the bare literal `no result`.
+      const hasSummary = childResult?.summary && childResult.summary.trim().length > 0;
+      let failedRaw: string;
+      let fallbackApplied = false;
+      if (hasSummary) {
+        failedRaw = `Child task "${childId}" failed: ${childResult!.summary}`;
+      } else {
+        failedRaw = buildFailedEmptySummaryFallback({
+          childId,
+          status,
+          iterations: childResult?.actualIterations,
+          interrupted: childResult?.interrupted === true,
+          resultsCount: result.results.length,
+          mergedFindingsCount: result.mergedFindings.length,
+          readOnly: bundle.readOnly,
+          parentRole: role,
+          provider: parentConfig?.provider,
+          model: parentConfig?.model,
+        });
+        fallbackApplied = true;
+      }
       const bannerContent = await applyChildSummaryGuardrailWithSummarizer(
         'child_task_summary',
         failedRaw,
@@ -653,7 +773,7 @@ export async function* toolDispatchChildTask(
         result,
         rawSummary: failedRaw,
         bannerContent,
-        fallbackApplied: false,
+        fallbackApplied,
         provider: parentConfig?.provider,
         model: parentConfig?.model,
         durationMs: Date.now() - dispatchStartTs,

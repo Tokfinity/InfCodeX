@@ -615,6 +615,205 @@ describe('empty-summary fallback — dispatch_child_task pipeline', () => {
     expect(result.trim().length).toBeGreaterThan(0);
   });
 
+  it('async-failed path: silent-drop (resultsCount=0) triggers diagnostic envelope', async () => {
+    // Regression guard for the validateWriteBundles silent-drop bug: Worker
+    // dispatches write child, validateWriteBundles drops it before the
+    // child runner is invoked, executeChildAgents returns EMPTY_RESULT,
+    // and dispatch unpacks `result.results[0] === undefined`. Pre-fix the
+    // Worker banner read `failed: no result`; now it carries a diagnostic
+    // envelope classifying mode=silent-drop with the readOnly + parentRole
+    // context so investigation has a starting point.
+    //
+    // The test uses managedProtocolRole='worker' + read_only:false so the
+    // dispatch passes the role gate at dispatch-child-tasks.ts:308-316.
+    // The mocked executeChildAgents returns EMPTY_RESULT directly to
+    // simulate any silent-drop path (validateWriteBundles or other early
+    // returns inside executeChildAgents).
+    const id = childId('silent-drop');
+    const emptyResult: KodaXChildExecutionResult = {
+      results: [],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(emptyResult);
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      managedProtocolRole: 'worker',
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe', read_only: false }, ctx),
+    );
+    await registry.get(id);
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain(`<task-completed task_id="${id}">`);
+    expect(banner).toContain('FAILED with no result text');
+    expect(banner).toContain('mode=silent-drop');
+    expect(banner).toContain('parentRole=worker');
+    expect(banner).toContain('readOnly=false');
+    // Critical: does NOT contain the bare literal pre-fix text.
+    expect(banner).not.toContain('failed: no result');
+    // Outer tag content is non-empty.
+    const inner = banner
+      .replace(/^<task-completed task_id="[^"]+">\s*/, '')
+      .replace(/\s*<\/task-completed>$/, '');
+    expect(inner.trim().length).toBeGreaterThan(0);
+  });
+
+  it('async-failed path: startup-crash (iterations=0, results=1) classifies as startup-crash', async () => {
+    // run-substrate CAP-084 generic error terminal returns
+    // `success:false, lastText:''` after a provider stream error before any
+    // text was accumulated. child-executor reports `status='failed',
+    // summary='', actualIterations=0`. The envelope should classify
+    // mode=startup-crash with the iteration count visible.
+    const id = childId('startup-crash');
+    const failedResult: KodaXChildExecutionResult = {
+      results: [
+        {
+          childId: id,
+          fanoutClass: 'evidence-scan',
+          status: 'failed',
+          disposition: 'needs-more-evidence',
+          summary: '',
+          evidenceRefs: [],
+          contradictions: [],
+          actualIterations: 0,
+          interrupted: false,
+        },
+      ],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(failedResult);
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
+    );
+    await registry.get(id);
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('FAILED with no result text');
+    expect(banner).toContain('mode=startup-crash');
+    expect(banner).toContain('iterations=0');
+    expect(banner).not.toContain('failed: no result');
+  });
+
+  it('async-failed path: mid-run-failure (iterations>0) classifies as mid-run-failure', async () => {
+    const id = childId('mid-run');
+    const failedResult: KodaXChildExecutionResult = {
+      results: [
+        {
+          childId: id,
+          fanoutClass: 'evidence-scan',
+          status: 'failed',
+          disposition: 'needs-more-evidence',
+          summary: '',
+          evidenceRefs: [],
+          contradictions: [],
+          actualIterations: 7,
+          interrupted: false,
+        },
+      ],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(failedResult);
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
+    );
+    await registry.get(id);
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('mode=mid-run-failure');
+    expect(banner).toContain('iterations=7');
+  });
+
+  it('async-failed path: non-empty summary bypasses envelope (no regression)', async () => {
+    // When child reports failure WITH a summary, the envelope must NOT fire
+    // — the Worker should see the real error message, not a generic
+    // diagnostic.
+    const id = childId('failed-with-msg');
+    const failedResult: KodaXChildExecutionResult = {
+      results: [
+        {
+          childId: id,
+          fanoutClass: 'evidence-scan',
+          status: 'failed',
+          disposition: 'needs-more-evidence',
+          summary: 'specific error: ENOENT /tmp/foo',
+          evidenceRefs: [],
+          contradictions: [],
+          actualIterations: 2,
+          interrupted: false,
+        },
+      ],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(failedResult);
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
+    );
+    await registry.get(id);
+
+    const banner = getMessageQueue().peek({ maxPriority: 'background' })[0]?.content ?? '';
+    expect(banner).toContain('failed: specific error: ENOENT /tmp/foo');
+    expect(banner).not.toContain('FAILED with no result text');
+    expect(banner).not.toContain('mode=');
+  });
+
+  it('sync-failed path: empty summary triggers diagnostic envelope (parity with async)', async () => {
+    const id = childId('sync-failed-empty');
+    process.env.KODAX_ASYNC_DISPATCH = '0';
+    const failedResult: KodaXChildExecutionResult = {
+      results: [
+        {
+          childId: id,
+          fanoutClass: 'evidence-scan',
+          status: 'failed',
+          disposition: 'needs-more-evidence',
+          summary: '',
+          evidenceRefs: [],
+          contradictions: [],
+          actualIterations: 0,
+          interrupted: false,
+        },
+      ],
+      mergedFindings: [],
+      mergedArtifacts: [],
+      totalTokensUsed: 0,
+      cancelledChildren: [],
+    };
+    mockExec.mockResolvedValueOnce(failedResult);
+    const ctx = buildBaseCtx(undefined);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask({ id, objective: 'probe' }, ctx),
+    );
+
+    expect(result).toContain('FAILED with no result text');
+    expect(result).toContain('mode=startup-crash');
+    expect(result).not.toContain('failed: no result');
+  });
+
   it('crash path: empty Error.message still produces a non-empty banner', async () => {
     const id = childId('crash-empty');
     mockExec.mockRejectedValueOnce(new Error(''));

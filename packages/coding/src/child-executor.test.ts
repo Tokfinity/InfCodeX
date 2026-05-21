@@ -257,6 +257,49 @@ describe('executeChildAgents', () => {
     expect(mockRunKodaX).not.toHaveBeenCalled();
   });
 
+  it('allows write bundles from V2 Worker via tool-dispatch (parentRole=worker)', async () => {
+    // V2 single-loop Worker inherits Generator's dispatch surface (see
+    // `wrapDispatchChildTaskForRole` role union + worker-role-prompt RULE
+    // C). The `validateWriteBundles` allow-list MUST include 'worker',
+    // otherwise the bundle is silently dropped (executeChildAgents returns
+    // EMPTY_RESULT, dispatch-child-tasks unpacks `undefined`, Worker sees
+    // `failed: no result` with no clue what happened). Regression guard.
+    const bundles = [
+      createBundle({ id: 'cb-worker-1', readOnly: false, objective: 'Refactor module A' }),
+    ];
+
+    mockWorktreeCreate.mockResolvedValueOnce(JSON.stringify({ path: '/tmp/wt-mod-a', branch: 'wt-mod-a' }));
+    mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Done', messages: [{ role: 'assistant', content: '' }], sessionId: 's-w1' });
+    mockWorktreeRemove.mockResolvedValueOnce('removed');
+
+    const result = await executeChildAgents(
+      bundles,
+      createCtx(),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
+    );
+
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]!.status).toBe('completed');
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects write bundles from non-dispatcher roles (planner/evaluator parity)', async () => {
+    // Defensive: allow-list expansion must not turn into an allow-all. Use a
+    // role string outside the {scout, generator, worker} set.
+    const bundles = [
+      createBundle({ id: 'cb-stranger-1', readOnly: false, objective: 'Write task' }),
+    ];
+
+    const result = await executeChildAgents(
+      bundles,
+      createCtx(),
+      createOptions({ parentRole: 'planner', parentHarness: 'tool-dispatch' }),
+    );
+
+    expect(result.results).toEqual([]);
+    expect(mockRunKodaX).not.toHaveBeenCalled();
+  });
+
   it('allows write bundles from H2 Generator', async () => {
     const bundles = [
       createBundle({ id: 'cb-1', readOnly: false, objective: 'Refactor auth' }),
