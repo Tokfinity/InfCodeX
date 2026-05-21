@@ -1,15 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { KodaXEvents, KodaXManagedTaskStatus } from '../../../types.js';
+import type { KodaXEvents, KodaXManagedTaskStatus, KodaXTaskRole } from '../../../types.js';
 import type { ManagedTaskBudgetController } from './budget.js';
 import { buildObserverBridge, NULL_OBSERVER } from './observer-bridge.js';
 
 /**
- * Minimum scaffolding to invoke `buildObserverBridge` for the
- * surface-contract assertions below. We do not test the full event
- * shape here (that is covered by the integration tests in
- * `runner-driven.test.ts`); we only pin the FEATURE_184 Phase D.3
- * `sidecarStarted` contract.
+ * Scaffolding to invoke `buildObserverBridge` for the surface-contract
+ * assertions below. The full event-shape coverage lives in
+ * `runner-driven.test.ts`; this file pins the FEATURE_184 Phase D.3
+ * `sidecarStarted` contract end-to-end (10/10 buildObserverBridge
+ * parameters wired, including the optional `checkpointWriter`).
  */
 function makeBridgeHarness() {
   const statuses: KodaXManagedTaskStatus[] = [];
@@ -23,6 +23,7 @@ function makeBridgeHarness() {
     spentBudget: 0,
     currentHarness: 'H2_PLAN_EXECUTE_EVAL',
   };
+  const checkpointWriter = vi.fn<(role: KodaXTaskRole) => void>();
   const bridge = buildObserverBridge(
     events,
     { current: 'H2_PLAN_EXECUTE_EVAL' },
@@ -33,13 +34,14 @@ function makeBridgeHarness() {
     { current: false },
     { items: [] },
     { current: 'session-abc' },
+    checkpointWriter,
   );
-  return { bridge, statuses };
+  return { bridge, statuses, checkpointWriter };
 }
 
 describe('observer-bridge — FEATURE_184 Phase D.3 sidecarStarted', () => {
   it('emits a `phase: "verifying"` status when the sidecar verifier kicks off', () => {
-    const { bridge, statuses } = makeBridgeHarness();
+    const { bridge, statuses, checkpointWriter } = makeBridgeHarness();
 
     bridge.sidecarStarted();
 
@@ -49,11 +51,16 @@ describe('observer-bridge — FEATURE_184 Phase D.3 sidecarStarted', () => {
     expect(ev.note).toBe('Verifying agent output');
     expect(ev.persistToHistory).toBe(false);
     // Inherits the per-emit envelope so the REPL can still render
-    // round/budget context next to the spinner.
+    // round/budget/harness context next to the spinner.
     expect(ev.agentMode).toBe('ama');
     expect(ev.harnessProfile).toBe('H2_PLAN_EXECUTE_EVAL');
+    expect(ev.upgradeCeiling).toBe('H2_PLAN_EXECUTE_EVAL');
     expect(ev.currentRound).toBe(3);
     expect(ev.maxRounds).toBe(6);
+    // sidecarStarted is a pure UI label flip (same shape as
+    // agentSwitched / idleWaiting). It must NOT write checkpoints —
+    // those are slot-emit anchored, not transient REPL state.
+    expect(checkpointWriter).not.toHaveBeenCalled();
   });
 
   it('does not throw when the consumer did not register onManagedTaskStatus', () => {
