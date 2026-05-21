@@ -1089,6 +1089,39 @@ export interface KodaXOptions {
   guardrails?: readonly import('@kodax-ai/agent').Guardrail[];
   /** AbortSignal for cancelling the API request */
   abortSignal?: AbortSignal;
+  /**
+   * v0.7.42 — `RunningSession` plumbing (closes gap 6 reported by KodaX
+   * Space). When provided, the substrate `_attach`es low-level mutators
+   * onto this control object so the embedder can flip provider / model
+   * / reasoning between turns without restarting the run. The mutations
+   * land on the live `RuntimeSessionState` and are picked up by the
+   * next-turn CAP-055 provider re-resolution. `startKodaX` (the
+   * non-blocking entry) is the canonical producer of this field; direct
+   * SDK callers can also instantiate one via {@link createSessionControl}.
+   */
+  sessionControl?: KodaXSessionControl;
+}
+
+/**
+ * Low-level mutators handed to a `KodaXSessionControl` by the substrate.
+ * Each setter writes directly into the live `RuntimeSessionState`. Called
+ * exactly once per session (just after `buildRuntimeSessionState`).
+ */
+export interface KodaXSessionMutators {
+  setProvider(name: string): void;
+  setModel(model: string | undefined): void;
+  setReasoning(mode: KodaXReasoningMode | undefined): void;
+}
+
+/**
+ * Embedder-facing control surface. Created by the embedder (or by
+ * `startKodaX`), passed in via `KodaXOptions.sessionControl`. The
+ * substrate calls `_attach` once, after which the control's setter
+ * methods apply live to the in-flight run.
+ */
+export interface KodaXSessionControl {
+  /** @internal — wired by `run-substrate`. Do not call from user code. */
+  _attach(mutators: KodaXSessionMutators): void;
 }
 
 // ============== 结果类型 ==============

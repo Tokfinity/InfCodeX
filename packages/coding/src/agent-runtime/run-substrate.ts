@@ -478,6 +478,20 @@ export async function runSubstrate(
     },
     thinkingLevel: turnState.runtimeThinkingLevel,
   });
+  // v0.7.42 — wire optional embedder-facing session control. CAP-055 reads
+  // these fields at the start of every turn, so direct mutation here is
+  // sufficient — no re-resolve dance required.
+  options.sessionControl?._attach({
+    setProvider: (name) => {
+      runtimeSessionState.modelSelection.provider = name;
+    },
+    setModel: (model) => {
+      runtimeSessionState.modelSelection.model = model;
+    },
+    setReasoning: (mode) => {
+      runtimeSessionState.thinkingLevel = mode;
+    },
+  });
   releaseRuntimeBinding = runtime?.bindController(
     createExtensionRuntimeSessionController(runtimeSessionState),
   );

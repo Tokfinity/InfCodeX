@@ -123,6 +123,8 @@ export type {
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
   KodaXResult,
+  KodaXSessionControl,
+  KodaXSessionMutators,
   KodaXTaskSurface,
   KodaXTaskStatus,
   KodaXTaskRole,
@@ -470,6 +472,13 @@ export {
   runKodaX,
   checkPromiseSignal,
 } from './agent.js';
+
+// v0.7.42 — non-blocking SDK entry (closes gap 6 reported by KodaX Space).
+// `startKodaX` returns a `RunningSession` handle so embedders can flip
+// provider/model/reasoning mid-run and abort cooperatively without
+// forging an external AbortSignal. See `./running-session.ts`.
+export { startKodaX, createSessionControl } from './running-session.js';
+export type { RunningSession } from './running-session.js';
 
 // CAP-002: extracted from agent.ts to agent-runtime/ in FEATURE_100 P2.
 // v0.7.35.1 FEATURE_142 Batch D: uplifted to @kodax-ai/agent/runtime-middleware/.

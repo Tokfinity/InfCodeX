@@ -7,6 +7,11 @@
  * per ADR-020 / v0.7.29 §239 §371). Substrate body lives in
  * `agent-runtime/run-substrate.ts` (`runSubstrate`) and is wired via
  * the `Agent.substrateExecutor` closure attached in `coding-preset.ts`.
+ *
+ * v0.7.42: `runRunKodaXInternal` is the shared implementation. The
+ * embedder-facing `startKodaX` (non-blocking, returns `RunningSession`)
+ * lives in `./running-session.ts` and wraps the same internal path —
+ * no dual route (per feedback_no_parallel_refactor_paths).
  */
 
 import { Runner } from '@kodax-ai/agent';
