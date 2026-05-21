@@ -1254,3 +1254,29 @@ export function resolveTranscriptColor(
       return theme.colors[color];
   }
 }
+
+// Synthetic-divider helpers for the transcript-mode 30-item compact cap
+// (FEATURE_060 Tier 2). When the cap hides earlier rounds the InkREPL
+// useMemo prepends `buildTranscriptHiddenDivider(hiddenCount, ts)` so the
+// user sees `↑ N earlier messages hidden — press Ctrl+E to show all`
+// instead of a silent slice. The id is a stable sentinel so selection /
+// search / scrollback-dump can skip it via `isTranscriptHiddenDivider`.
+export const TRANSCRIPT_HIDDEN_DIVIDER_ID = "__transcript_hidden_divider__";
+
+export function buildTranscriptHiddenDivider(
+  hiddenCount: number,
+  anchorTimestamp?: number,
+): HistoryItem {
+  const noun = hiddenCount === 1 ? "message" : "messages";
+  return {
+    id: TRANSCRIPT_HIDDEN_DIVIDER_ID,
+    type: "info",
+    timestamp: anchorTimestamp ? Math.max(0, anchorTimestamp - 1) : 0,
+    text: `${hiddenCount} earlier ${noun} hidden — press Ctrl+E to show all`,
+    icon: "↑",
+  };
+}
+
+export function isTranscriptHiddenDivider(item: HistoryItem): boolean {
+  return item.id === TRANSCRIPT_HIDDEN_DIVIDER_ID;
+}

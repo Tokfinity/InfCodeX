@@ -234,13 +234,16 @@ import {
 } from "../tui/core/termio.js";
 import {
   buildTranscriptDynamicPortion,
+  buildTranscriptHiddenDivider,
   buildTranscriptRenderModel,
   buildTranscriptStaticPortion,
   composeTranscriptRenderModel,
   computeTranscriptCapStart,
+  isTranscriptHiddenDivider,
   materializeTranscriptRenderModel,
   sliceHistoryToRecentRounds,
   TRANSCRIPT_HARD_LINE_CAP,
+  TRANSCRIPT_HIDDEN_DIVIDER_ID,
   TRANSCRIPT_MODE_VISIBLE_MESSAGES,
   type TranscriptCapAnchor,
   type TranscriptRenderModel,
@@ -2621,13 +2624,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     transcriptItems: transcriptHistory,
   });
   // FEATURE_060 Tier 2 (v0.7.30): when transcript-mode is active and the
-  // user has NOT toggled show-all, slice to the last 30 messages with a
-  // hidden-count divider — mirrors CC's `MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE = 30`
-  // (Messages.tsx:276). The 200-item cap (anchor above) is the perf safety
-  // net for `<Static>` first-paint on `kodax -c`; this 30-cap is the
-  // transcript-mode UX (so the surface lands close to the active turn,
-  // not buried under hundreds of historical rounds). `showAllInTranscript`
-  // toggles back to the full (200-capped) view.
+  // user has NOT toggled show-all, slice to the last 30 messages and
+  // prepend a synthetic `buildTranscriptHiddenDivider` info-row so the
+  // user sees `↑ N earlier messages hidden — press Ctrl+E to show all`
+  // (mirrors CC's `MAX_MESSAGES_TO_SHOW_IN_TRANSCRIPT_MODE = 30` at
+  // Messages.tsx:276). The 200-item cap (anchor above) is the perf
+  // safety net for `<Static>` first-paint on `kodax -c`; this 30-cap is
+  // the transcript-mode UX (so the surface lands close to the active
+  // turn, not buried under hundreds of historical rounds).
+  // `showAllInTranscript` toggles back to the full (200-capped) view and
+  // drops the divider.
   const transcriptDisplayItems = useMemo(() => {
     if (!isTranscriptMode || showAllInTranscript) {
       return rawTranscriptDisplayItems;
@@ -2635,7 +2641,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (rawTranscriptDisplayItems.length <= TRANSCRIPT_MODE_VISIBLE_MESSAGES) {
       return rawTranscriptDisplayItems;
     }
-    return rawTranscriptDisplayItems.slice(-TRANSCRIPT_MODE_VISIBLE_MESSAGES);
+    const visibleSlice = rawTranscriptDisplayItems.slice(-TRANSCRIPT_MODE_VISIBLE_MESSAGES);
+    const hiddenCount = rawTranscriptDisplayItems.length - visibleSlice.length;
+    const divider = buildTranscriptHiddenDivider(
+      hiddenCount,
+      visibleSlice[0]?.timestamp,
+    );
+    return [divider, ...visibleSlice];
   }, [rawTranscriptDisplayItems, isTranscriptMode, showAllInTranscript]);
   const transcriptDisplayIsLoading = displaySnapshot?.isLoading ?? isLoading;
   const promptStreamingState = fullscreenPolicy.streamingPreview
@@ -3097,7 +3109,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     [currentConfig.agentMode, displayWorkStripText, isLoading, managedTaskStatus],
   );
   const selectableTranscriptItemIds = useMemo(
-    () => getSelectableTranscriptItemIds(currentSurfaceItems),
+    () => getSelectableTranscriptItemIds(currentSurfaceItems)
+      .filter((id) => id !== TRANSCRIPT_HIDDEN_DIVIDER_ID),
     [currentSurfaceItems],
   );
   const selectedTranscriptItemId = useMemo(
@@ -3146,7 +3159,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     [selectedTranscriptItem],
   );
   const transcriptSearchIndex = useMemo(
-    () => createTranscriptSearchIndex(currentSurfaceItems),
+    () => createTranscriptSearchIndex(
+      currentSurfaceItems.filter((item) => !isTranscriptHiddenDivider(item)),
+    ),
     [currentSurfaceItems],
   );
   const historySearchMatches = useMemo(
@@ -4854,7 +4869,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // re-entry so no content restoration is needed.
         dumpTranscriptToScrollback: () => {
           dumpTranscriptToNativeScrollback({
-            items: currentSurfaceItems,
+            items: currentSurfaceItems.filter((item) => !isTranscriptHiddenDivider(item)),
             exitAltScreen: () => {
               writeTerminal(buildAlternateScreenExitSequence({ mouseTracking: true }));
             },

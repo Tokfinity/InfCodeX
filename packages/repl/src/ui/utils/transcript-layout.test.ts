@@ -3,6 +3,7 @@ import { ToolCallStatus, type HistoryItem } from "../types.js";
 import {
   buildDynamicTranscriptSection,
   buildHistoryItemTranscriptSections,
+  buildTranscriptHiddenDivider,
   buildTranscriptRenderModel,
   buildTranscriptRows,
   buildStaticTranscriptSections,
@@ -10,10 +11,12 @@ import {
   computeTranscriptCapStart,
   flattenTranscriptSections,
   getVisibleTranscriptRows,
+  isTranscriptHiddenDivider,
   materializeTranscriptRenderModel,
   sliceHistoryToRecentRounds,
   THINKING_SHOW_ALL_HARD_CHAR_CAP,
   TRANSCRIPT_HARD_LINE_CAP,
+  TRANSCRIPT_HIDDEN_DIVIDER_ID,
   TRANSCRIPT_MODE_VISIBLE_MESSAGES,
   TRANSCRIPT_RENDER_CAP,
   TRANSCRIPT_RENDER_CAP_STEP,
@@ -1345,5 +1348,53 @@ describe("computeTranscriptCapStart — FEATURE_060 Tier 2 (UUID-anchored 200-ca
 
   it("transcript-mode visible message constant is 30 (CC parity)", () => {
     expect(TRANSCRIPT_MODE_VISIBLE_MESSAGES).toBe(30);
+  });
+});
+
+describe("transcript-layout/transcript-hidden-divider", () => {
+  it("builds a synthetic info item with stable id, count, and shortcut hint", () => {
+    const divider = buildTranscriptHiddenDivider(142, 1_700_000_000_000);
+
+    expect(divider.id).toBe(TRANSCRIPT_HIDDEN_DIVIDER_ID);
+    expect(divider.type).toBe("info");
+    expect(divider.timestamp).toBe(1_699_999_999_999);
+    expect(divider.text).toContain("142 earlier messages hidden");
+    expect(divider.text).toContain("Ctrl+E");
+    expect(divider.icon).toBe("↑");
+  });
+
+  it("uses singular noun when exactly one message is hidden", () => {
+    const divider = buildTranscriptHiddenDivider(1);
+    expect(divider.text).toContain("1 earlier message hidden");
+    expect(divider.text).not.toContain("messages");
+  });
+
+  it("falls back to timestamp 0 when no anchor is supplied", () => {
+    const divider = buildTranscriptHiddenDivider(5);
+    expect(divider.timestamp).toBe(0);
+  });
+
+  it("isTranscriptHiddenDivider recognises only the sentinel id", () => {
+    expect(isTranscriptHiddenDivider(buildTranscriptHiddenDivider(3))).toBe(true);
+
+    const realUser: HistoryItem = {
+      id: "user-1",
+      type: "user",
+      text: "hi",
+      timestamp: Date.now(),
+    };
+    expect(isTranscriptHiddenDivider(realUser)).toBe(false);
+  });
+
+  it("renders as an info row through buildTranscriptRows without throwing", () => {
+    const divider = buildTranscriptHiddenDivider(7, 1_000);
+    const rows = buildTranscriptRows({
+      items: [divider],
+      viewportWidth: 80,
+    });
+    const flat = rows.map((row) => row.text).join("\n");
+    expect(flat).toContain("7 earlier messages hidden");
+    expect(flat).toContain("Ctrl+E");
+    expect(flat).toContain("↑");
   });
 });
