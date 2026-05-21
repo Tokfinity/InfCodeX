@@ -622,6 +622,54 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
     expect(store.getAll()[0]!.metadata).toEqual({ a: 1 });
   });
 
+  // v0.7.42 — per-key delete: { key: null } inside the metadata patch
+  // removes that key from existing metadata; other keys are preserved.
+  it('deletes a single metadata key when patch.metadata.<key> is null', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X', metadata: { a: 1, b: 2, c: 3 } });
+    store.patch(id, { metadata: { b: null } });
+    expect(store.getAll()[0]!.metadata).toEqual({ a: 1, c: 3 });
+  });
+
+  it('supports mixed per-key merge + delete in a single patch', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X', metadata: { keep: 1, gone: 'old', tweak: 'a' } });
+    store.patch(id, { metadata: { gone: null, tweak: 'b', fresh: true } });
+    expect(store.getAll()[0]!.metadata).toEqual({ keep: 1, tweak: 'b', fresh: true });
+  });
+
+  it('drops the metadata field entirely when per-key deletes empty the bag', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X', metadata: { a: 1, b: 2 } });
+    store.patch(id, { metadata: { a: null, b: null } });
+    expect(store.getAll()[0]!.metadata).toBeUndefined();
+  });
+
+  it('per-key delete on an absent key is a tolerated no-op for that key', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X', metadata: { a: 1 } });
+    store.patch(id, { metadata: { absent: null } });
+    expect(store.getAll()[0]!.metadata).toEqual({ a: 1 });
+  });
+
+  it('per-key delete on an item without metadata is a no-op (no key created)', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X' });
+    store.patch(id, { metadata: { x: null } });
+    expect(store.getAll()[0]!.metadata).toBeUndefined();
+  });
+
+  it('preserves the difference between metadata:null (clear all) and {key:null} (delete one)', () => {
+    const store = createTodoStore();
+    const id = store.add({ subject: 'X', metadata: { a: 1, b: 2 } });
+    // Per-key delete: only `a` removed.
+    store.patch(id, { metadata: { a: null } });
+    expect(store.getAll()[0]!.metadata).toEqual({ b: 2 });
+    // Top-level null: clears the whole bag.
+    store.patch(id, { metadata: null });
+    expect(store.getAll()[0]!.metadata).toBeUndefined();
+  });
+
   it('is a no-op (no onChange) when patch fields equal current values', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });

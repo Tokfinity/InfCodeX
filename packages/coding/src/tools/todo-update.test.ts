@@ -634,6 +634,44 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
     expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toBeUndefined();
   });
 
+  // v0.7.42 — per-key delete: { key: null } inside the metadata patch
+  // removes that key from existing metadata while preserving the rest.
+  // Distinguishes from top-level `metadata: null` which clears the whole bag.
+  it('deletes a single metadata key when patch.metadata.<key> is null', async () => {
+    const { ctx, store } = makeContextWithStore();
+    await toolTodoUpdate(
+      { id: 'todo_1', metadata: { owner: 'worker-1', tag: 'auth', round: 2 } },
+      ctx,
+    );
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', metadata: { tag: null } },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toEqual({
+      owner: 'worker-1',
+      round: 2,
+    });
+  });
+
+  it('supports mixed merge + delete in a single metadata patch (v0.7.42)', async () => {
+    const { ctx, store } = makeContextWithStore();
+    await toolTodoUpdate(
+      { id: 'todo_1', metadata: { keep: 1, gone: 'old', tweak: 'a' } },
+      ctx,
+    );
+    const result = await toolTodoUpdate(
+      { id: 'todo_1', metadata: { gone: null, tweak: 'b', fresh: true } },
+      ctx,
+    );
+    expect(JSON.parse(result)).toEqual({ ok: true });
+    expect(store.getAll().find((it) => it.id === 'todo_1')?.metadata).toEqual({
+      keep: 1,
+      tweak: 'b',
+      fresh: true,
+    });
+  });
+
   it('combines patch fields with a status transition in one call', async () => {
     const { ctx, store } = makeContextWithStore();
     const result = await toolTodoUpdate(

@@ -73,9 +73,22 @@ export interface TodoAddSeed {
 
 /**
  * FEATURE_170 v0.7.41 — input shape for `patch()`. Every field optional;
- * only those present in the patch object are applied. `metadata` is
- * shallow-merged (mirrors React setState mental model); explicit
- * `metadata: null` clears it.
+ * only those present in the patch object are applied.
+ *
+ * Metadata patch semantics (mirrors React setState mental model):
+ *   - `metadata: undefined` (omitted) → preserve existing metadata as-is.
+ *   - `metadata: null` (explicit)     → CLEAR all metadata.
+ *   - `metadata: {key: value}`        → shallow-merge `key=value` into
+ *                                       existing metadata.
+ *   - `metadata: {key: null}`         → v0.7.42 — DELETE that key from
+ *                                       existing metadata. Other existing
+ *                                       keys not mentioned in the patch
+ *                                       are preserved. If all keys end up
+ *                                       removed, the metadata field is
+ *                                       set back to `undefined` so the
+ *                                       JSON envelope stays compact.
+ *   - Mixed (`{keyA: null, keyB: v}`) → deletes keyA, sets keyB. Useful
+ *                                       for atomic "rename a flag" patches.
  *
  * `owner` and `sourceObligationIndex` are intentionally NOT patchable
  * post-creation — they identify provenance (which dispatch_child_task
@@ -92,6 +105,12 @@ export interface TodoPatch {
   readonly status?: TodoStatus;
   readonly note?: string;
   readonly evaluator?: TodoEvaluatorHint;
+  /**
+   * Opaque metadata patch. See type-level JSDoc for the four semantics
+   * (preserve / clear-all / merge / per-key-delete). Individual values
+   * inside the object MAY be `null` (v0.7.42 — interpreted as "delete
+   * this key from existing metadata").
+   */
   readonly metadata?: Record<string, unknown> | null;
 }
 
@@ -361,11 +380,30 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       if (partial.status !== undefined) next = { ...next, status: partial.status };
       if (partial.note !== undefined) next = { ...next, note: partial.note };
       if (partial.evaluator !== undefined) next = { ...next, evaluator: partial.evaluator };
-      // metadata: shallow-merge on object; `null` clears; `undefined` preserves.
+      // metadata patch (v0.7.42 per-key delete):
+      //   - `null` clears the whole bag.
+      //   - object whose values are non-null shallow-merges as before.
+      //   - object whose values include `null` deletes those keys from
+      //     existing metadata (the only semantic change in v0.7.42).
+      //   - `undefined` preserves.
+      // When the merged bag ends up empty, drop the field entirely so
+      // the JSON envelope stays compact (and downstream consumers can
+      // use `metadata === undefined` as the "no metadata" test).
       if (partial.metadata === null) {
         next = { ...next, metadata: undefined };
       } else if (partial.metadata !== undefined) {
-        next = { ...next, metadata: { ...(prev.metadata ?? {}), ...partial.metadata } };
+        const merged: Record<string, unknown> = { ...(prev.metadata ?? {}) };
+        for (const [key, value] of Object.entries(partial.metadata)) {
+          if (value === null) {
+            delete merged[key];
+          } else {
+            merged[key] = value;
+          }
+        }
+        next = {
+          ...next,
+          metadata: Object.keys(merged).length === 0 ? undefined : merged,
+        };
       }
       // No-op detection: shallow-compare the fields we may have touched.
       // Skips onChange firing so React doesn't re-render on idempotent

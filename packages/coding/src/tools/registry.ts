@@ -894,7 +894,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       + '`subject` (non-empty string) replaces the brief imperative title shown in the row; '
       + '`description` (string; empty clears) replaces the fuller context shown by todo_get; '
       + '`evaluator` ("build" | "test" | "lint") replaces the deterministic evaluator hint (also accepted on op="init" items); '
-      + '`metadata` (object | null) shallow-merges into existing metadata, or pass null to clear. '
+      + '`metadata` (object | null) — pass null to CLEAR the whole bag; pass an object to shallow-merge keys; inside the object, a value of null DELETES that specific key from existing metadata (mixed merge+delete in one call is supported, e.g. `{newKey: "v", oldKey: null}`). '
       + 'Combining patch fields with a status transition in one call is supported. '
       + 'If the call returns ok=false with reason "Unknown todo id", inspect the listed valid ids and retry with a correct one. '
       + 'If the call returns ok=false with reason "todo_update is not active", the current run has no plan list and you may continue working without further todo_update calls. '
@@ -990,7 +990,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           // handler is authoritative.
           type: 'object',
           description:
-            'op="update" only (FEATURE_170 v0.7.41). Optional opaque key-value bag. SHALLOW-MERGED into any existing metadata (top-level keys overwrite, nested objects are not deep-merged). Pass null explicitly to clear all metadata (handler accepts null even though the JSON Schema is `type:"object"`). The UI does NOT render metadata; it is for extension hooks / eval harnesses.',
+            'op="update" only (FEATURE_170 v0.7.41 + v0.7.42 per-key delete). Optional opaque key-value bag. Semantics: (a) shallow-merge — top-level keys overwrite (nested objects are NOT deep-merged); (b) v0.7.42 per-key delete — a value of `null` inside the object DELETES that key from existing metadata; (c) mixed merge+delete in one call is supported (e.g. `{newKey: "v", oldKey: null}`); (d) pass the whole `metadata` field as `null` (NOT inside an object) to clear ALL metadata (handler accepts top-level null even though the JSON Schema is `type:"object"`). The UI does NOT render metadata; it is for extension hooks / eval harnesses.',
         },
       },
       // No top-level required fields — the handler validates per-op:
