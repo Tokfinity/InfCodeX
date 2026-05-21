@@ -1866,3 +1866,98 @@ Per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedbac
 
 ---
 
+## ADR-034: claudecode-Parity dispatch_child Architecture — Drop Forced Worktree + Prompt-Level Conflict Awareness (FEATURE_188, v0.7.42)
+
+**Status**: Implemented 2026-05-22 (FEATURE_188 shipped in v0.7.42)
+**Driver**: FEATURE_177 panel #2 dump 显示 dispatch_child eval cells 中 **0/250 real binding dispatches**（C4 read fan-out + C5 write fan-out 全部）。深入调查后发现 (a) 强制 worktree 在当前架构下的安全收益已经无支撑（FEATURE_184 删了 Evaluator role；`backups Map` 已提供 per-file restore），(b) claudecode 用 `isolation: 'worktree'` opt-in，**不**强制。用户决定：信任 LLM 检测冲突 + halt write，drop worktree 作为 default。
+**Scope**: `dispatch_child_task` 工具 + `child-executor.ts` 执行分叉 + `worker-role-prompt.ts` dispatchRules 措辞。
+
+### Context
+
+KodaX 当前 `dispatch_child_task` 的 `readOnly: false` 路径强制创 git worktree（[`child-executor.ts:296`](../../packages/coding/src/child-executor.ts#L296) `executeWriteChild` 第一步 `toolWorktreeCreate`），无 opt-out。该设计的三个原始支撑现在都不成立或可由其他机制替代：
+
+1. **"Evaluator review at merge time" 已死**。FEATURE_184 (v0.7.42 已 ship，per [ADR-030](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745)) 把 Evaluator-as-role state machine 整个删了，换成 Sidecar Verifier 读 tool-use summary + file edit refs，不读 worktree diff。"worktree 是 diff review 单元"这个 assumption 没有产品支撑了。
+
+2. **"失败回滚需要 worktree"**：[`child-executor.ts:315`](../../packages/coding/src/child-executor.ts#L315) write child 已经维护 `backups: Map`（per-file 写前 backup + 失败时 restore）。大部分实际场景是单 child 改 1-3 个文件，per-file backup 足够。worktree 只对 "child 跑了 50+ file edit 然后整体失败" 这种重场景有意义，pilot/panel 数据未见此使用模式。
+
+3. **"并行 write 必冲突"**：dispatchRules 措辞本身要求 children 之间 `NON-conflicting file-level edits across multiple modules`——并行 children 编辑不同文件这一前提由 coordinator 在 dispatch 时保证，worktree 是 redundant 兜底。`bash` 工具也允许并发也没强制 worktree。真正会冲突的场景（两 child 改同一文件）应由 prompt 层校验 + child 检测后 halt，不是用 worktree 兜底。
+
+**Pilot v3 数据**（2026-05-21 isolation test，20 calls ~$0.20）提供**无回归证据**：删 quant 后 kimi +1 cell aggregate intent rate (1/5 → 2/5)、ark/v4flash 持平 (1/5 → 1/5)，两 alias 都未触发预注册 "≥2 cell regression" 阈值。**注意**：pilot 测的是 intent rate（narrative tool-call mention 计数），real binding 在两 variant 均为 0/20——pilot 证明删 quant 不引入 narrative-FP 退化，**改善 real binding 的判定由 Step 11 re-eval 提供**，不靠 pilot 数据。
+
+**claudecode 对照**（[`AgentTool.tsx:99`](file:///c:/Works/claudecode/src/tools/AgentTool/AgentTool.tsx#L99)）：
+```typescript
+isolation: z.enum(['worktree']).optional().describe(
+  '"worktree" creates a temporary git worktree so the agent works
+   on an isolated copy of the repo.'
+)
+```
+**默认 NOT 创 worktree** —— Agent 跑在 parent cwd。[`EnterWorktreeTool/prompt.ts`](file:///c:/Works/claudecode/src/tools/EnterWorktreeTool/prompt.ts) 严格"ONLY when the user explicitly asks for a worktree"。
+
+### Decision
+
+**Drop forced worktree from `executeWriteChild`**。Write children 跑在 parent cwd，跟 read children 同 cwd 处理。差异仅保留：
+- `excludeTools`：read 多排除 `write` `edit` `multi_edit` `insert_after_anchor` `undo`
+- `systemPromptOverride`：read 用 bare `CHILD_AGENT_SYSTEM_PROMPT`；write 用 `buildWriteSystemPrompt(parentGitRoot)` 含 AGENTS.md mutation policy
+
+**`readOnly` 参数保留** —— 它 gates write tools 可用性 + Scout role safety check（Scout + `readOnly:false` 仍硬阻断），跟 worktree 创建解耦。**Prompt body 不教 readOnly**——schema description 已经写 `'true=investigation only (default), false=code changes (Generator only)'`，prompt 不重复 schema。
+
+**所有 children（read + write）的 briefing 加 conflict-awareness 段**——让 LLM 自己负责检测潜在并行冲突 + halt-and-report。
+
+**worker-role-prompt.ts dispatchRules 改动**（per pilot v3 + worktree drop 后续连带）：
+- 量化阈值定性化（pilot v3 验证）：`≥3 independent investigations` → `multiple independent investigations`；`≥45 seconds` → `a while`；`≥3 modules` → `multiple modules`
+- 删 RULE C 里 `Worktrees are isolated; merge happens at Evaluator review time` 一句（worktree drop + Evaluator role 已死，两个事实都让这句变成 false statement）
+- **保留**：RULE A/B/C labels + structure + Generator-equivalent gate + "Do NOT use write fan-out for single-file edits — coordination cost without speedup" ✗（带 WHY，满足 ADR-033 §3）+ IDLE-YIELD 段 + FEATURE_155 v0.7.39 注解（其它 FEATURE_xxx 注解 + RULE 枚举的整体 restyle 是 v0.7.43 独立 FEATURE，本 ADR 不动）
+
+### Implementation outline（详细见 FEATURE_188 设计文档 [v0.7.42.md](features/v0.7.42.md#feature_188-dispatch_child-worktree-drop--conflict-awareness-prompt-hardening)）
+
+| Step | 文件 | 改动 |
+|---|---|---|
+| 1 | `packages/coding/src/child-executor.ts` | `executeWriteChild` 删 `toolWorktreeCreate` + `wtPath` + `worktreePaths.set/delete` + `collectWorktreeDiff` + `artifactPaths`；executionCwd / gitRoot 用 parent 的；try/finally cleanup 删 |
+| 2 | `packages/coding/src/task-engine/runner-driven.ts` + `packages/coding/src/task-engine/_internal/managed-task/dispatch-child.ts` + `packages/coding/src/task-engine/_internal/managed-task/payload-builder.ts` + `packages/coding/src/types.ts` | `childWriteWorktreePathsRef` / `registerChildWriteWorktrees` callback / `childWriteWorktreePaths` payload 字段 / `worktreePaths` ReadonlyMap 类型声明全删 — 4 处类型 + 4 处 plumbing 在 FEATURE_184 删 Evaluator 后已是 dead infrastructure，不删则 "代码净减" claim 不成立且留 false promise（payload 永远 undefined） |
+| 3 | `packages/coding/src/child-executor.ts buildChildBriefing` | 加 "Coordination with peers" 段 **仅 write-children**；read children briefing 不加（read 子 agent 无 write op，"check before file modification" 语义空 + ~100 token/dispatch 浪费 + 可能 mis-fire halt） |
+| 4 | `packages/coding/src/agents/worker-role-prompt.ts` | dispatchRules：3 处量化定性化 + 删 worktree-isolated 句 |
+| 5 | `packages/coding/src/tools/dispatch-child-tasks.ts` | schema description for `readOnly` 微调（去掉 "(default)" 的歧义，写明语义；维持 schema 是 readOnly 教学唯一源） |
+| 6 | `packages/coding/src/agent-runtime/__contract-tests__/cap-097-child-worktree.contract.test.ts` | 整文件删除（产品行为已变） |
+| 7 | `cap-095-child-exec.contract.test.ts` + `cap-096-child-par.contract.test.ts` | CAP-095：更新 CAP-CHILD-EXEC-002 期望（write child 不再创 worktree）；**CAP-096**：`vi.mock('../../tools/worktree.js')` 的 `toolWorktreeCreate` / `toolWorktreeRemove` mock 删（FEATURE_188 后 path-under-test 不再调，留 silent mock 会让未来读者误判该路径仍创 worktree） |
+| 8 | `packages/coding/src/child-executor.test.ts` | 更新 mocks + 期望（toolWorktreeCreate / toolWorktreeRemove 不再调） |
+| 9 | 新单测 | child briefing 含 conflict-awareness 段（**仅 write path 验证含 "Coordination" 段；read path 验证不含**） |
+| 10 | `CHANGELOG.md` | `v0.7.42 Breaking changes` 段：`dispatch_child_task` write-child 不再 auto-worktree；`KodaXManagedTaskResult.worktreePaths` 字段 + `evidence.artifacts[].worktree:${path}` 条目下线 |
+| 11 | Layer 2 eval re-run | worktree-dropped + qualitative prompt 在 C4 + C5 + 5 alias × 5 runs 上不退化（intent rate ≥ baseline − 1 cell 每 alias × case；C5 严格 gate — write fan-out 是 worktree drop 行为核心信号） |
+
+### Consequences
+
+**正面**：
+- **dispatch latency 下降** —— 每个 write child 节省 `git worktree add` + branch 创建 + 完成时 cleanup 三步 IO（典型 200-500ms）
+- **代码净减** —— child-executor.ts `executeWriteChild` ~50 LoC 简化；CAP-097 test 整文件删；`worktreePaths` Map + cleanup try/finally 全部下线
+- **架构与 ADR-030 一致** —— claudecode-shape main agent + opt-in（不是强制）worktree，跟 FEATURE_184 收口的 Sidecar Verifier 架构同向
+- **降低模型 dispatch 心理门槛** —— 不需要内化 "worktree 开销值不值" 的判断；模型更倾向用 dispatch 作为并发原语
+- **简化 child briefing** —— 不再有 "your worktree path is X, parent gitRoot is Y, translate paths..." 这段（v0.7.26 NEW-2 加的 path 教学是为 worktree 准备的）
+
+**负面 / 风险**：
+- **真实冲突场景**（两 child 编辑同一文件）由 prompt 层 + 子 agent 自检兜底，不再有 file-system 隔离托底。Mitigation：
+  - Coordinator dispatchRules 明示 `NON-conflicting file-level edits across multiple modules` 由 dispatcher 保证
+  - Child briefing 新 "Coordination with peers" 段：写之前检查 peer scope overlap，不确定就 halt
+  - `backups: Map` per-file restore 仍 active —— 单文件错改可回滚
+- **artifactPaths `worktree:${wtPath}` 字段下线** —— SDK consumer 如有依赖会 break。**评估**：该字段未在 KodaX SDK doc 出现，gh 仓库 grep 无外部引用；视为内部 API。**Action**：CHANGELOG `Breaking changes` 段写明
+- **"big-bang refactor" 单 child 多文件改失败时 rollback 粒度**：`backups: Map` 是 per-file，失败时按文件 restore；如果 child 跑了 30 个 file edit 中间崩了，restore 是 file-level not transaction-level。**评估**：worktree 之前也不是事务性（worktree 失败时 parent diff 还是要手工 review），这条不退化。
+
+**Tool registry retention**：`toolWorktreeCreate` / `toolWorktreeRemove`（`packages/coding/src/tools/worktree.ts` + `tools/registry.ts:833/862`）**不删** — 它们继续服务 user-explicit `EnterWorktreeTool` / `ExitWorktreeTool` 工作流。FEATURE_188 只删 dispatch_child 自动创 worktree 路径，不删工具本身可用性（claudecode 同结构：工具存在但默认不自动调）。
+
+### Alternatives considered
+
+- **Opt-in worktree（claudecode style，加 `isolation: 'worktree'` 参数）** — rejected. 用户明确指示走 prompt-level 协调（用户在以前的项目里实测有效）。加参数会让 LLM 多一个 "should I worktree?" 决策面，pilot v3 已经显示模型对 worktree 暗示的反应是降低 dispatch 倾向，多一个 explicit toggle 是把这个 friction 反向放大。
+- **保留 worktree，只删量化阈值** — rejected. Pilot v3 只验证了量化可删；worktree 的产品支撑（Evaluator review at merge）已经在 FEATURE_184 被删，留着是 dead-path code + 错误 mental model 给开发者。半改方案让既有 worktree code 长期 dead 在 codebase 里。
+- **完整 claudecode-style restyle（RULE A/B/C labels / ✗ catalogue / FEATURE_xxx 注解全部清理）** — deferred. Pilot v3 只 isolate 验证了量化阈值这一个变量，**没有**验证 RULE 枚举或 ✗ 措辞或 FEATURE 注解是否影响信号。整体 restyle 需独立 v0.7.43 FEATURE 重新设计 + eval 验证 + ship。本 FEATURE_188 严格限定 scope 是 worktree drop + 量化阈值删 + worktree 句删。
+
+### References
+
+- 配套实施：FEATURE_188 实施 commits（待定，会按 [feedback_concurrent_thread_git_race](../../memory/feedback_concurrent_thread_git_race.md) 原则 atomic add+commit）
+- FEATURE_177 panel #2 dump：`c:/tmp/kodax-eval-dumps/feature-177-task-output/`（0/250 real dispatch 证据）
+- Pilot v3 dump：`c:/tmp/kodax-eval-dumps/feature-dispatch-prompt-pilot/pilot-v3-quantitative-threshold-isolation.json`（量化非 load-bearing 证据）
+- [ADR-030](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745)（Evaluator role REVERT，本 ADR 的前置依赖）
+- [ADR-033](#adr-033-claudecode-style-prompt-design-principles--qualitative-criteria-over-quantitative-rules-v0742-v0743)（prompt design principles，本 ADR 是其架构落地的第一个 FEATURE）
+- 关键 memory：[`project_feature_177_task_output_shipped`](../../memory/project_feature_177_task_output_shipped.md) / [`project_feature_184_shipped`](../../memory/project_feature_184_shipped.md) / [`feedback_simplifying_prompt_can_regress`](../../memory/feedback_simplifying_prompt_can_regress.md)（pilot v3 验证为何是必要步骤而非可跳过）/ [`feedback_eval_pilot_before_scale`](../../memory/feedback_eval_pilot_before_scale.md)（pilot v3 探索期为何 1-alias 起步）
+- claudecode 对照：[`AgentTool.tsx:99`](file:///c:/Works/claudecode/src/tools/AgentTool/AgentTool.tsx#L99)（isolation opt-in 参数）、[`EnterWorktreeTool/prompt.ts`](file:///c:/Works/claudecode/src/tools/EnterWorktreeTool/prompt.ts)（独立 explicit tool）
+
+---
+

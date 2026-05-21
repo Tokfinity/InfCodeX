@@ -2224,7 +2224,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
         undefined,
         undefined,
         undefined,
-        undefined,
+        // FEATURE_188 v0.7.42 — childWriteWorktreePathsRef param removed.
+        // The remaining trailing slots stay in the same order.
         undefined,
         undefined,
         todoStore,

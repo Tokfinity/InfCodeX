@@ -78,7 +78,6 @@ export function buildManagedTaskPayload(args: {
   readonly plan?: ReasoningPlan;
   readonly entries?: readonly KodaXTaskEvidenceEntry[];
   readonly degradedContinue?: boolean;
-  readonly childWriteWorktreePaths?: ReadonlyMap<string, string>;
   /**
    * Stable taskId for the run. Callers that need deterministic snapshot
    * paths (runManagedTaskViaRunnerInner, checkpoint writer, skill-artifact
@@ -125,7 +124,6 @@ export function buildManagedTaskPayload(args: {
     plan,
     entries,
     degradedContinue,
-    childWriteWorktreePaths,
     taskId: providedTaskId,
     extraArtifacts,
     rawRoutingDecision,
@@ -347,13 +345,6 @@ export function buildManagedTaskPayload(args: {
         options.context?.taskVerification,
         verdictStatus,
       ),
-      // Shard 6d-Q: surface the dispatch_child_task write-fan-out ledger
-      // so Evaluator diff injection (FEATURE_067 v2 parity) can find
-      // per-child worktree paths. Undefined when no children dispatched.
-      childWriteWorktreePaths:
-        childWriteWorktreePaths && childWriteWorktreePaths.size > 0
-          ? childWriteWorktreePaths
-          : undefined,
       // F4 parity (v0.7.26) — surface routing provenance + tool
       // truncation state. `rawRoutingDecision` is the pre-floor snapshot
       // (before `applyCurrentDiffReviewRoutingFloor`); `finalRoutingDecision`

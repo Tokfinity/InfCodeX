@@ -81,6 +81,32 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('RULE C');
   });
 
+  // FEATURE_188 v0.7.42 (ADR-034 + ADR-033 §1) — dispatch rules use
+  // qualitative criteria instead of quantitative thresholds. Pin the
+  // post-conversion wording + assert the pre-conversion thresholds are
+  // gone, so a future revert is loud.
+  it('dispatchRules use qualitative wording (no quantitative thresholds in RULE A/B/C)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    // Positive: post-FEATURE_188 qualitative wording present.
+    expect(out).toContain('multiple independent investigations');
+    expect(out).toContain('a while');
+    expect(out).toContain('multiple modules');
+    // Negative: pre-FEATURE_188 thresholds are gone from RULE A/B/C.
+    expect(out).not.toContain('≥3 independent investigations');
+    expect(out).not.toContain('≥45 seconds');
+    expect(out).not.toContain('≥3 modules');
+  });
+
+  // FEATURE_188 v0.7.42 — RULE C dropped the "Worktrees are isolated;
+  // merge happens at Evaluator review time" sentence. After FEATURE_184
+  // (ADR-030) deleted the Evaluator role and FEATURE_188 (ADR-034) dropped
+  // the auto-worktree, that sentence was a false reassurance.
+  it('RULE C does NOT claim Worktree isolation (Evaluator + auto-worktree dropped)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).not.toContain('Worktrees are isolated');
+    expect(out).not.toContain('Evaluator review time');
+  });
+
   // FEATURE_177 v0.7.45 → REVERTED in v0.7.42 (commit TBD):
   // Worker prompt RULE D dropped after Layer 2 panel C5 kimi -60pp triggered
   // the pre-registered REVERT threshold (>20pp cross-case regression on RULE C

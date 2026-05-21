@@ -568,12 +568,6 @@ export async function* toolDispatchChildTask(
         : undefined,
     };
 
-    // Capture the worktree-register callback so it can fire at result
-    // time (when the child promise settles, before the registry cleanup
-    // `.finally` runs below). Without this, write children's worktrees
-    // would never be wired into the Evaluator diff injection path on
-    // the async branch.
-    const registerWorktrees = ctx.registerChildWriteWorktrees;
     // Default child-task notification target is the ROOT main agent
     // (agentId === undefined). Subagents may set parentAgentId on the
     // ctx in the future to route to a specific scope; keep it undefined
@@ -592,9 +586,6 @@ export async function* toolDispatchChildTask(
     const childPromise: Promise<KodaXChildExecutionResult> = (async () => {
       try {
         const result = await executeChildAgents([bundle], ctx, childOptions);
-        if (result.worktreePaths && result.worktreePaths.size > 0 && registerWorktrees) {
-          registerWorktrees(result.worktreePaths);
-        }
         // Background drain: enqueue a task-completed notification so the
         // Sleep-gated mid-turn drain (FEATURE_115) can wake the Worker
         // even if it's currently mid-stream on another tool.
@@ -798,10 +789,6 @@ export async function* toolDispatchChildTask(
   // --- Sync (legacy / forced via KODAX_ASYNC_DISPATCH=0) ---
   try {
     const result = await executeChildAgents([bundle], ctx, options);
-
-    if (result.worktreePaths && result.worktreePaths.size > 0 && ctx.registerChildWriteWorktrees) {
-      ctx.registerChildWriteWorktrees(result.worktreePaths);
-    }
 
     const childResult = result.results[0];
     const status = childResult?.status ?? 'failed';

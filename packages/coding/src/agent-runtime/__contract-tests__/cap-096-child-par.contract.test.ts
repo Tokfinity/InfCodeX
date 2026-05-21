@@ -16,7 +16,7 @@
  * semaphore + Promise.allSettled orchestration); :779-814 (createSemaphore).
  *
  * Time-ordering constraint: AFTER write-bundle validation (only
- * H2 Generator allowed); BEFORE worktree cleanup.
+ * H2 Generator allowed).
  *
  * STATUS: ACTIVE since FEATURE_100 P3.6t.
  */
@@ -27,10 +27,9 @@ vi.mock('../../agent.js', () => ({
   runKodaX: vi.fn(),
 }));
 
-vi.mock('../../tools/worktree.js', () => ({
-  toolWorktreeCreate: vi.fn(),
-  toolWorktreeRemove: vi.fn(),
-}));
+// FEATURE_188 v0.7.42 — child-executor no longer imports worktree
+// helpers, so this file does not need to mock them. Removed previous
+// vi.mock('../../tools/worktree.js') stub.
 
 import { executeChildAgents } from '../../child-executor.js';
 import { runKodaX } from '../../agent.js';

@@ -357,11 +357,6 @@ export function buildRunnerAgentChain(
   // Evaluator prompt so the model actually probes the runtime instead
   // of writing a verdict from static file reads.
   verification?: KodaXTaskVerificationContract,
-  // Shard 6d-Q: shared ref so Scout/Generator dispatch_child_task invocations
-  // can register write worktree paths for Evaluator diff injection
-  // (FEATURE_067 v2 parity). The caller owns the map; the Runner-internal
-  // wrappers only append.
-  childWriteWorktreePathsRef: { current: Map<string, string> } = { current: new Map() },
   // Full role-prompt context (original task, decision,
   // metadata, tool policy, skill / scope factory). When provided, every
   // role's `instructions` resolves through `createRolePrompt` — the
@@ -531,7 +526,6 @@ export function buildRunnerAgentChain(
     ctx,
     'scout',
     budget,
-    childWriteWorktreePathsRef,
     observer,
     events,
   );
@@ -540,7 +534,6 @@ export function buildRunnerAgentChain(
     ctx,
     'generator',
     budget,
-    childWriteWorktreePathsRef,
     observer,
     events,
   );
@@ -555,7 +548,6 @@ export function buildRunnerAgentChain(
     ctx,
     'worker',
     budget,
-    childWriteWorktreePathsRef,
     observer,
     events,
   );

@@ -808,7 +808,6 @@ async function runManagedTaskViaRunnerInner(
       plan,
       entries: entriesRef.items,
       degradedContinue: degradedContinueRef.current,
-      childWriteWorktreePaths: childWriteWorktreePathsRef.current,
       taskId,
       extraArtifacts: skillArtifactsRef.current,
       rawRoutingDecision,
@@ -890,13 +889,6 @@ async function runManagedTaskViaRunnerInner(
   // revise. Surfaced on `managedTask.runtime.degradedContinue` so the
   // REPL / CLI can warn the user.
   const degradedContinueRef: { current: boolean } = { current: false };
-  // Shard 6d-Q: dispatch_child_task write-fan-out ledger. Generator's
-  // dispatch invocations populate this map (childId → worktreePath);
-  // the Evaluator reads it at verdict time to inject per-child diffs.
-  // FEATURE_067 v2 parity.
-  const childWriteWorktreePathsRef: { current: Map<string, string> } = {
-    current: new Map(),
-  };
   // Risk-2 fix — per-harness revise counter. The wrapper mutates this
   // map in place so consecutive Evaluator emits across the same run
   // share state. Initialised empty; first revise of any harness passes
@@ -1231,7 +1223,6 @@ async function runManagedTaskViaRunnerInner(
     budgetExtension,
     planRef,
     options.context?.taskVerification,
-    childWriteWorktreePathsRef,
     chainPromptContext,
     options.events,
     todoStore,
@@ -1896,7 +1887,6 @@ async function runManagedTaskViaRunnerInner(
     plan,
     entries: entriesRef.items,
     degradedContinue: degradedContinueRef.current,
-    childWriteWorktreePaths: childWriteWorktreePathsRef.current,
     taskId,
     extraArtifacts: skillArtifactsRef.current,
     rawRoutingDecision,

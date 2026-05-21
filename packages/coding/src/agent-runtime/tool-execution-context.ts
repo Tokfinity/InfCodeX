@@ -9,8 +9,7 @@
  *   - per-run state: `backups` map (write-tool rollback), abort signal,
  *     extension runtime, working directory + git root.
  *   - declarative wiring forwarded from `options.context`:
- *     mutationTracker, planModeBlockCheck, registerChildWriteWorktrees,
- *     managedProtocolRole.
+ *     mutationTracker, planModeBlockCheck, managedProtocolRole.
  *   - parent agent config snapshot (provider/model/reasoningMode) so
  *     `dispatch_child_task` can spawn children with the parent's
  *     declaration.
@@ -93,7 +92,6 @@ export function buildToolExecutionContext(
           );
         }
       : undefined,
-    registerChildWriteWorktrees: options.context?.registerChildWriteWorktrees,
     mutationTracker: options.context?.mutationTracker,
     // FEATURE_074: forward parent's plan-mode predicate so
     // dispatch_child_task can enforce plan mode on child tool calls.

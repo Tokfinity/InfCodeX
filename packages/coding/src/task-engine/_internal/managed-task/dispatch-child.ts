@@ -44,9 +44,7 @@ import type { ObserverBridge } from './types.js';
  *     gating (Scout: read-only only; Planner/Evaluator: blocked;
  *     Generator: full). The Runner path does not set
  *     `managedProtocolRole` on the base ctx, so each role-specific
- *     wrapper injects the right role on the per-call ctx. Also captures
- *     any write worktrees into `childWriteWorktreePathsRef` so the
- *     Evaluator diff injection parity (FEATURE_067 v2) is preserved.
+ *     wrapper injects the right role on the per-call ctx.
  */
 export function wrapDispatchChildTaskForRole(
   definition: KodaXToolDefinition,
@@ -58,7 +56,6 @@ export function wrapDispatchChildTaskForRole(
   // through into `managedProtocolRole`.
   role: 'scout' | 'generator' | 'worker',
   budget: ManagedTaskBudgetController | undefined,
-  childWriteWorktreePathsRef: { current: Map<string, string> },
   observer: ObserverBridge,
   events?: KodaXEvents,
 ): RunnableTool {
@@ -86,18 +83,13 @@ export function wrapDispatchChildTaskForRole(
       const progressHook = events?.onToolProgress && toolCallId
         ? (message: string) => events.onToolProgress?.({ id: toolCallId, message })
         : undefined;
-      // Shallow clone so the managedProtocolRole + registerChildWriteWorktrees
-      // callback are local to this invocation. The base ctx stays pristine
+      // Shallow clone so the managedProtocolRole + per-call progress hook
+      // are local to this invocation. The base ctx stays pristine
       // for parallel dispatches.
       const perCallCtx: KodaXToolExecutionContext = {
         ...baseCtx,
         managedProtocolRole: role,
         reportToolProgress: progressHook,
-        registerChildWriteWorktrees: (worktreePaths) => {
-          for (const [id, p] of worktreePaths) {
-            childWriteWorktreePathsRef.current.set(id, p);
-          }
-        },
       };
       try {
         const gen = toolDispatchChildTask(input, perCallCtx);

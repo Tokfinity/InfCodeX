@@ -3,7 +3,10 @@
  *
  * Core execution engine for parallel child agents.
  * Called by dispatch_child_tasks tool (v2) or directly by orchestration layer.
- * Supports read-only children (shared context) and write children (worktree isolation).
+ * Read children share parent cwd; write children share parent cwd as well
+ * (FEATURE_188 v0.7.42 dropped forced worktree — per-file `backups` Map is
+ * the per-child rollback substrate; prompt-level peer coordination handles
+ * concurrent conflict avoidance, see ADR-034).
  */
 
 import { execSync } from 'child_process';
@@ -65,7 +68,6 @@ async function getRunKodaX(): Promise<RunKodaXFn> {
   }
   return _runKodaXCache;
 }
-import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.js';
 // FEATURE_120 v0.7.39 Step 0d (Option D) — generic fan-out lifted to
 // @kodax-ai/agent (ADR-021). All coding-side concerns (read vs write,
@@ -153,75 +155,52 @@ export async function executeChildAgents(
 
   const results: KodaXChildAgentResult[] = [];
   const cancelledChildren: string[] = [];
-  const worktreePaths: Map<string, string> = new Map();
   const report = options.onProgress ?? (() => {});
 
   report(`Starting ${allBundles.length} child tasks in parallel`);
 
-  try {
-    // FEATURE_120 v0.7.39 Step 0d — bounded-concurrency + abort + progress
-    // events are owned by `runFanOut` (agent-layer, ADR-021). This call
-    // preserves the previous semantics:
-    //   - Promise.allSettled-style rejection capture → `result.results`
-    //   - Pre-execution abort check → `result.cancelled`
-    //   - Per-bundle progress callbacks adapted to the legacy string-based
-    //     `onProgress` contract.
-    // Note: `result.results` is in COMPLETION order (not bundle order). We
-    // use the embedded bundle reference on each outcome, not array index,
-    // to attribute crashes back to their bundle — matching the prior
-    // behavior at L171-180 which used `allBundles[i]` keyed on
-    // `Promise.allSettled` index (also order-stable in practice).
-    const fanOut = await runFanOut<KodaXChildContextBundle, KodaXChildAgentResult>({
-      bundles: allBundles,
-      runOne: (bundle) =>
-        bundle.readOnly
-          ? executeReadChild(bundle, parentCtx, options)
-          : executeWriteChild(bundle, parentCtx, options, worktreePaths),
-      maxParallel: options.maxParallel,
-      abortSignal: options.abortSignal,
-      onProgress: (event, ctx) => {
-        if (event.kind === 'start') {
-          report(`[${ctx.completedCount}/${ctx.totalCount}] Running: ${event.bundle.id}`);
-        } else if (event.kind === 'item-done') {
-          report(`[${ctx.completedCount}/${ctx.totalCount}] Done: ${event.bundle.id} → ${event.result.status}`);
-        }
-        // `item-failed` events are absorbed into the crash branch below —
-        // the rejection's bundle.id was already surfaced via `start`, and
-        // the synthesized `[Crash]` result will appear in `results`.
-      },
-    });
+  // FEATURE_120 v0.7.39 Step 0d — bounded-concurrency + abort + progress
+  // events are owned by `runFanOut` (agent-layer, ADR-021). This call
+  // preserves the previous semantics:
+  //   - Promise.allSettled-style rejection capture → `result.results`
+  //   - Pre-execution abort check → `result.cancelled`
+  //   - Per-bundle progress callbacks adapted to the legacy string-based
+  //     `onProgress` contract.
+  // Note: `result.results` is in COMPLETION order (not bundle order). We
+  // use the embedded bundle reference on each outcome, not array index,
+  // to attribute crashes back to their bundle.
+  const fanOut = await runFanOut<KodaXChildContextBundle, KodaXChildAgentResult>({
+    bundles: allBundles,
+    runOne: (bundle) =>
+      bundle.readOnly
+        ? executeReadChild(bundle, parentCtx, options)
+        : executeWriteChild(bundle, parentCtx, options),
+    maxParallel: options.maxParallel,
+    abortSignal: options.abortSignal,
+    onProgress: (event, ctx) => {
+      if (event.kind === 'start') {
+        report(`[${ctx.completedCount}/${ctx.totalCount}] Running: ${event.bundle.id}`);
+      } else if (event.kind === 'item-done') {
+        report(`[${ctx.completedCount}/${ctx.totalCount}] Done: ${event.bundle.id} → ${event.result.status}`);
+      }
+      // `item-failed` events are absorbed into the crash branch below —
+      // the rejection's bundle.id was already surfaced via `start`, and
+      // the synthesized `[Crash]` result will appear in `results`.
+    },
+  });
 
-    for (const r of fanOut.results) {
-      if (r.status === 'fulfilled') {
-        results.push(r.value);
-      } else {
-        results.push(extractChildResult(r.bundle, `[Crash] ${r.reason.message}`, 'failed'));
-      }
-    }
-    for (const b of fanOut.cancelled) {
-      cancelledChildren.push(b.id);
-    }
-  } finally {
-    // Cleanup worktrees for FAILED children only.
-    // Successful write children's worktrees are kept alive for Evaluator review.
-    // Caller must call cleanupWorktrees() after Evaluator completes.
-    const successfulChildIds = new Set(
-      results.filter((r) => r.status === 'completed').map((r) => r.childId),
-    );
-    for (const [bundleId, wtPath] of worktreePaths) {
-      if (successfulChildIds.has(bundleId)) continue; // Keep for Evaluator review
-      try {
-        await toolWorktreeRemove(
-          { action: 'remove', worktree_path: wtPath, discard_changes: true },
-          parentCtx,
-        );
-      } catch {
-        // Best-effort cleanup — don't block other cleanups
-      }
+  for (const r of fanOut.results) {
+    if (r.status === 'fulfilled') {
+      results.push(r.value);
+    } else {
+      results.push(extractChildResult(r.bundle, `[Crash] ${r.reason.message}`, 'failed'));
     }
   }
+  for (const b of fanOut.cancelled) {
+    cancelledChildren.push(b.id);
+  }
 
-  return mergeChildResults(allBundles, results, cancelledChildren, worktreePaths);
+  return mergeChildResults(allBundles, results, cancelledChildren);
 }
 
 /* ---------- Read-only child execution ---------- */
@@ -285,33 +264,22 @@ async function executeReadChild(
   }
 }
 
-/* ---------- Write child execution (worktree) ---------- */
+/* ---------- Write child execution ---------- */
+// FEATURE_188 v0.7.42 (ADR-034) — write children no longer get an
+// isolated git worktree. They share parent cwd + gitRoot, with a fresh
+// per-child `backups` Map providing per-file rollback. Prompt-level
+// peer-coordination (added to write-child briefing) handles concurrent
+// conflict avoidance.
 
 async function executeWriteChild(
   bundle: KodaXChildContextBundle,
   parentCtx: KodaXToolExecutionContext,
   options: ChildExecutorOptions,
-  worktreePaths: Map<string, string>,
 ): Promise<KodaXChildAgentResult> {
-  const wtResult = await toolWorktreeCreate(
-    { description: bundle.objective },
-    parentCtx,
-  );
-
-  const wtPath = parseWorktreePath(wtResult);
-  if (!wtPath) {
-    return extractChildResult(bundle, 'Failed to create worktree', 'failed');
-  }
-
-  // Register immediately so finally-block cleanup covers this worktree
-  worktreePaths.set(bundle.id, wtPath);
-
-  // Child gets isolated context: own CWD, own gitRoot, own backups.
-  // Shared: extensionRuntime (tools need it), askUser (user interaction).
+  // Child shares parent cwd + gitRoot. Fresh `backups` Map gives per-child
+  // per-file rollback; AGENTS.md resolution uses the parent gitRoot.
   const childCtx: KodaXToolExecutionContext = {
     ...parentCtx,
-    executionCwd: wtPath,
-    gitRoot: wtPath,
     backups: new Map(),
   };
 
@@ -326,11 +294,8 @@ async function executeWriteChild(
 
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
-  // (they don't mutate, so project rules don't apply). The override is
-  // computed against the parent gitRoot, not the worktree path — the
-  // worktree is a transient checkout of the same repo, so AGENTS.md
-  // resolution must walk from the original project root.
-  const writeSystemPrompt = buildWriteSystemPrompt(parentCtx.gitRoot ?? wtPath);
+  // (they don't mutate, so project rules don't apply).
+  const writeSystemPrompt = buildWriteSystemPrompt(parentCtx.gitRoot ?? parentCtx.executionCwd ?? process.cwd());
 
   try {
     const result = await (await getRunKodaX())(
@@ -347,8 +312,8 @@ async function executeWriteChild(
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
         context: {
-          gitRoot: wtPath,
-          executionCwd: wtPath,
+          gitRoot: parentCtx.gitRoot,
+          executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
           systemPromptOverride: writeSystemPrompt,
           excludeTools: CHILD_EXCLUDE_TOOLS_BASE, // Write children keep write/edit tools
         },
@@ -357,19 +322,15 @@ async function executeWriteChild(
       briefing,
     );
 
-    const diff = collectWorktreeDiff(wtPath);
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
 
-    return {
-      ...extractChildResult(
-        bundle,
-        result.lastText,
-        result.success ? 'completed' : 'failed',
-        iterations,
-        result.interrupted === true,
-      ),
-      artifactPaths: diff ? [`worktree:${wtPath}`] : undefined,
-    };
+    return extractChildResult(
+      bundle,
+      result.lastText,
+      result.success ? 'completed' : 'failed',
+      iterations,
+      result.interrupted === true,
+    );
   } catch (error) {
     return extractChildResult(
       bundle,
@@ -427,6 +388,15 @@ async function buildChildBriefing(
       ? '- This is a READ-ONLY task. Do NOT modify any files.'
       : '- You may modify files within the scope listed above.',
     `- You CANNOT spawn child agents or call dispatch_child_tasks.`,
+    ...(bundle.readOnly
+      ? []
+      : [
+          ``,
+          // FEATURE_188 v0.7.42 (ADR-034) — write children share parent
+          // cwd with siblings, so peer-coordination is prompt-enforced.
+          `## Coordination with peers`,
+          `Other agents may be working in parallel in this same repository. Before making any file modification, briefly check whether your target path could be touched by a peer (e.g. the coordinator dispatched another sibling whose scope overlaps yours, or the user mentioned a parallel thread). If you cannot confidently rule out a conflict, STOP and report back to the coordinator with what you observed rather than proceeding with the edit. The coordinator will resolve the conflict or hand you an updated scope.`,
+        ]),
     ``,
     `## Execution Strategy (IMPORTANT: use parallel tool calls)`,
     `- Turn 1: Scope scan — emit 3-8 PARALLEL tool calls: glob for structure + grep for key patterns + read critical files. All in ONE response.`,
@@ -538,10 +508,9 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
  *
  * Read-only children get `CHILD_AGENT_SYSTEM_PROMPT` verbatim — they only
  * navigate code, so AGENTS.md mutation policy is irrelevant. Write children
- * (H2 Generator fan-out, isolated worktree) actually edit files and would
- * silently violate project rules ("NEVER use `any`", forbidden imports,
- * coding-style conventions) unless the project's AGENTS.md is in their
- * system prompt.
+ * (H2 Generator / Worker fan-out) actually edit files and would silently
+ * violate project rules ("NEVER use `any`", forbidden imports, coding-style
+ * conventions) unless the project's AGENTS.md is in their system prompt.
  *
  * The original FEATURE_117 design ("strip read-path context") was inverted
  * after Phase 3 fact-check showed `systemPromptOverride` already short-
@@ -728,7 +697,6 @@ function mergeChildResults(
   bundles: readonly KodaXChildContextBundle[],
   results: readonly KodaXChildAgentResult[],
   cancelledChildren: readonly string[],
-  worktreePaths?: ReadonlyMap<string, string>,
 ): KodaXChildExecutionResult {
   const bundleMap = new Map(bundles.map((b) => [b.id, b]));
 
@@ -751,152 +719,7 @@ function mergeChildResults(
     mergedArtifacts,
     totalTokensUsed: 0, // Tracked via FEATURE_064 cost observatory when available
     cancelledChildren: [...cancelledChildren],
-    worktreePaths: worktreePaths && worktreePaths.size > 0 ? worktreePaths : undefined,
   };
-}
-
-/* ---------- Evaluator-assisted merge (H2 write fan-out) ---------- */
-
-export interface WriteChildDiff {
-  readonly childId: string;
-  readonly objective: string;
-  readonly worktreePath: string;
-  readonly diff: string;
-  readonly status: KodaXChildAgentResult['status'];
-}
-
-export function buildEvaluatorMergePrompt(diffs: readonly WriteChildDiff[]): string {
-  const sections = diffs.map((d) => [
-    `### Child: ${d.childId} — ${d.objective}`,
-    `Status: ${d.status}`,
-    `Worktree: ${d.worktreePath}`,
-    '```diff',
-    d.diff.slice(0, 8000), // Cap diff size per child
-    '```',
-  ].join('\n'));
-
-  return [
-    '# Evaluator: Review Parallel Write Results',
-    '',
-    'Multiple child agents made independent code changes in isolated worktrees.',
-    'Review each child\'s diff for:',
-    '- Correctness and consistency across children',
-    '- Conflicts between changes (e.g., same file modified differently)',
-    '- Quality of implementation',
-    '',
-    'For each child, decide: ACCEPT (merge to main) or REVISE (needs changes).',
-    '',
-    ...sections,
-    '',
-    'Summarize your verdict for each child and any conflicts found.',
-  ].join('\n');
-}
-
-export function collectWriteChildDiffs(
-  results: readonly KodaXChildAgentResult[],
-  bundles: readonly KodaXChildContextBundle[],
-  worktreePaths: ReadonlyMap<string, string>,
-): readonly WriteChildDiff[] {
-  const bundleMap = new Map(bundles.map((b) => [b.id, b]));
-
-  return results
-    .filter((r) => worktreePaths.has(r.childId))
-    .map((r) => {
-      const wtPath = worktreePaths.get(r.childId)!;
-      const diff = collectWorktreeDiff(wtPath);
-      return {
-        childId: r.childId,
-        objective: bundleMap.get(r.childId)?.objective ?? '',
-        worktreePath: wtPath,
-        diff: diff ?? '(no changes)',
-        status: r.status,
-      };
-    });
-}
-
-/* ---------- Worktree helpers ---------- */
-
-function parseWorktreePath(toolResult: string): string | null {
-  try {
-    const parsed = JSON.parse(toolResult) as { path?: string };
-    if (typeof parsed.path === 'string') return parsed.path;
-  } catch {
-    // Fallback to regex if tool returns non-JSON format
-    const match = toolResult.match(/Worktree created at:\s*(.+?)\s+branch:/);
-    if (match?.[1]) return match[1];
-  }
-  return null;
-}
-
-function collectWorktreeDiff(worktreePath: string): string | null {
-  try {
-    const diff = execSync('git diff HEAD', {
-      cwd: worktreePath,
-      encoding: 'utf-8',
-      timeout: 10_000,
-    });
-    return diff.length > 0 ? diff : null;
-  } catch {
-    return null;
-  }
-}
-
-/* ---------- Post-Evaluator worktree operations ---------- */
-
-/**
- * Cherry-pick changes from a child's worktree into the main branch.
- * Call this after Evaluator accepts a write child's changes.
- */
-export function cherryPickWorktree(
-  worktreePath: string,
-  mainGitRoot: string,
-): { success: boolean; error?: string } {
-  try {
-    // Commit all changes in worktree
-    execSync('git add -A && git diff --cached --quiet || git commit -m "child-agent: apply changes"', {
-      cwd: worktreePath,
-      encoding: 'utf-8',
-      timeout: 15_000,
-    });
-    // Get the commit hash
-    const commitHash = execSync('git rev-parse HEAD', {
-      cwd: worktreePath,
-      encoding: 'utf-8',
-      timeout: 5_000,
-    }).trim();
-    // Cherry-pick into main
-    execSync(`git cherry-pick ${commitHash}`, {
-      cwd: mainGitRoot,
-      encoding: 'utf-8',
-      timeout: 15_000,
-    });
-    return { success: true };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    // Abort failed cherry-pick to leave repo clean
-    try { execSync('git cherry-pick --abort', { cwd: mainGitRoot, timeout: 5_000 }); } catch { /* ignore */ }
-    return { success: false, error: message };
-  }
-}
-
-/**
- * Cleanup remaining worktrees after Evaluator review completes.
- * Call this in the task-engine after Evaluator verdict is processed.
- */
-export async function cleanupWorktrees(
-  worktreePaths: ReadonlyMap<string, string>,
-  ctx: KodaXToolExecutionContext,
-): Promise<void> {
-  for (const [, wtPath] of worktreePaths) {
-    try {
-      await toolWorktreeRemove(
-        { action: 'remove', worktree_path: wtPath, discard_changes: true },
-        ctx,
-      );
-    } catch {
-      // Best-effort cleanup
-    }
-  }
 }
 
 /* ---------- Validation ---------- */

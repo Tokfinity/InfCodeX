@@ -9,10 +9,8 @@ vi.mock('./agent.js', () => ({
   runKodaX: vi.fn(),
 }));
 
-vi.mock('./tools/worktree.js', () => ({
-  toolWorktreeCreate: vi.fn(),
-  toolWorktreeRemove: vi.fn(),
-}));
+// FEATURE_188 v0.7.42 — child-executor no longer imports worktree helpers,
+// so `vi.mock('./tools/worktree.js')` and its mock objects are removed.
 
 import type {
   KodaXChildContextBundle,
@@ -20,20 +18,15 @@ import type {
 } from './types.js';
 import {
   executeChildAgents,
-  buildEvaluatorMergePrompt,
-  collectWriteChildDiffs,
   buildChildEvents,
   CHILD_AGENT_SYSTEM_PROMPT,
   CHILD_EXCLUDE_TOOLS_BASE,
 } from './child-executor.js';
 import { clearAgentsLoaderCacheForTesting } from './context/agents-loader.js';
-import type { ChildExecutorOptions, WriteChildDiff } from './child-executor.js';
+import type { ChildExecutorOptions } from './child-executor.js';
 import { runKodaX } from './agent.js';
-import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
-const mockWorktreeCreate = toolWorktreeCreate as ReturnType<typeof vi.fn>;
-const mockWorktreeRemove = toolWorktreeRemove as ReturnType<typeof vi.fn>;
 
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
@@ -268,9 +261,7 @@ describe('executeChildAgents', () => {
       createBundle({ id: 'cb-worker-1', readOnly: false, objective: 'Refactor module A' }),
     ];
 
-    mockWorktreeCreate.mockResolvedValueOnce(JSON.stringify({ path: '/tmp/wt-mod-a', branch: 'wt-mod-a' }));
     mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Done', messages: [{ role: 'assistant', content: '' }], sessionId: 's-w1' });
-    mockWorktreeRemove.mockResolvedValueOnce('removed');
 
     const result = await executeChildAgents(
       bundles,
@@ -280,7 +271,7 @@ describe('executeChildAgents', () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]!.status).toBe('completed');
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
   });
 
   it('still rejects write bundles from non-dispatcher roles (planner/evaluator parity)', async () => {
@@ -305,9 +296,7 @@ describe('executeChildAgents', () => {
       createBundle({ id: 'cb-1', readOnly: false, objective: 'Refactor auth' }),
     ];
 
-    mockWorktreeCreate.mockResolvedValueOnce(JSON.stringify({ path: '/tmp/wt-auth', branch: 'wt-auth' }));
     mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Refactored', messages: [{ role: 'assistant', content: '' }], sessionId: 's1' });
-    mockWorktreeRemove.mockResolvedValueOnce('removed');
 
     const result = await executeChildAgents(
       bundles,
@@ -317,22 +306,18 @@ describe('executeChildAgents', () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]!.status).toBe('completed');
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
-    // Successful write children's worktrees are kept for Evaluator review (not cleaned up here)
-    expect(mockWorktreeRemove).toHaveBeenCalledTimes(0);
-    // worktreePaths should be in result for downstream cleanup
-    expect(result.worktreePaths).toBeDefined();
-    expect(result.worktreePaths!.size).toBe(1);
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    // FEATURE_188 v0.7.42 — write child shares parent cwd/gitRoot (no
+    // worktree); `KodaXChildExecutionResult.worktreePaths` field removed.
+    expect((result as { worktreePaths?: unknown }).worktreePaths).toBeUndefined();
   });
 
-  it('cleans up worktrees even when child crashes', async () => {
+  it('surfaces a failed result when the child crashes (no worktree cleanup needed post-FEATURE_188)', async () => {
     const bundles = [
       createBundle({ id: 'cb-1', readOnly: false, objective: 'Crash task' }),
     ];
 
-    mockWorktreeCreate.mockResolvedValueOnce(JSON.stringify({ path: '/tmp/wt-crash', branch: 'wt-crash' }));
     mockRunKodaX.mockRejectedValueOnce(new Error('Crash!'));
-    mockWorktreeRemove.mockResolvedValueOnce('removed');
 
     const result = await executeChildAgents(
       bundles,
@@ -342,26 +327,6 @@ describe('executeChildAgents', () => {
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]!.status).toBe('failed');
-    // Worktree must still be cleaned up
-    expect(mockWorktreeRemove).toHaveBeenCalledTimes(1);
-  });
-
-  it('handles worktree creation failure gracefully', async () => {
-    const bundles = [
-      createBundle({ id: 'cb-1', readOnly: false, objective: 'Task' }),
-    ];
-
-    mockWorktreeCreate.mockResolvedValueOnce('some non-json error output');
-
-    const result = await executeChildAgents(
-      bundles,
-      createCtx(),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
-    );
-
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0]!.status).toBe('failed');
-    expect(result.results[0]!.summary).toContain('Failed to create worktree');
   });
 
   /* ---------- Evidence resolution ---------- */
@@ -391,26 +356,43 @@ describe('executeChildAgents', () => {
     expect(prompt).toContain('Known fact');
   });
 
-  /* ---------- Write fan-out worktreePaths export ---------- */
+  /* ---------- FEATURE_188 v0.7.42: peer-coordination briefing ---------- */
 
-  it('exports worktreePaths in result for write children', async () => {
+  it('write-child briefing includes the "Coordination with peers" section (FEATURE_188 ADR-034)', async () => {
     const bundles = [
-      createBundle({ id: 'cb-1', readOnly: false, objective: 'Refactor' }),
+      createBundle({ id: 'cb-coord-w', readOnly: false, objective: 'Refactor module X' }),
     ];
 
-    mockWorktreeCreate.mockResolvedValueOnce(JSON.stringify({ path: '/tmp/wt-ref', branch: 'wt-ref' }));
-    mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Done', messages: [{ role: 'assistant', content: '' }], sessionId: 's1' });
-    mockWorktreeRemove.mockResolvedValueOnce('removed');
+    mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Done', messages: [{ role: 'assistant', content: '' }], sessionId: 's-coord-w' });
 
-    const result = await executeChildAgents(
+    await executeChildAgents(
       bundles,
       createCtx(),
       createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
     );
 
-    // worktreePaths should be available before cleanup
-    // (cleanup happens in finally, but result is built before that)
-    expect(result.results).toHaveLength(1);
+    const briefing = mockRunKodaX.mock.calls[0]![1] as string;
+    expect(briefing).toContain('## Coordination with peers');
+    expect(briefing).toContain('STOP and report back to the coordinator');
+    expect(briefing).toContain('parallel');
+  });
+
+  it('read-child briefing does NOT include the "Coordination with peers" section', async () => {
+    const bundles = [
+      createBundle({ id: 'cb-coord-r', readOnly: true, objective: 'Investigate module Y' }),
+    ];
+
+    mockRunKodaX.mockResolvedValueOnce({ success: true, lastText: 'Inspected', messages: [{ role: 'assistant', content: '' }], sessionId: 's-coord-r' });
+
+    await executeChildAgents(
+      bundles,
+      createCtx(),
+      createOptions({ parentRole: 'scout', parentHarness: 'H0_DIRECT' }),
+    );
+
+    const briefing = mockRunKodaX.mock.calls[0]![1] as string;
+    expect(briefing).not.toContain('## Coordination with peers');
+    expect(briefing).not.toContain('STOP and report back to the coordinator');
   });
 });
 
@@ -449,9 +431,6 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
       `# Project Rules\n\n- ${sentinel}\n- All commits must be conventional.\n`,
     );
 
-    mockWorktreeCreate.mockResolvedValueOnce(
-      JSON.stringify({ path: join(tmpRoot, 'wt'), branch: 'wt' }),
-    );
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
       lastText: 'done',
@@ -484,9 +463,6 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
 
   it('write child falls back to bare CHILD_AGENT_SYSTEM_PROMPT when no AGENTS.md exists', async () => {
     // tmpRoot has no AGENTS.md
-    mockWorktreeCreate.mockResolvedValueOnce(
-      JSON.stringify({ path: join(tmpRoot, 'wt'), branch: 'wt' }),
-    );
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
       lastText: 'done',
@@ -543,13 +519,11 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
   });
 
   it('write child gracefully no-ops when parent gitRoot is undefined (non-git workspace)', async () => {
-    // When parentCtx.gitRoot is undefined, buildWriteSystemPrompt falls
-    // back to wtPath. Worktrees don't carry untracked AGENTS.md, so the
-    // formatted block is empty and the bare CHILD_AGENT_SYSTEM_PROMPT
-    // surfaces — which is the right behavior for non-git workspaces.
-    mockWorktreeCreate.mockResolvedValueOnce(
-      JSON.stringify({ path: join(tmpRoot, 'wt-no-gitroot'), branch: 'wt' }),
-    );
+    // FEATURE_188 v0.7.42 — `buildWriteSystemPrompt` now falls back from
+    // parent gitRoot → executionCwd → process.cwd() (no worktree path).
+    // To exercise the "no project rules" path we point executionCwd at a
+    // clean tmpdir that has no AGENTS.md, so the AGENTS.md walk finds
+    // nothing and the bare CHILD_AGENT_SYSTEM_PROMPT surfaces.
     mockRunKodaX.mockResolvedValueOnce({
       success: true,
       lastText: 'done',
@@ -561,7 +535,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
 
     await executeChildAgents(
       bundles,
-      { backups: new Map(), gitRoot: undefined, executionCwd: undefined } as unknown as Parameters<typeof executeChildAgents>[1],
+      { backups: new Map(), gitRoot: undefined, executionCwd: tmpRoot } as unknown as Parameters<typeof executeChildAgents>[1],
       createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
     );
 
@@ -572,63 +546,35 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     expect(opts.context.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
   });
 
-  it('write child resolves AGENTS.md from parent gitRoot, not the worktree path', async () => {
-    // Worktree is a transient checkout under a different path. The
-    // AGENTS.md lookup must walk from the original gitRoot, otherwise
-    // worktree-only paths would have no project rules.
+  it('write child resolves AGENTS.md from parent gitRoot (FEATURE_188 v0.7.42 — child shares parent cwd)', async () => {
+    // Post-FEATURE_188 the child no longer runs inside a separate
+    // worktree; it shares the parent's gitRoot directly. The AGENTS.md
+    // lookup therefore walks the parent gitRoot, picking up the project
+    // rules as expected.
     const sentinel = 'PARENT_GITROOT_AGENTS_SENTINEL';
     writeFileSync(
       join(tmpRoot, 'AGENTS.md'),
       `# Rules\n\n- ${sentinel}\n`,
     );
 
-    // Worktree path is intentionally outside tmpRoot so its own walk
-    // would not find AGENTS.md unless the lookup uses parent gitRoot.
-    const wtPath = mkdtempSync(join(tmpdir(), 'kodax-feat117-wt-'));
-    try {
-      mockWorktreeCreate.mockResolvedValueOnce(
-        JSON.stringify({ path: wtPath, branch: 'wt' }),
-      );
-      mockRunKodaX.mockResolvedValueOnce({
-        success: true,
-        lastText: 'done',
-        messages: [{ role: 'assistant', content: '' }],
-        sessionId: 's1',
-      });
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's1',
+    });
 
-      const bundles = [createBundle({ id: 'cb-w3', readOnly: false, objective: 'Refactor' })];
-      await executeChildAgents(
-        bundles,
-        createTmpCtx(tmpRoot),
-        createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
-      );
+    const bundles = [createBundle({ id: 'cb-w3', readOnly: false, objective: 'Refactor' })];
+    await executeChildAgents(
+      bundles,
+      createTmpCtx(tmpRoot),
+      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+    );
 
-      const opts = mockRunKodaX.mock.calls[0]![0] as {
-        context: { systemPromptOverride: string };
-      };
-      expect(opts.context.systemPromptOverride).toContain(sentinel);
-    } finally {
-      try { rmSync(wtPath, { recursive: true, force: true }); } catch { /* best-effort */ }
-    }
-  });
-});
-
-/* ---------- Evaluator merge helpers ---------- */
-
-describe('buildEvaluatorMergePrompt', () => {
-  it('builds a structured prompt from write child diffs', () => {
-    const diffs: WriteChildDiff[] = [
-      { childId: 'cb-1', objective: 'Refactor auth', worktreePath: '/wt/auth', diff: '+new code\n-old code', status: 'completed' },
-      { childId: 'cb-2', objective: 'Refactor cache', worktreePath: '/wt/cache', diff: '+cache fix', status: 'completed' },
-    ];
-
-    const prompt = buildEvaluatorMergePrompt(diffs);
-
-    expect(prompt).toContain('Refactor auth');
-    expect(prompt).toContain('Refactor cache');
-    expect(prompt).toContain('+new code');
-    expect(prompt).toContain('ACCEPT');
-    expect(prompt).toContain('REVISE');
+    const opts = mockRunKodaX.mock.calls[0]![0] as {
+      context: { systemPromptOverride: string };
+    };
+    expect(opts.context.systemPromptOverride).toContain(sentinel);
   });
 });
 
@@ -724,19 +670,3 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
   });
 });
 
-describe('collectWriteChildDiffs', () => {
-  it('collects diffs from worktree paths', () => {
-    const results = [
-      { childId: 'cb-1', fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass, status: 'completed' as const, disposition: 'valid' as const, summary: 'done', evidenceRefs: [], contradictions: [] },
-    ];
-    const bundles = [createBundle({ id: 'cb-1', objective: 'Test' })];
-    const worktreePaths = new Map([['cb-1', '/tmp/wt-test']]);
-
-    // collectWorktreeDiff calls execSync internally — will fail in test but should return (no changes)
-    const diffs = collectWriteChildDiffs(results, bundles, worktreePaths);
-
-    expect(diffs).toHaveLength(1);
-    expect(diffs[0]!.childId).toBe('cb-1');
-    expect(diffs[0]!.objective).toBe('Test');
-  });
-});

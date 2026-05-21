@@ -756,8 +756,6 @@ export interface KodaXChildExecutionResult {
   readonly mergedArtifacts: readonly string[];
   readonly totalTokensUsed: number;
   readonly cancelledChildren: readonly string[];
-  /** Worktree paths for write children, keyed by childId. Available for evaluator review. */
-  readonly worktreePaths?: ReadonlyMap<string, string>;
 }
 
 export interface KodaXChildFinding {
@@ -1043,8 +1041,6 @@ export interface KodaXContextOptions {
   };
   /** Mutable mutation tracker shared between worker events and the protocol tool handler. */
   mutationTracker?: ManagedMutationTracker;
-  /** FEATURE_067 v2: Callback for dispatch_child_tasks to register write worktree paths. */
-  registerChildWriteWorktrees?: (worktreePaths: ReadonlyMap<string, string>) => void;
   /** FEATURE_067 v3: Tool names to exclude from API-level tool list (child agents). */
   excludeTools?: readonly string[];
   /**
@@ -1291,8 +1287,6 @@ export interface KodaXManagedTaskRuntimeState {
   childWriteReviewPrompt?: string;
   /** FEATURE_067: Number of write child diffs pending evaluator review. */
   childWriteDiffCount?: number;
-  /** FEATURE_067 v2: Worktree paths from dispatch_child_tasks write fan-out, keyed by childId. */
-  childWriteWorktreePaths?: ReadonlyMap<string, string>;
 }
 
 export interface KodaXManagedTask {
@@ -1539,8 +1533,6 @@ export interface KodaXToolExecutionContext {
   /** FEATURE_067 v2: Callback for long-running tools to report execution progress to the REPL transcript.
    *  The string will be displayed as the tool's "Running:" line in the transcript. */
   reportToolProgress?: (message: string) => void;
-  /** FEATURE_067 v2: Callback to store write child worktree paths for Evaluator diff injection. */
-  registerChildWriteWorktrees?: (worktreePaths: ReadonlyMap<string, string>) => void;
   /** Mutation tracker for scope-aware protocol responses. Populated by createWorkerEvents. */
   mutationTracker?: ManagedMutationTracker;
   /**

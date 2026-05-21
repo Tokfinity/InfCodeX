@@ -502,7 +502,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       properties: {
         id: { type: 'string', description: 'Unique child task identifier' },
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
-        readOnly: { type: 'boolean', description: 'true=investigation only (default), false=code changes (Generator only)' },
+        readOnly: { type: 'boolean', description: 'true (default): child can only read files. false: child may edit files (Generator/Worker only); use for non-conflicting file-level edits across modules.' },
         scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
         evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence: "file:path", "diff:path", or "finding:text"' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
