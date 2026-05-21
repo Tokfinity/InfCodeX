@@ -1540,6 +1540,26 @@ v0.7.45 后：
 
 **否决**：违反 [`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)。Recorder.verdict 同时有两个 source 会让 deriveFinalStatus 二义性、TodoStore 双触发、UI label 模糊。
 
+#### E. Verifier verdict-outcome 落 JSONL log（受 MetaCogAgent 论文 5b 启发）
+
+**否决**：[MetaCogAgent](https://arxiv.org/pdf/2605.17292) 论文 Section IV-B 建议把 verifier verdict + 最终 task outcome 配对落盘，方便后续算 verifier 准确率。在 KodaX 上这是不必要的重复：
+
+1. **session-lineage 已经记录**：`packages/session-lineage/` 把每个 session 的 verdict slot + final outcome 落到磁盘 — 想算 verifier 准确率从 session-lineage 拉数据就够，不需要额外 JSONL stream
+2. **production user 不会自己分析**：KodaX 是单用户 CLI 不是 SaaS dashboard；用户不会 grep 自己的 JSONL 算 verifier accuracy
+3. **Layer 2 eval raw dump 已覆盖**：`os.tmpdir()/kodax-eval-dumps/` 落盘所有 eval call 的 raw output，分析需要时去那里找
+4. **违反 minimalist 原则**：加一个 runtime logging pipeline 不解决任何当前 pain，是"为假设需求设计"
+
+#### F. Verifier 输出 0-100 confidence-in-verdict score（受 MetaCogAgent 论文 5c 启发）
+
+**否决**：MetaCogAgent Section III-B 让 agent 自评 0-100 confidence，配 historical capability profile 算 hybrid score。把这套搬到 KodaX sidecar verifier 上有四个问题：
+
+1. **三态 verdict 已经分级**：`accept`/`revise`/`blocked` 本身就是粗粒度 confidence ladder（高/中/低），再叠加 0-100 是 over-engineer
+2. **verbalized confidence 已知失校**：MetaCogAgent 论文自己证明（Section III-B / Ablation Table IV）verbalized confidence 单独使用比 hybrid 弱 4.3pp，且 ECE 在 hard task 上飙到 0.132。KodaX 不打算（也不该）维护 capability profile（违反 minimalist），所以 confidence 只会是 raw verbalized，已知不可靠
+3. **reanimate budget 已经兜底"不确定"case**：sidecar fail-open accept + cap=2 reanimate budget 已经覆盖"我也不太确定"的场景 — 模型下一轮会再判一次。confidence 字段在这套机制里没有放置之处
+4. **引入伪精度风险**：用户看到 "confidence=78" 会过度解读，但实际 78 vs 82 没有可解释的差异
+
+**搁置**：5b/5c 不进 FEATURE_184 后续 follow-up，不进 v0.7.46+ roadmap。MetaCogAgent 论文的核心架构（pre-execution routing）跟 KodaX post-execution verification 是不同问题，论文里间接支持"独立验证比 self-judge 强"的发现不需要靠 5b/5c 形态承载 — Stop-hook + cross-family model override 已经覆盖。
+
 ### 实施分相
 
 **FEATURE_184 phased commits**（参照 FEATURE_178 4-commit 模式）：
