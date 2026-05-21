@@ -158,6 +158,44 @@ export interface ISkillRegistry {
 
 // === Skill Execution Context ===
 
+/**
+ * v0.7.42 — SDK-embedder hook for `!`cmd`` dynamic context resolution.
+ *
+ * Receives the literal command string and the working directory the resolver
+ * would have used. Must return the command's text output (which the resolver
+ * splices into the skill markdown in place of the `!`cmd`` token), or throw
+ * to deny.
+ *
+ * **Trust boundary**: when the KodaX SDK is embedded inside a host app
+ * (e.g. KodaX Space, IDE extensions), the host typically mediates shell
+ * execution through a permission broker so the end user can approve / deny
+ * each command. Without this hook, `VariableResolver` directly `execSync`s
+ * commands using its own built-in whitelist — bypassing the host's broker
+ * and producing OS side-effects the user never saw.
+ *
+ * Embedders should route here to:
+ *   - prompt the user via their own UI,
+ *   - log execution to their audit trail,
+ *   - apply policy (e.g. block network commands),
+ *   - or refuse outright (throw).
+ *
+ * @example
+ * ```ts
+ * const context: SkillContext = {
+ *   workingDirectory: '/repo',
+ *   executeDynamicContext: async (cmd, cwd) => {
+ *     const approved = await brokerAskUser({ kind: 'skill-cmd', command: cmd, cwd });
+ *     if (!approved) throw new Error('user denied');
+ *     return await brokerExecute(cmd, cwd);
+ *   },
+ * };
+ * ```
+ */
+export type SkillDynamicContextExecutor = (
+  command: string,
+  cwd: string,
+) => Promise<string>;
+
 export interface SkillContext {
   workingDirectory: string;
   projectRoot?: string;
@@ -171,6 +209,21 @@ export interface SkillContext {
   sessionId?: string;
   environment?: Record<string, string>;
   messages?: unknown[];
+  /**
+   * v0.7.42 — SDK-embedder hook for `!`cmd`` dynamic-context resolution.
+   * See {@link SkillDynamicContextExecutor} for the trust-boundary rationale.
+   * When present, completely replaces the built-in `execSync`-based path
+   * (whitelist + 5s timeout). When absent, the legacy whitelist path runs.
+   */
+  executeDynamicContext?: SkillDynamicContextExecutor;
+  /**
+   * v0.7.42 — hard-disable `!`cmd`` resolution.
+   * When `true`, encountering a `!`cmd`` token throws
+   * `[Dynamic context disabled by host]` regardless of any hook. Useful for
+   * embedders that want a single-flag kill switch without writing a hook.
+   * `executeDynamicContext` is ignored when this is `true`.
+   */
+  disableDynamicContext?: boolean;
 }
 
 // === Skill Execution Result ===

@@ -211,7 +211,18 @@ export class VariableResolver implements IVariableResolver {
   }
 
   /**
-   * Replace !`command` with command output (dynamic context)
+   * Replace !`command` with command output (dynamic context).
+   *
+   * Three-tier dispatch (v0.7.42):
+   *   1. `context.disableDynamicContext === true` → throw immediately,
+   *      surfaced to the LLM as `[Error: …]`. Host-level kill switch.
+   *   2. `context.executeDynamicContext` provided → route there. Embedder
+   *      mediates shell execution (broker, audit, deny).
+   *   3. else → legacy built-in path (`isSafeDynamicContextCommand`
+   *      whitelist + `execSync` with 5s timeout).
+   *
+   * The resolver inlines an `[Error: …]` placeholder for any thrown
+   * exception so a single bad token doesn't poison the whole skill load.
    */
   private async resolveDynamicContext(content: string): Promise<string> {
     const dynamicPattern = /!`([^`]+)`/g;
@@ -230,7 +241,7 @@ export class VariableResolver implements IVariableResolver {
     let resolved = content;
     for (const { match, command } of matches) {
       try {
-        const output = this.executeDynamicCommand(command);
+        const output = await this.executeDynamicCommand(command);
         resolved = resolved.replace(match, output);
       } catch (error) {
         // On error, replace with error message
@@ -243,12 +254,34 @@ export class VariableResolver implements IVariableResolver {
   }
 
   /**
-   * Execute a dynamic context command
+   * Execute a dynamic context command via the appropriate dispatch tier.
+   * See `resolveDynamicContext` JSDoc for the 3-tier ordering rationale.
    */
-  private executeDynamicCommand(command: string): string {
+  private async executeDynamicCommand(command: string): Promise<string> {
+    // Tier 1: hard kill switch — embedder fully opts out of `!`cmd``.
+    if (this.context.disableDynamicContext) {
+      throw new Error(
+        'Dynamic context disabled by host. Skill `!`cmd`` blocks are not allowed in this environment.',
+      );
+    }
+
+    // Tier 2: embedder-provided hook — host mediates shell execution
+    // (permission broker / audit / policy). The hook owns the entire
+    // execution policy; KodaX's built-in whitelist does NOT run in front
+    // of it, because the host is presumed to have its own (typically
+    // stricter or interactive) policy. The hook may throw to deny.
+    if (this.context.executeDynamicContext) {
+      const output = await this.context.executeDynamicContext(
+        command,
+        this.context.workingDirectory,
+      );
+      return typeof output === 'string' ? output.trim() : '';
+    }
+
+    // Tier 3: legacy built-in path — read-only whitelist + execSync.
     if (!isSafeDynamicContextCommand(command)) {
       throw new Error(
-        'Unsafe dynamic context command blocked. Only simple read-only commands are allowed in !`...` blocks.'
+        'Unsafe dynamic context command blocked. Only simple read-only commands are allowed in !`...` blocks.',
       );
     }
 

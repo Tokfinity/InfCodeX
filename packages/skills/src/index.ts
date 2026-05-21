@@ -15,6 +15,7 @@ export type {
   SkillHooks,
   SkillSource,
   SkillContext,
+  SkillDynamicContextExecutor,
   SkillResult,
   SkillArtifact,
   SkillPathsConfig,
