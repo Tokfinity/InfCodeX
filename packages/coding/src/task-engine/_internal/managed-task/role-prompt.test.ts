@@ -143,9 +143,9 @@ describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)'
     expect(rendered).not.toContain('targeted piece of evidence');
   });
 
-  it('Discipline block does NOT bleed into non-Generator roles (Scout / Planner / Evaluator)', () => {
+  it('Discipline block does NOT bleed into non-Generator roles (Scout / Planner)', () => {
     const decision = buildFallbackRoutingDecision(userQuestion);
-    for (const role of ['scout', 'planner', 'evaluator'] as const) {
+    for (const role of ['scout', 'planner'] as const) {
       const rendered = createRolePrompt(
         role,
         userQuestion,
@@ -179,7 +179,7 @@ describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)'
 // block (they would otherwise duplicate).
 describe('FEATURE_144 — AMA worker capability-context parity', () => {
   function renderRole(
-    role: 'scout' | 'planner' | 'generator' | 'evaluator',
+    role: 'scout' | 'planner' | 'generator',
     capabilityContextBlock: string | undefined,
   ): string {
     const decision = buildFallbackRoutingDecision(userQuestion);
@@ -202,7 +202,10 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
     );
   }
 
-  const roles = ['scout', 'planner', 'generator', 'evaluator'] as const;
+  // FEATURE_184 (v0.7.45) Phase C.3: 'evaluator' removed from role list —
+  // in-chain Evaluator retired. Sidecar Verifier now handles post-execution
+  // verification via StopHook and does not use createRolePrompt.
+  const roles = ['scout', 'planner', 'generator'] as const;
 
   it('renders capabilityContextBlock for every role when present', () => {
     const block = [
@@ -469,9 +472,9 @@ describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => 
     expect(rendered).toMatch(/continue as the H0 executor and call todo_update at each step transition/);
   });
 
-  it('TRIVIAL-EXEMPTION block belongs to Scout only (does NOT leak into Planner / Generator / Evaluator)', () => {
+  it('TRIVIAL-EXEMPTION block belongs to Scout only (does NOT leak into Planner / Generator)', () => {
     const decision = buildFallbackRoutingDecision(userQuestion);
-    for (const role of ['planner', 'generator', 'evaluator'] as const) {
+    for (const role of ['planner', 'generator'] as const) {
       const rendered = createRolePrompt(
         role,
         userQuestion,
@@ -505,52 +508,14 @@ describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => 
   });
 });
 
-// v0.7.38 FEATURE_155 hotfix — Bug C: Evaluator must wait for child
-// tasks to settle before emit_verdict, and the verdict's user_answer
-// must restate the consolidated review (not collapse to a one-line
-// ack). Structural test pins both anchors in the Evaluator prompt so
-// a future edit can't silently drop the contract. A Layer 2 behavioural
-// eval is the follow-up (tracked in FEATURE_LIST under FEATURE_155
-// pending work) — this structural test is the minimum gate for the
-// hotfix release.
-describe('createRolePrompt — Evaluator wait-for-children + final-answer contract (v0.7.38 FEATURE_155 hotfix)', () => {
-  function renderEvaluatorPrompt(): string {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    return createRolePrompt(
-      'evaluator',
-      userQuestion,
-      decision,
-      undefined,
-      undefined,
-      'kodax/role/evaluator',
-      undefined,
-      buildContext({ provider: 'p', model: 'm' }),
-      undefined,
-      false,
-    );
-  }
-
-  it('teaches the Evaluator to wait for ALL dispatched children before emit_verdict', () => {
-    const rendered = renderEvaluatorPrompt();
-    expect(rendered).toContain('CHILD-TASK WAIT DISCIPLINE');
-    expect(rendered).toContain('wait for ALL of them to return before calling `emit_verdict`');
-    expect(rendered).toContain('end your turn with ONE short status sentence and NO tool calls');
-    expect(rendered).toContain('<task-completed task_id="…">…</task-completed>');
-  });
-
-  it('requires the final user_answer to restate the consolidated review (not a one-line ack)', () => {
-    const rendered = renderEvaluatorPrompt();
-    expect(rendered).toContain('the `user_answer` field MUST restate the consolidated review');
-    expect(rendered).toContain('do NOT collapse it to a one-line acknowledgement');
-  });
-
-  it('crashed children still count as settled so the Evaluator doesn\'t block forever', () => {
-    const rendered = renderEvaluatorPrompt();
-    expect(rendered).toContain('failed:');
-    expect(rendered).toContain('count it as settled and continue');
-  });
-
-  it('wait-discipline block belongs to Evaluator only (does NOT leak into Worker / Generator / Scout / Planner)', () => {
+// v0.7.38 FEATURE_155 hotfix — Bug C: Evaluator wait-for-children discipline.
+// FEATURE_184 (v0.7.45) Phase C.3: in-chain Evaluator retired. The prompt
+// content tests (CHILD-TASK WAIT DISCIPLINE etc.) are removed because
+// createRolePrompt('evaluator', ...) now falls through to the default branch.
+// The isolation test ("does NOT leak") is preserved as a sentinel to ensure
+// the wait-discipline section stays confined to the Sidecar Verifier context.
+describe('createRolePrompt — wait-discipline isolation (FEATURE_155 / FEATURE_184)', () => {
+  it('CHILD-TASK WAIT DISCIPLINE does NOT appear in Worker / Generator / Scout / Planner prompts', () => {
     const decision = buildFallbackRoutingDecision(userQuestion);
     for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
       const rendered = createRolePrompt(
@@ -574,8 +539,9 @@ describe('createRolePrompt — Evaluator wait-for-children + final-answer contra
 // driven adapter renders `=== Other active KodaX sessions ===` per LLM
 // round via `buildOtherInstancesPromptBlock(discoverInstances())` and
 // passes it via `rolePromptContext.teamModeSection`. The role-prompt
-// builder must surface it on every managed-task role so worker / scout /
-// planner / generator / evaluator all see the same sibling context.
+// builder must surface it on every active managed-task role.
+// FEATURE_184 (v0.7.45) Phase C.3: 'evaluator' removed — in-chain
+// Evaluator retired; Sidecar Verifier does not use createRolePrompt.
 describe('FEATURE_125 — teamModeSection wiring across roles', () => {
   const SAMPLE_BLOCK = [
     '=== Other active KodaX sessions ===',
@@ -587,7 +553,7 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     '  Intent: "refactoring auth"',
   ].join('\n');
 
-  function renderWithTeamBlock(role: 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker'): string {
+  function renderWithTeamBlock(role: 'scout' | 'planner' | 'generator' | 'worker'): string {
     const decision = buildFallbackRoutingDecision(userQuestion);
     const ctx: ManagedRolePromptContext = {
       ...buildContext({ provider: 'p', model: 'm' }),
@@ -607,7 +573,7 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     );
   }
 
-  for (const role of ['scout', 'planner', 'generator', 'evaluator', 'worker'] as const) {
+  for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
     it(`role=${role} includes the team-mode block when supplied`, () => {
       const rendered = renderWithTeamBlock(role);
       expect(rendered).toContain('=== Other active KodaX sessions ===');

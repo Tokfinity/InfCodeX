@@ -38,10 +38,6 @@ import { createAgent, type Agent } from '@kodax-ai/agent';
 export const SCOUT_AGENT_NAME = 'kodax/role/scout';
 export const PLANNER_AGENT_NAME = 'kodax/role/planner';
 export const GENERATOR_AGENT_NAME = 'kodax/role/generator';
-// FEATURE_184 (v0.7.45) Phase C.3 cleanup: EVALUATOR_AGENT_NAME kept here
-// until C.3 removes remaining evaluator references in role-prompt.ts,
-// REPL UI fixtures, verdict-recorder.ts evaluator branch, and sanitize.ts.
-export const EVALUATOR_AGENT_NAME = 'kodax/role/evaluator';
 // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
 // Collapses Scout/Planner/Generator into one Worker that drives plan +
 // execute via the KODAX_HARNESS_V2 flag. Sidecar Verifier (FEATURE_184

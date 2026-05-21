@@ -4,10 +4,14 @@
  * Scenario coverage mirrors the 4 v0.7.22 call sites that consumed a
  * `?? parseManagedTask*Directive(text)` fallback when the LLM forgot to
  * call the emit tool but wrote a well-formed `kodax-task-*` block:
- *   - Scout  → emit_scout_verdict  (block: kodax-task-scout)
- *   - Planner → emit_contract       (block: kodax-task-contract)
- *   - Generator → emit_handoff      (block: kodax-task-handoff)
- *   - Evaluator → emit_verdict      (block: kodax-task-verdict)
+ *   - Scout    → emit_scout_verdict  (block: kodax-task-scout)
+ *   - Planner  → emit_contract       (block: kodax-task-contract)
+ *   - Generator → emit_handoff       (block: kodax-task-handoff)
+ *   - Evaluator → emit_verdict       (block: kodax-task-verdict, Sidecar slot)
+ *
+ * FEATURE_184 (v0.7.45) Phase C.3: Generator is now terminal (Sidecar Verifier
+ * via StopHook). Evaluator `revise` without next_harness is terminal (no
+ * in-chain agent to route back to).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -113,7 +117,10 @@ describe('attemptProtocolTextFallback — generator (handoff)', () => {
     const meta = attemptProtocolTextFallback('generator', text);
     expect(meta).toBeDefined();
     expect(meta!.payload.handoff?.status).toBe('ready');
-    expect(meta!.handoffTarget).toBe('kodax/role/evaluator');
+    // FEATURE_184 (v0.7.45) Phase C.1: Generator is now terminal — Sidecar
+    // Verifier runs via StopHook instead of in-chain Evaluator handoff.
+    expect(meta!.handoffTarget).toBeUndefined();
+    expect(meta!.isTerminal).toBe(true);
   });
 });
 
@@ -137,7 +144,7 @@ describe('attemptProtocolTextFallback — evaluator (verdict)', () => {
     expect(meta!.isTerminal).toBe(true);
   });
 
-  it('parses a revise verdict and routes back to generator by default', () => {
+  it('parses a revise verdict (default: terminal — no in-chain re-run after FEATURE_184 C.1)', () => {
     const text = [
       '```kodax-task-verdict',
       JSON.stringify({ status: 'revise', reason: 'test coverage gap' }),
@@ -146,8 +153,11 @@ describe('attemptProtocolTextFallback — evaluator (verdict)', () => {
     const meta = attemptProtocolTextFallback('evaluator', text);
     expect(meta).toBeDefined();
     expect(meta!.payload.verdict?.status).toBe('revise');
-    expect(meta!.handoffTarget).toBe('kodax/role/generator');
-    expect(meta!.isTerminal).toBe(false);
+    // FEATURE_184 (v0.7.45): without next_harness the revise path is
+    // now terminal — the Sidecar Verifier owns the verdict slot and there
+    // is no in-chain evaluator to route back to.
+    expect(meta!.handoffTarget).toBeUndefined();
+    expect(meta!.isTerminal).toBe(true);
   });
 
   it('routes revise + next_harness=H2_PLAN_EXECUTE_EVAL back to planner', () => {

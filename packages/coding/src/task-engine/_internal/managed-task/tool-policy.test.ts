@@ -8,7 +8,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   DOCS_ONLY_WRITE_PATH_PATTERNS,
-  H1_EVALUATOR_ALLOWED_TOOLS,
   H1_READONLY_GENERATOR_ALLOWED_TOOLS,
   PLANNER_ALLOWED_TOOLS,
   SHELL_WRITE_PATTERNS,
@@ -146,11 +145,9 @@ describe('role allow-lists expose repo-intelligence deep-capsule tools (v0.7.27)
     }
   });
 
-  it('H1 Evaluator can call every repo-intel deep-capsule tool', () => {
-    for (const tool of DEEP_CAPSULE_TOOLS) {
-      expect(H1_EVALUATOR_ALLOWED_TOOLS).toContain(tool);
-    }
-  });
+  // FEATURE_184 (v0.7.45) Phase C.3: H1_EVALUATOR_ALLOWED_TOOLS removed
+  // (in-chain Evaluator retired in C.1+C.2). Sidecar Verifier inherits the
+  // Generator's tool access via its StopHook context.
 
   it('H1 readonly Generator can call every repo-intel deep-capsule tool', () => {
     for (const tool of DEEP_CAPSULE_TOOLS) {
@@ -161,18 +158,15 @@ describe('role allow-lists expose repo-intelligence deep-capsule tools (v0.7.27)
   it('existing inspection tools remain in every expanded allow-list', () => {
     for (const base of ['changed_scope', 'repo_overview', 'changed_diff_bundle']) {
       expect(PLANNER_ALLOWED_TOOLS).toContain(base);
-      expect(H1_EVALUATOR_ALLOWED_TOOLS).toContain(base);
       expect(H1_READONLY_GENERATOR_ALLOWED_TOOLS).toContain(base);
     }
     // Planner does not page changed_diff slices (plan-time evidence stays
     // at bundle/summary granularity).
     expect(PLANNER_ALLOWED_TOOLS).not.toContain('changed_diff');
-    expect(H1_EVALUATOR_ALLOWED_TOOLS).toContain('changed_diff');
     expect(H1_READONLY_GENERATOR_ALLOWED_TOOLS).toContain('changed_diff');
     // Readonly Generator is the only one that may dispatch child tasks.
     expect(H1_READONLY_GENERATOR_ALLOWED_TOOLS).toContain('dispatch_child_task');
     expect(PLANNER_ALLOWED_TOOLS).not.toContain('dispatch_child_task');
-    expect(H1_EVALUATOR_ALLOWED_TOOLS).not.toContain('dispatch_child_task');
   });
 });
 

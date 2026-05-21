@@ -56,11 +56,18 @@ import type { ObserverBridge, VerdictRecorder } from './types.js';
 /**
  * Role-mapping for `onManagedTaskStatus` emissions. Each emit tool
  * corresponds to a role that has just finished its turn.
+ *
+ * FEATURE_184 (v0.7.45): `verdict: 'evaluator'` is a SLOT semantic, not
+ * an agent-name reference. The in-chain Evaluator role was retired in C.1+C.2;
+ * the Sidecar Verifier (verifier-recorder-bridge.ts) writes `recorder.verdict`
+ * directly via `applySidecarVerdictToRecorder` and emits `'evaluator'` here
+ * for backward compat (downstream consumers key on this string).
  */
 export const SLOT_TO_ROLE: Record<'scout' | 'contract' | 'handoff' | 'verdict', KodaXTaskRole> = {
   scout: 'scout',
   contract: 'planner',
   handoff: 'generator',
+  // 'evaluator' is a slot semantic — the Sidecar Verifier now owns this slot.
   verdict: 'evaluator',
 };
 
@@ -199,6 +206,13 @@ export function wrapEmitterWithRecorder(
         // degraded-continue ref so the final managed-task runtime carries
         // `degradedContinue: true`. Mirrors legacy's
         // `denyHarnessUpgrade → degradedContinue` branch.
+        // FEATURE_184 (v0.7.45) Phase C.3: this branch is no longer triggered in
+        // production — Generator is now terminal and the Sidecar Verifier writes
+        // `recorder.verdict` directly via `applySidecarVerdictToRecorder` (which
+        // replicates the budget logic). The `slot === 'verdict'` path is preserved
+        // here for the `wrapEmitterWithRecorder` unit-test surface exposed through
+        // `__runnerDrivenTestables`; removing it would break those tests without
+        // equivalent coverage in the sidecar bridge.
         if (slot === 'verdict' && budgetExtension) {
           const emitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
           const verdictPayload = emitterMeta.payload?.verdict;

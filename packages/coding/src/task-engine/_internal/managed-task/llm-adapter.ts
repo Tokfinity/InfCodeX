@@ -31,7 +31,6 @@ import type {
 import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
 import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
@@ -127,7 +126,6 @@ function agentNameToManagedRole(
     case SCOUT_AGENT_NAME: return 'scout';
     case PLANNER_AGENT_NAME: return 'planner';
     case GENERATOR_AGENT_NAME: return 'generator';
-    case EVALUATOR_AGENT_NAME: return 'evaluator';
     default: return undefined;
   }
 }
@@ -318,7 +316,6 @@ export function buildRunnerLlmAdapter(
       agent.name === SCOUT_AGENT_NAME ? 'scout'
       : agent.name === PLANNER_AGENT_NAME ? 'planner'
       : agent.name === GENERATOR_AGENT_NAME ? 'generator'
-      : agent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
       : 'sa';
     const reasoningMode = resolveRoleReasoning(role, userCeiling, agent.reasoning, scoutHint);
     const providerReasoning: KodaXReasoningRequest | undefined =

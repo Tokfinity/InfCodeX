@@ -482,8 +482,8 @@ describe('FileSessionStorage', () => {
       gitRoot,
       scope: 'user',
     });
-    await storage.save('managed-task-worker-task-abc-evaluator', {
-      messages: [{ role: 'assistant', content: 'internal evaluator session' }],
+    await storage.save('managed-task-worker-task-abc-sidecar', {
+      messages: [{ role: 'assistant', content: 'internal sidecar session' }],
       title: 'Internal Worker',
       gitRoot,
       scope: 'managed-task-worker',

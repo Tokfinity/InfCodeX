@@ -8,15 +8,14 @@
  *     "no dispatcher" error — confirming these are placeholders, not live
  *     dispatch targets in v0.7.23.
  *
- * FEATURE_184 (v0.7.45) Phase C.1: evaluatorAgent removed from chain.
- * EVALUATOR_AGENT_NAME constant is kept for C.3 cleanup.
+ * FEATURE_184 (v0.7.45) Phase C.3: evaluatorAgent and EVALUATOR_AGENT_NAME removed.
+ * Post-execution verification is now handled by the Sidecar Verifier (Phase D.2).
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { Runner } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
@@ -31,8 +30,6 @@ describe('task-engine role agents', () => {
     expect(scoutAgent.name).toBe(SCOUT_AGENT_NAME);
     expect(plannerAgent.name).toBe(PLANNER_AGENT_NAME);
     expect(generatorAgent.name).toBe(GENERATOR_AGENT_NAME);
-    // EVALUATOR_AGENT_NAME constant retained for C.3 cleanup
-    expect(EVALUATOR_AGENT_NAME).toBeTruthy();
   });
 
   it('exposes all three roles via TASK_ENGINE_ROLE_AGENTS', () => {

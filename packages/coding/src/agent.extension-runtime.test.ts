@@ -591,7 +591,7 @@ describe('runKodaX extension runtime integration', () => {
           },
         },
       },
-      'run managed evaluator with hidden protocol tool',
+      'run managed verdict via hidden protocol tool (sidecar verifier path)',
     );
 
     expect(result.success).toBe(true);

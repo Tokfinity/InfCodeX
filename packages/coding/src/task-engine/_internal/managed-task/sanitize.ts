@@ -11,7 +11,7 @@
  * confused instruction following). Without these sanitizers those
  * internal blocks leak to the user. The three sanitize functions
  * (`sanitizeManagedUserFacingText`, `sanitizeManagedStreamingText`,
- * `sanitizeEvaluatorPublicAnswer`) are grouped with the fence helpers
+ * `sanitizeEvaluatorPublicAnswer` — now used for Sidecar Verifier answers) are grouped with the fence helpers
  * (`MANAGED_FENCE_NAMES`, `isManagedFencePrefix`,
  * `findIncompleteManagedFenceIndex`) because they share the same
  * fence-prefix matching logic.

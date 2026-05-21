@@ -60,11 +60,10 @@ import {
  * Keep in sync with `packages/coding/src/agents/protocol-emitters.ts` —
  * this is the single place the prompt text references emit tools by name.
  */
-const ROLE_EMIT_TOOL_NAMES: Record<Exclude<KodaXTaskRole, 'direct'>, string> = {
+const ROLE_EMIT_TOOL_NAMES: Record<Exclude<KodaXTaskRole, 'direct' | 'evaluator'>, string> = {
   scout: 'emit_scout_verdict',
   planner: 'emit_contract',
   generator: 'emit_handoff',
-  evaluator: 'emit_verdict',
   // FEATURE_114 v0.7.36 — Worker (V2 single-loop primary agent) hands off
   // to the structurally-preserved Evaluator role with the same payload
   // shape Generator uses today. Reusing `emit_handoff` keeps the wire
@@ -306,14 +305,6 @@ export function createRolePrompt(
         'Treat the skill map as the coordination surface shared with Scout/Evaluator. If any obligation conflicts with the contract, surface it in your handoff.',
       ].join('\n\n')
       : undefined;
-  const evaluatorSkillSection = skillMap
-    ? [
-      formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath),
-      skillMap.rawSkillFallbackAllowed && rolePromptContext?.skillExecutionArtifactPath
-        ? `Only if the skill map is incomplete or the Generator's claims conflict with it, reopen the raw skill artifact at ${rolePromptContext.skillExecutionArtifactPath}.`
-        : undefined,
-    ].filter((section): section is string => Boolean(section)).join('\n\n')
-    : undefined;
   const previousRoleSummarySection = previousRoleSummary
     ? formatRoleRoundSummarySection(previousRoleSummary)
     : undefined;
@@ -325,21 +316,6 @@ export function createRolePrompt(
       'If there are no findings, say so explicitly before mentioning residual risks or testing gaps.',
     ].join('\n')
     : undefined;
-  const evaluatorPublicAnswerRule = decision.primaryTask === 'review'
-    ? [
-      'Your public answer must read like the final review report itself.',
-      'List concrete findings first, ordered by severity, with tight file/path references whenever the evidence supports them.',
-      'Do not collapse the review into a one-line quality summary when concrete findings exist.',
-      'If you found no actionable issues, say that explicitly before any residual-risk note.',
-      'Do not say that you verified, evaluated, graded, or judged the Generator, its handoff, or its findings.',
-      'Do not mention the Planner, Generator, contract, or verdict process in the user-facing answer.',
-      'Keep evaluator-only reasoning inside the final verdict block and supporting artifacts.',
-    ].join('\n')
-    : [
-      'Speak directly to the user in the public answer.',
-      'Do not describe yourself as reviewing or judging another role.',
-      'Keep evaluator-only reasoning inside the final verdict block and supporting artifacts.',
-    ].join('\n');
   const repoWorkingToolsEnabled = toolPolicy?.allowedTools
     ? toolPolicy.allowedTools.some((toolName) => isRepoIntelligenceWorkingToolName(toolName))
     : true;
@@ -427,29 +403,6 @@ export function createRolePrompt(
             : undefined
       )
     : undefined;
-  const evaluatorReviewEvidenceGuidance = reviewLikeTask
-    ? (
-        decision.harnessProfile === 'H1_EXECUTE_EVAL'
-          ? [
-            'Start from the Scout handoff and Generator handoff.',
-            diffPagingToolsEnabled
-              ? 'Use targeted spot-checks on the highest-risk claims with changed_diff/read. Do not repeat the Generator\'s full deep-evidence pass unless the handoff is contradictory or structurally incomplete.'
-              : 'Use targeted spot-checks on the highest-risk claims with read/grep. Do not repeat the Generator\'s full deep-evidence pass unless the handoff is contradictory or structurally incomplete.',
-            diffPagingToolsEnabled
-              ? 'When a tool reports truncated output, narrow the follow-up by path or offset, or switch from changed_diff to changed_diff_bundle instead of repeating the same broad request.'
-              : 'When a tool reports truncated output, narrow the follow-up by path or offset instead of repeating the same broad request.',
-          ]
-          : [
-            'Start from the Planner contract and Generator handoff.',
-            diffPagingToolsEnabled
-              ? 'Use targeted spot-checks on the highest-risk claims with changed_diff/read. Do not repeat the full deep-evidence pass unless the handoff is contradictory or structurally incomplete.'
-              : 'Use targeted spot-checks on the highest-risk claims with read/grep. Do not repeat the full deep-evidence pass unless the handoff is contradictory or structurally incomplete.',
-            diffPagingToolsEnabled
-              ? 'When a tool reports truncated output, narrow the follow-up by path or offset, or switch from changed_diff to changed_diff_bundle instead of repeating the same broad request.'
-              : 'When a tool reports truncated output, narrow the follow-up by path or offset instead of repeating the same broad request.',
-          ]
-      ).join('\n')
-    : undefined;
   const handoffBlockInstructions = [
     `Append a final fenced block named \`\`\`${MANAGED_TASK_HANDOFF_BLOCK}\` with this exact shape:`,
     'status: ready|incomplete|blocked',
@@ -461,7 +414,7 @@ export function createRolePrompt(
     '- <optional second next step>',
     'Keep the role output above the block.',
   ].join('\n');
-  const emitToolName = role !== 'direct' ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
+  const emitToolName = (role !== 'direct' && role !== 'evaluator') ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
   const managedProtocolToolInstructions = role !== 'direct' && emitToolName && (!isTerminalAuthority || role !== 'generator')
     ? [
       'PROTOCOL EMISSION — MUST be in the SAME response as your answer:',
@@ -839,91 +792,6 @@ export function createRolePrompt(
         sharedWorkerDiscipline,
         sharedClosingRule,
       ].filter(Boolean).join('\n\n');
-    case 'evaluator':
-      return [
-        'You are Evaluator — the H1/H2 verifier role for a managed KodaX task.',
-        workspaceSection,
-        capabilityContextSection,
-        promptOverlaySection,
-        teamModeSection,
-        decisionSummary,
-        originalTaskSection,
-        roundInstructionSection,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        parallelBatchGuidance,
-        evaluatorSkillSection,
-        previousRoleSummarySection,
-        managedProtocolToolInstructions,
-        reviewPresentationRule,
-        evaluatorReviewEvidenceGuidance,
-        'The Scout-confirmed harness is the active harness for this run. Do not reinterpret it locally; only recommend a stronger harness when the evidence clearly shows the current harness cannot safely finish the task.',
-        'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
-        'Judge whether the dependency handoff satisfies the original task and whether the evidence is strong enough.',
-        // FEATURE_067: Inject write fan-out review prompt for Evaluator
-        rolePromptContext?.childWriteReviewPrompt
-          ? [
-            '## Child Agent Write Diffs — Pending Your Review',
-            '',
-            'The Generator spawned parallel child agents that modified code in isolated worktrees.',
-            'Review each child\'s diff below. For each child, decide ACCEPT or REVISE.',
-            'ACCEPT: changes are correct and consistent — they will be merged to the main branch.',
-            'REVISE: changes need fixes — explain what\'s wrong so Generator can retry.',
-            '',
-            rolePromptContext.childWriteReviewPrompt,
-          ].join('\n')
-          : undefined,
-        decision.harnessProfile === 'H1_EXECUTE_EVAL'
-          ? [
-            'You are the lightweight H1 evaluator, not a second full executor.',
-            'Only check whether the answer is on target, whether it misses obvious requested work, whether key claims have evidence, and whether the answer sounds obviously overconfident.',
-            'Do not broad-scan the repo, do not linearly page large diffs, and do not rerun the Generator\'s whole analysis.',
-            'Only run a limited spot-check when the task explicitly requires verification or the Generator claimed a concrete test/check that needs confirmation.',
-            'Do not request a stronger harness. H1 must stay lightweight; if the answer is still incomplete after one short revise pass, return the best supported answer with explicit limits instead of escalating to H2.',
-            'When status=revise, keep the user-facing text short and specific: list the missing items, evidence gaps, or overconfident claims that the Generator must fix next.',
-            'Do not write a full polished final report when status=revise. Reserve the full final-report style for accept, or for blocked when you must return the best supported answer with explicit limits.',
-          ].join('\n')
-          : 'You own the final verification pass and must personally execute any required checks or browser validation before accepting the task.',
-        'Evaluate the task against the verification criteria and thresholds. If any hard threshold is not met, do not accept the task.',
-        evaluatorPublicAnswerRule,
-        // v0.7.38 FEATURE_155 hotfix — Bug C. Without this guidance an
-        // Evaluator that dispatched audit children would emit_verdict
-        // immediately after its first turn, while children are still in
-        // flight. The verdict then misses every child's findings, and
-        // the runner outer loop terminates with a final user-facing
-        // text that doesn't restate the consolidated review. The
-        // idle-yield mechanic is the wait surface: ending the turn
-        // text-only with NO tool calls cedes control to the runner,
-        // which resumes the Evaluator when a child completes.
-        [
-          'CHILD-TASK WAIT DISCIPLINE (FEATURE_155 idle-yield, v0.7.38 hotfix):',
-          '- If you dispatched any child tasks with `dispatch_child_task`, you MUST wait for ALL of them to return before calling `emit_verdict`. Your verdict must integrate every child finding to be accurate.',
-          '- The wait mechanic is idle-yield: when a child is still in flight and you have no other useful work, end your turn with ONE short status sentence and NO tool calls. The runner will resume you on the next turn with one or more `<task-completed task_id="…">…</task-completed>` blocks in your user message — react to each, then check whether more are pending.',
-          '- Only call `emit_verdict` once every dispatched child has surfaced a `<task-completed>` block in your transcript. A verdict that ships before children settle silently loses their findings and is treated as a quality regression.',
-          '- If a child crashes you still see a `<task-completed task_id="…">failed: …</task-completed>` block — count it as settled and continue.',
-        ].join('\n'),
-        'Return the final user-facing answer. If the task is not ready, explain the blocker or missing evidence clearly. When you do emit_verdict, the `user_answer` field MUST restate the consolidated review (problems found, drift checks, regressions, top recommendations) — do NOT collapse it to a one-line acknowledgement; the user reads this as the final report.',
-        'If the original task requires an exact closing block, include it in your final answer when you conclude.',
-        [
-          `Verdict payload shape (pass to ${ROLE_EMIT_TOOL_NAMES.evaluator}):`,
-          'status: accept|revise|blocked',
-          'reason: <one-line reason>',
-          'user_answer: <optional final user-facing answer; multi-line content may continue on following lines>',
-          decision.harnessProfile === 'H1_EXECUTE_EVAL'
-            ? undefined
-            : 'next_harness: <optional stronger harness when revise requires it>',
-          'followup:',
-          '- <required next step>',
-          '- <optional second next step>',
-          'Prefer putting the final user-facing answer in user_answer. If omitted, keep the user-facing answer above the call. Use status=revise when more execution should happen before acceptance.',
-          `(The fenced-block form \`\`\`${MANAGED_TASK_VERDICT_BLOCK}\`\`\` is accepted as a fallback; prefer the tool call.)`,
-        ].filter((line): line is string => Boolean(line)).join('\n'),
-        sharedWorkerDiscipline,
-        sharedClosingRule,
-      ].filter((section): section is string => Boolean(section)).join('\n\n');
     case 'worker': {
       // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
       // Wraps `buildWorkerInstructions` (decisional + plan-first +

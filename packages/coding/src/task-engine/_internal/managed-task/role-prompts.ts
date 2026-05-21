@@ -44,12 +44,6 @@ export const GENERATOR_INSTRUCTIONS_FALLBACK = [
   'edit, dispatch_child_task.',
 ].join('\n');
 
-export const EVALUATOR_INSTRUCTIONS_FALLBACK = [
-  'You are Evaluator (H1/H2 verifier). Call `emit_verdict` exactly once with status ',
-  '(accept|revise|blocked). You may call: read, grep, glob, bash (read-only verification ',
-  'preferred).',
-].join('\n');
-
 // FEATURE_114 v0.7.36 — minimal Worker instructions for the
 // topology-only test path (no `promptContext`). Real Worker prompts
 // are produced by `createRolePrompt('worker', ...)` via
@@ -140,14 +134,6 @@ export function resolveRoleInstructions(
       const block = renderScoutSkillMapBlock(recorder, { includeVerification: false });
       return block ? `${fallback}\n${block}` : fallback;
     }
-    if (role === 'evaluator') {
-      const skillBlock = renderScoutSkillMapBlock(recorder, { includeVerification: true });
-      const runtimeBlock = renderRuntimeVerificationBlock(verification);
-      let out = fallback;
-      if (skillBlock) out += `\n${skillBlock}`;
-      if (runtimeBlock) out += `\n${runtimeBlock}`;
-      return out;
-    }
     return fallback;
   }
   const ctx = promptContext.contextFactory
@@ -176,7 +162,7 @@ export function resolveRoleInstructions(
     promptContext.metadata,
     ctx,
     undefined, // workerId — unused by createRolePrompt body
-    false, // isTerminalAuthority — Runner-driven path always runs with Evaluator
+    false, // isTerminalAuthority — Generator is terminal via Sidecar Verifier (FEATURE_184)
   );
   // FEATURE_086: prepend the pre-computed repo-intelligence context
   // block so every role sees repo overview /

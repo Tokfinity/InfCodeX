@@ -4,13 +4,12 @@
  * Data-shape tests: name binding, tool wiring, handoff topology.
  * No runtime execution at this shard — that lands with Shard 5.
  *
- * FEATURE_184 (v0.7.45) Phase C.1: evaluatorCodingAgent removed.
- * EVALUATOR_AGENT_NAME constant kept for C.3 cleanup.
+ * FEATURE_184 (v0.7.45) Phase C.3: evaluatorCodingAgent and EVALUATOR_AGENT_NAME removed.
+ * Post-execution verification is now handled by the Sidecar Verifier (Phase D.2).
  */
 
 import { describe, expect, it } from 'vitest';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
@@ -73,7 +72,8 @@ describe('coding-agents — handoff topology', () => {
     const targets = targetNames(scoutCodingAgent);
     expect(targets).toContain(GENERATOR_AGENT_NAME);
     expect(targets).toContain(PLANNER_AGENT_NAME);
-    expect(targets).not.toContain(EVALUATOR_AGENT_NAME);
+    // FEATURE_184 Phase C.3: Evaluator role retired — no in-chain evaluator handoff.
+    expect(targets).not.toContain('kodax/role/evaluator');
   });
 
   it('planner hands off to generator only', () => {

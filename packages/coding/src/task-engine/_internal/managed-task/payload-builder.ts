@@ -221,8 +221,9 @@ export function buildManagedTaskPayload(args: {
   // the Scout always provided a `userAnswer`, so `?? prompt` was a never-
   // reached safety net. Under V2 chain (FEATURE_114) Worker runs first and
   // a Worker round can legitimately end without `emit_verdict` (e.g. the
-  // chain hands off to Generator or Evaluator on the next iteration). In
-  // that case `userAnswer` and `verdict.reason` are both undefined, and
+  // chain hands off to Generator on the next iteration, or the Sidecar
+  // Verifier has not yet written to recorder.verdict). In that case
+  // `userAnswer` and `verdict.reason` are both undefined, and
   // `?? prompt` populated `verdict.summary` with the user's raw query
   // verbatim.
   //

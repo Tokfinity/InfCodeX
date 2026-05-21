@@ -17,8 +17,9 @@
  *
  * Policy assembly (restored for P1 parity):
  *   - `INSPECTION_SHELL_PATTERNS` / `VERIFICATION_SHELL_PATTERNS`.
- *   - `PLANNER_ALLOWED_TOOLS` / `H1_EVALUATOR_ALLOWED_TOOLS` /
- *     `H1_READONLY_GENERATOR_ALLOWED_TOOLS`.
+ *   - `PLANNER_ALLOWED_TOOLS` / `H1_READONLY_GENERATOR_ALLOWED_TOOLS`.
+ *     (`H1_EVALUATOR_ALLOWED_TOOLS` removed in FEATURE_184 Phase C.3 —
+ *     in-chain Evaluator retired; Sidecar Verifier inherits Generator context.)
  *   - `extractRuntimeCommandCandidate` / `buildRuntimeVerificationShellPatterns`.
  *   - `buildManagedWorkerToolPolicy` — the per-role switch that produces
  *     the `KodaXTaskToolPolicy` consumed by `formatToolPolicy` when
