@@ -214,6 +214,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolRead,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -239,6 +240,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['skill'],
     },
     handler: toolSkill,
+    sideEffect: 'mutates-state',
     toClassifierInput: () => '',
   },
   {
@@ -269,6 +271,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path', 'content'],
     },
     handler: toolWrite,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { path?: string; content?: string };
       const size = typeof i?.content === 'string' ? i.content.length : 0;
@@ -299,6 +302,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path', 'old_string', 'new_string'],
     },
     handler: toolEdit,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { path?: string; replace_all?: boolean };
       return `Edit ${i?.path ?? '<unknown>'}${i?.replace_all ? ' [replace_all]' : ''}`;
@@ -351,6 +355,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path', 'edits'],
     },
     handler: toolMultiEdit,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { path?: string; edits?: unknown[] };
       const count = Array.isArray(i?.edits) ? i.edits.length : 0;
@@ -370,6 +375,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path', 'anchor', 'content'],
     },
     handler: toolInsertAfterAnchor,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { path?: string; anchor?: string };
       const anchor = typeof i?.anchor === 'string' ? i.anchor.slice(0, 40) : '<no-anchor>';
@@ -404,6 +410,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['command'],
     },
     handler: toolBash,
+    sideEffect: 'mutates-shell',
     // FEATURE_149 (v0.7.38) — `interruptBehavior` is intentionally LEFT
     // UNSET (defaults to 'wait'). KodaX mirrors Claude Code's conservative
     // posture here: SIGTERM-mid-bash leaves half-written files, half-pushed
@@ -431,6 +438,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['pattern'],
     },
     handler: toolGlob,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -461,6 +469,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['pattern'],
     },
     handler: toolGrep,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -482,6 +491,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['role', 'payload'],
     },
     handler: toolEmitManagedProtocol,
+    sideEffect: 'mutates-state',
     toClassifierInput: () => '',
   },
   {
@@ -509,6 +519,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['objective'],
     },
     handler: toolDispatchChildTask,
+    sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
       const i = input as { objective?: string; readOnly?: boolean };
       const obj = typeof i?.objective === 'string' ? i.objective.slice(0, 200) : '<no-objective>';
@@ -543,6 +554,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['to', 'content'],
     },
     handler: toolSendMessage,
+    sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
       const i = input as { to?: string; content?: string };
       const target = typeof i?.to === 'string' ? i.to : '<no-to>';
@@ -572,6 +584,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['task_id'],
     },
     handler: toolTaskStop,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
     toClassifierInput: (input) => {
       const i = input as { task_id?: string; reason?: string };
       const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
@@ -605,6 +619,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['task_id'],
     },
     handler: toolTaskOutput,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: (input) => {
       const i = input as { task_id?: string; block?: boolean };
       const target = typeof i?.task_id === 'string' ? i.task_id : '<no-task_id>';
@@ -625,6 +641,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolWebSearch,
+    sideEffect: 'mutates-network',
+    // Plan mode permits web_search: it's functionally a query (no remote
+    // mutation), common in planning workflows ("research the API before
+    // I propose the change"). web_fetch is NOT planModeAllowed because
+    // it can issue POST/PUT requests that mutate remote state.
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -639,6 +661,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolWebFetch,
+    sideEffect: 'mutates-network',
     toClassifierInput: (input) => {
       const i = input as { url?: string };
       return `WebFetch ${typeof i?.url === 'string' ? i.url : '<no-url>'}`;
@@ -659,6 +682,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolCodeSearch,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -680,6 +704,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolSemanticLookup,
+    // sideEffect: 'readonly' — 95% of calls are pure queries against an
+    // existing repo-intel index. The `refresh: true` option rebuilds the
+    // local index (a derived-data side effect, not a source-tree mutation),
+    // which the classifier projection surfaces; plan mode permits the read
+    // path and the handler can gate refresh internally if needed.
+    sideEffect: 'readonly',
     // refresh: true rebuilds the repo-intel snapshot (disk side effect),
     // so this is not strictly Tier 1 — surface name + truncated input via
     // the helper so the classifier can see when refresh is requested.
@@ -703,6 +733,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['query'],
     },
     handler: toolMcpSearch,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -716,6 +748,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpDescribe,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -733,6 +767,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpCall,
+    sideEffect: 'mutates-network',
     toClassifierInput: (input) => {
       const i = input as { id?: string; args?: unknown };
       const capability = typeof i?.id === 'string' ? i.id : '<no-id>';
@@ -756,6 +791,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpReadResource,
+    sideEffect: 'mutates-network',
+    // Plan mode permits MCP read-resource: it's a read against the
+    // remote server, functionally a query. mcp_call is NOT
+    // planModeAllowed because it can invoke arbitrary MCP tools that
+    // mutate remote state.
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -773,6 +814,10 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolMcpGetPrompt,
+    sideEffect: 'mutates-network',
+    // Plan mode permits MCP get-prompt: it's a read of a server-side
+    // prompt definition, functionally a query.
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -786,6 +831,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolWorktreeCreate,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { branch_name?: string; description?: string };
       const branch = typeof i?.branch_name === 'string'
@@ -814,6 +860,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['action', 'worktree_path'],
     },
     handler: toolWorktreeRemove,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { action?: string; worktree_path?: string; discard_changes?: boolean };
       const flags = i?.discard_changes ? ' [discard_changes]' : '';
@@ -825,6 +872,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     description: 'Revert the last file modification.',
     input_schema: { type: 'object', properties: {} },
     handler: toolUndo,
+    sideEffect: 'mutates-fs',
     toClassifierInput: () => 'Undo: revert last file modification',
   },
   {
@@ -892,6 +940,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['question'],
     },
     handler: toolAskUserQuestion,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -908,6 +958,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['plan'],
     },
     handler: toolExitPlanMode,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -1034,6 +1086,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       //     {status, subject, description, activeForm, note, evaluator, metadata}.
     },
     handler: toolTodoUpdate,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -1081,6 +1135,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['subject'],
     },
     handler: toolTodoCreate,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -1094,6 +1150,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       properties: {},
     },
     handler: toolTodoList,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -1116,6 +1174,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['id'],
     },
     handler: toolTodoGet,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
     toClassifierInput: () => '',
   },
   {
@@ -1129,6 +1189,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolRepoOverview,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1148,6 +1209,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolChangedScope,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1167,6 +1229,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolChangedDiff,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1190,6 +1253,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['paths'],
     },
     handler: toolChangedDiffBundle,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1204,6 +1268,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolModuleContext,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1219,6 +1284,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolSymbolContext,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1234,6 +1300,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolProcessContext,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1250,6 +1317,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolImpactEstimate,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   // ====================================================================
@@ -1288,6 +1356,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name'],
     },
     handler: toolScaffoldTool,
+    sideEffect: 'mutates-fs',
     toClassifierInput: () => '',
   },
   {
@@ -1307,6 +1376,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['artifact_json'],
     },
     handler: toolValidateTool,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1322,6 +1392,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['artifact_json'],
     },
     handler: toolStageConstruction,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { artifact_json?: string };
       return `StageTool: ${stageArtifactPreview(i?.artifact_json)}`;
@@ -1345,6 +1416,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name', 'version'],
     },
     handler: toolTestTool,
+    sideEffect: 'mutates-state',
     toClassifierInput: () => '',
   },
   {
@@ -1361,6 +1433,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name', 'version'],
     },
     handler: toolActivateTool,
+    sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
       const i = input as { name?: string; version?: string };
       return `ActivateTool: ${i?.name ?? '<no-name>'}@${i?.version ?? '<no-version>'}`;
@@ -1393,6 +1466,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name'],
     },
     handler: toolScaffoldAgent,
+    sideEffect: 'mutates-fs',
     toClassifierInput: () => '',
   },
   {
@@ -1408,6 +1482,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['artifact_json'],
     },
     handler: toolValidateAgent,
+    sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
   {
@@ -1423,6 +1498,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['artifact_json'],
     },
     handler: toolStageAgentConstruction,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { artifact_json?: string };
       return `StageAgent: ${stageArtifactPreview(i?.artifact_json)}`;
@@ -1442,6 +1518,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name', 'version'],
     },
     handler: toolTestAgent,
+    sideEffect: 'mutates-state',
     toClassifierInput: () => '',
   },
   {
@@ -1459,6 +1536,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['name', 'version'],
     },
     handler: toolActivateAgent,
+    sideEffect: 'mutates-state',
     toClassifierInput: (input) => {
       const i = input as { name?: string; version?: string };
       return `ActivateAgent: ${i?.name ?? '<no-name>'}@${i?.version ?? '<no-version>'}`;
@@ -1491,6 +1569,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['artifact_json'],
     },
     handler: toolStageSelfModify,
+    sideEffect: 'mutates-fs',
     toClassifierInput: (input) => {
       const i = input as { artifact_json?: string };
       return `StageSelfModify: ${stageArtifactPreview(i?.artifact_json)}`;
@@ -1592,6 +1671,84 @@ export function listBuiltinToolDefinitions(): RegisteredToolDefinition[] {
       label: definition.name,
     },
   }));
+}
+
+/**
+ * v0.7.42 — snapshot of every currently-active tool registration.
+ *
+ * Returns the most-recent registration for each tool name (mirroring
+ * {@link getRegisteredToolDefinition}'s single-name semantics across the
+ * full registry). Use this to drive metadata-based filters such as:
+ *
+ *   - SDK embedder permission brokers building a blocklist by side-effect class:
+ *     `getAllRegisteredTools().filter(t => t.sideEffect !== 'readonly')`
+ *   - UI that displays available tools grouped by category.
+ *   - Plan-mode gates that compute their own blocklist from metadata
+ *     instead of hardcoded `Set<string>` of names.
+ *
+ * The returned array is a fresh copy per call (safe to mutate without
+ * affecting the registry). Order is registration order (sorted by name
+ * within each registration to keep the snapshot deterministic).
+ */
+export function getAllRegisteredTools(): RegisteredToolDefinition[] {
+  const result: RegisteredToolDefinition[] = [];
+  for (const [name] of TOOL_REGISTRY) {
+    const active = getActiveToolRegistration(name);
+    if (active) result.push(active);
+  }
+  result.sort((left, right) => left.name.localeCompare(right.name));
+  return result;
+}
+
+/**
+ * v0.7.42 — plan-mode permit check driven by tool metadata.
+ *
+ *   - `sideEffect === 'readonly'` ⇒ permitted (unless explicitly
+ *     `planModeAllowed: false`).
+ *   - `planModeAllowed: true` ⇒ permitted (overrides non-readonly).
+ *   - any other sideEffect ⇒ blocked.
+ *
+ * Returns `false` for unknown tool names (fail-closed). Use this in
+ * preference to hardcoded `Set<string>` of tool names — adding a new
+ * `'mutates-fs'` builtin will flow through automatically.
+ */
+export function isToolPlanModeAllowed(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!def) return false;
+  if (def.planModeAllowed === true) return true;
+  if (def.planModeAllowed === false) return false;
+  return def.sideEffect === 'readonly';
+}
+
+/**
+ * v0.7.42 — does this tool mutate the filesystem?
+ *
+ * Wraps `sideEffect === 'mutates-fs'`. Used by the REPL permission
+ * pipeline's gitRoot guard and Space's permission broker. Replaces the
+ * previous practice of hardcoding `Set(["write", "edit"])`-style lookups
+ * scattered across 5+ callsites.
+ */
+export function isToolFileMutation(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  return def?.sideEffect === 'mutates-fs';
+}
+
+/**
+ * v0.7.42 — does this tool mutate anything (FS, shell, network, state)?
+ *
+ * True for every `sideEffect` except `'readonly'`. Fail-closed (unknown
+ * names return `true` — assumed mutating until proven otherwise).
+ */
+export function isToolMutation(name: string): boolean {
+  const def =
+    getActiveToolRegistration(name)
+    ?? BUILTIN_TOOL_DEFINITIONS.find((entry) => entry.name === name);
+  if (!def) return true;
+  return def.sideEffect !== 'readonly';
 }
 
 export function getRequiredToolParams(name: string): string[] {

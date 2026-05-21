@@ -966,6 +966,17 @@ async function registerActiveToolArtifact(artifact: ToolArtifact): Promise<void>
     description: artifact.content.description,
     input_schema: artifact.content.inputSchema as KodaXToolDefinition['input_schema'],
     handler,
+    // v0.7.42 — LLM-constructed tools fail-closed on side-effect class.
+    // The artifact schema does not yet carry a `sideEffect` declaration,
+    // and a constructed handler's body can do anything (FS write, shell,
+    // network, state mutation). Default to `'mutates-state'` so plan mode
+    // treats constructed tools as non-readonly until a future artifact
+    // schema lets authors declare a tighter category. Activation already
+    // requires user approval (the activate_tool policy gate), so this
+    // default doesn't add a new approval surface — it just keeps plan
+    // mode from auto-permitting a constructed tool whose true class is
+    // unknown.
+    sideEffect: 'mutates-state',
     // Constructed tools don't yet declare a custom classifier projection.
     // FEATURE_092 v1: fail-closed via the conservative default helper —
     // tool name + truncated JSON. Future artifact schema may add an

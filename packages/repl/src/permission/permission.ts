@@ -17,6 +17,7 @@ import os from 'os';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
 import type { BashPrefixExtractor, BashPrefixResult } from '@kodax-ai/coding';
+import { isToolPlanModeAllowed } from '@kodax-ai/coding';
 
 import { PermissionMode, MODIFICATION_TOOLS, FILE_MODIFICATION_TOOLS, BASH_WRITE_COMMANDS, BASH_SAFE_READ_COMMANDS } from './types.js';
 import { isNullDevice, parseBashCommand } from './bash-ast.js';
@@ -1026,6 +1027,39 @@ export function getBashOutsideProjectWriteRisk(
   return { dangerous: false };
 }
 
+/**
+ * v0.7.42 — Metadata-driven plan-mode gate.
+ *
+ * Decision order (first match wins):
+ *
+ *   1. Tool has `planModeAllowed: true` in its `LocalToolDefinition` →
+ *      permitted (`null`). Covers planning-loop tools whose effect IS the
+ *      planning workflow: `exit_plan_mode`, `task_stop`, `todo_*`,
+ *      `ask_user_question`, plus read-class network queries
+ *      (`web_search`, `mcp_search` / `mcp_describe` /
+ *      `mcp_read_resource` / `mcp_get_prompt`).
+ *   2. Tool has `sideEffect === 'readonly'` AND not explicitly disallowed →
+ *      permitted (`null`). Read tools never need plan-mode gating.
+ *   3. Path-aware FS-write escape: tools in `FILE_MODIFICATION_TOOLS`
+ *      (computed from `sideEffect === 'mutates-fs' AND requires path`)
+ *      can write IF the target path is `.agent/plan_mode_doc.md` or the
+ *      system temp dir.
+ *   4. `bash` special case: command-content-aware check via
+ *      `isBashWriteCommand` + `collectBashWriteTargets` — read-only bash
+ *      (`git status`, `ls`, …) is permitted; write bash with all targets
+ *      in the plan-doc / temp escape is permitted; everything else
+ *      blocks.
+ *   5. Everything else with a side effect → blocked with a generic
+ *      reason naming the side-effect class.
+ *
+ * Pre-v0.7.42 this function only gated `write`, `edit`, `undo`, `bash` —
+ * a hardcoded 4-tool list that silently let `multi_edit`,
+ * `insert_after_anchor`, `worktree_*`, `scaffold_*`, `stage_*`,
+ * `dispatch_child_task`, `send_message`, `web_fetch`, `mcp_call` etc.
+ * fall through to `return null` (permitted). The metadata-driven gate
+ * closes that gap structurally — new mutating tools auto-block until
+ * explicitly opted in via `planModeAllowed: true`.
+ */
 export function getPlanModeBlockReason(
   toolName: string,
   input: Record<string, unknown>,
@@ -1033,6 +1067,16 @@ export function getPlanModeBlockReason(
 ): string | null {
   const allowedLocations = formatPlanModeAllowedLocations(projectRoot);
 
+  // (1) + (2): metadata says this tool is permitted in plan mode. Covers
+  // read-only tools (no `planModeAllowed` flag needed) and explicitly
+  // plan-allowed mutating tools.
+  if (isToolPlanModeAllowed(toolName)) {
+    return null;
+  }
+
+  // (3) Path-aware FS-write escape. Tools in this set declare a `path`
+  // input and mutate the filesystem; permit when the path is the
+  // project plan doc or the system temp dir.
   if (FILE_MODIFICATION_TOOLS.has(toolName)) {
     const targetPath = typeof input.path === 'string' ? input.path : '';
     if (!targetPath) {
@@ -1046,10 +1090,7 @@ export function getPlanModeBlockReason(
     return `[Blocked] Plan mode only allows file modifications in ${allowedLocations}. Requested path: ${targetPath}`;
   }
 
-  if (toolName === 'undo') {
-    return `[Blocked] Tool 'undo' is not allowed in plan mode. Plan mode only allows file modifications in ${allowedLocations}.`;
-  }
-
+  // (4) bash: command-content-aware check (read-only commands permitted).
   if (toolName === 'bash') {
     const command = (input.command as string) ?? '';
     if (!isBashWriteCommand(command)) {
@@ -1069,7 +1110,15 @@ export function getPlanModeBlockReason(
     return `[Blocked] Plan mode only allows bash write operations in ${allowedLocations}. Blocked target: ${blockedTarget}`;
   }
 
-  return null;
+  // (5) Generic block for any other tool whose sideEffect declares a
+  // mutation. Reaches here only for tools that:
+  //   - are NOT planModeAllowed: true
+  //   - are NOT sideEffect: 'readonly'
+  //   - are NOT in FILE_MODIFICATION_TOOLS (path-aware)
+  //   - are NOT 'bash' (command-aware)
+  // i.e. `undo`, `worktree_*`, `dispatch_child_task`, `send_message`,
+  // `web_fetch`, `mcp_call`, constructed-tool staircase, etc.
+  return `[Blocked] Tool '${toolName}' has side effects and is not permitted in plan mode. Switch to accept-edits or auto mode to use it, or work within ${allowedLocations}.`;
 }
 
 // ============== Mode Inference ==============

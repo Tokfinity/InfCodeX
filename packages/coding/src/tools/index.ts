@@ -7,6 +7,7 @@
 export type {
   ToolHandler,
   ToolRegistry,
+  ToolSideEffect,
   LocalToolDefinition,
   RegisteredToolDefinition,
   ToolDefinitionSource,
@@ -31,6 +32,10 @@ export {
   getBuiltinRegisteredToolDefinition,
   createBuiltinToolDefinition,
   listBuiltinToolDefinitions,
+  getAllRegisteredTools,
+  isToolPlanModeAllowed,
+  isToolFileMutation,
+  isToolMutation,
   getRequiredToolParams,
   listTools,
   listToolDefinitions,

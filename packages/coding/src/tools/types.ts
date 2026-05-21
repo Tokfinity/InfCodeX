@@ -44,6 +44,50 @@ export type ToolHandlerStreaming = (
 export type ToolHandler = ToolHandlerSync | ToolHandlerStreaming;
 
 /**
+ * v0.7.42 — Declarative tool side-effect class.
+ *
+ * Required field on every {@link LocalToolDefinition}. Used by:
+ *   - Plan mode: tools with `sideEffect !== 'readonly'` are blocked unless
+ *     they explicitly opt in via `planModeAllowed: true` (e.g.
+ *     `exit_plan_mode`, `task_stop`).
+ *   - SDK embedders (KodaX Space etc.): iterate `getAllRegisteredTools()`
+ *     and build their own blocklist by category — replaces the previous
+ *     practice of hardcoding a `Set<string>` of tool names, which silently
+ *     drifted whenever KodaX added a new tool.
+ *   - Internal permission system: `FILE_MODIFICATION_TOOLS` and
+ *     `MODIFICATION_TOOLS` exports in `@kodax-ai/repl` are now computed
+ *     from this metadata at module load time, so adding a new
+ *     `'mutates-fs'` tool here automatically reaches every callsite
+ *     that consumes those sets.
+ *
+ * Categories (mutually exclusive; pick the dominant effect):
+ *   - `'readonly'`        — produces no observable side effect, just reads
+ *                            local state (FS, registry, computed views).
+ *   - `'mutates-fs'`      — writes to the local filesystem (write, edit,
+ *                            multi-edit, undo, worktree-*, construction
+ *                            artifacts). Bash is NOT in this bucket; it has
+ *                            its own.
+ *   - `'mutates-shell'`   — invokes an arbitrary shell command (bash).
+ *   - `'mutates-network'` — performs a network request that may have side
+ *                            effects on the remote (web_fetch with any
+ *                            method, web_search, MCP server calls).
+ *   - `'mutates-state'`   — changes internal session/agent state without
+ *                            FS or shell side effects (todo_update,
+ *                            send_message, dispatch_child_task,
+ *                            exit_plan_mode, emit_managed_protocol).
+ *
+ * Pick the dominant effect when a tool touches multiple. e.g. `dispatch_
+ * child_task` may transitively run any tool, but its own direct effect is
+ * spawning a child agent (`mutates-state`).
+ */
+export type ToolSideEffect =
+  | 'readonly'
+  | 'mutates-fs'
+  | 'mutates-shell'
+  | 'mutates-network'
+  | 'mutates-state';
+
+/**
  * FEATURE_149 (v0.7.38) — interrupt-on-submit policy for in-flight tools.
  *
  * Controls whether submitting a new prompt while THIS tool is mid-execution
@@ -65,6 +109,30 @@ export type ToolInterruptBehavior = 'cancel' | 'wait';
 
 export interface LocalToolDefinition extends KodaXToolDefinition {
   handler: ToolHandler;
+
+  /**
+   * v0.7.42 — Required declarative side-effect class. See
+   * {@link ToolSideEffect} for category definitions and rationale. Plan
+   * mode and SDK embedders' permission brokers consume this; failure to
+   * declare is a TypeScript error (by design — `sideEffect` is required,
+   * not optional, to prevent silent drift when new tools are added).
+   */
+  sideEffect: ToolSideEffect;
+
+  /**
+   * v0.7.42 — Optional plan-mode override.
+   *
+   *   - `undefined` (default): plan-mode permits only `sideEffect ===
+   *     'readonly'` tools.
+   *   - `true`: explicitly permitted in plan mode even when sideEffect is
+   *     not `'readonly'`. Reserve for tools whose effect is itself part of
+   *     the planning loop (`exit_plan_mode`, `task_stop`, `todo_update`,
+   *     `todo_create`, `ask_user_question`).
+   *   - `false`: explicitly blocked in plan mode even when sideEffect is
+   *     `'readonly'`. Rare — useful for read-only tools whose output would
+   *     leak content the planner should not see.
+   */
+  planModeAllowed?: boolean;
 
   /**
    * FEATURE_149 (v0.7.38) — submit-time interrupt policy. See

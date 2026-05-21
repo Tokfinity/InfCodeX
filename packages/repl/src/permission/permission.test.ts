@@ -88,6 +88,129 @@ describe('plan mode writable path whitelist', () => {
   });
 });
 
+// v0.7.42 — metadata-driven plan-mode gate. Pre-v0.7.42 getPlanModeBlockReason
+// hardcoded {write, edit, undo, bash} as the only gated tools, silently
+// permitting multi_edit, insert_after_anchor, worktree_*, dispatch_child_task,
+// web_fetch, mcp_call, send_message, construction-staircase, etc. The
+// metadata-driven gate (sideEffect + planModeAllowed) closes that gap.
+describe('plan mode — metadata-driven gating (v0.7.42 gap 2)', () => {
+  it('readonly tools permitted without explicit annotation', () => {
+    const projectRoot = createProjectRoot();
+    // No `planModeAllowed: true` needed — sideEffect: 'readonly' is enough.
+    expect(getPlanModeBlockReason('read', { path: 'src/foo.ts' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('glob', { pattern: '**/*.ts' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('grep', { pattern: 'export' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('code_search', { query: 'TODO' }, projectRoot)).toBeNull();
+  });
+
+  it('plan-loop tools (planModeAllowed:true) permitted regardless of sideEffect', () => {
+    const projectRoot = createProjectRoot();
+    expect(getPlanModeBlockReason('exit_plan_mode', { plan: 'x' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('todo_update', { id: 'todo_1', status: 'completed' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('todo_create', { subject: 'Audit auth' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('task_stop', { task_id: 't_1' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('ask_user_question', { question: 'X?' }, projectRoot)).toBeNull();
+  });
+
+  it('network-query tools (web_search / mcp_search etc.) permitted for research-during-plan', () => {
+    const projectRoot = createProjectRoot();
+    expect(getPlanModeBlockReason('web_search', { query: 'rust async' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('mcp_search', { query: 'github' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('mcp_describe', { id: 'gh.search' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('mcp_read_resource', { id: 'gh.issue' }, projectRoot)).toBeNull();
+    expect(getPlanModeBlockReason('mcp_get_prompt', { id: 'gh.review' }, projectRoot)).toBeNull();
+  });
+
+  it('multi_edit / insert_after_anchor honor path-aware escape (newly gated in v0.7.42)', () => {
+    const projectRoot = createProjectRoot();
+    const tempFile = path.join(os.tmpdir(), `kodax-multi-edit-${Date.now()}.txt`);
+
+    // Permitted via plan-doc escape:
+    expect(
+      getPlanModeBlockReason(
+        'multi_edit',
+        { path: '.agent/plan_mode_doc.md', edits: [] },
+        projectRoot,
+      ),
+    ).toBeNull();
+
+    // Permitted via system-temp escape:
+    expect(
+      getPlanModeBlockReason('multi_edit', { path: tempFile, edits: [] }, projectRoot),
+    ).toBeNull();
+
+    // Blocked when path is outside escape:
+    expect(
+      getPlanModeBlockReason('multi_edit', { path: 'src/foo.ts', edits: [] }, projectRoot),
+    ).toContain('Plan mode only allows file modifications');
+
+    expect(
+      getPlanModeBlockReason('insert_after_anchor', { path: 'src/foo.ts', anchor: 'X', content: 'Y' }, projectRoot),
+    ).toContain('Plan mode only allows file modifications');
+  });
+
+  it('worktree_create / worktree_remove block outright (no path-aware escape; newly gated)', () => {
+    const projectRoot = createProjectRoot();
+    const reason = getPlanModeBlockReason('worktree_create', { branch_name: 'feat-x' }, projectRoot);
+    expect(reason).toContain("Tool 'worktree_create'");
+    expect(reason).toContain('side effects');
+
+    const reason2 = getPlanModeBlockReason(
+      'worktree_remove',
+      { action: 'remove', worktree_path: '/tmp/wt' },
+      projectRoot,
+    );
+    expect(reason2).toContain("Tool 'worktree_remove'");
+  });
+
+  it('dispatch_child_task / send_message block outright (mutates-state, newly gated)', () => {
+    const projectRoot = createProjectRoot();
+    expect(
+      getPlanModeBlockReason('dispatch_child_task', { objective: 'investigate' }, projectRoot),
+    ).toContain("Tool 'dispatch_child_task'");
+    expect(
+      getPlanModeBlockReason('send_message', { to: 't_1', content: 'hi' }, projectRoot),
+    ).toContain("Tool 'send_message'");
+  });
+
+  it('web_fetch / mcp_call block (mutating network, not planModeAllowed)', () => {
+    const projectRoot = createProjectRoot();
+    expect(getPlanModeBlockReason('web_fetch', { url: 'https://x' }, projectRoot)).toContain(
+      "Tool 'web_fetch'",
+    );
+    expect(getPlanModeBlockReason('mcp_call', { id: 'gh.create_issue', args: {} }, projectRoot)).toContain(
+      "Tool 'mcp_call'",
+    );
+  });
+
+  it('construction-staircase tools block in plan mode (mutates-fs/state, no escape)', () => {
+    const projectRoot = createProjectRoot();
+    expect(getPlanModeBlockReason('scaffold_tool', { name: 'foo' }, projectRoot)).toContain(
+      "Tool 'scaffold_tool'",
+    );
+    expect(
+      getPlanModeBlockReason('stage_construction', { artifact_json: '{}' }, projectRoot),
+    ).toContain("Tool 'stage_construction'");
+    expect(getPlanModeBlockReason('activate_tool', { name: 'foo', version: '0.1.0' }, projectRoot)).toContain(
+      "Tool 'activate_tool'",
+    );
+  });
+
+  it('undo still blocks with a meaningful reason', () => {
+    const projectRoot = createProjectRoot();
+    const reason = getPlanModeBlockReason('undo', {}, projectRoot);
+    expect(reason).toBeTruthy();
+    expect(reason).toContain("Tool 'undo'");
+  });
+
+  it('unknown tool defaults to fail-closed (blocked)', () => {
+    const projectRoot = createProjectRoot();
+    const reason = getPlanModeBlockReason('totally_unknown_tool', {}, projectRoot);
+    expect(reason).toBeTruthy();
+    expect(reason).toContain('side effects');
+  });
+});
+
 describe('isAlwaysConfirmPath — system temp as safe scratchpad', () => {
   it('does NOT require confirmation for paths inside the system temp directory', () => {
     const projectRoot = createProjectRoot();

@@ -31,6 +31,7 @@ import {
   type KodaXContextTokenSnapshot,
   type KodaXOptions,
   type KodaXReasoningMode,
+  isToolFileMutation,
   runKodaX,
   createExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
@@ -86,7 +87,16 @@ import {
 export const ACP_PERMISSION_MODE_IDS = ['plan', 'accept-edits', 'auto-in-project'] as const;
 export type AcpPermissionMode = (typeof ACP_PERMISSION_MODE_IDS)[number];
 
-const ACP_TOOL_FILE_MODIFICATION_TOOLS = new Set(['write', 'edit']);
+// v0.7.42 — replaced the hardcoded `Set(['write', 'edit'])` with the
+// metadata-driven `isToolFileMutation` from `@kodax-ai/coding`. The old
+// 2-element list silently under-classified `multi_edit`,
+// `insert_after_anchor`, `undo`, `worktree_*`, construction-staircase
+// writes, etc. — ACP clients were not asked for protected-path / outside-
+// project confirmation on those tools. The metadata path auto-syncs as
+// new write tools are added.
+function acpIsFileModificationTool(toolName: string): boolean {
+  return isToolFileMutation(toolName);
+}
 const ACP_TOOL_KIND_MAP: Record<string, ToolKind> = {
   read: 'read',
   write: 'edit',
@@ -233,7 +243,7 @@ function inferToolKind(toolName: string): ToolKind {
 }
 
 function inferToolLocations(toolName: string, input: Record<string, unknown>): Array<{ path: string }> | undefined {
-  if (ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName)) {
+  if (acpIsFileModificationTool(toolName)) {
     const targetPath = typeof input.path === 'string' ? input.path : undefined;
     return targetPath ? [{ path: targetPath }] : undefined;
   }
@@ -828,7 +838,7 @@ export class KodaXAcpServer implements Agent {
     }
 
     const needsProtectedPathConfirmation =
-      ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName) &&
+      acpIsFileModificationTool(toolName) &&
       typeof input.path === 'string' &&
       isAlwaysConfirmPath(path.resolve(session.cwd, input.path), session.cwd);
 
@@ -836,7 +846,7 @@ export class KodaXAcpServer implements Agent {
     const needsAutoOutsideProjectConfirmation =
       session.permissionMode === 'auto-in-project' &&
       (
-        (ACP_TOOL_FILE_MODIFICATION_TOOLS.has(toolName) &&
+        (acpIsFileModificationTool(toolName) &&
           typeof input.path === 'string' &&
           !isPathInsideProject(input.path, session.cwd)) ||
         (toolName === 'bash' &&

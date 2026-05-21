@@ -245,6 +245,7 @@ export type { ProviderName } from './providers/index.js';
 export {
   type ToolHandler,
   type ToolRegistry,
+  type ToolSideEffect,
   type LocalToolDefinition,
   type RegisteredToolDefinition,
   type ToolDefinitionSource,
@@ -266,6 +267,10 @@ export {
   getBuiltinRegisteredToolDefinition,
   createBuiltinToolDefinition,
   listBuiltinToolDefinitions,
+  getAllRegisteredTools,
+  isToolPlanModeAllowed,
+  isToolFileMutation,
+  isToolMutation,
   getRequiredToolParams,
   listTools,
   listToolDefinitions,

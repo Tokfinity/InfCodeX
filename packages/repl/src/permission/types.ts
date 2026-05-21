@@ -3,6 +3,7 @@
  */
 
 import type { BashPrefixExtractor } from '@kodax-ai/coding';
+import { listBuiltinToolDefinitions } from '@kodax-ai/coding';
 
 // ============== Permission Mode ==============
 
@@ -123,12 +124,62 @@ export interface ConfirmResult {
 }
 
 // ============== Tool Categories ==============
+//
+// v0.7.42 — these two sets are now COMPUTED from `LocalToolDefinition.
+// sideEffect` metadata declared on each tool in
+// `packages/coding/src/tools/registry.ts`. Previously they were hardcoded
+// at this file (`new Set(["write", "edit"])`), which silently drifted
+// every time a new write-class tool was added to KodaX — `multi_edit`,
+// `insert_after_anchor`, `worktree_*`, `scaffold_*`, `stage_*` and
+// friends were all missing from the original sets, so plan-mode and
+// gitRoot tracking under-enforced for years.
+//
+// The snapshot is taken at module load. `listBuiltinToolDefinitions()`
+// returns the static built-in roster (extensions / constructed tools
+// register AFTER module evaluation and are intentionally excluded —
+// these sets describe the KodaX-shipped surface only).
+//
+// SDK consumers (KodaX Space etc.) and new internal callsites should
+// prefer the metadata API directly:
+//   - `isToolFileMutation(name)` / `isToolMutation(name)` /
+//     `isToolPlanModeAllowed(name)` from `@kodax-ai/coding`
+//   - `getAllRegisteredTools().filter(t => t.sideEffect === '…')`
+// The sets below are retained for back-compat with existing callsites
+// in REPL / executor / InkREPL / src/acp_server.
 
-/** Modification tools that are blocked in plan mode. */
-export const MODIFICATION_TOOLS = new Set(["write", "edit", "bash", "undo"]);
+const _builtinSnapshot = listBuiltinToolDefinitions();
 
-/** File modification tools (not commands). */
-export const FILE_MODIFICATION_TOOLS = new Set(["write", "edit"]);
+/**
+ * Tools that mutate the local filesystem AND accept a `path` input.
+ * Eligible for plan-mode's path-aware escape (writes to
+ * `.agent/plan_mode_doc.md` or the system temp dir are permitted; all
+ * other paths block).
+ *
+ * Derived from metadata: `sideEffect === 'mutates-fs'` AND
+ * `requiredParams.includes('path')`. Tools that mutate the FS without a
+ * `path` input (`undo`, `worktree_*`, construction-staircase tools) are
+ * NOT in this set — their plan-mode block reason is computed elsewhere
+ * via `isToolPlanModeAllowed()` instead of a path check.
+ */
+export const FILE_MODIFICATION_TOOLS: Set<string> = new Set(
+  _builtinSnapshot
+    .filter((tool) => tool.sideEffect === 'mutates-fs' && tool.requiredParams.includes('path'))
+    .map((tool) => tool.name),
+);
+
+/**
+ * All tools with any observable side effect (`sideEffect !== 'readonly'`).
+ *
+ * Historically used as the plan-mode block set; today
+ * `isToolPlanModeAllowed(name)` from `@kodax-ai/coding` is the canonical
+ * gate (it honors `planModeAllowed: true` overrides for tools whose
+ * effect is itself part of the planning loop, e.g. `exit_plan_mode` /
+ * `task_stop` / `todo_*` / `ask_user_question`). Retained as a derived
+ * back-compat alias.
+ */
+export const MODIFICATION_TOOLS: Set<string> = new Set(
+  _builtinSnapshot.filter((tool) => tool.sideEffect !== 'readonly').map((tool) => tool.name),
+);
 
 /**
  * Bash commands that have write side-effects (blocked in plan mode).
