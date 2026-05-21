@@ -57,6 +57,7 @@ import {
 } from './guardrail.js';
 import {
   detectHandoffSignal,
+  detectTerminalToolSignal,
   emitHandoffSpan,
   replaceSystemMessage,
 } from './runner-handoff.js';
@@ -1126,6 +1127,26 @@ async function genericRun<TData>(
           iteration,
         });
       }
+    }
+
+    // FEATURE_184 (v0.7.45) — terminal tool signal: a tool result carrying
+    // isTerminal:true without a handoffTarget signals the agent is done
+    // without transferring ownership (e.g. Generator post-C.1 calls
+    // emit_handoff with no in-chain Evaluator, or Worker post-C.1 calls
+    // emit_handoff with the Evaluator removed from chain). Return so the
+    // outer runWithIdleYield wrapper sees a clean run result and can
+    // inspect the snapshot (hasEmittedHandoff / pendingChildTaskCount).
+    // A bare `break` would fall through to the MAX_TOOL_LOOP_ITERATIONS
+    // throw at the end of genericRun — never correct here.
+    // Extract any inline text the LLM put alongside the terminal tool call
+    // so extractUserFacingText (status-derivation.ts) can surface it as
+    // lastText even though the final transcript message is a tool_result.
+    if (!handoffSignal && detectTerminalToolSignal(currentAgent, results)) {
+      return {
+        output: extractLastText(assistantMessage),
+        messages: transcript,
+        sessionId: opts.session?.id,
+      };
     }
 
     // FEATURE_164 (v0.7.41) — mid-turn message injection hook.

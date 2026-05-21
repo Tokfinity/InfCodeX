@@ -31,7 +31,6 @@ import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
 import type { Agent, StopHookFn } from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
@@ -125,7 +124,6 @@ import { buildManagedTaskCompactionHook } from './_internal/managed-task/compact
 // the registry value type).
 import {
   countLastAssistantToolCalls,
-  detectMissingTerminalVerdict,
   runWithIdleYield,
 } from '@kodax-ai/agent';
 // FEATURE_125 (v0.7.41) — Team Mode runner-side adapter.
@@ -145,11 +143,6 @@ import {
   REPORT_TOOL as STALL_REPORT_TOOL,
   SIDECAR_SYSTEM_PROMPT as STALL_SIDECAR_SYSTEM_PROMPT,
 } from '../multi-instance/stall-sidecar-prompts.js';
-// FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback constants.
-import {
-  EVALUATOR_VERDICT_RETRY_PROMPT,
-  resolveEvaluatorVerdictRetryCap,
-} from './_internal/managed-task/evaluator-verdict-retry.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
@@ -1499,6 +1492,17 @@ async function runManagedTaskViaRunnerInner(
     },
   };
 
+  // FEATURE_184 (v0.7.45) Phase C.1 — current-agent role ref.
+  // Tracks which role is currently executing so composedStopHook can gate
+  // the sidecar verifier to generator/worker turns only. The sidecar should
+  // NOT fire on Scout or Planner text-only turns (H0_DIRECT Scout answer,
+  // zero-tool Planner fallback) — those are not the "execution terminal" the
+  // verifier is designed to review. Initialised to 'scout' (chain starts
+  // there); updated by onAgentSwitched below.
+  const currentAgentRoleRef: { current: KodaXTaskRole | 'scout' | 'planner' } = {
+    current: 'scout',
+  };
+
   // FEATURE_184 (v0.7.45) Phase D.2 — Sidecar Verifier wiring.
   //
   // Resolve the verifier's (provider, model). **Default behaviour is
@@ -1517,25 +1521,15 @@ async function runManagedTaskViaRunnerInner(
   // turn-complete event and can override (e.g. their own validation
   // rule that wants another round). This is the "first-party first,
   // second-party fallback" precedence documented in v0.7.45.md §D.
-  //
-  // **Transient gate (removed in Phase C.1 next commit)**: skip the
-  // verifier when the chain still has an in-chain `evaluator` slot.
-  // While Evaluator role + Sidecar Verifier both exist (this commit
-  // only — Phase C.1 deletes the chain slot), running sidecar on
-  // Evaluator's text-only termination would pre-empt the F167 B0/B1/B2
-  // retry path and silently change the F167 fallback contract. The
-  // guard ensures D.2 ships as a pure substrate addition with zero
-  // production behaviour change; the very next commit (C.1) drops
-  // `chain.evaluator`, the guard becomes always-false, and sidecar
-  // activates.
+  // FEATURE_184 (v0.7.45) Phase C.1: Transient gate dropped — chain no
+  // longer has an in-chain evaluator slot, so Sidecar Verifier always
+  // activates when a verifier provider can be resolved.
   const mainProviderName = options.provider ?? 'anthropic';
-  const resolvedVerifier = chain.evaluator
-    ? undefined
-    : resolveVerifierProvider({
-        mainProvider: resolveProvider(mainProviderName),
-        mainProviderName,
-        mainModel: options.modelOverride ?? options.model ?? 'unknown',
-      });
+  const resolvedVerifier = resolveVerifierProvider({
+    mainProvider: resolveProvider(mainProviderName),
+    mainProviderName,
+    mainModel: options.modelOverride ?? options.model ?? 'unknown',
+  });
   const sidecarVerifierHook = resolvedVerifier
     ? createSidecarVerifierStopHook({
         provider: resolvedVerifier.provider,
@@ -1579,10 +1573,46 @@ async function runManagedTaskViaRunnerInner(
   // through to extension bridge on undefined (sidecar accepted, or no
   // sidecar configured). Order matters — flip it and user extensions
   // could second-guess a sidecar `revise` / `blocked` verdict.
+  //
+  // FEATURE_184 (v0.7.45) Phase C.1 idle-yield guard: skip the sidecar
+  // verifier when the stop hook fires on an intermediate text-only idle-
+  // yield turn (i.e. Worker is waiting for a pending child or a queued
+  // background banner). Invoking the verifier here would:
+  //   (a) waste an LLM call on a non-terminal agent state, and
+  //   (b) set recorder.verdict synchronously inside onVerdict, which
+  //       makes computeSnapshot's `hasEmittedTerminalVerdict` flip to
+  //       true, causing detectIdleYield to return false and stranding
+  //       the outer loop — Worker never resumes after the child settles.
+  // The guard mirrors the detectIdleYield conditions: if there are still
+  // pending children OR pending background banners, defer verification to
+  // the next stop-hook invocation that fires after the real terminal turn.
   const composedStopHook: StopHookFn = async (ctx) => {
     if (sidecarVerifierHook) {
-      const sidecarResult = await sidecarVerifierHook(ctx);
-      if (sidecarResult !== undefined) return sidecarResult;
+      // FEATURE_184 (v0.7.45) Phase C.1 role gate: only invoke the sidecar
+      // verifier when the *execution* agent (generator / worker) terminates
+      // text-only. Scout and Planner text-only turns (H0_DIRECT Scout
+      // answer, zero-tool Planner fallback) are pre-execution roles — they
+      // do not produce work that needs post-execution verification.
+      // Without this gate the verifier fires on every Scout turn, sets
+      // recorder.verdict='accept', and breaks H0_DIRECT verdict.status
+      // ('running' → 'completed') and roleAssignments (['direct'] →
+      // ['scout', 'evaluator']).
+      const isExecutionRole =
+        currentAgentRoleRef.current === 'generator' ||
+        currentAgentRoleRef.current === 'worker';
+      if (isExecutionRole) {
+        const isIdleYieldTurn =
+          (baseCtx.childTaskRegistry?.size ?? 0) > 0 ||
+          getMessageQueue().has({
+            agentId: undefined,
+            maxPriority: 'background',
+            mode: 'task-notification',
+          });
+        if (!isIdleYieldTurn) {
+          const sidecarResult = await sidecarVerifierHook(ctx);
+          if (sidecarResult !== undefined) return sidecarResult;
+        }
+      }
     }
     return extensionTurnCompleteHook(ctx);
   };
@@ -1653,9 +1683,12 @@ async function runManagedTaskViaRunnerInner(
           to.name === SCOUT_AGENT_NAME ? 'scout'
             : to.name === PLANNER_AGENT_NAME ? 'planner'
               : to.name === GENERATOR_AGENT_NAME ? 'generator'
-                : to.name === EVALUATOR_AGENT_NAME ? 'evaluator'
-                  : to.name === WORKER_AGENT_NAME ? 'worker'
-                    : undefined;
+                : to.name === WORKER_AGENT_NAME ? 'worker'
+                  : undefined;
+        // FEATURE_184 (v0.7.45) Phase C.1: update the current-agent role
+        // ref so composedStopHook can gate the sidecar verifier to
+        // generator/worker turns only.
+        if (switchedRole) currentAgentRoleRef.current = switchedRole;
         observer.agentSwitched(switchedRole);
       },
       // FEATURE_184 (v0.7.45) Phase D.2 — Composed Stop hook:
@@ -1796,9 +1829,8 @@ async function runManagedTaskViaRunnerInner(
         currentAgent.name === SCOUT_AGENT_NAME ? 'scout'
           : currentAgent.name === PLANNER_AGENT_NAME ? 'planner'
             : currentAgent.name === GENERATOR_AGENT_NAME ? 'generator'
-              : currentAgent.name === EVALUATOR_AGENT_NAME ? 'evaluator'
-                : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
-                  : undefined;
+              : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
+                : undefined;
       observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
     },
     // `maxIterations` omitted — wrapper defaults to 64, matching the
@@ -1818,148 +1850,11 @@ async function runManagedTaskViaRunnerInner(
   // late-cleanup placement, just with broader error coverage.
   await cleanupRunCheckpoint();
 
-  // FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback.
-  //
-  // The runner-driven outer loop above (runWithIdleYield) exits when:
-  //   (a) the run is genuinely terminal (verdict emitted), OR
-  //   (b) `hasEmittedHandoff=true` but the assistant produced no tool
-  //       calls and no children are pending — the Evaluator-text-only
-  //       smoking gun (session 20260515_185354).
-  //
-  // Case (b) is what we recover here. Without intervention,
-  // `deriveFinalStatus` would see `recorder.verdict===undefined` and
-  // synthesize a `signal:'COMPLETE'` final status, silently turning a
-  // failed audit into a reported success.
-  //
-  // 3-layer defense per the FEATURE_167 design doc:
-  //   - B0 (fenced parser): SKIPPED — probe C3 showed 0/25 emissions
-  //     across the 5-alias panel. No model writes the fence; carrying
-  //     the parser would be dead code.
-  //   - B1 (retry-prompt loop): inject the canonical
-  //     `EVALUATOR_VERDICT_RETRY_PROMPT` as a user message + re-run
-  //     `chain.evaluator` via the same `runOnce` closure the main loop
-  //     uses, up to `resolveEvaluatorVerdictRetryCap(alias)` times.
-  //     Probe C2 data showed kimi recovers 100% at retry 1, ds/v4pro
-  //     and mmx/m27 plateau at 80% within 1-2 retries; zhipu cap=1
-  //     because the intent-vs-action floor is structurally unrecoverable
-  //     ([[project_zhipu_send_message_floor]]).
-  //   - B2 (synth fallback): if B1 exhausts cap without a verdict,
-  //     synthesize one. Status is `'accept'` because the Evaluator did
-  //     produce a useful review text — marking it `'blocked'` would
-  //     false-fail the run for what was really a tool-protocol failure
-  //     on top of correct review content. The
-  //     `onEvaluatorFallbackSynthesized` event lets SDK consumers
-  //     distinguish the synthesized verdict from a real `accept`.
-  //
-  // Ordering invariant: write `recorder.verdict` BEFORE firing the
-  // telemetry event so consumers see causal order (recorder committed
-  // → event fires → `deriveFinalStatus` reads the committed verdict).
-  // The abort signal short-circuits the loop at entry of each retry
-  // so a mid-B1 Esc/Ctrl-C doesn't burn extra LLM turns.
-  let effectiveRunResult = runResult;
-  if (
-    !options.abortSignal?.aborted &&
-    detectMissingTerminalVerdict({
-      lastAssistantToolCallCount: countLastAssistantToolCalls(runResult.messages),
-      pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
-      hasEmittedHandoff: Boolean(recorder.handoff),
-      hasEmittedTerminalVerdict: (() => {
-        const s = recorder.verdict?.payload?.verdict?.status;
-        return s === 'accept' || s === 'blocked';
-      })(),
-      hasPendingBackgroundMessages: getMessageQueue().has({
-        agentId: undefined,
-        maxPriority: 'background',
-        mode: 'task-notification',
-      }),
-    })
-  ) {
-    const resolvedAlias = options.modelOverride ?? options.model;
-    const verdictRetryCap = resolveEvaluatorVerdictRetryCap(resolvedAlias);
-    let retriesAttempted = 0;
-    let currentMessages = runResult.messages;
-    let currentOutput = runResult.output;
-
-    // Capture the recorder.verdict OBJECT identity before retries. Each
-    // successful `emit_verdict` tool call assigns a fresh
-    // `ProtocolEmitterMetadata` to `recorder.verdict` (see line ~967),
-    // so identity comparison correctly detects "a new tool call
-    // happened in this retry" regardless of whether the new status
-    // equals the prior one. Checking status alone would falsely break
-    // the loop when a stale `revise` from a prior round is still
-    // in the recorder and the current Evaluator turn didn't emit —
-    // the synth path would never fire, and the stale revise would
-    // propagate as if it were the final answer.
-    const priorVerdictObject = recorder.verdict;
-
-    for (let i = 0; i < verdictRetryCap; i++) {
-      if (options.abortSignal?.aborted) break;
-      const retryInput: KodaXMessage[] = [
-        ...currentMessages,
-        { role: 'user', content: EVALUATOR_VERDICT_RETRY_PROMPT },
-      ];
-      const retryResult = await runOnce(chain.evaluator, retryInput);
-      retriesAttempted++;
-      currentMessages = retryResult.messages;
-      currentOutput = retryResult.output;
-      if (recorder.verdict !== priorVerdictObject) {
-        // Retry succeeded — Evaluator emitted a structured verdict
-        // (fresh object reference, regardless of status value).
-        break;
-      }
-    }
-
-    // The retry calls may have written a new checkpoint mid-loop;
-    // clear it now so a successful B1 recovery doesn't leave an orphan
-    // for the next session to discover.
-    await cleanupRunCheckpoint();
-
-    effectiveRunResult = { ...runResult, messages: currentMessages, output: currentOutput };
-
-    // B2 synth fallback — fires only if STILL no fresh verdict after
-    // exhausting cap. Identity comparison matches the loop break
-    // condition: recorder unchanged from before retries === no real
-    // emit_verdict landed. A stale `revise` from a prior round
-    // counts as "no fresh emit" here and correctly triggers B2.
-    if (recorder.verdict === priorVerdictObject) {
-      const userFacingText = extractUserFacingText(effectiveRunResult);
-      const synthReason =
-        `Evaluator failed to emit a terminal verdict after ${retriesAttempted} retries.`;
-      recorder.verdict = {
-        role: 'evaluator',
-        payload: {
-          verdict: {
-            source: 'evaluator',
-            status: 'accept',
-            reason: synthReason,
-            followups: [],
-            userFacingText,
-            userAnswer: userFacingText,
-          },
-        },
-        isTerminal: true,
-      };
-      // v0.7.42 — mirror the `wrapEmitterWithRecorder` verdict-slot
-      // `accept` branch's auto-completion side-effect. The synth path
-      // assigns directly to `recorder.verdict` and so bypasses the
-      // wrapper's slot setter (which would have called
-      // `autoCompleteOnAccept` for a real `emit_verdict` tool call).
-      // Without this mirror, the plan-list UI shows `0/N completed`
-      // even when the run terminated as `accept` — Worker did the
-      // work but never closed individual items, and the synth bypass
-      // means the runner-side safety net never fired either. Pairing
-      // the auto-complete here keeps "final terminal verdict status"
-      // and "items rendered to user" structurally consistent.
-      todoStore.autoCompleteOnAccept();
-      options.events?.onEvaluatorFallbackSynthesized?.({
-        retriesAttempted,
-        cap: verdictRetryCap,
-        modelAlias: resolvedAlias,
-        userFacingText,
-        reason: synthReason,
-      });
-    }
-  }
+  // FEATURE_184 (v0.7.45) Phase C.2: F167 Evaluator terminal-verdict
+  // fallback (B0/B1/B2 retry/synth block) deleted. The in-chain Evaluator
+  // is gone (Phase C.1); Sidecar Verifier StopHook (Phase D.2) handles
+  // post-execution verification. No synthetic verdict path needed.
+  const effectiveRunResult = runResult;
 
   const lastText = extractUserFacingText(effectiveRunResult);
   const { signal, verdictStatus, reason, userAnswer } = deriveFinalStatus(recorder);
@@ -2065,7 +1960,10 @@ async function runManagedTaskViaRunnerInner(
       : undefined;
 
   const result: KodaXResult = {
-    success: verdictStatus !== 'blocked',
+    // FEATURE_184 (v0.7.45) Phase C.1: success=false when the run is
+    // blocked, regardless of source — sidecar verdict (verdictStatus=
+    // 'blocked') or Generator-level blocked handoff (signal='BLOCKED').
+    success: signal !== 'BLOCKED' && verdictStatus !== 'blocked',
     lastText: resolvedText,
     signal,
     signalReason: reason,

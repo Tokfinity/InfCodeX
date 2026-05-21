@@ -21,7 +21,6 @@
 
 import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
 } from './task-engine-agents.js';
@@ -85,21 +84,22 @@ export function resolveHandoffTarget(
     return { handoffTarget: GENERATOR_AGENT_NAME, isTerminal: false };
   }
   if (role === 'generator') {
-    // Generator always hands off to evaluator, regardless of status
-    // (blocked/incomplete still need evaluator to decide).
-    return { handoffTarget: EVALUATOR_AGENT_NAME, isTerminal: false };
+    // FEATURE_184 (v0.7.45) Phase C.1: Generator is now terminal — text-only
+    // termination triggers the Sidecar Verifier StopHook (Phase D.2).
+    return { isTerminal: true };
   }
-  // evaluator
+  // evaluator — kept for bridge compat (Sidecar Verifier calls emitVerdict
+  // which flows through this path; see verifier-recorder-bridge.ts).
   const status = normalized.verdict?.status;
   if (status === 'accept' || status === 'blocked') {
     return { isTerminal: true };
   }
-  // revise — next_harness picks the escalation target (default: back to generator).
+  // revise — next_harness picks the escalation target (default: back to planner for H2).
   const next = normalized.verdict?.nextHarness;
   if (next === 'H2_PLAN_EXECUTE_EVAL') {
     return { handoffTarget: PLANNER_AGENT_NAME, isTerminal: false };
   }
-  return { handoffTarget: GENERATOR_AGENT_NAME, isTerminal: false };
+  return { isTerminal: true };
 }
 
 interface EmitterSpec {

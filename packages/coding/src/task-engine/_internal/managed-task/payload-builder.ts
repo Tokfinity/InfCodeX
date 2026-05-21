@@ -277,8 +277,15 @@ export function buildManagedTaskPayload(args: {
       routingNotes: plan?.decision.routingNotes ? [...plan.decision.routingNotes] : [],
     },
     verdict: {
+      // FEATURE_184 (v0.7.45) Phase C.1: verdict.status is owned by the
+      // Evaluator / Sidecar Verifier verdict slot (verdictStatus). A
+      // Generator-level blocked handoff surfaces via result.signal only,
+      // leaving verdict.status='running' (no verifier ran). We intentionally
+      // do NOT map signal='BLOCKED' → status='blocked' here because that
+      // would conflate Generator-blocked (no verifier) with Evaluator/Sidecar-
+      // blocked (verifier ran and said 'blocked').
       status:
-        signal === 'BLOCKED'
+        verdictStatus === 'blocked'
           ? 'blocked'
           : verdictStatus === 'accept'
             ? 'completed'

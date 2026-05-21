@@ -90,6 +90,41 @@ export function replaceSystemMessage(
 }
 
 /**
+ * FEATURE_184 (v0.7.45) — detect a terminal tool signal.
+ *
+ * Returns true when ALL of:
+ *   1. The current agent has an EMPTY handoffs array (i.e. it was declared
+ *      as a terminal executor — Generator or Worker post-C.1).
+ *   2. Any tool result carries `metadata.isTerminal: true` without a
+ *      `metadata.handoffTarget`.
+ *
+ * The agent-handoffs guard is load-bearing: Scout also produces
+ * `isTerminal: true` tool results (H0_DIRECT path) but still needs a
+ * follow-up text-only turn to produce its answer. Scout always has a
+ * non-empty `handoffs` array (H1 + H2 targets), so this helper returns
+ * false for Scout even when its emit result is terminal.
+ *
+ * Disjoint from `detectHandoffSignal`: that helper requires a non-empty
+ * `handoffs` array and a matching `handoffTarget`; this helper fires only
+ * when `handoffs` is empty AND `isTerminal` is true with no target.
+ */
+export function detectTerminalToolSignal(
+  currentAgent: Agent,
+  toolResults: readonly RunnerToolResult[],
+): boolean {
+  if (!currentAgent.handoffs || currentAgent.handoffs.length > 0) {
+    return false;
+  }
+  for (const result of toolResults) {
+    const meta = result.metadata as { isTerminal?: unknown; handoffTarget?: unknown } | undefined;
+    if (meta?.isTerminal === true && !meta?.handoffTarget) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Emit a `HandoffSpan` as a child of the agent span. Ends immediately
  * because a handoff is a point-in-time event (unlike agent/tool spans
  * which wrap a duration).

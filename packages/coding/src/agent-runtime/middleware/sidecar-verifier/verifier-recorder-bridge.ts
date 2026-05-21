@@ -160,9 +160,9 @@ export async function applySidecarVerdictToRecorder(
     // the final UI render reflects whatever state work reached.
   }
 
-  // Fire role-emit observer. 'evaluator' label is legacy compat:
-  // downstream consumers key on this string; the sidecar architecturally
-  // replaces the role but the verdict slot semantics are preserved.
+  // 'evaluator' label is legacy compat: downstream consumers key on this
+  // string; the sidecar architecturally replaces the role but the verdict
+  // slot semantics are preserved.
   const emittedRole: KodaXTaskRole = 'evaluator';
   observer.onRoleEmit(emittedRole, recorder);
 
@@ -170,30 +170,44 @@ export async function applySidecarVerdictToRecorder(
   // wrapEmitterWithRecorder verdict slot. Fires when sidecar returns
   // revise + cumulative usage crossed 90%, so the user can extend
   // budget before the loop runs out of rounds.
+  //
+  // FEATURE_184 (v0.7.45) Phase C.1 inline fix: narrow try/catch around
+  // maybeRequestAdditionalWorkBudget so dialog failures (e.g. events
+  // surface error, provider timeout) cannot crash the bridge. The outer
+  // .catch(() => undefined) in runner-driven.ts covers the full bridge
+  // call; this inner guard additionally ensures budget side-effects
+  // (budgetApprovalRef, maxRoundsRef, degradedContinueRef) are safely
+  // skipped on error rather than left in a half-committed state.
   if (budget && budgetExtension) {
     observer.notifyBudgetApprovalRequest();
     const summary = verdict.reason
       ? `Sidecar verifier requested another pass: ${verdict.reason}`
       : 'Sidecar verifier requested another pass';
-    const decision = await maybeRequestAdditionalWorkBudget(
-      budgetExtension.events,
-      budget,
-      {
-        summary,
-        currentRound: budgetExtension.roundRef.current,
-        maxRounds: budgetExtension.maxRoundsRef.current,
-        originalTask: budgetExtension.originalTask,
-        additionalUnits: BUDGET_EXTENSION_BY_HARNESS[budget.currentHarness],
-      },
-    );
-    budgetExtension.budgetApprovalRef.current = false;
-    if (decision === 'approved') {
-      budgetExtension.maxRoundsRef.current += 1;
-    } else if (decision === 'denied' && verdict.verdict === 'revise') {
-      // User denied a budget extension on revise — flip degradedContinue
-      // so caller renders the warning. Mirrors the legacy denied-revise
-      // branch (Shard 6d-U).
-      budgetExtension.degradedContinueRef.current = true;
+    try {
+      const decision = await maybeRequestAdditionalWorkBudget(
+        budgetExtension.events,
+        budget,
+        {
+          summary,
+          currentRound: budgetExtension.roundRef.current,
+          maxRounds: budgetExtension.maxRoundsRef.current,
+          originalTask: budgetExtension.originalTask,
+          additionalUnits: BUDGET_EXTENSION_BY_HARNESS[budget.currentHarness],
+        },
+      );
+      budgetExtension.budgetApprovalRef.current = false;
+      if (decision === 'approved') {
+        budgetExtension.maxRoundsRef.current += 1;
+      } else if (decision === 'denied' && verdict.verdict === 'revise') {
+        // User denied a budget extension on revise — flip degradedContinue
+        // so caller renders the warning. Mirrors the legacy denied-revise
+        // branch (Shard 6d-U).
+        budgetExtension.degradedContinueRef.current = true;
+      }
+    } catch {
+      // Best-effort: budget dialog failure must not crash the bridge.
+      // Leave refs in their pre-call state; run continues without extension.
+      budgetExtension.budgetApprovalRef.current = false;
     }
   }
 }

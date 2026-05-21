@@ -76,6 +76,24 @@ export function deriveFinalStatus(recorder: VerdictRecorder): {
       userAnswer: verdictPayload.userAnswer,
     };
   }
+  // FEATURE_184 (v0.7.45) Phase C.1: in-chain Evaluator is gone, so
+  // recorder.verdict is only set by the Sidecar Verifier (out-of-band).
+  // Generator can still call emit_handoff(status:'blocked') to surface an
+  // unrecoverable blocker directly — check the handoff payload when no
+  // verdict has been set. Without this, a Generator-blocked handoff would
+  // produce signal:'COMPLETE' and success:true, silently hiding the block.
+  //
+  // NOTE: We return signal:'BLOCKED' but NOT verdictStatus:'blocked' here.
+  // managedTask.verdict.status is owned by the Evaluator / Sidecar Verifier
+  // verdict slot; a Generator-level blocked handoff surfaces the block via
+  // result.signal only, leaving verdict.status='running' (no verifier ran).
+  const handoffPayload = recorder.handoff?.payload.handoff;
+  if (handoffPayload?.status === 'blocked') {
+    return {
+      signal: 'BLOCKED',
+      reason: handoffPayload.summary,
+    };
+  }
   return { signal: 'COMPLETE' };
 }
 
