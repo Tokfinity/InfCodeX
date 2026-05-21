@@ -23,7 +23,7 @@ export {
   isProviderName,
 } from './registry.js';
 export type { ProviderName } from './registry.js';
-export { createCustomProvider } from './custom-provider.js';
+export { createCustomProvider, validateCustomProviderConfig } from './custom-provider.js';
 export {
   registerCustomProviders,
   getCustomProvider,

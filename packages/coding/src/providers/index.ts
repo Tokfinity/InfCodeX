@@ -28,6 +28,7 @@ export {
   reasoningCapabilityToOverride,
   reasoningOverrideToCapability,
   createCustomProvider,
+  validateCustomProviderConfig,
   registerCustomProviders,
   getCustomProvider,
   isCustomProviderName,

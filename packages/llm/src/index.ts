@@ -122,6 +122,7 @@ export {
   getProviderList,
   isProviderName,
   createCustomProvider,
+  validateCustomProviderConfig,
   registerCustomProviders,
   getCustomProvider,
   isCustomProviderName,

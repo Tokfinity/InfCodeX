@@ -78,6 +78,18 @@ export {
   PREVIEW_MAX_LENGTH,
 } from "./common/utils.js";
 
+// === Custom provider CRUD (v0.7.42 SDK export) ===
+// SDK embedders (KodaX Space etc.) can add / remove `customProviders`
+// entries in `~/.kodax/config.json` without re-implementing the schema
+// or the in-memory re-registration step. See common/custom-providers.ts
+// for the trust-boundary rationale (gap 7).
+export {
+  listCustomProviders,
+  getCustomProviderConfig,
+  upsertCustomProvider,
+  removeCustomProvider,
+} from "./common/custom-providers.js";
+
 // === 会话存储 ===
 export { FileSessionStorage } from "./interactive/storage.js";
 
