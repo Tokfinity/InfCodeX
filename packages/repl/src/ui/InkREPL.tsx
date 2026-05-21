@@ -475,6 +475,23 @@ interface ManagedForegroundLedgerState {
   activeAssistantItemId?: string;
   activeToolGroupItemId?: string;
   activeToolGroupTools: ToolCall[];
+  /**
+   * FEATURE_184 v0.7.42 follow-up — id of the thinking item this turn
+   * has accumulated streaming `reasoning_content` into. Survives
+   * `activeKind` flips to "assistant" / "tool_group" (unlike
+   * `activeThinkingItemId`, which is cleared the moment the model
+   * switches off thinking). `syncManagedForegroundThinkingBlock`
+   * (`onThinkingEnd` finalize) targets this id so the full thinking
+   * content replaces the existing item, instead of `startManagedForeg-
+   * roundLedgerBlock` creating a duplicate thinking item AFTER the
+   * assistant text has already been rendered (surfaced as a stale
+   * "Thinking" block below the answer in `deepseek-v4-pro`-style
+   * reasoning streams where the entire thinking phase precedes the
+   * text phase). Overwritten with the new id on each new thinking-
+   * item creation (so multi-turn workers correctly re-target);
+   * reset to undefined on phase transition.
+   */
+  currentTurnThinkingItemId?: string;
 }
 
 const PLAN_MODE_BLOCK_GUIDANCE =
@@ -1914,6 +1931,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         ...managedForegroundLedgerRef.current,
         activeKind: "thinking",
         activeThinkingItemId: itemId,
+        // FEATURE_184 v0.7.42 follow-up — record this id as the
+        // turn-scoped thinking target. We only get here when creating
+        // a NEW thinking item (the same-kind reuse path returned
+        // early above), so this naturally tracks the first thinking
+        // item of each new thinking phase. The id survives the
+        // `activeThinkingItemId: undefined` reset that happens when
+        // text streaming starts, so `onThinkingEnd` can find it.
+        currentTurnThinkingItemId: itemId,
         activeAssistantItemId: undefined,
         ...(hasExecutingTools ? {} : {
           activeToolGroupItemId: undefined,
@@ -2030,13 +2055,34 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     const nextText = workerTitle
       ? `[${workerTitle}] ${normalizedThinking}`
       : normalizedThinking;
+    // FEATURE_184 v0.7.42 follow-up — `onThinkingEnd` fires AFTER the
+    // text-streaming phase (provider streams `reasoning_content` first,
+    // then `content`, then finalizes). By that point `activeKind` has
+    // flipped to "assistant" and `activeThinkingItemId` has been
+    // cleared — so the old code called `startManagedForegroundLedger-
+    // Block("thinking", ...)`, which would CREATE A NEW thinking item
+    // and append it AFTER the assistant text. The user-visible bug
+    // was a duplicate "Thinking" block surfaced below the answer.
+    //
+    // Fix: target `currentTurnThinkingItemId` (the turn-scoped id
+    // recorded when the first thinking item was created earlier in
+    // this turn) and update it in place. Fallback to the standard
+    // ledger-block path only when no thinking item exists this turn
+    // — vanishingly rare (`onThinkingEnd` without a prior
+    // `onThinkingDelta`), but covered for completeness.
+    const existingTurnThinkingId = managedForegroundLedgerRef.current.currentTurnThinkingItemId;
+    if (existingTurnThinkingId) {
+      updateManagedForegroundLedgerItem(existingTurnThinkingId, (item) => (
+        item.type === "thinking"
+          ? { ...item, text: nextText }
+          : item
+      ));
+      return;
+    }
     const itemId = startManagedForegroundLedgerBlock("thinking", managedForegroundLedgerRef.current.workerTitle);
     updateManagedForegroundLedgerItem(itemId, (item) => (
       item.type === "thinking"
-        ? {
-            ...item,
-            text: nextText,
-          }
+        ? { ...item, text: nextText }
         : item
     ));
   }, [startManagedForegroundLedgerBlock, updateManagedForegroundLedgerItem]);
