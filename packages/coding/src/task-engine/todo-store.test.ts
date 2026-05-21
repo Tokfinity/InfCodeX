@@ -812,6 +812,29 @@ describe('todo-store init() preserves prior status on id match (v0.7.42)', () =>
     // No note ever existed on this item; preservation logic only carries
     // note when prev.note was set. Verify we did not synthesize one.
     expect(it.note).toBeUndefined();
+    // activeForm is intentionally NOT preserved on status preservation
+    // — the seed value wins (re-emit may legitimately rephrase). Here
+    // the seed omits it, so the field clears and the REPL spinner
+    // falls back to `subject`.
+    expect(it.activeForm).toBeUndefined();
+  });
+
+  it('carries existing note across in_progress preservation on id-match re-init', () => {
+    // Symmetric to the `failed → pending` note-clear branch already
+    // tested above: when `in_progress` is preserved, a Worker-attached
+    // note (e.g. a sub-step annotation) should survive the re-seed
+    // just like a `cancelled` reason does. Real-world relevance is
+    // low (in_progress items rarely carry notes) but the symmetry
+    // guards against a future regression where someone special-cases
+    // note-clearing on every preserveStatus branch except cancelled.
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', subject: 'Refactor router' }]);
+    store.updateStatus('todo_1', 'in_progress', 'currently on sub-step 2/4');
+    store.init([{ id: 'todo_1', subject: 'Refactor router (scope expanded)' }]);
+    const it = store.getAll()[0]!;
+    expect(it.status).toBe('in_progress');
+    expect(it.note).toBe('currently on sub-step 2/4');
+    expect(it.subject).toBe('Refactor router (scope expanded)');
   });
 
   it('preserves note alongside preserved cancelled status', () => {

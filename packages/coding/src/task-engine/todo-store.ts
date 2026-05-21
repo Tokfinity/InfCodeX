@@ -261,7 +261,11 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       //     imply "stop working on it"; if the model wanted to demote
       //     it would have emitted `op:'patch'` to mark completed /
       //     cancelled first. Defaulting to RESET loses execution
-      //     intent and surfaces the UX bug above.
+      //     intent and surfaces the UX bug above. Note: `activeForm`
+      //     is NOT preserved alongside status — the seed value wins
+      //     (a re-emit may legitimately rephrase the spinner verb),
+      //     and an undefined seed `activeForm` falls through to
+      //     `subject` in the REPL spinner fallback chain.
       //   - Seed id matches existing item AND existing status is
       //     `failed` → reset to `pending` and DROP the stale failure
       //     note. Rationale: a `failed` item carries a Worker note
