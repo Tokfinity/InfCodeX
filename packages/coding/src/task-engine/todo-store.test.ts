@@ -748,15 +748,16 @@ describe('todo-store remove() — FEATURE_170 v0.7.41', () => {
   });
 });
 
-// v0.7.42 — init() id-match terminal-success preservation. Mid-task re-init
-// used to silently wipe completed/skipped/cancelled items back to pending,
-// causing the plan UI to show 0/N completed even after real work landed.
-// init() now preserves those three statuses (and their notes) when the
-// new seed list reuses the same id. Non-terminal statuses (pending /
-// in_progress / failed) are still normalized to pending — they describe
-// in-flight intent that the re-seed implicitly drops.
-describe('todo-store init() preserves terminal-success on id match (v0.7.42)', () => {
-  it('preserves completed/skipped/cancelled on id match, resets in_progress/failed/pending', () => {
+// v0.7.42 — init() id-match status preservation. Mid-task re-init used
+// to silently wipe completed/skipped/cancelled items back to pending,
+// causing the plan UI to show 0/N completed even after real work
+// landed. It also wiped the active `in_progress` item back to pending,
+// removing the `●` accent + spinner verb while the model kept
+// executing. init() now preserves four statuses (and their notes)
+// when the new seed list reuses the same id; only `failed` resets to
+// `pending` (clearing the stale failure note for a clean retry).
+describe('todo-store init() preserves prior status on id match (v0.7.42)', () => {
+  it('preserves completed/skipped/cancelled/in_progress on id match, resets failed/pending', () => {
     const store = createTodoStore();
     store.init([
       { id: 'todo_1', subject: 'Wire EChart' },
@@ -768,7 +769,7 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
     // Drive the store into the 5 status flavors that exist after a
     // mid-task re-init: completed (terminal-success), skipped
     // (terminal-success), cancelled (terminal-success), in_progress
-    // (non-terminal), failed (non-terminal).
+    // (active execution), failed (carries stale note).
     store.updateStatus('todo_1', 'completed');
     store.updateStatus('todo_2', 'skipped');
     store.updateStatus('todo_3', 'cancelled', 'no longer needed');
@@ -786,12 +787,31 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
     ]);
     const items = store.getAll();
     expect(items.map((it) => it.status)).toEqual([
-      'completed', // preserved (terminal-success)
-      'skipped',   // preserved (terminal-success)
-      'cancelled', // preserved (terminal-success)
-      'pending',   // reset from in_progress
-      'pending',   // reset from failed
+      'completed',   // preserved (terminal-success)
+      'skipped',     // preserved (terminal-success)
+      'cancelled',   // preserved (terminal-success)
+      'in_progress', // preserved (active execution intent survives re-seed)
+      'pending',     // reset from failed (note cleared for clean retry)
     ]);
+  });
+
+  it('preserves in_progress without note even when seed omits activeForm', () => {
+    // Mirror the screenshot scenario: model emits op:'init' to refresh
+    // the plan list mid-execution. The seed list does not echo each
+    // item's status or activeForm. Without the v0.7.42 hotfix the
+    // in_progress row demotes to pending, losing its `●` symbol and
+    // its spinner verb in the REPL surface.
+    const store = createTodoStore();
+    store.init([{ id: 'todo_1', subject: '3D ball viz', activeForm: 'Refactoring viz' }]);
+    store.updateStatus('todo_1', 'in_progress');
+    // Re-seed the same id with NO activeForm (legacy LLM op:'init' shape).
+    store.init([{ id: 'todo_1', subject: '3D ball viz (refined)' }]);
+    const it = store.getAll()[0]!;
+    expect(it.status).toBe('in_progress');
+    expect(it.subject).toBe('3D ball viz (refined)'); // subject still patches
+    // No note ever existed on this item; preservation logic only carries
+    // note when prev.note was set. Verify we did not synthesize one.
+    expect(it.note).toBeUndefined();
   });
 
   it('preserves note alongside preserved cancelled status', () => {

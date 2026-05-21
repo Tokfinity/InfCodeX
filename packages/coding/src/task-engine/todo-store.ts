@@ -243,25 +243,34 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       return freeze(items);
     },
     init(seeds): void {
-      // v0.7.42 — id-match terminal-success preservation. Mid-task re-init
+      // v0.7.42 — id-match status preservation. Mid-task re-init
       // (Worker calls `todo_update({op:'init'})` to refine scope) used to
       // wipe every item back to `pending`, including ids that matched a
-      // previously `completed` / `skipped` / `cancelled` item. UI then
-      // showed `0/N completed` even when prior work was actually done,
-      // and the LLM's throttle reminder re-listed already-finished work
-      // as `open` — both inviting redundant execution.
+      // previously `completed` / `skipped` / `cancelled` / `in_progress`
+      // item. UI then showed `0/N completed` even when prior work was
+      // actually done, and the active item lost its `●` accent while the
+      // model kept executing it (spinner verb vanished). Both invited
+      // redundant execution or confused the user about progress.
       //
       // Preservation rules:
-      //   - Seed id matches existing item AND existing status is terminal-
-      //     success (`completed` | `skipped` | `cancelled`) → KEEP that
-      //     status. The `note` is preserved alongside (e.g. cancelled
-      //     reason).
       //   - Seed id matches existing item AND existing status is
-      //     non-terminal (`pending` | `in_progress` | `failed`) → reset
-      //     to `pending`. Rationale: those statuses describe in-flight
-      //     execution intent; re-init means "refresh the plan" so the
-      //     execution intent is moot. `failed` becomes `pending` so the
-      //     LLM gets a clean retry without the prior `note` polluting.
+      //     `completed` | `skipped` | `cancelled` → KEEP that status.
+      //     The `note` is preserved alongside (e.g. cancelled reason).
+      //   - Seed id matches existing item AND existing status is
+      //     `in_progress` → KEEP `in_progress`. Re-seeding does not
+      //     imply "stop working on it"; if the model wanted to demote
+      //     it would have emitted `op:'patch'` to mark completed /
+      //     cancelled first. Defaulting to RESET loses execution
+      //     intent and surfaces the UX bug above.
+      //   - Seed id matches existing item AND existing status is
+      //     `failed` → reset to `pending` and DROP the stale failure
+      //     note. Rationale: a `failed` item carries a Worker note
+      //     ("missing dep X"); re-seeding implicitly retries with a
+      //     clean slate, and a pending row carrying that note would
+      //     mislead the throttle-reminder and next-turn context.
+      //   - Seed id matches existing item AND existing status is
+      //     `pending` → stays `pending` (no-op transition, but flows
+      //     through the same branch for uniformity).
       //   - Seed id has no match in existing items → enter as `pending`
       //     (new item).
       //   - Existing items whose ids are NOT in the seed list are
@@ -281,6 +290,7 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
             prev.status === 'completed'
             || prev.status === 'skipped'
             || prev.status === 'cancelled'
+            || prev.status === 'in_progress'
           );
         return {
           id: seed.id,
@@ -290,8 +300,9 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
           // Preserve the note alongside the status (e.g. `cancelled`
           // items often carry a Worker-supplied reason that the user
           // should keep seeing across a refine-the-plan call). When
-          // status is reset to `pending`, the note is cleared — a
-          // pending item with a stale `failed` note would mislead.
+          // status is reset to `pending` (i.e. the prior status was
+          // `failed`), the note is cleared — a pending item with a
+          // stale `failed` note would mislead.
           ...(preserveStatus && prev.note !== undefined ? { note: prev.note } : {}),
           owner: seed.owner,
           sourceObligationIndex: seed.sourceObligationIndex,
