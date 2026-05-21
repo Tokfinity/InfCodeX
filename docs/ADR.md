@@ -1679,3 +1679,76 @@ LLM 在 compaction 时把 hits 写入 `~/.kodax/projects/<repo>/memory/project_r
 
 ---
 
+## ADR-032: SDK Embedder Surface Closure (FEATURE_186, v0.7.42)
+
+**Status**: Accepted 2026-05-21
+**Driver**: KodaX Space（基于 `@kodax-ai/kodax@0.7.40` 的下游消费者）报回的 10-gap export 清单 + MCP popout 独立设计需求
+**Scope**: SDK publish surface（dist `.d.ts` bundling + subpath exports）/ 一行 export 集 / runtime hook 注入 / mid-run mutation surface / 配置 CRUD / MCP 子路径
+
+### Context
+
+KodaX 在 v0.7.39 的 ADR-024 把 npm 发布物正名 `@kodax-ai/kodax` + 形式化了 5 个 SDK subpath（`/agent` `/llm` `/coding` `/repl` `/skills`）。v0.7.40-v0.7.41 期间，KodaX Space 把 `@kodax-ai/kodax@0.7.40` 当作 substrate 在他们桌面端封装上跑，集成过程中报回了三类 gap：
+
+1. **SDK 发布物缺陷** — 入口 `.d.ts` 在 v0.7.40 仍内嵌 `import { X } from '@kodax-ai/*'`（rollup-plugin-dts bundle 后跑出来一份 self-contained 但同 commit 漏更新；用户 `tsc --noEmit` 在 Space 项目里能复现）。这一类是 publish hazard，dist tarball ship 出去就坏。
+2. **能力存在但 barrel 没 re-export** — Space 在他们项目里反复手写一份 parallel implementation（`bootstrapAutoMode` / `loadCommands` / `getAgentConfigHome` / `getAgentConfigPath` / `getAppDataDir` / `KodaXReasoningMode` / `ToolSideEffect` 分类 / `validateCustomProviderConfig` 等）。每次 KodaX 内部改格式 Space 那边就坏（"你们改格式我们就坏"——commit `ee549d6f` 注释引用）。
+3. **运行时 hook 缺失** — Skill 系统的 `!cmd` 动态上下文用 `execSync` 直接出走宿主 shell（在 Space 沙盒里要么噪音要么不安全）；`runKodaX` 是 blocking `Promise<KodaXResult>`，没办法 mid-run 切 provider / model / reasoning 也没办法不 forge `AbortSignal` 取消；MCP 服务器只能 hand-edit `~/.kodax/config.json`，restart runtime 才生效。
+
+并行用户提的 **MCP popout** 是独立产品需求：让 Space 把 MCP 服务器管理放到 popout 窗口，对外只暴露 MCP 子集，避免拉全 coding bundle。
+
+### Decision
+
+**Ship 全部 10 gap + MCP popout 在 v0.7.42，不 defer**。设计原则：
+
+1. **No dual route**（per [feedback_no_parallel_refactor_paths](../../memory/feedback_no_parallel_refactor_paths.md)）：`startKodaX` 是 `runKodaX` 的 thin decorator，不引入并行执行路径；plan-mode gate 元数据驱动一套实现，删 `ACP_TOOL_FILE_MODIFICATION_TOOLS` 硬编码 set；不为 hypothetical future 加 flag 双轨。
+2. **Trust boundary 不变** — KodaX 是 single-user CLI（per [feedback_review_threat_model](../../memory/feedback_review_threat_model.md)），CRUD 模块 last-write-wins 多写并发不是 v0.7.42 生产关切；注释里写明 future file-lock 不破坏 caller-facing API。
+3. **Validator 同 SDK 一致** — Custom provider CRUD 调 `validateCustomProviderConfig`（来自 `@kodax-ai/llm`，SDK 自身用的同一份）；MCP CRUD 做 shape-level check（已知 transport / connect 枚举 + stdio→command / sse|streamable-http→url 分支必填）。Space 不再需要 parallel zod schema。
+4. **Dynamic path resolution** — CRUD 模块每次调用经 `getAgentConfigPath('config.json')`，不缓存 module-load 时的 `KODAX_CONFIG_FILE` 常量，让 `setAgentConfigHome()` programmatic override（tests / 多租户 substrate consumers）即时生效。Phase 5 实测此修复是 14 个 vitest 测试一次全 PASS 的关键。
+5. **Mid-run state 直改 live `RuntimeSessionState`** — `sessionControl._attach({...})` 在 `buildRuntimeSessionState` 之后 substrate 调一次，把三个 setter 装上；CAP-055 `resolvePerTurnProvider` 已经在每轮开头从 `sessionState.modelSelection` / `sessionState.thinkingLevel` 重读（pre-FEATURE_100 baseline 保留至今）。下一轮 turn 自动看到变化，无需 re-resolve 仪式。
+6. **元数据驱动 plan-mode gate**（Phase 4 keystone）— `LocalToolDefinition.sideEffect: 'readonly' | 'mutates-fs' | 'mutates-shell' | 'mutates-network' | 'mutates-state'` 必填字段 + 可选 `planModeAllowed?: boolean`。`packages/repl/src/permission/types.ts` 的 `FILE_MODIFICATION_TOOLS` / `MODIFICATION_TOOLS` 改为 module-load 时从 `listBuiltinToolDefinitions()` 计算（无需手 sync）；`acp_server.ts` 硬编码 `Set(['write','edit'])` 换成 `isToolFileMutation`；`construction/runtime.ts` LLM-constructed tools 默认 `sideEffect: 'mutates-state'`（守得最严）。
+7. **MCP subpath 是 publish-time subset**（per ADR-024 既有模式）— `src/sdk-mcp.ts` 只 re-export `@kodax-ai/mcp`（不带 coding 层 adapter），让 Space 引 `@kodax-ai/kodax/mcp` 时 dist/sdk-mcp.js ~0 kB + 共享 chunks，不拉 12 kB 的 sdk-coding bundle。
+
+### Implementation
+
+**7 atomic commits**（在并行 thread FEATURE_184 跑的时候 stage 每个 commit 都按文件名走，不用 `git add -A`，每个 commit `add + commit` 同一 Bash 调用，per [feedback_concurrent_thread_git_race](../../memory/feedback_concurrent_thread_git_race.md)）：
+
+| Phase | Commit | Surface |
+|---|---|---|
+| 1 | `2e33b681` | `scripts/build-dts.mjs` self-test + hard-assert `/from\s+['\"]@kodax-ai\//` 在 entry .d.ts |
+| 2 | `d3ab38b0` | `packages/agent/src/runtime/agent-home.ts` `getAppDataDir(appId)` + 32 单测；`packages/repl/src/index.ts` `bootstrapAutoMode` re-export；`src/sdk-repl.ts` `loadCommands` etc. re-export；`packages/coding/src/index.ts` `getAgentConfigHome` / `getAgentConfigPath` / `setAgentConfigHome` / `getAppDataDir` re-export |
+| 3 | `9b1e440f` | `packages/skills/src/types.ts` `executeDynamicContext?` + `disableDynamicContext?` 注入 `SkillContext`；`skill-resolver.ts` 3-tier dispatch（disable → host hook → legacy `execSync`） |
+| 4 | `7defd65f` | `packages/coding/src/tools/types.ts` `ToolSideEffect` + `sideEffect: ToolSideEffect` 必填；`packages/coding/src/tools/registry.ts` 51 工具全打标 + 4 个 helper；`packages/repl/src/permission/types.ts` `FILE_MODIFICATION_TOOLS` / `MODIFICATION_TOOLS` 元数据计算；`packages/repl/src/permission/permission.ts` `getPlanModeBlockReason` layered；`src/acp_server.ts` 硬编码 set 移除 |
+| 5 | `ee549d6f` | `packages/repl/src/common/custom-providers.ts` CRUD（21 单测）+ `validateCustomProviderConfig` re-export 链（llm / coding / coding-providers）+ 动态 `getAgentConfigPath('config.json')` resolve |
+| 6 | `9ba68f25` | `packages/coding/src/types.ts` `KodaXSessionControl` + `KodaXSessionMutators`；`packages/coding/src/agent-runtime/run-substrate.ts` `_attach({setProvider/setModel/setReasoning})` 在 `buildRuntimeSessionState` 之后；`packages/coding/src/running-session.ts` 新文件（200+ LoC）+ 20 单测 |
+| 7 | `523e9a28` | `packages/repl/src/common/mcp-servers.ts` CRUD（26 单测）+ shape validator；`src/sdk-mcp.ts` 子路径入口；`scripts/build-bundle.mjs` `sdkEntryNames` 扩 + `scripts/build-dts.mjs` `sdkEntries` 扩 + `scripts/release.mjs` `pkg.exports['./mcp']` 同步 |
+
+**138 个新单测**（不含既有不退化测试）。
+
+### Consequences
+
+**正面**：
+- KodaX Space 不再维护任何 parallel implementation 的 KodaX SDK ABI；CRUD 走 SDK validator，schema drift 死掉。
+- `RunningSession` 让 Space 桌面端的"切 provider / 切 model / 切 reasoning"动作不再需要 restart agent。
+- MCP popout 端凭 `@kodax-ai/kodax/mcp` + `@kodax-ai/kodax/repl` 的 MCP CRUD 子集独立构建，不拉全 coding bundle。
+- Plan-mode gate 元数据驱动后，新加工具的开发者只需要打 `sideEffect` 标签，gate 自动维护；`acp_server.ts` 不再有"加新工具忘了同步硬编码 set"的隐患。
+
+**负面 / 风险**：
+- `LocalToolDefinition.sideEffect` 从可选变必填是 SDK ABI break（已在 Phase 4 commit message 文档化）；旧版 substrate consumer 没标 `sideEffect` 的自定义工具会 tsc fail。缓解：v0.7.42 CHANGELOG `Breaking changes` 段会显式列出。
+- `startKodaX` 与 `runKodaX` 并存可能让"哪个是 canonical"的问题反复回到 SDK 文档；通过 `runKodaX` jsdoc 显式说"`startKodaX` is the new non-blocking entry" + sample code 倾向 `startKodaX` 来缓解。
+- MCP popout 内 mutation 触发下一次 turn prompt cache miss（Space 用户加 MCP server 后下一轮变慢一次）；与 v0.7.41 FEATURE_125 team-mode 加新 sibling instance 同类，文档化。
+
+### Alternatives considered
+
+- **每个 gap 一个 FEATURE_xxx** — rejected，10 个 gap 涉及面太散，单 FEATURE 多 phase 更适合 release-cycle scope；FEATURE_186 是 umbrella。
+- **`startKodaX` 走 `EventEmitter` 协议而非 `RunningSession` 对象** — rejected，KodaX 已有 `KodaXEvents` 一套 observer pattern；额外加 EventEmitter 会形成两个 events 通道，Space 上手负担更高。Setter 方法 + getter 字段对 popout UI 是直接绑定模式。
+- **MCP CRUD 放 `@kodax-ai/kodax/mcp` 子路径** — rejected，CRUD 依赖 `getAgentConfigPath` 这条 repl-bound 路径解析；放 `/mcp` 会让子路径意外拉进 repl bundle，破坏"子路径最小化"目标。CRUD 落在 `@kodax-ai/kodax/repl` 是 trade-off：Space MCP popout 多引一行 import 但保住子路径独立性。
+- **plan-mode gate 用 string-prefix 启发式（如 `name.startsWith('web_')`）** — rejected，启发式漂移不可见；元数据 explicit + module-load 时计算 + 强类型字段被 TS 强制（添加新工具不打标签直接 tsc fail）是更稳的设计。
+
+### References
+
+- 配套实施：7 atomic commits `2e33b681` → `d3ab38b0` → `9b1e440f` → `7defd65f` → `ee549d6f` → `9ba68f25` → `523e9a28`（每个 commit message 内嵌设计 rationale）
+- v0.7.42 上下文 §FEATURE_186（详细 gap 清单 + 实施 cross-reference + 测试合计）
+- ADR-024（v0.7.39 SDK subpath 形式化基础）— 本 ADR 扩第 6 个子路径
+- 关键 memory：[`feedback_review_threat_model`](../../memory/feedback_review_threat_model.md)（信任边界）、[`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)（单实现）、[`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md)（atomic add+commit）
+
+---
+
