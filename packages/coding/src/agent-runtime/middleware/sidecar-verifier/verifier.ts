@@ -16,11 +16,16 @@
  *      call, or parse failure → default `'accept'` (do not block the
  *      happy path)
  *
- * **Model decoupling rationale**: a separate `provider` injection lets
- * the verifier run on a different (typically stronger) model than the
- * Main Agent. This is the architectural fix for the zhipu/glm51
- * intent-vs-action floor (memory: project_feature_167) — the floor is a
- * model property; route around it by not using zhipu for verification.
+ * **Model selection**: by default the verifier **inherits the Main
+ * Agent's provider+model** (see `verifier-provider-resolver.ts`). The
+ * core architectural value of FEATURE_184 is the Stop-hook shape (out-
+ * of-chain verification after Worker text-only termination, replacing
+ * the in-chain Evaluator role), NOT automatic model-family decoupling.
+ * Users who want to route around model quirks (e.g. zhipu/glm-5.1
+ * intent-vs-action floor, memory: project_feature_167) can opt into
+ * cross-family verification via `KODAX_VERIFIER_PROVIDER` +
+ * `KODAX_VERIFIER_MODEL` env vars — provider injection here is the
+ * indirection that makes that override possible.
  *
  * Phase D.1 scope (this commit): substrate module only. The
  * `createSidecarVerifierStopHook` factory returns a `StopHookFn` but it

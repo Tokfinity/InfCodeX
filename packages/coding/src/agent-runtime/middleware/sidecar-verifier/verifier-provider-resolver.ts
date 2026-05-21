@@ -1,42 +1,37 @@
 /**
  * FEATURE_184 (v0.7.45) — Sidecar Verifier provider resolution.
  *
- * Picks the (provider, model) pair the verifier calls — *deliberately*
- * decoupled from the Main Agent's provider. That decoupling is the
- * architectural fix for the zhipu/glm-5.1 intent-vs-action floor
- * (memory: project_feature_167): when the Main Agent fails because of a
- * model quirk, the verifier must not inherit the same quirk and rubber-
- * stamp the failure.
+ * Picks the (provider, model) pair the verifier calls. **Default
+ * behaviour is inherit-from-main-agent** — the sidecar verifier runs
+ * on the same provider/model as the Main Agent unless explicitly
+ * overridden. The architectural value of FEATURE_184 is the *Stop-
+ * hook shape* (out-of-chain verification fires after Worker text-only
+ * termination, replacing the in-chain Evaluator role), NOT automatic
+ * model-family decoupling.
+ *
+ * **Model decoupling is an opt-in escape hatch**: users who want to
+ * route around a model quirk (e.g. zhipu/glm-5.1 intent-vs-action
+ * floor, memory: project_feature_167) set the env vars below to send
+ * the verifier to a different family. Without the override, sidecar
+ * uses the same model — same model = same floor; the architecture
+ * provides the override mechanism, the user decides whether to use it.
  *
  * Resolution order:
  *
  *   1. Explicit env override (both must be set):
  *        `KODAX_VERIFIER_PROVIDER` + `KODAX_VERIFIER_MODEL`
  *      Used verbatim — caller takes responsibility for the choice.
+ *      If the provider name doesn't exist in the KodaX provider
+ *      registry, the override is silently ignored and we fall through
+ *      to step 2 (typos shouldn't silently break verification).
  *
- *   2. Preferred-fallback list (first whose API-key env var is set):
- *        `kimi-code  · kimi-for-coding`        (coding-plan, independent)
- *        `ark-coding · deepseek-v4-flash`      (coding-plan, independent)
- *      Both are independent model families w.r.t. the zhipu/glm-5.1 floor
- *      and route through coding-plan providers (cost-controlled, see
- *      `benchmark/EVAL_GUIDELINES.md` §"Canonical alias panel").
+ *   2. Inherit from Main Agent (default — always returns).
  *
- *   3. None available → returns `undefined`. Caller skips the verifier
- *      pass entirely (the StopHook factory simply isn't installed).
- *      This is the "claudecode parity but no sidecar" intermediate state
- *      — equivalent end behaviour to the F167 B2 synth-accept that
- *      Phase C.2 removes.
- *
- * **Intentional exclusions** from the preferred list:
- *   - `zhipu-coding · glm-5.1` — same model as the documented floor;
- *     same family as `ark-coding · glm-5.1`; using it would defeat the
- *     decoupling
- *   - `ark-coding · glm-5.1` — same underlying model as zhipu/glm-5.1
- *     even though routed through a different gateway; correlated failure
- *   - `anthropic · claude-*` — quality is fine but most users without
- *     ANTHROPIC_API_KEY shouldn't see verifier inactivity disguised as
- *     "needs anthropic"; users who specifically want sonnet can opt-in
- *     via the explicit env override
+ * The resolver **always returns a defined value** — the verifier hook
+ * is always installed in production. This differs from a prior draft
+ * where the resolver could return `undefined` to skip verification;
+ * the corrected design (2026-05-21) makes verifier ubiquitous, with
+ * model choice gated only by user override.
  *
  * DI-clean: `env` parameter is injectable so unit tests don't mutate
  * `process.env`.
@@ -44,8 +39,9 @@
  * Design references:
  *   - ADR-030 (docs/ADR.md)
  *   - v0.7.45.md §FEATURE_184 Phase D
- *   - memory: project_feature_167_evaluator_verdict_fallback
- *   - memory: feedback_canonical_eval_alias_panel
+ *   - memory: project_feature_167_evaluator_verdict_fallback (the floor
+ *     that motivated FEATURE_184 — but architecture provides the
+ *     escape hatch, not automatic remediation)
  */
 
 import {
@@ -55,32 +51,17 @@ import {
 } from '@kodax-ai/llm';
 
 /**
- * Outcome of a successful resolution. `source` lets callers log /
- * surface telemetry distinguishing user-configured vs default-picked
- * verifier — useful for tracking "how many users hit which path".
+ * Outcome of verifier provider resolution. `source` lets callers log /
+ * surface telemetry distinguishing user-configured vs main-inherited
+ * verifier — useful for tracking "is the user opting into a cross-
+ * family verifier or just inheriting main?" in eval data.
  */
 export interface ResolvedVerifierProvider {
   readonly provider: KodaXBaseProvider;
   readonly model: string;
   readonly providerName: string;
-  readonly source: 'explicit-env' | 'default-preferred';
+  readonly source: 'explicit-env' | 'inherit-main';
 }
-
-interface PreferredCandidate {
-  readonly providerName: string;
-  readonly model: string;
-  readonly apiKeyEnv: string;
-}
-
-/**
- * Verifier-default preferred candidates. Order matters: first whose API
- * key env var is populated wins. Both entries are intentional —
- * see file JSDoc for the family-decoupling rationale.
- */
-export const PREFERRED_VERIFIER_CANDIDATES: readonly PreferredCandidate[] = Object.freeze([
-  Object.freeze({ providerName: 'kimi-code',  model: 'kimi-for-coding',   apiKeyEnv: 'KIMI_API_KEY' }),
-  Object.freeze({ providerName: 'ark-coding', model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_API_KEY' }),
-]);
 
 export const VERIFIER_PROVIDER_ENV = 'KODAX_VERIFIER_PROVIDER';
 export const VERIFIER_MODEL_ENV = 'KODAX_VERIFIER_MODEL';
@@ -94,24 +75,30 @@ function tryGetProvider(name: string): KodaXBaseProvider | undefined {
   }
 }
 
-function envHasValue(env: NodeJS.ProcessEnv, name: string): boolean {
-  const v = env[name];
-  return typeof v === 'string' && v.length > 0;
+export interface ResolveVerifierProviderOptions {
+  /** Main Agent's effective provider instance — used as the inherit
+   *  fallback when no env override is set. Always required. */
+  readonly mainProvider: KodaXBaseProvider;
+  /** Main Agent's effective provider name (string id in the KodaX
+   *  provider registry) — used as the inherit fallback. */
+  readonly mainProviderName: string;
+  /** Main Agent's effective model id — used as the inherit fallback. */
+  readonly mainModel: string;
+  /** Injectable env reader; defaults to `process.env`. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /**
- * Resolve the verifier provider per the 3-step order documented in the
- * file JSDoc. Returns `undefined` when no candidate is reachable —
- * callers MUST treat undefined as "skip the verifier pass" (no
- * exception, no warn-and-continue with main agent's provider).
- *
- * @param env  injectable env reader; defaults to `process.env`. Tests
- *             pass synthetic envs to drive each resolution branch.
+ * Resolve the verifier provider per the 2-step order documented in the
+ * file JSDoc. Always returns a defined value — the verifier hook is
+ * always installed in production.
  */
 export function resolveVerifierProvider(
-  env: NodeJS.ProcessEnv = process.env,
-): ResolvedVerifierProvider | undefined {
-  // 1. Explicit env override — both must be set, otherwise fall through.
+  options: ResolveVerifierProviderOptions,
+): ResolvedVerifierProvider {
+  const env = options.env ?? process.env;
+
+  // 1. Explicit env override — both must be set to take effect.
   const explicitProvider = env[VERIFIER_PROVIDER_ENV];
   const explicitModel = env[VERIFIER_MODEL_ENV];
   if (explicitProvider && explicitModel) {
@@ -124,22 +111,16 @@ export function resolveVerifierProvider(
         source: 'explicit-env',
       };
     }
+    // Provider name unknown — silently fall through to inherit-main
+    // (typos shouldn't break verification, and inherit-main is the
+    // safe default).
   }
 
-  // 2. Preferred fallback list — first with API-key wins.
-  for (const candidate of PREFERRED_VERIFIER_CANDIDATES) {
-    if (!envHasValue(env, candidate.apiKeyEnv)) continue;
-    const provider = tryGetProvider(candidate.providerName);
-    if (provider) {
-      return {
-        provider,
-        model: candidate.model,
-        providerName: candidate.providerName,
-        source: 'default-preferred',
-      };
-    }
-  }
-
-  // 3. Nothing reachable — caller skips verifier.
-  return undefined;
+  // 2. Inherit from Main Agent.
+  return {
+    provider: options.mainProvider,
+    model: options.mainModel,
+    providerName: options.mainProviderName,
+    source: 'inherit-main',
+  };
 }

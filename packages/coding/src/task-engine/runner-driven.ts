@@ -1501,13 +1501,15 @@ async function runManagedTaskViaRunnerInner(
 
   // FEATURE_184 (v0.7.45) Phase D.2 — Sidecar Verifier wiring.
   //
-  // Resolve a (provider, model) decoupled from the Main Agent's
-  // (architectural fix for zhipu/glm-5.1 intent-vs-action floor —
-  // see `verifier-provider-resolver.ts` JSDoc). When no candidate is
-  // reachable (no KIMI_API_KEY / ARK_API_KEY / explicit env), the
-  // resolver returns `undefined` and we skip installing the verifier
-  // hook entirely — the agent terminates text-only and the run
-  // completes with whatever verdict source the recorder already has.
+  // Resolve the verifier's (provider, model). **Default behaviour is
+  // inherit-from-main-agent** — sidecar runs on the same model as the
+  // Main Agent unless the user explicitly sets KODAX_VERIFIER_PROVIDER
+  // + KODAX_VERIFIER_MODEL. The architectural value of FEATURE_184 is
+  // the Stop-hook shape (out-of-chain verification fires after Worker
+  // text-only termination), NOT automatic model-family decoupling.
+  // Decoupling is an opt-in escape hatch for users routing around
+  // documented quirks (e.g. zhipu/glm-5.1 intent-vs-action floor,
+  // memory: project_feature_167).
   //
   // The verifier StopHook is composed with the extension `turn:complete`
   // bridge below: sidecar tries first; on `accept` (undefined) we defer
@@ -1526,7 +1528,13 @@ async function runManagedTaskViaRunnerInner(
   // production behaviour change; the very next commit (C.1) drops
   // `chain.evaluator`, the guard becomes always-false, and sidecar
   // activates.
-  const resolvedVerifier = chain.evaluator ? undefined : resolveVerifierProvider();
+  const resolvedVerifier = chain.evaluator
+    ? undefined
+    : resolveVerifierProvider({
+        mainProvider: resolveProvider(options.provider ?? 'anthropic'),
+        mainProviderName: options.provider ?? 'anthropic',
+        mainModel: options.modelOverride ?? options.model ?? 'unknown',
+      });
   const sidecarVerifierHook = resolvedVerifier
     ? createSidecarVerifierStopHook({
         provider: resolvedVerifier.provider,
