@@ -110,12 +110,32 @@ export function buildWorkerInstructions(
   // `await_child_task` tool was removed in Slice C1; the prompt
   // teaches the only remaining wait mechanic (text-only turn end,
   // runner resumes on `<task-completed>`).
+  //
+  // FEATURE_177 (v0.7.45) — `task_output` peek tool is gated behind the
+  // `KODAX_TASK_OUTPUT_PROMPT` env flag. Default OFF: the runtime tool
+  // is callable (registered + wired) but the Worker prompt does not
+  // teach it, so production behavior is unchanged from v0.7.45
+  // pre-flag. Layer 2 panel will validate the cross-case behavior
+  // (positive: peek when idle; negative: NOT a wait substitute, NOT a
+  // replacement for dispatch_child_task fan-out) before the default
+  // flips. See benchmark/EVAL_GUIDELINES.md for the ship-gate.
+  const enableTaskOutputRule = process.env.KODAX_TASK_OUTPUT_PROMPT === '1';
   const dispatchRules = [
     'DISPATCH RULES (`dispatch_child_task` — idle-yield model, FEATURE_155 v0.7.39):',
     '- RULE A — read-only fan-out: when you need ≥3 independent investigations (e.g. probe N package boundaries in parallel), launch each as a child task with `readOnly: true`.',
     '- RULE B — long-running probes: when a single investigation will take ≥45 seconds (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across ≥3 modules can be dispatched as `readOnly: false` children. Worktrees are isolated; merge happens at Evaluator review time. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
     '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
+    ...(enableTaskOutputRule ? [
+      // FEATURE_177 v0.7.45 — peek-at-in-flight-children rule. Sequenced
+      // immediately after IDLE-YIELD on purpose: the model just learned
+      // "end the turn, runner will wake you" — RULE D teaches "if you
+      // need a status check WHILE doing other useful work, here's the
+      // peek tool". The explicit "IDLE-YIELD is the canonical wait — do
+      // NOT use `task_output(block:true)` as a wait substitute" sentence
+      // closes the misuse path the panel will probe (Case 2 negative).
+      '- RULE D — peek at in-flight children (FEATURE_177): you may call `task_output({task_id:"…", block:false})` to read a snapshot of a child\'s recent tool-call breadcrumbs + iteration count. Use sparingly — children\'s final results arrive automatically as `<task-completed>` blocks; only peek when deciding whether to dispatch a sibling, call `task_stop`, or report back to the user mid-flight ("the auth-audit child has run 12 iterations and is still in `grep`"). IDLE-YIELD is the canonical wait — do NOT use `task_output(block:true)` as a wait substitute, and do NOT replace a planned fan-out (`dispatch_child_task`) with `task_output` polling.',
+    ] : []),
     '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report exceeds the inline envelope budget (~50KB), the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
     '- MODEL HINT (optional, FEATURE_120 v0.7.39): you may set `model_hint` on a dispatch to advertise the child\'s reasoning weight class. `"fast"` for trivial single-file lookups; `"deep"` for multi-file research or analytical synthesis; `"balanced"` (or omit) for everything else. Routing is a no-op today — every child runs on your model — but the hint is recorded for FEATURE_102 (v0.7.45). Mark intentionally; do not blanket-tag every child.',
     // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0

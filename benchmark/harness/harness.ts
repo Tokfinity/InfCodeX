@@ -27,6 +27,7 @@ import {
 } from '@kodax-ai/llm';
 
 import {
+  MODEL_ALIASES,
   resolveAlias,
   type ModelAlias,
   type ModelAliasTarget,
@@ -320,6 +321,14 @@ export interface BenchmarkRunCell {
   readonly durationMs: number;
   /** Set when the provider call itself errored (rate-limit, timeout, etc.). */
   readonly error?: string;
+  /**
+   * When the cell's primary alias failed with a quota/rate-limit error
+   * AND a fallback alias was configured, this records which fallback
+   * actually answered. The `alias` field still reports the PRIMARY for
+   * panel structure consistency; readers wanting gateway-level detail
+   * inspect this field.
+   */
+  readonly fallbackUsed?: ModelAlias;
   readonly judges: readonly JudgeRunResult[];
   readonly judgeAggregate: AggregatedJudgeRun;
   readonly passed: boolean;
@@ -365,6 +374,23 @@ export interface BenchmarkRunInput {
   readonly judges: readonly PromptJudge[];
   /** Number of runs per cell. Defaults to DEFAULT_BENCHMARK_RUNS (3). */
   readonly runs?: number;
+  /**
+   * Optional fallback alias map. When a cell's primary alias call throws
+   * a quota / rate-limit error, the harness retries ONCE against the
+   * mapped fallback alias before recording the run as failed. The mapped
+   * alias must have its API key present (via `availableAliases`) or the
+   * fallback is silently skipped.
+   *
+   * Use case: ark-coding's shared coding-plan pool sometimes drains
+   * during long panel runs (see FEATURE_177 v0.7.45 panel), wiping
+   * data from 2/5 alias on the canonical panel. Mapping `ark/v4pro` →
+   * `ds/v4pro` and `ark/v4flash` → `ds/v4flash` keeps the same
+   * underlying model (deepseek-v4-{pro,flash}) but routes via the
+   * dedicated deepseek API quota — same Δ measurement, different
+   * gateway. The cell records the PRIMARY alias for panel structure;
+   * a `fallbackUsed` flag on the run signals which gateway answered.
+   */
+  readonly aliasFallback?: Readonly<Partial<Record<ModelAlias, ModelAlias>>>;
 }
 
 export interface BenchmarkResult {
@@ -439,19 +465,52 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
         let durationMs = 0;
         let toolCalls: BenchmarkRunCell['toolCalls'] = [];
         let error: string | undefined;
+        let fallbackUsed: ModelAlias | undefined;
+        const oneShotInput = {
+          systemPrompt: variant.systemPrompt,
+          userMessage: variant.userMessage,
+          tools: variant.tools,
+          priorMessages: variant.priorMessages,
+          reasoning: variant.reasoning,
+        };
         try {
-          const out = await runOneShot(alias, {
-            systemPrompt: variant.systemPrompt,
-            userMessage: variant.userMessage,
-            tools: variant.tools,
-            priorMessages: variant.priorMessages,
-            reasoning: variant.reasoning,
-          });
+          const out = await runOneShot(alias, oneShotInput);
           text = out.text;
           toolCalls = out.toolCalls;
           durationMs = out.durationMs;
         } catch (err) {
-          error = err instanceof Error ? err.message : String(err);
+          const primaryMsg = err instanceof Error ? err.message : String(err);
+          // FEATURE_177 v0.7.45 lesson: ark-coding's shared coding-plan
+          // pool can drain mid-panel. Detect quota/rate-limit + retry
+          // ONCE on configured fallback alias if its API key is present.
+          // Conservative regex matches the failure surface we observed
+          // (ark + zhipu + minimax error strings).
+          const isQuotaErr =
+            /rate.?limit|429|exceeded after.*retries|quota|over_capacity/i.test(primaryMsg);
+          const fallbackAlias = input.aliasFallback?.[alias];
+          if (isQuotaErr && fallbackAlias) {
+            const fallbackKeyEnv = MODEL_ALIASES[fallbackAlias]?.apiKeyEnv;
+            const fallbackKeyPresent =
+              !!fallbackKeyEnv &&
+              typeof process.env[fallbackKeyEnv] === 'string' &&
+              (process.env[fallbackKeyEnv] as string).length > 0;
+            if (fallbackKeyPresent) {
+              try {
+                const out = await runOneShot(fallbackAlias, oneShotInput);
+                text = out.text;
+                toolCalls = out.toolCalls;
+                durationMs = out.durationMs;
+                fallbackUsed = fallbackAlias;
+              } catch (fbErr) {
+                const fbMsg = fbErr instanceof Error ? fbErr.message : String(fbErr);
+                error = `primary ${alias} quota-exhausted (${primaryMsg.slice(0, 80)}); fallback ${fallbackAlias} also failed: ${fbMsg.slice(0, 80)}`;
+              }
+            } else {
+              error = `primary ${alias} quota-exhausted; fallback ${fallbackAlias} unavailable (no ${fallbackKeyEnv ?? '(unknown env)'} in env)`;
+            }
+          } else {
+            error = primaryMsg;
+          }
         }
 
         const aggregate: AggregatedJudgeRun = error
@@ -474,6 +533,7 @@ export async function runBenchmark(input: BenchmarkRunInput): Promise<BenchmarkR
           toolCalls,
           durationMs,
           error,
+          fallbackUsed,
           judges: aggregate.results,
           judgeAggregate: aggregate,
           passed: aggregate.passed,

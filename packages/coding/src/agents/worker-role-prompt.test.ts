@@ -81,6 +81,66 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('RULE C');
   });
 
+  // FEATURE_177 v0.7.45 — task_output RULE D is gated behind the
+  // KODAX_TASK_OUTPUT_PROMPT env flag (default OFF). Runtime tool is
+  // callable + wired regardless; only the prompt teaching is flag-gated
+  // until Layer 2 panel validates the cross-case-regression-free SHIP.
+  describe('FEATURE_177 RULE D env-flag gating', () => {
+    beforeEach(() => {
+      delete process.env.KODAX_TASK_OUTPUT_PROMPT;
+    });
+    afterEach(() => {
+      delete process.env.KODAX_TASK_OUTPUT_PROMPT;
+    });
+
+    it('does NOT emit RULE D when KODAX_TASK_OUTPUT_PROMPT is unset (default OFF)', () => {
+      const out = buildWorkerInstructions(baseDecision, undefined, false);
+      expect(out).not.toContain('RULE D');
+      expect(out).not.toContain('task_output');
+    });
+
+    it("does NOT emit RULE D when KODAX_TASK_OUTPUT_PROMPT='0'", () => {
+      process.env.KODAX_TASK_OUTPUT_PROMPT = '0';
+      const out = buildWorkerInstructions(baseDecision, undefined, false);
+      expect(out).not.toContain('RULE D');
+    });
+
+    it("does NOT emit RULE D when KODAX_TASK_OUTPUT_PROMPT='true' (only '1' flips it on)", () => {
+      // Conservative gating — accept only exact '1' so we don't catch
+      // accidental KODAX_TASK_OUTPUT_PROMPT=anything-truthy production
+      // misconfigurations before the panel ships.
+      process.env.KODAX_TASK_OUTPUT_PROMPT = 'true';
+      const out = buildWorkerInstructions(baseDecision, undefined, false);
+      expect(out).not.toContain('RULE D');
+    });
+
+    it("emits RULE D when KODAX_TASK_OUTPUT_PROMPT='1'", () => {
+      process.env.KODAX_TASK_OUTPUT_PROMPT = '1';
+      const out = buildWorkerInstructions(baseDecision, undefined, false);
+      expect(out).toContain('RULE D');
+      expect(out).toContain('task_output');
+      // Anti-misuse guard wording must be present — this is the line
+      // the Layer 2 panel will probe for via Case 3 (idle-yield).
+      expect(out).toMatch(/do NOT use `task_output\(block:true\)` as a wait substitute/);
+      // Cross-case fan-out guard — Case 4/5 of the panel checks the
+      // model doesn't substitute task_output for a planned dispatch.
+      expect(out).toMatch(/do NOT replace a planned fan-out \(`dispatch_child_task`\) with `task_output` polling/);
+    });
+
+    it('orders RULE D AFTER IDLE-YIELD and BEFORE LARGE CHILD OUTPUT (sequencing matters for prompt flow)', () => {
+      process.env.KODAX_TASK_OUTPUT_PROMPT = '1';
+      const out = buildWorkerInstructions(baseDecision, undefined, false);
+      const idleYieldIdx = out.indexOf('IDLE-YIELD');
+      const ruleDIdx = out.indexOf('RULE D');
+      const largeOutputIdx = out.indexOf('LARGE CHILD OUTPUT');
+      expect(idleYieldIdx).toBeGreaterThan(-1);
+      expect(ruleDIdx).toBeGreaterThan(-1);
+      expect(largeOutputIdx).toBeGreaterThan(-1);
+      expect(idleYieldIdx).toBeLessThan(ruleDIdx);
+      expect(ruleDIdx).toBeLessThan(largeOutputIdx);
+    });
+  });
+
   it('does NOT emit the retired FEATURE_148 anti-immediate-await block (its target tool was deleted in Slice C1)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).not.toContain('DO NOT IMMEDIATELY AWAIT');
