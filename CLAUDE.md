@@ -44,6 +44,18 @@ If the user did not give a concrete task, read `README.md`, then check `docs/` f
 - ✅ Use LLM for generation, review, refactoring, test-case generation, docs
 - ✅ Let LLM handle boilerplate; humans focus on business logic
 
+## Prompt Design Principles (ADR-033)
+
+When writing or modifying any LLM-facing prompt (role prompts in `packages/coding/src/agents/*-role-prompt.ts`, tool `description` fields, system prompt sections, etc.), follow these 5 principles. Full rationale + evidence in [`docs/ADR.md` ADR-033](docs/ADR.md).
+
+1. **Qualitative criteria over quantitative thresholds** — write "when independent work would fill your context with raw output you won't need again" not "when ≥3 investigations". LLM is colleague making judgment, not a program looking up a table.
+2. **Single-concept sentences** — never compound `do X AND do Y` rules. One concept per sentence. Compound ✗-clauses cause cross-case regression (FEATURE_177 panel C5 kimi -60pp).
+3. **✗ 反模式 sparing, must include WHY** — every "do NOT X" must explain the failure mode it prevents. Bare negation lets the LLM over-suppress adjacent behavior.
+4. **No enumerated taxonomies** — don't classify with "RULE A/B/C/D" labels. Use informal use-case examples (claudecode style: "Research:..." / "Implementation:..."). Taxonomies make LLM treat dispatch as a classification problem rather than a judgment.
+5. **No version metadata in prompt body** — `FEATURE_xxx vX.Y.Z` annotations belong in code comments, not in the prompt the LLM reads. They're noise + break prompt cache.
+
+**Trigger**: any change touching LLM-facing prompt content must (a) review against ADR-033 + (b) add/update a prompt eval per `benchmark/EVAL_GUIDELINES.md`.
+
 ## Technology Stack
 
 | Category | Technology | Version |

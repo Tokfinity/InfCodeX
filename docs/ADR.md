@@ -1752,3 +1752,117 @@ KodaX 在 v0.7.39 的 ADR-024 把 npm 发布物正名 `@kodax-ai/kodax` + 形式
 
 ---
 
+## ADR-033: claudecode-Style Prompt Design Principles — Qualitative Criteria over Quantitative Rules (v0.7.42-v0.7.43)
+
+**Status**: Accepted 2026-05-21
+**Driver**: FEATURE_177 task_output Worker prompt RULE D Layer 2 panel hit pre-registered REVERT threshold (C5 kimi -60pp cross-case regression on RULE C write fan-out). 同 session 用户提出更深层质疑："RULE A-C 给的信号要求太强了，整个 prompt 应该简单些，让 AI 判断 dispatch 是否提升效率就行"。
+**Scope**: 所有 KodaX role prompts（worker / generator / evaluator / planner / scout）的设计哲学 + 措辞规范。本 ADR 是 umbrella；后续 FEATURE refactor 引用此 ADR 作为标准。
+
+### Context
+
+FEATURE_177 v0.7.45 panel rerun #2（5 alias × 5 case × 5 run × 2 variant = 250 cells, 3.2% audit disagreement DATA VALID）实测数据：
+
+| Case | v_baseline | v_proposed (RULE D ON) | Δ |
+|------|-----------|------------------------|---|
+| C1 peek (user-asked) | 16/25 (64%) | 19/25 (76%) | +12pp |
+| C2 peek (long-running) | 15/25 (60%) | 23/25 (92%) | +32pp |
+| C3 idle-yield NEG (block:true 滥用) | 24/25 (96%) | 23/25 (92%) | −4pp (saturated) |
+| C4 RULE A read-only fan-out | 14/25 (56%) | 14/25 (56%) | 0pp |
+| **C5 RULE C write fan-out, kimi** | **4/5 (80%)** | **1/5 (20%)** | **−60pp** |
+
+C5 kimi -60pp 触发 pre-registered REVERT 阈值（>20pp cross-case regression）。根因不是 RULE D 单段写得不好，而是 dispatchRules 整段设计哲学有问题：RULE D 第二个 ✗ 反模式 "do NOT replace planned fan-out (`dispatch_child_task`) with `task_output` polling" 让 kimi 在 RULE C 写场景泛化抑制 dispatch（per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedback_prompt_strengthening_cross_case_regression.md)）。
+
+**对照 claudecode 同位置 prompt**（[`C:/Works/claudecode/src/tools/AgentTool/prompt.ts:85-95`](file:///c:/Works/claudecode/src/tools/AgentTool/prompt.ts) + [`src/constants/prompts.ts:316-320`](file:///c:/Works/claudecode/src/constants/prompts.ts)）：
+
+> Fork yourself **when the intermediate tool output isn't worth keeping in your context**. The criterion is **qualitative** — "will I need this output again" — **not task size**.
+> - **Research**: fork open-ended questions. If research can be broken into independent questions, launch parallel forks in one message.
+> - **Implementation**: prefer to fork implementation work that requires more than a couple of edits.
+>
+> **Don't peek.** ... You get a completion notification; trust it.
+> **Don't race.** ... Never fabricate or predict fork results.
+
+主 prompt 那边整段 "use sub-agent" 教学 = 60 词、一句话。
+
+**KodaX worker-role-prompt.ts `dispatchRules` 同等位置** = ~800 词 + 4 个 RULE 标签 + 多条 MANDATORY + 复合 ✗ 反模式 + FEATURE_xxx vX.Y.Z 版本元数据。**Order of magnitude 差 13×**。
+
+### Decision
+
+把 KodaX 整体 prompt 设计哲学切换为 **claudecode-style qualitative + colleague-judgment**，建立 5 条 prompt design principles 作为后续所有 prompt 改动的标准：
+
+#### 1. Qualitative criteria over quantitative thresholds
+
+❌ "when you need ≥3 independent investigations" / "≥45 seconds" / "≥3 modules"
+✅ "when the intermediate tool output isn't worth keeping in your context" / "when independent work can run in parallel for speedup" / "when it would otherwise fill your context with raw output you won't need again"
+
+**Rationale**: 量化阈值让 LLM 把 dispatch 当"查表"而非"判断"。"2 个 child 该不该 dispatch?" "正好 4 个 module 算不算 ≥3?" 这种边界情形模型会僵掉。Qualitative 措辞让 LLM 用 colleague-judgment——这是 claudecode 显式选择的设计点（prompt 内 *literally* 写 "The criterion is qualitative — not task size"）。
+
+#### 2. Single-concept sentences — no compound rules
+
+❌ "do NOT use X as wait substitute, **AND** do NOT replace planned Y with Z"
+✅ "Don't peek." / "Don't race." 两句各自单独一行，每句后跟一句 why。
+
+**Rationale**: FEATURE_177 RULE D 的 ✗ #2 复合从句直接造成 kimi C5 -60pp。复合 ✗ 让模型抽出错位的泛化命题。单 concept 单句让模型对每条命题的 scope 边界清晰。
+
+#### 3. ✗ 反模式 sparing usage — must include WHY
+
+❌ "Do NOT use write fan-out for single-file edits" (孤立否定，无 why)
+❌ "do NOT replace planned fan-out with task_output polling" (无 why)
+✅ "Don't peek. The tool result includes an `output_file` path — do not Read or tail it unless the user explicitly asks for a progress check. **You get a completion notification; trust it. Reading the transcript mid-flight pulls the fork's tool noise into your context, which defeats the point of forking.**"
+
+**Rationale**: claudecode 的 ✗ 总带一句 because-clause 解释失败模式。这让 LLM 在 edge case 上能 reason about scope（"啊这是为了防 context 噪音, 不是禁止 Read 文件"）。KodaX 现状很多 ✗ 是裸否定，模型只能 over-suppress。
+
+Per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedback_prompt_strengthening_cross_case_regression.md)："用 ✗ 反模式 catalogue 风险最高，模型会泛化抑制"——FEATURE_120 send_message +30pp 同时 task_stop -60pp 的真实复现案例已经在 memory。FEATURE_177 RULE D C5 kimi -60pp 是同一坑的第二次复现。
+
+#### 4. No enumerated taxonomies — RULE A/B/C/D out
+
+❌ KodaX dispatchRules 现有 RULE A (read-only) / RULE B (long-running) / RULE C (write) / RULE D (peek)
+✅ claudecode 用 use-case 描述："Research" / "Implementation"——不是分类，是场景示例
+
+**Rationale**: 枚举分类让 LLM 把 "我应不应该 dispatch" 当成"我属于哪个 RULE"的归类问题。一旦实际场景跨多个 RULE 或不完全 fit 任何一个，模型就有"既没满足 A 也没满足 C，那就不 dispatch"的逃逸路径。Claudecode 用 informal use-case examples 而非 classification taxonomy。
+
+#### 5. No version metadata in prompt body
+
+❌ "LARGE CHILD OUTPUT (**FEATURE_121 v0.7.40**)" / "MODEL HINT (**FEATURE_120 v0.7.39**)" / "DISPATCH RULES (`dispatch_child_task` — idle-yield model, **FEATURE_155 v0.7.39**)"
+✅ 完全省略——prompt body 是给 LLM 看的，FEATURE 编号是给开发者看的，写在 code comment 即可
+
+**Rationale**: 版本元数据对 LLM 是噪音（不构成判断依据）+ 容易 prompt cache 碎片化（FEATURE 编号变更会破缓存 prefix）+ 给读者错觉 "这些是有时序依赖的规则"。claudecode 代码注释里写 PR 编号但 prompt body 一个 FEATURE_xxx 都没有。
+
+### Implementation roadmap
+
+**Phase 1 — v0.7.42（本 ADR 同 release window）**：
+
+- ✅ **FEATURE_177 REVERT** — 删 worker-role-prompt.ts RULE D + env-flag gating + 5 个 FEATURE_177 unit test。Runtime `task_output` tool 不动（per pre-registered fallback action，SDK consumers 可继续程序化调用）。Eval 文件保留作为永久 regression sweep。
+- 🚧 **dispatch_child prompt refactor (FEATURE TBD)** — 按本 ADR 5 条原则重写 `dispatchRules` 整段，准备 2-3 个 variant，在 FEATURE_177 复用 5-case eval 上验证：(a) C1/C2 positive 不退化；(b) C5 kimi RULE C write fan-out 恢复 ≥60%；(c) C3 NEG idle-yield ≥80%。Pre-register SHIP gate before panel run，pilot 1×1×1 first。
+
+**Phase 2 — v0.7.43**：
+
+- **Systemic prompt audit (FEATURE TBD)** — grep 所有 role prompts（worker / generator / evaluator / planner / scout）找出违反本 ADR 5 条原则的所有 instance。列出 audit report 作为 refactor backlog。
+- **逐 role 重写** — 按 audit 优先级 staged rollout，每个重写带 Layer 2 eval 验证 cross-case 不退化。
+
+### Consequences
+
+**正面**：
+- FEATURE_177 panel 数据明确给出 KodaX prompt 失败模式的量化证据（C5 kimi -60pp）+ claudecode 对照参照（13× 词量差），后续 prompt 设计有可引用的标准 + 反例。
+- 减少 prompt 维护负担——qualitative 措辞跨版本稳定，量化阈值 (≥3 / ≥45s) 容易因小幅调整破缓存或失效。
+- Cross-case regression risk 降低——单 concept 单句 + WHY-bearing ✗ 让模型 reason about scope 而非泛化抑制。
+
+**负面 / 风险**：
+- 短期 dispatch 率可能下降——claudecode 风格更松，模型在该 dispatch 的边界场景里可能 "judge wrong, single-thread it"。需要 Phase 1 eval 验证 mmx/m27 等保守模型不会因为去掉量化触发条件而显著减少 dispatch。
+- Per [`feedback_simplifying_prompt_can_regress`](../../memory/feedback_simplifying_prompt_can_regress.md)：简化 prompt 不是默认安全。"Prefer over X when Y" 比较从句看似冗余实际 load-bearing。Phase 1 重写每删一条 ✗ 或量化条件，必须 eval 验证未引入新退化。
+- Phase 2 audit 范围大（5 role prompt × 多 segment），v0.7.43 时间可能不够完成全部 roll-out。可分多个 minor version 渐进。
+
+### Alternatives considered
+
+- **保留量化阈值但改 wording** — rejected. C5 kimi -60pp 直接证明量化阈值不是 wording-tunable；问题在哲学层，不在某条具体阈值的数字。
+- **每 case 单独 wording iteration**（per FEATURE_177 panel #2 改 RULE D V2/V3）— rejected. 本质是 "在 over-prescription 框架内打补丁"，每补一处 cross-case regression 风险继续累积。User 直接指出问题在 systemic 层，不在 RULE D。
+- **直接全量改写所有 prompt** — rejected. Phase 2 之前需要 Phase 1 数据先证明哲学切换确实在 dispatch_child 这条线上正向。一次性大改无法归因哪个 segment 的改动导致哪个 cross-case 变化。
+
+### References
+
+- 配套实施：FEATURE_177 REVERT commit + ADR-033 同 commit（atomic per [feedback_concurrent_thread_git_race](../../memory/feedback_concurrent_thread_git_race.md)）
+- FEATURE_177 panel #2 dump：`c:/tmp/kodax-eval-dumps/feature-177-task-output/` (per [feedback_audit_dump_dir_vanishes](../../memory/feedback_audit_dump_dir_vanishes.md) `KODAX_EVAL_DUMP_DIR` override)
+- 关键 memory：[`project_feature_177_task_output_shipped`](../../memory/project_feature_177_task_output_shipped.md)（panel 完整数据）、[`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedback_prompt_strengthening_cross_case_regression.md)（✗ 反模式泛化抑制规律）、[`feedback_simplifying_prompt_can_regress`](../../memory/feedback_simplifying_prompt_can_regress.md)（简化非默认安全）、[`project_feature_175_shipped_with_eval_driven_revert`](../../memory/project_feature_175_shipped_with_eval_driven_revert.md)（eval-driven revert 先例）
+- claudecode 对照文件：[`AgentTool/prompt.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/prompt.ts)（fork 哲学）、[`constants/prompts.ts:316-320`](file:///c:/Works/claudecode/src/constants/prompts.ts)（主 prompt agent-tool 段）、[`built-in/generalPurposeAgent.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/built-in/generalPurposeAgent.ts)（agent 内置 prompt）
+
+---
+
