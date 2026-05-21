@@ -554,7 +554,7 @@ export function buildJudges(caseId: CaseId): readonly PromptJudge[] {
         {
           name: 'staleness_refresh_judge',
           category: 'correctness',
-          run: (output) => judgeStaleness(output),
+          judge: (output) => judgeStaleness(output),
         },
       ];
     case 'dedup_scan_before_create':
@@ -562,7 +562,7 @@ export function buildJudges(caseId: CaseId): readonly PromptJudge[] {
         {
           name: 'dedup_scan_judge',
           category: 'correctness',
-          run: (output) => judgeDedup(output),
+          judge: (output) => judgeDedup(output),
         },
       ];
     case 'verification_after_completion':
@@ -570,7 +570,7 @@ export function buildJudges(caseId: CaseId): readonly PromptJudge[] {
         {
           name: 'verification_judge',
           category: 'correctness',
-          run: (output) => judgeVerification(output),
+          judge: (output) => judgeVerification(output),
         },
       ];
   }
