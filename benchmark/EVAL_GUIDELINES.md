@@ -147,7 +147,7 @@ OK = process exit 0 是个**极其弱的信号**：
 
 ### 反模式 4：探索期就开多 alias
 
-探索期（不知道实验设计是否可行）= 1 alias（用便宜的，如 ds/v4flash）。验证期（信号清楚要看泛化）= 多 alias。次序不可反。
+探索期（不知道实验设计是否可行）= 1 alias（用便宜的，如 `ark/v4flash`）。验证期（信号清楚要看泛化）= 多 alias。次序不可反。
 
 ### 反模式 5：prompt 迭代用大规模实验
 
@@ -185,7 +185,7 @@ OK = process exit 0 是个**极其弱的信号**：
 **允许的 judge 来源**（按优先级）：
 
 1. **Self-judge by the orchestrating Claude session**（主线程的 Claude 模型读 raw dump 直接判定）。零额外 API 调用、可解释、独立于 panel。**前提**：判定文本 + 理由必须落盘 audit JSON，不能只是 in-conversation 结论。适合 ≤50 cells / 一次性 sanity check。
-2. **Panel-internal multi-judge majority vote** —— 用 KodaX 生产 panel 的 3 家（推荐：`zhipu/glm51` + `ds/v4pro` + `kimi-code`，覆盖 3 个独立 family）独立判定，2/3 majority 算 PASS。适合 ship-gate 复核 / 跨版本可重复。
+2. **Panel-internal multi-judge majority vote** —— 用 KodaX 生产 panel 的 3 家（推荐：`zhipu/glm51` + `ark/v4pro` + `kimi`，覆盖 3 个独立 family，全 coding-plan）独立判定，2/3 majority 算 PASS。适合 ship-gate 复核 / 跨版本可重复。
 3. 自定义同源模型（按 case 设计），但**永远不要用 anthropic/openai**。
 
 **反模式**：
@@ -261,28 +261,31 @@ Total: $Z
 
 ---
 
-## Canonical alias panel（2026-05-19 锁定）
+## Canonical alias panel（2026-05-19 锁定 / 2026-05-21 升级为 coding-plan-only）
 
-新 prompt-eval 的 Layer 2 / Layer 3 跑面默认就这 **5 个 alias**：
+新 prompt-eval 的 Layer 2 / Layer 3 跑面默认就这 **5 个 coding-plan alias**：
 
 | Alias short id | Provider · model | Family | 档位 |
 |---|---|---|---|
 | `zhipu/glm51` | zhipu-coding · glm-5.1 | Zhipu | high-end |
 | `kimi`        | kimi-code · kimi-for-coding | Moonshot | high-end |
 | `mmx/m27`     | minimax-coding · MiniMax-M2.7 | MiniMax | high-end |
-| `ds/v4pro`    | deepseek · deepseek-v4-pro | DeepSeek | high-end |
-| `ds/v4flash`  | deepseek · deepseek-v4-flash | DeepSeek | floor |
+| `ark/v4pro`   | ark-coding · deepseek-v4-pro | DeepSeek (via Ark) | high-end |
+| `ark/v4flash` | ark-coding · deepseek-v4-flash | DeepSeek (via Ark) | floor |
 
 **为什么是这 5 个**：
 - 覆盖 4 个独立 provider family（Zhipu / Moonshot / MiniMax / DeepSeek），跨家族盲区互补
 - DeepSeek 双档（flash floor + pro high-end）能在同 family 内捕到"模型档位是否吃 prompt 改动"
-- 排除 `mimo/v25(pro)` / `ark/glm51` 等可选 alias —— 不是禁止用，是不在 default panel；有跨 panel 验证需要时再加
+- **2026-05-21 升级**：DeepSeek 双档从官方 API `ds/v4{pro,flash}` 切到 `ark-coding` 路线 `ark/v4{pro,flash}`。理由：用户验证 ark-coding gateway routes DeepSeek-V4 正常，**走 coding-plan 订阅成本可控**，不再混入 token-bill 路径。`zhipu-coding/glm-5.1` 留在 panel；`ark-coding/glm-5.1`（`ark/glm51`）退出 default panel — 同 zhipu family 重复采样收益低于跨 family
+- 排除 `mimo/v25(pro)` / `ark/glm51` / `ds/v4{pro,flash}` —— 不是禁止用，是不在 default panel；有跨 panel 验证或与历史 `ds/*` 数据对照时再显式 opt-in
 
-**Pilot 阶段（探索 trigger 是否成立）**：仍按 anti-pattern 4 用 1 alias × 1 case × 1 run，**alias 选 `ds/v4flash`**（最便宜 floor model，单 call ~$0.005）。Pilot 触发后 Layer 2 才放量到 5 alias。
+**Pilot 阶段（探索 trigger 是否成立）**：仍按 anti-pattern 4 用 1 alias × 1 case × 1 run，**alias 选 `ark/v4flash`**（最便宜 floor model on coding-plan provider）。Pilot 触发后 Layer 2 才放量到 5 alias。
+
+**所有 canonical alias 必须 coding-plan provider** —— 新增 alias 时先 verify provider 类型。Never add 一次性 token-bill alias 到 default panel，否则后续 eval 成本预算会失真。
 
 **例外**：
 - 某 feature 只影响特定 provider（例如 zhipu-only quirk）时 panel 收窄到 `zhipu/glm51` 单 alias，需在 eval docstring 显式说明
-- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 8 alias 含 mimo / ark / kimi 三家全档位
+- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 7-8 alias 含 mimo / kimi 三家全档位
 
 ---
 

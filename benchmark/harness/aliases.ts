@@ -17,12 +17,21 @@
  *   'mimo-coding/mimo-v2.5-pro':    'mimo/v25pro'
  *   'minimax-coding/MiniMax-M2.7':  'mmx/m27'
  *   'ark-coding/glm-5.1':           'ark/glm51'
+ *   'ark-coding/deepseek-v4-pro':   'ark/v4pro'
+ *   'ark-coding/deepseek-v4-flash': 'ark/v4flash'
  *   'deepseek/deepseek-v4-pro':     'ds/v4pro'
  *   'deepseek/deepseek-v4-flash':   'ds/v4flash'
  *
  * To add a new alias: extend `MODEL_ALIASES` below. Existing eval files
  * that still inline their own PROVIDERS arrays continue to work — migration
  * is opportunistic, not forced.
+ *
+ * **Canonical panel rule (2026-05-21)**: new prompt-evals default to the 5
+ * coding-plan aliases — `zhipu/glm51`, `kimi`, `mmx/m27`, `ark/v4pro`,
+ * `ark/v4flash`. The `ds/*` (deepseek official API) aliases stay in the
+ * registry for legacy compatibility but should not be picked for new
+ * canonical panels — `ark/v4*` is the equivalent on a coding-plan provider
+ * (cost-controlled).
  */
 
 export type ModelAlias =
@@ -32,6 +41,8 @@ export type ModelAlias =
   | 'mimo/v25pro'
   | 'mmx/m27'
   | 'ark/glm51'
+  | 'ark/v4pro'
+  | 'ark/v4flash'
   | 'ds/v4pro'
   | 'ds/v4flash';
 
@@ -51,6 +62,8 @@ export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Obj
   'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_API_KEY' },
   'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_API_KEY' },
   'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_API_KEY' },
+  'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_API_KEY' },
+  'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_API_KEY' },
   'ds/v4pro':     { provider: 'deepseek',       model: 'deepseek-v4-pro',   apiKeyEnv: 'DEEPSEEK_API_KEY' },
   'ds/v4flash':   { provider: 'deepseek',       model: 'deepseek-v4-flash', apiKeyEnv: 'DEEPSEEK_API_KEY' },
 });
