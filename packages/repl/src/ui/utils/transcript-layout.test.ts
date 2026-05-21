@@ -619,6 +619,28 @@ describe("transcript-layout", () => {
     expect(text).not.toContain("Worker");
   });
 
+  it("does NOT render any Verifying row when isLoading is false (FEATURE_184 D.3 precondition)", () => {
+    // The sidecar window always implies an active spinner — when
+    // `isLoading` is false the spinner cascade is gated off entirely
+    // (`if (isLoading)` at the top of the live-rows block). This pin
+    // catches a future regression where someone moves the `verifying`
+    // branch outside the `isLoading` gate and accidentally bleeds a
+    // stale `[AMA Verifying]` prefix into a non-spinner row.
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 100,
+      isLoading: false,
+      managedAgentMode: "ama",
+      managedPhase: "verifying",
+      managedHarnessProfile: "H2_PLAN_EXECUTE_EVAL",
+      managedWorkerTitle: "Worker",
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).not.toContain("Verifying");
+    expect(text).not.toContain("checking agent output");
+  });
+
   it("does not leak round 1/2 in the initial AMA live thinking row", () => {
     const rows = buildTranscriptRows({
       items: [],
