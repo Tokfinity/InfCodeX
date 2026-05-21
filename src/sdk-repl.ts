@@ -20,3 +20,16 @@
  */
 
 export * from '@kodax-ai/repl';
+
+// v0.7.42 — user-defined slash command loader. Lives in this layer (not
+// inside @kodax-ai/repl) because it depends on the SDK's `KodaXResult` type
+// and is consumed by the bin entry alongside REPL bootstrap.
+export {
+  loadCommands,
+  processCommandCall,
+  parseCommandCall,
+  getDefaultCommandDir,
+  KODAX_COMMANDS_DIR,
+  type KodaXCommand,
+  type KodaXCommandContext,
+} from './cli_commands.js';

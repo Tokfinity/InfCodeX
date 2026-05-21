@@ -718,6 +718,18 @@ export {
   registerPresetDispatcher,
 } from '@kodax-ai/agent';
 
+// v0.7.42 — agent config home + third-party app namespace helper.
+// Re-exported from `@kodax-ai/coding` so SDK consumers reach them via the
+// root SDK or `/coding` subpath without depending on `@kodax-ai/agent`
+// directly. `getAppDataDir` is the entrypoint downstream SDK embedders
+// (KodaX Space, IDE extensions) should use for `~/.kodax/apps/<appId>/`.
+export {
+  getAgentConfigHome,
+  getAgentConfigPath,
+  setAgentConfigHome,
+  getAppDataDir,
+} from '@kodax-ai/agent';
+
 // v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations are
 // coding-side now (`@kodax-ai/coding/src/agents/task-engine-agents.ts`),
 // re-exported through coding's `agents/` barrel. See ADR-021.

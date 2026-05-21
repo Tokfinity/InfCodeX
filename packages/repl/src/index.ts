@@ -99,3 +99,15 @@ export {
   generateSavePattern,
   getPlanModeBlockReason,
 } from "./permission/index.js";
+
+// === Auto-mode bootstrap (v0.7.42 SDK export) ===
+// FEATURE_092 auto-mode guardrail wiring. SDK consumers (KodaX Space etc.)
+// now reach the same bootstrap REPL uses for the `auto` permission mode,
+// instead of mirroring the internal API. See packages/repl/src/interactive/
+// auto-mode-bootstrap.ts for the wiring contract.
+export { bootstrapAutoMode } from "./interactive/auto-mode-bootstrap.js";
+export type {
+  AutoModeBootstrapDeps,
+  AutoModeBootstrapResult,
+  ResolvedAutoModeBootstrapSettings,
+} from "./interactive/auto-mode-bootstrap.js";

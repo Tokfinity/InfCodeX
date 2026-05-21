@@ -325,6 +325,7 @@ export {
   getAgentConfigHome,
   getAgentConfigPath,
   setAgentConfigHome,
+  getAppDataDir,
 } from './runtime/agent-home.js';
 
 // ============== Messaging (v0.7.36 FEATURE_115) ==============

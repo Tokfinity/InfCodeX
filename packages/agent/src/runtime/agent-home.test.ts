@@ -2,7 +2,8 @@
  * v0.7.35.1 FEATURE_145 — agent-home 3-tier resolution unit tests.
  */
 
-import { homedir } from 'node:os';
+import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   getAgentConfigHome,
   getAgentConfigPath,
+  getAppDataDir,
   setAgentConfigHome,
 } from './agent-home.js';
 
@@ -105,5 +107,87 @@ describe('agent-home — 3-tier resolution', () => {
       delete process.env.KODAX_HOME;
       expect(getAgentConfigHome()).toBe(join(homedir(), '.kodax'));
     });
+  });
+});
+
+describe('getAppDataDir — third-party namespace under ~/.kodax/apps/', () => {
+  let tmpHome: string;
+  const originalEnv = process.env.KODAX_HOME;
+
+  beforeEach(() => {
+    setAgentConfigHome(undefined);
+    delete process.env.KODAX_HOME;
+    tmpHome = mkdtempSync(join(tmpdir(), 'kodax-appdata-test-'));
+    setAgentConfigHome(tmpHome);
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+    if (originalEnv === undefined) {
+      delete process.env.KODAX_HOME;
+    } else {
+      process.env.KODAX_HOME = originalEnv;
+    }
+    rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  it('creates ~/.kodax/apps/<appId>/ and returns it', () => {
+    const dir = getAppDataDir('space');
+    expect(dir).toBe(join(tmpHome, 'apps', 'space'));
+    expect(existsSync(dir)).toBe(true);
+    expect(statSync(dir).isDirectory()).toBe(true);
+  });
+
+  it('is idempotent — second call on existing dir returns same path', () => {
+    const a = getAppDataDir('space');
+    const b = getAppDataDir('space');
+    expect(a).toBe(b);
+  });
+
+  it('accepts valid kebab-case appIds', () => {
+    expect(() => getAppDataDir('vs-code-ext')).not.toThrow();
+    expect(() => getAppDataDir('a1')).not.toThrow();
+    expect(() => getAppDataDir('a'.repeat(32))).not.toThrow();
+  });
+
+  it.each([
+    ['empty string', ''],
+    ['single char (too short)', 'a'],
+    ['too long (33 chars)', 'a'.repeat(33)],
+    ['starts with digit', '1space'],
+    ['starts with dash', '-space'],
+    ['uppercase', 'Space'],
+    ['underscore', 'my_app'],
+    ['dot', 'my.app'],
+    ['slash', 'my/app'],
+    ['backslash', 'my\\app'],
+    ['traversal', '..'],
+    ['nested traversal', 'a/../b'],
+    ['space char', 'my app'],
+    ['unicode', 'spáce'],
+  ])('rejects invalid appId: %s', (_label, appId) => {
+    expect(() => getAppDataDir(appId)).toThrow(/invalid appId/);
+  });
+
+  it.each([
+    ['reserved literal', 'kodax'],
+    ['reserved prefix', 'kodax-space'],
+    ['reserved prefix-only', 'kodax-'],
+  ])('rejects reserved name: %s', (_label, appId) => {
+    expect(() => getAppDataDir(appId)).toThrow(/reserved/);
+  });
+
+  it('rejects non-string appId', () => {
+    // @ts-expect-error — testing runtime validation
+    expect(() => getAppDataDir(undefined)).toThrow(/invalid appId/);
+    // @ts-expect-error
+    expect(() => getAppDataDir(123)).toThrow(/invalid appId/);
+    // @ts-expect-error
+    expect(() => getAppDataDir(null)).toThrow(/invalid appId/);
+  });
+
+  it('honors setAgentConfigHome override (programmatic)', () => {
+    const dir = getAppDataDir('myapp');
+    expect(dir.startsWith(tmpHome)).toBe(true);
   });
 });

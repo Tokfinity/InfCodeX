@@ -57,6 +57,7 @@
  *     the caller) are likewise project-scoped and stay as-is.
  */
 
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -102,4 +103,40 @@ export function getAgentConfigHome(): string {
  */
 export function getAgentConfigPath(...segments: string[]): string {
   return join(getAgentConfigHome(), ...segments);
+}
+
+/**
+ * v0.7.42 — Namespaced data directory for third-party apps embedding the
+ * KodaX SDK (e.g. `KodaX Space` desktop client, IDE extensions).
+ *
+ * Returns `${getAgentConfigHome()}/apps/<appId>/` and creates the directory
+ * if missing. Provides a coordination point so multiple SDK consumers can
+ * share `~/.kodax/` without colliding on path conventions.
+ *
+ * Constraints:
+ *   - `appId` must match `^[a-z][a-z0-9-]{1,31}$` (lowercase kebab, 2–32 chars,
+ *     no dots, no slashes, no underscores) — keeps the directory name safe
+ *     across all filesystems and prevents `../` traversal.
+ *   - Reserved prefixes (`kodax`, `kodax-*`) are rejected to leave room
+ *     for first-party feature directories that may collide later.
+ *
+ * The convention is intentionally light — no central registry, no manifest.
+ * Apps owning their data dir means SDK upgrades cannot trample on third-party
+ * state. Apps are responsible for migration/cleanup within their own subtree.
+ */
+export function getAppDataDir(appId: string): string {
+  if (typeof appId !== 'string' || !/^[a-z][a-z0-9-]{1,31}$/.test(appId)) {
+    throw new Error(
+      `getAppDataDir: invalid appId ${JSON.stringify(appId)}. ` +
+      `Must match /^[a-z][a-z0-9-]{1,31}$/ (lowercase kebab, 2–32 chars).`,
+    );
+  }
+  if (appId === 'kodax' || appId.startsWith('kodax-')) {
+    throw new Error(
+      `getAppDataDir: appId ${JSON.stringify(appId)} is reserved (the 'kodax' / 'kodax-*' prefix is reserved for first-party use).`,
+    );
+  }
+  const dir = join(getAgentConfigHome(), 'apps', appId);
+  mkdirSync(dir, { recursive: true });
+  return dir;
 }
