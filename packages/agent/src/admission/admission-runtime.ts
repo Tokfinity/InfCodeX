@@ -254,10 +254,9 @@ export function resolveRequiredInvariants(
   _toolScope: readonly string[],
   _harnessTier: string,
 ): readonly InvariantId[] {
-  // v1: the 7 admission closed-set invariants apply uniformly.
-  // Future versions may relax (e.g. independentReview optional in H0
-  // since H0 has no Evaluator role — see FEATURE_101 §晋升 ADR-021 前
-  // 需要回答的开放问题 #2).
+  // v1: the 6 admission closed-set invariants apply uniformly.
+  // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed —
+  // superseded by Sidecar Verifier StopHook; in-chain Evaluator deleted.
   return [
     'finalOwner',
     'handoffLegality',
@@ -265,7 +264,6 @@ export function resolveRequiredInvariants(
     'toolPermission',
     'evidenceTrail',
     'boundedRevise',
-    'independentReview',
   ];
 }
 

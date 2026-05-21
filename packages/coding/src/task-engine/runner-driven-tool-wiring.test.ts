@@ -20,6 +20,10 @@
  * derivation-based assertion so the test surfaces BOTH (a) the full set
  * mismatch and (b) the specific class of tool that drifted (writes,
  * dispatch, web, repo-intel, etc.).
+ *
+ * FEATURE_184 (v0.7.45) Phase C.1: Evaluator removed from AmaRole and
+ * the in-chain agent graph. The Evaluator security boundary describe block
+ * is deleted; Sidecar Verifier carries its own architectural constraints.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -35,7 +39,6 @@ import {
   EMIT_CONTRACT_TOOL_NAME,
   EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
-  EMIT_VERDICT_TOOL_NAME,
 } from '../agents/protocol-emitters.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
@@ -68,7 +71,6 @@ const ROLE_EMIT_TOOL_NAME: Record<AmaRole, string> = {
   scout: EMIT_SCOUT_VERDICT_TOOL_NAME,
   planner: EMIT_CONTRACT_TOOL_NAME,
   generator: EMIT_HANDOFF_TOOL_NAME,
-  evaluator: EMIT_VERDICT_TOOL_NAME,
   worker: EMIT_HANDOFF_TOOL_NAME, // Worker reuses Generator's emit shape (FEATURE_114)
 };
 
@@ -78,7 +80,7 @@ function getAgentRegistryToolNames(role: AmaRole): readonly string[] {
 }
 
 describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
-  const roles: readonly AmaRole[] = ['scout', 'planner', 'generator', 'evaluator', 'worker'];
+  const roles: readonly AmaRole[] = ['scout', 'planner', 'generator', 'worker'];
 
   for (const role of roles) {
     it(`${role}.tools (excluding emit tool) === getAmaRoleExpectedToolNames('${role}')`, () => {
@@ -108,8 +110,8 @@ describe('FEATURE_168 — coordinator-class tools (send_message, task_stop) are 
     },
   );
 
-  it.each(['planner', 'evaluator'] as const)(
-    '%s does NOT have send_message / task_stop (coordinator-only, planner+evaluator excluded)',
+  it.each(['planner'] as const)(
+    '%s does NOT have send_message / task_stop (coordinator-only, planner excluded)',
     (role) => {
       const names = getAgentToolNames(role);
       expect(names).not.toContain('send_message');
@@ -130,7 +132,7 @@ describe('FEATURE_168 — repo-intel pull tools (FEATURE_161 v0.7.41 wiring fix)
     'impact_estimate',
   ] as const;
 
-  it.each(['scout', 'planner', 'generator', 'evaluator', 'worker'] as const)(
+  it.each(['scout', 'planner', 'generator', 'worker'] as const)(
     '%s has all 8 repo-intel pull tools (Worker prompt FEATURE_161 teaches them)',
     (role) => {
       const names = getAgentToolNames(role);
@@ -144,7 +146,7 @@ describe('FEATURE_168 — repo-intel pull tools (FEATURE_161 v0.7.41 wiring fix)
 describe('FEATURE_168 — web/search tools (FEATURE_168 Tier D wiring fix)', () => {
   const WEB_TOOLS = ['web_search', 'web_fetch', 'code_search', 'semantic_lookup'] as const;
 
-  it.each(['scout', 'planner', 'generator', 'evaluator', 'worker'] as const)(
+  it.each(['scout', 'planner', 'generator', 'worker'] as const)(
     '%s has web/search tools',
     (role) => {
       const names = getAgentToolNames(role);
@@ -153,45 +155,6 @@ describe('FEATURE_168 — web/search tools (FEATURE_168 Tier D wiring fix)', () 
       }
     },
   );
-});
-
-describe('FEATURE_168 — Evaluator security boundary (architectural, not prompt-dependent)', () => {
-  const FORBIDDEN_FOR_EVALUATOR = [
-    // File mutations
-    'write',
-    'edit',
-    'multi_edit',
-    'insert_after_anchor',
-    'undo',
-    // Dispatch / steering
-    'dispatch_child_task',
-    'send_message',
-    'task_stop',
-    'worktree_create',
-    'worktree_remove',
-    // State changes affecting Worker/Generator's plan view
-    'exit_plan_mode',
-    'todo_update',
-    // FEATURE_170 (v0.7.41) — per-item plan insertion is also a plan-view
-    // mutation; independent audit must not insert items either.
-    'todo_create',
-    // User interaction
-    'ask_user_question',
-  ] as const;
-
-  it.each(FORBIDDEN_FOR_EVALUATOR)('Evaluator is hard-excluded from %s', (toolName) => {
-    const names = getAgentToolNames('evaluator');
-    expect(names).not.toContain(toolName);
-  });
-
-  it('Evaluator retains read-only verification surface', () => {
-    const names = getAgentToolNames('evaluator');
-    expect(names).toContain('read');
-    expect(names).toContain('grep');
-    expect(names).toContain('glob');
-    expect(names).toContain('bash'); // wrapReadOnlyBash inside — same name, different execute
-    expect(names).toContain('todo_list');
-  });
 });
 
 describe('FEATURE_168 — Planner security boundary (read-only inspection)', () => {
@@ -240,7 +203,7 @@ describe('FEATURE_168 — registry orphan check (no registered tool falls off ev
     const nonSpecialized = allRegistered.filter((name) => !specializedPaths.has(name));
 
     const roleUnion = new Set<string>();
-    for (const role of ['scout', 'planner', 'generator', 'evaluator', 'worker'] as const) {
+    for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
       for (const name of getAgentToolNames(role)) {
         roleUnion.add(name);
       }

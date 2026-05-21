@@ -1,17 +1,15 @@
 /**
  * FEATURE_101 admission integration suite — full v1 contract end-to-end.
  *
- * Boots the registry with `registerCodingInvariants()` (the 8-id v1
- * set: 4 core pure + 4 coding capability-coupled) and exercises
- * `Runner.admit` against the four canonical scenarios called out in
- * the FEATURE_101 §Acceptance Criteria:
+ * Boots the registry with `registerCodingInvariants()` (the 6-id v1
+ * set: 4 core pure + 2 coding capability-coupled; FEATURE_184 v0.7.45
+ * removed independentReview — superseded by Sidecar Verifier StopHook)
+ * and exercises `Runner.admit` against the canonical scenarios:
  *
  *   1. **Happy path** — minimal manifest, no clamps, all admit hooks pass.
  *   2. **Clamp path** — over-budget manifest with a disallowed tool;
  *      both clamps compose and the admitted manifest reflects them.
- *   3. **Reject path** — generator-bearing topology missing an evaluator
- *      (independentReview rejects); separately, a transitive handoff
- *      cycle (handoffLegality rejects).
+ *   3. **Reject path** — transitive handoff cycle (handoffLegality rejects).
  *   4. **Mixed warn + clamp** — manifest with maxBudget over cap PLUS
  *      `harnessSelectionTiming` declared (observe-only id surfacing in
  *      bindings); admission still succeeds with both signals recorded.
@@ -70,6 +68,8 @@ describe('FEATURE_101 admission v1 — full integration', () => {
     if (verdict.ok) {
       expect(verdict.handle.appliedPatches).toEqual([]);
       expect(verdict.clampNotes).toEqual([]);
+      // FEATURE_184 Phase C.1 (v0.7.45): 'independentReview' removed from
+      // CODING_INVARIANTS (superseded by Sidecar Verifier StopHook).
       expect(verdict.handle.invariantBindings).toEqual([
         'finalOwner',
         'handoffLegality',
@@ -77,7 +77,6 @@ describe('FEATURE_101 admission v1 — full integration', () => {
         'toolPermission',
         'evidenceTrail',
         'boundedRevise',
-        'independentReview',
       ]);
       expect(verdict.handle.admittedAt).toBe('2026-04-29T00:00:00.000Z');
     }
@@ -118,32 +117,11 @@ describe('FEATURE_101 admission v1 — full integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 3a. Reject path — missing evaluator
+  // 3a. FEATURE_184 Phase C.1 (v0.7.45): independentReview removed.
+  // "reject path — generator-bearing manifest without evaluator fails
+  // independentReview" test deleted — independentReview invariant superseded
+  // by Sidecar Verifier StopHook; CODING_INVARIANTS no longer includes it.
   // -------------------------------------------------------------------------
-
-  it('reject path — generator-bearing manifest without evaluator fails independentReview', async () => {
-    const generator = createAgent({ name: 'generator', instructions: 'g' });
-    const planner = createAgent({
-      name: 'planner',
-      instructions: 'p',
-      handoffs: [createHandoff({ target: generator, kind: 'continuation' })],
-    });
-    const activated = new Map<string, Agent>([
-      ['planner', planner],
-      ['generator', generator],
-    ]);
-    const verdict = await Runner.admit(planner, {
-      systemCap: TIGHT_CAP,
-      activatedAgents: activated,
-    });
-    expect(verdict.ok).toBe(false);
-    if (!verdict.ok) {
-      expect(verdict.reason).toMatch(/independentReview/);
-      expect(verdict.reason).toMatch(/generator/);
-      expect(verdict.reason).toMatch(/evaluator/);
-      expect(verdict.retryable).toBe(false);
-    }
-  });
 
   // -------------------------------------------------------------------------
   // 3b. Reject path — transitive cycle

@@ -213,10 +213,13 @@ describe('protocol emitters — handoff target resolution (Shard 4)', () => {
     expect(meta.handoffTarget).toBe('kodax/role/generator');
   });
 
-  it('generator handoff always → handoff to evaluator', async () => {
+  it('generator handoff → terminal (no handoffTarget), isTerminal=true', async () => {
+    // FEATURE_184 Phase C.1: Generator is now terminal — text-only
+    // terminates so Sidecar Verifier StopHook fires.
     const result = await runExecute(emitHandoff, { status: 'ready' });
     const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/evaluator');
+    expect(meta.handoffTarget).toBeUndefined();
+    expect(meta.isTerminal).toBe(true);
   });
 
   it('evaluator accept → no handoffTarget, isTerminal=true', async () => {
@@ -233,10 +236,14 @@ describe('protocol emitters — handoff target resolution (Shard 4)', () => {
     expect(meta.isTerminal).toBe(true);
   });
 
-  it('evaluator revise (default) → handoff to generator', async () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): evaluator revise (H1) with no
+  // nextHarness no longer routes back to generator — Evaluator removed
+  // from chain; sidecar verifier uses a different routing path.
+  it('evaluator revise (default, no nextHarness) → isTerminal=true (FEATURE_184 C.1)', async () => {
     const result = await runExecute(emitVerdict, { status: 'revise' });
     const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/generator');
+    expect(meta.handoffTarget).toBeUndefined();
+    expect(meta.isTerminal).toBe(true);
   });
 
   it('evaluator revise with next_harness=H2 → handoff to planner', async () => {

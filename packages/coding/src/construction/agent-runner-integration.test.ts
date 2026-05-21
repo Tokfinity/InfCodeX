@@ -106,27 +106,38 @@ describe('FEATURE_089 — stage → admit → activate → Runner.run roundtrip'
     expect(result.output).toBe('echo: hello world');
   });
 
-  it('reject from admission prevents activation (Generator without Evaluator)', async () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Deleted "reject from admission prevents
+  // activation (Generator without Evaluator)" test — that test relied on
+  // `independentReview` rejecting a generator-bearing manifest that had no
+  // evaluator handoff. independentReview has been removed from the admission
+  // closed set (superseded by Sidecar Verifier StopHook), so
+  // generator-bearing manifests are now valid and admission succeeds.
+
+  it('reject from admission prevents activation when budget exceeds system cap', async () => {
+    // Use budgetCeiling (still in the closed set) as the rejection driver:
+    // a manifest whose maxBudget exceeds the system cap gets clamped on
+    // admit, then testArtifact succeeds (clamping is not rejection). Use
+    // a clearly malformed manifest to trigger schema-level rejection instead.
     const artifact: AgentArtifact = {
       kind: 'agent',
-      name: 'gen-no-eval',
+      name: 'malformed-no-instructions',
       version: '1.0.0',
       status: 'staged',
       createdAt: Date.now(),
       content: {
-        instructions: 'I generate without verification',
-        handoffs: [{ target: { ref: 'builtin:generator' }, kind: 'continuation' }],
+        // Missing instructions triggers schema validation failure.
+        instructions: '',
       },
     };
     const handle = await stage(artifact);
     const testResult = await testArtifact(handle);
+    // Schema validation rejects empty instructions.
     expect(testResult.ok).toBe(false);
-    expect(testResult.errors?.some((e) => /independentReview/.test(e))).toBe(true);
 
     // activate must fail because testedAt was never set.
     await expect(activate(handle)).rejects.toThrow(/has not passed test/);
 
     // Resolver does NOT contain the agent.
-    expect(resolveConstructedAgent('gen-no-eval')).toBeUndefined();
+    expect(resolveConstructedAgent('malformed-no-instructions')).toBeUndefined();
   });
 });

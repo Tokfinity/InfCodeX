@@ -25,18 +25,15 @@ import type {
   RunnerToolResult,
 } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../../../agents/task-engine-agents.js';
-import { isHarnessV2Enabled } from '../../../agents/worker-role-prompt.js';
 import {
   emitContract,
   emitHandoff,
   emitScoutVerdict,
-  emitVerdict,
 } from '../../../agents/protocol-emitters.js';
 import { toolBash } from '../../../tools/bash.js';
 import { toolEdit } from '../../../tools/edit.js';
@@ -86,7 +83,6 @@ import {
   SCOUT_INSTRUCTIONS_FALLBACK,
   PLANNER_INSTRUCTIONS_FALLBACK,
   GENERATOR_INSTRUCTIONS_FALLBACK,
-  EVALUATOR_INSTRUCTIONS_FALLBACK,
   WORKER_INSTRUCTIONS_FALLBACK,
   resolveRoleInstructions,
 } from './role-prompts.js';
@@ -95,7 +91,6 @@ import {
   wrapCodingToolAsRunnable,
   wrapGeneratorBashWithMutationGuard,
   wrapGeneratorWriteWithMutationGuard,
-  wrapReadOnlyBash,
 } from './tool-wrappers.js';
 import { wrapDispatchChildTaskForRole } from './dispatch-child.js';
 import { NULL_OBSERVER } from './observer-bridge.js';
@@ -315,20 +310,20 @@ function buildAgentToolsFromRegistry(
 }
 
 // =============================================================================
-// Runtime Agent chain: Scout / Planner / Generator / Evaluator
+// Runtime Agent chain: Scout / Planner / Generator / Worker
 // =============================================================================
 
 export interface RunnerAgentChain {
   readonly scout: Agent;
   readonly planner: Agent;
   readonly generator: Agent;
-  readonly evaluator: Agent;
   /**
    * FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
    * Active only when `KODAX_HARNESS_V2=true` (gate wired in Slice 3b).
    * In V1 runs the Worker slot is built but never dispatched, so its
-   * presence here costs nothing structural. Worker handoffs target
-   * Evaluator (the structural gate KodaX preserves).
+   * presence here costs nothing structural. FEATURE_184 (v0.7.45) Phase
+   * C.1: Worker (and Generator) are now terminal — Sidecar Verifier
+   * StopHook (Phase D.2) handles verification.
    */
   readonly worker: Agent;
 }
@@ -686,19 +681,6 @@ export function buildRunnerAgentChain(
       return handoffEmitBase.execute(input, runnerCtx);
     },
   };
-  const verdictEmit = wrapEmitterWithRecorder(
-    emitVerdict,
-    'verdict',
-    recorder,
-    observer,
-    budget,
-    budgetExtension,
-    undefined,
-    undefined,
-    todoStore,
-    pendingFailedResetRef,
-  );
-
   type WritableAgent = { -readonly [K in keyof Agent]: Agent[K] };
 
   // Dynamic role instructions. Every agent's `instructions`
@@ -843,40 +825,8 @@ export function buildRunnerAgentChain(
     handoffs: undefined,
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
   };
-  const evaluator: WritableAgent = {
-    name: EVALUATOR_AGENT_NAME,
-    instructions: () => resolveRoleInstructions(
-      'evaluator',
-      EVALUATOR_AGENT_NAME,
-      EVALUATOR_INSTRUCTIONS_FALLBACK,
-      recorder,
-      promptContext,
-      verification,
-    ),
-    // FEATURE_168 (v0.7.40 hotfix) — Evaluator's tool surface is derived from the
-    // registry minus `AMA_BASELINE_EXCLUDE ∪ EVALUATOR_EXTRA_EXCLUDE`.
-    // EVALUATOR_EXTRA_EXCLUDE is the strictest set in this file — every file
-    // mutation, dispatch, plan-state change, and user-interaction tool is
-    // hard-excluded so the audit security boundary is architectural, not
-    // prompt-dependent. What remains: read/grep/glob + readonly bash + all 8
-    // repo-intel pull tools + 5 MCP tools + 4 web tools + todo_list. Note
-    // `todo_update` is excluded (audit role must not mutate Worker's plan)
-    // — pre-FEATURE_168 Evaluator already did not have it, just made explicit.
-    tools: [
-      verdictEmit,
-      ...buildAgentToolsFromRegistry(
-        'evaluator',
-        ctx,
-        budget,
-        events,
-        new Map<string, RunnableTool>([
-          ['bash', wrapReadOnlyBash(codingTools.bash, 'Evaluator')],
-        ]),
-      ),
-    ],
-    handoffs: undefined,
-    reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: false },
-  };
+  // FEATURE_184 (v0.7.45) Phase C.1: Evaluator agent removed from in-chain
+  // topology. Sidecar Verifier StopHook (Phase D.2) handles verification.
 
   // FEATURE_114 v0.7.36 — AMA Harness V2 Worker agent.
   //
@@ -980,46 +930,20 @@ export function buildRunnerAgentChain(
   const plannerHandoffs: Handoff[] = [
     { target: generator, kind: 'continuation', description: 'Hand off execution to Generator' },
   ];
-  const generatorHandoffs: Handoff[] = [
-    { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
-  ];
-  // FEATURE_114 v0.7.36 Slice 3b — Evaluator's revise handoff target
-  // depends on which executor is active for this run. V1: revise →
-  // Generator. V2: revise → Worker. The handoff list always carries
-  // Planner (replan path: works for both V1 and V2 H2 escalation) and
-  // exactly one executor target; the LLM-driven handoff selection
-  // route via `resolveHandoffTarget` rewrite (verdict-slot wrapper
-  // below) targets the same executor literally.
-  //
-  // Reading `isHarnessV2Enabled()` at chain-build time is safe: a run
-  // can't change harness mid-flight (the flag is a process-level
-  // env var, not per-request), so the chain's structural target
-  // matches the runtime's selected entry agent.
-  const v2ActiveAtChainBuild = isHarnessV2Enabled();
-  const evaluatorHandoffs: Handoff[] = v2ActiveAtChainBuild
-    ? [
-      { target: worker, kind: 'continuation', description: 'V2 revise — retry execution via Worker' },
-      { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
-    ]
-    : [
-      { target: generator, kind: 'continuation', description: 'revise — retry execution' },
-      { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
-    ];
-  const workerHandoffs: Handoff[] = [
-    { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
-  ];
+  // FEATURE_184 (v0.7.45) Phase C.1: Generator and Worker are now terminal —
+  // text-only termination triggers Sidecar Verifier (Phase D.2).
+  const generatorHandoffs: Handoff[] = [];
+  const workerHandoffs: Handoff[] = [];
 
   scout.handoffs = scoutHandoffs;
   planner.handoffs = plannerHandoffs;
   generator.handoffs = generatorHandoffs;
-  evaluator.handoffs = evaluatorHandoffs;
   worker.handoffs = workerHandoffs;
 
   return {
     scout: Object.freeze(scout) as Agent,
     planner: Object.freeze(planner) as Agent,
     generator: Object.freeze(generator) as Agent,
-    evaluator: Object.freeze(evaluator) as Agent,
     worker: Object.freeze(worker) as Agent,
   };
 }

@@ -484,14 +484,14 @@ export {
 } from './agent-runtime/coding-compaction-prompts.js';
 
 // FEATURE_101 (v0.7.31): admission contract — capability-coupled
-// invariants (budgetCeiling / toolPermission / boundedRevise /
-// independentReview) plus the bootstrap that registers the full v1 set
-// (4 core pure + 4 coding coupled = 8 ids).
+// invariants (budgetCeiling / toolPermission / boundedRevise) plus
+// the bootstrap that registers the full v1 set.
+// (FEATURE_184 Phase C.1: independentReview deleted — superseded by
+// Sidecar Verifier.)
 export {
   CODING_INVARIANTS,
   boundedRevise,
   budgetCeiling,
-  independentReview,
   registerCodingInvariants,
   resolveToolCapability,
   toolPermission,
@@ -730,7 +730,6 @@ export {
   scoutAgent,
   plannerAgent,
   generatorAgent,
-  evaluatorAgent,
 } from './agents/task-engine-agents.js';
 
 export {
@@ -753,7 +752,6 @@ export {
   emitHandoff,
   emitScoutVerdict,
   emitVerdict,
-  evaluatorCodingAgent,
   generatorCodingAgent,
   plannerCodingAgent,
   scoutCodingAgent,

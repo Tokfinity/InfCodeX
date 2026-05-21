@@ -10,10 +10,11 @@
  *
  *   - Three pure invariants (finalOwner, handoffLegality, evidenceTrail)
  *     are pure functions of admission types and live in @kodax-ai/agent.
- *   - Four coupled invariants (budgetCeiling, toolPermission,
- *     boundedRevise, independentReview) tie into @kodax-ai/coding's budget
- *     controller / tool registry / revise tracker / role conventions and
- *     live here.
+ *   - Three coupled invariants (budgetCeiling, toolPermission,
+ *     boundedRevise) tie into @kodax-ai/coding's budget controller /
+ *     tool registry / revise tracker and live here.
+ *     (FEATURE_184 Phase C.1: `independentReview` deleted — superseded by
+ *     Sidecar Verifier.)
  *   - `harnessSelectionTiming` (FEATURE_106 external) reads coding's AMA
  *     `ctx.recorder.scout.payload.scout.confirmedHarness` and lives here
  *     too (v0.7.35.1 FEATURE_142 A-R2 moved it from @kodax-ai/agent per
@@ -33,7 +34,6 @@ import type { QualityInvariant } from '@kodax-ai/agent';
 import { boundedRevise } from './bounded-revise.js';
 import { budgetCeiling } from './budget-ceiling.js';
 import { harnessSelectionTiming } from './harness-selection-timing.js';
-import { independentReview } from './independent-review.js';
 import { planBeforeMutate } from './plan-before-mutate.js';
 import { resolveToolCapability, toolPermission } from './tool-permission.js';
 
@@ -41,7 +41,6 @@ export {
   boundedRevise,
   budgetCeiling,
   harnessSelectionTiming,
-  independentReview,
   planBeforeMutate,
   resolveToolCapability,
   toolPermission,
@@ -64,7 +63,6 @@ export const CODING_INVARIANTS: readonly QualityInvariant[] = [
   budgetCeiling,
   toolPermission,
   boundedRevise,
-  independentReview,
   harnessSelectionTiming,
   planBeforeMutate,
 ];

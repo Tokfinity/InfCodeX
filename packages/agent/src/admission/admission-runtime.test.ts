@@ -6,7 +6,8 @@
  *   - applyManifestPatch is monotone (only shrinks, never expands)
  *   - composePatches: min-wins for clamps, union for collections
  *   - registerInvariant rejects duplicates and hookless invariants
- *   - resolveRequiredInvariants returns the 7 admission v1 closed-set ids
+ *   - resolveRequiredInvariants returns the 6 admission v1 closed-set ids
+ *     (FEATURE_184 Phase C.1 v0.7.45: independentReview removed)
  *   - resolveEffectiveInvariants unions declared on top of required,
  *     stable ordering, no duplicates
  */
@@ -268,9 +269,11 @@ describe('Invariant registry', () => {
 // ---------------------------------------------------------------------------
 
 describe('resolveRequiredInvariants', () => {
-  it('v1 returns the 7 admission v1 closed-set ids', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from
+  // closed-set (superseded by Sidecar Verifier StopHook). Count is now 6.
+  it('v1 returns the 6 admission v1 closed-set ids', () => {
     const required = resolveRequiredInvariants('scout', [], 'H0_DIRECT');
-    expect(required).toHaveLength(7);
+    expect(required).toHaveLength(6);
     expect(required).toEqual([
       'finalOwner',
       'handoffLegality',
@@ -278,13 +281,14 @@ describe('resolveRequiredInvariants', () => {
       'toolPermission',
       'evidenceTrail',
       'boundedRevise',
-      'independentReview',
     ]);
   });
 
   it('v1 returns the same set regardless of role / toolScope / harnessTier', () => {
     const a = resolveRequiredInvariants('scout', [], 'H0_DIRECT');
-    const b = resolveRequiredInvariants('evaluator', ['read', 'grep'], 'H2_PLAN_EXECUTE_EVAL');
+    // FEATURE_184 Phase C.1 (v0.7.45): 'evaluator' is no longer a valid
+    // AmaRole; using 'worker' as a representative alternative role.
+    const b = resolveRequiredInvariants('worker', ['read', 'grep'], 'H2_PLAN_EXECUTE_EVAL');
     expect(a).toEqual(b);
   });
 });

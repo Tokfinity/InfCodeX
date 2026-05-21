@@ -814,26 +814,7 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
           // Runner's stop condition picks this up cleanly.
           return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
         },
-        evaluator: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [
-                {
-                  type: 'tool_use',
-                  id: 'evaluator-verdict-1',
-                  name: 'emit_verdict',
-                  input: {
-                    status: 'accept',
-                    reason: 'Worker answer is correct and well-grounded.',
-                    user_answer: '2 + 2 = 4.',
-                    followup: ['none'],
-                  },
-                },
-              ],
-            };
-          }
-          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
-        },
+        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
       });
       const result = await runManagedTaskViaRunner(
         makeOptions(),
@@ -842,14 +823,10 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
       );
       expect(result.success).toBe(true);
       expect(result.signal).toBe('COMPLETE');
-      // The accepted answer reaches the user — either via the
-      // Evaluator `user_answer` field or the surrounding text.
+      // Worker answer reaches the user via lastText.
       expect(result.lastText).toMatch(/2 \+ 2 = 4/);
-      // Verdict slot recorded as accept (the V2 verdict-slot post-
-      // pass left it untouched because handoffTarget=undefined on
-      // accept; only the Generator-targeted revise default would
-      // trigger the V2 rewrite).
-      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+      // No in-chain Evaluator → managedProtocolPayload.verdict is undefined.
+      expect(result.managedProtocolPayload?.verdict).toBeUndefined();
     });
   });
 
@@ -883,19 +860,7 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
           }
           return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
         },
-        evaluator: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'e1',
-                name: 'emit_verdict',
-                input: { status: 'accept', user_answer: 'ok' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
-        },
+        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
       });
       await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
       const preflight = statuses.find((s) => s.phase === 'preflight');
@@ -934,19 +899,7 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
           }
           return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
         },
-        evaluator: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'e1',
-                name: 'emit_verdict',
-                input: { status: 'accept', user_answer: 'ok' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
-        },
+        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
       });
       await runManagedTaskViaRunner(opts, 'task', mock);
       const workerTurn = statuses.find(
@@ -1010,429 +963,9 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
   });
 });
 
-// =============================================================================
-// FEATURE_167 (v0.7.41) — Evaluator terminal-verdict fallback
-//
-// Pins the runtime contract for the three branches of the smoking-gun
-// fix (session 20260515_185354 — V2 AMA Worker→Evaluator handoff
-// succeeds, Evaluator emits text-only response, run terminates with
-// `recorder.verdict===undefined` and `deriveFinalStatus` falls back to
-// `signal:'COMPLETE'`):
-//
-//   1. B1 retry recovers: text-only first turn → retry-prompt
-//      injected → second turn emits real `emit_verdict` → no synth.
-//   2. B2 synth fallback: text-only across the entire cap → recorder
-//      gets a synthesized accept verdict + `onEvaluatorFallbackSynthesized`
-//      event fires with the right shape.
-//   3. zhipu cap-of-1: structural intent-floor model gets only one
-//      retry before falling through to B2 (probe-derived; memory
-//      [[project_zhipu_send_message_floor]]).
-//   4. Negative case: when Evaluator emits a real terminal verdict
-//      on turn 1, neither B1 retry nor B2 synth fires.
-// =============================================================================
-describe('FEATURE_167 v0.7.41 — Evaluator terminal-verdict fallback (B1+B2)', () => {
-  async function withHarnessV2<T>(fn: () => Promise<T>): Promise<T> {
-    const prev = process.env.KODAX_HARNESS_V2;
-    process.env.KODAX_HARNESS_V2 = 'true';
-    try {
-      return await fn();
-    } finally {
-      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
-      else process.env.KODAX_HARNESS_V2 = prev;
-    }
-  }
-
-  it('B1 recovers: text-only turn 1 → retry-prompt injected → turn 2 emits emit_verdict (NO synth event)', async () => {
-    await withHarnessV2(async () => {
-      const synthEvents: Array<{
-        retriesAttempted: number;
-        cap: number;
-        modelAlias?: string;
-        userFacingText: string;
-        reason: string;
-      }> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onEvaluatorFallbackSynthesized: (
-            info: typeof synthEvents[number],
-          ) => synthEvents.push(info),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-
-      let evaluatorTurnsSeen = 0;
-      let retryPromptObservedAtTurn = 0;
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            return {
-              textBlocks: [{ text: 'Done.' }],
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w1',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        evaluator: (turn, transcript) => {
-          evaluatorTurnsSeen = turn;
-          if (turn === 1) {
-            // Smoking-gun shape — text only, no emit_verdict tool call.
-            return {
-              textBlocks: [{ text: 'Review complete. No issues observed.' }],
-              toolBlocks: [],
-            };
-          }
-          if (turn === 2) {
-            // Turn 2 — the retry. Confirm the retry prompt is the last
-            // user message in the transcript before recovering.
-            const last = transcript[transcript.length - 1];
-            const lastContent = typeof last?.content === 'string' ? last.content : '';
-            if (lastContent.includes('Your previous response ended without calling')) {
-              retryPromptObservedAtTurn = turn;
-            }
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'e-retry',
-                name: 'emit_verdict',
-                input: {
-                  status: 'accept',
-                  reason: 'Recovered after retry.',
-                  user_answer: 'Review complete. No issues observed.',
-                },
-              }],
-            };
-          }
-          // After emit_verdict succeeded, Runner may re-invoke the agent
-          // once more before recognising terminal exit; return text-only
-          // so the Runner inner loop terminates cleanly.
-          return {
-            textBlocks: [{ text: 'Review complete. No issues observed.' }],
-            toolBlocks: [],
-          };
-        },
-      });
-
-      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
-      // Retry succeeded on turn 2; Runner may re-invoke once more for
-      // post-terminal confirmation. Lower bound = 2 (the retry that
-      // recovered); upper bound = 3 (one extra post-verdict turn).
-      // Bounded range catches the regression where B1 spuriously
-      // fires extra retries after recovery.
-      expect(evaluatorTurnsSeen).toBeGreaterThanOrEqual(2);
-      expect(evaluatorTurnsSeen).toBeLessThanOrEqual(3);
-      expect(retryPromptObservedAtTurn).toBe(2);
-      expect(result.success).toBe(true);
-      expect(result.signal).toBe('COMPLETE');
-      // Real `emit_verdict` populated the recorder — NOT a synth.
-      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-      expect(result.managedProtocolPayload?.verdict?.reason).toBe('Recovered after retry.');
-      // Synth event must NOT fire — real tool call recovered.
-      expect(synthEvents).toHaveLength(0);
-    });
-  });
-
-  it('B2 synth: text-only across cap → synthesized accept verdict + onEvaluatorFallbackSynthesized fires with right shape', async () => {
-    await withHarnessV2(async () => {
-      const synthEvents: Array<{
-        retriesAttempted: number;
-        cap: number;
-        modelAlias?: string;
-        userFacingText: string;
-        reason: string;
-      }> = [];
-      const opts = {
-        ...makeOptions(),
-        // Default cap = 2 (no zhipu alias)
-        events: {
-          onEvaluatorFallbackSynthesized: (
-            info: typeof synthEvents[number],
-          ) => synthEvents.push(info),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-
-      let evaluatorTurnsSeen = 0;
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w1',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        evaluator: (turn) => {
-          evaluatorTurnsSeen = turn;
-          // ALL turns text-only — exhaust cap, force B2 synth.
-          return {
-            textBlocks: [{ text: 'Review complete. The Worker answer holds.' }],
-            toolBlocks: [],
-          };
-        },
-      });
-
-      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
-      // Default cap=2 → Evaluator runs 1 initial + 2 retries = 3 turns.
-      expect(evaluatorTurnsSeen).toBe(3);
-      // Synth event fires exactly once with the canonical shape.
-      expect(synthEvents).toHaveLength(1);
-      const evt = synthEvents[0]!;
-      expect(evt.retriesAttempted).toBe(2);
-      expect(evt.cap).toBe(2);
-      expect(evt.modelAlias).toBeUndefined();
-      expect(evt.userFacingText).toContain('Review complete');
-      expect(evt.reason).toContain('failed to emit a terminal verdict');
-      expect(evt.reason).toContain('2 retries');
-      // Synth verdict landed in recorder + managed payload.
-      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-      expect(result.managedProtocolPayload?.verdict?.reason).toContain(
-        'failed to emit a terminal verdict',
-      );
-      // The Evaluator's review text reaches the user as user_answer.
-      expect(result.managedProtocolPayload?.verdict?.userAnswer).toContain(
-        'Review complete',
-      );
-      // Final signal is COMPLETE (not BLOCKED) — accept-with-synth.
-      expect(result.success).toBe(true);
-      expect(result.signal).toBe('COMPLETE');
-    });
-  });
-
-  it('zhipu alias gets cap=1 (intent-floor structural — wasted budget on retry-2)', async () => {
-    await withHarnessV2(async () => {
-      const synthEvents: Array<{
-        retriesAttempted: number;
-        cap: number;
-        modelAlias?: string;
-        userFacingText: string;
-        reason: string;
-      }> = [];
-      const baseOpts = makeOptions();
-      const opts = {
-        ...baseOpts,
-        // Resolved alias path: `options.modelOverride ?? options.model`.
-        // `makeOptions` sets `provider:'anthropic'` so model field is
-        // open; we set it to a zhipu family alias.
-        model: 'zhipu/glm51',
-        events: {
-          onEvaluatorFallbackSynthesized: (
-            info: typeof synthEvents[number],
-          ) => synthEvents.push(info),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-
-      let evaluatorTurnsSeen = 0;
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w1',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        evaluator: (turn) => {
-          evaluatorTurnsSeen = turn;
-          return {
-            textBlocks: [{ text: 'Review complete. Intent-floor case.' }],
-            toolBlocks: [],
-          };
-        },
-      });
-
-      await runManagedTaskViaRunner(opts, 'audit task', mock);
-      // zhipu cap=1 → Evaluator runs 1 initial + 1 retry = 2 turns total.
-      expect(evaluatorTurnsSeen).toBe(2);
-      expect(synthEvents).toHaveLength(1);
-      const evt = synthEvents[0]!;
-      expect(evt.retriesAttempted).toBe(1);
-      expect(evt.cap).toBe(1);
-      expect(evt.modelAlias).toBe('zhipu/glm51');
-    });
-  });
-
-  it('negative: when Evaluator emits real emit_verdict on turn 1, NO B1 retry and NO B2 synth fire', async () => {
-    await withHarnessV2(async () => {
-      const synthEvents: Array<{
-        retriesAttempted: number;
-        cap: number;
-      }> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onEvaluatorFallbackSynthesized: (
-            info: typeof synthEvents[number],
-          ) => synthEvents.push(info),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-
-      let evaluatorTurnsSeen = 0;
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w1',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        evaluator: (turn) => {
-          evaluatorTurnsSeen = turn;
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'e1',
-                name: 'emit_verdict',
-                input: { status: 'accept', user_answer: 'all good' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'all good' }], toolBlocks: [] };
-        },
-      });
-
-      const result = await runManagedTaskViaRunner(opts, 'audit task', mock);
-      // Real emit_verdict on turn 1 — no retries fired. Runner may
-      // re-invoke the agent once more for terminal confirmation (the
-      // V2 chain doesn't strictly halt on isTerminal=true, see the
-      // existing "After accept, Worker MAY be re-invoked" pattern in
-      // the H0_DIRECT test at line ~813), so we permit ≥1 turns.
-      expect(evaluatorTurnsSeen).toBeGreaterThanOrEqual(1);
-      expect(synthEvents).toHaveLength(0);
-      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-      // Reason carries the LLM-provided value (or undefined when the
-      // mock didn't supply one). The synth marker MUST NOT appear —
-      // its presence would indicate a spurious B2 fallback was fired.
-      const reason = result.managedProtocolPayload?.verdict?.reason;
-      if (reason !== undefined) {
-        expect(reason).not.toContain('failed to emit a terminal verdict');
-      }
-    });
-  });
-
-  // v0.7.42 — B2 synth fallback used to write `recorder.verdict` directly,
-  // bypassing the `wrapEmitterWithRecorder` slot-setter side-effect that
-  // would have called `todoStore.autoCompleteOnAccept()` on a real
-  // `emit_verdict` tool call. The plan-list UI then showed `0/N completed`
-  // even when the run terminated as `accept`. The fix mirrors the slot-
-  // setter side-effect at the synth site.
-  it('B2 synth: autoCompleteOnAccept also fires on synth verdict (plan items flip to completed)', async () => {
-    await withHarnessV2(async () => {
-      // Listen on the public onTodoUpdate event bus to capture the
-      // canonical end-of-run plan-list snapshot the REPL would see.
-      const todoSnapshots: Array<ReadonlyArray<{ id: string; status: string }>> = [];
-      const synthEvents: Array<unknown> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onTodoUpdate: (items: ReadonlyArray<{ id: string; status: string }>) => {
-            todoSnapshots.push(items.map((it) => ({ id: it.id, status: it.status })));
-          },
-          onEvaluatorFallbackSynthesized: (info: unknown) => synthEvents.push(info),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            // Seed a 3-item plan on turn 1.
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w-init',
-                name: 'todo_update',
-                input: {
-                  op: 'init',
-                  items: [
-                    { id: 'todo_1', content: 'Wire EChart', activeForm: 'Wiring EChart' },
-                    { id: 'todo_2', content: 'Overlay data', activeForm: 'Overlaying data' },
-                    { id: 'todo_3', content: 'Verify', activeForm: 'Verifying' },
-                  ],
-                },
-              }],
-            };
-          }
-          if (turn === 2) {
-            // Close out todo_1 only — the smoking-gun shape: Worker
-            // completed some items but not all when handing off.
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w-step',
-                name: 'todo_update',
-                input: { id: 'todo_1', status: 'completed' },
-              }],
-            };
-          }
-          if (turn === 3) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w-handoff',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done (1/3 closed by LLM; 2/3 left for runner to finalize)' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'idle' }], toolBlocks: [] };
-        },
-        evaluator: () => {
-          // Force B2 synth: every Evaluator turn is text-only.
-          return {
-            textBlocks: [{ text: 'Review complete. Plan items look right.' }],
-            toolBlocks: [],
-          };
-        },
-      });
-
-      const result = await runManagedTaskViaRunner(opts, 'build map', mock);
-
-      // Sanity-pin we actually went through the synth path. Without
-      // this guard, an upstream change that makes B1 always recover
-      // would silently invalidate the side-effect assertion below.
-      expect(synthEvents).toHaveLength(1);
-      expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-      expect(result.managedProtocolPayload?.verdict?.reason).toContain(
-        'failed to emit a terminal verdict',
-      );
-
-      // The final onTodoUpdate snapshot must show ALL three items
-      // completed — todo_1 by the LLM's earlier todo_update, todo_2
-      // and todo_3 by autoCompleteOnAccept mirroring the synth verdict.
-      // Pre-fix this assertion was `[completed, pending, pending]`
-      // (autoCompleteOnAccept never ran on the synth path), which
-      // mapped to the user-visible "PLANNED ... 1/3 completed" stale
-      // UI even after the run ended successfully.
-      expect(todoSnapshots.length).toBeGreaterThan(0);
-      const finalSnapshot = todoSnapshots[todoSnapshots.length - 1]!;
-      expect(finalSnapshot).toEqual([
-        { id: 'todo_1', status: 'completed' },
-        { id: 'todo_2', status: 'completed' },
-        { id: 'todo_3', status: 'completed' },
-      ]);
-    });
-  });
-});
+// FEATURE_167 (v0.7.41) Evaluator terminal-verdict fallback (B1+B2) deleted
+// in FEATURE_184 Phase C.2 (v0.7.45). The three-layer B0/B1/B2 retry/synth
+// fallback block is superseded by the Sidecar Verifier StopHook (Phase D.2).
 
 describe('parity — Runner path and legacy SA path produce compatible KodaXResult shape', () => {
   // The goal of Shard 5a parity is NOT byte-level equivalence (the legacy
@@ -1484,7 +1017,7 @@ function makeChainMockLlm(handlers: Record<string, AgentTurn>) {
     if (system.includes('You are Scout')) return 'scout';
     if (system.includes('You are Planner')) return 'planner';
     if (system.includes('You are Generator')) return 'generator';
-    if (system.includes('You are Evaluator')) return 'evaluator';
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     // FEATURE_114 v0.7.36 Slice 5 — Worker prompt opens with one
     // of two markers depending on whether the prompt is built via
     // `worker-role-prompt.ts` (production path: "You are the Worker
@@ -1522,7 +1055,10 @@ function makeChainMockLlm(handlers: Record<string, AgentTurn>) {
 }
 
 describe('Shard 5b parity — H1 accept path', () => {
-  it('Scout → Generator → Evaluator accept produces converged KodaXResult', async () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // Generator emits emit_handoff (isTerminal=true); run terminates.
+  // Sidecar Verifier (Phase D.2) handles verdict async.
+  it('Scout → Generator terminates text-only for Sidecar Verifier (H1 accept path)', async () => {
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -1550,28 +1086,15 @@ describe('Shard 5b parity — H1 accept path', () => {
         }
         throw new Error('generator should have handed off already');
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'eval-1',
-              name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Feature implemented and tests pass.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Feature implemented and tests pass.' }] };
-      },
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'Add login endpoint', mock);
     expect(result.success).toBe(true);
     expect(result.signal).toBe('COMPLETE');
-    expect(result.lastText).toBe('Feature implemented and tests pass.');
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
     expect(result.managedProtocolPayload?.scout?.confirmedHarness).toBe('H1_EXECUTE_EVAL');
     expect(result.managedProtocolPayload?.handoff?.status).toBe('ready');
+    // No in-chain Evaluator — verdict.status is undefined post-C.1.
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
   });
 });
 
@@ -1619,17 +1142,6 @@ describe('M5 parity — Scout pre-handoff write warning (v0.7.26)', () => {
           input: { status: 'ready', summary: 'Done' },
         }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e-1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Shipped.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Shipped.' }] };
-      },
     });
 
     await runManagedTaskViaRunner(opts, 'Rewrite summary', mock);
@@ -1690,8 +1202,11 @@ describe('M5 parity — Scout pre-handoff write warning (v0.7.26)', () => {
   });
 });
 
-describe('Shard 5b parity — H1 revise → accept path', () => {
-  it('Evaluator revise cycles back to Generator, then accept on second pass', async () => {
+describe('Shard 5b parity — H1 Generator terminates text-only', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // Revise cycles via in-chain Evaluator no longer exist.
+  // Generator emits emit_handoff (isTerminal=true) and run terminates.
+  it('Generator terminates with emit_handoff ready; handoff.status set', async () => {
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -1705,46 +1220,29 @@ describe('Shard 5b parity — H1 revise → accept path', () => {
         throw new Error('scout overrun');
       },
       generator: (turn) => {
-        if (turn === 1 || turn === 2) {
+        if (turn === 1) {
           return {
             toolBlocks: [{
-              type: 'tool_use', id: `g${turn}`, name: 'emit_handoff',
+              type: 'tool_use', id: 'g1', name: 'emit_handoff',
               input: { status: 'ready' },
             }],
           };
         }
         throw new Error('generator overrun');
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'revise', reason: 'missed edge case' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e2', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Fixed on second pass.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Fixed on second pass.' }] };
-      },
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'Fix edge case', mock);
     expect(result.success).toBe(true);
-    expect(result.lastText).toBe('Fixed on second pass.');
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+    expect(result.signal).toBe('COMPLETE');
+    expect(result.managedProtocolPayload?.handoff?.status).toBe('ready');
   });
 });
 
-describe('Shard 5b parity — H2 plan → execute → accept path', () => {
-  it('Scout → Planner → Generator → Evaluator accept with contract', async () => {
+describe('Shard 5b parity — H2 plan → execute path', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // Generator terminates with emit_handoff (isTerminal=true).
+  it('Scout → Planner → Generator terminates; contract surfaced', async () => {
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -1784,30 +1282,21 @@ describe('Shard 5b parity — H2 plan → execute → accept path', () => {
         }
         throw new Error('generator overrun');
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'JWT auth ready per contract.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'JWT auth ready per contract.' }] };
-      },
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'Add JWT auth', mock);
     expect(result.success).toBe(true);
-    expect(result.lastText).toBe('JWT auth ready per contract.');
     expect(result.managedProtocolPayload?.scout?.confirmedHarness).toBe('H2_PLAN_EXECUTE_EVAL');
     expect(result.managedProtocolPayload?.contract?.successCriteria).toHaveLength(2);
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+    // No in-chain Evaluator — verdict undefined post-C.1.
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
   });
 });
 
 describe('Shard 5b parity — blocked path', () => {
-  it('Evaluator blocked surfaces BLOCKED signal + reason; success=false', async () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): BLOCKED signal comes from Generator
+  // emit_handoff(status:'blocked') directly — no in-chain Evaluator.
+  it('Generator blocked emit_handoff surfaces BLOCKED signal; success=false', async () => {
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -1831,24 +1320,13 @@ describe('Shard 5b parity — blocked path', () => {
         }
         throw new Error('generator overrun');
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'blocked', reason: 'Missing OAUTH_CLIENT_ID env var' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Blocked: needs OAUTH_CLIENT_ID to be set.' }] };
-      },
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'Enable OAuth', mock);
     expect(result.success).toBe(false);
     expect(result.signal).toBe('BLOCKED');
-    expect(result.signalReason).toMatch(/OAUTH_CLIENT_ID/);
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('blocked');
+    // No in-chain Evaluator — verdict undefined post-C.1.
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
   });
 });
 
@@ -1890,7 +1368,8 @@ describe('Shard 6a — onManagedTaskStatus observer events', () => {
     expect(statuses.some((s) => s.phase === 'completed')).toBe(true);
   });
 
-  it('fires round events per role emit (Scout → Gen → Eval → accept)', async () => {
+  it('fires round events per role emit (Scout → Generator terminates)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const statuses: Array<{ phase?: string; activeWorkerId?: string }> = [];
     const opts = {
       ...makeOptions(),
@@ -1908,26 +1387,17 @@ describe('Shard 6a — onManagedTaskStatus observer events', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Done' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Done' }] };
-      },
     });
     await runManagedTaskViaRunner(opts, 'task', mock);
     const roleEvents = statuses.filter((s) => s.phase === 'worker').map((s) => s.activeWorkerId);
     expect(roleEvents).toContain('scout');
     expect(roleEvents).toContain('generator');
-    expect(roleEvents).toContain('evaluator');
+    expect(roleEvents).not.toContain('evaluator');
   });
 
-  it('fires completed with BLOCKED signal note on blocked verdict', async () => {
+  it('fires completed with BLOCKED signal note on blocked handoff', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): BLOCKED comes from Generator
+    // emit_handoff(status:'blocked') directly — no in-chain Evaluator.
     const statuses: Array<{ phase?: string; note?: string }> = [];
     const opts = {
       ...makeOptions(),
@@ -1945,17 +1415,6 @@ describe('Shard 6a — onManagedTaskStatus observer events', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'blocked' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'blocked', reason: 'missing dependency' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'blocked' }] };
-      },
     });
     await runManagedTaskViaRunner(opts, 'task', mock);
     const completed = statuses.find((s) => s.phase === 'completed');
@@ -1965,6 +1424,7 @@ describe('Shard 6a — onManagedTaskStatus observer events', () => {
 
 describe('Shard 6a — managedTask payload shape', () => {
   it('populates contract.harnessProfile from Scout verdict (H1 case)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -1975,17 +1435,6 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     expect(result.managedTask?.contract.harnessProfile).toBe('H1_EXECUTE_EVAL');
@@ -1994,6 +1443,8 @@ describe('Shard 6a — managedTask payload shape', () => {
   });
 
   it('populates roleAssignments in handoff order (H2 chain)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // roleAssignments ends at 'generator'.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2010,21 +1461,10 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'done' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     const roles = result.managedTask?.roleAssignments.map((a) => a.role);
-    expect(roles).toEqual(['scout', 'planner', 'generator', 'evaluator']);
+    expect(roles).toEqual(['scout', 'planner', 'generator']);
   });
 
   it('populates single "direct" assignment for H0_DIRECT', async () => {
@@ -2048,6 +1488,7 @@ describe('Shard 6a — managedTask payload shape', () => {
   });
 
   it('populates runtime.globalWorkBudget + budgetUsage (Shard 6a minimum)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2058,17 +1499,6 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     // v0.7.26 budget caps: H0=100, H1=H2=200 (legacy parity). Extension
@@ -2078,6 +1508,7 @@ describe('Shard 6a — managedTask payload shape', () => {
   });
 
   it('records harnessTransitions when Scout chooses non-H0 tier', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2094,17 +1525,6 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'done' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     const transitions = result.managedTask?.runtime?.harnessTransitions ?? [];
@@ -2114,8 +1534,12 @@ describe('Shard 6a — managedTask payload shape', () => {
     expect(transitions[0]!.source).toBe('scout');
   });
 
-  it('verdict.status=completed on accept, blocked on blocked', async () => {
-    const acceptMock = makeChainMockLlm({
+  it('managedTask.verdict.status=running (initial) since no in-chain Evaluator sets it', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // managedTask.verdict is initialised as {status:'running'} by the
+    // recorder. No in-chain Evaluator updates it to 'completed'/'blocked'.
+    // Sidecar Verifier (Phase D.2) owns verdict finalisation async.
+    const readyMock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
           type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
@@ -2125,20 +1549,9 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
-    const accept = await runManagedTaskViaRunner(makeOptions(), 'task', acceptMock);
-    expect(accept.managedTask?.verdict.status).toBe('completed');
+    const ready = await runManagedTaskViaRunner(makeOptions(), 'task', readyMock);
+    expect(ready.managedTask?.verdict.status).toBe('running');
 
     const blockedMock = makeChainMockLlm({
       scout: () => ({
@@ -2150,20 +1563,12 @@ describe('Shard 6a — managedTask payload shape', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'blocked' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'blocked', reason: 'need env var' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'blocked' }] };
-      },
     });
     const blocked = await runManagedTaskViaRunner(makeOptions(), 'task', blockedMock);
-    expect(blocked.managedTask?.verdict.status).toBe('blocked');
+    // managedTask.verdict is still 'running' (no in-chain Evaluator to flip it).
+    // The BLOCKED signal comes from result.signal, not managedTask.verdict.
+    expect(blocked.managedTask?.verdict.status).toBe('running');
+    expect(blocked.signal).toBe('BLOCKED');
   });
 });
 
@@ -2173,6 +1578,8 @@ describe('Shard 6a — managedTask payload shape', () => {
 
 describe('Shard 6b — budget controller', () => {
   it('increments spentBudget per tool invocation (emit tools count)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // 2 emit tool calls (scout + handoff) → at least 2 budget units.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2183,24 +1590,14 @@ describe('Shard 6b — budget controller', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    // 3 emit tool calls (scout + handoff + verdict) → at least 3 budget units
-    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(3);
+    // 2 emit tool calls (scout + handoff) → at least 2 budget units
+    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(2);
   });
 
   it('upgrades totalBudget when Scout picks H1 (from 50 → 400)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2211,17 +1608,6 @@ describe('Shard 6b — budget controller', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     expect(result.managedTask?.runtime?.globalWorkBudget).toBe(200);
@@ -2246,6 +1632,7 @@ describe('Shard 6b — budget controller', () => {
   });
 
   it('upgrades to 200 when Scout picks H2', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2262,17 +1649,6 @@ describe('Shard 6b — budget controller', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'done' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     expect(result.managedTask?.runtime?.globalWorkBudget).toBe(200);
@@ -2318,22 +1694,12 @@ describe('Shard 6b — mutation tracker', () => {
           toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
         };
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'done' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     expect(result.success).toBe(true);
-    // Budget usage reflects scout emit + write tool + handoff emit + verdict emit ≥ 4
-    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(4);
+    // Budget usage reflects scout emit + write tool + handoff emit ≥ 3
+    // (FEATURE_184 C.1: no verdict emit from in-chain Evaluator)
+    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -2365,6 +1731,7 @@ describe('Shard 6c — checkpoint handling', () => {
     // Exercises the fire-and-forget checkpoint writer during a multi-role
     // run. Failures inside writeCurrentCheckpoint are swallowed, so even
     // if the workspace-root is unwritable the chain completes.
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     const mock = makeChainMockLlm({
       scout: () => ({
         toolBlocks: [{
@@ -2375,30 +1742,21 @@ describe('Shard 6c — checkpoint handling', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
     expect(result.success).toBe(true);
-    // roleAssignments records all 3 roles that emitted.
+    // roleAssignments records the 2 roles that emitted (no evaluator).
     expect(result.managedTask?.roleAssignments.map((a) => a.role)).toEqual([
-      'scout', 'generator', 'evaluator',
+      'scout', 'generator',
     ]);
   });
 });
 
-describe('Shard 5b — H2 replan via nextHarness', () => {
-  it('Evaluator revise with next_harness=H2 routes back to Planner', async () => {
-    let plannerTurns = 0;
+describe('Shard 5b — H2 Generator terminates after planning', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // Revise cycles via nextHarness no longer exist.
+  // Generator terminates with emit_handoff (isTerminal=true).
+  it('Scout → Planner → Generator terminates; result.success=true', async () => {
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -2412,52 +1770,32 @@ describe('Shard 5b — H2 replan via nextHarness', () => {
         throw new Error('scout overrun');
       },
       planner: (turn) => {
-        plannerTurns += 1;
-        return {
-          toolBlocks: [{
-            type: 'tool_use', id: `p${turn}`, name: 'emit_contract',
-            input: {
-              summary: `Plan v${turn}`,
-              success_criteria: ['criteria1'],
-              required_evidence: [],
-              constraints: [],
-            },
-          }],
-        };
-      },
-      generator: (turn) => {
-        return {
-          toolBlocks: [{
-            type: 'tool_use', id: `g${turn}`, name: 'emit_handoff',
-            input: { status: 'ready' },
-          }],
-        };
-      },
-      evaluator: (turn) => {
         if (turn === 1) {
           return {
             toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'revise', next_harness: 'H2_PLAN_EXECUTE_EVAL' },
+              type: 'tool_use', id: 'p1', name: 'emit_contract',
+              input: {
+                summary: 'Plan v1',
+                success_criteria: ['criteria1'],
+                required_evidence: [],
+                constraints: [],
+              },
             }],
           };
         }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e2', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Replanned and succeeded.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Replanned and succeeded.' }] };
+        throw new Error('planner overrun');
       },
+      generator: () => ({
+        toolBlocks: [{
+          type: 'tool_use', id: 'g1', name: 'emit_handoff',
+          input: { status: 'ready' },
+        }],
+      }),
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'Complex task', mock);
-    expect(plannerTurns).toBeGreaterThanOrEqual(2);
     expect(result.success).toBe(true);
-    expect(result.lastText).toBe('Replanned and succeeded.');
+    expect(result.signal).toBe('COMPLETE');
   });
 });
 
@@ -2480,17 +1818,6 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready', summary: 'gen done' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'ok' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
     });
     await runManagedTaskViaRunner(opts, 'do X', mock);
     // Filter for slot-emit "completed a turn" events specifically —
@@ -2513,9 +1840,10 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
     const genEvent = statuses.find((s) => isRoundEvent(s, 'generator'));
     expect(genEvent?.activeWorkerTitle).toBe('Generator');
     expect(genEvent?.currentRound).toBe(2);
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // No evalEvent — chain terminates after Generator.
     const evalEvent = statuses.find((s) => isRoundEvent(s, 'evaluator'));
-    expect(evalEvent?.activeWorkerTitle).toBe('Evaluator');
-    expect(evalEvent?.currentRound).toBe(3);
+    expect(evalEvent).toBeUndefined();
   });
 
   it('populates globalWorkBudget and budgetUsage on every event', async () => {
@@ -2535,7 +1863,10 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
     expect(event?.budgetApprovalRequired).toBe(false);
   });
 
-  it('completed event has persistToHistory=true and detailNote=verdict reason', async () => {
+  it('completed event has persistToHistory=true (FEATURE_184 C.1: no in-chain Evaluator, detailNote absent)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // Generator emits emit_handoff(blocked) → run terminates as BLOCKED.
+    // No in-chain Evaluator emits emit_verdict, so detailNote is not set.
     const statuses: Array<Record<string, unknown>> = [];
     const opts = {
       ...makeOptions(),
@@ -2553,22 +1884,12 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'blocked' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'blocked', reason: 'cannot verify dep' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'blocked' }] };
-      },
     });
     await runManagedTaskViaRunner(opts, 'Task X', mock);
     const completed = statuses.find((s) => s.phase === 'completed');
     expect(completed?.persistToHistory).toBe(true);
-    expect(completed?.detailNote).toBe('cannot verify dep');
+    // No Evaluator → no detailNote from verdict reason.
+    expect(completed?.detailNote).toBeUndefined();
   });
 
   it('round events default persistToHistory=false (transient progress ticks)', async () => {
@@ -2592,7 +1913,7 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
         return { textBlocks: [{ text: 'ok' }] };
       },
       generator: () => ({ textBlocks: [{ text: 'ok' }] }),
-      evaluator: () => ({ textBlocks: [{ text: 'ok' }] }),
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     });
     await runManagedTaskViaRunner(opts, 'Task', mock);
     const round = statuses.find((s) => s.phase === 'worker');
@@ -2658,14 +1979,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     expect(plannerTools).not.toContain('edit');
   });
 
-  it('Evaluator agent exposes read + grep + glob + bash + emit_verdict (no write/edit)', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const evaluatorTools = chain.evaluator.tools?.map((t) => t.name) ?? [];
-    expect(evaluatorTools).toContain('emit_verdict');
-    expect(evaluatorTools).toContain('bash');
-    expect(evaluatorTools).not.toContain('write');
-    expect(evaluatorTools).not.toContain('edit');
-  });
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // "Evaluator agent exposes read + grep + glob + bash + emit_verdict" test deleted.
 
   it('Generator agent exposes full coding toolbox including write + edit', () => {
     const chain = buildRunnerAgentChain(makeCtx(), {});
@@ -2676,35 +1991,11 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     expect(genTools).toContain('edit');
   });
 
-  it('Evaluator bash blocks shell mutation commands (legacy SHELL_WRITE_PATTERNS parity)', async () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const evalBash = findTool(chain.evaluator, 'bash');
-    const result = await evalBash.execute({ command: 'rm -rf /tmp/x' }, makeToolCtx('evaluator'));
-    expect(result.isError).toBe(true);
-    expect(String(result.content)).toContain('verification-only');
-  });
-
-  it('Evaluator bash allows read-only commands (ls, cat, git diff)', async () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const evalBash = findTool(chain.evaluator, 'bash');
-    // Mutation guard does NOT fire for read-only commands.
-    const result = await evalBash.execute({ command: 'git diff HEAD' }, makeToolCtx('evaluator'));
-    if (result.isError) {
-      expect(String(result.content)).not.toContain('verification-only');
-    }
-  });
-
-  it('Evaluator bash blocks git write commands (commit, push, reset)', async () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const evalBash = findTool(chain.evaluator, 'bash');
-    const commit = await evalBash.execute({ command: 'git commit -m "x"' }, makeToolCtx('evaluator'));
-    expect(commit.isError).toBe(true);
-    expect(String(commit.content)).toContain('verification-only');
-    const push = await evalBash.execute({ command: 'git push origin main' }, makeToolCtx('evaluator'));
-    expect(push.isError).toBe(true);
-    const reset = await evalBash.execute({ command: 'git reset --hard HEAD' }, makeToolCtx('evaluator'));
-    expect(reset.isError).toBe(true);
-  });
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // "Evaluator bash blocks shell mutation commands" test deleted.
+  // "Evaluator bash allows read-only commands" test deleted.
+  // "Evaluator bash blocks git write commands" test deleted.
+  // wrapReadOnlyBash is retained for C.3 cleanup.
 
   it('Scout bash is NOT wrapped — Scout has full tool access per v0.7.22 parity', async () => {
     // v0.7.26 Scout-tool-restoration: Scout runs H0_DIRECT tasks to
@@ -2782,28 +2073,22 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       expect(workerTools).not.toContain('emit_verdict');
     });
 
-    it('Worker hands off to Evaluator (single continuation edge)', () => {
+    it('Worker has no handoffs (FEATURE_184 C.1: Evaluator removed from chain)', () => {
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // Worker emits emit_handoff(isTerminal=true) to terminate; no agent handoff edge.
       const chain = buildRunnerAgentChain(makeCtx(), {});
       const handoffs = chain.worker.handoffs ?? [];
-      expect(handoffs).toHaveLength(1);
-      expect(handoffs[0].target.name).toBe('kodax/role/evaluator');
-      expect(handoffs[0].kind).toBe('continuation');
+      expect(handoffs).toHaveLength(0);
     });
 
-    it('legacy V1 chain handoffs are unchanged (no Worker leak into V1 topology)', () => {
-      // v0.7.38 Slice 7: V2 is now default, so we set the env var
-      // to 'false' explicitly to test V1 baseline. Previously this
-      // test used `delete env` (implicit V1 default); the default
-      // flip changes that semantics so the env var must now carry
-      // the explicit V1 opt-out value.
+    it('V1/V2 chain topology: no Worker targets in scout/planner/generator handoffs', () => {
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // chain.evaluator no longer exists; verify Worker is not leaked into
+      // the remaining agent handoff edges.
       const prev = process.env.KODAX_HARNESS_V2;
       process.env.KODAX_HARNESS_V2 = 'false';
       try {
         const chain = buildRunnerAgentChain(makeCtx(), {});
-        const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
-        expect(evalTargets).not.toContain('kodax/role/worker');
-        expect(evalTargets).toContain('kodax/role/generator');
-        expect(evalTargets).toContain('kodax/role/planner');
         const scoutTargets = (chain.scout.handoffs ?? []).map((h) => h.target.name);
         expect(scoutTargets).not.toContain('kodax/role/worker');
         const plannerTargets = (chain.planner.handoffs ?? []).map((h) => h.target.name);
@@ -2839,43 +2124,31 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       }
     }
 
-    it('V2 active: Evaluator revise targets Worker (Generator no longer in handoff list)', () => {
-      withHarnessV2('true', () => {
-        const chain = buildRunnerAgentChain(makeCtx(), {});
-        const evalTargets = (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
-        expect(evalTargets).toContain('kodax/role/worker');
-        expect(evalTargets).toContain('kodax/role/planner');
-        // V2 mode swaps the executor: Generator MUST NOT be on
-        // Evaluator's revise list (would create a phantom V1 path
-        // the runner can't satisfy because the entry agent is Worker).
-        expect(evalTargets).not.toContain('kodax/role/generator');
-      });
-    });
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // "V2 active: Evaluator revise targets Worker" test deleted (chain.evaluator gone).
 
-    it('V2 active: Worker still hands off to Evaluator (single edge unchanged)', () => {
+    it('V2 active: Worker has no handoffs (FEATURE_184 C.1: Evaluator removed)', () => {
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // Worker terminates via emit_handoff(isTerminal=true); no edge to Evaluator.
       withHarnessV2('true', () => {
         const chain = buildRunnerAgentChain(makeCtx(), {});
         const workerTargets = (chain.worker.handoffs ?? []).map((h) => h.target.name);
-        expect(workerTargets).toEqual(['kodax/role/evaluator']);
+        expect(workerTargets).toHaveLength(0);
+        expect(workerTargets).not.toContain('kodax/role/evaluator');
       });
     });
 
-    it('flag toggles deterministically: same chain factory, different graphs', () => {
-      // v0.7.38 Slice 7 — V2 is now the default. To compare V1 vs V2
-      // graphs, pass 'false' for V1 opt-out instead of undefined
-      // (which now means "V2 default").
-      const v1Targets = withHarnessV2('false', () => {
+    it('flag toggles deterministically: same chain factory, Worker has no Evaluator target in either mode', () => {
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // chain.evaluator no longer exists; verify Worker has no Evaluator target.
+      withHarnessV2('false', () => {
         const chain = buildRunnerAgentChain(makeCtx(), {});
-        return (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+        expect((chain.worker.handoffs ?? [])).toHaveLength(0);
       });
-      const v2Targets = withHarnessV2('true', () => {
+      withHarnessV2('true', () => {
         const chain = buildRunnerAgentChain(makeCtx(), {});
-        return (chain.evaluator.handoffs ?? []).map((h) => h.target.name);
+        expect((chain.worker.handoffs ?? [])).toHaveLength(0);
       });
-      expect(v1Targets).toContain('kodax/role/generator');
-      expect(v1Targets).not.toContain('kodax/role/worker');
-      expect(v2Targets).toContain('kodax/role/worker');
-      expect(v2Targets).not.toContain('kodax/role/generator');
     });
   });
 
@@ -3121,31 +2394,8 @@ describe('Shard 6d-T — Scout skillMap injected into Generator + Evaluator inst
     expect(gen).not.toContain('verification_obligations:');
   });
 
-  it('renders verification_obligations for Evaluator', () => {
-    const recorder: Record<string, unknown> = {
-      scout: {
-        payload: {
-          scout: {
-            summary: 's',
-            scope: [],
-            requiredEvidence: [],
-            skillMap: {
-              skillSummary: 'fix parser bug',
-              executionObligations: ['patch parser.ts'],
-              verificationObligations: ['parser.test.ts passes', 'no regression in ast-walker'],
-              ambiguities: [],
-            },
-          },
-        },
-      },
-    };
-    const chain = buildRunnerAgentChain(makeCtx(), recorder as unknown as Parameters<typeof buildRunnerAgentChain>[1]);
-    const evaluator = resolveInstructions(chain.evaluator);
-    expect(evaluator).toContain('Scout Skill Map');
-    expect(evaluator).toContain('verification_obligations:');
-    expect(evaluator).toContain('- parser.test.ts passes');
-    expect(evaluator).toContain('- no regression in ast-walker');
-  });
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // "renders verification_obligations for Evaluator" test deleted (chain.evaluator gone).
 
   it('omits empty obligation lists', () => {
     const recorder: Record<string, unknown> = {
@@ -3185,12 +2435,11 @@ describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only',
     expect(genTools).toContain('dispatch_child_task');
   });
 
-  it('Planner + Evaluator agents do NOT expose dispatch_child_task', () => {
+  it('Planner agent does NOT expose dispatch_child_task (FEATURE_184 C.1: Evaluator removed)', () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): chain.evaluator no longer exists.
     const chain = buildRunnerAgentChain(makeCtx(), {});
     const plannerTools = chain.planner.tools?.map((t) => t.name) ?? [];
-    const evaluatorTools = chain.evaluator.tools?.map((t) => t.name) ?? [];
     expect(plannerTools).not.toContain('dispatch_child_task');
-    expect(evaluatorTools).not.toContain('dispatch_child_task');
   });
 
   it('Scout-bound dispatch tool errors out if Scout asks for a write child', async () => {
@@ -3213,52 +2462,18 @@ describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only',
   });
 });
 
-describe('Shard 6d-S — task verification contract surfaced to Evaluator + completionContractStatus', () => {
-  function resolveInstructions(
-    agent: { readonly instructions: string | ((ctx: unknown) => string) },
-  ): string {
-    return typeof agent.instructions === 'function'
-      ? agent.instructions(undefined)
-      : agent.instructions;
-  }
+describe('Shard 6d-S — task verification contract completionContractStatus', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+  // "falls back to base Evaluator text when no verification contract" test deleted.
+  // "renders startup command + UI flows + API checks for the Evaluator" test deleted.
+  // (chain.evaluator no longer exists; role-prompts.ts Evaluator case retained for C.3.)
+  //
+  // completionContractStatus now reflects verdictStatus=undefined (no in-chain Evaluator).
+  // Verdict is set by Sidecar Verifier (Phase D.2). Without a sidecar verdict, all checks
+  // get status='missing'.
 
-  it('falls back to base Evaluator text when no verification contract', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const evaluator = resolveInstructions(chain.evaluator);
-    expect(evaluator).not.toContain('Runtime Verification Contract');
-  });
-
-  it('renders startup command + UI flows + API checks for the Evaluator', () => {
-    const chain = buildRunnerAgentChain(
-      makeCtx(),
-      {},
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      {
-        runtime: {
-          startupCommand: 'pnpm dev',
-          readySignal: 'Ready in',
-          baseUrl: 'http://localhost:3000',
-          uiFlows: ['Navigate to /login and submit form', 'Verify dashboard renders'],
-          apiChecks: ['GET /api/health returns 200'],
-          dbChecks: [],
-        },
-      },
-    );
-    const evaluator = resolveInstructions(chain.evaluator);
-    expect(evaluator).toContain('Runtime Verification Contract');
-    expect(evaluator).toContain('startup_command: pnpm dev');
-    expect(evaluator).toContain('ready_signal: Ready in');
-    expect(evaluator).toContain('base_url: http://localhost:3000');
-    expect(evaluator).toContain('ui_flows');
-    expect(evaluator).toContain('1. Navigate to /login and submit form');
-    expect(evaluator).toContain('api_checks');
-    expect(evaluator).toContain('1. GET /api/health returns 200');
-  });
-
-  it('populates completionContractStatus=ready for all checks on accept', async () => {
+  it('populates completionContractStatus=missing when no verdict emitted (FEATURE_184 C.1)', async () => {
+    // FEATURE_184 Phase C.1: no in-chain Evaluator → verdictStatus=undefined → status='missing'
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -3282,17 +2497,6 @@ describe('Shard 6d-S — task verification contract surfaced to Evaluator + comp
         }
         throw new Error('generator overrun');
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'all checks pass' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'all checks pass' }] };
-      },
     });
 
     const result = await runManagedTaskViaRunner(
@@ -3315,60 +2519,13 @@ describe('Shard 6d-S — task verification contract surfaced to Evaluator + comp
       'Verify the app',
       mock,
     );
-    expect(result.success).toBe(true);
     const status = result.managedTask?.runtime?.completionContractStatus;
     expect(status).toBeDefined();
-    expect(status!['crit.login']).toBe('ready');
-    expect(status!['ui_flow:1']).toBe('ready');
-    expect(status!['api_check:1']).toBe('ready');
-    expect(status!['db_check:1']).toBe('ready');
-  });
-
-  it('populates completionContractStatus=blocked on blocked verdict', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      generator: () => ({
-        toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
-      }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'blocked', reason: 'db unreachable' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'db unreachable' }] };
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(
-      {
-        ...makeOptions(),
-        context: {
-          ...makeOptions().context!,
-          taskVerification: {
-            runtime: { dbChecks: ['users table query'] },
-          },
-        },
-      },
-      'Verify',
-      mock,
-    );
-    const status = result.managedTask?.runtime?.completionContractStatus;
-    expect(status).toBeDefined();
-    expect(status!['db_check:1']).toBe('blocked');
+    // No Evaluator → verdictStatus undefined → all checks='missing'
+    expect(status!['crit.login']).toBe('missing');
+    expect(status!['ui_flow:1']).toBe('missing');
+    expect(status!['api_check:1']).toBe('missing');
+    expect(status!['db_check:1']).toBe('missing');
   });
 
   it('returns undefined when no verification contract is declared', async () => {
@@ -3422,7 +2579,10 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
     };
   }
 
-  it('rewrites H2 revise → Generator when ceiling is H1 and sets degradedContinue=true', async () => {
+  it('FEATURE_184 C.1: no in-chain Evaluator means degradedContinue is not set (Generator terminates directly)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // degradedContinue was set by the Evaluator revise path; with no Evaluator
+    // the Generator just emits emit_handoff(isTerminal=true) and run completes normally.
     const mock = makeChainMockLlm({
       scout: (turn) => {
         if (turn === 1) {
@@ -3436,7 +2596,7 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
         throw new Error('scout overrun');
       },
       generator: (turn) => {
-        if (turn === 1 || turn === 2) {
+        if (turn === 1) {
           return {
             toolBlocks: [{
               type: 'tool_use', id: `g${turn}`, name: 'emit_handoff',
@@ -3445,31 +2605,6 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
           };
         }
         throw new Error('generator overrun');
-      },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          // Request H2 upgrade — should be denied because ceiling is H1.
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'revise', reason: 'need a plan', next_harness: 'H2_PLAN_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e2', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Degraded fix applied.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Degraded fix applied.' }] };
-      },
-      // Ensure Planner never runs — the degraded path must keep ownership
-      // inside Generator rather than pivoting to Planner.
-      planner: () => {
-        throw new Error('planner should not run when upgrade is denied');
       },
     });
 
@@ -3480,115 +2615,16 @@ describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
       makePlanWithCeiling('H1_EXECUTE_EVAL'),
     );
     expect(result.success).toBe(true);
-    expect(result.managedTask?.runtime?.degradedContinue).toBe(true);
-    // Accept still reached on second pass — degradation does not abort.
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-  });
-
-  it('allows H2 upgrade (no degradation) when ceiling permits it', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      generator: (turn) => {
-        if (turn === 1 || turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: `g${turn}`, name: 'emit_handoff',
-              input: { status: 'ready' },
-            }],
-          };
-        }
-        throw new Error('generator overrun');
-      },
-      planner: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'p1', name: 'emit_contract',
-              input: {
-                summary: 'Escalated plan',
-                success_criteria: ['fixed'],
-                required_evidence: [],
-                constraints: [],
-              },
-            }],
-          };
-        }
-        throw new Error('planner overrun');
-      },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          // Same H2 upgrade request — permitted this time.
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'revise', reason: 'need a plan', next_harness: 'H2_PLAN_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e2', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Upgraded fix applied.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Upgraded fix applied.' }] };
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(
-      makeOptions(),
-      'Fix it',
-      mock,
-      makePlanWithCeiling('H2_PLAN_EXECUTE_EVAL'),
-    );
-    expect(result.success).toBe(true);
+    // No Evaluator → no revise request → no degradedContinue flag set.
     expect(result.managedTask?.runtime?.degradedContinue).toBeUndefined();
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+    // managedProtocolPayload.verdict is undefined (no emit_verdict from in-chain Evaluator).
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
   });
 });
 
-describe('Shard 6d-f — evaluator graceful fallback when verdict is not emitted', () => {
-  it('returns COMPLETE with last assistant text when Evaluator produces no verdict', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
-      generator: () => ({
-        toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
-      }),
-      // Evaluator emits NO verdict — just returns final text directly.
-      evaluator: () => ({
-        textBlocks: [{ text: 'Evaluator could not structure a verdict but here is the result.' }],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    // Without a verdict, runner defaults to signal='COMPLETE' and uses
-    // the last assistant text as the answer (degraded-verification
-    // fallback semantics, minus the explicit note).
-    expect(result.signal).toBe('COMPLETE');
-    expect(result.lastText).toContain('could not structure a verdict');
-  });
-});
+// FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+// "Shard 6d-f — evaluator graceful fallback when verdict is not emitted" deleted.
+// The F167 three-layer B0/B1/B2 retry/synth fallback is superseded by Sidecar Verifier (Phase D.2).
 
 describe('Shard 6d-d — session continuity', () => {
   it('prepends options.session.initialMessages before the new prompt', async () => {
@@ -3652,7 +2688,7 @@ describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
         return { textBlocks: [{ text: 'done' }] };
       },
       generator: () => ({ textBlocks: [{ text: 'x' }] }),
-      evaluator: () => ({ textBlocks: [{ text: 'x' }] }),
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     });
     await runManagedTaskViaRunner(opts, 'T', mock);
     expect(iterations.length).toBeGreaterThanOrEqual(2); // scout turn 1 + scout turn 2
@@ -3675,7 +2711,10 @@ describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
 });
 
 describe('Shard 6d-c3 — budget extension at 90% threshold', () => {
-  it('fires askUser when Evaluator revises and budget exceeds 90%', async () => {
+  it('budget extension askUser is NOT fired on short Scout→Generator run (threshold gating)', async () => {
+    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+    // Budget cap is 400 for H1; the short Scout+Generator chain burns <<90%,
+    // so the askUser dialog is NOT fired — verifies threshold gating.
     const askUserCalls: Array<{ question: string }> = [];
     const opts = {
       ...makeOptions(),
@@ -3687,10 +2726,6 @@ describe('Shard 6d-c3 — budget extension at 90% threshold', () => {
       },
     } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
     const mock = makeChainMockLlm({
-      // Scout picks H1 so Generator + Evaluator both run. Budget cap is
-      // 400 for H1; the short chain (scout + gen + eval + eval) is well
-      // under 90%, so the askUser dialog is NOT fired — this verifies
-      // the threshold gating is in place and doesn't spam.
       scout: (turn) => {
         if (turn === 1) {
           return {
@@ -3705,42 +2740,10 @@ describe('Shard 6d-c3 — budget extension at 90% threshold', () => {
       generator: () => ({
         toolBlocks: [{ type: 'tool_use', id: 'g1', name: 'emit_handoff', input: { status: 'ready' } }],
       }),
-      evaluator: (turn) => {
-        if (turn === 1) {
-          // Burn budget by emitting many read tool calls first — but in
-          // this test we simulate the threshold via direct spent >= 90%
-          // by having many tool invocations. Because each emit + tool
-          // call increments budget, a short chain like scout+gen+eval is
-          // typically < 10 calls. To hit threshold quickly we lean on
-          // the low H0 cap (50).
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e1', name: 'emit_verdict',
-              input: { status: 'revise', reason: 'needs more work' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'e2', name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Done eventually' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Done eventually' }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     });
-    // The budget-extension prompt is gated on spentBudget >= 90% of total.
-    // In this happy path with H0 cap 50, the chain burns ~6-8 units, so
-    // the threshold is NOT hit and askUser fires only for the checkpoint
-    // dialog (which is also gated on findValidCheckpoint). Since we have
-    // no pre-existing checkpoint, askUser won't fire at all.
     await runManagedTaskViaRunner(opts, 'Task', mock);
-    // Test passes as long as the wiring compiles and the call is
-    // conditional (threshold not met in this short run). A dedicated
-    // integration test under a pre-seeded high-usage budget controller
-    // would be needed to drive this path end-to-end.
+    // threshold not met — askUser never fires.
     expect(askUserCalls.length).toBe(0);
   });
 
@@ -4498,27 +3501,10 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
             }],
           };
         }
-        // Fallback for any extra turn after handoff — Runner-driven
-        // post-evaluator continuation can re-enter Worker; return
-        // safe text-only.
+        // Fallback for any extra turn after handoff — return safe text-only.
+        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
         return { textBlocks: [{ text: 'Done.' }] };
-      },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: {
-                status: 'accept',
-                user_answer: 'Imports of foo: 3.',
-                reason: 'evidence corroborated',
-              },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Imports of foo: 3.' }] };
+        // evaluator handler deleted — Evaluator removed from chain.
       },
     });
 
@@ -4535,7 +3521,6 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // The synthetic user message must have surfaced the canonical
     // banner format on resume.
     expect(resumeTranscriptHadBanner).toBe(true);
-    expect(result.lastText).toBe('Imports of foo: 3.');
   }, 30_000);
 
   // FEATURE_155 v0.7.39 Slice C3 — the `KODAX_IDLE_YIELD=false` opt-out
@@ -4642,22 +3627,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
         }
         return { textBlocks: [{ text: 'fallthrough' }] };
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: {
-                status: 'accept',
-                user_answer: 'OK.',
-              },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'OK.' }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // evaluator handler deleted.
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'long task', mock);
@@ -4708,7 +3679,7 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
       }),
     );
 
-    const evaluatorTurns: number[] = [];
+    // FEATURE_184 Phase C.1 (v0.7.45): evaluatorTurns removed (Evaluator removed from chain).
     let lastWorkerTurn = 0;
 
     const mock = makeChainMockLlm({
@@ -4772,39 +3743,14 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
           ],
         };
       },
-      evaluator: (turn) => {
-        evaluatorTurns.push(turn);
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: {
-                status: 'accept',
-                user_answer: 'Audit complete.',
-                reason: 'verified',
-              },
-            }],
-          };
-        }
-        // The failure mode: this branch runs if the outer loop
-        // re-entered Runner.run after the accept verdict. The
-        // assertion below fails the test if we reach turn 2+.
-        return { textBlocks: [{ text: `degenerate ack turn ${turn}` }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // evaluator handler deleted. evaluatorTurns tracking removed.
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'long audit task', mock);
 
     expect(result.success).toBe(true);
     expect(result.signal).toBe('COMPLETE');
-    expect(result.lastText).toBe('Audit complete.');
-
-    // CORE ASSERTION (Bug B): Evaluator runs ≤ 2 turns. After
-    // emit_verdict accept, the outer loop's `hasEmittedTerminalVerdict`
-    // gate must prevent re-entry.
-    expect(evaluatorTurns.length).toBeLessThanOrEqual(2);
 
     // FEATURE_165 ASSERTION: Worker reached at least turn 3 — i.e.
     // the first emit_handoff (with pending child) was rejected and
@@ -4908,22 +3854,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
         }
         return { textBlocks: [{ text: 'fallthrough' }] };
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Both probes complete.' },
-            }],
-          };
-        }
-        // Post-verdict text-only final-text turn — Runner needs a
-        // non-tool response after the synthetic tool_result, otherwise
-        // it loops emit_verdict to MAX_TOOL_LOOP_ITERATIONS.
-        return { textBlocks: [{ text: 'Both probes complete.' }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // evaluator handler deleted.
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'two-child fan-out', mock);
@@ -5057,19 +3989,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
         }
         return { textBlocks: [{ text: 'fallthrough' }] };
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Audit X complete.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Audit X complete.' }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // evaluator handler deleted.
     });
 
     const result = await runManagedTaskViaRunner(makeOptions(), 'fast audit', mock);
@@ -5082,7 +4003,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // orphaned in the background queue. Post-fix the loop stays alive,
     // wake fires on the queue arm, Worker resumes and emits handoff.
     expect(workerTurns).toEqual([1, 2, 3]);
-    expect(result.lastText).toBe('Audit X complete.');
+    // FEATURE_184 Phase C.1: lastText assertion removed (was verifying
+    // Evaluator's user_answer field; Evaluator no longer in chain).
   }, 30_000);
 
   // v0.7.38 FEATURE_156 — idle-wait status emit. Verifies the
@@ -5144,19 +4066,8 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
         }
         return { textBlocks: [{ text: 'fallthrough' }] };
       },
-      evaluator: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'e-1',
-              name: 'emit_verdict',
-              input: { status: 'accept', user_answer: 'Audit complete.' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'Audit complete.' }] };
-      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
+      // evaluator handler deleted.
     });
 
     const options: KodaXOptions = {
@@ -5318,16 +4229,17 @@ describe('FEATURE_165 v0.7.41 — emit_handoff pending-children gate', () => {
     const meta = result.metadata as {
       role?: string;
       handoffTarget?: string;
+      isTerminal?: boolean;
       payload?: { handoff?: { status?: string } };
     };
     // emit_handoff is registered as the 'generator' role (V2 Worker
-    // reuses it via shared `handoffEmit`); resolveHandoffTarget maps
-    // generator → Evaluator.
+    // reuses it via shared `handoffEmit`). FEATURE_184 Phase C.1 (v0.7.45):
+    // resolveHandoffTarget now returns isTerminal=true with no handoffTarget
+    // for generator role — Evaluator removed from chain.
     expect(meta.role).toBe('generator');
-    // handoffTarget points at the runtime evaluator agent name, not the
-    // role label — the runner's `detectHandoffSignal` matches against
-    // `currentAgent.handoffs[*].target.name`.
-    expect(meta.handoffTarget).toMatch(/evaluator/i);
+    // FEATURE_184 Phase C.1: no Evaluator target; generator is terminal.
+    expect(meta.handoffTarget).toBeUndefined();
+    expect(meta.isTerminal).toBe(true);
     expect(meta.payload?.handoff?.status).toBe('ready');
   });
 
@@ -5480,90 +4392,10 @@ describe('FEATURE_166 v0.7.41 follow-up — agent-switch label flip', () => {
     }
   }
 
-  it('emits a phase=worker status with activeWorkerTitle="Evaluator" AFTER Worker emit_handoff and BEFORE Evaluator emit_verdict', async () => {
-    await withHarnessV2('true', async () => {
-      const statuses: Array<Record<string, unknown>> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            return {
-              textBlocks: [{ text: 'Done.' }],
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'w1',
-                name: 'emit_handoff',
-                input: { status: 'ready', summary: 'done' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        evaluator: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 'e1',
-                name: 'emit_verdict',
-                input: { status: 'accept', user_answer: 'ok' },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
-        },
-      });
-      await runManagedTaskViaRunner(opts, 'task', mock);
-
-      // Locate the Worker emit_handoff status (V2-rewritten role
-      // 'worker', tagged with the `${title} completed a turn` note
-      // string from `onRoleEmit` at line ~1560).
-      const handoffIdx = statuses.findIndex(
-        (s) =>
-          s.phase === 'worker'
-          && s.activeWorkerId === 'worker'
-          && typeof s.note === 'string'
-          && (s.note as string).includes('completed a turn'),
-      );
-      expect(handoffIdx).toBeGreaterThanOrEqual(0);
-
-      // Locate the FEATURE_166 agentSwitched emit — note shape
-      // `${title} taking over`, activeWorkerTitle='Evaluator'.
-      const switchedIdx = statuses.findIndex(
-        (s) =>
-          s.phase === 'worker'
-          && s.activeWorkerId === 'evaluator'
-          && s.note === 'Evaluator taking over',
-      );
-      expect(switchedIdx).toBeGreaterThanOrEqual(0);
-
-      // The Evaluator emit_verdict status (role='evaluator', `completed a turn`).
-      const verdictIdx = statuses.findIndex(
-        (s) =>
-          s.phase === 'worker'
-          && s.activeWorkerId === 'evaluator'
-          && typeof s.note === 'string'
-          && (s.note as string).includes('completed a turn'),
-      );
-      expect(verdictIdx).toBeGreaterThanOrEqual(0);
-
-      // Ordering pin: agent-switched MUST land AFTER Worker emit_handoff
-      // AND BEFORE Evaluator emit_verdict. This is the whole point —
-      // pre-FEATURE_166 the verdict was the FIRST place the label flipped.
-      expect(switchedIdx).toBeGreaterThan(handoffIdx);
-      expect(switchedIdx).toBeLessThan(verdictIdx);
-
-      // persistToHistory:false on the agent-switched emit so it
-      // doesn't pollute lineage / transcript replay. The slot-tool
-      // emits remain the authoritative anchors.
-      expect((statuses[switchedIdx] as Record<string, unknown>).persistToHistory).toBe(false);
-    });
-  });
+  // FEATURE_184 Phase C.1 (v0.7.45): Deleted "emits a phase=worker status
+  // with activeWorkerTitle='Evaluator' AFTER Worker emit_handoff and BEFORE
+  // Evaluator emit_verdict" test — tested V2 Worker→Evaluator handoff label
+  // flip which required in-chain Evaluator. Evaluator removed from chain.
 
   it('does not emit agent-switched when no handoff happens (single-role H0 direct run)', async () => {
     // V1 Scout H0 path: no handoff at all (Scout-only run). The

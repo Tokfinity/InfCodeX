@@ -69,6 +69,11 @@ const PLANNER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
   'dispatch_child_task',
   'send_message',
   'task_stop',
+  // FEATURE_177 v0.7.45 — Planner drafts contracts; it never dispatches
+  // children itself, so peeking at child progress would surface a tool
+  // it cannot use. Worker / Scout / Generator inherit `task_output` via
+  // their empty extra-exclude sets (parent agents that DO dispatch).
+  'task_output',
   'worktree_create',
   'worktree_remove',
   'exit_plan_mode',
@@ -78,47 +83,16 @@ const PLANNER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
 /** Generator: full execution surface (V1 path). No extra excludes. */
 const GENERATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
 
-/**
- * Evaluator: independent auditor — verification only. Architecturally
- * hard-exclude every mutation surface so the security boundary does not
- * depend on prompt discipline. The Evaluator role-prompt teaches read-only
- * verification, but a prompt-jailbroken or tool-confused Evaluator must
- * still be physically unable to write, dispatch, or change plan state.
- */
-const EVALUATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
-  // No file mutations
-  'write',
-  'edit',
-  'multi_edit',
-  'insert_after_anchor',
-  'undo',
-  // No dispatch / steering (independent audit must not depend on child agents)
-  'dispatch_child_task',
-  'send_message',
-  'task_stop',
-  'worktree_create',
-  'worktree_remove',
-  // No state changes that would affect the Worker/Generator's plan-view
-  'exit_plan_mode',
-  'todo_update',
-  // FEATURE_170 (v0.7.41) — Evaluator must not insert plan items either.
-  // Independent audit is verification-only; any plan-view mutation
-  // (insertion / status flip / removal) is reserved for Worker/Generator/
-  // Scout. Architecturally exclude `todo_create` for the same reason
-  // todo_update is excluded.
-  'todo_create',
-  // No user interaction — independent audit must not block on user input
-  'ask_user_question',
-]);
-
 /** Worker (V2 single-loop primary agent): collapses Scout+Generator, full surface. */
 const WORKER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
 
+// FEATURE_184 (v0.7.45) Phase C.1: EVALUATOR_EXTRA_EXCLUDE deleted —
+// the in-chain Evaluator role is removed. Sidecar Verifier (Phase D.2)
+// enforces its own architectural boundary.
 const ROLE_EXTRA_EXCLUDE: Record<AmaRole, ReadonlySet<string>> = {
   scout: SCOUT_EXTRA_EXCLUDE,
   planner: PLANNER_EXTRA_EXCLUDE,
   generator: GENERATOR_EXTRA_EXCLUDE,
-  evaluator: EVALUATOR_EXTRA_EXCLUDE,
   worker: WORKER_EXTRA_EXCLUDE,
 };
 

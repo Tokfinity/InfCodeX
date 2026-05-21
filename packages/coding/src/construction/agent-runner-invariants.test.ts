@@ -94,17 +94,19 @@ describe('FEATURE_101 — bindings flow through activate', () => {
 
     const meta = getAdmittedAgentBindings(resolved!);
     expect(meta).toBeDefined();
-    // The 8th invariant (harnessSelectionTiming) is registered too via
-    // registerCodingInvariants but is NOT in the admission v1 closed set
-    // (FEATURE_106 external consumer). Bindings must include the 7 core
-    // invariants exactly.
+    // harnessSelectionTiming is registered via registerCodingInvariants but
+    // is NOT in the admission v1 closed set (FEATURE_106 external consumer).
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from closed
+    // set — bindings must include the 6 core invariants (not independentReview).
     expect(meta?.bindings).toContain('finalOwner');
     expect(meta?.bindings).toContain('handoffLegality');
     expect(meta?.bindings).toContain('budgetCeiling');
     expect(meta?.bindings).toContain('toolPermission');
     expect(meta?.bindings).toContain('evidenceTrail');
     expect(meta?.bindings).toContain('boundedRevise');
-    expect(meta?.bindings).toContain('independentReview');
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from
+    // closed set — superseded by Sidecar Verifier StopHook.
+    expect(meta?.bindings).not.toContain('independentReview');
   });
 
   it('drops bindings when the agent is unregistered', async () => {
@@ -150,13 +152,13 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from exports.
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
     registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
-    registerInvariant(independentReview);
     void registerCoreInvariants; // silence unused.
 
     const handle = await stage(baseEchoArtifact('observe-probe'));
@@ -195,13 +197,13 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from exports.
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
     registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
-    registerInvariant(independentReview);
 
     const handle = await stage(baseEchoArtifact('reject-on-tool'));
     expect((await testArtifact(handle)).ok).toBe(true);
@@ -243,13 +245,13 @@ describe('FEATURE_101 — Runner.run dispatches observe + assertTerminal', () =>
     const { handoffLegality, evidenceTrail } = await import('@kodax-ai/agent');
     registerInvariant(handoffLegality);
     registerInvariant(evidenceTrail);
-    const { boundedRevise, budgetCeiling, harnessSelectionTiming, independentReview, toolPermission } =
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from exports.
+    const { boundedRevise, budgetCeiling, harnessSelectionTiming, toolPermission } =
       await import('../agent-runtime/invariants/index.js');
     registerInvariant(harnessSelectionTiming);
     registerInvariant(budgetCeiling);
     registerInvariant(toolPermission);
     registerInvariant(boundedRevise);
-    registerInvariant(independentReview);
 
     const handle = await stage(baseEchoArtifact('terminal-reject'));
     expect((await testArtifact(handle)).ok).toBe(true);

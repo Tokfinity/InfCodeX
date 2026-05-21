@@ -2,8 +2,9 @@
  * FEATURE_101 — `registerCodingInvariants` bootstrap test.
  *
  * Verifies that calling the bootstrap registers the full v1 set
- * (4 core pure + 4 coding capability-coupled = 8 ids) on the shared
- * runtime registry.
+ * (4 core pure + 3 coding capability-coupled = 7 ids; FEATURE_184 Phase C.1
+ * v0.7.45 removed independentReview — superseded by Sidecar Verifier StopHook)
+ * on the shared runtime registry.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -21,7 +22,7 @@ import { registerCodingInvariants } from './index.js';
 describe('registerCodingInvariants', () => {
   afterEach(() => _resetInvariantRegistry());
 
-  it('registers all 9 v1+v2 invariants in canonical order', () => {
+  it('registers all 8 v1+v2 invariants in canonical order', () => {
     _resetInvariantRegistry();
     registerCodingInvariants();
     expect(listRegisteredInvariants()).toEqual([
@@ -36,7 +37,8 @@ describe('registerCodingInvariants', () => {
       'budgetCeiling',
       'toolPermission',
       'boundedRevise',
-      'independentReview',
+      // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed —
+      // superseded by Sidecar Verifier StopHook; in-chain Evaluator deleted.
       'harnessSelectionTiming',
       // v0.7.36 FEATURE_114: planBeforeMutate — V2 plan-first
       // observation. Coexists with harnessSelectionTiming during the
@@ -45,16 +47,17 @@ describe('registerCodingInvariants', () => {
     ]);
   });
 
-  it('after registration, Runner.admit produces a 7-id binding for a minimal manifest', async () => {
+  it('after registration, Runner.admit produces a 6-id binding for a minimal manifest', async () => {
     _resetInvariantRegistry();
     registerCodingInvariants();
     const manifest: AgentManifest = createAgent({ name: 'm', instructions: 'i' });
     const verdict = await Runner.admit(manifest);
     expect(verdict.ok).toBe(true);
     if (verdict.ok) {
-      // The 7 admission v1 closed-set ids — harnessSelectionTiming is NOT
-      // in the required set, so it appears in bindings only when
-      // explicitly declared.
+      // The 6 admission v1 closed-set ids (FEATURE_184 Phase C.1 v0.7.45:
+      // independentReview removed — superseded by Sidecar Verifier StopHook).
+      // harnessSelectionTiming is NOT in the required set, so it appears
+      // in bindings only when explicitly declared.
       expect(verdict.handle.invariantBindings).toEqual([
         'finalOwner',
         'handoffLegality',
@@ -62,7 +65,6 @@ describe('registerCodingInvariants', () => {
         'toolPermission',
         'evidenceTrail',
         'boundedRevise',
-        'independentReview',
       ]);
     }
   });

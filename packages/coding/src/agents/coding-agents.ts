@@ -2,10 +2,10 @@
  * Coding Agent declarations — FEATURE_084 (v0.7.26).
  *
  * **These are declarative references exposing the canonical Scout /
- * Planner / Generator / Evaluator topology to SDK consumers.** Each
- * exported Agent carries the role's emit tool + the H0/H1/H2 handoff
- * graph, but carries ONLY a short identifier `instructions` string and
- * NO coding tools (read / grep / bash / write / edit / etc.).
+ * Planner / Generator topology to SDK consumers.** Each exported Agent
+ * carries the role's emit tool + the H0/H1/H2 handoff graph, but carries
+ * ONLY a short identifier `instructions` string and NO coding tools
+ * (read / grep / bash / write / edit / etc.).
  *
  * **The runtime agents are built fresh by
  * `task-engine/runner-driven.ts::buildRunnerAgentChain` on every run**,
@@ -37,7 +37,6 @@ import {
   type Handoff,
 } from '@kodax-ai/agent';
 import {
-  EVALUATOR_AGENT_NAME,
   GENERATOR_AGENT_NAME,
   PLANNER_AGENT_NAME,
   SCOUT_AGENT_NAME,
@@ -48,7 +47,6 @@ import {
   emitContract,
   emitHandoff,
   emitScoutVerdict,
-  emitVerdict,
 } from './protocol-emitters.js';
 
 // FEATURE_106 (v0.7.31): declarative marker that Scout + Generator carry
@@ -127,27 +125,19 @@ const generatorSpec: AgentSpec = {
   guardrails: [scopeAwareHarnessGuardrailMarker],
 };
 
-const evaluatorSpec: AgentSpec = {
-  name: EVALUATOR_AGENT_NAME,
-  instructions:
-    'H1/H2 verifier role: check generator output against the verification ' +
-    'contract. Emit the verdict via emit_verdict exactly once: accept to ' +
-    'finalize, revise to retry (optionally escalating harness tier), or ' +
-    'blocked when verification cannot complete.',
-  tools: [emitVerdict],
-  reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: false },
-};
-
 /**
- * Build the four agents with a shared mutable closure so handoffs can
+ * Build the three agents with a shared mutable closure so handoffs can
  * reference each other without circular import contortions. The resulting
  * Agent objects are frozen before export.
+ *
+ * FEATURE_184 (v0.7.45) Phase C.1: Evaluator removed from the in-chain
+ * topology. Generator text-only terminates; Sidecar Verifier StopHook
+ * (Phase D.2) handles verification.
  */
 function createCodingAgents(): {
   scout: Agent;
   planner: Agent;
   generator: Agent;
-  evaluator: Agent;
 } {
   // Step 1 — create bare Agent objects for each role. `handoffs` is mutable
   // in-scope here and is filled in step 3.
@@ -167,12 +157,10 @@ function createCodingAgents(): {
   const scout = make(scoutSpec);
   const planner = make(plannerSpec);
   const generator = make(generatorSpec);
-  const evaluator = make(evaluatorSpec);
 
   // Step 2 — declare handoff topology. Scout can escalate to Generator (H1)
-  // or Planner (H2). Planner always hands off to Generator. Generator always
-  // hands off to Evaluator. Evaluator can revise (back to Generator) or
-  // replan (back to Planner).
+  // or Planner (H2). Planner always hands off to Generator. Generator is
+  // now terminal — text-only termination triggers Sidecar Verifier.
   const scoutHandoffs: Handoff[] = [
     { target: generator, kind: 'continuation', description: 'Upgrade to H1 — execute + evaluate' },
     { target: planner, kind: 'continuation', description: 'Upgrade to H2 — plan + execute + evaluate' },
@@ -180,26 +168,18 @@ function createCodingAgents(): {
   const plannerHandoffs: Handoff[] = [
     { target: generator, kind: 'continuation', description: 'Hand off execution to Generator' },
   ];
-  const generatorHandoffs: Handoff[] = [
-    { target: evaluator, kind: 'continuation', description: 'Hand off to Evaluator for verification' },
-  ];
-  const evaluatorHandoffs: Handoff[] = [
-    { target: generator, kind: 'continuation', description: 'revise — retry execution' },
-    { target: planner, kind: 'continuation', description: 'replan — revise the contract' },
-  ];
+  const generatorHandoffs: Handoff[] = [];
 
   // Step 3 — attach handoffs. This is the only mutation allowed; everything
   // is frozen immediately after.
   scout.handoffs = scoutHandoffs;
   planner.handoffs = plannerHandoffs;
   generator.handoffs = generatorHandoffs;
-  evaluator.handoffs = evaluatorHandoffs;
 
   return {
     scout: Object.freeze(scout) as Agent,
     planner: Object.freeze(planner) as Agent,
     generator: Object.freeze(generator) as Agent,
-    evaluator: Object.freeze(evaluator) as Agent,
   };
 }
 
@@ -208,15 +188,13 @@ const AGENTS = createCodingAgents();
 export const scoutCodingAgent: Agent = AGENTS.scout;
 export const plannerCodingAgent: Agent = AGENTS.planner;
 export const generatorCodingAgent: Agent = AGENTS.generator;
-export const evaluatorCodingAgent: Agent = AGENTS.evaluator;
 
 /**
- * Topology record — iterable form of the four coding agents. Shard 5's
+ * Topology record — iterable form of the three coding agents. Shard 5's
  * Runner-driven dispatcher uses this as the agent lookup.
  */
 export const CODING_AGENTS = Object.freeze({
   scout: scoutCodingAgent,
   planner: plannerCodingAgent,
   generator: generatorCodingAgent,
-  evaluator: evaluatorCodingAgent,
 } as const);

@@ -158,21 +158,24 @@ describe('FEATURE_089 — agent-kind test', () => {
   });
 });
 
-describe('FEATURE_089 — testAgentArtifact runs Runner.admit (FEATURE_101 5-step audit)', () => {
-  it('rejects a generator-bearing manifest with no evaluator (independentReview)', async () => {
+describe('FEATURE_089 — testAgentArtifact runs Runner.admit (FEATURE_101 admission audit)', () => {
+  // FEATURE_184 Phase C.1 (v0.7.45): Deleted "rejects a generator-bearing
+  // manifest with no evaluator (independentReview)" test — independentReview
+  // has been removed from the admission closed set (superseded by Sidecar
+  // Verifier StopHook). Generator-bearing manifests now admit cleanly.
+
+  it('admits a generator-bearing manifest (FEATURE_184 Phase C.1 — no evaluator required)', async () => {
     const handle = await stage(
       buildAgentArtifact({
         name: 'gen-without-eval',
         content: {
           instructions: 'I generate code',
-          // Handoff to "generator" is reachable; no evaluator anywhere.
           handoffs: [{ target: { ref: 'builtin:generator' }, kind: 'continuation' }],
         },
       }),
     );
     const result = await testArtifact(handle);
-    expect(result.ok).toBe(false);
-    expect(result.errors?.some((e) => /independentReview/.test(e))).toBe(true);
+    expect(result.ok).toBe(true);
   });
 
   it('rejects a self-loop handoff (finalOwner / handoffLegality)', async () => {

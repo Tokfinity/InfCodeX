@@ -2,14 +2,17 @@
  * FEATURE_101 v0.7.31.1 — builtin handoff resolution.
  *
  * Closes v0.7.31's silent degradation: a constructed agent that
- * handoffs to a builtin role (scout / planner / generator / evaluator)
- * had its target resolved to a stub `{ name, instructions: '' }`. The
- * runtime would still walk the name (so admission's handoff-legality
- * accepted the manifest), but the actual handoff at runtime gave the
- * target zero instructions — silent role-spec loss.
+ * handoffs to a builtin role (scout / planner / generator) had its
+ * target resolved to a stub `{ name, instructions: '' }`. The runtime
+ * would still walk the name (so admission's handoff-legality accepted
+ * the manifest), but the actual handoff at runtime gave the target zero
+ * instructions — silent role-spec loss.
  *
  * The patch resolves `builtin:<role>` refs to the real
  * `@kodax-ai/core/task-engine-agents` declarations.
+ *
+ * FEATURE_184 Phase C.1 (v0.7.45): evaluator removed from chain.
+ * evaluatorAgent import and evaluator test cases removed.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -19,7 +22,6 @@ import fs from 'fs/promises';
 
 import { _resetInvariantRegistry } from '@kodax-ai/agent';
 import {
-  evaluatorAgent,
   generatorAgent,
   plannerAgent,
   scoutAgent,
@@ -56,8 +58,8 @@ afterEach(async () => {
 
 describe('agent-resolver — builtin handoff resolution', () => {
   it('lifts builtin:scout handoff to the real scoutAgent declaration', async () => {
-    // Need an evaluator handoff so independentReview admits (otherwise
-    // the manifest with a generator role would be rejected).
+    // FEATURE_184 Phase C.1 (v0.7.45): independentReview removed from
+    // CODING_INVARIANTS; no evaluator handoff required for admission.
     const artifact: AgentArtifact = {
       kind: 'agent',
       name: 'wrapper-with-scout',
@@ -82,22 +84,13 @@ describe('agent-resolver — builtin handoff resolution', () => {
     expect(handoff!.target.instructions).toBe(scoutAgent.instructions);
   });
 
+  // FEATURE_184 Phase C.1 (v0.7.45): evaluator case removed from it.each
+  // (evaluatorAgent deleted; Evaluator removed from chain).
   it.each([
     ['scout', scoutAgent] as const,
     ['planner', plannerAgent] as const,
     ['generator', generatorAgent] as const,
-    ['evaluator', evaluatorAgent] as const,
   ])('resolves builtin:%s ref to the matching real agent', async (role, expected) => {
-    // Build a constructed agent whose handoffs reach generator + evaluator
-    // when the role under test isn't already evaluator (so independentReview
-    // is satisfied for generator-bearing graphs).
-    const handoffs = role === 'generator' || role === 'evaluator'
-      ? [
-          { target: { ref: 'builtin:generator' }, kind: 'continuation' as const },
-          { target: { ref: 'builtin:evaluator' }, kind: 'continuation' as const },
-        ]
-      : [{ target: { ref: `builtin:${role}` }, kind: 'continuation' as const }];
-
     const artifact: AgentArtifact = {
       kind: 'agent',
       name: `wrapper-${role}`,
@@ -106,7 +99,7 @@ describe('agent-resolver — builtin handoff resolution', () => {
       createdAt: Date.now(),
       content: {
         instructions: `wrapper that hands off to ${role}`,
-        handoffs: handoffs.map((h) => ({ target: { ref: h.target.ref }, kind: h.kind })),
+        handoffs: [{ target: { ref: `builtin:${role}` }, kind: 'continuation' as const }],
       },
     };
     const handle = await stage(artifact);

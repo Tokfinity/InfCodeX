@@ -5,8 +5,10 @@
  * harness calibration (FEATURE_106) compose end-to-end:
  *
  *   1. `registerCodingInvariants()` bootstraps the full v1 closed set
- *      (4 core pure + 4 coding capability-coupled = 8 invariant ids,
- *      including the FEATURE_106 external `harnessSelectionTiming`).
+ *      (4 core pure + 3 coding capability-coupled = 7 invariant ids
+ *      + FEATURE_106 external harnessSelectionTiming = 8 total;
+ *      FEATURE_184 Phase C.1 v0.7.45 removed independentReview —
+ *      superseded by Sidecar Verifier StopHook).
  *
  *   2. `Runner.admit()` accepts a Scout-shaped manifest under default
  *      caps and produces an `AdmittedHandle` whose `invariantBindings`
@@ -81,11 +83,12 @@ describe('FEATURE_101 × FEATURE_106 — joint registration + observe wiring', (
     const ids = listRegisteredInvariants();
     expect(ids).toContain('harnessSelectionTiming');
     expect(ids).toContain('planBeforeMutate');
-    // 9 ids = 7 admission v1 closed set + FEATURE_106 external
-    // (harnessSelectionTiming) + FEATURE_114 V2 external
-    // (planBeforeMutate). The two externals coexist during the
+    // 8 ids = 6 admission v1 closed set (FEATURE_184 Phase C.1 v0.7.45:
+    // independentReview removed — superseded by Sidecar Verifier StopHook)
+    // + FEATURE_106 external (harnessSelectionTiming) + FEATURE_114 V2
+    // external (planBeforeMutate). The two externals coexist during the
     // V1↔V2 migration window.
-    expect(ids).toHaveLength(9);
+    expect(ids).toHaveLength(8);
   });
 
   it('Runner.admit binds harnessSelectionTiming when manifest declares it', async () => {

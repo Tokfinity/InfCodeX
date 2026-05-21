@@ -217,29 +217,6 @@ export const PLANNER_ALLOWED_TOOLS: readonly string[] = [
 ];
 
 /**
- * H1 Evaluator tool allow-list — inspection + diff + repo-intelligence
- * deep-capsule lookups + MCP.
- *
- * v0.7.27 — repo-intel deep-capsule tools added so Evaluator can
- * precisely quantify blast radius / caller-callee chains when
- * verifying a claim, instead of relying on grep heuristics.
- */
-export const H1_EVALUATOR_ALLOWED_TOOLS: readonly string[] = [
-  'changed_scope',
-  'repo_overview',
-  'changed_diff_bundle',
-  'changed_diff',
-  'module_context',
-  'symbol_context',
-  'process_context',
-  'impact_estimate',
-  'glob',
-  'grep',
-  'read',
-  ...MCP_TOOL_NAMES,
-];
-
-/**
  * H1 read-only Generator tool allow-list — inspection + dispatch +
  * repo-intelligence deep-capsule lookups + MCP.
  *
@@ -400,26 +377,8 @@ export function buildManagedWorkerToolPolicy(
         });
       }
       return undefined;
-    case 'evaluator':
-      if (harnessProfile === 'H1_EXECUTE_EVAL') {
-        return finalizeToolPolicy({
-          summary: 'H1 Evaluator is a lightweight checker. It may only do targeted spot-checks against the Generator handoff and must not broad-scan the repo, deep-page large diffs, or run broad test sweeps unless the verification contract explicitly requires them.',
-          blockedTools: [...WRITE_ONLY_TOOLS],
-          allowedTools: [...H1_EVALUATOR_ALLOWED_TOOLS],
-          allowedShellPatterns: Array.from(new Set([
-            ...INSPECTION_SHELL_PATTERNS,
-            ...buildRuntimeVerificationShellPatterns(verification),
-          ])),
-        });
-      }
-      return finalizeToolPolicy({
-        summary: 'Verification agents may inspect the repo and run verification commands, including browser, startup, API, and runtime checks declared by the verification contract, but must not edit project files or mutate control-plane artifacts.',
-        blockedTools: [...WRITE_ONLY_TOOLS],
-        allowedShellPatterns: [
-          ...VERIFICATION_SHELL_PATTERNS,
-          ...buildRuntimeVerificationShellPatterns(verification),
-        ],
-      });
+    // FEATURE_184 (v0.7.45) Phase C.1: 'evaluator' case deleted.
+    // Sidecar Verifier (Phase D.2) enforces its own policy boundary.
     default:
       return undefined;
   }

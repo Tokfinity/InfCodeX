@@ -1,13 +1,13 @@
 /**
  * Placeholder Agent declarations for the coding-AMA H2 task-engine roles
- * (Scout / Planner / Generator / Evaluator).
+ * (Scout / Planner / Generator / Worker).
  *
  * FEATURE_080 (v0.7.23): these declarations exist so the role identities
  * are represented as Layer A `Agent` data, which downstream features need:
  *
- *   - FEATURE_084 (v0.7.26): runtime rewrite of Scout/Planner/Generator/
- *     Evaluator on top of `Runner` consumes these declarations as the
- *     source of truth for role metadata.
+ *   - FEATURE_084 (v0.7.26): runtime rewrite of Scout/Planner/Generator
+ *     on top of `Runner` consumes these declarations as the source of
+ *     truth for role metadata.
  *   - FEATURE_078 (v0.7.29): reasoning profiles attach to the `reasoning`
  *     field on these declarations.
  *   - FEATURE_087+ self-construction: Agent-as-data means role specs can
@@ -27,10 +27,10 @@
  *
  * v0.7.35.1 FEATURE_142 (A-R1): moved from `@kodax-ai/agent/src/primitives/`
  * back to `@kodax-ai/coding/src/agents/`. These role declarations are
- * coding-AMA-specific (Scout / Planner / Generator / Evaluator are the
- * H2 state-machine roles, not generic Agent platform primitives). Per
- * ADR-021, the universal `@kodax-ai/agent` framework must not predeclare
- * coding's H2 role identities.
+ * coding-AMA-specific (Scout / Planner / Generator are the H2 state-machine
+ * roles, not generic Agent platform primitives). Per ADR-021, the universal
+ * `@kodax-ai/agent` framework must not predeclare coding's H2 role
+ * identities.
  */
 
 import { createAgent, type Agent } from '@kodax-ai/agent';
@@ -38,12 +38,14 @@ import { createAgent, type Agent } from '@kodax-ai/agent';
 export const SCOUT_AGENT_NAME = 'kodax/role/scout';
 export const PLANNER_AGENT_NAME = 'kodax/role/planner';
 export const GENERATOR_AGENT_NAME = 'kodax/role/generator';
+// FEATURE_184 (v0.7.45) Phase C.3 cleanup: EVALUATOR_AGENT_NAME kept here
+// until C.3 removes remaining evaluator references in role-prompt.ts,
+// REPL UI fixtures, verdict-recorder.ts evaluator branch, and sanitize.ts.
 export const EVALUATOR_AGENT_NAME = 'kodax/role/evaluator';
 // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
 // Collapses Scout/Planner/Generator into one Worker that drives plan +
-// execute behind the KODAX_HARNESS_V2 flag; Evaluator stays a separate
-// structural gate. Legacy four-role identifiers above remain live until
-// v0.7.45 cleanup so the V1 path is unaffected.
+// execute via the KODAX_HARNESS_V2 flag. Sidecar Verifier (FEATURE_184
+// Phase D.2) replaces the former in-chain Evaluator role.
 export const WORKER_AGENT_NAME = 'kodax/role/worker';
 
 /**
@@ -71,7 +73,8 @@ export const plannerAgent: Agent = createAgent({
 
 /**
  * Generator role declaration. Performs the actual code changes /
- * investigations in both H1 and H2 harnesses.
+ * investigations in both H1 harness; text-only terminates so Sidecar
+ * Verifier (FEATURE_184 Phase D.2) takes over verification.
  */
 export const generatorAgent: Agent = createAgent({
   name: GENERATOR_AGENT_NAME,
@@ -81,23 +84,12 @@ export const generatorAgent: Agent = createAgent({
 });
 
 /**
- * Evaluator role declaration. Lightweight verifier in H1, structured
- * revise/replan gate in H2.
- */
-export const evaluatorAgent: Agent = createAgent({
-  name: EVALUATOR_AGENT_NAME,
-  instructions:
-    'H1/H2 verifier role: check generator output against the verification '
-    + 'contract, emit revise / replan verdicts when needed.',
-});
-
-/**
  * Worker role declaration — FEATURE_114 v0.7.36. The AMA Harness V2
  * single-loop primary agent: plans (todo_update), executes
- * (read/write/edit/bash/dispatch), and hands off to Evaluator. Only
+ * (read/write/edit/bash/dispatch), text-only terminates when done so
+ * Sidecar Verifier (FEATURE_184 Phase D.2) runs verification. Only
  * active when `KODAX_HARNESS_V2=true`; the Scout/Planner/Generator
- * placeholders above stay live for the legacy V1 path until v0.7.45
- * cleanup.
+ * placeholders above stay live for the legacy V1 path.
  *
  * Like the other declarations in this file, this is a placeholder for
  * Layer A `Agent` data — the runtime Worker (with full tool set,
@@ -108,13 +100,12 @@ export const workerAgent: Agent = createAgent({
   name: WORKER_AGENT_NAME,
   instructions:
     'AMA Harness V2 primary role: plan via todo_update, execute via '
-    + 'tool calls, hand off to Evaluator with emit_handoff.',
+    + 'tool calls, emit emit_handoff to signal completion.',
 });
 
-/** All four placeholder role agents, exposed for iteration in downstream features. */
+/** All three placeholder role agents, exposed for iteration in downstream features. */
 export const TASK_ENGINE_ROLE_AGENTS = Object.freeze({
   scout: scoutAgent,
   planner: plannerAgent,
   generator: generatorAgent,
-  evaluator: evaluatorAgent,
 } as const);

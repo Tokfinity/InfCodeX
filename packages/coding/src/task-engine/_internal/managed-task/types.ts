@@ -46,7 +46,10 @@ export interface VerdictRecorder {
  * pseudo-role) since direct runs do not pass through the AMA
  * chain-builder's exclude resolution.
  */
-export type AmaRole = 'scout' | 'planner' | 'generator' | 'evaluator' | 'worker';
+// FEATURE_184 (v0.7.45) Phase C.1: 'evaluator' removed from AmaRole.
+// C.3 cleanup will remove remaining evaluator references in role-prompt.ts,
+// REPL UI fixtures, verdict-recorder.ts, and sanitize.ts.
+export type AmaRole = 'scout' | 'planner' | 'generator' | 'worker';
 
 /**
  * Factory that resolves the `ManagedRolePromptContext` for a given role

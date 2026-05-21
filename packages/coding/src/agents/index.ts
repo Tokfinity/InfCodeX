@@ -22,7 +22,6 @@ export type { ProtocolEmitterMetadata } from './protocol-emitters.js';
 export {
   CODING_AGENT_MARKER,
   CODING_AGENTS,
-  evaluatorCodingAgent,
   generatorCodingAgent,
   plannerCodingAgent,
   scoutCodingAgent,
@@ -39,5 +38,4 @@ export {
   scoutAgent,
   plannerAgent,
   generatorAgent,
-  evaluatorAgent,
 } from './task-engine-agents.js';

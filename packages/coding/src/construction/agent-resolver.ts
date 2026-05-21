@@ -44,7 +44,6 @@ import {
   setAdmittedAgentBindings,
 } from '@kodax-ai/agent';
 import {
-  evaluatorAgent,
   generatorAgent,
   plannerAgent,
   scoutAgent,
@@ -57,10 +56,12 @@ import type { AgentArtifact, AgentContent, AgentHandoffRef, ToolRef } from './ty
 /**
  * FEATURE_101 v0.7.31.1 — builtin agent registry.
  *
- * Maps the 4 v1 builtin role names to their `@kodax-ai/core/task-engine-agents`
- * declarations. Constructed agents that handoff to a builtin role
- * (e.g. `target: { ref: 'builtin:scout' }`) get the real role declaration
- * here instead of a phantom stub `{ name, instructions: '' }`.
+ * Maps the 3 v1 builtin role names (scout/planner/generator) to their
+ * `@kodax-ai/core/task-engine-agents` declarations. Constructed agents
+ * that handoff to a builtin role (e.g. `target: { ref: 'builtin:scout' }`)
+ * get the real role declaration here instead of a phantom stub
+ * `{ name, instructions: '' }`. FEATURE_184 Phase C.1 (v0.7.45): evaluator
+ * removed from chain and from this map.
  *
  * Without this map, builtin handoffs silently degraded — admission's
  * handoffLegality DAG check passed because the stub had no outgoing
@@ -71,15 +72,17 @@ import type { AgentArtifact, AgentContent, AgentHandoffRef, ToolRef } from './ty
  * The map is also keyed on the short alias (`scout`) and the
  * `kodax/role/<x>` canonical form so refs written either way resolve.
  */
+// FEATURE_184 Phase C.1 (v0.7.45): evaluatorAgent removed from chain.
+// 'evaluator' / 'kodax/role/evaluator' entries removed; unknown refs fall
+// through to the stub path (empty instructions) — correct behavior since
+// no in-chain Evaluator agent exists.
 const BUILTIN_AGENTS: ReadonlyMap<string, Agent> = new Map<string, Agent>([
   ['scout', scoutAgent],
   ['planner', plannerAgent],
   ['generator', generatorAgent],
-  ['evaluator', evaluatorAgent],
   ['kodax/role/scout', scoutAgent],
   ['kodax/role/planner', plannerAgent],
   ['kodax/role/generator', generatorAgent],
-  ['kodax/role/evaluator', evaluatorAgent],
 ]);
 
 const AGENT_REGISTRY = new Map<string, RegisteredConstructedAgent>();

@@ -3,6 +3,9 @@
  *
  * Data-shape tests: name binding, tool wiring, handoff topology.
  * No runtime execution at this shard — that lands with Shard 5.
+ *
+ * FEATURE_184 (v0.7.45) Phase C.1: evaluatorCodingAgent removed.
+ * EVALUATOR_AGENT_NAME constant kept for C.3 cleanup.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,7 +17,6 @@ import {
 } from './task-engine-agents.js';
 import {
   CODING_AGENTS,
-  evaluatorCodingAgent,
   generatorCodingAgent,
   plannerCodingAgent,
   scoutCodingAgent,
@@ -23,7 +25,6 @@ import {
   EMIT_CONTRACT_TOOL_NAME,
   EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
-  EMIT_VERDICT_TOOL_NAME,
 } from './protocol-emitters.js';
 
 describe('coding-agents — identity', () => {
@@ -31,21 +32,18 @@ describe('coding-agents — identity', () => {
     expect(scoutCodingAgent.name).toBe(SCOUT_AGENT_NAME);
     expect(plannerCodingAgent.name).toBe(PLANNER_AGENT_NAME);
     expect(generatorCodingAgent.name).toBe(GENERATOR_AGENT_NAME);
-    expect(evaluatorCodingAgent.name).toBe(EVALUATOR_AGENT_NAME);
   });
 
-  it('exposes all four agents in CODING_AGENTS record', () => {
+  it('exposes all three agents in CODING_AGENTS record', () => {
     expect(CODING_AGENTS.scout).toBe(scoutCodingAgent);
     expect(CODING_AGENTS.planner).toBe(plannerCodingAgent);
     expect(CODING_AGENTS.generator).toBe(generatorCodingAgent);
-    expect(CODING_AGENTS.evaluator).toBe(evaluatorCodingAgent);
   });
 
   it('freezes each agent to prevent runtime mutation', () => {
     expect(Object.isFrozen(scoutCodingAgent)).toBe(true);
     expect(Object.isFrozen(plannerCodingAgent)).toBe(true);
     expect(Object.isFrozen(generatorCodingAgent)).toBe(true);
-    expect(Object.isFrozen(evaluatorCodingAgent)).toBe(true);
   });
 });
 
@@ -63,11 +61,6 @@ describe('coding-agents — tool wiring', () => {
   it('generator agent carries emit_handoff', () => {
     const names = generatorCodingAgent.tools?.map((t) => t.name) ?? [];
     expect(names).toContain(EMIT_HANDOFF_TOOL_NAME);
-  });
-
-  it('evaluator agent carries emit_verdict', () => {
-    const names = evaluatorCodingAgent.tools?.map((t) => t.name) ?? [];
-    expect(names).toContain(EMIT_VERDICT_TOOL_NAME);
   });
 });
 
@@ -88,19 +81,14 @@ describe('coding-agents — handoff topology', () => {
     expect(targets).toEqual([GENERATOR_AGENT_NAME]);
   });
 
-  it('generator hands off to evaluator only', () => {
+  it('generator has no handoffs — terminates text-only for Sidecar Verifier', () => {
+    // FEATURE_184 Phase C.1: Generator is now terminal (text-only → sidecar).
     const targets = targetNames(generatorCodingAgent);
-    expect(targets).toEqual([EVALUATOR_AGENT_NAME]);
-  });
-
-  it('evaluator hands off back to generator (revise) and planner (replan)', () => {
-    const targets = targetNames(evaluatorCodingAgent);
-    expect(targets).toContain(GENERATOR_AGENT_NAME);
-    expect(targets).toContain(PLANNER_AGENT_NAME);
+    expect(targets).toEqual([]);
   });
 
   it('all handoffs are continuation kind', () => {
-    for (const agent of [scoutCodingAgent, plannerCodingAgent, generatorCodingAgent, evaluatorCodingAgent]) {
+    for (const agent of [scoutCodingAgent, plannerCodingAgent, generatorCodingAgent]) {
       for (const handoff of agent.handoffs ?? []) {
         expect(handoff.kind).toBe('continuation');
       }
@@ -108,7 +96,7 @@ describe('coding-agents — handoff topology', () => {
   });
 
   it('every handoff has a human-readable description', () => {
-    for (const agent of [scoutCodingAgent, plannerCodingAgent, generatorCodingAgent, evaluatorCodingAgent]) {
+    for (const agent of [scoutCodingAgent, plannerCodingAgent, generatorCodingAgent]) {
       for (const handoff of agent.handoffs ?? []) {
         expect(handoff.description).toBeTruthy();
       }
@@ -130,8 +118,7 @@ describe('coding-agents — reasoning profile placeholders', () => {
     expect(scoutCodingAgent.reasoning?.escalateOnRevise).toBe(false);
   });
 
-  it('generator/evaluator default to balanced', () => {
+  it('generator defaults to balanced', () => {
     expect(generatorCodingAgent.reasoning?.default).toBe('balanced');
-    expect(evaluatorCodingAgent.reasoning?.default).toBe('balanced');
   });
 });
