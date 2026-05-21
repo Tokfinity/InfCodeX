@@ -68,6 +68,29 @@ export function buildWorkerInstructions(
     '    * STRIKETHROUGH ONE STEP (keep visible breadcrumb): `todo_update({id, status:"cancelled", note:"..."})`. Prefer over `deleted` when the user benefits from seeing the discarded record.',
   ].join('\n');
 
+  // v0.7.42 — plan-list hygiene: staleness refresh + dedup. The two
+  // checks below are explicit because production sessions show two
+  // recurring failure modes when this discipline is implicit:
+  //   - STALENESS: model emits `todo_update({id, status:"completed"})`
+  //     after a long quiet stretch, but the runner-side accept verdict
+  //     already flipped that item to completed several turns ago. The
+  //     patch is a no-op but the model thinks it advanced state.
+  //   - DEDUP: model emits `todo_create({subject:"Audit foo"})` even
+  //     though `todo_2: Audit foo` already exists from the initial
+  //     plan. Two parallel rows of the same work confuse the user's
+  //     dashboard.
+  // Mirrors claudecode V2's `TaskUpdate` / `TaskCreate` prompts which
+  // teach the same "read latest before mutate" / "scan before insert"
+  // discipline (see `c:/Works/claudecode/src/tools/TaskUpdateTool/`
+  // and `TaskCreateTool/`).
+  const planListHygiene = [
+    'PLAN-LIST HYGIENE (v0.7.42 — staleness + dedup):',
+    '- BEFORE `todo_update` on an item you have NOT recently touched (e.g. just resumed from idle-yield, or mid-fan-out after children finished, or after a long thinking stretch), call `todo_get(id)` first to read the item\'s CURRENT state. Runner-side auto-handlers can flip statuses between your turns; mutating on a stale view produces silent no-op patches or surprising overwrites. `todo_get` is cheap — one tool call per uncertain item — and the JSON it returns is authoritative.',
+    '- BEFORE `todo_create` mid-task, scan the existing plan list (it is visible at the top of every throttle reminder, OR call `todo_list` for an explicit snapshot) and confirm no item with the same subject is already present. Duplicate items split the user\'s progress dashboard into parallel branches of the same work — confusing and easy to over-count.',
+    '- DEDUP HEURISTIC: two items are duplicates when their `subject` describes the same concrete artifact / file path / module. They are NOT duplicates when one is a parent-level summary ("Audit packages/auth") and the other a leaf ("Write test for handleLogin in packages/auth") — those are legitimately distinct rows.',
+    '- INITIAL PLAN COMMITMENT (first batch of `todo_create` at the start of the task) is exempt from the dedup check — the list is empty so duplicates are impossible.',
+  ].join('\n');
+
   const scopeCommitment = [
     'SCOPE COMMITMENT (FEATURE_106 hard rule + FEATURE_170 v0.7.41 + v0.7.42):',
     '- Whatever scope you commit to in your first batch of `todo_create` calls is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_create({subject:"..."})` to add the new item explicitly, do not slip it into a later step\'s description.',
@@ -224,6 +247,7 @@ export function buildWorkerInstructions(
     roleAck,
     reviseFailureRetrospective,
     planFirstContract,
+    planListHygiene,
     scopeCommitment,
     mutationDiscipline,
     repoIntelligenceTools,

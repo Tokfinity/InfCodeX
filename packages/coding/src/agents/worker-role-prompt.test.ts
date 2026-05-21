@@ -333,6 +333,40 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
   });
 });
 
+// v0.7.42 — Step 5: PLAN-LIST HYGIENE section teaches staleness refresh
+// (todo_get before todo_update on uncertain items) + dedup (todo_list /
+// throttle reminder scan before todo_create). Pinned here as structural
+// assertions so later prompt edits cannot silently drop the guidance;
+// behavioral eval lands in FEATURE_104 Layer 2 panel.
+describe('buildWorkerInstructions — v0.7.42 plan-list hygiene (Step 5)', () => {
+  it('teaches todo_get before todo_update for uncertain items (staleness guard)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('PLAN-LIST HYGIENE');
+    expect(out).toContain('staleness');
+    expect(out).toMatch(/BEFORE `todo_update`.*call `todo_get/);
+    // The "why" — auto-handlers flipping state between turns — is the
+    // load-bearing rationale. Without it the model can argue "the patch
+    // was idempotent so no harm done", which misses the no-op surprise.
+    expect(out).toMatch(/auto-handlers can flip statuses between your turns/);
+  });
+
+  it('teaches dedup scan before todo_create (todo_list / throttle reminder)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('dedup');
+    expect(out).toMatch(/BEFORE `todo_create`.*scan the existing plan list/);
+    // The initial-batch exemption keeps the rule from blocking the
+    // legitimate "first plan commitment on an empty list" case.
+    expect(out).toMatch(/INITIAL PLAN COMMITMENT.*exempt from the dedup check/);
+  });
+
+  it('clarifies parent-vs-leaf is NOT a duplicate (avoids over-eager dedup)', () => {
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    // Without the heuristic the model may collapse legitimate per-step
+    // leaves under a single parent label and lose progress granularity.
+    expect(out).toMatch(/parent-level summary.*leaf/);
+  });
+});
+
 describe('buildWorkerInstructions — FEATURE_121 envelope spillover (v0.7.40)', () => {
   it('emits the LARGE CHILD OUTPUT dispatch-rules bullet tagged with the feature/version', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
