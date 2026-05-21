@@ -174,6 +174,7 @@ function buildCodingToolBundle(
   const todoUpdate = getToolDefinition('todo_update');
   const todoList = getToolDefinition('todo_list');
   const todoCreate = getToolDefinition('todo_create');
+  const todoGet = getToolDefinition('todo_get');
   if (
     !read
     || !grep
@@ -186,9 +187,10 @@ function buildCodingToolBundle(
     || !todoUpdate
     || !todoList
     || !todoCreate
+    || !todoGet
   ) {
     throw new Error(
-      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list/todo_create) to be registered',
+      'Runner-driven path: expected core tools (read/grep/glob/bash/write/edit/multi_edit/exit_plan_mode/todo_update/todo_list/todo_create/todo_get) to be registered',
     );
   }
   // M1 parity (v0.7.26) — optionally wrap repo-intel + MCP tools so

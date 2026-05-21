@@ -59,4 +59,12 @@ describe('CAP-035: tool name visibility classification contract', () => {
   it('CAP-TOOL-VISIBILITY-001e: FEATURE_170 todo_create tool hidden', () => {
     expect(isVisibleToolName('todo_create')).toBe(false);
   });
+
+  // v0.7.42 — todo_get is read-only per-id lookup (mirrors claudecode V2
+  // TaskGet). Same scaffolding stance: staleness refreshes are not user-
+  // facing work; the user sees the plan via TodoListSurface, not raw
+  // tool-result echoes. Must stay hidden.
+  it('CAP-TOOL-VISIBILITY-001f: v0.7.42 todo_get tool hidden', () => {
+    expect(isVisibleToolName('todo_get')).toBe(false);
+  });
 });

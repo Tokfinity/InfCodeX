@@ -660,7 +660,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 26 F183-canonical members exactly', () => {
+  it('contains the 27 F183-canonical members exactly (+ todo_get v0.7.42)', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -680,6 +680,8 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'todo_create',
         'todo_update',
         'todo_list',
+        // v0.7.42 — todo_get added to mirror CC `TaskGetTool` protection.
+        'todo_get',
         // Worktree / undo
         'worktree_create',
         'worktree_remove',
@@ -701,7 +703,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'impact_estimate',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(26);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(27);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {

@@ -70,6 +70,11 @@ const HIDDEN_TODO_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Same rationale as todo_update: the user sees inserted items via the
   // TodoListSurface; the raw tool call is pure transcript noise.
   'todo_create',
+  // v0.7.42 — `todo_get` is read-only per-id lookup. Same scaffolding
+  // role as todo_list (Generator / Worker uses it to refresh state
+  // before `todo_update`, or to fetch full description on pick-up).
+  // Mirrors CC's `TaskGetTool` (also `shouldDefer: true`).
+  'todo_get',
 ]);
 
 export function isVisibleToolName(name: string): boolean {

@@ -47,10 +47,12 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *   - user-interaction (2)     — ask_user_question, exit_plan_mode
  *   - task delegation (3)      — dispatch_child_task, task_stop, send_message
  *   - control plane (1)        — emit_managed_protocol
- *   - todo state (3)           — todo_create, todo_update, todo_list — the
- *                                model's self-maintained plan; results
- *                                serialise the entire `items[]` list and
- *                                clearing them erases task memory mid-run
+ *   - todo state (4)           — todo_create, todo_update, todo_list,
+ *                                todo_get — the model's self-maintained
+ *                                plan; results serialise the entire
+ *                                `items[]` list (or full single item for
+ *                                todo_get) and clearing them erases task
+ *                                memory mid-run
  *   - worktree / undo (3)      — worktree_create, worktree_remove, undo
  *   - MCP (5)                  — mcp_search/describe/call/read_resource/get_prompt
  *   - repo intelligence (8)    — repo_overview, changed_scope, changed_diff,
@@ -70,13 +72,19 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // Control plane
   'emit_managed_protocol',
   // Todo state — the model's self-maintained plan list. todo_create /
-  // todo_update / todo_list results contain the full serialised item set
-  // (`{ok, items: [{id, content, status, activeForm?, note?, ...}, ...]}`).
+  // todo_update / todo_list / todo_get results contain the full serialised
+  // item set (or per-item full detail for todo_get):
+  // (`{ok, items: [{id, subject, description?, status, activeForm?, note?, ...}, ...]}`).
   // Clearing erases task memory mid-run — exactly the failure mode F183
-  // is here to prevent (claudecode parity: `TodoWriteTool` is protected).
+  // is here to prevent (claudecode parity: `TodoWriteTool` / `TaskGetTool`
+  // both protected).
   'todo_create',
   'todo_update',
   'todo_list',
+  // v0.7.42 — `todo_get` is read-only single-item lookup. Protected so
+  // microcompaction doesn't strip a recent staleness-refresh result the
+  // model is about to mutate via todo_update on the next turn.
+  'todo_get',
   // Worktree / undo (low-frequency but high-value control events)
   'worktree_create',
   'worktree_remove',

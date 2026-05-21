@@ -65,6 +65,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'todo_create',
       'todo_update',
       'todo_list',
+      'todo_get',
       'worktree_create',
       'worktree_remove',
       'undo',
@@ -127,7 +128,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES ↔ registry parity', () =
       'code_search', 'semantic_lookup',
       'worktree_create', 'worktree_remove', 'undo',
       'ask_user_question', 'exit_plan_mode',
-      'todo_update', 'todo_create', 'todo_list',
+      'todo_update', 'todo_create', 'todo_list', 'todo_get',
     ]);
     for (const name of PROTECTED_TOOL_NAMES) {
       expect(

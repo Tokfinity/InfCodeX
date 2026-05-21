@@ -226,6 +226,10 @@ describe('FEATURE_168 — Planner security boundary (read-only inspection)', () 
     // FEATURE_170 (v0.7.41) — Planner also gets todo_create for plan
     // refinement during contract drafting.
     expect(names).toContain('todo_create');
+    // v0.7.42 — todo_get is the staleness-refresh / pick-up surface
+    // (mirrors claudecode V2 TaskGet). Planner uses it before mutating an
+    // item via todo_update when it's uncertain about current state.
+    expect(names).toContain('todo_get');
   });
 });
 

@@ -50,6 +50,7 @@ import { toolTaskStop } from './task-stop.js';
 import { toolTodoUpdate } from './todo-update.js';
 import { toolTodoList } from './todo-list.js';
 import { toolTodoCreate } from './todo-create.js';
+import { toolTodoGet } from './todo-get.js';
 import {
   toolScaffoldTool,
   toolValidateTool,
@@ -879,8 +880,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'todo_update',
     description:
       'Drive the visible plan checklist so the user sees real-time progress. Two operating modes selected by `op`: '
-      + '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, content, activeForm?, evaluator?}, ...]` (>= 1 entry; ids must be unique non-empty strings, content non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. Match Claude Code TodoWrite guidance: skip op:"init" for trivial single-step / informational tasks. '
-      + '(B) `op="update"` (default; omit `op` for back-compat) — single-item PATCH + state transition. Use this every time you start or finish a major step. The status field is OPTIONAL when you only want to patch content / activeForm / note / evaluator / metadata. Rules: '
+      + '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, subject, description?, activeForm?, evaluator?}, ...]` (>= 1 entry; ids must be unique non-empty strings, subject non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. NOTE (v0.7.42): the per-item additive path is `todo_create` (single new step) — prefer that over op:"init" for mid-task plan growth so existing completed items keep their progress. '
+      + '(B) `op="update"` (default; omit `op` for back-compat) — single-item PATCH + state transition. Use this every time you start or finish a major step. The status field is OPTIONAL when you only want to patch subject / description / activeForm / note / evaluator / metadata. Rules: '
       + '(1) Set status="in_progress" BEFORE starting work on an item. '
       + '(2) Set status="completed" AFTER finishing that item. '
       + '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. '
@@ -888,9 +889,10 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       + '(5) Use status="skipped" only when the item turned out to be unnecessary (e.g. Planner merged two obligations into one). '
       + '(6) Use status="cancelled" (FEATURE_114) when you decide mid-execution to drop an item the user no longer needs — UI shows strikethrough; distinct from "skipped" which is for Planner-driven merging. '
       + '(7) FEATURE_170 v0.7.41: Use status="deleted" to remove the item from the visible list entirely. Prefer "deleted" over "cancelled" when the item turned out to be wholly off-plan (no breadcrumb desired); prefer "cancelled" when the user benefits from seeing the strikethrough record. '
-      + '(8) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item content (e.g. content "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. '
-      + '(9) FEATURE_170 v0.7.41 — on op="update" you may now also patch fields without changing status: '
-      + '`content` (non-empty string) replaces the imperative description for mid-task plan refinement; '
+      + '(8) When transitioning to status="in_progress", ALWAYS supply `activeForm` — a present-continuous-tense rephrasing of the item subject (e.g. subject "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now without waiting for the round to end. '
+      + '(9) FEATURE_170 v0.7.41 + v0.7.42 — on op="update" you may patch fields without changing status: '
+      + '`subject` (non-empty string) replaces the brief imperative title shown in the row; '
+      + '`description` (string; empty clears) replaces the fuller context shown by todo_get; '
       + '`evaluator` ("build" | "test" | "lint") replaces the deterministic evaluator hint (also accepted on op="init" items); '
       + '`metadata` (object | null) shallow-merges into existing metadata, or pass null to clear. '
       + 'Combining patch fields with a status transition in one call is supported. '
@@ -909,12 +911,16 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         items: {
           type: 'array',
           description:
-            'op="init" payload — the new plan list. Each entry: {id: non-empty string (unique within list), content: non-empty string, activeForm?: present-continuous string}.',
+            'op="init" payload — the new plan list. Each entry: {id: non-empty string (unique within list), subject: non-empty string (brief title), description?: string (fuller context), activeForm?: present-continuous string}.',
           items: {
             type: 'object',
             properties: {
               id: { type: 'string', description: 'Unique non-empty item id (e.g. "todo_1").' },
-              content: { type: 'string', description: 'Imperative description of what needs to be done (e.g. "Run failing tests").' },
+              subject: { type: 'string', description: 'Brief imperative title shown in the plan-list row (e.g. "Run failing tests"). Keep ≤80 chars.' },
+              description: {
+                type: 'string',
+                description: 'Optional fuller context / work instructions read when this item is later picked up (todo_get surface). Multi-line OK. Skip when subject alone is enough.',
+              },
               activeForm: {
                 type: 'string',
                 description: 'Optional present-continuous form (e.g. "Running failing tests") shown by the spinner when this item flips to in_progress.',
@@ -925,7 +931,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
                 description: 'Optional (FEATURE_114) per-step deterministic evaluator. When set and the item flips to "completed", the runner runs `npm run build` / `npm test` / `npm run lint` accordingly; failure surfaces stderr in your next tool result. Use sparingly — only on milestone steps.',
               },
             },
-            required: ['id', 'content'],
+            required: ['id', 'subject'],
             // Note: ideally we'd set `additionalProperties: false` here so
             // an LLM passing `{id, content, status:'pending'}` (mixing
             // init-item shape with update shape) gets a schema-validation
@@ -944,7 +950,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'string',
           enum: ['in_progress', 'completed', 'failed', 'skipped', 'cancelled', 'deleted'],
           description:
-            'op="update" only. New status. Optional — when omitted you may still patch content/activeForm/note/evaluator/metadata. '
+            'op="update" only. New status. Optional — when omitted you may still patch subject/description/activeForm/note/evaluator/metadata. '
             + '"pending" is intentionally not allowed — items start as pending automatically and only the runner moves them back to pending after a revise verdict. '
             + '"cancelled" (FEATURE_114) signals a Worker-driven mid-execution decision to drop the item; UI shows strikethrough. '
             + '"deleted" (FEATURE_170) removes the item from the visible list entirely — use when the item turned out to be wholly irrelevant and you do not want a strikethrough breadcrumb. The matching extension event is `todo:deleted`.',
@@ -956,12 +962,17 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         activeForm: {
           type: 'string',
           description:
-            'op="update" only. Present-continuous form of the item content (e.g. "Running failing tests"). Required when status="in_progress" so the spinner can show the user what you are doing right now. Omitted on completed/failed/skipped (the previous activeForm is preserved but irrelevant once the item leaves in_progress).',
+            'op="update" only. Present-continuous form of the item subject (e.g. "Running failing tests"). Required when status="in_progress" so the spinner can show the user what you are doing right now. Omitted on completed/failed/skipped (the previous activeForm is preserved but irrelevant once the item leaves in_progress).',
         },
-        content: {
+        subject: {
           type: 'string',
           description:
-            'op="update" only (FEATURE_170 v0.7.41). Optional. When provided, REPLACES the item\'s imperative description. Use for mid-task plan refinement (e.g. "Run failing tests" → "Run failing tests AND clean up tmp"). Must be a non-empty string.',
+            'op="update" only (v0.7.42). Optional. When provided, REPLACES the brief imperative title shown in the plan-list row. Use for mid-task plan refinement (e.g. "Run failing tests" → "Run failing tests AND clean up tmp"). Must be a non-empty string.',
+        },
+        description: {
+          type: 'string',
+          description:
+            'op="update" only (v0.7.42). Optional. When provided, REPLACES the fuller context (work instruction). Multi-line OK. Pass empty string to clear an existing description.',
         },
         evaluator: {
           type: 'string',
@@ -985,7 +996,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       // No top-level required fields — the handler validates per-op:
       //   op="init"   → requires `items`
       //   op="update" → requires `id` plus at least one of
-      //     {status, content, activeForm, note, evaluator, metadata}.
+      //     {status, subject, description, activeForm, note, evaluator, metadata}.
     },
     handler: toolTodoUpdate,
     toClassifierInput: () => '',
@@ -993,23 +1004,27 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_create',
     description:
-      'FEATURE_170 (v0.7.41) — insert ONE new pending item into the visible plan list. ' +
-      'Use this MID-TASK when you realize the plan needs an additional step but the existing items must be preserved. ' +
-      'Do NOT use this for the initial plan commitment — `todo_update({op:"init", items:[...]})` is the batch-seed path for fan-out plan-first or task entry. ' +
+      'Insert ONE new pending item into the visible plan list. ' +
+      'Use this for plan commitment (one call per planned step, batched in the same response) AND for mid-task additive growth when you realize an extra step is needed. Each todo_create is purely additive — existing items are untouched. ' +
       'Rules: ' +
       '(1) The store auto-generates the id (monotonic `todo_N`). Do NOT pass an id — any caller-supplied id is rejected at the schema layer. ' +
-      '(2) `content` is required (imperative description, e.g. "Add edge-case test for null input"). ' +
-      '(3) Supply `activeForm` (present-continuous form, e.g. "Adding edge-case test for null input") so the spinner can show the user what you are working on when this item is later flipped to `in_progress` via todo_update. ' +
-      '(4) Optional `evaluator: "build" | "test" | "lint"` hint runs the corresponding deterministic check when the item flips to "completed" (FEATURE_114) — use sparingly, only on milestone steps with a real ground-truth check. ' +
-      '(5) Optional `metadata` opaque object is carried alongside the item for extension hooks / observability — the UI does NOT render it. ' +
+      '(2) `subject` is required (brief imperative title shown in the plan-list row, e.g. "Audit handleAuth callers"; keep ≤80 chars). ' +
+      '(3) Optional `description` carries fuller context / work instructions read when this item is later picked up via todo_get (multi-line OK; NOT rendered in the compact row). Skip when subject alone is enough. ' +
+      '(4) Supply `activeForm` (present-continuous form, e.g. "Auditing handleAuth callers") so the spinner can show the user what you are working on when this item is later flipped to `in_progress` via todo_update. ' +
+      '(5) Optional `evaluator: "build" | "test" | "lint"` hint runs the corresponding deterministic check when the item flips to "completed" (FEATURE_114) — use sparingly, only on milestone steps with a real ground-truth check. ' +
+      '(6) Optional `metadata` opaque object is carried alongside the item for extension hooks / observability — the UI does NOT render it. ' +
       'Returns {ok: true, id: "todo_<n>"} on success. ' +
       'Returns {ok: false, reason: "..."} when the store is not wired, validation fails, or an extension hook blocks the create.',
     input_schema: {
       type: 'object',
       properties: {
-        content: {
+        subject: {
           type: 'string',
-          description: 'Imperative description of what needs to be done (e.g. "Run failing tests").',
+          description: 'Brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers"). Keep ≤80 chars.',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional fuller context / work instructions read when this item is later picked up via todo_get. Multi-line OK; NOT rendered in the compact row. Skip when subject alone is enough.',
         },
         activeForm: {
           type: 'string',
@@ -1028,7 +1043,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
             'Optional opaque key-value bag carried alongside the item. Used by extension hooks / eval harnesses. The UI does NOT render metadata. Omit if you have nothing structured to attach.',
         },
       },
-      required: ['content'],
+      required: ['subject'],
     },
     handler: toolTodoCreate,
     toClassifierInput: () => '',
@@ -1036,14 +1051,36 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_list',
     description:
-      'FEATURE_151 (v0.7.38) — read-only query that returns the current visible plan list as JSON. Use this when you want to confirm what items are pending before deciding the next move, when you need to see the canonical id set after an "Unknown todo id" error, or when refining a plan and want to compare it against the existing list. ' +
-      'Returns {ok: true, count: N, items: [{id, content, status, activeForm?, note?}, ...]} on success; {ok: false, reason: "todo_list is not active ..."} when no plan list infrastructure is wired (no managed task active). ' +
-      'This tool is read-only — it never mutates the store. Pair with todo_update({op:"init", ...}) to commit a new plan or todo_update({op:"update", id, status}) to change item state.',
+      'Read-only query that returns the current visible plan list as JSON. Use this when you want to confirm what items are pending before deciding the next move, when you need to see the canonical id set after an "Unknown todo id" error, or when refining a plan and want to compare it against the existing list. ' +
+      'Returns {ok: true, count: N, items: [{id, subject, status, description?, activeForm?, note?}, ...]} on success; {ok: false, reason: "todo_list is not active ..."} when no plan list infrastructure is wired (no managed task active). ' +
+      'This tool is read-only — it never mutates the store. Pair with `todo_create` to add new steps additively, `todo_update` to change item state, or `todo_get` to fetch a single item with full detail (incl. description / metadata / evaluator).',
     input_schema: {
       type: 'object',
       properties: {},
     },
     handler: toolTodoList,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'todo_get',
+    description:
+      'v0.7.42 — read-only single-item lookup. Returns the full TodoItem detail for one id (subject + optional description + status + activeForm + note + evaluator + metadata). Mirrors claudecode V2 `TaskGet`. ' +
+      'Use this: ' +
+      '(1) BEFORE calling todo_update when uncertain about an item\'s current state (runner-side auto-handlers may have flipped statuses between turns). ' +
+      '(2) WHEN PICKING UP an item — the full `description` carries the work instruction; the compact row label (`subject`) alone often is not enough. ' +
+      '(3) AFTER an "Unknown todo id" error on todo_update — use todo_list to see all ids, then todo_get to drill into the specific one you want. ' +
+      'Returns {ok: true, item: {...}} on success; {ok: false, reason: "..."} when the store is not wired or the id is unknown (the reason carries the canonical valid-id list).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'The todo id to retrieve (e.g. "todo_3"). Must match a current valid id.',
+        },
+      },
+      required: ['id'],
+    },
+    handler: toolTodoGet,
     toClassifierInput: () => '',
   },
   {
