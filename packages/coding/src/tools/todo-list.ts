@@ -35,7 +35,10 @@ import type { KodaXToolExecutionContext, TodoItem } from '../types.js';
 
 interface TodoListItemDTO {
   readonly id: string;
-  readonly content: string;
+  /** v0.7.42 — brief imperative title (renamed from `content`). */
+  readonly subject: string;
+  /** v0.7.42 — optional fuller description. Use `todo_get` for full-detail. */
+  readonly description?: string;
   readonly status: string;
   readonly activeForm?: string;
   readonly note?: string;
@@ -46,8 +49,9 @@ function toDTO(item: TodoItem): TodoListItemDTO {
   // (no `"activeForm":null` noise polluting prompt-cache hits).
   const dto: TodoListItemDTO = {
     id: item.id,
-    content: item.content,
+    subject: item.subject,
     status: item.status,
+    ...(item.description ? { description: item.description } : {}),
     ...(item.activeForm ? { activeForm: item.activeForm } : {}),
     ...(item.note ? { note: item.note } : {}),
   };

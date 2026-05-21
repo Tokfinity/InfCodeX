@@ -2973,8 +2973,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       const calls: StubCall[] = [];
       const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
       todoStore.init([
-        { id: 't1', content: 'Build the package', evaluator: 'build' },
-        { id: 't2', content: 'Run tests' },
+        { id: 't1', subject: 'Build the package', evaluator: 'build' },
+        { id: 't2', subject: 'Run tests' },
       ]);
       const tool = findTodoUpdate(chain);
       // Set t1 to completed via the wrapped tool. Snapshot pre-state
@@ -2995,7 +2995,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     it('threads fail stderr tail into the tool result so the LLM sees it', async () => {
       const calls: StubCall[] = [];
       const { chain, todoStore } = await buildChainWithEvaluator(calls, 'fail');
-      todoStore.init([{ id: 't1', content: 'Run tests', evaluator: 'test' }]);
+      todoStore.init([{ id: 't1', subject: 'Run tests', evaluator: 'test' }]);
       const tool = findTodoUpdate(chain);
       const result = await tool.execute(
         { id: 't1', status: 'completed' },
@@ -3009,7 +3009,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     it('does NOT trigger the evaluator on items without an evaluator hint', async () => {
       const calls: StubCall[] = [];
       const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
-      todoStore.init([{ id: 't1', content: 'Plain step (no hint)' }]);
+      todoStore.init([{ id: 't1', subject: 'Plain step (no hint)' }]);
       const tool = findTodoUpdate(chain);
       await tool.execute(
         { id: 't1', status: 'completed' },
@@ -3021,7 +3021,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     it('does NOT re-trigger the evaluator when the item was already completed (no transition)', async () => {
       const calls: StubCall[] = [];
       const { chain, todoStore } = await buildChainWithEvaluator(calls, 'pass');
-      todoStore.init([{ id: 't1', content: 'Build', evaluator: 'build' }]);
+      todoStore.init([{ id: 't1', subject: 'Build', evaluator: 'build' }]);
       const tool = findTodoUpdate(chain);
       // First flip — fires.
       await tool.execute(
@@ -3061,7 +3061,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
         undefined,
         stub,
       );
-      todoStore.init([{ id: 't1', content: 'Build', evaluator: 'build' }]);
+      todoStore.init([{ id: 't1', subject: 'Build', evaluator: 'build' }]);
       const tool = chain.worker.tools?.find((t) => t.name === 'todo_update');
       if (!tool) throw new Error('todo_update tool missing');
       await tool.execute(

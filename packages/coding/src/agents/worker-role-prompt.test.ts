@@ -64,10 +64,9 @@ describe('buildWorkerInstructions', () => {
   it('emits the plan-first contract section', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('PLAN-FIRST CONTRACT');
-    // FEATURE_170 v0.7.41 — wording sharpened to point at the explicit
-    // op:'init' batch-seed form (mid-task insertion is the new
-    // todo_create path, separate API).
-    expect(out).toContain('FIRST tool call MUST be `todo_update({op:"init", items:[...]})`');
+    // v0.7.42 — opening commit goes through a batch of `todo_create`
+    // calls (claudecode V2 parity, no whole-list write surface).
+    expect(out).toMatch(/FIRST tool calls MUST be a batch of `todo_create`/);
   });
 
   it('emits the SCOPE COMMITMENT block (FEATURE_106 port)', () => {
@@ -104,9 +103,11 @@ describe('buildWorkerInstructions', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('FAN-OUT PLAN GRANULARITY');
     expect(out).toContain('FEATURE_151 Slice I');
-    // Mechanical contract: ≥3 children → ONE item per child's objective.
+    // Mechanical contract: ≥3 children → ONE todo_create per child's objective.
     expect(out).toContain('≥3 children');
-    expect(out).toContain('ONE item per child');
+    // v0.7.42 — wording shifted from "ONE item per child" (op:init items
+    // array) to "ONE per child" (one todo_create call per child).
+    expect(out).toMatch(/ONE (todo_create|item|per) /);
     // Anti-pattern call-out — plan list IS the user's progress dashboard.
     expect(out).toContain('plan list IS the user');
     // Tied to dispatch RULE A / RULE C (same trigger surface).
@@ -286,15 +287,18 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('INSERT ONE NEW STEP mid-task: `todo_create');
     expect(out).toContain('FEATURE_170 v0.7.41');
-    // The split must explicitly call out the wipes-progress hazard of
-    // op:init for incremental insertion.
-    expect(out).toMatch(/wipes the user-visible progress/);
+    // v0.7.42 — the schema-split note + "purely additive" semantics is
+    // the structural pin; op:'init' as a fan-out re-seed path is gone.
+    expect(out).toMatch(/v0\.7\.42 schema split/);
+    expect(out).toMatch(/purely additive/);
   });
 
   it('teaches todo_update patch fields without changing status', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('EDIT ONE STEP');
-    expect(out).toContain('content?, activeForm?, evaluator?, metadata?');
+    // v0.7.42 — patch field list now includes subject (was content) +
+    // description (new).
+    expect(out).toContain('subject?, description?, activeForm?, evaluator?, metadata?');
   });
 
   it('teaches the deleted vs cancelled distinction', () => {
@@ -315,10 +319,11 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
 
   it('FAN-OUT PLAN GRANULARITY teaches todo_create for the late N+1th child', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).toContain('LATE-DISCOVERED CHILD (FEATURE_170 v0.7.41)');
-    expect(out).toContain('todo_create({content:"...", activeForm:"..."})');
-    // Negative pin — never re-seed via op:init during fan-out.
-    expect(out).toMatch(/Do NOT call `todo_update\(\{op:"init"/);
+    expect(out).toContain('LATE-DISCOVERED CHILD');
+    // v0.7.42 — schema split: subject (required) + description (optional).
+    expect(out).toContain('todo_create({subject:"..."');
+    // Positive pin — late-discovered children go through additive todo_create.
+    expect(out).toMatch(/todo_create.*BEFORE the new `dispatch_child_task`/);
   });
 
   it('revise-failure retrospective points new fundamentally-different steps at todo_create', () => {

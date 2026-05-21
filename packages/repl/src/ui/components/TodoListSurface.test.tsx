@@ -24,11 +24,11 @@ import {
 
 function makeItem(
   id: string,
-  content: string,
+  subject: string,
   status: TodoItem["status"] = "pending",
   note?: string,
 ): TodoItem {
-  return { id, content, status, note };
+  return { id, subject, status, note };
 }
 
 const NOW = 1_700_000_000_000;

@@ -51,24 +51,27 @@ export function buildWorkerInstructions(
     : '';
 
   const planFirstContract = [
-    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41):',
-    '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_update`.',
-    '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool call MUST be `todo_update({op:"init", items:[...]})` with the full plan.',
-    '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_update({op:"init", ...})` AT THAT MOMENT to retrofit the plan — do not silently grow scope.',
+    'PLAN-FIRST CONTRACT (FEATURE_114 v0.7.36 + FEATURE_170 v0.7.41 + v0.7.42 schema split):',
+    '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_create` / `todo_update`.',
+    '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool calls MUST be a batch of `todo_create` — one call per planned step — to commit the full plan up front.',
+    '- Plan item schema (v0.7.42, mirrors claudecode V2 `TaskCreate`):',
+    '    * `subject` — REQUIRED. Brief imperative title shown in the plan-list row (≤80 chars, e.g. "Audit handleAuth callers").',
+    '    * `description` — OPTIONAL. Fuller context / work instructions read when you pick up the item later. Multi-line OK; NOT rendered in the compact row. Skip when subject alone is enough.',
+    '    * `activeForm` — OPTIONAL. Present-continuous form shown by the spinner while this item is `in_progress` (e.g. "Auditing handleAuth callers"). Supply alongside `subject` so the spinner reads natural while you work.',
+    '    * `evaluator` — OPTIONAL `\'build\' | \'test\' | \'lint\'`. Use sparingly — only on milestone steps with a real ground-truth check.',
+    '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_create` AT THAT MOMENT — one call per newly-realized step — to retrofit the plan. Do not silently grow scope.',
     '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
-    '- Items with verifiable acceptance gates may carry an optional `evaluator` hint: `\'build\' | \'test\' | \'lint\'`. The runner runs the corresponding deterministic check on `pending → completed`; failure surfaces stderr in your next tool result so you can self-correct. Use sparingly — only on milestone steps with a real ground-truth check.',
-    '- Replan iteratively as the picture firms up — FEATURE_170 v0.7.41 split the API for clarity:',
-    '    * INSERT ONE NEW STEP mid-task: `todo_create({content:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
-    '    * EDIT ONE STEP\'S TEXT / EVALUATOR / METADATA: `todo_update({id, content?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
+    '- Replan iteratively as the picture firms up — use the per-item API:',
+    '    * INSERT ONE NEW STEP mid-task: `todo_create({subject:"...", description?:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
+    '    * EDIT ONE STEP: `todo_update({id, subject?, description?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
     '    * REMOVE ONE STEP entirely (no breadcrumb): `todo_update({id, status:"deleted"})`. Prefer over `cancelled` when the item was wholly off-plan.',
     '    * STRIKETHROUGH ONE STEP (keep visible breadcrumb): `todo_update({id, status:"cancelled", note:"..."})`. Prefer over `deleted` when the user benefits from seeing the discarded record.',
-    '    * FULL REPLAN (rare — reserved for explicit "start over"): `todo_update({op:"init", items:[...]})`. NEVER use full replan for mid-task insertion — it wipes the user-visible progress on items already completed.',
   ].join('\n');
 
   const scopeCommitment = [
-    'SCOPE COMMITMENT (FEATURE_106 hard rule + FEATURE_170 v0.7.41):',
-    '- Whatever scope you commit to in your first `todo_update({op:"init", ...})` is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_create({content:"..."})` to add the new item explicitly, do not slip it into a later step\'s description.',
-    '- If the user request is review/audit, your initial `todo_update({op:"init", ...})` plan IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
+    'SCOPE COMMITMENT (FEATURE_106 hard rule + FEATURE_170 v0.7.41 + v0.7.42):',
+    '- Whatever scope you commit to in your first batch of `todo_create` calls is your contract for the run. Surfacing belated obligations later forfeits the trust that drove your initial harness choice — call `todo_create({subject:"..."})` to add the new item explicitly, do not slip it into a later step\'s description.',
+    '- If the user request is review/audit, your initial plan committed via `todo_create` IS the visible review report skeleton — emit it in the first 1-2 turns so the user sees structured progress, not a wall of bash + read calls followed by a single text dump.',
   ].join('\n');
 
   const mutationDiscipline = [
@@ -182,24 +185,22 @@ export function buildWorkerInstructions(
   ].join('\n');
 
   const fanOutPlanGranularity = [
-    'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38):',
-    '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool call MUST be `todo_update({op:"init", ...})`. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
-    '- COUNT-FIRST RULE: before calling `todo_update`, count the exact number N of `dispatch_child_task` calls you will make. The `op:"init"` items array MUST contain EXACTLY N items — ONE item per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `content:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
-    '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 items:',
-    '    todo_update({op:"init", items:[',
-    '      {id:"todo_1", content:"Audit packages/llm",    activeForm:"Auditing packages/llm"},',
-    '      {id:"todo_2", content:"Audit packages/agent",  activeForm:"Auditing packages/agent"},',
-    '      {id:"todo_3", content:"Audit packages/coding", activeForm:"Auditing packages/coding"},',
-    '      {id:"todo_4", content:"Audit packages/repl",   activeForm:"Auditing packages/repl"},',
-    '      {id:"todo_5", content:"Audit packages/skills", activeForm:"Auditing packages/skills"}',
-    '    ]})',
+    'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38 + v0.7.42 schema split):',
+    '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
+    '- COUNT-FIRST RULE: before the batch, count the exact number N of `dispatch_child_task` calls you will make. Emit EXACTLY N `todo_create` calls — ONE per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `subject:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
+    '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 todo_create calls (emit them in the same response so they batch):',
+    '    todo_create({subject:"Audit packages/llm",    activeForm:"Auditing packages/llm"})',
+    '    todo_create({subject:"Audit packages/agent",  activeForm:"Auditing packages/agent"})',
+    '    todo_create({subject:"Audit packages/coding", activeForm:"Auditing packages/coding"})',
+    '    todo_create({subject:"Audit packages/repl",   activeForm:"Auditing packages/repl"})',
+    '    todo_create({subject:"Audit packages/skills", activeForm:"Auditing packages/skills"})',
     '- ANTI-PATTERNS (NEVER emit any of these):',
-    '    BAD: skip todo_update and go straight to dispatch_child_task                       (violates plan-first)',
-    '    BAD: items:[{content:"Fan out review across 5 packages"}]                          (1 item collapses N children)',
-    '    BAD: items:[{content:"Review all packages"},{content:"Aggregate findings"}]        (2 items hides per-package progress)',
-    '    BAD: any items array shorter than the number of dispatch_child_task calls.',
+    '    BAD: skip todo_create and go straight to dispatch_child_task                       (violates plan-first)',
+    '    BAD: one todo_create with subject:"Fan out review across 5 packages"               (1 item collapses N children)',
+    '    BAD: two todo_create calls collapsing 5 children into "Review all" + "Aggregate"   (hides per-package progress)',
+    '    BAD: any todo_create batch shorter than the number of dispatch_child_task calls.',
     '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
-    '- LATE-DISCOVERED CHILD (FEATURE_170 v0.7.41): if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({content:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Do NOT call `todo_update({op:"init", ...})` to re-seed — that wipes the completed children\'s breadcrumbs.',
+    '- LATE-DISCOVERED CHILD: if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({subject:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Each `todo_create` is purely additive — existing items are untouched.',
     '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
   ].join('\n');
 

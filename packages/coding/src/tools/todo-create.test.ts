@@ -23,11 +23,11 @@ function makeContext(
 }
 
 function makeContextWithStore(
-  seeds: ReadonlyArray<{ id: string; content: string }> = [],
+  seeds: ReadonlyArray<{ id: string; subject: string }> = [],
 ): { ctx: KodaXToolExecutionContext; store: ReturnType<typeof createTodoStore> } {
   const store = createTodoStore();
   if (seeds.length > 0) {
-    store.init(seeds.map((s) => ({ id: s.id, content: s.content })));
+    store.init(seeds.map((s) => ({ id: s.id, subject: s.content })));
   }
   return {
     ctx: makeContext({ todoStore: store }),
@@ -38,15 +38,15 @@ function makeContextWithStore(
 describe('todo_create happy path', () => {
   it('returns {ok:true, id} and inserts a pending item', async () => {
     const { ctx, store } = makeContextWithStore([
-      { id: 'todo_1', content: 'First' },
+      { id: 'todo_1', subject: 'First' },
     ]);
-    const out = await toolTodoCreate({ content: 'Second step' }, ctx);
+    const out = await toolTodoCreate({ subject: 'Second step' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; id?: string };
     expect(parsed.ok).toBe(true);
     expect(parsed.id).toBe('todo_2');
     expect(store.has('todo_2')).toBe(true);
     const item = store.getAll().find((it) => it.id === 'todo_2')!;
-    expect(item.content).toBe('Second step');
+    expect(item.subject).toBe('Second step');
     expect(item.status).toBe('pending');
   });
 
@@ -54,7 +54,7 @@ describe('todo_create happy path', () => {
     const { ctx, store } = makeContextWithStore();
     const out = await toolTodoCreate(
       {
-        content: 'Refactor auth',
+        subject: 'Refactor auth',
         activeForm: 'Refactoring auth',
         evaluator: 'build',
         metadata: { feature: 'AUTH-42' },
@@ -71,9 +71,9 @@ describe('todo_create happy path', () => {
 
   it('returns monotonic ids across consecutive todo_create calls', async () => {
     const { ctx } = makeContextWithStore();
-    const a = JSON.parse(await toolTodoCreate({ content: 'A' }, ctx)) as { id: string };
-    const b = JSON.parse(await toolTodoCreate({ content: 'B' }, ctx)) as { id: string };
-    const c = JSON.parse(await toolTodoCreate({ content: 'C' }, ctx)) as { id: string };
+    const a = JSON.parse(await toolTodoCreate({ subject: 'A' }, ctx)) as { id: string };
+    const b = JSON.parse(await toolTodoCreate({ subject: 'B' }, ctx)) as { id: string };
+    const c = JSON.parse(await toolTodoCreate({ subject: 'C' }, ctx)) as { id: string };
     expect(a.id).toBe('todo_1');
     expect(b.id).toBe('todo_2');
     expect(c.id).toBe('todo_3');
@@ -83,7 +83,7 @@ describe('todo_create happy path', () => {
 describe('todo_create validation', () => {
   it('returns {ok:false} when store is not wired', async () => {
     const ctx = makeContext({ todoStore: undefined });
-    const out = await toolTodoCreate({ content: 'X' }, ctx);
+    const out = await toolTodoCreate({ subject: 'X' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.reason).toMatch(/todo_create is not active/);
@@ -91,10 +91,10 @@ describe('todo_create validation', () => {
 
   it('rejects empty content', async () => {
     const { ctx } = makeContextWithStore();
-    const out = await toolTodoCreate({ content: '' }, ctx);
+    const out = await toolTodoCreate({ subject: '' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
-    expect(parsed.reason).toMatch(/content.*non-empty string/);
+    expect(parsed.reason).toMatch(/subject.*non-empty string/);
   });
 
   it('rejects missing content', async () => {
@@ -102,21 +102,21 @@ describe('todo_create validation', () => {
     const out = await toolTodoCreate({}, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
-    expect(parsed.reason).toMatch(/content.*non-empty string/);
+    expect(parsed.reason).toMatch(/subject.*non-empty string/);
   });
 
   it('rejects non-string content (e.g. number)', async () => {
     const { ctx } = makeContextWithStore();
-    const out = await toolTodoCreate({ content: 42 } as Record<string, unknown>, ctx);
+    const out = await toolTodoCreate({ subject: 42 } as Record<string, unknown>, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
-    expect(parsed.reason).toMatch(/content.*non-empty string/);
+    expect(parsed.reason).toMatch(/subject.*non-empty string/);
   });
 
   it('rejects non-string activeForm', async () => {
     const { ctx } = makeContextWithStore();
     const out = await toolTodoCreate(
-      { content: 'X', activeForm: 99 } as Record<string, unknown>,
+      { subject: 'X', activeForm: 99 } as Record<string, unknown>,
       ctx,
     );
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
@@ -127,7 +127,7 @@ describe('todo_create validation', () => {
   it('rejects invalid evaluator value', async () => {
     const { ctx } = makeContextWithStore();
     const out = await toolTodoCreate(
-      { content: 'X', evaluator: 'typecheck' } as Record<string, unknown>,
+      { subject: 'X', evaluator: 'typecheck' } as Record<string, unknown>,
       ctx,
     );
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
@@ -138,7 +138,7 @@ describe('todo_create validation', () => {
   it('rejects non-object metadata (e.g. array)', async () => {
     const { ctx } = makeContextWithStore();
     const out = await toolTodoCreate(
-      { content: 'X', metadata: [1, 2, 3] } as Record<string, unknown>,
+      { subject: 'X', metadata: [1, 2, 3] } as Record<string, unknown>,
       ctx,
     );
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
@@ -149,7 +149,7 @@ describe('todo_create validation', () => {
   it('rejects non-object metadata (e.g. string)', async () => {
     const { ctx } = makeContextWithStore();
     const out = await toolTodoCreate(
-      { content: 'X', metadata: 'foo' } as Record<string, unknown>,
+      { subject: 'X', metadata: 'foo' } as Record<string, unknown>,
       ctx,
     );
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
@@ -180,19 +180,19 @@ describe('todo_create extension hook gating', () => {
     // registerHook() is the programmatic equivalent of an extension
     // subscribing to 'todo:before-create' via api.hook(...).
     runtime.registerHook('todo:before-create', (hookCtx) => {
-      if (String(hookCtx.seed.content).startsWith('forbidden')) {
+      if (String(hookCtx.seed.subject).startsWith('forbidden')) {
         return 'policy: content starts with forbidden';
       }
     });
 
     const { ctx } = makeContextWithStore();
-    const blocked = await toolTodoCreate({ content: 'forbidden thing' }, ctx);
+    const blocked = await toolTodoCreate({ subject: 'forbidden thing' }, ctx);
     const blockedParsed = JSON.parse(blocked) as { ok: boolean; reason: string };
     expect(blockedParsed.ok).toBe(false);
     expect(blockedParsed.reason).toBe('policy: content starts with forbidden');
 
     // Allowed content should still pass through.
-    const ok = await toolTodoCreate({ content: 'safe step' }, ctx);
+    const ok = await toolTodoCreate({ subject: 'safe step' }, ctx);
     const okParsed = JSON.parse(ok) as { ok: boolean };
     expect(okParsed.ok).toBe(true);
   });
@@ -202,7 +202,7 @@ describe('todo_create extension hook gating', () => {
     runtime.registerHook('todo:before-create', () => false);
 
     const { ctx, store } = makeContextWithStore();
-    const out = await toolTodoCreate({ content: 'X' }, ctx);
+    const out = await toolTodoCreate({ subject: 'X' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.reason).toBe('blocked-by-hook');
@@ -212,7 +212,7 @@ describe('todo_create extension hook gating', () => {
 
   it('allows the create when no hook is registered (default path)', async () => {
     const { ctx, store } = makeContextWithStore();
-    const out = await toolTodoCreate({ content: 'X' }, ctx);
+    const out = await toolTodoCreate({ subject: 'X' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean; id?: string };
     expect(parsed.ok).toBe(true);
     expect(store.hasItems()).toBe(true);
@@ -225,13 +225,13 @@ describe('todo_create extension hook gating', () => {
       received.push({
         id: payload.id,
         source: payload.source,
-        itemContent: payload.item.content,
+        itemContent: payload.item.subject,
       });
     });
 
     const { ctx } = makeContextWithStore();
     const out = await toolTodoCreate(
-      { content: 'Test event payload' },
+      { subject: 'Test event payload' },
       ctx,
     );
     const parsed = JSON.parse(out) as { ok: boolean; id: string };
@@ -254,7 +254,7 @@ describe('todo_create extension hook gating', () => {
     });
 
     const { ctx } = makeContextWithStore();
-    const out = await toolTodoCreate({ content: 'X' }, ctx);
+    const out = await toolTodoCreate({ subject: 'X' }, ctx);
     const parsed = JSON.parse(out) as { ok: boolean };
     expect(parsed.ok).toBe(false);
     expect(eventCount).toBe(0);

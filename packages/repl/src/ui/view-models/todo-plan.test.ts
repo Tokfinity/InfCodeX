@@ -17,11 +17,11 @@ import {
 
 function makeItem(
   id: string,
-  content: string,
+  subject: string,
   status: TodoStatus = "pending",
   note?: string,
 ): TodoItem {
-  return { id, content, status, note };
+  return { id, subject, status, note };
 }
 
 function makeItems(n: number, status: TodoStatus = "pending"): TodoItem[] {

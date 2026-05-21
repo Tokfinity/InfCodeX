@@ -29,7 +29,9 @@ import type { TodoEvaluatorHint, TodoItem, TodoList, TodoStatus } from '../types
 
 export interface TodoInit {
   readonly id: string;
-  readonly content: string;
+  /** v0.7.42 — see TodoItem.subject JSDoc. */
+  readonly subject: string;
+  readonly description?: string;
   readonly owner?: string;
   readonly sourceObligationIndex?: number;
   /**
@@ -56,9 +58,12 @@ export interface TodoInit {
 /**
  * FEATURE_170 v0.7.41 — input shape for `add()`. No `id` (auto-generated
  * by the store), no `status` (always created as `pending`).
+ *
+ * v0.7.42 — `content` renamed to `subject` + optional `description`.
  */
 export interface TodoAddSeed {
-  readonly content: string;
+  readonly subject: string;
+  readonly description?: string;
   readonly activeForm?: string;
   readonly evaluator?: TodoEvaluatorHint;
   readonly owner?: string;
@@ -79,7 +84,10 @@ export interface TodoAddSeed {
  * seed and treat them as immutable thereafter.
  */
 export interface TodoPatch {
-  readonly content?: string;
+  /** v0.7.42 — `content` renamed; patch the row label. */
+  readonly subject?: string;
+  /** v0.7.42 — patch the optional fuller description. Empty string clears. */
+  readonly description?: string;
   readonly activeForm?: string;
   readonly status?: TodoStatus;
   readonly note?: string;
@@ -257,7 +265,8 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
           );
         return {
           id: seed.id,
-          content: seed.content,
+          subject: seed.subject,
+          description: seed.description,
           status: preserveStatus ? prev.status : ('pending' as TodoStatus),
           // Preserve the note alongside the status (e.g. `cancelled`
           // items often carry a Worker-supplied reason that the user
@@ -320,7 +329,8 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       const id = `todo_${idCounter}`;
       const item: TodoItem = {
         id,
-        content: seed.content,
+        subject: seed.subject,
+        description: seed.description,
         status: 'pending' as TodoStatus,
         owner: seed.owner,
         sourceObligationIndex: seed.sourceObligationIndex,
@@ -339,8 +349,14 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       // Build next item from the partial, omitting undefined keys so that
       // "field not specified" preserves the prior value (matches the
       // updateStatus preserve-vs-replace semantics already documented).
+      //
+      // v0.7.42 — `subject` and `description` are independent patch fields.
+      // `subject` cannot be cleared to empty (it's the required row label);
+      // `description` may be cleared by passing empty string. Both follow
+      // preserve-when-undefined semantics.
       let next: TodoItem = { ...prev };
-      if (partial.content !== undefined) next = { ...next, content: partial.content };
+      if (partial.subject !== undefined) next = { ...next, subject: partial.subject };
+      if (partial.description !== undefined) next = { ...next, description: partial.description };
       if (partial.activeForm !== undefined) next = { ...next, activeForm: partial.activeForm };
       if (partial.status !== undefined) next = { ...next, status: partial.status };
       if (partial.note !== undefined) next = { ...next, note: partial.note };
@@ -355,7 +371,8 @@ export function createTodoStore(options: TodoStoreOptions = {}): TodoStore {
       // Skips onChange firing so React doesn't re-render on idempotent
       // patches (same as updateStatus does).
       const isNoop =
-        next.content === prev.content
+        next.subject === prev.subject
+        && next.description === prev.description
         && next.activeForm === prev.activeForm
         && next.status === prev.status
         && next.note === prev.note

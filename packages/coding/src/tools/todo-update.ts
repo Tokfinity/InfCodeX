@@ -123,7 +123,7 @@ interface TodoUpdateInput {
    * write semantics.
    */
   op?: unknown;
-  /** op:'init' payload — array of `{id, content, activeForm?}`. */
+  /** op:'init' payload — array of `{id, subject, description?, activeForm?}`. */
   items?: unknown;
   // op:'update' (v0.7.34 + FEATURE_170 patch fields) parameters:
   id?: unknown;
@@ -136,8 +136,10 @@ interface TodoUpdateInput {
    * existing.
    */
   activeForm?: unknown;
-  /** FEATURE_170 v0.7.41 — patch imperative description. */
-  content?: unknown;
+  /** v0.7.42 — patch the brief imperative title (row label). */
+  subject?: unknown;
+  /** v0.7.42 — patch the optional fuller description. */
+  description?: unknown;
   /** FEATURE_170 v0.7.41 — patch deterministic evaluator hint. */
   evaluator?: unknown;
   /**
@@ -149,7 +151,8 @@ interface TodoUpdateInput {
 
 interface InitItemInput {
   readonly id: unknown;
-  readonly content: unknown;
+  readonly subject: unknown;
+  readonly description?: unknown;
   readonly activeForm?: unknown;
   /**
    * FEATURE_114 v0.7.36 — optional per-step deterministic evaluator hint.
@@ -177,7 +180,8 @@ function changedFieldsOf(
   after: TodoItem,
 ): readonly (keyof KodaXTodoItem)[] {
   const fields: (keyof KodaXTodoItem)[] = [];
-  if (before.content !== after.content) fields.push('content');
+  if (before.subject !== after.subject) fields.push('subject');
+  if (before.description !== after.description) fields.push('description');
   if (before.status !== after.status) fields.push('status');
   if (before.activeForm !== after.activeForm) fields.push('activeForm');
   if (before.note !== after.note) fields.push('note');
@@ -229,16 +233,22 @@ function executeInitOp(
   }
 
   const seenIds = new Set<string>();
-  const seeds: Array<{ id: string; content: string; activeForm?: string; evaluator?: TodoEvaluatorHint }> = [];
+  const seeds: Array<{
+    id: string;
+    subject: string;
+    description?: string;
+    activeForm?: string;
+    evaluator?: TodoEvaluatorHint;
+  }> = [];
   for (let i = 0; i < rawItems.length; i++) {
     const raw = rawItems[i] as InitItemInput | undefined;
     if (raw === null || raw === undefined || typeof raw !== 'object') {
       return jsonResult({
         ok: false,
-        reason: `Invalid op:'init' items[${i}]: must be an object {id, content, activeForm?}.`,
+        reason: `Invalid op:'init' items[${i}]: must be an object {id, subject, description?, activeForm?}.`,
       });
     }
-    const { id, content, activeForm, evaluator } = raw;
+    const { id, subject, description, activeForm, evaluator } = raw;
     if (typeof id !== 'string' || id.length === 0) {
       return jsonResult({
         ok: false,
@@ -254,10 +264,20 @@ function executeInitOp(
       });
     }
     seenIds.add(id);
-    if (typeof content !== 'string' || content.length === 0) {
+    if (typeof subject !== 'string' || subject.length === 0) {
       return jsonResult({
         ok: false,
-        reason: `Invalid op:'init' items[${i}].content: must be a non-empty string.`,
+        reason:
+          `Invalid op:'init' items[${i}].subject: must be a non-empty string ` +
+          '(brief imperative title shown in the plan-list row).',
+      });
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      return jsonResult({
+        ok: false,
+        reason:
+          `Invalid op:'init' items[${i}].description: when provided, must be a string ` +
+          '(fuller context / work instructions; multi-line OK).',
       });
     }
     if (activeForm !== undefined && typeof activeForm !== 'string') {
@@ -279,7 +299,8 @@ function executeInitOp(
     }
     seeds.push({
       id,
-      content,
+      subject,
+      ...(typeof description === 'string' ? { description } : {}),
       ...(typeof activeForm === 'string' ? { activeForm } : {}),
       ...(typeof evaluator === 'string' ? { evaluator: evaluator as TodoEvaluatorHint } : {}),
     });
@@ -296,7 +317,17 @@ export async function toolTodoUpdate(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const { op, id, status, note, activeForm, content, evaluator, metadata } = input as TodoUpdateInput;
+  const {
+    op,
+    id,
+    status,
+    note,
+    activeForm,
+    subject,
+    description,
+    evaluator,
+    metadata,
+  } = input as TodoUpdateInput;
 
   if (!ctx.todoStore) {
     // Configuration error — runner-driven did not wire a store for this run.
@@ -333,9 +364,9 @@ export async function toolTodoUpdate(
     });
   }
 
-  // FEATURE_170 v0.7.41 — status becomes optional when a pure patch is
-  // supplied (content/activeForm/note/evaluator/metadata only). At least
-  // one of {status, content, activeForm, note, evaluator, metadata} must
+  // FEATURE_170 v0.7.41 + v0.7.42 schema split — status becomes optional
+  // when a pure patch is supplied (subject/description/activeForm/note/
+  // evaluator/metadata only). At least one of the patchable fields must
   // be present, or the call is a no-op the LLM didn't mean to make.
   if (status !== undefined && (typeof status !== 'string' || !ALLOWED_STATUSES_FOR_UPDATE.has(status))) {
     return jsonResult({
@@ -347,7 +378,8 @@ export async function toolTodoUpdate(
   }
   if (
     status === undefined
-    && content === undefined
+    && subject === undefined
+    && description === undefined
     && activeForm === undefined
     && note === undefined
     && evaluator === undefined
@@ -356,8 +388,8 @@ export async function toolTodoUpdate(
     return jsonResult({
       ok: false,
       reason:
-        "Empty op:'update' payload. Supply at least one of: status, content, " +
-        'activeForm, note, evaluator, metadata.',
+        "Empty op:'update' payload. Supply at least one of: status, subject, " +
+        'description, activeForm, note, evaluator, metadata.',
     });
   }
 
@@ -412,10 +444,21 @@ export async function toolTodoUpdate(
     });
   }
 
-  if (content !== undefined && (typeof content !== 'string' || content.length === 0)) {
+  if (subject !== undefined && (typeof subject !== 'string' || subject.length === 0)) {
     return jsonResult({
       ok: false,
-      reason: 'Invalid content: when provided, must be a non-empty string (imperative description).',
+      reason:
+        'Invalid subject: when provided, must be a non-empty string ' +
+        '(brief imperative title for the plan-list row).',
+    });
+  }
+
+  if (description !== undefined && typeof description !== 'string') {
+    return jsonResult({
+      ok: false,
+      reason:
+        'Invalid description: when provided, must be a string ' +
+        '(fuller context; pass empty string to clear).',
     });
   }
 
@@ -474,7 +517,8 @@ export async function toolTodoUpdate(
   // (null clears, plain object merges).
   ctx.todoStore.patch(id, {
     ...(status !== undefined ? { status: status as TodoStatus } : {}),
-    ...(content !== undefined ? { content: content as string } : {}),
+    ...(subject !== undefined ? { subject: subject as string } : {}),
+    ...(description !== undefined ? { description: description as string } : {}),
     ...(activeForm !== undefined ? { activeForm: activeForm as string } : {}),
     ...(note !== undefined ? { note: note as string } : {}),
     ...(evaluator !== undefined ? { evaluator: evaluator as TodoEvaluatorHint } : {}),

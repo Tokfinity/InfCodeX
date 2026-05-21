@@ -308,9 +308,14 @@ export type TodoMutationSource = 'tool' | 'internal';
  * FEATURE_170 v0.7.41 — seed shape passed to `'todo:before-create'`.
  * Mirrors `TodoAddSeed` from todo-store.ts (kept structurally compatible
  * to avoid coupling extension authors to the internal task-engine type).
+ *
+ * v0.7.42 — `content` renamed to `subject` + optional `description` to
+ * match claudecode V2 `TaskCreateTool` schema. See `TodoItem` JSDoc in
+ * packages/coding/src/types.ts.
  */
 export interface ExtensionTodoCreateSeed {
-  readonly content: string;
+  readonly subject: string;
+  readonly description?: string;
   readonly activeForm?: string;
   readonly evaluator?: 'build' | 'test' | 'lint';
   readonly owner?: string;
@@ -331,7 +336,9 @@ export interface ExtensionTodoCreateSeed {
  */
 export interface KodaXTodoItem {
   readonly id: string;
-  readonly content: string;
+  /** v0.7.42 — see TodoItem.subject JSDoc in packages/coding/src/types.ts. */
+  readonly subject: string;
+  readonly description?: string;
   readonly status:
     | 'pending'
     | 'in_progress'

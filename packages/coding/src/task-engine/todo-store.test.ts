@@ -7,9 +7,9 @@ import type { TodoList, TodoStatus } from '../types.js';
 import { createTodoStore, type TodoInit } from './todo-store.js';
 
 const SEEDS: readonly TodoInit[] = Object.freeze([
-  { id: 'todo_1', content: 'Rename function', owner: 'main', sourceObligationIndex: 0 },
-  { id: 'todo_2', content: 'Update callers', owner: 'main', sourceObligationIndex: 1 },
-  { id: 'todo_3', content: 'Run typecheck', owner: 'main', sourceObligationIndex: 2 },
+  { id: 'todo_1', subject: 'Rename function', owner: 'main', sourceObligationIndex: 0 },
+  { id: 'todo_2', subject: 'Update callers', owner: 'main', sourceObligationIndex: 1 },
+  { id: 'todo_3', subject: 'Run typecheck', owner: 'main', sourceObligationIndex: 2 },
 ]);
 
 describe('todo-store basics', () => {
@@ -51,8 +51,8 @@ describe('todo-store basics', () => {
     const store = createTodoStore();
     store.init(SEEDS);
     store.replace([
-      { id: 'p_1', content: 'planned step a', status: 'pending' },
-      { id: 'p_2', content: 'planned step b', status: 'pending' },
+      { id: 'p_1', subject: 'planned step a', status: 'pending' },
+      { id: 'p_2', subject: 'planned step b', status: 'pending' },
     ]);
     expect(store.allIds()).toEqual(['p_1', 'p_2']);
     expect(store.has('todo_1')).toBe(false);
@@ -262,7 +262,7 @@ describe('todo-store onChange callback', () => {
     const calls: number[] = [];
     const store = createTodoStore({ onChange: (items) => calls.push(items.length) });
     store.init(SEEDS); // call 1
-    store.replace([{ id: 'p_1', content: 'new', status: 'pending' }]); // call 2
+    store.replace([{ id: 'p_1', subject: 'new', status: 'pending' }]); // call 2
     expect(calls).toEqual([3, 1]);
   });
 
@@ -353,9 +353,9 @@ describe('todo-store revise → reset cross-turn lifecycle (FEATURE_097 §5 ①)
       },
     });
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
-      { id: 'todo_3', content: 'C' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
+      { id: 'todo_3', subject: 'C' },
     ]);
     // Phase 1: Generator marks todo_1 + todo_2 in_progress (sequential).
     store.updateStatus('todo_1', 'in_progress');
@@ -382,8 +382,8 @@ describe('todo-store revise → reset cross-turn lifecycle (FEATURE_097 §5 ①)
     let calls = 0;
     const store = createTodoStore({ onChange: () => calls++ });
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
     ]);
     store.updateStatus('todo_1', 'in_progress');
     store.markInProgressFailed('reason');
@@ -399,8 +399,8 @@ describe('todo-store revise → reset cross-turn lifecycle (FEATURE_097 §5 ①)
   it('replan path is distinguishable: store.reset() empties the list', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
     ]);
     store.updateStatus('todo_1', 'in_progress');
     // §5 ① replan disposition routes through `reset()` (not
@@ -419,7 +419,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
   it('init() seeds activeForm when provided', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'Run failing tests', activeForm: 'Running failing tests' },
+      { id: 'todo_1', subject: 'Run failing tests', activeForm: 'Running failing tests' },
     ]);
     expect(store.getAll()[0]?.activeForm).toBe('Running failing tests');
   });
@@ -434,7 +434,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
 
   it('updateStatus() sets activeForm when supplied', () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'Refactor auth' }]);
+    store.init([{ id: 'todo_1', subject: 'Refactor auth' }]);
     store.updateStatus('todo_1', 'in_progress', undefined, 'Refactoring auth');
     expect(store.getAll()[0]?.activeForm).toBe('Refactoring auth');
     expect(store.getAll()[0]?.status).toBe('in_progress');
@@ -443,7 +443,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
   it('updateStatus() preserves existing activeForm when omitted', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'Refactor auth', activeForm: 'Refactoring auth' },
+      { id: 'todo_1', subject: 'Refactor auth', activeForm: 'Refactoring auth' },
     ]);
     // Subsequent transition with no activeForm arg should preserve.
     store.updateStatus('todo_1', 'completed');
@@ -453,7 +453,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
   it('updateStatus() replaces activeForm when supplied', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'Refactor auth', activeForm: 'old phrase' },
+      { id: 'todo_1', subject: 'Refactor auth', activeForm: 'old phrase' },
     ]);
     store.updateStatus('todo_1', 'in_progress', undefined, 'new phrase');
     expect(store.getAll()[0]?.activeForm).toBe('new phrase');
@@ -463,7 +463,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
     store.init([
-      { id: 'todo_1', content: 'X', activeForm: 'Doing X' },
+      { id: 'todo_1', subject: 'X', activeForm: 'Doing X' },
     ]);
     events.length = 0; // Drop the init notification.
     // Same status + same activeForm = no-op.
@@ -474,7 +474,7 @@ describe('todo-store activeForm (FEATURE_149)', () => {
   it('updateStatus() fires onChange when only activeForm changes', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
-    store.init([{ id: 'todo_1', content: 'X', activeForm: 'Doing X' }]);
+    store.init([{ id: 'todo_1', subject: 'X', activeForm: 'Doing X' }]);
     events.length = 0;
     store.updateStatus('todo_1', 'pending', undefined, 'Working on X');
     expect(events.length).toBe(1);
@@ -490,18 +490,18 @@ describe('todo-store add() — FEATURE_170 v0.7.41', () => {
   it('returns a new monotonic id and appends a pending item', () => {
     const store = createTodoStore();
     store.init(SEEDS); // todo_1, todo_2, todo_3
-    const newId = store.add({ content: 'New step' });
+    const newId = store.add({ subject: 'New step' });
     expect(newId).toBe('todo_4');
     expect(store.has('todo_4')).toBe(true);
     const item = store.getAll().find((it) => it.id === 'todo_4')!;
     expect(item.status).toBe('pending');
-    expect(item.content).toBe('New step');
+    expect(item.subject).toBe('New step');
   });
 
   it('carries activeForm / evaluator / metadata / owner from the seed', () => {
     const store = createTodoStore();
     const id = store.add({
-      content: 'Refactor auth',
+      subject: 'Refactor auth',
       activeForm: 'Refactoring auth',
       evaluator: 'build',
       owner: 'main',
@@ -517,40 +517,40 @@ describe('todo-store add() — FEATURE_170 v0.7.41', () => {
   it('counter is monotonic — remove() then add() does NOT reuse the id', () => {
     const store = createTodoStore();
     store.init(SEEDS); // counter = 3
-    expect(store.add({ content: 'A' })).toBe('todo_4');
-    expect(store.add({ content: 'B' })).toBe('todo_5');
+    expect(store.add({ subject: 'A' })).toBe('todo_4');
+    expect(store.add({ subject: 'B' })).toBe('todo_5');
     expect(store.remove('todo_5')).toBe(true);
     // Next add must be todo_6 — todo_5 is forever gone.
-    expect(store.add({ content: 'C' })).toBe('todo_6');
+    expect(store.add({ subject: 'C' })).toBe('todo_6');
   });
 
   it('counter initializes from sparse numeric seeds (gaps OK)', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_3', content: 'first' },
-      { id: 'todo_5', content: 'second' },
+      { id: 'todo_3', subject: 'first' },
+      { id: 'todo_5', subject: 'second' },
     ]);
     // Highest numeric suffix is 5 → next add is todo_6.
-    expect(store.add({ content: 'C' })).toBe('todo_6');
+    expect(store.add({ subject: 'C' })).toBe('todo_6');
   });
 
   it('counter initializes to 0 from non-numeric seeds (counter falls back gracefully)', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'step-a', content: 'first' },
-      { id: 'step-b', content: 'second' },
+      { id: 'step-a', subject: 'first' },
+      { id: 'step-b', subject: 'second' },
     ]);
     // No `^todo_\d+$` matches → counter stays at 0 → next add is todo_1.
-    expect(store.add({ content: 'C' })).toBe('todo_1');
+    expect(store.add({ subject: 'C' })).toBe('todo_1');
   });
 
   it('counter never regresses across multiple init() calls', () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_10', content: 'big seed' }]);
-    expect(store.add({ content: 'X' })).toBe('todo_11');
+    store.init([{ id: 'todo_10', subject: 'big seed' }]);
+    expect(store.add({ subject: 'X' })).toBe('todo_11');
     // Now a smaller init — counter must NOT regress.
-    store.init([{ id: 'todo_2', content: 'small seed' }]);
-    expect(store.add({ content: 'Y' })).toBe('todo_12');
+    store.init([{ id: 'todo_2', subject: 'small seed' }]);
+    expect(store.add({ subject: 'Y' })).toBe('todo_12');
   });
 
   it('fires onChange after add', () => {
@@ -558,7 +558,7 @@ describe('todo-store add() — FEATURE_170 v0.7.41', () => {
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
     store.init([]);
     events.length = 0;
-    store.add({ content: 'X' });
+    store.add({ subject: 'X' });
     expect(events.length).toBe(1);
     expect(events[0]!.length).toBe(1);
   });
@@ -568,11 +568,11 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
   it('patches content while preserving status / activeForm / evaluator', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'old content', activeForm: 'Doing X', evaluator: 'build' },
+      { id: 'todo_1', subject: 'old content', activeForm: 'Doing X', evaluator: 'build' },
     ]);
-    expect(store.patch('todo_1', { content: 'new content' })).toBe(true);
+    expect(store.patch('todo_1', { subject: 'new content' })).toBe(true);
     const item = store.getAll()[0]!;
-    expect(item.content).toBe('new content');
+    expect(item.subject).toBe('new content');
     expect(item.activeForm).toBe('Doing X');
     expect(item.evaluator).toBe('build');
     expect(item.status).toBe('pending');
@@ -580,15 +580,15 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
 
   it('patches multiple fields at once', () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     store.patch('todo_1', {
-      content: 'Y',
+      subject: 'Y',
       status: 'in_progress',
       activeForm: 'Doing Y',
       evaluator: 'test',
     });
     const item = store.getAll()[0]!;
-    expect(item.content).toBe('Y');
+    expect(item.subject).toBe('Y');
     expect(item.status).toBe('in_progress');
     expect(item.activeForm).toBe('Doing Y');
     expect(item.evaluator).toBe('test');
@@ -597,44 +597,44 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
   it('returns false for unknown id (no mutation)', () => {
     const store = createTodoStore();
     store.init(SEEDS);
-    expect(store.patch('todo_99', { content: 'X' })).toBe(false);
-    expect(store.getAll().every((it) => it.content !== 'X')).toBe(true);
+    expect(store.patch('todo_99', { subject: 'X' })).toBe(false);
+    expect(store.getAll().every((it) => it.subject !== 'X')).toBe(true);
   });
 
   it('shallow-merges metadata, preserving untouched keys', () => {
     const store = createTodoStore();
-    const id = store.add({ content: 'X', metadata: { a: 1, b: 2 } });
+    const id = store.add({ subject: 'X', metadata: { a: 1, b: 2 } });
     store.patch(id, { metadata: { b: 99, c: 3 } });
     expect(store.getAll()[0]!.metadata).toEqual({ a: 1, b: 99, c: 3 });
   });
 
   it('clears metadata when patch passes metadata:null', () => {
     const store = createTodoStore();
-    const id = store.add({ content: 'X', metadata: { a: 1 } });
+    const id = store.add({ subject: 'X', metadata: { a: 1 } });
     store.patch(id, { metadata: null });
     expect(store.getAll()[0]!.metadata).toBeUndefined();
   });
 
   it('preserves metadata when patch.metadata is undefined', () => {
     const store = createTodoStore();
-    const id = store.add({ content: 'X', metadata: { a: 1 } });
-    store.patch(id, { content: 'Y' });
+    const id = store.add({ subject: 'X', metadata: { a: 1 } });
+    store.patch(id, { subject: 'Y' });
     expect(store.getAll()[0]!.metadata).toEqual({ a: 1 });
   });
 
   it('is a no-op (no onChange) when patch fields equal current values', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
-    store.init([{ id: 'todo_1', content: 'X', activeForm: 'Doing X' }]);
+    store.init([{ id: 'todo_1', subject: 'X', activeForm: 'Doing X' }]);
     events.length = 0;
-    store.patch('todo_1', { content: 'X', activeForm: 'Doing X', status: 'pending' });
+    store.patch('todo_1', { subject: 'X', activeForm: 'Doing X', status: 'pending' });
     expect(events).toEqual([]);
   });
 
   it('is a no-op when patch.note equals current value', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     store.patch('todo_1', { note: 'first note' }); // sets note
     events.length = 0;
     store.patch('todo_1', { note: 'first note' }); // same note again — no-op
@@ -644,7 +644,7 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
   it('is a no-op when patch.evaluator equals current value', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
-    store.init([{ id: 'todo_1', content: 'X', evaluator: 'build' }]);
+    store.init([{ id: 'todo_1', subject: 'X', evaluator: 'build' }]);
     events.length = 0;
     store.patch('todo_1', { evaluator: 'build' });
     expect(events).toEqual([]);
@@ -656,8 +656,8 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
     // type rule, so this test documents the contract by exercising the
     // expected behavior: an item's owner stays put after a content patch.
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'X', owner: 'main', sourceObligationIndex: 7 }]);
-    store.patch('todo_1', { content: 'Y' });
+    store.init([{ id: 'todo_1', subject: 'X', owner: 'main', sourceObligationIndex: 7 }]);
+    store.patch('todo_1', { subject: 'Y' });
     const item = store.getAll()[0]!;
     expect(item.owner).toBe('main');
     expect(item.sourceObligationIndex).toBe(7);
@@ -666,7 +666,7 @@ describe('todo-store patch() — FEATURE_170 v0.7.41', () => {
   it('fires onChange when at least one field changes', () => {
     const events: TodoList[] = [];
     const store = createTodoStore({ onChange: (items) => { events.push(items); } });
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     events.length = 0;
     store.patch('todo_1', { status: 'in_progress' });
     expect(events.length).toBe(1);
@@ -711,11 +711,11 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
   it('preserves completed/skipped/cancelled on id match, resets in_progress/failed/pending', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'Wire EChart' },
-      { id: 'todo_2', content: 'Overlay data' },
-      { id: 'todo_3', content: 'Fix marker zoom' },
-      { id: 'todo_4', content: 'Verify' },
-      { id: 'todo_5', content: 'Cleanup' },
+      { id: 'todo_1', subject: 'Wire EChart' },
+      { id: 'todo_2', subject: 'Overlay data' },
+      { id: 'todo_3', subject: 'Fix marker zoom' },
+      { id: 'todo_4', subject: 'Verify' },
+      { id: 'todo_5', subject: 'Cleanup' },
     ]);
     // Drive the store into the 5 status flavors that exist after a
     // mid-task re-init: completed (terminal-success), skipped
@@ -730,11 +730,11 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
     // Worker re-emits op:'init' with the same 5 ids (e.g. to refine
     // content / add an evaluator hint).
     store.init([
-      { id: 'todo_1', content: 'Wire EChart' },
-      { id: 'todo_2', content: 'Overlay data' },
-      { id: 'todo_3', content: 'Fix marker zoom' },
-      { id: 'todo_4', content: 'Verify' },
-      { id: 'todo_5', content: 'Cleanup' },
+      { id: 'todo_1', subject: 'Wire EChart' },
+      { id: 'todo_2', subject: 'Overlay data' },
+      { id: 'todo_3', subject: 'Fix marker zoom' },
+      { id: 'todo_4', subject: 'Verify' },
+      { id: 'todo_5', subject: 'Cleanup' },
     ]);
     const items = store.getAll();
     expect(items.map((it) => it.status)).toEqual([
@@ -748,20 +748,20 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
 
   it('preserves note alongside preserved cancelled status', () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     store.updateStatus('todo_1', 'cancelled', 'user changed their mind');
-    store.init([{ id: 'todo_1', content: 'X (refined)' }]);
+    store.init([{ id: 'todo_1', subject: 'X (refined)' }]);
     const it = store.getAll()[0]!;
     expect(it.status).toBe('cancelled');
     expect(it.note).toBe('user changed their mind');
-    expect(it.content).toBe('X (refined)'); // content patched, status sticky
+    expect(it.subject).toBe('X (refined)'); // content patched, status sticky
   });
 
   it('clears note when status is reset from failed to pending', () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     store.updateStatus('todo_1', 'failed', 'first attempt error trace');
-    store.init([{ id: 'todo_1', content: 'X' }]);
+    store.init([{ id: 'todo_1', subject: 'X' }]);
     const it = store.getAll()[0]!;
     expect(it.status).toBe('pending');
     // A pending item carrying a stale "failed" note would mislead the
@@ -773,15 +773,15 @@ describe('todo-store init() preserves terminal-success on id match (v0.7.42)', (
   it('seeds new ids as pending alongside preserved id matches', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
     ]);
     store.updateStatus('todo_1', 'completed');
     // Re-init adds a third item — the existing completed must survive.
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
-      { id: 'todo_3', content: 'C (new)' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
+      { id: 'todo_3', subject: 'C (new)' },
     ]);
     const items = store.getAll();
     expect(items.map((it) => `${it.id}:${it.status}`)).toEqual([

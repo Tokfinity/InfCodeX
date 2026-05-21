@@ -22,10 +22,10 @@ function makeContext(
 }
 
 function makeContextWithStore(
-  seeds: ReadonlyArray<{ id: string; content: string }> = [
-    { id: 'todo_1', content: 'Rename function' },
-    { id: 'todo_2', content: 'Update callers' },
-    { id: 'todo_3', content: 'Run typecheck' },
+  seeds: ReadonlyArray<{ id: string; subject: string }> = [
+    { id: 'todo_1', subject: 'Rename function' },
+    { id: 'todo_2', subject: 'Update callers' },
+    { id: 'todo_3', subject: 'Run typecheck' },
   ],
 ): {
   ctx: KodaXToolExecutionContext;
@@ -38,7 +38,7 @@ function makeContextWithStore(
       calls++;
     },
   });
-  store.init(seeds.map((s) => ({ id: s.id, content: s.content })));
+  store.init(seeds.map((s) => ({ id: s.id, subject: s.subject })));
   // init counts as call 1; reset for clarity.
   const initCalls = calls;
   return {
@@ -126,8 +126,8 @@ describe('todo_update §5 ⑤ unknown id contract', () => {
     const { ctx, store } = makeContextWithStore();
     // Planner fully replaces — old todo_1..todo_3 disappear.
     store.replace([
-      { id: 'p_1', content: 'planner step a', status: 'pending' },
-      { id: 'p_2', content: 'planner step b', status: 'pending' },
+      { id: 'p_1', subject: 'planner step a', status: 'pending' },
+      { id: 'p_2', subject: 'planner step b', status: 'pending' },
     ]);
     // Generator (running on stale ids) tries to update the old id.
     const result = await toolTodoUpdate(
@@ -259,8 +259,8 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'Audit auth', activeForm: 'Auditing auth' },
-          { id: 'todo_2', content: 'Update tests' },
+          { id: 'todo_1', subject: 'Audit auth', activeForm: 'Auditing auth' },
+          { id: 'todo_2', subject: 'Update tests' },
         ],
       },
       ctx,
@@ -271,7 +271,7 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
     const all = store.getAll();
     expect(all).toHaveLength(2);
     expect(all[0]?.id).toBe('todo_1');
-    expect(all[0]?.content).toBe('Audit auth');
+    expect(all[0]?.subject).toBe('Audit auth');
     expect(all[0]?.activeForm).toBe('Auditing auth');
     expect(all[0]?.status).toBe('pending');
     expect(all[1]?.id).toBe('todo_2');
@@ -284,7 +284,7 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
   it('accepts a single-item init (FEATURE_151 + Slice A: MIN=1 renders)', async () => {
     const { ctx, store } = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'Do the thing' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'Do the thing' }] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; count?: number };
@@ -311,8 +311,8 @@ describe("todo_update FEATURE_151 op:'init' happy path", () => {
       {
         op: 'init',
         items: [
-          { id: 'p_1', content: 'New plan step 1' },
-          { id: 'p_2', content: 'New plan step 2' },
+          { id: 'p_1', subject: 'New plan step 1' },
+          { id: 'p_2', subject: 'New plan step 2' },
         ],
       },
       ctx,
@@ -347,7 +347,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it("rejects unknown `op` value", async () => {
     const ctx = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'replace', items: [{ id: 'a', content: 'b' }] },
+      { op: 'replace', items: [{ id: 'a', subject: 'b' }] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
@@ -359,7 +359,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('rejects op:init with non-array items', async () => {
     const ctx = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'init', items: { id: 'a', content: 'b' } },
+      { op: 'init', items: { id: 'a', subject: 'b' } },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
@@ -379,7 +379,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('rejects op:init with malformed item object', async () => {
     const ctx = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'A' }, null] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'A' }, null] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
@@ -390,7 +390,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('rejects op:init with empty id', async () => {
     const ctx = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: '', content: 'A' }] },
+      { op: 'init', items: [{ id: '', subject: 'A' }] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
@@ -404,8 +404,8 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'A' },
-          { id: 'todo_1', content: 'B' },
+          { id: 'todo_1', subject: 'A' },
+          { id: 'todo_1', subject: 'B' },
         ],
       },
       ctx,
@@ -418,12 +418,12 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('rejects op:init with empty content', async () => {
     const ctx = makeEmptyContext();
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: '' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: '' }] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
-    expect(parsed.reason).toContain('items[0].content');
+    expect(parsed.reason).toContain('items[0].subject');
   });
 
   it('rejects op:init with non-string activeForm', async () => {
@@ -431,7 +431,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
     const result = await toolTodoUpdate(
       {
         op: 'init',
-        items: [{ id: 'todo_1', content: 'A', activeForm: 42 as unknown as string }],
+        items: [{ id: 'todo_1', subject: 'A', activeForm: 42 as unknown as string }],
       },
       ctx,
     );
@@ -443,7 +443,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('treats omitted activeForm as undefined (not "")', async () => {
     const ctx = makeContext({ todoStore: createTodoStore() });
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'A' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'A' }] },
       ctx,
     );
     expect(JSON.parse(result)).toEqual({ ok: true, count: 1 });
@@ -454,7 +454,7 @@ describe("todo_update FEATURE_151 op:'init' input validation", () => {
   it('does not attempt op:init when todoStore is not wired (graceful degradation)', async () => {
     const ctx = makeContext({ todoStore: undefined });
     const result = await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'A' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'A' }] },
       ctx,
     );
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
@@ -486,8 +486,8 @@ describe("todo_update v0.7.42 op:'init' on dirty store still succeeds (no reject
       {
         op: 'init',
         items: [
-          { id: 'p_1', content: 'New plan step 1' },
-          { id: 'p_2', content: 'New plan step 2' },
+          { id: 'p_1', subject: 'New plan step 1' },
+          { id: 'p_2', subject: 'New plan step 2' },
         ],
       },
       ctx,
@@ -529,10 +529,10 @@ describe("todo_update FEATURE_114 v0.7.36 Slice 1 — cancelled status + evaluat
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'Run unit tests', evaluator: 'test' },
-          { id: 'todo_2', content: 'Type-check the module', evaluator: 'build' },
-          { id: 'todo_3', content: 'Format and lint', evaluator: 'lint' },
-          { id: 'todo_4', content: 'Manual verification step' /* no evaluator */ },
+          { id: 'todo_1', subject: 'Run unit tests', evaluator: 'test' },
+          { id: 'todo_2', subject: 'Type-check the module', evaluator: 'build' },
+          { id: 'todo_3', subject: 'Format and lint', evaluator: 'lint' },
+          { id: 'todo_4', subject: 'Manual verification step' /* no evaluator */ },
         ],
       },
       ctx,
@@ -550,7 +550,7 @@ describe("todo_update FEATURE_114 v0.7.36 Slice 1 — cancelled status + evaluat
     const result = await toolTodoUpdate(
       {
         op: 'init',
-        items: [{ id: 'todo_1', content: 'A', evaluator: 'typecheck' }],
+        items: [{ id: 'todo_1', subject: 'A', evaluator: 'typecheck' }],
       },
       ctx,
     );
@@ -565,7 +565,7 @@ describe("todo_update FEATURE_114 v0.7.36 Slice 1 — cancelled status + evaluat
     const result = await toolTodoUpdate(
       {
         op: 'init',
-        items: [{ id: 'todo_1', content: 'A', evaluator: 1 }],
+        items: [{ id: 'todo_1', subject: 'A', evaluator: 1 }],
       },
       ctx,
     );
@@ -583,12 +583,12 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
   it('patches content alone (no status change) and returns {ok:true}', async () => {
     const { ctx, store } = makeContextWithStore();
     const result = await toolTodoUpdate(
-      { id: 'todo_1', content: 'Rename function AND update callers' },
+      { id: 'todo_1', subject: 'Rename function AND update callers' },
       ctx,
     );
     expect(JSON.parse(result)).toEqual({ ok: true });
     const item = store.getAll().find((it) => it.id === 'todo_1');
-    expect(item?.content).toBe('Rename function AND update callers');
+    expect(item?.subject).toBe('Rename function AND update callers');
     expect(item?.status).toBe('pending'); // unchanged
   });
 
@@ -640,7 +640,7 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
       {
         id: 'todo_1',
         status: 'in_progress',
-        content: 'Renamed function (refined scope)',
+        subject: 'Renamed function (refined scope)',
         activeForm: 'Renaming function (refined scope)',
         metadata: { startedAt: 'iso-timestamp-stub' },
       },
@@ -649,7 +649,7 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
     expect(JSON.parse(result)).toEqual({ ok: true });
     const item = store.getAll().find((it) => it.id === 'todo_1');
     expect(item?.status).toBe('in_progress');
-    expect(item?.content).toBe('Renamed function (refined scope)');
+    expect(item?.subject).toBe('Renamed function (refined scope)');
     expect(item?.activeForm).toBe('Renaming function (refined scope)');
     expect(item?.metadata).toEqual({ startedAt: 'iso-timestamp-stub' });
   });
@@ -664,10 +664,10 @@ describe('todo_update FEATURE_170 — patch fields without status transition', (
 
   it('rejects empty-string content (must be non-empty)', async () => {
     const { ctx } = makeContextWithStore();
-    const result = await toolTodoUpdate({ id: 'todo_1', content: '' }, ctx);
+    const result = await toolTodoUpdate({ id: 'todo_1', subject: '' }, ctx);
     const parsed = JSON.parse(result) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
-    expect(parsed.reason).toMatch(/content.*non-empty/);
+    expect(parsed.reason).toMatch(/subject.*non-empty/);
   });
 
   it('rejects invalid evaluator on op:update', async () => {
@@ -709,7 +709,7 @@ describe("todo_update FEATURE_170 — status:'deleted' delete path", () => {
     const { ctx, store } = makeContextWithStore();
     await toolTodoUpdate({ id: 'todo_2', status: 'deleted' }, ctx);
     // store.add() should mint a fresh id past the highest seeded.
-    const newId = store.add({ content: 'New step' });
+    const newId = store.add({ subject: 'New step' });
     expect(newId).not.toBe('todo_2');
   });
 
@@ -740,7 +740,7 @@ describe("todo_update FEATURE_170 — status:'deleted' delete path", () => {
         // Each of these would individually trip a patch-field validator,
         // but on the delete path they must all be ignored.
         note: 42 as unknown as string,
-        content: '' as unknown as string,
+        subject: '' as unknown as string,
         evaluator: 'typecheck' as unknown as string,
         metadata: [1, 2, 3] as unknown as Record<string, unknown>,
       },
@@ -772,13 +772,13 @@ describe("todo_update FEATURE_170 — 'todo:before-complete' hook + events", () 
   it("blocks status='completed' via hook string and returns {ok:false, reason:<string>}", async () => {
     runtime = createExtensionRuntime().activate();
     runtime.registerHook('todo:before-complete', (hookCtx) => {
-      if (hookCtx.item.content.includes('forbidden')) {
+      if (hookCtx.item.subject.includes('forbidden')) {
         return 'policy: cannot complete items mentioning forbidden';
       }
     });
     const { ctx, store } = makeContextWithStore([
-      { id: 'todo_1', content: 'forbidden step' },
-      { id: 'todo_2', content: 'safe step' },
+      { id: 'todo_1', subject: 'forbidden step' },
+      { id: 'todo_2', subject: 'safe step' },
     ]);
     const blocked = await toolTodoUpdate(
       { id: 'todo_1', status: 'completed' },
@@ -899,7 +899,7 @@ describe("todo_update FEATURE_170 — 'todo:before-complete' hook + events", () 
       received.push({
         id: payload.id,
         source: payload.source,
-        itemContent: payload.item.content,
+        itemContent: payload.item.subject,
       });
     });
 

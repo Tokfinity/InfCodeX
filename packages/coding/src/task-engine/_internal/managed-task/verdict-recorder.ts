@@ -339,9 +339,13 @@ export function wrapEmitterWithRecorder(
               // Seed once. The store's `init()` is idempotent on content but
               // always re-fires onChange — that's the right behavior on a
               // re-emit (extremely rare; Scout emits exactly once per run).
-              const seeds = obligations.map((content, idx) => ({
+              //
+              // v0.7.42 — each obligation string becomes the seed `subject`;
+              // no `description` is set (executionObligations carries only
+              // the short imperative form by design).
+              const seeds = obligations.map((subject, idx) => ({
                 id: `todo_${idx + 1}`,
-                content,
+                subject,
                 sourceObligationIndex: idx,
               }));
               todoStore.init(seeds);
@@ -355,9 +359,11 @@ export function wrapEmitterWithRecorder(
             if (!todoStore.hasItems()) {
               const criteria = recorder.contract?.payload.contract?.successCriteria;
               if (Array.isArray(criteria) && criteria.length >= 2) {
-                const seeds = criteria.map((content, idx) => ({
+                // v0.7.42 — successCriteria strings → seed `subject`s. See
+                // Scout branch above for the same shape.
+                const seeds = criteria.map((subject, idx) => ({
                   id: `todo_${idx + 1}`,
-                  content,
+                  subject,
                   sourceObligationIndex: idx,
                 }));
                 todoStore.init(seeds);

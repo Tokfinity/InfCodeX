@@ -22,9 +22,9 @@ import {
 function makeSeededStore(): ReturnType<typeof createTodoStore> {
   const store = createTodoStore();
   store.init([
-    { id: 'todo_1', content: 'Locate test fixtures' },
-    { id: 'todo_2', content: 'Run migration tests' },
-    { id: 'todo_3', content: 'Update type definitions' },
+    { id: 'todo_1', subject: 'Locate test fixtures' },
+    { id: 'todo_2', subject: 'Run migration tests' },
+    { id: 'todo_3', subject: 'Update type definitions' },
   ]);
   return store;
 }
@@ -155,10 +155,10 @@ describe('throttle reminder text format', () => {
   it('only lists non-terminal items (pending / in_progress / failed)', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'Step A' },
-      { id: 'todo_2', content: 'Step B' },
-      { id: 'todo_3', content: 'Step C' },
-      { id: 'todo_4', content: 'Step D' },
+      { id: 'todo_1', subject: 'Step A' },
+      { id: 'todo_2', subject: 'Step B' },
+      { id: 'todo_3', subject: 'Step C' },
+      { id: 'todo_4', subject: 'Step D' },
     ]);
     store.updateStatus('todo_1', 'completed');
     store.updateStatus('todo_2', 'skipped');
@@ -181,8 +181,8 @@ describe('throttle reminder text format', () => {
   it('falls back to short form when every item is terminal', () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
     ]);
     store.updateStatus('todo_1', 'completed');
     store.updateStatus('todo_2', 'skipped');
@@ -193,18 +193,21 @@ describe('throttle reminder text format', () => {
     expect(text).toContain('NEVER mention this reminder to the user.');
   });
 
-  // FEATURE_151 (v0.7.38) — empty-store branch nudges LLM to op:'init'.
-  it('FEATURE_151: empty store reminder nudges LLM toward op:"init"', () => {
+  // v0.7.42 — empty-store branch nudges LLM to a batch of `todo_create`
+  // calls (claudecode V2 parity, no whole-list write surface).
+  it('v0.7.42: empty store reminder nudges LLM toward a batch of todo_create', () => {
     const emptyStore = createTodoStore();
     const text = buildTodoReminderText(emptyStore);
     expect(text.startsWith('<system-reminder>')).toBe(true);
     expect(text.endsWith('</system-reminder>')).toBe(true);
     expect(text).toContain('have not committed a plan');
-    expect(text).toContain('todo_update({op:"init"');
+    expect(text).toContain('todo_create');
     // Must mention the trivial-task exemption so the LLM doesn't spam plans.
     expect(text).toContain('Trivial');
     // Must NOT show the v0.7.34 'Pending items:' bullet header.
     expect(text).not.toContain('Pending items:');
+    // Must NOT regress to teaching op:'init' (deprecated in v0.7.42).
+    expect(text).not.toContain('op:"init"');
   });
 
   it('FEATURE_151: empty store reminder lists no bullet items (defensive)', () => {
@@ -241,7 +244,7 @@ describe('end-to-end throttle scenario', () => {
   it('FEATURE_151: fires once at 1 item (front-gate removed; UI MIN=1 renders)', () => {
     const state = createTodoReminderState();
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'sole task' }]);
+    store.init([{ id: 'todo_1', subject: 'sole task' }]);
     let firedCount = 0;
     for (let i = 0; i < 20; i++) {
       if (shouldFireTodoReminder(state, store)) firedCount++;

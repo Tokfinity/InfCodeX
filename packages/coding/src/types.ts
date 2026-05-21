@@ -312,11 +312,6 @@ export interface KodaXEvents {
    * — consumers see the synth signal in causal order before the result
    * surfaces.
    */
-  onEvaluatorFallbackSynthesized?: (
-    info: import(
-      './task-engine/_internal/managed-task/evaluator-verdict-retry.js'
-    ).EvaluatorFallbackSynthesizedInfo,
-  ) => void;
   /** Returns a formatted cost report for the current session. Set by agent at session start. */
   getCostReport?: { current: (() => string) | null };
 
@@ -520,17 +515,34 @@ export type TodoStatus =
 export type TodoEvaluatorHint = 'build' | 'test' | 'lint';
 
 /**
- * One row in the planner-produced todo list. Content is sourced from
- * Scout's existing `executionObligations: string[]` payload (no schema
- * change at the protocol layer). Status is advanced via the
- * `todo_update` tool by Scout (H0 path) / Generator / Planner.
+ * One row in the planner-produced todo list. Subject is the short
+ * imperative title (shown in the UI row + throttle reminder); the
+ * optional description carries fuller context for downstream consumers
+ * that need the full work instruction. Sourced from Scout's existing
+ * `executionObligations: string[]` payload (each string becomes the
+ * `subject` of one seed item, no `description`). Status is advanced
+ * via the `todo_update` tool by Scout (H0 path) / Worker / Generator /
+ * Planner.
+ *
+ * v0.7.42 — `content` field renamed to `subject` to match claudecode V2
+ * `TaskSchema` (TaskCreateTool's required `subject` + `description`
+ * pair). KodaX makes `description` optional because trivial single-line
+ * steps don't need it; weaker models reach the API more easily without
+ * the forced second-string burden.
  *
  * `owner` partitions the list when child agents run in parallel under
  * `dispatch_child_task`; "main" is the parent thread.
  */
 export interface TodoItem {
   readonly id: string;
-  readonly content: string;
+  /** Brief imperative title — the row label users see in the plan list. */
+  readonly subject: string;
+  /**
+   * Optional fuller description / context. Read by the executing role
+   * when picking up an item (claudecode V2 `TaskGet`-style detail view).
+   * Not rendered in the compact plan-list row.
+   */
+  readonly description?: string;
   readonly status: TodoStatus;
   readonly owner?: string;
   /** Index into the originating `executionObligations: string[]` array (0-based). */

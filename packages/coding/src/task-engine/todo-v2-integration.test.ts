@@ -76,7 +76,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
     deleted = [];
     beforeCompleteCount = 0;
     runtime.on('todo:created', (p) => {
-      created.push({ id: p.id, itemContent: p.item.content, source: p.source });
+      created.push({ id: p.id, itemContent: p.item.subject, source: p.source });
     });
     runtime.on('todo:updated', (p) => {
       updated.push({
@@ -88,7 +88,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
       });
     });
     runtime.on('todo:deleted', (p) => {
-      deleted.push({ id: p.id, itemContent: p.item.content, source: p.source });
+      deleted.push({ id: p.id, itemContent: p.item.subject, source: p.source });
     });
     runtime.registerHook('todo:before-complete', () => {
       beforeCompleteCount++;
@@ -113,9 +113,9 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'Read failing test', activeForm: 'Reading failing test' },
-          { id: 'todo_2', content: 'Identify root cause', activeForm: 'Identifying root cause' },
-          { id: 'todo_3', content: 'Apply minimal fix', activeForm: 'Applying minimal fix' },
+          { id: 'todo_1', subject: 'Read failing test', activeForm: 'Reading failing test' },
+          { id: 'todo_2', subject: 'Identify root cause', activeForm: 'Identifying root cause' },
+          { id: 'todo_3', subject: 'Apply minimal fix', activeForm: 'Applying minimal fix' },
         ],
       },
       ctx,
@@ -129,7 +129,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
 
     // ─── Phase 2: Worker realizes mid-task a tmp-cleanup step was missed. ───
     const createRes = await toolTodoCreate(
-      { content: 'Clean up tmp dir', activeForm: 'Cleaning up tmp dir' },
+      { subject: 'Clean up tmp dir', activeForm: 'Cleaning up tmp dir' },
       ctx,
     );
     const createParsed = JSON.parse(createRes) as { ok: boolean; id: string };
@@ -240,7 +240,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
     if (active) await active.dispose();
     runtime = createExtensionRuntime().activate();
     runtime.registerHook('todo:before-create', (hookCtx) => {
-      if (hookCtx.seed.content.includes('skip')) return 'policy: cannot skip steps';
+      if (hookCtx.seed.subject.includes('skip')) return 'policy: cannot skip steps';
     });
 
     const store = createTodoStore();
@@ -248,13 +248,13 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
     await toolTodoUpdate(
       {
         op: 'init',
-        items: [{ id: 'todo_1', content: 'real step' }],
+        items: [{ id: 'todo_1', subject: 'real step' }],
       },
       ctx,
     );
     expect(store.allIds()).toEqual(['todo_1']);
 
-    const blocked = await toolTodoCreate({ content: 'skip the verification' }, ctx);
+    const blocked = await toolTodoCreate({ subject: 'skip the verification' }, ctx);
     const parsed = JSON.parse(blocked) as { ok: boolean; reason: string };
     expect(parsed.ok).toBe(false);
     expect(parsed.reason).toBe('policy: cannot skip steps');
@@ -264,7 +264,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
 
     // Subsequent legitimate create still works and lands at todo_2
     // (counter advanced past the seeded suffix).
-    const ok = await toolTodoCreate({ content: 'follow-up step' }, ctx);
+    const ok = await toolTodoCreate({ subject: 'follow-up step' }, ctx);
     expect((JSON.parse(ok) as { id: string }).id).toBe('todo_2');
   });
 
@@ -277,8 +277,8 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'A1' },
-          { id: 'todo_2', content: 'A2' },
+          { id: 'todo_1', subject: 'A1' },
+          { id: 'todo_2', subject: 'A2' },
         ],
       },
       makeCtx(storeA),
@@ -289,7 +289,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
     const ctxB = makeCtx(storeB);
     expect(storeB.allIds()).toEqual([]);
 
-    const firstCreate = await toolTodoCreate({ content: 'fresh task step' }, ctxB);
+    const firstCreate = await toolTodoCreate({ subject: 'fresh task step' }, ctxB);
     expect((JSON.parse(firstCreate) as { id: string }).id).toBe('todo_1');
     expect(storeB.allIds()).toEqual(['todo_1']);
     // Store A unchanged.
@@ -304,7 +304,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
     // self-correct on the next turn.
     const store = createTodoStore();
     await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'step' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'step' }] },
       makeCtx(store),
     );
     const ctx = makeCtx(store);
@@ -327,8 +327,8 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
       {
         op: 'init',
         items: [
-          { id: 'todo_1', content: 'real step' },
-          { id: 'todo_2', content: 'doomed step' },
+          { id: 'todo_1', subject: 'real step' },
+          { id: 'todo_2', subject: 'doomed step' },
         ],
       },
       makeCtx(store),
@@ -367,7 +367,7 @@ describe('FEATURE_170 — Todo V2 end-to-end (hermetic, no LLM)', () => {
 
     const store = createTodoStore();
     await toolTodoUpdate(
-      { op: 'init', items: [{ id: 'todo_1', content: 'step' }] },
+      { op: 'init', items: [{ id: 'todo_1', subject: 'step' }] },
       makeCtx(store),
     );
 

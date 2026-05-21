@@ -42,10 +42,10 @@ describe('todo_list — populated store', () => {
     store.init([
       {
         id: 'todo_1',
-        content: 'Audit packages/llm',
+        subject: 'Audit packages/llm',
         activeForm: 'Auditing packages/llm',
       },
-      { id: 'todo_2', content: 'Update tests' },
+      { id: 'todo_2', subject: 'Update tests' },
     ]);
     store.updateStatus('todo_1', 'in_progress');
     onChangeCalls = 0; // reset counter so we can verify list is read-only
@@ -57,7 +57,7 @@ describe('todo_list — populated store', () => {
       count: number;
       items: Array<{
         id: string;
-        content: string;
+        subject: string;
         status: string;
         activeForm?: string;
         note?: string;
@@ -69,13 +69,13 @@ describe('todo_list — populated store', () => {
     expect(parsed.items).toHaveLength(2);
     expect(parsed.items[0]).toEqual({
       id: 'todo_1',
-      content: 'Audit packages/llm',
+      subject: 'Audit packages/llm',
       status: 'in_progress',
       activeForm: 'Auditing packages/llm',
     });
     expect(parsed.items[1]).toEqual({
       id: 'todo_2',
-      content: 'Update tests',
+      subject: 'Update tests',
       status: 'pending',
     });
 
@@ -85,23 +85,23 @@ describe('todo_list — populated store', () => {
 
   it('omits absent optional fields (activeForm, note) so JSON stays compact', async () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'Plain item' }]);
+    store.init([{ id: 'todo_1', subject: 'Plain item' }]);
     const result = await toolTodoList({}, makeContext({ todoStore: store }));
     const parsed = JSON.parse(result) as { items: Record<string, unknown>[] };
     expect(parsed.items[0]).toEqual({
       id: 'todo_1',
-      content: 'Plain item',
+      subject: 'Plain item',
       status: 'pending',
     });
     // Verify absence by checking key set, not undefined-equality.
     expect(Object.keys(parsed.items[0] ?? {}).sort()).toEqual(
-      ['content', 'id', 'status'].sort(),
+      ['subject', 'id', 'status'].sort(),
     );
   });
 
   it('preserves a failed-item note in the output', async () => {
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'Run tests' }]);
+    store.init([{ id: 'todo_1', subject: 'Run tests' }]);
     store.updateStatus('todo_1', 'failed', 'tests timed out');
     const result = await toolTodoList({}, makeContext({ todoStore: store }));
     const parsed = JSON.parse(result) as { items: Record<string, unknown>[] };
@@ -112,9 +112,9 @@ describe('todo_list — populated store', () => {
   it('reflects the current state after a series of updates', async () => {
     const store = createTodoStore();
     store.init([
-      { id: 'todo_1', content: 'A' },
-      { id: 'todo_2', content: 'B' },
-      { id: 'todo_3', content: 'C' },
+      { id: 'todo_1', subject: 'A' },
+      { id: 'todo_2', subject: 'B' },
+      { id: 'todo_3', subject: 'C' },
     ]);
     store.updateStatus('todo_1', 'completed');
     store.updateStatus('todo_2', 'in_progress', undefined, 'Doing B');
@@ -140,7 +140,7 @@ describe('todo_list — populated store', () => {
     // `reset()` which the runner uses on the `replan` verdict. Verify
     // todo_list copes with the post-reset empty state.
     const store = createTodoStore();
-    store.init([{ id: 'todo_1', content: 'A' }]);
+    store.init([{ id: 'todo_1', subject: 'A' }]);
     store.reset();
     const result = await toolTodoList({}, makeContext({ todoStore: store }));
     const parsed = JSON.parse(result) as {

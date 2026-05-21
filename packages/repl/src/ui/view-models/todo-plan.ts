@@ -184,9 +184,12 @@ function pickAnchorIndex(items: readonly TodoItem[]): number {
 
 function buildItemRow(item: TodoItem): TodoRow {
   const { symbol, color } = symbolForStatus(item.status);
+  // v0.7.42 — render the row label from `subject`. The optional
+  // `description` carries fuller context for `todo_get` consumers and
+  // is intentionally NOT rendered here (compact row stays compact).
   const text = item.status === "failed" && item.note
-    ? `${item.content} (${item.note})`
-    : item.content;
+    ? `${item.subject} (${item.note})`
+    : item.subject;
   // FEATURE_114 v0.7.36 Slice 4 — cancelled rows render strikethrough
   // so a Worker-driven mid-task drop is visually distinct from a
   // Planner-merge `skipped`. The symbol (`☒` vs `⊘`) already differs;

@@ -1,10 +1,10 @@
 /**
- * KodaX `todo_create` Tool — FEATURE_170 (v0.7.41).
+ * KodaX `todo_create` Tool — FEATURE_170 (v0.7.41) + v0.7.42 schema split.
  *
  * Insert ONE new pending item into the visible plan list, with a
  * store-generated monotonic id. Companion to `todo_update` (single-item
  * state transition) and `todo_update({op:'init', ...})` (whole-list
- * batch seed).
+ * batch seed; deprecated for LLM use in v0.7.42 — see Step 4).
  *
  * Why a separate tool instead of overloading `todo_update`: prior to
  * FEATURE_170 the only insertion path was `op:'init'` (full replace),
@@ -14,14 +14,20 @@
  * `todo_create` closes that gap, mirroring claudecode V2's `TaskCreate`
  * surface.
  *
- * Contract:
+ * Contract (v0.7.42 — content → subject + description):
  *
  *   Input:
- *     content     string     — required. Imperative description of the step
- *                              (e.g. "Run failing tests").
+ *     subject     string     — required. Brief imperative title shown in
+ *                              the plan-list row (e.g. "Audit handleAuth
+ *                              callers"). Keep short (≤80 chars).
+ *     description string?    — optional. Fuller context / work instructions
+ *                              read when the executing role picks up this
+ *                              item (claudecode V2 TaskGet-style detail).
+ *                              Multi-line OK; NOT rendered in the compact
+ *                              row, only when fetched via `todo_get`.
  *     activeForm  string?    — optional. Present-continuous form
- *                              (e.g. "Running failing tests"). Shown by
- *                              the spinner when the item flips to
+ *                              (e.g. "Auditing handleAuth callers"). Shown
+ *                              by the spinner when the item flips to
  *                              `in_progress` (FEATURE_149).
  *     evaluator   enum?      — optional `'build' | 'test' | 'lint'`. When
  *                              the item flips to `completed`, the runner
@@ -55,7 +61,8 @@ import type { KodaXToolExecutionContext, TodoEvaluatorHint } from '../types.js';
 const ALLOWED_EVALUATOR_HINTS: ReadonlySet<string> = new Set(['build', 'test', 'lint']);
 
 interface TodoCreateInput {
-  content?: unknown;
+  subject?: unknown;
+  description?: unknown;
   activeForm?: unknown;
   evaluator?: unknown;
   metadata?: unknown;
@@ -77,7 +84,7 @@ export async function toolTodoCreate(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
-  const { content, activeForm, evaluator, metadata } = input as TodoCreateInput;
+  const { subject, description, activeForm, evaluator, metadata } = input as TodoCreateInput;
 
   if (!ctx.todoStore) {
     return jsonResult({
@@ -88,10 +95,25 @@ export async function toolTodoCreate(
     });
   }
 
-  if (typeof content !== 'string' || content.length === 0) {
+  // v0.7.42 — `subject` is the new required field (claudecode V2 parity).
+  // `description` is optional; pass when the work instruction warrants more
+  // context than fits in the row label.
+  if (typeof subject !== 'string' || subject.length === 0) {
     return jsonResult({
       ok: false,
-      reason: 'Missing or invalid required parameter: content (non-empty string).',
+      reason:
+        'Missing or invalid required parameter: subject (non-empty string). ' +
+        'Provide a brief imperative title for the plan-list row, e.g. ' +
+        '"Audit handleAuth callers".',
+    });
+  }
+
+  if (description !== undefined && typeof description !== 'string') {
+    return jsonResult({
+      ok: false,
+      reason:
+        'Invalid description: when provided, must be a string ' +
+        '(fuller context / work instructions; multi-line OK).',
     });
   }
 
@@ -128,7 +150,8 @@ export async function toolTodoCreate(
   // The hook fires BEFORE store.add() so a blocked create produces no
   // 'todo:created' event downstream and no allocated id.
   const seed: ExtensionTodoCreateSeed = {
-    content,
+    subject,
+    ...(typeof description === 'string' ? { description } : {}),
     ...(typeof activeForm === 'string' ? { activeForm } : {}),
     ...(typeof evaluator === 'string' ? { evaluator: evaluator as TodoEvaluatorHint } : {}),
     ...(metadata !== undefined ? { metadata: metadata as Record<string, unknown> } : {}),

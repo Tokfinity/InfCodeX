@@ -135,8 +135,9 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
     return [
       '<system-reminder>',
       `You have not committed a plan in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations.`,
-      'If this task has ≥2 distinct execution steps, commit a plan now via',
-      'todo_update({op:"init", items:[{id:"todo_1", content:"...", activeForm:"..."}, ...]}).',
+      'If this task has ≥2 distinct execution steps, commit a plan now by calling',
+      'todo_create({subject:"...", activeForm:"..."}) once per step',
+      '(one call per planned item — store auto-mints the id).',
       'A visible plan list helps the user follow progress and forces full-scope thinking.',
       'Trivial single-step tasks (single typo / single edit / single-action lookup /',
       'one-sentence answer) may proceed without a plan — ignore this reminder if applicable.',
@@ -156,7 +157,7 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
       '<system-reminder>',
       `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. `
         + `All listed items are already in a terminal state. If a new substep emerged, `
-        + `call todo_create({content:"...", activeForm:"..."}) to insert it (FEATURE_170 v0.7.41); `
+        + `call todo_create({subject:"...", activeForm:"..."}) to insert it (FEATURE_170 v0.7.41); `
         + `do NOT re-seed via todo_update({op:"init"}) — that wipes the completed items.`,
       // FEATURE_151 (v0.7.38) — match Claude Code's `<system-reminder>`
       // suppression discipline (mirrors `messages.ts:3668`).
@@ -169,7 +170,10 @@ export function buildTodoReminderText(todoStore: TodoStore): string {
     `You have not called todo_update in ${TURNS_SINCE_TODO_UPDATE_REMINDER} iterations. Pending items:`,
   ];
   for (const it of open) {
-    lines.push(`- ${it.id}: ${it.content}`);
+    // v0.7.42 — show `subject` (the row label) in the reminder. The
+    // optional `description` is intentionally omitted to keep reminders
+    // compact; if the model needs more context it can call todo_get(id).
+    lines.push(`- ${it.id}: ${it.subject}`);
   }
   lines.push(
     'If you have started or finished any of these, call todo_update now.',
