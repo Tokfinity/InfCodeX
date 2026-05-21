@@ -7536,6 +7536,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           stopCompacting: () => {
             stopCompacting();
           },
+          // Mirror the agent-runtime `onCompactStats` callback (see
+          // `runKodaXCallbacks.onCompactStats` above) so manual
+          // `/compact` invocations refresh the live token count too —
+          // otherwise the status bar's `liveTokenCount` outranks the
+          // post-compact `contextTokenSnapshot` and the bar keeps
+          // showing the pre-compact total.
+          onCompactStats: (info) => {
+            lastCompactionTokensBeforeRef.current = info.tokensBefore;
+            setLiveTokenCount(info.tokensAfter);
+          },
           // Confirmation callback for interactive commands.
           confirm: async (message: string): Promise<boolean> => {
             const result = await showConfirmDialog("confirm", {

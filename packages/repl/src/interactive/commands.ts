@@ -359,6 +359,16 @@ export const BUILTIN_COMMANDS: Command[] = [
             source: 'estimate',
           };
 
+          // Push the post-compact token count into the UI layer's live
+          // counter. `contextUsage` in InkREPL reads `liveTokenCount`
+          // before `context.contextTokenSnapshot`, so without this hook
+          // the status bar would keep showing the stale pre-compact
+          // value despite the snapshot above being up to date.
+          callbacks.onCompactStats?.({
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter,
+          });
+
           // Clear UI history - it will be re-created from the new context.messages
           // This ensures the UI shows the summary + protected recent context.
           // Clear UI history so it can be rebuilt from the compacted messages.

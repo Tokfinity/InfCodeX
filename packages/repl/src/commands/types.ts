@@ -91,6 +91,14 @@ export interface CommandCallbacks {
   readline?: readline.Interface;
   startCompacting?: () => void;
   stopCompacting?: () => void;
+  /**
+   * Fired by `/compact` after a successful manual compaction so the UI
+   * layer can update its live token count (mirrors the agent-runtime
+   * `onCompactStats` for auto-compaction). Without this, the status bar
+   * keeps showing the pre-compact `liveTokenCount` because that field
+   * outranks `context.contextTokenSnapshot` in the cascade.
+   */
+  onCompactStats?: (info: { tokensBefore: number; tokensAfter: number }) => void;
   printSessionTree?: () => Promise<void>;
   switchSessionBranch?: (selector: string) => Promise<SessionBranchSwitchStatus>;
   labelSessionBranch?: (selector: string, label?: string) => Promise<boolean>;
