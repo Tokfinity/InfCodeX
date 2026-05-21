@@ -105,8 +105,14 @@ export interface SidecarVerifierContextInputs {
 export interface SidecarVerifierInvokeOptions {
   /** Provider used for the verifier call. Often a stronger model than
    *  the Main Agent's. Injection target = test fakes + production
-   *  resolution from a default-verifier-model registry. */
+   *  resolution from `verifier-provider-resolver.ts`. */
   readonly provider: KodaXBaseProvider;
+  /** Specific model id on the provider. When omitted, the provider's
+   *  registered default model is used. Production wiring passes the
+   *  resolved model string from `resolveVerifierProvider()` so model
+   *  selection is explicit (rather than implicitly inheriting whatever
+   *  default model the provider happens to ship). */
+  readonly model?: string;
   /** Verifier context built by the caller (`buildVerifierContext`). */
   readonly inputs: SidecarVerifierContextInputs;
   /** Timeout in ms. Default 15000 (verification is heavier than F178
@@ -235,6 +241,7 @@ export async function invokeSidecarVerifier(
         [VERIFIER_REPORT_TOOL],
         VERIFIER_SYSTEM_PROMPT,
         false,
+        options.model ? { modelOverride: options.model } : undefined,
       );
     } catch {
       return { verdict: 'accept', reason: '', trace: 'provider_error' };
@@ -283,12 +290,13 @@ export function mapVerifierVerdictToStopHookResult(
 
 export interface CreateSidecarVerifierStopHookOptions {
   /** Provider used for the verifier call. Production resolves this from
-   *  a default-verifier-model registry; tests pass a fake. */
+   *  `verifier-provider-resolver.ts`; tests pass a fake. */
   readonly provider: KodaXBaseProvider;
+  /** Specific model id on the provider. When omitted, the provider's
+   *  registered default model is used. */
+  readonly model?: string;
   /** Builds the context inputs from the StopHookContext + the caller's
-   *  per-run state (file edit ledger, current-turn user queries, etc.).
-   *  Phase D.2 supplies a concrete builder; Phase D.1 leaves this as
-   *  an injection point. */
+   *  per-run state (file edit ledger, current-turn user queries, etc.). */
   readonly buildContext: (ctx: {
     readonly transcript: readonly KodaXMessage[];
     readonly lastAssistantText: string;
@@ -326,6 +334,7 @@ export function createSidecarVerifierStopHook(
     });
     const verdict = await invokeSidecarVerifier({
       provider: options.provider,
+      model: options.model,
       inputs,
       timeoutMs: options.timeoutMs,
     });
