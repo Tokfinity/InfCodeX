@@ -879,9 +879,10 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_update',
     description:
-      'Drive the visible plan checklist so the user sees real-time progress. Two operating modes selected by `op`: '
-      + '(A) `op="init"` (FEATURE_151) — commit / replace the whole plan list. Use this when (a) Scout did not seed a plan but you have realised the task is non-trivial and a plan helps the user follow along, OR (b) you need to fully replace the existing plan after the scope shifted. Provide `items: [{id, subject, description?, activeForm?, evaluator?}, ...]` (>= 1 entry; ids must be unique non-empty strings, subject non-empty). Calling on an already-populated store fully replaces — items not in the new list are dropped. NOTE (v0.7.42): the per-item additive path is `todo_create` (single new step) — prefer that over op:"init" for mid-task plan growth so existing completed items keep their progress. '
-      + '(B) `op="update"` (default; omit `op` for back-compat) — single-item PATCH + state transition. Use this every time you start or finish a major step. The status field is OPTIONAL when you only want to patch subject / description / activeForm / note / evaluator / metadata. Rules: '
+      'Drive the visible plan checklist so the user sees real-time progress. PRIMARY MODE is `op="update"` (the default — single-item PATCH + state transition). '
+      + 'PLAN-LIST WRITES — for COMMITTING the initial plan AND for ADDING new steps mid-task, batch `todo_create` calls (one per planned step) in the same response. Each `todo_create` is purely additive — existing items are NEVER touched. This is the ONLY path the LLM should use to grow the plan list (mirrors claudecode V2 `TaskCreate`). '
+      + 'The legacy `op="init"` whole-list replace path is reserved for runner-side seeding (Scout obligations → store seed). LLMs SHOULD NOT call `op="init"` — it destructively replaces the list (any item not echoed back is dropped), which weaker models routinely under-echo and lose completed work. Use a batch of `todo_create` calls instead — additive and safe. '
+      + '`op="update"` (default; omit `op` for back-compat) — single-item PATCH + state transition. Use this every time you start or finish a major step. The status field is OPTIONAL when you only want to patch subject / description / activeForm / note / evaluator / metadata. Rules: '
       + '(1) Set status="in_progress" BEFORE starting work on an item. '
       + '(2) Set status="completed" AFTER finishing that item. '
       + '(3) Only ONE item should be in_progress per owner at any time — finish or fail the current item before starting the next. '
@@ -906,12 +907,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'string',
           enum: ['init', 'update'],
           description:
-            'Operation mode. "init" replaces the whole list with `items`; "update" mutates one item by `id`. Default = "update" when omitted.',
+            'Operation mode. Default "update" when omitted — mutate one item by `id`. "init" (legacy / runner-side seeding only) replaces the whole list with `items`; LLMs should NOT call it — it destructively drops any item not echoed back. Use a batch of `todo_create` calls for both initial commitment and mid-task plan growth.',
         },
         items: {
           type: 'array',
           description:
-            'op="init" payload — the new plan list. Each entry: {id: non-empty string (unique within list), subject: non-empty string (brief title), description?: string (fuller context), activeForm?: present-continuous string}.',
+            'op="init" (legacy / runner-side only) payload. Each entry: {id: non-empty string (unique within list), subject: non-empty string (brief title), description?: string (fuller context), activeForm?: present-continuous string}. LLMs should use a batch of `todo_create` calls instead.',
           items: {
             type: 'object',
             properties: {
