@@ -121,6 +121,10 @@ describe(`Eval: FEATURE_184 sidecar verifier vs in-chain evaluator (${MODE})`, (
       const rows: ProbeRow[] = [];
       const incrementalDumpPath = join(DUMP_ROOT, `${MODE}-incremental-${Date.now()}.json`);
       const flushIncremental = () => {
+        // Re-create DUMP_ROOT on every flush — Windows tmpdir cleanup can
+        // race with long-running evals (~13min for 100 cells) and remove
+        // the parent dir between mkdirSync above and the first write.
+        mkdirSync(DUMP_ROOT, { recursive: true });
         writeFileSync(
           incrementalDumpPath,
           JSON.stringify(
@@ -224,6 +228,7 @@ describe(`Eval: FEATURE_184 sidecar verifier vs in-chain evaluator (${MODE})`, (
         overall.set(key, cur);
       }
 
+      mkdirSync(DUMP_ROOT, { recursive: true });
       const dumpPath = join(DUMP_ROOT, `${MODE}-${Date.now()}.json`);
       writeFileSync(
         dumpPath,
