@@ -1528,11 +1528,12 @@ async function runManagedTaskViaRunnerInner(
   // production behaviour change; the very next commit (C.1) drops
   // `chain.evaluator`, the guard becomes always-false, and sidecar
   // activates.
+  const mainProviderName = options.provider ?? 'anthropic';
   const resolvedVerifier = chain.evaluator
     ? undefined
     : resolveVerifierProvider({
-        mainProvider: resolveProvider(options.provider ?? 'anthropic'),
-        mainProviderName: options.provider ?? 'anthropic',
+        mainProvider: resolveProvider(mainProviderName),
+        mainProviderName,
         mainModel: options.modelOverride ?? options.model ?? 'unknown',
       });
   const sidecarVerifierHook = resolvedVerifier

@@ -285,7 +285,7 @@ Total: $Z
 
 **例外**：
 - 某 feature 只影响特定 provider（例如 zhipu-only quirk）时 panel 收窄到 `zhipu/glm51` 单 alias，需在 eval docstring 显式说明
-- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 7-8 alias 含 mimo / kimi 三家全档位
+- 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 7-8 alias 含 mimo 全档位 + `ark/glm51`（cross-gateway 同模型对照）+ 历史 `ds/v4*` 数据保留时纳入对比。**注**：`ark/v4*`（coding-plan, default panel）与 `ds/v4*`（deepseek 官方 API, 已退出 default panel）跑同样 deepseek-v4 模型但走不同 gateway，扩展验证时**不**默认同时纳入两条路 — 选择性 opt-in 避免成本翻倍。
 
 ---
 
