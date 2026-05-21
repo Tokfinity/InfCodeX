@@ -23,6 +23,7 @@
 //   dist/sdk-coding.d.ts
 //   dist/sdk-repl.d.ts
 //   dist/sdk-skills.d.ts
+//   dist/sdk-mcp.d.ts
 //   dist/types-chunks/*.d.ts     ← shared chunks (mirrors esbuild splitting)
 //
 // External list mirrors build-bundle.mjs: anything in root dependencies stays
@@ -83,6 +84,7 @@ const sdkEntries = {
   'sdk-coding': 'src/sdk-coding.ts',
   'sdk-repl': 'src/sdk-repl.ts',
   'sdk-skills': 'src/sdk-skills.ts',
+  'sdk-mcp': 'src/sdk-mcp.ts',
 };
 
 // Clean prior tsc emit so stale per-file .d.ts (acp_*.d.ts, cli_commands.d.ts,

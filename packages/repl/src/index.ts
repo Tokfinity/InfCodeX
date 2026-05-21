@@ -90,6 +90,20 @@ export {
   removeCustomProvider,
 } from "./common/custom-providers.js";
 
+// === MCP server CRUD (v0.7.42 SDK export) ===
+// SDK embedders (KodaX Space etc.) can add / remove `mcpServers` entries
+// in `~/.kodax/config.json` from a popout UI without re-implementing the
+// shape validation. New entries take effect on the NEXT `runKodaX` /
+// `startKodaX` invocation; in-flight runs keep their startup snapshot.
+// See common/mcp-servers.ts for the trust-boundary rationale.
+export {
+  listMcpServers,
+  getMcpServerConfig,
+  upsertMcpServer,
+  removeMcpServer,
+  validateMcpServerConfig,
+} from "./common/mcp-servers.js";
+
 // === 会话存储 ===
 export { FileSessionStorage } from "./interactive/storage.js";
 

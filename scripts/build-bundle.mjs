@@ -10,9 +10,10 @@
 //   5. dist/sdk-coding.js    — SDK subpath `@kodax-ai/kodax/coding`
 //   6. dist/sdk-repl.js      — SDK subpath `@kodax-ai/kodax/repl`
 //   7. dist/sdk-skills.js    — SDK subpath `@kodax-ai/kodax/skills`
-//   8. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
-//                                across the 6 SDK entries (avoids 6× bundle bloat).
-//   9. dist/builtin/         — verbatim copy of packages/skills/dist/builtin/.
+//   8. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
+//   9. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
+//                                across the 7 SDK entries (avoids 7× bundle bloat).
+//  10. dist/builtin/         — verbatim copy of packages/skills/dist/builtin/.
 //                                Path MUST stay 'dist/builtin/' (not 'builtin-skills/')
 //                                because @kodax-ai/skills resolveBuiltinPath() does
 //                                `path.join(__dirname, 'builtin')` and esbuild
@@ -234,7 +235,7 @@ log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 
 // ---- build SDK entries (multi-entry + code-splitting) -------------------
 //
-// ADR-024: the 6 SDK entries (root + 5 subpaths) share large internal
+// ADR-024: the 7 SDK entries (root + 6 subpaths) share large internal
 // packages (e.g. sdk-coding re-exports @kodax-ai/coding which also surfaces
 // through the root index.ts). Without splitting, each entry would inline
 // the same code → 6× tarball bloat. With `splitting: true`, esbuild emits
@@ -244,7 +245,7 @@ log(`  ✓ dist/kodax_cli.js (${(cliBytes / 1024).toFixed(0)} kB)`);
 // — Node's ESM resolver follows chunk imports transparently, so splitting
 // does not affect the helper-depth contract verified below.
 
-const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-repl', 'sdk-skills'];
+const sdkEntryNames = ['index', 'sdk-agent', 'sdk-llm', 'sdk-coding', 'sdk-repl', 'sdk-skills', 'sdk-mcp'];
 const sdkEntryPoints = sdkEntryNames.map((name) => {
   // index.ts lives directly under src/, the others as src/sdk-<name>.ts.
   const filename = name === 'index' ? 'index.ts' : `${name}.ts`;
