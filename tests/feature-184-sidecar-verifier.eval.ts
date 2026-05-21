@@ -74,12 +74,21 @@ const RUNS = MODE === 'pilot' ? 1 : 5;
 
 // Pilot uses only the case that has the highest discriminative value
 // (B — intent-vs-action floor). Other modes use all four.
-// KODAX_F184_CASES env var (comma-separated case ids) overrides for
-// targeted spot-checks (e.g. `KODAX_F184_CASES=C_blocked_ambiguous,D_accept_via_workaround`).
+// `KODAX_F184_CASES` env var (comma-separated case ids) overrides for
+// targeted spot-checks (e.g.
+// `KODAX_F184_CASES=C_blocked_ambiguous,D_accept_via_workaround`).
+// `RUNS` is independently controlled by `MODE` even when this env var
+// is set — `KODAX_F184_PROBE=pilot` still means 1 run per cell.
 const REQUESTED_CASES: readonly SidecarVerifierCase[] = (() => {
   if (process.env.KODAX_F184_CASES) {
     const wanted = new Set(process.env.KODAX_F184_CASES.split(',').map((s) => s.trim()));
-    return CASES.filter((c) => wanted.has(c.id));
+    const filtered = CASES.filter((c) => wanted.has(c.id));
+    if (filtered.length === 0) {
+      throw new Error(
+        `KODAX_F184_CASES matched 0 cases. Wanted: [${[...wanted].join(', ')}]. Available: [${CASES.map((c) => c.id).join(', ')}]. Check for typos.`,
+      );
+    }
+    return filtered;
   }
   return MODE === 'pilot' ? CASES.filter((c) => c.id === 'B_revise_incomplete') : CASES;
 })();

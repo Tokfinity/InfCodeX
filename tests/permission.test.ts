@@ -4,9 +4,18 @@ const { executeToolMock } = vi.hoisted(() => ({
   executeToolMock: vi.fn(async () => "[executed]"),
 }));
 
-vi.mock("@kodax-ai/coding", () => ({
-  executeTool: executeToolMock,
-}));
+// Partial mock: only override `executeTool`. The permission types/executor
+// modules load other named exports from `@kodax-ai/coding` at module init
+// (e.g. `listBuiltinToolDefinitions`, `isToolPlanModeAllowed`); using
+// `importOriginal` preserves them instead of forcing this test to maintain
+// a parallel list whenever the package surface grows.
+vi.mock("@kodax-ai/coding", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    executeTool: executeToolMock,
+  };
+});
 
 import { createPermissionContext, executeWithPermission } from "../packages/repl/src/permission/executor.js";
 
