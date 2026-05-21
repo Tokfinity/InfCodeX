@@ -28,7 +28,7 @@
  */
 
 import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
-import type { Agent } from '@kodax-ai/agent';
+import type { Agent, StopHookFn } from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import {
   EVALUATOR_AGENT_NAME,
@@ -91,6 +91,12 @@ import {
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
 import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
+import {
+  createSidecarVerifierStopHook,
+} from '../agent-runtime/middleware/sidecar-verifier/verifier.js';
+import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifier/verifier-context-builder.js';
+import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
+import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 import {
   SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT,
@@ -1493,19 +1499,95 @@ async function runManagedTaskViaRunnerInner(
     },
   };
 
-  // FEATURE_167 (v0.7.41): one-shot Runner invocation closure, used by
-  // both the idle-yield outer loop AND the B1 evaluator-verdict retry
-  // path post-loop. Lifting it to a named function lets the B1 retries
-  // reuse the same llm / guardrails / observer / compactionHook / agent-
-  // switch hook the chain itself runs with, so the retry's transcript +
-  // tool emissions / status updates are indistinguishable from a "normal"
-  // turn (the LLM never knows it's the B2-prelude).
+  // FEATURE_184 (v0.7.45) Phase D.2 — Sidecar Verifier wiring.
+  //
+  // Resolve a (provider, model) decoupled from the Main Agent's
+  // (architectural fix for zhipu/glm-5.1 intent-vs-action floor —
+  // see `verifier-provider-resolver.ts` JSDoc). When no candidate is
+  // reachable (no KIMI_API_KEY / ARK_API_KEY / explicit env), the
+  // resolver returns `undefined` and we skip installing the verifier
+  // hook entirely — the agent terminates text-only and the run
+  // completes with whatever verdict source the recorder already has.
+  //
+  // The verifier StopHook is composed with the extension `turn:complete`
+  // bridge below: sidecar tries first; on `accept` (undefined) we defer
+  // to the extension bridge so user-installed extensions still see the
+  // turn-complete event and can override (e.g. their own validation
+  // rule that wants another round). This is the "first-party first,
+  // second-party fallback" precedence documented in v0.7.45.md §D.
+  //
+  // **Transient gate (removed in Phase C.1 next commit)**: skip the
+  // verifier when the chain still has an in-chain `evaluator` slot.
+  // While Evaluator role + Sidecar Verifier both exist (this commit
+  // only — Phase C.1 deletes the chain slot), running sidecar on
+  // Evaluator's text-only termination would pre-empt the F167 B0/B1/B2
+  // retry path and silently change the F167 fallback contract. The
+  // guard ensures D.2 ships as a pure substrate addition with zero
+  // production behaviour change; the very next commit (C.1) drops
+  // `chain.evaluator`, the guard becomes always-false, and sidecar
+  // activates.
+  const resolvedVerifier = chain.evaluator ? undefined : resolveVerifierProvider();
+  const sidecarVerifierHook = resolvedVerifier
+    ? createSidecarVerifierStopHook({
+        provider: resolvedVerifier.provider,
+        model: resolvedVerifier.model,
+        buildContext: (ctx) =>
+          buildVerifierContext({
+            transcript: ctx.transcript,
+            lastAssistantText: ctx.lastAssistantText,
+            mutationTracker,
+          }),
+        onVerdict: (verdict) => {
+          // Side-effect bridge: writes recorder.verdict in Evaluator-
+          // shape, fires observer.onRoleEmit('evaluator', recorder)
+          // for downstream parity, dispatches TodoStore action keyed
+          // on verdict.status, and triggers the 90%-threshold budget-
+          // extension dialog when sidecar returns revise on a high-
+          // utilisation run. Mirrors the legacy wrapEmitterWithRecorder
+          // verdict-slot behaviour minus the V1 H1-cap / handoff-rewrite
+          // branches that the sidecar architecturally retires. Errors
+          // are swallowed (best-effort) — the stop-hook return value is
+          // the user-visible contract; bridge failures must not crash
+          // the run.
+          void applySidecarVerdictToRecorder({
+            recorder,
+            observer,
+            verdict,
+            todoStore,
+            pendingFailedResetRef,
+            budget,
+            budgetExtension,
+          }).catch(() => undefined);
+        },
+      })
+    : undefined;
+
+  const extensionTurnCompleteHook = createExtensionTurnCompleteStopHook(
+    () => sessionIdRef.current,
+  );
+
+  // Composed stopHook: sidecar verifier wins when non-undefined; falls
+  // through to extension bridge on undefined (sidecar accepted, or no
+  // sidecar configured). Order matters — flip it and user extensions
+  // could second-guess a sidecar `revise` / `blocked` verdict.
+  const composedStopHook: StopHookFn = async (ctx) => {
+    if (sidecarVerifierHook) {
+      const sidecarResult = await sidecarVerifierHook(ctx);
+      if (sidecarResult !== undefined) return sidecarResult;
+    }
+    return extensionTurnCompleteHook(ctx);
+  };
+
+  // One-shot Runner invocation closure, used by the idle-yield outer
+  // loop. Lifting it to a named function lets the wrapper reuse the
+  // same llm / guardrails / observer / compactionHook / stop-hook the
+  // chain itself runs with, so resumed turns are indistinguishable from
+  // initial turns.
   //
   // Returned type retains the full `RunResult` shape (output + messages
-  // + sessionId), not the wrapper's narrower `RunWithIdleYieldRunResult`.
-  // The B1 path reads `messages` to thread the next retry's input; the
-  // existing `runWithIdleYield` call sees the same shape (the wrapper
-  // only requires `messages`, so the wider type is structurally OK).
+  // + sessionId), not the wrapper's narrower `RunWithIdleYieldRunResult`
+  // (the wrapper only requires `messages`, so the wider type is
+  // structurally OK).
   const runOnce = (agent: Agent, input: readonly KodaXMessage[]) =>
     Runner.run(agent, input, {
       llm,
@@ -1567,15 +1649,14 @@ async function runManagedTaskViaRunnerInner(
                     : undefined;
         observer.agentSwitched(switchedRole);
       },
-      // FEATURE_184 (v0.7.45) Phase B — Extension `turn:complete`
-      // bridge. Delegates the agent-layer Stop hook to registered
-      // extension handlers (first non-undefined return short-circuits).
-      // Zero-extension behavior: bridge returns undefined → falls
-      // through to agent's terminal path, byte-identical to v0.7.42.
-      // Phase D's first-party Sidecar Verifier will wrap this bridge
-      // (try verifier first, defer to extensions on undefined) — not
-      // yet wired.
-      stopHook: createExtensionTurnCompleteStopHook(() => sessionIdRef.current),
+      // FEATURE_184 (v0.7.45) Phase D.2 — Composed Stop hook:
+      // sidecar verifier (first-party) → extension `turn:complete`
+      // bridge (second-party). Constructed above; see comment block
+      // preceding `runOnce`. When sidecar returns `revise` or `blocked`
+      // the extension chain is intentionally NOT consulted — first-
+      // party precedence guarantees architectural defenses cannot be
+      // silently overridden by user-installed extensions.
+      stopHook: composedStopHook,
       // Iteration cap for the entire chain. Core's default (20) is
       // meant for stand-alone single-agent runs and is far too low
       // for a multi-role investigation + execution + verify chain.
