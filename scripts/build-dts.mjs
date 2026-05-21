@@ -34,6 +34,7 @@
 import { rollup } from 'rollup';
 import dts from 'rollup-plugin-dts';
 import { readFileSync, readdirSync, rmSync, statSync, unlinkSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -146,6 +147,63 @@ async function main() {
     const bytes = statSync(p).size;
     log(`  ✓ dist/${name}.d.ts (${(bytes / 1024).toFixed(1)} kB)`);
   }
+
+  // Hard assertion: every entry .d.ts must be self-contained (no `@kodax-ai/*`
+  // bare-specifier imports). Such an import would only resolve at consumer-side
+  // tsc if the consumer happened to have @kodax-ai/* installed — but the
+  // published tarball does NOT ship them (esbuild already inlined the .js).
+  // Pre-FEATURE_150 v0.7.40 release shipped this leak; v0.7.41 added this
+  // bundler. This assertion is the structural guard so it can never regress
+  // silently — any future build-dts edit that fails to inline `@kodax-ai/*`
+  // types fails the build instead of producing a broken tarball.
+  const INTERNAL_IMPORT_PATTERN = /from\s+['"]@kodax-ai\//;
+
+  // Self-test the pattern against known shapes so a future regex edit that
+  // breaks detection fails the build BEFORE producing a green check on
+  // legitimately-clean output. Cheap (microseconds), catches regex drift.
+  const POSITIVE_SAMPLES = [
+    "export * from '@kodax-ai/coding';",
+    `import { X } from "@kodax-ai/repl";`,
+    "import {a, b} from   '@kodax-ai/llm';",
+  ];
+  const NEGATIVE_SAMPLES = [
+    "import { K as KodaXBaseProvider } from './types-chunks/cost-tracker.d-BENnrGlF.js';",
+    "// reference to @kodax-ai/foo in a comment is fine",
+    "const s = '@kodax-ai/llm';",
+  ];
+  for (const s of POSITIVE_SAMPLES) {
+    if (!INTERNAL_IMPORT_PATTERN.test(s)) {
+      console.error(`[build-dts] ERROR: INTERNAL_IMPORT_PATTERN self-test failed (false negative): ${s}`);
+      process.exit(1);
+    }
+  }
+  for (const s of NEGATIVE_SAMPLES) {
+    if (INTERNAL_IMPORT_PATTERN.test(s)) {
+      console.error(`[build-dts] ERROR: INTERNAL_IMPORT_PATTERN self-test failed (false positive): ${s}`);
+      process.exit(1);
+    }
+  }
+
+  const violations = [];
+  for (const name of Object.keys(sdkEntries)) {
+    const p = path.join(distDir, `${name}.d.ts`);
+    const content = await readFile(p, 'utf8');
+    if (INTERNAL_IMPORT_PATTERN.test(content)) {
+      const sample = content.match(INTERNAL_IMPORT_PATTERN)?.[0] ?? '<unknown>';
+      violations.push({ entry: `dist/${name}.d.ts`, sample });
+    }
+  }
+  if (violations.length > 0) {
+    console.error('[build-dts] ERROR: bundled .d.ts entries leak internal @kodax-ai/* imports:');
+    for (const v of violations) {
+      console.error(`  - ${v.entry}: ${v.sample}`);
+    }
+    console.error('[build-dts] The published tarball does NOT ship @kodax-ai/* sub-packages.');
+    console.error('[build-dts] Consumer-side tsc will fail to resolve these imports.');
+    console.error('[build-dts] Fix: ensure isExternal() in this script bundles all @kodax-ai/* IDs.');
+    process.exit(1);
+  }
+
   log('Done. dist/*.d.ts are self-contained (no @kodax-ai/* imports).');
 }
 
