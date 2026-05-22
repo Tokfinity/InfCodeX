@@ -22,6 +22,10 @@ describe('tool registry', () => {
   it('FEATURE_075: exit_plan_mode plan description enforces structural length budget', () => {
     // LLM-first defense against oversized plans that blow past terminal
     // height. Scroll in the approval dialog is the mechanical fallback.
+    // FEATURE_189 Batch 4 audit kept the quantitative anchors here: 3-judge
+    // pilot showed dropping "40 lines / 3 depth / 1 sentence per bullet"
+    // triggers verbosity drift (multi-paragraph bullets / >5000 chars). The
+    // anchor is load-bearing for this tool description.
     const def = getToolDefinition('exit_plan_mode');
     const planSchema = (def?.input_schema as {
       properties?: { plan?: { description?: string } };

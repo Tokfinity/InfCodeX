@@ -250,9 +250,9 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       + 'ALWAYS prefer the `edit` tool over `write` when modifying an existing file — `edit` sends only the '
       + 'diff and avoids output-token pressure. Only use `write` to create new files or for a complete rewrite '
       + 'that the user explicitly asked for. '
-      + 'For new files up to ~500 lines, call `write` directly. For files larger than that, use this two-step pattern: '
+      + 'For new files small enough to write in one pass, call `write` directly. For larger files, use this two-step pattern: '
       + '(1) `write(path, skeleton)` — a structural skeleton with placeholder markers like `<!-- SECTION_A -->` or '
-      + '`// === SECTION_A ===`, kept under ~300 lines; (2) one `edit(path, "<!-- SECTION_A -->", <real content>)` '
+      + '`// === SECTION_A ===`; (2) one `edit(path, "<!-- SECTION_A -->", <real content>)` '
       + 'per section. Each edit streams reliably. '
       + 'NEVER fall back to `bash` (python/node heredoc, `echo >`, `cat > file <<EOF`) to generate a source file — '
       + 'it bypasses mutation tracking, loses diff visibility, and recurses the same streaming limit onto the generator '
@@ -1003,7 +1003,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
             type: 'object',
             properties: {
               id: { type: 'string', description: 'Unique non-empty item id (e.g. "todo_1").' },
-              subject: { type: 'string', description: 'Brief imperative title shown in the plan-list row (e.g. "Run failing tests"). Keep ≤80 chars.' },
+              subject: { type: 'string', description: 'Brief imperative title shown in the plan-list row (e.g. "Run failing tests").' },
               description: {
                 type: 'string',
                 description: 'Optional fuller context / work instructions read when this item is later picked up (todo_get surface). Multi-line OK. Skip when subject alone is enough.',
@@ -1108,7 +1108,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       properties: {
         subject: {
           type: 'string',
-          description: 'Brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers"). Keep ≤80 chars.',
+          description: 'Brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers").',
         },
         description: {
           type: 'string',

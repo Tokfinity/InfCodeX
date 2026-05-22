@@ -55,7 +55,7 @@ export function buildWorkerInstructions(
     '- Trivial tasks (single typo / single-line edit / single-question lookup / pure conversational answer) → answer or execute directly. Do NOT call `todo_create` / `todo_update`.',
     '- Non-trivial tasks (≥2 distinct execution steps OR touching ≥2 files / areas / feature threads) → your FIRST tool calls MUST be a batch of `todo_create` — one call per planned step — to commit the full plan up front.',
     '- Plan item schema (v0.7.42, mirrors claudecode V2 `TaskCreate`):',
-    '    * `subject` — REQUIRED. Brief imperative title shown in the plan-list row (≤80 chars, e.g. "Audit handleAuth callers").',
+    '    * `subject` — REQUIRED. Brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers").',
     '    * `description` — OPTIONAL. Fuller context / work instructions read when you pick up the item later. Multi-line OK; NOT rendered in the compact row. Skip when subject alone is enough.',
     '    * `activeForm` — OPTIONAL. Present-continuous form shown by the spinner while this item is `in_progress` (e.g. "Auditing handleAuth callers"). Supply alongside `subject` so the spinner reads natural while you work.',
     '    * `evaluator` — OPTIONAL `\'build\' | \'test\' | \'lint\'`. Use sparingly — only on milestone steps with a real ground-truth check.',
@@ -116,7 +116,7 @@ export function buildWorkerInstructions(
     '- RULE B — long-running probes: when a single investigation will take a while (full test suite, deep grep, repo-intel rebuild), dispatch as a child and continue with other tools while it runs.',
     '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across multiple modules can be dispatched as `readOnly: false` children. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
     '- IDLE-YIELD (the wait mechanic): after `dispatch_child_task` returns a `task_id:<id>`, do whatever interleaved work is useful (more dispatches, side-reads the user asked for, drafting a synthesis plan in text). When you have run out of useful work AND children are still in flight, end your turn with ONE short status sentence and NO tool calls. The runner will automatically resume you when a child completes — your next user message will start with one or more `<task-completed task_id="…">…</task-completed>` blocks carrying the result. This lets the user keep chatting with you while children run.',
-    '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report exceeds the inline envelope budget (~50KB), the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
+    '- LARGE CHILD OUTPUT (FEATURE_121 v0.7.40): when a child\'s report is too large to include inline, the `<task-completed>` banner contains a preview + a marker like `[Tool output truncated. ... Full output saved to: <ABSOLUTE_PATH>. Use the Read tool to view full output.]`. The preview is usually enough — read it first, and only call `Read` on the saved path when you need details beyond what the preview shows (e.g., specific code snippets the child cited, or items below the cutoff). Do NOT blindly Read every spillover path; that wastes context.',
     '- MODEL HINT (optional, FEATURE_120 v0.7.39): you may set `model_hint` on a dispatch to advertise the child\'s reasoning weight class. `"fast"` for trivial single-file lookups; `"deep"` for multi-file research or analytical synthesis; `"balanced"` (or omit) for everything else. Routing is a no-op today — every child runs on your model — but the hint is recorded for FEATURE_102 (v0.7.45). Mark intentionally; do not blanket-tag every child.',
     // FEATURE_169 v0.7.40 — dispatch objective quality (F0a + F0b). Suite 0
     // v2 audit VALID (bash disagreement 8.9%, pull-correct 3.3%): C bash=0%
@@ -190,10 +190,10 @@ export function buildWorkerInstructions(
     '- About to review a multi-file change → call `changed_scope` + `changed_diff_bundle` instead of `git diff` + N reads.',
     '',
     'WHEN TO STICK WITH read/grep:',
-    '- Single-file targeted edit or lookup (≤2 files).',
+    '- Single-file targeted edit or lookup in one or a few known files.',
     '- Need exact line numbers or code text (capsules summarize; files give you exact bytes).',
     '- Pull-tool returned `[Tool Error]` / `unavailable` (repo-intel daemon not running) — fall back to read/grep without retrying the same pull-tool.',
-    '- Rationale: pull-tool capsules typically run 2-3KB vs 20-200KB for the equivalent multi-file read exploration (Layer 1 ROI analysis 2026-05-14, median ratio 15.4x). Token savings compound across a full task.',
+    '- Rationale: pull-tool capsules are much smaller than the equivalent multi-file read exploration; the token savings compound across a full task.',
     '',
     // FEATURE_169 v0.7.40 — F3 change-review positive reframe. Suite B v2
     // audit VALID (pull 5%, bash_git_diff 0%, neg-correct 7.7%): 6/6 alias

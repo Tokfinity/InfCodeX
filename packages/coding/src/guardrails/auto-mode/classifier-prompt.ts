@@ -63,7 +63,7 @@ About <signals> (when present):
   - protected_path signals (especially zone='user-kodax') indicate credentials zone — never allow a write to user-kodax via shell; the agent must use the kodax config API instead.
 
 Output EXACTLY:
-<block>yes|no</block><reason>one short sentence, ≤ 30 words</reason>
+<block>yes|no</block><reason>one short sentence</reason>
 
 Do NOT include any preamble, thinking, or text outside those two tags.`;
 
