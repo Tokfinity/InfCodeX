@@ -85,6 +85,7 @@ const sdkEntries = {
   'sdk-repl': 'src/sdk-repl.ts',
   'sdk-skills': 'src/sdk-skills.ts',
   'sdk-mcp': 'src/sdk-mcp.ts',
+  'sdk-session': 'src/sdk-session.ts',
 };
 
 // Clean prior tsc emit so stale per-file .d.ts (acp_*.d.ts, cli_commands.d.ts,

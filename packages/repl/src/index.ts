@@ -137,3 +137,25 @@ export type {
   AutoModeBootstrapResult,
   ResolvedAutoModeBootstrapSettings,
 } from "./interactive/auto-mode-bootstrap.js";
+
+// === FEATURE_173 Part B: Session Management Public SDK (v0.7.42) ===
+// Also available via the `@kodax-ai/kodax/session` SDK subpath.
+export type {
+  SessionSummary,
+  ListSessionsOptions,
+  WatchSessionsCallback,
+  SessionManager,
+  RunningSessionInfo,
+  DeleteSessionResult,
+} from "./session/public-api.js";
+export {
+  listSessions,
+  loadSession,
+  forkSession,
+  rewindSession,
+  setActiveEntry,
+  deleteSession,
+  listRunningSessions,
+  watchSessions,
+  createSessionManager,
+} from "./session/public-api.js";

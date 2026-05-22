@@ -123,6 +123,7 @@ function rewriteRootPackageJson() {
     './repl': { types: './dist/sdk-repl.d.ts', import: './dist/sdk-repl.js' },
     './skills': { types: './dist/sdk-skills.d.ts', import: './dist/sdk-skills.js' },
     './mcp': { types: './dist/sdk-mcp.d.ts', import: './dist/sdk-mcp.js' },
+    './session': { types: './dist/sdk-session.d.ts', import: './dist/sdk-session.js' },
     './package.json': './package.json',
   };
 

@@ -1,0 +1,288 @@
+/**
+ * FEATURE_173 Part B — Session Management Public SDK contract tests.
+ *
+ * 12 contract tests covering the public API surface.
+ *
+ * Session directory isolation: each test overrides HOME/USERPROFILE to a
+ * fresh mkdtemp directory so KODAX_SESSIONS_DIR (frozen at module-load time)
+ * points to a per-test temp dir. vi.resetModules() + dynamic imports are
+ * required.
+ */
+
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Helpers —————————————————————————————————————————————————————————————————————
+
+interface SessionApiModule {
+  listSessions: (opts?: import('./public-api.js').ListSessionsOptions) => Promise<import('./public-api.js').SessionSummary[]>;
+  loadSession: (id: string) => Promise<import('./public-api.js').SessionSummary | null>;
+  forkSession: (id: string, opts?: { selector?: string; sessionId?: string; title?: string }) => Promise<{ sessionId: string; data: unknown } | null>;
+  rewindSession: (id: string, opts?: { selector?: string }) => Promise<unknown | null>;
+  setActiveEntry: (id: string, selector: string) => Promise<unknown | null>;
+  deleteSession: (id: string) => Promise<{ ok: true } | { error: { code: string } }>;
+  listRunningSessions: () => Promise<Array<{ pid: number; startedAt: number; cwd: string; sessionId: string | undefined }>>;
+  watchSessions: (cb: (e: { kind: string; sessionId: string }) => void) => { close: () => void };
+  createSessionManager: (opts?: { sessionsDir?: string }) => unknown;
+}
+
+/** Write a minimal valid JSONL session file (just a meta line). */
+async function writeMinimalSession(
+  sessionsDir: string,
+  id: string,
+  overrides: Record<string, unknown> = {},
+): Promise<void> {
+  await mkdir(sessionsDir, { recursive: true });
+  const meta = {
+    _type: 'meta',
+    id,
+    title: overrides.title ?? `Title for ${id}`,
+    gitRoot: '/tmp/test-repo',
+    createdAt: overrides.createdAt ?? new Date().toISOString(),
+    scope: overrides.scope ?? 'user',
+    activeMessageCount: overrides.activeMessageCount ?? 2,
+    ...overrides,
+  };
+  await writeFile(
+    path.join(sessionsDir, `${id}.jsonl`),
+    JSON.stringify(meta) + '\n',
+    'utf-8',
+  );
+}
+
+// Test state ───────────────────────────────────────────────────────────────────
+
+describe('Session Management Public SDK', () => {
+  let tempHome: string;
+  let sessionsDir: string;
+  let previousHome: string | undefined;
+  let previousUserProfile: string | undefined;
+  let api: SessionApiModule;
+
+  beforeEach(async () => {
+    tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-session-sdk-'));
+    sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    previousHome = process.env.HOME;
+    previousUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tempHome;
+    process.env.USERPROFILE = tempHome;
+
+    // Mock workspace-runtime to avoid git calls.
+    vi.resetModules();
+    vi.doMock('../interactive/workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('../interactive/workspace-runtime.js')>(
+        '../interactive/workspace-runtime.js',
+      );
+      return {
+        ...actual,
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: '/tmp/test-repo',
+          workspaceRoot: '/tmp/test-repo',
+          executionCwd: '/tmp/test-repo',
+          branch: 'main',
+          workspaceKind: 'detected',
+        })),
+        isSameCanonicalRepo: vi.fn(() => true),
+      };
+    });
+
+    api = await import('./public-api.js') as unknown as SessionApiModule;
+  });
+
+  afterEach(async () => {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+    vi.resetModules();
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
+  // ── Test 1: listSessions returns SessionSummary shape ────────────────────
+  it('listSessions returns SessionSummary with id, title, msgCount fields', async () => {
+    await writeMinimalSession(sessionsDir, 'sess-001', {
+      title: 'My Test Session',
+      activeMessageCount: 5,
+    });
+
+    const results = await api.listSessions({ scope: 'all' });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    const found = results.find((s) => s.id === 'sess-001');
+    expect(found).toBeDefined();
+    expect(found?.id).toBe('sess-001');
+    expect(found?.title).toBe('My Test Session');
+    expect(typeof found?.msgCount).toBe('number');
+  });
+
+  // ── Test 2: listSessions honors limit ────────────────────────────────────
+  it('listSessions honors the limit option', async () => {
+    for (let i = 0; i < 5; i++) {
+      await writeMinimalSession(sessionsDir, `sess-limit-${i}`);
+    }
+
+    const results = await api.listSessions({ scope: 'all', limit: 3 });
+    expect(results.length).toBeLessThanOrEqual(3);
+  });
+
+  // ── Test 3: listSessions honors scope=all ────────────────────────────────
+  it('listSessions with scope=all returns worker sessions too', async () => {
+    await writeMinimalSession(sessionsDir, 'user-sess', { scope: 'user' });
+    await writeMinimalSession(sessionsDir, 'worker-sess', { scope: 'managed-task-worker' });
+
+    const userOnly = await api.listSessions({ scope: 'user' });
+    const all = await api.listSessions({ scope: 'all' });
+
+    expect(all.length).toBeGreaterThanOrEqual(userOnly.length);
+    const workerFound = all.find((s) => s.id === 'worker-sess');
+    expect(workerFound).toBeDefined();
+  });
+
+  // ── Test 4: loadSession returns null for missing id ───────────────────────
+  it('loadSession returns null for a non-existent session id', async () => {
+    const result = await api.loadSession('does-not-exist-xyz');
+    expect(result).toBeNull();
+  });
+
+  // ── Test 5: forkSession returns null for missing id (NEVER throws) ────────
+  it('forkSession returns null for a missing session without throwing', async () => {
+    let threw = false;
+    let result: { sessionId: string; data: unknown } | null = null;
+    try {
+      result = await api.forkSession('ghost-session-id');
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(false);
+    expect(result).toBeNull();
+  });
+
+  // ── Test 6: forkSession on real session returns new sessionId ────────────
+  it('forkSession on a saved session returns a new sessionId', async () => {
+    // Need a real session file with lineage data — use FileSessionStorage.
+    vi.resetModules();
+    vi.doMock('../interactive/workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('../interactive/workspace-runtime.js')>(
+        '../interactive/workspace-runtime.js',
+      );
+      return {
+        ...actual,
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: '/tmp/test-repo',
+          workspaceRoot: '/tmp/test-repo',
+          executionCwd: '/tmp/test-repo',
+          branch: 'main',
+          workspaceKind: 'detected',
+        })),
+        isSameCanonicalRepo: vi.fn(() => true),
+      };
+    });
+    const storage = await import('../interactive/storage.js');
+    const pubApi = await import('./public-api.js') as unknown as SessionApiModule;
+
+    const st = new storage.FileSessionStorage();
+    await st.save('fork-source', {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      title: 'Fork Source',
+      gitRoot: '/tmp/test-repo',
+    });
+
+    const forkResult = await pubApi.forkSession('fork-source', { title: 'Forked' });
+    expect(forkResult).not.toBeNull();
+    expect(typeof forkResult?.sessionId).toBe('string');
+    expect(forkResult?.sessionId).not.toBe('fork-source');
+    expect(forkResult?.data).toBeDefined();
+  });
+
+  // ── Test 7: rewindSession returns null for missing id ────────────────────
+  it('rewindSession returns null for a non-existent session id', async () => {
+    const result = await api.rewindSession('ghost-session-id');
+    expect(result).toBeNull();
+  });
+
+  // ── Test 8: deleteSession on missing id is no-op (no throw, ok:true) ─────
+  it('deleteSession returns ok:true for a non-existent session', async () => {
+    const result = await api.deleteSession('no-such-session');
+    expect(result).toEqual({ ok: true });
+  });
+
+  // ── Test 9: listRunningSessions returns [] when no instances dir ──────────
+  it('listRunningSessions returns [] when the instances directory is missing', async () => {
+    // instances dir doesn't exist in our fresh tempHome.
+    const result = await api.listRunningSessions();
+    expect(Array.isArray(result)).toBe(true);
+    expect(result.length).toBe(0);
+  });
+
+  // ── Test 10: listRunningSessions skips own pid ────────────────────────────
+  it('listRunningSessions does not include the current process pid', async () => {
+    const result = await api.listRunningSessions();
+    const selfPid = process.pid;
+    expect(result.every((r) => r.pid !== selfPid)).toBe(true);
+  });
+
+  // ── Test 11: watchSessions fires callback on file create ─────────────────
+  it(
+    'watchSessions callback fires within the platform timeout when a session file is created',
+    async () => {
+      await mkdir(sessionsDir, { recursive: true });
+      const events: Array<{ kind: string; sessionId: string }> = [];
+
+      const handle = api.watchSessions((e) => events.push(e));
+
+      try {
+        // Allow watcher to initialize.
+        await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+        // Create a session file.
+        await writeFile(
+          path.join(sessionsDir, 'watch-test.jsonl'),
+          JSON.stringify({ _type: 'meta', id: 'watch-test', title: 'W' }) + '\n',
+        );
+
+        // On Windows poll is 1000ms; POSIX is 100ms debounce.
+        const waitMs = process.platform === 'win32' ? 1600 : 300;
+        await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+
+        expect(events.some((e) => e.sessionId === 'watch-test')).toBe(true);
+      } finally {
+        handle.close();
+      }
+    },
+    // Generous timeout to cover Windows polling.
+    process.platform === 'win32' ? 5000 : 2000,
+  );
+
+  // ── Test 12: createSessionManager returns object with all 9 methods ───────
+  it('createSessionManager returns an object with all 9 expected methods', async () => {
+    const manager = api.createSessionManager() as Record<string, unknown>;
+    const expectedMethods = [
+      'listSessions',
+      'loadSession',
+      'forkSession',
+      'rewindSession',
+      'setActiveEntry',
+      'deleteSession',
+      'listRunningSessions',
+      'watchSessions',
+    ];
+    for (const method of expectedMethods) {
+      expect(typeof manager[method]).toBe('function');
+    }
+    // sessionId field in listRunningSessions result is allowed to be undefined.
+    const sessions = await (manager.listRunningSessions as () => Promise<Array<{ sessionId: string | undefined }>>)();
+    expect(Array.isArray(sessions)).toBe(true);
+    if (sessions.length > 0) {
+      // sessionId field must exist (may be undefined).
+      expect('sessionId' in sessions[0]).toBe(true);
+    }
+  });
+});

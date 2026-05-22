@@ -989,6 +989,34 @@ describe('parity — Runner path and legacy SA path produce compatible KodaXResu
     // Shard 6a populates managedTask even on zero-tool runs.
     expect(result.managedTask?.verdict?.status).toBe('running');
   });
+
+  // FEATURE_173 (v0.7.42) Part A — kill `runner-${epoch}` ghost-session
+  // double-write. When the REPL caller passes `options.session.id` (the
+  // canonical `YYYYMMDD_HHMMSS` session file id), the result must echo it
+  // back verbatim — `Runner.run` does not own a Session here (would
+  // trigger `session.append` writes), so the synth `runner-${Date.now()}`
+  // fallback at runner-driven.ts MUST NOT fire. The pre-fix bug caused
+  // REPL to save TWO `.jsonl` files per conversation (REPL-side under
+  // `YYYYMMDD_HHMMSS` + ghost-side under `runner-${epoch}`).
+  it('FEATURE_173 Part A: propagates caller-supplied session.id, never falls through to runner-${epoch} ghost', async () => {
+    const callerSessionId = '20260522_180000';
+    const options = {
+      ...makeOptions(),
+      session: { id: callerSessionId },
+    } as KodaXOptions;
+
+    const result = await runManagedTaskViaRunner(
+      options,
+      'Trivial task',
+      async () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    );
+
+    expect(result.sessionId).toBe(callerSessionId);
+    // Negative assertion: the ghost-fallback prefix must NEVER appear when
+    // caller supplied an id. Future regressions where someone reverses the
+    // ??-chain order at runner-driven.ts:~1965 will trip this immediately.
+    expect(result.sessionId.startsWith('runner-')).toBe(false);
+  });
 });
 
 // =============================================================================

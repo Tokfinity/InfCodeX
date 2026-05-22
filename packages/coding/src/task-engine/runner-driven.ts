@@ -1962,7 +1962,15 @@ async function runManagedTaskViaRunnerInner(
     signal,
     signalReason: reason,
     messages: [...effectiveRunResult.messages],
-    sessionId: effectiveRunResult.sessionId ?? `runner-${Date.now()}`,
+    // FEATURE_173 (v0.7.42) Part A — kill `runner-${epoch}` ghost-session
+    // double-write. Caller-supplied `options.session.id` (the REPL session
+    // file, format `YYYYMMDD_HHMMSS`) always wins. `runOnce` does NOT
+    // currently pass an agent-layer Session into Runner.run (would trigger
+    // `session.append()`), so `effectiveRunResult.sessionId` is always
+    // undefined for production callers — the `runner-${Date.now()}`
+    // synthetic-id branch is left as a last-resort for SDK callers that
+    // explicitly opt out of session.id (vanishingly rare).
+    sessionId: options.session?.id ?? effectiveRunResult.sessionId ?? `runner-${Date.now()}`,
     managedProtocolPayload,
     managedTask,
     contextTokenSnapshot,
