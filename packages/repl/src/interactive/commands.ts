@@ -61,6 +61,7 @@ import {
 } from '@kodax-ai/skills';
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
+import { memoryCommand } from '../commands/memory-command.js';
 import { newCommand } from '../commands/new-command.js';
 import { getActivePasteStore } from '../ui/utils/paste-store.js';
 import { retrievePastedText } from '../ui/utils/paste-cache.js';
@@ -1679,6 +1680,7 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   copyCommand,
+  memoryCommand,
   newCommand,
 ];
 

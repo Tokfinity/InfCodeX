@@ -30,6 +30,7 @@ export { CommandRegistry, globalCommandRegistry } from './registry.js';
 export { registerBuiltinCommands, getBuiltinCommandCount } from './builtin.js';
 
 export { copyCommand } from './copy-command.js';
+export { memoryCommand } from './memory-command.js';
 export { newCommand } from './new-command.js';
 
 export { discoverCommands, registerDiscoveredCommands } from './discovery.js';
