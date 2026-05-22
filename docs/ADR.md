@@ -1836,7 +1836,7 @@ Per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedbac
 
 **Phase 2 — v0.7.43**：
 
-- **Systemic prompt audit (FEATURE TBD)** — grep 所有 role prompts（worker / generator / evaluator / planner / scout）找出违反本 ADR 5 条原则的所有 instance。列出 audit report 作为 refactor backlog。
+- **Systemic prompt audit ([FEATURE_189](../features/v0.7.43.md#feature_189-systemic-prompt-audit--anti-pattern-hygiene-sweep))** — grep 所有 role prompts（worker / generator / evaluator / planner / scout）找出违反本 ADR 5 条原则的所有 instance。**重点是 ✗ 反模式审查**（per `feedback_prompt_strengthening_cross_case_regression` + claudecode-style panel C4 实测：18-line block 含密集 ✗ → plan-first 0/25 完全失效；3-bullet 无 ✗ → 4/25 plan-first + 5/25 dispatch）。列出 audit report 作为 refactor backlog。
 - **逐 role 重写** — 按 audit 优先级 staged rollout，每个重写带 Layer 2 eval 验证 cross-case 不退化。
 
 ### Consequences
