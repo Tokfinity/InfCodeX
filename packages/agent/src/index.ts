@@ -443,3 +443,9 @@ export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './runtime-middleware/index.js';
+
+// FEATURE_124 (v0.7.43) — Memory System Alignment substrate.
+// Per-project memory directory + frontmatter taxonomy + claudecode-shape
+// truncation. Consumed by `@kodax-ai/coding` SP builder (Phase B/C) and
+// `@kodax-ai/repl` `/memory` slash + transcript badge (Phase D).
+export * from './memory/index.js';
