@@ -547,9 +547,10 @@ export function buildObserverBridge(
       // line. The note format is the user-facing identifier.
       if (!events?.onManagedTaskStatus) return;
       const sourceTag = info.source === 'explicit-env' ? 'env' : 'inherit';
+      const modelLabel = info.model ?? '(default)';
       emit({
         phase: 'worker',
-        note: `[Sidecar Verifier] ${info.verdict} · ${info.providerName}/${info.model} (${sourceTag}) · ${info.elapsedMs}ms · ${info.trace}`,
+        note: `[Sidecar Verifier] ${info.verdict} · ${info.providerName}/${modelLabel} (${sourceTag}) · ${info.elapsedMs}ms · ${info.trace}`,
         persistToHistory: true,
       });
     },

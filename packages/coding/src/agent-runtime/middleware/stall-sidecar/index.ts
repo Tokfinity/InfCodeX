@@ -60,9 +60,11 @@ import {
 } from './prompts.js';
 
 export interface CreateStallSidecarToolObserverOptions {
-  /** Provider used for the L2 sidecar LLM call. Phase B will wrap this
-   *  in `resolveStallSidecarProvider({mainProvider, env})` for explicit
-   *  env override. */
+  /** Provider used for the L2 sidecar LLM call. Production wiring
+   *  (`runner-driven.ts`) resolves this via `resolveStallSidecarProvider`
+   *  — default inherit-main with `KODAX_STALL_PROVIDER` +
+   *  `KODAX_STALL_MODEL` env override. Tests can pass a fake provider
+   *  directly. */
   readonly provider: KodaXBaseProvider;
   /** Specific model id on the provider. When omitted, provider's
    *  registered default model is used. */
@@ -102,6 +104,7 @@ export function createStallSidecarToolObserver(
   const orchestrator: StallOrchestrator = createStallOrchestrator({
     detector: options.detector,
     provider: options.provider,
+    model: options.model,
     systemPrompt: SIDECAR_SYSTEM_PROMPT,
     reportTool: REPORT_TOOL,
     timeoutMs: options.timeoutMs,

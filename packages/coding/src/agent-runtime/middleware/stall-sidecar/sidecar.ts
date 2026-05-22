@@ -120,8 +120,20 @@ export type SidecarVerdictTrace =
   | 'timeout';
 
 export interface StallSidecarOptions {
-  /** Provider used to call the sidecar — same as the main agent's. */
+  /** Provider used to call the sidecar — defaults to the main agent's,
+   *  may be cross-family overridden via FEATURE_187 Phase B env vars. */
   readonly provider: KodaXBaseProvider;
+
+  /**
+   * Specific model id on the provider. When omitted, the provider's
+   * registered default model is used. FEATURE_187 Phase B production
+   * wiring passes the model resolved by `resolveStallSidecarProvider()`
+   * so the `KODAX_STALL_MODEL` env override takes effect at the
+   * `provider.stream` call (without this thread the override would be
+   * cosmetic — provider name changes but model stays at provider
+   * default).
+   */
+  readonly model?: string;
 
   /**
    * The pre-rendered user-message body for the sidecar. Caller builds
@@ -246,6 +258,7 @@ export async function invokeStallSidecar(
         [options.reportTool],
         options.systemPrompt,
         false,
+        options.model ? { modelOverride: options.model } : undefined,
       );
     } catch {
       return { isStuck: false, trace: 'provider_error' };

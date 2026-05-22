@@ -227,8 +227,11 @@ export interface SidecarFinishedInfo {
   readonly verdict: 'accept' | 'revise' | 'blocked';
   /** Resolved verifier provider name (kodax provider registry id). */
   readonly providerName: string;
-  /** Resolved verifier model id. */
-  readonly model: string;
+  /** Resolved verifier model id. `undefined` means the provider's
+   *  registered default model was used (no specific `KODAX_VERIFIER_MODEL`
+   *  override AND no main-agent `modelOverride` / `model` configured —
+   *  the user-facing log renders this as `(default)` for clarity). */
+  readonly model: string | undefined;
   /** Whether the verifier inherited from main or came from env override. */
   readonly source: 'explicit-env' | 'inherit-main';
   /** Wall-clock duration of the verifier StopHook call in milliseconds. */

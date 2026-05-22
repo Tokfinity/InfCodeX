@@ -58,7 +58,11 @@ import {
  */
 export interface ResolvedVerifierProvider {
   readonly provider: KodaXBaseProvider;
-  readonly model: string;
+  /** Resolved model id. `string` on the explicit-env path (env var
+   *  required), `string | undefined` on the inherit-main path (the
+   *  caller may have no specific main model configured — then the
+   *  provider's registered default is used downstream). */
+  readonly model: string | undefined;
   readonly providerName: string;
   readonly source: 'explicit-env' | 'inherit-main';
 }
@@ -82,8 +86,15 @@ export interface ResolveVerifierProviderOptions {
   /** Main Agent's effective provider name (string id in the KodaX
    *  provider registry) — used as the inherit fallback. */
   readonly mainProviderName: string;
-  /** Main Agent's effective model id — used as the inherit fallback. */
-  readonly mainModel: string;
+  /** Main Agent's effective model id — used as the inherit fallback.
+   *  `undefined` is a legitimate value: the caller has no specific
+   *  model configured and the provider's registered default should be
+   *  used. The resolved `model` will then also be `undefined`, which
+   *  `invokeSidecarVerifier` short-circuits via
+   *  `options.model ? {modelOverride} : undefined`. DO NOT pass a
+   *  placeholder like `'unknown'` — that is a truthy string and would
+   *  defeat the guard (FEATURE_187 Phase B code review finding). */
+  readonly mainModel: string | undefined;
   /** Injectable env reader; defaults to `process.env`. */
   readonly env?: NodeJS.ProcessEnv;
 }

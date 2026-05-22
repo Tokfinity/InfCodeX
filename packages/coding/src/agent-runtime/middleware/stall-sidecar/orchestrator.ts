@@ -62,6 +62,13 @@ export const TRANSCRIPT_WINDOW = 16;
 export interface StallOrchestratorOptions {
   readonly detector: StallDetector;
   readonly provider: KodaXBaseProvider;
+  /**
+   * Specific model id on the provider. When omitted, the provider's
+   * registered default model is used. FEATURE_187 Phase B threads this
+   * through from `resolveStallSidecarProvider()` so `KODAX_STALL_MODEL`
+   * env override takes effect at the underlying `provider.stream` call.
+   */
+  readonly model?: string;
   readonly systemPrompt: string;
   readonly reportTool: KodaXToolDefinition;
   /** Sidecar timeout in ms. Default 5000. */
@@ -151,6 +158,7 @@ export function createStallOrchestrator(
 
       const promise = invokeStallSidecar({
         provider: options.provider,
+        model: options.model,
         userMessage,
         systemPrompt: options.systemPrompt,
         reportTool: options.reportTool,

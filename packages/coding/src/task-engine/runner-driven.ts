@@ -143,6 +143,7 @@ import {
   createStallSidecarToolObserver,
   type StallSidecarHandle,
 } from '../agent-runtime/middleware/stall-sidecar/index.js';
+import { resolveStallSidecarProvider } from '../agent-runtime/middleware/stall-sidecar/provider-resolver.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
@@ -657,9 +658,31 @@ async function runManagedTaskViaRunnerInner(
   // Prompt assets (SIDECAR_SYSTEM_PROMPT + REPORT_TOOL + sample output)
   // are pinned by `byte-identity-lock.test.ts` to preserve F178 eval
   // 1909d5d2 SHIP-SIDECAR-ALL evidence across this plumbing-only move.
+  //
+  // FEATURE_187 Phase B — provider resolution mirrors the FEATURE_184
+  // verifier pattern: default inherit-main, env-var override via
+  // KODAX_STALL_PROVIDER + KODAX_STALL_MODEL (both required for
+  // override to take effect; typo on provider name silently falls
+  // through to inherit-main). F178 eval was run with inherit-main on
+  // all 5 canonical aliases, so the default behaviour preserves the
+  // SHIP-SIDECAR-ALL baseline exactly.
+  const stallMainProviderName = options.provider ?? 'anthropic';
+  const resolvedStallSidecar = resolveStallSidecarProvider({
+    mainProvider: resolveProvider(stallMainProviderName),
+    mainProviderName: stallMainProviderName,
+    // Sentinel intentionally `undefined` (not the truthy string 'unknown'):
+    // the inherit-main path threads this string down to
+    // `provider.stream(...{modelOverride: ...})` via the `options.model ?
+    // {modelOverride} : undefined` guard in `sidecar.ts`. A truthy
+    // sentinel would resolve to `modelOverride: 'unknown'` and force the
+    // provider to call a model literally named "unknown" — bug discovered
+    // in Phase B code review, same pattern below in verifier wiring.
+    mainModel: options.modelOverride ?? options.model,
+  });
   const stallSidecar: StallSidecarHandle = createStallSidecarToolObserver({
     detector: stallDetector,
-    provider: resolveProvider(options.provider ?? 'anthropic'),
+    provider: resolvedStallSidecar.provider,
+    model: resolvedStallSidecar.model,
   });
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
@@ -1525,7 +1548,13 @@ async function runManagedTaskViaRunnerInner(
   const resolvedVerifier = resolveVerifierProvider({
     mainProvider: resolveProvider(mainProviderName),
     mainProviderName,
-    mainModel: options.modelOverride ?? options.model ?? 'unknown',
+    // FEATURE_187 Phase B code review found a latent bug also affecting
+    // this F184 verifier wiring: a truthy `'unknown'` sentinel would
+    // resolve to `modelOverride: 'unknown'` at `provider.stream`, forcing
+    // the provider to call a model literally named "unknown". The
+    // `options.model ? {modelOverride} : undefined` guard inside
+    // `invokeSidecarVerifier` only works when the sentinel is `undefined`.
+    mainModel: options.modelOverride ?? options.model,
   });
   // Opt-in verifier observability: when the user enables verifier-log
   // (env var KODAX_VERIFIER_LOG=1 OR `verifierLog: true` in
