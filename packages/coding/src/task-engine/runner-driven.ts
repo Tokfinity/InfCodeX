@@ -28,7 +28,7 @@
  */
 
 import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
-import type { Agent, StopHookFn } from '@kodax-ai/agent';
+import type { Agent, RunnerToolObserver, StopHookFn } from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
 import {
   GENERATOR_AGENT_NAME,
@@ -144,6 +144,7 @@ import {
   type StallSidecarHandle,
 } from '../agent-runtime/middleware/stall-sidecar/index.js';
 import { resolveStallSidecarProvider } from '../agent-runtime/middleware/stall-sidecar/provider-resolver.js';
+import { composeToolObservers } from '../agent-runtime/middleware/compose-tool-observers.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
@@ -1459,9 +1460,22 @@ async function runManagedTaskViaRunnerInner(
   // reaches the user (observed regression report: "除了正式输出之外的
   // 任何别的信息都看不到"). Legacy agent.ts fired events.onToolResult at
   // three sites per invocation (success / error / cancelled); the
-  // Runner observer maps 1:1 onto `onToolUseStart` + `onToolResult`
-  // here.
-  const runnerToolObserver = {
+  // Runner observer's `onToolCall` hook dispatches
+  // `options.events.onToolUseStart`, and its `onToolResult` hook
+  // dispatches `options.events.onToolResult`.
+  //
+  // FEATURE_187 (v0.7.43) Phase D — toolObserver assembled via
+  // `composeToolObservers` for explicit precedence. Two observers in
+  // order: (1) `stallSidecar.observer` runs first so its
+  // pending-nudge consume in beforeTool gates everything else (a
+  // permission denial AFTER nudge consume would swallow the nudge);
+  // (2) `permissionEventsObserver` handles CAP-010 permission gate +
+  // CAP-035 visibility filter + events.onToolUseStart /
+  // events.onToolResult dispatch + F4 truncation tracking.
+  // composeToolObservers short-circuits beforeTool on the first
+  // non-pass verdict (so stall nudge correctly blocks downstream
+  // permission); fans out onToolCall / onToolResult to every observer.
+  const permissionEventsObserver: RunnerToolObserver = {
     // CAP-010 tri-state permission gate: plan-mode / accept-edits /
     // extension "tool:before" hooks run here. Delegates to the shared
     // substrate helper so SA and AMA evaluate the same gate chain —
@@ -1471,21 +1485,7 @@ async function runManagedTaskViaRunnerInner(
     // Tri-state contract preserved verbatim: undefined → allow;
     // CANCELLED_TOOL_RESULT_MESSAGE → cancel; other string → block
     // with that string as the synthesized tool_result content.
-    beforeTool: async (call: { name: string; id: string; input: Record<string, unknown> }) => {
-      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
-      // observer's beforeTool. Internally consumes any pending nudge
-      // queued by the previous tool's L1+L2 verdict pipeline; returns
-      // a string to short-circuit (block with nudge as synthesized
-      // tool_result), or true/undefined to fall through to permission.
-      // Phase D will replace this manual delegation with
-      // `composeToolObservers([stallSidecar.observer, ...])`.
-      const stallVerdict = await stallSidecar.observer.beforeTool?.(call);
-      if (stallVerdict !== undefined && stallVerdict !== true) {
-        return stallVerdict;
-      }
-      // Existing permission / policy override path. Only runs when
-      // `options.events` is set (interactive callers); SDK / tests
-      // bypass entirely.
+    beforeTool: async (call) => {
       if (options.events) {
         const override = await getToolExecutionOverride(
           options.events,
@@ -1501,13 +1501,7 @@ async function runManagedTaskViaRunnerInner(
       }
       return true;
     },
-    onToolCall: (call: { name: string; id: string; input: Record<string, unknown> }) => {
-      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
-      // observer's onToolCall. Records into L1 detector + transcript
-      // buffer + fires L2 sidecar non-awaited on stall signal. Verdict
-      // surfaces on the NEXT beforeTool via the observer's
-      // consumePendingNudge path; this call returns immediately.
-      stallSidecar.observer.onToolCall?.(call);
+    onToolCall: (call) => {
       // CAP-035: filter internal control-plane tools (emit_managed_protocol,
       // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
       // AMA emitted every tool call regardless of visibility — REPL
@@ -1521,19 +1515,7 @@ async function runManagedTaskViaRunnerInner(
         input: call.input,
       });
     },
-    onToolResult: (
-      call: { name: string; id: string; input: Record<string, unknown> },
-      result: {
-        content: string | readonly KodaXToolResultContentItem[];
-        metadata?: Record<string, unknown>;
-      },
-    ) => {
-      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
-      // observer's onToolResult. Feeds tool_result content into the
-      // orchestrator transcript buffer so subsequent sidecar prompts
-      // see actual return values, not just bare tool_use blocks. The
-      // observer internally string-coerces non-text content.
-      stallSidecar.observer.onToolResult?.(call, result);
+    onToolResult: (call, result) => {
       // F4 parity — track whether any tool result was truncated by the
       // tool-result-truncation guardrail. `result.metadata.truncated`
       // is set by the guardrail's rewrite step. Observed values feed
@@ -1547,13 +1529,24 @@ async function runManagedTaskViaRunnerInner(
       }
       // CAP-035: same visibility filter on the result side.
       if (!isVisibleToolName(call.name)) return;
+      const content = result.content;
       options.events?.onToolResult?.({
         id: call.id,
         name: call.name,
-        content: typeof result.content === 'string' ? result.content : result.content.filter(i => i.type === 'text').map(i => i.type === 'text' ? i.text : '').join(''),
+        content:
+          typeof content === 'string'
+            ? content
+            : (content as readonly KodaXToolResultContentItem[])
+                .filter((i) => i.type === 'text')
+                .map((i) => (i.type === 'text' ? i.text : ''))
+                .join(''),
       });
     },
   };
+  const runnerToolObserver = composeToolObservers(
+    stallSidecar.observer,
+    permissionEventsObserver,
+  );
 
   // FEATURE_184 (v0.7.45) Phase C.1 — current-agent role ref.
   // Tracks which role is currently executing so composedStopHook can gate
