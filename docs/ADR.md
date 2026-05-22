@@ -1709,7 +1709,7 @@ KodaX 在 v0.7.39 的 ADR-024 把 npm 发布物正名 `@kodax-ai/kodax` + 形式
 
 ### Implementation
 
-**7 atomic commits**（在并行 thread FEATURE_184 跑的时候 stage 每个 commit 都按文件名走，不用 `git add -A`，每个 commit `add + commit` 同一 Bash 调用，per [feedback_concurrent_thread_git_race](../../memory/feedback_concurrent_thread_git_race.md)）：
+**8 atomic commits**（在并行 thread FEATURE_184 跑的时候 stage 每个 commit 都按文件名走，不用 `git add -A`，每个 commit `add + commit` 同一 Bash 调用，per [feedback_concurrent_thread_git_race](../../memory/feedback_concurrent_thread_git_race.md)）：
 
 | Phase | Commit | Surface |
 |---|---|---|
@@ -1720,8 +1720,11 @@ KodaX 在 v0.7.39 的 ADR-024 把 npm 发布物正名 `@kodax-ai/kodax` + 形式
 | 5 | `ee549d6f` | `packages/repl/src/common/custom-providers.ts` CRUD（21 单测）+ `validateCustomProviderConfig` re-export 链（llm / coding / coding-providers）+ 动态 `getAgentConfigPath('config.json')` resolve |
 | 6 | `9ba68f25` | `packages/coding/src/types.ts` `KodaXSessionControl` + `KodaXSessionMutators`；`packages/coding/src/agent-runtime/run-substrate.ts` `_attach({setProvider/setModel/setReasoning})` 在 `buildRuntimeSessionState` 之后；`packages/coding/src/running-session.ts` 新文件（200+ LoC）+ 20 单测 |
 | 7 | `523e9a28` | `packages/repl/src/common/mcp-servers.ts` CRUD（26 单测）+ shape validator；`src/sdk-mcp.ts` 子路径入口；`scripts/build-bundle.mjs` `sdkEntryNames` 扩 + `scripts/build-dts.mjs` `sdkEntries` 扩 + `scripts/release.mjs` `pkg.exports['./mcp']` 同步 |
+| 8 | Phase 8 | `packages/mcp/src/manager.ts` 新文件（`McpManager` class + `createMcpManager` factory，~230 LoC）暴露 `listServers / startServer / stopServer / getServerLogs / listTools` 5 大 popout 操作 + `provider() / execute / describe / search / read / dispose` escape hatch；`packages/mcp/src/provider.ts` 加 `getServerIds()` + `getRuntime(id)` 两个 readonly accessor 让 manager 复用 provider 内部 runtimes Map（不重复构造）；`packages/mcp/src/index.ts` + `packages/coding/src/index.ts` re-export 链；20 单测（真 MCP test-fixture stdio JSON-RPC 全程，包括 broken-binary lastError 捕获 / stop→start 重连 / forceRefresh 旁路 cache / 4 个 unknown-id 错误路径）|
 
-**138 个新单测**（不含既有不退化测试）。
+**158 个新单测**（不含既有不退化测试）。
+
+**Phase 7 vs Phase 8 关系**：Phase 7 暴露的 `@kodax-ai/kodax/mcp` 子路径在 KodaX Space 实测后反馈"只有 types + helpers，没有 manager 高层 API"——`McpCapabilityProvider` 已经被 export 但形状是 capability-provider-shape（`search / describe / execute / read / getPrompt`），popout UI 想要的是 manager-shape（`listServers / startServer / stopServer / getServerLogs / listTools`）。Phase 8 加 `McpManager` thin wrapper（内部 hold 一个 `McpCapabilityProvider` 实例）补这个 surface gap，保持 capability-provider API 完全向后兼容（escape hatch 通过 `manager.provider()` 拿到）。
 
 ### Consequences
 
@@ -1745,7 +1748,7 @@ KodaX 在 v0.7.39 的 ADR-024 把 npm 发布物正名 `@kodax-ai/kodax` + 形式
 
 ### References
 
-- 配套实施：7 atomic commits `2e33b681` → `d3ab38b0` → `9b1e440f` → `7defd65f` → `ee549d6f` → `9ba68f25` → `523e9a28`（每个 commit message 内嵌设计 rationale）
+- 配套实施：8 atomic commits `2e33b681` → `d3ab38b0` → `9b1e440f` → `7defd65f` → `ee549d6f` → `9ba68f25` → `523e9a28` → Phase 8（每个 commit message 内嵌设计 rationale）
 - v0.7.42 上下文 §FEATURE_186（详细 gap 清单 + 实施 cross-reference + 测试合计）
 - ADR-024（v0.7.39 SDK subpath 形式化基础）— 本 ADR 扩第 6 个子路径
 - 关键 memory：[`feedback_review_threat_model`](../../memory/feedback_review_threat_model.md)（信任边界）、[`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md)（单实现）、[`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md)（atomic add+commit）

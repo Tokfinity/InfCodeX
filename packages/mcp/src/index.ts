@@ -46,4 +46,15 @@ export { McpCapabilityProvider } from './provider.js';
 export type { McpTransport, McpTransportEvents } from './transport.js';
 export { createMcpTransport } from './transport.js';
 
+// v0.7.42 — popout-shape manager facade (`listServers / startServer /
+// stopServer / getServerLogs / listTools`) over the capability-provider-
+// shaped `McpCapabilityProvider`. See manager.ts docstring for the
+// KodaX-Space-driven motivation.
+export type {
+  McpServerStatus,
+  McpServerLogs,
+  McpServerToolList,
+} from './manager.js';
+export { McpManager, createMcpManager } from './manager.js';
+
 export { createMcpTestServerFixture } from './test-helpers.js';

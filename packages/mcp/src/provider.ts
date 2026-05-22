@@ -75,6 +75,25 @@ export class McpCapabilityProvider implements CapabilityProvider {
     return this.runtimes.size > 0;
   }
 
+  /**
+   * v0.7.42 — read-only accessor for the enabled server id list.
+   * Used by {@link McpManager} to drive popout-shape `listServers /
+   * startServer / stopServer / logs / tools` operations without
+   * exposing the internal runtimes Map.
+   */
+  getServerIds(): readonly string[] {
+    return Array.from(this.runtimes.keys());
+  }
+
+  /**
+   * v0.7.42 — single-server runtime accessor. Returns `undefined`
+   * for unknown / disabled servers. Use {@link McpManager} for
+   * higher-level lifecycle control.
+   */
+  getRuntime(serverId: string): McpServerRuntime | undefined {
+    return this.runtimes.get(serverId);
+  }
+
   async prewarm(): Promise<void> {
     // Prewarm all servers in parallel so startup latency is bounded by the
     // slowest server rather than their sum.

@@ -827,6 +827,9 @@ export type {
   McpProviderOptions,
   McpTransport,
   McpTransportEvents,
+  McpServerStatus,
+  McpServerLogs,
+  McpServerToolList,
 } from '@kodax-ai/mcp';
 export {
   McpCapabilityProvider,
@@ -837,6 +840,8 @@ export {
   parseMcpCapabilityId,
   searchMcpCatalog,
   getMcpCachePaths,
+  McpManager,
+  createMcpManager,
 } from '@kodax-ai/mcp';
 
 // FEATURE_087 + FEATURE_088 (v0.7.28): Construction Runtime — runtime-
