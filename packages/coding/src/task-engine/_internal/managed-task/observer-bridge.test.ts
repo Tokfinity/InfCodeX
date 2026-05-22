@@ -137,6 +137,28 @@ describe('observer-bridge — sidecarFinished (Phase D.3 follow-up, opt-in log)'
     expect(statuses[0]!.note).toContain('(env)');
   });
 
+  it('renders undefined model as `(default)` so user sees the provider default explicitly', () => {
+    // Regression pin for FEATURE_187 Phase B follow-up: when no specific
+    // model is configured (caller passes undefined per the verifier /
+    // stall resolver `model: string | undefined` contract), the log line
+    // shows `(default)` rather than the literal string "undefined". This
+    // is the common case for users who set provider but not model.
+    const { bridge, statuses } = makeBridgeHarness();
+
+    bridge.sidecarFinished({
+      verdict: 'accept',
+      providerName: 'anthropic',
+      model: undefined,
+      source: 'inherit-main',
+      elapsedMs: 1200,
+      trace: 'verifier_ok',
+    });
+
+    const note = statuses[0]!.note ?? '';
+    expect(note).toContain('anthropic/(default)');
+    expect(note).not.toContain('undefined');
+  });
+
   it('does not throw when the consumer did not register onManagedTaskStatus', () => {
     const bridge = buildObserverBridge(
       undefined,

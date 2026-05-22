@@ -126,6 +126,27 @@ describe('resolveVerifierProvider — explicit env override', () => {
   });
 });
 
+describe('resolveVerifierProvider — undefined mainModel sentinel', () => {
+  it('propagates undefined mainModel as undefined model on inherit-main path', () => {
+    // Regression pin for FEATURE_187 Phase B code review HIGH finding
+    // applied symmetrically to the verifier resolver: callers
+    // (`runner-driven.ts`) MUST pass `undefined` (not the truthy string
+    // 'unknown') when no model is configured. The resolved `model`
+    // field then short-circuits `invokeSidecarVerifier`'s
+    // `options.model ? {modelOverride} : undefined` guard correctly.
+    const main = fakeMainProvider();
+    const r = resolveVerifierProvider({
+      mainProvider: main,
+      mainProviderName: 'zhipu-coding',
+      mainModel: undefined,
+      env: emptyEnv(),
+    });
+    expect(r.source).toBe('inherit-main');
+    expect(r.model).toBeUndefined();
+    expect(r.providerName).toBe('zhipu-coding');
+  });
+});
+
 describe('resolveVerifierProvider — always-defined contract', () => {
   it('never returns undefined; inherit-main is the safe terminal fallback', () => {
     // Sweep multiple env configurations — none should produce undefined.

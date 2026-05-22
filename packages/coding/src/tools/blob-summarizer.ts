@@ -88,7 +88,12 @@ export type SummarizeBlob = (
 
 export interface CreateBlobSummarizerOptions {
   readonly provider: KodaXBaseProvider;
-  readonly model: string;
+  /** Model id for the underlying provider. `undefined` means use the
+   *  provider's registered default. Error messages render `undefined`
+   *  as `(default)` for diagnostic clarity. DO NOT pass a placeholder
+   *  like `'unknown'` — see FEATURE_187 Phase B code review (same
+   *  sentinel-truthiness pitfall as sidecar-verifier / stall-sidecar). */
+  readonly model: string | undefined;
   /** Override the 30 s wall. Tests pass small values to keep them fast. */
   readonly timeoutMs?: number;
 }
@@ -167,7 +172,7 @@ export function createBlobSummarizer(
         .trim();
       if (text.length === 0) {
         throw new BlobSummarizerError(
-          `blob summarizer (${opts.model}) returned empty text`,
+          `blob summarizer (${opts.model ?? '(default)'}) returned empty text`,
         );
       }
       return text;
@@ -175,7 +180,7 @@ export function createBlobSummarizer(
       if (err instanceof BlobSummarizerError) throw err;
       const message = err instanceof Error ? err.message : String(err);
       throw new BlobSummarizerError(
-        `blob summarizer (${opts.model}) failed: ${message}`,
+        `blob summarizer (${opts.model ?? '(default)'}) failed: ${message}`,
         err,
       );
     } finally {

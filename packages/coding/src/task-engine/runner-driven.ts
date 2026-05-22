@@ -611,7 +611,11 @@ async function runManagedTaskViaRunnerInner(
   ) => {
     if (!cachedSummarizer) {
       const provider = resolveProvider(options.provider ?? 'anthropic');
-      const model = options.modelOverride ?? options.model ?? 'unknown';
+      // Sentinel intentionally `undefined` (not the truthy string 'unknown'):
+      // diagnostic error messages in `blob-summarizer.ts` render undefined
+      // as `(default)`. Same sentinel-truthiness pitfall as the
+      // FEATURE_187 Phase B verifier + stall wiring fix.
+      const model = options.modelOverride ?? options.model;
       cachedSummarizer = createBlobSummarizer({ provider, model });
     }
     return cachedSummarizer(content, summaryOpts);
