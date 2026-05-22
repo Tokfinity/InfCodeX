@@ -75,8 +75,14 @@ export interface CreateStallSidecarToolObserverOptions {
   readonly detector: StallDetector;
   /** Observability sink — fires every time a sidecar verdict resolves
    *  (whether isStuck true or false). Phase C wires the env-gated
-   *  `stallSidecarFired` ObserverBridge call through this. */
-  readonly onVerdict?: (signal: StallSignal, verdict: SidecarVerdict) => void;
+   *  `stallSidecarFired` ObserverBridge call through this. `elapsedMs`
+   *  is wall-clock from sidecar invocation kickoff to verdict
+   *  resolution; captured by the orchestrator (non-awaited path). */
+  readonly onVerdict?: (
+    signal: StallSignal,
+    verdict: SidecarVerdict,
+    elapsedMs: number,
+  ) => void;
   /** Sidecar timeout in ms. Default 5000 (F178 eval baseline). */
   readonly timeoutMs?: number;
 }

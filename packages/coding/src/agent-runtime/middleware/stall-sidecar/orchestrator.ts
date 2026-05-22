@@ -76,9 +76,17 @@ export interface StallOrchestratorOptions {
   /**
    * Optional verdict callback for observability — fires every time a
    * sidecar verdict resolves (whether isStuck true or false). Used by
-   * integration tests; production wiring can leave this unset.
+   * integration tests; production wiring uses this for FEATURE_187
+   * Phase C opt-in stall log (`KODAX_STALL_LOG=1` gate inside the
+   * factory's onVerdict wrapping). `elapsedMs` is wall-clock time from
+   * sidecar invocation kickoff to verdict resolution — captured by the
+   * orchestrator since the sidecar runs non-awaited from `recordToolUse`.
    */
-  readonly onVerdict?: (signal: StallSignal, verdict: SidecarVerdict) => void;
+  readonly onVerdict?: (
+    signal: StallSignal,
+    verdict: SidecarVerdict,
+    elapsedMs: number,
+  ) => void;
 }
 
 export interface StallOrchestrator {
@@ -156,6 +164,12 @@ export function createStallOrchestrator(
         recentMessages: snapshot,
       });
 
+      // Capture sidecar kickoff time so the `onVerdict` callback can
+      // surface elapsedMs (FEATURE_187 Phase C opt-in observability).
+      // Wall-clock includes provider.stream + parse + Levenshtein
+      // fuzzy match — same envelope a verifier `sidecarFinished` log
+      // line reports.
+      const sidecarStartedAt = Date.now();
       const promise = invokeStallSidecar({
         provider: options.provider,
         model: options.model,
@@ -165,7 +179,8 @@ export function createStallOrchestrator(
         timeoutMs: options.timeoutMs,
       })
         .then((verdict) => {
-          options.onVerdict?.(signal, verdict);
+          const elapsedMs = Date.now() - sidecarStartedAt;
+          options.onVerdict?.(signal, verdict, elapsedMs);
           if (verdict.isStuck && verdict.nudge) {
             pendingNudge = verdict.nudge;
           }

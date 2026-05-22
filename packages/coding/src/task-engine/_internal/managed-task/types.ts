@@ -215,6 +215,55 @@ export interface ObserverBridge {
    * call, not just a flicker in the live spinner row.
    */
   readonly sidecarFinished: (info: SidecarFinishedInfo) => void;
+  /**
+   * FEATURE_187 Phase C (v0.7.43) — opt-in observability for the
+   * FEATURE_178 stall sidecar. Fires AFTER each L2 sidecar verdict
+   * resolves so the REPL can persist a one-line summary into the
+   * transcript:
+   *   `[Stall Sidecar] isStuck=true · zhipu/glm-5.1 (inherit) · 1842ms · sidecar_ok`
+   *
+   * Gated by `KODAX_STALL_LOG=1` (env or `stallLog: true` in
+   * `~/.kodax/config.json`) — off by default. The stall sidecar
+   * middleware factory checks the env var inside its `onVerdict`
+   * callback before invoking this method (mirrors the FEATURE_184
+   * verifier `sidecarFinished` design, with env gating moved into the
+   * factory because stall verdicts arrive async / fire-and-forget —
+   * the upstream call site has no synchronous moment to check env).
+   *
+   * `persistToHistory: true` (writes to session jsonl) — divergence
+   * from `sidecarStarted` is intentional: when users opt in to the
+   * log they explicitly want a durable record per stall verdict, not
+   * a transient flicker.
+   */
+  readonly stallSidecarFired: (info: StallSidecarFiredInfo) => void;
+}
+
+/**
+ * Shape passed to `ObserverBridge.stallSidecarFired`. Mirrors the
+ * public fields of the FEATURE_178 `SidecarVerdict` (`stall-sidecar/
+ * sidecar.ts`) plus resolution metadata the user opted in to see.
+ * Same skeleton as `SidecarFinishedInfo` (FEATURE_184 verifier) but
+ * carries `isStuck: boolean` instead of a 3-state verdict — that's
+ * the F178 contract.
+ */
+export interface StallSidecarFiredInfo {
+  /** Whether the L2 sidecar decided the agent is in a real stall. */
+  readonly isStuck: boolean;
+  /** Resolved stall-sidecar provider name (kodax provider registry id). */
+  readonly providerName: string;
+  /** Resolved stall-sidecar model id. `undefined` means the provider's
+   *  registered default was used (no `KODAX_STALL_MODEL` override AND
+   *  no main-agent model configured — log renders `(default)`). */
+  readonly model: string | undefined;
+  /** Whether the stall sidecar inherited from main or came from env override. */
+  readonly source: 'explicit-env' | 'inherit-main';
+  /** Wall-clock duration of the stall sidecar LLM call in milliseconds. */
+  readonly elapsedMs: number;
+  /** Diagnostic trace tag — see `SidecarVerdictTrace` in
+   *  `stall-sidecar/sidecar.ts` for the closed enum
+   *  (sidecar_ok / fuzzy_tool_match / timeout / provider_error /
+   *  no_tool_call / invalid_isStuck / missing_nudge). */
+  readonly trace: string;
 }
 
 /**

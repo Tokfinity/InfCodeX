@@ -637,6 +637,14 @@ export function loadConfig(): {
    * layer (which has no access to `~/.kodax/config.json`) can read it.
    */
   verifierLog?: boolean;
+  /**
+   * FEATURE_187 Phase C (v0.7.43) — opt-in Stall Sidecar observability.
+   * When `true`, the runtime emits a persisted note per L2 stall
+   * verdict (isStuck true OR false):
+   *   `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`
+   * Mirrored to env var `KODAX_STALL_LOG=1`.
+   */
+  stallLog?: boolean;
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -660,6 +668,7 @@ export function loadConfig(): {
         repoIntelligenceTrace?: boolean;
         streamIdleTimeoutMs?: number;
         verifierLog?: boolean;
+        stallLog?: boolean;
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
@@ -717,12 +726,24 @@ function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
   }
 }
 
+/**
+ * FEATURE_187 Phase C (v0.7.43) — propagate the user-config
+ * `stallLog` boolean to `KODAX_STALL_LOG=1` env. Same env-wins
+ * precedence as the verifier counterpart.
+ */
+function applyStallSidecarRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
+  if (config.stallLog === true && !process.env.KODAX_STALL_LOG) {
+    process.env.KODAX_STALL_LOG = '1';
+  }
+}
+
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
   applyResilienceRuntimeEnv(config);
   applyRepoIntelligenceRuntimeEnv(config);
   applyVerifierRuntimeEnv(config);
+  applyStallSidecarRuntimeEnv(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -749,6 +770,8 @@ export function saveConfig(config: {
   repoIntelligenceTrace?: boolean;
   /** FEATURE_184 Phase D.3 follow-up — opt-in verifier log line. */
   verifierLog?: boolean;
+  /** FEATURE_187 Phase C — opt-in stall sidecar log line. */
+  stallLog?: boolean;
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };

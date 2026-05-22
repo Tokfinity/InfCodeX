@@ -683,10 +683,43 @@ async function runManagedTaskViaRunnerInner(
     // in Phase B code review, same pattern below in verifier wiring.
     mainModel: options.modelOverride ?? options.model,
   });
+  // Forward ref for the stall observer's opt-in log emit. The factory
+  // is built here (line ~690) before `observer` (`buildObserverBridge`
+  // at ~line 870); the onVerdict callback fires only at runtime when a
+  // tool call triggers an L2 stall judgement, which is always AFTER
+  // observer construction. We hold a mutable ref + assign it where
+  // observer is built (search `stallObserverBridgeRef.current = `).
+  const stallObserverBridgeRef: { current: ObserverBridge | undefined } = {
+    current: undefined,
+  };
   const stallSidecar: StallSidecarHandle = createStallSidecarToolObserver({
     detector: stallDetector,
     provider: resolvedStallSidecar.provider,
     model: resolvedStallSidecar.model,
+    onVerdict: (_signal, verdict, elapsedMs) => {
+      // FEATURE_187 Phase C (v0.7.43) opt-in observability: when the
+      // user enables `KODAX_STALL_LOG=1` (env or `stallLog:true` in
+      // `~/.kodax/config.json`), persist a one-line summary per L2
+      // stall verdict so users can confirm the sidecar fired without
+      // reading raw session jsonl. Off by default — stall sidecar is
+      // silent on the happy path (verdict.isStuck=false is the common
+      // case; no nudge injected).
+      if (process.env.KODAX_STALL_LOG !== '1') return;
+      const obs = stallObserverBridgeRef.current;
+      if (!obs) return;
+      obs.stallSidecarFired({
+        isStuck: verdict.isStuck,
+        providerName: resolvedStallSidecar.providerName,
+        model: resolvedStallSidecar.model,
+        source: resolvedStallSidecar.source,
+        elapsedMs,
+        // `unknown_trace` (not `sidecar_ok`) when verdict.trace is
+        // absent: the SidecarVerdictTrace enum has a specific
+        // `'sidecar_ok'` value meaning "ran cleanly". Conflating
+        // missing-trace with clean-trace would mislead audit reads.
+        trace: verdict.trace ?? 'unknown_trace',
+      });
+    },
   });
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
@@ -879,6 +912,12 @@ async function runManagedTaskViaRunnerInner(
     sessionIdRef,
     checkpointWriter,
   );
+  // FEATURE_187 Phase C — wire the stall sidecar's deferred observer
+  // ref (declared at ~line 690 before observer existed). All L2 stall
+  // verdicts arrive async via the orchestrator promise — always after
+  // this line — so the ref is safely populated before any onVerdict
+  // fires.
+  stallObserverBridgeRef.current = observer;
 
   // H3 parity (v0.7.26) — emit the `routing` phase before Scout's
   // preflight. Legacy `task-engine.ts:6545` fired this event right after

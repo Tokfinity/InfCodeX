@@ -1679,6 +1679,81 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
     },
   },
+  {
+    name: 'stall-log',
+    description: 'Toggle Stall Sidecar log line (off by default)',
+    usage: '/stall-log [on|off]',
+    argumentHint: 'on | off',
+    handler: async (args) => {
+      const raw = args[0]?.toLowerCase();
+      const envOn = process.env.KODAX_STALL_LOG === '1';
+
+      if (!raw) {
+        const configOn = loadConfig().stallLog === true;
+        const effective = envOn ? 'on' : 'off';
+        // Same env-vs-config divergence handling as /verifier-log.
+        const persistedSuffix =
+          configOn === envOn
+            ? ''
+            : ` (env=${envOn ? 'on' : 'off'}, config=${configOn ? 'on' : 'off'})`;
+        console.log(
+          chalk.dim(`\nStall Sidecar log: ${chalk.cyan(effective)}${persistedSuffix}`),
+        );
+        console.log(
+          chalk.dim(
+            '  When on, a one-line summary persists per L2 stall verdict:\n' +
+            '  `[Stall Sidecar] isStuck={true|false} · {provider}/{model} · {ms}ms · {trace}`',
+          ),
+        );
+        console.log(chalk.dim('Usage: /stall-log [on|off]\n'));
+        return;
+      }
+
+      let nextValue: boolean;
+      if (raw === 'on' || raw === 'true' || raw === '1') {
+        nextValue = true;
+      } else if (raw === 'off' || raw === 'false' || raw === '0') {
+        nextValue = false;
+      } else {
+        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
+        console.log(chalk.dim('Usage: /stall-log [on|off]\n'));
+        return;
+      }
+
+      // Mutate runtime env so the change takes effect on the next stall
+      // verdict (no restart needed). Read by the stall sidecar factory's
+      // onVerdict gate in `runner-driven.ts`.
+      if (nextValue) {
+        process.env.KODAX_STALL_LOG = '1';
+      } else {
+        delete process.env.KODAX_STALL_LOG;
+      }
+
+      const persistence = persistUserConfig({ stallLog: nextValue });
+      printPersistedCommandStatus(
+        `Stall Sidecar log: ${nextValue ? 'on' : 'off'}`,
+        persistence,
+      );
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/stall-log - Stall Sidecar Log Toggle\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /stall-log           ') + 'Show current state');
+      console.log(chalk.dim('  /stall-log on        ') + 'Enable + persist to config');
+      console.log(chalk.dim('  /stall-log off       ') + 'Disable + persist to config');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  The Stall Sidecar (FEATURE_178) is the L2 anti-loop LLM judge that'));
+      console.log(chalk.dim('  fires when the L1 rule-based detector spots a repeat-tool pattern.'));
+      console.log(chalk.dim('  Off by default (silent happy path). When on, every L2 verdict emits'));
+      console.log(chalk.dim('  a one-line summary:'));
+      console.log(chalk.dim('    [Stall Sidecar] isStuck=true · zhipu/glm-5.1 (inherit) · 1842ms · sidecar_ok'));
+      console.log();
+      console.log(chalk.bold('Equivalent env var:'));
+      console.log(chalk.dim('  KODAX_STALL_LOG=1   ') + 'Same effect, env wins over config');
+      console.log();
+    },
+  },
   copyCommand,
   memoryCommand,
   newCommand,

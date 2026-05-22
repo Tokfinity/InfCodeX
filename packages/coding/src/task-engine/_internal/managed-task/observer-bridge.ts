@@ -554,6 +554,23 @@ export function buildObserverBridge(
         persistToHistory: true,
       });
     },
+    stallSidecarFired: (info) => {
+      // FEATURE_187 Phase C (v0.7.43) — opt-in stall sidecar
+      // observability. Gated upstream by `KODAX_STALL_LOG=1` (check
+      // happens inside the stall-sidecar middleware factory's
+      // `onVerdict` callback because stall verdicts arrive async; the
+      // factory is the synchronous moment when the env check runs).
+      // Same shape strategy as `sidecarFinished`: `phase: 'worker'`,
+      // `persistToHistory: true`, single user-visible note line.
+      if (!events?.onManagedTaskStatus) return;
+      const sourceTag = info.source === 'explicit-env' ? 'env' : 'inherit';
+      const modelLabel = info.model ?? '(default)';
+      emit({
+        phase: 'worker',
+        note: `[Stall Sidecar] isStuck=${info.isStuck} · ${info.providerName}/${modelLabel} (${sourceTag}) · ${info.elapsedMs}ms · ${info.trace}`,
+        persistToHistory: true,
+      });
+    },
   };
 }
 
@@ -572,4 +589,5 @@ export const NULL_OBSERVER: ObserverBridge = {
   agentSwitched: () => undefined,
   sidecarStarted: () => undefined,
   sidecarFinished: () => undefined,
+  stallSidecarFired: () => undefined,
 };
