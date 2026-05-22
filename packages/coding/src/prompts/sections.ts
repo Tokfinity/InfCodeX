@@ -177,6 +177,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 100,
     stability: 'project',
   },
+  'project-memory': {
+    id: 'project-memory',
+    title: 'Persistent Memory Index',
+    owner: 'project',
+    feature: 'FEATURE_124',
+    slot: 'project-rules',
+    order: 200,
+    stability: 'project',
+  },
   'skills-addendum': {
     id: 'skills-addendum',
     title: 'Skills Addendum',

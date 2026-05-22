@@ -53,6 +53,7 @@ import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import type { KodaXOptions } from '../types.js';
 
+import { buildMemorySection } from './memory-section.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
 import { SYSTEM_PROMPT } from './system.js';
 import {
@@ -200,6 +201,22 @@ export async function buildCapabilityContextSections(
       ),
     );
   }
+
+  // FEATURE_124 (v0.7.43) Phase B — `project-memory` section.
+  // MEMORY.md index injected after AGENTS.md (user-managed rules) and
+  // before skills-addendum so the LLM-managed persistent layer sits
+  // between the two static instruction sources. Phase C will insert
+  // `memory-rules` (LLM teaching text) immediately before this section.
+  // Section is ALWAYS emitted — fallback "currently empty" text tells
+  // the LLM the subsystem is active even when no entries exist yet.
+  const memory = buildMemorySection(executionCwd);
+  sections.push(
+    createPromptSection(
+      'project-memory',
+      memory.content,
+      'Inject the per-project MEMORY.md index so the agent has cross-session recall without re-asking the user for previously-given context.',
+    ),
+  );
 
   if (options.context?.skillsPrompt?.trim()) {
     sections.push(
