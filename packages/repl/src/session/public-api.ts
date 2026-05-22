@@ -74,8 +74,14 @@ export interface SessionManager {
 
 // ── Shared storage instance (lazy) ───────────────────────────────────────────
 
-function getStorage(): FileSessionStorage {
-  return new FileSessionStorage();
+function getStorage(sessionsDir?: string): FileSessionStorage {
+  return sessionsDir !== undefined
+    ? new FileSessionStorage({ sessionsDir })
+    : new FileSessionStorage();
+}
+
+function resolveSessionsDir(override?: string): string {
+  return override ?? KODAX_SESSIONS_DIR;
 }
 
 // ── listSessions ─────────────────────────────────────────────────────────────
@@ -85,17 +91,25 @@ function getStorage(): FileSessionStorage {
  * NEVER throws. Returns [] when the sessions directory is empty or missing.
  */
 export async function listSessions(opts?: ListSessionsOptions): Promise<SessionSummary[]> {
+  return listSessionsImpl(opts, undefined);
+}
+
+async function listSessionsImpl(
+  opts: ListSessionsOptions | undefined,
+  sessionsDirOverride: string | undefined,
+): Promise<SessionSummary[]> {
   try {
+    const sessionsDir = resolveSessionsDir(sessionsDirOverride);
     // FileSessionStorage.list() accepts an optional gitRoot to scope to the
     // current workspace. Map projectRoot alias to gitRoot.
     const gitRoot = opts?.projectRoot;
-    const storage = getStorage();
+    const storage = getStorage(sessionsDirOverride);
 
     // Read all .jsonl files directly so we can lift the hard-cap of 10 that
     // FileSessionStorage.list() applies, and support scope='all' / 'managed-task-worker'.
     // We replicate the core listing logic here to get createdAt + runtimeInfo
     // without re-reading files.
-    await fsPromises.mkdir(KODAX_SESSIONS_DIR, { recursive: true });
+    await fsPromises.mkdir(sessionsDir, { recursive: true });
     const scope = opts?.scope ?? 'user';
     const includeArchived = opts?.includeArchived ?? false;
     const limit = opts?.limit ?? 50;
@@ -109,7 +123,7 @@ export async function listSessions(opts?: ListSessionsOptions): Promise<SessionS
     }
 
     // Slow path: read the sessions directory ourselves for scope / before filtering.
-    const files = (await fsPromises.readdir(KODAX_SESSIONS_DIR))
+    const files = (await fsPromises.readdir(sessionsDir))
       .filter((f) => f.endsWith('.jsonl') && (includeArchived || !f.startsWith('archived-')));
 
     const sessions: Array<SessionSummary & { _createdAtMs?: number }> = [];
@@ -117,7 +131,7 @@ export async function listSessions(opts?: ListSessionsOptions): Promise<SessionS
     for (const file of files) {
       try {
         const content = (
-          await fsPromises.readFile(path.join(KODAX_SESSIONS_DIR, file), 'utf-8')
+          await fsPromises.readFile(path.join(sessionsDir, file), 'utf-8')
         ).trim();
         const firstLine = content.split('\n')[0];
         if (!firstLine) continue;
@@ -234,8 +248,15 @@ function toSessionSummary(raw: {
  * Returns null for a missing session. NEVER throws.
  */
 export async function loadSession(id: string): Promise<SessionData | null> {
+  return loadSessionImpl(id, undefined);
+}
+
+async function loadSessionImpl(
+  id: string,
+  sessionsDirOverride: string | undefined,
+): Promise<SessionData | null> {
   try {
-    return await getStorage().load(id);
+    return await getStorage(sessionsDirOverride).load(id);
   } catch {
     return null;
   }
@@ -251,8 +272,16 @@ export async function forkSession(
   id: string,
   opts?: { selector?: string; sessionId?: string; title?: string },
 ): Promise<{ sessionId: string; data: SessionData } | null> {
+  return forkSessionImpl(id, opts, undefined);
+}
+
+async function forkSessionImpl(
+  id: string,
+  opts: { selector?: string; sessionId?: string; title?: string } | undefined,
+  sessionsDirOverride: string | undefined,
+): Promise<{ sessionId: string; data: SessionData } | null> {
   try {
-    return await getStorage().fork(id, opts?.selector, {
+    return await getStorage(sessionsDirOverride).fork(id, opts?.selector, {
       sessionId: opts?.sessionId,
       title: opts?.title,
     });
@@ -271,8 +300,16 @@ export async function rewindSession(
   id: string,
   opts?: { selector?: string },
 ): Promise<SessionData | null> {
+  return rewindSessionImpl(id, opts, undefined);
+}
+
+async function rewindSessionImpl(
+  id: string,
+  opts: { selector?: string } | undefined,
+  sessionsDirOverride: string | undefined,
+): Promise<SessionData | null> {
   try {
-    return await getStorage().rewind(id, opts?.selector);
+    return await getStorage(sessionsDirOverride).rewind(id, opts?.selector);
   } catch {
     return null;
   }
@@ -288,8 +325,16 @@ export async function setActiveEntry(
   id: string,
   selector: string,
 ): Promise<SessionData | null> {
+  return setActiveEntryImpl(id, selector, undefined);
+}
+
+async function setActiveEntryImpl(
+  id: string,
+  selector: string,
+  sessionsDirOverride: string | undefined,
+): Promise<SessionData | null> {
   try {
-    return await getStorage().setActiveEntry(id, selector);
+    return await getStorage(sessionsDirOverride).setActiveEntry(id, selector);
   } catch {
     return null;
   }
@@ -302,10 +347,11 @@ export interface RunningSessionInfo {
   readonly startedAt: number;
   readonly cwd: string;
   /**
-   * Reserved — FEATURE_125 heartbeat schema does not yet carry sessionId.
-   * Will be populated in a future version once the state writer includes it.
-   * Consumers MUST treat undefined as valid; do not assume a running session
-   * always has a sessionId.
+   * v0.7.43 — populated from `PersistedSessionState.sessionId`, published
+   * by the REPL after `createInteractiveContext`. Remains `undefined` for
+   * a brief window during a peer's bootstrap (before the first sessionId
+   * is generated) and for peers running pre-v0.7.43 binaries; consumers
+   * MUST handle `undefined`.
    */
   readonly sessionId: string | undefined;
 }
@@ -322,8 +368,7 @@ export async function listRunningSessions(): Promise<RunningSessionInfo[]> {
       pid: inst.pid,
       startedAt: inst.state.meta.startedAt,
       cwd: inst.state.meta.cwd,
-      // sessionId not yet in the state schema — reserved for v0.7.43+.
-      sessionId: undefined,
+      sessionId: inst.state.sessionId,
     }));
   } catch {
     return [];
@@ -343,6 +388,13 @@ export type DeleteSessionResult =
  * NEVER throws.
  */
 export async function deleteSession(id: string): Promise<DeleteSessionResult> {
+  return deleteSessionImpl(id, undefined);
+}
+
+async function deleteSessionImpl(
+  id: string,
+  sessionsDirOverride: string | undefined,
+): Promise<DeleteSessionResult> {
   try {
     const running = await listRunningSessions();
     const match = running.find((r) => r.sessionId === id);
@@ -354,7 +406,7 @@ export async function deleteSession(id: string): Promise<DeleteSessionResult> {
         },
       };
     }
-    await getStorage().delete(id);
+    await getStorage(sessionsDirOverride).delete(id);
     return { ok: true };
   } catch {
     return { ok: true };
@@ -375,10 +427,18 @@ export async function deleteSession(id: string): Promise<DeleteSessionResult> {
  * until the directory is created.
  */
 export function watchSessions(cb: WatchSessionsCallback): { close: () => void } {
+  return watchSessionsImpl(cb, undefined);
+}
+
+function watchSessionsImpl(
+  cb: WatchSessionsCallback,
+  sessionsDirOverride: string | undefined,
+): { close: () => void } {
+  const sessionsDir = resolveSessionsDir(sessionsDirOverride);
   if (process.platform === 'win32') {
-    return watchSessionsWindows(cb);
+    return watchSessionsWindows(cb, sessionsDir);
   }
-  return watchSessionsPosix(cb);
+  return watchSessionsPosix(cb, sessionsDir);
 }
 
 function sessionIdFromFilename(filename: string): string | null {
@@ -386,7 +446,10 @@ function sessionIdFromFilename(filename: string): string | null {
   return filename.slice(0, -6); // strip ".jsonl"
 }
 
-function watchSessionsPosix(cb: WatchSessionsCallback): { close: () => void } {
+function watchSessionsPosix(
+  cb: WatchSessionsCallback,
+  sessionsDir: string,
+): { close: () => void } {
   let watcher: fs.FSWatcher | null = null;
   let closed = false;
 
@@ -405,16 +468,16 @@ function watchSessionsPosix(cb: WatchSessionsCallback): { close: () => void } {
   function startWatch(): void {
     if (closed) return;
     try {
-      if (!fs.existsSync(KODAX_SESSIONS_DIR)) {
+      if (!fs.existsSync(sessionsDir)) {
         // Directory not yet created — retry after 1s.
         setTimeout(startWatch, 1000);
         return;
       }
-      watcher = fs.watch(KODAX_SESSIONS_DIR, (eventType, filename) => {
+      watcher = fs.watch(sessionsDir, (eventType, filename) => {
         if (!filename) return;
         const sessionId = sessionIdFromFilename(filename);
         if (!sessionId) return;
-        const kind = eventType === 'rename' ? detectRenameKind(filename) : 'change';
+        const kind = eventType === 'rename' ? detectRenameKind(sessionsDir, filename) : 'change';
         emitDebounced(kind, sessionId);
       });
       watcher.on('error', () => {
@@ -441,26 +504,29 @@ function watchSessionsPosix(cb: WatchSessionsCallback): { close: () => void } {
   };
 }
 
-function detectRenameKind(filename: string): 'add' | 'remove' {
+function detectRenameKind(sessionsDir: string, filename: string): 'add' | 'remove' {
   // On POSIX 'rename' fires for both add and remove; check existence.
   try {
-    fs.statSync(path.join(KODAX_SESSIONS_DIR, filename));
+    fs.statSync(path.join(sessionsDir, filename));
     return 'add';
   } catch {
     return 'remove';
   }
 }
 
-function watchSessionsWindows(cb: WatchSessionsCallback): { close: () => void } {
+function watchSessionsWindows(
+  cb: WatchSessionsCallback,
+  sessionsDir: string,
+): { close: () => void } {
   let closed = false;
   let lastSnapshot = new Set<string>();
 
   function buildSnapshot(): Set<string> {
     try {
-      if (!fs.existsSync(KODAX_SESSIONS_DIR)) return new Set();
+      if (!fs.existsSync(sessionsDir)) return new Set();
       return new Set(
         fs
-          .readdirSync(KODAX_SESSIONS_DIR)
+          .readdirSync(sessionsDir)
           .filter((f) => f.endsWith('.jsonl'))
           .map((f) => f.slice(0, -6)),
       );
@@ -497,24 +563,34 @@ function watchSessionsWindows(cb: WatchSessionsCallback): { close: () => void } 
 /**
  * Factory that returns an object with all session management methods bound.
  *
- * The `sessionsDir` option is accepted for API surface completeness but is
- * ignored in v0.7.42 — FileSessionStorage reads KODAX_SESSIONS_DIR frozen at
- * module-load time. A per-instance directory override requires a substrate-
- * level `setAgentConfigHome()` call before import. The sessionsDir parameter
- * will be wired in a future version (v0.7.43 follow-up).
+ * v0.7.43 (FEATURE_173 Part B follow-up) — the `sessionsDir` override is
+ * now honored. When provided, all read/write/watch operations go through
+ * that directory instead of the module-load-frozen `KODAX_SESSIONS_DIR`.
+ * `listRunningSessions` still consults the agent-config-home instances
+ * directory (sibling-process awareness is not scoped per sessions dir).
  */
 export function createSessionManager(opts?: { sessionsDir?: string }): SessionManager {
-  // opts.sessionsDir intentionally unused in v0.7.42 — see JSDoc above.
-  void opts;
-
+  const sessionsDir = opts?.sessionsDir;
+  if (sessionsDir === undefined) {
+    return {
+      listSessions,
+      loadSession,
+      forkSession,
+      rewindSession,
+      setActiveEntry,
+      deleteSession,
+      listRunningSessions,
+      watchSessions,
+    };
+  }
   return {
-    listSessions,
-    loadSession,
-    forkSession,
-    rewindSession,
-    setActiveEntry,
-    deleteSession,
+    listSessions: (o) => listSessionsImpl(o, sessionsDir),
+    loadSession: (id) => loadSessionImpl(id, sessionsDir),
+    forkSession: (id, o) => forkSessionImpl(id, o, sessionsDir),
+    rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir),
+    setActiveEntry: (id, selector) => setActiveEntryImpl(id, selector, sessionsDir),
+    deleteSession: (id) => deleteSessionImpl(id, sessionsDir),
     listRunningSessions,
-    watchSessions,
+    watchSessions: (cb) => watchSessionsImpl(cb, sessionsDir),
   };
 }

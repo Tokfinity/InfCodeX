@@ -408,6 +408,11 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     runtimeInfo: startupRuntime,
   });
 
+  // v0.7.43 (FEATURE_173 Part B follow-up) — publish the resolved
+  // sessionId to the FEATURE_125 heartbeat so `listRunningSessions()`
+  // can correlate a running instance with its `.jsonl` file.
+  teamModeHandle?.writer.update({ sessionId: context.sessionId });
+
   const guardSessionTransition = (action: string): boolean => {
     return enforceSessionTransitionGuard(currentConfig, action, (status, headline, details) => {
       console.log((status === 'block' ? chalk.red : chalk.yellow)(`\n${headline}`));
@@ -659,6 +664,7 @@ Keyboard Shortcuts:
         sessionId: context.sessionId,
         messageCount: 0,
       });
+      teamModeHandle?.writer.update({ sessionId: context.sessionId });
     },
     loadSession: async (id: string) => {
       const loaded = await storage.load(id);
@@ -699,6 +705,7 @@ Keyboard Shortcuts:
           sessionId: id,
           messageCount: loaded.messages.length,
         });
+        teamModeHandle?.writer.update({ sessionId: id });
         console.log(chalk.green(`\n[Loaded session: ${id}]`));
         console.log(chalk.dim(`  Messages: ${loaded.messages.length}`));
         if (context.runtimeInfo?.workspaceRoot) {

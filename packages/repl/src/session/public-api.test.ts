@@ -285,4 +285,62 @@ describe('Session Management Public SDK', () => {
       expect('sessionId' in sessions[0]).toBe(true);
     }
   });
+
+  // ── Test 13: v0.7.43 — createSessionManager({sessionsDir}) honors override ──
+  it('createSessionManager({sessionsDir}) routes reads + writes through the override', async () => {
+    // Two isolated directories — the override must NOT see entries from the
+    // default sessions dir.
+    const overrideDir = path.join(tempHome, 'isolated-sessions');
+    await mkdir(overrideDir, { recursive: true });
+    await writeMinimalSession(overrideDir, 'iso-001', { title: 'Isolated' });
+    await writeMinimalSession(sessionsDir, 'default-001', { title: 'Default' });
+
+    const overrideMgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      listSessions: (opts?: { scope?: string }) => Promise<Array<{ id: string }>>;
+    };
+    const defaultMgr = api.createSessionManager() as {
+      listSessions: (opts?: { scope?: string }) => Promise<Array<{ id: string }>>;
+    };
+
+    const overrideList = await overrideMgr.listSessions({ scope: 'all' });
+    const defaultList = await defaultMgr.listSessions({ scope: 'all' });
+
+    expect(overrideList.map((s) => s.id)).toContain('iso-001');
+    expect(overrideList.map((s) => s.id)).not.toContain('default-001');
+    expect(defaultList.map((s) => s.id)).toContain('default-001');
+    expect(defaultList.map((s) => s.id)).not.toContain('iso-001');
+  });
+
+  // ── Test 14: v0.7.43 — listRunningSessions surfaces sessionId from heartbeat ──
+  it('listRunningSessions().sessionId is sourced from PersistedSessionState.sessionId', async () => {
+    // Plant a fake live instance directory under <agentConfigHome>/instances/<pid>/
+    // with sessionId in its state.json. discoverInstances reads
+    // getAgentConfigPath('instances') which resolves under HOME/.kodax.
+    const peerPid = 4242;
+    const instanceDir = path.join(tempHome, '.kodax', 'instances', String(peerPid));
+    await mkdir(instanceDir, { recursive: true });
+    const now = Date.now();
+    fs.writeFileSync(path.join(instanceDir, 'heartbeat'), '');
+    fs.utimesSync(path.join(instanceDir, 'heartbeat'), now / 1000, now / 1000);
+    await writeFile(
+      path.join(instanceDir, 'meta.json'),
+      JSON.stringify({ cwd: '/tmp/peer-repo', startedAt: now - 5000 }),
+    );
+    await writeFile(
+      path.join(instanceDir, 'state.json'),
+      JSON.stringify({
+        version: '1',
+        pid: peerPid,
+        updatedAt: now,
+        meta: { cwd: '/tmp/peer-repo', startedAt: now - 5000 },
+        agentPhase: 'idle',
+        sessionId: '20260522_113000',
+      }),
+    );
+
+    const running = await api.listRunningSessions();
+    const peer = running.find((r) => r.pid === peerPid);
+    expect(peer).toBeDefined();
+    expect(peer?.sessionId).toBe('20260522_113000');
+  });
 });

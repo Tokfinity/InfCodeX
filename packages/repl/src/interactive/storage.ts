@@ -33,11 +33,14 @@ import {
 } from '@kodax-ai/coding';
 import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-storage.js';
 // `KODAX_SESSIONS_DIR` is a module-load-time-frozen constant (see
-// `../common/utils.ts` JSDoc — v0.7.35.1 FEATURE_145). All session I/O
-// in this module reads it directly. If a substrate consumer wants
-// session storage redirected, they MUST call `setAgentConfigHome()`
-// from `@kodax-ai/agent` BEFORE importing `@kodax-ai/repl`. Late calls will
-// silently write sessions to the original (default) path.
+// `../common/utils.ts` JSDoc — v0.7.35.1 FEATURE_145). It is the default
+// used when `FileSessionStorage` is constructed without an explicit
+// `sessionsDir` override (v0.7.43 FEATURE_173 Part B follow-up).
+// Substrate consumers that need the agent-config-home redirected via
+// `setAgentConfigHome()` from `@kodax-ai/agent` MUST still call it
+// BEFORE importing `@kodax-ai/repl`. SDK consumers that want a
+// per-instance override should pass `{ sessionsDir }` to
+// `createSessionManager()` instead.
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
 import {
@@ -424,6 +427,18 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
 }
 
 export class FileSessionStorage implements KodaXSessionStorage {
+  // v0.7.43 (FEATURE_173 Part B follow-up) — optional per-instance
+  // override of the sessions directory. Defaults to the
+  // module-load-time-frozen KODAX_SESSIONS_DIR so existing single-process
+  // callers see no behavior change. Constructed by `createSessionManager`
+  // to let SDK consumers point at an isolated sessions root without
+  // mutating the agent-config-home singleton.
+  private readonly sessionsDir: string;
+
+  constructor(opts?: { sessionsDir?: string }) {
+    this.sessionsDir = opts?.sessionsDir ?? KODAX_SESSIONS_DIR;
+  }
+
   // ── Session-level write serialization ──
   // All writes (append / cold save / maintenance) for the same session are
   // serialized through a per-session promise chain.  State reads, delta
@@ -461,11 +476,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   private getSessionFilePath(id: string): string {
-    return path.join(KODAX_SESSIONS_DIR, `${id}.jsonl`);
+    return path.join(this.sessionsDir, `${id}.jsonl`);
   }
 
   private getArchiveFilePath(id: string): string {
-    return path.join(KODAX_SESSIONS_DIR, `${id}.archive.jsonl`);
+    return path.join(this.sessionsDir, `${id}.archive.jsonl`);
   }
 
   private async readSession(id: string): Promise<ResolvedSessionSnapshot | null> {
@@ -487,7 +502,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     data: SessionData,
     createdAt?: string,
   ): Promise<void> {
-    await fs.mkdir(KODAX_SESSIONS_DIR, { recursive: true });
+    await fs.mkdir(this.sessionsDir, { recursive: true });
 
     const targetPath = this.getSessionFilePath(id);
     const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
@@ -874,12 +889,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     msgCount: number;
     runtimeInfo?: KodaXSessionRuntimeInfo;
   }>> {
-    await fs.mkdir(KODAX_SESSIONS_DIR, { recursive: true });
+    await fs.mkdir(this.sessionsDir, { recursive: true });
     const currentGitRoot = gitRoot ?? await getGitRoot();
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? process.cwd(),
     });
-    const files = (await fs.readdir(KODAX_SESSIONS_DIR)).filter((file) => file.endsWith('.jsonl'));
+    const files = (await fs.readdir(this.sessionsDir)).filter((file) => file.endsWith('.jsonl'));
     const sessions: Array<{
       id: string;
       title: string;
@@ -890,7 +905,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
     for (const file of files) {
       try {
-        const content = (await fs.readFile(path.join(KODAX_SESSIONS_DIR, file), 'utf-8')).trim();
+        const content = (await fs.readFile(path.join(this.sessionsDir, file), 'utf-8')).trim();
         const firstLine = content.split('\n')[0];
         if (!firstLine) {
           continue;

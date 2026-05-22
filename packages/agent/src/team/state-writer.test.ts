@@ -258,6 +258,25 @@ describe('createStateWriter — update()', () => {
     });
   });
 
+  // v0.7.43 (FEATURE_173 Part B follow-up) — sessionId roundtrip.
+  it('carries sessionId through to state.json (v0.7.43 FEATURE_173 follow-up)', () => {
+    const writer = createStateWriter({
+      pid: 999,
+      meta: baseMeta,
+      initialState: baseState,
+      clock,
+      fs,
+      instancesRoot: INSTANCES_ROOT,
+    });
+    // Initial state has no sessionId — field must be omitted entirely from disk.
+    const initial = findStateFile(fs);
+    expect('sessionId' in initial.parsed).toBe(false);
+
+    writer.update({ sessionId: '20260522_113000' });
+    const afterUpdate = findStateFile(fs);
+    expect(afterUpdate.parsed.sessionId).toBe('20260522_113000');
+  });
+
   it('swallows fs failures so a transient write error does not crash the agent loop', () => {
     // Registration must succeed (meta/state/heartbeat write through). Swap in a
     // failing atomicWriteSync for the post-registration phase to simulate a

@@ -369,6 +369,70 @@ describe('discoverInstances — corruption resilience', () => {
     expect(result.map((i) => i.pid)).toEqual([100]);
   });
 
+  // v0.7.43 (FEATURE_173 Part B follow-up) — sessionId on state.json must
+  // surface through discovery; pre-v0.7.43 writers omit the field and
+  // must still pass the type guard.
+  it('exposes sessionId on the discovered state when present, undefined otherwise', () => {
+    const fs = new FakeFs();
+    fs.addInstance(100, {
+      heartbeatMtimeMs: NOW - 1000,
+      stateJson: JSON.stringify({
+        version: '1',
+        pid: 100,
+        updatedAt: NOW,
+        meta: { cwd: '/users/test/repo', startedAt: NOW - 5000 },
+        agentPhase: 'idle',
+        sessionId: '20260522_113000',
+      }),
+    });
+    fs.addInstance(200, {
+      heartbeatMtimeMs: NOW - 1000,
+      stateJson: JSON.stringify({
+        version: '1',
+        pid: 200,
+        updatedAt: NOW,
+        meta: { cwd: '/users/test/repo', startedAt: NOW - 5000 },
+        agentPhase: 'idle',
+        // sessionId omitted — pre-v0.7.43 writer shape.
+      }),
+    });
+
+    const result = discoverInstances({
+      instancesRoot: INSTANCES_ROOT,
+      fs,
+      clock: () => NOW,
+      excludePid: 999,
+    });
+
+    const byPid = new Map(result.map((i) => [i.pid, i] as const));
+    expect(byPid.get(100)?.state.sessionId).toBe('20260522_113000');
+    expect(byPid.get(200)?.state.sessionId).toBeUndefined();
+  });
+
+  it('rejects state.json whose sessionId is the wrong type', () => {
+    const fs = new FakeFs();
+    fs.addInstance(100, {
+      heartbeatMtimeMs: NOW - 1000,
+      stateJson: JSON.stringify({
+        version: '1',
+        pid: 100,
+        updatedAt: NOW,
+        meta: { cwd: '/users/test/repo', startedAt: NOW - 5000 },
+        agentPhase: 'idle',
+        sessionId: 123, // wrong type
+      }),
+    });
+
+    const result = discoverInstances({
+      instancesRoot: INSTANCES_ROOT,
+      fs,
+      clock: () => NOW,
+      excludePid: 999,
+    });
+
+    expect(result).toEqual([]);
+  });
+
   it('skips instances whose state.json read fails mid-scan (peer mid-write)', () => {
     const fs = new FakeFs();
     fs.addInstance(100, { heartbeatMtimeMs: NOW - 1000 });

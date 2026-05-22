@@ -240,6 +240,8 @@ function isPersistedV1(value: unknown): value is PersistedSessionState {
   const meta = obj.meta as Record<string, unknown>;
   if (typeof meta.cwd !== 'string') return false;
   if (typeof meta.startedAt !== 'number') return false;
+  // v0.7.43 — sessionId is optional. Reject only on wrong type, not on absence.
+  if (obj.sessionId !== undefined && typeof obj.sessionId !== 'string') return false;
   return true;
 }
 

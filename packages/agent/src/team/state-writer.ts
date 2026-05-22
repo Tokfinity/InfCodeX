@@ -61,6 +61,15 @@ export interface SessionStateSnapshot {
    * working on: <X>" without owning the todo store.
    */
   readonly currentTodoSummary?: CurrentTodoSummary;
+  /**
+   * v0.7.43 (FEATURE_173 Part B follow-up) — REPL session id
+   * (e.g. `YYYYMMDD_HHMMSS`). Lets `listRunningSessions()` correlate
+   * a sibling instance with its `.jsonl` file. Mutable: starts
+   * undefined during bootstrap, set after `createInteractiveContext`,
+   * re-published on `/new`. Older writers omit this; readers MUST
+   * treat as optional.
+   */
+  readonly sessionId?: string;
 }
 
 export interface RecentlyModifiedFile {
@@ -211,6 +220,7 @@ export function createStateWriter(options: StateWriterOptions): StateWriter {
       ...(state.currentTodoSummary !== undefined
         ? { currentTodoSummary: { ...state.currentTodoSummary } }
         : {}),
+      ...(state.sessionId !== undefined ? { sessionId: state.sessionId } : {}),
     };
     fs.atomicWriteSync(statePath(), JSON.stringify(persisted, null, 2));
   }

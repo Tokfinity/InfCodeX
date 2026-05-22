@@ -425,6 +425,14 @@ interface InkREPLProps {
    * readline REPL).
    */
   onAgentsFilesReload: (files: AgentsFile[]) => void;
+  /**
+   * v0.7.43 (FEATURE_173 Part B follow-up): the Team Mode handle bootstrapped
+   * in `runInkInteractiveMode`. Threaded into the component so `/new`,
+   * `/resume`, and `/fork` slash command handlers can republish the resolved
+   * sessionId onto the FEATURE_125 heartbeat. `null` when team mode is
+   * disabled (`KODAX_DISABLE_MULTI_INSTANCE=1`).
+   */
+  teamModeHandle: TeamModeHandle | null;
 }
 
 // Banner Props
@@ -1441,6 +1449,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   setAutoModeEngineChange,
   setCurrentConfigRef,
   onAgentsFilesReload,
+  teamModeHandle,
 }) => {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -7253,6 +7262,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // fresh session. Input history (↑↓) is handled separately.
             getActivePasteStore()?.reset();
             setSessionId(nextSessionId);
+            teamModeHandle?.writer.update({ sessionId: nextSessionId });
           },
           loadSession: async (id: string) => {
             const loaded = await storage.load(id);
@@ -7280,6 +7290,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               // does not carry over runtime todoStore state.
               setTodoItems([]);
               setSessionId(id);
+              teamModeHandle?.writer.update({ sessionId: id });
               console.log(chalk.green(`[Session loaded: ${id}]`));
               return "loaded";
             }
@@ -7503,6 +7514,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             // the new fork starts a fresh task tree.
             setTodoItems([]);
             setSessionId(forked.sessionId);
+            teamModeHandle?.writer.update({ sessionId: forked.sessionId });
             console.log(chalk.green(`\n[Forked session: ${forked.sessionId}]`));
             console.log(chalk.dim(`  Messages: ${forked.data.messages.length}`));
             return "forked";
@@ -8613,6 +8625,11 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
   });
   context.title = sessionTitle;
 
+  // v0.7.43 (FEATURE_173 Part B follow-up) — publish the resolved
+  // sessionId to the FEATURE_125 heartbeat so `listRunningSessions()`
+  // can correlate a running instance with its `.jsonl` file.
+  teamModeHandle?.writer.update({ sessionId: context.sessionId });
+
   // FEATURE_092 phase 2b.7b: bootstrap the auto-mode guardrail factory before
   // render so the Ink component receives a ready-to-use accessor. Agents files
   // are loaded once here and exposed via a mutable ref so /reload-agents
@@ -8745,6 +8762,7 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         onAgentsFilesReload={(files) => {
           agentsFilesRef.current = files;
         }}
+        teamModeHandle={teamModeHandle}
         onExit={() => {
           exitMessageRequested = true;
         }}
