@@ -1581,7 +1581,7 @@ Phase A 独立可 ship（claudecode-style infra in agent 层，零行为变化�
 - **ADR-029**（Compaction trigger top-of-loop）：无冲突。compactionHook 和 stopHook 并列在 `RunOptions`，触发时机正交（top-of-loop vs end-of-turn）。
 - **FEATURE_114**（AMA Harness V2 Worker+Evaluator）：v0.7.36 把 Evaluator 保留为 structural gate；本 ADR 是该决策的反转 — FEATURE_114 当时的论据是 "Evaluator stays a separate structural gate even in V2"，但 v0.7.42 zhipu 数据证明 role-form 的 gate 不可靠，sidecar-form 用 model-decoupling 才能让 gate 真实有效。
 - **FEATURE_165/166/167**：本 ADR 落地后这三个 feature 的代码全部 die（handoff gate / label flip / terminal-verdict fallback）。三者的测试套保留转化为 "Sidecar Verifier 接管之后的等价行为" 回归测试。
-- **FEATURE_178 stall sidecar**：当前硬接在 [`runner-driven.ts:651`](../../packages/coding/src/task-engine/runner-driven.ts) 通过 `RunnerToolObserver`。FEATURE_187（v0.7.46+，optional follow-up）可把 stall sidecar 也迁到 agent 层 `onToolCall` hook，统一 sidecar 接入面。本 ADR 不强制做 stall 迁移 — F178 当前位置不违反任何 ADR。
+- **FEATURE_178 stall sidecar**：当前硬接在 [`runner-driven.ts:651`](../../packages/coding/src/task-engine/runner-driven.ts) 通过 `RunnerToolObserver`。**FEATURE_187（planned v0.7.43）** 把 stall sidecar 迁到 `agent-runtime/middleware/stall-sidecar/`、跟 FEATURE_184 verifier 同形（factory + env override + opt-in log），统一 sidecar 接入面。Placeholder 原写 "v0.7.46+, optional"，2026-05-22 promote 到 v0.7.43 — byte-identity prompt 锁兜底 $0 eval、~1-2 工作日。详见 [FEATURE_LIST](../FEATURE_LIST.md) §FEATURE_187 + [v0.7.43.md](../features/v0.7.43.md#feature_187-stall-sidecar-middleware-unification)。
 
 ### 用户可见影响
 
