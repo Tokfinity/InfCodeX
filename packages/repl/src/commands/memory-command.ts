@@ -61,7 +61,15 @@ function readTopicFiles(memoryDir: string): TopicFile[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(memoryDir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    // ENOENT = "memory dir not created yet" — expected when the LLM
+    // has never written a memory. Surface any other failure (EPERM,
+    // ENOTDIR, etc.) so the user notices filesystem problems instead
+    // of seeing a silent "0 topic files" — per project rule "NEVER
+    // silently swallow errors" (CLAUDE.md).
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.error(`[memory] failed to read memory directory ${memoryDir}:`, err);
+    }
     return [];
   }
 
@@ -76,7 +84,12 @@ function readTopicFiles(memoryDir: string): TopicFile[] {
     try {
       raw = fs.readFileSync(absPath, 'utf-8');
       mtimeMs = fs.statSync(absPath).mtimeMs;
-    } catch {
+    } catch (err) {
+      // Per-file read errors (TOCTOU with concurrent delete, unusual
+      // permissions, etc.) skip the file but log so the user can spot
+      // it. Do NOT abort the whole scan — a single unreadable file
+      // shouldn't block rebuild of the rest of the index.
+      console.error(`[memory] failed to read ${absPath}:`, err);
       continue;
     }
     const parsed = parseMemoryFile(raw);

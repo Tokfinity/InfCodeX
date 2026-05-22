@@ -275,19 +275,30 @@ const CASES: readonly MemoryCase[] = [
       );
     },
     classify: (toolCalls, memoryDir) => {
-      // Any Write call inside the memory dir that ISN'T the existing
-      // feedback_no_mock_db.md file = FAIL (duplicate creation).
-      const writeCall = toolCalls.find(
-        (c) => c.name === 'Write' && isInsideMemoryDir(readPath(c.input), memoryDir),
-      );
-      if (writeCall) {
-        const target = readPath(writeCall.input);
-        if (target && path.basename(target) !== 'feedback_no_mock_db.md') {
-          return {
-            passed: false,
-            reason: `created duplicate file in memory dir: ${path.basename(target)}`,
-          };
+      // Scan ALL Write calls inside the memory dir — using `.find` on
+      // the first match would order-dependently miss a duplicate Write
+      // that comes AFTER a Write to the seeded file or MEMORY.md (the
+      // model is allowed to update the existing memory + MEMORY.md
+      // index; what we're guarding against is the creation of a NEW
+      // topic file with a different filename).
+      const duplicateWrites: string[] = [];
+      for (const c of toolCalls) {
+        if (c.name !== 'Write') continue;
+        const target = readPath(c.input);
+        if (!isInsideMemoryDir(target, memoryDir)) continue;
+        const base = path.basename(target!);
+        // Acceptable Writes inside memory dir: the existing seeded
+        // file (update) or MEMORY.md (index update). Anything else is
+        // a duplicate-creation FAIL.
+        if (base !== 'feedback_no_mock_db.md' && base !== 'MEMORY.md') {
+          duplicateWrites.push(base);
         }
+      }
+      if (duplicateWrites.length > 0) {
+        return {
+          passed: false,
+          reason: `created duplicate file(s) in memory dir: ${duplicateWrites.join(', ')}`,
+        };
       }
       return { passed: true, reason: 'no duplicate Write' };
     },
