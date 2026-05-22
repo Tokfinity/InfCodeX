@@ -1827,6 +1827,29 @@ Per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedbac
 
 **Rationale**: 版本元数据对 LLM 是噪音（不构成判断依据）+ 容易 prompt cache 碎片化（FEATURE 编号变更会破缓存 prefix）+ 给读者错觉 "这些是有时序依赖的规则"。claudecode 代码注释里写 PR 编号但 prompt body 一个 FEATURE_xxx 都没有。
 
+#### 6. Layered prompt — registry brief identity, in-prompt detailed guidance
+
+❌ KodaX 现状：tool registry `description` 字段塞所有教学（schema + use-case + WHY + 多条 numbered rule + 版本号），单 string 700-1600 字。每次 stream tool catalog 都付一次完整教学的 token 成本；模型 always 看见复杂描述，即使该 turn 不调用该 tool。
+✅ claudecode：tool `DESCRIPTION` 常量 **3-8 字**（"Create a new task in the task list"）+ 详细教学放 `getPrompt()` 函数单独按需注入（80-700 字）。registry 层只承担**身份标识**职责，使用教学是另一个 surface。
+
+**Rationale**: 双层数据测量证据：
+- claudecode `TaskCreateTool/DESCRIPTION` = 6 字 / `getPrompt()` = ~350 字
+- KodaX `todo_create` registry description = ~700 字 / KodaX `todo_update` = ~1600 字
+- Order of magnitude 差 **80-200×** 在 registry surface
+
+这一层不分离的代价：
+- token cost — 每个 turn 模型扫 registry 都付完整教学成本（即使该 turn 不调用 tool）
+- cache fragmentation — registry desc 改一个字就破整 tool catalog 缓存 prefix
+- attention dilution — 模型看到 700-1600 字的 description 时，会把"读完整 description"当成判断 tool relevance 的代理任务，影响真正的 task 推理
+- coupling — schema 改动绑定 prompt 改动，两个独立 concerns 共用一根字符串
+
+**实施方式**：
+- 顶层 `description` 字段：1 句话 identity（"X tool — does Y"）
+- 详细教学：移到 system prompt 或 capability section（按 role gate 注入，不是 always-on）
+- schema field description：保持 schema-level（仅描述字段含义，不教使用 pattern）
+
+**已有先例**：`fanOutPlanGranularity` (worker-role-prompt.ts:210-216, FEATURE_188 + claudecode 3-bullet swap) 是 ADR-033 §1-5 + §6 同时应用的首个 block——既 qualitative 又移除了 registry 层重复描述（教学全在 system prompt 段）。FEATURE_189 Phase B 按此模式扩展到 todo_create / todo_update / dispatch_child_task / 等。
+
 ### Implementation roadmap
 
 **Phase 1 — v0.7.42（本 ADR 同 release window）**：
@@ -1836,8 +1859,17 @@ Per [`feedback_prompt_strengthening_cross_case_regression`](../../memory/feedbac
 
 **Phase 2 — v0.7.43**：
 
-- **Systemic prompt audit ([FEATURE_189](../features/v0.7.43.md#feature_189-systemic-prompt-audit--anti-pattern-hygiene-sweep))** — grep 所有 role prompts（worker / generator / evaluator / planner / scout）找出违反本 ADR 5 条原则的所有 instance。**重点是 ✗ 反模式审查**（per `feedback_prompt_strengthening_cross_case_regression` + claudecode-style panel C4 实测：18-line block 含密集 ✗ → plan-first 0/25 完全失效；3-bullet 无 ✗ → 4/25 plan-first + 5/25 dispatch）。列出 audit report 作为 refactor backlog。
-- **逐 role 重写** — 按 audit 优先级 staged rollout，每个重写带 Layer 2 eval 验证 cross-case 不退化。
+- **Systemic prompt audit ([FEATURE_189](../features/v0.7.43.md#feature_189-systemic-prompt-audit--anti-pattern-hygiene-sweep))** — grep + claudecode 对照 audit 所有 LLM-facing prompt（role prompts / capability sections / tool registry descriptions / classifier prompt / child briefing / protocol emitters）找出违反本 ADR **6 条原则**的所有 instance。**重点是 ✗ 反模式审查 + 工具描述分层**：
+    - ✗ 反模式（§3）：per `feedback_prompt_strengthening_cross_case_regression` + claudecode-style panel C4 实测（18-line block 含密集 ✗ → plan-first 0/25 完全失效；3-bullet 无 ✗ → 4/25 plan-first + 5/25 dispatch）
+    - 工具描述分层（§6）：tool registry `description` 字段从 700-1600 字塞所有教学的现状，重构为 claudecode-shape 的 3-8 字 identity + 详细教学按需注入（todo_create / todo_update / dispatch_child_task 等高频 tool 是首批 target）
+- **逐 block 重写** — 按 audit 优先级 staged rollout，每个 sub-block 一个独立 commit + Layer 2 eval + 3-judge LLM audit + DATA VALID gate。
+- **Audit catalog 量化基线**（2026-05-22 grep 实测，整 prompt 体系内）：
+    - §1 quantitative threshold violations: ~19 instance（worker-role-prompt 5 + registry 7 + 其它）
+    - §2 compound rules: ~6 instance
+    - §3 ✗ 反模式: ~18 total, ~6 缺 WHY because-clause
+    - §4 enumerated taxonomies: ~20+ instance（RULE A/B/C + todo_update (1)-(9) + todo_create (1)-(6) + todo_get (1)-(3) + system.ts 错误处理编号 list）
+    - §5 version metadata in prompt body: ~25 string-literal occurrence
+    - §6 registry description over-stuffed: todo_update 1600 字 / todo_create 700 字 / 等高频 tool（vs claudecode 6 字 + 350 字函数注入）
 
 ### Consequences
 
