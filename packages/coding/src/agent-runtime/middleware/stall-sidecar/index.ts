@@ -148,24 +148,15 @@ export function createStallSidecarToolObserver(
   };
 }
 
-// Re-export the moved types so external consumers (`runner-driven.ts`
-// + tests) can pull everything from a single import path.
-export type {
-  SidecarVerdict,
-  SidecarVerdictTrace,
-  StallSidecarOptions,
-} from './sidecar.js';
-export {
-  ALLOWED_SUGGESTED_TOOLS,
-  invokeStallSidecar,
-} from './sidecar.js';
-export type {
-  StallOrchestrator,
-  StallOrchestratorOptions,
-} from './orchestrator.js';
-export { createStallOrchestrator, TRANSCRIPT_WINDOW } from './orchestrator.js';
-export {
-  REPORT_TOOL,
-  SIDECAR_SYSTEM_PROMPT,
-  buildSidecarUserMessage,
-} from './prompts.js';
+// Minimal public surface — the factory + its option/return types only.
+// `SidecarVerdict` is re-exported because the `onVerdict` callback in
+// `CreateStallSidecarToolObserverOptions` references it, so any caller
+// supplying a typed callback needs the shape. Everything else (raw
+// `invokeStallSidecar`, `createStallOrchestrator`, prompt assets,
+// `TRANSCRIPT_WINDOW`, `ALLOWED_SUGGESTED_TOOLS`, `StallOrchestrator*`
+// types, `StallSidecarOptions`, `SidecarVerdictTrace`) is intentionally
+// NOT re-exported — those are implementation details whose invariants
+// can only be safely honoured through this factory. Tests + future
+// phase wiring import them via direct `./sidecar.js` / `./prompts.js`
+// subpaths when truly needed.
+export type { SidecarVerdict } from './sidecar.js';
