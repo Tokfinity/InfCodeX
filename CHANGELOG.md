@@ -41,7 +41,7 @@ All notable changes to this project will be documented in this file.
 - **`dispatch_child_task` empty-summary fallback + opt-in trace** (commit `8c17dba4`). Child task that exited with empty summary previously fell through `??` to a default banner that read like a real summary; now produces a "no summary returned" diagnostic envelope with `mode=silent-drop` so the parent worker can react. Opt-in trace via env-gated logging.
 - **`dispatch_child_task` review pass — flaky test + minor cleanups** (commit `3b5a862f`). Stabilizes one flaky test in the child-task harness and clears a handful of LOW-severity review items.
 - **Shift-Tab cycle uses canonical `'auto'`** (commit `1b513824` + revert chain `32396db8` → `3637bcec`). Closes the Windows-SSH cursor-misalignment root cause. The follow-up revert `3637bcec` restored the `aliasedCurrent` mapping after `32396db8` was challenged by the user — semantic intent (explicit `auto-in-project ≡ auto`) ≠ behavior equivalence (`indexOf=-1` fallback); the original mapping is load-bearing. See `feedback_behavioral_vs_semantic_equivalence` memory.
-- **FEATURE_172 follow-up: `Output.width` follows terminal viewport** (commits `fabe0b4f` + revert `e62312b3`). Attempted fix for Windows-SSH ghost cells via dynamic viewport width; reverted same cycle after broader regression surfaced. Investigation continues in v0.7.43+ work.
+- **FEATURE_172 `Output.width` viewport-sync attempt** (commits `fabe0b4f` + revert `e62312b3`). Same-cycle revert, retrospectively classified as a **misjudged hypothesis** — no real ghost-cell bug to fix. FEATURE_172 main scope (Phase 1 data layer + Phase A.1 ScreenBuilder) remains CLOSED with no v0.7.43+ follow-up.
 - **REPL queue layout — budget reserves N+1 rows for `QueuedCommandsSurface`** (commit `f4267d4d`). The queue surface was 1 row short of its actual rendered height in tight terminals, causing trailing ellipsis cutoff.
 - **Compaction preserves image blocks + counts image tokens** (commit `92b11e68`). Image blocks were silently dropped during summary roll-up; now preserved verbatim and their estimated tokens included in the total.
 - **REPL drops `[Image #N]` anchor from user-message text** (commit `1eac821d`). Pre-fix the visible user-message text carried both the image block and a redundant `[Image #N]` anchor string; claudecode parity removes the text anchor since the image block itself is the canonical reference.
@@ -355,8 +355,8 @@ Production trace showed Evaluator emitting `emit_verdict` accept before children
 
 ### Known not-in-scope
 
-- **Mid-tool-call prompt injection** (streaming a new user message to the LLM while a tool is still executing) — conflicts with cancel-then-reissue boundaries; deferred to v0.7.43+.
-- **Soft-pause state machine** — FEATURE_111 v0.7.43 scope.
+- **Mid-tool-call prompt injection** (streaming a new user message to the LLM while a tool is still executing) — conflicts with cancel-then-reissue boundaries. **NOT in v0.7.43 scope** (FEATURE_124 + FEATURE_189 占满 release window); blocked on FEATURE_115 stabilization before re-entry. Earliest realistic window: v0.7.46+.
+- **Soft-pause state machine** — FEATURE_111 cancelled, absorbed into FEATURE_115 (per FEATURE_LIST.md row 130). v0.7.43 slot reallocated to FEATURE_124.
 - **Council / multi-advisor consult** — FEATURE_105 v0.7.46 scope.
 - **Read-child cost-stripping** — v1 of FEATURE_117 was abandoned; read children already minimal.
 
