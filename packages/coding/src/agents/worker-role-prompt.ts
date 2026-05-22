@@ -209,7 +209,7 @@ export function buildWorkerInstructions(
 
   const fanOutPlanGranularity = [
     'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38 + v0.7.42 schema split):',
-    '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
+    '- MANDATORY TRIGGER: when you intend to dispatch multiple children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
     '- COUNT-FIRST RULE: before the batch, count the exact number N of `dispatch_child_task` calls you will make. Emit EXACTLY N `todo_create` calls — ONE per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `subject:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
     '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 todo_create calls (emit them in the same response so they batch):',
     '    todo_create({subject:"Audit packages/llm",    activeForm:"Auditing packages/llm"})',

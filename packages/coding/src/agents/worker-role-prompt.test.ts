@@ -151,8 +151,10 @@ describe('buildWorkerInstructions', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('FAN-OUT PLAN GRANULARITY');
     expect(out).toContain('FEATURE_151 Slice I');
-    // Mechanical contract: ≥3 children → ONE todo_create per child's objective.
-    expect(out).toContain('≥3 children');
+    // Mechanical contract: multiple children → ONE todo_create per child's objective.
+    // ADR-033 hygiene follow-up to FEATURE_188: qualitative trigger replaced
+    // quantitative `≥3 children` threshold (v0.7.42, judge-validated no regression).
+    expect(out).toContain('multiple children');
     // v0.7.42 — wording shifted from "ONE item per child" (op:init items
     // array) to "ONE per child" (one todo_create call per child).
     expect(out).toMatch(/ONE (todo_create|item|per) /);
