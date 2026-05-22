@@ -150,6 +150,13 @@ describe('buildSystemPrompt', () => {
         },
         {
           "feature": "FEATURE_124",
+          "id": "memory-rules",
+          "owner": "project",
+          "slot": "project-rules",
+          "stability": "project",
+        },
+        {
+          "feature": "FEATURE_124",
           "id": "project-memory",
           "owner": "project",
           "slot": "project-rules",

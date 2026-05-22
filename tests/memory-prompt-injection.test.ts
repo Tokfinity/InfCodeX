@@ -100,8 +100,8 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
     expect(snapshot.rendered).toContain('move detail into topic files');
   });
 
-  it('orders project-memory immediately after project-agents and before skills-addendum', async () => {
-    // Plant both AGENTS.md and MEMORY.md so all three sections fire.
+  it('orders project-agents → memory-rules → project-memory → skills-addendum', async () => {
+    // Plant both AGENTS.md and MEMORY.md so all four sections fire.
     fs.mkdirSync(path.join(cwd, '.kodax'), { recursive: true });
     fs.writeFileSync(
       path.join(cwd, '.kodax', 'AGENTS.md'),
@@ -131,21 +131,25 @@ describe('FEATURE_124 Phase B — system prompt memory injection', () => {
 
     const ids = snapshot.sections.map((s) => s.id);
     const agentsIdx = ids.indexOf('project-agents');
+    const rulesIdx = ids.indexOf('memory-rules');
     const memoryIdx = ids.indexOf('project-memory');
     const skillsIdx = ids.indexOf('skills-addendum');
 
     expect(agentsIdx).toBeGreaterThan(-1);
-    expect(memoryIdx).toBe(agentsIdx + 1);
+    expect(rulesIdx).toBe(agentsIdx + 1);
+    expect(memoryIdx).toBe(rulesIdx + 1);
     expect(skillsIdx).toBe(memoryIdx + 1);
 
     // Rendered SP preserves the same order.
     const renderedAgentsIdx = snapshot.rendered.indexOf(
       'PROJECT RULE: prefer project-scoped constraints.',
     );
+    const renderedRulesIdx = snapshot.rendered.indexOf('# Memory (per-project)');
     const renderedMemoryIdx = snapshot.rendered.indexOf('Memory-Entry-Marker-XYZ');
     const renderedSkillsIdx = snapshot.rendered.indexOf('Skills-Marker-ABC');
     expect(renderedAgentsIdx).toBeGreaterThan(-1);
-    expect(renderedMemoryIdx).toBeGreaterThan(renderedAgentsIdx);
+    expect(renderedRulesIdx).toBeGreaterThan(renderedAgentsIdx);
+    expect(renderedMemoryIdx).toBeGreaterThan(renderedRulesIdx);
     expect(renderedSkillsIdx).toBeGreaterThan(renderedMemoryIdx);
   });
 
