@@ -69,12 +69,17 @@ export interface McpServerToolList {
  * Full catalog snapshot for a server — tools + resources + prompts.
  * Use {@link McpManager.getCatalog} when the popout needs to render
  * all three capability kinds (not just tools).
+ *
+ * `cachedAt` matches the naming used by {@link McpServerStatus},
+ * {@link McpServerLogs}, and {@link McpServerToolList} for consistency
+ * across the manager surface (all are renames of the underlying
+ * `McpServerCatalogSnapshot.updatedAt` field).
  */
 export interface McpServerCatalog {
   readonly serverId: string;
   readonly items: readonly McpCatalogItem[];
   readonly descriptors: readonly McpCapabilityDescriptor[];
-  readonly updatedAt: string;
+  readonly cachedAt: string;
 }
 
 /**
@@ -208,7 +213,7 @@ export class McpManager {
       serverId,
       items: snapshot.items,
       descriptors: snapshot.descriptors,
-      updatedAt: snapshot.updatedAt,
+      cachedAt: snapshot.updatedAt,
     };
   }
 

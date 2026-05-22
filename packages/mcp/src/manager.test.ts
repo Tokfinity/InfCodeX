@@ -127,7 +127,7 @@ describe('McpManager — getCatalog (full catalog)', () => {
 
     // items + descriptors must have the same length (1:1 mapping).
     expect(catalog.items.length).toBe(catalog.descriptors.length);
-    expect(catalog.updatedAt).toBeDefined();
+    expect(catalog.cachedAt).toBeDefined();
   });
 
   it('forceRefresh:true bypasses the on-disk cache', async () => {
