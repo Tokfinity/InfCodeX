@@ -102,8 +102,8 @@ export function buildWorkerInstructions(
     '- `read` first when the file is non-trivial. Skipping the read forces `edit`/`multi_edit` to fail with "old_string not found" and costs a retry round-trip.',
     '- Prefer `edit` over `write` for existing files (smaller token footprint, diff-safe). Use `write` only for new files or full rewrites the user explicitly asked for.',
     '- For multiple edits to one file, batch with `multi_edit` instead of N separate `edit` calls — atomic, cheaper, structure-preserving.',
-    '- NEVER route a single known-content file through `bash` heredocs. Use `write` or `edit`.',
-    '- Workspace discipline: scratch files go under `.agent/tmp/` (relative to git root). NEVER write scratch to project root or system tmp.',
+    '- NEVER route a single known-content file through `bash` heredocs — use `write` or `edit` instead. Heredoc routing bypasses mutation tracking and diff visibility; the file lands without an edit record so reviewers cannot see what changed.',
+    '- Workspace discipline: scratch files go under `.agent/tmp/` (relative to git root). NEVER write scratch to project root or system tmp — project root pollutes the user\'s repo (shows up in `git status` and file listings), and system tmp gets reclaimed by the OS before you can re-read it.',
   ].join('\n');
 
   // FEATURE_155 (v0.7.39) — Worker waits via idle-yield. The

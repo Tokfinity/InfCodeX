@@ -290,7 +290,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       + 'When making multiple independent edits to the same file, use `multi_edit` instead — one tool call '
       + 'batches N edits atomically. '
       + 'If the anchor is unstable, retry with a smaller unique snippet or use `insert_after_anchor`; '
-      + 'do NOT fall back to `write` for the whole file as a recovery.',
+      + 'do NOT fall back to `write` for the whole file as a recovery, because that discards the partial-edit context and re-streams the entire file — exactly what `edit` was designed to avoid.',
     input_schema: {
       type: 'object',
       properties: {
@@ -536,7 +536,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — DO NOT spam (typical pattern: 0-1 send_message per child). Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
+      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — but use it sparingly (typical pattern: 0-1 send_message per child), because a child needing more context mid-flight is usually a planning failure: you did not brief it well enough up front. Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
     input_schema: {
       type: 'object',
       properties: {
@@ -608,7 +608,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         block: {
           type: 'boolean',
           description:
-            'When true, wait for the child to settle (up to timeout_ms) before returning the snapshot. When false (default), return the current snapshot immediately without waiting. Use block:false for status peeks during interleaved work; block:true only for tightly-scoped synchronous patterns. Idle-yield (end turn text-only) is the canonical wait — do not use block:true as a substitute for it.',
+            'When true, wait for the child to settle (up to timeout_ms) before returning the snapshot. When false (default), return the current snapshot immediately without waiting. Use block:false for status peeks during interleaved work; block:true only for tightly-scoped synchronous patterns. Idle-yield (end turn text-only) is the canonical wait — do not use block:true as a substitute for it, because block:true holds your turn open synchronously while idle-yield ends your turn so the user can chat with you while children run.',
         },
         timeout_ms: {
           type: 'number',
@@ -877,7 +877,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'ask_user_question',
-    description: 'Ask the user a question. Supports single-select (default), multi-select, or free-text input. When you have multiple independent questions, use the "questions" array — each question is presented separately with its own options. Do NOT combine multiple questions into a single question string.',
+    description: 'Ask the user a question. Supports single-select (default), multi-select, or free-text input. When you have multiple independent questions, use the "questions" array — each question is presented separately with its own options. Do NOT combine multiple questions into a single question string, because combining forces the user to mentally disambiguate option combinations themselves, which usually breaks the option-button UI.',
     input_schema: {
       type: 'object',
       properties: {
