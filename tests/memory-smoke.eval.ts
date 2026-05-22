@@ -1,51 +1,67 @@
 /**
- * FEATURE_124 (v0.7.43) Phase E — memory subsystem behavioural smoke eval.
+ * FEATURE_124 (v0.7.43) Phase E.4 — memory subsystem Layer 2 behavioural eval.
  *
- * **Status**: smoke test, NOT a SHIP-gate prompt-eval.
- * **Layer**: EVAL_GUIDELINES Layer 2 single-turn probe.
+ * **Layer**: EVAL_GUIDELINES §49 Layer 2 single-turn probe.
+ * **Status**: Cross-provider validation panel for the memory-rules SP
+ *             teaching text + project-memory index introduced by Phase B/C.
  *
- * **What it measures**: when the agent is configured with the FEATURE_124
- * memory subsystem (memory-rules teaching text + project-memory index in
- * the system prompt) plus the Write/Edit/Read/Grep/Glob tools, does it:
- *   S1 WRITE: a user feedback statement triggers a Write into the memory
- *      directory with a feedback_* filename?
- *   S2 READ : MEMORY.md pre-seeded with a `user_role` entry → user asks a
- *      stack-relevant question → agent Reads or Greps inside the memory
- *      directory before answering?
- *   S3 NO-DUP: a feedback memory already exists + user repeats it → agent
- *      does NOT Write a duplicate file (no Write to memory dir is the
- *      pass; Edit on the existing file is also acceptable).
+ * **What it measures** — given the FEATURE_124 SP (memory-rules teaching
+ * + project-memory index) and Write/Edit/Read/Grep/Glob tools advertised:
+ *   S1 WRITE   — user feedback msg → agent invokes `Write` into the
+ *                memory directory.
+ *   S2 READ    — MEMORY.md pre-seeded with `user_role` entry; user asks
+ *                stack-relevant question → agent Read/Grep/Glob inside
+ *                memory dir BEFORE answering.
+ *   S3 NO-DUP  — feedback memory already exists; user repeats the same
+ *                feedback → agent does NOT Write a NEW topic file (Write
+ *                to the existing seeded file or MEMORY.md = allowed
+ *                update; any other filename inside the memory dir = FAIL).
  *
- * **Topology**: 2 aliases (`ark/v4flash` + `zhipu/glm51`) × 3 cases ×
- * 2 runs = 12 cells. Budget ~$1-2. Per design doc v0.7.43.md §Step E.
+ * **Topology** — Canonical 5-alias panel × 3 cases × 3 runs = 45 cells.
+ *                Aliases per EVAL_GUIDELINES §266-280 (frozen 2026-05-21):
+ *                  zhipu/glm51 + kimi + mmx/m27 + ark/v4pro + ark/v4flash.
+ *                Budget ~$2.25 / ~25 min.
  *
- * **Why deterministic regex judge (not LLM judge)**: the PASS criteria
- * are structural — the model invoked a specific tool with a specific
- * path prefix. Path prefix containment is uncontroversial; an LLM judge
- * would add $1+ of cost for zero signal lift. The audit is "did the tool
- * call land in the memory directory" — a string operation.
+ * **Pre-registered SHIP gate** (FROZEN 2026-05-23 before any run; per
+ * `feedback_pre_registered_gate_saturation` and EVAL_GUIDELINES §115):
+ *   (a) ≥4/5 alias × ALL 3 cases ≥ 60% PASS (≥ 2/3 cells)
+ *       → SHIP — memory subsystem cross-provider trigger validated.
+ *   (b) 3/5 alias clear bar
+ *       → ACCEPT — mark non-passing alias as structural floor in
+ *         `docs/features/v0.7.43.md` known-issues; ship as-is.
+ *         Per `feedback_model_structural_floor_not_prompt_tunable`:
+ *         "alias on case with ≥3 wordings × ≥5 runs each = ≥15 cells
+ *         all 0 PASS" is the structural-floor threshold. This eval has
+ *         only 1 wording × 3 runs = 3 cells per alias-case; (b) is the
+ *         provisional designation pending follow-up panel if needed.
+ *   (c) <3/5 alias clear bar
+ *       → DEFER — tune memory-rules prompt content (likely trigger
+ *         wording in TYPES_SECTION when_to_save examples), re-run.
  *
- * **Pass policy**: this is a smoke test. Failure → tune memory-rules
- * prompt then re-run. Does NOT block FEATURE_124 ship. See
- * `docs/features/v0.7.43.md` §"Phase 实施状态" — the design table marks
- * this as Phase E with soft-gate semantics on purpose: the eval-validated
- * claudecode wording is the strong prior; this eval just verifies the
- * KodaX-specific deltas (PREPEND-to-top, AGENTS.md ref, displayed
- * memory-dir path) don't disrupt that prior.
+ * **LLM-judge audit** — see `tests/memory-smoke-judge-audit.eval.ts`.
+ *   Required per EVAL_GUIDELINES §172 (反模式 7 §3): every cell at least
+ *   1 sampled fail/pass re-judged by 3-judge panel-internal majority
+ *   (zhipu/glm51 + ark/v4pro + kimi). Disagreement >10% (>2/20) → data
+ *   invalid, eval rerun. NO anthropic/openai judges per §180-183.
  *
- * **Why this is NOT a FEATURE_104 SHIP-gate eval**:
- *   - The teaching text is mostly verbatim from claudecode (eval-validated
- *     wording reused). The cost of a full 5-alias × 3-variant × 5-run
- *     panel + 3-judge audit would re-pay claudecode's eval cost for no
- *     additional signal.
- *   - The KodaX-specific deltas (per-project path, AGENTS.md ref) are
- *     verified by deterministic substrate tests (Phase A/B/C — 50 + 13
- *     + 5 = 68 unit/integration tests).
- *   - This smoke eval guards against "the prompt loads but the model
- *     ignores it" — a binary outcome the simple regex judge resolves.
+ * **Why panel-internal majority (not self-judge by orchestrator)**:
+ *   §188 says self-judge is OK for "≤50 cells / one-shot sanity check".
+ *   45 cells is right at the boundary, and the orchestrator (this Claude
+ *   session) has read the prompt design — that's panel-internal bias.
+ *   3-judge majority is the more rigorous option for ship-gate purposes.
  *
- * Skips when neither ARK_API_KEY nor ZHIPU_API_KEY is set.
+ * **Why this IS a real eval (not just a smoke)**:
+ *   Earlier framing called this "smoke" because the teaching text
+ *   mirrors claudecode's eval-validated wording. User pushback at
+ *   2026-05-23 noted (a) claudecode tested Sonnet/Haiku, KodaX runs
+ *   distillation-trained coding plans where prompts behave differently;
+ *   (b) 2-alias × 2-run smoke gave 11/12 PASS but provided weak signal
+ *   for unmeasured alias (mmx/m27, kimi, ark/v4pro). This Layer 2 panel
+ *   closes that gap. Soft-gate language removed.
+ *
+ * Skips when no canonical-panel API key is set.
  * Run: `npm run test:eval -- tests/memory-smoke.eval.ts`
+ *      audit:   `npm run test:eval -- tests/memory-smoke-judge-audit.eval.ts`
  */
 
 import * as fs from 'node:fs';
@@ -66,8 +82,17 @@ import { buildSystemPrompt } from '@kodax-ai/coding';
 import { availableAliases, type ModelAlias } from '../benchmark/harness/aliases.js';
 import { runOneShot } from '../benchmark/harness/harness.js';
 
-const REQUESTED: readonly ModelAlias[] = ['ark/v4flash', 'zhipu/glm51'];
-const RUNS = 2;
+// Canonical 5-alias panel per EVAL_GUIDELINES §266-280. Frozen 2026-05-23.
+// All coding-plan providers; 4 independent families (Zhipu / Moonshot /
+// MiniMax / DeepSeek via Ark) + DeepSeek floor for in-family signal.
+const REQUESTED: readonly ModelAlias[] = [
+  'zhipu/glm51',
+  'kimi',
+  'mmx/m27',
+  'ark/v4pro',
+  'ark/v4flash',
+];
+const RUNS = 3;
 const DUMP_ROOT = path.join(os.tmpdir(), 'kodax-eval-dumps', 'feature-124-memory-smoke');
 
 // ── Tool schemas the LLM may pick ─────────────────────────────────────────
@@ -168,6 +193,35 @@ function isInsideMemoryDir(p: string | undefined, memoryDir: string): boolean {
   if (!p) return false;
   const normalised = path.resolve(p);
   return normalised.startsWith(memoryDir + path.sep) || normalised === memoryDir;
+}
+
+/**
+ * 4-syntax tool-name detection per EVAL_GUIDELINES §175. Used as audit
+ * signal — does NOT override structured toolCalls-based primary verdict.
+ * Captures the case where a provider parser missed a non-standard syntax
+ * (e.g. zhipu emitting `<Write path="...">` that the harness dropped).
+ * If primary FAIL but `mentioned*InText` true, the dump flags `parser_suspect`
+ * for the 3-judge audit to weigh in.
+ */
+function buildToolNamePatterns(toolName: string): readonly RegExp[] {
+  const esc = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [
+    new RegExp(`\\b${esc}\\s*\\(`, 'i'),                              // Write(
+    new RegExp(`["'\`]name["'\`]\\s*:\\s*["'\`]${esc}["'\`]`, 'i'),   // "name":"Write"
+    new RegExp(`<${esc}\\b`, 'i'),                                    // <Write
+    new RegExp(`\\bname\\s*[:=]\\s*${esc}\\b`, 'i'),                  // name: Write
+  ];
+}
+
+function textMentionsTool(text: string, toolName: string): boolean {
+  return buildToolNamePatterns(toolName).some((re) => re.test(text));
+}
+
+function textMentionsMemoryDir(text: string, memoryDir: string): boolean {
+  // Path may render with forward or backward slashes depending on
+  // model. Check both forms.
+  const fwd = memoryDir.split(path.sep).join('/');
+  return text.includes(memoryDir) || text.includes(fwd);
 }
 
 const CASES: readonly MemoryCase[] = [
@@ -313,8 +367,23 @@ interface ProbeRow {
   readonly text: string;
   readonly toolCalls: ReadonlyArray<{ name: string; input: unknown }>;
   readonly memoryDir: string;
+  /** Primary verdict from structured-toolCalls regex judge. */
   readonly passed: boolean;
   readonly reason: string;
+  /**
+   * Raw-text 4-syntax audit signals per EVAL_GUIDELINES §175. Informational;
+   * the 3-judge audit reviews cases where primary verdict and these signals
+   * disagree (e.g. primary FAIL but `writeInText && memoryDirInText` → likely
+   * provider parser miss, not behavioural fail).
+   */
+  readonly auditSignals: {
+    readonly writeInText: boolean;
+    readonly readInText: boolean;
+    readonly grepInText: boolean;
+    readonly globInText: boolean;
+    readonly editInText: boolean;
+    readonly memoryDirInText: boolean;
+  };
 }
 
 describe('FEATURE_124 Phase E — memory subsystem smoke eval', () => {
@@ -399,6 +468,14 @@ describe('FEATURE_124 Phase E — memory subsystem smoke eval', () => {
               }
 
               const verdict = c.classify(result.toolCalls, memoryDir);
+              const auditSignals = {
+                writeInText: textMentionsTool(result.text, 'Write'),
+                readInText: textMentionsTool(result.text, 'Read'),
+                grepInText: textMentionsTool(result.text, 'Grep'),
+                globInText: textMentionsTool(result.text, 'Glob'),
+                editInText: textMentionsTool(result.text, 'Edit'),
+                memoryDirInText: textMentionsMemoryDir(result.text, memoryDir),
+              };
               rows.push({
                 caseId: c.id,
                 alias,
@@ -409,6 +486,7 @@ describe('FEATURE_124 Phase E — memory subsystem smoke eval', () => {
                 memoryDir,
                 passed: verdict.passed,
                 reason: verdict.reason,
+                auditSignals,
               });
               flush();
             } finally {
