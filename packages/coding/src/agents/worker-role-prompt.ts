@@ -208,23 +208,10 @@ export function buildWorkerInstructions(
   ].join('\n');
 
   const fanOutPlanGranularity = [
-    'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38 + v0.7.42 schema split):',
-    '- MANDATORY TRIGGER: when you intend to dispatch multiple children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
-    '- COUNT-FIRST RULE: before the batch, count the exact number N of `dispatch_child_task` calls you will make. Emit EXACTLY N `todo_create` calls — ONE per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `subject:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
-    '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 todo_create calls (emit them in the same response so they batch):',
-    '    todo_create({subject:"Audit packages/llm",    activeForm:"Auditing packages/llm"})',
-    '    todo_create({subject:"Audit packages/agent",  activeForm:"Auditing packages/agent"})',
-    '    todo_create({subject:"Audit packages/coding", activeForm:"Auditing packages/coding"})',
-    '    todo_create({subject:"Audit packages/repl",   activeForm:"Auditing packages/repl"})',
-    '    todo_create({subject:"Audit packages/skills", activeForm:"Auditing packages/skills"})',
-    '- ANTI-PATTERNS (NEVER emit any of these):',
-    '    BAD: skip todo_create and go straight to dispatch_child_task                       (violates plan-first)',
-    '    BAD: one todo_create with subject:"Fan out review across 5 packages"               (1 item collapses N children)',
-    '    BAD: two todo_create calls collapsing 5 children into "Review all" + "Aggregate"   (hides per-package progress)',
-    '    BAD: any todo_create batch shorter than the number of dispatch_child_task calls.',
-    '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
-    '- LATE-DISCOVERED CHILD: if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({subject:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Each `todo_create` is purely additive — existing items are untouched.',
-    '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
+    'FAN-OUT PLAN GRANULARITY:',
+    '- When you are about to dispatch several children in parallel, first emit a `todo_create` call for each one so the user sees per-child progress instead of a 30-60s black box. One todo per child — use the child\'s objective as the subject.',
+    '- Mark each item `in_progress` just before its `dispatch_child_task` call, and `completed` when the matching `<task-completed>` block arrives.',
+    '- If mid fan-out you decide to dispatch another child, add the matching todo before the new dispatch.',
   ].join('\n');
 
   const handoffRules = [

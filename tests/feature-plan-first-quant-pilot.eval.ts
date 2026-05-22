@@ -185,7 +185,10 @@ function judgePlanFirstCompliance(out: string, context?: JudgeContext): JudgeRes
     return { passed: false, reason: 'todo_create called AFTER dispatch_child_task — plan-first violated (binding)' };
   }
   if (todoIdx >= 0 && dispatchIdx < 0) {
-    return { passed: false, reason: 'todo_create called but no dispatch_child_task — plan without fan-out' };
+    // Lenient (aligned with LLM judge prompt): plan committed is PASS for
+    // plan_first_compliance; dispatch follow-through is judged separately
+    // by dispatch_intent. Otherwise the two judges are not independent.
+    return { passed: true };
   }
   if (todoIdx < 0 && dispatchIdx >= 0) {
     return { passed: false, reason: 'dispatch_child_task called without prior todo_create (binding) — MANDATORY rule violated' };
@@ -212,7 +215,11 @@ function judgePlanFirstCompliance(out: string, context?: JudgeContext): JudgeRes
     return { passed: true };
   }
   if (!dispatchFound) {
-    return { passed: false, reason: 'no dispatch_child_task invocation — case did not trigger fan-out at all' };
+    if (todoFound) {
+      // Lenient — todo_create only, no dispatch text: plan committed.
+      return { passed: true };
+    }
+    return { passed: false, reason: 'neither todo_create nor dispatch_child_task invoked — case did not trigger fan-out at all' };
   }
   return { passed: false, reason: 'dispatch_child_task without any todo_create — MANDATORY rule violated' };
 }

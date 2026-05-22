@@ -1,51 +1,69 @@
 /**
- * Layer 2 panel — ADR-033 hygiene follow-up to FEATURE_188.
+ * Layer 2 panel — claudecode-style rewrite of the FAN-OUT PLAN
+ * GRANULARITY block (ADR-033 systemic application).
  *
- * Tests whether the PLAN-FIRST block's quantitative `≥3 children`
- * trigger can be replaced with qualitative `multiple children` without
- * regressing plan-first compliance or dispatch intent.
+ * ## Why
  *
- * ## Prior evidence
+ * User feedback (2026-05-22): "你的 prompt 感觉写的非常冗余，反模式
+ * 也过多，你能不能参考下 C:\\Works\\claudecode 一样的部分是怎么写的".
  *
- *   - FEATURE_188 panel (5 alias × 2 case × 2 variant × 5 runs = 100
- *     cells, both variants used the same `≥3 children` PLAN-FIRST
- *     block) showed **0/100 plan-first compliance** via binding +
- *     9-pattern regex. The `≥3 children` MANDATORY rule is structurally
- *     ignored by all 5 alias on multi-child tasks.
- *   - 2026-05-22 pilot (1 alias × 2 case × 2 variant × 3 runs = 12
- *     cells): 1/6 narrative-todo emission in v_baseline (no dispatch
- *     follow-through); 0/6 in v_proposed. Indistinguishable at the
- *     intent-vs-action floor.
+ * claudecode equivalent investigation:
+ *
+ *   1. `src/constants/prompts.ts:280` — single sentence in the main
+ *      system prompt's "# Using your tools" section:
+ *        "Break down and manage your work with the TaskCreate tool.
+ *         These tools are helpful for planning your work and helping
+ *         the user track your progress. Mark each task as completed
+ *         as soon as you are done with the task. Do not batch up
+ *         multiple tasks before marking them as completed."
+ *   2. `src/tools/TaskCreateTool/prompt.ts` — When-to-use / When-not-
+ *      to-use bullets, all qualitative ("Complex multi-step tasks",
+ *      "3 or more distinct steps" as soft soft guidance, never
+ *      MANDATORY).
+ *
+ * No `MANDATORY TRIGGER`, no `COUNT-FIRST RULE` label, no `ANTI-
+ * PATTERNS` section, no `WORKED EXAMPLE` code samples, no `LATE-
+ * DISCOVERED CHILD` label, no version annotation, no Rationale
+ * paragraph. ~3 bullets vs KodaX's 18-line block.
+ *
+ * ## Variants
+ *
+ *   v_baseline_quant        — current production (18-line block,
+ *                             ≥3 children, COUNT-FIRST, WORKED EXAMPLE,
+ *                             ANTI-PATTERNS, LATE-DISCOVERED CHILD,
+ *                             Rationale)
+ *   v_minimal_qual          — minimal-diff swap from prior eval:
+ *                             ≥3 → multiple, everything else identical
+ *                             (already tested in feature-plan-first-quant)
+ *   v_claudecode_style      — claudecode-style rewrite: ~3 bullets,
+ *                             qualitative, no labels, no ✗ patterns,
+ *                             no worked example, no version metadata
  *
  * ## Scope
  *
- * Canonical 5-alias panel × 2 case (C4 audit_4_packages + C5
- * edit_3_modules) × 2 variant × 5 runs = 100 cells. ~$3, ~30 min wall.
+ * 5 alias × 2 case × 3 variant × 5 runs = 150 cells, ~$5, ~40 min.
+ * Companion judge-audit eval re-judges via 3-judge majority vote.
  *
- * Companion `feature-plan-first-quant-judge-audit.eval.ts` does the
- * 3-judge LLM majority-vote audit per `feedback_audit_must_see_binding`
- * + `feedback_audit_binding_priority_in_prompt`.
+ * ## Pre-registered SHIP gate (for v_claudecode_style)
  *
- * ## Variants — only PLAN-FIRST `MANDATORY TRIGGER` line differs
- *
- *   v_baseline_plan_quant  — `≥3 children` (current production)
- *   v_proposed_plan_qual   — `multiple children` (qualitative swap)
- *
- * Both use the post-FEATURE_188 dispatchRules to isolate the
- * PLAN-FIRST variable.
- *
- * ## Pre-registered SHIP gate
- *
- *   (a) plan_first_compliance (judge view): v_proposed ≥ v_baseline − 1
- *       cell per alias × case. Below saturation floor (0%) regression
- *       is impossible.
- *   (b) dispatch_intent (judge view): v_proposed ≥ v_baseline − 1
- *       cell per alias × case (FEATURE_188 baseline preserved).
+ *   (a) plan_first_compliance (judge view): v_claudecode ≥ v_baseline
+ *       − 1 cell per alias × case. (Plan-first behavior preserved
+ *       despite drastic prompt size reduction.)
+ *   (b) dispatch_intent (judge view): v_claudecode ≥ v_baseline − 1
+ *       cell per alias × case. (Dispatch intent not suppressed by
+ *       removing the MANDATORY/COUNT-FIRST/✗ rules.)
  *   (c) audit disagreement ≤ 10% → DATA VALID.
+ *
+ * Decision matrix:
+ *   - v_claudecode wins or ties v_baseline AND v_minimal_qual →
+ *     SHIP v_claudecode (~13 lines saved, ADR-033 compliant)
+ *   - v_minimal_qual wins, v_claudecode regresses → SHIP v_minimal_qual
+ *     (keep most of the block, just quant→qual)
+ *   - Both regress → REVERT to baseline, defer to v0.7.43 systemic
  *
  * ## Run
  *
- *   KODAX_EVAL_DUMP_DIR=c:/tmp/ npm run test:eval -- feature-plan-first-quant
+ *   KODAX_EVAL_DUMP_DIR=c:/tmp/ npm run test:eval -- tests/feature-plan-first-claudecode.eval.ts
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -61,7 +79,7 @@ import type { PromptJudge, JudgeContext, JudgeResult } from '../benchmark/harnes
 const DUMP_ROOT = join(
   process.env.KODAX_EVAL_DUMP_DIR ?? tmpdir(),
   'kodax-eval-dumps',
-  'feature-plan-first-quant',
+  'feature-plan-first-claudecode',
 );
 
 const CANONICAL_PANEL: readonly ModelAlias[] = [
@@ -99,32 +117,44 @@ const DISPATCH_RULES = [
   '- RULE C — write fan-out (Generator-equivalent only): NON-conflicting file-level edits across multiple modules can be dispatched as `readOnly: false` children. Do NOT use write fan-out for single-file edits — it adds coordination cost without speedup.',
 ].join('\n');
 
-function buildPlanFirstBlock(triggerLine: string): string {
-  return [
-    'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38 + v0.7.42 schema split):',
-    triggerLine,
-    '- COUNT-FIRST RULE: before the batch, count the exact number N of `dispatch_child_task` calls you will make. Emit EXACTLY N `todo_create` calls — ONE per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `subject:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
-    '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 todo_create calls (emit them in the same response so they batch):',
-    '    todo_create({subject:"Audit packages/llm",    activeForm:"Auditing packages/llm"})',
-    '    todo_create({subject:"Audit packages/agent",  activeForm:"Auditing packages/agent"})',
-    '    todo_create({subject:"Audit packages/coding", activeForm:"Auditing packages/coding"})',
-    '    todo_create({subject:"Audit packages/repl",   activeForm:"Auditing packages/repl"})',
-    '    todo_create({subject:"Audit packages/skills", activeForm:"Auditing packages/skills"})',
-    '- ANTI-PATTERNS (NEVER emit any of these):',
-    '    BAD: skip todo_create and go straight to dispatch_child_task                       (violates plan-first)',
-    '    BAD: one todo_create with subject:"Fan out review across 5 packages"               (1 item collapses N children)',
-    '    BAD: two todo_create calls collapsing 5 children into "Review all" + "Aggregate"   (hides per-package progress)',
-    '    BAD: any todo_create batch shorter than the number of dispatch_child_task calls.',
-    '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
-    '- LATE-DISCOVERED CHILD: if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({subject:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Each `todo_create` is purely additive — existing items are untouched.',
-    '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
-  ].join('\n');
-}
+// v_baseline_quant — current production, 18 lines.
+const PLAN_FIRST_BASELINE_QUANT = [
+  'FAN-OUT PLAN GRANULARITY (FEATURE_151 Slice I, v0.7.38 + v0.7.42 schema split):',
+  '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.',
+  '- COUNT-FIRST RULE: before the batch, count the exact number N of `dispatch_child_task` calls you will make. Emit EXACTLY N `todo_create` calls — ONE per child\'s objective, mirroring each child\'s `bundle.objective` literally (e.g. child reviewing `packages/foo` ⇒ item `subject:"Review packages/foo"`). Not 1 collapsed item. Not 2. Not N-1. Exactly N.',
+  '- WORKED EXAMPLE — 5 packages ⇒ exactly 5 todo_create calls (emit them in the same response so they batch):',
+  '    todo_create({subject:"Audit packages/llm",    activeForm:"Auditing packages/llm"})',
+  '    todo_create({subject:"Audit packages/agent",  activeForm:"Auditing packages/agent"})',
+  '    todo_create({subject:"Audit packages/coding", activeForm:"Auditing packages/coding"})',
+  '    todo_create({subject:"Audit packages/repl",   activeForm:"Auditing packages/repl"})',
+  '    todo_create({subject:"Audit packages/skills", activeForm:"Auditing packages/skills"})',
+  '- ANTI-PATTERNS (NEVER emit any of these):',
+  '    BAD: skip todo_create and go straight to dispatch_child_task                       (violates plan-first)',
+  '    BAD: one todo_create with subject:"Fan out review across 5 packages"               (1 item collapses N children)',
+  '    BAD: two todo_create calls collapsing 5 children into "Review all" + "Aggregate"   (hides per-package progress)',
+  '    BAD: any todo_create batch shorter than the number of dispatch_child_task calls.',
+  '- Mark each item `in_progress` just before the corresponding `dispatch_child_task`, and `completed` when the matching `<task-completed task_id="…">` block arrives in your next user message (`failed` if the child crashes / times out).',
+  '- LATE-DISCOVERED CHILD: if you decide mid-fan-out to dispatch an N+1th child, add the matching item with `todo_create({subject:"...", activeForm:"..."})` BEFORE the new `dispatch_child_task`. Each `todo_create` is purely additive — existing items are untouched.',
+  '- Rationale: the plan list IS the user\'s progress dashboard during 30-60s fan-outs. Collapsing N dispatches into fewer items, or skipping the plan altogether, turns parallel work into a black box and hides 30+ seconds of progress. "Dispatching N children" IS N distinct steps from the user\'s viewpoint, never fewer.',
+].join('\n');
 
-const PLAN_FIRST_QUANT_TRIGGER =
-  '- MANDATORY TRIGGER: when you intend to dispatch ≥3 children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.';
-const PLAN_FIRST_QUAL_TRIGGER =
-  '- MANDATORY TRIGGER: when you intend to dispatch multiple children (`dispatch_child_task` per RULE A or RULE C), your FIRST tool calls MUST be a batch of `todo_create` — one call per planned child. No exceptions — even if the user phrases the task as "just go review X, Y, Z", commit the plan first.';
+// v_minimal_qual — only swap "≥3 children" → "multiple children".
+const PLAN_FIRST_MINIMAL_QUAL = PLAN_FIRST_BASELINE_QUANT.replace(
+  'dispatch ≥3 children',
+  'dispatch multiple children',
+);
+
+// v_claudecode_style — claudecode-faithful rewrite:
+//   * 3 short bullets, qualitative, no labels, no ✗ patterns
+//   * no WORKED EXAMPLE, no LATE-DISCOVERED CHILD header
+//   * no version metadata, no Rationale paragraph
+//   * Single-concept sentences per ADR-033 §2.
+const PLAN_FIRST_CLAUDECODE_STYLE = [
+  'FAN-OUT PLAN GRANULARITY:',
+  '- When you are about to dispatch several children in parallel, first emit a `todo_create` call for each one so the user sees per-child progress instead of a 30-60s black box. One todo per child — use the child\'s objective as the subject.',
+  '- Mark each item `in_progress` just before its `dispatch_child_task` call, and `completed` when the matching `<task-completed>` block arrives.',
+  '- If mid fan-out you decide to dispatch another child, add the matching todo before the new dispatch.',
+].join('\n');
 
 function buildSystemPrompt(planFirstBlock: string): string {
   return [
@@ -198,7 +228,7 @@ function judgePlanFirstCompliance(out: string, context?: JudgeContext): JudgeRes
     return { passed: true };
   }
   if (todoIdx < 0 && dispatchIdx >= 0) {
-    return { passed: false, reason: 'dispatch without prior todo_create (binding) — MANDATORY violated' };
+    return { passed: false, reason: 'dispatch without prior todo_create (binding)' };
   }
   const todoFound = invokesTool(out, 'todo_create');
   const dispatchFound = invokesTool(out, 'dispatch_child_task');
@@ -209,13 +239,13 @@ function judgePlanFirstCompliance(out: string, context?: JudgeContext): JudgeRes
     return { passed: false, reason: 'narrative todo_create after dispatch (text)' };
   }
   if (!todoFound && dispatchFound) {
-    return { passed: false, reason: 'dispatch without todo_create (text) — MANDATORY violated' };
+    return { passed: false, reason: 'dispatch without todo_create (text)' };
   }
   if (todoFound && !dispatchFound) {
     // Lenient — see binding-path note above.
     return { passed: true };
   }
-  return { passed: false, reason: 'neither todo_create nor dispatch_child_task invoked (no fan-out at all)' };
+  return { passed: false, reason: 'neither todo_create nor dispatch_child_task invoked' };
 }
 
 function judgeDispatchIntent(out: string, context?: JudgeContext): JudgeResult {
@@ -230,33 +260,38 @@ const JUDGES: readonly PromptJudge[] = [
   { name: 'dispatch_intent', category: 'correctness', judge: judgeDispatchIntent },
 ];
 
-describe('PLAN-FIRST quant→qual canonical panel (ADR-033 hygiene follow-up to FEATURE_188)', () => {
+describe('PLAN-FIRST claudecode-style rewrite eval (ADR-033 systemic application)', () => {
   const aliases = availableAliases(...CANONICAL_PANEL);
 
   if (aliases.length === 0) {
-    it('skips: no canonical alias key in env', () => {
-      // No-op.
-    });
+    it('skips: no canonical alias key in env', () => { /* no-op */ });
     return;
   }
 
   for (const c of CASES) {
     it(
-      `${c.id} — ${aliases.length} alias × 2 variant × ${RUNS_PER_CELL} runs`,
-      { timeout: 30 * 60_000 },
+      `${c.id} — ${aliases.length} alias × 3 variant × ${RUNS_PER_CELL} runs`,
+      { timeout: 45 * 60_000 },
       async () => {
         const variants = [
           {
-            id: 'v_baseline_plan_quant',
-            description: 'current PLAN-FIRST MANDATORY TRIGGER with "≥3 children" quantitative threshold',
-            systemPrompt: buildSystemPrompt(buildPlanFirstBlock(PLAN_FIRST_QUANT_TRIGGER)),
+            id: 'v_baseline_quant',
+            description: 'current production — 18-line block with ≥3 children, COUNT-FIRST, WORKED EXAMPLE, ANTI-PATTERNS, LATE-DISCOVERED CHILD, Rationale',
+            systemPrompt: buildSystemPrompt(PLAN_FIRST_BASELINE_QUANT),
             priorMessages: [],
             userMessage: c.userMessage,
           },
           {
-            id: 'v_proposed_plan_qual',
-            description: 'qualitative swap — "multiple children" replaces "≥3 children" (minimal-diff)',
-            systemPrompt: buildSystemPrompt(buildPlanFirstBlock(PLAN_FIRST_QUAL_TRIGGER)),
+            id: 'v_minimal_qual',
+            description: 'minimal-diff swap: ≥3 children → multiple children; everything else byte-identical',
+            systemPrompt: buildSystemPrompt(PLAN_FIRST_MINIMAL_QUAL),
+            priorMessages: [],
+            userMessage: c.userMessage,
+          },
+          {
+            id: 'v_claudecode_style',
+            description: 'claudecode-faithful rewrite — 3 short bullets, qualitative, no labels, no ✗, no worked example, no version metadata',
+            systemPrompt: buildSystemPrompt(PLAN_FIRST_CLAUDECODE_STYLE),
             priorMessages: [],
             userMessage: c.userMessage,
           },
@@ -271,12 +306,11 @@ describe('PLAN-FIRST quant→qual canonical panel (ADR-033 hygiene follow-up to 
         });
 
         const lines: string[] = [];
-        lines.push(`[feature-plan-first-quant][${c.id}]`);
+        lines.push(`[feature-plan-first-claudecode][${c.id}]`);
         lines.push(`  aliases:         ${aliases.join(', ')}`);
         lines.push(`  runs per cell:   ${RUNS_PER_CELL}`);
-        lines.push('  judges:          plan_first_compliance + dispatch_intent (binding-priority + 9-pattern regex)');
 
-        for (const variantId of ['v_baseline_plan_quant', 'v_proposed_plan_qual']) {
+        for (const variantId of ['v_baseline_quant', 'v_minimal_qual', 'v_claudecode_style']) {
           const cells = result.byVariant[variantId] ?? [];
           let aggPlanFirst = 0, aggDispatch = 0, aggTotal = 0;
           lines.push('');
@@ -311,7 +345,7 @@ describe('PLAN-FIRST quant→qual canonical panel (ADR-033 hygiene follow-up to 
         const dumpPath = join(DUMP_ROOT, `${c.id}.json`);
         const dump = {
           case: c.id,
-          stage: 'plan-first-quant-vs-qual-canonical-panel',
+          stage: 'plan-first-claudecode-style-rewrite-panel',
           startedAt: result.startedAt,
           variants: variants.map((v) => ({
             id: v.id,

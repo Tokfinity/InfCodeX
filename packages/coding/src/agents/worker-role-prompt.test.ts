@@ -143,25 +143,27 @@ describe('buildWorkerInstructions', () => {
     expect(out).toContain('CANNOT bypass the Evaluator');
   });
 
-  // FEATURE_151 Slice I (v0.7.38) — fan-out plan granularity guidance.
-  // Pin presence of the section + its key signals so a future prompt edit
-  // doesn't silently drop the fan-out → N-item-per-child contract that
-  // closes the review fan-out visibility gap.
-  it('emits the FAN-OUT PLAN GRANULARITY section (Slice I)', () => {
+  // FAN-OUT PLAN GRANULARITY — claudecode-style 3-bullet rewrite
+  // (FEATURE_188 ADR-033 hygiene continuation, v0.7.42 judge-validated).
+  // Panel `tests/feature-plan-first-claudecode.eval.ts` (5 alias × 2 case
+  // × 3 variant × 5 runs = 150 cells + 900 audit calls) showed C4
+  // baseline 18-line block 0/25 dispatch vs 3-bullet 7/25 dispatch
+  // (judge view). 57% character reduction, all 5 ADR-033 principles
+  // applied. Pin the 3 load-bearing signals so future edits can't drop
+  // them silently — but no enumerated label or worked-example assertions
+  // (those are exactly what ADR-033 §4 / §5 say should NOT be pinned).
+  it('emits the FAN-OUT PLAN GRANULARITY section (claudecode 3-bullet)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('FAN-OUT PLAN GRANULARITY');
-    expect(out).toContain('FEATURE_151 Slice I');
-    // Mechanical contract: multiple children → ONE todo_create per child's objective.
-    // ADR-033 hygiene follow-up to FEATURE_188: qualitative trigger replaced
-    // quantitative `≥3 children` threshold (v0.7.42, judge-validated no regression).
-    expect(out).toContain('multiple children');
-    // v0.7.42 — wording shifted from "ONE item per child" (op:init items
-    // array) to "ONE per child" (one todo_create call per child).
-    expect(out).toMatch(/ONE (todo_create|item|per) /);
-    // Anti-pattern call-out — plan list IS the user's progress dashboard.
-    expect(out).toContain('plan list IS the user');
-    // Tied to dispatch RULE A / RULE C (same trigger surface).
-    expect(out).toMatch(/RULE A or RULE C/);
+    // Qualitative trigger (no quantitative threshold per ADR-033 §1).
+    expect(out).toMatch(/several children in parallel/);
+    // One-todo-per-child contract (qualitative single-sentence per ADR-033 §2).
+    expect(out).toContain('One todo per child');
+    // Status transition: in_progress on dispatch, completed on task-completed.
+    expect(out).toContain('in_progress');
+    expect(out).toContain('<task-completed>');
+    // Late-discovered-child handling (no LATE-DISCOVERED CHILD label per ADR-033 §4).
+    expect(out).toMatch(/mid fan-out|another child/);
   });
 
   it('orders Slice I after dispatch rules and before Evaluator handoff', () => {
@@ -253,8 +255,11 @@ describe('buildWorkerInstructions — FEATURE_155 idle-yield (always-on, Slice C
 
   it('FAN-OUT plan granularity guidance points in_progress trigger at dispatch_child_task', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).toContain('just before the corresponding `dispatch_child_task`');
-    expect(out).toContain('<task-completed task_id="…">');
+    // claudecode 3-bullet rewrite (v0.7.42): "just before its
+    // `dispatch_child_task` call" (no "corresponding" prefix per
+    // ADR-033 §2 single-concept simplification).
+    expect(out).toContain("just before its `dispatch_child_task`");
+    expect(out).toContain('<task-completed>');
   });
 
   it('keeps the structural gates intact (PLAN-FIRST, SCOPE COMMITMENT, EVALUATOR HANDOFF, FAN-OUT PLAN GRANULARITY)', () => {
@@ -337,10 +342,12 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('INSERT ONE NEW STEP mid-task: `todo_create');
     expect(out).toContain('FEATURE_170 v0.7.41');
-    // v0.7.42 — the schema-split note + "purely additive" semantics is
-    // the structural pin; op:'init' as a fan-out re-seed path is gone.
+    // v0.7.42 — the schema-split note + additive semantics is the
+    // structural pin; op:'init' as a fan-out re-seed path is gone.
     expect(out).toMatch(/v0\.7\.42 schema split/);
-    expect(out).toMatch(/purely additive/);
+    // ADR-033 §4 — additive semantics now expressed via "existing items
+    // must be preserved" (single concept) rather than "purely additive" label.
+    expect(out).toMatch(/existing items must be preserved/);
   });
 
   it('teaches todo_update patch fields without changing status', () => {
@@ -367,13 +374,12 @@ describe('buildWorkerInstructions — FEATURE_170 Todo V2 API (v0.7.41)', () => 
     expect(out).toMatch(/call `todo_create.*to add the new item explicitly/);
   });
 
-  it('FAN-OUT PLAN GRANULARITY teaches todo_create for the late N+1th child', () => {
+  it('FAN-OUT PLAN GRANULARITY handles the late N+1th child (claudecode 3-bullet)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).toContain('LATE-DISCOVERED CHILD');
-    // v0.7.42 — schema split: subject (required) + description (optional).
-    expect(out).toContain('todo_create({subject:"..."');
-    // Positive pin — late-discovered children go through additive todo_create.
-    expect(out).toMatch(/todo_create.*BEFORE the new `dispatch_child_task`/);
+    // Mid-fan-out additive child — qualitative one-sentence guidance
+    // (no LATE-DISCOVERED CHILD label per ADR-033 §4, no worked-example
+    // syntax pin per ADR-033 §1).
+    expect(out).toMatch(/mid fan-out you decide to dispatch another child.*add the matching todo before the new dispatch/);
   });
 
   it('revise-failure retrospective points new fundamentally-different steps at todo_create', () => {
