@@ -47,9 +47,9 @@ import type { KodaXBaseProvider } from '@kodax-ai/llm';
 import {
   invokeStallSidecar,
   type SidecarVerdict,
-} from './stall-sidecar.js';
-import { buildSidecarUserMessage } from './stall-sidecar-prompts.js';
-import type { StallDetector, StallSignal } from './stall-detector.js';
+} from './sidecar.js';
+import { buildSidecarUserMessage } from './prompts.js';
+import type { StallDetector, StallSignal } from '../../../multi-instance/stall-detector.js';
 
 /**
  * How many recent tool turns the orchestrator keeps for the sidecar

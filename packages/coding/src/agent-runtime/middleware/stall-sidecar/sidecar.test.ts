@@ -14,7 +14,7 @@ import {
   findFuzzyToolMatch,
   invokeStallSidecar,
   normalizeIsStuck,
-} from './stall-sidecar.js';
+} from './sidecar.js';
 
 const FAKE_SYSTEM_PROMPT = 'You are a stall detector.';
 

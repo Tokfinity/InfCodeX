@@ -139,11 +139,10 @@ import {
 import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
 import { createStallDetector } from '../multi-instance/stall-detector.js';
-import { createStallOrchestrator } from '../multi-instance/stall-orchestrator.js';
 import {
-  REPORT_TOOL as STALL_REPORT_TOOL,
-  SIDECAR_SYSTEM_PROMPT as STALL_SIDECAR_SYSTEM_PROMPT,
-} from '../multi-instance/stall-sidecar-prompts.js';
+  createStallSidecarToolObserver,
+  type StallSidecarHandle,
+} from '../agent-runtime/middleware/stall-sidecar/index.js';
 import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
@@ -649,11 +648,18 @@ async function runManagedTaskViaRunnerInner(
   // KODAX_STALL_DETECT=0 returns a no-op detector (the orchestrator
   // never sees a stall signal, never fires the sidecar).
   const stallDetector = createStallDetector();
-  const stallOrchestrator = createStallOrchestrator({
+  // FEATURE_187 (v0.7.43) Phase A — factory-encapsulated stall sidecar.
+  // The handle's `observer` is a `RunnerToolObserver` whose beforeTool /
+  // onToolCall / onToolResult are called inline from this file's
+  // toolObserver below (Phase D will replace the manual chain with
+  // `composeToolObservers`). `reset` is wired to the compaction
+  // post-hook — `RunnerToolObserver` has no lifecycle hook for that.
+  // Prompt assets (SIDECAR_SYSTEM_PROMPT + REPORT_TOOL + sample output)
+  // are pinned by `byte-identity-lock.test.ts` to preserve F178 eval
+  // 1909d5d2 SHIP-SIDECAR-ALL evidence across this plumbing-only move.
+  const stallSidecar: StallSidecarHandle = createStallSidecarToolObserver({
     detector: stallDetector,
     provider: resolveProvider(options.provider ?? 'anthropic'),
-    systemPrompt: STALL_SIDECAR_SYSTEM_PROMPT,
-    reportTool: STALL_REPORT_TOOL,
   });
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
@@ -1328,7 +1334,7 @@ async function runManagedTaskViaRunnerInner(
     onPostCompact: () => {
       readFileStateCache.clear();
       stallDetector.reset();
-      stallOrchestrator.reset();
+      stallSidecar.reset();
     },
   });
 
@@ -1400,17 +1406,16 @@ async function runManagedTaskViaRunnerInner(
     // CANCELLED_TOOL_RESULT_MESSAGE → cancel; other string → block
     // with that string as the synthesized tool_result content.
     beforeTool: async (call: { name: string; id: string; input: Record<string, unknown> }) => {
-      // FEATURE_178 v0.7.42 — consume any pending nudge first. If the
-      // previous tool's onToolCall fired a stall signal and the L2
-      // sidecar resolved with isStuck=true, the nudge text is sitting
-      // in the orchestrator's pending ref. Returning it as a string
-      // here blocks the current tool with the nudge as its synthesized
-      // tool_result — the model sees the nudge instead of the actual
-      // tool output and rethinks. This is the only path that converts
-      // an L1+L2 verdict into model-visible behaviour.
-      const pendingNudge = stallOrchestrator.consumePendingNudge();
-      if (pendingNudge !== undefined) {
-        return pendingNudge;
+      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
+      // observer's beforeTool. Internally consumes any pending nudge
+      // queued by the previous tool's L1+L2 verdict pipeline; returns
+      // a string to short-circuit (block with nudge as synthesized
+      // tool_result), or true/undefined to fall through to permission.
+      // Phase D will replace this manual delegation with
+      // `composeToolObservers([stallSidecar.observer, ...])`.
+      const stallVerdict = await stallSidecar.observer.beforeTool?.(call);
+      if (stallVerdict !== undefined && stallVerdict !== true) {
+        return stallVerdict;
       }
       // Existing permission / policy override path. Only runs when
       // `options.events` is set (interactive callers); SDK / tests
@@ -1431,12 +1436,12 @@ async function runManagedTaskViaRunnerInner(
       return true;
     },
     onToolCall: (call: { name: string; id: string; input: Record<string, unknown> }) => {
-      // FEATURE_178 v0.7.42 — record into the orchestrator (which
-      // records into the L1 detector AND the transcript buffer, and
-      // fires the L2 sidecar non-awaited when stall is detected). The
-      // sidecar verdict surfaces on the NEXT beforeTool call via
-      // consumePendingNudge(); this call returns immediately.
-      stallOrchestrator.recordToolUse(call);
+      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
+      // observer's onToolCall. Records into L1 detector + transcript
+      // buffer + fires L2 sidecar non-awaited on stall signal. Verdict
+      // surfaces on the NEXT beforeTool via the observer's
+      // consumePendingNudge path; this call returns immediately.
+      stallSidecar.observer.onToolCall?.(call);
       // CAP-035: filter internal control-plane tools (emit_managed_protocol,
       // etc.) so REPL transcript doesn't surface them. Pre-FEATURE_100
       // AMA emitted every tool call regardless of visibility — REPL
@@ -1451,18 +1456,18 @@ async function runManagedTaskViaRunnerInner(
       });
     },
     onToolResult: (
-      call: { name: string; id: string },
-      result: { content: string | readonly KodaXToolResultContentItem[]; metadata?: unknown },
+      call: { name: string; id: string; input: Record<string, unknown> },
+      result: {
+        content: string | readonly KodaXToolResultContentItem[];
+        metadata?: Record<string, unknown>;
+      },
     ) => {
-      // FEATURE_178 v0.7.42 — feed the tool_result content into the
-      // orchestrator's transcript buffer so subsequent sidecar prompts
-      // include the actual return values, not just bare tool_use
-      // blocks. We string-coerce to keep the buffer type-clean — the
-      // sidecar only reads text.
-      stallOrchestrator.recordToolResult(
-        { id: call.id },
-        typeof result.content === 'string' ? result.content : '[non-text content]',
-      );
+      // FEATURE_187 (v0.7.43) Phase A — delegate to the stall sidecar
+      // observer's onToolResult. Feeds tool_result content into the
+      // orchestrator transcript buffer so subsequent sidecar prompts
+      // see actual return values, not just bare tool_use blocks. The
+      // observer internally string-coerces non-text content.
+      stallSidecar.observer.onToolResult?.(call, result);
       // F4 parity — track whether any tool result was truncated by the
       // tool-result-truncation guardrail. `result.metadata.truncated`
       // is set by the guardrail's rewrite step. Observed values feed

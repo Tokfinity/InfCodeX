@@ -8,12 +8,12 @@ import type {
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
 import { KodaXBaseProvider } from '@kodax-ai/llm';
-import { createStallDetector } from './stall-detector.js';
-import { createStallOrchestrator } from './stall-orchestrator.js';
+import { createStallDetector } from '../../../multi-instance/stall-detector.js';
+import { createStallOrchestrator } from './orchestrator.js';
 import {
   REPORT_TOOL,
   SIDECAR_SYSTEM_PROMPT,
-} from './stall-sidecar-prompts.js';
+} from './prompts.js';
 
 const FAKE_REPORT_TOOL: KodaXToolDefinition = REPORT_TOOL;
 
