@@ -1606,21 +1606,18 @@ export const BUILTIN_COMMANDS: Command[] = [
   {
     name: 'verifier-log',
     description: 'Toggle Sidecar Verifier log line (off by default)',
-    usage: '/verifier-log [on|off|toggle|status]',
-    argumentHint: 'on | off | toggle | status',
+    usage: '/verifier-log [on|off]',
+    argumentHint: 'on | off',
     handler: async (args) => {
       const raw = args[0]?.toLowerCase();
       const envOn = process.env.KODAX_VERIFIER_LOG === '1';
-      const configOn = loadConfig().verifierLog === true;
 
-      if (!raw || raw === 'status') {
+      if (!raw) {
+        const configOn = loadConfig().verifierLog === true;
         const effective = envOn ? 'on' : 'off';
-        // Effective state = `process.env.KODAX_VERIFIER_LOG === '1'`
-        // (what the next sidecar call will see). When config and env
-        // disagree we show both sides explicitly without asserting a
-        // precedence direction — the right side that "wins" depends on
-        // whether the divergence is mid-session (env not yet applied
-        // from config) or shell-set (env overrides config on startup).
+        // Show config-vs-env divergence without asserting precedence —
+        // it depends on whether env came from shell (overrides config)
+        // or from `applyVerifierRuntimeEnv` (config-derived).
         const persistedSuffix =
           configOn === envOn
             ? ''
@@ -1634,14 +1631,18 @@ export const BUILTIN_COMMANDS: Command[] = [
             '  `[Sidecar Verifier] {verdict} · {provider}/{model} · {ms}ms · {trace}`',
           ),
         );
-        console.log(chalk.dim('Usage: /verifier-log [on|off|toggle|status]\n'));
+        console.log(chalk.dim('Usage: /verifier-log [on|off]\n'));
         return;
       }
 
-      const nextValue = resolveToggleFlag(raw, envOn);
-      if (nextValue === null) {
+      let nextValue: boolean;
+      if (raw === 'on' || raw === 'true' || raw === '1') {
+        nextValue = true;
+      } else if (raw === 'off' || raw === 'false' || raw === '0') {
+        nextValue = false;
+      } else {
         console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /verifier-log [on|off|toggle|status]\n'));
+        console.log(chalk.dim('Usage: /verifier-log [on|off]\n'));
         return;
       }
 
@@ -1665,7 +1666,6 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /verifier-log           ') + 'Show current state');
       console.log(chalk.dim('  /verifier-log on        ') + 'Enable + persist to config');
       console.log(chalk.dim('  /verifier-log off       ') + 'Disable + persist to config');
-      console.log(chalk.dim('  /verifier-log toggle    ') + 'Flip current state');
       console.log();
       console.log(chalk.bold('Description:'));
       console.log(chalk.dim('  The Sidecar Verifier is the second-pass LLM judgment that fires'));
