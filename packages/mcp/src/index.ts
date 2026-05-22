@@ -54,6 +54,7 @@ export type {
   McpServerStatus,
   McpServerLogs,
   McpServerToolList,
+  McpServerCatalog,
 } from './manager.js';
 export { McpManager, createMcpManager } from './manager.js';
 

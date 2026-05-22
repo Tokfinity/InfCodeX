@@ -85,6 +85,54 @@ const expanded = await expandSkillForLLM(skill, 'src/auth.ts', context);
 console.log(expanded.content);
 ```
 
+### 动态上下文 `` !`cmd` `` 与 Host Hook (v0.7.42)
+
+Skill 的 markdown 支持 `` !`shell-cmd` `` 占位符，解析时被替换为命令的 stdout：
+
+```markdown
+Current git status:
+!`git status --short`
+```
+
+默认 `VariableResolver` 用 `execSync` + 内置 allowlist 直接执行 — 这对独立 `kodax` CLI 用户合适，但**嵌入到 host app 时往往不是想要的**（host 通常要走自己的 permission broker / audit trail）。
+
+`SkillContext` 暴露两个 hook：
+
+| 字段 | 行为 |
+|---|---|
+| `executeDynamicContext?: (cmd, cwd) => Promise<string>` | 注入后，**每次** `` !`cmd` `` 执行都路由到这里。返回 stdout 字符串，或 throw 来拒绝。 |
+| `disableDynamicContext?: boolean` | `true` 时所有 `` !`cmd` `` token 直接被替换为拒绝 banner，覆盖 hook。 |
+
+三层 dispatch 顺序：`disable` → `executeDynamicContext` → 兜底 `execSync`。
+
+```ts
+import { createResolver } from '@kodax/skills';
+
+const context: SkillContext = {
+  workingDirectory: '/repo',
+  projectRoot: '/repo',
+  sessionId: 'session-1',
+  environment: {},
+  executeDynamicContext: async (cmd, cwd) => {
+    if (!(await brokerAskUser({ kind: 'skill-cmd', command: cmd, cwd }))) {
+      throw new Error('user denied');
+    }
+    return (await brokerExecute(cmd, { cwd })).stdout;
+  },
+};
+const resolver = createResolver(context);  // returns IVariableResolver
+```
+
+入口三件套（都从 `@kodax-ai/kodax/skills` 导出）：
+
+- `IVariableResolver` — 接口契约（`resolve(content): Promise<string>`）
+- `VariableResolver` — 默认实现类
+- `createResolver(context)` — factory，返回 `IVariableResolver`
+
+Host 完全替换 resolver 时可以自己实现 `IVariableResolver` interface — KodaX 自己的 skill 执行路径走的就是这个接口。
+
+详细 embedder 集成指南：[docs/SDK_EMBEDDER_GUIDE.md §2](../../docs/SDK_EMBEDDER_GUIDE.md#2-skill-cmd-dynamic-context-resolution--ivariableresolver)。
+
 ### 自定义 Skill
 
 创建自定义 Skill 文件 `~/.kodax/skills/my-skill/SKILL.md`:
@@ -139,7 +187,11 @@ export { loadSkillMetadata, loadFullSkill, loadSkillFileContent };
 export { initializeSkillRegistry, getSkillRegistry, SkillRegistry };
 export { executeSkill, createExecutor, SkillExecutor };
 export { expandSkillForLLM, formatSkillActivationMessage };
-export type { Skill, SkillMetadata, SkillContext, SkillResult };
+export { VariableResolver, createResolver, resolveSkillContent, parseArguments };
+export type {
+  Skill, SkillMetadata, SkillContext, SkillResult,
+  IVariableResolver, ISkillRegistry, SkillDynamicContextExecutor,
+};
 ```
 
 ## 依赖

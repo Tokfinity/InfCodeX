@@ -111,6 +111,48 @@ describe('McpManager — startServer + listTools (real MCP roundtrip)', () => {
   });
 });
 
+describe('McpManager — getCatalog (full catalog)', () => {
+  it('returns tools + resources + prompts in a single snapshot', async () => {
+    manager = new McpManager(fixture.servers, { cacheDir: fixture.cacheDir });
+    await manager.startServer(fixture.serverId);
+    const catalog = await manager.getCatalog(fixture.serverId);
+
+    expect(catalog.serverId).toBe(fixture.serverId);
+    expect(catalog.descriptors.length).toBeGreaterThanOrEqual(3); // 1 tool + 1 resource + 1 prompt minimum
+
+    const kinds = new Set(catalog.descriptors.map((d) => d.kind));
+    expect(kinds.has('tool')).toBe(true);
+    expect(kinds.has('resource')).toBe(true);
+    expect(kinds.has('prompt')).toBe(true);
+
+    // items + descriptors must have the same length (1:1 mapping).
+    expect(catalog.items.length).toBe(catalog.descriptors.length);
+    expect(catalog.updatedAt).toBeDefined();
+  });
+
+  it('forceRefresh:true bypasses the on-disk cache', async () => {
+    manager = new McpManager(fixture.servers, { cacheDir: fixture.cacheDir });
+    await manager.startServer(fixture.serverId);
+    const cold = await manager.getCatalog(fixture.serverId);
+    const refreshed = await manager.getCatalog(fixture.serverId, { forceRefresh: true });
+    expect(refreshed.descriptors.length).toBe(cold.descriptors.length);
+  });
+
+  it('throws for unknown serverId', async () => {
+    manager = new McpManager(fixture.servers, { cacheDir: fixture.cacheDir });
+    await expect(manager.getCatalog('does-not-exist')).rejects.toThrow(/Unknown MCP server/);
+  });
+
+  it('triggers lazy connect when called without prior startServer', async () => {
+    const lazyServers = {
+      [fixture.serverId]: { ...fixture.servers[fixture.serverId]!, connect: 'lazy' as const },
+    };
+    manager = new McpManager(lazyServers, { cacheDir: fixture.cacheDir });
+    const catalog = await manager.getCatalog(fixture.serverId);
+    expect(catalog.descriptors.length).toBeGreaterThan(0);
+  });
+});
+
 describe('McpManager — stopServer', () => {
   it('disposes the transport but keeps the server in the config', async () => {
     manager = new McpManager(fixture.servers, { cacheDir: fixture.cacheDir });

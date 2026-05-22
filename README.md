@@ -253,6 +253,11 @@ const result = await runKodaX(
 );
 ```
 
+> **Embedding KodaX inside another app?** (KodaX Space, IDE extensions, custom CLIs)
+> See [docs/SDK_EMBEDDER_GUIDE.md](docs/SDK_EMBEDDER_GUIDE.md) for the runtime-mutation
+> surface (`startKodaX` + `RunningSession`), MCP popout manager API (`McpManager`),
+> Skill `` !`cmd` `` host hook, and per-app data dir namespacing (`getAppDataDir`).
+
 ## Repo Intelligence (optional premium engine)
 
 KodaX ships with built-in OSS repo intelligence (`repo_overview`, `module_context`, `symbol_context`, `process_context`, `impact_estimate`, …) that helps the coding agent understand large codebases without ad-hoc grep/glob exploration.

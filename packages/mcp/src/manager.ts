@@ -66,6 +66,18 @@ export interface McpServerToolList {
 }
 
 /**
+ * Full catalog snapshot for a server — tools + resources + prompts.
+ * Use {@link McpManager.getCatalog} when the popout needs to render
+ * all three capability kinds (not just tools).
+ */
+export interface McpServerCatalog {
+  readonly serverId: string;
+  readonly items: readonly McpCatalogItem[];
+  readonly descriptors: readonly McpCapabilityDescriptor[];
+  readonly updatedAt: string;
+}
+
+/**
  * Manager-shape facade over {@link McpCapabilityProvider}. Construct
  * via the {@link createMcpManager} factory or `new McpManager(...)`
  * directly.
@@ -172,6 +184,31 @@ export class McpManager {
       serverId,
       tools: snapshot.descriptors.filter((descriptor) => descriptor.kind === 'tool'),
       cachedAt: snapshot.updatedAt,
+    };
+  }
+
+  /**
+   * Return the full catalog snapshot for `serverId` — every tool,
+   * resource, and prompt the server exposes — plus lightweight catalog
+   * items for menu rendering. `listTools` is the tools-only fast path;
+   * use this when the popout needs to render resources / prompts panes
+   * alongside tools.
+   *
+   * Triggers a lazy connect + catalog fetch if the catalog has not yet
+   * been built; pass `{ forceRefresh: true }` to force a fresh catalog
+   * regardless of cache state.
+   */
+  async getCatalog(
+    serverId: string,
+    options: { forceRefresh?: boolean } = {},
+  ): Promise<McpServerCatalog> {
+    const runtime = this.requireRuntime(serverId);
+    const snapshot = await runtime.getCatalog(options.forceRefresh ?? false);
+    return {
+      serverId,
+      items: snapshot.items,
+      descriptors: snapshot.descriptors,
+      updatedAt: snapshot.updatedAt,
     };
   }
 

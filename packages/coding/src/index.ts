@@ -830,6 +830,7 @@ export type {
   McpServerStatus,
   McpServerLogs,
   McpServerToolList,
+  McpServerCatalog,
 } from '@kodax-ai/mcp';
 export {
   McpCapabilityProvider,
