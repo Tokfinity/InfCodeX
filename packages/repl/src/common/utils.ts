@@ -628,6 +628,15 @@ export function loadConfig(): {
   repointelBin?: string;
   repoIntelligenceTrace?: boolean;
   streamIdleTimeoutMs?: number;
+  /**
+   * FEATURE_184 Phase D.3 follow-up (v0.7.42) — opt-in Sidecar Verifier
+   * observability. When `true`, the runtime emits a persisted note per
+   * verifier call:
+   *   `[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`
+   * Mirrored to env var `KODAX_VERIFIER_LOG=1` so the agent-runtime
+   * layer (which has no access to `~/.kodax/config.json`) can read it.
+   */
+  verifierLog?: boolean;
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -650,6 +659,7 @@ export function loadConfig(): {
         repointelBin?: string;
         repoIntelligenceTrace?: boolean;
         streamIdleTimeoutMs?: number;
+        verifierLog?: boolean;
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
@@ -694,11 +704,25 @@ function applyRepoIntelligenceRuntimeEnv(config: ReturnType<typeof loadConfig>):
   }
 }
 
+/**
+ * FEATURE_184 Phase D.3 follow-up (v0.7.42) — propagate the user-config
+ * `verifierLog` boolean to the runtime env var the coding layer reads.
+ * Env wins when both are set (mirrors `applyResilienceRuntimeEnv` /
+ * `applyRepoIntelligenceRuntimeEnv` precedence — env-set-first means
+ * a developer can override via shell without editing config).
+ */
+function applyVerifierRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
+  if (config.verifierLog === true && !process.env.KODAX_VERIFIER_LOG) {
+    process.env.KODAX_VERIFIER_LOG = '1';
+  }
+}
+
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
   applyResilienceRuntimeEnv(config);
   applyRepoIntelligenceRuntimeEnv(config);
+  applyVerifierRuntimeEnv(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -723,6 +747,8 @@ export function saveConfig(config: {
   repointelEndpoint?: string;
   repointelBin?: string;
   repoIntelligenceTrace?: boolean;
+  /** FEATURE_184 Phase D.3 follow-up — opt-in verifier log line. */
+  verifierLog?: boolean;
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };

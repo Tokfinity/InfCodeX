@@ -89,3 +89,90 @@ describe('observer-bridge — FEATURE_184 Phase D.3 sidecarStarted', () => {
     expect(() => NULL_OBSERVER.sidecarStarted()).not.toThrow();
   });
 });
+
+describe('observer-bridge — sidecarFinished (Phase D.3 follow-up, opt-in log)', () => {
+  it('emits a persisted `phase: "worker"` summary note with verdict + model + elapsed + trace', () => {
+    const { bridge, statuses, checkpointWriter } = makeBridgeHarness();
+
+    bridge.sidecarFinished({
+      verdict: 'accept',
+      providerName: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      source: 'inherit-main',
+      elapsedMs: 3214,
+      trace: 'verifier_ok',
+    });
+
+    expect(statuses).toHaveLength(1);
+    const ev = statuses[0]!;
+    // 'worker' (not a new union value) — log line is observability only.
+    expect(ev.phase).toBe('worker');
+    // persistToHistory MUST be true — log line is durable evidence.
+    expect(ev.persistToHistory).toBe(true);
+    // Note carries the four user-visible facts (verdict + provider/model +
+    // elapsedMs + trace) so users can confirm sidecar fired post-hoc.
+    expect(ev.note).toContain('[Sidecar Verifier]');
+    expect(ev.note).toContain('accept');
+    expect(ev.note).toContain('anthropic/claude-sonnet-4-6');
+    expect(ev.note).toContain('(inherit)');
+    expect(ev.note).toContain('3214ms');
+    expect(ev.note).toContain('verifier_ok');
+    // sidecarFinished is observer-layer only — no recorder mutation,
+    // no checkpoint side-effect (those are slot-emit anchored).
+    expect(checkpointWriter).not.toHaveBeenCalled();
+  });
+
+  it('labels env-override verifier as `(env)` so users can tell apart inherit vs cross-family', () => {
+    const { bridge, statuses } = makeBridgeHarness();
+
+    bridge.sidecarFinished({
+      verdict: 'revise',
+      providerName: 'anthropic',
+      model: 'claude-opus-4-7',
+      source: 'explicit-env',
+      elapsedMs: 5400,
+      trace: 'verifier_ok',
+    });
+
+    expect(statuses[0]!.note).toContain('(env)');
+  });
+
+  it('does not throw when the consumer did not register onManagedTaskStatus', () => {
+    const bridge = buildObserverBridge(
+      undefined,
+      { current: 'H2_PLAN_EXECUTE_EVAL' },
+      { emitted: [] },
+      { totalBudget: 100, spentBudget: 0, currentHarness: 'H2_PLAN_EXECUTE_EVAL' },
+      { current: 1 },
+      { current: 6 },
+      { current: false },
+      { items: [] },
+      { current: undefined },
+    );
+
+    expect(() =>
+      bridge.sidecarFinished({
+        verdict: 'accept',
+        providerName: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        source: 'inherit-main',
+        elapsedMs: 100,
+        trace: 'verifier_ok',
+      }),
+    ).not.toThrow();
+  });
+
+  it('NULL_OBSERVER provides a no-op sidecarFinished so chain-only paths do not throw', () => {
+    expect(typeof NULL_OBSERVER.sidecarFinished).toBe('function');
+    expect(() =>
+      NULL_OBSERVER.sidecarFinished({
+        verdict: 'accept',
+        providerName: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        source: 'inherit-main',
+        elapsedMs: 100,
+        trace: 'verifier_ok',
+      }),
+    ).not.toThrow();
+  });
+});

@@ -92,6 +92,7 @@ import { createTodoStore, type TodoStore } from './todo-store.js';
 import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
 import {
   createSidecarVerifierStopHook,
+  type SidecarVerifierVerdict,
 } from '../agent-runtime/middleware/sidecar-verifier/verifier.js';
 import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifier/verifier-context-builder.js';
 import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
@@ -1521,6 +1522,16 @@ async function runManagedTaskViaRunnerInner(
     mainProviderName,
     mainModel: options.modelOverride ?? options.model ?? 'unknown',
   });
+  // Opt-in verifier observability: when the user enables verifier-log
+  // (env var KODAX_VERIFIER_LOG=1 OR `verifierLog: true` in
+  // ~/.kodax/config.json), the composedStopHook below emits a
+  // persisted `sidecarFinished` note after every verdict. The captured
+  // verdict ref is used in the body to attach `verifier_ok/timeout/...`
+  // trace + elapsedMs to the log line — onVerdict gives us the verdict
+  // shape, the call-site times the await.
+  const capturedSidecarVerdictRef: {
+    current: SidecarVerifierVerdict | undefined;
+  } = { current: undefined };
   const sidecarVerifierHook = resolvedVerifier
     ? createSidecarVerifierStopHook({
         provider: resolvedVerifier.provider,
@@ -1532,6 +1543,7 @@ async function runManagedTaskViaRunnerInner(
             mutationTracker,
           }),
         onVerdict: (verdict) => {
+          capturedSidecarVerdictRef.current = verdict;
           // Side-effect bridge: writes recorder.verdict in Evaluator-
           // shape, fires observer.onRoleEmit('evaluator', recorder)
           // for downstream parity, dispatches TodoStore action keyed
@@ -1604,7 +1616,38 @@ async function runManagedTaskViaRunnerInner(
           // the observer so the user sees something during the sidecar
           // LLM call (typically 3-10s on inherit-main provider).
           observer.sidecarStarted();
+          capturedSidecarVerdictRef.current = undefined;
+          const verifierStartedAt = Date.now();
           const sidecarResult = await sidecarVerifierHook(ctx);
+          // Phase D.3 follow-up (v0.7.42): when the user opts in via
+          // `KODAX_VERIFIER_LOG=1` (or `verifierLog:true` in
+          // `~/.kodax/config.json`), emit a persisted note summarizing
+          // the verifier call so users can confirm it fired without
+          // reading the raw session jsonl. Off by default — sidecar
+          // accept is the silent happy path.
+          //
+          // Widen with `as` cast: TS narrows `.current` to `undefined`
+          // after the reset assignment above and does not widen back
+          // across the awaited onVerdict mutation (closure mutation is
+          // opaque to control-flow analysis). Explicit annotation does
+          // not override the narrowed RHS type; `as` is the escape.
+          const captured = capturedSidecarVerdictRef.current as
+            | SidecarVerifierVerdict
+            | undefined;
+          if (
+            process.env.KODAX_VERIFIER_LOG === '1' &&
+            captured &&
+            resolvedVerifier
+          ) {
+            observer.sidecarFinished({
+              verdict: captured.verdict,
+              providerName: resolvedVerifier.providerName,
+              model: resolvedVerifier.model,
+              source: resolvedVerifier.source,
+              elapsedMs: Date.now() - verifierStartedAt,
+              trace: captured.trace,
+            });
+          }
           if (sidecarResult !== undefined) return sidecarResult;
         }
       }

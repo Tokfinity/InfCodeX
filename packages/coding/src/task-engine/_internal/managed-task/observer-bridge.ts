@@ -536,6 +536,23 @@ export function buildObserverBridge(
         persistToHistory: false,
       });
     },
+    sidecarFinished: (info) => {
+      // Opt-in verifier observability — gated upstream by
+      // `KODAX_VERIFIER_LOG=1`. Persists a one-line summary into the
+      // session jsonl so users can confirm post-hoc that the sidecar
+      // fired AND see which (provider, model) ran the verification.
+      //
+      // Phase: 'worker' (back to in-chain phase after the verifying
+      // spinner) — avoids adding a new union value just for the log
+      // line. The note format is the user-facing identifier.
+      if (!events?.onManagedTaskStatus) return;
+      const sourceTag = info.source === 'explicit-env' ? 'env' : 'inherit';
+      emit({
+        phase: 'worker',
+        note: `[Sidecar Verifier] ${info.verdict} · ${info.providerName}/${info.model} (${sourceTag}) · ${info.elapsedMs}ms · ${info.trace}`,
+        persistToHistory: true,
+      });
+    },
   };
 }
 
@@ -553,4 +570,5 @@ export const NULL_OBSERVER: ObserverBridge = {
   idleWaiting: () => undefined,
   agentSwitched: () => undefined,
   sidecarStarted: () => undefined,
+  sidecarFinished: () => undefined,
 };

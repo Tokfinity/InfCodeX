@@ -199,4 +199,40 @@ export interface ObserverBridge {
    * for revise+reanimate) naturally overrides the verifying phase.
    */
   readonly sidecarStarted: () => void;
+  /**
+   * FEATURE_184 Phase D.3 follow-up (v0.7.42) — opt-in observability
+   * for the Sidecar Verifier. Fires AFTER the verifier verdict comes
+   * back so the REPL can persist a one-line summary into the transcript
+   * (`[Sidecar Verifier] {verdict} · {model} · {ms}ms · {trace}`).
+   *
+   * Gated by `KODAX_VERIFIER_LOG=1` (env or `verifierLog:true` in
+   * `~/.kodax/config.json`) — off by default. The runtime call site at
+   * `runner-driven.ts` checks the env var before invoking this method.
+   *
+   * `persistToHistory: true` (writes to session jsonl) — diverges from
+   * `sidecarStarted` which is transient spinner state. When users opt
+   * in to the log they explicitly want a durable record per verifier
+   * call, not just a flicker in the live spinner row.
+   */
+  readonly sidecarFinished: (info: SidecarFinishedInfo) => void;
+}
+
+/**
+ * Shape passed to `ObserverBridge.sidecarFinished`. Mirrors the public
+ * fields of `SidecarVerifierVerdict` (`verifier.ts`) plus resolution
+ * metadata that the user opted in to see.
+ */
+export interface SidecarFinishedInfo {
+  /** Three-state verdict the sidecar returned. */
+  readonly verdict: 'accept' | 'revise' | 'blocked';
+  /** Resolved verifier provider name (kodax provider registry id). */
+  readonly providerName: string;
+  /** Resolved verifier model id. */
+  readonly model: string;
+  /** Whether the verifier inherited from main or came from env override. */
+  readonly source: 'explicit-env' | 'inherit-main';
+  /** Wall-clock duration of the verifier StopHook call in milliseconds. */
+  readonly elapsedMs: number;
+  /** Diagnostic trace tag (verifier_ok / fuzzy_tool_match / timeout / …). */
+  readonly trace: string;
 }

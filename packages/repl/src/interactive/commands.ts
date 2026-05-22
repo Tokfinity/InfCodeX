@@ -1603,6 +1603,81 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log();
     },
   },
+  {
+    name: 'verifier-log',
+    description: 'Toggle Sidecar Verifier log line (off by default)',
+    usage: '/verifier-log [on|off|toggle|status]',
+    argumentHint: 'on | off | toggle | status',
+    handler: async (args) => {
+      const raw = args[0]?.toLowerCase();
+      const envOn = process.env.KODAX_VERIFIER_LOG === '1';
+      const configOn = loadConfig().verifierLog === true;
+
+      if (!raw || raw === 'status') {
+        const effective = envOn ? 'on' : 'off';
+        // Effective state = `process.env.KODAX_VERIFIER_LOG === '1'`
+        // (what the next sidecar call will see). When config and env
+        // disagree we show both sides explicitly without asserting a
+        // precedence direction — the right side that "wins" depends on
+        // whether the divergence is mid-session (env not yet applied
+        // from config) or shell-set (env overrides config on startup).
+        const persistedSuffix =
+          configOn === envOn
+            ? ''
+            : ` (env=${envOn ? 'on' : 'off'}, config=${configOn ? 'on' : 'off'})`;
+        console.log(
+          chalk.dim(`\nSidecar Verifier log: ${chalk.cyan(effective)}${persistedSuffix}`),
+        );
+        console.log(
+          chalk.dim(
+            '  When on, a one-line summary persists per verifier call:\n' +
+            '  `[Sidecar Verifier] {verdict} · {provider}/{model} · {ms}ms · {trace}`',
+          ),
+        );
+        console.log(chalk.dim('Usage: /verifier-log [on|off|toggle|status]\n'));
+        return;
+      }
+
+      const nextValue = resolveToggleFlag(raw, envOn);
+      if (nextValue === null) {
+        console.log(chalk.red(`\n[Invalid value: ${args[0]}]`));
+        console.log(chalk.dim('Usage: /verifier-log [on|off|toggle|status]\n'));
+        return;
+      }
+
+      // Mutate runtime env so the change takes effect immediately
+      // (next sidecar call reads `process.env.KODAX_VERIFIER_LOG`).
+      if (nextValue) {
+        process.env.KODAX_VERIFIER_LOG = '1';
+      } else {
+        delete process.env.KODAX_VERIFIER_LOG;
+      }
+
+      const persistence = persistUserConfig({ verifierLog: nextValue });
+      printPersistedCommandStatus(
+        `Sidecar Verifier log: ${nextValue ? 'on' : 'off'}`,
+        persistence,
+      );
+    },
+    detailedHelp: () => {
+      console.log(chalk.cyan('\n/verifier-log - Sidecar Verifier Log Toggle\n'));
+      console.log(chalk.bold('Usage:'));
+      console.log(chalk.dim('  /verifier-log           ') + 'Show current state');
+      console.log(chalk.dim('  /verifier-log on        ') + 'Enable + persist to config');
+      console.log(chalk.dim('  /verifier-log off       ') + 'Disable + persist to config');
+      console.log(chalk.dim('  /verifier-log toggle    ') + 'Flip current state');
+      console.log();
+      console.log(chalk.bold('Description:'));
+      console.log(chalk.dim('  The Sidecar Verifier is the second-pass LLM judgment that fires'));
+      console.log(chalk.dim('  after a Worker terminates text-only. Off by default (silent happy'));
+      console.log(chalk.dim('  path). When on, every verifier call emits a one-line summary:'));
+      console.log(chalk.dim('    [Sidecar Verifier] accept · anthropic/claude-sonnet-4-6 · 3214ms · verifier_ok'));
+      console.log();
+      console.log(chalk.bold('Equivalent env var:'));
+      console.log(chalk.dim('  KODAX_VERIFIER_LOG=1   ') + 'Same effect, env wins over config');
+      console.log();
+    },
+  },
   copyCommand,
   newCommand,
 ];
