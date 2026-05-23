@@ -1843,8 +1843,9 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
 //   (d) re-enter `Runner.run` so the Worker can react.
 //
 // The single test exercises the full happy path (probe child completes
-// → Worker emits handoff → Evaluator accepts) with the child-executor
-// mocked so we control settlement timing precisely. Idle-yield is
+// → Worker text-only terminates → Sidecar Verifier accepts) with the
+// child-executor mocked so we control settlement timing precisely.
+// Idle-yield is
 // always-on as of Slice C3 (the `KODAX_IDLE_YIELD` env-flag gate was
 // retired); this test is the only place that drives the outer-loop
 // wiring through a real `Runner.run` -> idle-yield -> resume ->
@@ -1900,7 +1901,7 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     _resetMessageQueueForTests();
   });
 
-  it('Worker dispatches → idle-yields → child completes → Worker resumes & emits handoff → Evaluator accepts', async () => {
+  it('Worker dispatches → idle-yields → child completes → Worker resumes → text-only termination → Sidecar Verifier accepts', async () => {
     let resolveChild!: (r: KodaXChildExecutionResult) => void;
     mockExec.mockReturnValue(
       new Promise<KodaXChildExecutionResult>((resolve) => {
@@ -1986,6 +1987,20 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
     // The synthetic user message must have surfaced the canonical
     // banner format on resume.
     expect(resumeTranscriptHadBanner).toBe(true);
+    // FEATURE_184 (v0.7.45) + FEATURE_190 (v0.7.43): post-resume Worker
+    // text-only termination is the canonical V2 terminal signal. The
+    // Sidecar Verifier StopHook fires after the text-only turn and the
+    // recorder bridge stamps `source: 'sidecar'` on the verdict slot.
+    // In the unit-test environment the verifier provider is `anthropic`
+    // without a real API key — fail-open policy resolves to
+    // `verdict: 'accept'` (trace=`provider_error`, see
+    // `verifier.ts:251`). Mirrors the L715-717 assertion shape locked
+    // in by the cc8ce393 F193 sidecar-restore fix; this assertion
+    // covers the idle-yield resume path which has a different runner
+    // entry trajectory than the trivial direct-answer path at L715.
+    expect(result.managedProtocolPayload?.verdict).toBeDefined();
+    expect(result.managedProtocolPayload?.verdict?.source).toBe('sidecar');
+    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
   }, 30_000);
 
   // FEATURE_155 v0.7.39 Slice C3 — the `KODAX_IDLE_YIELD=false` opt-out
