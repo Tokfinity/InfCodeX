@@ -230,7 +230,10 @@ export interface StructuralResumeSeed {
   };
   readonly harness: KodaXHarnessProfile;
   readonly rolesEmitted: readonly KodaXTaskRole[];
-  readonly startingRole: 'scout' | 'planner' | 'generator';
+  // FEATURE_193 (v0.7.43): `startingRole` field removed — was computed
+  // but never read by the runner (only the V1 chain consumed it). On V2
+  // the entry agent is always `chain.worker`, so resume picks up there
+  // regardless of how far V1 had progressed before the checkpoint.
 }
 
 export function buildStructuralResumeSeed(validated: ValidatedCheckpoint): StructuralResumeSeed {
@@ -299,18 +302,9 @@ export function buildStructuralResumeSeed(validated: ValidatedCheckpoint): Struc
     rolesEmitted.push('planner');
   }
 
-  let startingRole: 'scout' | 'planner' | 'generator' = 'scout';
-  if (recorderSlots.scout) {
-    if (harness === 'H0_DIRECT') {
-      startingRole = 'scout';
-    } else if (harness === 'H1_EXECUTE_EVAL') {
-      startingRole = 'generator';
-    } else {
-      startingRole = recorderSlots.contract ? 'generator' : 'planner';
-    }
-  }
-
-  return { recorderSlots, harness, rolesEmitted, startingRole };
+  // FEATURE_193 (v0.7.43): `startingRole` computation removed — see
+  // StructuralResumeSeed interface note above.
+  return { recorderSlots, harness, rolesEmitted };
 }
 
 /**

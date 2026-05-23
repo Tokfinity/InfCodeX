@@ -33,7 +33,6 @@ import type {
   KodaXTaskToolPolicy,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
-import { MCP_TOOL_NAMES } from '../../../tools/index.js';
 
 /**
  * Scope hints the Scout emits on `emit_scout_verdict` — `scope` + the
@@ -187,53 +186,13 @@ export const VERIFICATION_SHELL_PATTERNS: readonly string[] = [
   '^(?:pytest|go\\s+test|cargo\\s+test|dotnet\\s+test|mvn\\s+test|gradle\\s+test)\\b',
 ];
 
-/**
- * Planner tool allow-list — read/overview/scope + repo-intelligence
- * deep-capsule lookups + MCP.
- *
- * v0.7.27 — repo-intel deep-capsule tools (`module_context`,
- * `symbol_context`, `process_context`, `impact_estimate`) are added so
- * Planner can drill into modules outside the active one when shaping a
- * sprint contract. auto-injection only packs the **active** module /
- * impact; cross-module planning often needs explicit lookups.
- */
-export const PLANNER_ALLOWED_TOOLS: readonly string[] = [
-  'changed_scope',
-  'repo_overview',
-  'changed_diff_bundle',
-  'module_context',
-  'symbol_context',
-  'process_context',
-  'impact_estimate',
-  'glob',
-  'grep',
-  'read',
-  ...MCP_TOOL_NAMES,
-];
-
-/**
- * H1 read-only Generator tool allow-list — inspection + dispatch +
- * repo-intelligence deep-capsule lookups + MCP.
- *
- * v0.7.27 — repo-intel deep-capsule tools added so a read-only
- * Generator investigating before dispatch can explicitly surface
- * module / symbol / impact capsules for its child-task briefs.
- */
-export const H1_READONLY_GENERATOR_ALLOWED_TOOLS: readonly string[] = [
-  'changed_scope',
-  'repo_overview',
-  'changed_diff_bundle',
-  'changed_diff',
-  'module_context',
-  'symbol_context',
-  'process_context',
-  'impact_estimate',
-  'glob',
-  'grep',
-  'read',
-  'dispatch_child_task',
-  ...MCP_TOOL_NAMES,
-];
+// FEATURE_193 (v0.7.43): `PLANNER_ALLOWED_TOOLS` +
+// `H1_READONLY_GENERATOR_ALLOWED_TOOLS` removed. The V1 Planner /
+// readonly Generator allow-lists were referenced only by
+// `buildManagedWorkerToolPolicy`'s `case 'planner'` / `case 'generator'`
+// switch arms (deleted in F193 commits 1–5) and the
+// `'role allow-lists expose repo-intelligence deep-capsule tools'`
+// describe block in `tool-policy.test.ts` (deleted in this commit).
 
 /**
  * Extract a plausible shell command candidate from a free-form

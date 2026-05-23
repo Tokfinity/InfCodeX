@@ -41,56 +41,11 @@ export const WORKER_INSTRUCTIONS_FALLBACK = [
   'todo_update, todo_list, dispatch_child_task, exit_plan_mode.',
 ].join('\n');
 
-/**
- * Shard 6d-T: render Scout's skill map as an appended "Execution
- * Obligations" block. Mirrors legacy `task-engine.ts` behaviour where
- * Scout's skillMap.{skillSummary, executionObligations, ambiguities}
- * was surfaced to Generator as a concrete obligation list before
- * execution. Without this block, `skillMap.executionObligations` is
- * parsed into `scoutDecision.skillMap` but never reaches the model
- * doing the work.
- *
- * Passing `includeVerification: true` additionally surfaces
- * `verificationObligations` — used by Evaluator, whose QA plan
- * legacy also branched on Scout's verification guidance.
- */
-export function renderScoutSkillMapBlock(
-  recorder: VerdictRecorder,
-  { includeVerification }: { includeVerification: boolean },
-): string | undefined {
-  const skillMap = recorder.scout?.payload.scout?.skillMap;
-  if (!skillMap) return undefined;
-  const exec = skillMap.executionObligations ?? [];
-  const verify = skillMap.verificationObligations ?? [];
-  const ambig = skillMap.ambiguities ?? [];
-  const hasExec = exec.length > 0;
-  const hasVerify = includeVerification && verify.length > 0;
-  const hasAmbig = ambig.length > 0;
-  if (!skillMap.skillSummary && !hasExec && !hasVerify && !hasAmbig) {
-    return undefined;
-  }
-  const lines = ['', '=== Scout Skill Map (required obligations) ==='];
-  if (skillMap.skillSummary) {
-    lines.push(`skill_summary: ${skillMap.skillSummary}`);
-  }
-  if (hasExec) {
-    lines.push('execution_obligations:');
-    for (const item of exec) lines.push(`- ${item}`);
-  }
-  if (hasVerify) {
-    lines.push('verification_obligations:');
-    for (const item of verify) lines.push(`- ${item}`);
-  }
-  if (hasAmbig) {
-    lines.push('ambiguities_to_resolve:');
-    for (const item of ambig) lines.push(`- ${item}`);
-  }
-  lines.push(
-    'You must address every obligation above. If any obligation cannot be met, ',
-    'surface it in your emit payload (`followup` for Generator, `reason` for Evaluator).',
-  );
-  return lines.join('\n');
-}
+// FEATURE_193 (v0.7.43): `renderScoutSkillMapBlock` removed — fed
+// Scout's skillMap into Generator/Evaluator prompts. V1 Scout retired,
+// `recorder.scout` is never populated on V2, so the helper produced
+// `undefined` on every call. All call sites were removed in commits
+// 1–5; this commit drops the dangling exporter.
 
 /**
  * Resolve the system prompt for a role. When the full `promptContext`

@@ -2,8 +2,6 @@
  * Verdict-recorder emit wrapper for the runner-driven AMA path.
  *
  * Hosts:
- *   - `SLOT_TO_ROLE` — slot-id → role mapping (used by both the wrapper
- *     and downstream observability)
  *   - `BudgetExtensionContext` — the per-run plan/harness/round refs
  *     the emit wrapper needs to fire the 90%-threshold budget-extension
  *     dialog and to enforce the H1 same-harness revise cap (consumed by
@@ -14,14 +12,13 @@
  *   - `wrapEmitterWithRecorder` — wraps a single protocol-emitter tool
  *     so every successful execution records its `ProtocolEmitterMetadata`
  *     into the recorder, fires the role-emit observer, runs the
- *     H1-cap / V2-routing / Scout-skillMap-todo seeding / Scout pre-handoff
- *     write warning / budget-extension dialog branches, and routes any
- *     V2-active handoffTarget=Generator back to Worker
+ *     V2-routing + H1-cap + budget-extension dialog branches, and
+ *     rewrites legacy V1 `handoffTarget=Generator` back to Worker
  *
  * Extracted from `task-engine/runner-driven.ts` lines ~398–870 of the
  * pre-FEATURE_171 monolith as part of FEATURE_171 (v0.7.41) modular
- * split. Zero behavior change — bodies are byte-identical to the
- * previous in-file declarations.
+ * split. FEATURE_193 (v0.7.43) dropped the V1 scout/contract/handoff
+ * slot branches; only the verdict slot remains.
  */
 
 import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
@@ -34,7 +31,6 @@ import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.
 import type {
   KodaXEvents,
   KodaXHarnessProfile,
-  KodaXTaskRole,
 } from '../../../types.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
 import {
@@ -46,23 +42,10 @@ import { BUDGET_EXTENSION_BY_HARNESS } from './observer-bridge.js';
 import type { TodoStore } from '../../todo-store.js';
 import type { ObserverBridge, VerdictRecorder } from './types.js';
 
-/**
- * Role-mapping for `onManagedTaskStatus` emissions. Each emit tool
- * corresponds to a role that has just finished its turn.
- *
- * FEATURE_184 (v0.7.45): `verdict: 'evaluator'` is a SLOT semantic, not
- * an agent-name reference. The in-chain Evaluator role was retired in C.1+C.2;
- * the Sidecar Verifier (verifier-recorder-bridge.ts) writes `recorder.verdict`
- * directly via `applySidecarVerdictToRecorder` and emits `'evaluator'` here
- * for backward compat (downstream consumers key on this string).
- */
-export const SLOT_TO_ROLE: Record<'scout' | 'contract' | 'handoff' | 'verdict', KodaXTaskRole> = {
-  scout: 'scout',
-  contract: 'planner',
-  handoff: 'generator',
-  // 'evaluator' is a slot semantic — the Sidecar Verifier now owns this slot.
-  verdict: 'evaluator',
-};
+// FEATURE_193 (v0.7.43): `SLOT_TO_ROLE` const removed — Commit 6 inlined
+// the only reader (`observer.onRoleEmit('evaluator', recorder)`) and the
+// scout/contract/handoff fields had no consumer after V1 chain retirement.
+// `KodaXTaskRole` import dropped along with it.
 
 /**
  * Context needed to fire the 90%-threshold budget-extension dialog on
