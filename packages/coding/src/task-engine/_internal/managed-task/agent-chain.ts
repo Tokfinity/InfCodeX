@@ -32,7 +32,6 @@ import {
 } from '../../../agents/task-engine-agents.js';
 import {
   emitContract,
-  emitHandoff,
   emitScoutVerdict,
 } from '../../../agents/protocol-emitters.js';
 import { toolBash } from '../../../tools/bash.js';
@@ -582,97 +581,19 @@ export function buildRunnerAgentChain(
     todoStore,
     pendingFailedResetRef,
   );
-  // FEATURE_165 (v0.7.41) — pending-children gate on emit_handoff.
-  //
-  // The outer idle-yield loop's `detectIdleYield` treats
-  // `hasEmittedHandoff=true` as a terminal exit (Worker hands off →
-  // Evaluator owns the rest). This is correct for the normal flow,
-  // but if the LLM calls emit_handoff while `dispatch_child_task`
-  // children are still in flight, the registry is non-empty at exit,
-  // banners are stranded in the background queue, and the user-visible
-  // run-summary is missing the child outputs (production trace
-  // 2026-05-15: zhipu/glm51 worker emit_handoff'd mid-fanout, 3
-  // children orphaned).
-  //
-  // Gate behaviour: when invoked with a non-empty `childTaskRegistry`,
-  // returns `isError:true` AND omits `metadata`. Two invariants the
-  // rest of the pipeline depends on are observed by this shape:
-  //
-  //   1. `wrapEmitterWithRecorder` (line ~821) guards
-  //      `recorder[slot] = result.metadata` behind
-  //      `if (!result.isError && result.metadata)`, so `recorder.handoff`
-  //      stays `undefined` when the gate fires. The outer-loop
-  //      `computeSnapshot` (line ~5645) reads `Boolean(recorder.handoff)`,
-  //      so `hasEmittedHandoff` stays false → idle-yield engages →
-  //      `<task-completed>` banners get woven into the next Worker turn
-  //      as designed.
-  //
-  //   2. `detectHandoffSignal`
-  //      (`agent/src/primitives/runner-handoff.ts:53`) reads
-  //      `result.metadata.handoffTarget`; without metadata, no handoff
-  //      signal fires, so `currentAgent` does NOT switch from Worker →
-  //      Evaluator on this turn. Worker sees the error tool_result on
-  //      its next turn and (per role prompt) ends text-only so
-  //      idle-yield picks up.
-  //
-  // Scope: gates BOTH V1 Generator and V2 Worker uses of `handoffEmit`
-  // (the variable is shared at lines 2558 / 2682). Evaluator's
-  // `emit_verdict` has its own analogous discipline via the prompt's
-  // CHILD-TASK WAIT DISCIPLINE block (FEATURE_155 v0.7.38) AND the
-  // outer-loop's `hasEmittedTerminalVerdict` gate — those are
-  // unaffected here.
-  //
-  // Same-batch race (resolved empirically — `runner-driven.test.ts`
-  // FEATURE_165 race-regression test pins the behaviour): when the
-  // LLM emits `[dispatch_child_task, emit_handoff]` in ONE tool_use
-  // batch, `runner.ts:737-739` runs both via `Promise.all`. The
-  // `wrapDispatchChildTaskForRole` wrapper calls `gen.next()` on
-  // `toolDispatchChildTask`'s async generator BEFORE its first
-  // `await` — V8 / modern engines run async-generator bodies
-  // synchronously through the first `yield`, so `registerChildTask`
-  // (registry.set) executes before `gen.next()` returns control to
-  // the awaiter. By the time `emit_handoff`'s wrapper sync prefix
-  // (this gate) runs, the registry is already populated. The race
-  // regression test exercises this exact `Promise.all` shape and
-  // expects the gate to fire — if a future Node version defers
-  // async-generator body execution, that test pins the regression.
-  //
-  // Budget accounting: when the gate fires, `incrementManagedBudgetUsage`
-  // inside `wrapEmitterWithRecorder` does NOT run (we short-circuit
-  // before delegating). Matches the broader pattern that a failed /
-  // rejected tool call does not consume the recorder slot, so it
-  // should not consume the budget either.
-  const handoffEmitBase = wrapEmitterWithRecorder(
-    emitHandoff,
-    'handoff',
-    recorder,
-    observer,
-    budget,
-  );
-  const handoffEmit: RunnableTool = {
-    ...handoffEmitBase,
-    execute: async (input, runnerCtx): Promise<RunnerToolResult> => {
-      const registry = ctx.childTaskRegistry;
-      if (registry && registry.size > 0) {
-        const pendingIds = [...registry.keys()].slice(0, 5).join(', ');
-        const more = registry.size > 5 ? `, +${registry.size - 5} more` : '';
-        return {
-          content:
-            `[emit_handoff] cannot hand off while ${registry.size} child task(s) `
-            + `are still in flight: ${pendingIds}${more}. Each dispatched child `
-            + `must produce a matching <task-completed task_id="…"> in your `
-            + `transcript before you can hand off — otherwise the Evaluator `
-            + `audits a half-finished run and the child work is orphaned. End `
-            + `your turn with text only; the runner will resume you when each `
-            + `child completes. To abandon a child instead of waiting, call `
-            + `task_stop(task_id, reason="…") first and wait for the resulting `
-            + `<task-completed> (it carries error="stopped: …").`,
-          isError: true,
-        };
-      }
-      return handoffEmitBase.execute(input, runnerCtx);
-    },
-  };
+  // FEATURE_190 (v0.7.43) Phase 3: `handoffEmit` deleted. Under the
+  // F184 Sidecar Verifier architecture Worker/Generator terminate
+  // text-only — no tool call to populate `recorder.handoff`, so the
+  // outer-loop `computeSnapshot` reads `Boolean(recorder.handoff) ==
+  // false` permanently and idle-yield handles the pending-children case
+  // naturally (text-only + pending children → wait + resume). The
+  // FEATURE_165 pending-children gate's invariant survives via the
+  // idle-yield path: when Worker terminates text-only with pending
+  // children, `detectIdleYield` returns true, the runner waits for
+  // each child banner, and Worker resumes — same end-user observable
+  // as the F165 gate's "stay in Worker, wait for children" behaviour
+  // (just without the LLM ever calling a tool that would need to be
+  // rejected).
   type WritableAgent = { -readonly [K in keyof Agent]: Agent[K] };
 
   // Dynamic role instructions. Every agent's `instructions`
@@ -797,7 +718,6 @@ export function buildRunnerAgentChain(
     // tracking). FEATURE_097 §5 ② throttle reset + Slice 3c per-step
     // deterministic evaluator wraps flow through `codingTools.todoUpdate`.
     tools: [
-      handoffEmit,
       ...buildAgentToolsFromRegistry(
         'generator',
         ctx,
@@ -883,7 +803,6 @@ export function buildRunnerAgentChain(
     // module_context / symbol_context / process_context / impact_estimate
     // pull tools also now land in the schema (previously missing).
     tools: [
-      handoffEmit,
       ...buildAgentToolsFromRegistry(
         'worker',
         ctx,

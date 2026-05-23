@@ -8,12 +8,10 @@
 
 export {
   EMIT_CONTRACT_TOOL_NAME,
-  EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
   EMIT_VERDICT_TOOL_NAME,
   PROTOCOL_EMITTER_TOOLS,
   emitContract,
-  emitHandoff,
   emitScoutVerdict,
   emitVerdict,
 } from './protocol-emitters.js';

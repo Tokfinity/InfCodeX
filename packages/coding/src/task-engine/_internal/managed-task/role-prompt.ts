@@ -31,7 +31,6 @@ import type {
 } from '../../../types.js';
 import {
   MANAGED_TASK_CONTRACT_BLOCK,
-  MANAGED_TASK_HANDOFF_BLOCK,
   MANAGED_TASK_VERDICT_BLOCK,
 } from '../../../managed-protocol.js';
 import { isRepoIntelligenceWorkingToolName } from '../../../tools/index.js';
@@ -57,19 +56,15 @@ import {
  * `emit_managed_protocol` tool; the Runner-driven path routes each role
  * through its own dedicated emitter so the LLM picks the correct schema.
  *
- * Keep in sync with `packages/coding/src/agents/protocol-emitters.ts` —
+ * FEATURE_190 (v0.7.43) Phase 3: `generator` and `worker` removed — both
+ * roles are terminal under F184 architecture and have no emit tool
+ * (text-only termination + out-of-band Sidecar Verifier). Keep in sync
+ * with `packages/coding/src/agents/protocol-emitters.ts` —
  * this is the single place the prompt text references emit tools by name.
  */
-const ROLE_EMIT_TOOL_NAMES: Record<Exclude<KodaXTaskRole, 'direct' | 'evaluator'>, string> = {
+const ROLE_EMIT_TOOL_NAMES: Record<'scout' | 'planner', string> = {
   scout: 'emit_scout_verdict',
   planner: 'emit_contract',
-  generator: 'emit_handoff',
-  // FEATURE_114 v0.7.36 — Worker (V2 single-loop primary agent) hands off
-  // to the structurally-preserved Evaluator role with the same payload
-  // shape Generator uses today. Reusing `emit_handoff` keeps the wire
-  // format identical so the V2 runner can plug into the existing
-  // wrapEmitterWithRecorder + protocol-emitters pipeline unchanged.
-  worker: 'emit_handoff',
 };
 
 /**
@@ -403,24 +398,15 @@ export function createRolePrompt(
             : undefined
       )
     : undefined;
-  const handoffBlockInstructions = [
-    `Append a final fenced block named \`\`\`${MANAGED_TASK_HANDOFF_BLOCK}\` with this exact shape:`,
-    'status: ready|incomplete|blocked',
-    'summary: <one-line handoff summary>',
-    'evidence:',
-    '- <evidence item>',
-    'followup:',
-    '- <required next step or "none">',
-    '- <optional second next step>',
-    'Keep the role output above the block.',
-  ].join('\n');
-  const emitToolName = (role !== 'direct' && role !== 'evaluator') ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
-  // FEATURE_190 (v0.7.43): Worker is excluded from PROTOCOL EMISSION
-  // teaching — under F184 architecture Worker terminates text-only
-  // (no `emit_handoff` tool call) and the Sidecar Verifier runs
-  // out-of-band. Generator retains the teaching for legacy V1 paths
-  // until Phase 3 deletes the tool.
-  const managedProtocolToolInstructions = role !== 'direct' && role !== 'worker' && emitToolName && (!isTerminalAuthority || role !== 'generator')
+  // FEATURE_190 (v0.7.43) Phase 3: the legacy `handoffBlockInstructions`
+  // fenced-block fallback was removed — Generator/Worker terminate
+  // text-only and have no emit tool to fall back from.
+  const emitToolName = (role === 'scout' || role === 'planner') ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
+  // FEATURE_190 (v0.7.43) Phase 3: only Scout and Planner have emit tools.
+  // Generator and Worker are terminal under F184 — text-only termination
+  // triggers the Sidecar Verifier StopHook out-of-band; no PROTOCOL
+  // EMISSION teaching needed (would point to a non-existent tool).
+  const managedProtocolToolInstructions = emitToolName
     ? [
       'PROTOCOL EMISSION — MUST be in the SAME response as your answer:',
       `Write your user-facing answer, then call "${emitToolName}" exactly once — all in the SAME response.`,
@@ -793,7 +779,9 @@ export function createRolePrompt(
             ? 'WRITE FAN-OUT: In this H2 run you may call with readOnly=false when modifying independent modules. Each write child runs in an isolated git worktree; the Evaluator reviews all diffs before merging.'
             : 'Write fan-out (readOnly=false) is only available in H2_PLAN_EXECUTE_EVAL harness. In the current harness, children must be readOnly=true.',
         ].join('\n'),
-        isTerminalAuthority ? undefined : handoffBlockInstructions,
+        // FEATURE_190 (v0.7.43) Phase 3: Generator terminates text-only;
+        // the legacy `handoffBlockInstructions` (fenced-block fallback for
+        // emit_handoff) is no longer injected.
         sharedWorkerDiscipline,
         sharedClosingRule,
       ].filter(Boolean).join('\n\n');

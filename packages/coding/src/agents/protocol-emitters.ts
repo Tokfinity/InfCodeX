@@ -31,7 +31,10 @@ import type { KodaXManagedProtocolPayload } from '../types.js';
 /** Public tool name — LLM sees this on the tool list. */
 export const EMIT_SCOUT_VERDICT_TOOL_NAME = 'emit_scout_verdict';
 export const EMIT_CONTRACT_TOOL_NAME = 'emit_contract';
-export const EMIT_HANDOFF_TOOL_NAME = 'emit_handoff';
+// FEATURE_190 (v0.7.43) Phase 3: `EMIT_HANDOFF_TOOL_NAME` / `emitHandoff`
+// deleted. Worker/Generator are terminal post-F184 — text-only termination
+// triggers the Sidecar Verifier StopHook out-of-band; no tool call needed
+// to signal turn-end.
 export const EMIT_VERDICT_TOOL_NAME = 'emit_verdict';
 
 /**
@@ -275,47 +278,6 @@ export const emitContract: RunnableTool = buildEmitter({
 });
 
 /**
- * Generator/Worker handoff emitter — LEGACY (pre-F184).
- *
- * FEATURE_184 (v0.7.45) retired the in-chain Evaluator and made Worker/
- * Generator terminal. FEATURE_190 (v0.7.43) updated the Worker prompt
- * to teach text-only termination as the canonical exit. This tool
- * remains in the registry through the FEATURE_190 cleanup window for
- * back-compat; FEATURE_190 Phase 3 deletes it.
- */
-export const emitHandoff: RunnableTool = buildEmitter({
-  name: EMIT_HANDOFF_TOOL_NAME,
-  role: 'generator',
-  description:
-    'LEGACY (pre-F184). When you need to flag a blocked terminal state with structured evidence/followup ' +
-    'metadata, prefer ending your turn with a brief text-only summary instead — the Sidecar Verifier ' +
-    'reads it and decides accept / revise / blocked out-of-band. This tool is retained only for ' +
-    'transitional compatibility and will be removed in a future release.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      status: {
-        type: 'string',
-        enum: ['ready', 'incomplete', 'blocked'],
-        description: 'Execution state at handoff time.',
-      },
-      summary: { type: 'string', description: 'One-line handoff summary.' },
-      evidence: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Evidence produced during execution.',
-      },
-      followup: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Required next steps for the Evaluator.',
-      },
-    },
-    required: ['status'],
-  },
-});
-
-/**
  * Sidecar Verifier verdict emitter (FEATURE_184). Decides the terminal
  * outcome of the round: accept, revise (Worker re-runs to fix), or
  * blocked. The Runner-driven engine reads `metadata.payload.verdict.status`
@@ -364,10 +326,15 @@ export const emitVerdict: RunnableTool = buildEmitter({
   },
 });
 
-/** All four emitter tools, exposed as a tuple for iteration. */
+/**
+ * All three emitter tools, exposed as a tuple for iteration.
+ *
+ * FEATURE_190 (v0.7.43) Phase 3: shrank from 4 to 3 — `emitHandoff` deleted.
+ * Worker/Generator terminate text-only; Sidecar Verifier owns terminal
+ * decisions out-of-band.
+ */
 export const PROTOCOL_EMITTER_TOOLS: readonly RunnableTool[] = Object.freeze([
   emitScoutVerdict,
   emitContract,
-  emitHandoff,
   emitVerdict,
 ]);

@@ -45,7 +45,6 @@ import {
 import { SCOPE_AWARE_HARNESS_GUARDRAIL_NAME } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
 import {
   emitContract,
-  emitHandoff,
   emitScoutVerdict,
 } from './protocol-emitters.js';
 
@@ -117,7 +116,9 @@ const generatorSpec: AgentSpec = {
     'brief text-only summary when execution is complete or blocked — no ' +
     'tool call is needed to terminate. An independent Sidecar Verifier ' +
     'reads your work and decides accept / revise / blocked.',
-  tools: [emitHandoff],
+  // FEATURE_190 (v0.7.43) Phase 3: `emit_handoff` deleted. Generator is
+  // terminal under F184 — text-only termination triggers Sidecar Verifier.
+  tools: [],
   reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
   // FEATURE_106 — Generator is the canonical multi-file mutation
   // surface; the guardrail catches edge cases where Scout admitted H0

@@ -267,6 +267,11 @@ export function attemptProtocolTextFallback(
  * Map a managed-task role to its canonical emit tool name. Used by the
  * fallback path to synthesize a tool call that flows through the same
  * `wrapEmitterWithRecorder` wrapper as a real emit call.
+ *
+ * FEATURE_190 (v0.7.43) Phase 3: returns `undefined` for `generator` and
+ * `worker` — both roles are terminal under F184 and have no emit tool
+ * (text-only termination + out-of-band Sidecar Verifier). Keep in sync
+ * with `ROLE_EMIT_TOOL_NAMES` in `role-prompt.ts`.
  */
 export function getEmitToolNameForRole(
   role: Exclude<KodaXTaskRole, 'direct'>,
@@ -274,12 +279,10 @@ export function getEmitToolNameForRole(
   switch (role) {
     case 'scout': return 'emit_scout_verdict';
     case 'planner': return 'emit_contract';
-    case 'generator': return 'emit_handoff';
     case 'evaluator': return 'emit_verdict';
-    // FEATURE_114 v0.7.36 — Worker reuses generator's emit_handoff
-    // tool/payload shape; keep this in sync with ROLE_EMIT_TOOL_NAMES
-    // in role-prompt.ts (same single-source-of-truth invariant).
-    case 'worker': return 'emit_handoff';
+    case 'generator':
+    case 'worker':
+      return undefined;
     default: return undefined;
   }
 }
