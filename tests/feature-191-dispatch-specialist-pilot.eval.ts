@@ -171,10 +171,28 @@ function extractSubagentTypesFromBinding(toolCalls: ReadonlyArray<{ name: string
 }
 
 function extractSubagentTypesFromText(text: string): string[] {
+  // EVAL_GUIDELINES anti-pattern 7 §4: ≥4 syntax variants. Production
+  // panel models emit `subagent_type` arg in any of:
+  //   1. JSON          `"subagent_type":"db-reviewer"`
+  //   2. YAML no-quote `subagent_type: db-reviewer` (ark/v4flash empirical)
+  //   3. HTML-attr     `subagent_type=db-reviewer` / `subagent_type="db-reviewer"`
+  //   4. XML tag       `<subagent_type>db-reviewer</subagent_type>`
+  //   5. arrow form    `subagent_type => "db-reviewer"` (mmx bracket-arrow)
   const out: string[] = [];
-  const re = /["']subagent_type["']\s*[:=]\s*["']([^"']+)["']/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) out.push(m[1]!);
+  const patterns: readonly RegExp[] = [
+    /["']subagent_type["']\s*:\s*["']([^"'\n]+?)["']/gi,                      // JSON
+    /\bsubagent_type\s*:\s*([A-Za-z0-9_-]+)/gi,                                // YAML no-quote
+    /\bsubagent_type\s*=\s*["']?([A-Za-z0-9_-]+)["']?/gi,                       // attr (with optional quotes)
+    /<subagent_type>\s*([A-Za-z0-9_-]+)\s*<\/subagent_type>/gi,                // XML
+    /\bsubagent_type\s*=>\s*["']?([A-Za-z0-9_-]+)["']?/gi,                      // arrow form
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const v = (m[1] ?? '').trim();
+      if (v.length > 0) out.push(v);
+    }
+  }
   return out;
 }
 
