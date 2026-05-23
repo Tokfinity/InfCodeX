@@ -630,7 +630,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'web_search',
-    description: 'Search the web for discovery-oriented results with explicit trust and freshness signaling.',
+    description: 'Search the web for discovery-oriented results with explicit trust and freshness signaling. Use this for "discover what is out there" queries when you do not yet have a specific URL — researching a library before integrating it, finding canonical docs for an API, identifying current best-practice patterns. Output includes provenance + trust signals; when relaying answers to the user, cite sources back in markdown link format (`[title](url)`). Pair with `web_fetch` to follow up on a specific result. Search results are geographically scoped (US-based) and freshness metadata reflects when each source was last indexed, not the moment of your query — interpret "current X" with that caveat. For finding code or documentation INSIDE the repo, prefer `grep` / `code_search` / `semantic_lookup` — those operate on the local checkout and do not consume network turns.',
     input_schema: {
       type: 'object',
       properties: {
@@ -651,7 +651,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'web_fetch',
-    description: 'Fetch a specific remote source and return bounded text with provenance and trust hints.',
+    description: 'Fetch a specific remote source by URL and return bounded text with provenance and trust hints. The handler converts HTML to markdown and caches each unique URL for a short window so repeated reads within the same task are free. If the response is a redirect (3xx), the tool stops and reports the new target URL — re-issue `web_fetch` against that new URL rather than chasing the redirect manually, so the cache + provenance line up with what the user actually sees. For GitHub URLs specifically (`github.com/...` / `raw.githubusercontent.com/...`), prefer `bash` with the `gh` CLI when available — `gh api` / `gh pr view` / `gh issue view` are faster, return structured output, and avoid markdown-conversion artifacts; using `web_fetch` on a github.com URL when `gh` would work is the most common "tool waste" pattern in this surface. Despite the `mutates-network` side-effect classification (some providers route POST requests through this surface), the LLM-facing semantics are read-only. Use `web_search` first when you do not yet have a specific URL.',
     input_schema: {
       type: 'object',
       properties: {
@@ -669,7 +669,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'code_search',
-    description: 'Search local repository code with lower-noise output than ad hoc shell grep.',
+    description: 'Search local repository code with lower-noise output than ad hoc shell grep. Returns ranked matches with file:line refs and surrounding context, filtered by repo-aware heuristics (skips minified bundles, generated artifacts, lockfiles by default). Prefer `code_search` over `grep` for "find symbol X" / "where is this string used" investigations spanning the whole repo — the noise reduction saves token budget on the result side. Prefer raw `grep` when you need exact byte-level matching (regex anchors, character classes, multiline patterns) or when scoping is already narrow (a known single file or small subdirectory). For symbol-level intelligence (callers, callees, imports), use `symbol_context` instead — it pre-resolves the relationships that a text search would only hint at.',
     input_schema: {
       type: 'object',
       properties: {
@@ -687,7 +687,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'semantic_lookup',
-    description: 'Search repository intelligence for symbol-, module-, or process-aware semantic matches.',
+    description: 'Search repository intelligence for symbol-, module-, or process-aware semantic matches. "Repository intelligence" here is a pre-indexed structural view of the codebase (symbol definitions, module boundaries, process flows); `semantic_lookup` queries that index rather than scanning raw text. Use it when the question is structural ("what does symbol X relate to", "which module owns concept Y", "what flow does entry Z drive") rather than textual. The `kind` parameter narrows the lookup category (`symbol` / `module` / `process` / `auto`); `target_path` scopes to a subtree. `refresh: true` rebuilds the underlying index — expensive — so only set it when you have reason to believe the index is stale (e.g., right after a large bulk edit). For exact text match prefer `grep`; for ranked text search prefer `code_search`; to read a file directly prefer `read`.',
     input_schema: {
       type: 'object',
       properties: {
@@ -717,7 +717,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_search',
-    description: 'Search active MCP tools, resources, and prompts through the shared capability runtime.',
+    description: 'Search active MCP tools, resources, and prompts through the shared capability runtime. The KodaX MCP surface is a meta-tool layer: capabilities live on remote MCP servers, and `mcp_search` is the discovery entry point. Returns capability ids in `server.name` form. Batch-call `mcp_describe` on the ids you actually plan to use rather than describing every result — describing capabilities you will not call wastes a turn. The `kind` filter (`tool` / `resource` / `prompt`) narrows the family: tools are the only family that can mutate remote state via `mcp_call`; resources are reads via `mcp_read_resource`; prompts are templates via `mcp_get_prompt`. The `server` filter scopes to a specific MCP server when multiple are connected.',
     input_schema: {
       type: 'object',
       properties: {
@@ -739,7 +739,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_describe',
-    description: 'Describe a specific MCP capability by id, including schemas, trust, and provenance.',
+    description: 'Describe a specific MCP capability by id, including its full JSON Schema, trust tier, and provenance. Use this when `mcp_search` returned a candidate id and you need to see the exact parameter shape before invoking it. `mcp_describe` is a pure read against the MCP server catalog — safe to call freely, but redundant: only describe capabilities you actually plan to call. The schema returned is the source of truth for `mcp_call.args` / `mcp_get_prompt.args` shape; do not guess argument names from the capability id alone.',
     input_schema: {
       type: 'object',
       properties: {
@@ -754,7 +754,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_call',
-    description: 'Invoke an MCP tool capability by id with structured arguments.',
+    description: 'Invoke an MCP tool capability by id with structured arguments. This is the ONLY side-effecting MCP entry point — the underlying capability can mutate remote state (file writes, database updates, API calls). Treat each `mcp_call` with the same care as a `bash` command against an unfamiliar shell: confirm the capability is what you intend by `mcp_describe` first when uncertain. The `id` is the `server.name` form from `mcp_search`; `args` must match the JSON Schema returned by `mcp_describe`. For pure reads use `mcp_read_resource` (no mutation) or `mcp_get_prompt` (template retrieval) instead — `mcp_call` is overkill when the goal is just reading.',
     input_schema: {
       type: 'object',
       properties: {
@@ -782,7 +782,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_read_resource',
-    description: 'Read an MCP resource capability by id.',
+    description: 'Read an MCP resource capability by id. Resources are server-published read-only data sources — file contents, query results, config snapshots — and `mcp_read_resource` retrieves them without invoking remote code. Unlike `mcp_call`, this entry point cannot mutate remote state, so it is safe to use during plan-mode preview. The `id` is the `server.name` form from `mcp_search` (with `kind="resource"` filter). Use `mcp_call` instead when the capability is registered as a tool (mutation-capable), and `mcp_get_prompt` when it is a templated prompt.',
     input_schema: {
       type: 'object',
       properties: {
@@ -801,7 +801,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'mcp_get_prompt',
-    description: 'Retrieve an MCP prompt capability by id with optional arguments.',
+    description: 'Retrieve an MCP prompt capability by id, expanding any template arguments. Prompts are server-published reusable text templates (system prompt snippets, structured query templates, task framings); `mcp_get_prompt` returns the expanded text after substituting `args`. Read-only with respect to remote state — the server resolves the template but does not run code. The `id` is the `server.name` form from `mcp_search` (with `kind="prompt"` filter); `args` must match the prompt template variables (which `mcp_describe` will list).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1179,7 +1179,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'repo_overview',
-    description: 'Summarize the repository structure, key areas, entry hints, and stored repo-intelligence snapshot for the current workspace.',
+    description: 'Summarize the repository structure, key areas, entry hints, and stored repo-intelligence snapshot for the current workspace. Returns a compact top-down map: monorepo packages or top-level directories, entry files, primary languages, build/test commands. Use this once at session start (or after switching into an unfamiliar area) to orient yourself before issuing targeted reads — calling it at the start of every task is wasteful because the snapshot rarely changes within a session. The `refresh` flag rebuilds the snapshot; expensive, so only set it after a structural change to the workspace (new package added, large directory move). For drilling into a specific module, use `module_context` instead.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1193,7 +1193,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'changed_scope',
-    description: 'Analyze which files, areas, and categories are touched by the current git diff or a comparison range.',
+    description: 'Analyze which files, areas, and categories are touched by the current git diff or a comparison range. This is the canonical entry point for any review / change-audit / commit-prep workflow — call it first to see the change surface before issuing per-file diffs. Returns files grouped by area/category (e.g., "tests", "docs", "core") with a one-line summary per file. The `scope` parameter selects which change set: `unstaged` (working tree vs HEAD), `staged` (index vs HEAD), `all` (working tree + index vs HEAD, default), `compare` (HEAD vs base_ref). Pair with `changed_diff_bundle` to fetch the actual diffs for the files identified.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1257,7 +1257,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'module_context',
-    description: 'Return a task-shaped module capsule with dependencies, entry files, symbols, tests, docs, and follow-up handles.',
+    description: 'Return a task-shaped module capsule with dependencies, entry files, top-level symbols, test files, docs, and follow-up handles for further drill-down. Use this when about to read 3+ files in the same module — the capsule replaces that exploration round-trip with one structured response. Prefer `module_context` over raw `read`+`grep` for "what does this module do / what depends on what" questions. When the question is about a single function or class, use `symbol_context` instead — it is cheaper because it scopes to one symbol. When you only need exact file content (line numbers, byte-level text), fall back to `read` after the capsule narrows the target. `refresh: true` rebuilds the underlying repo-intel index, which is expensive — only set it when you have reason to believe the index is stale.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1272,7 +1272,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'symbol_context',
-    description: 'Return definition, probable callers/callees, imports, and alternatives for a repository symbol.',
+    description: 'Return the definition, probable callers/callees, imports, and naming alternatives for a single repository symbol. Use this when tracing the usage of one function, class, or constant — the response pre-resolves the relationships that would otherwise take several `grep -n "symbolName"` + `read` rounds to assemble. Cheaper than `module_context` when the question is symbol-scoped rather than module-scoped (the callers/callees graph is bounded by symbol degree, not module surface). The `module` parameter disambiguates when the same symbol name appears in multiple packages. For "where is this exact string used" without symbol semantics, prefer `grep` or `code_search` instead. For impact estimation before a refactor, use `impact_estimate` — it combines symbol info with changed-scope overlap.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1288,7 +1288,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'process_context',
-    description: 'Return an approximate static execution/process capsule for an entry symbol, module, or path.',
+    description: 'Return an approximate static execution/process capsule for an entry symbol, module, or path. Use this when the question is "how does this flow execute" rather than "what depends on what" — `process_context` traces from an entry point through likely call paths, giving you the sequence of file/symbol transitions without N rounds of follow-up reads. The `entry` parameter is the starting point (function name, file path, or module label); `module` is an optional disambiguating hint. Prefer over `module_context` when you care about runtime sequence, not module structure; prefer over `symbol_context` when you need the multi-hop call chain rather than just direct callers/callees. The trace is static (no runtime sampling), so it captures plausible paths, not actual hit rates.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1304,7 +1304,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   },
   {
     name: 'impact_estimate',
-    description: 'Estimate blast radius for a symbol, path, or module using local intelligence plus changed-scope overlap.',
+    description: 'Estimate the blast radius of changing a symbol, path, or module — combines repo-intelligence usage graph with current changed-scope overlap. Call this BEFORE planning a rename, refactor, or breaking change, not after the work is started — its purpose is to scope the work up front so the plan reflects reality (which packages need touching, which call sites assume current behavior, which tests must update). Returns ranked impact sites with severity hints. Prefer over guessing impact from a `grep` of the symbol name — `grep` overcounts (matches strings + comments) and undercounts (misses re-exports + structural callers). The `refresh` flag rebuilds the underlying index — expensive — so reserve it for cases where a recent large edit may have invalidated the cached graph.',
     input_schema: {
       type: 'object',
       properties: {
