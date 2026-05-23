@@ -959,8 +959,10 @@ packages/coding/src/task-engine/
     │    RolePromptContextFactory / RunnerChainPromptContext
     │    — 打破 verdict-recorder ↔ observer-bridge 循环依赖
     ├── role-prompts.ts                       (297 lines, R1)
-    │  ↳ 5 个 *_INSTRUCTIONS_FALLBACK + resolveRoleInstructions +
-    │    buildCompletionContractStatus + renderScoutSkillMapBlock
+    │  ↳ WORKER_INSTRUCTIONS_FALLBACK + resolveRoleInstructions +
+    │    buildCompletionContractStatus
+    │  ↳ FEATURE_193 (v0.7.43) deleted Scout/Planner/Generator/Evaluator
+    │    *_INSTRUCTIONS_FALLBACK + renderScoutSkillMapBlock
     ├── role-exclude.ts                       (142 lines, R1)
     │  ↳ FEATURE_168 per-role exclude sets + getAmaRoleEffectiveExclude
     ├── write-turn-cap.ts                     (100 lines, R1)
@@ -983,7 +985,9 @@ packages/coding/src/task-engine/
     ├── agent-chain.ts                        (1010 lines, R3)
     │  ↳ CodingToolBundle / buildCodingToolBundle /
     │    buildAgentToolsFromRegistry / RunnerAgentChain /
-    │    buildRunnerAgentChain / buildRunnerScoutAgent
+    │    buildRunnerAgentChain
+    │  ↳ FEATURE_193 (v0.7.43) deleted buildRunnerScoutAgent + V1 chain
+    │    agent declarations (chain.scout/.planner/.generator)
     ├── llm-adapter.ts                        (954 lines, R3)
     │  ↳ RunnerAdapterTokenState + agentNameToManagedRole +
     │    flattenNormalizedForEmitterInput + buildRunnerLlmAdapter
@@ -1004,6 +1008,9 @@ packages/coding/src/task-engine/
 `runner-driven.ts` 顶部添加 import + re-export 块：
 
 ```typescript
+// FEATURE_193 (v0.7.43) note: `buildRunnerScoutAgent` was removed from
+// this re-export block when V1 chain agents retired. The snapshot
+// below shows the pre-F193 surface for historical context.
 export {
   // R1 leaf modules
   getAmaRoleEffectiveExclude,

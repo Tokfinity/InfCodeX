@@ -11,11 +11,12 @@
  * - MANAGED_TASK_BUDGET_BASE — type-dependent, moves with budget helpers (Slice 6).
  * - REVIEW_*_THRESHOLD — duplicated in reasoning.ts (separate GLM-like DRY issue,
  *   handled in follow-up).
- * - WRITE_ONLY_TOOLS / SCOUT_ALLOWED_TOOLS / PLANNER_ALLOWED_TOOLS /
- *   H1_EVALUATOR_ALLOWED_TOOLS / H1_READONLY_GENERATOR_ALLOWED_TOOLS /
- *   INSPECTION_SHELL_PATTERNS / DOCS_ONLY_WRITE_PATH_PATTERNS /
+ * - WRITE_ONLY_TOOLS / INSPECTION_SHELL_PATTERNS / DOCS_ONLY_WRITE_PATH_PATTERNS /
  *   VERIFICATION_SHELL_PATTERNS / SHELL_WRITE_PATTERNS — tool-policy constants,
- *   move with tool-policy helpers (Slice 6/8).
+ *   moved with tool-policy helpers (Slice 6/8). FEATURE_184 (v0.7.45) /
+ *   FEATURE_193 (v0.7.43) retired the V1-only tool-policy allow-lists
+ *   (SCOUT_ALLOWED_TOOLS, PLANNER_ALLOWED_TOOLS, H1_EVALUATOR_ALLOWED_TOOLS,
+ *   H1_READONLY_GENERATOR_ALLOWED_TOOLS); none of those names exist anymore.
  * - SHELL_PATTERN_CACHE / WRITE_PATH_PATTERN_CACHE — stateful Map caches, stay with
  *   their users.
  * - TOOL_TRUNCATION_MARKERS / REVIEW_PROGRESS_PREFIXES / MANAGED_CONTROL_PLANE_MARKERS

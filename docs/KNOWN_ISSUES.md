@@ -1118,13 +1118,13 @@ L1 deepseek V4 路径已实证（直接 API probe 重现 400 + 修复）。但�
 **Layer 2 - Profile filter**（[reasoning.ts:1158](../packages/coding/src/reasoning.ts)）：
 - `profile === 'tactical'` 一刀切。plan / systemic / brainstorm 任务的 managed profile 直接屏蔽 fan-out
 
-**Layer 3 - H1 工具白名单**（[tool-policy.ts:373-394](../packages/coding/src/task-engine/_internal/managed-task/tool-policy.ts)）：
+**Layer 3 - H1 工具白名单**（V1 chain 时期分析；FEATURE_193 (v0.7.43) 已 retire 整层）：
 - 初步分析以为"H1 Generator 在非 review-only 路径下拿不到 `dispatch_child_task`"，但**实地核对后是误判**：
-  - `H1_READONLY_GENERATOR_ALLOWED_TOOLS` 数组本身已经包含 `dispatch_child_task`
+  - 当时 `H1_READONLY_GENERATOR_ALLOWED_TOOLS` 数组本身已经包含 `dispatch_child_task`（该常量在 FEATURE_193 v0.7.43 退役 V1 Planner / readonly Generator 时被删）
   - 非 review-only / 非 docs-scoped 的默认 H1 路径返回 `undefined`，没有 `allowedTools` 过滤，全工具可用
-  - [runner-driven.ts:2010](../packages/coding/src/task-engine/runner-driven.ts) Generator agent 的 tools 数组无条件包含 `generatorDispatch`
-- 既有测试 `Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only` 已经覆盖这个不变量
-- **本层无 fix 工作**（A3 移除）
+  - 当时 Generator agent 的 tools 数组无条件包含 `generatorDispatch`（FEATURE_193 v0.7.43 退役 V1 chain agent declarations 时删除）
+- 既有测试 `Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only` 已经覆盖这个不变量（FEATURE_193 retire 后测试也已迁移到 Worker）
+- **本层无 fix 工作**（A3 移除）。V2 Worker 直接拿全工具集，不走 allow-list 路径。
 
 **Layer 4 - 缺乏 telemetry**（[dispatch-child-tasks.ts](../packages/coding/src/tools/dispatch-child-tasks.ts)）：
 - 现有 `onToolUseStart` 已记录 LLM 端的"我要派 child"，但缺乏 child 完成的状态 + 耗时聚合

@@ -1504,9 +1504,10 @@ export function buildAmaControllerDecision(
 ): KodaXAmaControllerDecision {
   const readOnlyLike = decision.mutationSurface === 'read-only'
     || decision.mutationSurface === 'docs-only';
-  // FEATURE_061: Pre-Scout profile is always tactical. Scout decides whether to
-  // upgrade. The managed profile is only selected post-Scout when Scout confirms
-  // H1 or H2, which is handled by applyScoutDecisionToPlan in task-engine.ts.
+  // FEATURE_061: profile is always tactical at routing time. FEATURE_193
+  // (v0.7.43) retired the Scout calibration round — V2 Worker honours the
+  // heuristic verdict directly, so the managed-profile upgrade path that
+  // used to flow through `applyScoutDecisionToPlan` no longer fires.
   const managed =
     decision.primaryTask === 'plan'
     || decision.complexity === 'systemic'
@@ -1669,7 +1670,9 @@ export async function createReasoningPlan(
     reasoningMode: mode,
   });
 
-  // FEATURE_061 Phase 1: All paths use heuristic routing; Scout is the routing authority.
+  // FEATURE_061 Phase 1 + FEATURE_193 (v0.7.43): all paths use heuristic
+  // routing only (no LLM router call here, no Scout calibration round
+  // post-routing). The heuristic verdict drives V2 Worker directly.
   const decision = buildFallbackRoutingDecision(
     prompt,
     providerPolicy,
@@ -1686,7 +1689,7 @@ export async function createReasoningPlan(
     routingNotes: [
       ...(decision.routingNotes ?? []),
       intentGate.reason,
-      'Pre-Scout LLM routing disabled (FEATURE_061 Phase 1); Scout is the routing authority.',
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     ],
   };
   const amaControllerDecision = buildAmaControllerDecision(finalDecision);
@@ -2729,10 +2732,13 @@ function getHarnessRank(harness: KodaXHarnessProfile): number {
   return HARNESS_ORDER.indexOf(harness);
 }
 
-// FEATURE_061: Scout is the routing authority. Pre-Scout harnessProfile is always
-// H0_DIRECT — Scout decides whether to stay H0 or upgrade to H1/H2 based on its
-// own analysis. The old hardcoded logic is replaced by factual routing hints that
-// Scout can use as evidence, not as binding decisions.
+// FEATURE_061 + FEATURE_193 (v0.7.43): heuristic routing returns a verdict
+// that V2 Worker honours directly. The harnessProfile starts at
+// `H0_DIRECT` and is upgraded only by the heuristic's own
+// `topologyCeiling` derivation — the V1 Scout calibration round that
+// could move H0 → H1/H2 mid-task no longer exists. The returned `notes`
+// are surfaced to Worker via `routingNotes`; their hints are framed as
+// observations the Worker can act on, not as Scout-bound instructions.
 function selectHarnessProfile(
   prompt: string,
   decision: KodaXTaskRoutingDecision,
@@ -2755,18 +2761,18 @@ function selectHarnessProfile(
 
   const hints: string[] = [];
   if (decision.complexity === 'complex' || decision.complexity === 'systemic') {
-    hints.push(`Complexity hint: ${decision.complexity}. Scout should assess whether this truly needs multi-role coordination.`);
+    hints.push(`Complexity hint: ${decision.complexity}. Assess whether the recommended harness fits the task scope.`);
   }
   if (decision.needsIndependentQA) {
-    hints.push('Independent QA was inferred from prompt signals. Scout should verify whether a separate evaluator is genuinely needed.');
+    hints.push('Independent QA was inferred from prompt signals. Verify whether explicit verification artifacts are needed before declaring the task done.');
   }
   if (decision.requiresBrainstorm) {
-    hints.push('Brainstorm/planning signal detected. Scout should judge whether explicit planning adds value.');
+    hints.push('Brainstorm/planning signal detected. Judge whether to plan-first via todo_update before executing.');
   }
   if (mutationSurface === 'system' && (decision.riskLevel === 'high' || decision.workIntent === 'overwrite')) {
-    hints.push('High-risk system mutation detected. Scout should consider whether coordinated execution is warranted.');
+    hints.push('High-risk system mutation detected. Proceed with caution; consider checkpointing intermediate state.');
   }
-  hints.push('Scout is the routing authority and will determine the final harness profile.');
+  hints.push('Heuristic routing verdict — the harness profile above is the binding routing decision.');
 
   return {
     harnessProfile: 'H0_DIRECT',
@@ -3338,8 +3344,10 @@ function stabilizeRoutingDecision(
 
   let nextRecommendedMode = recommendedMode;
   let nextThinkingDepth = recommendedThinkingDepth;
-  // FEATURE_061: Pre-Scout harness is always H0_DIRECT; execution pattern starts
-  // as 'direct' and may be upgraded by Scout post-analysis.
+  // FEATURE_061 + FEATURE_193 (v0.7.43): heuristic routing produces a
+  // binding H0_DIRECT verdict with `direct` execution pattern. The V1
+  // Scout post-analysis upgrade path no longer exists; V2 Worker
+  // executes against this verdict as-is.
   const finalExecutionPattern: KodaXExecutionPattern = 'direct';
 
   if (intentFields.taskFamily === 'conversation') {

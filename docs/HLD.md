@@ -148,19 +148,19 @@ AMA Runner-driven 路径主入口 `packages/coding/src/task-engine/runner-driven
 |---|---|---|
 | `runner-driven.ts` | 1897 | 主循环 + 顶部 re-export（公共导入面） |
 | `_internal/managed-task/types.ts` | 180 | 共享类型（`VerdictRecorder` / `ObserverBridge` / `AmaRole` / `RolePromptContextFactory` / `RunnerChainPromptContext`），打破 verdict-recorder ↔ observer-bridge 循环依赖 |
-| `_internal/managed-task/role-prompts.ts` | 297 | 5 个 `*_INSTRUCTIONS_FALLBACK` + `resolveRoleInstructions` + `buildCompletionContractStatus` |
+| `_internal/managed-task/role-prompts.ts` | 297 | `WORKER_INSTRUCTIONS_FALLBACK` + `resolveRoleInstructions` + `buildCompletionContractStatus`（FEATURE_193 v0.7.43 删除 Scout/Planner/Generator/Evaluator FALLBACK + `renderScoutSkillMapBlock`） |
 | `_internal/managed-task/role-exclude.ts` | 142 | FEATURE_168 per-role exclude sets + `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` |
 | `_internal/managed-task/status-derivation.ts` | 97 | `extractUserFacingText` / `deriveFinalStatus` / `buildManagedProtocolPayload` |
 | `_internal/managed-task/tool-wrappers.ts` | 312 | `wrapCodingToolAsRunnable` + 3 个 mutation-guard wrappers |
 | `_internal/managed-task/dispatch-child.ts` | 119 | `wrapDispatchChildTaskForRole`（per-role child-task wrapper） |
 | `_internal/managed-task/observer-bridge.ts` | 541 | `buildObserverBridge` / `buildRunnerRoutingNote` / `applyScoutDecisionToPlanRunner` + budget cap 常量 |
 | `_internal/managed-task/verdict-recorder.ts` | 532 | `wrapEmitterWithRecorder` + `H1_MAX_SAME_HARNESS_REVISES` + FEATURE_165 handoff pending-children gate |
-| `_internal/managed-task/agent-chain.ts` | 1010 | `buildCodingToolBundle` + `buildAgentToolsFromRegistry` + `buildRunnerAgentChain` + `buildRunnerScoutAgent` |
+| `_internal/managed-task/agent-chain.ts` | 1010 | `buildCodingToolBundle` + `buildAgentToolsFromRegistry` + `buildRunnerAgentChain`（FEATURE_193 v0.7.43 删除 `buildRunnerScoutAgent` 及 V1 chain agent declarations） |
 | `_internal/managed-task/llm-adapter.ts` | 954 | `buildRunnerLlmAdapter`（含 FEATURE_085 max_tokens L1-L5 escalation + FEATURE_167 Evaluator terminal-verdict fallback retry hook） |
 | `_internal/managed-task/payload-builder.ts` | 444 | `buildManagedTaskPayload` + `deriveQualityAssuranceMode` + `buildScoutDecisionRuntime` + `buildSkillMapRuntime` |
 | `_internal/managed-task/checkpoint-flow.ts` | 350 | `handlePreRunCheckpoint` + `buildResumePreamble` + `buildStructuralResumeSeed` + `writeCurrentCheckpoint` |
 
-**外部导入面零变更**：`runner-driven.ts` 顶部 re-export 块保留 3 个调用方（`task-engine.ts`、2 个 test 文件）需要的所有公共符号（`buildRunnerAgentChain` / `buildRunnerScoutAgent` / `buildRunnerLlmAdapter` / `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` + 7 个 type）。v0.7.42 retire `maybeApplyP2bWriteTurnCap` 后从 6 个公共符号降到 5 个。
+**外部导入面零变更（截至 v0.7.43 / FEATURE_193 退役 V1 chain 前）**：`runner-driven.ts` 顶部 re-export 块保留 3 个调用方（`task-engine.ts`、2 个 test 文件）需要的所有公共符号（`buildRunnerAgentChain` / `buildRunnerLlmAdapter` / `getAmaRoleEffectiveExclude` / `getAmaRoleExpectedToolNames` + 7 个 type）。v0.7.42 retire `maybeApplyP2bWriteTurnCap` 后从 6 个公共符号降到 5 个；FEATURE_193 (v0.7.43) retire `buildRunnerScoutAgent` 后降到 4 个。
 
 **依赖拓扑无循环**：`types.ts` 是共享类型顶点，所有 12 个模块单向依赖它；`verdict-recorder.ts → observer-bridge.ts` 是单向依赖（共享类型上沉到 `types.ts`）。
 

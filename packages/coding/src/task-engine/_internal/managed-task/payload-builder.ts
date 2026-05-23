@@ -132,10 +132,13 @@ export function buildManagedTaskPayload(args: {
     toolOutputTruncationNotes,
   } = args;
 
-  // Shard 6d-L: Scout's emitted harness still wins over the plan's
-  // recommendation (FEATURE_061 — Scout is the routing authority). Fall
-  // back to plan.decision.harnessProfile when Scout has not emitted yet,
-  // then to H0_DIRECT.
+  // Shard 6d-L: legacy V1 path read Scout's emitted harness over the
+  // plan's recommendation. FEATURE_193 (v0.7.43) retired Scout —
+  // `recorder.scout` is never populated on V2, so the lookup chain
+  // falls through to `plan.decision.harnessProfile` then `H0_DIRECT`
+  // on every V2 run. The first read is retained for old-session
+  // resume compat (checkpoint files predating F193 may still carry
+  // `recorder.scout` payloads in the JSON shape).
   const harness: KodaXHarnessProfile =
     recorder.scout?.payload.scout?.confirmedHarness
       ?? plan?.decision.harnessProfile

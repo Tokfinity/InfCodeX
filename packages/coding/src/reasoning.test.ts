@@ -189,7 +189,7 @@ describe('reasoning reroute', () => {
     expect(plan.decision.recommendedMode).toBe('investigation');
     expect(plan.promptOverlay).toContain('[Execution Mode: investigation]');
     expect(plan.decision.routingNotes).toContain(
-      'Pre-Scout LLM routing disabled (FEATURE_061 Phase 1); Scout is the routing authority.',
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
 
     // LLM router should NOT have been called
@@ -263,7 +263,7 @@ describe('reasoning reroute', () => {
     // Heuristic routing succeeds without calling the provider
     expect(plan.decision.primaryTask).toBe('bugfix');
     expect(plan.decision.routingNotes).toContain(
-      'Pre-Scout LLM routing disabled (FEATURE_061 Phase 1); Scout is the routing authority.',
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
   });
 
@@ -466,7 +466,7 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Scout is the routing authority'),
+        expect.stringContaining('Heuristic routing verdict'),
       ]),
     );
   });
@@ -789,7 +789,7 @@ describe('reasoning reroute', () => {
       expect.arrayContaining([
         expect.stringContaining('Repository intelligence elevated task complexity'),
         expect.stringContaining('cross-module impact'),
-        expect.stringContaining('Scout is the routing authority'),
+        expect.stringContaining('Heuristic routing verdict'),
       ]),
     );
   });
@@ -812,7 +812,7 @@ describe('reasoning reroute', () => {
     expect(decision.harnessProfile).toBe('H0_DIRECT');
     expect(decision.routingNotes).toEqual(
       expect.arrayContaining([
-        expect.stringContaining('Scout is the routing authority'),
+        expect.stringContaining('Heuristic routing verdict'),
       ]),
     );
   });
@@ -899,7 +899,7 @@ describe('reasoning reroute', () => {
     // Repo signals should influence the heuristic routing decision
     expect(plan.decision.complexity).toBe('complex');
     expect(plan.decision.routingNotes).toContain(
-      'Pre-Scout LLM routing disabled (FEATURE_061 Phase 1); Scout is the routing authority.',
+      'Heuristic routing only — LLM router skipped (FEATURE_061 Phase 1; FEATURE_193 retired post-routing calibration).',
     );
 
     // LLM router should NOT have been called

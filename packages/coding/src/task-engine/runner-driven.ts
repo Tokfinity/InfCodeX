@@ -260,10 +260,12 @@ export function isRunnerDrivenRuntimeEnabled(): boolean {
 
 // =============================================================================
 // Role instructions — moved to `./_internal/managed-task/role-prompts.ts`
-// (FEATURE_171 v0.7.41 split). Five `*_INSTRUCTIONS_FALLBACK` constants,
-// `renderScoutSkillMapBlock`, `resolveRoleInstructions`,
-// `renderRuntimeVerificationBlock` and `buildCompletionContractStatus`
-// are imported at the top of this file.
+// (FEATURE_171 v0.7.41 split). FEATURE_193 (v0.7.43) retired four of the
+// five `*_INSTRUCTIONS_FALLBACK` constants (Scout/Planner/Generator/
+// Evaluator) and the `renderScoutSkillMapBlock` helper. Only
+// `WORKER_INSTRUCTIONS_FALLBACK` + `resolveRoleInstructions` +
+// `renderRuntimeVerificationBlock` + `buildCompletionContractStatus`
+// remain (imported at the top of this file).
 // =============================================================================
 
 // =============================================================================
