@@ -69,6 +69,13 @@ export {
   listConstructedAgents,
   registerConstructedAgent,
   resolveConstructedAgent,
+  // FEATURE_191 — provenance surface
+  listConstructedAgentsWithSource,
+  resolveConstructedAgentSource,
+} from './agent-resolver.js';
+export type {
+  ConstructedAgentSource,
+  ConstructedAgentEntry,
 } from './agent-resolver.js';
 
 // FEATURE_089 admission bridge — exposed so SDK consumers can

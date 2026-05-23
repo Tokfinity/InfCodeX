@@ -104,7 +104,33 @@ const _pendingSwap = new Map<string, RegisteredConstructedAgent>();
 interface RegisteredConstructedAgent {
   readonly artifact: AgentArtifact;
   readonly agent: Agent;
+  /**
+   * FEATURE_191 — in-memory only source tag (not persisted to disk).
+   * `undefined` when register caller doesn't supply one (legacy /
+   * test path); production loaders pass an explicit tag.
+   */
+  readonly source?: ConstructedAgentSource;
 }
+
+/**
+ * FEATURE_191 — registration source enum. Used in-memory to disambiguate
+ * which loader registered an agent so REPL `/agents list` can group by
+ * origin and same-name precedence is enforced via load order rather
+ * than a precedence stack. Not persisted to `AgentArtifact` (the
+ * artifact schema stays untouched to avoid migration).
+ *
+ * Load-order convention (boot path registers in this order; subsequent
+ * registrations overwrite earlier ones via last-write-wins):
+ *   built-in < extension < markdown:user < markdown:project <
+ *   constructed:cli < constructed:llm
+ */
+export type ConstructedAgentSource =
+  | 'built-in'
+  | 'extension'
+  | 'markdown:user'
+  | 'markdown:project'
+  | 'constructed:cli'
+  | 'constructed:llm';
 
 /**
  * Look up an activated constructed agent by name. Returns the
@@ -121,6 +147,37 @@ export function resolveConstructedAgent(name: string): Agent | undefined {
  */
 export function listConstructedAgents(): readonly Agent[] {
   return Array.from(AGENT_REGISTRY.values()).map((e) => e.agent);
+}
+
+/**
+ * FEATURE_191 — enriched snapshot exposing both the resolved Agent and
+ * the in-memory source tag. Consumers that need provenance (REPL
+ * `/agents list --by-source`, debug surfaces) call this instead of
+ * `listConstructedAgents()`. The plain-Agent list keeps its signature
+ * for backward compatibility with all pre-FEATURE_191 callers.
+ */
+export interface ConstructedAgentEntry {
+  readonly agent: Agent;
+  readonly source: ConstructedAgentSource | undefined;
+}
+
+export function listConstructedAgentsWithSource(): readonly ConstructedAgentEntry[] {
+  return Array.from(AGENT_REGISTRY.values()).map((e) => ({
+    agent: e.agent,
+    source: e.source,
+  }));
+}
+
+/**
+ * FEATURE_191 — single-agent source lookup. `undefined` when the agent
+ * is not registered OR was registered without a source tag (legacy
+ * caller). Surfaces for code paths that want to discriminate on
+ * provenance without iterating the full registry.
+ */
+export function resolveConstructedAgentSource(
+  name: string,
+): ConstructedAgentSource | undefined {
+  return AGENT_REGISTRY.get(name)?.source;
 }
 
 /**
@@ -300,6 +357,14 @@ function buildAgentFromContent(name: string, content: AgentContent): Agent {
 export interface ConstructedAgentRegistration {
   readonly bindings?: readonly InvariantId[];
   readonly manifest?: AgentManifest;
+  /**
+   * FEATURE_191 — in-memory source tag for provenance tracking.
+   * Optional so the FEATURE_089 / FEATURE_090 / FEATURE_101 legacy
+   * callers and unit tests that bypass admission can omit it. When
+   * present, surfaces via `listConstructedAgentsWithSource()` /
+   * `resolveConstructedAgentSource(name)`.
+   */
+  readonly source?: ConstructedAgentSource;
 }
 
 /**
@@ -347,7 +412,14 @@ export function registerConstructedAgent(
   // liftHandoffRef) still see the prior active version until
   // `drainPendingSwaps()` runs.
   const target = options.deferred ? _pendingSwap : AGENT_REGISTRY;
-  target.set(artifact.name, { artifact, agent });
+  target.set(artifact.name, {
+    artifact,
+    agent,
+    // FEATURE_191 — persist source tag from registration arg (may be
+    // undefined for legacy callers; absent source surfaces as
+    // undefined through listConstructedAgentsWithSource).
+    source: registration.source,
+  });
 
   return () => {
     // The unregister callback must work whether the entry is currently
