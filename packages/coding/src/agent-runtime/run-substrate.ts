@@ -133,6 +133,10 @@ import {
   getActiveToolDefinitions,
   getRuntimeActiveToolNames,
 } from './tool-resolution.js';
+// FEATURE_189 Batch 3 B.2 — progressive disclosure: read the per-context
+// unlock set on each turn so deferred tools' full descriptions surface
+// after `tool_search` runs.
+import { getUnlockedDeferredTools } from '../tools/deferred-tools.js';
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
@@ -731,6 +735,7 @@ export async function runSubstrate(
         options.context?.managedProtocolEmission?.enabled === true,
         !!runtime,
         options.context?.toolConstructionMode,
+        getUnlockedDeferredTools(ctx),
       );
 
       while (true) {

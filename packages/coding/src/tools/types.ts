@@ -141,6 +141,35 @@ export interface LocalToolDefinition extends KodaXToolDefinition {
   interruptBehavior?: ToolInterruptBehavior;
 
   /**
+   * Progressive disclosure — when `true`, the tool's full description is
+   * replaced with `searchHint` (a one-line summary) in the LLM-visible
+   * tool schema until the per-session unlock Set marks the tool name as
+   * unlocked. Unlocking happens via the `tool_search` tool: the LLM
+   * invokes `tool_search` with a query that selects this tool, and the
+   * full description + JSON schema are returned in the tool_result text.
+   * The next `getActiveToolDefinitions` call for the same session sees
+   * the unlock and emits the full description.
+   *
+   * Use for tools with rich descriptions (>500 bytes) whose teaching
+   * content the model only needs to consume when it actually plans to
+   * call the tool. Saves turn-1 context without dropping the tool.
+   *
+   * Mirrors claudecode `Tool.shouldDefer` — see
+   * `c:/Works/claudecode/src/tools/Tool.ts` for the parent design and
+   * `c:/Works/claudecode/src/tools/ToolSearchTool/` for the bootstrap.
+   */
+  shouldDefer?: boolean;
+
+  /**
+   * One-line hint shown in place of the full description when this tool
+   * is deferred and not yet unlocked. Required when `shouldDefer: true`.
+   * Should answer "when would I want to look this up" in ≤ 100 chars
+   * so the LLM can decide whether to invoke `tool_search` for the full
+   * schema. Example: `'Fetch a specific remote URL — use tool_search to load full schema.'`
+   */
+  searchHint?: string;
+
+  /**
    * Classifier projection — REQUIRED (FEATURE_092 v0.7.33).
    *
    * Returns a one-line string that the auto-mode classifier sees as the

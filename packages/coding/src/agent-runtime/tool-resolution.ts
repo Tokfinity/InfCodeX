@@ -55,6 +55,7 @@ import {
 } from '../tools/index.js';
 import { isManagedProtocolToolName } from '../managed-protocol.js';
 import { resolveKodaXAutoRepoMode } from '../repo-intelligence/runtime.js';
+import { DEFERRED_TOOL_HINTS, isDeferredTool } from '../tools/deferred-tools.js';
 
 /** FEATURE_067 v3: Filter tools excluded for child agents at API level. */
 export function filterExcludedTools(
@@ -88,6 +89,7 @@ export function getActiveToolDefinitions(
   allowManagedProtocolTool = false,
   hasCapabilityRuntime = false,
   toolConstructionMode?: boolean,
+  unlockedDeferredTools?: ReadonlySet<string>,
 ): ReturnType<typeof listToolDefinitions> {
   const allTools = listToolDefinitions();
   if (activeToolNames.length === 0) {
@@ -102,8 +104,21 @@ export function getActiveToolDefinitions(
       toolConstructionMode,
     ),
   );
-  return allTools.filter((tool) => (
-    allowed.has(tool.name)
-    && (allowManagedProtocolTool || !isManagedProtocolToolName(tool.name))
-  ));
+  return allTools
+    .filter((tool) => (
+      allowed.has(tool.name)
+      && (allowManagedProtocolTool || !isManagedProtocolToolName(tool.name))
+    ))
+    .map((tool) => {
+      // FEATURE_189 Batch 3 B.2 — progressive disclosure: deferred tools
+      // emit a one-line searchHint instead of the full description until
+      // the per-context unlock set marks them. The schema parameters are
+      // unchanged so the tool stays callable with just the hint, but the
+      // model only sees the rich teaching content after `tool_search`.
+      if (!isDeferredTool(tool.name)) return tool;
+      if (unlockedDeferredTools && unlockedDeferredTools.has(tool.name)) return tool;
+      const hint = DEFERRED_TOOL_HINTS[tool.name];
+      if (!hint) return tool;
+      return { ...tool, description: hint };
+    });
 }
