@@ -155,12 +155,20 @@ export function listConstructedAgents(): readonly Agent[] {
  * `/agents list --by-source`, debug surfaces) call this instead of
  * `listConstructedAgents()`. The plain-Agent list keeps its signature
  * for backward compatibility with all pre-FEATURE_191 callers.
+ *
+ * @internal v0.7.43 surface — exposed for the planned v0.7.46+
+ * `/agents list` REPL command and for source-tag round-trip tests
+ * (see `agent-resolver.test.ts` FEATURE_191 B.3 block). NOT yet a
+ * stable SDK surface; embedders SHOULD continue using
+ * `listConstructedAgents()` (which is byte-identical post-F191).
+ * Promoted to public when the REPL `/agents list` consumer ships.
  */
 export interface ConstructedAgentEntry {
   readonly agent: Agent;
   readonly source: ConstructedAgentSource | undefined;
 }
 
+/** @internal — see {@link ConstructedAgentEntry} */
 export function listConstructedAgentsWithSource(): readonly ConstructedAgentEntry[] {
   return Array.from(AGENT_REGISTRY.values()).map((e) => ({
     agent: e.agent,
@@ -173,6 +181,9 @@ export function listConstructedAgentsWithSource(): readonly ConstructedAgentEntr
  * is not registered OR was registered without a source tag (legacy
  * caller). Surfaces for code paths that want to discriminate on
  * provenance without iterating the full registry.
+ *
+ * @internal — same v0.7.43 staging policy as
+ * {@link listConstructedAgentsWithSource}.
  */
 export function resolveConstructedAgentSource(
   name: string,
@@ -384,6 +395,29 @@ export interface ConstructedAgentRegisterOptions {
  * same name (idempotent — re-activate of the same name+version is a
  * no-op for the resolver). Returns an unregister callback the
  * ConstructionRuntime stores in its `_activated` map.
+ *
+ * @internal SDK consumers MUST go through an admission-enforcing entry
+ * point:
+ *   - `loadAgentsFromMarkdown(opts)` — user/project markdown loader
+ *     (FEATURE_191 Phase B)
+ *   - `KodaXExtensionAPI.registerAgent(name, content)` — extension API
+ *     (FEATURE_191 Phase C)
+ *   - `activate()` in `construction/runtime.ts` — CLI / LLM-constructed
+ *     agents (FEATURE_087-090 / 101)
+ *
+ * Calling this function directly bypasses `Runner.admit` and is
+ * intended ONLY for resolver-only unit coverage (omitting
+ * `registration` exercises the trusted-agent silent-skip path, which
+ * has no observe / assertTerminal hooks). Production code path was
+ * audited 2026-05-23 in the F191 final review; all production callers
+ * thread `{ bindings, manifest }` from `Runner.admit`.
+ *
+ * Threat model context (`feedback_review_threat_model`): KodaX is a
+ * single-user CLI. Bypass-availability is not an attack surface in
+ * this model — all in-process code runs at the same privilege as the
+ * user. The `@internal` marker exists to keep SDK consumers on the
+ * admission-enforcing entry points so a future multi-tenant evolution
+ * does not require renaming the only production-safe API.
  *
  * Called from `runtime.ts::registerActiveAgentArtifact` — the resolver
  * does NOT itself enforce that the artifact has been admitted; that's

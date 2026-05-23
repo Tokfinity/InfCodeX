@@ -443,13 +443,40 @@ export interface KodaXExtensionAPI {
    * the extension's disposables list) unregisters the agent on
    * extension deactivate.
    *
-   * Promise return — admission is async because activatedAgents /
-   * stagedAgents maps may consult disk in future versions; current
-   * impl resolves immediately.
+   * Returns `Promise<() => void>` — **you MUST `await` the call**
+   * before invoking the dispose function. Unlike sibling
+   * `registerTool` (sync), this is async because `Runner.admit` is
+   * declared async (FEATURE_101 admission contract — admission may
+   * consult disk for handoff-target staged-agent resolution).
+   *
+   * @example
+   * ```ts
+   * // CORRECT — await unwraps the Promise to a sync dispose
+   * export default async function activate(api: KodaXExtensionAPI) {
+   *   const dispose = await api.registerAgent('db-reviewer', {
+   *     instructions: 'You review DB migrations.',
+   *     description: 'DB migration reviewer',
+   *   });
+   *   // dispose() is now callable on demand; the runtime also auto-
+   *   // disposes via the extension's disposables list at deactivate.
+   * }
+   * ```
+   *
+   * @example
+   * ```ts
+   * // WRONG — TypeScript catches this; .js / @ts-ignore consumers
+   * // hit a runtime TypeError because Promise is not a function.
+   * export default function activate(api: KodaXExtensionAPI) {
+   *   const dispose = api.registerAgent('x', { instructions: '...' });
+   *   dispose();  // TypeError: dispose is not a function
+   * }
+   * ```
    *
    * Throws on admission rejection (with the verdict reason) so the
    * extension author sees the failure at activate time rather than
-   * having a silently-dropped registration.
+   * having a silently-dropped registration. The throw also halts
+   * extension loading — the extension's other registrations roll back
+   * via `LoadedExtensionRecord.disposables` reverse-iterate.
    */
   registerAgent: (
     name: string,
