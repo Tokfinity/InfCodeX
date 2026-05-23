@@ -107,8 +107,27 @@ function buildJudgePrompt(
   variantId: string,
   run: DumpRun,
 ): { systemPrompt: string; userMessage: string } {
+  // M2: per `feedback_audit_binding_priority_in_prompt` memory, the
+  // judge must be told that the structured `tool_calls` binding payload
+  // (delivered in the user message) is ABSOLUTE GROUND TRUTH and takes
+  // precedence over the raw assistant text. Without this, judges drift
+  // toward "no tool invocation present" verdicts on aliases whose raw
+  // text is empty (binding-only models) — surfaced 85-97% disagreement
+  // on a prior tool-schema-slim audit before this prompt structure was
+  // adopted. The placement here is the system prompt top, with explicit
+  // workflow + the ABSOLUTE GROUND TRUTH phrase.
   const systemPrompt =
     "You are an independent judge auditing a coding agent's terminal-turn behavior. " +
+    'CRITICAL RULE: the user message contains a section ' +
+    '`## Harness-bound tool_calls (ground truth — READ THIS FIRST)` ' +
+    "with a JSON payload — that payload is ABSOLUTE GROUND TRUTH for what tools the agent invoked. " +
+    'It supersedes the raw `## Worker raw response` text. ' +
+    'Workflow: ' +
+    '(1) read the harness-bound tool_calls JSON FIRST; ' +
+    '(2) THEN read the raw response text; ' +
+    "(3) THEN decide PASS/FAIL using the decision rule. " +
+    'If binding shows a tool invocation and raw text is empty, the model invoked the tool via the binding channel — ' +
+    'a `(none)` binding combined with non-empty raw text means no tool was invoked. ' +
     'Reply with a single JSON object on one line — no markdown, no preamble.';
 
   const variant = dump.variants.find((v) => v.id === variantId);
