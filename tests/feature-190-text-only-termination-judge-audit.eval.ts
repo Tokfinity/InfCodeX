@@ -324,10 +324,10 @@ describe('Audit: FEATURE_190 text-only termination LLM-judge majority vote (anti
         for (const judgeAlias of judges) {
           let raw = '';
           try {
-            const { text } = await runOneShot({
+            const { text } = await runOneShot(judgeAlias, {
               systemPrompt: prompt.systemPrompt,
               userMessage: prompt.userMessage,
-            }, judgeAlias);
+            });
             raw = text;
           } catch (err) {
             raw = `[error: ${err instanceof Error ? err.message : String(err)}]`;
@@ -349,7 +349,12 @@ describe('Audit: FEATURE_190 text-only termination LLM-judge majority vote (anti
           expectTerminate: dump.expectTerminate,
           regexVerdict: regex,
           majorityVerdict: majority,
-          judgeVerdicts: verdicts.map((v, j) => ({ judge: judges[j], judgment: v.judgment, reason: v.reason })),
+          judgeVerdicts: verdicts.map((v, j) => ({
+            judge: judges[j],
+            judgment: v.judgment,
+            reason: v.reason,
+            rawJudgeText: v.rawJudgeText.slice(0, 400),
+          })),
           agreement,
           textPreview: run.text.slice(0, 300),
         });
