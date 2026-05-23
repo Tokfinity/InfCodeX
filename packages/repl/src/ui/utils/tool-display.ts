@@ -1,4 +1,10 @@
-import { isAutoManagedMemoryFile, parseMemoryTypeFromFilename } from "@kodax-ai/agent";
+import * as path from "node:path";
+
+import {
+  getAgentConfigPath,
+  isAutoManagedMemoryFile,
+  parseMemoryTypeFromFilename,
+} from "@kodax-ai/agent";
 
 import { ToolCallStatus, type ToolCall } from "../types.js";
 
@@ -6,23 +12,59 @@ type ToolInputValue = Record<string, unknown> | string | undefined;
 
 /**
  * FEATURE_124 Phase D.2 — `[memory:<type>]` badge for tool calls that
- * land on per-project memory files. Uses substrate predicates from
- * `@kodax-ai/agent` (Phase A) so the detection stays consistent with
- * the agent-side `isAutoManagedMemoryFile` check used by permission
- * carve-outs. Falls back to a bare `[memory]` badge for files whose
- * name doesn't follow the `user_*` / `feedback_*` / `project_*` /
- * `reference_*` filename convention — keeps the user informed that the
- * tool touched persistent memory even when the type can't be inferred.
+ * land on per-project memory paths. Two recognition tiers:
  *
- * Pure string transform; no side effects. Single-path tool calls (Write,
- * Edit, Read targeting one file) get the badge inline. Multi-path calls
- * (Glob results, Grep over directories) skip the badge — the user sees
- * the path list and can disambiguate themselves.
+ *   1. **File match** (`isAutoManagedMemoryFile`) — Write/Edit/Read on a
+ *      specific topic file. Returns `[memory:<type>]` with the type
+ *      inferred from the filename convention (`feedback_*.md` →
+ *      `feedback`, etc.), or bare `[memory]` for files like `MEMORY.md`
+ *      that don't follow the convention.
+ *
+ *   2. **Directory match** (`isInsideAnyMemoryDir`) — Grep/Glob whose
+ *      `path` argument is the memory directory itself (or any subdir).
+ *      The GC section explicitly teaches Grep over the memory dir for
+ *      duplicate checks, and Glob `<memdir>/*.md` for listing — both are
+ *      memory-engagement signals worth surfacing. Returns bare `[memory]`
+ *      (no type inferable from a dir path).
+ *
+ * Pure string transform; no side effects. Multi-path tool calls render
+ * as "<N> files" and intentionally skip the badge — the user sees the
+ * count, not individual paths, so a single badge would be misleading
+ * when the array mixes memory + non-memory paths.
  */
 function memoryBadgeFor(filePath: string): string | undefined {
-  if (!isAutoManagedMemoryFile(filePath)) return undefined;
-  const type = parseMemoryTypeFromFilename(filePath);
-  return type ? `[memory:${type}]` : "[memory]";
+  if (isAutoManagedMemoryFile(filePath)) {
+    const type = parseMemoryTypeFromFilename(filePath);
+    return type ? `[memory:${type}]` : "[memory]";
+  }
+  if (isInsideAnyMemoryDir(filePath)) return "[memory]";
+  return undefined;
+}
+
+/**
+ * Check whether a given path is the memory directory itself, or any
+ * subdirectory / sub-path within ANY `<agentConfigHome>/projects/<key>/
+ * memory/` tree. Looser than `isAutoManagedMemoryFile` — no `.md`
+ * requirement and the memory dir itself counts (segments.length >= 2
+ * instead of >= 3). Used for the Grep/Glob directory-scope badge tier.
+ *
+ * Local to tool-display because the substrate's `isAutoManagedMemoryFile`
+ * is a permission-relevant predicate that intentionally restricts to
+ * `.md` files — broadening it would affect other consumers (transcript
+ * tagging, future permission carve-outs).
+ */
+function isInsideAnyMemoryDir(filePath: string): boolean {
+  const normalized = path.resolve(filePath);
+  const projectsRoot = getAgentConfigPath("projects");
+  if (
+    !normalized.startsWith(projectsRoot + path.sep) &&
+    normalized !== projectsRoot
+  ) {
+    return false;
+  }
+  const tail = normalized.slice(projectsRoot.length + 1);
+  const segments = tail.split(path.sep);
+  return segments.length >= 2 && segments[1] === "memory";
 }
 
 export type ToolSummaryGroup = {
@@ -356,6 +398,14 @@ function summarizeToolDetails(toolName: string, input: ToolInputValue): string[]
       parts.push(`pattern=${truncateValue(pattern, 96)}`);
     }
     if (scope) {
+      // FEATURE_124 Phase D.2 — badge memory-dir scope. Glob has its own
+      // inline scope rendering (bypassing pushPathSummary), so the badge
+      // must be injected here too. This is the same predicate as
+      // pushPathSummary's: `isAutoManagedMemoryFile(scope)` → badge.
+      // Critical for due-diligence Glob calls the memory-rules prompt
+      // teaches (per smoke eval observation 2026-05-23).
+      const badge = memoryBadgeFor(scope);
+      if (badge) parts.push(badge);
       parts.push(truncateValue(scope));
     }
     return parts;
@@ -374,6 +424,11 @@ function summarizeToolDetails(toolName: string, input: ToolInputValue): string[]
       parts.push(`pattern=${truncateValue(pattern, 96)}`);
     }
     if (scope) {
+      // FEATURE_124 Phase D.2 — same rationale as Glob above. Grep is the
+      // primary tool the GC section teaches ("Use Grep over the memory
+      // directory to find existing entries by keyword").
+      const badge = memoryBadgeFor(scope);
+      if (badge) parts.push(badge);
       parts.push(truncateValue(scope));
     }
     return parts;

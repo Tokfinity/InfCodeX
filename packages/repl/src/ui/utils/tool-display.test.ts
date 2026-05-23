@@ -334,10 +334,61 @@ describe("FEATURE_124 Phase D.2 — memory badge in tool-display", () => {
     expect(summary).not.toContain("[memory:");
   });
 
-  it("does NOT prefix any badge for paths OUTSIDE the memory directory", () => {
-    // A regular project file path — must not collect a spurious badge.
-    const summary = formatToolSummary("Read", { path: "packages/coding/src/task-engine.ts" });
+  it("does NOT prefix any badge for paths OUTSIDE the memory directory (absolute path)", () => {
+    // Absolute path outside agent home — pure sentinel for false-positives.
+    // Using absolute path avoids cwd-dependent reasoning (relative path
+    // would be `path.resolve`'d against process.cwd which may or may not
+    // happen to be inside the agent home in some test environments).
+    const outsidePath = path.join(os.tmpdir(), "kodax-project-foo", "src", "engine.ts");
+    const summary = formatToolSummary("Read", { path: outsidePath });
     expect(summary).not.toMatch(/\[memory(:[a-z]+)?\]/);
+  });
+
+  it("badges non-.md files under memory dir with bare [memory] (Tier-2 directory match)", () => {
+    // Tier 2 directory-level match: ANY file inside <projects>/<key>/
+    // memory/ gets a bare `[memory]` badge, even if not .md. Rationale:
+    // a Read/Write on a non-.md file under memory dir is still memory
+    // subsystem engagement (e.g. a future session-state sidecar). The
+    // Tier-1 type-aware badge (`[memory:feedback]`) only fires for .md
+    // files with the naming convention — those are the LLM-managed
+    // taxonomy entries.
+    const memoryJsonPath = path.join(memoryDir, "session-state.json");
+    const summary = formatToolSummary("Read", { path: memoryJsonPath });
+    expect(summary).toContain("[memory]");
+    expect(summary).not.toMatch(/\[memory:/); // no type suffix
+  });
+
+  it("badges glob scope when it points at the memory directory (inline render path)", () => {
+    // Glob has its own inline summarizer that bypasses pushPathSummary —
+    // verifies the badge injection in glob's case block (line ~358).
+    // Use the bare memory directory as the scope (per the actual prompt-
+    // taught usage: "Use Glob to scan the memory directory").
+    const summary = formatToolSummary("Glob", { pattern: "*.md", path: memoryDir });
+    expect(summary).toContain("[memory]"); // memoryDir itself has no
+    // type-prefixed name; falls back to bare [memory]
+  });
+
+  it("badges grep scope when it points at a memory-dir file (inline render path)", () => {
+    // Grep is the tool the GC section explicitly teaches for due-diligence
+    // duplicate checks. Verifies the badge injection in grep's case block
+    // (line ~376). Use a specific topic file as the scope (a possible
+    // shape when the LLM greps inside a single memory file).
+    const memoryPath = path.join(memoryDir, "feedback_no_mock_db.md");
+    const summary = formatToolSummary("Grep", { pattern: "mock", path: memoryPath });
+    expect(summary).toMatch(/\[memory:feedback\]/);
+  });
+
+  it("badges via the pushPathSummary preferPathsArray single-element branch (Write fallthrough)", () => {
+    // pushPathSummary has 3 badge-injection branches: (i) preferPathsArray
+    // + 1-item paths, (ii) explicitPath, (iii) paths-fallback + 1-item.
+    // All 6 happy-path tests above exercise (ii). This test routes through
+    // the default fallthrough in summarizeToolDetails (line ~478) which
+    // calls pushPathSummary with preferPathsArray=true — exercising
+    // branch (i). Use `Write` because it's not a recognized special-case
+    // tool name, so it falls through to default.
+    const memoryPath = path.join(memoryDir, "user_role.md");
+    const summary = formatToolSummary("Write", { paths: [memoryPath] });
+    expect(summary).toMatch(/\[memory:user\]/);
   });
 
   it("threads the badge through formatCollapsedToolInlineText too", () => {
