@@ -17,6 +17,19 @@ import {
   listTools,
   registerTool,
 } from '../tools/index.js';
+// FEATURE_191 (v0.7.43) — extension `registerAgent` plumbing.
+// `buildAdmissionManifest` (construction/admission-bridge) adapts
+// `(name, AgentContent)` → `AgentManifest`; `Runner.admit` gates;
+// `registerConstructedAgent` adds the activated Agent to the resolver
+// registry. Dispose pushed onto the extension's `disposables[]` so
+// deactivate auto-unregisters.
+import { Runner } from '@kodax-ai/agent';
+import {
+  buildAdmissionManifest,
+  listConstructedAgents,
+  registerConstructedAgent,
+} from '../construction/index.js';
+import type { AgentArtifact } from '../construction/types.js';
 import type {
   LocalToolDefinition,
   ToolRegistrationOptions,
@@ -880,6 +893,41 @@ export class KodaXExtensionRuntime implements ExtensionRuntimeContract {
           ? skillPath
           : path.resolve(path.dirname(extensionPath), skillPath);
         const dispose = registerPluginSkillPath(resolvedSkillPath);
+        disposables.push(dispose);
+        return dispose;
+      },
+      registerAgent: async (name, content) => {
+        // FEATURE_191 — `(name, content)` is the extension-author-friendly
+        // shape; we adapt it to AgentManifest internally so authors don't
+        // need to import admission internals.
+        const manifest = buildAdmissionManifest({ name, content });
+        const activatedAgents = new Map(
+          listConstructedAgents().map((a) => [a.name, a]),
+        );
+        const verdict = await Runner.admit(manifest, { activatedAgents });
+        if (!verdict.ok) {
+          throw new Error(
+            `[extension:${source.id}] registerAgent("${name}") rejected by admission: ${verdict.reason}`,
+          );
+        }
+        const artifact: AgentArtifact = {
+          kind: 'agent',
+          name,
+          version: '0.0.0-extension',
+          content,
+          status: 'active',
+          createdAt: Date.now(),
+          testedAt: Date.now(),
+          activatedAt: Date.now(),
+        };
+        const dispose = registerConstructedAgent(
+          artifact,
+          {
+            bindings: verdict.handle.invariantBindings,
+            manifest: verdict.handle.manifest,
+            source: 'extension',
+          },
+        );
         disposables.push(dispose);
         return dispose;
       },

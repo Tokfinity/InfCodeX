@@ -12,6 +12,11 @@ import {
   registerOfficialSandboxExtension,
   runActiveExtensionHook,
 } from './index.js';
+import {
+  _resetAgentResolverForTesting,
+  resolveConstructedAgent,
+  resolveConstructedAgentSource,
+} from '../construction/index.js';
 
 declare global {
   // eslint-disable-next-line no-var
@@ -872,3 +877,132 @@ describe('KodaXExtensionRuntime', () => {
     await runtime.dispose();
   });
 });
+
+describe('KodaXExtensionRuntime — FEATURE_191 registerAgent', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    _resetAgentResolverForTesting();
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-ext-ra-'));
+  });
+
+  afterEach(async () => {
+    const runtime = getActiveExtensionRuntime();
+    if (runtime) {
+      await runtime.dispose();
+    }
+    _resetAgentResolverForTesting();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('registers a constructed agent via api.registerAgent and tags source="extension"', async () => {
+    const extensionPath = path.join(tempDir, 'ext-with-agent.mjs');
+    await writeFile(
+      extensionPath,
+      `export default async function(api) {
+        await api.registerAgent('ext-reviewer', {
+          instructions: 'You review code from an extension.',
+          description: 'Extension-supplied code reviewer',
+          tools: [{ ref: 'builtin:read' }],
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+
+    const agent = resolveConstructedAgent('ext-reviewer');
+    expect(agent).toBeDefined();
+    expect(agent?.instructions).toBe('You review code from an extension.');
+    expect(resolveConstructedAgentSource('ext-reviewer')).toBe('extension');
+  });
+
+  it('auto-unregisters the agent on extension dispose (disposable chain)', async () => {
+    const extensionPath = path.join(tempDir, 'ext-dispose.mjs');
+    await writeFile(
+      extensionPath,
+      `export default async function(api) {
+        await api.registerAgent('disposable-reviewer', {
+          instructions: 'Goes away when the extension does.',
+          description: 'Transient extension agent',
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+    expect(resolveConstructedAgent('disposable-reviewer')).toBeDefined();
+
+    await runtime.dispose();
+    expect(resolveConstructedAgent('disposable-reviewer')).toBeUndefined();
+  });
+
+  it('returns a dispose fn that can be called manually mid-session', async () => {
+    let disposeRef: (() => void) | null = null;
+    globalThis.__kodaxTestExtAgentDispose = (fn: () => void) => {
+      disposeRef = fn;
+    };
+    const extensionPath = path.join(tempDir, 'ext-manual-dispose.mjs');
+    await writeFile(
+      extensionPath,
+      `export default async function(api) {
+        const dispose = await api.registerAgent('manual-dispose', {
+          instructions: 'I can be unregistered mid-session.',
+          description: 'Manual-dispose target',
+        });
+        globalThis.__kodaxTestExtAgentDispose(dispose);
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await runtime.loadExtension(extensionPath);
+    expect(resolveConstructedAgent('manual-dispose')).toBeDefined();
+
+    expect(disposeRef).not.toBeNull();
+    disposeRef!();
+    expect(resolveConstructedAgent('manual-dispose')).toBeUndefined();
+
+    delete (globalThis as { __kodaxTestExtAgentDispose?: unknown })
+      .__kodaxTestExtAgentDispose;
+    await runtime.dispose();
+  });
+
+  it('throws when admission rejects the manifest', async () => {
+    // Trigger a deterministic rejection: `declaredInvariants` containing
+    // an unknown invariant id fails the manifest schema audit per
+    // construction/admission-bridge.ts:99 ("let unknown ids fail loudly
+    // in the audit"). The extension activation will propagate the
+    // throw, so loadExtension records a failure rather than silently
+    // dropping the registration.
+    const extensionPath = path.join(tempDir, 'ext-rejected.mjs');
+    await writeFile(
+      extensionPath,
+      `export default async function(api) {
+        await api.registerAgent('rejected', {
+          instructions: 'I will be rejected by admission.',
+          description: 'will be rejected',
+          declaredInvariants: ['nonexistentInvariantForTesting'],
+        });
+      }`,
+      'utf8',
+    );
+
+    const runtime = createExtensionRuntime().activate();
+    await expect(runtime.loadExtension(extensionPath)).rejects.toThrow(
+      /unknown invariant id "nonexistentInvariantForTesting"/,
+    );
+
+    // Agent must NOT be registered on rejection.
+    expect(resolveConstructedAgent('rejected')).toBeUndefined();
+  });
+});
+
+declare global {
+  // Used by the manual-dispose test to bridge a closure across the
+  // extension boundary (the extension runs in a tsImport sandbox).
+  // eslint-disable-next-line no-var
+  var __kodaxTestExtAgentDispose: ((fn: () => void) => void) | undefined;
+}

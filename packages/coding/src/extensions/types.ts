@@ -12,6 +12,8 @@ import type {
   LocalToolDefinition,
   RegisteredToolDefinition,
 } from '../tools/types.js';
+import type { AgentContent } from '../construction/types.js';
+export type { AgentContent };
 
 import type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './helpers.js';
@@ -430,6 +432,29 @@ export interface KodaXExtensionAPI {
   registerCapabilityProvider: (provider: CapabilityProvider) => () => void;
   registerCommand: (command: ExtensionCommandDefinition) => () => void;
   registerSkillPath: (skillPath: string) => () => void;
+  /**
+   * FEATURE_191 (v0.7.43) — register a constructed agent at extension
+   * activate time. The extension supplies the agent name and an
+   * `AgentContent` body (instructions + optional tools/handoffs/
+   * reasoning/model/description); the runtime threads it through
+   * `buildAdmissionManifest` + `Runner.admit` and registers the
+   * activated Agent via `registerConstructedAgent({ source:
+   * 'extension' })`. The returned dispose fn (also auto-pushed onto
+   * the extension's disposables list) unregisters the agent on
+   * extension deactivate.
+   *
+   * Promise return — admission is async because activatedAgents /
+   * stagedAgents maps may consult disk in future versions; current
+   * impl resolves immediately.
+   *
+   * Throws on admission rejection (with the verdict reason) so the
+   * extension author sees the failure at activate time rather than
+   * having a silently-dropped registration.
+   */
+  registerAgent: (
+    name: string,
+    content: AgentContent,
+  ) => Promise<() => void>;
   on: <TEvent extends keyof ExtensionEventMap>(
     event: TEvent,
     handler: (payload: ExtensionEventMap[TEvent]) => Promise<void> | void,
