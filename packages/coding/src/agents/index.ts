@@ -19,20 +19,16 @@ export type { ProtocolEmitterMetadata } from './protocol-emitters.js';
 
 export {
   CODING_AGENT_MARKER,
-  CODING_AGENTS,
-  generatorCodingAgent,
-  plannerCodingAgent,
-  scoutCodingAgent,
 } from './coding-agents.js';
 
-// v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations moved back
-// from `@kodax-ai/agent/src/primitives/` per ADR-021.
+// FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) Agent declarations
+// retired. The string name constants are kept for verdict-recorder routing
+// + historical session id compatibility; Worker is the only Agent declared.
 export {
   SCOUT_AGENT_NAME,
   PLANNER_AGENT_NAME,
   GENERATOR_AGENT_NAME,
+  WORKER_AGENT_NAME,
   TASK_ENGINE_ROLE_AGENTS,
-  scoutAgent,
-  plannerAgent,
-  generatorAgent,
+  workerAgent,
 } from './task-engine-agents.js';

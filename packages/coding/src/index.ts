@@ -748,14 +748,16 @@ export {
 // v0.7.35.1 FEATURE_142 (A-R1): coding-AMA H2 role declarations are
 // coding-side now (`@kodax-ai/coding/src/agents/task-engine-agents.ts`),
 // re-exported through coding's `agents/` barrel. See ADR-021.
+// FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) Agent declarations
+// retired. Name constants survive for verdict-recorder routing + historical
+// session id compat.
 export {
   SCOUT_AGENT_NAME,
   PLANNER_AGENT_NAME,
   GENERATOR_AGENT_NAME,
+  WORKER_AGENT_NAME,
   TASK_ENGINE_ROLE_AGENTS,
-  scoutAgent,
-  plannerAgent,
-  generatorAgent,
+  workerAgent,
 } from './agents/task-engine-agents.js';
 
 export {
@@ -763,12 +765,13 @@ export {
   createDefaultCodingAgent,
 } from './coding-preset.js';
 
-// FEATURE_084 Shard 2 (v0.7.26): protocol emitter tools + coding Agent
-// instances with handoff topology. Data-only at this shard; consumed by the
-// Runner-driven task engine in Shard 5.
+// FEATURE_193 v0.7.43: V1 chain Coding Agent instances (scoutCodingAgent /
+// plannerCodingAgent / generatorCodingAgent / CODING_AGENTS) deleted along
+// with the V1 chain agents themselves. EMIT_SCOUT_VERDICT_TOOL_NAME +
+// EMIT_CONTRACT_TOOL_NAME + emitScoutVerdict + emitContract retire in
+// Commit 4 alongside the protocol-emitters cleanup.
 export {
   CODING_AGENT_MARKER,
-  CODING_AGENTS,
   EMIT_CONTRACT_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
   EMIT_VERDICT_TOOL_NAME,
@@ -776,9 +779,6 @@ export {
   emitContract,
   emitScoutVerdict,
   emitVerdict,
-  generatorCodingAgent,
-  plannerCodingAgent,
-  scoutCodingAgent,
 } from './agents/index.js';
 export type { ProtocolEmitterMetadata } from './agents/index.js';
 

@@ -43,11 +43,7 @@ import {
   _resetAdmittedAgentBindings,
   setAdmittedAgentBindings,
 } from '@kodax-ai/agent';
-import {
-  generatorAgent,
-  plannerAgent,
-  scoutAgent,
-} from '../agents/task-engine-agents.js';
+import { workerAgent } from '../agents/task-engine-agents.js';
 
 import { getRegisteredToolDefinition } from '../tools/registry.js';
 
@@ -72,17 +68,13 @@ import type { AgentArtifact, AgentContent, AgentHandoffRef, ToolRef } from './ty
  * The map is also keyed on the short alias (`scout`) and the
  * `kodax/role/<x>` canonical form so refs written either way resolve.
  */
-// FEATURE_184 Phase C.1 (v0.7.45): evaluatorAgent removed from chain.
-// 'evaluator' / 'kodax/role/evaluator' entries removed; unknown refs fall
-// through to the stub path (empty instructions) — correct behavior since
-// no in-chain Evaluator agent exists.
+// FEATURE_184 Phase C.1: evaluatorAgent removed; FEATURE_193 v0.7.43: V1
+// chain (Scout/Planner/Generator) Agent declarations retired. Worker is the
+// only builtin agent now; unknown refs fall through to the stub path
+// (empty instructions) — correct behavior since no other in-chain agent exists.
 const BUILTIN_AGENTS: ReadonlyMap<string, Agent> = new Map<string, Agent>([
-  ['scout', scoutAgent],
-  ['planner', plannerAgent],
-  ['generator', generatorAgent],
-  ['kodax/role/scout', scoutAgent],
-  ['kodax/role/planner', plannerAgent],
-  ['kodax/role/generator', generatorAgent],
+  ['worker', workerAgent],
+  ['kodax/role/worker', workerAgent],
 ]);
 
 const AGENT_REGISTRY = new Map<string, RegisteredConstructedAgent>();

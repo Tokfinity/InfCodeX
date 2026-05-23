@@ -1,53 +1,36 @@
 /**
- * Unit test for task-engine role Agent placeholders (FEATURE_080 v0.7.23).
+ * Unit test for task-engine role Agent placeholders.
  *
- * These are declarative-only; no preset dispatcher is registered. Verifies:
- *   - Each role has a stable name the runtime can dispatch against later.
- *   - `TASK_ENGINE_ROLE_AGENTS` exposes all three roles.
- *   - Without a preset or `opts.llm`, Runner.run throws the standard
- *     "no dispatcher" error — confirming these are placeholders, not live
- *     dispatch targets in v0.7.23.
- *
- * FEATURE_184 (v0.7.45) Phase C.3: evaluatorAgent and EVALUATOR_AGENT_NAME removed.
- * Post-execution verification is now handled by the Sidecar Verifier (Phase D.2).
+ * FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) Agent placeholders
+ * retired. The name constants survive for verdict-recorder routing + historical
+ * session id compat; Worker is the only declarative Agent now.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import { Runner } from '@kodax-ai/agent';
 import {
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  SCOUT_AGENT_NAME,
+  WORKER_AGENT_NAME,
   TASK_ENGINE_ROLE_AGENTS,
-  generatorAgent,
-  plannerAgent,
-  scoutAgent,
+  workerAgent,
 } from './task-engine-agents.js';
 
 describe('task-engine role agents', () => {
-  it('has stable names for each role', () => {
-    expect(scoutAgent.name).toBe(SCOUT_AGENT_NAME);
-    expect(plannerAgent.name).toBe(PLANNER_AGENT_NAME);
-    expect(generatorAgent.name).toBe(GENERATOR_AGENT_NAME);
+  it('Worker has a stable name', () => {
+    expect(workerAgent.name).toBe(WORKER_AGENT_NAME);
   });
 
-  it('exposes all three roles via TASK_ENGINE_ROLE_AGENTS', () => {
-    expect(TASK_ENGINE_ROLE_AGENTS.scout).toBe(scoutAgent);
-    expect(TASK_ENGINE_ROLE_AGENTS.planner).toBe(plannerAgent);
-    expect(TASK_ENGINE_ROLE_AGENTS.generator).toBe(generatorAgent);
+  it('exposes Worker via TASK_ENGINE_ROLE_AGENTS', () => {
+    expect(TASK_ENGINE_ROLE_AGENTS.worker).toBe(workerAgent);
   });
 
-  it('each role has non-empty instructions', () => {
-    for (const agent of Object.values(TASK_ENGINE_ROLE_AGENTS)) {
-      expect(typeof agent.instructions).toBe('string');
-      expect((agent.instructions as string).length).toBeGreaterThan(0);
-    }
+  it('Worker has non-empty instructions', () => {
+    expect(typeof workerAgent.instructions).toBe('string');
+    expect((workerAgent.instructions as string).length).toBeGreaterThan(0);
   });
 
-  it('has no preset dispatcher registered (placeholders only in v0.7.23)', async () => {
-    // Without llm + no preset registered, Runner.run must throw.
-    await expect(Runner.run(scoutAgent, 'test'))
+  it('has no preset dispatcher registered (Worker is a placeholder — runtime Worker is built by buildRunnerAgentChain)', async () => {
+    await expect(Runner.run(workerAgent, 'test'))
       .rejects.toThrow(/no registered preset dispatcher/);
   });
 });

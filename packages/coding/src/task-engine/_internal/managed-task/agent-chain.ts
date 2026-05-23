@@ -309,21 +309,14 @@ function buildAgentToolsFromRegistry(
 }
 
 // =============================================================================
-// Runtime Agent chain: Scout / Planner / Generator / Worker
+// Runtime Agent chain: Worker single-loop
 // =============================================================================
+// FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) retired. Worker is
+// the only role in the chain. FEATURE_184 (v0.7.42) retired the in-chain
+// Evaluator role too — the Sidecar Verifier StopHook handles verification
+// out-of-band after Worker terminates text-only.
 
 export interface RunnerAgentChain {
-  readonly scout: Agent;
-  readonly planner: Agent;
-  readonly generator: Agent;
-  /**
-   * FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
-   * Active only when `KODAX_HARNESS_V2=true` (gate wired in Slice 3b).
-   * In V1 runs the Worker slot is built but never dispatched, so its
-   * presence here costs nothing structural. FEATURE_184 (v0.7.45) Phase
-   * C.1: Worker (and Generator) are now terminal — Sidecar Verifier
-   * StopHook (Phase D.2) handles verification.
-   */
   readonly worker: Agent;
 }
 
@@ -605,140 +598,9 @@ export function buildRunnerAgentChain(
   // guidance + H0/H1/H2 quality framework + handoff/verdict/contract
   // block specs + shared closing rules). Tests that don't pass a
   // `promptContext` continue to see the minimal static fallback.
-  const scout: WritableAgent = {
-    name: SCOUT_AGENT_NAME,
-    instructions: () => resolveRoleInstructions(
-      'scout',
-      SCOUT_AGENT_NAME,
-      SCOUT_INSTRUCTIONS_FALLBACK,
-      recorder,
-      promptContext,
-      verification,
-    ),
-    // FEATURE_168 (v0.7.40 hotfix) — Scout's tool surface is derived from the
-    // registry minus `AMA_BASELINE_EXCLUDE ∪ SCOUT_EXTRA_EXCLUDE`. SCOUT_EXTRA
-    // is empty: Scout is the H0 executor + dispatcher, so it carries the full
-    // execution surface (bash/write/edit/multi_edit raw — v0.7.26 Scout-tool-
-    // restoration discipline). Dispatch is role-wrapped for the read-only
-    // enforcement (`managedProtocolRole='scout'` enforces read-only fan-out
-    // inside dispatch_child_task). The throttle+evaluator-aware todo_update
-    // built above is supplied as an override so the FEATURE_097 §5 ② reminder
-    // reset still fires on Scout's H0 turns.
-    tools: [
-      scoutEmit,
-      ...buildAgentToolsFromRegistry(
-        'scout',
-        ctx,
-        budget,
-        events,
-        new Map<string, RunnableTool>([
-          ['dispatch_child_task', scoutDispatch],
-          ['todo_update', codingTools.todoUpdate],
-          ['todo_create', codingTools.todoCreate],
-        ]),
-      ),
-    ],
-    handoffs: undefined,
-    reasoning: { default: 'quick', max: 'balanced', escalateOnRevise: false },
-  };
-  // FEATURE_168 (v0.7.40 hotfix) — Planner's tool surface is derived from the
-  // registry minus the PLANNER_EXTRA_EXCLUDE set defined at the top of this
-  // file. Planner is planning-only — no mutation (write/edit/multi_edit/
-  // insert_after_anchor/undo), no shell (bash), no dispatch (dispatch_child_
-  // task / send_message / task_stop), no worktree management, no exit_plan_
-  // mode, no user interaction. What remains: read/grep/glob + all 8 repo-
-  // intel pull tools (repo_overview / changed_scope / changed_diff /
-  // changed_diff_bundle / module_context / symbol_context / process_context
-  // / impact_estimate — note the latter 4 were absent in v0.7.41 despite
-  // being in legacy `PLANNER_ALLOWED_TOOLS`, recovered by this refactor),
-  // 5 MCP tools, web tools (web_search / web_fetch / code_search /
-  // semantic_lookup), and todo_update/todo_list. The throttle+evaluator-
-  // aware todo_update is supplied as an override so the FEATURE_097 §5 ②
-  // reminder reset still fires when Planner replaces the plan.
-  const plannerTools: RunnableTool[] = [
-    contractEmit,
-    ...buildAgentToolsFromRegistry(
-      'planner',
-      ctx,
-      budget,
-      events,
-      new Map<string, RunnableTool>([
-        ['todo_update', codingTools.todoUpdate],
-        ['todo_create', codingTools.todoCreate],
-      ]),
-    ),
-  ];
-  const planner: WritableAgent = {
-    name: PLANNER_AGENT_NAME,
-    instructions: () => resolveRoleInstructions(
-      'planner',
-      PLANNER_AGENT_NAME,
-      PLANNER_INSTRUCTIONS_FALLBACK,
-      recorder,
-      promptContext,
-      verification,
-    ),
-    tools: plannerTools,
-    handoffs: undefined,
-    reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
-  };
-  const generator: WritableAgent = {
-    name: GENERATOR_AGENT_NAME,
-    instructions: () => {
-      // FEATURE_097 (v0.7.34) — consume pending failed → pending reset
-      // at the start of every Generator turn. The verdict-slot wrapper
-      // arms this flag on `revise` (Generator-targeted route); reading
-      // + clearing it here gives the user the ● → ✗ → ☐ → ● visual
-      // sequence across the retry boundary. The closure resolves on
-      // every Runner invocation of Generator, so the reset fires at
-      // the natural "Generator turn starts" boundary.
-      if (
-        pendingFailedResetRef
-        && pendingFailedResetRef.current
-        && todoStore
-      ) {
-        todoStore.resetFailed();
-        pendingFailedResetRef.current = false;
-      }
-      return resolveRoleInstructions(
-        'generator',
-        GENERATOR_AGENT_NAME,
-        GENERATOR_INSTRUCTIONS_FALLBACK,
-        recorder,
-        promptContext,
-        verification,
-      );
-    },
-    // FEATURE_168 (v0.7.40 hotfix) — Generator's tool surface is derived from the
-    // registry minus `AMA_BASELINE_EXCLUDE` (no extra excludes — full
-    // execution surface). Mutation-guard wraps applied to bash/write/edit/
-    // multi_edit so `plan.decision.primaryTask='review'` or scout-scoped
-    // review-only intent still blocks accidental mutations. Dispatch is
-    // role-wrapped for FEATURE_067 v2 parity (write-fan-out worktree
-    // tracking). FEATURE_097 §5 ② throttle reset + Slice 3c per-step
-    // deterministic evaluator wraps flow through `codingTools.todoUpdate`.
-    tools: [
-      ...buildAgentToolsFromRegistry(
-        'generator',
-        ctx,
-        budget,
-        events,
-        new Map<string, RunnableTool>([
-          ['bash', wrapGeneratorBashWithMutationGuard(codingTools.bash, recorder, planRef)],
-          ['write', wrapGeneratorWriteWithMutationGuard(codingTools.write, recorder, planRef)],
-          ['edit', wrapGeneratorWriteWithMutationGuard(codingTools.edit, recorder, planRef)],
-          ['multi_edit', wrapGeneratorWriteWithMutationGuard(codingTools.multiEdit, recorder, planRef)],
-          ['dispatch_child_task', generatorDispatch],
-          ['todo_update', codingTools.todoUpdate],
-          ['todo_create', codingTools.todoCreate],
-        ]),
-      ),
-    ],
-    handoffs: undefined,
-    reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
-  };
-  // FEATURE_184 (v0.7.45) Phase C.1: Evaluator agent removed from in-chain
-  // topology. Sidecar Verifier StopHook (Phase D.2) handles verification.
+  // FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) agents retired —
+  // Worker is the only entry path. FEATURE_184 (v0.7.42) Phase C.1: Evaluator
+  // also retired — Sidecar Verifier StopHook handles verification out-of-band.
 
   // FEATURE_114 v0.7.36 — AMA Harness V2 Worker agent.
   //
@@ -828,44 +690,14 @@ export function buildRunnerAgentChain(
     reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
   };
 
-  const scoutHandoffs: Handoff[] = [
-    { target: generator, kind: 'continuation', description: 'Upgrade to H1 — execute + evaluate' },
-    { target: planner, kind: 'continuation', description: 'Upgrade to H2 — plan + execute + evaluate' },
-  ];
-  // FEATURE_107 (v0.7.32) — empirical conclusion: H2-A (full Planner
-  // transcript) and H2-B (only emit_contract artifact) produce identical
-  // Generator outcomes across 6 aliases × 3 cases (boundary suite, 0pp
-  // delta). Therefore the v0.7.16 design "new session + plan artifact" is
-  // not implemented — the current full-transcript behaviour is equivalent
-  // and simpler. No inputFilter is wired.
-  const plannerHandoffs: Handoff[] = [
-    { target: generator, kind: 'continuation', description: 'Hand off execution to Generator' },
-  ];
-  // FEATURE_184 (v0.7.45) Phase C.1: Generator and Worker are now terminal —
-  // text-only termination triggers Sidecar Verifier (Phase D.2).
-  const generatorHandoffs: Handoff[] = [];
+  // FEATURE_184 (v0.7.42) Phase C.1: Worker terminates text-only —
+  // Sidecar Verifier StopHook handles verification, no handoff edges.
   const workerHandoffs: Handoff[] = [];
-
-  scout.handoffs = scoutHandoffs;
-  planner.handoffs = plannerHandoffs;
-  generator.handoffs = generatorHandoffs;
   worker.handoffs = workerHandoffs;
 
   return {
-    scout: Object.freeze(scout) as Agent,
-    planner: Object.freeze(planner) as Agent,
-    generator: Object.freeze(generator) as Agent,
     worker: Object.freeze(worker) as Agent,
   };
 }
 
-/**
- * Shard 5a backward-compat: returns just the Scout from a chain (used by
- * existing callers that expected a single Scout agent). Tests that
- * previously asserted `scout.handoffs === undefined` need updating — Shard 5b
- * wires the full topology.
- */
-export function buildRunnerScoutAgent(ctx: KodaXToolExecutionContext): Agent {
-  const recorder: VerdictRecorder = {};
-  return buildRunnerAgentChain(ctx, recorder).scout;
-}
+// FEATURE_193 v0.7.43: `buildRunnerScoutAgent` deleted — V1 Scout retired.

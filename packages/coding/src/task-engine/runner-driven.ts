@@ -213,7 +213,6 @@ import type {
 } from './_internal/managed-task/types.js';
 import {
   buildRunnerAgentChain,
-  buildRunnerScoutAgent,
   type RunnerAgentChain,
 } from './_internal/managed-task/agent-chain.js';
 import {
@@ -237,7 +236,6 @@ export {
   getAmaRoleEffectiveExclude,
   getAmaRoleExpectedToolNames,
   buildRunnerAgentChain,
-  buildRunnerScoutAgent,
   buildRunnerLlmAdapter,
 };
 export type {

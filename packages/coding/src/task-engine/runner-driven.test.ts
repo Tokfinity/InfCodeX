@@ -15,9 +15,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {
-  EMIT_SCOUT_VERDICT_TOOL_NAME,
-} from '../agents/protocol-emitters.js';
 // FEATURE_155 (v0.7.39) idle-yield e2e test below. Mock the child-
 // executor so the dispatch tool's IIFE has a controllable promise
 // instead of spawning a real sub-Runner. None of the pre-existing
@@ -33,7 +30,6 @@ import { _resetMessageQueueForTests, getMessageQueue } from '@kodax-ai/agent';
 import {
   buildRunnerAgentChain,
   buildRunnerLlmAdapter,
-  buildRunnerScoutAgent,
   isRunnerDrivenRuntimeEnabled,
   runManagedTaskViaRunner,
 } from './runner-driven.js';
@@ -116,42 +112,7 @@ describe('isRunnerDrivenRuntimeEnabled', () => {
   });
 });
 
-describe('buildRunnerScoutAgent', () => {
-  it('carries emit_scout_verdict + 4 core coding tools', () => {
-    const scout = buildRunnerScoutAgent(makeCtx());
-    const names = scout.tools?.map((t) => t.name) ?? [];
-    expect(names).toContain(EMIT_SCOUT_VERDICT_TOOL_NAME);
-    expect(names).toContain('read');
-    expect(names).toContain('grep');
-    expect(names).toContain('glob');
-    expect(names).toContain('bash');
-  });
-
-  it('declares handoffs to generator (H1) and planner (H2) — Shard 5b topology', () => {
-    const scout = buildRunnerScoutAgent(makeCtx());
-    const targets = (scout.handoffs ?? []).map((h) => h.target.name);
-    expect(targets).toContain('kodax/role/generator');
-    expect(targets).toContain('kodax/role/planner');
-  });
-
-  it('uses kodax/role/scout as the canonical agent name', () => {
-    const scout = buildRunnerScoutAgent(makeCtx());
-    expect(scout.name).toBe('kodax/role/scout');
-  });
-
-  it('carries a self-contained H0 instruction string (no ManagedRolePromptContext dependency)', () => {
-    const scout = buildRunnerScoutAgent(makeCtx());
-    // v0.7.26 parity: instructions is a closure that resolves on every
-    // Runner invocation so Scout's post-emit skillMap / scope reach
-    // downstream prompts at runtime. Resolve it once here for assertion.
-    const instructions = typeof scout.instructions === 'function'
-      ? scout.instructions(undefined)
-      : scout.instructions;
-    expect(typeof instructions).toBe('string');
-    expect(instructions).toMatch(/H0_DIRECT/);
-    expect(instructions).toMatch(/emit_scout_verdict/);
-  });
-});
+// FEATURE_193 v0.7.43: describe('buildRunnerScoutAgent') deleted — V1 chain retired.
 
 describe('buildRunnerLlmAdapter (via overrideStream)', () => {
   it('splits leading system message and sends rest to the stream', async () => {
@@ -241,33 +202,35 @@ describe('buildRunnerLlmAdapter (via overrideStream)', () => {
       capturedTools = tools as readonly { name: string; execute?: unknown }[];
       return { textBlocks: [], toolBlocks: [] };
     });
-    const scout = buildRunnerScoutAgent(makeCtx());
-    await adapter([{ role: 'system', content: 's' }], scout);
+    // FEATURE_193 v0.7.43: migrated from Scout/emit_scout_verdict fixture to
+    // Worker chain (V1 chain retired).
+    const chain = buildRunnerAgentChain(makeCtx(), {});
+    await adapter([{ role: 'system', content: 's' }], chain.worker);
     for (const t of capturedTools) {
       expect(t.execute).toBeUndefined();
     }
-    expect(capturedTools.some((t) => t.name === EMIT_SCOUT_VERDICT_TOOL_NAME)).toBe(true);
+    expect(capturedTools.some((t) => t.name === 'read')).toBe(true);
   });
 
   it('converts textBlocks+toolBlocks to RunnerLlmResult shape', async () => {
     const toolBlock: KodaXToolUseBlock = {
       type: 'tool_use',
       id: 'call_1',
-      name: 'emit_scout_verdict',
-      input: { confirmed_harness: 'H0_DIRECT' },
+      name: 'read',
+      input: { path: 'package.json' },
     };
     const adapter = buildRunnerLlmAdapter(makeOptions(), async () => ({
-      textBlocks: [{ text: 'Calling verdict' }],
+      textBlocks: [{ text: 'Reading file' }],
       toolBlocks: [toolBlock],
     }));
     const result = await adapter(
       [{ role: 'system', content: 's' }],
       { name: 'x', instructions: '' },
     );
-    expect(result.text).toBe('Calling verdict');
+    expect(result.text).toBe('Reading file');
     expect(result.toolCalls).toHaveLength(1);
-    expect(result.toolCalls![0]!.name).toBe('emit_scout_verdict');
-    expect(result.toolCalls![0]!.input).toEqual({ confirmed_harness: 'H0_DIRECT' });
+    expect(result.toolCalls![0]!.name).toBe('read');
+    expect(result.toolCalls![0]!.input).toEqual({ path: 'package.json' });
   });
 });
 
@@ -1048,39 +1011,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     return { agent: { name: agentName } as unknown as import('@kodax-ai/agent').Agent };
   }
 
-  it('Planner agent exposes only read + grep + glob + emit_contract (no bash/write/edit)', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const plannerTools = chain.planner.tools?.map((t) => t.name) ?? [];
-    expect(plannerTools).toContain('emit_contract');
-    expect(plannerTools).toContain('read');
-    expect(plannerTools).toContain('grep');
-    expect(plannerTools).toContain('glob');
-    expect(plannerTools).not.toContain('bash');
-    expect(plannerTools).not.toContain('write');
-    expect(plannerTools).not.toContain('edit');
-  });
-
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // "Evaluator agent exposes read + grep + glob + bash + emit_verdict" test deleted.
-
-  it('Generator agent exposes full coding toolbox including write + edit', () => {
-    // FEATURE_190 Phase 3: emit_handoff deleted from all agents.
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const genTools = chain.generator.tools?.map((t) => t.name) ?? [];
-    expect(genTools).not.toContain('emit_handoff');
-    expect(genTools).toContain('bash');
-    expect(genTools).toContain('write');
-    expect(genTools).toContain('edit');
-  });
-
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // "Evaluator bash blocks shell mutation commands" test deleted.
-  // "Evaluator bash allows read-only commands" test deleted.
-  // "Evaluator bash blocks git write commands" test deleted.
-  // wrapReadOnlyBash is retained for C.3 cleanup.
-
-  // FEATURE_193 v0.7.43: 'Scout bash is NOT wrapped' test deleted (chain.scout retired — V1 chain removed)
-  // FEATURE_193 v0.7.43: 'Scout exposes write/edit/exit_plan_mode tools' test deleted (chain.scout retired — V1 chain removed)
+  // FEATURE_193 v0.7.43: Planner + Generator topology tests deleted —
+  // V1 chain agents retired from agent-chain.ts.
 
   // FEATURE_114 v0.7.36 Slice 3a — Worker agent in the runner chain.
   // Slice 3a is intentionally additive: the Worker slot is built but
@@ -1372,23 +1304,9 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
 // FEATURE_193 v0.7.43: 'Shard 6d-T — Scout skillMap injected into Generator + Evaluator instructions' deleted
 //   (all tests used chain.generator / chain.scout — V1 chain roles retired)
 
-describe('Shard 6d-Q — dispatch_child_task topology', () => {
-  // FEATURE_193 v0.7.43: 'Scout agent exposes dispatch_child_task' deleted (chain.scout retired — V1 chain removed)
-  // FEATURE_193 v0.7.43: 'Scout-bound dispatch tool errors out if Scout asks for a write child' deleted (chain.scout retired)
-
-  it('Generator agent exposes dispatch_child_task', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const genTools = chain.generator.tools?.map((t) => t.name) ?? [];
-    expect(genTools).toContain('dispatch_child_task');
-  });
-
-  it('Planner agent does NOT expose dispatch_child_task (FEATURE_184 C.1: Evaluator removed)', () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): chain.evaluator no longer exists.
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const plannerTools = chain.planner.tools?.map((t) => t.name) ?? [];
-    expect(plannerTools).not.toContain('dispatch_child_task');
-  });
-});
+// FEATURE_193 v0.7.43: Shard 6d-Q V1-agent dispatch_child_task tests deleted
+// (chain.scout/.planner/.generator retired). Worker dispatch is covered by
+// Worker topology tests in the Slice 3a describe.
 
 // FEATURE_193 v0.7.43: 'Shard 6d-S — task verification contract completionContractStatus' deleted
 //   (all tests used makeChainMockLlm with scout:/generator: — V1 chain roles retired)
