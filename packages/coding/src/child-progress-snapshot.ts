@@ -110,6 +110,13 @@ export interface ChildProgressSnapshot {
   /** Read-only flag forwarded from the dispatch bundle. Same rationale
    * as `parentRole` — currently captured for future surfacing. */
   readonly readOnly?: boolean;
+  /**
+   * FEATURE_191 — registered specialist agent name when the dispatch
+   * routed through a `subagent_type` argument. `undefined` for generic
+   * anonymous children. Surfaced by `task_output` so post-mortem peeks
+   * can identify which specialist owned the child.
+   */
+  readonly specialistName?: string;
 }
 
 export interface InitSnapshotInput {
@@ -118,6 +125,7 @@ export interface InitSnapshotInput {
   readonly maxIterations: number;
   readonly parentRole?: string;
   readonly readOnly?: boolean;
+  readonly specialistName?: string;
 }
 
 /**
@@ -146,6 +154,7 @@ export function initChildSnapshot(
     recentToolCalls: [],
     parentRole: input.parentRole,
     readOnly: input.readOnly,
+    specialistName: input.specialistName,
   };
   snapshots.set(input.childId, snap);
   return snap;

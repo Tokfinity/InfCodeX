@@ -47,6 +47,13 @@ import {
   initChildSnapshot,
   type ChildProgressStatus,
 } from '../child-progress-snapshot.js';
+// FEATURE_191 — specialist agent resolution at dispatch time. `resolveConstructedAgent`
+// returns `Agent | undefined`; unknown names are surfaced as tool-result
+// errors before bundle construction (no throw — Worker self-corrects).
+import {
+  listConstructedAgents,
+  resolveConstructedAgent,
+} from '../construction/agent-resolver.js';
 import { applyToolResultGuardrail } from './tool-result-policy.js';
 import {
   LARGE_CONTENT_THRESHOLD_BYTES,
@@ -326,6 +333,7 @@ async function writeDispatchTraceIfEnabled(args: {
         evidenceRefsCount: args.bundle.evidenceRefs.length,
         constraintsCount: args.bundle.constraints.length,
         modelHint: args.bundle.modelHint ?? null,
+        specialistName: args.bundle.specialistName ?? null,
       },
       result: args.result === undefined
         ? null
@@ -428,6 +436,32 @@ export async function* toolDispatchChildTask(
       ? modelHintRaw
       : undefined;
 
+  // FEATURE_191 — optional `subagent_type` field. When set, dispatch
+  // routes the child through a registered specialist agent's
+  // `instructions` + tool whitelist + reasoning + guardrails instead of
+  // the stock Worker bundle. Unknown names return a tool-result error
+  // (not throw) so the calling Worker can self-correct or fallback to
+  // anonymous dispatch.
+  const subagentTypeRaw = typeof input.subagent_type === 'string' ? input.subagent_type.trim() : '';
+  const specialistName = subagentTypeRaw || undefined;
+  if (specialistName) {
+    const specialist = resolveConstructedAgent(specialistName);
+    if (!specialist) {
+      const available = listConstructedAgents().map(a => a.name);
+      const availableStr = available.length === 0 ? '(none)' : available.join(', ');
+      yield { stage: 'error', message: `Child "${childId}": specialist "${specialistName}" not registered` };
+      return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" not registered. Available: ${availableStr}`;
+    }
+    // FEATURE_191 A.2c — specialist write dispatch parentRole gate. Mirrors the
+    // existing scout/!readOnly guard above for the worker/generator allow-list
+    // that `validateWriteBundles` enforces in `child-executor.ts`. Reject here
+    // explicitly with a reason rather than letting the bundle silently drop
+    // inside `validateWriteBundles`.
+    if (!readOnly && role !== 'worker' && role !== 'generator') {
+      return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" is a write dispatch (readOnly=false) but current role "${role ?? 'unknown'}" cannot dispatch write children. Only Worker and Generator may dispatch write specialists.`;
+    }
+  }
+
   const bundle: KodaXChildContextBundle = {
     id: childId,
     fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
@@ -441,6 +475,7 @@ export async function* toolDispatchChildTask(
       ? input.constraints.filter((c): c is string => typeof c === 'string')
       : [],
     modelHint,
+    specialistName,
   };
 
   // --- Build executor options ---
@@ -549,6 +584,7 @@ export async function* toolDispatchChildTask(
         maxIterations: options.maxIterationsPerChild,
         parentRole: options.parentRole,
         readOnly: bundle.readOnly,
+        specialistName: bundle.specialistName,
       });
     }
 

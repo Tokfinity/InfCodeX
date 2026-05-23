@@ -1052,3 +1052,214 @@ describe('FEATURE_177 — child progress snapshot lifecycle', () => {
     // No snapshot map → no exception, the rest of dispatch proceeds.
   });
 });
+
+describe('FEATURE_191 — dispatch_child_task subagent_type guards (A.2 + A.2c)', () => {
+  beforeEach(async () => {
+    mockExec.mockReset();
+    _resetMessageQueueForTests();
+    const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+  });
+  afterEach(async () => {
+    _resetMessageQueueForTests();
+    const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+  });
+
+  it('A.2: returns tool-result error for unknown subagent_type (does not throw)', async () => {
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-unknown', objective: 'probe', subagent_type: 'ghost-reviewer' },
+        ctx,
+      ),
+    );
+
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toContain('ghost-reviewer');
+    expect(result).toContain('not registered');
+    expect(result).toContain('Available:');
+    // Executor must NOT be called when subagent_type is rejected
+    expect(mockExec).not.toHaveBeenCalled();
+    // Registry must not gain a bogus entry
+    expect(registry.size).toBe(0);
+  });
+
+  it('A.2: known subagent_type passes through to bundle.specialistName', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'db-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'DB REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    mockExec.mockResolvedValue(buildSuccessResult('sp-known', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry);
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-known', objective: 'review schema', subagent_type: 'db-reviewer' },
+        ctx,
+      ),
+    );
+
+    expect(result).toContain('task_id:sp-known');
+    expect(mockExec).toHaveBeenCalledTimes(1);
+    // Inspect the bundle passed to executor — bundle.specialistName must be set
+    const execCallArgs = mockExec.mock.calls[0]!;
+    const bundles = execCallArgs[0] as readonly { specialistName?: string }[];
+    expect(bundles[0]?.specialistName).toBe('db-reviewer');
+  });
+
+  it('A.2c: rejects write specialist dispatch from scout role with explicit error', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'refactor-helper',
+      version: '1.0.0',
+      content: {
+        instructions: 'REFACTOR HELPER',
+        tools: [{ ref: 'builtin:write' }, { ref: 'builtin:edit' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx = buildBaseCtx(registry); // managedProtocolRole: 'scout'
+
+    // The pre-existing scout/!readOnly guard at line 399 fires FIRST and
+    // returns its own scout-specific error. This test verifies that combined
+    // guard surface — scout can never dispatch write children whether or not
+    // a specialist is named.
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-write-scout', objective: 'refactor', readOnly: false, subagent_type: 'refactor-helper' },
+        ctx,
+      ),
+    );
+
+    expect(result).toMatch(/^\[Tool Error\]/);
+    // Either the scout-readonly guard OR the specialist-write-role guard
+    // produces the error — both surface explicit reason, neither silently drops.
+    expect(result.toLowerCase()).toMatch(/scout|write|specialist|cannot|read-only/);
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it('A.2c: rejects write specialist dispatch from unauthorized role with specialist-specific error', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'refactor-helper',
+      version: '1.0.0',
+      content: {
+        instructions: 'REFACTOR HELPER',
+        tools: [{ ref: 'builtin:write' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    // Custom role outside scout/planner/evaluator/worker/generator that
+    // would historically pass the pre-existing guards but fall into
+    // validateWriteBundles silent-drop. The specialist-specific A.2c guard
+    // catches it here with an explicit reason.
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      managedProtocolRole: 'custom-role' as never,
+    };
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-write-custom', objective: 'refactor', readOnly: false, subagent_type: 'refactor-helper' },
+        ctx,
+      ),
+    );
+
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toContain('refactor-helper');
+    expect(result.toLowerCase()).toMatch(/write|cannot dispatch/);
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
+  it('A.2c: allows write specialist dispatch from worker role', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'refactor-helper',
+      version: '1.0.0',
+      content: {
+        instructions: 'REFACTOR HELPER',
+        tools: [{ ref: 'builtin:write' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    mockExec.mockResolvedValue(buildSuccessResult('sp-write-ok', ['done']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      managedProtocolRole: 'worker',
+    };
+
+    const result = await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-write-ok', objective: 'refactor', readOnly: false, subagent_type: 'refactor-helper' },
+        ctx,
+      ),
+    );
+
+    expect(result).toContain('task_id:sp-write-ok');
+    expect(mockExec).toHaveBeenCalledTimes(1);
+  });
+
+  it('A.2d: ChildProgressSnapshot carries specialistName at init', async () => {
+    const { registerConstructedAgent } = await import('../construction/agent-resolver.js');
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'db-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'DB REVIEWER',
+        tools: [{ ref: 'builtin:read' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const snapshots = new Map();
+    mockExec.mockResolvedValue(buildSuccessResult('sp-snap', ['ok']));
+    const registry = new Map<string, Promise<KodaXChildExecutionResult>>();
+    const ctx: KodaXToolExecutionContext = {
+      ...buildBaseCtx(registry),
+      childProgressSnapshots: snapshots,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask(
+        { id: 'sp-snap', objective: 'probe', subagent_type: 'db-reviewer' },
+        ctx,
+      ),
+    );
+
+    const snap = snapshots.get('sp-snap');
+    expect(snap).toBeDefined();
+    expect(snap?.specialistName).toBe('db-reviewer');
+  });
+});

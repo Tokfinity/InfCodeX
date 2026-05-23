@@ -74,6 +74,16 @@ import { loadAgentsFiles, formatAgentsForPrompt } from './context/agents-loader.
 // worktree isolation, briefing, role policy) stay below; the wrapper
 // owns only bounded concurrency + abort + progress eventing.
 import { runFanOut } from '@kodax-ai/agent';
+// FEATURE_191 — specialist agent override resolution. `resolveConstructedAgent`
+// returns `Agent | undefined`; the dispatch-child-tasks layer has already
+// rejected unknown names before bundle construction, so a re-resolve here is
+// expected to succeed for any bundle that carries `specialistName`.
+// `getAllRegisteredTools` powers the complementary excludeTools computation
+// (`KodaXOptions.context` has no `includeOnlyTools` API; the inverse subset
+// is the YAGNI-compliant substitute per ADR-035 R11).
+import { resolveConstructedAgent } from './construction/agent-resolver.js';
+import { getAllRegisteredTools } from './tools/registry.js';
+import type { Agent } from '@kodax-ai/agent';
 
 /* ---------- Public API ---------- */
 
@@ -203,6 +213,64 @@ export async function executeChildAgents(
   return mergeChildResults(allBundles, results, cancelledChildren);
 }
 
+/* ---------- Specialist override helper (FEATURE_191) ---------- */
+
+/**
+ * Compute `(systemPromptOverride, excludeTools)` for a child given the
+ * bundle's `specialistName`. When set, the specialist's instructions
+ * replace the default child system prompt, and the excludeTools list
+ * becomes the complement of the specialist's `tools` array (full tool
+ * universe minus what the specialist whitelists). When unset, the
+ * defaults the caller passes through are used.
+ *
+ * Resolution is best-effort: if the specialist was unregistered between
+ * dispatch and execution (a rare race the dispatch-child-tasks guard
+ * cannot fully prevent in async fan-out), the defaults fire as a fail-
+ * safe — the child still runs, just without specialist overrides. This
+ * matches the "specialist override is opportunistic, not load-bearing"
+ * semantic of the FEATURE_191 design.
+ */
+function resolveSpecialistOverride(
+  bundle: KodaXChildContextBundle,
+  defaultSystemPrompt: string,
+  defaultExcludeTools: readonly string[],
+): { systemPromptOverride: string; excludeTools: readonly string[] } {
+  if (!bundle.specialistName) {
+    return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
+  }
+  const specialist: Agent | undefined = resolveConstructedAgent(bundle.specialistName);
+  if (!specialist) {
+    // Defensive fail-safe — should not happen because the dispatch layer
+    // already rejected unknown names. If it does (e.g. registry mutated
+    // mid-flight), fall through to defaults rather than blocking the
+    // child run.
+    return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
+  }
+  // Agent.instructions is `string | ((ctx) => string)`. Constructed agents
+  // built by agent-resolver.buildAgentFromContent assign the literal
+  // string straight through; the function variant is reserved for
+  // platform-level dynamic prompts (built-in agents). Specialist override
+  // therefore safely narrows to the string branch.
+  const systemPromptOverride = typeof specialist.instructions === 'string'
+    ? specialist.instructions
+    : defaultSystemPrompt;
+
+  // Complementary exclusion: KodaXOptions.context has no `includeOnlyTools`
+  // API. Computing `allTools - specialist.tools` as the excludeTools list
+  // is semantically equivalent to an allowlist intersect without
+  // requiring a new option schema (ADR-035 R11, YAGNI-compliant).
+  if (!specialist.tools || specialist.tools.length === 0) {
+    // Specialist declared no tools — fall back to defaults so the child
+    // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
+    // rather than an unrestricted toolset.
+    return { systemPromptOverride, excludeTools: defaultExcludeTools };
+  }
+  const specialistToolNames = new Set(specialist.tools.map(t => t.name));
+  const allToolNames = getAllRegisteredTools().map(t => t.name);
+  const excludeTools = allToolNames.filter(n => !specialistToolNames.has(n));
+  return { systemPromptOverride, excludeTools };
+}
+
 /* ---------- Read-only child execution ---------- */
 
 async function executeReadChild(
@@ -219,6 +287,14 @@ async function executeReadChild(
   );
 
   const provider = options.parentOptions.provider ?? 'anthropic';
+
+  // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
+  // is undefined; falls through to v0.7.42 defaults).
+  const { systemPromptOverride, excludeTools } = resolveSpecialistOverride(
+    bundle,
+    CHILD_AGENT_SYSTEM_PROMPT,
+    CHILD_EXCLUDE_TOOLS_READONLY,
+  );
 
   try {
     const result = await (await getRunKodaX())(
@@ -237,8 +313,8 @@ async function executeReadChild(
         context: {
           gitRoot: parentCtx.gitRoot,
           executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
-          systemPromptOverride: CHILD_AGENT_SYSTEM_PROMPT,
-          excludeTools: CHILD_EXCLUDE_TOOLS_READONLY,
+          systemPromptOverride,
+          excludeTools,
         },
         events: childEvents,
       },
@@ -297,6 +373,14 @@ async function executeWriteChild(
   // (they don't mutate, so project rules don't apply).
   const writeSystemPrompt = buildWriteSystemPrompt(parentCtx.gitRoot ?? parentCtx.executionCwd ?? process.cwd());
 
+  // FEATURE_191 — specialist override switch on the write path. Same fail-safe
+  // semantic as the read path: unknown specialist falls back to defaults.
+  const { systemPromptOverride, excludeTools } = resolveSpecialistOverride(
+    bundle,
+    writeSystemPrompt,
+    CHILD_EXCLUDE_TOOLS_BASE,
+  );
+
   try {
     const result = await (await getRunKodaX())(
       {
@@ -314,8 +398,8 @@ async function executeWriteChild(
         context: {
           gitRoot: parentCtx.gitRoot,
           executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
-          systemPromptOverride: writeSystemPrompt,
-          excludeTools: CHILD_EXCLUDE_TOOLS_BASE, // Write children keep write/edit tools
+          systemPromptOverride,
+          excludeTools,
         },
         events: childEvents,
       },

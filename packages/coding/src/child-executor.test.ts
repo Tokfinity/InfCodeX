@@ -25,6 +25,11 @@ import {
 import { clearAgentsLoaderCacheForTesting } from './context/agents-loader.js';
 import type { ChildExecutorOptions } from './child-executor.js';
 import { runKodaX } from './agent.js';
+import {
+  _resetAgentResolverForTesting,
+  registerConstructedAgent,
+} from './construction/agent-resolver.js';
+import type { AgentArtifact } from './construction/types.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
 
@@ -667,6 +672,166 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     expect(typeof decision).toBe('string');
     expect(decision).toContain('Not available in child agent context');
     expect(check).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetAgentResolverForTesting();
+  });
+
+  afterEach(() => {
+    _resetAgentResolverForTesting();
+  });
+
+  function buildSpecialistArtifact(overrides: Partial<AgentArtifact> = {}): AgentArtifact {
+    return {
+      kind: 'agent',
+      name: overrides.name ?? 'db-reviewer',
+      version: overrides.version ?? '1.0.0',
+      content: overrides.content ?? {
+        instructions: 'SPECIALIST DB-REVIEWER PROMPT',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:grep' }],
+        description: 'DB review',
+      },
+      status: overrides.status ?? 'active',
+      createdAt: overrides.createdAt ?? Date.now(),
+      testedAt: overrides.testedAt ?? Date.now(),
+      activatedAt: overrides.activatedAt ?? Date.now(),
+    };
+  }
+
+  const okResult = (lastText = 'specialist done') => ({
+    success: true,
+    lastText,
+    messages: [{ role: 'assistant', content: lastText }],
+    sessionId: 's-specialist',
+  });
+
+  it('overrides systemPromptOverride with specialist instructions when bundle.specialistName resolves', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({ name: 'db-reviewer' }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp1',
+      readOnly: true,
+      specialistName: 'db-reviewer',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    expect(mockRunKodaX).toHaveBeenCalled();
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
+    };
+    expect(childOptions.context?.systemPromptOverride).toBe('SPECIALIST DB-REVIEWER PROMPT');
+  });
+
+  it('computes excludeTools as the complement of specialist.tools (read child path)', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({ name: 'db-reviewer' }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp2',
+      readOnly: true,
+      specialistName: 'db-reviewer',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { excludeTools?: readonly string[] };
+    };
+    const excludeTools = childOptions.context?.excludeTools ?? [];
+    // Specialist whitelisted `read` + `grep`; everything else (write/edit/
+    // bash/etc.) must be excluded.
+    expect(excludeTools).not.toContain('read');
+    expect(excludeTools).not.toContain('grep');
+    expect(excludeTools).toContain('write');
+    expect(excludeTools).toContain('edit');
+    expect(excludeTools).toContain('bash');
+  });
+
+  it('falls through to default systemPromptOverride when specialistName is undefined (backward compat)', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-sp3', readOnly: true })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string };
+    };
+    expect(childOptions.context?.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
+  });
+
+  it('falls through to defaults when specialist is unregistered between dispatch and execution (fail-safe)', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    // bundle carries specialistName but registry is empty (defensive race path)
+    const bundles = [createBundle({
+      id: 'cb-sp4',
+      readOnly: true,
+      specialistName: 'ghost-reviewer',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
+    };
+    // Fail-safe: child still runs with default child prompt + default exclude
+    // list rather than blocking the dispatch.
+    expect(childOptions.context?.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
+  });
+
+  it('uses default excludeTools when specialist declares no tools', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'narrator',
+      content: { instructions: 'NARRATOR PROMPT' },  // no tools field
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp5',
+      readOnly: true,
+      specialistName: 'narrator',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions());
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
+    };
+    expect(childOptions.context?.systemPromptOverride).toBe('NARRATOR PROMPT');
+    // No specialist.tools → standard CHILD_EXCLUDE_TOOLS_READONLY guard applies
+    // rather than an empty exclusion (which would unrestrict the child).
+    expect(childOptions.context?.excludeTools).toContain('dispatch_child_task');
+  });
+
+  it('write child path also honors specialist override (executeWriteChild)', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'refactor-helper',
+      content: {
+        instructions: 'REFACTOR HELPER PROMPT',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:write' }, { ref: 'builtin:edit' }],
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-sp6',
+      readOnly: false,
+      specialistName: 'refactor-helper',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentRole: 'worker',
+      parentHarness: 'tool-dispatch',
+    }));
+
+    expect(mockRunKodaX).toHaveBeenCalled();
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { systemPromptOverride?: string; excludeTools?: readonly string[] };
+    };
+    expect(childOptions.context?.systemPromptOverride).toBe('REFACTOR HELPER PROMPT');
+    expect(childOptions.context?.excludeTools).not.toContain('write');
+    expect(childOptions.context?.excludeTools).not.toContain('edit');
   });
 });
 
