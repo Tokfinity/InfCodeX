@@ -29,8 +29,10 @@ import {
   type AskUserQuestionOptions,
   type ConstructionArtifact,
   type ConstructionPolicy,
+  type MarkdownLoadFailure,
   type SelfModifyAskUser,
   configureRuntime,
+  loadAgentsFromMarkdown,
   rehydrateActiveArtifacts,
 } from '@kodax-ai/coding';
 
@@ -157,13 +159,46 @@ const replSelfModifyAskUser: SelfModifyAskUser = async (input) => {
  * same overrides; rehydrateActiveArtifacts will re-register, and
  * registerActiveArtifact unregisters any prior entry first).
  */
+export interface BootstrapConstructionRuntimeResult {
+  /** Rehydrated on-disk artifacts (FEATURE_087/088 — constructed tools). */
+  readonly loaded: number;
+  readonly failed: number;
+  readonly tampered: number;
+  /**
+   * FEATURE_191 (v0.7.43) — count of markdown-defined agents registered
+   * from `~/.kodax/agents/*.md` and `<cwd>/.kodax/agents/*.md`. Kept
+   * separate from `loaded` so the existing "Rehydrated N tools" REPL
+   * banner stays semantically accurate.
+   */
+  readonly markdownLoaded: number;
+  /**
+   * FEATURE_191 (v0.7.43) — per-file failures from markdown agent
+   * loading. Surfaces under-frontmatter / admission-rejected agents
+   * so the REPL can show a `/agents list` diagnostic with reasons
+   * (claudecode parity with `getAgentDefinitionsWithOverrides.failedFiles`).
+   */
+  readonly markdownFailures: readonly MarkdownLoadFailure[];
+}
+
 export async function bootstrapConstructionRuntime(
   cwd: string,
-): Promise<{ loaded: number; failed: number; tampered: number }> {
+): Promise<BootstrapConstructionRuntimeResult> {
   configureRuntime({
     cwd,
     policy: replConstructionPolicy,
     selfModifyAskUser: replSelfModifyAskUser,
   });
-  return rehydrateActiveArtifacts();
+  const rehydrated = await rehydrateActiveArtifacts();
+  // FEATURE_191 — load user + project markdown agents *after* rehydrate
+  // so the resolver is populated for cross-agent handoff validation
+  // during the markdown loader's `Runner.admit` step. Markdown failures
+  // do not block boot — accumulated and surfaced to the caller.
+  const markdown = await loadAgentsFromMarkdown({ cwd });
+  return {
+    loaded: rehydrated.loaded,
+    failed: rehydrated.failed,
+    tampered: rehydrated.tampered,
+    markdownLoaded: markdown.loaded,
+    markdownFailures: markdown.failed,
+  };
 }

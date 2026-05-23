@@ -4,6 +4,9 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   resolve: {
     alias: {
+      // More-specific subpath aliases must precede the package-root alias
+      // because Vite matches alias entries by prefix.
+      '@kodax-ai/skills/shared/yaml': path.resolve(__dirname, '..', 'skills', 'src', 'shared', 'yaml.ts'),
       '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/agent/messaging/queue': path.resolve(__dirname, '..', 'agent', 'src', 'messaging', 'queue.ts'),
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),

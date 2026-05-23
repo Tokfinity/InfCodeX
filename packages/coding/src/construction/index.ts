@@ -85,6 +85,19 @@ export {
   parseToolNameFromRef,
 } from './admission-bridge.js';
 
+// FEATURE_191 (v0.7.43) — user/project markdown-defined agent loader.
+// Called from REPL bootstrap after `rehydrateActiveArtifacts()` so
+// `.kodax/agents/` + `~/.kodax/agents/` agents register alongside
+// LLM/CLI-constructed ones.
+export {
+  loadAgentsFromMarkdown,
+} from './markdown-loader.js';
+export type {
+  LoadAgentsFromMarkdownOptions,
+  LoadAgentsFromMarkdownResult,
+  MarkdownLoadFailure,
+} from './markdown-loader.js';
+
 // FEATURE_089 Phase 3.5 — sandbox runner.
 export {
   runSandboxAgentTest,

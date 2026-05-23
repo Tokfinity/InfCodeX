@@ -921,8 +921,20 @@ export {
   drainPendingSwaps,
   hasPendingSwap,
   resolveConstructedAgent,
+  // FEATURE_191 (v0.7.43) — markdown-defined agent loader. REPL bootstrap
+  // calls `loadAgentsFromMarkdown` after `rehydrateActiveArtifacts` so
+  // `.kodax/agents/*.md` agents register alongside on-disk artifacts.
+  loadAgentsFromMarkdown,
   // Test-only — reset module-singleton state between hermetic test runs.
   _resetRuntimeForTesting,
+} from './construction/index.js';
+// FEATURE_191 — type exports for the markdown loader (consumed by REPL
+// `BootstrapConstructionRuntimeResult` so REPL can surface failures
+// with reasons).
+export type {
+  LoadAgentsFromMarkdownOptions,
+  LoadAgentsFromMarkdownResult,
+  MarkdownLoadFailure,
 } from './construction/index.js';
 
 // ============== FEATURE_092 (v0.7.33): Auto-Mode Classifier ==============
