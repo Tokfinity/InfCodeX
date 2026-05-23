@@ -1415,7 +1415,7 @@ describe('Shard 6d-c3 — budget extension at 90% threshold', () => {
   // FEATURE_193 v0.7.43: 'budget extension askUser is NOT fired on short Scout→Generator run' deleted
   //   (used makeChainMockLlm with scout:/generator: — V1 chain roles retired)
 
-  it('fires askUser when Evaluator revises and usage crosses 90% threshold', async () => {
+  it('fires askUser when revise summary lands and usage crosses 90% threshold', async () => {
     // Directly exercise `maybeRequestAdditionalWorkBudget` with a
     // pre-seeded controller, proving the helper we wire into the runner
     // path produces the expected askUser dialog + budget extension. The
