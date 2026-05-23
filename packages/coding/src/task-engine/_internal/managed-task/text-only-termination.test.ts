@@ -23,12 +23,16 @@
  *     verdict path (the F184 canonical blocked surface)
  *   - `buildManagedProtocolPayload` correctly handles the empty-recorder
  *     case (returns undefined — no slices to expose)
- *   - `continuationSuggested` derivation correctly returns falsy for the
- *     text-only canonical state
  *
  * These pins prevent silent regressions during Phase 2/3 — if any
  * primitive accidentally requires `recorder.handoff` to be populated to
  * function, the corresponding test here will fail.
+ *
+ * FEATURE_190 follow-up (post-F193): the `continuationSuggested`
+ * derivation describe block was deleted — the field has been removed
+ * from `KodaXOrchestrationVerdict` / `KodaXManagedTaskVerdict` public
+ * types. Sidecar Verifier owns the continuation decision via
+ * `disposition` + `signal` (see `artifacts.ts:writeManagedTaskArtifacts`).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -192,59 +196,9 @@ describe('FEATURE_190 Phase 1 — buildManagedProtocolPayload text-only terminat
   });
 });
 
-describe('FEATURE_190 Phase 1 — continuationSuggested text-only termination derivation', () => {
-  it('empty recorder (canonical text-only) → continuationSuggested derives falsy', () => {
-    // The continuationSuggested derivation in payload-builder.ts:295
-    // reads `recorder.handoff?.payload.handoff?.status === 'ready' &&
-    // verdictStatus !== 'accept'`. For text-only termination,
-    // recorder.handoff is undefined → the `?.` chain returns undefined
-    // → `undefined === 'ready'` is false → continuationSuggested is
-    // false. This is the correct semantic: under F184 the Sidecar
-    // Verifier owns the next-step decision, not a Worker-emitted
-    // "ready" signal.
-    const recorder: VerdictRecorder = {};
-    const continuationSuggested =
-      recorder.handoff?.payload.handoff?.status === 'ready'
-      && undefined !== 'accept'; // verdictStatus undefined for empty recorder
-    expect(continuationSuggested).toBeFalsy();
-  });
-
-  it('legacy: emit_handoff(status=ready) without sidecar verdict accept → continuationSuggested truthy (pre-Phase-3 parity)', () => {
-    // Pre-Phase-3, the legacy "user can continue an unverified handoff"
-    // affordance is preserved. Phase 3 will retire this surface.
-    const recorder: VerdictRecorder = {
-      handoff: {
-        role: 'generator',
-        payload: {
-          handoff: {
-            status: 'ready',
-            summary: 'done',
-          },
-        },
-      },
-    };
-    const verdictStatus = undefined;
-    const continuationSuggested =
-      recorder.handoff?.payload.handoff?.status === 'ready'
-      && verdictStatus !== 'accept';
-    expect(continuationSuggested).toBe(true);
-  });
-
-  it('sidecar verdict accept overrides ready handoff → continuationSuggested falsy', () => {
-    const recorder: VerdictRecorder = {
-      handoff: {
-        role: 'generator',
-        payload: { handoff: { status: 'ready', summary: 'done' } },
-      },
-      verdict: {
-        role: 'evaluator',
-        payload: { verdict: { status: 'accept' } },
-      },
-    };
-    const verdictStatus: 'accept' | 'revise' | 'blocked' | undefined = 'accept';
-    const continuationSuggested =
-      recorder.handoff?.payload.handoff?.status === 'ready'
-      && (verdictStatus as 'accept' | 'revise' | 'blocked' | undefined) !== 'accept';
-    expect(continuationSuggested).toBe(false);
-  });
-});
+// FEATURE_190 follow-up (post-F193): `continuationSuggested` derivation
+// describe block removed — the field was deleted from
+// `KodaXOrchestrationVerdict` / `KodaXManagedTaskVerdict` public types.
+// Sidecar Verifier owns the continuation decision; see
+// `artifacts.ts:writeManagedTaskArtifacts` for the disposition-based
+// derivation that replaced it.

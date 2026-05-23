@@ -1230,7 +1230,6 @@ export interface KodaXOrchestrationVerdict {
   signalReason?: string;
   signalDebugReason?: string;
   disposition?: 'complete' | 'blocked' | 'needs_continuation';
-  continuationSuggested?: boolean;
 }
 
 export interface KodaXManagedTaskRuntimeState {
@@ -1327,7 +1326,6 @@ export interface KodaXManagedVerdictPayload {
   nextHarness?: KodaXTaskRoutingDecision['harnessProfile'];
   protocolParseFailed?: boolean;
   verificationDegraded?: boolean;
-  continuationSuggested?: boolean;
   preferredFallbackWorkerId?: string;
   /**
    * v0.7.26 Risk-3 fix — Evaluator explicit budget-extension request.

@@ -295,19 +295,6 @@ export function buildManagedTaskPayload(args: {
       decidedByAssignmentId,
       summary: verdictSummary,
       signal,
-      // FEATURE_190 (v0.7.43) note: this derivation reads
-      // `recorder.handoff` which only the legacy `emit_handoff` tool
-      // populates. Under the F184 Sidecar Verifier architecture the
-      // canonical Worker exit is text-only termination → recorder.handoff
-      // is undefined → continuationSuggested is false. This is the
-      // CORRECT semantic — the Sidecar Verifier (not a Worker-emitted
-      // "ready" signal) owns the next-step decision. Phase 3 of F190
-      // will delete `emit_handoff`, after which this derivation is
-      // permanently false; the field stays in the public KodaXManagedTask
-      // surface for SDK backwards compatibility but always evaluates to
-      // false post-Phase-3. (Pre-Phase-3 we preserve the legacy
-      // "continue an unverified ready handoff" affordance.)
-      continuationSuggested: recorder.handoff?.payload.handoff?.status === 'ready' && verdictStatus !== 'accept',
     },
     runtime: {
       globalWorkBudget: budget?.totalBudget ?? harnessToBudget(harness),

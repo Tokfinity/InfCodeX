@@ -198,7 +198,6 @@ describe("buildManagedTaskTranscriptItems", () => {
         verdict: {
           decidedByAssignmentId: "generator",
           disposition: "needs_continuation",
-          continuationSuggested: true,
         },
       },
     } as any);

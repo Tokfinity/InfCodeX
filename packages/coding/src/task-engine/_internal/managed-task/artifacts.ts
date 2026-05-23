@@ -362,14 +362,14 @@ export async function writeManagedTaskArtifacts(
   result: Pick<KodaXResult, 'success' | 'lastText' | 'sessionId' | 'signal' | 'signalReason' | 'signalDebugReason'>,
 ): Promise<void> {
   await writeManagedTaskSnapshotArtifacts(workspaceDir, task);
-  // Match legacy `task-engine.ts:5216` continuation inference, but also
-  // honour `task.verdict.continuationSuggested` — the Runner-driven path
-  // populates that field directly from the Evaluator handoff shape and
-  // does not set `verdict.disposition`, so the disposition-only check
-  // would miss the revise → generator handoff case.
+  // Match legacy `task-engine.ts:5216` continuation inference, driven by
+  // sidecar-set disposition + blocked signal. The legacy
+  // `task.verdict.continuationSuggested` fallback was removed post-F190
+  // (the field was always false after the `emit_handoff` tool deletion;
+  // sidecar verifier is the canonical continuation authority and writes
+  // disposition / signal directly).
   const continuationSuggested = Boolean(
-    task.verdict.continuationSuggested
-      || task.verdict.disposition === 'needs_continuation'
+    task.verdict.disposition === 'needs_continuation'
       || (task.verdict.status === 'blocked' && task.verdict.signal === 'BLOCKED'),
   );
   const nextRound = (buildManagedTaskRoundHistory(task).at(-1)?.round ?? 0) + 1;
