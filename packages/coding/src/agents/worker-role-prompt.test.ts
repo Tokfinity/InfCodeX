@@ -1,12 +1,12 @@
 /**
  * FEATURE_114 v0.7.36 — Worker role-prompt builder tests.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   buildWorkerInstructions,
-  isHarnessV2Enabled,
   WORKER_AGENT_NAME,
 } from './worker-role-prompt.js';
+// FEATURE_193 v0.7.43: isHarnessV2Enabled import removed (V1 flag retired)
 import type { KodaXTaskRoutingDecision } from '../types.js';
 
 const baseDecision: KodaXTaskRoutingDecision = {
@@ -22,37 +22,7 @@ const baseDecision: KodaXTaskRoutingDecision = {
   requiresBrainstorm: false,
 };
 
-describe('isHarnessV2Enabled (v0.7.38 Slice 7 — V2 is now default)', () => {
-  beforeEach(() => {
-    delete process.env.KODAX_HARNESS_V2;
-  });
-  afterEach(() => {
-    delete process.env.KODAX_HARNESS_V2;
-  });
-
-  it('returns true by default (no env var set) — V2 is the default in v0.7.38+', () => {
-    expect(isHarnessV2Enabled()).toBe(true);
-  });
-
-  it('returns false ONLY when env is exactly "false" (V1 opt-out)', () => {
-    process.env.KODAX_HARNESS_V2 = 'false';
-    expect(isHarnessV2Enabled()).toBe(false);
-  });
-
-  it('opt-out is case-insensitive — FALSE / False also disable V2', () => {
-    for (const value of ['FALSE', 'False']) {
-      process.env.KODAX_HARNESS_V2 = value;
-      expect(isHarnessV2Enabled()).toBe(false);
-    }
-  });
-
-  it('returns true for "true" / "TRUE" / "1" / "yes" — anything other than "false" leaves V2 active', () => {
-    for (const value of ['true', 'TRUE', '1', 'yes', 'on', 'enabled', '']) {
-      process.env.KODAX_HARNESS_V2 = value;
-      expect(isHarnessV2Enabled()).toBe(true);
-    }
-  });
-});
+// FEATURE_193 v0.7.43: isHarnessV2Enabled describe block deleted (V1 flag retired — V2 is always default)
 
 describe('buildWorkerInstructions', () => {
   // v0.7.39 Slice C3 — `KODAX_IDLE_YIELD` flag retired (idle-yield is

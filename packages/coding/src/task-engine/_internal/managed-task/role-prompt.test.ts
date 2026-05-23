@@ -19,15 +19,16 @@ function buildContext(
   };
 }
 
-function callScout(ctx: ManagedRolePromptContext): string {
+// FEATURE_193 v0.7.43: callScout renamed to callWorker and role changed from 'scout' to 'worker' (V1 chain retired)
+function callWorker(ctx: ManagedRolePromptContext): string {
   const decision = buildFallbackRoutingDecision(userQuestion);
   return createRolePrompt(
-    'scout',
+    'worker',
     userQuestion,
     decision,
     undefined,
     undefined,
-    'kodax/role/scout',
+    'kodax/role/worker',
     undefined,
     ctx,
     undefined,
@@ -37,7 +38,7 @@ function callScout(ctx: ManagedRolePromptContext): string {
 
 describe('createRolePrompt — runtime identity in workspace section', () => {
   it('emits Provider and Model lines when both are supplied', () => {
-    const rendered = callScout(
+    const rendered = callWorker(
       buildContext({ provider: 'ark-coding', model: 'glm-5.1' }),
     );
     expect(rendered).toContain('Provider: ark-coding');
@@ -45,7 +46,7 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
   });
 
   it('places Provider/Model inside the ## Environment block (not elsewhere)', () => {
-    const rendered = callScout(
+    const rendered = callWorker(
       buildContext({ provider: 'kimi-code', model: 'kimi-for-coding' }),
     );
     const envIdx = rendered.indexOf('## Environment');
@@ -62,19 +63,19 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
   });
 
   it('omits Provider line when provider is absent', () => {
-    const rendered = callScout(buildContext({ model: 'glm-5.1' }));
+    const rendered = callWorker(buildContext({ model: 'glm-5.1' }));
     expect(rendered).not.toMatch(/^Provider:/m);
     expect(rendered).toContain('Model: glm-5.1');
   });
 
   it('omits Model line when model is absent', () => {
-    const rendered = callScout(buildContext({ provider: 'ark-coding' }));
+    const rendered = callWorker(buildContext({ provider: 'ark-coding' }));
     expect(rendered).toContain('Provider: ark-coding');
     expect(rendered).not.toMatch(/^Model:/m);
   });
 
   it('emits neither when workspace lacks both fields (legacy callers unaffected)', () => {
-    const rendered = callScout(buildContext());
+    const rendered = callWorker(buildContext());
     expect(rendered).not.toMatch(/^Provider:/m);
     expect(rendered).not.toMatch(/^Model:/m);
     // Sanity: the rest of the workspace block still renders.
@@ -83,86 +84,10 @@ describe('createRolePrompt — runtime identity in workspace section', () => {
     expect(rendered).toContain('Platform: Windows');
   });
 
-  it('emits identity facts for non-Scout roles too (Generator)', () => {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    const rendered = createRolePrompt(
-      'generator',
-      userQuestion,
-      decision,
-      undefined,
-      undefined,
-      'kodax/role/generator',
-      undefined,
-      buildContext({ provider: 'zhipu-coding', model: 'glm-5' }),
-      undefined,
-      false,
-    );
-    expect(rendered).toContain('Provider: zhipu-coding');
-    expect(rendered).toContain('Model: glm-5');
-  });
+  // FEATURE_193 v0.7.43: emits identity facts for non-Scout roles (Generator) it deleted (V1 generator role retired)
 });
 
-// FEATURE_107 (v0.7.32): Generator reasoning-discipline now hardcoded as default
-// after P6 eval confirmed it's harmless on low-context tasks across 6 aliases.
-// Originally an env-gated experiment (KODAX_GENERATOR_REASONING_DISCIPLINE);
-// promoted to always-on prompt fragment.
-describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)', () => {
-  function renderGenerator(): string {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    return createRolePrompt(
-      'generator',
-      userQuestion,
-      decision,
-      undefined,
-      undefined,
-      'kodax/role/generator',
-      undefined,
-      buildContext({ provider: 'p', model: 'm' }),
-      undefined,
-      false,
-    );
-  }
-
-  it('Generator prompt includes the discipline block by default (no env hook)', () => {
-    const rendered = renderGenerator();
-    // FEATURE_190 (v0.7.43) Phase 3: emit_handoff deleted → blocked
-    // surface is now a text-only summary read by Sidecar Verifier.
-    expect(rendered).toContain('diagnose why before switching tactics');
-    expect(rendered).toContain('check your assumptions');
-    expect(rendered).toContain('Don\'t retry the identical action blindly');
-    expect(rendered).toContain('don\'t abandon a viable approach after a single failure');
-    expect(rendered).toContain('Reserve a blocked text-only terminal summary');
-    expect(rendered).toContain('genuine impasses after investigation');
-    expect(rendered).toContain('not as a first response to friction');
-  });
-
-  it('Earlier-iteration artifacts (v1/v2) are not present', () => {
-    const rendered = renderGenerator();
-    expect(rendered).not.toContain('_debug.test.ts');
-    expect(rendered).not.toContain('three consecutive');
-    expect(rendered).not.toContain('Forbidden anti-patterns');
-    expect(rendered).not.toContain('targeted piece of evidence');
-  });
-
-  it('Discipline block does NOT bleed into non-Generator roles (Scout / Planner)', () => {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    for (const role of ['scout', 'planner'] as const) {
-      const rendered = createRolePrompt(
-        role,
-        userQuestion,
-        decision,
-        undefined,
-        undefined,
-        `kodax/role/${role}`,
-        undefined,
-        buildContext({ provider: 'p', model: 'm' }),
-        undefined,
-        false,
-      );
-      expect(rendered, `role=${role}`).not.toContain('Don\'t retry the identical action blindly');
-    }
-  });
-});
+// FEATURE_193 v0.7.43: FEATURE_107 Generator reasoning discipline describe deleted (V1 generator role retired)
 
 // FEATURE_144 (v0.7.35.1): AMA worker capability-context parity. Each
 // role MUST receive the 6 SA-path sections that v0.7.26 FEATURE_084
@@ -179,8 +104,9 @@ describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)'
 // (d) the 5 sections that ride on other Runner paths are NOT in this
 // block (they would otherwise duplicate).
 describe('FEATURE_144 — AMA worker capability-context parity', () => {
+  // FEATURE_193 v0.7.43: renderRole role type trimmed from scout|planner|generator to worker (V1 chain retired)
   function renderRole(
-    role: 'scout' | 'planner' | 'generator',
+    role: 'worker',
     capabilityContextBlock: string | undefined,
   ): string {
     const decision = buildFallbackRoutingDecision(userQuestion);
@@ -203,10 +129,9 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
     );
   }
 
-  // FEATURE_184 (v0.7.45) Phase C.3: 'evaluator' removed from role list —
-  // in-chain Evaluator retired. Sidecar Verifier now handles post-execution
-  // verification via StopHook and does not use createRolePrompt.
-  const roles = ['scout', 'planner', 'generator'] as const;
+  // FEATURE_193 v0.7.43: roles array trimmed from ['scout','planner','generator'] to ['worker'] (V1 chain retired)
+  // FEATURE_184 (v0.7.45) Phase C.3: 'evaluator' removed — in-chain Evaluator retired.
+  const roles = ['worker'] as const;
 
   it('renders capabilityContextBlock for every role when present', () => {
     const block = [
@@ -389,135 +314,7 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
   });
 });
 
-// FEATURE_114 v0.7.36 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin.
-//
-// Goal: regression-gate the Scout EMIT TIMING + TRIVIAL-EXEMPTION wording
-// so accidental edits do not silently widen the exemption boundary
-// (which is FEATURE_097 root cause #3 — "Scout treats too many tasks
-// as trivial").
-//
-// Per `benchmark/EVAL_GUIDELINES.md` anti-pattern 5 ("prompt iteration
-// with large-scale experiments"), this slice does NOT pre-emptively
-// rewrite the prompt. The Scout wording is already strong (single-step
-// boundary, review/audit ≥2 files clause, EMIT TIMING anchor); a
-// data-driven decision on whether to strengthen further is the
-// Slice 8b Layer 2 probe (`tests/scout-trivial-exemption.eval.ts`,
-// pending API budget authorization). These Layer 1 unit tests pin
-// the current contract so the probe baseline is stable.
-//
-// Slice 8b probe design (pending, NOT run by this file):
-//   Categories (5 probes each, mock user task + history):
-//     A. Single-step lookups → Scout MUST exit without emit
-//     B. ≥2-file investigations phrased as questions → MUST emit EARLY
-//     C. "Explain how X works" with multi-file scope → MUST emit EARLY
-//   Pre-registered threshold: ≥80% mean across 2 alias families per
-//   category. Drop below threshold → strengthen; above → leave as is.
-describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => {
-  function renderScoutPrompt(overrides: Partial<NonNullable<ManagedRolePromptContext['workspace']>> = {}): string {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    return createRolePrompt(
-      'scout',
-      userQuestion,
-      decision,
-      undefined,
-      undefined,
-      'kodax/role/scout',
-      undefined,
-      buildContext({ provider: 'p', model: 'm', ...overrides }),
-      undefined,
-      false,
-    );
-  }
-
-  it('EMIT TIMING block is present (timing anchor — call EARLY, before main work)', () => {
-    const rendered = renderScoutPrompt();
-    expect(rendered).toContain('EMIT TIMING (CRITICAL — read this carefully)');
-    // Pin the timing anchor — "EARLY — within the first 1-2 scoping turns".
-    expect(rendered).toMatch(/EARLY.*within the first 1-2 scoping turns/);
-    // Pin the contract framing — emit_scout_verdict is a PLAN COMMITMENT,
-    // not a final report.
-    expect(rendered).toContain('PLAN COMMITMENT, not a final report');
-    expect(rendered).toContain('what you PLAN TO DO next, NOT what you have already done');
-  });
-
-  it('ANTI-PATTERN block calls out late emit + post-hoc obligations', () => {
-    const rendered = renderScoutPrompt();
-    expect(rendered).toContain('ANTI-PATTERN (do NOT do this)');
-    expect(rendered).toContain('Call emit_scout_verdict at the END');
-    // The correct flow line — pin the canonical sequence so a future
-    // edit can't drop the explicit transition guidance.
-    expect(rendered).toContain('commit plan EARLY → execute → todo_update at each step');
-  });
-
-  it('TRIVIAL-EXEMPTION boundary is single-step ONLY (typo / single-line edit / single-action lookup / one-sentence answer)', () => {
-    const rendered = renderScoutPrompt();
-    expect(rendered).toContain('TRIVIAL-EXEMPTION (narrow, do not abuse)');
-    // Pin the exact boundary phrase — "exactly ONE distinct execution
-    // step". The prompt source joins lines with `\n  ` (line
-    // continuation), so the phrase spans a line break — match with a
-    // whitespace-tolerant regex. Loosening this (e.g. "≤ 2 steps")
-    // would silently widen the exemption and is the FEATURE_097 root
-    // cause #3 regression we explicitly guard against.
-    expect(rendered).toMatch(/exactly ONE distinct\s+execution step/);
-    expect(rendered).toContain('a single typo fix');
-    expect(rendered).toContain('a single-line edit');
-    expect(rendered).toContain('a single-action');
-    expect(rendered).toContain('a one-sentence answer');
-  });
-
-  it('EVERYTHING-ELSE clause: review/audit/investigation ≥2 files MUST emit EARLY (the FEATURE_097 #3 protection)', () => {
-    const rendered = renderScoutPrompt();
-    // Pin the load-bearing must-emit clause that catches review-style
-    // tasks LLMs are most likely to misclassify as trivial. Removing
-    // any of these phrases re-opens the exemption loophole. The
-    // phrase spans a line break in the source (`including review /`
-    // → `\n  audit / investigation`), match with whitespace tolerance.
-    expect(rendered).toContain('EVERYTHING ELSE');
-    expect(rendered).toMatch(/review \/\s+audit \/ investigation tasks that touch ≥2 files/);
-    expect(rendered).toContain('even when the harness ends up being H0_DIRECT');
-    expect(rendered).toContain('MUST');
-    expect(rendered).toMatch(/emit_scout_verdict EARLY with executionObligations populated/);
-    // The post-emit handoff: continue as H0 executor + call todo_update
-    // at each step transition. Spans a line break — match with
-    // whitespace tolerance.
-    expect(rendered).toMatch(/continue as the H0 executor and call todo_update at each step transition/);
-  });
-
-  it('TRIVIAL-EXEMPTION block belongs to Scout only (does NOT leak into Planner / Generator)', () => {
-    const decision = buildFallbackRoutingDecision(userQuestion);
-    for (const role of ['planner', 'generator'] as const) {
-      const rendered = createRolePrompt(
-        role,
-        userQuestion,
-        decision,
-        undefined,
-        undefined,
-        `kodax/role/${role}`,
-        undefined,
-        buildContext({ provider: 'p', model: 'm' }),
-        undefined,
-        false,
-      );
-      expect(rendered, `role=${role}`).not.toContain('TRIVIAL-EXEMPTION');
-      expect(rendered, `role=${role}`).not.toContain('EMIT TIMING (CRITICAL');
-    }
-  });
-
-  it('block ordering: EMIT TIMING comes after EXECUTION OBLIGATIONS, anchor before SCOPE COMMITMENT context', () => {
-    // The Scout prompt builds the TRIVIAL-EXEMPTION argument in
-    // sequence: SCOPE COMMITMENT (when to escalate) → EXECUTION
-    // OBLIGATIONS (how to populate) → EMIT TIMING (when to call). A
-    // future edit that reorders these could break the rhetorical
-    // structure that drives early emission. Pin the order.
-    const rendered = renderScoutPrompt();
-    const scopeIdx = rendered.indexOf('SCOPE COMMITMENT (hard rule)');
-    const execIdx = rendered.indexOf('EXECUTION OBLIGATIONS:');
-    const emitIdx = rendered.indexOf('EMIT TIMING (CRITICAL');
-    expect(scopeIdx).toBeGreaterThanOrEqual(0);
-    expect(execIdx).toBeGreaterThan(scopeIdx);
-    expect(emitIdx).toBeGreaterThan(execIdx);
-  });
-});
+// FEATURE_193 v0.7.43: FEATURE_114 Slice 8a Scout TRIVIAL-EXEMPTION boundary pin describe deleted (V1 scout role retired)
 
 // v0.7.38 FEATURE_155 hotfix — Bug C: Evaluator wait-for-children discipline.
 // FEATURE_184 (v0.7.45) Phase C.3: in-chain Evaluator retired. The prompt
@@ -526,9 +323,10 @@ describe('FEATURE_114 Slice 8a — Scout TRIVIAL-EXEMPTION boundary pin', () => 
 // The isolation test ("does NOT leak") is preserved as a sentinel to ensure
 // the wait-discipline section stays confined to the Sidecar Verifier context.
 describe('createRolePrompt — wait-discipline isolation (FEATURE_155 / FEATURE_184)', () => {
-  it('CHILD-TASK WAIT DISCIPLINE does NOT appear in Worker / Generator / Scout / Planner prompts', () => {
+  // FEATURE_193 v0.7.43: loop trimmed from ['scout','planner','generator','worker'] to ['worker'] (V1 chain retired)
+  it('CHILD-TASK WAIT DISCIPLINE does NOT appear in Worker prompt', () => {
     const decision = buildFallbackRoutingDecision(userQuestion);
-    for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
+    for (const role of ['worker'] as const) {
       const rendered = createRolePrompt(
         role,
         userQuestion,
@@ -564,7 +362,8 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     '  Intent: "refactoring auth"',
   ].join('\n');
 
-  function renderWithTeamBlock(role: 'scout' | 'planner' | 'generator' | 'worker'): string {
+  // FEATURE_193 v0.7.43: role type trimmed from scout|planner|generator|worker to worker (V1 chain retired)
+  function renderWithTeamBlock(role: 'worker'): string {
     const decision = buildFallbackRoutingDecision(userQuestion);
     const ctx: ManagedRolePromptContext = {
       ...buildContext({ provider: 'p', model: 'm' }),
@@ -584,7 +383,8 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     );
   }
 
-  for (const role of ['scout', 'planner', 'generator', 'worker'] as const) {
+  // FEATURE_193 v0.7.43: loop trimmed from ['scout','planner','generator','worker'] to ['worker'] (V1 chain retired)
+  for (const role of ['worker'] as const) {
     it(`role=${role} includes the team-mode block when supplied`, () => {
       const rendered = renderWithTeamBlock(role);
       expect(rendered).toContain('=== Other active KodaX sessions ===');
@@ -602,15 +402,16 @@ describe('FEATURE_125 — teamModeSection wiring across roles', () => {
     });
   }
 
+  // FEATURE_193 v0.7.43: 'scout' → 'worker' (V1 chain retired)
   it('omits the block entirely when teamModeSection is undefined (solo session)', () => {
     const decision = buildFallbackRoutingDecision(userQuestion);
     const rendered = createRolePrompt(
-      'scout',
+      'worker',
       userQuestion,
       decision,
       undefined,
       undefined,
-      'kodax/role/scout',
+      'kodax/role/worker',
       undefined,
       buildContext({ provider: 'p', model: 'm' }),
       undefined,

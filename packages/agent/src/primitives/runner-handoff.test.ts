@@ -143,69 +143,7 @@ describe('Runner integration — handoff chain', () => {
     };
   }
 
-  it('transfers ownership from scout → generator → evaluator and returns evaluator final', async () => {
-    // Build a 3-agent chain via closures.
-    const evalTool = makeEmitTool('emit_verdict', undefined); // terminal
-    const genTool = makeEmitTool('emit_handoff', 'chain-evaluator');
-
-    const evaluator: Agent = createAgent({
-      name: 'chain-evaluator',
-      instructions: 'eval-sys',
-      tools: [evalTool],
-    });
-    const generator: Agent = createAgent({
-      name: 'chain-generator',
-      instructions: 'gen-sys',
-      tools: [genTool],
-      handoffs: [createHandoff({ target: evaluator, kind: 'continuation', description: 'to eval' })],
-    });
-    const scoutTool = makeEmitTool('emit_scout_verdict', 'chain-generator');
-    const scout: Agent = createAgent({
-      name: 'chain-scout',
-      instructions: 'scout-sys',
-      tools: [scoutTool],
-      handoffs: [createHandoff({ target: generator, kind: 'continuation', description: 'upgrade H1' })],
-    });
-
-    // Track which agent the llm callback was called with.
-    const agentsSeen: string[] = [];
-    // Track system message text seen on each call (to verify switch).
-    const systemsSeen: string[] = [];
-    let turn = 0;
-
-    const llm = vi.fn(async (messages: readonly { role: string; content: unknown }[], agent: Agent): Promise<RunnerLlmResult> => {
-      agentsSeen.push(agent.name);
-      const sys = messages[0]!;
-      if (sys.role === 'system' && typeof sys.content === 'string') systemsSeen.push(sys.content);
-      turn += 1;
-      if (agent.name === 'chain-scout') {
-        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_scout_verdict', input: {} }] };
-      }
-      if (agent.name === 'chain-generator') {
-        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_handoff', input: {} }] };
-      }
-      // Evaluator: first time emit verdict (tool call), second time text final.
-      if (turn === 3) {
-        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_verdict', input: {} }] };
-      }
-      return { text: 'All good, tests pass.', toolCalls: [] };
-    });
-
-    const result = await Runner.run(scout, 'implement feature', { llm });
-
-    // Chain visited all three agents.
-    expect(agentsSeen).toContain('chain-scout');
-    expect(agentsSeen).toContain('chain-generator');
-    expect(agentsSeen).toContain('chain-evaluator');
-
-    // System message swapped at each handoff.
-    expect(systemsSeen).toContain('scout-sys');
-    expect(systemsSeen).toContain('gen-sys');
-    expect(systemsSeen).toContain('eval-sys');
-
-    // Final output from the evaluator terminal turn.
-    expect(result.output).toBe('All good, tests pass.');
-  });
+  // FEATURE_193 v0.7.43: scout→generator→evaluator V1 chain it deleted (uses emit_handoff + emit_scout_verdict — V1 chain retired)
 
   it('stays on the same agent when tool result has no handoffTarget', async () => {
     const echo: RunnableTool = {
@@ -341,27 +279,28 @@ describe('Runner integration — handoff chain', () => {
   });
 
   it('final assistant message is from the terminal agent (FEATURE_076 seam)', async () => {
-    // Scout → Generator. The user should see Generator's final text, NOT
-    // Scout's intermediate verdict.
-    const genNoTool: Agent = createAgent({ name: 'gen-final', instructions: 'gen-sys' });
-    const scoutTool = makeEmitTool('emit_scout', 'gen-final');
-    const scout: Agent = createAgent({
-      name: 'scout-handoff',
-      instructions: 'scout-sys',
-      tools: [scoutTool],
-      handoffs: [createHandoff({ target: genNoTool, kind: 'continuation' })],
+    // Start-agent → terminal-agent. The user should see the terminal agent's
+    // final text, NOT the start agent's intermediate handoff text.
+    // FEATURE_193 v0.7.43: migrated from scout→generator names to generic agent names (V1 chain retired)
+    const terminalAgent: Agent = createAgent({ name: 'terminal-agent', instructions: 'terminal-sys' });
+    const startTool = makeEmitTool('emit_done', 'terminal-agent');
+    const startAgent: Agent = createAgent({
+      name: 'start-agent',
+      instructions: 'start-sys',
+      tools: [startTool],
+      handoffs: [createHandoff({ target: terminalAgent, kind: 'continuation' })],
     });
     let turn = 0;
     const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
       turn += 1;
-      if (agent.name === 'scout-handoff') {
-        return { text: 'scout transient', toolCalls: [{ id: 'c1', name: 'emit_scout', input: {} }] };
+      if (agent.name === 'start-agent') {
+        return { text: 'start transient', toolCalls: [{ id: 'c1', name: 'emit_done', input: {} }] };
       }
-      return { text: 'generator final answer', toolCalls: [] };
+      return { text: 'terminal final answer', toolCalls: [] };
     };
-    const result = await Runner.run(scout, 'q', { llm });
-    expect(result.output).toBe('generator final answer');
-    expect(result.output).not.toBe('scout transient');
+    const result = await Runner.run(startAgent, 'q', { llm });
+    expect(result.output).toBe('terminal final answer');
+    expect(result.output).not.toBe('start transient');
   });
 
   // ----------------------------------------------------------------
@@ -376,13 +315,14 @@ describe('Runner integration — handoff chain', () => {
   // ----------------------------------------------------------------
 
   it('FEATURE_166: onAgentSwitched fires once per handoff with from/to/iteration', async () => {
+    // FEATURE_193 v0.7.43: emit_handoff → emit_done (V1 chain tool retired)
     const evalTool = makeEmitTool('emit_verdict', undefined);
     const evaluator: Agent = createAgent({
       name: 'f166-evaluator',
       instructions: 'eval-sys',
       tools: [evalTool],
     });
-    const handoffTool = makeEmitTool('emit_handoff', 'f166-evaluator');
+    const handoffTool = makeEmitTool('emit_done', 'f166-evaluator');
     const worker: Agent = createAgent({
       name: 'f166-worker',
       instructions: 'worker-sys',
@@ -394,7 +334,7 @@ describe('Runner integration — handoff chain', () => {
     const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
       turn += 1;
       if (agent.name === 'f166-worker') {
-        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_handoff', input: {} }] };
+        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_done', input: {} }] };
       }
       if (turn === 2) {
         return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_verdict', input: {} }] };
@@ -431,13 +371,14 @@ describe('Runner integration — handoff chain', () => {
     // streaming output begins. Without await, a non-trivial caller
     // hook would race against runGenerationTurn and the label flip
     // could still surface AFTER the new agent's first tokens.
+    // FEATURE_193 v0.7.43: emit_handoff → emit_done (V1 chain tool retired)
     const evalTool = makeEmitTool('emit_verdict', undefined);
     const evaluator: Agent = createAgent({
       name: 'f166-async-eval',
       instructions: 'eval',
       tools: [evalTool],
     });
-    const handoffTool = makeEmitTool('emit_handoff', 'f166-async-eval');
+    const handoffTool = makeEmitTool('emit_done', 'f166-async-eval');
     const worker: Agent = createAgent({
       name: 'f166-async-worker',
       instructions: 'worker',
@@ -451,7 +392,7 @@ describe('Runner integration — handoff chain', () => {
       turn += 1;
       eventLog.push(`llm:${agent.name}`);
       if (agent.name === 'f166-async-worker') {
-        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_handoff', input: {} }] };
+        return { text: '', toolCalls: [{ id: `c${turn}`, name: 'emit_done', input: {} }] };
       }
       return { text: 'eval-final', toolCalls: [] };
     };
@@ -473,13 +414,14 @@ describe('Runner integration — handoff chain', () => {
   });
 
   it('FEATURE_166: hook errors propagate verbatim (caller-controlled contract)', async () => {
+    // FEATURE_193 v0.7.43: emit_handoff → emit_done (V1 chain tool retired)
     const evalTool = makeEmitTool('emit_verdict', undefined);
     const evaluator: Agent = createAgent({
       name: 'f166-err-eval',
       instructions: 'eval',
       tools: [evalTool],
     });
-    const handoffTool = makeEmitTool('emit_handoff', 'f166-err-eval');
+    const handoffTool = makeEmitTool('emit_done', 'f166-err-eval');
     const worker: Agent = createAgent({
       name: 'f166-err-worker',
       instructions: 'worker',
@@ -489,7 +431,7 @@ describe('Runner integration — handoff chain', () => {
 
     const llm = async (_m: unknown, agent: Agent): Promise<RunnerLlmResult> => {
       if (agent.name === 'f166-err-worker') {
-        return { text: '', toolCalls: [{ id: 'c1', name: 'emit_handoff', input: {} }] };
+        return { text: '', toolCalls: [{ id: 'c1', name: 'emit_done', input: {} }] };
       }
       return { text: 'unreachable', toolCalls: [] };
     };

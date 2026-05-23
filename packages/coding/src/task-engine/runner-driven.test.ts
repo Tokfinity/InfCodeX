@@ -47,24 +47,12 @@ import type { KodaXChildExecutionResult, KodaXEvents, KodaXOptions, KodaXToolExe
 // the repo's cwd with `.agent/managed-tasks/` entries.
 let testWorkspaceRoot: string;
 
-// v0.7.38 Slice 7 — V2 is now the default behavior at runtime. This
-// test file exercises the V1 chain extensively; pin the env to V1 for
-// the whole file so V1 mocks (scout/planner/generator/evaluator only)
-// stay valid. Tests that need V2 explicitly use the local `withHarnessV2('true', ...)`
-// helper which save/restores the env around their scope.
-let prevHarnessV2Env: string | undefined;
 beforeAll(async () => {
-  prevHarnessV2Env = process.env.KODAX_HARNESS_V2;
-  process.env.KODAX_HARNESS_V2 = 'false';
   testWorkspaceRoot = await mkdtemp(path.join(os.tmpdir(), 'kodax-runner-driven-'));
 });
 
 afterAll(async () => {
-  if (prevHarnessV2Env === undefined) delete process.env.KODAX_HARNESS_V2;
-  else process.env.KODAX_HARNESS_V2 = prevHarnessV2Env;
   if (testWorkspaceRoot) {
-    // Windows can hold transient handles immediately after tests;
-    // retry a few times before giving up so CI stays clean.
     await rm(testWorkspaceRoot, {
       recursive: true,
       force: true,
@@ -660,58 +648,12 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
   }, 15_000);
 });
 
-describe('runManagedTaskViaRunner — Scout H0_DIRECT end-to-end', () => {
-  it('runs a Scout H0_DIRECT flow: emit_scout_verdict then final text', async () => {
-    let turn = 0;
-    const result = await runManagedTaskViaRunner(
-      makeOptions(),
-      'What is 2 + 2?',
-      async (_transcript, _tools, _system) => {
-        turn += 1;
-        if (turn === 1) {
-          return {
-            textBlocks: [{ text: 'Simple arithmetic, answering directly.' }],
-            toolBlocks: [
-              {
-                type: 'tool_use',
-                id: 'scout-1',
-                name: 'emit_scout_verdict',
-                input: {
-                  confirmed_harness: 'H0_DIRECT',
-                  direct_completion_ready: 'yes',
-                  summary: 'Arithmetic question',
-                  scope: [],
-                  required_evidence: [],
-                  harness_rationale: 'Trivial math, no code inspection needed.',
-                },
-              },
-            ],
-          };
-        }
-        // Second turn: Scout sees tool_result, emits final text
-        return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
-      },
-    );
+describe('runManagedTaskViaRunner — end-to-end', () => {
+  // FEATURE_193 v0.7.43: Scout H0_DIRECT emit_scout_verdict flow it deleted (V1 chain retired — Scout role + emit_scout_verdict tool retired)
 
-    expect(result.success).toBe(true);
-    expect(result.lastText).toBe('2 + 2 = 4.');
-    expect(result.signal).toBe('COMPLETE');
-    // Shard 6a populates managedTask with a minimal but well-shaped payload.
-    expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
-
-    // Transcript shape: system, user, assistant(tool_use), user(tool_result), assistant(final)
-    expect(result.messages).toHaveLength(5);
-    expect(result.messages[0]!.role).toBe('system');
-    expect(result.messages[1]!.role).toBe('user');
-    expect(result.messages[2]!.role).toBe('assistant');
-    expect(result.messages[3]!.role).toBe('user');
-    expect(result.messages[4]!.role).toBe('assistant');
-  });
-
-  it('handles a zero-tool direct answer (Scout answers without emit)', async () => {
-    // Edge case: a minimalist Scout that just returns the answer as text,
-    // without ever calling emit_scout_verdict. The run still completes;
-    // managedTask is populated with defaults (harness=H0_DIRECT).
+  it('handles a zero-tool direct answer (Worker answers without emit)', async () => {
+    // Edge case: a minimalist Worker that just returns the answer as text.
+    // The run still completes; managedTask is populated with defaults (harness=H0_DIRECT).
     const result = await runManagedTaskViaRunner(
       makeOptions(),
       'Say hello',
@@ -768,51 +710,33 @@ describe('runManagedTaskViaRunner — Scout H0_DIRECT end-to-end', () => {
 // (per-agent turn detection via system-prompt sniffing) and adds a
 // 'worker' branch.
 describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () => {
-  // v0.7.38 Slice 7 — V2 is now the DEFAULT. Pass 'false' to opt out
-  // (V1 path), 'true' to assert V2 explicitly, undefined to test the
-  // unset-env default (which is now V2).
-  async function withHarnessV2<T>(
-    value: 'true' | 'false' | undefined,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    const prev = process.env.KODAX_HARNESS_V2;
-    if (value === undefined) delete process.env.KODAX_HARNESS_V2;
-    else process.env.KODAX_HARNESS_V2 = value;
-    try {
-      return await fn();
-    } finally {
-      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
-      else process.env.KODAX_HARNESS_V2 = prev;
-    }
-  }
+  // FEATURE_193 v0.7.43: withHarnessV2 helper deleted (KODAX_HARNESS_V2 env flag retired — V2 is now unconditional default)
 
   it('runs a V2 trivial flow: Worker terminates text-only', async () => {
-    await withHarnessV2('true', async () => {
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-            return {
-              textBlocks: [{ text: 'Trivial arithmetic — answering directly. 2 + 2 = 4.' }],
-              toolBlocks: [],
-            };
-          }
-          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
-        },
-        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-      });
-      const result = await runManagedTaskViaRunner(
-        makeOptions(),
-        'What is 2 + 2?',
-        mock,
-      );
-      expect(result.success).toBe(true);
-      expect(result.signal).toBe('COMPLETE');
-      // Worker answer reaches the user via lastText.
-      expect(result.lastText).toMatch(/2 \+ 2 = 4/);
-      // No in-chain Evaluator → managedProtocolPayload.verdict is undefined.
-      expect(result.managedProtocolPayload?.verdict).toBeUndefined();
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
+          return {
+            textBlocks: [{ text: 'Trivial arithmetic — answering directly. 2 + 2 = 4.' }],
+            toolBlocks: [],
+          };
+        }
+        return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
+      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     });
+    const result = await runManagedTaskViaRunner(
+      makeOptions(),
+      'What is 2 + 2?',
+      mock,
+    );
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+    // Worker answer reaches the user via lastText.
+    expect(result.lastText).toMatch(/2 \+ 2 = 4/);
+    // No in-chain Evaluator → managedProtocolPayload.verdict is undefined.
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
   });
 
   it('V2 active: preflight emits activeWorkerTitle="Worker" (not "Scout")', async () => {
@@ -822,33 +746,31 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
     // `[Worker] read/bash/grep`. The previous hardcoded scout label
     // persisted into every Worker tool call (no slot emit had fired
     // yet) and made V2 sessions appear to still be running V1.
-    await withHarnessV2('true', async () => {
-      const statuses: Array<Record<string, unknown>> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-      const mock = makeChainMockLlm({
-        worker: (turn) => {
-          if (turn === 1) {
-            // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-            return {
-              textBlocks: [{ text: 'Done.' }],
-              toolBlocks: [],
-            };
-          }
-          return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
-        },
-        // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-      });
-      await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
-      const preflight = statuses.find((s) => s.phase === 'preflight');
-      expect(preflight?.activeWorkerId).toBe('worker');
-      expect(preflight?.activeWorkerTitle).toBe('Worker');
-      expect(preflight?.note).toBe('Worker analyzing task');
+    const statuses: Array<Record<string, unknown>> = [];
+    const opts = {
+      ...makeOptions(),
+      events: {
+        onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
+      },
+    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
+          return {
+            textBlocks: [{ text: 'Done.' }],
+            toolBlocks: [],
+          };
+        }
+        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     });
+    await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
+    const preflight = statuses.find((s) => s.phase === 'preflight');
+    expect(preflight?.activeWorkerId).toBe('worker');
+    expect(preflight?.activeWorkerTitle).toBe('Worker');
+    expect(preflight?.note).toBe('Worker analyzing task');
   });
 
   // FEATURE_190 Phase 3: Worker terminates text-only — onRoleEmit('worker')
@@ -858,51 +780,7 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
   // the onRoleEmit path specifically). Covered by text-only-termination.test.ts.
   it.todo('post-F190: V2 worker onRoleEmit event no longer fires — Worker terminates text-only; covered by text-only-termination.test.ts');
 
-  it('V2 flag off (KODAX_HARNESS_V2=false): same prompt routes through Scout (V1 baseline preserved)', async () => {
-    // v0.7.38 Slice 7 — V2 is the default; explicit `false` opts out
-    // to V1. Previously this test used `undefined` (env unset =
-    // implicit V1); the default flip flips that meaning so we now
-    // pass 'false' explicitly to keep testing the V1 codepath.
-    await withHarnessV2('false', async () => {
-      // V1 Scout H0 shape — when flag is off, the run takes the
-      // V1 entry. This guards against a regression where Slice 3b's
-      // flag check accidentally returns true on undefined env.
-      const mock = makeChainMockLlm({
-        scout: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [
-                {
-                  type: 'tool_use',
-                  id: 'scout-1',
-                  name: 'emit_scout_verdict',
-                  input: {
-                    confirmed_harness: 'H0_DIRECT',
-                    direct_completion_ready: 'yes',
-                    summary: 'Arithmetic',
-                    scope: [],
-                    required_evidence: [],
-                    harness_rationale: 'Trivial.',
-                  },
-                },
-              ],
-            };
-          }
-          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
-        },
-      });
-      const result = await runManagedTaskViaRunner(
-        makeOptions(),
-        'What is 2 + 2?',
-        mock,
-      );
-      expect(result.success).toBe(true);
-      // V1 path: Scout populated the harness profile. V2 path
-      // wouldn't have a Scout role record — so this is a clean
-      // sentinel for which path the runner took.
-      expect(result.managedTask?.contract.harnessProfile).toBe('H0_DIRECT');
-    });
-  });
+  // FEATURE_193 v0.7.43: V1 flag-off routing test deleted (Scout chain agents retired).
 });
 
 // FEATURE_167 (v0.7.41) Evaluator terminal-verdict fallback (B1+B2) deleted
@@ -1024,243 +902,13 @@ function makeChainMockLlm(handlers: Record<string, AgentTurn>) {
   };
 }
 
-describe('Shard 5b parity — H1 accept path', () => {
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // FEATURE_190 Phase 3: emit_handoff deleted; Generator terminates text-only.
-  // Sidecar Verifier (Phase D.2) handles verdict async.
-  it('Scout → Generator terminates text-only for Sidecar Verifier (H1 accept path)', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use',
-              id: 'scout-1',
-              name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL', harness_rationale: 'small scope' },
-            }],
-          };
-        }
-        throw new Error('scout should have handed off already');
-      },
-      generator: (turn) => {
-        if (turn === 1) {
-          // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-          return {
-            textBlocks: [{ text: 'Done. (summary: login endpoint added, tests pass)' }],
-            toolBlocks: [],
-          };
-        }
-        throw new Error('generator should have handed off already');
-      },
-    });
+// FEATURE_193 v0.7.43: V1 Scout→Generator H1 accept describe deleted (V1 chain retired).
 
-    const result = await runManagedTaskViaRunner(makeOptions(), 'Add login endpoint', mock);
-    expect(result.success).toBe(true);
-    expect(result.signal).toBe('COMPLETE');
-    expect(result.managedProtocolPayload?.scout?.confirmedHarness).toBe('H1_EXECUTE_EVAL');
-    // FEATURE_190 Phase 3: Sidecar Verifier auto-runs and may populate verdict.
-    // Accept both undefined (no sidecar in test env) and a sidecar accept verdict.
-    const verdict = result.managedProtocolPayload?.verdict;
-    if (verdict !== undefined) {
-      expect(verdict.source).toBe('sidecar');
-    }
-  });
-});
+// FEATURE_193 v0.7.43: M5 Scout pre-handoff write warning describe deleted (V1 chain retired).
 
-describe('M5 parity — Scout pre-handoff write warning (v0.7.26)', () => {
-  it('fires onManagedTaskStatus note when Scout writes a file then hands off to Generator (H1)', async () => {
-    const statusEvents: Array<{ note?: string; detailNote?: string }> = [];
-    const opts = makeOptions();
-    opts.events = {
-      ...opts.events,
-      onManagedTaskStatus: (e) => {
-        if (typeof e.note === 'string') {
-          statusEvents.push({ note: e.note, detailNote: e.detailNote });
-        }
-      },
-    };
-    // Make Scout mutate a file before emitting H1 verdict by invoking
-    // the `write` tool in the first turn, then emit_scout_verdict in
-    // the second turn. The test fs path doesn't need to persist — the
-    // wrapCodingToolAsRunnable path increments the mutation tracker
-    // regardless of actual disk success.
-    const tempFile = path.join(testWorkspaceRoot, 'scout-pre-handoff-artifact.txt');
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's-write', name: 'write',
-              input: { path: tempFile, content: 'scout draft\n' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's-emit', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL', harness_rationale: 'small scope' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: summary rewritten)' }],
-        toolBlocks: [],
-      }),
-    });
+// FEATURE_193 v0.7.43: Shard 5b parity H1 (scout→generator text-only) describe deleted (V1 chain retired — uses emit_scout_verdict + generator role)
 
-    await runManagedTaskViaRunner(opts, 'Rewrite summary', mock);
-
-    const preHandoffNote = statusEvents.find(
-      (e) => e.note && e.note.includes('before handing off'),
-    );
-    expect(preHandoffNote).toBeDefined();
-    expect(preHandoffNote!.note).toMatch(/Scout wrote \d+ file/);
-    expect(preHandoffNote!.note).toContain('Generator');
-    expect(preHandoffNote!.detailNote ?? '').toContain('scout-pre-handoff-artifact.txt');
-  });
-
-  it('does NOT fire the warning on H0_DIRECT (Scout is the author in that case)', async () => {
-    const statusEvents: Array<{ note?: string }> = [];
-    const opts = makeOptions();
-    opts.events = {
-      ...opts.events,
-      onManagedTaskStatus: (e) => {
-        if (typeof e.note === 'string') statusEvents.push({ note: e.note });
-      },
-    };
-    const tempFile = path.join(testWorkspaceRoot, 'scout-h0-artifact.txt');
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's-write', name: 'write',
-              input: { path: tempFile, content: 'scout direct output\n' },
-            }],
-          };
-        }
-        if (turn === 2) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's-emit', name: 'emit_scout_verdict',
-              input: {
-                confirmed_harness: 'H0_DIRECT',
-                direct_completion_ready: 'yes',
-                summary: 'Direct answer provided via write.',
-              },
-            }],
-          };
-        }
-        // Scout may get a final text-only turn after H0_DIRECT emit so
-        // the Runner can collect the assistant's user-facing answer.
-        return { textBlocks: [{ text: 'Note written.' }] };
-      },
-    });
-
-    await runManagedTaskViaRunner(opts, 'Write a note', mock);
-
-    const preHandoffNote = statusEvents.find(
-      (e) => e.note && e.note.includes('before handing off'),
-    );
-    expect(preHandoffNote).toBeUndefined();
-  });
-});
-
-describe('Shard 5b parity — H1 Generator terminates text-only', () => {
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // FEATURE_190 Phase 3: emit_handoff deleted; Generator terminates text-only.
-  it('Generator terminates text-only; result.signal=COMPLETE', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      generator: (turn) => {
-        if (turn === 1) {
-          // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-          return {
-            textBlocks: [{ text: 'Done. (summary: edge case fixed)' }],
-            toolBlocks: [],
-          };
-        }
-        throw new Error('generator overrun');
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(makeOptions(), 'Fix edge case', mock);
-    expect(result.success).toBe(true);
-    expect(result.signal).toBe('COMPLETE');
-    // FEATURE_190 Phase 3: handoff slot no longer populated (emit_handoff deleted).
-  });
-});
-
-describe('Shard 5b parity — H2 plan → execute path', () => {
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // Generator terminates with emit_handoff (isTerminal=true).
-  it('Scout → Planner → Generator terminates; contract surfaced', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL', harness_rationale: 'larger scope' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      planner: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'p1', name: 'emit_contract',
-              input: {
-                summary: 'Add JWT auth',
-                success_criteria: ['POST /auth/login works', 'tests pass'],
-                required_evidence: ['auth.test.ts passing'],
-                constraints: ['use existing token utils'],
-              },
-            }],
-          };
-        }
-        throw new Error('planner overrun');
-      },
-      generator: (turn) => {
-        if (turn === 1) {
-          // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-          return {
-            textBlocks: [{ text: 'Done. (summary: JWT auth added, tests passing)' }],
-            toolBlocks: [],
-          };
-        }
-        throw new Error('generator overrun');
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(makeOptions(), 'Add JWT auth', mock);
-    expect(result.success).toBe(true);
-    expect(result.managedProtocolPayload?.scout?.confirmedHarness).toBe('H2_PLAN_EXECUTE_EVAL');
-    expect(result.managedProtocolPayload?.contract?.successCriteria).toHaveLength(2);
-    // FEATURE_190 Phase 3: Sidecar Verifier may populate verdict. Accept both.
-    const verdict = result.managedProtocolPayload?.verdict;
-    if (verdict !== undefined) {
-      expect(verdict.source).toBe('sidecar');
-    }
-  });
-});
+// FEATURE_193 v0.7.43: Shard 5b parity H2 (scout→planner→generator) describe deleted (V1 chain retired — uses emit_scout_verdict + emit_contract + generator role)
 
 describe('Shard 5b parity — blocked path', () => {
   // FEATURE_190 Phase 3: emit_handoff deleted. BLOCKED semantics now owned
@@ -1296,534 +944,42 @@ describe('Shard 6a — onManagedTaskStatus observer events', () => {
     }));
     const preflight = statuses.find((s) => s.phase === 'preflight');
     expect(preflight).toBeDefined();
-    // V1 baseline (file-level KODAX_HARNESS_V2='false') keeps the
-    // legacy Scout label on preflight. The Slice 7 V2 path uses
-    // 'Worker' — covered by the V2 preflight test in the
-    // 'Shard 5d V2 trivial flow' describe block.
-    expect(preflight?.activeWorkerId).toBe('scout');
-    expect(preflight?.activeWorkerTitle).toBe('Scout');
-    expect(preflight?.note).toBe('Scout analyzing task complexity');
+    // FEATURE_193 v0.7.43: V2 default — preflight carries Worker label.
+    expect(preflight?.activeWorkerId).toBe('worker');
+    expect(preflight?.activeWorkerTitle).toBe('Worker');
+    expect(preflight?.note).toBe('Worker analyzing task');
     expect(statuses.some((s) => s.phase === 'completed')).toBe(true);
   });
 
-  it('fires round events per role emit (Scout → Generator terminates)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // FEATURE_190 Phase 3: Sidecar Verifier may fire an evaluator-labeled event.
-    const statuses: Array<{ phase?: string; activeWorkerId?: string }> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        onManagedTaskStatus: (s: { phase?: string; activeWorkerId?: string }) => statuses.push(s),
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    await runManagedTaskViaRunner(opts, 'task', mock);
-    const roleEvents = statuses.filter((s) => s.phase === 'worker').map((s) => s.activeWorkerId);
-    expect(roleEvents).toContain('scout');
-    expect(roleEvents).toContain('generator');
-    // Post-F190: Sidecar Verifier may also emit an evaluator-labeled event;
-    // the key invariant is scout and generator are present.
-  });
+  // FEATURE_193 v0.7.43: fires round events per role emit (Scout → Generator) it deleted (V1 chain retired)
 
-  it('fires completed with BLOCKED signal note on blocked handoff', async () => {
-    // FEATURE_190 Phase 3: emit_handoff deleted. BLOCKED note is now owned
-    // by Sidecar Verifier. This test checks that 'completed' phase is emitted.
-    const statuses: Array<{ phase?: string; note?: string }> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        onManagedTaskStatus: (s: { phase?: string; note?: string }) => statuses.push(s),
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    await runManagedTaskViaRunner(opts, 'task', mock);
-    const completed = statuses.find((s) => s.phase === 'completed');
-    expect(completed).toBeDefined();
-  });
+  // FEATURE_193 v0.7.43: fires completed with BLOCKED signal note on blocked handoff it deleted (V1 chain retired — emit_handoff deleted)
 });
 
-describe('Shard 6a — managedTask payload shape', () => {
-  it('populates contract.harnessProfile from Scout verdict (H1 case)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.managedTask?.contract.harnessProfile).toBe('H1_EXECUTE_EVAL');
-    expect(result.managedTask?.contract.surface).toBe('cli');
-    expect(result.managedTask?.contract.objective).toBe('task');
-  });
-
-  it('populates roleAssignments in handoff order (H2 chain)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // FEATURE_190 Phase 3: Generator terminates text-only — onRoleEmit('generator')
-    // is never called (no emit_handoff slot tool). Sidecar Verifier fires
-    // onRoleEmit('evaluator') instead, so roleAssignments ends at 'evaluator'.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL' },
-        }],
-      }),
-      planner: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 'p1', name: 'emit_contract',
-          input: { success_criteria: ['c1'] },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    const roles = result.managedTask?.roleAssignments.map((a) => a.role);
-    // Post-F190: Generator text-only → onRoleEmit('generator') never fires.
-    // Sidecar adds 'evaluator' via applySidecarVerdictToRecorder.
-    expect(roles).toContain('scout');
-    expect(roles).toContain('planner');
-    // Either 'generator' (no sidecar) or 'evaluator' (sidecar ran).
-    const terminal = roles?.[roles.length - 1];
-    expect(['generator', 'evaluator']).toContain(terminal);
-  });
-
-  it('populates single "direct" assignment for H0_DIRECT', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT', direct_completion_ready: 'yes' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'direct answer' }] };
-      },
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'trivial', mock);
-    const roles = result.managedTask?.roleAssignments.map((a) => a.role);
-    expect(roles).toEqual(['direct']);
-    expect(result.managedTask?.verdict.decidedByAssignmentId).toBe('direct');
-  });
-
-  it('populates runtime.globalWorkBudget + budgetUsage (Shard 6a minimum)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    // v0.7.26 budget caps: H0=100, H1=H2=200 (legacy parity). Extension
-    // dialog at 90% crossing tops up by +100 (H0) or +200 (H1/H2).
-    expect(result.managedTask?.runtime?.globalWorkBudget).toBe(200); // H1
-    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThan(0);
-  });
-
-  it('records harnessTransitions when Scout chooses non-H0 tier', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL' },
-        }],
-      }),
-      planner: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 'p1', name: 'emit_contract',
-          input: { success_criteria: ['x'] },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    const transitions = result.managedTask?.runtime?.harnessTransitions ?? [];
-    expect(transitions).toHaveLength(1);
-    expect(transitions[0]!.from).toBe('H0_DIRECT');
-    expect(transitions[0]!.to).toBe('H2_PLAN_EXECUTE_EVAL');
-    expect(transitions[0]!.source).toBe('scout');
-  });
-
-  it('managedTask.verdict.status finalized (COMPLETE signal emitted post-F190)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // FEATURE_190 Phase 3: emit_handoff deleted; Generator terminates text-only.
-    // Sidecar Verifier auto-runs after text-only termination and sets
-    // verdict.status='completed'. The no-in-chain-evaluator invariant that
-    // kept status='running' no longer holds; Sidecar owns verdict finalisation.
-    const readyMock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const ready = await runManagedTaskViaRunner(makeOptions(), 'task', readyMock);
-    // Post-F190: Sidecar sets verdict.status='completed'; accept either value.
-    expect(['running', 'completed']).toContain(ready.managedTask?.verdict.status);
-    expect(ready.signal).toBe('COMPLETE');
-  });
-});
+// FEATURE_193 v0.7.43: Shard 6a managedTask payload shape describe deleted (V1 chain retired — all its used scout/planner/generator roles)
 
 // =============================================================================
 // Shard 6b — Real budget tracking + mutation tracker
 // =============================================================================
 
-describe('Shard 6b — budget controller', () => {
-  it('increments spentBudget per tool invocation (emit tools count)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // FEATURE_190 Phase 3: emit_handoff deleted; 1 emit tool call (scout).
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    // At least 1 emit tool call (scout) → at least 1 budget unit.
-    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(1);
-  });
+// FEATURE_193 v0.7.43: 'Shard 6b — budget controller' describe deleted — all 4 tests used scout + emit_scout_verdict (V1 chain retired)
+//   increments spentBudget per tool invocation it deleted
+//   upgrades totalBudget when Scout picks H1 it deleted
+//   keeps H0 budget when Scout chooses H0_DIRECT it deleted
+//   upgrades to 200 when Scout picks H2 it deleted
 
-  it('upgrades totalBudget when Scout picks H1 (from 50 → 400)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.managedTask?.runtime?.globalWorkBudget).toBe(200);
-  });
-
-  it('keeps H0 budget (100) when Scout chooses H0_DIRECT', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT', direct_completion_ready: 'yes' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'direct answer' }] };
-      },
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'trivial', mock);
-    expect(result.managedTask?.runtime?.globalWorkBudget).toBe(100);
-  });
-
-  it('upgrades to 200 when Scout picks H2', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL' },
-        }],
-      }),
-      planner: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 'p1', name: 'emit_contract',
-          input: { success_criteria: ['x'] },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.managedTask?.runtime?.globalWorkBudget).toBe(200);
-  });
-});
-
-describe('Shard 6b — mutation tracker', () => {
-  // Mutation tracking hooks run when Generator invokes write/edit/bash.
-  // We test by having the mock Generator call the `write` tool, then
-  // verify the tracker accumulated the file entry.
-  //
-  // Note: the tracker is internal to the run. It's observable via the
-  // scope-awareness note that `emit_scout_verdict` appends when H0 is
-  // declared with >3 mutations (legacy behavior). For Shard 6b we only
-  // assert the plumbing works end-to-end by checking that the write
-  // tool call returns successfully — this exercises the
-  // recordMutationForTool codepath without adding new assertions.
-  it('write tool execution does not crash under the Runner-driven path', async () => {
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      generator: (turn) => {
-        if (turn === 1) {
-          // Call write with a path that won't actually exist; we only care
-          // that the mutation hook runs (records via recordMutationForTool).
-          // The tool will error, which is fine — we're testing plumbing,
-          // not end-to-end write success.
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'w1', name: 'write',
-              input: {
-                file_path: '/tmp/kodax-runner-driven-test-nowrite.txt',
-                content: 'line1\nline2\nline3\n',
-              },
-            }],
-          };
-        }
-        // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-        return {
-          textBlocks: [{ text: 'Done. (summary: write complete)' }],
-          toolBlocks: [],
-        };
-      },
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.success).toBe(true);
-    // Budget usage reflects scout emit + write tool ≥ 2
-    // (FEATURE_184 C.1: no verdict emit from in-chain Evaluator;
-    //  FEATURE_190 Phase 3: no emit_handoff tool call)
-    expect(result.managedTask?.runtime?.budgetUsage).toBeGreaterThanOrEqual(2);
-  });
-});
+// FEATURE_193 v0.7.43: Shard 6b mutation tracker describe deleted (V1 chain retired — uses scout + generator roles)
 
 // =============================================================================
 // Shard 6c — Checkpoint recovery (FEATURE_071)
 // =============================================================================
 
-describe('Shard 6c — checkpoint handling', () => {
-  it('completes a run that has no pre-existing checkpoint without error', async () => {
-    // Smoke: the happy-path "no checkpoint" branch in handlePreRunCheckpoint.
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT', direct_completion_ready: 'yes' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.success).toBe(true);
-  });
+// FEATURE_193 v0.7.43: Shard 6c checkpoint handling describe deleted (V1 chain retired — both its used scout/generator roles)
 
-  it('completes the full H1 chain even with checkpoint writes firing per role', async () => {
-    // Exercises the fire-and-forget checkpoint writer during a multi-role
-    // run. Failures inside writeCurrentCheckpoint are swallowed, so even
-    // if the workspace-root is unwritable the chain completes.
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-      generator: () => ({
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-    const result = await runManagedTaskViaRunner(makeOptions(), 'task', mock);
-    expect(result.success).toBe(true);
-    // FEATURE_190 Phase 3: Generator terminates text-only — onRoleEmit('generator')
-    // never fires. Sidecar Verifier fires onRoleEmit('evaluator') instead.
-    const roles = result.managedTask?.roleAssignments.map((a) => a.role);
-    expect(roles).toContain('scout');
-    // Either 'generator' (no sidecar env) or 'evaluator' (sidecar ran).
-    const terminal = roles?.[roles.length - 1];
-    expect(['generator', 'evaluator']).toContain(terminal);
-  });
-});
-
-describe('Shard 5b — H2 Generator terminates after planning', () => {
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // Revise cycles via nextHarness no longer exist.
-  // Generator terminates with emit_handoff (isTerminal=true).
-  it('Scout → Planner → Generator terminates; result.success=true', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      planner: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 'p1', name: 'emit_contract',
-              input: {
-                summary: 'Plan v1',
-                success_criteria: ['criteria1'],
-                required_evidence: [],
-                constraints: [],
-              },
-            }],
-          };
-        }
-        throw new Error('planner overrun');
-      },
-      generator: () => ({
-        // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-        textBlocks: [{ text: 'Done. (summary: task complete)' }],
-        toolBlocks: [],
-      }),
-    });
-
-    const result = await runManagedTaskViaRunner(makeOptions(), 'Complex task', mock);
-    expect(result.success).toBe(true);
-    expect(result.signal).toBe('COMPLETE');
-  });
-});
+// FEATURE_193 v0.7.43: Shard 5b H2 Generator terminates after planning describe deleted (V1 chain retired — uses scout/planner/generator roles)
 
 describe('Shard 6d-c1 — observer event enrichment', () => {
-  it('populates activeWorkerTitle, currentRound, maxRounds on round events', async () => {
-    const statuses: Array<Record<string, unknown>> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL', summary: 'chosen H1' },
-        }],
-      }),
-      generator: () => ({
-        // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-        textBlocks: [{ text: 'Done. (summary: gen done)' }],
-        toolBlocks: [],
-      }),
-    });
-    await runManagedTaskViaRunner(opts, 'do X', mock);
-    // Filter for slot-emit "completed a turn" events specifically —
-    // FEATURE_166 v0.7.41 follow-up added an `agentSwitched` emit
-    // that ALSO matches `phase==='worker' && activeWorkerId===<role>`
-    // but fires before the role's slot tool and so carries the
-    // pre-increment round. The "round events" this test asserts on
-    // are the slot-emit anchors (round counter incremented in
-    // onRoleEmit at line ~1552). The `'completed a turn'` note
-    // string is unique to those slot emits.
-    const isRoundEvent = (s: Record<string, unknown>, role: string): boolean =>
-      s.phase === 'worker'
-      && s.activeWorkerId === role
-      && typeof s.note === 'string'
-      && (s.note as string).includes('completed a turn');
-    const scoutEvent = statuses.find((s) => isRoundEvent(s, 'scout'));
-    expect(scoutEvent?.activeWorkerTitle).toBe('Scout');
-    expect(scoutEvent?.currentRound).toBe(1);
-    expect(scoutEvent?.maxRounds).toBeGreaterThanOrEqual(6);
-    // FEATURE_190 Phase 3: Generator terminates text-only — onRoleEmit('generator')
-    // never fires, so no "completed a turn" round event for generator exists.
-    // The genEvent is undefined; assert that only slot-emit-based events (Scout)
-    // are present, not those tied to emit_handoff (Generator).
-    const genEvent = statuses.find((s) => isRoundEvent(s, 'generator'));
-    // genEvent may be undefined post-F190 (no slot emit for generator).
-    if (genEvent !== undefined) {
-      // If present (e.g. future env without sidecar), validate shape.
-      expect(genEvent.activeWorkerTitle).toBe('Generator');
-      expect(genEvent.currentRound).toBe(2);
-    }
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // Post-F190: Sidecar Verifier fires onRoleEmit('evaluator') via
-    // applySidecarVerdictToRecorder, which uses the same "completed a turn"
-    // note format. evalEvent may be defined when Sidecar runs.
-    // The key invariant is that no *in-chain* Evaluator is invoked.
-    // Accept both undefined (no sidecar env) and evaluator from sidecar.
-    const evalEvent = statuses.find((s) => isRoundEvent(s, 'evaluator'));
-    if (evalEvent !== undefined) {
-      // Sidecar added evaluator event; verify it is a sidecar-sourced entry.
-      // The presence of evalEvent is acceptable post-F190.
-      expect(evalEvent.activeWorkerTitle).toBe('Evaluator');
-    }
-  });
+  // FEATURE_193 v0.7.43: populates activeWorkerTitle/currentRound/maxRounds on round events it deleted (V1 chain retired — uses scout/generator roles)
 
   it('populates globalWorkBudget and budgetUsage on every event', async () => {
     const statuses: Array<Record<string, unknown>> = [];
@@ -1842,63 +998,8 @@ describe('Shard 6d-c1 — observer event enrichment', () => {
     expect(event?.budgetApprovalRequired).toBe(false);
   });
 
-  it('completed event has persistToHistory=true (FEATURE_184 C.1: no in-chain Evaluator, detailNote absent)', async () => {
-    // FEATURE_190 Phase 3: emit_handoff deleted. Generator terminates text-only.
-    // No in-chain Evaluator emits emit_verdict, so detailNote is not set.
-    const statuses: Array<Record<string, unknown>> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: () => ({
-        toolBlocks: [{
-          type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-          input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-        }],
-      }),
-      generator: () => ({
-        // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-        textBlocks: [{ text: 'Done.' }],
-        toolBlocks: [],
-      }),
-    });
-    await runManagedTaskViaRunner(opts, 'Task X', mock);
-    const completed = statuses.find((s) => s.phase === 'completed');
-    expect(completed?.persistToHistory).toBe(true);
-    // No Evaluator → no detailNote from verdict reason.
-    expect(completed?.detailNote).toBeUndefined();
-  });
-
-  it('round events default persistToHistory=false (transient progress ticks)', async () => {
-    const statuses: Array<Record<string, unknown>> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'ok' }] };
-      },
-      generator: () => ({ textBlocks: [{ text: 'ok' }] }),
-      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    });
-    await runManagedTaskViaRunner(opts, 'Task', mock);
-    const round = statuses.find((s) => s.phase === 'worker');
-    expect(round?.persistToHistory).toBe(false);
-  });
+  // FEATURE_193 v0.7.43: completed event has persistToHistory=true it deleted (V1 chain retired — uses scout/generator roles)
+  // FEATURE_193 v0.7.43: round events default persistToHistory=false it deleted (V1 chain retired — onRoleEmit path is V1-only; V2 Worker text-only termination does not fire onRoleEmit)
 });
 
 describe('Shard 6d-c2 — stream event passthrough', () => {
@@ -1978,38 +1079,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
   // "Evaluator bash blocks git write commands" test deleted.
   // wrapReadOnlyBash is retained for C.3 cleanup.
 
-  it('Scout bash is NOT wrapped — Scout has full tool access per v0.7.22 parity', async () => {
-    // v0.7.26 Scout-tool-restoration: Scout runs H0_DIRECT tasks to
-    // completion (including file writes), so its bash must not be
-    // wrapped with the verification-only guard. Harness routing is
-    // enforced by prompt, not tool restrictions. This test guards
-    // against future regressions that re-wrap Scout bash.
-    //
-    // Probe with `python -c "print(1)"` — a pure-read command that
-    // WOULD have been blocked by the old `wrapReadOnlyBash` wrapper
-    // (SHELL_WRITE_PATTERNS treats `python -c` as mutation). If Scout
-    // bash is unwrapped, the block message never fires; the downstream
-    // handler gets the command (and may or may not succeed depending on
-    // test env, which we don't care about — we only assert on the
-    // absence of the wrapper's block message).
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const scoutBash = findTool(chain.scout, 'bash');
-    const result = await scoutBash.execute(
-      { command: 'python -c "print(1)"' },
-      makeToolCtx('scout'),
-    );
-    const text = typeof result.content === 'string' ? result.content : '';
-    expect(text).not.toContain('verification-only');
-  });
-
-  it('Scout exposes write/edit/exit_plan_mode tools (v0.7.22 parity)', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const scoutTools = chain.scout.tools?.map((t) => t.name) ?? [];
-    expect(scoutTools).toContain('write');
-    expect(scoutTools).toContain('edit');
-    expect(scoutTools).toContain('bash');
-    expect(scoutTools).toContain('exit_plan_mode');
-  });
+  // FEATURE_193 v0.7.43: 'Scout bash is NOT wrapped' test deleted (chain.scout retired — V1 chain removed)
+  // FEATURE_193 v0.7.43: 'Scout exposes write/edit/exit_plan_mode tools' test deleted (chain.scout retired — V1 chain removed)
 
   // FEATURE_114 v0.7.36 Slice 3a — Worker agent in the runner chain.
   // Slice 3a is intentionally additive: the Worker slot is built but
@@ -2063,25 +1134,8 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
       expect(handoffs).toHaveLength(0);
     });
 
-    it('V1/V2 chain topology: no Worker targets in scout/planner/generator handoffs', () => {
-      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-      // chain.evaluator no longer exists; verify Worker is not leaked into
-      // the remaining agent handoff edges.
-      const prev = process.env.KODAX_HARNESS_V2;
-      process.env.KODAX_HARNESS_V2 = 'false';
-      try {
-        const chain = buildRunnerAgentChain(makeCtx(), {});
-        const scoutTargets = (chain.scout.handoffs ?? []).map((h) => h.target.name);
-        expect(scoutTargets).not.toContain('kodax/role/worker');
-        const plannerTargets = (chain.planner.handoffs ?? []).map((h) => h.target.name);
-        expect(plannerTargets).not.toContain('kodax/role/worker');
-        const genTargets = (chain.generator.handoffs ?? []).map((h) => h.target.name);
-        expect(genTargets).not.toContain('kodax/role/worker');
-      } finally {
-        if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
-        else process.env.KODAX_HARNESS_V2 = prev;
-      }
-    });
+    // FEATURE_193 v0.7.43: 'V1/V2 chain topology: no Worker targets in scout/planner/generator handoffs' deleted
+    //   (KODAX_HARNESS_V2='false' + chain.scout/planner/generator — V1 chain retired)
   });
 
   // FEATURE_114 v0.7.36 Slice 3b — V2 single-loop topology under flag.
@@ -2094,17 +1148,7 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
   // Scout-H0 e2e test under flag-off baseline + a unit assertion on
   // `isHarnessV2Enabled` here.
   describe('FEATURE_114 Slice 3b — V2 flag-gated handoff topology', () => {
-    function withHarnessV2<T>(value: 'true' | 'false' | undefined, fn: () => T): T {
-      const prev = process.env.KODAX_HARNESS_V2;
-      if (value === undefined) delete process.env.KODAX_HARNESS_V2;
-      else process.env.KODAX_HARNESS_V2 = value;
-      try {
-        return fn();
-      } finally {
-        if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
-        else process.env.KODAX_HARNESS_V2 = prev;
-      }
-    }
+    // FEATURE_193 v0.7.43: withHarnessV2 sync helper deleted (KODAX_HARNESS_V2 env flag retired — V2 is now unconditional default)
 
     // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
     // "V2 active: Evaluator revise targets Worker" test deleted (chain.evaluator gone).
@@ -2112,25 +1156,21 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
     it('V2 active: Worker has no handoffs (FEATURE_184 C.1: Evaluator removed)', () => {
       // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
       // FEATURE_190 Phase 3: Worker terminates text-only (emit_handoff deleted); no edge to Evaluator.
-      withHarnessV2('true', () => {
-        const chain = buildRunnerAgentChain(makeCtx(), {});
-        const workerTargets = (chain.worker.handoffs ?? []).map((h) => h.target.name);
-        expect(workerTargets).toHaveLength(0);
-        expect(workerTargets).not.toContain('kodax/role/evaluator');
-      });
+      // FEATURE_193 v0.7.43: withHarnessV2 wrapper removed (V2 is now unconditional default)
+      const chain = buildRunnerAgentChain(makeCtx(), {});
+      const workerTargets = (chain.worker.handoffs ?? []).map((h) => h.target.name);
+      expect(workerTargets).toHaveLength(0);
+      expect(workerTargets).not.toContain('kodax/role/evaluator');
     });
 
     it('flag toggles deterministically: same chain factory, Worker has no Evaluator target in either mode', () => {
       // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
       // chain.evaluator no longer exists; verify Worker has no Evaluator target.
-      withHarnessV2('false', () => {
-        const chain = buildRunnerAgentChain(makeCtx(), {});
-        expect((chain.worker.handoffs ?? [])).toHaveLength(0);
-      });
-      withHarnessV2('true', () => {
-        const chain = buildRunnerAgentChain(makeCtx(), {});
-        expect((chain.worker.handoffs ?? [])).toHaveLength(0);
-      });
+      // FEATURE_193 v0.7.43: withHarnessV2 wrappers removed (V2 is now unconditional default)
+      const chain1 = buildRunnerAgentChain(makeCtx(), {});
+      expect((chain1.worker.handoffs ?? [])).toHaveLength(0);
+      const chain2 = buildRunnerAgentChain(makeCtx(), {});
+      expect((chain2.worker.handoffs ?? [])).toHaveLength(0);
     });
   });
 
@@ -2329,89 +1369,12 @@ describe('Shard 6d-f — role-scoped tool boundaries (legacy toolPolicy parity)'
   });
 });
 
-describe('Shard 6d-T — Scout skillMap injected into Generator + Evaluator instructions', () => {
-  function resolveInstructions(
-    agent: { readonly instructions: string | ((ctx: unknown) => string) },
-  ): string {
-    return typeof agent.instructions === 'function'
-      ? agent.instructions(undefined)
-      : agent.instructions;
-  }
+// FEATURE_193 v0.7.43: 'Shard 6d-T — Scout skillMap injected into Generator + Evaluator instructions' deleted
+//   (all tests used chain.generator / chain.scout — V1 chain roles retired)
 
-  it('falls back to base text when Scout has not emitted', () => {
-    // FEATURE_190 Phase 3: emit_handoff deleted from Generator instructions.
-    const recorder = {};
-    const chain = buildRunnerAgentChain(makeCtx(), recorder);
-    const gen = resolveInstructions(chain.generator);
-    expect(gen).not.toContain('Scout Skill Map');
-    expect(gen).not.toContain('emit_handoff');
-  });
-
-  it('renders execution_obligations + ambiguities for Generator (not verification)', () => {
-    const recorder: Record<string, unknown> = {
-      scout: {
-        payload: {
-          scout: {
-            summary: 's',
-            scope: [],
-            requiredEvidence: [],
-            skillMap: {
-              skillSummary: 'add a login form',
-              executionObligations: ['write LoginForm.tsx', 'wire up POST /login'],
-              verificationObligations: ['e2e test covers login'],
-              ambiguities: ['should we support OAuth?'],
-            },
-          },
-        },
-      },
-    };
-    const chain = buildRunnerAgentChain(makeCtx(), recorder as unknown as Parameters<typeof buildRunnerAgentChain>[1]);
-    const gen = resolveInstructions(chain.generator);
-    expect(gen).toContain('Scout Skill Map');
-    expect(gen).toContain('skill_summary: add a login form');
-    expect(gen).toContain('execution_obligations:');
-    expect(gen).toContain('- write LoginForm.tsx');
-    expect(gen).toContain('- wire up POST /login');
-    expect(gen).toContain('ambiguities_to_resolve:');
-    expect(gen).toContain('- should we support OAuth?');
-    // Generator does NOT see verification obligations.
-    expect(gen).not.toContain('verification_obligations:');
-  });
-
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // "renders verification_obligations for Evaluator" test deleted (chain.evaluator gone).
-
-  it('omits empty obligation lists', () => {
-    const recorder: Record<string, unknown> = {
-      scout: {
-        payload: {
-          scout: {
-            summary: 's',
-            scope: [],
-            requiredEvidence: [],
-            skillMap: {
-              skillSummary: undefined,
-              executionObligations: [],
-              verificationObligations: [],
-              ambiguities: [],
-            },
-          },
-        },
-      },
-    };
-    const chain = buildRunnerAgentChain(makeCtx(), recorder as unknown as Parameters<typeof buildRunnerAgentChain>[1]);
-    const gen = resolveInstructions(chain.generator);
-    // No fields populated → skill block omitted entirely.
-    expect(gen).not.toContain('Scout Skill Map');
-  });
-});
-
-describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only', () => {
-  it('Scout agent exposes dispatch_child_task', () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const scoutTools = chain.scout.tools?.map((t) => t.name) ?? [];
-    expect(scoutTools).toContain('dispatch_child_task');
-  });
+describe('Shard 6d-Q — dispatch_child_task topology', () => {
+  // FEATURE_193 v0.7.43: 'Scout agent exposes dispatch_child_task' deleted (chain.scout retired — V1 chain removed)
+  // FEATURE_193 v0.7.43: 'Scout-bound dispatch tool errors out if Scout asks for a write child' deleted (chain.scout retired)
 
   it('Generator agent exposes dispatch_child_task', () => {
     const chain = buildRunnerAgentChain(makeCtx(), {});
@@ -2425,188 +1388,13 @@ describe('Shard 6d-Q — dispatch_child_task exposed to Scout + Generator only',
     const plannerTools = chain.planner.tools?.map((t) => t.name) ?? [];
     expect(plannerTools).not.toContain('dispatch_child_task');
   });
-
-  it('Scout-bound dispatch tool errors out if Scout asks for a write child', async () => {
-    const chain = buildRunnerAgentChain(makeCtx(), {});
-    const scoutDispatch = chain.scout.tools?.find(
-      (t) => t.name === 'dispatch_child_task',
-    ) as RunnableTool;
-    expect(scoutDispatch).toBeDefined();
-    // Scout with `read_only: false` → error (role gating inside
-    // toolDispatchChildTask rejects write fan-out from Scout).
-    const result = await scoutDispatch.execute(
-      {
-        id: 'x',
-        objective: 'test',
-        read_only: false,
-      },
-      { agent: { name: 'scout' } as unknown as import('@kodax-ai/agent').Agent },
-    );
-    expect(String(result.content)).toContain('Scout can only dispatch read-only');
-  });
 });
 
-describe('Shard 6d-S — task verification contract completionContractStatus', () => {
-  // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-  // "falls back to base Evaluator text when no verification contract" test deleted.
-  // "renders startup command + UI flows + API checks for the Evaluator" test deleted.
-  // (chain.evaluator no longer exists; role-prompts.ts Evaluator case retained for C.3.)
-  //
-  // completionContractStatus now reflects verdictStatus=undefined (no in-chain Evaluator).
-  // Verdict is set by Sidecar Verifier (Phase D.2). Without a sidecar verdict, all checks
-  // get status='missing'.
+// FEATURE_193 v0.7.43: 'Shard 6d-S — task verification contract completionContractStatus' deleted
+//   (all tests used makeChainMockLlm with scout:/generator: — V1 chain roles retired)
 
-  it('populates completionContractStatus=missing when no verdict emitted (FEATURE_184 C.1)', async () => {
-    // FEATURE_184 Phase C.1: no in-chain Evaluator → verdictStatus=undefined → status='missing'
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      generator: (turn) => {
-        if (turn === 1) {
-          return {
-            // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-            textBlocks: [{ text: 'Done. (summary: fixed)' }],
-            toolBlocks: [],
-          };
-        }
-        throw new Error('generator overrun');
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(
-      {
-        ...makeOptions(),
-        context: {
-          ...makeOptions().context!,
-          taskVerification: {
-            criteria: [
-              { id: 'crit.login', label: 'Login works', description: 'Login form submits successfully', threshold: 0.8, weight: 1 },
-            ],
-            runtime: {
-              uiFlows: ['Login flow'],
-              apiChecks: ['GET /api/health returns 200'],
-              dbChecks: ['user row exists after signup'],
-            },
-          },
-        },
-      },
-      'Verify the app',
-      mock,
-    );
-    const status = result.managedTask?.runtime?.completionContractStatus;
-    expect(status).toBeDefined();
-    // FEATURE_190 Phase 3: Sidecar Verifier auto-runs after text-only termination
-    // and populates verdict with status='accept', which sets completionContractStatus
-    // to 'ready' for all criteria. Accept either 'missing' (no sidecar) or 'ready'.
-    for (const key of ['crit.login', 'ui_flow:1', 'api_check:1', 'db_check:1']) {
-      expect(['missing', 'ready']).toContain(status![key]);
-    }
-  });
-
-  it('returns undefined when no verification contract is declared', async () => {
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT', direct_completion_ready: 'yes' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'hi' }] };
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(makeOptions(), 'hi', mock);
-    expect(result.managedTask?.runtime?.completionContractStatus).toBeUndefined();
-  });
-});
-
-describe('Shard 6d-U — degraded-continue when upgrade beyond ceiling', () => {
-  function makePlanWithCeiling(
-    upgradeCeiling: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL',
-  ): import('../reasoning.js').ReasoningPlan {
-    return {
-      mode: 'balanced',
-      depth: 'medium',
-      decision: {
-        primaryTask: 'bugfix',
-        confidence: 0.8,
-        riskLevel: 'medium',
-        recommendedMode: 'conversation',
-        recommendedThinkingDepth: 'medium',
-        complexity: 'moderate',
-        workIntent: 'append',
-        requiresBrainstorm: false,
-        harnessProfile: 'H1_EXECUTE_EVAL',
-        upgradeCeiling,
-        reason: 'test',
-      },
-      amaControllerDecision: {
-        profile: 'tactical',
-        tactics: [],
-        fanout: { mode: 'off' as const } as unknown as import('@kodax-ai/llm').KodaXAmaFanoutPolicy,
-        reason: 'test',
-        upgradeTriggers: [],
-      },
-      promptOverlay: '',
-    };
-  }
-
-  it('FEATURE_184 C.1: no in-chain Evaluator means degradedContinue is not set (Generator terminates directly)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // FEATURE_190 Phase 3: emit_handoff deleted. Generator terminates text-only.
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        throw new Error('scout overrun');
-      },
-      generator: (turn) => {
-        if (turn === 1) {
-          return {
-            // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-            textBlocks: [{ text: 'Done.' }],
-            toolBlocks: [],
-          };
-        }
-        throw new Error('generator overrun');
-      },
-    });
-
-    const result = await runManagedTaskViaRunner(
-      makeOptions(),
-      'Fix it',
-      mock,
-      makePlanWithCeiling('H1_EXECUTE_EVAL'),
-    );
-    expect(result.success).toBe(true);
-    // No in-chain Evaluator → no revise request → no degradedContinue flag set.
-    expect(result.managedTask?.runtime?.degradedContinue).toBeUndefined();
-    // FEATURE_190 Phase 3: Sidecar Verifier auto-runs and may populate verdict.
-    // Accept both undefined (no sidecar env) and sidecar accept verdict.
-    const verdict = result.managedProtocolPayload?.verdict;
-    if (verdict !== undefined) {
-      expect(verdict.source).toBe('sidecar');
-    }
-  });
-});
+// FEATURE_193 v0.7.43: 'Shard 6d-U — degraded-continue when upgrade beyond ceiling' deleted
+//   (test used makeChainMockLlm with scout:/generator: — V1 chain roles retired)
 
 // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
 // "Shard 6d-f — evaluator graceful fallback when verdict is not emitted" deleted.
@@ -2652,7 +1440,8 @@ describe('Shard 6d-d — session continuity', () => {
 });
 
 describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
-  it('fires onIterationEnd after every LLM turn with scope=worker', async () => {
+  it('fires onIterationEnd after LLM turn with scope=worker', async () => {
+    // FEATURE_193 v0.7.43: migrated from scout/generator to worker (V1 chain retired)
     const iterations: Array<{ iter: number; scope?: string }> = [];
     const opts = {
       ...makeOptions(),
@@ -2661,26 +1450,11 @@ describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
           iterations.push({ iter: info.iter, scope: info.scope }),
       },
     } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H0_DIRECT' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'done' }] };
-      },
-      generator: () => ({ textBlocks: [{ text: 'x' }] }),
-      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    });
-    await runManagedTaskViaRunner(opts, 'T', mock);
-    expect(iterations.length).toBeGreaterThanOrEqual(2); // scout turn 1 + scout turn 2
+    await runManagedTaskViaRunner(opts, 'T', makeChainMockLlm({
+      worker: () => ({ textBlocks: [{ text: 'done' }], toolBlocks: [] }),
+    }));
+    expect(iterations.length).toBeGreaterThanOrEqual(1);
     expect(iterations.every((i) => i.scope === 'worker')).toBe(true);
-    // Iteration counter is monotonically increasing
-    expect(iterations[0]!.iter).toBeLessThan(iterations[iterations.length - 1]!.iter);
   });
 
   it('returns undefined contextTokenSnapshot when no provider usage is reported', async () => {
@@ -2697,43 +1471,8 @@ describe('Shard 6d-c4 — onIterationEnd + contextTokenSnapshot', () => {
 });
 
 describe('Shard 6d-c3 — budget extension at 90% threshold', () => {
-  it('budget extension askUser is NOT fired on short Scout→Generator run (threshold gating)', async () => {
-    // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    // Budget cap is 400 for H1; the short Scout+Generator chain burns <<90%,
-    // so the askUser dialog is NOT fired — verifies threshold gating.
-    const askUserCalls: Array<{ question: string }> = [];
-    const opts = {
-      ...makeOptions(),
-      events: {
-        askUser: async (q: { question: string }) => {
-          askUserCalls.push({ question: q.question });
-          return 'continue';
-        },
-      },
-    } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-    const mock = makeChainMockLlm({
-      scout: (turn) => {
-        if (turn === 1) {
-          return {
-            toolBlocks: [{
-              type: 'tool_use', id: 's1', name: 'emit_scout_verdict',
-              input: { confirmed_harness: 'H1_EXECUTE_EVAL' },
-            }],
-          };
-        }
-        return { textBlocks: [{ text: 'scout fallback' }] };
-      },
-      generator: () => ({
-        // FEATURE_190 Phase 3: text-only termination (emit_handoff deleted).
-        textBlocks: [{ text: 'Done.' }],
-        toolBlocks: [],
-      }),
-      // FEATURE_184 Phase C.1 (v0.7.45): Evaluator removed from chain.
-    });
-    await runManagedTaskViaRunner(opts, 'Task', mock);
-    // threshold not met — askUser never fires.
-    expect(askUserCalls.length).toBe(0);
-  });
+  // FEATURE_193 v0.7.43: 'budget extension askUser is NOT fired on short Scout→Generator run' deleted
+  //   (used makeChainMockLlm with scout:/generator: — V1 chain roles retired)
 
   it('fires askUser when Evaluator revises and usage crosses 90% threshold', async () => {
     // Directly exercise `maybeRequestAdditionalWorkBudget` with a
@@ -3148,198 +1887,8 @@ describe('wrapEmitterWithRecorder — Risk 2/3/5 behavioural guards', () => {
 // H1 structural resume (v0.7.26) — buildStructuralResumeSeed
 // =============================================================================
 
-describe('H1 structural resume — buildStructuralResumeSeed (v0.7.26)', () => {
-  async function getBuilder() {
-    const mod = await import('./runner-driven.js');
-    return mod.__runnerDrivenTestables.buildStructuralResumeSeed;
-  }
-
-  type ValidatedCheckpointInput = Parameters<
-    Awaited<ReturnType<typeof getBuilder>>
-  >[0];
-
-  function makeCheckpoint(params: {
-    harness: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL';
-    scoutCompleted: boolean;
-    scoutDecision?: {
-      summary?: string;
-      recommendedHarness?: 'H0_DIRECT' | 'H1_EXECUTE_EVAL' | 'H2_PLAN_EXECUTE_EVAL';
-      scope?: string[];
-      reviewFilesOrAreas?: string[];
-      harnessRationale?: string;
-      directCompletionReady?: 'yes' | 'no';
-      skillSummary?: string;
-      executionObligations?: string[];
-    };
-    contractSummary?: string;
-  }): ValidatedCheckpointInput {
-    return {
-      checkpoint: {
-        version: 1,
-        taskId: 'task-test',
-        createdAt: new Date().toISOString(),
-        gitCommit: 'abcd1234',
-        objective: 'resume fixture',
-        harnessProfile: params.harness,
-        currentRound: 2,
-        completedWorkerIds: params.scoutCompleted ? ['scout-1'] : [],
-        scoutCompleted: params.scoutCompleted,
-      },
-      workspaceDir: '/tmp/ws',
-      managedTask: {
-        contract: {
-          taskId: 'task-test',
-          surface: 'repl',
-          objective: 'resume fixture',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          status: 'in_progress',
-          primaryTask: 'edit',
-          workIntent: 'implement',
-          complexity: 'medium',
-          riskLevel: 'low',
-          harnessProfile: params.harness,
-          recommendedMode: 'ama',
-          requiresBrainstorm: false,
-          reason: 'fixture',
-          contractSummary: params.contractSummary,
-          successCriteria: params.contractSummary ? ['criterion-1'] : [],
-          requiredEvidence: [],
-          constraints: [],
-        },
-        roleAssignments: [],
-        workItems: [],
-        evidence: { workspaceDir: '/tmp/ws', artifacts: [], entries: [], routingNotes: [] },
-        verdict: {
-          status: 'in_progress',
-          decidedByAssignmentId: '',
-          summary: '',
-        },
-        runtime: params.scoutDecision
-          ? {
-            scoutDecision: {
-              summary: params.scoutDecision.summary ?? 'scout summary',
-              recommendedHarness: params.scoutDecision.recommendedHarness ?? params.harness,
-              readyForUpgrade: false,
-              scope: params.scoutDecision.scope,
-              reviewFilesOrAreas: params.scoutDecision.reviewFilesOrAreas,
-              harnessRationale: params.scoutDecision.harnessRationale,
-              directCompletionReady: params.scoutDecision.directCompletionReady,
-              skillSummary: params.scoutDecision.skillSummary,
-              executionObligations: params.scoutDecision.executionObligations,
-            },
-          }
-          : undefined,
-      },
-    } as unknown as ValidatedCheckpointInput;
-  }
-
-  it('H1 scout completed → starts at generator, scout slot seeded, rolesEmitted=[scout]', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H1_EXECUTE_EVAL',
-      scoutCompleted: true,
-      scoutDecision: {
-        summary: 'Investigated modules A + B',
-        recommendedHarness: 'H1_EXECUTE_EVAL',
-        scope: ['src/a.ts', 'src/b.ts'],
-        harnessRationale: 'single-file write sufficient',
-      },
-    }));
-    expect(seed.startingRole).toBe('generator');
-    expect(seed.harness).toBe('H1_EXECUTE_EVAL');
-    expect(seed.rolesEmitted).toEqual(['scout']);
-    expect(seed.recorderSlots.scout).toBeDefined();
-    expect(seed.recorderSlots.scout?.role).toBe('scout');
-    expect(seed.recorderSlots.scout?.payload.scout?.summary).toBe('Investigated modules A + B');
-    expect(seed.recorderSlots.scout?.payload.scout?.confirmedHarness).toBe('H1_EXECUTE_EVAL');
-    expect(seed.recorderSlots.scout?.handoffTarget).toBe('kodax/role/generator');
-    expect(seed.recorderSlots.contract).toBeUndefined();
-  });
-
-  it('H2 scout completed, no contract → starts at planner', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H2_PLAN_EXECUTE_EVAL',
-      scoutCompleted: true,
-      scoutDecision: {
-        summary: 'Large refactor across 4 modules',
-        recommendedHarness: 'H2_PLAN_EXECUTE_EVAL',
-      },
-    }));
-    expect(seed.startingRole).toBe('planner');
-    expect(seed.harness).toBe('H2_PLAN_EXECUTE_EVAL');
-    expect(seed.rolesEmitted).toEqual(['scout']);
-    expect(seed.recorderSlots.contract).toBeUndefined();
-  });
-
-  it('H2 scout + contract completed → starts at generator, both slots seeded', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H2_PLAN_EXECUTE_EVAL',
-      scoutCompleted: true,
-      scoutDecision: {
-        summary: 'Multi-phase migration',
-        recommendedHarness: 'H2_PLAN_EXECUTE_EVAL',
-      },
-      contractSummary: 'Phase 1: add schema; Phase 2: backfill; Phase 3: cutover',
-    }));
-    expect(seed.startingRole).toBe('generator');
-    expect(seed.rolesEmitted).toEqual(['scout', 'planner']);
-    expect(seed.recorderSlots.scout).toBeDefined();
-    expect(seed.recorderSlots.contract).toBeDefined();
-    expect(seed.recorderSlots.contract?.payload.contract?.summary)
-      .toContain('Phase 1: add schema');
-    expect(seed.recorderSlots.contract?.payload.contract?.successCriteria).toEqual(['criterion-1']);
-  });
-
-  it('no scout completion → starts at scout with empty seeds (plain restart)', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H1_EXECUTE_EVAL',
-      scoutCompleted: false,
-    }));
-    expect(seed.startingRole).toBe('scout');
-    expect(seed.rolesEmitted).toEqual([]);
-    expect(seed.recorderSlots.scout).toBeUndefined();
-    expect(seed.recorderSlots.contract).toBeUndefined();
-  });
-
-  it('H0 scout completed → stays at scout (re-emit direct answer with context)', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H0_DIRECT',
-      scoutCompleted: true,
-      scoutDecision: {
-        summary: 'Trivial explain-only',
-        recommendedHarness: 'H0_DIRECT',
-        directCompletionReady: 'yes',
-      },
-    }));
-    expect(seed.startingRole).toBe('scout');
-    expect(seed.harness).toBe('H0_DIRECT');
-    expect(seed.rolesEmitted).toEqual(['scout']);
-    expect(seed.recorderSlots.scout?.isTerminal).toBe(true);
-  });
-
-  it('seeded scout skillMap round-trips the skillSummary + obligations', async () => {
-    const build = await getBuilder();
-    const seed = build(makeCheckpoint({
-      harness: 'H1_EXECUTE_EVAL',
-      scoutCompleted: true,
-      scoutDecision: {
-        summary: 'write-heavy edit',
-        recommendedHarness: 'H1_EXECUTE_EVAL',
-        skillSummary: 'use edit for single-file change',
-        executionObligations: ['preserve CRLF', 'keep header comment'],
-      },
-    }));
-    const skillMap = seed.recorderSlots.scout?.payload.scout?.skillMap;
-    expect(skillMap).toBeDefined();
-    expect(skillMap?.skillSummary).toBe('use edit for single-file change');
-    expect(skillMap?.executionObligations).toEqual(['preserve CRLF', 'keep header comment']);
-  });
-});
+// FEATURE_193 v0.7.43: 'H1 structural resume — buildStructuralResumeSeed' describe deleted
+//   (all 6 tests used V1 chain resume concepts: scoutCompleted, rolesEmitted=['scout'], startingRole='generator'/'planner'/'scout')
 
 // =============================================================================
 // FEATURE_155 (v0.7.39) Slice A2 — runner-driven idle-yield outer loop
@@ -3391,13 +1940,11 @@ function buildSuccessChildResult(
 }
 
 describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
-  let prevHarnessV2: string | undefined;
+  // FEATURE_193 v0.7.43: KODAX_HARNESS_V2 env manipulation removed from beforeEach/afterEach (V2 is now unconditional default)
   let prevAsyncDispatch: string | undefined;
 
   beforeEach(() => {
-    prevHarnessV2 = process.env.KODAX_HARNESS_V2;
     prevAsyncDispatch = process.env.KODAX_ASYNC_DISPATCH;
-    process.env.KODAX_HARNESS_V2 = 'true';
     // Ensure the dispatch tool takes the async / fire-and-forget path
     // — the sync path runs the child inline and never reaches the
     // idle-yield branch.
@@ -3407,8 +1954,6 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
   });
 
   afterEach(() => {
-    if (prevHarnessV2 === undefined) delete process.env.KODAX_HARNESS_V2;
-    else process.env.KODAX_HARNESS_V2 = prevHarnessV2;
     if (prevAsyncDispatch === undefined) delete process.env.KODAX_ASYNC_DISPATCH;
     else process.env.KODAX_ASYNC_DISPATCH = prevAsyncDispatch;
     _resetMessageQueueForTests();
@@ -3955,88 +2500,15 @@ describe('FEATURE_155 v0.7.39 Slice A2 — idle-yield outer loop', () => {
 // arrive) is covered by `text-only-termination.test.ts`.
 
 describe('FEATURE_166 v0.7.41 follow-up — agent-switch label flip', () => {
-  // V2 Worker→Evaluator handoff label-lag fix. The runner-driven outer
-  // loop now provides an `onAgentSwitched` callback to `Runner.run`;
-  // that callback maps the new agent's name to a `KodaXTaskRole` and
-  // calls `observer.agentSwitched(role)`, which emits a fresh status
-  // event with `activeWorkerTitle: ROLE_TO_TITLE[role]`. The REPL reads
-  // this on the next render frame and the new agent's first streaming
-  // output displays under the correct label.
-  //
-  // Without the hook, the label stays on whichever role last fired
-  // `onRoleEmit` (Worker, from emit_handoff success at line ~1093).
-  // Production session 20260515_185354 confirmed: Evaluator's
-  // text-only review summary surfaced under `[Worker]` because zhipu
-  // never emitted emit_verdict to flip the label.
-  //
-  // The test below uses the same withHarnessV2 + makeChainMockLlm
-  // shape as the FEATURE_114 V2 tests above.
-  async function withHarnessV2<T>(
-    value: 'true' | 'false' | undefined,
-    fn: () => Promise<T>,
-  ): Promise<T> {
-    const prev = process.env.KODAX_HARNESS_V2;
-    if (value === undefined) delete process.env.KODAX_HARNESS_V2;
-    else process.env.KODAX_HARNESS_V2 = value;
-    try {
-      return await fn();
-    } finally {
-      if (prev === undefined) delete process.env.KODAX_HARNESS_V2;
-      else process.env.KODAX_HARNESS_V2 = prev;
-    }
-  }
+  // FEATURE_193 v0.7.43: withHarnessV2 async helper deleted (KODAX_HARNESS_V2 env flag retired — V2 is now unconditional default)
 
   // FEATURE_184 Phase C.1 (v0.7.45): Deleted "emits a phase=worker status
   // with activeWorkerTitle='Evaluator' AFTER Worker emit_handoff and BEFORE
   // Evaluator emit_verdict" test — tested V2 Worker→Evaluator handoff label
   // flip which required in-chain Evaluator. Evaluator removed from chain.
 
-  it('does not emit agent-switched when no handoff happens (single-role H0 direct run)', async () => {
-    // V1 Scout H0 path: no handoff at all (Scout-only run). The
-    // observer's agentSwitched callback should never fire because
-    // the agent runtime never invokes the onAgentSwitched hook
-    // without a handoffSignal.
-    await withHarnessV2('false', async () => {
-      const statuses: Array<Record<string, unknown>> = [];
-      const opts = {
-        ...makeOptions(),
-        events: {
-          onManagedTaskStatus: (s: Record<string, unknown>) => statuses.push(s),
-        },
-      } as unknown as Parameters<typeof runManagedTaskViaRunner>[0];
-      const mock = makeChainMockLlm({
-        scout: (turn) => {
-          if (turn === 1) {
-            return {
-              toolBlocks: [{
-                type: 'tool_use',
-                id: 's1',
-                name: 'emit_scout_verdict',
-                input: {
-                  confirmed_harness: 'H0_DIRECT',
-                  direct_completion_ready: 'yes',
-                  summary: 'Trivial',
-                  scope: [],
-                  required_evidence: [],
-                  harness_rationale: 'Trivial.',
-                },
-              }],
-            };
-          }
-          return { textBlocks: [{ text: '2 + 2 = 4.' }], toolBlocks: [] };
-        },
-      });
-      await runManagedTaskViaRunner(opts, 'What is 2 + 2?', mock);
-
-      // No `taking over` notes — that string is unique to the
-      // FEATURE_166 agentSwitched emit shape, so absence pins the
-      // "hook did not fire" invariant.
-      const switchedStatuses = statuses.filter(
-        (s) => typeof s.note === 'string' && (s.note as string).endsWith(' taking over'),
-      );
-      expect(switchedStatuses).toEqual([]);
-    });
-  });
+  // FEATURE_193 v0.7.43: 'does not emit agent-switched when no handoff happens (single-role H0 direct run)' deleted
+  //   (used withHarnessV2('false') + scout: mock with emit_scout_verdict — V1 chain roles retired)
 
   it('NULL_OBSERVER provides a no-op agentSwitched so chain-only test paths do not throw', () => {
     // The NULL_OBSERVER is used in topology-only tests that build the

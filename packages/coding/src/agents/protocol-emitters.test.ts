@@ -60,69 +60,8 @@ describe('protocol emitters — tool shapes', () => {
   });
 });
 
-describe('protocol emitters — scout', () => {
-  it('normalizes an H1 verdict with scope and confirmedHarness', async () => {
-    const result = await runExecute(emitScoutVerdict, {
-      summary: 'User wants to add a login endpoint',
-      scope: ['src/auth/', 'src/server/routes.ts'],
-      required_evidence: ['test/auth.test.ts'],
-      confirmed_harness: 'H1_EXECUTE_EVAL',
-      harness_rationale: 'Small scope, tests already in place',
-    });
-    expect(result.isError).toBeUndefined();
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.role).toBe('scout');
-    expect(meta.payload.scout?.confirmedHarness).toBe('H1_EXECUTE_EVAL');
-    expect(meta.payload.scout?.scope).toEqual(['src/auth/', 'src/server/routes.ts']);
-    expect(meta.payload.scout?.requiredEvidence).toEqual(['test/auth.test.ts']);
-  });
-
-  it('accepts lowercase harness aliases and normalizes to canonical form', async () => {
-    const result = await runExecute(emitScoutVerdict, { confirmed_harness: 'h0' });
-    expect(result.isError).toBeUndefined();
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.payload.scout?.confirmedHarness).toBe('H0_DIRECT');
-  });
-
-  it('surfaces is_error when no normalizable fields are present', async () => {
-    const result = await runExecute(emitScoutVerdict, {});
-    expect(result.isError).toBe(true);
-    expect(result.content).toMatch(/could not be normalized/);
-  });
-
-  it('produces a summary containing harness=X for the LLM to see', async () => {
-    const result = await runExecute(emitScoutVerdict, {
-      confirmed_harness: 'H2_PLAN_EXECUTE_EVAL',
-      scope: ['x'],
-    });
-    expect(result.content).toMatch(/harness=H2_PLAN_EXECUTE_EVAL/);
-  });
-});
-
-describe('protocol emitters — planner (contract)', () => {
-  it('normalizes a contract with success_criteria + constraints', async () => {
-    const result = await runExecute(emitContract, {
-      summary: 'Add login endpoint with JWT',
-      success_criteria: ['POST /auth/login works', 'Tests pass'],
-      required_evidence: ['auth.test.ts output'],
-      constraints: ['Use existing JWT utils in src/auth/token.ts'],
-    });
-    expect(result.isError).toBeUndefined();
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.role).toBe('planner');
-    expect(meta.payload.contract?.successCriteria).toHaveLength(2);
-    expect(meta.payload.contract?.constraints).toHaveLength(1);
-  });
-
-  it('surfaces is_error when all lists are empty and no summary', async () => {
-    const result = await runExecute(emitContract, {
-      success_criteria: [],
-      required_evidence: [],
-      constraints: [],
-    });
-    expect(result.isError).toBe(true);
-  });
-});
+// FEATURE_193 v0.7.43: protocol emitters scout describe deleted (V1 chain retired)
+// FEATURE_193 v0.7.43: protocol emitters planner (contract) describe deleted (V1 chain retired)
 
 // FEATURE_190 (v0.7.43) Phase 3: `emitHandoff` deleted. Worker/Generator
 // terminate text-only. The `coerceManagedProtocolToolPayload('generator',
@@ -163,31 +102,7 @@ describe('protocol emitters — evaluator (verdict)', () => {
 });
 
 describe('protocol emitters — handoff target resolution (Shard 4)', () => {
-  it('scout H0_DIRECT → no handoffTarget, isTerminal=true', async () => {
-    const result = await runExecute(emitScoutVerdict, { confirmed_harness: 'H0_DIRECT' });
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBeUndefined();
-    expect(meta.isTerminal).toBe(true);
-  });
-
-  it('scout H1_EXECUTE_EVAL → handoff to generator', async () => {
-    const result = await runExecute(emitScoutVerdict, { confirmed_harness: 'H1_EXECUTE_EVAL' });
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/generator');
-    expect(meta.isTerminal).toBe(false);
-  });
-
-  it('scout H2_PLAN_EXECUTE_EVAL → handoff to planner', async () => {
-    const result = await runExecute(emitScoutVerdict, { confirmed_harness: 'H2_PLAN_EXECUTE_EVAL' });
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/planner');
-  });
-
-  it('planner contract always → handoff to generator', async () => {
-    const result = await runExecute(emitContract, { success_criteria: ['x'] });
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/generator');
-  });
+  // FEATURE_193 v0.7.43: scout H0/H1/H2 and planner contract its deleted (V1 chain retired)
 
   // FEATURE_190 (v0.7.43) Phase 3: the previous "generator handoff →
   // terminal" assertion exercised the deleted `emitHandoff` tool — the
@@ -227,18 +142,7 @@ describe('protocol emitters — handoff target resolution (Shard 4)', () => {
 });
 
 describe('protocol emitters — parity with legacy parser', () => {
-  it('scout payload is byte-equivalent to coerceManagedProtocolToolPayload output', async () => {
-    const input = {
-      confirmed_harness: 'H1_EXECUTE_EVAL',
-      scope: ['a', 'b'],
-      required_evidence: ['test.ts'],
-      harness_rationale: 'small scope',
-    };
-    const result = await runExecute(emitScoutVerdict, input);
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    const legacy = coerceManagedProtocolToolPayload('scout', input);
-    expect(meta.payload).toEqual(legacy);
-  });
+  // FEATURE_193 v0.7.43: scout parity it deleted (V1 chain retired)
 
   it('evaluator payload is byte-equivalent to legacy for revise + next_harness', async () => {
     const input = { status: 'revise', next_harness: 'H2', reason: 'scope grew' };
@@ -254,78 +158,4 @@ describe('protocol emitters — parity with legacy parser', () => {
   // tests in parse-helpers.test.ts pin its behavior on that path.
 });
 
-describe('coerceManagedProtocolToolPayload — FEATURE_097 nested skill_map regression', () => {
-  // The protocol-emitters JSON schema (protocol-emitters.ts:227-236) nests
-  // the skill_map fields inside a `skill_map` object. The pre-fix parser
-  // only read these fields at the top level of the payload, so a
-  // schema-correct LLM emission like
-  //   { skill_map: { execution_obligations: ['a','b','c'] } }
-  // would produce executionObligations=[] in the parsed payload, and the
-  // FEATURE_097 todo seeding gate (≥2 obligations) would never fire.
-
-  it('reads execution_obligations from nested skill_map (snake_case)', () => {
-    const result = coerceManagedProtocolToolPayload('scout', {
-      confirmed_harness: 'H2_PLAN_EXECUTE_EVAL',
-      skill_map: {
-        skill_summary: 'investigate auth flow',
-        execution_obligations: [
-          'enumerate scope',
-          'collect evidence',
-          'emit scout verdict',
-        ],
-        verification_obligations: ['unit tests pass'],
-        ambiguities: ['unclear whether refactor is allowed'],
-        projection_confidence: 'high',
-      },
-    });
-    expect(result?.scout?.skillMap?.executionObligations).toEqual([
-      'enumerate scope',
-      'collect evidence',
-      'emit scout verdict',
-    ]);
-    expect(result?.scout?.skillMap?.verificationObligations).toEqual([
-      'unit tests pass',
-    ]);
-    expect(result?.scout?.skillMap?.ambiguities).toEqual([
-      'unclear whether refactor is allowed',
-    ]);
-    expect(result?.scout?.skillMap?.skillSummary).toBe('investigate auth flow');
-    expect(result?.scout?.skillMap?.projectionConfidence).toBe('high');
-  });
-
-  it('reads execution_obligations from nested skillMap (camelCase)', () => {
-    const result = coerceManagedProtocolToolPayload('scout', {
-      confirmed_harness: 'H2_PLAN_EXECUTE_EVAL',
-      skillMap: {
-        executionObligations: ['step 1', 'step 2'],
-      },
-    });
-    expect(result?.scout?.skillMap?.executionObligations).toEqual([
-      'step 1',
-      'step 2',
-    ]);
-  });
-
-  it('top-level wins over nested when both are present (back-compat)', () => {
-    const result = coerceManagedProtocolToolPayload('scout', {
-      confirmed_harness: 'H2_PLAN_EXECUTE_EVAL',
-      execution_obligations: ['top a', 'top b'],
-      skill_map: {
-        execution_obligations: ['nested a', 'nested b', 'nested c'],
-      },
-    });
-    expect(result?.scout?.skillMap?.executionObligations).toEqual([
-      'top a',
-      'top b',
-    ]);
-  });
-
-  it('non-object skill_map is ignored (defensive)', () => {
-    const result = coerceManagedProtocolToolPayload('scout', {
-      confirmed_harness: 'H1_EXECUTE_EVAL',
-      skill_map: 'not an object',
-      execution_obligations: ['only top'],
-    });
-    expect(result?.scout?.skillMap?.executionObligations).toEqual(['only top']);
-  });
-});
+// FEATURE_193 v0.7.43: coerceManagedProtocolToolPayload FEATURE_097 skill_map regression describe deleted (V1 scout role retired)
