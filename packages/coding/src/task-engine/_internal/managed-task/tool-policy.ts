@@ -15,15 +15,17 @@
  *   - `enforceWritePathBoundary` / `enforceShellWriteBoundary`.
  *   - `ScoutMutationIntent` / `inferScoutMutationIntent`.
  *
- * Policy assembly (restored for P1 parity):
+ * Policy assembly:
  *   - `INSPECTION_SHELL_PATTERNS` / `VERIFICATION_SHELL_PATTERNS`.
- *   - `PLANNER_ALLOWED_TOOLS` / `H1_READONLY_GENERATOR_ALLOWED_TOOLS`.
- *     (`H1_EVALUATOR_ALLOWED_TOOLS` removed in FEATURE_184 Phase C.3 —
- *     in-chain Evaluator retired; Sidecar Verifier inherits Generator context.)
  *   - `extractRuntimeCommandCandidate` / `buildRuntimeVerificationShellPatterns`.
- *   - `buildManagedWorkerToolPolicy` — the per-role switch that produces
- *     the `KodaXTaskToolPolicy` consumed by `formatToolPolicy` when
- *     rendering each worker's system prompt.
+ *   - `buildManagedWorkerToolPolicy` — per-role switch (post-F193:
+ *     returns `undefined` for every role; V2 Worker discipline is
+ *     prompt-enforced via `worker-role-prompt.ts`).
+ *
+ * FEATURE_184 Phase C.3 removed `H1_EVALUATOR_ALLOWED_TOOLS` (Evaluator
+ * retired). FEATURE_193 (v0.7.43) removed `PLANNER_ALLOWED_TOOLS` and
+ * `H1_READONLY_GENERATOR_ALLOWED_TOOLS` (V1 Planner / readonly Generator
+ * retired).
  */
 
 import { isDocsLikePath, escapeRegexLiteral } from '../text-utils.js';

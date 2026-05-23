@@ -5,10 +5,13 @@
  * to the same runtime but enforced FEATURE_106's harness calibration
  * contract (multi-file mutations must be preceded by a Scout-emitted
  * harness verdict). FEATURE_193 (v0.7.43) retired the V1 Scout role —
- * `recorder.scout` is never populated on V2, so the predicate is now a
- * permanent no-op. Kept registered as a structural placeholder pending
- * a future cleanup decision (delete vs. repurpose for V2 Worker
- * harness calibration).
+ * `recorder.scout` is never populated on V2, so the predicate's
+ * `confirmedHarness` check now fails on every multi-file mutation and
+ * the invariant emits its `warn` result indiscriminately on V2 runs.
+ * Telemetry consumers that aggregate invariant warnings should treat
+ * this as background noise until the invariant is repurposed (V2
+ * Worker harness calibration) or deleted. Kept registered as a
+ * structural placeholder pending that decision.
  *
  * Hook:
  *   - observe(mutation_recorded) when the event reports fileCount > 1
