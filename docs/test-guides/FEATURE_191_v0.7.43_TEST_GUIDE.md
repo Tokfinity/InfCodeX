@@ -48,35 +48,39 @@
 
 ### 期望结果
 
-- **Test 1.1** — boot banner / 日志显示已加载 markdown agents（`/agents list` 或类似 surface 应能看到 `db-reviewer`；当前 v0.7.43 surface 是 in-memory only，可以用以下 node REPL 验证）：
+- **Test 1.1** — boot banner / 日志显示已加载 markdown agents（v0.7.43 没有 `/agents list` slash surface — 用以下 node REPL 验证）：
 
   ```bash
   cd <your-repo>
-  node --eval "import('@kodax-ai/coding').then(m => {
-    return m.bootstrapConstructionRuntime ?
-      Promise.resolve(m.listConstructedAgentsWithSource()) :
-      import('@kodax-ai/repl/dist/common/construction-bootstrap.js')
-        .then(b => b.bootstrapConstructionRuntime(process.cwd()))
-        .then(() => m.listConstructedAgentsWithSource());
-  }).then(list => console.log(JSON.stringify(list.map(e => ({name: e.agent.name, source: e.source})), null, 2)))"
+  node --input-type=module --eval "
+    const repl = await import('@kodax-ai/repl/dist/common/construction-bootstrap.js');
+    const coding = await import('@kodax-ai/coding');
+    await repl.bootstrapConstructionRuntime(process.cwd());
+    // listConstructedAgents() is the public top-level reader. The
+    // source-aware variant lives on the @internal construction sub-
+    // barrel and is not part of the v0.7.43 SDK surface (see
+    // FEATURE_191 design doc + SDK_EMBEDDER_GUIDE §8 boundary note).
+    const agents = coding.listConstructedAgents();
+    console.log(JSON.stringify(agents.map(a => ({name: a.name, description: a.description})), null, 2));
+  "
   ```
 
 - 期望输出包含：
 
   ```json
   [
-    { "name": "db-reviewer", "source": "markdown:project" }
+    { "name": "db-reviewer", "description": "Project-specific DB migration reviewer (PostgreSQL + Supabase)" }
   ]
   ```
 
-  （**project 覆盖 user**：source 是 `markdown:project` 而不是 `markdown:user`，因为 project 在加载顺序里晚于 user，last-write-wins 实现 precedence。）
+  （**project 覆盖 user**：description 显示 project-level 字面值而非 user-level，证明 last-write-wins 实现 precedence 正确。source tag 本身的 6 个 enum value 由 `agent-resolver.test.ts` 的 7 个 B.3 单元测试覆盖。）
 
 ### 失败排查
 
 | 现象 | 诊断 |
 |---|---|
-| `listConstructedAgentsWithSource()` 返回 `[]` | bootstrapConstructionRuntime 未被调用；检查 InkREPL 启动路径或手动调 `bootstrapConstructionRuntime(cwd)`. |
-| source 显示 `markdown:user` 而非 `markdown:project` | last-write-wins 失效；检查 markdown-loader.ts 的加载顺序（user 必须先于 project）. |
+| `listConstructedAgents()` 返回 `[]` | bootstrapConstructionRuntime 未被调用；检查 InkREPL 启动路径或手动调 `bootstrapConstructionRuntime(cwd)`. |
+| description 显示 user-level 字面值而非 project-level | last-write-wins 失效；检查 markdown-loader.ts 的加载顺序（user 必须先于 project）. |
 | boot 输出含 `markdownFailures: [...]` | frontmatter 缺 `description` 或 body 为空；检查 .md 文件 frontmatter. |
 
 ---
@@ -136,12 +140,10 @@
    ```bash
    cd <KodaX root>
    node --input-type=module --eval "
-     const { createExtensionRuntime } = await import('@kodax-ai/coding');
-     const { resolveConstructedAgentSource, listConstructedAgents } = await import('@kodax-ai/coding');
+     const { createExtensionRuntime, listConstructedAgents } = await import('@kodax-ai/coding');
      const runtime = createExtensionRuntime().activate();
      await runtime.loadExtension('/tmp/kodax-test-ext/ext.mjs');
      console.log('agents:', listConstructedAgents().map(a => a.name));
-     console.log('source(python-reviewer):', resolveConstructedAgentSource('python-reviewer'));
      await runtime.dispose();
      console.log('after dispose:', listConstructedAgents().map(a => a.name));
    "
@@ -150,8 +152,8 @@
 ### 期望结果
 
 - `agents: ['python-reviewer']`
-- `source(python-reviewer): extension`
 - `after dispose: []`（auto-unregister 通过 disposables chain 触发）
+- source tag = `'extension'` 由 `runtime.test.ts` FEATURE_191 registerAgent suite 的 4 个测试覆盖（包含 source 验证 + 自动 unregister + 手动 dispose + admission 拒绝）。`resolveConstructedAgentSource()` 是 `@internal` 不通过 top-level SDK 暴露 — 见 SDK_EMBEDDER_GUIDE §8 boundary note。
 
 ### 失败排查
 

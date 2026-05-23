@@ -872,22 +872,27 @@ failures at activate time rather than silently dropped registrations.
 ```ts
 import {
   listConstructedAgents,
-  listConstructedAgentsWithSource,
   resolveConstructedAgent,
-  resolveConstructedAgentSource,
 } from '@kodax-ai/kodax';
 
 // All registered constructed agents (markdown + extension + LLM + CLI).
 const agents = listConstructedAgents();
 
-// With provenance metadata.
-const entries = listConstructedAgentsWithSource();
-// entry.source: 'built-in' | 'extension' | 'markdown:user' |
-//               'markdown:project' | 'constructed:cli' | 'constructed:llm'
-
+// Resolve a specific agent by name.
 const agent = resolveConstructedAgent('db-reviewer');
-const source = resolveConstructedAgentSource('db-reviewer');
 ```
+
+> **Source-aware variants** — `listConstructedAgentsWithSource()` /
+> `resolveConstructedAgentSource(name)` expose the in-memory source
+> tag (`'built-in' | 'extension' | 'markdown:user' | 'markdown:project'
+> | 'constructed:cli' | 'constructed:llm'`). These are marked
+> `@internal` in v0.7.43 and exposed only via the construction
+> sub-barrel — they will be promoted to the top-level SDK entry when
+> the v0.7.46+ REPL `/agents list` command lands as their third
+> production consumer (current consumers: source-tag round-trip tests
+> + planned REPL). Embedders that need provenance today can read the
+> source via the existing `listConstructedAgents()` Agent shape and
+> cross-reference their own registration calls.
 
 ### Wiring dispatch
 
