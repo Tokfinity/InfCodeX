@@ -806,6 +806,117 @@ exercises exactly the published shape.
 
 ---
 
+## 8. User-authored agents — markdown loader + extension `registerAgent` (FEATURE_191, v0.7.43)
+
+### Why this exists
+
+KodaX's Self-Construction substrate (FEATURE_087-090 / 101) lets the
+LLM author + admit constructed agents at runtime. FEATURE_191 closes
+the loop for **human authors** and **SDK embedders**: ship an `<name>.md`
+file under `~/.kodax/agents/` (user-level) or `<repo>/.kodax/agents/`
+(project-level), or have an extension call `api.registerAgent(name, content)`
+at activate time. All three paths feed the same admission pipeline as
+the LLM-generation route and surface in the Worker SP's
+`=== Available specialist agents ===` block.
+
+### Markdown shape
+
+```markdown
+---
+name: db-reviewer
+description: Reviews DB migrations for safety and best practices
+tools: [read, grep]
+model: claude-sonnet-4-6
+---
+You are a DB migration reviewer. Focus on:
+- Locking behavior under concurrent writes
+- Default value backfill cost on large tables
+```
+
+`name` and `description` are required; missing/invalid `name` is a
+silent skip (claudecode-compatible: treats the file as a reference doc).
+`tools` accepts either a YAML array (`[read, grep]`) or a
+comma-separated string (`"read, grep"`); each entry maps to
+`builtin:<name>`. `mcpServers` / `hooks` / `memory` / `isolation` /
+`permissionMode` / `maxTurns` / `skills` frontmatter fields are
+silently ignored in v0.7.43 (forward-compat with future features).
+
+Project agents (`<repo>/.kodax/agents/*.md`) shadow user-level agents
+of the same name (last-write-wins).
+
+### SDK API for extensions
+
+```ts
+// In an extension's activate function:
+export default async function activate(api: KodaXExtensionAPI) {
+  const dispose = await api.registerAgent('python-reviewer', {
+    instructions: 'You review Python code for PEP-8 + type hints.',
+    description: 'Python code reviewer (PEP-8 + type hints)',
+    tools: [{ ref: 'builtin:read' }, { ref: 'builtin:grep' }],
+  });
+
+  // The returned dispose is auto-pushed onto the extension's
+  // disposables list, so manual disposal is optional. Call it only
+  // if you need to unregister the agent mid-session.
+  return () => dispose();
+}
+```
+
+`api.registerAgent(name, content)` throws on admission rejection with
+the extension id + agent name + verdict reason — the embedder sees
+failures at activate time rather than silently dropped registrations.
+
+### Reading the agent registry (host code)
+
+```ts
+import {
+  listConstructedAgents,
+  listConstructedAgentsWithSource,
+  resolveConstructedAgent,
+  resolveConstructedAgentSource,
+} from '@kodax-ai/kodax';
+
+// All registered constructed agents (markdown + extension + LLM + CLI).
+const agents = listConstructedAgents();
+
+// With provenance metadata.
+const entries = listConstructedAgentsWithSource();
+// entry.source: 'built-in' | 'extension' | 'markdown:user' |
+//               'markdown:project' | 'constructed:cli' | 'constructed:llm'
+
+const agent = resolveConstructedAgent('db-reviewer');
+const source = resolveConstructedAgentSource('db-reviewer');
+```
+
+### Wiring dispatch
+
+Workers automatically see a registered agent through the SP block.
+Programmatic dispatch (e.g. in `runKodaX` SDK consumers) goes through
+the standard tool surface — pass `subagent_type` to
+`dispatch_child_task`:
+
+```ts
+// Inside a tool handler or eval driver:
+const result = await dispatchChildTask({
+  id: 'child-1',
+  objective: 'Review the migration in this PR',
+  readOnly: true,
+  subagent_type: 'db-reviewer',
+});
+```
+
+Unknown `subagent_type` returns a tool-result error listing available
+names (does NOT throw); write-capable specialists dispatched from a
+non-Worker/Generator role are rejected at the dispatch layer.
+
+### See also
+
+- [docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md](test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md) — manual test recipes
+- [docs/features/v0.7.43.md FEATURE_191](features/v0.7.43.md#feature_191-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge) — design + acceptance gates
+- [docs/ADR.md ADR-035](ADR.md#adr-035-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge-feature_191-v0743) — architectural rationale
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start
