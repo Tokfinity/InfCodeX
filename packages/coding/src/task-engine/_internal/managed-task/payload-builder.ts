@@ -210,8 +210,13 @@ export function buildManagedTaskPayload(args: {
     status: contractStatus,
   }));
 
+  // FEATURE_193 (v0.7.43): `'generator'` fallback replaced with `'worker'`
+  // — V1 Generator role retired (chain.generator agent deleted in commit
+  // `dcac55ea`). On V2 the only execution agent that produces a managedTask
+  // payload without a Sidecar Verifier verdictStatus is the Worker. H0_DIRECT
+  // remains for the SA-fast-path pseudo-role.
   const decidedByAssignmentId =
-    harness === 'H0_DIRECT' ? 'direct' : verdictStatus ? 'evaluator' : 'generator';
+    harness === 'H0_DIRECT' ? 'direct' : verdictStatus ? 'evaluator' : 'worker';
   // FEATURE_159 follow-up (v0.7.40): fallback to '' instead of `prompt`.
   // The legacy `?? prompt` fallback was a copy from SA fast-path days when
   // the Scout always provided a `userAnswer`, so `?? prompt` was a never-
@@ -294,23 +299,15 @@ export function buildManagedTaskPayload(args: {
     runtime: {
       globalWorkBudget: budget?.totalBudget ?? harnessToBudget(harness),
       budgetUsage: budget?.spentBudget ?? rolesEmitted.length,
-      // `harnessTransitions` in legacy semantics records harness-tier
-      // upgrades (e.g. H1 → H2 on revise+next_harness=H2), not individual
-      // role transitions. For the Runner path we synthesise one transition
-      // when Scout picks a non-H0 tier (the only case tests observe today).
-      harnessTransitions:
-        harness !== 'H0_DIRECT'
-          ? [
-              {
-                from: 'H0_DIRECT',
-                to: harness,
-                round: 1,
-                source: 'scout',
-                reason: 'Scout confirmed harness tier',
-                approved: true,
-              },
-            ]
-          : [],
+      // FEATURE_193 (v0.7.43): legacy V1 semantics — Scout would emit a
+      // `confirmedHarness` upgrading from H0_DIRECT to H1/H2 and the Runner
+      // synthesised a `harnessTransitions` record from that. With Scout
+      // retired (chain.scout deleted, `emit_scout_verdict` deleted), there
+      // is no transition source on V2; the Worker single-loop runs at the
+      // routing-decided tier from turn 0. Always emit an empty array. The
+      // field stays on `KodaXManagedTaskRuntimeState` for pre-1.0 SDK
+      // consumer compat (see `@deprecated` markers in `types.ts`).
+      harnessTransitions: [],
       // Shard 6d-O: fill runtime fields the legacy path populated so
       // downstream consumers (REPL harness UI, evaluator guardrails,
       // resume flow, session storage) see the same shape they did on

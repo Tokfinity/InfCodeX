@@ -826,6 +826,15 @@ function validateWriteBundles(
   // result` with no diagnostic signal. The async branch's empty-banner
   // fallback covers the success-empty case; the failed-empty diagnostic
   // envelope covers the post-fix residual paths.
+  // V2 path: `parentRole === 'worker'` + `parentHarness === 'tool-dispatch'`
+  // (set by `dispatch-child-tasks.ts:487-488` via `wrapDispatchChildTaskForRole`
+  // which now accepts only `'worker'`). The `'generator'` + `'H2_PLAN_EXECUTE_EVAL'`
+  // arms are V1-vestigial: production V1 chain is retired (FEATURE_193, commit
+  // `dcac55ea`), but `child-executor.test.ts` + `cap-095-child-exec.contract.test.ts`
+  // still exercise these branches as a stand-in dispatcher role for the
+  // gate's allow-list behavior (~13 cases across the two files). Removing
+  // the V1 arms requires migrating those tests; deferred per F193 cleanup
+  // policy "test infrastructure parity > minimal-LoC purity".
   if (parentRole !== 'generator' && parentRole !== 'worker') {
     return [];
   }

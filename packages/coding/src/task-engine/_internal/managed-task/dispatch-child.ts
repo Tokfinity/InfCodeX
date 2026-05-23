@@ -49,12 +49,16 @@ import type { ObserverBridge } from './types.js';
 export function wrapDispatchChildTaskForRole(
   definition: KodaXToolDefinition,
   baseCtx: KodaXToolExecutionContext,
-  // FEATURE_114 v0.7.36 — `'worker'` joins the dispatch-capable roles
-  // for the V2 single-loop path. Worker's dispatch behavior matches
-  // Generator's (read-only fan-out + write fan-out gated by harness),
-  // so the wrapper body is unchanged; only the role label flows
-  // through into `managedProtocolRole`.
-  role: 'scout' | 'generator' | 'worker',
+  // FEATURE_114 v0.7.36 — `'worker'` joined the dispatch-capable roles
+  // for the V2 single-loop path. FEATURE_193 (v0.7.43) retired the V1
+  // Scout and Generator chain agents (chain.scout / chain.generator
+  // deleted in commit `dcac55ea`), so the role union narrows to a
+  // single literal `'worker'` — the only caller is
+  // `agent-chain.ts:buildRunnerAgentChain` which builds `workerDispatch`.
+  // `managedProtocolRole` is set to this value on the per-call ctx;
+  // downstream gates (`validateWriteBundles` in `child-executor.ts`)
+  // accept this value as the V2 dispatcher identity.
+  role: 'worker',
   budget: ManagedTaskBudgetController | undefined,
   observer: ObserverBridge,
   events?: KodaXEvents,

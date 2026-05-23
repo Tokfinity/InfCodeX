@@ -446,13 +446,17 @@ export async function* toolDispatchChildTask(
       yield { stage: 'error', message: `Child "${childId}": specialist "${specialistName}" not registered` };
       return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" not registered. Available: ${availableStr}`;
     }
-    // FEATURE_191 A.2c — specialist write dispatch parentRole gate. Mirrors the
-    // existing scout/!readOnly guard above for the worker/generator allow-list
-    // that `validateWriteBundles` enforces in `child-executor.ts`. Reject here
-    // explicitly with a reason rather than letting the bundle silently drop
-    // inside `validateWriteBundles`.
-    if (!readOnly && role !== 'worker' && role !== 'generator') {
-      return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" is a write dispatch (readOnly=false) but current role "${role ?? 'unknown'}" cannot dispatch write children. Only Worker and Generator may dispatch write specialists.`;
+    // FEATURE_191 A.2c — specialist write dispatch parentRole gate. Mirrors
+    // the worker allow-list that `validateWriteBundles` enforces in
+    // `child-executor.ts`. Reject here explicitly with a reason rather than
+    // letting the bundle silently drop inside `validateWriteBundles`.
+    // FEATURE_193 (v0.7.43): pre-V2 surface accepted Worker OR Generator;
+    // Generator retired (chain.generator deleted) so only Worker remains as
+    // the V2 write dispatcher. `validateWriteBundles` keeps the
+    // `parentRole === 'generator'` branch as a defensive dead-branch for
+    // test-infrastructure parity (see `child-executor.ts:829` comment).
+    if (!readOnly && role !== 'worker') {
+      return `[Tool Error] ${TOOL_NAME}: specialist "${specialistName}" is a write dispatch (readOnly=false) but current role "${role ?? 'unknown'}" cannot dispatch write children. Only Worker may dispatch write specialists.`;
     }
   }
 
@@ -484,7 +488,13 @@ export async function* toolDispatchChildTask(
       reasoningMode: parentConfig?.reasoningMode,
       extensionRuntime: ctx.extensionRuntime,
     },
-    parentRole: role ?? 'scout',
+    // FEATURE_193 (v0.7.43): fallback `'scout'` (V1 role, retired) replaced
+    // with `'worker'`. In V2 `role` is set by `wrapDispatchChildTaskForRole`
+    // which only passes `'worker'` (see `dispatch-child.ts` role union), so
+    // the fallback is unreachable in production paths; the V2 default
+    // ensures any future caller hitting the fallback gets a current-day
+    // role label instead of a retired one.
+    parentRole: role ?? 'worker',
     parentHarness: 'tool-dispatch',
     // Progress from child executor (e.g. "[1/3] Running: ...") flows through
     // reportToolProgress → onToolProgress → REPL transcript/spinner.
