@@ -114,9 +114,22 @@ export interface IdleYieldSnapshot {
   /**
    * True if the run's managed-protocol payload has been populated
    * with a handoff (typically `emit_handoff` for the worker→evaluator
-   * boundary). False = the run ended without a handoff. Idle-yield
-   * REQUIRES this to be false; otherwise the handoff target already
-   * owns the next step.
+   * boundary in legacy V1 / V2 chains). False = the run ended without
+   * a handoff. Idle-yield REQUIRES this to be false; otherwise the
+   * handoff target already owns the next step.
+   *
+   * **FEATURE_184 (v0.7.45) + FEATURE_190 (v0.7.43)**: the Evaluator
+   * role was retired and Worker/Generator are now terminal. Under the
+   * Sidecar Verifier architecture, the CANONICAL post-F184 terminal
+   * signal is text-only termination — Worker produces a final text
+   * message with no `tool_use` block, Runner.run exits via the no-
+   * tool-calls branch, and this snapshot reads `hasEmittedHandoff:
+   * false` + `lastAssistantToolCallCount: 0`. `detectIdleYield`
+   * correctly returns false in that state (no pending child, no
+   * pending banner) → the outer loop breaks. So text-only termination
+   * is a first-class exit path; `hasEmittedHandoff` retained only for
+   * the pre-FEATURE_190 Phase 3 legacy `emit_handoff` tool that
+   * remains in scope through the cleanup window.
    */
   readonly hasEmittedHandoff: boolean;
   /**

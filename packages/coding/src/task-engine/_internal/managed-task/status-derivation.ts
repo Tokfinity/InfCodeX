@@ -49,10 +49,22 @@ export function extractUserFacingRaw(result: { messages: readonly KodaXMessage[]
 /**
  * Derive the final signal + managedTask.verdict.status from the recorder.
  * Priority:
- *   1. Evaluator verdict if present (accept / revise / blocked)
- *   2. Scout H0 direct completion (maps to completed)
- *   3. Fallback: undefined (treated as converged by round-boundary for the
- *      SA fast-path pattern)
+ *   1. Sidecar Verifier verdict if present (accept / revise / blocked) —
+ *      F184 v0.7.45 retired the in-chain Evaluator; this slot is now
+ *      populated exclusively by the Stop-hook Sidecar Verifier
+ *      (`agent-runtime/middleware/sidecar-verifier/`)
+ *   2. Legacy Generator `emit_handoff(status:'blocked')` — surfaces a
+ *      Generator-level blocker when no Sidecar Verifier verdict has
+ *      been emitted. **FEATURE_190 (v0.7.43) Phase 3** will remove
+ *      `emit_handoff` from Worker/Generator tool surfaces; this
+ *      fallback then becomes dead. Until Phase 3 ships, the branch
+ *      stays for pre-rollout compatibility.
+ *   3. Fallback: `{signal: 'COMPLETE'}` — the canonical text-only
+ *      termination outcome. Worker produces a final text message,
+ *      Runner.run exits via the no-tool-calls branch, neither slot
+ *      is populated, and this function returns COMPLETE. This is the
+ *      DEFAULT happy-path post-F184; no recorder mutation is required
+ *      for a successful Worker termination.
  */
 export function deriveFinalStatus(recorder: VerdictRecorder): {
   signal: KodaXResult['signal'];
