@@ -705,6 +705,17 @@ export interface KodaXChildContextBundle {
    * lands separately.
    */
   modelHint?: KodaXChildModelHint;
+  /**
+   * FEATURE_191 — optional registered specialist agent name. When set,
+   * the child is dispatched with that agent's `instructions` /
+   * `tools` / `reasoning` / `guardrails` instead of the stock Worker
+   * bundle. Resolved via `resolveConstructedAgent(name)` at dispatch
+   * time; unknown names are rejected by `toolDispatchChildTask` with
+   * a tool-result error (not throw) before the bundle reaches
+   * `executeReadChild` / `executeWriteChild`. Optional — omitting
+   * preserves byte-identical v0.7.42 baseline dispatch behavior.
+   */
+  specialistName?: string;
 }
 
 /**

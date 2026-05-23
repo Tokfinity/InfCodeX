@@ -160,6 +160,17 @@ export interface AgentContent {
   readonly model?: string;
   readonly provider?: string;
   /**
+   * FEATURE_191 — one-sentence human-readable summary surfaced in the
+   * Worker system prompt's `=== Available specialist agents ===`
+   * block (FEATURE_191 A.3) and in `/agents list` UIs. Frontmatter
+   * `description` field of `~/.kodax/agents/<name>.md` and the
+   * `name`-paired argument of `KodaXExtensionAPI.registerAgent`
+   * funnel into this field. Optional for backward compatibility with
+   * FEATURE_089 minimal-agent shape (`{ instructions: '...' }`);
+   * the SP block renders `(no description)` when absent.
+   */
+  readonly description?: string;
+  /**
    * Optional structured-output schema mirroring `Agent.outputSchema`.
    * Pure pass-through to the runtime — admission does not validate
    * shape semantics here, only well-formed JSON.

@@ -38,6 +38,57 @@ describe('tool registry', () => {
     expect(desc).toMatch(/phases|split/i);
   });
 
+  it('FEATURE_191 A.1: dispatch_child_task schema exposes optional subagent_type field', () => {
+    // User-Authored Custom Agents — Worker selects a registered specialist
+    // by name to route the child through that agent's instructions/tools.
+    // Optional so existing dispatch sites (no subagent_type) remain
+    // byte-identical with v0.7.42 baseline.
+    const def = getToolDefinition('dispatch_child_task');
+    const props = (def?.input_schema as {
+      properties?: Record<string, { type?: string; description?: string }>;
+      required?: readonly string[];
+    } | undefined)?.properties;
+    const required = (def?.input_schema as { required?: readonly string[] } | undefined)?.required ?? [];
+
+    expect(props).toBeDefined();
+    expect(props?.subagent_type).toBeDefined();
+    expect(props?.subagent_type?.type).toBe('string');
+    expect(required).not.toContain('subagent_type');
+    // Qualitative description per ADR-033 §1 — no enumerated agent names,
+    // no ✗ anti-pattern, no FEATURE_xxx version tag in LLM-facing surface.
+    expect(props?.subagent_type?.description).toBeTruthy();
+    expect(props?.subagent_type?.description).not.toMatch(/✗|FEATURE_\d/);
+  });
+
+  it('FEATURE_191 A.0: KodaXChildContextBundle declares optional specialistName field', () => {
+    // Type-level guard — the bundle must carry specialistName from
+    // toolDispatchChildTask through executeChildAgents to
+    // executeReadChild/executeWriteChild. Compile-time check via
+    // structural assignment in TypeScript; runtime smoke verifies the
+    // field accepts a string.
+    const bundle: import('../types.js').KodaXChildContextBundle = {
+      id: 'test',
+      fanoutClass: 'read' as import('../types.js').KodaXAmaFanoutClass,
+      objective: 'noop',
+      evidenceRefs: [],
+      constraints: [],
+      readOnly: true,
+      specialistName: 'db-reviewer',
+    };
+    expect(bundle.specialistName).toBe('db-reviewer');
+  });
+
+  it('FEATURE_191 A.0b: AgentContent declares optional description field', () => {
+    // Compile-time check via structural assignment; runtime asserts the
+    // object accepts the field. Aligns with FEATURE_089 minimal-agent
+    // pattern (only `instructions` required).
+    const content: import('../construction/types.js').AgentContent = {
+      instructions: 'noop',
+      description: 'Reviews DB migrations for safety',
+    };
+    expect(content.description).toBe('Reviews DB migrations for safety');
+  });
+
   it('derives required params from the active tool schema', () => {
     expect(getRequiredToolParams('read')).toEqual(['path']);
     expect(getRequiredToolParams('ask_user_question')).toEqual(['question']);

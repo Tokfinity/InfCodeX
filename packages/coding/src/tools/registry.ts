@@ -516,6 +516,10 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           enum: ['fast', 'balanced', 'deep'],
           description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short lookups (read 1-2 files, simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); a future routing feature will activate the hint. Mark "fast" only for trivial single-file lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
         },
+        subagent_type: {
+          type: 'string',
+          description: 'When the task matches a registered specialist (e.g., db-reviewer for SQL changes, e2e-runner for browser tests), dispatch as that specialist instead of a generic child.',
+        },
       },
       required: ['objective'],
     },
