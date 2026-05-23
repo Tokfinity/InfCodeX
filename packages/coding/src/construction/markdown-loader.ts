@@ -153,7 +153,7 @@ async function loadOneAgentFile(
     return { ok: false, reason: `read failed: ${errMsg(err)}` };
   }
 
-  const [frontmatter] = parseYamlFrontmatter(raw);
+  const [frontmatter, body] = parseYamlFrontmatter(raw);
   // Files without frontmatter are reference docs (claudecode parity).
   if (!frontmatter) return { ok: false, reason: null };
 
@@ -174,7 +174,6 @@ async function loadOneAgentFile(
   }
   const description = descriptionField.trim();
 
-  const [, body] = parseYamlFrontmatter(raw);
   const instructions = body.trim();
   if (instructions.length === 0) {
     return { ok: false, reason: 'markdown body (instructions) is empty' };

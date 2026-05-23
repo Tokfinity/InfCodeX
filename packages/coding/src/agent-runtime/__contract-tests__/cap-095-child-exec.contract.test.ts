@@ -46,7 +46,11 @@ vi.mock('../../agent.js', () => ({
 // previous `vi.mock('../../tools/worktree.js')` block (child-executor no
 // longer imports those helpers, so mocking the module surface is moot).
 
-import { executeChildAgents, CHILD_EXCLUDE_TOOLS_BASE } from '../../child-executor.js';
+import {
+  CHILD_AGENT_SYSTEM_PROMPT,
+  CHILD_EXCLUDE_TOOLS_BASE,
+  executeChildAgents,
+} from '../../child-executor.js';
 import { runKodaX } from '../../agent.js';
 import {
   _resetAgentResolverForTesting,
@@ -112,19 +116,15 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
     const [opts] = mockRunKodaX.mock.calls[0]!;
     expect(opts.agentMode).toBe('sa');
-    // System prompt is replaced wholesale (not appended) for child agents
-    expect(typeof opts.context?.systemPromptOverride).toBe('string');
-    expect(opts.context?.systemPromptOverride).toContain('focused sub-agent');
-    // FEATURE_191 default-path guard: assertion above probes the
-    // "no specialist registered" branch. If a future change accidentally
-    // routes the bundle through the specialist branch the assertion
-    // above would mismatch (specialist prompts replace `focused sub-agent`
-    // wholesale). Asserting bundle.specialistName === undefined here
-    // makes the branch selection explicit at the test boundary.
-    expect(
-      (opts as { context?: { systemPromptOverride?: string } }).context
-        ?.systemPromptOverride,
-    ).not.toMatch(/SPECIALIST/i);
+    // FEATURE_191 default-path guard: identity check against the canonical
+    // CHILD_AGENT_SYSTEM_PROMPT. Pre-F191 read-only children use this
+    // prompt verbatim; if a specialist branch ever leaks into this no-
+    // specialist bundle path the override would be the specialist's own
+    // instructions string (not this constant), and the assertion fails.
+    // Identity check (vs. word-match like `not.toMatch(/SPECIALIST/i)`)
+    // is robust against future SP additions that happen to include the
+    // word "specialist" (e.g. FEATURE_125 Team Mode).
+    expect(opts.context?.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
     // Read-only children must not see write/edit/multi_edit/insert_after_anchor/undo
     const excluded = opts.context?.excludeTools as readonly string[];
     expect(excluded).toEqual(

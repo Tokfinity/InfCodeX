@@ -8546,6 +8546,16 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
         : '';
       console.log(chalk.dim(`[Constructed] Rehydrated ${construction.loaded} active tool(s)${failedSuffix}${tamperedSuffix}.`));
     }
+    // FEATURE_191 — surface markdown-defined agent count + per-file failures
+    // so users with malformed `~/.kodax/agents/*.md` or `<repo>/.kodax/agents/*.md`
+    // get actionable feedback at boot (otherwise admission rejection / missing
+    // description is silently dropped).
+    if (construction.markdownLoaded > 0 || construction.markdownFailures.length > 0) {
+      console.log(chalk.dim(`[Agents] Loaded ${construction.markdownLoaded} markdown agent(s).`));
+      for (const failure of construction.markdownFailures) {
+        console.warn(chalk.yellow(`[Agents] Skipped ${failure.path}: ${failure.reason}`));
+      }
+    }
   } catch (err) {
     // Bootstrap failure must not break the REPL; log and proceed without
     // construction support for this session.
