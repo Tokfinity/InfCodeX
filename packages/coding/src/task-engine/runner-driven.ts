@@ -1245,34 +1245,12 @@ async function runManagedTaskViaRunnerInner(
       decision: () => planRef.current?.decision ?? plan.decision,
       metadata: options.context?.taskMetadata,
       repoIntelligenceContext: prebuiltRepoIntelligenceContext,
-      // P1 parity — per-role tool policy computed lazily so Generator
-      // can see Scout's mutation intent after emit. Legacy routed this
-      // through `buildManagedWorkerToolPolicy` per role; the Runner-driven
-      // path needs the same branching to keep the "## Tool Policy"
-      // section in each worker's system prompt (allow-lists, shell
-      // patterns, docs-only write boundary).
-      //
-      // M4 parity extension — also read the current plan via `planRef`
-      // so the Generator's H1 review-only / docs-scoped branch triggers
-      // off Scout's post-decision harness + primaryTask, not the stale
-      // pre-Scout snapshot.
-      toolPolicyFactory: (role, currentRecorder) => {
-        const currentDecision = planRef.current?.decision ?? plan.decision;
-        return buildManagedWorkerToolPolicy(
-          role,
-          options.context?.taskVerification,
-          currentDecision.harnessProfile,
-          inferScoutMutationIntent(
-            {
-              scope: currentRecorder.scout?.payload.scout?.scope,
-              reviewFilesOrAreas: currentRecorder.scout?.payload.scout?.reviewFilesOrAreas,
-            },
-            currentDecision.primaryTask,
-            currentRecorder.scout?.payload.scout?.confirmedHarness,
-          ),
-          options.context?.repoIntelligenceMode,
-        );
-      },
+      // FEATURE_193 (v0.7.43): V1 Scout-driven mutation-intent + harness
+      // branching retired. `buildManagedWorkerToolPolicy` now takes only
+      // `role` and returns undefined for V2 Worker (prompt-enforced
+      // discipline). The factory closure stays to preserve the
+      // `(role, recorder) => policy` interface the agent runtime expects.
+      toolPolicyFactory: (role) => buildManagedWorkerToolPolicy(role),
       contextFactory: rolePromptContextFactory,
     }
     : undefined;

@@ -82,39 +82,22 @@ export function createRolePrompt(
   // Issue 119: For post-Scout roles (generator/planner/evaluator), `decision.mutationSurface`
   // is a stale pre-Scout regex heuristic. Show it only to Scout — downstream workers get
   // scope cues from Scout's own scope/reviewFilesOrAreas via the handoff.
-  // FEATURE_112 (v0.7.34): Topology ceiling is rendered with a brief semantic gloss
-  // **only for Scout** — the bare value (H1_EXECUTE_EVAL / H2_PLAN_EXECUTE_EVAL)
-  // had no instruction telling Scout what the ceiling means or what action it
-  // implies, so the ceiling lift from Slice 1 had no inference path into Scout's
-  // H0/H1/H2 choice. Generator/Planner/Evaluator do NOT see the gloss because
-  // (a) Evaluator IS the auditor — telling it "Evaluator can audit your
-  // conclusion" is self-referential nonsense; (b) Planner/Generator do not
-  // call emit_scout_verdict so "if you escalate" is meaningless; (c) the bare
-  // ceiling value is the upper bound the post-Scout roles already operate
-  // within and needs no further explanation at runtime.
+  // FEATURE_112 (v0.7.34): Topology ceiling rendered as a bare value
+  // (H0_DIRECT / H1_EXECUTE_EVAL / H2_PLAN_EXECUTE_EVAL / PLANNED) for
+  // every role. FEATURE_193 (v0.7.43) removed the Scout-only semantic
+  // gloss + the Scout-only mutation-surface row + the Scout-only
+  // topology-ceiling-without-harness branch: V2 Worker is the only
+  // active createRolePrompt role, so the scout/non-scout split was
+  // permanently taking the non-scout branch.
   const ceilingValue = decision.topologyCeiling ?? decision.upgradeCeiling ?? 'none';
-  const scoutCeilingGloss = role === 'scout'
-    ? ceilingValue === 'H2_PLAN_EXECUTE_EVAL'
-      ? ' — Planner+Generator+Evaluator pipeline available if you escalate to H2'
-      : ceilingValue === 'H1_EXECUTE_EVAL'
-        ? ' — Evaluator can audit your conclusion if you escalate to H1'
-        : ''
-    : '';
   const decisionSummary = [
     `Primary task: ${decision.primaryTask}`,
-    ...(role === 'scout' ? [`Mutation surface (heuristic): ${decision.mutationSurface ?? 'unknown'}`] : []),
     `Assurance intent: ${decision.assuranceIntent ?? 'default'}`,
     `Work intent: ${decision.workIntent}`,
     `Complexity hint: ${decision.complexity}`,
     `Risk: ${decision.riskLevel}`,
-    // FEATURE_061: Don't show pre-decided harness to Scout. Scout is the routing
-    // authority and decides the harness based on its own evidence analysis.
-    ...(role === 'scout'
-      ? [`Topology ceiling: ${ceilingValue}${scoutCeilingGloss}`]
-      : [
-        `Harness: ${decision.harnessProfile}`,
-        `Topology ceiling: ${ceilingValue}`,
-      ]),
+    `Harness: ${decision.harnessProfile}`,
+    `Topology ceiling: ${ceilingValue}`,
     `Brainstorm required: ${decision.requiresBrainstorm ? 'yes' : 'no'}`,
   ].join('\n');
 

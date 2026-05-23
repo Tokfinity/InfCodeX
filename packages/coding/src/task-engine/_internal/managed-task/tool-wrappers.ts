@@ -11,13 +11,14 @@
  *     `RunnableTool` adapter (per-call progress, budget metering,
  *     mutation tracker, error envelope)
  *   - `wrapReadOnlyBash` — verification-only bash guard (Evaluator)
- *   - `resolveGeneratorMutationIntent` + the two Generator-side
- *     write/bash mutation guards
+ *   - the two Generator-side write/bash mutation-guard wrappers (now
+ *     thin pass-throughs after FEATURE_193 retired the V1 Scout role
+ *     that fed mutation intent; wrap signatures preserved for the
+ *     `agent-chain.ts` Map-override call sites)
  *
  * Extracted from `task-engine/runner-driven.ts` lines ~1361–1621 of
  * the pre-FEATURE_171 monolith as part of FEATURE_171 (v0.7.41)
- * modular split. Zero behavior change — bodies are byte-identical to
- * the previous in-file declarations.
+ * modular split.
  */
 
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
@@ -29,13 +30,8 @@ import type {
 import { incrementManagedBudgetUsage } from './budget.js';
 import type { ManagedTaskBudgetController } from './budget.js';
 import {
-  DOCS_ONLY_WRITE_PATH_PATTERNS,
-  enforceShellWriteBoundary,
-  enforceWritePathBoundary,
-  inferScoutMutationIntent,
   matchesShellPattern,
   SHELL_WRITE_PATTERNS,
-  type ScoutMutationIntent,
 } from './tool-policy.js';
 import type {
   KodaXEvents,
@@ -232,81 +228,33 @@ export function wrapReadOnlyBash(bashTool: RunnableTool, roleTitle: string): Run
  *     FEATURE_LIST / etc.); destructive shell commands blocked.
  *   - `'open'` (default) → tools pass through unchanged.
  *
- * Shard 6d-M replaces the earlier "Scout self-declares `mutation_intent`"
- * pattern with `inferScoutMutationIntent` — we classify intent from
- * Scout's emitted `scope` + `reviewFilesOrAreas` + the routing
- * `primaryTask` (Issue 119 inference). Scout's LLM payload is no longer
- * consulted for this boundary; its scope list is the evidence.
- *
- * The wrappers close over the shared `VerdictRecorder` + plan ref and
- * read intent lazily at invocation time — `buildRunnerAgentChain`
- * constructs Generator before Scout has run, so the intent is not yet
- * available when the Agent graph is frozen. `planRef.current` holds the
- * reasoning plan (if any) so the guard can read `primaryTask`.
+ * FEATURE_193 (v0.7.43): V1 Scout role retired — `recorder.scout` is never
+ * populated on the V2 path, so `resolveGeneratorMutationIntent` permanently
+ * returned `'open'`. The helper + its `inferScoutMutationIntent` call were
+ * removed; the wrap functions now short-circuit on a constant `intent`. The
+ * wrap function signatures keep `recorder` / `planRef` parameters so the
+ * call sites in `agent-chain.ts` remain stable (the V2 Worker still threads
+ * both refs for the worker `instructions` closure to consume).
  */
-function resolveGeneratorMutationIntent(
-  recorder: VerdictRecorder,
-  planRef: { current: ReasoningPlan | undefined },
-): ScoutMutationIntent {
-  const scoutPayload = recorder.scout?.payload.scout;
-  if (!scoutPayload) return 'open';
-  return inferScoutMutationIntent(
-    { scope: scoutPayload.scope, reviewFilesOrAreas: scoutPayload.reviewFilesOrAreas },
-    planRef.current?.decision.primaryTask,
-    scoutPayload.confirmedHarness,
-  );
-}
 
 export function wrapGeneratorWriteWithMutationGuard(
   writeOrEdit: RunnableTool,
-  recorder: VerdictRecorder,
-  planRef: { current: ReasoningPlan | undefined },
+  _recorder: VerdictRecorder,
+  _planRef: { current: ReasoningPlan | undefined },
 ): RunnableTool {
   return {
     ...writeOrEdit,
-    execute: async (input, ctx): Promise<RunnerToolResult> => {
-      const intent = resolveGeneratorMutationIntent(recorder, planRef);
-      if (intent === 'review-only') {
-        return {
-          content:
-            `[Managed Task Generator] Tool "${writeOrEdit.name}" blocked — `
-            + 'Scout-scoped review task: Generator must not write.',
-          isError: true,
-        };
-      }
-      if (intent === 'docs-scoped') {
-        const blocked = enforceWritePathBoundary(
-          writeOrEdit.name,
-          input,
-          DOCS_ONLY_WRITE_PATH_PATTERNS,
-          'Generator',
-        );
-        if (blocked) {
-          return { content: blocked, isError: true };
-        }
-      }
-      return writeOrEdit.execute(input, ctx);
-    },
+    execute: async (input, ctx): Promise<RunnerToolResult> => writeOrEdit.execute(input, ctx),
   };
 }
 
 export function wrapGeneratorBashWithMutationGuard(
   bashTool: RunnableTool,
-  recorder: VerdictRecorder,
-  planRef: { current: ReasoningPlan | undefined },
+  _recorder: VerdictRecorder,
+  _planRef: { current: ReasoningPlan | undefined },
 ): RunnableTool {
   return {
     ...bashTool,
-    execute: async (input, ctx): Promise<RunnerToolResult> => {
-      const intent = resolveGeneratorMutationIntent(recorder, planRef);
-      if (intent === 'docs-scoped' || intent === 'review-only') {
-        const command = typeof input.command === 'string' ? input.command : '';
-        const blocked = enforceShellWriteBoundary(command, 'Generator');
-        if (blocked) {
-          return { content: blocked, isError: true };
-        }
-      }
-      return bashTool.execute(input, ctx);
-    },
+    execute: async (input, ctx): Promise<RunnerToolResult> => bashTool.execute(input, ctx),
   };
 }

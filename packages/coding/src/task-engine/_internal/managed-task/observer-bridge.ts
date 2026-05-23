@@ -140,16 +140,12 @@ function buildEvidenceEntryForRoleEmit(args: {
   let summary: string | undefined;
   let signal: KodaXTaskEvidenceEntry['signal'];
   let signalReason: string | undefined;
-  if (role === 'scout') {
-    summary = recorder.scout?.payload.scout?.summary;
-  } else if (role === 'planner') {
-    summary = recorder.contract?.payload.contract?.summary;
-  } else if (role === 'generator') {
-    const handoff = recorder.handoff?.payload.handoff;
-    summary = handoff?.summary;
-    if (handoff?.status === 'blocked') status = 'blocked';
-    else if (handoff?.status === 'incomplete') status = 'running';
-  } else if (role === 'evaluator') {
+  // FEATURE_193 (v0.7.43): scout / planner / generator role branches removed —
+  // V1 chain retired, those roles never reach onRoleEmit on the V2 path.
+  // The 'direct' branch is retained for the H0_DIRECT execution path which
+  // still publishes a direct-completion summary even though V1 Scout no
+  // longer drives it.
+  if (role === 'evaluator') {
     const verdict = recorder.verdict?.payload.verdict;
     summary = verdict?.reason;
     if (verdict?.status === 'blocked') {
@@ -163,7 +159,10 @@ function buildEvidenceEntryForRoleEmit(args: {
       signalReason = verdict.reason;
     }
   } else if (role === 'direct') {
-    // H0_DIRECT: Scout answered directly — treat as a completed direct turn.
+    // H0_DIRECT direct-completion summary. The `recorder.scout` field
+    // remains in the VerdictRecorder shape for SDK compat; on the V2 path
+    // it is never populated, so this branch reduces to an undefined
+    // summary + COMPLETE signal on the rare H0_DIRECT trace.
     summary = recorder.scout?.payload.scout?.summary;
     signal = 'COMPLETE';
   }
@@ -362,14 +361,10 @@ export function buildObserverBridge(
       }
       rolesRef.emitted.push(role);
       roundRef.current += 1;
-      const detail =
-        role === 'scout'
-          ? recorder.scout?.payload.scout?.summary
-          : role === 'planner'
-            ? recorder.contract?.payload.contract?.summary
-            : role === 'generator'
-              ? recorder.handoff?.payload.handoff?.summary
-              : recorder.verdict?.payload.verdict?.reason;
+      // FEATURE_193 (v0.7.43): scout / planner / generator role branches
+      // removed — onRoleEmit only fires with 'evaluator' (Sidecar Verifier
+      // bridge) or 'worker' (Worker text-only termination) on V2.
+      const detail = recorder.verdict?.payload.verdict?.reason;
       // Shard 6d-R: accumulate `evidence.entries[]` per-turn. Mirrors legacy
       // `task-engine.ts` behaviour where each role completion appended a
       // `KodaXTaskEvidenceEntry` to the managed task's evidence bundle so

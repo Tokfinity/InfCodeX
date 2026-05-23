@@ -28,18 +28,12 @@
 
 import { isDocsLikePath, escapeRegexLiteral } from '../text-utils.js';
 import type {
-  KodaXRepoIntelligenceMode,
   KodaXTaskRole,
   KodaXTaskRoutingDecision,
   KodaXTaskToolPolicy,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
-import { MANAGED_PROTOCOL_TOOL_NAME } from '../../../managed-protocol.js';
-import {
-  filterRepoIntelligenceWorkingToolNames,
-  MCP_TOOL_NAMES,
-} from '../../../tools/index.js';
-import { resolveKodaXAutoRepoMode } from '../../../repo-intelligence/runtime.js';
+import { MCP_TOOL_NAMES } from '../../../tools/index.js';
 
 /**
  * Scope hints the Scout emits on `emit_scout_verdict` — `scope` + the
@@ -288,64 +282,25 @@ export function buildRuntimeVerificationShellPatterns(
 }
 
 /**
- * Produce the per-role `KodaXTaskToolPolicy` for a managed worker,
- * or `undefined` when the role should run with the default unrestricted
- * policy (currently Scout, and the open-scope H1/H2 Generator).
+ * Per-role `KodaXTaskToolPolicy` for a managed worker, or `undefined`
+ * for the unrestricted-surface case.
  *
- * 1:1 port from legacy `_internal/prompts/tool-policy.ts::buildManagedWorkerToolPolicy`.
- *
- * Behavior:
- *   - In `repo-intelligence: 'off'`, any allow-list is filtered to drop
- *     repo-intel working tools and the policy summary gets an explanatory
- *     sentence appended.
- *   - `MANAGED_PROTOCOL_TOOL_NAME` is always added back to any non-empty
- *     allow-list so the control-plane escape hatch can never be blocked.
- *   - H1 Generator branches off Scout's scope intent (review-only /
- *     docs-scoped) to add write-path or blocked-tool constraints; H2
- *     Generator stays open and relies on the Evaluator tail-gate.
+ * FEATURE_193 (v0.7.43): V1 scout / planner / generator switch cases
+ * were retired with the V1 chain. The V2 Worker runs with an unrestricted
+ * tool surface — discipline is enforced by `worker-role-prompt.ts` (plan-
+ * first, mutation discipline, dispatch RULE A/B/C, scope commitment),
+ * not by the tool-policy layer. The previous `verification` /
+ * `harnessProfile` / `scoutMutationIntent` / `repoIntelligenceMode`
+ * parameters + `finalizeToolPolicy` repo-intelligence-off filter became
+ * unreachable when every switch arm returned `undefined`; they were
+ * removed here. The function is kept (rather than inlined to `undefined`
+ * at the call site) so a future role-specific tool policy can reattach
+ * without touching the runner-driven dispatch closure.
  */
 export function buildManagedWorkerToolPolicy(
   role: KodaXTaskRole,
-  verification: KodaXTaskVerificationContract | undefined,
-  harnessProfile?: KodaXTaskRoutingDecision['harnessProfile'],
-  scoutMutationIntent?: ScoutMutationIntent,
-  repoIntelligenceMode?: KodaXRepoIntelligenceMode,
 ): KodaXTaskToolPolicy | undefined {
-  const strictRepoIntelligenceOff = resolveKodaXAutoRepoMode(repoIntelligenceMode) === 'off';
-  const finalizeToolPolicy = (
-    policy: KodaXTaskToolPolicy | undefined,
-  ): KodaXTaskToolPolicy | undefined => {
-    if (!policy) return policy;
-    const allowedTools = policy.allowedTools?.length
-      ? Array.from(new Set([
-          ...(strictRepoIntelligenceOff
-            ? filterRepoIntelligenceWorkingToolNames(policy.allowedTools)
-            : policy.allowedTools),
-          MANAGED_PROTOCOL_TOOL_NAME,
-        ]))
-      : policy.allowedTools;
-    return {
-      ...policy,
-      allowedTools,
-      summary:
-        strictRepoIntelligenceOff && policy.allowedTools
-          ? [
-              policy.summary,
-              'Repo-intelligence working tools are disabled in off mode; rely on general-purpose read/glob/grep evidence instead.',
-            ].join(' ')
-          : policy.summary,
-    };
-  };
-
-  // FEATURE_193 (v0.7.43): case 'scout', case 'planner', case 'generator'
-  // deleted — V1 chain roles retired. Worker runs with unrestricted tool
-  // surface (prompt-enforced discipline); evaluator was already deleted by
-  // FEATURE_184. All roles fall through to the default undefined return.
   switch (role) {
-    // FEATURE_114 v0.7.36 — Worker is the AMA Harness V2 single-loop
-    // primary role. Discipline (plan-first, mutation discipline,
-    // dispatch RULE A/B/C, scope commitment) is enforced by the prompt
-    // (`worker-role-prompt.ts`), not the tool-policy layer.
     case 'worker':
       return undefined;
     default:
