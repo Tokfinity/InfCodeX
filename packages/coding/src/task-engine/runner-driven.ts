@@ -48,7 +48,6 @@ import type {
   KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXResult,
-  KodaXRoleRoundSummary,
   KodaXTaskEvidenceArtifact,
   KodaXTaskEvidenceEntry,
   KodaXTaskRole,
@@ -76,10 +75,10 @@ import {
   writeManagedTaskSnapshotArtifacts,
 } from './_internal/managed-task/artifacts.js';
 import { attachManagedTaskRepoIntelligence } from './_internal/managed-task/repo-intelligence.js';
-import {
-  buildManagedWorkerToolPolicy,
-  inferScoutMutationIntent,
-} from './_internal/managed-task/tool-policy.js';
+// FEATURE_193 (v0.7.43): `inferScoutMutationIntent` import removed —
+// last consumer (Shard 6d-k Scout suspicious-completion block) deleted
+// alongside the V1 `recorder.scout` slot.
+import { buildManagedWorkerToolPolicy } from './_internal/managed-task/tool-policy.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
 import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
@@ -91,10 +90,10 @@ import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifi
 import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
-import {
-  SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT,
-  detectScoutSuspiciousSignals,
-} from './_internal/managed-task/scout-signals.js';
+// FEATURE_193 (v0.7.43): `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` +
+// `detectScoutSuspiciousSignals` imports removed — last consumer
+// (H0_DIRECT scout suspicious-completion gate at the end of runManaged-
+// TaskViaRunnerInner) deleted alongside the V1 Scout role.
 import type { ManagedRolePromptContext } from './_internal/managed-task/role-prompt-types.js';
 import {
   sanitizeEvaluatorPublicAnswer,
@@ -194,7 +193,10 @@ import {
   buildManagedProtocolPayload,
 } from './_internal/managed-task/status-derivation.js';
 import {
-  applyScoutDecisionToPlanRunner,
+  // FEATURE_193 (v0.7.43): `applyScoutDecisionToPlanRunner` import
+  // removed — last consumer (H1 structural-resume overlay block at the
+  // top of runManagedTaskViaRunnerInner) deleted alongside the V1
+  // Scout role.
   buildObserverBridge,
   buildRunnerRoutingNote,
   BUDGET_CAP_BY_HARNESS,
@@ -770,12 +772,12 @@ async function runManagedTaskViaRunnerInner(
   };
 
   const recorder: VerdictRecorder = {};
-  if (structuralResumeSeed?.recorderSlots.scout) {
-    recorder.scout = structuralResumeSeed.recorderSlots.scout;
-  }
-  if (structuralResumeSeed?.recorderSlots.contract) {
-    recorder.contract = structuralResumeSeed.recorderSlots.contract;
-  }
+  // FEATURE_193 (v0.7.43): V1 `recorder.scout` / `recorder.contract`
+  // resume-seed restoration removed — slots deleted in v0.7.43 along
+  // with the emit tools. Pre-F193 checkpoints carrying these slots
+  // resume to an empty recorder (Worker re-runs from the chain head;
+  // never observed in production since F193 ships in the same
+  // version that drops the emit tools).
   const harnessRef = { current: initialHarness };
   const rolesRef: { emitted: KodaXTaskRole[] } = {
     emitted: structuralResumeSeed ? [...structuralResumeSeed.rolesEmitted] : [],
@@ -826,34 +828,12 @@ async function runManagedTaskViaRunnerInner(
     }
   };
   const checkpointWriter = (role: KodaXTaskRole): void => {
-    // v0.7.26 C4 parity — when Scout emits with a freshly derived
-    // skillMap, re-persist the skill artefacts so downstream roles and
-    // resume consumers can reach the structured map on disk. Best-effort;
-    // the artefact paths in the role prompt stay valid even when the
-    // re-write fails (the raw skill was written pre-run).
-    if (role === 'scout' && skillInvocationCtx) {
-      const scoutSkillMap = recorder.scout?.payload.scout?.skillMap;
-      // Reconstruct the full KodaXSkillMap shape from Scout's emit payload
-      // (which only carries a subset of fields). Missing fields fall back
-      // to safe defaults so `writeManagedSkillArtifacts` + downstream
-      // consumers render correctly.
-      const fullSkillMap = scoutSkillMap
-        ? {
-            skillSummary: scoutSkillMap.skillSummary ?? '',
-            executionObligations: scoutSkillMap.executionObligations ?? [],
-            verificationObligations: scoutSkillMap.verificationObligations ?? [],
-            requiredEvidence: [],
-            ambiguities: scoutSkillMap.ambiguities ?? [],
-            projectionConfidence: scoutSkillMap.projectionConfidence ?? 'medium',
-            rawSkillFallbackAllowed: true,
-          }
-        : undefined;
-      void writeManagedSkillArtifacts(workspaceDir, skillInvocationCtx, fullSkillMap)
-        .then((records) => {
-          skillArtifactsRef.current = records;
-        })
-        .catch(() => undefined);
-    }
+    // FEATURE_193 (v0.7.43): legacy Scout-driven skillMap re-persist
+    // block removed — Scout role retired, `recorder.scout` deleted.
+    // V2 skill artefacts are written pre-run via
+    // `writeManagedSkillArtifacts` at the bootstrap site (raw skill +
+    // initial skillMap markdown), and never re-derived mid-run.
+    void role;
     const snapshot = buildManagedTaskPayload({
       prompt,
       options,
@@ -879,7 +859,11 @@ async function runManagedTaskViaRunnerInner(
     if (!checkpointingEnabled) {
       return;
     }
-    const scoutCompleted = Boolean(recorder.scout);
+    // FEATURE_193 (v0.7.43): `scoutCompleted` always false on V2 (Scout
+    // role retired, recorder.scout slot deleted). The checkpoint
+    // schema still carries the field for pre-F193 checkpoint compat;
+    // V2 writes propagate `false` for every snapshot.
+    const scoutCompleted = false;
     const currentRound = rolesRef.emitted.length;
     pendingCheckpointWrites.push(writeCurrentCheckpoint({
       options,
@@ -930,22 +914,10 @@ async function runManagedTaskViaRunnerInner(
   observer.preflight();
 
   const planRef = { current: plan };
-  // H1 structural resume (v0.7.26) — when scout is pre-seeded from a
-  // checkpoint, the observer's `onRoleEmit` path never runs for scout on
-  // this turn, so downstream role prompts would otherwise see the pre-
-  // scout plan decision (wrong harness, wrong routing notes). Apply the
-  // seeded scout payload to the plan immediately so planner/generator/
-  // evaluator see the post-scout plan on their first turn. Mirrors the
-  // legacy `applyScoutDecisionToPlan` invocation inside
-  // `resumeManagedTask`.
-  if (structuralResumeSeed?.recorderSlots.scout?.payload.scout && planRef.current) {
-    const seededScout = structuralResumeSeed.recorderSlots.scout.payload.scout;
-    planRef.current = applyScoutDecisionToPlanRunner(planRef.current, {
-      confirmedHarness: seededScout.confirmedHarness,
-      harnessRationale: seededScout.harnessRationale,
-      summary: seededScout.summary,
-    });
-  }
+  // FEATURE_193 (v0.7.43): V1 scout resume-seed → plan overlay branch
+  // removed (Scout role retired, `structuralResumeSeed.recorderSlots.scout`
+  // never populated on V2 checkpoints). `planRef.current` stays at the
+  // pre-Worker routing decision throughout the run.
   // Shard 6d-U: degraded-continue ref. Flipped by the verdict emitter
   // wrapper when the Evaluator requests an H2 upgrade beyond the plan's
   // `upgradeCeiling`, or when budget-extension approval is denied during
@@ -1062,7 +1034,11 @@ async function runManagedTaskViaRunnerInner(
     });
   }
   const rolePromptContextFactory: RolePromptContextFactory = (role, currentRecorder) => {
-    const scoutPayload = currentRecorder.scout?.payload.scout;
+    // FEATURE_193 (v0.7.43): `scoutPayload = currentRecorder.scout?.payload.scout`
+    // read removed (V1 scout slot deleted). All downstream scoutPayload-derived
+    // ctx fields (skillMap, scoutScope, previousRoleSummaries.scout/planner/
+    // generator) are permanently undefined on V2.
+    void currentRecorder;
     // FEATURE_125 v0.7.41 — Per-LLM-round sibling discovery. Only fires
     // when the Team Mode writer was bootstrapped (REPL session normally;
     // disabled via KODAX_DISABLE_MULTI_INSTANCE=1). The active writer's
@@ -1119,96 +1095,12 @@ async function runManagedTaskViaRunnerInner(
       ctx.skillExecutionArtifactPath = skillArtifactPaths.rawSkillPath;
       ctx.skillMapArtifactPath = skillArtifactPaths.skillMapMarkdownPath;
     }
-    if (scoutPayload?.skillMap) {
-      // The scout emit payload carries a subset of KodaXSkillMap fields
-      // (skill_summary, execution_obligations, verification_obligations,
-      // ambiguities, projection_confidence). Fill the remaining fields
-      // with safe defaults so `formatSkillMapSection` renders correctly.
-      ctx.skillMap = {
-        skillSummary: scoutPayload.skillMap.skillSummary ?? '',
-        executionObligations: scoutPayload.skillMap.executionObligations ?? [],
-        verificationObligations: scoutPayload.skillMap.verificationObligations ?? [],
-        requiredEvidence: [],
-        ambiguities: scoutPayload.skillMap.ambiguities ?? [],
-        projectionConfidence: scoutPayload.skillMap.projectionConfidence ?? 'medium',
-        rawSkillFallbackAllowed: true,
-      };
-    }
-    // Scout's scope hints are only relevant to post-Scout roles (Issue 119).
-    // v0.7.26 loop-fix: also carry `confirmedHarness` so downstream
-    // `inferScoutMutationIntent` calls can recognise execute harnesses
-    // and stop misclassifying "review primaryTask + empty scope" as
-    // review-only when Scout actually picked H1_EXECUTE_EVAL or
-    // H2_PLAN_EXECUTE_EVAL.
-    if (role !== 'scout') {
-      const scope = scoutPayload?.scope ?? [];
-      const reviewFilesOrAreas = scoutPayload?.reviewFilesOrAreas ?? [];
-      const confirmedHarness = scoutPayload?.confirmedHarness;
-      if (scope.length > 0 || reviewFilesOrAreas.length > 0 || confirmedHarness) {
-        ctx.scoutScope = {
-          scope: [...scope],
-          reviewFilesOrAreas: [...reviewFilesOrAreas],
-          confirmedHarness,
-        };
-      }
-    }
-    // M1 parity (v0.7.26) — populate `previousRoleSummaries` from the
-    // recorder so each downstream role sees a distilled summary of what
-    // the prior roles produced. Legacy carried this via
-    // `ManagedWorkerSessionStorage`, where per-worker state accumulated
-    // across rounds. Runner-driven doesn't have that storage; as a
-    // minimum faithful port, synthesise each `KodaXRoleRoundSummary`
-    // directly from the recorder's captured emit payloads so
-    // role-prompt's `previousRoleSummarySection` stops being empty.
-    if (role !== 'scout') {
-      const summaries: Partial<Record<KodaXTaskRole, KodaXRoleRoundSummary>> = {};
-      const nowIso = new Date().toISOString();
-      if (currentRecorder.scout?.payload.scout) {
-        const s = currentRecorder.scout.payload.scout;
-        summaries.scout = {
-          role: 'scout',
-          round: 1,
-          objective: 'Investigate task scope and confirm harness tier',
-          confirmedConclusions: [
-            s.summary ? `Summary: ${s.summary}` : undefined,
-            s.confirmedHarness ? `Confirmed harness: ${s.confirmedHarness}` : undefined,
-          ].filter((v): v is string => Boolean(v)),
-          unresolvedQuestions: [],
-          nextFocus: Array.isArray(s.scope) ? [...s.scope] : [],
-          summary: s.summary ?? '',
-          updatedAt: nowIso,
-        };
-      }
-      if (currentRecorder.contract?.payload.contract && role !== 'planner') {
-        const c = currentRecorder.contract.payload.contract;
-        summaries.planner = {
-          role: 'planner',
-          round: 1,
-          objective: 'Produce the H2 execution contract',
-          confirmedConclusions: c.summary ? [c.summary] : [],
-          unresolvedQuestions: [],
-          nextFocus: Array.isArray(c.successCriteria) ? [...c.successCriteria] : [],
-          summary: c.summary ?? '',
-          updatedAt: nowIso,
-        };
-      }
-      if (currentRecorder.handoff?.payload.handoff && role === 'evaluator') {
-        const h = currentRecorder.handoff.payload.handoff;
-        summaries.generator = {
-          role: 'generator',
-          round: 1,
-          objective: 'Execute the task per the handoff',
-          confirmedConclusions: h.summary ? [h.summary] : [],
-          unresolvedQuestions: Array.isArray(h.followup) ? [...h.followup] : [],
-          nextFocus: [],
-          summary: h.summary ?? '',
-          updatedAt: nowIso,
-        };
-      }
-      if (Object.keys(summaries).length > 0) {
-        ctx.previousRoleSummaries = summaries;
-      }
-    }
+    // FEATURE_193 (v0.7.43): ctx.skillMap / ctx.scoutScope / ctx.previousRoleSummaries
+    // population branches removed — all three derived from V1 `recorder.scout` /
+    // `recorder.contract` / `recorder.handoff` slots, retired alongside the V1
+    // chain. On V2 the Worker role gets the skillMap / scope context from
+    // `ctx.skillInvocation` + the routing-overlay system-prompt section
+    // (FEATURE_143). No cross-role summary is needed (single-role V2 chain).
     return ctx;
   };
   // Pre-compute the repo-intelligence context block once per
@@ -1277,15 +1169,15 @@ async function runManagedTaskViaRunnerInner(
     // hot path.
     managedWorkspace.executionCwd,
   );
-  // FEATURE_078: provide a callback that surfaces Scout's
-  // `downstream_reasoning_hint` to the per-role adapter. Read lazily —
-  // Scout's payload only populates after Scout's own turn returns, so
-  // the callback closes over `recorder` and reads on each adapter call.
+  // FEATURE_193 (v0.7.43): FEATURE_078 Scout `downstream_reasoning_hint`
+  // callback retired — Scout role gone, no payload to surface. The
+  // adapter still accepts the getter slot for signature compatibility;
+  // it permanently returns `undefined` on V2.
   const llm = buildRunnerLlmAdapter(
     options,
     adapterOverride,
     tokenStateRef,
-    () => recorder.scout?.payload.scout?.downstreamReasoningHint,
+    () => undefined,
     contextTokenSnapshotRef,
     todoStore,
     todoReminderState,
@@ -1828,7 +1720,12 @@ async function runManagedTaskViaRunnerInner(
       return {
         lastAssistantToolCallCount: countLastAssistantToolCalls(rr.messages),
         pendingChildTaskCount: baseCtx.childTaskRegistry?.size ?? 0,
-        hasEmittedHandoff: Boolean(recorder.handoff),
+        // FEATURE_193 (v0.7.43): `recorder.handoff` deleted along with
+        // `emit_handoff`. The idle-yield gate kept this flag to
+        // distinguish "Generator emitted handoff" from "Worker ended
+        // without dispatching" on V1; on V2 only Worker runs and the
+        // gate falls through to the child-registry + verdict check.
+        hasEmittedHandoff: false,
         hasEmittedTerminalVerdict:
           verdictStatusForGate === 'accept' || verdictStatusForGate === 'blocked',
         // Bug E: queue arm alongside registry arm. Strictly
@@ -1950,46 +1847,15 @@ async function runManagedTaskViaRunnerInner(
 
   observer.completed(signal, reason ?? userAnswer);
 
-  // Shard 6d-k: Scout suspicious-completion detection (legacy
-  // task-engine.ts:4844). When harness is H0_DIRECT and Scout did not
-  // declare an explicit completion signal, the harness inspects the
-  // final transcript + mutation tracker + budget and surfaces
-  // `onScoutSuspiciousCompletion` for the REPL to render an "uncertain"
-  // warning. This is a passive signal — we do not change the verdict,
-  // only annotate it.
-  if (harnessRef.current === 'H0_DIRECT') {
-    // Shard 6d-M: infer the mutation intent from Scout's emitted scope
-    // list instead of reading a self-declared field. This matches legacy
-    // `inferScoutMutationIntent` (Issue 119) — Scout's scope IS the
-    // evidence.
-    const scoutMutationIntent = recorder.scout
-      ? inferScoutMutationIntent(
-          {
-            scope: recorder.scout.payload.scout?.scope,
-            reviewFilesOrAreas: recorder.scout.payload.scout?.reviewFilesOrAreas,
-          },
-          plan?.decision.primaryTask,
-          recorder.scout.payload.scout?.confirmedHarness,
-        )
-      : undefined;
-    const budgetExhausted = budget.totalBudget > 0 && budget.spentBudget >= budget.totalBudget;
-    const suspiciousSignals = detectScoutSuspiciousSignals({
-      messages: effectiveRunResult.messages,
-      lastText: resolvedText,
-      hasScoutPayload: Boolean(recorder.scout),
-      scoutMutationIntent,
-      mutationTracker,
-      budgetExhausted,
-    });
-    if (suspiciousSignals.length > 0) {
-      options.events?.onScoutSuspiciousCompletion?.({
-        confidence: 'uncertain',
-        signals: suspiciousSignals,
-        sessionId: effectiveRunResult.sessionId,
-        lastTextPreview: (resolvedText ?? '').slice(0, SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT),
-      });
-    }
-  }
+  // FEATURE_193 (v0.7.43): Shard 6d-k Scout suspicious-completion
+  // detection block removed. The heuristic gated on
+  // `recorder.scout?.payload.scout` to infer mutation intent + flag
+  // direct-path completions that lacked scout-confirmed evidence. With
+  // the V1 Scout role retired, `recorder.scout` is permanently
+  // undefined; the block would either no-op or false-positive on every
+  // V2 H0_DIRECT run. The `onScoutSuspiciousCompletion` event remains
+  // in the SDK surface (pre-1.0 compat) but is never fired by the
+  // Runner-driven path.
 
   // Populate contextTokenSnapshot so the REPL token-counter UI can
   // refresh when the run completes. `baselineEstimatedTokens` stays

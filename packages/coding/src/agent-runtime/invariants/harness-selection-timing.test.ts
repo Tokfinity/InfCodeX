@@ -1,12 +1,15 @@
 /**
- * FEATURE_106 — `harnessSelectionTiming` invariant unit tests.
+ * FEATURE_193 (v0.7.43) — `harnessSelectionTiming` V2 no-op shell tests.
  *
- * Observe-only, warn-severity. Triggers when:
+ * V1 (FEATURE_106) predicate was: trigger on
  *   - event.kind === 'mutation_recorded'
  *   - event.fileCount > 1
- *   - ctx.recorder.scout.payload.scout.confirmedHarness is missing
+ *   - ctx.recorder.scout.payload.scout.confirmedHarness missing
  *
- * Otherwise admits (no signal).
+ * V2 (FEATURE_193) Scout retirement neutralizes the predicate to a
+ * permanent admit. These tests pin the no-op contract so future
+ * changes to the file body don't accidentally re-introduce the
+ * scout-dependent gate.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,8 +28,8 @@ function obsCtx(recorder: ReadonlyRecorder = {}): ObserveCtx {
   };
 }
 
-describe('harnessSelectionTiming.observe', () => {
-  it('passes non-mutation events through', () => {
+describe('harnessSelectionTiming.observe — V2 no-op shell', () => {
+  it('admits tool_call events', () => {
     expect(
       harnessSelectionTiming.observe!(
         { kind: 'tool_call', toolName: 'read' },
@@ -35,7 +38,7 @@ describe('harnessSelectionTiming.observe', () => {
     ).toBe(true);
   });
 
-  it('passes single-file mutations regardless of confirmedHarness', () => {
+  it('admits single-file mutations', () => {
     expect(
       harnessSelectionTiming.observe!(
         { kind: 'mutation_recorded', file: 'a.ts', fileCount: 1 },
@@ -44,50 +47,33 @@ describe('harnessSelectionTiming.observe', () => {
     ).toBe(true);
   });
 
-  it('warns on multi-file mutation when confirmedHarness is missing', () => {
+  it('admits multi-file mutations without confirmedHarness (FEATURE_193 — V1 warn path neutralized)', () => {
     const result = harnessSelectionTiming.observe!(
       { kind: 'mutation_recorded', file: 'b.ts', fileCount: 4 },
       obsCtx(),
     );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.severity).toBe('warn');
-      expect(result.reason).toContain('fileCount=4');
-      expect(result.reason).toContain('without a Scout-emitted confirmedHarness');
-    }
+    expect(result.ok).toBe(true);
   });
 
-  it('warns when scout block exists but confirmedHarness is empty string', () => {
+  it('admits when scout block carries an empty confirmedHarness string', () => {
     const recorder: ReadonlyRecorder = {
       scout: { payload: { scout: { confirmedHarness: '' } } },
     };
-    const result = harnessSelectionTiming.observe!(
-      { kind: 'mutation_recorded', file: 'a.ts', fileCount: 2 },
-      obsCtx(recorder),
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.severity).toBe('warn');
+    expect(
+      harnessSelectionTiming.observe!(
+        { kind: 'mutation_recorded', file: 'a.ts', fileCount: 2 },
+        obsCtx(recorder),
+      ).ok,
+    ).toBe(true);
   });
 
-  it('admits when confirmedHarness is set', () => {
+  it('admits when confirmedHarness is set (no-op regardless of slot contents)', () => {
     const recorder: ReadonlyRecorder = {
       scout: { payload: { scout: { confirmedHarness: 'H1_EXECUTE_EVAL' } } },
     };
     expect(
       harnessSelectionTiming.observe!(
         { kind: 'mutation_recorded', file: 'a.ts', fileCount: 3 },
-        obsCtx(recorder),
-      ).ok,
-    ).toBe(true);
-  });
-
-  it('admits H2 verdict on multi-file mutation', () => {
-    const recorder: ReadonlyRecorder = {
-      scout: { payload: { scout: { confirmedHarness: 'H2_PLAN_EXECUTE_EVAL' } } },
-    };
-    expect(
-      harnessSelectionTiming.observe!(
-        { kind: 'mutation_recorded', file: 'a.ts', fileCount: 7 },
         obsCtx(recorder),
       ).ok,
     ).toBe(true);

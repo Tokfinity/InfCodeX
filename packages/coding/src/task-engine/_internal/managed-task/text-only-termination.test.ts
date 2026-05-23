@@ -33,6 +33,12 @@
  * from `KodaXOrchestrationVerdict` / `KodaXManagedTaskVerdict` public
  * types. Sidecar Verifier owns the continuation decision via
  * `disposition` + `signal` (see `artifacts.ts:writeManagedTaskArtifacts`).
+ *
+ * FEATURE_193 (v0.7.43): the legacy "recorder.handoff blocked surfaces
+ * BLOCKED" pin was retired — `recorder.handoff` slot deleted alongside
+ * the `emit_handoff` tool. The pin's replacement asserts the new V2
+ * contract: text-only termination with no verdict slot resolves to
+ * COMPLETE; BLOCKED only via Sidecar Verifier verdict.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -145,28 +151,17 @@ describe('FEATURE_190 Phase 1 — deriveFinalStatus text-only termination', () =
     expect(result.reason).toContain('schema violation');
   });
 
-  it('legacy path — recorder.handoff blocked still surfaces signal:BLOCKED (pre-Phase-3 emit_handoff still in scope)', () => {
-    // While FEATURE_190 Phase 3 has not yet removed emit_handoff from
-    // Worker/Generator tools, the legacy "Generator emit_handoff
-    // status=blocked" path remains valid. Verifies pre-Phase-3 parity.
-    // Once Phase 3 lands and the tool is deleted, this code path
-    // becomes dead but staying compatible avoids a forced two-step
-    // rollout coupling Phase 2 and Phase 3 atomically.
-    const recorder: VerdictRecorder = {
-      handoff: {
-        role: 'generator',
-        payload: {
-          handoff: {
-            status: 'blocked',
-            summary: 'cannot proceed — required file missing',
-          },
-        },
-      },
-    };
-    const result = deriveFinalStatus(recorder);
-    expect(result.signal).toBe('BLOCKED');
-    expect(result.verdictStatus).toBeUndefined(); // verdict slot owns the verdictStatus tier
-    expect(result.reason).toContain('cannot proceed');
+  it('FEATURE_193 (v0.7.43): recorder.handoff blocked fallback retired — empty recorder always returns signal:COMPLETE', () => {
+    // FEATURE_193 removed `emit_handoff` and the `recorder.handoff` slot
+    // (Generator role retired). The legacy Phase-3-deferred fallback —
+    // "Generator-level blocker → signal:BLOCKED via recorder.handoff" —
+    // is now dead. On V2 only `recorder.verdict` (Sidecar Verifier
+    // bridge) can surface BLOCKED; a Worker text-only termination with
+    // no verdict slot resolves to COMPLETE.
+    const result = deriveFinalStatus({});
+    expect(result.signal).toBe('COMPLETE');
+    expect(result.verdictStatus).toBeUndefined();
+    expect(result.reason).toBeUndefined();
   });
 });
 

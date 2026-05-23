@@ -19,7 +19,10 @@
  *     `ctx.recorder.scout.payload.scout.confirmedHarness` and lives here
  *     too (v0.7.35.1 FEATURE_142 A-R2 moved it from @kodax-ai/agent per
  *     ADR-021 — agent admission framework must not enumerate coding-AMA
- *     field names).
+ *     field names). FEATURE_193 (v0.7.43) retired V1 Scout — the
+ *     invariant is now a permanent no-op (predicate always admits)
+ *     but stays registered so existing admission manifests + tests
+ *     keep working.
  *
  * `registerCodingInvariants()` is the canonical bootstrap entry point
  * — call it once at SDK startup (or in test setup paired with
@@ -54,10 +57,10 @@ export {
  * v0.7.36 FEATURE_114: added `planBeforeMutate` — V2 plan-first
  * structural observation. Registers alongside `harnessSelectionTiming`
  * (not as a replacement). FEATURE_193 (v0.7.43) retired V1 — the
- * `harnessSelectionTiming` predicate now no-ops on every run because
- * its `recorder.scout` precondition is never satisfied on the V2 path,
- * but the invariant stays registered as a structural placeholder until
- * a future cleanup decides whether to delete it.
+ * `harnessSelectionTiming` predicate is now a permanent no-op (it
+ * always admits, since the V2 Worker single-loop is the new V2
+ * harness-discipline anchor) but stays registered so existing
+ * admission manifests + tests keep working.
  */
 export const CODING_INVARIANTS: readonly QualityInvariant[] = [
   budgetCeiling,

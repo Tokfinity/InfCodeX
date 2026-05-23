@@ -18,7 +18,6 @@ import path from 'node:path';
 
 import type {
   KodaXHarnessProfile,
-  KodaXManagedProtocolPayload,
   KodaXManagedTask,
   KodaXOptions,
   KodaXResult,
@@ -132,18 +131,14 @@ export function buildManagedTaskPayload(args: {
     toolOutputTruncationNotes,
   } = args;
 
-  // Shard 6d-L: legacy V1 path read Scout's emitted harness over the
-  // plan's recommendation. FEATURE_193 (v0.7.43) retired Scout —
-  // `recorder.scout` is never populated on V2, so the lookup chain
-  // falls through to `plan.decision.harnessProfile` then `H0_DIRECT`
-  // on every V2 run. The first read is retained for old-session
-  // resume compat (checkpoint files predating F193 may still carry
-  // `recorder.scout` payloads in the JSON shape).
+  // FEATURE_193 (v0.7.43): V1 `recorder.scout?.payload.scout?.confirmedHarness`
+  // override removed (V1 scout slot deleted). Harness now sourced from the
+  // routing plan directly, fallback to H0_DIRECT for plan-less test paths.
+  // `recorder.contract?.payload.contract` was the V1 H2 contract slot —
+  // also deleted; contract summary/criteria/evidence/constraints sourced
+  // directly from `options.context?.taskVerification`.
   const harness: KodaXHarnessProfile =
-    recorder.scout?.payload.scout?.confirmedHarness
-      ?? plan?.decision.harnessProfile
-      ?? 'H0_DIRECT';
-  const contractPayload = recorder.contract?.payload.contract;
+    plan?.decision.harnessProfile ?? 'H0_DIRECT';
 
   const nowIso = new Date().toISOString();
   // v0.7.26 C4 parity — honour the caller-supplied taskId so every
@@ -190,10 +185,10 @@ export function buildManagedTaskPayload(args: {
     recommendedMode: decision?.recommendedMode ?? 'conversation',
     requiresBrainstorm: decision?.requiresBrainstorm ?? false,
     reason: decision?.reason ?? 'Runner-driven AMA path',
-    contractSummary: contractPayload?.summary,
-    successCriteria: contractPayload?.successCriteria ?? [],
-    requiredEvidence: contractPayload?.requiredEvidence ?? [],
-    constraints: contractPayload?.constraints ?? [],
+    contractSummary: undefined,
+    successCriteria: [],
+    requiredEvidence: [],
+    constraints: [],
     verification: options.context?.taskVerification,
   };
 
@@ -331,10 +326,14 @@ export function buildManagedTaskPayload(args: {
       currentHarness: harness,
       upgradeCeiling: plan?.decision.upgradeCeiling ?? harness,
       qualityAssuranceMode: deriveQualityAssuranceMode(plan, harness),
-      scoutDecision: recorder.scout?.payload.scout
-        ? buildScoutDecisionRuntime(recorder.scout.payload.scout)
-        : undefined,
-      skillMap: buildSkillMapRuntime(recorder.scout?.payload.scout?.skillMap),
+      // FEATURE_193 (v0.7.43): `scoutDecision` + `skillMap` runtime fields
+      // sourced from `recorder.scout?.payload.scout` — V1 scout slot deleted
+      // so both outputs are permanently undefined. The SDK public type
+      // surface (KodaXManagedTaskRuntime.scoutDecision/skillMap) still
+      // exposes the field shape for pre-1.0 SDK consumer compat (Commit
+      // 13c will close that surface).
+      scoutDecision: undefined,
+      skillMap: undefined,
       // Shard 6d-U: propagate the degraded-continue signal. `true` when the
       // Evaluator requested an upgrade beyond `plan.decision.upgradeCeiling`
       // (rewritten back to Generator) or when budget-extension approval was
@@ -406,40 +405,6 @@ function deriveQualityAssuranceMode(
   return 'optional';
 }
 
-function buildScoutDecisionRuntime(
-  scout: NonNullable<KodaXManagedProtocolPayload['scout']>,
-): NonNullable<KodaXManagedTask['runtime']>['scoutDecision'] | undefined {
-  if (!scout.summary && !scout.confirmedHarness) return undefined;
-  return {
-    summary: scout.summary ?? '',
-    recommendedHarness: scout.confirmedHarness ?? 'H0_DIRECT',
-    readyForUpgrade: scout.directCompletionReady !== 'yes',
-    scope: scout.scope,
-    requiredEvidence: scout.requiredEvidence,
-    reviewFilesOrAreas: scout.reviewFilesOrAreas,
-    evidenceAcquisitionMode: scout.evidenceAcquisitionMode,
-    harnessRationale: scout.harnessRationale,
-    blockingEvidence: scout.blockingEvidence,
-    directCompletionReady: scout.directCompletionReady,
-    skillSummary: scout.skillMap?.skillSummary,
-    executionObligations: scout.skillMap?.executionObligations,
-    verificationObligations: scout.skillMap?.verificationObligations,
-    ambiguities: scout.skillMap?.ambiguities,
-    projectionConfidence: scout.skillMap?.projectionConfidence,
-  };
-}
-
-function buildSkillMapRuntime(
-  scoutSkillMap: NonNullable<KodaXManagedProtocolPayload['scout']>['skillMap'],
-): KodaXManagedTask['runtime'] extends infer R
-  ? R extends { skillMap?: infer M } ? M : never
-  : never {
-  if (!scoutSkillMap) return undefined as never;
-  return {
-    summary: scoutSkillMap.skillSummary,
-    executionObligations: scoutSkillMap.executionObligations ?? [],
-    verificationObligations: scoutSkillMap.verificationObligations ?? [],
-    ambiguities: scoutSkillMap.ambiguities ?? [],
-    projectionConfidence: scoutSkillMap.projectionConfidence,
-  } as never;
-}
+// FEATURE_193 (v0.7.43): `buildScoutDecisionRuntime` + `buildSkillMapRuntime`
+// helpers deleted — they read from the removed V1 `recorder.scout.payload.scout`
+// slot, and both call sites now emit `undefined` directly.

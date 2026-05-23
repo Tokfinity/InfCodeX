@@ -23,20 +23,18 @@ import type {
 } from '../../../types.js';
 
 /**
- * Per-run capture of each emit tool's metadata. Populated by the
- * `wrapEmitterWithRecorder` wrapper on every successful emit; read by
+ * Per-run capture of the verdict emit tool's metadata. Populated by the
+ * Sidecar Verifier bridge (`applySidecarVerdictToRecorder`); read by
  * downstream payload / status / observer code paths.
  *
- * Slots map 1:1 to the four runner-driven emit tools:
- *   - `scout`    → `emit_scout_verdict`
- *   - `contract` → `emit_contract`
- *   - `handoff`  → `emit_handoff`
- *   - `verdict`  → `emit_verdict`
+ * FEATURE_193 (v0.7.43): V1 chain retired — `scout` / `contract` /
+ * `handoff` slots removed along with their emit tools
+ * (`emit_scout_verdict` / `emit_contract` / `emit_handoff`). The V2
+ * path only produces the verdict slot via the out-of-band Sidecar
+ * Verifier StopHook. All ~17 dead `?.scout` / `?.contract` /
+ * `?.handoff` reader code paths were deleted in the same commit.
  */
 export interface VerdictRecorder {
-  scout?: ProtocolEmitterMetadata;
-  contract?: ProtocolEmitterMetadata;
-  handoff?: ProtocolEmitterMetadata;
   verdict?: ProtocolEmitterMetadata;
 }
 

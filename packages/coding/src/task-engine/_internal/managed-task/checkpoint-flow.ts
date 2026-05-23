@@ -24,15 +24,10 @@ import path from 'node:path';
 
 import type {
   KodaXHarnessProfile,
-  KodaXManagedProtocolPayload,
   KodaXManagedTask,
   KodaXOptions,
   KodaXTaskRole,
 } from '../../../types.js';
-import {
-  resolveHandoffTarget,
-  type ProtocolEmitterMetadata,
-} from '../../../agents/protocol-emitters.js';
 import type {
   ManagedTaskCheckpoint,
   ValidatedCheckpoint,
@@ -193,118 +188,39 @@ export function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
 }
 
 /**
- * H1 structural resume seed (v0.7.26) — reconstruct recorder slots, harness
- * tier, budget, and the agent entry-point from a validated checkpoint.
+ * Structural resume seed — reconstruct the carry-forward state (harness
+ * tier + completed-roles list) from a validated checkpoint so the
+ * resumed run starts at the right Worker tier with the right budget cap.
  *
- * Legacy `resumeManagedTask` synthesised a `ManagedTaskScoutDirective`
- * from `managedTask.runtime.scoutDecision`, applied it to the plan, then
- * filtered out `completedWorkerIds` so the resumed round skipped
- * already-completed workers. The Runner-driven path equivalent:
+ * FEATURE_193 (v0.7.43): V1 `recorderSlots.scout` / `recorderSlots.contract`
+ * population removed alongside the retired Scout/Planner roles. The
+ * seed used to also synthesise scout/contract `ProtocolEmitterMetadata`
+ * from the checkpoint's `scoutDecision` / `contractSummary` so the
+ * V1 chain could skip already-completed roles; on V2 the only entry
+ * point is `chain.worker` and the seed carries no recorder slots at
+ * all. The `recorderSlots` field is retained on the interface as an
+ * empty struct for pre-1.0 SDK compat (callers grep on `seed.recorderSlots`
+ * existence to detect resume vs fresh).
  *
- *   1. If Scout completed, re-emit the captured Scout directive into the
- *      recorder so `rolePromptContextFactory` → `previousRoleSummaries`
- *      + `scoutScope` still reach downstream roles.
- *   2. If the saved harness is H2 and `contract.contractSummary` is set,
- *      also seed the contract slot so the Planner turn can be skipped.
- *   3. Pick the entry agent based on which slots are seeded:
- *        - no scout      → scout (plain restart with preamble context)
- *        - scout + H0    → scout (re-emit H0 with saved findings)
- *        - scout + H1    → generator
- *        - scout + H2, no contract → planner
- *        - scout + H2 + contract  → generator
- *   4. Carry forward the harness tier + budget so budget caps + role-
- *      specific tool allow-lists are correct from turn 1. Budget spent is
- *      reset — the LLM is starting a fresh turn even if logically
- *      resuming, so old spend shouldn't eat into the new run's envelope.
- *
- * Handoff and verdict slots are deliberately NOT seeded: the legacy
- * resume also didn't replay them (it re-ran the terminal round). This
- * keeps the semantics simple — resume picks up at the last *role* that
- * needs to run, not at a specific revise-cycle iteration inside the
- * Evaluator loop.
+ * Pre-F193 checkpoints (carrying `scoutDecision` / `contractSummary`)
+ * resume to a fresh Worker turn — the textual preamble
+ * (`buildResumePreamble`) still surfaces the prior findings in the
+ * Worker prompt so the LLM picks up the work; full structural replay
+ * of V1 slot state is no longer meaningful.
  */
 export interface StructuralResumeSeed {
-  readonly recorderSlots: {
-    readonly scout?: ProtocolEmitterMetadata;
-    readonly contract?: ProtocolEmitterMetadata;
-  };
+  readonly recorderSlots: Record<string, never>;
   readonly harness: KodaXHarnessProfile;
   readonly rolesEmitted: readonly KodaXTaskRole[];
-  // FEATURE_193 (v0.7.43): `startingRole` field removed — was computed
-  // but never read by the runner (only the V1 chain consumed it). On V2
-  // the entry agent is always `chain.worker`, so resume picks up there
-  // regardless of how far V1 had progressed before the checkpoint.
 }
 
 export function buildStructuralResumeSeed(validated: ValidatedCheckpoint): StructuralResumeSeed {
   const task = validated.managedTask;
-  const checkpoint = validated.checkpoint;
-  const scoutDecision = task.runtime?.scoutDecision;
   const harness: KodaXHarnessProfile = task.contract.harnessProfile ?? 'H0_DIRECT';
-
-  const recorderSlots: { scout?: ProtocolEmitterMetadata; contract?: ProtocolEmitterMetadata } = {};
   const rolesEmitted: KodaXTaskRole[] = [];
-
-  if (checkpoint.scoutCompleted && scoutDecision) {
-    const scoutPayload: Partial<KodaXManagedProtocolPayload> = {
-      scout: {
-        summary: scoutDecision.summary,
-        scope: scoutDecision.scope ?? [],
-        requiredEvidence: scoutDecision.requiredEvidence ?? [],
-        reviewFilesOrAreas: scoutDecision.reviewFilesOrAreas,
-        evidenceAcquisitionMode: scoutDecision.evidenceAcquisitionMode,
-        confirmedHarness: scoutDecision.recommendedHarness,
-        harnessRationale: scoutDecision.harnessRationale,
-        blockingEvidence: scoutDecision.blockingEvidence,
-        directCompletionReady: scoutDecision.directCompletionReady,
-        skillMap: scoutDecision.skillSummary
-          ? {
-            skillSummary: scoutDecision.skillSummary,
-            executionObligations: scoutDecision.executionObligations ?? [],
-            verificationObligations: scoutDecision.verificationObligations ?? [],
-            ambiguities: scoutDecision.ambiguities ?? [],
-            projectionConfidence: scoutDecision.projectionConfidence,
-          }
-          : undefined,
-      },
-    };
-    const { handoffTarget, isTerminal } = resolveHandoffTarget('scout', scoutPayload);
-    recorderSlots.scout = {
-      role: 'scout',
-      payload: scoutPayload,
-      handoffTarget,
-      isTerminal,
-    };
-    rolesEmitted.push('scout');
-  }
-
-  const contractSummary = task.contract.contractSummary;
-  if (
-    harness === 'H2_PLAN_EXECUTE_EVAL'
-    && contractSummary
-    && contractSummary.trim().length > 0
-  ) {
-    const contractPayload: Partial<KodaXManagedProtocolPayload> = {
-      contract: {
-        summary: contractSummary,
-        successCriteria: task.contract.successCriteria ?? [],
-        requiredEvidence: task.contract.requiredEvidence ?? [],
-        constraints: task.contract.constraints ?? [],
-      },
-    };
-    const { handoffTarget, isTerminal } = resolveHandoffTarget('planner', contractPayload);
-    recorderSlots.contract = {
-      role: 'planner',
-      payload: contractPayload,
-      handoffTarget,
-      isTerminal,
-    };
-    rolesEmitted.push('planner');
-  }
-
-  // FEATURE_193 (v0.7.43): `startingRole` computation removed — see
-  // StructuralResumeSeed interface note above.
-  return { recorderSlots, harness, rolesEmitted };
+  // FEATURE_193 (v0.7.43): no recorder slots populated on V2. The
+  // empty Record literal carries the structural intent.
+  return { recorderSlots: {}, harness, rolesEmitted };
 }
 
 /**

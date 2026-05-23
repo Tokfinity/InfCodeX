@@ -53,18 +53,16 @@ export function extractUserFacingRaw(result: { messages: readonly KodaXMessage[]
  *      F184 v0.7.45 retired the in-chain Evaluator; this slot is now
  *      populated exclusively by the Stop-hook Sidecar Verifier
  *      (`agent-runtime/middleware/sidecar-verifier/`)
- *   2. Legacy Generator `emit_handoff(status:'blocked')` — surfaces a
- *      Generator-level blocker when no Sidecar Verifier verdict has
- *      been emitted. **FEATURE_190 (v0.7.43) Phase 3** will remove
- *      `emit_handoff` from Worker/Generator tool surfaces; this
- *      fallback then becomes dead. Until Phase 3 ships, the branch
- *      stays for pre-rollout compatibility.
- *   3. Fallback: `{signal: 'COMPLETE'}` — the canonical text-only
+ *   2. Fallback: `{signal: 'COMPLETE'}` — the canonical text-only
  *      termination outcome. Worker produces a final text message,
- *      Runner.run exits via the no-tool-calls branch, neither slot
- *      is populated, and this function returns COMPLETE. This is the
- *      DEFAULT happy-path post-F184; no recorder mutation is required
- *      for a successful Worker termination.
+ *      Runner.run exits via the no-tool-calls branch, the verdict slot
+ *      is not populated, and this function returns COMPLETE. This is
+ *      the DEFAULT happy-path post-F184; no recorder mutation is
+ *      required for a successful Worker termination.
+ *
+ * FEATURE_193 (v0.7.43): removed the legacy `emit_handoff(status:'blocked')`
+ * fallback — F190 deleted that tool, F193 removed the `recorder.handoff`
+ * slot entirely. Generator-level blockers no longer exist on V2.
  */
 export function deriveFinalStatus(recorder: VerdictRecorder): {
   signal: KodaXResult['signal'];
@@ -88,24 +86,6 @@ export function deriveFinalStatus(recorder: VerdictRecorder): {
       userAnswer: verdictPayload.userAnswer,
     };
   }
-  // FEATURE_184 (v0.7.45) Phase C.1: in-chain Evaluator is gone, so
-  // recorder.verdict is only set by the Sidecar Verifier (out-of-band).
-  // Generator can still call emit_handoff(status:'blocked') to surface an
-  // unrecoverable blocker directly — check the handoff payload when no
-  // verdict has been set. Without this, a Generator-blocked handoff would
-  // produce signal:'COMPLETE' and success:true, silently hiding the block.
-  //
-  // NOTE: We return signal:'BLOCKED' but NOT verdictStatus:'blocked' here.
-  // managedTask.verdict.status is owned by the Evaluator / Sidecar Verifier
-  // verdict slot; a Generator-level blocked handoff surfaces the block via
-  // result.signal only, leaving verdict.status='running' (no verifier ran).
-  const handoffPayload = recorder.handoff?.payload.handoff;
-  if (handoffPayload?.status === 'blocked') {
-    return {
-      signal: 'BLOCKED',
-      reason: handoffPayload.summary,
-    };
-  }
   return { signal: 'COMPLETE' };
 }
 
@@ -117,11 +97,9 @@ export function deriveFinalStatus(recorder: VerdictRecorder): {
 export function buildManagedProtocolPayload(
   recorder: VerdictRecorder,
 ): KodaXManagedProtocolPayload | undefined {
-  const slices: Partial<KodaXManagedProtocolPayload> = {};
-  if (recorder.scout?.payload.scout) slices.scout = recorder.scout.payload.scout;
-  if (recorder.contract?.payload.contract) slices.contract = recorder.contract.payload.contract;
-  if (recorder.handoff?.payload.handoff) slices.handoff = recorder.handoff.payload.handoff;
-  if (recorder.verdict?.payload.verdict) slices.verdict = recorder.verdict.payload.verdict;
-  if (Object.keys(slices).length === 0) return undefined;
-  return slices as KodaXManagedProtocolPayload;
+  // FEATURE_193 (v0.7.43): scout / contract / handoff slices removed —
+  // V1 chain retired, VerdictRecorder no longer carries those slots.
+  // Only verdict survives (Sidecar Verifier bridge).
+  if (!recorder.verdict?.payload.verdict) return undefined;
+  return { verdict: recorder.verdict.payload.verdict } as KodaXManagedProtocolPayload;
 }

@@ -1,8 +1,16 @@
 /**
  * FEATURE_101 × FEATURE_106 joint integration test (v0.7.31 Phase 2.1+2.2).
  *
- * Verifies that the admission contract runtime (FEATURE_101) and the AMA
- * harness calibration (FEATURE_106) compose end-to-end:
+ * FEATURE_193 (v0.7.43): the FEATURE_106 invariant
+ * (`harnessSelectionTiming`) is now a permanent no-op shell on V2 —
+ * V1 Scout retirement made its `recorder.scout.payload.scout
+ * .confirmedHarness` precondition permanently undefined. The integration
+ * surface still composes (registration + binding) so these tests
+ * survive as the no-op contract pin.
+ *
+ * Verifies that the admission contract runtime (FEATURE_101) and the
+ * neutralized AMA harness calibration (FEATURE_106) compose
+ * end-to-end:
  *
  *   1. `registerCodingInvariants()` bootstraps the full v1 closed set
  *      (4 core pure + 3 coding capability-coupled = 7 invariant ids
@@ -14,22 +22,14 @@
  *      caps and produces an `AdmittedHandle` whose `invariantBindings`
  *      include the harness-timing invariant when declared.
  *
- *   3. When invoked through the registry (the runtime path
- *      `Runner.observe` will eventually drive in a follow-up
- *      increment), `harnessSelectionTiming.observe`:
- *        - fires a warn signal on a multi-file `mutation_recorded`
- *          event with no confirmed Scout verdict (the FEATURE_106
- *          calibration target); AND
- *        - stays silent when the verdict has been set (calibration
- *          successful).
+ *   3. `harnessSelectionTiming.observe` always admits on V2 — the
+ *      multi-file `mutation_recorded` "warn" path was retired with
+ *      Scout (FEATURE_193). Tests pin the no-op contract.
  *
  *   4. The scope-aware-harness Guardrail (FEATURE_106 Slice 1) and
  *      this invariant (Slice 3) are independent — the Guardrail acts
  *      on tool results, the invariant observes runner events. Both
  *      remain wired after a single bootstrap call.
- *
- * Phase 3 will add FEATURE_089 (agent generation) and grow this suite
- * to a true three-feature joint test.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -103,9 +103,12 @@ describe('FEATURE_101 × FEATURE_106 — joint registration + observe wiring', (
     }
   });
 
-  it('harnessSelectionTiming.observe fires on multi-file mutation without confirmed harness (FEATURE_106 calibration target)', () => {
-    // The invariant is registered; we drive its observe hook directly,
-    // simulating what `Runner.observe` will do in a future increment.
+  it('harnessSelectionTiming.observe admits multi-file mutations on V2 (FEATURE_193 — V1 warn path neutralized)', () => {
+    // FEATURE_193 (v0.7.43): V1 predicate read `recorder.scout.payload.scout
+    // .confirmedHarness` to gate multi-file mutations; Scout retirement
+    // makes the slot permanently undefined, so the body was rewritten to
+    // a no-op. This test pins the V2 admit contract — V1 expected `warn`
+    // here, V2 expects unconditional admit.
     const inv = getInvariant('harnessSelectionTiming');
     expect(inv).toBeDefined();
     expect(inv?.observe).toBeDefined();
@@ -117,12 +120,7 @@ describe('FEATURE_101 × FEATURE_106 — joint registration + observe wiring', (
       fileCount: 4,
     };
     const result = inv!.observe!(event, obsCtx(manifest));
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.severity).toBe('warn');
-      expect(result.reason).toContain('fileCount=4');
-      expect(result.reason).toContain('Scout-emitted confirmedHarness');
-    }
+    expect(result.ok).toBe(true);
   });
 
   it('harnessSelectionTiming.observe stays silent when Scout has committed to H1 (calibration successful)', () => {

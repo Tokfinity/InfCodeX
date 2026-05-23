@@ -1,40 +1,26 @@
 /**
- * FEATURE_106 invariant: `harnessSelectionTiming`.
+ * FEATURE_106 invariant: `harnessSelectionTiming` — V2 no-op shell.
  *
- * External to the FEATURE_101 admission v1 closed set — it's registered
- * to the same runtime but enforced FEATURE_106's harness calibration
- * contract (multi-file mutations must be preceded by a Scout-emitted
- * harness verdict). FEATURE_193 (v0.7.43) retired the V1 Scout role —
- * `recorder.scout` is never populated on V2, so the predicate's
- * `confirmedHarness` check now fails on every multi-file mutation and
- * the invariant emits its `warn` result indiscriminately on V2 runs.
- * Telemetry consumers that aggregate invariant warnings should treat
- * this as background noise until the invariant is repurposed (V2
- * Worker harness calibration) or deleted. Kept registered as a
- * structural placeholder pending that decision.
+ * FEATURE_193 (v0.7.43): V1 Scout role retired. The original predicate
+ * gated multi-file mutations on a Scout-emitted `confirmedHarness` slot;
+ * with Scout gone, `recorder.scout` is never populated on V2 and the
+ * predicate would emit `warn` on every multi-file run. To avoid
+ * background noise in telemetry without disturbing the agent-package
+ * admission framework (the `'harnessSelectionTiming'` invariant id +
+ * audit array are pre-1.0 SDK surface), this file keeps the export
+ * shape but neutralizes the predicate to always admit.
  *
- * Hook:
- *   - observe(mutation_recorded) when the event reports fileCount > 1
- *     and ctx.recorder.scout.payload.scout.confirmedHarness is missing —
- *     emit a `warn` severity result. The signal is informational.
+ * The V2 successor — `planBeforeMutate` — is registered alongside
+ * `harnessSelectionTiming` in `CODING_INVARIANTS` and covers the
+ * structural "plan-first" observation on the V2 Worker single loop.
  *
- * v0.7.31 behaviour is intentionally `warn`-only: rejecting mid-run on
- * a missing harness verdict would break runs that legitimately escalate
- * after the first mutation (e.g. Generator discovers more files mid-task).
- * Once Stage 1 benchmark proves the Scout calibration is reliable, we
- * can promote to `reject` in a future release — see FEATURE_106 §Roadmap.
- *
- * Pure function. State (whether confirmedHarness is set) lives on the
- * recorder context the Runner passes in; the invariant is a stateless
- * predicate.
- *
- * v0.7.35.1 FEATURE_142 (A-R2): moved from `@kodax-ai/agent/src/admission/
- * invariants/` back to `@kodax-ai/coding/src/agent-runtime/invariants/`.
- * The body reads `ctx.recorder.scout.payload.scout.confirmedHarness` —
- * a hardcoded reference to coding's AMA Scout role and confirmedHarness
- * field. Per ADR-021, the universal `@kodax-ai/agent` admission framework
- * must not enumerate coding-AMA field names; coding registers this
- * invariant via `registerCodingInvariants()`.
+ * v0.7.35.1 FEATURE_142 (A-R2) provenance note: moved from
+ * `@kodax-ai/agent/src/admission/invariants/` back to
+ * `@kodax-ai/coding/src/agent-runtime/invariants/` per ADR-021 — the
+ * universal `@kodax-ai/agent` admission framework must not enumerate
+ * coding-AMA field names. With FEATURE_193 this file no longer reads
+ * coding-AMA fields at all (no-op), but the ADR-021 boundary is
+ * preserved by keeping the registration in the coding package.
  */
 
 import type {
@@ -44,24 +30,19 @@ import type {
   RunnerEvent,
 } from '@kodax-ai/agent';
 
-function observe(event: RunnerEvent, ctx: ObserveCtx): InvariantResult {
-  if (event.kind !== 'mutation_recorded') return { ok: true };
-  if (event.fileCount <= 1) return { ok: true };
-
-  const confirmed = ctx.recorder.scout?.payload?.scout?.confirmedHarness;
-  if (typeof confirmed === 'string' && confirmed.length > 0) {
-    return { ok: true };
-  }
-  return {
-    ok: false,
-    severity: 'warn',
-    reason: `harnessSelectionTiming: multi-file mutation (file=${event.file}, fileCount=${event.fileCount}) recorded without a Scout-emitted confirmedHarness`,
-  };
+function observe(_event: RunnerEvent, _ctx: ObserveCtx): InvariantResult {
+  // FEATURE_193 (v0.7.43): V2 no-op. The V1 predicate read
+  // `ctx.recorder.scout?.payload?.scout?.confirmedHarness` to gate
+  // multi-file mutations on a Scout harness verdict; Scout retirement
+  // makes that read permanently undefined. Returning `{ ok: true }`
+  // unconditionally keeps the invariant registered without emitting
+  // warnings.
+  return { ok: true };
 }
 
 export const harnessSelectionTiming: QualityInvariant = {
   id: 'harnessSelectionTiming',
   description:
-    'Multi-file mutations should be preceded by a Scout-emitted harness verdict; missing verdict is a warn-only signal in v0.7.31.',
+    'FEATURE_193 V2 no-op shell — predicate always admits since V1 Scout retired. Kept registered for admission-framework / audit-array compat.',
   observe,
 };

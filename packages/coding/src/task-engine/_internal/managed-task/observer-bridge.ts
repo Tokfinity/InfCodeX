@@ -159,11 +159,10 @@ function buildEvidenceEntryForRoleEmit(args: {
       signalReason = verdict.reason;
     }
   } else if (role === 'direct') {
-    // H0_DIRECT direct-completion summary. The `recorder.scout` field
-    // remains in the VerdictRecorder shape for SDK compat; on the V2 path
-    // it is never populated, so this branch reduces to an undefined
-    // summary + COMPLETE signal on the rare H0_DIRECT trace.
-    summary = recorder.scout?.payload.scout?.summary;
+    // FEATURE_193 (v0.7.43): H0_DIRECT direct-completion path. The
+    // V1 `recorder.scout?.payload.scout?.summary` source was removed
+    // along with the scout slot; remaining H0_DIRECT traces fire with
+    // `summary: undefined` + `signal: COMPLETE`.
     signal = 'COMPLETE';
   }
   return {
@@ -350,20 +349,14 @@ export function buildObserverBridge(
       });
     },
     onRoleEmit: (role, recorder) => {
-      // Once Scout has confirmed a harness tier, keep it as the reference.
-      const scoutHarness = recorder.scout?.payload.scout?.confirmedHarness;
-      if (scoutHarness) {
-        harnessRef.current = scoutHarness;
-        maxRoundsRef.current = Math.max(
-          maxRoundsRef.current,
-          MAX_ROUNDS_BY_HARNESS[scoutHarness],
-        );
-      }
+      // FEATURE_193 (v0.7.43): Scout harness-confirmation branch
+      // removed (V1 scout slot deleted). `harnessRef.current` is set
+      // by routing at run start and stays fixed — V2 Worker doesn't
+      // re-tier mid-run. onRoleEmit only fires with 'evaluator'
+      // (Sidecar Verifier bridge) or 'worker' (Worker text-only
+      // termination) on V2.
       rolesRef.emitted.push(role);
       roundRef.current += 1;
-      // FEATURE_193 (v0.7.43): scout / planner / generator role branches
-      // removed — onRoleEmit only fires with 'evaluator' (Sidecar Verifier
-      // bridge) or 'worker' (Worker text-only termination) on V2.
       const detail = recorder.verdict?.payload.verdict?.reason;
       // Shard 6d-R: accumulate `evidence.entries[]` per-turn. Mirrors legacy
       // `task-engine.ts` behaviour where each role completion appended a
