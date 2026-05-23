@@ -50,8 +50,8 @@ function createOptions(overrides: Partial<ChildExecutorOptions> = {}): ChildExec
     maxParallel: 4,
     maxIterationsPerChild: 20,
     parentOptions: { provider: 'anthropic' },
-    parentRole: 'scout',
-    parentHarness: 'H0_DIRECT',
+    parentRole: 'worker',
+    parentHarness: 'tool-dispatch',
     ...overrides,
   };
 }
@@ -239,16 +239,15 @@ describe('executeChildAgents', () => {
 
   /* ---------- Write fan-out validation ---------- */
 
-  it('rejects write bundles from non-H2 Generator roles', async () => {
+  it('rejects write bundles from non-Worker roles (e.g. evaluator)', async () => {
     const bundles = [
       createBundle({ id: 'cb-1', readOnly: false, objective: 'Write task' }),
     ];
 
-    // Scout cannot do write fan-out
     const result = await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'scout', parentHarness: 'H0_DIRECT' }),
+      createOptions({ parentRole: 'evaluator', parentHarness: 'tool-dispatch' }),
     );
 
     expect(result.results).toEqual([]);
@@ -279,9 +278,9 @@ describe('executeChildAgents', () => {
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
   });
 
-  it('still rejects write bundles from non-dispatcher roles (planner/evaluator parity)', async () => {
-    // Defensive: allow-list expansion must not turn into an allow-all. Use a
-    // role string outside the {scout, generator, worker} set.
+  it('rejects write bundles from unknown roles (defensive allow-list parity)', async () => {
+    // Defensive: the allow-list must not turn into an allow-all. Use a role
+    // string outside the {worker} set.
     const bundles = [
       createBundle({ id: 'cb-stranger-1', readOnly: false, objective: 'Write task' }),
     ];
@@ -289,14 +288,31 @@ describe('executeChildAgents', () => {
     const result = await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'planner', parentHarness: 'tool-dispatch' }),
+      createOptions({ parentRole: 'observer', parentHarness: 'tool-dispatch' }),
     );
 
     expect(result.results).toEqual([]);
     expect(mockRunKodaX).not.toHaveBeenCalled();
   });
 
-  it('allows write bundles from H2 Generator', async () => {
+  it('rejects write bundles when parentHarness is not tool-dispatch (harness gate)', async () => {
+    // Both gate conditions must hold; Worker role alone is insufficient if
+    // the harness signal disagrees.
+    const bundles = [
+      createBundle({ id: 'cb-bad-harness', readOnly: false, objective: 'Write task' }),
+    ];
+
+    const result = await executeChildAgents(
+      bundles,
+      createCtx(),
+      createOptions({ parentRole: 'worker', parentHarness: 'H0_DIRECT' }),
+    );
+
+    expect(result.results).toEqual([]);
+    expect(mockRunKodaX).not.toHaveBeenCalled();
+  });
+
+  it('allows write bundles from Worker via tool-dispatch', async () => {
     const bundles = [
       createBundle({ id: 'cb-1', readOnly: false, objective: 'Refactor auth' }),
     ];
@@ -306,7 +322,7 @@ describe('executeChildAgents', () => {
     const result = await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(result.results).toHaveLength(1);
@@ -327,7 +343,7 @@ describe('executeChildAgents', () => {
     const result = await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(result.results).toHaveLength(1);
@@ -373,7 +389,7 @@ describe('executeChildAgents', () => {
     await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     const briefing = mockRunKodaX.mock.calls[0]![1] as string;
@@ -392,7 +408,7 @@ describe('executeChildAgents', () => {
     await executeChildAgents(
       bundles,
       createCtx(),
-      createOptions({ parentRole: 'scout', parentHarness: 'H0_DIRECT' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     const briefing = mockRunKodaX.mock.calls[0]![1] as string;
@@ -448,7 +464,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     await executeChildAgents(
       bundles,
       createTmpCtx(tmpRoot),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
@@ -480,7 +496,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     await executeChildAgents(
       bundles,
       createTmpCtx(tmpRoot),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
@@ -511,7 +527,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     await executeChildAgents(
       bundles,
       createTmpCtx(tmpRoot),
-      createOptions({ parentRole: 'scout', parentHarness: 'H0_DIRECT' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
@@ -541,7 +557,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     await executeChildAgents(
       bundles,
       { backups: new Map(), gitRoot: undefined, executionCwd: tmpRoot } as unknown as Parameters<typeof executeChildAgents>[1],
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
@@ -573,7 +589,7 @@ describe('FEATURE_117 v2 — write-child AGENTS.md inject', () => {
     await executeChildAgents(
       bundles,
       createTmpCtx(tmpRoot),
-      createOptions({ parentRole: 'generator', parentHarness: 'H2_PLAN_EXECUTE_EVAL' }),
+      createOptions({ parentRole: 'worker', parentHarness: 'tool-dispatch' }),
     );
 
     const opts = mockRunKodaX.mock.calls[0]![0] as {

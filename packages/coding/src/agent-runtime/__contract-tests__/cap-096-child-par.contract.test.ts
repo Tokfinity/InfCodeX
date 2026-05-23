@@ -59,8 +59,8 @@ function createCtx() {
 const baseOptions = {
   maxIterationsPerChild: 5,
   parentOptions: { provider: 'anthropic' as const },
-  parentRole: 'scout',
-  parentHarness: 'H0_DIRECT',
+  parentRole: 'worker',
+  parentHarness: 'tool-dispatch',
 };
 
 describe('CAP-096: child-executor parallel execution semaphore contract', () => {

@@ -108,8 +108,8 @@ describe('CAP-095: child-executor SA invocation contract', () => {
         maxParallel: 1,
         maxIterationsPerChild: 5,
         parentOptions: { provider: 'anthropic' },
-        parentRole: 'scout',
-        parentHarness: 'H0_DIRECT',
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
       },
     );
 
@@ -154,9 +154,9 @@ describe('CAP-095: child-executor SA invocation contract', () => {
         maxParallel: 1,
         maxIterationsPerChild: 5,
         parentOptions: { provider: 'anthropic' },
-        // Only Generator + H2 harness may emit write fan-out.
-        parentRole: 'generator',
-        parentHarness: 'H2_PLAN_EXECUTE_EVAL',
+        // Only Worker + tool-dispatch harness may emit write fan-out.
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
       },
     );
 
@@ -201,8 +201,8 @@ describe('CAP-095: child-executor SA invocation contract', () => {
         maxParallel: 1,
         maxIterationsPerChild: 3,
         parentOptions: { provider: 'anthropic' },
-        parentRole: 'scout',
-        parentHarness: 'H0_DIRECT',
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
       },
     );
     // The lazy-loaded import resolved to the FEATURE_100 thin shim ⇒

@@ -811,34 +811,22 @@ function validateWriteBundles(
 ): readonly KodaXChildContextBundle[] {
   if (writeBundles.length === 0) return [];
 
-  // Worker (V2 AMA single-loop primary) does write fan-out via the
-  // `tool-dispatch` harness. The legacy `generator` parentRole + H2
-  // harness branches remain in the allow-list for unit-test surface
-  // continuity — FEATURE_193 retired the V1 chain in production so
-  // these never fire on a real run, but several `child-executor.test.ts`
-  // cases still exercise them as a stand-in for "dispatcher role".
-  // Keep this allow-list in sync with the `role` parameter accepted by
-  // `wrapDispatchChildTaskForRole` (task-engine/_internal/managed-task/
-  // dispatch-child.ts). If the wrapper accepts a role this gate rejects,
-  // write bundles are silently dropped — `executeChildAgents` returns
+  // Worker (V2 AMA single-loop primary) is the sole dispatcher allowed to
+  // emit write fan-out, signalled by `parentHarness === 'tool-dispatch'`
+  // (set by `dispatch-child-tasks.ts` via `wrapDispatchChildTaskForRole`,
+  // which only accepts `role === 'worker'`).
+  //
+  // If this gate rejects a role/harness pair that the wrapper accepts, the
+  // write bundle is silently dropped: `executeChildAgents` returns
   // `EMPTY_RESULT`, `dispatch-child-tasks.ts` unpacks
-  // `result.results[0] === undefined`, and the Worker sees `failed: no
-  // result` with no diagnostic signal. The async branch's empty-banner
-  // fallback covers the success-empty case; the failed-empty diagnostic
-  // envelope covers the post-fix residual paths.
-  // V2 path: `parentRole === 'worker'` + `parentHarness === 'tool-dispatch'`
-  // (set by `dispatch-child-tasks.ts:487-488` via `wrapDispatchChildTaskForRole`
-  // which now accepts only `'worker'`). The `'generator'` + `'H2_PLAN_EXECUTE_EVAL'`
-  // arms are V1-vestigial: production V1 chain is retired (FEATURE_193, commit
-  // `dcac55ea`), but `child-executor.test.ts` + `cap-095-child-exec.contract.test.ts`
-  // still exercise these branches as a stand-in dispatcher role for the
-  // gate's allow-list behavior (~13 cases across the two files). Removing
-  // the V1 arms requires migrating those tests; deferred per F193 cleanup
-  // policy "test infrastructure parity > minimal-LoC purity".
-  if (parentRole !== 'generator' && parentRole !== 'worker') {
+  // `result.results[0] === undefined`, and the Worker sees
+  // `failed: no result` with no diagnostic signal. The async branch's
+  // empty-banner fallback covers the success-empty case; the
+  // failed-empty diagnostic envelope covers the post-fix residual paths.
+  if (parentRole !== 'worker') {
     return [];
   }
-  if (parentHarness !== 'H2_PLAN_EXECUTE_EVAL' && parentHarness !== 'tool-dispatch') {
+  if (parentHarness !== 'tool-dispatch') {
     return [];
   }
 
