@@ -70,6 +70,17 @@ export interface SessionManager {
   deleteSession: typeof deleteSession;
   listRunningSessions: typeof listRunningSessions;
   watchSessions: typeof watchSessions;
+  /**
+   * v0.7.43 — the raw write-side storage instance. SDK embedders pass
+   * this into `runKodaX({ session: { id, scope, storage } })` so the
+   * SA / AMA loops write per-turn JSONL snapshots to disk. Without an
+   * injected storage, `saveSessionSnapshot` is a silent no-op and the
+   * sessions directory stays empty regardless of `session.id`.
+   *
+   * See {@link FileSessionStorage} for the concrete implementation and
+   * `docs/SDK_EMBEDDER_GUIDE.md` §6 for the end-to-end recipe.
+   */
+  storage: FileSessionStorage;
 }
 
 // ── Shared storage instance (lazy) ───────────────────────────────────────────
@@ -571,6 +582,14 @@ function watchSessionsWindows(
  */
 export function createSessionManager(opts?: { sessionsDir?: string }): SessionManager {
   const sessionsDir = opts?.sessionsDir;
+  // Single FileSessionStorage instance per manager. Returned via the
+  // `storage` field so callers can pass it through
+  // `runKodaX({ session: { id, storage } })`; sharing one instance keeps
+  // write-queue + append-watermark caches (CAP-013-001) coherent across
+  // mixed read (load/list) + write (run) operations.
+  const storage = sessionsDir !== undefined
+    ? new FileSessionStorage({ sessionsDir })
+    : new FileSessionStorage();
   if (sessionsDir === undefined) {
     return {
       listSessions,
@@ -581,6 +600,7 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
       deleteSession,
       listRunningSessions,
       watchSessions,
+      storage,
     };
   }
   return {
@@ -592,5 +612,6 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     deleteSession: (id) => deleteSessionImpl(id, sessionsDir),
     listRunningSessions,
     watchSessions: (cb) => watchSessionsImpl(cb, sessionsDir),
+    storage,
   };
 }

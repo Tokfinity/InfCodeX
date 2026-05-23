@@ -13,6 +13,7 @@ are NOT obvious from inspecting the type definitions alone:
 3. [Per-app data directory namespacing — `getAppDataDir`](#3-per-app-data-directory-namespacing--getappdatadir)
 4. [Cross-reference: other FEATURE_186 surfaces](#4-cross-reference-other-feature_186-surfaces)
 5. [Consuming from a CommonJS context (Electron main, CJS bundles)](#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)
+6. [Session persistence — wiring `runKodaX` to disk](#6-session-persistence--wiring-runkodax-to-disk)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -562,6 +563,177 @@ subpaths in a follow-up release.
       bundling subpath imports entirely).
 - [ ] Node version ≥ 20.19 (or ≥ 22 for the more permissive
       `--experimental-require-module` default).
+
+---
+
+## 6. Session persistence — wiring `runKodaX` to disk
+
+### The trap
+
+```ts
+import { runKodaX } from '@kodax-ai/kodax/coding';
+
+await runKodaX(
+  {
+    provider: 'zhipu-coding',
+    session: { id: 's_my_chat', scope: 'user' },  // ← session.id set
+  },
+  'reply with: ok',
+);
+// ✗ Run completes, LLM streams, events fire — but
+// ~/.kodax/sessions/s_my_chat.jsonl does NOT exist.
+```
+
+`session.id` alone is **not** enough. The SDK's snapshot path is
+gated on `options.session.storage`:
+
+```ts
+// packages/coding/src/agent-runtime/middleware/session-snapshot.ts
+if (!options.session?.storage) {
+  return;   // silent no-op
+}
+```
+
+This is by design — the CLI ships its own storage wiring, and the
+SDK doesn't want to force a disk-write side-effect onto every
+embedder (some hosts persist to a DB / cloud / IndexedDB instead).
+But the contract was previously **undocumented**, so SDK consumers
+typically hit this once before learning the rule.
+
+**v0.7.43 added a one-shot `console.warn` when `session.id` is set
+but `session.storage` is missing** — it points at this section.
+
+### The canonical fix
+
+```ts
+import { runKodaX } from '@kodax-ai/kodax/coding';
+import { createSessionManager } from '@kodax-ai/kodax/repl';
+
+// One manager per host process; reuse across runs so the
+// per-session write queue + append-watermark caches stay coherent.
+const { storage, listSessions, loadSession } = createSessionManager();
+
+await runKodaX(
+  {
+    provider: 'zhipu-coding',
+    session: {
+      id: 's_my_chat',
+      scope: 'user',
+      storage,                  // ← key — wire the storage instance
+    },
+  },
+  'reply with: ok',
+);
+// ✓ ~/.kodax/sessions/s_my_chat.jsonl now exists after the run.
+
+// Same `storage` instance reads back through SessionManager:
+const recent = await listSessions({ scope: 'user', limit: 50 });
+const replay = await loadSession('s_my_chat');
+```
+
+### What `createSessionManager()` returns (v0.7.43+)
+
+```ts
+interface SessionManager {
+  // Read side (FEATURE_173 v0.7.42)
+  listSessions(...): Promise<SessionSummary[]>;
+  loadSession(id): Promise<...>;
+  forkSession(id, opts?): Promise<...>;
+  rewindSession(id, opts?): Promise<...>;
+  setActiveEntry(id, selector): Promise<void>;
+  deleteSession(id): Promise<void>;
+  listRunningSessions(): Promise<RunningSessionInfo[]>;
+  watchSessions(cb): () => void;
+  // Write side (v0.7.43 follow-up)
+  storage: FileSessionStorage;     // ← NEW — pass into runKodaX
+}
+```
+
+### Custom sessions directory (multi-tenant / tests)
+
+```ts
+const { storage } = createSessionManager({
+  sessionsDir: '/srv/tenant-42/.kodax/sessions',
+});
+// `storage` writes there; matching listSessions/loadSession on the
+// same manager read from the same dir.
+```
+
+This is equivalent to constructing `FileSessionStorage` directly
+but keeps read + write sharing one instance (so append-watermark
+caches stay warm across mixed list / run operations).
+
+### Bring-your-own storage (database / cloud / IndexedDB)
+
+`FileSessionStorage` implements `KodaXSessionStorage`. Any class
+implementing the same interface can be passed in. Minimal contract:
+
+```ts
+import type { KodaXSessionStorage, SessionData } from '@kodax-ai/kodax/coding';
+
+class MyDbSessionStorage implements KodaXSessionStorage {
+  async save(id: string, data: SessionData): Promise<void> { /* ... */ }
+  async load(id: string): Promise<SessionData | null> { /* ... */ }
+  async list(opts?: ...): Promise<SessionSummary[]> { /* ... */ }
+  async delete(id: string): Promise<void> { /* ... */ }
+  // (other methods — see the @kodax-ai/kodax/coding type for the full surface)
+}
+
+const storage = new MyDbSessionStorage();
+await runKodaX({ session: { id, storage }, ... }, prompt);
+```
+
+The SA / AMA loops are storage-implementation-agnostic — they just
+call `storage.save(...)` at the terminal sites (success / error /
+mid-flow / limit-reached). Storage failures are swallowed locally
+with a `[SessionSnapshot] storage.save failed` `console.error` —
+they never propagate to the `runKodaX` caller.
+
+### Why isn't `storage` defaulted automatically?
+
+Three reasons we **don't** auto-construct `FileSessionStorage` when
+`session.id` is supplied:
+
+1. **Package boundary**: `FileSessionStorage` is implemented in
+   `@kodax-ai/repl` (it's >500 LoC of write-queue + watermark +
+   JSONL streaming logic). `@kodax-ai/coding` does not depend on
+   `/repl`, and reversing that direction breaks ADR-001 package
+   independence (you'd no longer be able to consume `/coding`
+   without dragging the Ink REPL bundle).
+2. **Pluggability**: hosts often want non-filesystem storage
+   (Electron IndexedDB, web app S3 bucket, server-side Postgres).
+   Defaulting to `FileSessionStorage` would force a `fs/promises`
+   side-effect on every embedder.
+3. **Explicit > implicit**: a silent default would hide the wiring
+   from new SDK consumers; the v0.7.43 `console.warn` makes the
+   missing wiring loud the first time it bites.
+
+### When to construct `FileSessionStorage` directly vs go through `createSessionManager`
+
+| Use case | Construct directly | Use `createSessionManager` |
+|---|---|---|
+| Only need to save runs, no listing / reading UI | ✓ | (also fine — `storage` field gives you the same instance) |
+| Need a popout / sidebar showing past sessions | | ✓ — pairs read + write through one instance |
+| Custom sessions dir for tests / tenants | (works, but you must repeat the dir option for each call) | ✓ — `{ sessionsDir }` once, both sides honor it |
+| Want to mock storage for unit tests | ✓ (inject mock implementing `KodaXSessionStorage`) | — |
+
+### Quick checklist before reporting "session.jsonl not appearing"
+
+- [ ] Did you set `session.storage`? (Not just `session.id`.)
+- [ ] Is the run actually reaching a terminal site?
+      `saveSessionSnapshot` fires from success / error / mid-flow /
+      limit-reached. A run that throws synchronously before
+      `runKodaX` enters the loop never saves.
+- [ ] Did `storage.save` throw? Check `console.error` for
+      `[SessionSnapshot] storage.save failed`. Storage errors are
+      isolated by design (don't fail the run), but they leave the
+      session file unwritten.
+- [ ] Is the `sessionsDir` the one you expect? Default is
+      `<KODAX_HOME>/sessions`; override via `setAgentConfigHome` or
+      `createSessionManager({ sessionsDir })`.
+- [ ] Is the `session.id` filesystem-safe? KodaX accepts any string
+      but writes `<id>.jsonl` literally — IDs with `/`, `\`, or
+      control chars will be rejected by the OS.
 
 ---
 

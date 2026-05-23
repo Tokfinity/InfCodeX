@@ -13,6 +13,9 @@
 //   node scripts/release.mjs              # real publish (irreversible)
 //   node scripts/release.mjs --otp=123456 # pass OTP for npm 2FA
 //   node scripts/release.mjs --skip-build # assume dist/ is already built (advanced)
+//   node scripts/release.mjs --pack-only  # produce kodax-ai-kodax-<v>.tgz at repo root
+//                                         # for local `npm install <path>` SDK consumer testing
+//                                         # (no publish; package.json restored via try/finally)
 //
 // Steps:
 //   1. Verify git is clean (no uncommitted changes).
@@ -41,6 +44,7 @@ const rootPkgPath = path.join(repoRoot, 'package.json');
 const argv = process.argv.slice(2);
 const isDryRun = argv.includes('--dry-run');
 const skipBuild = argv.includes('--skip-build');
+const packOnly = argv.includes('--pack-only');
 const otpArg = argv.find((a) => a.startsWith('--otp='));
 const otp = otpArg ? otpArg.split('=')[1] : null;
 
@@ -139,11 +143,12 @@ function restoreRootPackageJson(rawBytes) {
 
 function main() {
   // Sanity: git clean (uncommitted changes risk shipping unexpected dist).
-  // Hard fail for real publish; warn-only for dry-run (so operators can
-  // still validate the pipeline mid-edit, but get a visible reminder).
+  // Hard fail for real publish; warn-only for dry-run / pack-only (so
+  // operators can still produce a local tarball or validate the pipeline
+  // mid-edit, but get a visible reminder).
   if (!gitIsClean()) {
-    if (isDryRun) {
-      log('WARNING: git working tree is not clean. Dry-run will proceed but real publish would refuse.');
+    if (isDryRun || packOnly) {
+      log('WARNING: git working tree is not clean. Operation will proceed but real publish would refuse.');
     } else {
       logError('git working tree is not clean. Commit or stash first, then retry.');
       process.exit(1);
@@ -154,7 +159,7 @@ function main() {
   const version = pkg.version;
 
   log(`Version: ${version}`);
-  log(`Mode: ${isDryRun ? 'DRY RUN' : 'REAL PUBLISH (irreversible)'}`);
+  log(`Mode: ${packOnly ? 'PACK-ONLY (local tarball for SDK consumer testing)' : isDryRun ? 'DRY RUN' : 'REAL PUBLISH (irreversible)'}`);
   log('');
 
   // Step 1: build sub-packages, esbuild bundle, and root .d.ts.
@@ -175,23 +180,37 @@ function main() {
   log('-- rewriting root package.json (name → @kodax-ai/kodax, drop private, normalize bin, inject subpath exports)');
   const pristineBytes = rewriteRootPackageJson();
 
-  // Step 4: publish, then restore (try/finally guarantees restore)
+  // Step 4: publish OR pack, then restore (try/finally guarantees restore)
   try {
-    // Force official npm registry — repo .npmrc pins npmmirror for fast
-    // dev installs, but publish must always go to registry.npmjs.org.
-    const args = ['publish', '--registry=https://registry.npmjs.org/'];
-    if (isDryRun) args.push('--dry-run');
-    if (otp) args.push(`--otp=${otp}`);
-    log(`-- npm ${args.join(' ')}`);
-    runCmd('npm', args);
-    log('-- ✓ npm publish succeeded');
+    if (packOnly) {
+      // npm pack — produces kodax-ai-kodax-<version>.tgz at repo root.
+      // Consumer flow: `npm install /abs/path/to/kodax-ai-kodax-<version>.tgz`
+      // This matches the actual publish-time tarball byte-for-byte (same
+      // package.json rewrite + same files allowlist), so consumer testing
+      // exercises exactly what will be published.
+      log('-- npm pack (local tarball, no publish)');
+      runCmd('npm', ['pack']);
+      log('-- ✓ npm pack succeeded');
+    } else {
+      // Force official npm registry — repo .npmrc pins npmmirror for fast
+      // dev installs, but publish must always go to registry.npmjs.org.
+      const args = ['publish', '--registry=https://registry.npmjs.org/'];
+      if (isDryRun) args.push('--dry-run');
+      if (otp) args.push(`--otp=${otp}`);
+      log(`-- npm ${args.join(' ')}`);
+      runCmd('npm', args);
+      log('-- ✓ npm publish succeeded');
+    }
   } finally {
     log('-- restoring root package.json (pristine bytes)');
     restoreRootPackageJson(pristineBytes);
   }
 
   log('');
-  if (isDryRun) {
+  if (packOnly) {
+    log(`Tarball produced: kodax-ai-kodax-${version}.tgz`);
+    log(`Consumer install: npm install ${path.join(repoRoot, `kodax-ai-kodax-${version}.tgz`)}`);
+  } else if (isDryRun) {
     log('Dry run complete. Nothing was actually published.');
   } else {
     log(`Published @kodax-ai/kodax@${version}.`);

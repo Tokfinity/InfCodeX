@@ -261,8 +261,8 @@ describe('Session Management Public SDK', () => {
     process.platform === 'win32' ? 5000 : 2000,
   );
 
-  // ── Test 12: createSessionManager returns object with all 9 methods ───────
-  it('createSessionManager returns an object with all 9 expected methods', async () => {
+  // ── Test 12: createSessionManager returns object with all 8 methods + storage ───
+  it('createSessionManager returns an object with all 8 expected methods and a storage field', async () => {
     const manager = api.createSessionManager() as Record<string, unknown>;
     const expectedMethods = [
       'listSessions',
@@ -277,6 +277,11 @@ describe('Session Management Public SDK', () => {
     for (const method of expectedMethods) {
       expect(typeof manager[method]).toBe('function');
     }
+    // v0.7.43 — storage field exposes the underlying FileSessionStorage
+    // so embedders can pass it through runKodaX({ session: { id, storage } }).
+    expect(manager.storage).toBeDefined();
+    expect(typeof (manager.storage as { save?: unknown }).save).toBe('function');
+    expect(typeof (manager.storage as { load?: unknown }).load).toBe('function');
     // sessionId field in listRunningSessions result is allowed to be undefined.
     const sessions = await (manager.listRunningSessions as () => Promise<Array<{ sessionId: string | undefined }>>)();
     expect(Array.isArray(sessions)).toBe(true);
@@ -309,6 +314,37 @@ describe('Session Management Public SDK', () => {
     expect(overrideList.map((s) => s.id)).not.toContain('default-001');
     expect(defaultList.map((s) => s.id)).toContain('default-001');
     expect(defaultList.map((s) => s.id)).not.toContain('iso-001');
+  });
+
+  // ── Test 13b: v0.7.43 — manager.storage.save writes into the same dir reads see ──
+  it('createSessionManager.storage routes writes into the manager-owned sessionsDir', async () => {
+    const overrideDir = path.join(tempHome, 'storage-rw-test');
+    await mkdir(overrideDir, { recursive: true });
+
+    const mgr = api.createSessionManager({ sessionsDir: overrideDir }) as {
+      storage: { save: (id: string, data: unknown) => Promise<void> };
+      listSessions: (opts?: { scope?: string }) => Promise<Array<{ id: string }>>;
+      loadSession: (id: string) => Promise<unknown>;
+    };
+
+    // Use the exposed storage to persist a minimal session — this is the
+    // pattern SDK embedders use: pass `mgr.storage` into
+    // runKodaX({ session: { id, storage } }).
+    await mgr.storage.save('sdk-wired-001', {
+      messages: [{ role: 'user', content: 'hello' }],
+      title: 'SDK-wired',
+      gitRoot: tempHome,
+      scope: 'user',
+    });
+
+    // The same manager's read side must see what the write side wrote
+    // — proves storage + list/load share one underlying FileSessionStorage
+    // and one sessionsDir.
+    const list = await mgr.listSessions({ scope: 'all' });
+    expect(list.map((s) => s.id)).toContain('sdk-wired-001');
+
+    const loaded = await mgr.loadSession('sdk-wired-001');
+    expect(loaded).not.toBeNull();
   });
 
   // ── Test 14: v0.7.43 — listRunningSessions surfaces sessionId from heartbeat ──

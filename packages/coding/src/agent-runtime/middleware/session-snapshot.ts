@@ -63,6 +63,15 @@ async function getGitRoot(): Promise<string | null> {
   }
 }
 
+/**
+ * v0.7.43 — process-level dedup so we warn at most once per session id
+ * about the "id-without-storage" silent-noop trap. Keyed by sessionId
+ * so legitimately new runs (different ids) each get their own one-shot
+ * warning; the same id firing terminal save twice (mid-flow + success)
+ * only warns once.
+ */
+const warnedSessionIds = new Set<string>();
+
 export async function saveSessionSnapshot(
   options: KodaXOptions,
   sessionId: string,
@@ -75,6 +84,25 @@ export async function saveSessionSnapshot(
   },
 ): Promise<void> {
   if (!options.session?.storage) {
+    // v0.7.43 — when an SDK embedder supplies `session.id` but no
+    // `session.storage`, the run completes successfully but nothing
+    // lands on disk; the embedder's "sessions" UI silently stays empty.
+    // Surface this once per id so onboarding consumers learn the
+    // explicit-injection contract before they ship a buggy popout.
+    //
+    // The CLI is unaffected — it always wires FileSessionStorage, so
+    // this branch is unreachable for the standalone `kodax` binary.
+    if (options.session?.id && !warnedSessionIds.has(options.session.id)) {
+      warnedSessionIds.add(options.session.id);
+      console.warn(
+        `[KodaX SDK] session.id="${options.session.id}" was provided but session.storage is undefined — ` +
+        `session snapshots will NOT be persisted. To persist, pass a storage instance: ` +
+        `import { createSessionManager } from '@kodax-ai/kodax/repl'; ` +
+        `const { storage } = createSessionManager(); ` +
+        `runKodaX({ session: { id, storage, ... }, ... }, prompt);  ` +
+        `See docs/SDK_EMBEDDER_GUIDE.md §6.`,
+      );
+    }
     return;
   }
 
