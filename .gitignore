@@ -5,6 +5,11 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# npm pack tarballs (produced by `node scripts/release.mjs --pack-only`).
+# These are publish-ready artifacts for SDK consumer testing — never commit.
+# See scripts/release.mjs:167-192 for the produce-and-consume flow.
+*.tgz
+
 # Prevent accidental commit of tsc emit alongside source files
 # (e.g. running tsc without proper outDir configuration)
 src/**/*.js
