@@ -148,6 +148,13 @@ export function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
     `Harness: ${task.contract.harnessProfile}`,
     `Roles already executed: ${checkpoint.checkpoint.completedWorkerIds.join(', ') || 'none'}`,
   ];
+  // FEATURE_193 (v0.7.43): V1 Scout role retired — `task.runtime?.scoutDecision`
+  // is permanently `undefined` on V2 sessions, so the `--- Scout findings ---`
+  // preamble block is dead on V2. Pre-F193 checkpoint resume still hits
+  // this branch if a session jsonl carries the legacy `scoutDecision`
+  // payload — kept for that backfill compat. The SDK public field is
+  // marked `@deprecated`; the block can be deleted alongside the
+  // atomic V1-parser removal.
   const scout = task.runtime?.scoutDecision;
   if (scout) {
     lines.push('', '--- Scout findings (already complete) ---');

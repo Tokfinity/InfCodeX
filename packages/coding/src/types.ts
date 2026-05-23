@@ -1252,6 +1252,16 @@ export interface KodaXManagedTaskRuntimeState {
   currentHarness?: KodaXHarnessProfile;
   upgradeCeiling?: KodaXHarnessProfile;
   harnessTransitions?: KodaXManagedTaskHarnessTransition[];
+  /**
+   * @deprecated FEATURE_193 (v0.7.43): V1 Scout role retired. The Runner
+   * always emits `undefined` for this field on V2; pre-1.0 SDK consumers
+   * that still read `runtime.scoutDecision` see `undefined`. V2 Worker
+   * skillMap / scope context flows through `ctx.skillInvocation` and the
+   * routing-overlay system-prompt section (FEATURE_143). Field kept on
+   * the SDK type for pre-1.0 consumer compat; will be removed in a
+   * dedicated cleanup commit after V1-parser code paths in
+   * `managed-protocol.ts` / `llm-adapter.ts` are atomically retired.
+   */
   scoutDecision?: {
     summary: string;
     recommendedHarness: KodaXHarnessProfile;
@@ -1269,6 +1279,11 @@ export interface KodaXManagedTaskRuntimeState {
     ambiguities?: string[];
     projectionConfidence?: KodaXSkillProjectionConfidence;
   };
+  /**
+   * @deprecated FEATURE_193 (v0.7.43): V1 Scout-emitted skill map slot.
+   * Always `undefined` post-V2 (Scout role retired). See `scoutDecision`
+   * deprecation note for cleanup roadmap.
+   */
   skillMap?: KodaXSkillMap;
   completionContractStatus?: Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'>;
   rawRoutingDecision?: KodaXTaskRoutingDecision;
@@ -1409,8 +1424,23 @@ export interface KodaXManagedHandoffPayload {
 
 export interface KodaXManagedProtocolPayload {
   verdict?: KodaXManagedVerdictPayload;
+  /**
+   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_scout_verdict` retired.
+   * V2 Worker never populates this slice; consumers see `undefined`.
+   * Pre-1.0 SDK shape compat — will be removed in a dedicated cleanup
+   * commit after V1 parser code paths in `managed-protocol.ts` /
+   * `llm-adapter.ts` are atomically retired.
+   */
   scout?: KodaXManagedScoutPayload;
+  /**
+   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_contract` retired. See
+   * `scout` deprecation note for cleanup roadmap.
+   */
   contract?: KodaXManagedContractPayload;
+  /**
+   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_handoff` retired. See
+   * `scout` deprecation note for cleanup roadmap.
+   */
   handoff?: KodaXManagedHandoffPayload;
 }
 

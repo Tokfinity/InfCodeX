@@ -226,6 +226,15 @@ export function formatVerificationContract(
   return lines.length > 1 ? lines.join('\n') : undefined;
 }
 
+/**
+ * FEATURE_193 (v0.7.43): `formatManagedScoutDecision` retained as a
+ * V2-no-op shell — V1 Scout role retired so `runtime?.scoutDecision`
+ * is always `undefined` on V2 runs and the function returns `undefined`
+ * for every input. Kept exported so any pre-1.0 SDK consumer importing
+ * the symbol still resolves; the SDK public field
+ * `KodaXManagedTaskRuntimeState.scoutDecision` carries a parallel
+ * `@deprecated` marker.
+ */
 export function formatManagedScoutDecision(
   runtime: KodaXManagedTask['runtime'],
 ): string | undefined {

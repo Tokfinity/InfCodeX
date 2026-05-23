@@ -329,9 +329,9 @@ export function buildManagedTaskPayload(args: {
       // FEATURE_193 (v0.7.43): `scoutDecision` + `skillMap` runtime fields
       // sourced from `recorder.scout?.payload.scout` — V1 scout slot deleted
       // so both outputs are permanently undefined. The SDK public type
-      // surface (KodaXManagedTaskRuntime.scoutDecision/skillMap) still
-      // exposes the field shape for pre-1.0 SDK consumer compat (Commit
-      // 13c will close that surface).
+      // surface (`KodaXManagedTaskRuntimeState.scoutDecision/skillMap`) is
+      // marked `@deprecated` but kept for pre-1.0 SDK consumer compat;
+      // emitting `undefined` is the canonical V2 state.
       scoutDecision: undefined,
       skillMap: undefined,
       // Shard 6d-U: propagate the degraded-continue signal. `true` when the
