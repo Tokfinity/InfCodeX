@@ -134,6 +134,7 @@ export function buildWorkerInstructions(
     '    - Symbol tracing: "start with `symbol_context` to find callers"',
     '    - Process flow / execution trace: "use `process_context` to map the flow before reading runner files"',
     '    - Rename / refactor impact: "use `impact_estimate` to estimate blast radius first"',
+    '- SPECIALIST ROUTING: when a registered specialist agent matches the task domain (see "Available specialist agents" block above when present), prefer dispatching with `subagent_type=<name>` over a generic child.',
   ].join('\n');
 
   // FEATURE_120 v0.7.39 — Worker can steer in-flight children via

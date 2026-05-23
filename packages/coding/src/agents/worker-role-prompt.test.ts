@@ -91,6 +91,39 @@ describe('buildWorkerInstructions', () => {
     expect(out).not.toContain('task_output');
   });
 
+  it('FEATURE_191 A.4: dispatchRules emits SPECIALIST ROUTING guidance as the last bullet (qualitative, no enumerated names)', () => {
+    // ADR-035 R14 hard constraint — A.4 must append at the end of the
+    // dispatchRules array (not insert mid-array) to avoid mid-tier
+    // model attention-anchor regressions per the FEATURE_189 B.5 DEFER
+    // lesson. The sentence must be qualitative single-concept per
+    // ADR-033 §1 / §2 / §3 / §4 / §5: no enumerated agent names, no ✗
+    // anti-pattern, no FEATURE_xxx version tag in LLM-facing surface.
+    const out = buildWorkerInstructions(baseDecision, undefined, false);
+    expect(out).toContain('SPECIALIST ROUTING');
+    expect(out).toContain('subagent_type=<name>');
+    expect(out).toContain('registered specialist');
+
+    // ADR-033 §1 — no enumerated agent names in the sentence
+    expect(out).not.toMatch(/SPECIALIST ROUTING[^\n]*db-reviewer/);
+    expect(out).not.toMatch(/SPECIALIST ROUTING[^\n]*e2e-runner/);
+    expect(out).not.toMatch(/SPECIALIST ROUTING[^\n]*python-reviewer/);
+
+    // ADR-033 §3 — no ✗ anti-pattern in this sentence
+    const specialistLineMatch = out.match(/-\s*SPECIALIST ROUTING:[^\n]*/);
+    expect(specialistLineMatch).not.toBeNull();
+    expect(specialistLineMatch![0]).not.toContain('✗');
+
+    // ADR-033 §5 — no version tag (FEATURE_xxx vX.Y.Z) in the sentence
+    expect(specialistLineMatch![0]).not.toMatch(/FEATURE_\d+/);
+
+    // Position constraint — appears AFTER the impact_estimate bullet
+    // (last pre-existing dispatchRules element).
+    const impactIdx = out.indexOf('impact_estimate');
+    const specialistIdx = out.indexOf('SPECIALIST ROUTING');
+    expect(impactIdx).toBeGreaterThan(-1);
+    expect(specialistIdx).toBeGreaterThan(impactIdx);
+  });
+
   it('FEATURE_177 KODAX_TASK_OUTPUT_PROMPT env flag is no longer wired (REVERT)', () => {
     process.env.KODAX_TASK_OUTPUT_PROMPT = '1';
     const out = buildWorkerInstructions(baseDecision, undefined, false);
