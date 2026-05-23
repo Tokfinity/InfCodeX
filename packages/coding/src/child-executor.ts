@@ -727,9 +727,13 @@ function validateWriteBundles(
 ): readonly KodaXChildContextBundle[] {
   if (writeBundles.length === 0) return [];
 
-  // Only Generator (V1 AMA Generator slot) or Worker (V2 AMA single-loop
-  // primary) can do write fan-out, via H2 harness or `tool-dispatch`. Keep
-  // this allow-list in sync with the `role` parameter accepted by
+  // Worker (V2 AMA single-loop primary) does write fan-out via the
+  // `tool-dispatch` harness. The legacy `generator` parentRole + H2
+  // harness branches remain in the allow-list for unit-test surface
+  // continuity — FEATURE_193 retired the V1 chain in production so
+  // these never fire on a real run, but several `child-executor.test.ts`
+  // cases still exercise them as a stand-in for "dispatcher role".
+  // Keep this allow-list in sync with the `role` parameter accepted by
   // `wrapDispatchChildTaskForRole` (task-engine/_internal/managed-task/
   // dispatch-child.ts). If the wrapper accepts a role this gate rejects,
   // write bundles are silently dropped — `executeChildAgents` returns

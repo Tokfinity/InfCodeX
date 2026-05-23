@@ -511,28 +511,10 @@ export function buildRunnerAgentChain(
   if (!dispatchDefinition) {
     throw new Error('dispatch_child_task tool not registered — tools/registry.ts bootstrap failure');
   }
-  const scoutDispatch = wrapDispatchChildTaskForRole(
-    dispatchDefinition,
-    ctx,
-    'scout',
-    budget,
-    observer,
-    events,
-  );
-  const generatorDispatch = wrapDispatchChildTaskForRole(
-    dispatchDefinition,
-    ctx,
-    'generator',
-    budget,
-    observer,
-    events,
-  );
-  // FEATURE_114 v0.7.36 — Worker dispatch wrapper for the V2 single-loop
-  // path. Worker IS the executor (no separate Generator), so it inherits
-  // Generator's full dispatch surface: read-only fan-out via RULE A,
-  // long-running probes via RULE B, and write fan-out (readOnly:false)
-  // via RULE C. Worker stays dead code in the V1 path until Slice 3b
-  // flips the entry agent under `KODAX_HARNESS_V2=true`.
+  // Worker IS the only dispatcher after FEATURE_193 retired V1 chain
+  // (Scout/Generator dispatch wrappers deleted). Worker inherits the full
+  // dispatch surface: read-only fan-out via RULE A, long-running probes
+  // via RULE B, write fan-out (readOnly:false) via RULE C.
   const workerDispatch = wrapDispatchChildTaskForRole(
     dispatchDefinition,
     ctx,

@@ -30,13 +30,11 @@ import {
   PLANNER_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../../../agents/task-engine-agents.js';
-import { emitResilienceDebug } from '../../../agent.js';
 import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.js';
 import type {
   KodaXEvents,
   KodaXHarnessProfile,
   KodaXTaskRole,
-  ManagedMutationTracker,
 } from '../../../types.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
 import {
@@ -44,11 +42,7 @@ import {
   maybeRequestAdditionalWorkBudget,
   type ManagedTaskBudgetController,
 } from './budget.js';
-import {
-  applyScoutDecisionToPlanRunner,
-  BUDGET_CAP_BY_HARNESS,
-  BUDGET_EXTENSION_BY_HARNESS,
-} from './observer-bridge.js';
+import { BUDGET_EXTENSION_BY_HARNESS } from './observer-bridge.js';
 import type { TodoStore } from '../../todo-store.js';
 import type { ObserverBridge, VerdictRecorder } from './types.js';
 
@@ -143,6 +137,12 @@ function isUpgradeBeyondCeiling(
  * managed-task status observer event. The wrapped tool otherwise behaves
  * identically to the base tool.
  *
+ * FEATURE_193 (v0.7.43): the slot parameter was narrowed to `'verdict'` —
+ * scout/contract/handoff slots were retired with the V1 chain. The only
+ * remaining production caller path is the Sidecar Verifier bridge; the
+ * function itself is also exercised by the `__runnerDrivenTestables`
+ * test-only export for the H1 revise-cap and budget-dialog regressions.
+ *
  * On Evaluator `revise`, if the cumulative budget usage crosses 90% of the
  * current cap, fire `maybeRequestAdditionalWorkBudget` to ask the user
  * whether to extend. `approved` bumps the budget by
@@ -152,45 +152,31 @@ function isUpgradeBeyondCeiling(
  */
 export function wrapEmitterWithRecorder(
   base: RunnableTool,
-  slot: 'scout' | 'contract' | 'handoff' | 'verdict',
+  slot: 'verdict',
   recorder: VerdictRecorder,
   observer: ObserverBridge,
   budget?: ManagedTaskBudgetController,
   budgetExtension?: BudgetExtensionContext,
-  // M5 (v0.7.26) — Scout regained full write/edit/multi_edit tools
-  // for v0.7.22 parity. The H0 path is fine (Scout is the final
-  // author), but on H1/H2 Scout SHOULD keep its hands off the
-  // filesystem and hand off a clean slate to Generator. If Scout
-  // wrote anyway, the Evaluator's diff later on will mix Scout's
-  // changes with Generator's, confusing verification. These two
-  // closures give the scout-slot wrapper observable access to the
-  // mutation tracker + event sink so it can flag the situation at
-  // emit time with a user-visible status event + server-side log.
-  mutationTracker?: ManagedMutationTracker,
-  events?: KodaXEvents,
   // FEATURE_097 (v0.7.34) — todo-store hooks. The store is created
   // once per `runManagedTaskViaRunnerInner` call, then woven through
   // `baseCtx.todoStore` (so the `todo_update` tool can mutate it) AND
-  // through this wrapper (so the Runner can auto-handle three
-  // emit-time transitions per design §5 ①):
-  //   - scout slot   → seed from `executionObligations` when ≥ 2
-  //   - contract slot → replace from `successCriteria` when store is
-  //                     empty (e.g. after a replan reset, or H2 path
-  //                     where Scout obligations < 2 but Planner
-  //                     refines)
-  //   - verdict slot → dispatch on Evaluator verdict:
-  //                    accept → autoCompleteOnAccept
-  //                    revise (route Generator) → markInProgressFailed
-  //                                               + arm the pending
-  //                                               reset-failed flag
-  //                    revise (route Planner / replan) → reset
-  //                    blocked → no-op (terminal; list state is moot)
-  // `pendingFailedResetRef` is consumed at the next Generator turn's
-  // `instructions` resolve so the user briefly sees ✗ before ☐
-  // (matches the design's "下一轮 Generator 开始前 reset" semantics).
+  // through this wrapper. FEATURE_193 (v0.7.43): only the verdict-slot
+  // dispatch remains — scout seeding and contract replan-seed branches
+  // were retired with the V1 chain.
+  //   - accept → autoCompleteOnAccept
+  //   - revise (Worker retry) → markInProgressFailed + arm the
+  //                             pending reset-failed flag
+  //   - revise (replan, defensive) → reset
+  //   - blocked → no-op (terminal; list state is moot)
+  // `pendingFailedResetRef` is consumed at the next Worker turn's
+  // `instructions` resolve so the user briefly sees ✗ before ☐.
   todoStore?: TodoStore,
   pendingFailedResetRef?: { current: boolean },
 ): RunnableTool {
+  // `slot` is retained as a parameter for call-site clarity (the
+  // surrounding test suite asserts on the verdict slot semantics) but
+  // is no longer a discriminator — kept here to mark intent.
+  void slot;
   return {
     ...base,
     execute: async (input, ctx): Promise<RunnerToolResult> => {
@@ -208,11 +194,11 @@ export function wrapEmitterWithRecorder(
         // FEATURE_184 (v0.7.45) Phase C.3: this branch is no longer triggered in
         // production — Generator is now terminal and the Sidecar Verifier writes
         // `recorder.verdict` directly via `applySidecarVerdictToRecorder` (which
-        // replicates the budget logic). The `slot === 'verdict'` path is preserved
-        // here for the `wrapEmitterWithRecorder` unit-test surface exposed through
+        // replicates the budget logic). Preserved here for the
+        // `wrapEmitterWithRecorder` unit-test surface exposed through
         // `__runnerDrivenTestables`; removing it would break those tests without
         // equivalent coverage in the sidecar bridge.
-        if (slot === 'verdict' && budgetExtension) {
+        if (budgetExtension) {
           const emitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
           const verdictPayload = emitterMeta.payload?.verdict;
           const requested = verdictPayload?.nextHarness;
@@ -323,7 +309,7 @@ export function wrapEmitterWithRecorder(
         // FEATURE_193 v0.7.43: V1 chain retired. Worker is the executor; any
         // legacy V1 verdict metadata that names GENERATOR_AGENT_NAME as the
         // handoff target gets rewritten to WORKER_AGENT_NAME.
-        if (slot === 'verdict') {
+        {
           const emitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
           if (emitterMeta.handoffTarget === GENERATOR_AGENT_NAME) {
             const rewrittenMetadata: ProtocolEmitterMetadata = {
@@ -333,155 +319,52 @@ export function wrapEmitterWithRecorder(
             result = { ...result, metadata: rewrittenMetadata as unknown as Record<string, unknown> };
           }
         }
-        recorder[slot] = result.metadata as unknown as ProtocolEmitterMetadata;
-        // FEATURE_097 (v0.7.34) — todo-store seeding + auto-handling.
-        // Per design §5 ①, the Runner is the single source of truth for
-        // three transitions; the Evaluator emits an unmodified verdict
-        // and we dispatch from its status here. Each branch is a no-op
-        // when `todoStore` was not threaded (older callers / unit-test
-        // fixtures that don't wire FEATURE_097).
+        recorder.verdict = result.metadata as unknown as ProtocolEmitterMetadata;
+        // FEATURE_097 (v0.7.34) — todo-store auto-handling on verdict.
+        // FEATURE_193 v0.7.43: scout/contract seeding branches removed
+        // (V1 chain retired; Scout/Planner no longer emit). Per design §5 ①,
+        // the Runner dispatches from the verdict's status here. No-op when
+        // `todoStore` was not threaded.
         if (todoStore) {
-          if (slot === 'scout') {
-            const obligations = recorder.scout?.payload.scout?.skillMap?.executionObligations;
-            if (Array.isArray(obligations) && obligations.length >= 2) {
-              // Seed once. The store's `init()` is idempotent on content but
-              // always re-fires onChange — that's the right behavior on a
-              // re-emit (extremely rare; Scout emits exactly once per run).
-              //
-              // v0.7.42 — each obligation string becomes the seed `subject`;
-              // no `description` is set (executionObligations carries only
-              // the short imperative form by design).
-              const seeds = obligations.map((subject, idx) => ({
-                id: `todo_${idx + 1}`,
-                subject,
-                sourceObligationIndex: idx,
-              }));
-              todoStore.init(seeds);
-            }
-          } else if (slot === 'contract') {
-            // H2 replan path: store is empty after `replan` reset →
-            // Planner's refined `successCriteria` becomes the new list.
-            // When the store already has items (the normal H2 first-pass),
-            // leave them alone — Scout's obligations remain canonical and
-            // Planner uses `todo_update` for status changes.
-            if (!todoStore.hasItems()) {
-              const criteria = recorder.contract?.payload.contract?.successCriteria;
-              if (Array.isArray(criteria) && criteria.length >= 2) {
-                // v0.7.42 — successCriteria strings → seed `subject`s. See
-                // Scout branch above for the same shape.
-                const seeds = criteria.map((subject, idx) => ({
-                  id: `todo_${idx + 1}`,
-                  subject,
-                  sourceObligationIndex: idx,
-                }));
-                todoStore.init(seeds);
+          const verdictPayload = recorder.verdict?.payload.verdict;
+          const status = verdictPayload?.status;
+          const nextHarness = verdictPayload?.nextHarness;
+          if (status === 'accept') {
+            todoStore.autoCompleteOnAccept();
+          } else if (status === 'revise') {
+            if (nextHarness === 'H2_PLAN_EXECUTE_EVAL') {
+              // Replan disposition — drop the list. (Production V2 path
+              // never sets nextHarness=H2 since Planner is retired, but
+              // the Sidecar Verifier bridge can still synthesize it; keep
+              // the branch as a defensive no-op-friendly reset.)
+              todoStore.reset();
+            } else {
+              // Default revise route: Worker retries. Mark current
+              // in_progress as failed; the next Worker turn's
+              // `instructions` closure will reset failed → pending so
+              // the user sees ● → ✗ → ☐ → ● across the retry boundary.
+              todoStore.markInProgressFailed('Evaluator requested revision');
+              if (pendingFailedResetRef) {
+                pendingFailedResetRef.current = true;
               }
             }
-          } else if (slot === 'verdict') {
-            const verdictPayload = recorder.verdict?.payload.verdict;
-            const status = verdictPayload?.status;
-            const nextHarness = verdictPayload?.nextHarness;
-            if (status === 'accept') {
-              todoStore.autoCompleteOnAccept();
-            } else if (status === 'revise') {
-              if (nextHarness === 'H2_PLAN_EXECUTE_EVAL') {
-                // Replan disposition — drop the list; Planner's next
-                // contract will repopulate via the contract-slot branch.
-                todoStore.reset();
-              } else {
-                // Default revise route: Generator retries. Mark current
-                // in_progress as failed; the next Generator turn's
-                // `instructions` closure will reset failed → pending so
-                // the user sees ● → ✗ → ☐ → ● across the retry boundary.
-                todoStore.markInProgressFailed('Evaluator requested revision');
-                if (pendingFailedResetRef) {
-                  pendingFailedResetRef.current = true;
-                }
-              }
-            }
-            // status === 'blocked' is terminal — leave the list as-is so
-            // the final UI render reflects whatever state the work
-            // actually reached.
           }
+          // status === 'blocked' is terminal — leave the list as-is so
+          // the final UI render reflects whatever state the work
+          // actually reached.
         }
-        // M5 (v0.7.26) — Scout pre-handoff write warning. Scout's tool
-        // set includes write/edit/multi_edit for H0_DIRECT parity with
-        // v0.7.22. But on H1/H2 handoffs, any Scout-era write bleeds
-        // into the Evaluator's diff view and muddles the verification
-        // contract ("did Generator do X? unclear, because X was half-
-        // done before Generator started"). Fire a status event +
-        // debug log so the user / REPL can see this happened, and
-        // downstream telemetry can count it.
-        if (slot === 'scout' && mutationTracker && mutationTracker.files.size > 0) {
-          const scoutHarness = recorder.scout?.payload.scout?.confirmedHarness;
-          if (scoutHarness && scoutHarness !== 'H0_DIRECT') {
-            const paths = [...mutationTracker.files.keys()];
-            const preview = paths.slice(0, 5).join(', ') + (paths.length > 5 ? `, +${paths.length - 5} more` : '');
-            const handoffTo = scoutHarness === 'H1_EXECUTE_EVAL' ? 'Generator' : 'Planner';
-            events?.onManagedTaskStatus?.({
-              agentMode: 'ama',
-              harnessProfile: scoutHarness,
-              currentRound: 1,
-              maxRounds: 1,
-              upgradeCeiling: scoutHarness,
-              note: `Scout wrote ${paths.length} file${paths.length === 1 ? '' : 's'} before handing off to ${handoffTo}`,
-              detailNote: `Scout pre-handoff mutations (may show up in Evaluator diff alongside ${handoffTo} output): ${preview}`,
-            });
-            emitResilienceDebug('[m5:scout-pre-handoff-writes]', {
-              harness: scoutHarness,
-              count: paths.length,
-              paths: paths.slice(0, 20),
-            });
-          }
-        }
-        // When Scout's verdict picks a non-H0 harness, extend the budget
-        // accordingly so downstream roles have headroom. Mirrors the
-        // legacy behavior of upgrading the budget controller on Scout
-        // harness commitment.
-        if (slot === 'scout' && budget) {
-          const scoutHarness = recorder.scout?.payload.scout?.confirmedHarness;
-          if (scoutHarness && scoutHarness !== budget.currentHarness) {
-            budget.currentHarness = scoutHarness;
-            budget.totalBudget = Math.max(budget.totalBudget, BUDGET_CAP_BY_HARNESS[scoutHarness]);
-          }
-        }
-        // M4 parity (v0.7.26) — propagate Scout's decision back into the
-        // plan so downstream Generator / Evaluator prompts see the
-        // post-Scout harness / routing notes / prompt overlay. Without
-        // this, a plan=H2 but Scout=H1 run leaves H2-only prompt
-        // guidance leaking into the H1 workers. Mirrors legacy's
-        // `applyScoutDecisionToPlan` (task-engine.ts:6569) which runs
-        // right after `runManagedScoutStage`.
-        if (slot === 'scout' && budgetExtension?.planRef.current) {
-          const scoutPayload = recorder.scout?.payload.scout;
-          if (scoutPayload?.confirmedHarness) {
-            budgetExtension.planRef.current = applyScoutDecisionToPlanRunner(
-              budgetExtension.planRef.current,
-              {
-                confirmedHarness: scoutPayload.confirmedHarness,
-                harnessRationale: scoutPayload.harnessRationale,
-                summary: scoutPayload.summary,
-              },
-            );
-          }
-        }
-        // FEATURE_193 v0.7.43: V1 chain retired. handoff slot is Worker-emitted.
-        const emittedRole: KodaXTaskRole =
-          slot === 'handoff' ? 'worker' : SLOT_TO_ROLE[slot];
-        observer.onRoleEmit(emittedRole, recorder);
-        // 90%-threshold budget-extension dialog. Legacy only triggered this
-        // on Evaluator revise; the Runner-driven path now fires it after
-        // every role emit (scout/contract/handoff/verdict). Reason: in a
-        // single Runner.run chain the whole Scout → Planner → Generator →
-        // Evaluator flow shares one budget counter, so by the time the
-        // Evaluator emits a verdict the cap may already be exhausted —
-        // never giving the user a chance to approve more headroom. Firing
-        // after each role emit catches the 90% crossing at the earliest
-        // boundary.
-        //
-        // `maybeRequestAdditionalWorkBudget` is itself idempotent when
-        // already above threshold or under it (returns 'skipped'), so
-        // calling it per emit is cheap in the common case. The per-harness
+        // FEATURE_193 v0.7.43: scout pre-handoff write warning + scout
+        // budget upgrade + scout-decision-to-plan propagation deleted
+        // (V1 chain retired; Worker is now the only emitter and runs
+        // at a fixed harness chosen at routing time).
+        observer.onRoleEmit('evaluator', recorder);
+        // 90%-threshold budget-extension dialog on Evaluator verdict. The
+        // Runner-driven path (FEATURE_184) reaches this branch only via the
+        // Sidecar Verifier bridge after V1 chain retirement (FEATURE_193) —
+        // there are no more scout/contract/handoff emits ahead of the
+        // verdict that could exhaust the cap silently. Still cheap to fire:
+        // `maybeRequestAdditionalWorkBudget` is idempotent when already
+        // above/under threshold (returns 'skipped'). The per-harness
         // `additionalUnits` parameter matches the user's tiered mechanism
         // (H0 → +100 small top-up, H1/H2 → +200 legacy-parity top-up).
         if (budget && budgetExtension) {
@@ -491,18 +374,10 @@ export function wrapEmitterWithRecorder(
           // user sees the dialog immediately (with Evaluator's reason
           // as the summary) rather than waiting for cumulative usage
           // to cross the default gate.
-          const evaluatorBudgetRequest = slot === 'verdict'
-            ? recorder.verdict?.payload.verdict?.budgetRequest
-            : undefined;
+          const evaluatorBudgetRequest = recorder.verdict?.payload.verdict?.budgetRequest;
           const extensionSummary = evaluatorBudgetRequest
             ? `Evaluator requested more budget: ${evaluatorBudgetRequest}`
-            : slot === 'verdict'
-              ? (recorder.verdict?.payload.verdict?.reason ?? 'Evaluator requested another pass')
-              : slot === 'handoff'
-                ? (recorder.handoff?.payload.handoff?.summary ?? 'Generator handoff in progress')
-                : slot === 'contract'
-                  ? (recorder.contract?.payload.contract?.summary ?? 'Planner contract in progress')
-                  : (recorder.scout?.payload.scout?.summary ?? 'Scout investigation in progress');
+            : (recorder.verdict?.payload.verdict?.reason ?? 'Evaluator requested another pass');
           const decision = await maybeRequestAdditionalWorkBudget(
             budgetExtension.events,
             budget,
@@ -518,7 +393,7 @@ export function wrapEmitterWithRecorder(
           budgetExtension.budgetApprovalRef.current = false;
           if (decision === 'approved') {
             budgetExtension.maxRoundsRef.current += 1;
-          } else if (decision === 'denied' && slot === 'verdict') {
+          } else if (decision === 'denied') {
             const verdictPayload = recorder.verdict?.payload.verdict;
             if (verdictPayload?.status === 'revise') {
               // Shard 6d-U: user explicitly denied a budget extension on
