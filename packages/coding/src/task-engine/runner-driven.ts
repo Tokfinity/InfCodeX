@@ -36,13 +36,6 @@ import {
   SCOUT_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../agents/task-engine-agents.js';
-// FEATURE_114 v0.7.36 — gates the AMA Harness V2 single-loop path.
-// Returns false when `KODAX_HARNESS_V2` is unset or anything other than
-// 'true' (case-insensitive). Slice 3b consumes this in two places:
-// (a) entry-agent selection (chain.scout vs chain.worker), and
-// (b) Evaluator's revise handoff target (Generator vs Worker).
-import { isHarnessV2Enabled } from '../agents/worker-role-prompt.js';
-
 import { resolveProvider } from '../providers/index.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
 import {
@@ -764,16 +757,11 @@ async function runManagedTaskViaRunnerInner(
   // Scout's `emit_scout_verdict.confirmedHarness` upgrade payload, so a
   // fresh V2 run that initialized at `H0_DIRECT` would stay there for
   // its entire lifetime and inherit the H0 budget (100 turns) /
-  // max-rounds (1). Users see this as "默认轮数 200 → 100 退化" after
-  // the V2 default flip in Slice 7. PLANNED is the V2-equivalent
-  // profile (budget=200, max-rounds=8, identical envelope to H2) so
-  // we anchor fresh V2 runs there at init. Resume seeds still
-  // override — they carry the committed harness from the prior
-  // session. V1 path (`KODAX_HARNESS_V2=false`) is bit-for-bit
-  // preserved: it starts at H0_DIRECT and upgrades when Scout emits
-  // a verdict, exactly as before.
+  // FEATURE_193 v0.7.43: V1 chain retired — always start fresh V2 runs at
+  // PLANNED (budget=200, max-rounds=8). Resume seeds still override — they
+  // carry the committed harness from the prior session.
   const initialHarness: KodaXHarnessProfile =
-    structuralResumeSeed?.harness ?? (isHarnessV2Enabled() ? 'PLANNED' : 'H0_DIRECT');
+    structuralResumeSeed?.harness ?? 'PLANNED';
   const budget: ManagedTaskBudgetController = {
     totalBudget: BUDGET_CAP_BY_HARNESS[initialHarness],
     spentBudget: 0,
@@ -1405,30 +1393,12 @@ async function runManagedTaskViaRunnerInner(
     },
   });
 
-  // H1 structural resume: when a checkpoint seeded the recorder with a
-  // completed scout (and optionally contract), skip straight to the
-  // first unfinished role. The role-prompt factory reads the seeded
-  // recorder slots so planner/generator/evaluator see `scoutScope` +
-  // `previousRoleSummaries` on turn 1, matching what they'd see mid-run.
-  //
-  // FEATURE_114 v0.7.36 — when `KODAX_HARNESS_V2=true` AND the run is
-  // a fresh start (no structural resume), the AMA Harness V2 single-
-  // loop entry is `chain.worker` instead of `chain.scout`. V2 resume
-  // is intentionally out of scope for v0.7.38 (the V2 entry path
-  // doesn't yet have a checkpoint shape — checkpoints carry
-  // scout/contract/handoff slots, not worker slots). When the flag is
-  // off the literal V1 entry-agent select is preserved bit-for-bit so
-  // the legacy path stays a verbatim baseline.
-  const harnessV2Active = isHarnessV2Enabled();
-  const entryAgent: Agent = structuralResumeSeed
-    ? (structuralResumeSeed.startingRole === 'generator'
-      ? chain.generator
-      : structuralResumeSeed.startingRole === 'planner'
-        ? chain.planner
-        : chain.scout)
-    : harnessV2Active
-      ? chain.worker
-      : chain.scout;
+  // FEATURE_193 v0.7.43: V1 chain (Scout/Planner/Generator) retired. The
+  // Worker single-loop is the only entry path. structuralResumeSeed survives
+  // on the type only for backward-compat reading of legacy V1 checkpoints —
+  // V2 resume from V1 checkpoints isn't supported (and never was), so V1
+  // checkpoint resumes fall back to a fresh Worker entry as well.
+  const entryAgent: Agent = chain.worker;
   // Run-scoped guardrails — built ONCE so the FEATURE_155 idle-yield
   // outer loop can re-enter `Runner.run` cheaply. The factories return
   // stateless objects (idempotency state lives on the closed-over

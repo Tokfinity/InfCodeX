@@ -30,7 +30,6 @@ import {
   PLANNER_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../../../agents/task-engine-agents.js';
-import { isHarnessV2Enabled } from '../../../agents/worker-role-prompt.js';
 import { emitResilienceDebug } from '../../../agent.js';
 import type { ProtocolEmitterMetadata } from '../../../agents/protocol-emitters.js';
 import type {
@@ -321,22 +320,17 @@ export function wrapEmitterWithRecorder(
             }
           }
         }
-        // FEATURE_114 v0.7.36 Slice 3b — V2 revise routing (post-pass).
-        // `resolveHandoffTarget` and the V1 ceiling-violation /
-        // H1-cap rewrites above target Generator as the "executor"
-        // anchor. When V2 is active the executor is Worker, so any
-        // path that ended up with handoffTarget=Generator after the
-        // V1 logic gets rewritten to Worker here. Idempotent and
-        // post-pass so the V1 rewrites keep their literal control
-        // flow under the flag-off baseline.
-        if (slot === 'verdict' && isHarnessV2Enabled()) {
-          const v2EmitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
-          if (v2EmitterMeta.handoffTarget === GENERATOR_AGENT_NAME) {
-            const v2RewrittenMetadata: ProtocolEmitterMetadata = {
-              ...v2EmitterMeta,
+        // FEATURE_193 v0.7.43: V1 chain retired. Worker is the executor; any
+        // legacy V1 verdict metadata that names GENERATOR_AGENT_NAME as the
+        // handoff target gets rewritten to WORKER_AGENT_NAME.
+        if (slot === 'verdict') {
+          const emitterMeta = result.metadata as unknown as ProtocolEmitterMetadata;
+          if (emitterMeta.handoffTarget === GENERATOR_AGENT_NAME) {
+            const rewrittenMetadata: ProtocolEmitterMetadata = {
+              ...emitterMeta,
               handoffTarget: WORKER_AGENT_NAME,
             };
-            result = { ...result, metadata: v2RewrittenMetadata as unknown as Record<string, unknown> };
+            result = { ...result, metadata: rewrittenMetadata as unknown as Record<string, unknown> };
           }
         }
         recorder[slot] = result.metadata as unknown as ProtocolEmitterMetadata;
@@ -471,17 +465,9 @@ export function wrapEmitterWithRecorder(
             );
           }
         }
-        // FEATURE_114 v0.7.38 Slice 7 — V2 role label for the handoff
-        // slot. SLOT_TO_ROLE['handoff'] === 'generator' is the V1 truth
-        // (Generator emits emit_handoff). Under V2 the executor is
-        // Worker, so the slot=handoff emit comes from chain.worker; we
-        // rewrite the role label here so the REPL sees `[Worker]`
-        // instead of `[Generator]` after the handoff fires. All other
-        // slots (scout / contract / verdict) keep their V1 mapping.
+        // FEATURE_193 v0.7.43: V1 chain retired. handoff slot is Worker-emitted.
         const emittedRole: KodaXTaskRole =
-          slot === 'handoff' && isHarnessV2Enabled()
-            ? 'worker'
-            : SLOT_TO_ROLE[slot];
+          slot === 'handoff' ? 'worker' : SLOT_TO_ROLE[slot];
         observer.onRoleEmit(emittedRole, recorder);
         // 90%-threshold budget-extension dialog. Legacy only triggered this
         // on Evaluator revise; the Runner-driven path now fires it after

@@ -40,7 +40,6 @@ import {
   buildPromptOverlay,
 } from '../../../reasoning.js';
 import type { ReasoningPlan } from '../../../reasoning.js';
-import { isHarnessV2Enabled } from '../../../agents/worker-role-prompt.js';
 import {
   buildManagedStatusBudgetFields,
   type ManagedTaskBudgetController,
@@ -342,22 +341,12 @@ export function buildObserverBridge(
   };
   return {
     preflight: () => {
-      // FEATURE_114 v0.7.38 Slice 7 — when V2 is the entry path
-      // (chain.worker, see ~line 5212), the preflight title MUST mirror
-      // that. Otherwise `activeWorkerTitle: 'Scout'` persists into every
-      // Worker tool call (REPL reads `managedTaskStatusRef.current
-      // .activeWorkerTitle` as the per-tool prefix), so users see
-      // `[Scout] read/bash/grep` for a path that's actually running
-      // Worker — exactly the symptom that surfaced after the V2
-      // default flip. V1 path keeps the literal Scout label.
-      const v2Active = isHarnessV2Enabled();
+      // FEATURE_193 v0.7.43: V1 chain retired — preflight always labels Worker.
       emit({
         phase: 'preflight',
-        activeWorkerId: v2Active ? 'worker' : 'scout',
-        activeWorkerTitle: v2Active ? ROLE_TO_TITLE.worker : ROLE_TO_TITLE.scout,
-        note: v2Active
-          ? 'Worker analyzing task'
-          : 'Scout analyzing task complexity',
+        activeWorkerId: 'worker',
+        activeWorkerTitle: ROLE_TO_TITLE.worker,
+        note: 'Worker analyzing task',
         persistToHistory: false,
       });
     },
