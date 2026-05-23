@@ -50,6 +50,7 @@ import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { loadAgentsFiles, formatAgentsForPrompt } from '../context/agents-loader.js';
+import { listConstructedAgents } from '../construction/agent-resolver.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
 import type { KodaXOptions } from '../types.js';
 
@@ -178,6 +179,25 @@ export async function buildCapabilityContextSections(
     );
   }
 
+  // FEATURE_191 — registered specialist agents available for
+  // `dispatch_child_task(subagent_type=<name>)` routing. Conditional
+  // include matches the mcp-capability-context pattern: empty registry
+  // → not injected (saves tokens + keeps prompt cache stable for
+  // single-user runs that never register a specialist). When non-empty,
+  // surfaces each agent's name + description so the Worker LLM can
+  // choose a specialist whose curated instructions / tool whitelist
+  // fits the task.
+  const specialistBlock = buildSpecialistAgentsBlock();
+  if (specialistBlock) {
+    sections.push(
+      createPromptSection(
+        'specialist-agents',
+        specialistBlock,
+        'List registered specialist agents the Worker can dispatch via dispatch_child_task(subagent_type) so curated prompts and tool whitelists get reused instead of duplicated.',
+      ),
+    );
+  }
+
   if (options.context?.promptOverlay?.trim()) {
     sections.push(
       createPromptSection(
@@ -252,6 +272,46 @@ export async function buildCapabilityContextSections(
   }
 
   return sections;
+}
+
+/**
+ * FEATURE_191 A.3 — render the `specialist-agents` section content from
+ * the constructed-agent registry, or null when the registry is empty.
+ *
+ * Format mirrors the claudecode `loadAgentsDir` pattern: one line per
+ * specialist with `name: description`, followed by a single dispatch
+ * hint. Specialists without a `description` field render with a
+ * `(no description)` placeholder so the line shape stays consistent —
+ * AgentContent.description is optional for FEATURE_089 backward
+ * compatibility (the LLM-driven minimal-agent shape only requires
+ * `instructions`).
+ *
+ * Returning null when empty signals to the caller that the section
+ * should not be pushed at all — saves ~80 tokens per turn for the
+ * common single-user case that never registered a specialist, and
+ * keeps the prompt cache key stable across sessions that don't touch
+ * the registry.
+ */
+function buildSpecialistAgentsBlock(): string | null {
+  const agents = listConstructedAgents();
+  if (agents.length === 0) {
+    return null;
+  }
+  const lines = agents
+    .map((agent) => {
+      // Agent.description propagated from AgentContent.description by
+      // buildAgentFromContent. Falls back to a placeholder so the line
+      // shape stays consistent for legacy FEATURE_089 minimal-agent
+      // fixtures that pre-date the description field.
+      return `- ${agent.name}: ${agent.description?.trim() || '(no description)'}`;
+    })
+    .join('\n');
+  return [
+    '=== Available specialist agents ===',
+    lines,
+    '',
+    'Dispatch via dispatch_child_task(subagent_type="<name>").',
+  ].join('\n');
 }
 
 function splitSystemPromptTemplate(template: string): {

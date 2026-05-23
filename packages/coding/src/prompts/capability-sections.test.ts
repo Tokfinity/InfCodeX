@@ -212,3 +212,132 @@ describe('buildCapabilityContextSections', () => {
     expect(wd?.content).toBe(`Working Directory: ${cwd}`);
   });
 });
+
+describe('FEATURE_191 — specialist-agents section (A.3)', () => {
+  // Tests register fake constructed agents and verify the
+  // `specialist-agents` capability section appears (or not) in the
+  // assembled section list. _resetAgentResolverForTesting is called
+  // before/after each so the global registry stays clean.
+  const cleanupDirs: string[] = [];
+
+  afterEach(async () => {
+    const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+    for (const dir of cleanupDirs) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+    cleanupDirs.length = 0;
+  });
+
+  async function buildSections(cwd: string): Promise<readonly { id: string; content: string }[]> {
+    return buildCapabilityContextSections(
+      makeOptions({ executionCwd: cwd, gitRoot: cwd }),
+      false,
+      cwd,
+    );
+  }
+
+  it('omits specialist-agents section when registry is empty (token saving)', async () => {
+    const { _resetAgentResolverForTesting } = await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+    const cwd = await createTempDir('kodax-capsec-sp1-');
+    cleanupDirs.push(cwd);
+
+    const sections = await buildSections(cwd);
+    expect(ids(sections)).not.toContain('specialist-agents');
+  });
+
+  it('injects specialist-agents section when registry has agents, lists name + description', async () => {
+    const { _resetAgentResolverForTesting, registerConstructedAgent } =
+      await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'db-reviewer',
+      version: '1.0.0',
+      content: {
+        instructions: 'DB REVIEWER PROMPT',
+        description: 'Reviews DB migrations for safety',
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'e2e-runner',
+      version: '1.0.0',
+      content: {
+        instructions: 'E2E PROMPT',
+        description: 'End-to-end testing specialist using Playwright',
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const cwd = await createTempDir('kodax-capsec-sp2-');
+    cleanupDirs.push(cwd);
+
+    const sections = await buildSections(cwd);
+    const sp = sections.find((s) => s.id === 'specialist-agents');
+    expect(sp).toBeDefined();
+    expect(sp?.content).toContain('=== Available specialist agents ===');
+    expect(sp?.content).toContain('- db-reviewer: Reviews DB migrations for safety');
+    expect(sp?.content).toContain('- e2e-runner: End-to-end testing specialist using Playwright');
+    expect(sp?.content).toContain('Dispatch via dispatch_child_task(subagent_type="<name>").');
+  });
+
+  it('renders "(no description)" placeholder for agents missing the description field (FEATURE_089 backward compat)', async () => {
+    const { _resetAgentResolverForTesting, registerConstructedAgent } =
+      await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'legacy-agent',
+      version: '1.0.0',
+      // No description — FEATURE_089 minimal-agent shape
+      content: { instructions: 'LEGACY PROMPT' },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const cwd = await createTempDir('kodax-capsec-sp3-');
+    cleanupDirs.push(cwd);
+
+    const sections = await buildSections(cwd);
+    const sp = sections.find((s) => s.id === 'specialist-agents');
+    expect(sp?.content).toContain('- legacy-agent: (no description)');
+  });
+
+  it('section is positioned after mcp-capability-context (per documented ordering)', async () => {
+    const { _resetAgentResolverForTesting, registerConstructedAgent } =
+      await import('../construction/agent-resolver.js');
+    _resetAgentResolverForTesting();
+    registerConstructedAgent({
+      kind: 'agent',
+      name: 'positional',
+      version: '1.0.0',
+      content: { instructions: 'P', description: 'positional test' },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    });
+    const cwd = await createTempDir('kodax-capsec-sp4-');
+    cleanupDirs.push(cwd);
+
+    const sectionIds = ids(await buildSections(cwd));
+    const specialistIdx = sectionIds.indexOf('specialist-agents');
+    expect(specialistIdx).toBeGreaterThan(-1);
+    // mcp-capability-context only fires when an extensionRuntime is configured
+    // (we don't pass one here) — verify specialist-agents lands BEFORE
+    // project-agents / memory-rules instead.
+    const projectAgentsIdx = sectionIds.indexOf('project-agents');
+    if (projectAgentsIdx !== -1) {
+      expect(specialistIdx).toBeLessThan(projectAgentsIdx);
+    }
+  });
+});

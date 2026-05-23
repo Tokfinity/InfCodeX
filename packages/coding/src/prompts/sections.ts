@@ -150,6 +150,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 200,
     stability: 'dynamic',
   },
+  'specialist-agents': {
+    id: 'specialist-agents',
+    title: 'Specialist Agents',
+    owner: 'agent',
+    feature: 'FEATURE_191',
+    slot: 'capability-truth',
+    order: 300,
+    stability: 'dynamic',
+  },
   'long-running-overlay': {
     id: 'long-running-overlay',
     title: 'Long-Running Overlay',

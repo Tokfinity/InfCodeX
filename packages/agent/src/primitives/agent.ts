@@ -125,6 +125,17 @@ export interface Agent<TContext = unknown> {
   readonly handoffs?: readonly Handoff[];
   readonly reasoning?: AgentReasoningProfile;
   readonly guardrails?: readonly Guardrail[];
+  /**
+   * FEATURE_191 — one-sentence human-readable summary surfaced to
+   * other agents that may dispatch this one (e.g., via the
+   * `dispatch_child_task(subagent_type=<name>)` Worker SP block). The
+   * field propagates from `AgentContent.description` when the agent is
+   * built via the construction substrate; built-in / SDK-created
+   * agents may set it directly. Optional for backward compatibility
+   * with the FEATURE_089 minimal-agent shape and pre-FEATURE_191
+   * built-ins.
+   */
+  readonly description?: string;
   /** Reserved for structured-output agents; not consumed in v0.7.23. */
   readonly outputSchema?: unknown;
   readonly model?: string;
