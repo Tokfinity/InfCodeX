@@ -952,9 +952,10 @@ export function inferIntentGate(prompt: string): KodaXIntentGateDecision {
   const hasImplementationSignal = IMPLEMENTATION_PATTERN.test(trimmed) || IMPLEMENTATION_PATTERN_ZH_CLEAN.test(trimmed);
 
   // FEATURE_067 AMA redesign: All actionable tasks go through the model router.
-  // Scout is the final harness decision-maker. The model router provides a better
-  // initial signal than keyword-based heuristics.
-  // Only empty input and greetings bypass the model router (they're non-actionable).
+  // FEATURE_193 (v0.7.43) retired Scout — the model router's verdict is now the
+  // routing authority directly (V2 Worker honours it without a separate Scout
+  // calibration round). Keyword-based heuristics still bypass the router only
+  // for empty input and greetings (non-actionable).
 
   if (hasReviewSignal) {
     return {

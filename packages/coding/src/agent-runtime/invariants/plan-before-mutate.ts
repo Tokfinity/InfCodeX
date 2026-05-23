@@ -20,8 +20,10 @@
  *
  * Reads `recorder.todoUpdateCount` (added v0.7.36 to the recorder
  * context) — the Runner increments it on every `todo_update` call.
- * When the field is missing (legacy V1 path / KODAX_HARNESS_V2=false),
- * the invariant is a no-op so legacy behavior stays untouched.
+ * When the field is missing (e.g. test fixtures that don't wire the
+ * recorder), the invariant is a no-op. FEATURE_193 (v0.7.43) retired
+ * the V1 path that didn't write this field; on V2 the field is always
+ * populated by the Worker.
  */
 
 import type {

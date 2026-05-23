@@ -149,11 +149,12 @@ export const DEFAULT_CODING_MIDDLEWARE: readonly AgentMiddlewareDeclaration[] = 
 /**
  * Default reasoning profile for the SA single-agent declaration — FEATURE_078.
  *
- * Mirrors the AMA worker profiles (Scout=quick/balanced, Generator/Planner/
- * Evaluator=balanced/deep) by giving the SA agent the same `balanced/deep`
- * envelope Generator and Planner use. `escalateOnRevise: true` matches
- * the existing auto-reroute depth-escalation path the substrate already
- * honours when a turn hits an uncertainty / low-value-review heuristic.
+ * Mirrors the AMA Worker profile (`balanced/deep`) so SA and AMA modes
+ * share the same depth envelope. `escalateOnRevise: true` matches the
+ * substrate's existing auto-reroute depth-escalation path that triggers
+ * on uncertainty / low-value-review heuristics. FEATURE_193 (v0.7.43)
+ * retired the V1 multi-role envelope (Scout / Planner / Generator /
+ * Evaluator); only the Worker profile remains.
  *
  * The L1 user ceiling (`--reasoning <mode>` / `options.reasoningMode`) still
  * clamps the effective per-turn depth via `resolveRoleReasoning` and the

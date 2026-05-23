@@ -890,7 +890,8 @@ export async function runSubstrate(
           //
           // The mirror is intentional, not migration debt: this file is
           // the SA-mode substrate body and runner-driven.ts is the AMA-mode
-          // path (Scout/Planner/Generator/Evaluator). They are two parallel
+          // path (V2 Worker single-loop after FEATURE_193 retired the V1
+          // Scout/Planner/Generator/Evaluator chain). They are two parallel
           // execution modes dispatched by `task-engine.ts:dispatchManagedTask`,
           // sharing the same provider stack and therefore seeing the same
           // thinking-mode errors. Per CLAUDE.md "abstract only after 3+

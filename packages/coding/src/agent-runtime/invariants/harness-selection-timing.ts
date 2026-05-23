@@ -2,16 +2,18 @@
  * FEATURE_106 invariant: `harnessSelectionTiming`.
  *
  * External to the FEATURE_101 admission v1 closed set — it's registered
- * to the same runtime but enforces FEATURE_106's harness calibration
+ * to the same runtime but enforced FEATURE_106's harness calibration
  * contract (multi-file mutations must be preceded by a Scout-emitted
- * harness verdict).
+ * harness verdict). FEATURE_193 (v0.7.43) retired the V1 Scout role —
+ * `recorder.scout` is never populated on V2, so the predicate is now a
+ * permanent no-op. Kept registered as a structural placeholder pending
+ * a future cleanup decision (delete vs. repurpose for V2 Worker
+ * harness calibration).
  *
  * Hook:
  *   - observe(mutation_recorded) when the event reports fileCount > 1
  *     and ctx.recorder.scout.payload.scout.confirmedHarness is missing —
- *     emit a `warn` severity result. The signal is informational: it
- *     captures the case where Scout under-classified a multi-file edit
- *     as H0 and we want a dispatch-eval metric without aborting the run.
+ *     emit a `warn` severity result. The signal is informational.
  *
  * v0.7.31 behaviour is intentionally `warn`-only: rejecting mid-run on
  * a missing harness verdict would break runs that legitimately escalate

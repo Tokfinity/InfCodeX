@@ -13,10 +13,10 @@
  * Worker prompt to teach text-only termination as the canonical exit
  * — no `emit_handoff` tool call needed.
  *
- * Gated by the `KODAX_HARNESS_V2` env flag — when off, the legacy
- * Scout / Planner / Generator / Evaluator prompts in role-prompt.ts
- * stay live, so this file's wording cannot affect production runs
- * until a deployment opts in.
+ * FEATURE_193 (v0.7.43) retired the legacy Scout / Planner / Generator
+ * chain entirely — this file's wording is now the only AMA system
+ * prompt path. The `KODAX_HARNESS_V2` env flag was removed at the same
+ * time; setting it has no effect on V2 runs.
  *
  * Wording derives from:
  *   - SCOUT decisional framing (H0/H1/H2 → trivial / multi-step
@@ -40,11 +40,10 @@ import type {
 export const WORKER_AGENT_NAME = 'kodax-worker';
 
 /**
- * Pure builder. Returns a string the role-prompt entry point splices
- * in when `KODAX_HARNESS_V2=true`. Intentionally context-light — the
- * runner-driven path layers workspace / capability / overlay
- * sections around this on top, identical to how the legacy
- * `createRolePrompt` builds.
+ * Pure builder. Returns the system prompt the role-prompt entry point
+ * splices in for the V2 Worker (the only active AMA role after
+ * FEATURE_193). Intentionally context-light — the runner-driven path
+ * layers workspace / capability / overlay sections around this on top.
  */
 export function buildWorkerInstructions(
   decision: KodaXTaskRoutingDecision,

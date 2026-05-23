@@ -53,11 +53,11 @@ export {
  *
  * v0.7.36 FEATURE_114: added `planBeforeMutate` — V2 plan-first
  * structural observation. Registers alongside `harnessSelectionTiming`
- * (not as a replacement); the two coexist because V1 runs gate on the
- * Scout-emitted harness verdict while V2 runs gate on Worker
- * `todo_update`. Each predicate no-ops when its expected fields are
- * absent, so ship-side flag toggle (KODAX_HARNESS_V2) does not need a
- * separate registry.
+ * (not as a replacement). FEATURE_193 (v0.7.43) retired V1 — the
+ * `harnessSelectionTiming` predicate now no-ops on every run because
+ * its `recorder.scout` precondition is never satisfied on the V2 path,
+ * but the invariant stays registered as a structural placeholder until
+ * a future cleanup decides whether to delete it.
  */
 export const CODING_INVARIANTS: readonly QualityInvariant[] = [
   budgetCeiling,
