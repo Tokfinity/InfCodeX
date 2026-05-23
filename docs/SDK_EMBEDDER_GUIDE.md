@@ -15,6 +15,7 @@ are NOT obvious from inspecting the type definitions alone:
 5. [Consuming from a CommonJS context (Electron main, CJS bundles)](#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)
 6. [Session persistence — wiring `runKodaX` to disk](#6-session-persistence--wiring-runkodax-to-disk)
 7. [Local development via `npm link` (iterating against in-tree KodaX)](#7-local-development-via-npm-link-iterating-against-in-tree-kodax)
+8. [Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack](#8-electron--stdio-inherit-on-windows--powershell-input-hijack)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -914,6 +915,103 @@ non-Worker/Generator role are rejected at the dispatch layer.
 - [docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md](test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md) — manual test recipes
 - [docs/features/v0.7.43.md FEATURE_191](features/v0.7.43.md#feature_191-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge) — design + acceptance gates
 - [docs/ADR.md ADR-035](ADR.md#adr-035-user-authored-custom-agents--markdown-loader--extension-registeragent--dispatch_child_task-bridge-feature_191-v0743) — architectural rationale
+
+---
+
+## 8. Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack
+
+### Symptom
+
+A host process (e.g. `scripts/dev.mjs`) spawns Electron with
+`stdio: 'inherit'`. After Electron's main process starts up and loads
+the KodaX SDK, the parent terminal (PowerShell, Windows Terminal,
+cmd.exe) stops responding to keyboard input — characters don't echo,
+Enter doesn't dispatch, Ctrl-C may not register.
+
+### What's actually happening
+
+This is **not caused by KodaX hooking stdin**. The SDK has no
+module-level `process.stdin.on/setRawMode/resume/setEncoding` anywhere
+in the published code path. We verified this empirically with the
+following probe (Node 24, Windows, v0.7.43 dist):
+
+| Probe step | stdin listeners delta | raw mode delta | signal listeners delta |
+|---|---|---|---|
+| `import('@kodax-ai/kodax')` (root) | 0 | none | 0 |
+| `import('@kodax-ai/kodax/agent')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/llm')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/coding')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/mcp')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/session')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/skills')` | 0 | none | 0 |
+| `import('@kodax-ai/kodax/repl')` | 0 | none | 0 |
+| `hydrateProcessEnvFromShell()` (Windows) | 0 (early return) | none | 0 |
+| `loadConfig()` + `listMcpServers()` | 0 | none | 0 |
+
+`hydrateProcessEnvFromShell()` on Windows specifically returns `false`
+at [packages/repl/src/common/utils.ts](../packages/repl/src/common/utils.ts)
+line 151 **before** any `spawnSync`. Even on non-Windows where the
+spawn happens, it explicitly passes `stdio: ['ignore', 'pipe', 'pipe']`
+— the child shell never sees the parent stdin.
+
+The root cause is an Electron + Windows ConPTY interaction: spawning
+an Electron child with `stdio: 'inherit'` from a Windows terminal
+makes the child process inherit a live handle to the parent's input
+stream. Even though nobody inside Electron's main process reads from
+it, the open handle alters how PowerShell / Windows Terminal route
+keystrokes — they cannot tell whether the upstream child has
+"consumed" them. This is a known Windows console quirk independent
+of any code Electron's main module runs.
+
+### Canonical fix (host-side)
+
+Detach Electron's stdin in the spawn config:
+
+```js
+// scripts/dev.mjs
+import { spawn } from 'node:child_process';
+
+const electron = spawn(electronBin, [appEntry], {
+  stdio: ['ignore', 'inherit', 'inherit'], // ← stdin: 'ignore', NOT 'inherit'
+  shell: false,
+});
+```
+
+`stdio: ['ignore', 'inherit', 'inherit']` keeps stdout/stderr piped
+to the host terminal for log visibility but prevents Electron from
+holding the parent's stdin. PowerShell / Windows Terminal regain
+full control of keyboard input. This is the canonical workaround
+Electron itself documents (the `electron/dev-tools` examples ship
+with this exact pattern).
+
+### Why we don't ship a SDK-side mitigation
+
+There is nothing the SDK can do to release a stdin handle it never
+opened. Some hosts (CLI runners, headless servers) may legitimately
+want to pipe data into the Electron main process via stdin; pre-emptively
+closing or redirecting it from inside the SDK would break those.
+The spawn-time decision belongs to the host.
+
+### How to confirm whether your symptom matches this
+
+Run [`scripts/probe-sdk-stdin.mjs`](../scripts/probe-sdk-stdin.mjs)
+against your in-tree or installed SDK dist:
+
+```bash
+# In-tree (this repo):
+node scripts/probe-sdk-stdin.mjs
+
+# Against an installed @kodax-ai/kodax:
+node scripts/probe-sdk-stdin.mjs ./node_modules/@kodax-ai/kodax/dist
+```
+
+The probe imports every SDK subpath and runs the Space startup sequence
+(`hydrateProcessEnvFromShell` / typeof reads / `loadConfig` /
+`listMcpServers` / provider snapshots), reporting stdin listener delta /
+raw-mode delta / signal-handler delta at each step. If every step shows
+"no state change ✓", the issue is in your spawn config — not in KodaX.
+If any step shows a non-zero delta, file an issue with the probe output
+and your Node / OS / SDK version.
 
 ---
 
