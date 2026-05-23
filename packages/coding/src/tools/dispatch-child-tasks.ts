@@ -394,19 +394,13 @@ export async function* toolDispatchChildTask(
   }
 
   const role = ctx.managedProtocolRole;
-  // Scout, Generator (V1 AMA), and Worker (V2 AMA single-loop) are the only
-  // roles permitted to dispatch children. Planner / Evaluator are blocked.
-  // Keep this list in sync with `validateWriteBundles` in
-  // `../child-executor.ts` and the `role` union in
-  // `../task-engine/_internal/managed-task/dispatch-child.ts`.
-  if (role === 'planner' || role === 'evaluator') {
-    return `[Tool Error] ${TOOL_NAME}: ${role} cannot dispatch child tasks. Only Scout, Generator, and Worker may use this tool.`;
-  }
-
+  // FEATURE_193 (v0.7.43): V1 chain retired. Worker (V2 AMA single-loop)
+  // is the only role that dispatches children. Pre-F193 V1 role guards
+  // (`if (role === 'planner' || role === 'evaluator')` and the
+  // Scout-read-only guard) are deleted; the wider `KodaXTaskRole` union
+  // still carries the V1 names for pre-1.0 SDK consumer compat, but no
+  // production code path reaches this tool with those role values.
   const readOnly = (input.read_only ?? input.readOnly) !== false;
-  if (role === 'scout' && !readOnly) {
-    return `[Tool Error] ${TOOL_NAME}: Scout can only dispatch read-only tasks. Write fan-out is available to Generator only.`;
-  }
   // Issue 124 (v0.7.28) A4: structured dispatch telemetry. Reuses the existing
   // reportToolProgress channel (KodaXEvents.onToolProgress) — no new event
   // type, no new logger. Lines are persisted in the REPL transcript and can

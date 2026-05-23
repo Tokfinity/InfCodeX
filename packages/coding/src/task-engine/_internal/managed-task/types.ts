@@ -43,11 +43,16 @@ export interface VerdictRecorder {
  * exclude-based wiring contract. Excludes `direct` (an SA fast-path
  * pseudo-role) since direct runs do not pass through the AMA
  * chain-builder's exclude resolution.
+ *
+ * FEATURE_184 (v0.7.45) Phase C.1: 'evaluator' removed.
+ * FEATURE_193 (v0.7.43): V1 chain retired — 'scout' / 'planner' /
+ * 'generator' removed. Worker single-loop is the only V2 agent
+ * dispatched through the AMA chain-builder. The wider `KodaXTaskRole`
+ * union (in `../../../types.ts`) still carries the V1 names for
+ * pre-1.0 SDK consumer compat (checkpoint reading + REPL UI shapes),
+ * but the AMA-specific subset narrows to a single member.
  */
-// FEATURE_184 (v0.7.45) Phase C.1: 'evaluator' removed from AmaRole.
-// C.3 cleanup will remove remaining evaluator references in role-prompt.ts,
-// REPL UI fixtures, verdict-recorder.ts, and sanitize.ts.
-export type AmaRole = 'scout' | 'planner' | 'generator' | 'worker';
+export type AmaRole = 'worker';
 
 /**
  * Factory that resolves the `ManagedRolePromptContext` for a given role

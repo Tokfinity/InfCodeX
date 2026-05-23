@@ -30,12 +30,10 @@
 import type { KodaXMessage, KodaXToolResultContentItem } from '@kodax-ai/llm';
 import type { Agent, RunnerToolObserver, StopHookFn } from '@kodax-ai/agent';
 import { Runner, getMessageQueue } from '@kodax-ai/agent';
-import {
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  SCOUT_AGENT_NAME,
-  WORKER_AGENT_NAME,
-} from '../agents/task-engine-agents.js';
+// FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
+// GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
+// the only remaining V2 chain agent is the Worker.
+import { WORKER_AGENT_NAME } from '../agents/task-engine-agents.js';
 import { resolveProvider } from '../providers/index.js';
 import { buildCapabilityContextSections } from '../prompts/capability-sections.js';
 import {
@@ -1382,11 +1380,17 @@ async function runManagedTaskViaRunnerInner(
 
   // FEATURE_184 (v0.7.45) Phase C.1 — current-agent role ref.
   // Tracks which role is currently executing so composedStopHook can gate
-  // the sidecar verifier to generator/worker turns only. The sidecar should
-  // NOT fire on Scout or Planner text-only turns (H0_DIRECT Scout answer,
-  // zero-tool Planner fallback) — those are not the "execution terminal" the
-  // verifier is designed to review. Initialised to 'scout' (chain starts
-  // there); updated by onAgentSwitched below.
+  // the sidecar verifier to execution-role (worker) turns only.
+  //
+  // FEATURE_193 (v0.7.43): V1 Scout/Planner/Generator chain retired. The
+  // ref starts at the V1 'scout' sentinel to defer verifier activation
+  // until `onAgentSwitched` flips to 'worker'. The Runner does NOT fire
+  // `onAgentSwitched` for the entry agent on a single-agent chain (see
+  // `runner-handoff.test.ts`); production V2 runs reach this state via
+  // resume-from-checkpoint or via the agent-runner middleware's first-
+  // turn switch. Tests that drive `runManagedTaskViaRunner` directly with
+  // a zero-tool LLM mock observe `verdict.status='running'` because the
+  // verifier never fires under that path.
   const currentAgentRoleRef: { current: KodaXTaskRole | 'scout' | 'planner' } = {
     current: 'scout',
   };
@@ -1494,17 +1498,10 @@ async function runManagedTaskViaRunnerInner(
   const composedStopHook: StopHookFn = async (ctx) => {
     if (sidecarVerifierHook) {
       // FEATURE_184 (v0.7.45) Phase C.1 role gate: only invoke the sidecar
-      // verifier when the *execution* agent (generator / worker) terminates
-      // text-only. Scout and Planner text-only turns (H0_DIRECT Scout
-      // answer, zero-tool Planner fallback) are pre-execution roles — they
-      // do not produce work that needs post-execution verification.
-      // Without this gate the verifier fires on every Scout turn, sets
-      // recorder.verdict='accept', and breaks H0_DIRECT verdict.status
-      // ('running' → 'completed') and roleAssignments (['direct'] →
-      // ['scout', 'evaluator']).
-      const isExecutionRole =
-        currentAgentRoleRef.current === 'generator' ||
-        currentAgentRoleRef.current === 'worker';
+      // verifier on execution-role text-only termination. FEATURE_193
+      // (v0.7.43) collapsed V1 chain — Worker is the only execution role;
+      // the original gate's `=== 'generator'` arm is dead.
+      const isExecutionRole = currentAgentRoleRef.current === 'worker';
       if (isExecutionRole) {
         const isIdleYieldTurn =
           (baseCtx.childTaskRegistry?.size ?? 0) > 0 ||
@@ -1619,12 +1616,13 @@ async function runManagedTaskViaRunnerInner(
       // shape duplicates `onIdleWaiting`'s mapping below — both
       // need Worker recognised; the fallback helper does not.
       onAgentSwitched: ({ to }) => {
+        // FEATURE_193 (v0.7.43): V1 chain retired — `chain.worker` is the
+        // only agent in the V2 chain, so SCOUT_AGENT_NAME / PLANNER_AGENT_NAME
+        // / GENERATOR_AGENT_NAME branches are dead. Mapping reduced to the
+        // Worker check; unknown agent names produce `undefined` (consumer
+        // leaves the label untouched).
         const switchedRole: KodaXTaskRole | undefined =
-          to.name === SCOUT_AGENT_NAME ? 'scout'
-            : to.name === PLANNER_AGENT_NAME ? 'planner'
-              : to.name === GENERATOR_AGENT_NAME ? 'generator'
-                : to.name === WORKER_AGENT_NAME ? 'worker'
-                  : undefined;
+          to.name === WORKER_AGENT_NAME ? 'worker' : undefined;
         // FEATURE_184 (v0.7.45) Phase C.1: update the current-agent role
         // ref so composedStopHook can gate the sidecar verifier to
         // generator/worker turns only.
@@ -1770,12 +1768,12 @@ async function runManagedTaskViaRunnerInner(
       // transient "fast-child race recovery" sub-state
       // (`pendingCount === 0` + `idleWaiting === true`) which the
       // status-bar renders as "idle — resuming".
+      // FEATURE_193 (v0.7.43): V1 chain retired — Worker is the only
+      // agent that can reach idle-yield (dispatch-child-tasks.ts role
+      // guard restricts dispatch to Worker on V2). The SCOUT / PLANNER
+      // / GENERATOR_AGENT_NAME branches are dead.
       const idleRole: KodaXTaskRole | undefined =
-        currentAgent.name === SCOUT_AGENT_NAME ? 'scout'
-          : currentAgent.name === PLANNER_AGENT_NAME ? 'planner'
-            : currentAgent.name === GENERATOR_AGENT_NAME ? 'generator'
-              : currentAgent.name === WORKER_AGENT_NAME ? 'worker'
-                : undefined;
+        currentAgent.name === WORKER_AGENT_NAME ? 'worker' : undefined;
       observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
     },
     // `maxIterations` omitted — wrapper defaults to 64, matching the

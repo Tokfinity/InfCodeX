@@ -53,21 +53,15 @@ const AMA_BASELINE_EXCLUDE: ReadonlySet<string> = new Set([
 ]);
 
 // FEATURE_193 (v0.7.43): SCOUT_EXTRA_EXCLUDE, PLANNER_EXTRA_EXCLUDE,
-// GENERATOR_EXTRA_EXCLUDE deleted as standalone constants — V1 chain roles
-// retired. The AmaRole type still includes scout/planner/generator for
-// backward-compat (e.g. checkpoint reading); record keys are kept to
-// satisfy Record<AmaRole, ...> but resolve to empty sets (no active routing).
+// GENERATOR_EXTRA_EXCLUDE deleted (V1 chain roles retired) — AmaRole
+// narrowed to a single 'worker' member, so ROLE_EXTRA_EXCLUDE collapses
+// to a single-entry record.
 // FEATURE_184 (v0.7.45) Phase C.1: EVALUATOR_EXTRA_EXCLUDE already deleted.
 
 /** Worker (V2 single-loop primary agent): collapses Scout+Generator, full surface. */
 const WORKER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
 
 const ROLE_EXTRA_EXCLUDE: Record<AmaRole, ReadonlySet<string>> = {
-  // FEATURE_193 (v0.7.43): V1 roles retired — empty sets kept for type
-  // completeness with AmaRole. No active agents are dispatched as these roles.
-  scout: new Set<string>(),
-  planner: new Set<string>(),
-  generator: new Set<string>(),
   worker: WORKER_EXTRA_EXCLUDE,
 };
 

@@ -24,12 +24,10 @@ import type {
   RunnableTool,
   RunnerToolResult,
 } from '@kodax-ai/agent';
-import {
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  SCOUT_AGENT_NAME,
-  WORKER_AGENT_NAME,
-} from '../../../agents/task-engine-agents.js';
+// FEATURE_193 (v0.7.43): SCOUT_AGENT_NAME / PLANNER_AGENT_NAME /
+// GENERATOR_AGENT_NAME imports removed alongside the V1 chain agents —
+// the Worker is the only V2 chain agent.
+import { WORKER_AGENT_NAME } from '../../../agents/task-engine-agents.js';
 // FEATURE_193 (v0.7.43): emitContract / emitScoutVerdict imports removed —
 // V1 chain agents retired. The Worker chain doesn't need any emit tool;
 // Sidecar Verifier emits emit_verdict out-of-band.
