@@ -20,21 +20,14 @@
  */
 
 import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
-import {
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-} from './task-engine-agents.js';
 
 import { coerceManagedProtocolToolPayload } from '../managed-protocol.js';
 import type { KodaXManagedProtocolPayload } from '../types.js';
 
-/** Public tool name — LLM sees this on the tool list. */
-export const EMIT_SCOUT_VERDICT_TOOL_NAME = 'emit_scout_verdict';
-export const EMIT_CONTRACT_TOOL_NAME = 'emit_contract';
 // FEATURE_190 (v0.7.43) Phase 3: `EMIT_HANDOFF_TOOL_NAME` / `emitHandoff`
-// deleted. Worker/Generator are terminal post-F184 — text-only termination
-// triggers the Sidecar Verifier StopHook out-of-band; no tool call needed
-// to signal turn-end.
+// deleted. FEATURE_193 (v0.7.43): `EMIT_SCOUT_VERDICT_TOOL_NAME` /
+// `emitScoutVerdict` + `EMIT_CONTRACT_TOOL_NAME` / `emitContract` deleted
+// alongside the V1 chain Scout/Planner agents.
 export const EMIT_VERDICT_TOOL_NAME = 'emit_verdict';
 
 /**
@@ -76,32 +69,19 @@ export function resolveHandoffTarget(
   role: ProtocolEmitterMetadata['role'],
   normalized: Partial<KodaXManagedProtocolPayload>,
 ): { handoffTarget?: string; isTerminal: boolean } {
-  if (role === 'scout') {
-    const harness = normalized.scout?.confirmedHarness;
-    if (harness === 'H1_EXECUTE_EVAL') return { handoffTarget: GENERATOR_AGENT_NAME, isTerminal: false };
-    if (harness === 'H2_PLAN_EXECUTE_EVAL') return { handoffTarget: PLANNER_AGENT_NAME, isTerminal: false };
-    // H0_DIRECT or missing harness → Scout keeps ownership, terminal.
+  // FEATURE_193 (v0.7.43): scout/planner/generator role branches deleted with
+  // V1 chain retirement. Only evaluator (Sidecar Verifier) remains.
+  if (role === 'evaluator') {
+    const status = normalized.verdict?.status;
+    if (status === 'accept' || status === 'blocked') {
+      return { isTerminal: true };
+    }
+    // revise — V1 chain retirement removed the H2→planner branch; any
+    // revise verdict is now treated as terminal (Sidecar emits answers).
     return { isTerminal: true };
   }
-  if (role === 'planner') {
-    return { handoffTarget: GENERATOR_AGENT_NAME, isTerminal: false };
-  }
-  if (role === 'generator') {
-    // FEATURE_184 (v0.7.45) Phase C.1: Generator is now terminal — text-only
-    // termination triggers the Sidecar Verifier StopHook (Phase D.2).
-    return { isTerminal: true };
-  }
-  // evaluator — kept for bridge compat (Sidecar Verifier calls emitVerdict
-  // which flows through this path; see verifier-recorder-bridge.ts).
-  const status = normalized.verdict?.status;
-  if (status === 'accept' || status === 'blocked') {
-    return { isTerminal: true };
-  }
-  // revise — next_harness picks the escalation target (default: back to planner for H2).
-  const next = normalized.verdict?.nextHarness;
-  if (next === 'H2_PLAN_EXECUTE_EVAL') {
-    return { handoffTarget: PLANNER_AGENT_NAME, isTerminal: false };
-  }
+  // Unknown role (legacy V1 path) — fall through as terminal so the runtime
+  // doesn't try to walk a non-existent handoff edge.
   return { isTerminal: true };
 }
 
@@ -146,17 +126,8 @@ function summarizeNormalized(
   role: ProtocolEmitterMetadata['role'],
   normalized: Partial<KodaXManagedProtocolPayload>,
 ): string {
-  if (role === 'scout' && normalized.scout) {
-    const harness = normalized.scout.confirmedHarness ?? 'unknown';
-    const direct = normalized.scout.directCompletionReady;
-    return direct ? `harness=${harness}, direct=${direct}` : `harness=${harness}`;
-  }
-  if (role === 'planner' && normalized.contract) {
-    return `criteria=${normalized.contract.successCriteria?.length ?? 0}`;
-  }
-  if (role === 'generator' && normalized.handoff) {
-    return `status=${normalized.handoff.status}`;
-  }
+  // FEATURE_193 (v0.7.43): scout/planner/generator role summaries deleted
+  // with V1 chain retirement.
   if (role === 'evaluator' && normalized.verdict) {
     const next = normalized.verdict.nextHarness ? `, next=${normalized.verdict.nextHarness}` : '';
     return `status=${normalized.verdict.status}${next}`;
@@ -164,118 +135,8 @@ function summarizeNormalized(
   return 'ok';
 }
 
-/**
- * Scout verdict emitter. Reports the outcome of scope analysis and the
- * chosen harness tier. The Runner-driven task engine reads
- * `metadata.payload.scout.confirmedHarness` to decide whether to hand off
- * to Generator (H1) or Planner (H2), or to finish directly (H0).
- */
-export const emitScoutVerdict: RunnableTool = buildEmitter({
-  name: EMIT_SCOUT_VERDICT_TOOL_NAME,
-  role: 'scout',
-  description:
-    'Emit the Scout verdict — harness tier, scope facts, required evidence, and optional skill map. ' +
-    'Call this exactly once when scope analysis is complete. The chosen `confirmed_harness` ' +
-    'determines the downstream pipeline: H0_DIRECT (Scout answers), H1_EXECUTE_EVAL ' +
-    '(hand off to Generator), or H2_PLAN_EXECUTE_EVAL (hand off to Planner).',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      summary: { type: 'string', description: 'One-line summary of the scope assessment.' },
-      scope: { type: 'array', items: { type: 'string' }, description: 'Files / areas in scope.' },
-      required_evidence: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Evidence items the downstream worker must gather.',
-      },
-      review_files_or_areas: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'High-priority files for downstream review.',
-      },
-      confirmed_harness: {
-        type: 'string',
-        enum: ['H0_DIRECT', 'H1_EXECUTE_EVAL', 'H2_PLAN_EXECUTE_EVAL'],
-        description: 'Chosen harness tier.',
-      },
-      harness_rationale: { type: 'string', description: 'Why this harness tier.' },
-      blocking_evidence: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Issues blocking escalation.',
-      },
-      direct_completion_ready: {
-        type: 'string',
-        enum: ['yes', 'no'],
-        description: 'For H0 only — is the direct answer already complete?',
-      },
-      downstream_reasoning_hint: {
-        type: 'string',
-        enum: ['off', 'auto', 'quick', 'balanced', 'deep'],
-        description:
-          'FEATURE_078: optional non-binding suggestion for the reasoning depth ' +
-          'downstream workers (Planner / Generator / Evaluator) should use. Set ' +
-          'sparingly — only when the scoped task is atypically simple (suggest ' +
-          '"quick") or atypically risky/complex (suggest "deep"). Leave unset to ' +
-          'let each downstream agent stick to its declared default profile. The ' +
-          'value is clamped by the user-supplied `--reasoning <mode>` ceiling and ' +
-          'by each agent\'s own `max` field, so this hint can never escalate ' +
-          'beyond what the user explicitly authorized.',
-      },
-      evidence_acquisition_mode: {
-        type: 'string',
-        enum: ['overview', 'diff-bundle', 'diff-slice', 'file-read'],
-        description: 'How evidence was acquired.',
-      },
-      skill_map: {
-        type: 'object',
-        properties: {
-          skill_summary: { type: 'string' },
-          execution_obligations: { type: 'array', items: { type: 'string' } },
-          verification_obligations: { type: 'array', items: { type: 'string' } },
-          ambiguities: { type: 'array', items: { type: 'string' } },
-          projection_confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-        },
-      },
-    },
-    required: ['confirmed_harness'],
-  },
-});
-
-/**
- * Planner contract emitter (H2 only). Produces the execution contract the
- * Generator consumes: success criteria, required evidence, constraints.
- */
-export const emitContract: RunnableTool = buildEmitter({
-  name: EMIT_CONTRACT_TOOL_NAME,
-  role: 'planner',
-  description:
-    'Emit the execution contract after planning. Call this exactly once when the plan is ready. ' +
-    'The contract binds the Generator: it lists what success looks like, what evidence must be ' +
-    'produced, and what constraints must be respected.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      summary: { type: 'string', description: 'One-line contract summary.' },
-      success_criteria: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'What success looks like.',
-      },
-      required_evidence: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Evidence the Generator must produce.',
-      },
-      constraints: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'Constraints / gotchas to respect.',
-      },
-    },
-    required: ['success_criteria'],
-  },
-});
+// FEATURE_193 (v0.7.43): `emitScoutVerdict` + `emitContract` deleted with
+// V1 chain retirement. Scout / Planner roles no longer exist.
 
 /**
  * Sidecar Verifier verdict emitter (FEATURE_184). Decides the terminal
@@ -327,14 +188,11 @@ export const emitVerdict: RunnableTool = buildEmitter({
 });
 
 /**
- * All three emitter tools, exposed as a tuple for iteration.
- *
- * FEATURE_190 (v0.7.43) Phase 3: shrank from 4 to 3 — `emitHandoff` deleted.
- * Worker/Generator terminate text-only; Sidecar Verifier owns terminal
- * decisions out-of-band.
+ * Emitter tools tuple. FEATURE_190 (v0.7.43) shrank from 4→3 with
+ * `emitHandoff` deletion; FEATURE_193 (v0.7.43) shrank to 1 with
+ * `emitScoutVerdict` + `emitContract` deletion — only the Sidecar Verifier
+ * emitter survives.
  */
 export const PROTOCOL_EMITTER_TOOLS: readonly RunnableTool[] = Object.freeze([
-  emitScoutVerdict,
-  emitContract,
   emitVerdict,
 ]);

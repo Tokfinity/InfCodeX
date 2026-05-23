@@ -13,29 +13,24 @@
 import { describe, expect, it } from 'vitest';
 import type { ProtocolEmitterMetadata } from './protocol-emitters.js';
 import {
-  EMIT_CONTRACT_TOOL_NAME,
-  EMIT_SCOUT_VERDICT_TOOL_NAME,
+  // FEATURE_193 (v0.7.43): EMIT_SCOUT_VERDICT_TOOL_NAME / emitScoutVerdict +
+  // EMIT_CONTRACT_TOOL_NAME / emitContract deleted — V1 chain roles retired.
   EMIT_VERDICT_TOOL_NAME,
   PROTOCOL_EMITTER_TOOLS,
-  emitContract,
-  emitScoutVerdict,
   emitVerdict,
 } from './protocol-emitters.js';
 import { coerceManagedProtocolToolPayload } from '../managed-protocol.js';
 
-function runExecute(tool: typeof emitScoutVerdict, input: Record<string, unknown>) {
+function runExecute(tool: typeof emitVerdict, input: Record<string, unknown>) {
   return tool.execute(input, { agent: { name: 'test', instructions: '' } });
 }
 
 describe('protocol emitters — tool shapes', () => {
-  // FEATURE_190 (v0.7.43) Phase 3: shrank from 4 to 3 — `emitHandoff`
-  // deleted. Worker/Generator terminate text-only; Sidecar Verifier
-  // owns terminal decisions out-of-band.
-  it('exposes the three expected tool names', () => {
-    expect(emitScoutVerdict.name).toBe(EMIT_SCOUT_VERDICT_TOOL_NAME);
-    expect(emitContract.name).toBe(EMIT_CONTRACT_TOOL_NAME);
+  // FEATURE_193 (v0.7.43): shrank from 3 to 1 — emitScoutVerdict + emitContract
+  // deleted with V1 chain retirement. Only emitVerdict (Sidecar Verifier) remains.
+  it('exposes the one expected tool name (emitVerdict)', () => {
     expect(emitVerdict.name).toBe(EMIT_VERDICT_TOOL_NAME);
-    expect(PROTOCOL_EMITTER_TOOLS).toHaveLength(3);
+    expect(PROTOCOL_EMITTER_TOOLS).toHaveLength(1);
   });
 
   it('declares an execute function on each tool', () => {
@@ -44,16 +39,11 @@ describe('protocol emitters — tool shapes', () => {
     }
   });
 
-  it('requires confirmed_harness on scout, status on evaluator, success_criteria on planner', () => {
-    expect(emitScoutVerdict.input_schema.required).toContain('confirmed_harness');
-    expect(emitContract.input_schema.required).toContain('success_criteria');
+  it('requires status on evaluator', () => {
     expect(emitVerdict.input_schema.required).toContain('status');
   });
 
-  it('enumerates the harness tier on scout and the status on evaluator', () => {
-    const harnessEnum = (emitScoutVerdict.input_schema.properties as Record<string, { enum?: string[] }>)
-      .confirmed_harness?.enum;
-    expect(harnessEnum).toEqual(['H0_DIRECT', 'H1_EXECUTE_EVAL', 'H2_PLAN_EXECUTE_EVAL']);
+  it('enumerates the status on evaluator', () => {
     const verdictStatusEnum = (emitVerdict.input_schema.properties as Record<string, { enum?: string[] }>)
       .status?.enum;
     expect(verdictStatusEnum).toEqual(['accept', 'revise', 'blocked']);
@@ -134,10 +124,13 @@ describe('protocol emitters — handoff target resolution (Shard 4)', () => {
     expect(meta.isTerminal).toBe(true);
   });
 
-  it('evaluator revise with next_harness=H2 → handoff to planner', async () => {
+  // FEATURE_193 (v0.7.43): next_harness=H2 → planner routing deleted with
+  // V1 chain retirement. revise+H2 is now terminal (same as all revise).
+  it('evaluator revise with next_harness=H2 → isTerminal=true (planner retired)', async () => {
     const result = await runExecute(emitVerdict, { status: 'revise', next_harness: 'H2' });
     const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBe('kodax/role/planner');
+    expect(meta.handoffTarget).toBeUndefined();
+    expect(meta.isTerminal).toBe(true);
   });
 });
 

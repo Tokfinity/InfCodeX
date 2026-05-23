@@ -765,19 +765,15 @@ export {
   createDefaultCodingAgent,
 } from './coding-preset.js';
 
-// FEATURE_193 v0.7.43: V1 chain Coding Agent instances (scoutCodingAgent /
-// plannerCodingAgent / generatorCodingAgent / CODING_AGENTS) deleted along
-// with the V1 chain agents themselves. EMIT_SCOUT_VERDICT_TOOL_NAME +
-// EMIT_CONTRACT_TOOL_NAME + emitScoutVerdict + emitContract retire in
-// Commit 4 alongside the protocol-emitters cleanup.
+// FEATURE_193 v0.7.43: V1 chain Coding Agent instances + V1 emit tools
+// (scoutCodingAgent / plannerCodingAgent / generatorCodingAgent /
+// CODING_AGENTS / EMIT_SCOUT_VERDICT_TOOL_NAME / EMIT_CONTRACT_TOOL_NAME /
+// emitScoutVerdict / emitContract) all retired. EMIT_VERDICT_TOOL_NAME +
+// emitVerdict survive for the Sidecar Verifier (FEATURE_184).
 export {
   CODING_AGENT_MARKER,
-  EMIT_CONTRACT_TOOL_NAME,
-  EMIT_SCOUT_VERDICT_TOOL_NAME,
   EMIT_VERDICT_TOOL_NAME,
   PROTOCOL_EMITTER_TOOLS,
-  emitContract,
-  emitScoutVerdict,
   emitVerdict,
 } from './agents/index.js';
 export type { ProtocolEmitterMetadata } from './agents/index.js';

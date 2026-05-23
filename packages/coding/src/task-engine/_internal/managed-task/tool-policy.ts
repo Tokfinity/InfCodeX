@@ -337,49 +337,17 @@ export function buildManagedWorkerToolPolicy(
     };
   };
 
+  // FEATURE_193 (v0.7.43): case 'scout', case 'planner', case 'generator'
+  // deleted — V1 chain roles retired. Worker runs with unrestricted tool
+  // surface (prompt-enforced discipline); evaluator was already deleted by
+  // FEATURE_184. All roles fall through to the default undefined return.
   switch (role) {
-    case 'scout':
-      return undefined;
     // FEATURE_114 v0.7.36 — Worker is the AMA Harness V2 single-loop
-    // primary role. Like Scout under V1, Worker runs with the default
-    // unrestricted tool surface — discipline (plan-first, mutation
-    // discipline, dispatch RULE A/B/C, scope commitment) is enforced
-    // by the prompt (`worker-role-prompt.ts`), not the tool-policy
-    // layer. The structural Evaluator gate remains the safety net.
+    // primary role. Discipline (plan-first, mutation discipline,
+    // dispatch RULE A/B/C, scope commitment) is enforced by the prompt
+    // (`worker-role-prompt.ts`), not the tool-policy layer.
     case 'worker':
       return undefined;
-    case 'planner':
-      return finalizeToolPolicy({
-        summary: 'Planner may inspect scope facts and overview evidence to produce a sprint contract, but must not linearly page raw diffs, perform deep claim verification, mutate files, or execute implementation steps.',
-        blockedTools: [...WRITE_ONLY_TOOLS],
-        allowedTools: [...PLANNER_ALLOWED_TOOLS],
-        allowedShellPatterns: [...INSPECTION_SHELL_PATTERNS],
-      });
-    case 'generator':
-      if (harnessProfile === 'H1_EXECUTE_EVAL' && scoutMutationIntent === 'review-only') {
-        return finalizeToolPolicy({
-          summary: 'H1 review-only Generator should stay non-mutating per Scout\'s scope. It may inspect scoped evidence and run only limited inspection or explicitly required verification commands; mutate files only if the handoff explicitly requires fixes.',
-          blockedTools: [...WRITE_ONLY_TOOLS],
-          allowedTools: [...H1_READONLY_GENERATOR_ALLOWED_TOOLS],
-          allowedShellPatterns: Array.from(new Set([
-            ...INSPECTION_SHELL_PATTERNS,
-            ...buildRuntimeVerificationShellPatterns(verification),
-          ])),
-        });
-      }
-      if (harnessProfile === 'H1_EXECUTE_EVAL' && scoutMutationIntent === 'docs-scoped') {
-        return finalizeToolPolicy({
-          summary: 'H1 docs-scoped Generator: Scout\'s scope points entirely at documentation paths. Keep edits within those paths; do not expand into source, configuration, build outputs, or system state unless new evidence demands it.',
-          allowedWritePathPatterns: [...DOCS_ONLY_WRITE_PATH_PATTERNS],
-          allowedShellPatterns: Array.from(new Set([
-            ...INSPECTION_SHELL_PATTERNS,
-            ...buildRuntimeVerificationShellPatterns(verification),
-          ])),
-        });
-      }
-      return undefined;
-    // FEATURE_184 (v0.7.45) Phase C.1: 'evaluator' case deleted.
-    // Sidecar Verifier (Phase D.2) enforces its own policy boundary.
     default:
       return undefined;
   }

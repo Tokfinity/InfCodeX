@@ -138,7 +138,8 @@ import {
 } from '../agent-runtime/middleware/stall-sidecar/index.js';
 import { resolveStallSidecarProvider } from '../agent-runtime/middleware/stall-sidecar/provider-resolver.js';
 import { composeToolObservers } from '../agent-runtime/middleware/compose-tool-observers.js';
-import { createScopeAwareHarnessGuardrail } from '../agent-runtime/middleware/scope-aware-harness-guardrail.js';
+// FEATURE_193 (v0.7.43): createScopeAwareHarnessGuardrail import removed —
+// scope-aware-harness-guardrail.ts deleted (V1 Scout H0→H1/H2 guardrail).
 import { createToolResultTruncationGuardrail } from '../tools/tool-result-truncation-guardrail.js';
 import { createEnvelopeAggregateBudgetEnforcer } from '../tools/envelope-budget.js';
 import { createBlobSummarizer } from '../tools/blob-summarizer.js';
@@ -1403,24 +1404,15 @@ async function runManagedTaskViaRunnerInner(
   // `mutationTracker` / `payloadRef`, which persist across iterations
   // either way), so reusing is purely a small allocation saving on the
   // resume path; correctness is unchanged from the pre-loop shape.
+  // FEATURE_193 (v0.7.43): scope-aware-harness-guardrail removed from
+  // runnerGuardrails — was FEATURE_106 V1 Scout H0→H1/H2 miscalibration
+  // detection, no longer applicable post-V1-chain retirement.
   const runnerGuardrails = [
-    // 1. tool-result-truncation: post-execute size policy parity with
-    //    the SA substrate (`applyToolResultGuardrail`). Without it the
-    //    LLM sees raw unbounded tool output, blowing the context window
-    //    on read/grep of large files.
+    // tool-result-truncation: post-execute size policy parity with
+    // the SA substrate (`applyToolResultGuardrail`). Without it the
+    // LLM sees raw unbounded tool output, blowing the context window
+    // on read/grep of large files.
     createToolResultTruncationGuardrail(baseCtx),
-    // 2. scope-aware-harness (FEATURE_106 v0.7.31): when Scout has
-    //    committed to H0_DIRECT (or hasn't committed at all) and
-    //    Generator-stage mutations cross the significance threshold
-    //    (≥3 files OR ≥100 lines), append the canonical
-    //    emit_scout_verdict hint so the LLM can promote to H1/H2.
-    //    Idempotent on `mutationTracker.reflectionInjected`; reads
-    //    `managedProtocolPayloadRef.current.scout.confirmedHarness` to
-    //    skip when Scout already escalated.
-    createScopeAwareHarnessGuardrail({
-      mutationTracker,
-      payloadRef: managedProtocolPayloadRef,
-    }),
   ] as const;
   // Surface Runner tool-loop invocations through the KodaXEvents
   // channels the worker ledger consumes. Without this wiring the REPL

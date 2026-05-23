@@ -30,10 +30,9 @@ import {
   SCOUT_AGENT_NAME,
   WORKER_AGENT_NAME,
 } from '../../../agents/task-engine-agents.js';
-import {
-  emitContract,
-  emitScoutVerdict,
-} from '../../../agents/protocol-emitters.js';
+// FEATURE_193 (v0.7.43): emitContract / emitScoutVerdict imports removed —
+// V1 chain agents retired. The Worker chain doesn't need any emit tool;
+// Sidecar Verifier emits emit_verdict out-of-band.
 import { toolBash } from '../../../tools/bash.js';
 import { toolEdit } from '../../../tools/edit.js';
 import { toolMultiEdit } from '../../../tools/multi-edit.js';
@@ -79,9 +78,8 @@ import {
 } from '../../deterministic-evaluator.js';
 import type { TodoStore } from '../../todo-store.js';
 import {
-  SCOUT_INSTRUCTIONS_FALLBACK,
-  PLANNER_INSTRUCTIONS_FALLBACK,
-  GENERATOR_INSTRUCTIONS_FALLBACK,
+  // FEATURE_193 (v0.7.43): SCOUT_INSTRUCTIONS_FALLBACK, PLANNER_INSTRUCTIONS_FALLBACK,
+  // GENERATOR_INSTRUCTIONS_FALLBACK removed — V1 chain roles retired.
   WORKER_INSTRUCTIONS_FALLBACK,
   resolveRoleInstructions,
 } from './role-prompts.js';
@@ -544,49 +542,9 @@ export function buildRunnerAgentChain(
     events,
   );
 
-  // M5 (v0.7.26) — only the scout slot needs the mutation-tracker /
-  // events channel to surface "Scout wrote files before handing off"
-  // warnings. The other slots don't need that wiring.
-  // FEATURE_097 (v0.7.34) — scout/contract/verdict slots need the
-  // todoStore for seeding + Evaluator auto-handling; handoff slot does
-  // not (Generator's tool calls already mutate via `todo_update`).
-  const scoutEmit = wrapEmitterWithRecorder(
-    emitScoutVerdict,
-    'scout',
-    recorder,
-    observer,
-    budget,
-    undefined,
-    ctx.mutationTracker,
-    events,
-    todoStore,
-    pendingFailedResetRef,
-  );
-  const contractEmit = wrapEmitterWithRecorder(
-    emitContract,
-    'contract',
-    recorder,
-    observer,
-    budget,
-    undefined,
-    undefined,
-    undefined,
-    todoStore,
-    pendingFailedResetRef,
-  );
-  // FEATURE_190 (v0.7.43) Phase 3: `handoffEmit` deleted. Under the
-  // F184 Sidecar Verifier architecture Worker/Generator terminate
-  // text-only — no tool call to populate `recorder.handoff`, so the
-  // outer-loop `computeSnapshot` reads `Boolean(recorder.handoff) ==
-  // false` permanently and idle-yield handles the pending-children case
-  // naturally (text-only + pending children → wait + resume). The
-  // FEATURE_165 pending-children gate's invariant survives via the
-  // idle-yield path: when Worker terminates text-only with pending
-  // children, `detectIdleYield` returns true, the runner waits for
-  // each child banner, and Worker resumes — same end-user observable
-  // as the F165 gate's "stay in Worker, wait for children" behaviour
-  // (just without the LLM ever calling a tool that would need to be
-  // rejected).
+  // FEATURE_193 (v0.7.43): scoutEmit + contractEmit deleted with V1 chain.
+  // FEATURE_190 (v0.7.43) Phase 3: `handoffEmit` deleted — Worker terminates
+  // text-only (Sidecar Verifier StopHook handles verification out-of-band).
   type WritableAgent = { -readonly [K in keyof Agent]: Agent[K] };
 
   // Dynamic role instructions. Every agent's `instructions`

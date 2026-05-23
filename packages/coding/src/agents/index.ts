@@ -6,13 +6,12 @@
  * Shard 5.
  */
 
+// FEATURE_193 (v0.7.43): emit_scout_verdict / emit_contract tools retired
+// with V1 chain. EMIT_VERDICT_TOOL_NAME / emitVerdict survive for the
+// Sidecar Verifier (FEATURE_184).
 export {
-  EMIT_CONTRACT_TOOL_NAME,
-  EMIT_SCOUT_VERDICT_TOOL_NAME,
   EMIT_VERDICT_TOOL_NAME,
   PROTOCOL_EMITTER_TOOLS,
-  emitContract,
-  emitScoutVerdict,
   emitVerdict,
 } from './protocol-emitters.js';
 export type { ProtocolEmitterMetadata } from './protocol-emitters.js';

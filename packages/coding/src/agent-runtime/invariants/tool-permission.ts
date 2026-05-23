@@ -95,8 +95,8 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     // at the role-routing layer. FEATURE_190 (v0.7.43): `emit_handoff`
     // removed — F184 retired the Worker→Evaluator handoff and Worker is
     // now terminal via text-only termination + Sidecar Verifier.
-    case 'emit_scout_verdict':
-    case 'emit_contract':
+    // FEATURE_193 (v0.7.43): emit_scout_verdict and emit_contract deleted —
+    // scout and planner roles retired along with their emit tools.
     case 'emit_verdict':
     case 'emit_managed_protocol':         // v0.7.22 deprecated alias — keep until removed
     case 'scaffold_tool':

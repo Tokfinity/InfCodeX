@@ -29,11 +29,8 @@ import type {
   KodaXTaskToolPolicy,
   KodaXTaskVerificationContract,
 } from '../../../types.js';
-import {
-  MANAGED_TASK_CONTRACT_BLOCK,
-  MANAGED_TASK_VERDICT_BLOCK,
-} from '../../../managed-protocol.js';
-import { isRepoIntelligenceWorkingToolName } from '../../../tools/index.js';
+// FEATURE_193 (v0.7.43): MANAGED_TASK_CONTRACT_BLOCK, MANAGED_TASK_VERDICT_BLOCK,
+// and isRepoIntelligenceWorkingToolName removed — only used by deleted V1 cases.
 import { buildWorkerInstructions } from '../../../agents/worker-role-prompt.js';
 import {
   formatFullSkillSection,
@@ -46,26 +43,16 @@ import {
   formatVerificationContract,
 } from './formatting.js';
 import {
-  inferScoutMutationIntent,
-  isReviewEvidenceTask,
+  // FEATURE_193 (v0.7.43): inferScoutMutationIntent and isReviewEvidenceTask
+  // no longer imported — only used by deleted V1 scout/planner/generator cases.
   type ManagedRolePromptContext,
 } from './role-prompt-types.js';
 
-/**
- * Role → emit tool name mapping. v0.7.22 used a single
- * `emit_managed_protocol` tool; the Runner-driven path routes each role
- * through its own dedicated emitter so the LLM picks the correct schema.
- *
- * FEATURE_190 (v0.7.43) Phase 3: `generator` and `worker` removed — both
- * roles are terminal under F184 architecture and have no emit tool
- * (text-only termination + out-of-band Sidecar Verifier). Keep in sync
- * with `packages/coding/src/agents/protocol-emitters.ts` —
- * this is the single place the prompt text references emit tools by name.
- */
-const ROLE_EMIT_TOOL_NAMES: Record<'scout' | 'planner', string> = {
-  scout: 'emit_scout_verdict',
-  planner: 'emit_contract',
-};
+// FEATURE_193 (v0.7.43): ROLE_EMIT_TOOL_NAMES deleted — scout and planner
+// roles retired along with their emit tools (emit_scout_verdict,
+// emit_contract). Only emit_verdict remains for the evaluator role, referenced
+// directly in parse-helpers.ts. The worker role terminates text-only under
+// F184/F190 architecture with no emit tool.
 
 /**
  * Build the system prompt for a single managed-task role.
@@ -88,6 +75,9 @@ export function createRolePrompt(
   isTerminalAuthority = false,
 ): string {
   void workerId;
+  // FEATURE_193 (v0.7.43): isTerminalAuthority was used by the deleted
+  // generator case. Kept on signature for call-site stability.
+  void isTerminalAuthority;
   const originalTask = rolePromptContext?.originalTask || prompt;
   // Issue 119: For post-Scout roles (generator/planner/evaluator), `decision.mutationSurface`
   // is a stale pre-Scout regex heuristic. Show it only to Scout — downstream workers get
@@ -273,22 +263,11 @@ export function createRolePrompt(
   const agentSection = `Assigned native agent identity: ${agent}`;
   const skillInvocation = rolePromptContext?.skillInvocation;
   const skillMap = rolePromptContext?.skillMap;
-  const previousRoleSummary = role === 'generator'
-    ? undefined
-    : rolePromptContext?.previousRoleSummaries?.[role];
-  const scoutSkillSection = skillInvocation
-    ? [
-      formatSkillInvocationSummary(skillInvocation),
-      'You own the first intelligent skill decomposition pass. Read the full expanded skill below, then map it into summary/obligations/ambiguities for the downstream harness.',
-      formatFullSkillSection(skillInvocation),
-    ].filter((section): section is string => Boolean(section)).join('\n\n')
-    : undefined;
-  const plannerSkillSection = skillMap
-    ? [
-      formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath),
-      'Use the skill map as the planning view of the skill. Do not rely on the raw skill workflow unless the map explicitly says it is low-confidence and missing critical obligations.',
-    ].join('\n\n')
-    : undefined;
+  // FEATURE_193 (v0.7.43): removed `role === 'generator' ? undefined : ...`
+  // guard — generator role deleted. Worker always reads previousRoleSummaries.
+  const previousRoleSummary = rolePromptContext?.previousRoleSummaries?.[role];
+  // FEATURE_193 (v0.7.43): scoutSkillSection and plannerSkillSection deleted
+  // with scout/planner roles.
   const generatorSkillSection = skillInvocation
     ? [
       skillMap ? formatSkillMapSection(skillMap, rolePromptContext?.skillMapArtifactPath) : undefined,
@@ -307,488 +286,31 @@ export function createRolePrompt(
   const previousRoleSummarySection = previousRoleSummary
     ? formatRoleRoundSummarySection(previousRoleSummary)
     : undefined;
-  const reviewLikeTask = isReviewEvidenceTask(decision);
-  const reviewPresentationRule = decision.primaryTask === 'review'
-    ? [
-      'When the task is review or audit, speak directly to the user about the final review findings. Do not frame the answer as grading or critiquing the Generator.',
-      'Lead with concrete findings, ordered by severity, and anchor each finding to the strongest available file/path evidence.',
-      'If there are no findings, say so explicitly before mentioning residual risks or testing gaps.',
-    ].join('\n')
-    : undefined;
-  const repoWorkingToolsEnabled = toolPolicy?.allowedTools
-    ? toolPolicy.allowedTools.some((toolName) => isRepoIntelligenceWorkingToolName(toolName))
-    : true;
-  const diffPagingToolsEnabled = toolPolicy?.allowedTools
-    ? toolPolicy.allowedTools.includes('changed_diff') || toolPolicy.allowedTools.includes('changed_diff_bundle')
-    : true;
+  // FEATURE_193 (v0.7.43): reviewLikeTask, reviewPresentationRule,
+  // repoWorkingToolsEnabled, diffPagingToolsEnabled deleted — only used by
+  // V1 scout/planner/generator cases.
   const parallelBatchGuidance = [
     'When multiple read-only tool calls are independent, emit them in the same response so parallel mode can run them together.',
     'Only serialize tool calls when a later call depends on an earlier result.',
     'Keep parallel batches focused: prefer a few narrow grep/read/diff calls over many tiny sequential probes.',
   ].join('\n');
-  const scoutReviewEvidenceGuidance = reviewLikeTask
-    ? [
-      repoWorkingToolsEnabled
-        ? 'For large or history-based reviews, stay at the scope-facts level first: changed_scope -> repo_overview (only when needed) -> a small amount of changed_diff_bundle for high-priority files.'
-        : 'For large or history-based reviews in off mode, stay at cheap facts first with glob/grep/read and avoid rebuilding a repo-intelligence-style scope pass.',
-      diffPagingToolsEnabled
-        ? 'Do not linearly page changed_diff slices or verify individual claims. You are only deciding whether the task should stay direct or move into a heavier harness.'
-        : 'Do not linearly page raw file content or verify individual claims. You are only deciding whether the task should stay direct or move into a heavier harness.',
-      'When one file dominates the diff, summarize the risk and first-inspection areas instead of paging through the whole file.',
-    ].join('\n')
-    : undefined;
-  const plannerReviewEvidenceGuidance = reviewLikeTask
-    ? [
-      repoWorkingToolsEnabled
-        ? 'Plan from scope facts plus overview evidence only: changed_scope -> repo_overview (only when needed) -> changed_diff_bundle for high-priority files.'
-        : 'In off mode, plan from general-purpose evidence only: use glob/grep/read to anchor the contract without assuming repo-intelligence scope tooling is available.',
-      diffPagingToolsEnabled
-        ? 'Do not linearly page changed_diff slices for large files. If a bundle flags a critical entrypoint or type, use at most a small pinpoint read to anchor the contract.'
-        : 'Do not linearly page raw file content for large files. Use at most a small pinpoint read to anchor the contract.',
-      'If overview evidence is still incomplete, record the missing proof in required_evidence or constraints instead of omitting the contract.',
-    ].join('\n')
-    : undefined;
-  const generatorReviewEvidenceGuidance = reviewLikeTask
-    ? (
-        decision.harnessProfile === 'H1_EXECUTE_EVAL'
-          ? [
-            'Consume the Scout handoff before collecting more evidence.',
-            diffPagingToolsEnabled
-              ? 'Own the focused deep-evidence pass: use changed_diff/read only on the handoff\'s priority files, suspicious areas, and unresolved claims.'
-              : 'Own the focused deep-evidence pass with read/grep only on the handoff\'s priority files, suspicious areas, and unresolved claims.',
-            'Do not restart whole-repo evidence gathering unless the Scout handoff explicitly leaves critical scope unresolved.',
-            diffPagingToolsEnabled
-              ? 'When one file dominates the diff, prefer fewer larger changed_diff slices (roughly limit=360-480) over repeated 100-150 line paging.'
-              : 'When one file dominates the evidence, prefer fewer larger read slices over repeated tiny paging.',
-          ]
-          : [
-            'Consume the Scout handoff and Planner contract before collecting more evidence.',
-            diffPagingToolsEnabled
-              ? 'Own the deep evidence pass: use changed_diff/read to inspect the contract\'s flagged files, suspicious areas, and unresolved claims.'
-              : 'Own the deep evidence pass: use read/grep to inspect the contract\'s flagged files, suspicious areas, and unresolved claims.',
-            'Do not restart whole-repo evidence gathering unless the contract explicitly leaves critical scope unresolved.',
-            diffPagingToolsEnabled
-              ? 'When one file dominates the diff, prefer fewer larger changed_diff slices (roughly limit=360-480) over repeated 100-150 line paging.'
-              : 'When one file dominates the evidence, prefer fewer larger read slices over repeated tiny paging.',
-          ]
-      ).join('\n')
-    : undefined;
-  const h1GeneratorExecutionGuidance = decision.harnessProfile === 'H1_EXECUTE_EVAL'
-    ? [
-      'This is lightweight H1 checked-direct execution, not mini-H2.',
-      'Start from the Scout handoff. Reuse its cheap-facts summary, scope notes, and evidence-acquisition hints instead of rebuilding them from scratch.',
-      'Gather only the minimum deep evidence needed to answer well or to support one short revise pass.',
-      'Do not create a planner-style execution plan, contract, or broad repo survey.',
-      'Converge quickly on the user-facing answer and a crisp evidence handoff for the lightweight evaluator.',
-    ].join('\n')
-    : undefined;
-  // Issue 119: Read Scout's own scope analysis instead of the stale pre-Scout
-  // heuristic. When Scout's scope is 'open' (the default when Scout didn't
-  // flag it as review-only or docs-only), emit no hard mutation guard — trust
-  // Scout's scope handoff + Evaluator instead of layering extra constraints.
-  const h1MutationIntent = decision.harnessProfile === 'H1_EXECUTE_EVAL'
-    ? inferScoutMutationIntent(
-        rolePromptContext?.scoutScope,
-        decision.primaryTask,
-        rolePromptContext?.scoutScope?.confirmedHarness,
-      )
-    : 'open';
-  const h1MutationGuardance = decision.harnessProfile === 'H1_EXECUTE_EVAL'
-    ? (
-        h1MutationIntent === 'review-only'
-          ? 'Scout scoped this as a review-focused run (primary task: review, no files in scope). Treat it as non-mutating unless Scout\'s handoff explicitly asks for fixes — then act within that narrow scope only.'
-          : h1MutationIntent === 'docs-scoped'
-            ? 'Scout\'s scope points entirely at documentation paths. Keep edits within those paths unless new evidence during execution demands changes outside them — call that out explicitly in the handoff if so.'
-            : undefined
-      )
-    : undefined;
-  // FEATURE_190 (v0.7.43) Phase 3: the legacy `handoffBlockInstructions`
-  // fenced-block fallback was removed — Generator/Worker terminate
-  // text-only and have no emit tool to fall back from.
-  const emitToolName = (role === 'scout' || role === 'planner') ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
-  // FEATURE_190 (v0.7.43) Phase 3: only Scout and Planner have emit tools.
-  // Generator and Worker are terminal under F184 — text-only termination
-  // triggers the Sidecar Verifier StopHook out-of-band; no PROTOCOL
-  // EMISSION teaching needed (would point to a non-existent tool).
-  const managedProtocolToolInstructions = emitToolName
-    ? [
-      'PROTOCOL EMISSION — MUST be in the SAME response as your answer:',
-      `Write your user-facing answer, then call "${emitToolName}" exactly once — all in the SAME response.`,
-      'Pass a minimal protocol payload matching your role contract.',
-      'Do NOT stop between writing your answer and calling the protocol tool. Emit both in one turn.',
-      'Keep the user-facing answer in normal text. Do not bury it inside the protocol payload.',
-      'Never mention internal protocol tools, fenced blocks, MCP, capability runtimes, or extension runtimes in the user-facing answer.',
-      // D2 parity (v0.7.22 line restored) — tell the LLM how to fall back
-      // when tool calling isn't available on the provider. The fenced-block
-      // parser in `sanitize.ts` + `parse-helpers.ts` still accepts this
-      // payload form; without the prompt line, LLMs on CLI-bridge and
-      // self-hosted OpenAI-compat providers never discover it.
-      'If tool calling is unavailable, append the required fenced block at the end of this same response.',
-    ].join('\n')
-    : undefined;
+  // FEATURE_193 (v0.7.43): scoutReviewEvidenceGuidance, plannerReviewEvidenceGuidance,
+  // generatorReviewEvidenceGuidance, h1GeneratorExecutionGuidance, h1MutationIntent,
+  // h1MutationGuardance deleted — all V1 scout/planner/generator-only helpers.
+  // Also: inferScoutMutationIntent and isReviewEvidenceTask imports are no longer needed
+  // (see role-prompt-types.ts — those exports remain for external consumers if any).
+  // FEATURE_193 (v0.7.43): emitToolName + managedProtocolToolInstructions
+  // deleted — scout and planner roles (the only roles with emit tools) are
+  // retired. Worker terminates text-only (F184/F190). The evaluator role has
+  // its own emit_verdict handling via parse-helpers.ts; no prompt injection
+  // needed here.
+  // Keep a typed undefined so the worker case array shape is unchanged.
+  const managedProtocolToolInstructions: string | undefined = undefined;
 
+  // FEATURE_193 (v0.7.43): case 'scout', case 'planner', case 'generator'
+  // deleted — V1 chain roles retired. Only case 'worker', case 'evaluator'
+  // (via default pass-through), and case 'direct' remain.
   switch (role) {
-    case 'scout':
-      return [
-        'You are Scout — the AMA entry role for a managed KodaX task.',
-        workspaceSection,
-        capabilityContextSection,
-        promptOverlaySection,
-        teamModeSection,
-        decisionSummary,
-        originalTaskSection,
-        roundInstructionSection,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        parallelBatchGuidance,
-        scoutSkillSection,
-        previousRoleSummarySection,
-        decision.primaryTask === 'review'
-          ? 'If you finish a review directly, write the answer as the review report itself: findings first, with concrete file/path references, not as a meta-summary of your own process.'
-          : undefined,
-        // FEATURE_106 (v0.7.31): three-tier framework rewritten with
-        // quantitative H0 boundary + hard-rule scope commitment. Replaces
-        // the v0.7.26 "default H0" framing that — combined with FEATURE_103
-        // reasoning escalation — biased Scout into staying H0_DIRECT for
-        // multi-file projects. The scope guardrail (Slice 1) surfaces
-        // belated commitments at runtime; this prompt is the
-        // pre-commitment teaching half of the calibration.
-        [
-          'QUALITY FRAMEWORK — Think of yourself as a senior engineer who just received this task.',
-          '',
-          'You have the full default tool set: read / grep / glob / bash / write / edit /',
-          'dispatch_child_task(read-only) / exit_plan_mode. The harness decision below is about WHETHER',
-          'your work needs an independent reviewer — NOT about whether you are allowed to use those tools.',
-          '',
-          'H0 — Bounded mutation OR pure answer. ≤1 file ≤30 lines mutation, OR no file',
-          '  mutation at all (lookup / review / answer / git commit / config change / one-off',
-          '  scratch file / straightforward typo).',
-          '  → For mutation tasks within this bound, complete directly. For non-mutation tasks',
-          '    (lookup / review / answer), no emit needed. Anything beyond this bound MUST',
-          '    emit_scout_verdict first (see SCOPE COMMITMENT below).',
-          '',
-          'H1 — Multi-file change in known territory: bug fix across modules, refactor of familiar',
-          '  code, security/perf fix. ≥2 files OR >30 lines mutation in 1 file.',
-          '  → Call emit_scout_verdict with confirmed_harness="H1_EXECUTE_EVAL" to escalate. A Generator+Evaluator pipeline will handle it.',
-          '',
-          'H2 — New code without existing anchor: project from scratch, cross-module refactor,',
-          '  new feature, system design, database migration.',
-          '  → Call emit_scout_verdict with confirmed_harness="H2_PLAN_EXECUTE_EVAL" to escalate. A Planner+Generator+Evaluator pipeline will handle it.',
-          '',
-          'ESCALATION EXAMPLE:',
-          '  emit_scout_verdict({confirmed_harness:"H1_EXECUTE_EVAL", summary:"...", scope:[...], review_files_or_areas:[...]})',
-          '',
-          'SCOPE COMMITMENT (hard rule):',
-          '  Default harness is H0_DIRECT. The triggers below are escalation conditions, not defaults —',
-          '  apply them only when one fires for the current task. Simple lookups, single-file edits, and',
-          '  pure answer questions stay at H0 even when the rules below are present in this prompt.',
-          '',
-          '  • Mutation scope: If you intend to write ≥2 files OR start a project from scratch,',
-          '    call emit_scout_verdict({confirmed_harness: H1 or H2}) BEFORE the first write.',
-          '    The scope guardrail will surface belated commitments and slow you down.',
-          '  • Investigation scope: If your read-only investigation reaches ≥5 distinct files',
-          '    OR ≥8 searches without converging on a diagnosis, treat that as a signal the work',
-          '    has exceeded H0 — emit emit_scout_verdict({confirmed_harness:"H1_EXECUTE_EVAL"}) so',
-          '    an Evaluator can audit your conclusion. Continuing solo past this threshold loses',
-          '    the audit signal.',
-          '  • Multi-thread early decision: If your initial 1-2 scoping turns reveal ≥2',
-          '    independent investigation threads, prefer dispatch_child_task over deep-diving',
-          '    solo (per RULE A/B below). Dispatching AFTER you have already deep-dived is',
-          '    wasted work — decide early.',
-        ].join('\n'),
-        // FEATURE_097 (v0.7.34) — H0 mini-planner addendum, Heavy variant.
-        // Pinned VERBATIM from the 2026-05-04 64-cell A/B eval winner;
-        // see `benchmark/datasets/scout-h0-mini-planner/cases.ts` and
-        // `benchmark/results/feature-097--pilot-1run--ANALYSIS.md`. Heavy
-        // beat Light by +14.5pp obligation_coherence (eliminating "Read X"
-        // filler steps across zhipu / kimi / ark families) while keeping
-        // simple_overformalization at 0%. Do not edit this block without
-        // re-running the eval and updating the pin.
-        [
-          'EXECUTION OBLIGATIONS:',
-          '  For any task that requires ≥ 2 distinct execution steps (whether at H0_DIRECT,',
-          '  H1_EXECUTE_EVAL, or H2_PLAN_EXECUTE_EVAL), populate executionObligations with',
-          '  one entry per step BEFORE calling emit_scout_verdict.',
-          '',
-          '  Examples of "distinct execution steps" (DO list separately):',
-          '    - Editing files in different modules',
-          '    - Refactor + verification (e.g. rename + run tests)',
-          '    - Multiple changes to the same file when each is independent',
-          '',
-          '  Examples of NOT distinct steps (do NOT split into multiple obligations):',
-          '    - Reading a file before editing it (preparation, not a step)',
-          '    - "Think about X" or "analyze Y" (reasoning, not a step)',
-          '    - Single-token typo fixes (single action, no plan needed)',
-          '',
-          '  After emit_scout_verdict, when continuing as H0_DIRECT executor, call',
-          '  todo_update at each transition (pending → in_progress → completed) so the',
-          '  user sees real-time progress. This gives the user a visible plan and forces',
-          '  you to think through the full scope before acting.',
-          '',
-          '  FEATURE_151 (v0.7.38) + v0.7.42 — RECOVERY PATH: if you skipped emit_scout_verdict',
-          '  (or emitted with executionObligations < 2) and only later realized the',
-          '  task is genuinely multi-step, commit a plan by calling todo_create once per',
-          '  planned step: todo_create({subject:"...", description?:"...", activeForm?:"..."}).',
-          '  This is the LLM-side path to seed a list when the runner did not. Do',
-          '  not abuse it for trivial tasks — the same TRIVIAL-EXEMPTION criteria',
-          '  apply (single typo / single edit / single-action lookup → no plan).',
-          '',
-          '  FEATURE_170 (v0.7.41) + v0.7.42 — MID-TASK REFINEMENT: use the per-item API:',
-          '    * todo_create({subject, description?, activeForm?}) — INSERT ONE new step',
-          '      when the plan needs an extra item but existing items must be preserved.',
-          '      Store auto-mints the id. `subject` is the brief row label (≤80 chars);',
-          '      `description` is optional fuller context, omit when subject alone suffices.',
-          '    * todo_update({id, subject?, description?, activeForm?, evaluator?, metadata?})',
-          '      — patch one step\'s row label / fuller description / present-continuous',
-          '      form / evaluator hint / opaque metadata without changing its status.',
-          '    * todo_update({id, status:"deleted"}) — REMOVE one step entirely',
-          '      (no breadcrumb). Use when the step was wholly off-plan.',
-          '    * todo_update({id, status:"cancelled", note}) — KEEP a strikethrough',
-          '      breadcrumb. Use when the user benefits from seeing the discard.',
-          '  Each todo_create is purely additive — existing items are untouched.',
-          '',
-          '  When transitioning a todo to status="in_progress", ALWAYS supply the',
-          '  `activeForm` argument — a present-continuous-tense rephrasing of the',
-          '  item subject (subject "Run failing tests" → activeForm "Running failing',
-          '  tests"; subject "Refactor auth module" → activeForm "Refactoring auth',
-          '  module"). The spinner shows this verb live so the user sees what you',
-          '  are working on right now without waiting for the round to end.',
-        ].join('\n'),
-        // FEATURE_097 v0.7.34 hotfix-2 — emit timing anchor.
-        // GLM-as-Scout production transcript revealed Scouts treating
-        // emit_scout_verdict as a *final report* (called after all the work
-        // was done) instead of a *plan commitment* (called early, before the
-        // work). The TodoListSurface only renders after emit, so late-emit
-        // = invisible plan list = FEATURE_097 silently broken even when the
-        // parser fix correctly reads executionObligations.
-        [
-          'EMIT TIMING (CRITICAL — read this carefully):',
-          '  emit_scout_verdict is your PLAN COMMITMENT, not a final report. Call it',
-          '  EARLY — within the first 1-2 scoping turns (read/grep/glob), BEFORE the',
-          '  main implementation or investigation work. executionObligations describes',
-          '  what you PLAN TO DO next, NOT what you have already done.',
-          '',
-          '  Why timing matters: the realtime plan list (TodoListSurface) only',
-          '  renders AFTER emit_scout_verdict is parsed. Emitting at the END of the',
-          '  task with executionObligations listing completed work is a defect,',
-          '  not a shortcut — by then the user has already missed the entire',
-          '  visibility window and todo_update has nothing left to drive.',
-          '',
-          '  ANTI-PATTERN (do NOT do this):',
-          '    1. Investigate / dispatch children / read many files / produce findings',
-          '    2. Synthesize the answer',
-          '    3. Call emit_scout_verdict at the END with obligations describing',
-          '       what was already done',
-          '  Correct flow: commit plan EARLY → execute → todo_update at each step',
-          '  transition → final answer.',
-          '',
-          '  TRIVIAL-EXEMPTION (narrow, do not abuse): you may execute directly',
-          '  WITHOUT emit_scout_verdict ONLY for tasks with exactly ONE distinct',
-          '  execution step — a single typo fix, a single-line edit, a single-action',
-          '  lookup, a one-sentence answer. EVERYTHING ELSE — including review /',
-          '  audit / investigation tasks that touch ≥2 files, areas, or feature',
-          '  threads, even when the harness ends up being H0_DIRECT — MUST',
-          '  emit_scout_verdict EARLY with executionObligations populated, THEN',
-          '  continue as the H0 executor and call todo_update at each step transition.',
-          '',
-          '  CONCRETE FIRST-TURN EXAMPLE (≥2-file investigation, H0_DIRECT):',
-          '    emit_scout_verdict({',
-          '      confirmed_harness:"H0_DIRECT",',
-          '      summary:"...",',
-          '      scope:["packages/foo/src/file.ts","packages/bar/src/file.ts"],',
-          '      review_files_or_areas:["packages/foo","packages/bar"],',
-          '      executionObligations:[',
-          '        "Read packages/foo/src/file.ts and note <dimensions>",',
-          '        "Read packages/bar/src/file.ts and note same dimensions",',
-          '        "Compare findings and produce written summary"',
-          '      ]',
-          '    })',
-          '    [then proceed with read / grep to execute the obligations]',
-          '',
-          '  ANTI-PATTERNS for emit (NEVER do any of these on ≥2-file tasks):',
-          '    BAD (silent narration):  "I\'ll plan first. Step 1: read A. Step 2: read B."  [then directly calls read]',
-          '    BAD (markdown heading):  "## Scout Verdict\\n- harness: H0_DIRECT\\n- ..."     (markdown is not a tool call)',
-          '    BAD (verbal commitment): "I should emit a verdict early..."                  [then directly calls read without emitting]',
-          '    BAD (delayed emit):      [reads N files, synthesises answer, THEN calls emit_scout_verdict at the end]',
-          '    GOOD: `emit_scout_verdict({...})` as the FIRST tool call, BEFORE any read/grep/glob, with executionObligations populated as your CURRENT BEST GUESS (you can refine later via todo_update).',
-        ].join('\n'),
-        'For complex tasks (H1/H2): investigate scope, then call emit_scout_verdict with the right harness to escalate. Do NOT do the implementation yourself for H1/H2 tasks.',
-        'Respect any stated topology ceiling or upgrade ceiling in the routing metadata.',
-        'Always fill `scope` (files / areas the downstream role will touch) and `review_files_or_areas` (high-priority files to consider). The harness infers mutation boundaries from these paths — if every path is docs-like, Generator is restricted to docs-style writes; if the task is a pure review (primaryTask=review) and `scope` is empty, Generator writes are blocked entirely.',
-        scoutReviewEvidenceGuidance,
-        // FEATURE_067: dispatch_child_task tool guidance.
-        // v0.7.26 refresh: RULE-based decision tree covers both fan-out
-        // (parallel children) and context-preservation (single child on a
-        // heavy read-only investigation). The prior prompt's categorical
-        // "NEVER dispatch exactly 1 child" blocked the latter case, so
-        // Scout rationalised large multi-file investigations into direct
-        // work and crowded its own context.
-        [
-          'PARALLEL CHILD AGENTS: dispatch_child_task delegates an investigation to a child agent that has its own context window. Calls in the same turn run in parallel; each child\'s findings return as a separate tool result.',
-          '',
-          'DECIDE after your initial 1-2 scoping turns, before any deep investigation:',
-          '',
-          'RULE A — Fan-out (2+ independent non-trivial threads)',
-          '  "Non-trivial" means each thread on its own would need multiple file reads or multi-round searching. A bundle of small file lookups is NOT fan-out.',
-          '  → Dispatch ONE child per thread, in the SAME turn.',
-          '  Example: "Audit packages/llm, packages/agent, packages/coding for security" → 3 parallel children.',
-          '  If you identify N qualifying threads, dispatch ALL N. Do not rationalize "I\'ll handle one myself" — that defeats the parallelism.',
-          '',
-          'RULE B — Heavy single investigation (context preservation)',
-          '  Dispatch ONE child when BOTH conditions hold:',
-          '    (1) the raw volume would crowd your own context — any signal qualifies: unclear target set needing multi-round "search → read → re-search", likely ≥10 file reads, or large grep result sets; AND',
-          '    (2) you only need a summary / list / verdict as output — not the raw code in your own context to reason over.',
-          '  Example: "Find every caller of handleAuth() and categorize usage patterns."',
-          '',
-          'RULE C — Default (targets known, output small, single-round)',
-          '  Do it yourself with parallel tool calls (glob + grep + read together when independent).',
-          '  A single child for work that fits this rule is pure overhead — do not dispatch.',
-          '',
-          // Issue 124 (v0.7.28) A5b: explicit negative-bumper list. Mirrors
-          // the "When NOT to use" pattern used by Claude Code\'s Agent tool
-          // and opencode\'s task tool — concrete refusal cases reduce
-          // accidental dispatch on simple lookups.
-          'When NOT to use dispatch_child_task (do these directly instead):',
-          '  - Reading a known specific file path → use read_file directly.',
-          '  - Searching for a known symbol like `class Foo` or `function bar` → use grep_files.',
-          '  - Looking at 2–3 files you have already identified → parallel read_file calls.',
-          '  - Work where you will keep the raw output in your own context anyway.',
-          '',
-          'TIMING: decide early. Children\'s findings can inform your emit_scout_verdict harness choice. Dispatching after you have already deep-dived is wasted work.',
-          'Scope: Scout dispatches are readOnly. Write fan-out is Generator-only.',
-        ].join('\n'),
-        managedProtocolToolInstructions,
-        sharedWorkerDiscipline,
-        sharedClosingRule,
-      ].filter((section): section is string => Boolean(section)).join('\n\n');
-    case 'planner':
-      return [
-        'You are Planner — the H2 planning role for a managed KodaX task.',
-        workspaceSection,
-        capabilityContextSection,
-        promptOverlaySection,
-        teamModeSection,
-        decisionSummary,
-        originalTaskSection,
-        roundInstructionSection,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        parallelBatchGuidance,
-        plannerSkillSection,
-        previousRoleSummarySection,
-        managedProtocolToolInstructions,
-        plannerReviewEvidenceGuidance,
-        'The Scout-confirmed harness is the active harness for this run. Do not reinterpret it locally; only request a stronger harness through an explicit later verdict if the evidence truly demands it.',
-        'Produce a concise execution plan, the critical risks, and the evidence checklist.',
-        `Your output is invalid unless you call "${ROLE_EMIT_TOOL_NAMES.planner}" with the contract payload.`,
-        'Even if evidence is still incomplete, produce the best current contract and record the missing proof in required_evidence or constraints rather than omitting the call.',
-        'Do not linearly page large raw diffs or perform file-by-file claim verification. Stop at overview evidence and hand deep inspection to the Generator.',
-        'Do not perform the work yet and do not self-certify completion.',
-        // FEATURE_097 (v0.7.34): when refining Scout obligations, the runner
-        // updates the user-visible plan list automatically from your contract.
-        // You only need to call todo_update if you want to record interim
-        // status transitions (rare for a planner; status transitions are
-        // mostly Generator territory).
-        'PLAN PROGRESS: The user-visible plan list is refreshed automatically from your contract. You generally do not need to touch the todo list; if you do, restrict it to status="skipped" when an obligation turned out to be unnecessary (Generator handles in_progress / completed transitions). v0.7.42 — if your refined success_criteria diverge from Scout\'s seeded obligations and you genuinely need an additional planned step, call todo_create({subject:"...", description?:"...", activeForm?:"..."}) — one call per new step. Each call is purely additive; existing items are untouched. If todo_create returns ok=false with reason "not active", no plan list infrastructure is wired for this run.',
-        [
-          `Contract payload shape (pass to ${ROLE_EMIT_TOOL_NAMES.planner}):`,
-          'summary: <one-line contract summary>',
-          'success_criteria:',
-          '- <criterion>',
-          'required_evidence:',
-          '- <evidence item>',
-          'constraints:',
-          '- <constraint or leave empty>',
-          `(The fenced-block form \`\`\`${MANAGED_TASK_CONTRACT_BLOCK}\`\`\` is accepted as a fallback; prefer the tool call.)`,
-        ].join('\n'),
-        sharedWorkerDiscipline,
-        sharedClosingRule,
-      ].filter((section): section is string => Boolean(section)).join('\n\n');
-    case 'generator':
-      return [
-        'You are Generator — the H1/H2 execution role for a managed KodaX task.',
-        workspaceSection,
-        capabilityContextSection,
-        promptOverlaySection,
-        teamModeSection,
-        decisionSummary,
-        originalTaskSection,
-        roundInstructionSection,
-        agentSection,
-        contractSection,
-        metadataSection,
-        verificationSection,
-        toolPolicySection,
-        parallelBatchGuidance,
-        generatorSkillSection,
-        managedProtocolToolInstructions,
-        reviewPresentationRule,
-        generatorReviewEvidenceGuidance,
-        h1GeneratorExecutionGuidance,
-        h1MutationGuardance,
-        'The Scout-confirmed harness is the active harness for this run. Do not reinterpret it locally; only request a stronger harness through an explicit later verdict if the evidence truly demands it.',
-        'Read the managed task artifacts and dependency handoff artifacts before acting. Treat them as the primary coordination surface.',
-        'Execute the task or produce the requested deliverable.',
-        // FEATURE_097 (v0.7.34): drive the user-visible plan list so progress
-        // is observable round-to-round. The tool soft-fails if no plan was
-        // seeded for this run, so calling it is always safe.
-        'PLAN PROGRESS: When the run carries a visible obligation list (Scout produced ≥ 2 execution obligations), call todo_update at each transition: status="in_progress" BEFORE starting an obligation, status="completed" AFTER finishing it. Only ONE obligation should be in_progress at a time (per owner). If a step clearly fails and needs retry, set status="failed" with a brief note. When you set status="in_progress", ALWAYS supply the activeForm argument — a present-continuous-tense rephrasing of the obligation (e.g. obligation "Run failing tests" → activeForm "Running failing tests"). The spinner shows this verb live so the user sees what you are working on right now. v0.7.42 — if no plan list exists (Scout did not seed one) but you have realised the work is genuinely multi-step, commit a plan by calling todo_create({subject:"...", description?:"...", activeForm?:"..."}) once per planned step, then proceed with status updates. Only do this for tasks with ≥ 2 distinct execution steps; trivial single-step tasks should proceed without a plan. Each todo_create is purely additive (existing items untouched, store auto-mints ids). If todo_create / todo_update returns ok=false with reason "not active", no plan list infrastructure is wired for this run — continue without calling it.',
-        // FEATURE_107 P5: experimental, env-gated, P6 cleanup target.
-        generatorReasoningDiscipline,
-        isTerminalAuthority
-          ? 'You are the terminal delivery role for this run. Return the final user-facing answer and summarize concrete evidence inline.'
-          : 'Leave final judgment to the evaluator and include a crisp evidence handoff.',
-        // FEATURE_067: Generator parallel task guidance via dispatch_child_task tool.
-        // v0.7.26 refresh: mirrors the Scout RULE A/B/C structure so the
-        // same decision model applies to mid-execution investigation.
-        // Categorical "NEVER 1 child" was blocking the context-preservation
-        // case where a Generator faces a heavy read-only verification that
-        // would otherwise crowd its own context.
-        [
-          'PARALLEL CHILD AGENTS: dispatch_child_task delegates a sub-task to a child agent with its own context window. Calls in the same turn run in parallel; each child\'s findings return as a separate tool result.',
-          '',
-          'DECIDE when you hit a sub-task that is either fan-out or heavy-volume:',
-          '',
-          'RULE A — Fan-out (2+ independent non-trivial sub-tasks)',
-          '  "Non-trivial" means each sub-task on its own would need multiple file reads / writes or multi-round searching.',
-          '  → Dispatch ONE child per sub-task, in the SAME turn.',
-          '  Example: modifying 3 independent modules in an H2 run → 3 parallel write children.',
-          '  If you identify N qualifying sub-tasks, dispatch ALL N.',
-          '',
-          'RULE B — Heavy single investigation (context preservation)',
-          '  Dispatch ONE readOnly child when BOTH hold:',
-          '    (1) the raw volume would crowd your own context — any signal: unclear target set needing multi-round search, likely ≥10 file reads, or large grep result sets; AND',
-          '    (2) you only need a summary / list / verdict — not raw code in your own context to continue execution.',
-          '  Example: verifying "no other callers of removed API remain" across the repo before committing.',
-          '',
-          'RULE C — Default (targets known, output small, single-round)',
-          '  Do it yourself with parallel tool calls. A single child for work that fits this rule is pure overhead.',
-          '',
-          // Issue 124 (v0.7.28) A5b: same negative bumper list as Scout, so
-          // Generator mid-execution dispatch decisions follow identical
-          // refusal cases.
-          'When NOT to use dispatch_child_task (do these directly instead):',
-          '  - Reading a known specific file path → use read_file directly.',
-          '  - Searching for a known symbol like `class Foo` or `function bar` → use grep_files.',
-          '  - Looking at 2–3 files you have already identified → parallel read_file calls.',
-          '  - Work where you will keep the raw output in your own context anyway.',
-          '',
-          decision.harnessProfile === 'H2_PLAN_EXECUTE_EVAL' && !isTerminalAuthority
-            ? 'WRITE FAN-OUT: In this H2 run you may call with readOnly=false when modifying independent modules. Each write child runs in an isolated git worktree; the Evaluator reviews all diffs before merging.'
-            : 'Write fan-out (readOnly=false) is only available in H2_PLAN_EXECUTE_EVAL harness. In the current harness, children must be readOnly=true.',
-        ].join('\n'),
-        // FEATURE_190 (v0.7.43) Phase 3: Generator terminates text-only;
-        // the legacy `handoffBlockInstructions` (fenced-block fallback for
-        // emit_handoff) is no longer injected.
-        sharedWorkerDiscipline,
-        sharedClosingRule,
-      ].filter(Boolean).join('\n\n');
     case 'worker': {
       // FEATURE_114 v0.7.36 — AMA Harness V2 single-loop primary agent.
       // Wraps `buildWorkerInstructions` (decisional + plan-first +

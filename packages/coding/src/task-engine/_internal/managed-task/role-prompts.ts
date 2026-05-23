@@ -1,9 +1,10 @@
 /**
  * Role-prompt resolution for the runner-driven AMA path.
  *
- * Hosts the five `*_INSTRUCTIONS_FALLBACK` constants used when
+ * Hosts the `WORKER_INSTRUCTIONS_FALLBACK` constant used when
  * `buildRunnerAgentChain` is invoked without a full prompt context
- * (topology-only tests), plus the runtime resolver
+ * (topology-only tests; V1 scout/planner/generator fallbacks deleted
+ * by FEATURE_193 v0.7.43), plus the runtime resolver
  * `resolveRoleInstructions` that bridges `RunnerChainPromptContext`
  * through `createRolePrompt` for the v0.7.22-parity surface, with the
  * Scout-skillMap + runtime-verification + completion-contract helper
@@ -22,28 +23,9 @@ import type {
 import { createRolePrompt } from './role-prompt.js';
 import type { RunnerChainPromptContext, VerdictRecorder } from './types.js';
 
-export const SCOUT_INSTRUCTIONS_FALLBACK = [
-  'You are Scout, the AMA entry role. Analyse the user task, then choose a harness tier:',
-  '  - H0_DIRECT: trivial lookup / factual / review — Scout answers directly, no handoff',
-  '  - H1_EXECUTE_EVAL: execution task, small scope — hand off to Generator, Evaluator verifies',
-  '  - H2_PLAN_EXECUTE_EVAL: larger task, needs structured plan — hand off to Planner first',
-  '',
-  'You may call these tools to gather context: read, grep, glob, bash, dispatch_child_task.',
-  '',
-  'When ready, call `emit_scout_verdict` exactly once with `confirmed_harness` set.',
-].join('\n');
-
-export const PLANNER_INSTRUCTIONS_FALLBACK = [
-  'You are Planner (H2 role). Call `emit_contract` exactly once with summary, success_criteria, ',
-  'required_evidence, constraints. You may call: read, grep, glob.',
-].join('\n');
-
-export const GENERATOR_INSTRUCTIONS_FALLBACK = [
-  'You are Generator (H1/H2 execution role). Execute the task and end your turn with a brief ',
-  'text-only summary when done — no tool call is needed to terminate. An independent Sidecar ',
-  'Verifier reads your work and decides accept / revise / blocked. You may call: read, grep, ',
-  'glob, bash, write, edit, dispatch_child_task.',
-].join('\n');
+// FEATURE_193 (v0.7.43): SCOUT_INSTRUCTIONS_FALLBACK, PLANNER_INSTRUCTIONS_FALLBACK,
+// GENERATOR_INSTRUCTIONS_FALLBACK deleted — V1 chain roles retired.
+// Only WORKER_INSTRUCTIONS_FALLBACK remains for the topology-only test path.
 
 // FEATURE_114 v0.7.36 — minimal Worker instructions for the
 // topology-only test path (no `promptContext`). Real Worker prompts
@@ -129,13 +111,8 @@ export function resolveRoleInstructions(
 ): string {
   if (!promptContext) {
     // Legacy minimal-instructions path for tests / topology-only calls.
-    // Still append the skillMap block if Scout has emitted one, so
-    // downstream roles get Scout's execution obligations even in the
-    // fallback path.
-    if (role === 'generator') {
-      const block = renderScoutSkillMapBlock(recorder, { includeVerification: false });
-      return block ? `${fallback}\n${block}` : fallback;
-    }
+    // FEATURE_193 (v0.7.43): removed role === 'generator' skillMap append —
+    // generator role deleted along with V1 chain.
     return fallback;
   }
   const ctx = promptContext.contextFactory

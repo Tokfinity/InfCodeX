@@ -52,47 +52,22 @@ const AMA_BASELINE_EXCLUDE: ReadonlySet<string> = new Set([
   'stage_self_modify',
 ]);
 
-/** Scout: H0 executor + dispatcher. Full surface, no extra excludes. */
-const SCOUT_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
-
-/**
- * Planner: drafts the contract for Generator to execute. Read-only inspection
- * surface only — never mutate, dispatch, exec shell, or interact with user.
- */
-const PLANNER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set([
-  'bash',
-  'write',
-  'edit',
-  'multi_edit',
-  'insert_after_anchor',
-  'undo',
-  'dispatch_child_task',
-  'send_message',
-  'task_stop',
-  // FEATURE_177 v0.7.45 — Planner drafts contracts; it never dispatches
-  // children itself, so peeking at child progress would surface a tool
-  // it cannot use. Worker / Scout / Generator inherit `task_output` via
-  // their empty extra-exclude sets (parent agents that DO dispatch).
-  'task_output',
-  'worktree_create',
-  'worktree_remove',
-  'exit_plan_mode',
-  'ask_user_question',
-]);
-
-/** Generator: full execution surface (V1 path). No extra excludes. */
-const GENERATOR_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
+// FEATURE_193 (v0.7.43): SCOUT_EXTRA_EXCLUDE, PLANNER_EXTRA_EXCLUDE,
+// GENERATOR_EXTRA_EXCLUDE deleted as standalone constants — V1 chain roles
+// retired. The AmaRole type still includes scout/planner/generator for
+// backward-compat (e.g. checkpoint reading); record keys are kept to
+// satisfy Record<AmaRole, ...> but resolve to empty sets (no active routing).
+// FEATURE_184 (v0.7.45) Phase C.1: EVALUATOR_EXTRA_EXCLUDE already deleted.
 
 /** Worker (V2 single-loop primary agent): collapses Scout+Generator, full surface. */
 const WORKER_EXTRA_EXCLUDE: ReadonlySet<string> = new Set<string>();
 
-// FEATURE_184 (v0.7.45) Phase C.1: EVALUATOR_EXTRA_EXCLUDE deleted —
-// the in-chain Evaluator role is removed. Sidecar Verifier (Phase D.2)
-// enforces its own architectural boundary.
 const ROLE_EXTRA_EXCLUDE: Record<AmaRole, ReadonlySet<string>> = {
-  scout: SCOUT_EXTRA_EXCLUDE,
-  planner: PLANNER_EXTRA_EXCLUDE,
-  generator: GENERATOR_EXTRA_EXCLUDE,
+  // FEATURE_193 (v0.7.43): V1 roles retired — empty sets kept for type
+  // completeness with AmaRole. No active agents are dispatched as these roles.
+  scout: new Set<string>(),
+  planner: new Set<string>(),
+  generator: new Set<string>(),
   worker: WORKER_EXTRA_EXCLUDE,
 };
 

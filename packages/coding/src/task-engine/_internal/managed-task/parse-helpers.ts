@@ -276,13 +276,10 @@ export function attemptProtocolTextFallback(
 export function getEmitToolNameForRole(
   role: Exclude<KodaXTaskRole, 'direct'>,
 ): string | undefined {
+  // FEATURE_193 (v0.7.43): scout/planner cases deleted with V1 chain.
+  // Only evaluator (Sidecar Verifier) remains; generator/worker are terminal.
   switch (role) {
-    case 'scout': return 'emit_scout_verdict';
-    case 'planner': return 'emit_contract';
     case 'evaluator': return 'emit_verdict';
-    case 'generator':
-    case 'worker':
-      return undefined;
     default: return undefined;
   }
 }
