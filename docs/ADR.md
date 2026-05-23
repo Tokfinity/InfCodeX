@@ -1997,3 +1997,125 @@ isolation: z.enum(['worktree']).optional().describe(
 
 ---
 
+## ADR-035: User-Authored Custom Agents — Markdown Loader + Extension `registerAgent` + `dispatch_child_task` Bridge (FEATURE_191, v0.7.43)
+
+**Status**: Planned 2026-05-23
+**Driver**: KodaX 已具备 LLM-driven agent generation 全栈（FEATURE_087 ConstructionRuntime / FEATURE_088 Tool Generation / FEATURE_089 Agent Generation / FEATURE_101 Admission Contract，shipped v0.7.28-31，code 在 [`packages/coding/src/construction/`](../../packages/coding/src/construction/)），但 (a) Worker 不能通过 `dispatch_child_task` 派遣已注册的 specialist agent；(b) 用户无法手写 markdown 文件直接定义 agent（必须走 LLM `scaffold_agent` 或 CLI `kodax constructed admit`）；(c) extension package 无 `registerAgent` API 贡献 agent。三条 gap 同根（dispatch + 数据入口），合并为一个 feature 一次性闭环。原 FEATURE_128（v0.7.50 placeholder）仅覆盖 dispatch 桥，scope 不足以闭环，由本 feature **superseded**。
+**Scope**: `dispatch_child_task` schema + `child-executor.ts` 路由分支 + `worker-role-prompt.ts` specialist-routing 段；新增 `packages/coding/src/construction/markdown-loader.ts` + `loadAgentsAtBootstrap` boot hook；`packages/coding/src/extensions/types.ts` `KodaXExtensionAPI` + `runtime.ts` `registerAgent` 实现。
+
+### Context
+
+#### KodaX 既有自定义 agent 能力（已 shipped，常被低估）
+
+| 能力 | 入口 | Path | 状态 |
+|---|---|---|---|
+| LLM-driven agent generation | Worker 调 `scaffold_agent` 工具 | manifest JSON → `Runner.admit` 5-step → `registerConstructedAgent` | ✅ v0.7.31 ship |
+| Constructed agent registry | `resolveConstructedAgent(name)` / `listConstructedAgents()` | module-singleton Map | ✅ v0.7.31 ship（[`agent-resolver.ts`](../../packages/coding/src/construction/agent-resolver.ts)） |
+| Admission Contract（7 invariant） | `Runner.admit` 5-step pipeline | schema / invariant.admit / tool subset / budget clamp / handoff DAG | ✅ v0.7.31 ship |
+| CLI explicit invocation | `kodax constructed admit --manifest <file>` | manifest JSON → admission → register | ✅ v0.7.28 ship |
+| Self-modify role spec | Agent 改自己 instructions / reasoning / handoff | 同 admission 通道（versioned + rollback） | ✅ v0.7.32 ship |
+
+#### 缺失的三条 gap
+
+1. **dispatch 桥**：[`dispatch_child_task` schema](../../packages/coding/src/tools/dispatch-child-tasks.ts) 无 `subagent_type` 字段。Worker 拿到 SQL review / E2E test 任务时只能 (a) 自己做；(b) 派 anonymous child + prompt 里手写 "扮演 db-reviewer"——丢了 specialist agent 的精炼 prompt + admission 验证。Worker system prompt 也不知道 registry 里有哪些 specialist。
+2. **Markdown 入口**：[claudecode `loadAgentsDir.ts:541`](file:///c:/Works/claudecode/src/tools/AgentTool/loadAgentsDir.ts#L541) 用 markdown + YAML frontmatter 让用户**手写** `~/.claude/agents/<name>.md` 即生效。KodaX 只有 JSON manifest + CLI admit 路径——markdown 是更 LLM-friendly 也更 user-friendly 的格式（FEATURE_124 本版本 memory 系统也已选 markdown 路线），单一缺口。
+3. **Extension API 入口**：[`KodaXExtensionAPI`](../../packages/coding/src/extensions/types.ts) 提供 `registerTool` / `registerCommand` / `registerModelProvider` / `registerCapabilityProvider` / `registerSkillPath`，**唯独缺 `registerAgent`**。npm extension 想贡献 agent 必须自己调 `kodax constructed admit` CLI 或绕开 admission——分裂数据流。
+
+#### claudecode 调研对照
+
+[`loadAgentsDir.ts:296`](file:///c:/Works/claudecode/src/tools/AgentTool/loadAgentsDir.ts#L296) `getAgentDefinitionsWithOverrides(cwd)` 单一数据流：扫四个源（user / project / flag / policy）→ markdown frontmatter parse → 合并内置 + plugin agents → `getActiveAgentsFromList` 同名优先级覆盖（built-in < plugin < user < project < flag < policy）。Frontmatter 字段：`name` / `description` / `tools` / `disallowedTools` / `model` / `permissionMode` / `maxTurns` / `mcpServers` / `hooks` / `skills` / `memory` / `isolation`。运行时通过 `Task({subagent_type:"name"})` 派遣，[`runAgent.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/runAgent.ts) 为子 agent fork 独立 `query()` 循环 + MCP + transcript。
+
+### Decision
+
+**重用既有 Construction substrate，加三层薄 adapter 一次性闭环**：
+
+| Phase | 改动 | 数据流终点 | 字数 |
+|---|---|---|---|
+| **A**：dispatch 桥 | `dispatch_child_task` schema 加 `subagent_type?: string`；`KodaXChildContextBundle` 加 `specialistName?: string` 字段；`dispatch-child-tasks.ts toolDispatchChildTask` 内调 `resolveConstructedAgent(name)` 拿 `Agent \| undefined`，unknown-name 返 tool-result error 不 throw；`executeReadChild`/`executeWriteChild` 内 inline 切换 `systemPromptOverride` 用 specialist `.instructions` + 用**互补排除**计算 `excludeTools = allTools - specialistAgent.tools`（不引入新 includeOnlyTools API）；`prompts/capability-sections.ts::buildCapabilityContextSections` 注入 conditional `specialist-agents` 段 | 既有 `registerConstructedAgent` registry | ~180 LoC + 8-10 测试 |
+| **B**：Markdown loader | 新增 `packages/coding/src/construction/markdown-loader.ts` 扫 `${getAgentConfigHome()}/agents/*.md` + `${cwd}/.kodax/agents/*.md`，用 **`@kodax-ai/skills/shared/yaml::parseYamlFrontmatter`**（**不**用 gray-matter — repo 无此 dep）解析；映射到 `AgentContent` 后调 `buildAdmissionManifest({name, content}) → Runner.admit` （**注意**：`AgentManifest` 是 flat `Agent & {extras}` 不是 `{kind, name, content}` 包装形）→ `registerConstructedAgent(artifact, registration)` 带 invariant `registration` 第二参数（单参调用走 trusted-agent 路径会跳过 invariant 绑定）；bootstrap hook 落 `packages/repl/src/common/construction-bootstrap.ts` 与既有 `bootstrapConstructionRuntime` 并列（**不**落 `packages/coding/src/agent.ts` — 该文件是 thin shell 无 boot lifecycle） | 同 A 终点 | ~180 LoC + 10-14 测试 |
+| **C**：Extension `registerAgent` | `KodaXExtensionAPI` 加 `registerAgent: (name: string, content: AgentContent) => () => void`（**接收 `AgentContent` 不是 raw `AgentManifest`**，runtime 内部统一调 `buildAdmissionManifest` 适配）；`runtime.ts` 实现走同一 `Runner.admit` + invariant registration → register + push 入 `LoadedExtensionRecord.disposables`；source tag `'extension'` 落 **in-memory `ConstructedAgentRegistration`** 字段（不动 on-disk `AgentArtifact` schema） | 同 A 终点 | ~70 LoC + 4-6 测试 |
+
+**三条入口的统一保证**：A 消费的 registry **是** B/C/CLI/FEATURE_089 共用的，admission gate 是同一个，不分裂。
+
+**Source-tag precedence 显式声明**：`agent-resolver.ts:339` 当前是 **last-write-wins**（无 precedence stack）。本 feature 用**加载顺序纪律**实现 precedence：boot 时按 `built-in → extension → markdown:user → markdown:project → constructed:cli → constructed:llm` 顺序 register，后写覆盖前。不引入新 precedence 检测 infra（YAGNI；3+ 真实冲突场景后再考虑）。
+
+**新增字段 scope 一次性声明**（不分版本）：
+- `AgentContent.description?: string` — frontmatter `description` 字段落点 + Phase A.3 SP block 数据源（当前 `AgentContent` / `Agent` / `AgentManifest` **无任何 description 字段**）
+- `KodaXChildContextBundle.specialistName?: string` — specialist 名透传载体（当前 `types.ts:689` 无此字段）
+- `ConstructedAgentRegistration.source?: 'built-in' \| 'extension' \| 'markdown:user' \| 'markdown:project' \| 'constructed:cli' \| 'constructed:llm'` — in-memory source tag
+- `ChildProgressSnapshot.specialistName?` + dispatch-trace payload `specialistName?` — 诊断字段（FEATURE_177 + writeDispatchTraceIfEnabled 同步加）
+
+### Why not alternatives
+
+- **方案 X — 新建独立 user-agent 系统（绕开 Construction）**：rejected。会引入第二套 admission gate 或裸奔（claudecode 是裸奔，KodaX threat model 不接受）；同时违反 [ADR-021](#adr-021-agent-framework-boundary) 的多原语合并原则。Construction 已经为本场景准备好了：manifest JSON + admission 5-step。
+- **方案 Y — 仅 ship Phase A（沿用 FEATURE_128 v0.7.50 scope）**：rejected。LLM-driven generation（必须 model 在 session 内写 manifest）+ CLI admit（必须出 session 命令行）两条入口对"用户给 agent 写一个 5 行 markdown" 的 ergonomic 都很差。markdown loader 是 user-onboarding 的 keystone，跟 dispatch 桥同周期 ship 才闭环可用。
+- **方案 Z — 用 claudecode style markdown 直接 register（不走 admission）**：rejected。markdown frontmatter 是用户/extension 提供的不可信声明，绕过 admission 等于把 FEATURE_101 的 7 invariant 投资作废。markdown → manifest → admission 三步是必经路径。
+- **方案 W — Phase A+B+C 跨多版本拆分**：rejected。三条入口的 wire point 完全重叠（registry + dispatch），分版本 ship 会造成 ABI 抖动（v0.7.43 ship A → 用户用 dispatch 但拿不到 specialist；v0.7.44 ship B → 用户开始写 markdown 但发现 dispatch 早就在了等他）。一版闭环。
+
+### Implementation outline
+
+**预设**：以下 step 实际行号引用基于 4-agent audit (2026-05-23) verify 的当前代码状态。
+
+| Step | 文件 | 改动 |
+|---|---|---|
+| **A.0** （prereq） | `packages/coding/src/types.ts:689` | `KodaXChildContextBundle` 加 `specialistName?: string` 字段。**整个 Phase A 的载体类型基础，必须先落**（无此字段 specialist name 无法从 `toolDispatchChildTask` → `executeChildAgents` → `runFanOut` → `executeReadChild/executeWriteChild` 透传） |
+| **A.0b** （prereq） | `packages/agent/src/admission/admission.ts` (`AgentContent`) | 加 `description?: string` 字段。frontmatter `description` 数据源 + Phase A.3 SP block 数据源（当前 `AgentContent` / `Agent` / `AgentManifest` 三处皆无此字段） |
+| A.1 | `packages/coding/src/tools/registry.ts:498-530` (BUILTIN_TOOL_DEFINITIONS dispatch_child_task entry) | schema 加 `subagent_type?: z.string().optional()` + description 单 sentence qualitative (ADR-033 §1)：`'When the task matches a registered specialist (use list_agents to discover), dispatch as that specialist.'` |
+| A.2 | `packages/coding/src/tools/dispatch-child-tasks.ts` (`toolDispatchChildTask` 处理函数，bundle 构建处 line 431-444) | (1) 从 tool input 读 `subagent_type` 放到 `bundle.specialistName`；(2) **unknown-name guard 在这里**（不在 child-executor）：若 `subagent_type` 提供 → 调 `resolveConstructedAgent(name)` 返 `Agent \| undefined`，undefined 时返 tool-result error 不 throw，含 `Available: ${listConstructedAgents().map(a => a.name).join(', ')}` 让 Worker 自纠错 |
+| A.2b | `packages/coding/src/child-executor.ts` (`executeReadChild:240` + `executeWriteChild:317`，**`buildChildBundle` 函数不存在**) | inline 切换 `systemPromptOverride`：`bundle.specialistName` 提供 → 用 `resolveConstructedAgent(name).instructions`（resolver 返 `Agent \| undefined`，no 结构化 error 对象）；否则用 `CHILD_AGENT_SYSTEM_PROMPT`/`buildWriteSystemPrompt` 默认；同时计算**互补排除** `excludeTools = listAllTools() - specialistAgent.tools`（KodaXOptions.context 只有 `excludeTools` exclusion-only API，无 `includeOnlyTools`） |
+| A.2c | `packages/coding/src/child-executor.ts:723` `validateWriteBundles` gate | **审查 + 补丁**：现 gate 仅允许 `parentRole=worker\|generator` 在 `H2_PLAN_EXECUTE_EVAL\|tool-dispatch` harness 派 write child。specialist write child 必须经此 gate 不被静默 drop —— 若 specialist 是 readOnly:false 但 parent role 不匹配现行白名单，需扩 gate 或显式拒绝（不能 silent drop） |
+| A.2d | `packages/coding/src/child-progress-snapshot.ts` (FEATURE_177 ChildProgressSnapshot) + `dispatch-child-tasks.ts:283-370 writeDispatchTraceIfEnabled` | 都加 `specialistName?` 字段。`task_output` ring buffer 和 dispatch trace dump 才能保留 specialist context 用于事后诊断 |
+| A.3 | `packages/coding/src/prompts/capability-sections.ts::buildCapabilityContextSections` (line ~85，13 段中 conditional-include 模式与 `mcp-capability-context` / `repo-intelligence-context` 同) | 加 conditional `specialist-agents` 段：`listConstructedAgents()` 为空 → 不注入；非空 → 注入 `=== Available specialist agents ===\n- ${a.name}: ${a.description ?? '(no description)'}\n...\nDispatch via dispatch_child_task(subagent_type="<name>").` |
+| A.4 | `packages/coding/src/agents/worker-role-prompt.ts:137-138` (dispatchRules 数组末尾，line 138 `].join('\n')` 之前) | append **1 句** qualitative specialist-routing 指导（per ADR-033 §1+§3+§4+§5：不枚举 agent 名，不加 ✗，不加 FEATURE_xxx 注解）。**并发态势**：dispatchRules 当前**净空**（F189 B.1/B.2/B.3/B.5/B.6 均未触此块；F189 B.4 `52b08ada` 已 ship 仅改 line 125 LARGE CHILD OUTPUT 字面；F190 Phase 2a `5fa1c362` 已 ship 改 lines 1-28/55-57/223-228 不在 dispatchRules）—— append at line 137-138 之间**零冲突**。**保险动作**：实施前 `git fetch && git status` 再次确认 |
+| B.1 | `packages/coding/src/construction/markdown-loader.ts` 新增 | 用 `parseYamlFrontmatter` from **`@kodax-ai/skills/shared/yaml`**（**不**用 gray-matter — repo 0 hits）；frontmatter `{name, description, tools, model}` + body → `AgentContent`（**不是**直接 AgentManifest）；扫两 dir（顺序：先 user 再 project，后者覆盖前者）；映射 `tools:["read","grep"]` → `ToolRef[]` 即 `[{ref:'builtin:read'}, {ref:'builtin:grep'}]`（`packages/coding/src/construction/types.ts:86 ToolRef` 是 `{ref:string}` schema-prefixed） |
+| B.2 | `packages/repl/src/common/construction-bootstrap.ts` (与 `bootstrapConstructionRuntime` 并列) | 启动期单次调用 `loadAgentsFromMarkdown()`；每 file 走 `buildAdmissionManifest({name, content}) → Runner.admit(manifest)`（**`AgentManifest` 是 flat `Agent & {extras}` 不是 `{kind, name, content}` 包装形 — `packages/agent/src/admission/admission.ts:52` —— 必须先经 admission-bridge 转换**） → pass 即 `registerConstructedAgent(artifact, registration)` **带 invariant `registration` 第二参数**（不要单参 — 单参走 trusted-agent 路径会跳过 observe/assertTerminal hooks 让 invariant 强制静默失效）；fail 进 `{path, reason}[]` 数组返回（**模仿 claudecode `getAgentDefinitionsWithOverrides` `failedFiles` 返回模式**；当前 `rehydrateActiveArtifacts` 只返 `{loaded, failed, tampered}` count，本 feature 需 per-failure 详情） |
+| B.3 | `packages/coding/src/construction/markdown-loader.test.ts` | happy path + missing `name` 字段（静默跳过，模仿 claudecode）+ missing `description` 字段（进 failed[]）+ admission fail + 同名冲突（project > user 由加载顺序保证）+ 非 .md 文件忽略 + frontmatter `tools` 引用未注册 builtin（admission `toolCapabilitySubset` invariant 拦截）。`beforeEach`/`afterEach` 调 `_resetAgentResolverForTesting()` (`agent-resolver.ts:138`) |
+| B.4 | `packages/coding/src/construction/agent-resolver.ts` | `ConstructedAgentRegistration` 加 `source?: 'built-in' \| 'extension' \| 'markdown:user' \| 'markdown:project' \| 'constructed:cli' \| 'constructed:llm'` 字段（**in-memory only，不动 on-disk `AgentArtifact` schema**）。`registerConstructedAgent` 调用方按上述 enum 标 source；`listConstructedAgents` 投影暴露 source（`/agents list --by-source` 等后续 UI 消费） |
+| C.1 | `packages/coding/src/extensions/types.ts:425` (`KodaXExtensionAPI`) | 加 `registerAgent: (name: string, content: AgentContent) => () => void`（**接收 `AgentContent` 不是 raw `AgentManifest`**，runtime 内部统一调 `buildAdmissionManifest`） |
+| C.2 | `packages/coding/src/extensions/runtime.ts` | 实现 `registerAgent` 走 `buildAdmissionManifest({name, content}) → Runner.admit → registerConstructedAgent` (source='extension')；unregister fn 推入 `LoadedExtensionRecord.disposables` (per `runtime.ts:285` 既有 `disposables: Disposable[]` pattern with reverse-iterate dispose) |
+| C.3 | `packages/coding/src/extensions/runtime.test.ts` | extension activate → registerAgent → resolve 拿到 + source='extension' → extension deactivate → resolve 拿不到 |
+| 4 | `tests/feature-191-dispatch-specialist-pilot.eval.ts` + `tests/feature-191-dispatch-specialist-panel.eval.ts` + `tests/feature-191-dispatch-specialist-judge-audit.eval.ts` 三 driver | **驱动可与 Phase A/B/C 并行落 code**，**但跑 panel/audit 必须等 A.1 schema field 上 prod**（否则 binding capture 永远 0 by construction not by model）。Panel: 5 alias × 4 case × 5 run = 100 cells。Pilot: 1×1×1 `ark/v4flash`。3-judge audit 用 `tests/feature-188-worktree-drop-judge-audit.eval.ts:44` 同模板（judges = `['zhipu/glm51','ark/v4pro','kimi']` + `majorityVote()` 2/3）。aliasFallback `{'ark/v4flash':'ds/v4flash','ark/v4pro':'ds/v4pro'}` (`harness.ts:393` quota-err triggered)。**dump dir 双 mkdirSync** at test-suite start + 每次 writeFileSync 前（per `feedback_audit_dump_dir_vanishes` Windows tmpdir wipe 防御）。每 case mock registry 在 `beforeEach`/`afterEach` 调 `_resetAgentResolverForTesting()` |
+| 4b | 同上 driver 内的 SHIP gate | Pre-registered: (a) C1 specialist matches dispatch rate ≥60% per alias; (b) C3 false-name dispatch rate ≤10% per alias; (c) C4 multi-specialist fan-out ≥50% per alias; (d) audit disagreement <10% per EVAL_GUIDELINES; (e) 4-of-5 alias 满足 (a)+(b)+(c)（kimi floor 单 alias DEFER 不阻 SHIP per [[feedback_model_structural_floor_not_prompt_tunable]]） |
+| 5 | `docs/test-guides/FEATURE_191_v0.7.43_TEST_GUIDE.md` | 手测：用户写 `~/.kodax/agents/db-reviewer.md` → REPL 启动 → 任务 "review this migration" → 观察 Worker 派 specialist + child 使用 db-reviewer prompt |
+| 6 | `CHANGELOG.md` v0.7.43 | "User-defined agents: drop `~/.kodax/agents/<name>.md` or use `api.registerAgent(name, content)` in extension; Worker auto-dispatches matching specialist via `dispatch_child_task(subagent_type=...)`. New fields: `AgentContent.description?`, `KodaXChildContextBundle.specialistName?`, `ConstructedAgentRegistration.source?`" |
+| 7 | `docs/SDK_EMBEDDER_GUIDE.md` | 加 `loadAgentsFromMarkdown` + `registerAgent` 到 surface 表 |
+| 8 | 影响测试更新 | (a) `cap-095-child-exec.contract.test.ts:107-108` `systemPromptOverride` 含 `'focused sub-agent'` 断言加 default-path guard; (b) `child-executor.test.ts:427-577` 多处 verbatim 断言加 specialist 分支变体; (c) `cap-097-child-worktree.contract.test.ts` 已在 FEATURE_188 删 — 不动 |
+
+### Consequences
+
+**正面**：
+- **用户 5 分钟自定义专家** —— `vim ~/.kodax/agents/python-reviewer.md` 即生效，对齐 claudecode UX。
+- **三条入口统一 admission** —— LLM-driven (F089) / markdown (B) / extension (C) / CLI（既有）走同一 `Runner.admit`，threat model 不分裂。
+- **dispatch 可见性** —— Worker 看到 registry 后能自决何时调用 specialist，避免 "派 anonymous + prompt 里手写扮演 X" 的 prompt-pollution anti-pattern。
+- **激活既有投资** —— FEATURE_087/088/089/101 ship 后用户实际使用率很低（无 dispatch 路径），本 feature 把"投入未变现"的 path 接通。
+
+**负面 / 风险**：
+- **worker-role-prompt.ts 并发态势（澄清，原评估过紧）** —— 2026-05-23 验证：dispatchRules 块（lines 119-138）当前**净空**。F189 B.1 (`557c29a4`)/ B.2 (`47a8101b`) 改 tool descriptions，**不**碰 worker-role-prompt.ts；F189 B.4 (`52b08ada`) 已 ship 仅改 dispatchRules 内 line 125 单 bullet 字面（LARGE CHILD OUTPUT）；F190 Phase 2a (`5fa1c362`) 已 ship 改 lines 1-28 / 55-57 / 223-228（handoffRules，**不在 dispatchRules**）。Phase A.4 append at line 137-138 之间**零冲突**。保险动作：实施前 `git fetch && git status` 再次确认。
+- **markdown frontmatter 字段映射** v0.7.43 只 wire `name` / `description` / `tools` / `model` / `instructions`（body）。其它（mcpServers / hooks / memory / isolation / permissionMode / maxTurns / skills）**忽略 + 不报错**（前向兼容）。
+- **`description` field 是新 schema 字段** —— 当前 `AgentContent` / `Agent` / `AgentManifest` 三处皆无任何 description 字段；A.0b 加 `AgentContent.description?: string`。**回归边界**：FEATURE_089 已存的 constructed agents 无 description，A.3 SP block 渲染 `(no description)` fallback，不要 throw。
+- **`validateWriteBundles` parentRole gate 隐性 drop 风险** —— `child-executor.ts:723` 现 gate 按 `parentRole=worker\|generator` × `harness=H2_PLAN_EXECUTE_EVAL\|tool-dispatch` 过滤，若 specialist 是 `readOnly:false` 但 dispatching role 不在白名单会**静默 drop bundle**。A.2c 必须显式审 + 决定（扩 gate 或显式拒绝带 reason，**不能 silent drop**）。
+- **Layer 2 eval 风险**：specialist routing 是新行为，floor model（kimi / ark/v4flash）可能在 C1 "应派 specialist" 场景下不识别 SP 注入的 registry block。**Mitigation**：pilot 先验，PARTIAL 走 prompt iteration；floor model `≥3 wordings × ≥5 runs each` 全 0 PASS 则按 [[feedback_model_structural_floor_not_prompt_tunable]] DEFER per-alias 不强求。
+- **Eval sequencing 硬约束** —— Phase 4 driver 可与 Phase A/B/C 并行**写**，**跑** panel/audit 必须等 A.1 schema field 上 prod，否则 binding capture 永远 0 by construction not by model（同步性约束写入 acceptance）。
+- **registry 空 vs 满 prompt 不一致**——空时不注入 block，满时注入。模型 SP 字符串变化 = prompt cache miss。**评估**：multi-user 通常一致（用户要么没 agent 要么有 ≥1 个），切换边界出现率低，TTFB 影响可接受。
+- **dispatchRules anchor density** —— per F189 B.5 DEFER 教训，dispatchRules 是 mid-tier model（zhipu/glm51 + ark/v4pro）attention anchor。A.4 新句必须**末尾 append**，**不**插入数组中段，**不**重排既有 bullet。
+
+**Tool registry retention**：CLI `kodax constructed admit` + Worker `scaffold_agent` 工具**保留不动**——markdown 是新增 ergonomic path，不是替换。三条 user-facing 入口共存，admission 单一。
+
+### Alternatives considered
+
+- **`/agents` slash UI（REPL 编辑器 / wizard）** — defer to v0.7.46+。markdown 文件 + 用户外部编辑器（VS Code / vim）足以闭环 Phase B；REPL 内 UI 是 UX 加分项，本 feature 不强求。
+- **frontmatter 全字段映射（hooks / mcpServers / memory）** — defer。每个字段需要独立产品决策（KodaX hooks 走 FEATURE_063 absorbed extension hooks；mcpServers 走 FEATURE_065 协议成熟度路径；memory 走 v0.7.43 FEATURE_124）；本 feature scope 严格限 5 字段，避免堆耦合。
+- **dispatch-time re-admit**（v0.7.50 FEATURE_128 原设计 Step 6）— defer。Boot-time admit 已经过 5-step gate；dispatch 时再跑一次的安全收益（防 manifest tampering）边际，性能开销线性增长。先 ship 不带 re-admit，生产数据证明需要再加。
+
+### References
+
+- 配套实施：FEATURE_191 设计文档 [v0.7.43.md](features/v0.7.43.md#feature_191-user-authored-custom-agents)
+- 前置：FEATURE_087-090（Self-Construction staircase）/ FEATURE_101（Admission Contract）/ FEATURE_124（v0.7.43 memory markdown 路径同形）
+- Supersedes：原 v0.7.50 FEATURE_128 dispatch-only placeholder
+- claudecode 对照：[`loadAgentsDir.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/loadAgentsDir.ts)（markdown 加载 + 优先级合并）/ [`builtInAgents.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/builtInAgents.ts)（内置 + plugin + custom 合并）/ [`runAgent.ts`](file:///c:/Works/claudecode/src/tools/AgentTool/runAgent.ts)（dispatch 时 fork 子 query 循环）
+- 关键 memory：[`feedback_selective_hunk_staging`](../../memory/feedback_selective_hunk_staging.md)（A.4 worker-role-prompt.ts 并发管控）/ [`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md)（atomic add+commit）/ [`feedback_eval_pilot_before_scale`](../../memory/feedback_eval_pilot_before_scale.md)（Phase 4 eval 先 1×1×1 pilot）/ [`feedback_model_structural_floor_not_prompt_tunable`](../../memory/feedback_model_structural_floor_not_prompt_tunable.md)（floor model PARTIAL DEFER 策略）
+- [ADR-021](#adr-021-agent-framework-boundary)（数据原语 home，markdown-loader 落 coding 还是 agent 的 trade-off）
+- [ADR-033](#adr-033-claudecode-style-prompt-design-principles--qualitative-criteria-over-quantitative-rules-v0742-v0743)（A.3/A.4 prompt 段必须 qualitative 单 sentence，不枚举 agent 名，不加 ✗）
+
+---
+
