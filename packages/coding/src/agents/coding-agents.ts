@@ -113,8 +113,10 @@ const generatorSpec: AgentSpec = {
   name: GENERATOR_AGENT_NAME,
   instructions:
     'H1/H2 execution role: apply tool calls to satisfy the task contract, ' +
-    'produce evidence, converge to a final answer. Emit the handoff via ' +
-    'emit_handoff exactly once when execution is complete or blocked.',
+    'produce evidence, converge to a final answer. End your turn with a ' +
+    'brief text-only summary when execution is complete or blocked — no ' +
+    'tool call is needed to terminate. An independent Sidecar Verifier ' +
+    'reads your work and decides accept / revise / blocked.',
   tools: [emitHandoff],
   reasoning: { default: 'balanced', max: 'deep', escalateOnRevise: true },
   // FEATURE_106 — Generator is the canonical multi-file mutation

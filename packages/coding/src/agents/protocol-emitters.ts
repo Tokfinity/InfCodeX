@@ -275,15 +275,22 @@ export const emitContract: RunnableTool = buildEmitter({
 });
 
 /**
- * Generator handoff emitter. Signals that the Generator has finished its
- * execution round and hands off to the Evaluator for verification.
+ * Generator/Worker handoff emitter — LEGACY (pre-F184).
+ *
+ * FEATURE_184 (v0.7.45) retired the in-chain Evaluator and made Worker/
+ * Generator terminal. FEATURE_190 (v0.7.43) updated the Worker prompt
+ * to teach text-only termination as the canonical exit. This tool
+ * remains in the registry through the FEATURE_190 cleanup window for
+ * back-compat; FEATURE_190 Phase 3 deletes it.
  */
 export const emitHandoff: RunnableTool = buildEmitter({
   name: EMIT_HANDOFF_TOOL_NAME,
   role: 'generator',
   description:
-    'Emit the Generator handoff to the Evaluator. Call this exactly once when execution is complete ' +
-    '(or blocked). The Evaluator will verify against the contract and decide accept / revise / replan.',
+    'LEGACY (pre-F184). When you need to flag a blocked terminal state with structured evidence/followup ' +
+    'metadata, prefer ending your turn with a brief text-only summary instead — the Sidecar Verifier ' +
+    'reads it and decides accept / revise / blocked out-of-band. This tool is retained only for ' +
+    'transitional compatibility and will be removed in a future release.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -309,15 +316,17 @@ export const emitHandoff: RunnableTool = buildEmitter({
 });
 
 /**
- * Evaluator verdict emitter. Decides the terminal outcome of the round:
- * accept, revise (retry with same harness), or blocked. The Runner-driven
- * engine reads `metadata.payload.verdict.status` to decide next hop.
+ * Sidecar Verifier verdict emitter (FEATURE_184). Decides the terminal
+ * outcome of the round: accept, revise (Worker re-runs to fix), or
+ * blocked. The Runner-driven engine reads `metadata.payload.verdict.status`
+ * to decide next hop. Called by the Stop-hook Sidecar Verifier, never
+ * by Worker/Generator directly.
  */
 export const emitVerdict: RunnableTool = buildEmitter({
   name: EMIT_VERDICT_TOOL_NAME,
   role: 'evaluator',
   description:
-    'Emit the Evaluator verdict — accept / revise / blocked. Call this exactly once after ' +
+    'Emit the Sidecar Verifier verdict — accept / revise / blocked. Call this exactly once after ' +
     'verification is complete. A `revise` verdict may include `next_harness` to escalate (H1 → H2). ' +
     'When the task is complete, set `user_answer` to the multi-line answer the user should see.',
   inputSchema: {

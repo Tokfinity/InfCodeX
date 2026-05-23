@@ -316,17 +316,21 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('Preserve any exact machine-readable closing contract');
   });
 
-  it('routes Worker through emit_handoff (parity with Generator wire format)', () => {
+  it('does NOT route Worker through emit_handoff (FEATURE_190: text-only termination)', () => {
+    // FEATURE_190 (v0.7.43) — Worker is excluded from PROTOCOL EMISSION
+    // teaching and from the kodax-task-handoff fenced-block fallback.
+    // Worker terminates text-only and Sidecar Verifier runs out-of-band.
     const rendered = renderWorker();
-    expect(rendered).toContain('"emit_handoff"');
-    // Sanity: not the Scout / Planner / Evaluator emit names — the
-    // Worker switch case must NOT regress to a paste-from-Scout default.
+    expect(rendered).not.toContain('"emit_handoff"');
+    expect(rendered).not.toContain('PROTOCOL EMISSION — MUST be in the SAME response');
+    expect(rendered).not.toContain('kodax-task-handoff');
+    // Sanity: also not the other role-specific emit names.
     expect(rendered).not.toContain('"emit_scout_verdict"');
     expect(rendered).not.toContain('"emit_contract"');
     expect(rendered).not.toContain('"emit_verdict"');
   });
 
-  it('splices buildWorkerInstructions content (plan-first + scope commitment + dispatch + handoff fragments)', () => {
+  it('splices buildWorkerInstructions content (plan-first + scope commitment + dispatch + TERMINATION fragments)', () => {
     const rendered = renderWorker();
     // Pinned tokens from `buildWorkerInstructions` — if the entry
     // wire breaks, these disappear and the V2 path silently falls
@@ -338,19 +342,24 @@ describe('FEATURE_114 Slice 2 — worker role prompt entry wire', () => {
     expect(rendered).toContain('SCOPE COMMITMENT (FEATURE_106 hard rule');
     expect(rendered).toContain('MUTATION DISCIPLINE');
     expect(rendered).toContain('DISPATCH RULES');
-    expect(rendered).toContain('EVALUATOR HANDOFF');
+    // FEATURE_190 (v0.7.43): legacy `EVALUATOR HANDOFF` replaced by
+    // positive text-only termination block.
+    expect(rendered).toContain('TERMINATION');
+    expect(rendered).toContain('Sidecar Verifier');
+    expect(rendered).not.toContain('EVALUATOR HANDOFF');
     expect(rendered).toContain('You are the Worker — KodaX\'s single primary agent');
   });
 
-  it('threads isResumeAfterReviseFailure into the Worker retrospective fragment', () => {
+  it('threads isResumeAfterReviseFailure into the Worker retrospective fragment (Sidecar Verifier wording post-F190)', () => {
     const fresh = renderWorker();
     const resume = renderWorker({ isResumeAfterReviseFailure: true });
     // Fresh-run prompt should NOT carry the retrospective sentence.
-    expect(fresh).not.toContain('A previous attempt at this task failed under Evaluator review');
+    expect(fresh).not.toContain('Sidecar Verifier review');
     // Resume prompt MUST carry it (drives the LLM to read failed-item
-    // notes before retrying with the same approach).
-    expect(resume).toContain('A previous attempt at this task failed under Evaluator review');
-    expect(resume).toContain('failed under Evaluator review');
+    // notes before retrying with the same approach). FEATURE_190 swapped
+    // the wording from "Evaluator review" to "Sidecar Verifier review".
+    expect(resume).toContain('A previous attempt at this task failed Sidecar Verifier review');
+    expect(resume).not.toContain('Evaluator review');
   });
 
   it('does not leak Scout/Planner/Generator/Evaluator-specific prompt fragments', () => {

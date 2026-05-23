@@ -415,7 +415,12 @@ export function createRolePrompt(
     'Keep the role output above the block.',
   ].join('\n');
   const emitToolName = (role !== 'direct' && role !== 'evaluator') ? ROLE_EMIT_TOOL_NAMES[role] : undefined;
-  const managedProtocolToolInstructions = role !== 'direct' && emitToolName && (!isTerminalAuthority || role !== 'generator')
+  // FEATURE_190 (v0.7.43): Worker is excluded from PROTOCOL EMISSION
+  // teaching — under F184 architecture Worker terminates text-only
+  // (no `emit_handoff` tool call) and the Sidecar Verifier runs
+  // out-of-band. Generator retains the teaching for legacy V1 paths
+  // until Phase 3 deletes the tool.
+  const managedProtocolToolInstructions = role !== 'direct' && role !== 'worker' && emitToolName && (!isTerminalAuthority || role !== 'generator')
     ? [
       'PROTOCOL EMISSION — MUST be in the SAME response as your answer:',
       `Write your user-facing answer, then call "${emitToolName}" exactly once — all in the SAME response.`,
@@ -837,10 +842,13 @@ export function createRolePrompt(
         // framework lives between context blocks and the protocol
         // emit instructions.
         workerInstructions,
+        // FEATURE_190 (v0.7.43): Worker no longer injects PROTOCOL EMISSION
+        // or the kodax-task-handoff fenced-block fallback — under F184
+        // architecture Worker terminates text-only. Both contributors will
+        // be undefined here for Worker after the role !== 'worker' guard
+        // above, but kept in the array for shape parity with other roles.
         managedProtocolToolInstructions,
-        // Same fenced-block fallback Generator gets (Worker hands off
-        // to Evaluator with the handoff payload shape).
-        handoffBlockInstructions,
+        // handoffBlockInstructions intentionally omitted for Worker post-F190.
         sharedWorkerDiscipline,
         sharedClosingRule,
       ].filter((section): section is string => Boolean(section)).join('\n\n');

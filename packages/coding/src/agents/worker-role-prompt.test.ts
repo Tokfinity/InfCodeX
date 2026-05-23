@@ -136,11 +136,20 @@ describe('buildWorkerInstructions', () => {
     expect(out).not.toContain('await_child_task');
   });
 
-  it('emits the Evaluator handoff section (structural gate preserved)', () => {
+  it('emits the TERMINATION section (text-only canonical exit, post-F190)', () => {
+    // FEATURE_190 (v0.7.43) replaced the legacy EVALUATOR HANDOFF block
+    // with positive text-only termination guidance. F184 v0.7.45 retired
+    // the in-chain Evaluator; the Sidecar Verifier Stop-hook now runs
+    // out-of-band and the Worker terminates by simply omitting tool_use
+    // on its final assistant message.
     const out = buildWorkerInstructions(baseDecision, undefined, false);
-    expect(out).toContain('EVALUATOR HANDOFF');
-    expect(out).toContain('emit_handoff');
-    expect(out).toContain('CANNOT bypass the Evaluator');
+    expect(out).toContain('TERMINATION');
+    expect(out).toContain('text-only summary');
+    expect(out).toContain('Sidecar Verifier');
+    // Regression pins — these must NOT appear post-F190:
+    expect(out).not.toContain('EVALUATOR HANDOFF');
+    expect(out).not.toContain('CANNOT bypass the Evaluator');
+    expect(out).not.toContain('emit_handoff');
   });
 
   // FAN-OUT PLAN GRANULARITY — claudecode-style 3-bullet rewrite
@@ -166,14 +175,14 @@ describe('buildWorkerInstructions', () => {
     expect(out).toMatch(/mid fan-out|another child/);
   });
 
-  it('orders Slice I after dispatch rules and before Evaluator handoff', () => {
+  it('orders Slice I after dispatch rules and before TERMINATION (post-F190)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     const dispatchIdx = out.indexOf('DISPATCH RULES');
     const fanOutIdx = out.indexOf('FAN-OUT PLAN GRANULARITY');
-    const handoffIdx = out.indexOf('EVALUATOR HANDOFF');
+    const terminationIdx = out.indexOf('TERMINATION');
     expect(dispatchIdx).toBeGreaterThanOrEqual(0);
     expect(fanOutIdx).toBeGreaterThan(dispatchIdx);
-    expect(handoffIdx).toBeGreaterThan(fanOutIdx);
+    expect(terminationIdx).toBeGreaterThan(fanOutIdx);
   });
 
   // FEATURE_161 v0.7.41 — REPO INTELLIGENCE TOOLS section. Pin presence
@@ -262,12 +271,12 @@ describe('buildWorkerInstructions — FEATURE_155 idle-yield (always-on, Slice C
     expect(out).toContain('<task-completed>');
   });
 
-  it('keeps the structural gates intact (PLAN-FIRST, SCOPE COMMITMENT, EVALUATOR HANDOFF, FAN-OUT PLAN GRANULARITY)', () => {
+  it('keeps the structural gates intact (PLAN-FIRST, SCOPE COMMITMENT, TERMINATION, FAN-OUT PLAN GRANULARITY)', () => {
     const out = buildWorkerInstructions(baseDecision, undefined, false);
     expect(out).toContain('PLAN-FIRST CONTRACT');
     expect(out).toContain('SCOPE COMMITMENT');
     expect(out).toContain('FAN-OUT PLAN GRANULARITY');
-    expect(out).toContain('EVALUATOR HANDOFF');
+    expect(out).toContain('TERMINATION');
   });
 });
 

@@ -39,9 +39,10 @@ export const PLANNER_INSTRUCTIONS_FALLBACK = [
 ].join('\n');
 
 export const GENERATOR_INSTRUCTIONS_FALLBACK = [
-  'You are Generator (H1/H2 execution role). Execute the task and call `emit_handoff` exactly ',
-  'once with status/summary/evidence/followup. You may call: read, grep, glob, bash, write, ',
-  'edit, dispatch_child_task.',
+  'You are Generator (H1/H2 execution role). Execute the task and end your turn with a brief ',
+  'text-only summary when done — no tool call is needed to terminate. An independent Sidecar ',
+  'Verifier reads your work and decides accept / revise / blocked. You may call: read, grep, ',
+  'glob, bash, write, edit, dispatch_child_task.',
 ].join('\n');
 
 // FEATURE_114 v0.7.36 — minimal Worker instructions for the
@@ -51,10 +52,11 @@ export const GENERATOR_INSTRUCTIONS_FALLBACK = [
 // above; the production path never reaches this string.
 export const WORKER_INSTRUCTIONS_FALLBACK = [
   'You are Worker (AMA Harness V2 single-loop primary agent). Plan via ',
-  '`todo_update`, execute via tool calls, then call `emit_handoff` exactly ',
-  'once with status/summary/evidence/followup. You may call: read, grep, glob, ',
-  'bash, write, edit, multi_edit, todo_update, todo_list, dispatch_child_task, ',
-  'exit_plan_mode.',
+  '`todo_update`, execute via tool calls, then end your turn with a brief ',
+  'text-only summary when done — no tool call is needed to terminate. An ',
+  'independent Sidecar Verifier reads your work and decides accept / revise ',
+  '/ blocked. You may call: read, grep, glob, bash, write, edit, multi_edit, ',
+  'todo_update, todo_list, dispatch_child_task, exit_plan_mode.',
 ].join('\n');
 
 /**

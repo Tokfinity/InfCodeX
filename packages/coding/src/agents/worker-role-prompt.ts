@@ -3,9 +3,15 @@
  *
  * The Worker collapses the legacy 4-role chain
  * (Scout → Planner → Generator → Evaluator) into a single primary
- * agent that decides when to plan, executes, and hands off to the
- * Evaluator (preserved as an independent structural gate). The full
- * V2 design lives in docs/features/v0.7.36.md §FEATURE_114.
+ * agent that decides when to plan, executes, and converges on a final
+ * text-only summary. The full V2 design lives in
+ * docs/features/v0.7.36.md §FEATURE_114.
+ *
+ * FEATURE_184 (v0.7.45) Phase C.1 retired the in-chain Evaluator and
+ * replaced it with a Stop-hook Sidecar Verifier that runs out-of-band
+ * after the Worker terminates. FEATURE_190 (v0.7.43) updated the
+ * Worker prompt to teach text-only termination as the canonical exit
+ * — no `emit_handoff` tool call needed.
  *
  * Gated by the `KODAX_HARNESS_V2` env flag — when off, the legacy
  * Scout / Planner / Generator / Evaluator prompts in role-prompt.ts
@@ -47,7 +53,7 @@ export function buildWorkerInstructions(
 ): string {
   void verification; // kept on the signature for parity with legacy roles
   const reviseFailureRetrospective = isResumeAfterReviseFailure
-    ? 'A previous attempt at this task failed under Evaluator review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying. If the retry requires a fundamentally different step (not a fix of the failed one), use `todo_create` to add the new step rather than overloading the failed item with a different objective.'
+    ? 'A previous attempt at this task failed Sidecar Verifier review. Treat the prior `todo_update` items marked `failed` as ground truth — the same approach will not pass twice. Read the failure note before retrying. If the retry requires a fundamentally different step (not a fix of the failed one), use `todo_create` to add the new step rather than overloading the failed item with a different objective.'
     : '';
 
   const planFirstContract = [
@@ -215,10 +221,10 @@ export function buildWorkerInstructions(
   ].join('\n');
 
   const handoffRules = [
-    'EVALUATOR HANDOFF (KodaX structural gate, preserved as an independent role):',
-    '- When your plan is complete (all non-cancelled items `completed`), call `emit_handoff` with the artifacts you want the Evaluator to audit.',
-    '- The Evaluator runs in a fresh read-only session, audits your changes, and returns `accept` (terminal success), `revise` (your turn again — fix the called-out issues), or `blocked` (terminal failure).',
-    '- You CANNOT bypass the Evaluator. Trying to terminate the run with a final text answer instead of `emit_handoff` will be rejected by the runner.',
+    'TERMINATION:',
+    '- When all non-cancelled plan items are `completed`, end your turn with a brief text-only summary covering what you did, what changed (files / behavior), and any caveats. No tool call needed to terminate — the absence of a `tool_use` block on your final assistant message IS the terminal signal.',
+    '- If you cannot proceed (e.g. user-input blocker, irrecoverable failure), end your turn with a text-only summary of the blocker. Mark the affected plan items `failed` with a note BEFORE the final summary turn so the dashboard reflects the blocked state.',
+    '- After your terminal turn, an independent Sidecar Verifier reads your work in a fresh read-only session and decides accept (success) / revise (your turn again, fix the called-out issues) / blocked (terminal failure). You do not call the verifier — it runs automatically.',
   ].join('\n');
 
   const roleAck = [
