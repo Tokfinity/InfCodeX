@@ -559,60 +559,11 @@ describe('runKodaX extension runtime integration', () => {
     await runtime.dispose();
   });
 
-  it('captures hidden managed protocol tool payloads without surfacing protocol tool blocks in messages', async () => {
-    const extensionPath = path.join(tempDir, 'feature-034-managed-protocol.mjs');
-    await writeFile(
-      extensionPath,
-      `export default function(api) {
-        api.registerModelProvider({
-          name: '${TEST_PROVIDER_NAME}',
-          factory: () => new (globalThis.__feature034ManagedProtocolProviderClass)(),
-        });
-      }`,
-      'utf8',
-    );
-
-    (globalThis as typeof globalThis & {
-      __feature034ManagedProtocolProviderClass?: typeof Feature034ManagedProtocolProvider;
-    }).__feature034ManagedProtocolProviderClass = Feature034ManagedProtocolProvider;
-    Feature034ManagedProtocolProvider.calls = [];
-
-    const runtime = createExtensionRuntime();
-    await runtime.loadExtension(extensionPath);
-
-    const result = await runKodaX(
-      {
-        provider: TEST_PROVIDER_NAME,
-        extensionRuntime: runtime,
-        context: {
-          managedProtocolEmission: {
-            enabled: true,
-            role: 'evaluator',
-          },
-        },
-      },
-      'run managed verdict via hidden protocol tool (sidecar verifier path)',
-    );
-
-    expect(result.success).toBe(true);
-    expect(result.lastText).toBe('Structured evaluator answer.');
-    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
-    const toolNames = Feature034ManagedProtocolProvider.calls[0]?.tools.map((tool) => tool.name) ?? [];
-    expect(toolNames).toContain('emit_managed_protocol');
-    const assistantMessages = result.messages.filter((message) => message.role === 'assistant');
-    expect(
-      assistantMessages.some((message) =>
-        Array.isArray(message.content)
-        && message.content.some((block) => block.type === 'tool_use' && block.name === 'emit_managed_protocol'),
-      ),
-    ).toBe(false);
-
-    await runtime.dispose();
-    // 30_000 (was 5_000 default): under heavy parallel load (~226 test files
-    // running concurrently), this `runKodaX` integration test can balloon
-    // past the 5s default even though it completes in ~900ms in isolation.
-    // Same pattern as v0.7.37 d4a47bc — vitest's per-test timeout aborts the
-    // it-block but does NOT cancel the runKodaX substrate's in-flight
-    // provider.stream, so a timeout cascade leaks state into the next test.
-  }, 30_000);
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: the "captures hidden managed
+  // protocol tool payloads" integration test was tied to the
+  // `emit_managed_protocol` tool. That tool has been physically removed
+  // from the registry alongside the V1 chain retirement, so the test no
+  // longer has a hidden-protocol surface to capture. Sidecar Verifier
+  // (FEATURE_184) emits verdicts via the dedicated `emit_verdict` tool on
+  // a separate AMA path covered by `verifier-recorder-bridge.test.ts`.
 });

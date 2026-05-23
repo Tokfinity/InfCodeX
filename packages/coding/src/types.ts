@@ -1252,39 +1252,12 @@ export interface KodaXManagedTaskRuntimeState {
   currentHarness?: KodaXHarnessProfile;
   upgradeCeiling?: KodaXHarnessProfile;
   harnessTransitions?: KodaXManagedTaskHarnessTransition[];
-  /**
-   * @deprecated FEATURE_193 (v0.7.43): V1 Scout role retired. The Runner
-   * always emits `undefined` for this field on V2; pre-1.0 SDK consumers
-   * that still read `runtime.scoutDecision` see `undefined`. V2 Worker
-   * skillMap / scope context flows through `ctx.skillInvocation` and the
-   * routing-overlay system-prompt section (FEATURE_143). Field kept on
-   * the SDK type for pre-1.0 consumer compat; will be removed in a
-   * dedicated cleanup commit after V1-parser code paths in
-   * `managed-protocol.ts` / `llm-adapter.ts` are atomically retired.
-   */
-  scoutDecision?: {
-    summary: string;
-    recommendedHarness: KodaXHarnessProfile;
-    readyForUpgrade: boolean;
-    scope?: string[];
-    requiredEvidence?: string[];
-    reviewFilesOrAreas?: string[];
-    evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read';
-    harnessRationale?: string;
-    blockingEvidence?: string[];
-    directCompletionReady?: 'yes' | 'no';
-    skillSummary?: string;
-    executionObligations?: string[];
-    verificationObligations?: string[];
-    ambiguities?: string[];
-    projectionConfidence?: KodaXSkillProjectionConfidence;
-  };
-  /**
-   * @deprecated FEATURE_193 (v0.7.43): V1 Scout-emitted skill map slot.
-   * Always `undefined` post-V2 (Scout role retired). See `scoutDecision`
-   * deprecation note for cleanup roadmap.
-   */
-  skillMap?: KodaXSkillMap;
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: V1 Scout role retired. The
+  // SDK fields `scoutDecision` (Scout's harness/scope decision) and
+  // `skillMap` (Scout's skill-projection slot) have been removed
+  // physically — V2 Worker reads skillMap / scope context via
+  // `ctx.skillInvocation` and the routing-overlay system-prompt section
+  // (FEATURE_143) instead.
   completionContractStatus?: Record<string, 'ready' | 'incomplete' | 'blocked' | 'missing'>;
   rawRoutingDecision?: KodaXTaskRoutingDecision;
   finalRoutingDecision?: KodaXTaskRoutingDecision;
@@ -1422,26 +1395,15 @@ export interface KodaXManagedHandoffPayload {
   userFacingText: string;
 }
 
+// FEATURE_193 (v0.7.43) deep V1 cleanup: the V1 chain payload slots
+// (`scout` / `contract` / `handoff`) have been removed physically. Only
+// the verdict slot remains — the Sidecar Verifier (FEATURE_184) is the
+// sole emitter on V2. The slice type defs above
+// (`KodaXManagedScoutPayload` / `KodaXManagedContractPayload` /
+// `KodaXManagedHandoffPayload`) are retained so unit tests that mint
+// fixture payloads for the legacy parser still compile.
 export interface KodaXManagedProtocolPayload {
   verdict?: KodaXManagedVerdictPayload;
-  /**
-   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_scout_verdict` retired.
-   * V2 Worker never populates this slice; consumers see `undefined`.
-   * Pre-1.0 SDK shape compat — will be removed in a dedicated cleanup
-   * commit after V1 parser code paths in `managed-protocol.ts` /
-   * `llm-adapter.ts` are atomically retired.
-   */
-  scout?: KodaXManagedScoutPayload;
-  /**
-   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_contract` retired. See
-   * `scout` deprecation note for cleanup roadmap.
-   */
-  contract?: KodaXManagedContractPayload;
-  /**
-   * @deprecated FEATURE_193 (v0.7.43): V1 `emit_handoff` retired. See
-   * `scout` deprecation note for cleanup roadmap.
-   */
-  handoff?: KodaXManagedHandoffPayload;
 }
 
 export interface KodaXResult {

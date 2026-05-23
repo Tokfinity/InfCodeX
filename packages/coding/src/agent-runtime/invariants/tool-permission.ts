@@ -98,7 +98,6 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     // FEATURE_193 (v0.7.43): emit_scout_verdict and emit_contract deleted —
     // scout and planner roles retired along with their emit tools.
     case 'emit_verdict':
-    case 'emit_managed_protocol':         // v0.7.22 deprecated alias — keep until removed
     case 'scaffold_tool':
     case 'validate_tool':
     case 'stage_construction':

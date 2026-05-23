@@ -54,7 +54,10 @@ function makeOptions(emission: {
       managedProtocolEmission: {
         enabled: emission.enabled,
         optional: emission.optional ?? false,
-        role: emission.role ?? 'scout',
+        // FEATURE_193 (v0.7.43): scout/planner/generator role branches deleted
+      // from getManagedBlockNameForRole — only 'evaluator' resolves to a
+      // real block name now, so contract tests default to it.
+      role: emission.role ?? 'evaluator',
       },
     },
   } as unknown as KodaXOptions;
@@ -68,7 +71,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — gate short-circuits', ()
       lastText: 'some final text',
       messages,
       continueAttempted: true,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -84,7 +87,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — gate short-circuits', ()
       lastText: 'final answer',
       messages,
       continueAttempted: false,
-      options: makeOptions({ enabled: true, optional: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, optional: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -112,7 +115,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — gate short-circuits', ()
       lastText: 'final',
       messages: [],
       continueAttempted: false,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -125,7 +128,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — gate short-circuits', ()
       lastText: '',
       messages: [],
       continueAttempted: false,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -143,7 +146,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — gate short-circuits', ()
       lastText: 'final',
       messages: [],
       continueAttempted: false,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -159,7 +162,7 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — fires once', () => {
       lastText: 'plain text answer (no protocol block)',
       messages,
       continueAttempted: false,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });
@@ -172,16 +175,16 @@ describe('CAP-075: maybeAutoContinueManagedProtocol — fires once', () => {
     expect(blocks[0]!.text).toMatch(/required protocol was not emitted/);
     expect(blocks[0]!.text).toMatch(MANAGED_PROTOCOL_TOOL_NAME);
     expect(blocks[0]!.text).toMatch(/Do NOT output any text/);
-    expect(blocks[0]!.text).toMatch(/```kodax-task-scout```/);
+    expect(blocks[0]!.text).toMatch(/```kodax-task-verdict```/);
   });
 
   it('CAP-MANAGED-PROTO-AUTO-INLINED-BLOCK: lastText already contains the fenced block → no_op (model inlined it without calling the tool)', () => {
     const out = maybeAutoContinueManagedProtocol({
       result: makeResult({ stopReason: 'end_turn' }),
-      lastText: 'Here is my analysis.\n```kodax-task-scout\n{...}\n```',
+      lastText: 'Here is my analysis.\n```kodax-task-verdict\n{...}\n```',
       messages: [],
       continueAttempted: false,
-      options: makeOptions({ enabled: true, role: 'scout' }),
+      options: makeOptions({ enabled: true, role: 'evaluator' }),
       emittedManagedProtocolPayload: undefined,
       completedTurnTokenSnapshot: fakeSnapshot(),
     });

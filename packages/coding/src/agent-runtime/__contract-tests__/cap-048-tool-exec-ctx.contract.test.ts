@@ -83,11 +83,15 @@ describe('CAP-048: tool execution context construction contract', () => {
   });
 
   it('CAP-TOOL-CTX-004a: emitManagedProtocol mutates the shared payload ref so multiple emissions accumulate (when managedProtocolEmission is enabled)', () => {
+    // FEATURE_193 (v0.7.43) deep V1 cleanup: the V1 scout/contract/handoff
+    // payload slices were physically removed; this contract now pins
+    // accumulation through the single surviving `verdict` slot — a
+    // second emission overwrites prior fields while preserving siblings.
     const ref = makeRef();
     const ctx = buildToolExecutionContext({
       options: {
         context: {
-          managedProtocolEmission: { enabled: true, role: 'scout' },
+          managedProtocolEmission: { enabled: true, role: 'evaluator' },
         },
       } as unknown as KodaXOptions,
       runtime: undefined,
@@ -96,15 +100,15 @@ describe('CAP-048: tool execution context construction contract', () => {
     expect(ctx.emitManagedProtocol).toBeDefined();
 
     ctx.emitManagedProtocol!({
-      verdict: { source: 'evaluator', status: 'accept', followups: [], userFacingText: 'first' },
+      verdict: { source: 'evaluator', status: 'revise', followups: [], userFacingText: 'first' },
     });
     ctx.emitManagedProtocol!({
-      scout: { summary: 'second', scope: [], requiredEvidence: [] },
+      verdict: { source: 'evaluator', status: 'accept', followups: [], userFacingText: 'second' },
     });
 
     // Both emissions accumulated into the single ref.current value.
-    expect(ref.current?.verdict?.userFacingText).toBe('first');
-    expect(ref.current?.scout?.summary).toBe('second');
+    expect(ref.current?.verdict?.status).toBe('accept');
+    expect(ref.current?.verdict?.userFacingText).toBe('second');
   });
 
   it('CAP-TOOL-CTX-005: emitManagedProtocol is undefined when managedProtocolEmission is not enabled', () => {

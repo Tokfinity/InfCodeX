@@ -40,24 +40,25 @@ describe('CAP-047: managed protocol payload merge lifecycle contract', () => {
     const merged = mergeManagedProtocolPayload(undefined, patch);
     expect(merged?.verdict?.status).toBe('accept');
     expect(merged?.verdict?.userFacingText).toBe('all good');
-    expect(merged?.scout).toBeUndefined();
   });
 
-  it('CAP-MANAGED-PROTO-001b: successive merges accumulate sibling sections (verdict + scout + contract + handoff)', () => {
+  it('CAP-MANAGED-PROTO-001b: a later verdict merge overrides earlier sibling fields and preserves prior values when patch is partial', () => {
+    // FEATURE_193 (v0.7.43) deep V1 cleanup: the V1 scout/contract/handoff
+    // slices were physically removed from `KodaXManagedProtocolPayload`,
+    // so the accumulation contract is now exercised entirely through the
+    // single surviving `verdict` slot — successive emissions either
+    // override or extend the verdict fields. The covering contract for
+    // partial-patch override is in CAP-MANAGED-PROTO-001c below; this
+    // pins the "second emission lands cleanly on top of the first" path.
     let payload: KodaXManagedProtocolPayload | undefined;
     payload = mergeManagedProtocolPayload(payload, {
-      verdict: { source: 'evaluator', status: 'accept', followups: [], userFacingText: 'done' },
+      verdict: { source: 'evaluator', status: 'revise', followups: [], userFacingText: 'first take' },
     });
     payload = mergeManagedProtocolPayload(payload, {
-      scout: { summary: 'scouting complete', scope: [], requiredEvidence: [] },
-    });
-    payload = mergeManagedProtocolPayload(payload, {
-      contract: { summary: 'investigate', successCriteria: [], requiredEvidence: [], constraints: [] },
+      verdict: { source: 'evaluator', status: 'accept', followups: [], userFacingText: 'second take' },
     });
     expect(payload?.verdict?.status).toBe('accept');
-    expect(payload?.scout?.summary).toBe('scouting complete');
-    expect(payload?.contract?.summary).toBe('investigate');
-    expect(payload?.handoff).toBeUndefined();
+    expect(payload?.verdict?.userFacingText).toBe('second take');
   });
 
   it('CAP-MANAGED-PROTO-001c: a later patch overrides matching fields within a section but preserves siblings', () => {

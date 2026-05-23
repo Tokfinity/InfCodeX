@@ -323,14 +323,11 @@ export function buildManagedTaskPayload(args: {
       currentHarness: harness,
       upgradeCeiling: plan?.decision.upgradeCeiling ?? harness,
       qualityAssuranceMode: deriveQualityAssuranceMode(plan, harness),
-      // FEATURE_193 (v0.7.43): `scoutDecision` + `skillMap` runtime fields
-      // sourced from `recorder.scout?.payload.scout` — V1 scout slot deleted
-      // so both outputs are permanently undefined. The SDK public type
-      // surface (`KodaXManagedTaskRuntimeState.scoutDecision/skillMap`) is
-      // marked `@deprecated` but kept for pre-1.0 SDK consumer compat;
-      // emitting `undefined` is the canonical V2 state.
-      scoutDecision: undefined,
-      skillMap: undefined,
+      // FEATURE_193 (v0.7.43) deep V1 cleanup: `scoutDecision` + `skillMap`
+      // runtime fields physically removed from `KodaXManagedTaskRuntimeState`
+      // (Scout role retired, no V2 source). The runtime literal omits them
+      // entirely; downstream consumers read `ctx.skillInvocation` / the
+      // routing-overlay system-prompt section (FEATURE_143) for skill context.
       // Shard 6d-U: propagate the degraded-continue signal. `true` when the
       // Evaluator requested an upgrade beyond `plan.decision.upgradeCeiling`
       // (rewritten back to Generator) or when budget-extension approval was

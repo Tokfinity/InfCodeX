@@ -33,9 +33,9 @@ import type { AmaRole } from './types.js';
 
 /** Tools every AMA role excludes — specialized paths (SA-root, construction). */
 const AMA_BASELINE_EXCLUDE: ReadonlySet<string> = new Set([
-  // SA-path root entry only; AMA roles dispatch via role-specific emitters
-  // (emit_scout_verdict / emit_contract / emit_handoff / emit_verdict).
-  'emit_managed_protocol',
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: `emit_managed_protocol` was the
+  // SA-preset entry point for the V1 chain; with the chain retired and the
+  // tool itself deleted from the registry, no exclude entry is needed.
   // Construction / agent-construction / self-modify — activated only when
   // `toolConstructionMode=true` (see `agent-runtime/tool-resolution.ts:81`).
   // AMA roles never run in construction mode.

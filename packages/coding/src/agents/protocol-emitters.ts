@@ -1,22 +1,13 @@
 /**
- * Protocol emitter tools — FEATURE_084 Shard 2 (v0.7.26).
+ * Protocol emitter tools.
  *
- * Four role-specific `RunnableTool`s that replace the fenced-block text
- * protocol used by Scout / Planner / Generator / Evaluator today. Each tool
- * accepts a structured JSON payload, normalizes it via
- * `coerceManagedProtocolToolPayload` (the same normalizer the old fenced-block
- * parser uses), and surfaces the normalized payload on the tool result
- * `metadata.payload` field so the new Runner-driven task engine
- * (FEATURE_084 Shard 5) can make routing decisions without text parsing.
- *
- * **Data-only at this shard**: nothing consumes these tools yet. The SA
- * preset path and the existing managed-task engine continue to use the
- * legacy `emit_managed_protocol` tool + fenced-block fallback unchanged.
- *
- * **Payload parity contract**: a given JSON input MUST produce an identical
- * normalized payload to what the legacy fenced-block parser would produce
- * for the same JSON. This is enforced by sharing
- * `coerceManagedProtocolToolPayload` between both paths.
+ * After FEATURE_193 (v0.7.43) V1 chain retirement, this module exposes a
+ * single emitter: `emitVerdict` (the Sidecar Verifier verdict tool). The
+ * supporting types and helpers (`ProtocolEmitterMetadata`,
+ * `resolveHandoffTarget`, `buildEmitter`, `summarizeNormalized`) survive in
+ * generic form because `verifier-recorder-bridge.ts` and the recorder
+ * still observe the emitter metadata shape — but every Scout / Planner /
+ * Generator branch is gone with the V1 roles.
  */
 
 import type { RunnableTool, RunnerToolResult } from '@kodax-ai/agent';
@@ -32,13 +23,16 @@ export const EMIT_VERDICT_TOOL_NAME = 'emit_verdict';
 
 /**
  * Shared metadata shape on the tool result. The Runner-driven task engine
- * (Shard 5) inspects `payload` to understand verdicts and
- * `handoffTarget` to execute the next role transition.
+ * inspects `payload` to understand the Sidecar Verifier verdict.
+ *
+ * FEATURE_193 (v0.7.43): the role union narrowed from the V1 four-role
+ * set (scout/planner/generator/evaluator) to `'evaluator'` only — Sidecar
+ * Verifier is the sole emitter that survives V1 chain retirement.
  */
 export interface ProtocolEmitterMetadata {
-  /** The role that emitted this payload — always matches the tool's role. */
-  readonly role: 'scout' | 'planner' | 'generator' | 'evaluator';
-  /** Normalized payload slice (scout / contract / handoff / verdict). */
+  /** The role that emitted this payload — always `'evaluator'` in V2. */
+  readonly role: 'evaluator';
+  /** Normalized payload slice (verdict). */
   readonly payload: Partial<KodaXManagedProtocolPayload>;
   /**
    * FEATURE_084 Shard 4 handoff signal. When set, the Runner looks up the
@@ -56,32 +50,20 @@ export interface ProtocolEmitterMetadata {
 }
 
 /**
- * Map a normalized payload → handoff target agent name. Pure function so
- * both the emitter and unit tests can verify the mapping rules.
+ * Map a normalized verdict payload → handoff target agent name. Pure
+ * function so both the emitter and unit tests can verify the mapping
+ * rules.
  *
- * Exported for the v0.7.26 fenced-block fallback path: when the LLM
- * forgets to call an emit tool but writes a well-formed `kodax-task-*`
- * block, `attemptProtocolTextFallback` (parse-helpers.ts) reuses this
- * same mapping so the synthesized recorder entry carries identical
- * handoff / terminal flags to what the real tool call would produce.
+ * Post-FEATURE_193: every verdict status is terminal — accept and blocked
+ * close the round; revise no longer hands off to a Planner agent because
+ * the V1 chain is gone (Sidecar replies via Worker re-run scheduling).
+ * The `handoffTarget` field of the returned shape is preserved for
+ * backwards-compatible recorder bookkeeping but is always omitted now.
  */
 export function resolveHandoffTarget(
-  role: ProtocolEmitterMetadata['role'],
-  normalized: Partial<KodaXManagedProtocolPayload>,
+  _role: ProtocolEmitterMetadata['role'],
+  _normalized: Partial<KodaXManagedProtocolPayload>,
 ): { handoffTarget?: string; isTerminal: boolean } {
-  // FEATURE_193 (v0.7.43): scout/planner/generator role branches deleted with
-  // V1 chain retirement. Only evaluator (Sidecar Verifier) remains.
-  if (role === 'evaluator') {
-    const status = normalized.verdict?.status;
-    if (status === 'accept' || status === 'blocked') {
-      return { isTerminal: true };
-    }
-    // revise — V1 chain retirement removed the H2→planner branch; any
-    // revise verdict is now treated as terminal (Sidecar emits answers).
-    return { isTerminal: true };
-  }
-  // Unknown role (legacy V1 path) — fall through as terminal so the runtime
-  // doesn't try to walk a non-existent handoff edge.
   return { isTerminal: true };
 }
 
@@ -123,12 +105,10 @@ function buildEmitter(spec: EmitterSpec): RunnableTool {
 }
 
 function summarizeNormalized(
-  role: ProtocolEmitterMetadata['role'],
+  _role: ProtocolEmitterMetadata['role'],
   normalized: Partial<KodaXManagedProtocolPayload>,
 ): string {
-  // FEATURE_193 (v0.7.43): scout/planner/generator role summaries deleted
-  // with V1 chain retirement.
-  if (role === 'evaluator' && normalized.verdict) {
+  if (normalized.verdict) {
     const next = normalized.verdict.nextHarness ? `, next=${normalized.verdict.nextHarness}` : '';
     return `status=${normalized.verdict.status}${next}`;
   }

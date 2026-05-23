@@ -30,11 +30,6 @@ import type {
 } from '@kodax-ai/llm';
 import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
 import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
-import {
-  GENERATOR_AGENT_NAME,
-  PLANNER_AGENT_NAME,
-  SCOUT_AGENT_NAME,
-} from '../../../agents/task-engine-agents.js';
 import { resolveProvider } from '../../../providers/index.js';
 import { KODAX_MAX_MAXTOKENS_RETRIES } from '../../../constants.js';
 import {
@@ -72,20 +67,13 @@ import {
 } from '../../../reasoning.js';
 import type {
   KodaXEvents,
-  KodaXManagedProtocolPayload,
   KodaXOptions,
   KodaXReasoningMode,
-  KodaXTaskRole,
 } from '../../../types.js';
 import {
   emitProviderRateLimit,
   emitStreamEnd,
 } from '../../../agent-runtime/event-emitter.js';
-import { getManagedBlockNameForRole } from '../../../managed-protocol.js';
-import {
-  attemptProtocolTextFallback,
-  getEmitToolNameForRole,
-} from './parse-helpers.js';
 import {
   MANAGED_CONTROL_PLANE_MARKERS,
   sanitizeManagedStreamingText,
@@ -113,83 +101,16 @@ export interface RunnerAdapterTokenState {
   source: 'api' | 'estimate';
 }
 
-/**
- * C1 parity helper — map a registered Runner Agent name to its managed
- * task role. Used by the fenced-block fallback path in the LLM adapter
- * to decide which emit tool to synthesize when the LLM wrote the
- * fence but skipped the tool call.
- */
-function agentNameToManagedRole(
-  name: string,
-): Exclude<KodaXTaskRole, 'direct'> | undefined {
-  switch (name) {
-    case SCOUT_AGENT_NAME: return 'scout';
-    case PLANNER_AGENT_NAME: return 'planner';
-    case GENERATOR_AGENT_NAME: return 'generator';
-    default: return undefined;
-  }
-}
-
-/**
- * C1 parity helper — unwrap the per-role slice from a normalized
- * managed-protocol payload so it matches the emit tool's snake_case
- * input schema. The real emitter re-runs `coerceManagedProtocolToolPayload`
- * on this input, so the shape just needs to round-trip cleanly; we
- * intentionally emit snake_case keys matching the tool schema.
- */
-function flattenNormalizedForEmitterInput(
-  payload: Partial<KodaXManagedProtocolPayload>,
-): Record<string, unknown> {
-  if (payload.scout) {
-    const s = payload.scout;
-    return {
-      summary: s.summary,
-      scope: s.scope,
-      required_evidence: s.requiredEvidence,
-      review_files_or_areas: s.reviewFilesOrAreas,
-      evidence_acquisition_mode: s.evidenceAcquisitionMode,
-      confirmed_harness: s.confirmedHarness,
-      harness_rationale: s.harnessRationale,
-      blocking_evidence: s.blockingEvidence,
-      direct_completion_ready: s.directCompletionReady,
-      skill_map: s.skillMap
-        ? {
-          skill_summary: s.skillMap.skillSummary,
-          execution_obligations: s.skillMap.executionObligations,
-          verification_obligations: s.skillMap.verificationObligations,
-          ambiguities: s.skillMap.ambiguities,
-          projection_confidence: s.skillMap.projectionConfidence,
-        }
-        : undefined,
-    };
-  }
-  if (payload.contract) {
-    return {
-      summary: payload.contract.summary,
-      success_criteria: payload.contract.successCriteria,
-      required_evidence: payload.contract.requiredEvidence,
-      constraints: payload.contract.constraints,
-    };
-  }
-  if (payload.handoff) {
-    return {
-      status: payload.handoff.status,
-      summary: payload.handoff.summary,
-      evidence: payload.handoff.evidence,
-      followup: payload.handoff.followup,
-    };
-  }
-  if (payload.verdict) {
-    return {
-      status: payload.verdict.status,
-      reason: payload.verdict.reason,
-      followup: payload.verdict.followups,
-      user_answer: payload.verdict.userAnswer,
-      next_harness: payload.verdict.nextHarness,
-    };
-  }
-  return {};
-}
+// FEATURE_193 (v0.7.43) deep V1 cleanup: `agentNameToManagedRole` +
+// `flattenNormalizedForEmitterInput` deleted. They were C1-parity helpers
+// for the fenced-block fallback path that synthesized a tool call when
+// the LLM emitted a `kodax-task-*` block without calling the corresponding
+// `emit_*` tool. V1 chain retirement removed every reachable agent name
+// (SCOUT/PLANNER/GENERATOR) the mapping recognized, so `agentNameToManagedRole`
+// always returned `undefined` and the synthesize block short-circuited
+// before either helper ran. The Sidecar Verifier (FEATURE_184) drives
+// verdicts out-of-band and does not need the V2 worker to fall through
+// to the fence-synthesizer.
 
 export function buildRunnerLlmAdapter(
   options: KodaXOptions,
@@ -312,11 +233,12 @@ export function buildRunnerLlmAdapter(
     // user ceiling override + no scout hint is in play (resolver collapses).
     const userCeiling = resolveReasoningMode(options);
     const scoutHint = getScoutReasoningHint?.();
-    const role: ReasoningRole =
-      agent.name === SCOUT_AGENT_NAME ? 'scout'
-      : agent.name === PLANNER_AGENT_NAME ? 'planner'
-      : agent.name === GENERATOR_AGENT_NAME ? 'generator'
-      : 'sa';
+    // FEATURE_193 (v0.7.43): V1 chain retired — Worker is the sole agent
+    // exercised in the AMA Runner chain. The SCOUT/PLANNER/GENERATOR
+    // arms of this resolution always missed in V2 production and folded
+    // to `'sa'`; the explicit literal here matches that behaviour with
+    // zero functional change.
+    const role: ReasoningRole = 'sa';
     const reasoningMode = resolveRoleReasoning(role, userCeiling, agent.reasoning, scoutHint);
     const providerReasoning: KodaXReasoningRequest | undefined =
       reasoningMode === 'off'
@@ -867,51 +789,16 @@ export function buildRunnerLlmAdapter(
       input: b.input ?? {},
     }));
 
-    // C1 parity (v0.7.26) — fenced-block fallback. v0.7.22 ran
-    // `managedProtocolPayload?.scout ?? parseManagedTaskScoutDirective(text)`
-    // at 4 call sites so an LLM that writes a well-formed `kodax-task-*`
-    // block but forgets to call the emit tool still advances the
-    // pipeline. The Runner-driven path lost this until now — a missed
-    // emit stalls the entire run (task never records Scout/Handoff/
-    // Verdict, Runner loops until the 500-iteration safety cap trips).
-    //
-    // Strategy: detect "LLM didn't call the expected emit_* tool this
-    // turn, but assistant text contains the role's kodax-task-* fence"
-    // → parse the fence via `attemptProtocolTextFallback`, synthesize a
-    // matching tool_call entry. The Runner will dispatch it through
-    // the agent's already-registered emit tool + `wrapEmitterWithRecorder`,
-    // so recorder / budget / handoff bookkeeping flows through the
-    // exact same code path as a real tool call. Zero new state
-    // machinery. Mirrors v0.7.22's `?? parseManagedTask*Directive`
-    // fallback at task-engine.ts:3242 / 3297 / 3371 / 3416.
-    const fallbackRole = agentNameToManagedRole(agent.name);
-    if (fallbackRole && text.length > 0) {
-      const expectedEmit = getEmitToolNameForRole(fallbackRole);
-      const alreadyEmitted = expectedEmit
-        ? toolCalls.some((tc) => tc.name === expectedEmit)
-        : false;
-      if (expectedEmit && !alreadyEmitted) {
-        const synthesized = attemptProtocolTextFallback(fallbackRole, text);
-        if (synthesized) {
-          toolCalls.push({
-            id: `fallback-${fallbackRole}-${Date.now()}`,
-            name: expectedEmit,
-            // Re-serialize the normalized payload as the synthetic tool
-            // input. The real emitter will re-run `coerceManagedProtocolToolPayload`,
-            // which is idempotent on already-normalized input (keys
-            // already snake_case via the block body; camelCase fields
-            // the normalizer produced round-trip cleanly via the
-            // tool's schema).
-            input: flattenNormalizedForEmitterInput(synthesized.payload) as Record<string, unknown>,
-          });
-          options.events?.onRetry?.(
-            `[fallback] ${fallbackRole} emitted ${getManagedBlockNameForRole(fallbackRole) ?? 'fenced block'} without calling ${expectedEmit}; synthesizing tool call from block body`,
-            0,
-            0,
-          );
-        }
-      }
-    }
+    // FEATURE_193 (v0.7.43) deep V1 cleanup: the C1-parity fenced-block
+    // fallback (synthesize tool_call when LLM emits a `kodax-task-*` block
+    // without calling the matching `emit_*` tool) used to live here. With
+    // V1 chain retired, only `'evaluator'` (Sidecar Verifier) remains as
+    // a valid emit role, and verdicts are driven out-of-band by Sidecar
+    // Verifier — the Worker's terminal turn never needs the fence-to-
+    // tool-call synthesis. `agentNameToManagedRole` only matched the V1
+    // SCOUT/PLANNER/GENERATOR agent names, so the entire branch was a
+    // dead short-circuit in V2 production.
+
     // Forward thinking blocks so
     // `buildAssistantMessageFromLlmResult` can prepend them to the
     // assistant content. Required for Anthropic extended thinking —

@@ -148,29 +148,13 @@ export function buildResumePreamble(checkpoint: ValidatedCheckpoint): string {
     `Harness: ${task.contract.harnessProfile}`,
     `Roles already executed: ${checkpoint.checkpoint.completedWorkerIds.join(', ') || 'none'}`,
   ];
-  // FEATURE_193 (v0.7.43): V1 Scout role retired — `task.runtime?.scoutDecision`
-  // is permanently `undefined` on V2 sessions, so the `--- Scout findings ---`
-  // preamble block is dead on V2. Pre-F193 checkpoint resume still hits
-  // this branch if a session jsonl carries the legacy `scoutDecision`
-  // payload — kept for that backfill compat. The SDK public field is
-  // marked `@deprecated`; the block can be deleted alongside the
-  // atomic V1-parser removal.
-  const scout = task.runtime?.scoutDecision;
-  if (scout) {
-    lines.push('', '--- Scout findings (already complete) ---');
-    if (scout.summary) lines.push(`Summary: ${scout.summary}`);
-    if (scout.harnessRationale) lines.push(`Harness rationale: ${scout.harnessRationale}`);
-    if (scout.scope && scout.scope.length > 0) {
-      lines.push(`Scope: ${scout.scope.join(', ')}`);
-    }
-    if (scout.reviewFilesOrAreas && scout.reviewFilesOrAreas.length > 0) {
-      lines.push(`Review files/areas: ${scout.reviewFilesOrAreas.join(', ')}`);
-    }
-    if (scout.executionObligations && scout.executionObligations.length > 0) {
-      lines.push('Execution obligations:');
-      for (const ob of scout.executionObligations) lines.push(`  - ${ob}`);
-    }
-  }
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: the "Scout findings" preamble
+  // block — read from the V1-only `task.runtime?.scoutDecision` SDK field
+  // — was deleted alongside the deprecated field. Pre-F193 checkpoints
+  // resume with the contract / verdict preamble blocks below; the prior
+  // Scout findings narrative is no longer surfaced (its information was
+  // already absorbed into the contract summary that the V1 Planner role
+  // produced from Scout output).
   const contract = task.contract.contractSummary;
   if (contract) {
     lines.push('', '--- Contract (already produced) ---');

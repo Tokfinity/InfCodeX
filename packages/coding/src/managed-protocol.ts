@@ -1,17 +1,25 @@
 import type {
-  KodaXManagedContractPayload,
-  KodaXManagedHandoffPayload,
   KodaXManagedProtocolPayload,
-  KodaXManagedScoutPayload,
   KodaXManagedVerdictPayload,
-  KodaXReasoningMode,
   KodaXTaskRole,
 } from './types.js';
 
+// FEATURE_193 (v0.7.43) deep V1 cleanup: legacy `emit_managed_protocol` tool
+// was the SA-preset entry for the V1 chain (Scout/Planner/Generator). With
+// the chain retired and the AMA `worker` role excluding this tool by name
+// (`AMA_BASELINE_EXCLUDE`), it is unreachable from V2 production. The
+// constant remains so legacy tool-permission / contract tests can continue
+// to assert the gate-off semantics; the registered tool implementation has
+// been deleted.
 export const MANAGED_PROTOCOL_TOOL_NAME = 'emit_managed_protocol';
 // NOTE: When adding a new kodax-* fence block name, also add it to
 // MANAGED_FENCE_NAMES in task-engine.ts (near sanitizeManagedUserFacingText)
 // so that truncated versions are correctly stripped from user-facing output.
+// The three V1 block names (CONTRACT / SCOUT / HANDOFF) are retained for
+// the sanitizer's defensive fence-detection sweep — LLMs sometimes emit a
+// hallucinated `kodax-task-scout` / `kodax-task-handoff` block even after
+// the V1 chain retired, and the sanitizer must still strip them before
+// user-facing text is shown.
 export const MANAGED_TASK_CONTRACT_BLOCK = 'kodax-task-contract';
 export const MANAGED_TASK_VERDICT_BLOCK = 'kodax-task-verdict';
 export const MANAGED_TASK_SCOUT_BLOCK = 'kodax-task-scout';
@@ -39,15 +47,6 @@ export function mergeManagedProtocolPayload(
     verdict: patch?.verdict
       ? { ...(base?.verdict ?? {}), ...patch.verdict }
       : base?.verdict,
-    scout: patch?.scout
-      ? { ...(base?.scout ?? {}), ...patch.scout }
-      : base?.scout,
-    contract: patch?.contract
-      ? { ...(base?.contract ?? {}), ...patch.contract }
-      : base?.contract,
-    handoff: patch?.handoff
-      ? { ...(base?.handoff ?? {}), ...patch.handoff }
-      : base?.handoff,
   };
 }
 
@@ -62,12 +61,6 @@ export function hydrateManagedProtocolPayloadVisibleText(
 
   if (merged.verdict && !merged.verdict.userFacingText?.trim()) {
     merged.verdict = { ...merged.verdict, userFacingText: visibleText };
-  }
-  if (merged.scout && !merged.scout.userFacingText?.trim()) {
-    merged.scout = { ...merged.scout, userFacingText: visibleText };
-  }
-  if (merged.handoff && !merged.handoff.userFacingText?.trim()) {
-    merged.handoff = { ...merged.handoff, userFacingText: visibleText };
   }
   return merged;
 }
@@ -124,139 +117,6 @@ export function normalizeManagedNextHarness(
   return undefined;
 }
 
-export function normalizeManagedScoutHarness(
-  candidate: string,
-): KodaXManagedScoutPayload['confirmedHarness'] | undefined {
-  const trimmed = candidate.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed
-    .replace(/[`"'()[\]{}<>]+/g, '')
-    .replace(/[.:;!?]+$/g, '')
-    .replace(/[\s-]+/g, '_')
-    .trim()
-    .toUpperCase();
-  if (normalized === 'H0_DIRECT' || normalized === 'H0') {
-    return 'H0_DIRECT';
-  }
-  if (normalized === 'H1_EXECUTE_EVAL' || normalized === 'H1') {
-    return 'H1_EXECUTE_EVAL';
-  }
-  if (normalized === 'H2_PLAN_EXECUTE_EVAL' || normalized === 'H2') {
-    return 'H2_PLAN_EXECUTE_EVAL';
-  }
-  return undefined;
-}
-
-export function normalizeManagedHandoffStatus(
-  candidate: string,
-): KodaXManagedHandoffPayload['status'] | undefined {
-  const trimmed = candidate.trim().toLowerCase();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed
-    .replace(/[`"'()[\]{}<>]+/g, '')
-    .replace(/[.:;!?]+$/g, '')
-    .replace(/[_\s-]+/g, ' ')
-    .trim();
-  const firstToken = normalized.split(/\s+/, 1)[0] ?? '';
-  if (!firstToken) {
-    return undefined;
-  }
-  if (firstToken === 'ready') {
-    return 'ready';
-  }
-  if (firstToken === 'incomplete' || /^partial(?:ly)?$/.test(firstToken)) {
-    return 'incomplete';
-  }
-  if (/^block(?:ed|ing)?$/.test(firstToken) || /^failed?$/.test(firstToken)) {
-    return 'blocked';
-  }
-  return undefined;
-}
-
-export function normalizeManagedEvidenceAcquisitionMode(
-  candidate: string,
-): KodaXManagedScoutPayload['evidenceAcquisitionMode'] | undefined {
-  const normalized = candidate
-    .trim()
-    .toLowerCase()
-    .replace(/[`"'()[\]{}<>]+/g, '')
-    .replace(/[.:;!?]+$/g, '')
-    .replace(/[_\s-]+/g, '-')
-    .trim();
-  if (normalized === 'overview') {
-    return 'overview';
-  }
-  if (normalized === 'diff-bundle' || normalized === 'bundle') {
-    return 'diff-bundle';
-  }
-  if (normalized === 'diff-slice' || normalized === 'slice') {
-    return 'diff-slice';
-  }
-  if (normalized === 'file-read' || normalized === 'read') {
-    return 'file-read';
-  }
-  return undefined;
-}
-
-export function normalizeManagedProjectionConfidence(
-  candidate: string,
-): NonNullable<KodaXManagedScoutPayload['skillMap']>['projectionConfidence'] | undefined {
-  const normalized = candidate
-    .trim()
-    .toLowerCase()
-    .replace(/[`"'()[\]{}<>]+/g, '')
-    .replace(/[.:;!?]+$/g, '')
-    .trim();
-  if (normalized === 'high' || normalized === 'medium' || normalized === 'low') {
-    return normalized;
-  }
-  return undefined;
-}
-
-export function normalizeManagedDirectCompletionReady(
-  candidate: string,
-): KodaXManagedScoutPayload['directCompletionReady'] | undefined {
-  const normalized = candidate
-    .trim()
-    .toLowerCase()
-    .replace(/[`"'()[\]{}<>]+/g, '')
-    .replace(/[.:;!?]+$/g, '')
-    .trim();
-  if (normalized === 'yes' || normalized === 'true' || normalized === 'ready') {
-    return 'yes';
-  }
-  if (normalized === 'no' || normalized === 'false' || normalized === 'not-ready' || normalized === 'not ready') {
-    return 'no';
-  }
-  return undefined;
-}
-
-/**
- * FEATURE_078: normalize a Scout-emitted `downstream_reasoning_hint`. The
- * field is optional and silently dropped when it doesn't match the
- * `KodaXReasoningMode` literal set — this prevents a hallucinated
- * `'medium'` / `'thorough'` / `'extra'` etc. from poisoning the L3 input
- * to `resolveRoleReasoning`.
- */
-function normalizeReasoningHint(value: unknown): KodaXReasoningMode | undefined {
-  if (typeof value !== 'string') return undefined;
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === 'off'
-    || normalized === 'auto'
-    || normalized === 'quick'
-    || normalized === 'balanced'
-    || normalized === 'deep'
-  ) {
-    return normalized;
-  }
-  return undefined;
-}
-
 export function normalizeStringListValue(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value.map((item) => String(item).trim()).filter(Boolean);
@@ -280,190 +140,41 @@ export function coerceManagedProtocolToolPayload(
     return undefined;
   }
 
-  if (role === 'evaluator') {
-    const status = typeof payload.status === 'string'
-      ? normalizeManagedVerdictStatus(payload.status)
-      : undefined;
-    if (!status) {
-      return undefined;
-    }
-    return {
-      verdict: {
-        source: 'evaluator',
-        status,
-        reason: typeof payload.reason === 'string' ? payload.reason.trim() || undefined : undefined,
-        followups: normalizeStringListValue(payload.followup ?? payload.followups),
-        userFacingText: visibleText,
-        userAnswer: typeof payload.user_answer === 'string'
-          ? payload.user_answer.trim() || undefined
-          : typeof payload.userAnswer === 'string'
-            ? payload.userAnswer.trim() || undefined
-            : undefined,
-        nextHarness: typeof (payload.next_harness ?? payload.nextHarness) === 'string'
-          ? normalizeManagedNextHarness(String(payload.next_harness ?? payload.nextHarness))
-          : undefined,
-        // Risk-3: Evaluator may flag an explicit budget-extension request
-        // via a free-form string (one-line reason). `wrapEmitterWithRecorder`
-        // surfaces this to the user regardless of the 90% auto-threshold.
-        budgetRequest: typeof (payload.budget_request ?? payload.budgetRequest) === 'string'
-          ? String(payload.budget_request ?? payload.budgetRequest).trim() || undefined
-          : undefined,
-      },
-    };
-  }
-
-  if (role === 'planner') {
-    const summary = typeof payload.summary === 'string' ? payload.summary.trim() || undefined : undefined;
-    const successCriteria = normalizeStringListValue(payload.success_criteria ?? payload.successCriteria);
-    const requiredEvidence = normalizeStringListValue(payload.required_evidence ?? payload.requiredEvidence);
-    const constraints = normalizeStringListValue(payload.constraints);
-    if (!summary && successCriteria.length === 0 && requiredEvidence.length === 0 && constraints.length === 0) {
-      return undefined;
-    }
-    return {
-      contract: {
-        summary,
-        successCriteria,
-        requiredEvidence,
-        constraints,
-      },
-    };
-  }
-
-  if (role === 'scout') {
-    const summary = typeof payload.summary === 'string' ? payload.summary.trim() || undefined : undefined;
-    const scope = normalizeStringListValue(payload.scope);
-    const requiredEvidence = normalizeStringListValue(payload.required_evidence ?? payload.requiredEvidence);
-    const reviewFilesOrAreas = normalizeStringListValue(payload.review_files_or_areas ?? payload.reviewFilesOrAreas);
-    const blockingEvidence = normalizeStringListValue(payload.blocking_evidence ?? payload.blockingEvidence);
-    // FEATURE_097 P0 FIX: protocol-emitters schema nests skill_map fields, but
-    // some LLMs / older prompts emit them at top level. Read both shapes so the
-    // todo seed gate (≥2 executionObligations) actually fires when the LLM
-    // emits the schema-correct nested form.
-    const skillMapPayload = (() => {
-      const raw = payload.skill_map ?? payload.skillMap;
-      return raw && typeof raw === 'object' && !Array.isArray(raw)
-        ? (raw as Record<string, unknown>)
-        : undefined;
-    })();
-    const executionObligations = normalizeStringListValue(
-      payload.execution_obligations
-        ?? payload.executionObligations
-        ?? skillMapPayload?.execution_obligations
-        ?? skillMapPayload?.executionObligations,
-    );
-    const verificationObligations = normalizeStringListValue(
-      payload.verification_obligations
-        ?? payload.verificationObligations
-        ?? skillMapPayload?.verification_obligations
-        ?? skillMapPayload?.verificationObligations,
-    );
-    const ambiguities = normalizeStringListValue(
-      payload.ambiguities ?? skillMapPayload?.ambiguities,
-    );
-    const confirmedHarness = typeof (payload.confirmed_harness ?? payload.confirmedHarness) === 'string'
-      ? normalizeManagedScoutHarness(String(payload.confirmed_harness ?? payload.confirmedHarness))
-      : undefined;
-    const evidenceAcquisitionMode = typeof (payload.evidence_acquisition_mode ?? payload.evidenceAcquisitionMode) === 'string'
-      ? normalizeManagedEvidenceAcquisitionMode(String(payload.evidence_acquisition_mode ?? payload.evidenceAcquisitionMode))
-      : undefined;
-    const skillSummary = (() => {
-      const candidates = [
-        payload.skill_summary,
-        payload.skillSummary,
-        skillMapPayload?.skill_summary,
-        skillMapPayload?.skillSummary,
-      ];
-      for (const c of candidates) {
-        if (typeof c === 'string') {
-          const trimmed = c.trim();
-          if (trimmed) return trimmed;
-        }
-      }
-      return undefined;
-    })();
-    const projectionConfidenceRaw = payload.projection_confidence
-      ?? payload.projectionConfidence
-      ?? skillMapPayload?.projection_confidence
-      ?? skillMapPayload?.projectionConfidence;
-    const projectionConfidence = typeof projectionConfidenceRaw === 'string'
-      ? normalizeManagedProjectionConfidence(String(projectionConfidenceRaw))
-      : undefined;
-    const harnessRationale = typeof (payload.harness_rationale ?? payload.harnessRationale) === 'string'
-      ? String(payload.harness_rationale ?? payload.harnessRationale).trim() || undefined
-      : undefined;
-    const directCompletionReady = typeof (payload.direct_completion_ready ?? payload.directCompletionReady) === 'string'
-      ? normalizeManagedDirectCompletionReady(String(payload.direct_completion_ready ?? payload.directCompletionReady))
-      : typeof (payload.direct_completion_ready ?? payload.directCompletionReady) === 'boolean'
-        ? ((payload.direct_completion_ready ?? payload.directCompletionReady) ? 'yes' : 'no')
-        : undefined;
-    // FEATURE_078: Scout MAY suggest a downstream reasoning depth. Accept
-    // both snake_case (LLM-emitted JSON convention) and camelCase
-    // (programmatic carrier). The value is a `KodaXReasoningMode` literal —
-    // anything else is silently dropped so a hallucinated `'medium'` /
-    // `'thorough'` etc. doesn't poison the L3 input.
-    const downstreamReasoningHint = normalizeReasoningHint(
-      payload.downstream_reasoning_hint ?? payload.downstreamReasoningHint,
-    );
-    if (
-      !summary
-      && scope.length === 0
-      && requiredEvidence.length === 0
-      && reviewFilesOrAreas.length === 0
-      && !confirmedHarness
-      && !harnessRationale
-      && blockingEvidence.length === 0
-      && !directCompletionReady
-      && !downstreamReasoningHint
-      && !evidenceAcquisitionMode
-      && !skillSummary
-      && executionObligations.length === 0
-      && verificationObligations.length === 0
-      && ambiguities.length === 0
-      && !projectionConfidence
-      && !visibleText
-    ) {
-      return undefined;
-    }
-    return {
-      scout: {
-        summary,
-        scope,
-        requiredEvidence,
-        reviewFilesOrAreas,
-        evidenceAcquisitionMode,
-        confirmedHarness,
-        harnessRationale,
-        blockingEvidence,
-        directCompletionReady,
-        downstreamReasoningHint,
-        userFacingText: visibleText || undefined,
-        skillMap: skillSummary || executionObligations.length > 0 || verificationObligations.length > 0 || ambiguities.length > 0 || projectionConfidence
-          ? {
-              skillSummary,
-              executionObligations,
-              verificationObligations,
-              ambiguities,
-              projectionConfidence,
-            }
-          : undefined,
-      },
-    };
+  // FEATURE_193 (v0.7.43) deep V1 cleanup: V1 chain roles (scout / planner /
+  // generator) were the only callers besides Sidecar Verifier; with the
+  // chain retired they are unreachable from V2 production. Only `evaluator`
+  // (Sidecar Verifier verdict normalization) remains.
+  if (role !== 'evaluator') {
+    return undefined;
   }
 
   const status = typeof payload.status === 'string'
-    ? normalizeManagedHandoffStatus(payload.status)
+    ? normalizeManagedVerdictStatus(payload.status)
     : undefined;
   if (!status) {
     return undefined;
   }
   return {
-    handoff: {
+    verdict: {
+      source: 'evaluator',
       status,
-      summary: typeof payload.summary === 'string' ? payload.summary.trim() || undefined : undefined,
-      evidence: normalizeStringListValue(payload.evidence),
-      followup: normalizeStringListValue(payload.followup ?? payload.followups),
+      reason: typeof payload.reason === 'string' ? payload.reason.trim() || undefined : undefined,
+      followups: normalizeStringListValue(payload.followup ?? payload.followups),
       userFacingText: visibleText,
+      userAnswer: typeof payload.user_answer === 'string'
+        ? payload.user_answer.trim() || undefined
+        : typeof payload.userAnswer === 'string'
+          ? payload.userAnswer.trim() || undefined
+          : undefined,
+      nextHarness: typeof (payload.next_harness ?? payload.nextHarness) === 'string'
+        ? normalizeManagedNextHarness(String(payload.next_harness ?? payload.nextHarness))
+        : undefined,
+      // Risk-3: Evaluator may flag an explicit budget-extension request
+      // via a free-form string (one-line reason). `wrapEmitterWithRecorder`
+      // surfaces this to the user regardless of the 90% auto-threshold.
+      budgetRequest: typeof (payload.budget_request ?? payload.budgetRequest) === 'string'
+        ? String(payload.budget_request ?? payload.budgetRequest).trim() || undefined
+        : undefined,
     },
   };
 }
@@ -472,16 +183,10 @@ export function coerceManagedProtocolToolPayload(
  * Map a task role to its required managed protocol fenced-block name.
  */
 export function getManagedBlockNameForRole(role: string): string | undefined {
-  switch (role) {
-    case 'scout': return MANAGED_TASK_SCOUT_BLOCK;
-    case 'planner': return MANAGED_TASK_CONTRACT_BLOCK;
-    case 'evaluator': return MANAGED_TASK_VERDICT_BLOCK;
-    case 'generator': return MANAGED_TASK_HANDOFF_BLOCK;
-    // FEATURE_114 v0.7.36 — Worker hands off via the same handoff block
-    // Generator uses (mirrors ROLE_EMIT_TOOL_NAMES).
-    case 'worker': return MANAGED_TASK_HANDOFF_BLOCK;
-    default: return undefined;
+  if (role === 'evaluator') {
+    return MANAGED_TASK_VERDICT_BLOCK;
   }
+  return undefined;
 }
 
 /**
@@ -492,16 +197,10 @@ export function hasManagedProtocolForRole(
   role: string,
 ): boolean {
   if (!payload) return false;
-  switch (role) {
-    case 'scout': return !!payload.scout;
-    case 'planner': return !!payload.contract;
-    case 'evaluator': return !!payload.verdict;
-    case 'generator': return !!payload.handoff;
-    // FEATURE_114 v0.7.36 — Worker emits the same handoff payload
-    // shape Generator does (see getManagedBlockNameForRole).
-    case 'worker': return !!payload.handoff;
-    default: return false;
+  if (role === 'evaluator') {
+    return !!payload.verdict;
   }
+  return false;
 }
 
 /**
