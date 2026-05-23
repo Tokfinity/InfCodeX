@@ -21,11 +21,15 @@
 //   1. Verify git is clean (no uncommitted changes).
 //   2. Build sub-package dist/ via `npm run build:packages` (esbuild needs them).
 //   3. Build root bundle via `npm run build:bundle`.
-//   4. Rewrite root package.json: name → @kodax-ai/kodax, drop private,
-//      add publishConfig, normalize bin paths, inject SDK subpath exports
-//      (ADR-024). Capture pristine bytes for restore.
+//   4. Toggle root package.json `private: true` → `private: false` so npm
+//      will accept the publish. Capture pristine bytes for restore.
+//      Name / exports / bin / publishConfig are NOT rewritten — root
+//      package.json is already in published shape (v0.7.43 SDK consumer
+//      `npm link` ergonomics: name=@kodax-ai/kodax, all 7 SDK subpath
+//      exports baked in, bin path published-clean). See ADR-024.
 //   5. Run `npm publish` (or --dry-run).
-//   6. Restore pristine package.json bytes (try/finally guarantees this).
+//   6. Restore pristine package.json bytes — re-asserts `private: true`
+//      so the dev tree cannot be accidentally re-published bare.
 //
 // Idempotent failure mode: pristine bytes are captured BEFORE any mutation;
 // restore writes them back verbatim even if npm publish throws.
@@ -78,58 +82,34 @@ function gitIsClean() {
   return result.status === 0 && result.stdout.trim() === '';
 }
 
-// ---- root package.json rewrite ------------------------------------------
+// ---- root package.json toggle for publish -------------------------------
 
-function rewriteRootPackageJson() {
+function toggleRootPackageJsonForPublish() {
   const rawBytes = readFileSync(rootPkgPath, 'utf8');
   const pkg = JSON.parse(rawBytes);
 
-  // 1. Switch publish identity: monorepo internal name "kodax" → public scope
-  pkg.name = '@kodax-ai/kodax';
-
-  // 2. Remove private flag (npm refuses to publish private packages)
-  delete pkg.private;
-
-  // 3. Ensure publishConfig for scoped public access
-  pkg.publishConfig = { access: 'public' };
-
-  // 4. Normalize bin paths — strip leading "./" prefix.
-  //    npm 11 publish-time validation rejects bin paths starting with "./"
-  //    and silently removes the entry. See FEATURE_147 v0.7.37 first-attempt
-  //    sweep retro for the original bug encounter.
-  if (pkg.bin && typeof pkg.bin === 'object') {
-    for (const [name, p] of Object.entries(pkg.bin)) {
-      if (typeof p === 'string' && p.startsWith('./')) {
-        pkg.bin[name] = p.substring(2);
-      }
-    }
-  } else if (typeof pkg.bin === 'string' && pkg.bin.startsWith('./')) {
-    pkg.bin = pkg.bin.substring(2);
+  // Sanity: published shape is now the source-of-truth. Catch accidental
+  // dev-tree drift before npm sees it.
+  if (pkg.name !== '@kodax-ai/kodax') {
+    throw new Error(
+      `root package.json#name expected "@kodax-ai/kodax" (published shape), got ${JSON.stringify(pkg.name)} — refuse to publish`,
+    );
   }
-
-  // 5. files allowlist must be present (otherwise npm tarballs the whole monorepo).
-  //    This is checked, not synthesized — keep package.json source-of-truth.
+  if (!pkg.exports || typeof pkg.exports !== 'object' || !pkg.exports['./agent']) {
+    throw new Error(
+      'root package.json#exports is missing SDK subpath entries — refuse to publish (would ship a broken tarball)',
+    );
+  }
   if (!Array.isArray(pkg.files) || pkg.files.length === 0) {
-    throw new Error('root package.json#files is missing or empty — refuse to publish (would tarball the whole monorepo)');
+    throw new Error(
+      'root package.json#files is missing or empty — refuse to publish (would tarball the whole monorepo)',
+    );
   }
 
-  // 6. ADR-024: SDK subpath exports. Root '.' stays as authored. The 5
-  //    subpaths point at the multi-entry bundle output from build-bundle.mjs.
-  //    `npm run build` emits dist/sdk-*.d.ts via `tsc --emitDeclarationOnly`
-  //    after the esbuild bundle, so each subpath ships a real types entry
-  //    alongside its .js (TypeScript consumers get proper types from
-  //    `import { Runner } from '@kodax-ai/kodax/agent'`).
-  pkg.exports = {
-    ...(pkg.exports || {}),
-    './agent': { types: './dist/sdk-agent.d.ts', import: './dist/sdk-agent.js' },
-    './llm': { types: './dist/sdk-llm.d.ts', import: './dist/sdk-llm.js' },
-    './coding': { types: './dist/sdk-coding.d.ts', import: './dist/sdk-coding.js' },
-    './repl': { types: './dist/sdk-repl.d.ts', import: './dist/sdk-repl.js' },
-    './skills': { types: './dist/sdk-skills.d.ts', import: './dist/sdk-skills.js' },
-    './mcp': { types: './dist/sdk-mcp.d.ts', import: './dist/sdk-mcp.js' },
-    './session': { types: './dist/sdk-session.d.ts', import: './dist/sdk-session.js' },
-    './package.json': './package.json',
-  };
+  // The ONLY mutation: flip `private: true → false` so npm accepts the
+  // publish. Restore via try/finally guarantees the dev tree returns to
+  // `private: true` and cannot be accidentally re-published bare.
+  pkg.private = false;
 
   writeFileSync(rootPkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
   return rawBytes; // for restore
@@ -176,9 +156,10 @@ function main() {
     log('-- --skip-build: assuming dist/ is already current');
   }
 
-  // Step 3: rewrite root package.json
-  log('-- rewriting root package.json (name → @kodax-ai/kodax, drop private, normalize bin, inject subpath exports)');
-  const pristineBytes = rewriteRootPackageJson();
+  // Step 3: toggle private:true → false (root package.json is already in
+  // published shape; this is the only mutation needed).
+  log('-- toggling root package.json#private: true → false (will restore via try/finally)');
+  const pristineBytes = toggleRootPackageJsonForPublish();
 
   // Step 4: publish OR pack, then restore (try/finally guarantees restore)
   try {

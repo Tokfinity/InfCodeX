@@ -1,22 +1,54 @@
 {
-  "name": "kodax",
+  "name": "@kodax-ai/kodax",
   "version": "0.7.43",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持 12 个 LLM 提供商，可发布为免 Node 单文件二进制",
   "type": "module",
   "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "workspaces": [
     "packages/*"
   ],
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
-    "kodax": "./scripts/kodax-bin.cjs"
+    "kodax": "scripts/kodax-bin.cjs"
   },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./agent": {
+      "types": "./dist/sdk-agent.d.ts",
+      "import": "./dist/sdk-agent.js"
+    },
+    "./llm": {
+      "types": "./dist/sdk-llm.d.ts",
+      "import": "./dist/sdk-llm.js"
+    },
+    "./coding": {
+      "types": "./dist/sdk-coding.d.ts",
+      "import": "./dist/sdk-coding.js"
+    },
+    "./repl": {
+      "types": "./dist/sdk-repl.d.ts",
+      "import": "./dist/sdk-repl.js"
+    },
+    "./skills": {
+      "types": "./dist/sdk-skills.d.ts",
+      "import": "./dist/sdk-skills.js"
+    },
+    "./mcp": {
+      "types": "./dist/sdk-mcp.d.ts",
+      "import": "./dist/sdk-mcp.js"
+    },
+    "./session": {
+      "types": "./dist/sdk-session.d.ts",
+      "import": "./dist/sdk-session.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "npm run build:packages && npm run build:bundle && npm run build:dts",

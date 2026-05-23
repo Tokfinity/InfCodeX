@@ -14,6 +14,7 @@ are NOT obvious from inspecting the type definitions alone:
 4. [Cross-reference: other FEATURE_186 surfaces](#4-cross-reference-other-feature_186-surfaces)
 5. [Consuming from a CommonJS context (Electron main, CJS bundles)](#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)
 6. [Session persistence — wiring `runKodaX` to disk](#6-session-persistence--wiring-runkodax-to-disk)
+7. [Local development via `npm link` (iterating against in-tree KodaX)](#7-local-development-via-npm-link-iterating-against-in-tree-kodax)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -734,6 +735,74 @@ Three reasons we **don't** auto-construct `FileSessionStorage` when
 - [ ] Is the `session.id` filesystem-safe? KodaX accepts any string
       but writes `<id>.jsonl` literally — IDs with `/`, `\`, or
       control chars will be rejected by the OS.
+
+---
+
+## 7. Local development via `npm link` (iterating against in-tree KodaX)
+
+If you maintain an SDK consumer (KodaX Space, an IDE extension, a custom
+bundler integration) and need to iterate against an unreleased KodaX
+build — verifying a bugfix, prototyping against an in-progress feature,
+running your project's test suite against `main` — you can `npm link`
+the in-tree KodaX checkout instead of waiting for a published version.
+
+As of v0.7.43 the root `package.json` is in **already-published shape**:
+`"name": "@kodax-ai/kodax"` is baked in along with all 7 SDK subpath
+exports. `npm link` "just works" — no need to run `scripts/release.mjs`
+first.
+
+### Recipe
+
+```bash
+# In your local KodaX checkout
+cd /path/to/KodaX
+npm install                                    # one-time (sets up workspaces)
+npm run build                                  # required — npm link resolves to dist/
+npm link                                       # exposes the dir as @kodax-ai/kodax globally
+
+# In your SDK consumer project (e.g. KodaX Space)
+cd /path/to/my-host-app
+npm link @kodax-ai/kodax                       # consume the linked checkout
+```
+
+After this, `import { ... } from '@kodax-ai/kodax/repl'` in your host
+app resolves to `/path/to/KodaX/dist/sdk-repl.js`. Subsequent edits
+inside KodaX require **re-running `npm run build`** — the link points
+at the bundled output, not source.
+
+### Tearing down the link
+
+```bash
+# In your SDK consumer project
+npm unlink @kodax-ai/kodax       # restore the published version (npm install runs again)
+
+# In KodaX
+npm unlink -g @kodax-ai/kodax    # remove the global symlink
+```
+
+### Why root stays `"private": true`
+
+The dev `package.json` carries `"private": true` so a bare `npm publish`
+from the repo refuses — `scripts/release.mjs` is the only sanctioned
+publish path, and it briefly toggles `private: false` (via try/finally)
+just for the publish call. `"private"` does **not** block `npm link` —
+it only gates `npm publish` — so the linked-build flow is unaffected.
+
+### Alternative: tarball install
+
+If you want a one-shot snapshot rather than a live symlink (e.g. for CI
+or for a teammate without write access to the KodaX checkout):
+
+```bash
+# In KodaX
+node scripts/release.mjs --pack-only           # produces kodax-ai-kodax-<v>.tgz
+
+# In your host app
+npm install /path/to/KodaX/kodax-ai-kodax-<version>.tgz
+```
+
+The tarball is byte-identical to what `npm publish` would ship, so it
+exercises exactly the published shape.
 
 ---
 

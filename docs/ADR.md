@@ -721,6 +721,25 @@ ADR-022 Addendum（"v0.7.39 改名 kodax-cli"）被 ADR-024 取代；保留为�
 
 仅当 ADR-022 的回退条件成立（≥3 独立 SDK 用户 + ≥2 子包独立 release cadence）时，连带回滚 ADR-024 的 subpath exports 部分 —— 但即便如此，**`@kodax-ai/kodax` 这个包名不再改**（避免再次扰动用户安装命令）。
 
+### Addendum (v0.7.43): published-shape root package.json + 简化 release.mjs
+
+**Status**: Accepted (2026-05-23)
+
+v0.7.39 ADR-024 落地时把 `name`、`exports`、`bin` normalize、`publishConfig` 全都放在 `scripts/release.mjs` 的 publish-time rewrite 里。dev 的 root `package.json` 保留 monorepo-internal 形态 `"name": "kodax"` + 单一 `exports: { "." }`，publish 那一刻 release.mjs 才把它改成 `@kodax-ai/kodax` + 7 个 SDK subpath。
+
+**Trigger**: v0.7.42 SDK consumer (KodaX Space) gap report 第 4 项 — embedder 希望对本地 KodaX checkout 直接 `npm link @kodax-ai/kodax`，dev tree 不在已发布形态下时这条路彻底不通：
+- `npm link` 按 root `name` 字段建 global symlink，dev tree 是 `kodax` 而非 `@kodax-ai/kodax`，consumer 端 `npm link @kodax-ai/kodax` 找不到目标
+- 即便硬 fs.symlink 整个仓库，`import('@kodax-ai/kodax/coding')` 也会被 Node ESM `exports` encapsulation 拒绝（dev tree 的 `exports` 只声明 `.`）
+- 强迫 embedder 先跑 `scripts/release.mjs --dry-run` 才能复制 publish-time 形态，对 in-tree SDK 迭代体验是结构性阻塞
+
+**v0.7.43 决策**: 把已发布形态搬进 dev `package.json` —— `name` 直接是 `@kodax-ai/kodax`，7 个 SDK subpath exports + `./package.json` 都常驻。**唯一的 publish-time 残留 mutation 是 toggle `private: true → false`**（保留 `private: true` 防止误 `npm publish` 裸根目录）。release.mjs 因此薄了大半：从 5 项 rewrite 变成单点 toggle，逻辑分支少了 4 个，出错面同步缩小。
+
+**为什么不直接 `private: false` 进 dev**：失去防误发的最后一道闸门。当前 release flow 严格依赖 `scripts/release.mjs` 的 build + version-sanity 链路，bare `npm publish` 会跳过这些。`private: true` 是廉价的兜底，release.mjs 也会先做 sanity check（断言 `name === '@kodax-ai/kodax'` + `exports['./agent']` 存在 + `files` allowlist 非空）再 toggle —— dev tree drift 会在 publish 入口拒绝。
+
+**业界对照**: vite / next / tailwindcss 的 root `package.json#name` 就是发布名（`vite` / `next` / `tailwindcss`），publish 仅靠 `publishConfig` + `files` 字段控制。ADR-024 v0.7.39 的 publish-time rewrite 模式当时是 `@kodax-ai/cli` → `@kodax-ai/kodax` 改名窗口的过渡产物，迁移完成后已无技术必要保留。
+
+**回滚条件**: 与上文相同（ADR-022 回退条件）；本 addendum 不引入新的回滚阈值。
+
 ---
 
 ## ADR-025: auto[llm] 信号化分类器 — 决策层级倒置 + Windows-flag 误判结构性修复 (FEATURE_158, v0.7.39)
