@@ -205,14 +205,17 @@ const result = await runKodaX(
 如果只想用某个子能力，按 subpath 引入更轻量，bundler 也能更好地 tree-shake：
 
 ```typescript
-import { Runner } from '@kodax-ai/kodax/agent';        // Agent runtime
-import { createProvider } from '@kodax-ai/kodax/llm';  // LLM 抽象（12 家 provider）
-import { runKodaX } from '@kodax-ai/kodax/coding';     // Coding tools + prompts
-import { SkillRegistry } from '@kodax-ai/kodax/skills'; // 零依赖 skill loader
-import { loadConfig } from '@kodax-ai/kodax/repl';     // REPL 配置 / session 工具
+import { Runner } from '@kodax-ai/kodax/agent';                // Agent runtime
+import { createProvider } from '@kodax-ai/kodax/llm';           // LLM 抽象（12 家 provider）
+import { runKodaX } from '@kodax-ai/kodax/coding';              // Coding tools + prompts
+import { SkillRegistry } from '@kodax-ai/kodax/skills';         // 零依赖 skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL 配置 / session 工具
+import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager（v0.7.42 起）
 ```
 
-6 个入口（root + 5 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+7 个入口（root + 6 subpath）通过 ESM 共享 chunk 复用底层代码 —— 只 import `/agent` 不会把 `/repl` 的 Ink + React 一起拉进来。
+
+> **SDK 是 ESM-only**。在 CommonJS 上下文（Electron main 进程、传统 Webpack CJS bundle、`require()` 调用方）必须用 `await import('@kodax-ai/kodax/...')` 代替 `require()`。详见 [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)，含 Electron main 完整 recipe + 为什么大多数 subpath 物理上无法做 dual ESM/CJS bundle。
 
 ### 5. 自定义 Provider（OpenAI / Anthropic 兼容端点）
 
@@ -414,7 +417,7 @@ kodax --repo-intelligence premium-native --repo-intelligence-trace
 
 ## 仓库结构
 
-KodaX 是基于 npm workspaces 的 TypeScript monorepo，源码层 9 个 workspace 包，npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 5 个 SDK subpath exports（ADR-022 + ADR-024，v0.7.39）。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，源码层 9 个 workspace 包，npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 6 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`；ADR-022 + ADR-024 v0.7.39 + ADR-032 v0.7.42 加 `/mcp`）。核心包：
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
@@ -426,7 +429,7 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，源码层 9 个 workspa
 
 辅助包：`@kodax-ai/mcp`、`@kodax-ai/repointel-protocol`、`@kodax-ai/session-lineage`、`@kodax-ai/tracing`（按需依赖）。
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills}.ts` 是 5 个 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills,mcp}.ts` 是 6 个 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ```
 KodaX/
@@ -443,7 +446,7 @@ KodaX/
 │   └── tracing/             # @kodax-ai/tracing
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # 5 个 SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl,skills}
+│   └── sdk-*.ts             # 6 个 SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl,skills,mcp}
 ├── scripts/
 │   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + 6 SDK entry + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包

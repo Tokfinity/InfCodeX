@@ -273,7 +273,7 @@ Setup, runtime modes, REPL controls, config schema, and external-host integratio
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces. Source layout has 9 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 5 SDK subpath exports (ADR-022 + ADR-024, v0.7.39):
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout has 9 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 6 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/repl`, `/skills`, `/mcp`; ADR-022 + ADR-024 v0.7.39 + ADR-032 v0.7.42 added `/mcp`):
 
 ```
 KodaX/
@@ -298,7 +298,7 @@ KodaX/
 │   ├── session-lineage/     # @kodax-ai/session-lineage - branchable session tree
 │   └── tracing/             # @kodax-ai/tracing - tracing / observability
 │
-├── src/                     # CLI entry + 5 SDK subpath entries (sdk-{agent,llm,coding,repl,skills}.ts)
+├── src/                     # CLI entry + 6 SDK subpath entries (sdk-{agent,llm,coding,repl,skills,mcp}.ts)
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
 │   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl,skills}
 │
@@ -446,14 +446,17 @@ console.log(result.lastText);
 For smaller surface and tree-shake-friendly imports, the SDK is also exposed via subpath exports — pick only the package(s) you need:
 
 ```typescript
-import { Runner } from '@kodax-ai/kodax/agent';       // agent runtime
-import { createProvider } from '@kodax-ai/kodax/llm'; // LLM abstraction (12 providers)
-import { runKodaX } from '@kodax-ai/kodax/coding';    // coding tools + prompts
-import { SkillRegistry } from '@kodax-ai/kodax/skills'; // zero-dep skill loader
-import { loadConfig } from '@kodax-ai/kodax/repl';    // REPL config / session helpers
+import { Runner } from '@kodax-ai/kodax/agent';                // agent runtime
+import { createProvider } from '@kodax-ai/kodax/llm';           // LLM abstraction (12 providers)
+import { runKodaX } from '@kodax-ai/kodax/coding';              // coding tools + prompts
+import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skill loader
+import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config / session helpers
+import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
 ```
 
-All 6 entries (root + 5 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+All 7 entries (root + 6 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+
+> **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
 
 For CLI users, provider defaults live in `~/.kodax/config.json`. For library users, API keys are still read from environment variables; if you need custom base URLs or provider aliases, use `registerCustomProviders()` as shown above.
 
@@ -718,20 +721,23 @@ await runKodaX({
 
 ## SDK Usage
 
-KodaX ships as a single npm package `@kodax-ai/kodax` with 5 SDK subpath exports (ADR-024, v0.7.39). Each subpath is tree-shake-friendly so consumers pull only what they need:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 6 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 added `/mcp`). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
 ```bash
 npm install @kodax-ai/kodax
 ```
 
 ```typescript
-import { runKodaX } from '@kodax-ai/kodax';                  // root: CLI helpers + runKodaX
-import { Runner, runFanOut } from '@kodax-ai/kodax/agent';   // generic Agent framework
-import { getProvider } from '@kodax-ai/kodax/llm';           // 12-provider LLM abstraction
-import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';        // tools + prompts + agent loop
-import { InkREPL } from '@kodax-ai/kodax/repl';              // Ink TUI components
-import { SkillRegistry } from '@kodax-ai/kodax/skills';      // zero-dep skill loader
+import { runKodaX } from '@kodax-ai/kodax';                       // root: CLI helpers + runKodaX
+import { Runner, runFanOut } from '@kodax-ai/kodax/agent';        // generic Agent framework
+import { getProvider } from '@kodax-ai/kodax/llm';                // 12-provider LLM abstraction
+import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';             // tools + prompts + agent loop
+import { InkREPL } from '@kodax-ai/kodax/repl';                   // Ink TUI components
+import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep skill loader
+import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
 ```
+
+> The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
 
 ### `@kodax-ai/kodax/llm` — LLM Abstraction
 

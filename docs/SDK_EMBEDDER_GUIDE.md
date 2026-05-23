@@ -12,9 +12,20 @@ are NOT obvious from inspecting the type definitions alone:
 2. [Skill `!`cmd`` dynamic-context resolution + `IVariableResolver`](#2-skill-cmd-dynamic-context-resolution--ivariableresolver)
 3. [Per-app data directory namespacing — `getAppDataDir`](#3-per-app-data-directory-namespacing--getappdatadir)
 4. [Cross-reference: other FEATURE_186 surfaces](#4-cross-reference-other-feature_186-surfaces)
+5. [Consuming from a CommonJS context (Electron main, CJS bundles)](#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles)
 
-All three surfaces land in v0.7.42 under FEATURE_186 (see
-[ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
+§1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
+under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
+§5 documents the ESM-only packaging contract and the canonical
+`await import(...)` recipe for CJS / Electron main consumers.
+
+> **Code examples in §1–§4 use static ESM `import`** — that's the
+> shape ESM consumers (Node `"type": "module"`, Vite, modern Electron
+> renderer with `nodeIntegration: true`+ESM) want. **If your host
+> compiles to CJS** (Electron main process, legacy Webpack CJS bundle,
+> `tsc --module commonjs`), every static `import` example becomes
+> `await import(...)` — see §5 for the full recipe and bundler
+> configuration.
 
 ---
 
@@ -393,6 +404,164 @@ console.log(result.finalMessage);
 
 Constructor-supplied `options.abortSignal` is forwarded into the
 internal `AbortController`; calling either signal aborts the run.
+
+---
+
+## 5. Consuming from a CommonJS context (Electron main, CJS bundles)
+
+### TL;DR
+
+`@kodax-ai/kodax` and **all** its subpaths are published **ESM-only**.
+In a CommonJS context — Electron's main process (`vm.mainModule` runs
+as CJS by default), legacy Webpack/esbuild configs with
+`format: 'cjs'`, or any code path that ends up calling `require()` —
+you must use dynamic `import()` instead of static `import` /
+`require`. Both Node 22+ and Node 20.19+ support dynamic-importing
+ESM from CJS without flags.
+
+```ts
+// ❌ This breaks in CJS — esbuild / tsc transforms static `import`
+//    into `require('@kodax-ai/kodax/mcp')`, which Node then rejects
+//    with ERR_PACKAGE_PATH_NOT_EXPORTED because our `exports` only
+//    declares the `import` condition.
+import { McpManager } from '@kodax-ai/kodax/mcp';
+
+// ✅ Use dynamic import — Node resolves it via the ESM loader and
+//    matches our `import` condition.
+const { McpManager } = await import('@kodax-ai/kodax/mcp');
+```
+
+`import type { ... }` is **fine in CJS** — TypeScript / esbuild strip
+type-only imports at compile time, so they never become runtime
+`require()` calls:
+
+```ts
+import type { McpManager, McpServerStatus } from '@kodax-ai/kodax/mcp';
+// ↑ compiles to nothing at runtime
+```
+
+### Why we don't ship dual ESM/CJS bundles
+
+The natural fix would be to add `"require": "./dist/sdk-*.cjs"` next
+to the existing `"import"` condition in `package.json#exports`. We
+investigated this for v0.7.42 and the technical reality blocks all
+the subpaths embedders typically reach for:
+
+| Subpath | ESM-only third-party deps inlined | Dual feasible? |
+|---|---|---|
+| `/agent` | 0 | ✅ feasible (no UI deps) |
+| `/mcp` | 0 | ✅ feasible (no UI deps) |
+| `/skills` | 1 (`yaml`) | ❌ |
+| `/llm` | 2 (`@agentclientprotocol/sdk`, `partial-json`) | ❌ |
+| `/coding` | 4 (`yaml`, `tsx`, …) | ❌ |
+| `/repl` | **21** (`ink`, `chalk`, `react`, `ansi-escapes`, …) | ❌ |
+| root | 21 (same as `/repl`) | ❌ |
+
+Once a bundle inlines any ESM-only dependency, the bundle itself
+cannot be a valid CJS module — `require()`ing it would synchronously
+import an ESM dep, which Node refuses. `ink`, `chalk`, and most of
+the modern terminal-UI ecosystem are ESM-only as of 2024–2026, with
+no plans to dual-publish.
+
+**Dynamic `import()` is the canonical fix**, not a workaround. It
+is part of the ECMAScript standard, supported in CJS contexts by
+spec, and is how Node itself recommends consuming ESM from CJS today.
+
+### Electron main process recipe
+
+Electron's main process is CJS by default (`require('electron')`
+works because main runs without `"type": "module"`). The pattern
+that drops cleanly into existing Electron code:
+
+```ts
+// main.ts (or main.cjs) — Electron main process
+import type { McpManager } from '@kodax-ai/kodax/mcp';            // compile-time only
+import type { RunningSession } from '@kodax-ai/kodax/coding';     // compile-time only
+
+let mcpManager: McpManager | null = null;
+let kodax: typeof import('@kodax-ai/kodax/coding') | null = null;
+
+async function bootKodaX() {
+  // Bundle these dynamic imports as runtime-resolved (don't let
+  // esbuild rewrite them — see "Bundler config" below).
+  const { createMcpManager } = await import('@kodax-ai/kodax/mcp');
+  const { listMcpServers } = await import('@kodax-ai/kodax/repl');
+
+  kodax = await import('@kodax-ai/kodax/coding');
+  mcpManager = createMcpManager(listMcpServers());
+}
+
+app.whenReady().then(bootKodaX);
+
+// Wire to IPC handlers — your popout UI calls these.
+ipcMain.handle('mcp:listServers', () => mcpManager!.listServers());
+ipcMain.handle('mcp:startServer', (_, id: string) => mcpManager!.startServer(id));
+ipcMain.handle('mcp:listTools', (_, id: string) => mcpManager!.listTools(id));
+ipcMain.handle('mcp:getServerLogs', (_, id: string) => mcpManager!.getServerLogs(id));
+
+ipcMain.handle('kodax:run', async (_, prompt: string) => {
+  const session = kodax!.startKodaX({ provider: 'anthropic', model: 'claude-sonnet-4-6' }, prompt);
+  return session.result;
+});
+```
+
+### Bundler configuration
+
+Most bundlers (esbuild, Webpack, Vite, Rollup) will, by default,
+transform `await import(x)` into `require(x)` when targeting CJS.
+You must tell the bundler to **preserve** the dynamic import:
+
+**esbuild**:
+
+```js
+build({
+  format: 'cjs',
+  platform: 'node',
+  // Keep dynamic imports as-is so they resolve to the ESM bundle at runtime.
+  external: ['@kodax-ai/kodax', '@kodax-ai/kodax/*'],
+})
+```
+
+Alternatively, mark only `@kodax-ai/kodax` as external — bundlers
+that respect `external` will not rewrite dynamic imports of external
+modules.
+
+**Webpack**: add `@kodax-ai/kodax` (and any subpaths you use) to
+`externals`, e.g. `{ '@kodax-ai/kodax/mcp': 'commonjs2 @kodax-ai/kodax/mcp' }`.
+
+**Vite**: in `vite.config.ts` SSR / Electron-main builds, add
+`@kodax-ai/kodax` and subpaths to `ssr.external`.
+
+If the bundler still rewrites the dynamic import, the symptom is a
+synchronous `Error: ERR_REQUIRE_ESM` (Node ≤ 20) or
+`ERR_PACKAGE_PATH_NOT_EXPORTED` (Node 22+). Fix the bundler config
+before suspecting our package.
+
+### When you really need synchronous CJS
+
+If your host environment cannot adopt `await import(...)` (rare —
+even old Webpack supports it via `import()` syntax preserved through
+to runtime), the two subpaths with zero ESM-only deps (`/agent` and
+`/mcp`) are the **only** ones that could in principle ship a CJS
+build. We have not productized this yet — file an issue with your
+concrete blocker (sync popout startup, specific bundler limitation,
+etc.) and we'll evaluate adding a partial-dual emit for those two
+subpaths in a follow-up release.
+
+### Quick checklist before reporting "it doesn't work in CJS"
+
+- [ ] `package.json#type` in **your** project — if it's `"module"`,
+      static `import` works; if absent / `"commonjs"`, you need
+      dynamic `await import()`.
+- [ ] Your bundler emit format — `format: 'cjs'` + static `import`
+      from KodaX subpaths will always fail.
+- [ ] You used `import type { ... }` not `import { ... }` for
+      type-only references (otherwise they survive as runtime
+      `require`).
+- [ ] Bundler is set to **external** `@kodax-ai/kodax` (or skip
+      bundling subpath imports entirely).
+- [ ] Node version ≥ 20.19 (or ≥ 22 for the more permissive
+      `--experimental-require-module` default).
 
 ---
 
