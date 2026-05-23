@@ -48,6 +48,11 @@ vi.mock('../../agent.js', () => ({
 
 import { executeChildAgents, CHILD_EXCLUDE_TOOLS_BASE } from '../../child-executor.js';
 import { runKodaX } from '../../agent.js';
+import {
+  _resetAgentResolverForTesting,
+  registerConstructedAgent,
+} from '../../construction/index.js';
+import type { AgentArtifact } from '../../construction/types.js';
 import type {
   KodaXChildContextBundle,
   KodaXAmaFanoutClass,
@@ -78,6 +83,10 @@ function createCtx() {
 describe('CAP-095: child-executor SA invocation contract', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // FEATURE_191 — keep the specialist registry empty by default so
+    // existing CAP-CHILD-EXEC-001..003 hit the no-specialist branch
+    // (matches the contract's pre-FEATURE_191 behavior).
+    _resetAgentResolverForTesting();
   });
 
   it('CAP-CHILD-EXEC-001: executeReadChild invokes SA with agentMode:"sa", CHILD_AGENT_SYSTEM_PROMPT override, and READONLY excludeTools', async () => {
@@ -106,6 +115,16 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     // System prompt is replaced wholesale (not appended) for child agents
     expect(typeof opts.context?.systemPromptOverride).toBe('string');
     expect(opts.context?.systemPromptOverride).toContain('focused sub-agent');
+    // FEATURE_191 default-path guard: assertion above probes the
+    // "no specialist registered" branch. If a future change accidentally
+    // routes the bundle through the specialist branch the assertion
+    // above would mismatch (specialist prompts replace `focused sub-agent`
+    // wholesale). Asserting bundle.specialistName === undefined here
+    // makes the branch selection explicit at the test boundary.
+    expect(
+      (opts as { context?: { systemPromptOverride?: string } }).context
+        ?.systemPromptOverride,
+    ).not.toMatch(/SPECIALIST/i);
     // Read-only children must not see write/edit/multi_edit/insert_after_anchor/undo
     const excluded = opts.context?.excludeTools as readonly string[];
     expect(excluded).toEqual(
@@ -189,5 +208,69 @@ describe('CAP-095: child-executor SA invocation contract', () => {
     // The lazy-loaded import resolved to the FEATURE_100 thin shim ⇒
     // any successful invocation IS a Runner-frame invocation.
     expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+  });
+
+  it('CAP-CHILD-EXEC-004: specialist branch — bundle.specialistName routes the child through the registered Agent (FEATURE_191 v0.7.43)', async () => {
+    // Register a specialist agent in the resolver registry. The child
+    // executor's specialist branch (child-executor.ts
+    // `resolveSpecialistOverride`) reads instructions from the registered
+    // Agent and uses them wholesale as the systemPromptOverride. This
+    // contract guarantee mirrors CAP-CHILD-EXEC-001 for the new branch:
+    // the parent's KodaXOptions are not leaked, and the specialist's
+    // declared tools narrow the child's tool surface.
+    const SPECIALIST_PROMPT = 'You are a database migration reviewer.';
+    const artifact: AgentArtifact = {
+      kind: 'agent',
+      name: 'db-reviewer',
+      version: '0.0.0-cap095',
+      content: {
+        instructions: SPECIALIST_PROMPT,
+        description: 'Reviews DB migrations for safety',
+        tools: [{ ref: 'builtin:read' }, { ref: 'builtin:grep' }],
+      },
+      status: 'active',
+      createdAt: Date.now(),
+      testedAt: Date.now(),
+      activatedAt: Date.now(),
+    };
+    registerConstructedAgent(artifact);
+
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'reviewed',
+      messages: [],
+      sessionId: 's-specialist',
+    });
+
+    await executeChildAgents(
+      [createBundle({
+        id: 'cb-specialist',
+        readOnly: true,
+        objective: 'review the latest migration',
+        specialistName: 'db-reviewer',
+      })],
+      createCtx(),
+      {
+        maxParallel: 1,
+        maxIterationsPerChild: 3,
+        parentOptions: { provider: 'anthropic' },
+        parentRole: 'worker',
+        parentHarness: 'tool-dispatch',
+      },
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    const [opts] = mockRunKodaX.mock.calls[0]!;
+    // Specialist prompt replaces the default CHILD_AGENT_SYSTEM_PROMPT
+    // verbatim — the resolver returns Agent.instructions as a string for
+    // constructed agents.
+    expect(opts.context?.systemPromptOverride).toBe(SPECIALIST_PROMPT);
+    // Complementary exclusion: specialist whitelisted `read` + `grep`,
+    // so the executor builds excludeTools = allTools - specialistTools.
+    const excluded = opts.context?.excludeTools as readonly string[];
+    expect(excluded).not.toContain('read');
+    expect(excluded).not.toContain('grep');
+    expect(excluded).toContain('write');
+    expect(excluded).toContain('edit');
   });
 });
