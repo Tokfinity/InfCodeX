@@ -698,8 +698,23 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
     expect(result.signal).toBe('COMPLETE');
     // Worker answer reaches the user via lastText.
     expect(result.lastText).toMatch(/2 \+ 2 = 4/);
-    // No in-chain Evaluator → managedProtocolPayload.verdict is undefined.
-    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
+    // FEATURE_184 (v0.7.45): the Sidecar Verifier StopHook fires on
+    // Worker text-only termination and writes a verdict slot via
+    // `verifier-recorder-bridge.applySidecarVerdictToRecorder`. In the
+    // unit-test environment the verifier provider is `anthropic`
+    // without a real API key, so `provider.stream` throws inside the
+    // verifier; the fail-open policy resolves to `verdict: 'accept'`
+    // (trace=`provider_error`, see `verifier.ts:251`). The recorder
+    // bridge stamps `source: 'sidecar'` on the recorded payload.
+    //
+    // Pre-2026-05-23 this slot was silently `undefined` because
+    // `currentAgentRoleRef` was stuck at the V1 `'scout'` sentinel and
+    // the verifier gate (`isExecutionRole === 'worker'`) never opened
+    // (regression from F193 Commit 2 `c5d4b829`, restored by the
+    // ref-init fix).
+    expect(result.managedProtocolPayload?.verdict).toBeDefined();
+    expect(result.managedProtocolPayload?.verdict?.source).toBe('sidecar');
+    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
   });
 
   it('V2 active: preflight emits activeWorkerTitle="Worker" (not "Scout")', async () => {
@@ -770,7 +785,15 @@ describe('parity — Runner path and legacy SA path produce compatible KodaXResu
     expect(Array.isArray(result.messages)).toBe(true);
     expect(typeof result.sessionId).toBe('string');
     // Shard 6a populates managedTask even on zero-tool runs.
-    expect(result.managedTask?.verdict?.status).toBe('running');
+    // FEATURE_184 (v0.7.45): Sidecar Verifier fires on Worker text-only
+    // termination. In the unit-test environment without a real API
+    // key, the verifier fail-opens to `accept` (provider_error trace),
+    // which `payload-builder.ts:285-294` maps to `status: 'completed'`.
+    // Restored 2026-05-23 by fixing the `currentAgentRoleRef` init
+    // regression that previously gated the verifier off (was stuck at
+    // V1 `'scout'` sentinel; now `'worker'` so `isExecutionRole` opens
+    // the gate from turn 0).
+    expect(result.managedTask?.verdict?.status).toBe('completed');
   });
 
   // FEATURE_173 (v0.7.42) Part A — kill `runner-${epoch}` ghost-session

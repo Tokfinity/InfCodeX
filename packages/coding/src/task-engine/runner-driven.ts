@@ -1382,17 +1382,23 @@ async function runManagedTaskViaRunnerInner(
   // Tracks which role is currently executing so composedStopHook can gate
   // the sidecar verifier to execution-role (worker) turns only.
   //
-  // FEATURE_193 (v0.7.43): V1 Scout/Planner/Generator chain retired. The
-  // ref starts at the V1 'scout' sentinel to defer verifier activation
-  // until `onAgentSwitched` flips to 'worker'. The Runner does NOT fire
-  // `onAgentSwitched` for the entry agent on a single-agent chain (see
-  // `runner-handoff.test.ts`); production V2 runs reach this state via
-  // resume-from-checkpoint or via the agent-runner middleware's first-
-  // turn switch. Tests that drive `runManagedTaskViaRunner` directly with
-  // a zero-tool LLM mock observe `verdict.status='running'` because the
-  // verifier never fires under that path.
-  const currentAgentRoleRef: { current: KodaXTaskRole | 'scout' | 'planner' } = {
-    current: 'scout',
+  // FEATURE_193 (v0.7.43) follow-up: V1 Scout/Planner/Generator chain
+  // retired; the only V2 chain agent is the Worker (see
+  // `agent-chain.ts:RunnerAgentChain`). The earlier V1 `'scout'` init
+  // sentinel relied on a Scout→Worker handoff firing `onAgentSwitched`
+  // to flip the ref; on V2 the Runner enters at `chain.worker` directly
+  // and `Runner.run` does NOT fire `onAgentSwitched` for the entry
+  // agent on a single-agent chain (see
+  // `packages/agent/src/primitives/runner-handoff.test.ts`).
+  //
+  // The sentinel was therefore stuck at `'scout'` for the entire V2 run,
+  // making `isExecutionRole === 'worker'` permanently `false` and
+  // silently disabling the Sidecar Verifier StopHook. F184's "verifier
+  // always installed in production" invariant (verifier-provider-resolver
+  // JSDoc) was broken from F193 Commit 2 (`c5d4b829`) onwards. Initialise
+  // directly to `'worker'` to restore the verifier path.
+  const currentAgentRoleRef: { current: KodaXTaskRole } = {
+    current: 'worker',
   };
 
   // FEATURE_184 (v0.7.45) Phase D.2 — Sidecar Verifier wiring.
