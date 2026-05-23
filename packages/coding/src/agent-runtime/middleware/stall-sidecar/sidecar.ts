@@ -57,7 +57,15 @@ import type {
 } from '@kodax-ai/llm';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 
-/** The set of suggested-tool names the sidecar is allowed to reference. */
+/**
+ * The set of suggested-tool names the sidecar is allowed to reference.
+ *
+ * FEATURE_190 (v0.7.43): `emit_handoff` removed — the tool is being
+ * deleted as part of the F184 cleanup tail. F178 eval evidence transfers
+ * because the eval probes `isStuck` accuracy, not which specific tool
+ * the sidecar may suggest. See `prompts.ts` header for the broader
+ * exception policy.
+ */
 export const ALLOWED_SUGGESTED_TOOLS: readonly string[] = [
   'read',
   'edit',
@@ -67,7 +75,6 @@ export const ALLOWED_SUGGESTED_TOOLS: readonly string[] = [
   'glob',
   'bash',
   'task_stop',
-  'emit_handoff',
 ];
 
 /**

@@ -15,6 +15,17 @@
  * this exact wording. Material changes invalidate the eval's evidence
  * for SHIP and would require re-running the canonical 5-alias panel.
  *
+ * **FEATURE_190 (v0.7.43) exception**: the `suggestedTool` enum was
+ * narrowed from 9 to 8 entries (removed `emit_handoff` — the tool is
+ * being deleted in F190 Phase 3). The F178 eval's isStuck accuracy
+ * does NOT depend on `emit_handoff` being a recommendable nudge target
+ * (the eval probes the isStuck=true/false judgment, not the
+ * `suggestedTool` field semantics), so SHIP-SIDECAR-ALL evidence
+ * transfers. Future enum SHRINKS that follow the same rule (removing
+ * a tool that no longer exists) do not require re-running the panel;
+ * any other change (wording, isStuck criteria, transcript framing,
+ * or ENUM EXPANSION introducing a new recommended tool) does.
+ *
  * Pure data + pure-function — no side effects, no I/O.
  */
 
@@ -51,7 +62,7 @@ export const SIDECAR_SYSTEM_PROMPT: string = [
   '',
   'Call the `report_stall_judgment` tool exactly once. Do not narrate. Do not call any other tool.',
   '',
-  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop, emit_handoff). Keep nudge ≤ 600 chars.',
+  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop). Keep nudge ≤ 600 chars.',
   '',
   'If isStuck=false, leave nudge empty.',
 ].join('\n');
@@ -81,7 +92,7 @@ export const REPORT_TOOL: KodaXToolDefinition = {
       suggestedTool: {
         type: 'string',
         description:
-          'When isStuck=true, the specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop, emit_handoff. Empty string when isStuck=false.',
+          'When isStuck=true, the specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop. Empty string when isStuck=false.',
       },
       nudge: {
         type: 'string',

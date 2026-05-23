@@ -79,10 +79,10 @@ describe('resolveToolCapability', () => {
   });
 
   it('maps AMA managed-protocol emit tools to "subagent" (canonical names + deprecated alias)', () => {
-    // Canonical names since v0.7.23 (FEATURE_080+).
+    // Canonical names since v0.7.23 (FEATURE_080+). FEATURE_190 (v0.7.43)
+    // removed `emit_handoff` — F184 retired the Worker→Evaluator handoff.
     expect(resolveToolCapability('emit_scout_verdict')).toBe('subagent');
     expect(resolveToolCapability('emit_contract')).toBe('subagent');
-    expect(resolveToolCapability('emit_handoff')).toBe('subagent');
     expect(resolveToolCapability('emit_verdict')).toBe('subagent');
     // Deprecated v0.7.22 alias retained until removed.
     expect(resolveToolCapability('emit_managed_protocol')).toBe('subagent');

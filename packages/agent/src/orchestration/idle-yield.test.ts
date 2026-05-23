@@ -40,7 +40,6 @@ import {
   composeIdleYieldUserMessage,
   countLastAssistantToolCalls,
   detectIdleYield,
-  detectMissingTerminalVerdict,
   isIdleYieldEnabled,
   waitForWakeEvent,
   type WakeEvent,
@@ -204,139 +203,16 @@ describe('detectIdleYield', () => {
   });
 });
 
-// FEATURE_167 v0.7.41 — Evaluator missed-verdict B1 trigger predicate.
-//
-// `detectMissingTerminalVerdict` fires when:
-//   - last assistant turn made NO tool calls (no `emit_verdict`,
-//     no `emit_handoff`),
-//   - AND a prior `emit_handoff` already happened
-//     (so an Evaluator role owns the turn — Worker→Evaluator chain
-//     has activated),
-//   - AND no terminal verdict has been emitted yet,
-//   - AND no children are still pending (`pendingChildTaskCount===0`),
-//   - AND no background banners are queued.
-//
-// The 4 invariants below cover the gate per condition. The last
-// describe block pins the disjointness invariant with
-// `detectIdleYield` — no snapshot can satisfy both predicates,
-// because the two paths represent mutually exclusive runner states.
-describe('detectMissingTerminalVerdict', () => {
-  it('returns true at the canonical B1 trigger snapshot', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      }),
-    ).toBe(true);
-  });
-
-  it('returns false when last assistant turn made tool calls (turn not yet idle — could be mid-stream)', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 1,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('returns false when no handoff was emitted (Evaluator role not active yet)', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: false,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('returns false when a terminal verdict has already been emitted (run terminating cleanly)', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: true,
-        hasPendingBackgroundMessages: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('returns false when child tasks are still pending (idle-yield owns this state)', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 1,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('returns false when background banners are queued (idle-yield owns this state)', () => {
-    expect(
-      detectMissingTerminalVerdict({
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: true,
-      }),
-    ).toBe(false);
-  });
-
-  // Pin disjointness: when missing-verdict fires, idle-yield must NOT,
-  // and vice versa. The two predicates partition the "Runner exits with
-  // 0 tool calls on assistant turn" subspace cleanly. If a future change
-  // introduces overlap, B1 retry would race idle-yield resume.
-  describe('disjointness with detectIdleYield', () => {
-    it('canonical B1 snapshot does NOT satisfy detectIdleYield', () => {
-      const snapshot = {
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: true,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      };
-      expect(detectMissingTerminalVerdict(snapshot)).toBe(true);
-      expect(detectIdleYield(snapshot)).toBe(false);
-    });
-
-    it('canonical idle-yield snapshot does NOT satisfy detectMissingTerminalVerdict', () => {
-      const snapshot = {
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 1,
-        hasEmittedHandoff: false,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: false,
-      };
-      expect(detectIdleYield(snapshot)).toBe(true);
-      expect(detectMissingTerminalVerdict(snapshot)).toBe(false);
-    });
-
-    it('fast-child-race idle-yield snapshot does NOT satisfy detectMissingTerminalVerdict', () => {
-      // Banner queued, registry empty, no handoff yet — idle-yield
-      // territory, never B1.
-      const snapshot = {
-        lastAssistantToolCallCount: 0,
-        pendingChildTaskCount: 0,
-        hasEmittedHandoff: false,
-        hasEmittedTerminalVerdict: false,
-        hasPendingBackgroundMessages: true,
-      };
-      expect(detectIdleYield(snapshot)).toBe(true);
-      expect(detectMissingTerminalVerdict(snapshot)).toBe(false);
-    });
-  });
-});
+// FEATURE_190 (v0.7.43): the `detectMissingTerminalVerdict` test
+// suite (originally added in FEATURE_167 v0.7.41) was removed alongside
+// the predicate it covered. F184 v0.7.45 retired the in-chain Evaluator
+// — the only role that could exit text-only without an explicit
+// terminal verdict — and F184 Phase C.2 deleted the runner call site
+// that consulted this predicate. Under the Sidecar Verifier Stop-hook
+// architecture, Worker text-only termination IS the canonical terminal
+// signal; no separate "missing verdict" state exists, so neither the
+// predicate nor its disjointness-with-`detectIdleYield` invariant
+// remain meaningful.
 
 describe('waitForWakeEvent', () => {
   let queue: MessageQueue;

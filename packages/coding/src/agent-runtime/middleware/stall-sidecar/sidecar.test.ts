@@ -438,9 +438,12 @@ describe('FEATURE_178 (v0.7.42): invokeStallSidecar — failure-mode safe defaul
   });
 });
 
-describe('FEATURE_178 (v0.7.42): ALLOWED_SUGGESTED_TOOLS contract', () => {
-  it('matches the F178 eval REPORT_TOOL description (one entry per allow-list)', () => {
-    // Pinned to the eval cases.ts REPORT_TOOL.suggestedTool description.
+describe('FEATURE_178 (v0.7.42) + FEATURE_190 (v0.7.43): ALLOWED_SUGGESTED_TOOLS contract', () => {
+  it('matches the post-F190 REPORT_TOOL description (8 entries — emit_handoff removed)', () => {
+    // F178 eval REPORT_TOOL.suggestedTool description originally enumerated
+    // 9 tools. FEATURE_190 (v0.7.43) shrunk to 8 — emit_handoff is being
+    // deleted in F190 Phase 3 so the sidecar should not suggest it as a
+    // nudge target. F178 isStuck-accuracy evidence transfers.
     expect(ALLOWED_SUGGESTED_TOOLS).toEqual([
       'read',
       'edit',
@@ -450,7 +453,10 @@ describe('FEATURE_178 (v0.7.42): ALLOWED_SUGGESTED_TOOLS contract', () => {
       'glob',
       'bash',
       'task_stop',
-      'emit_handoff',
     ]);
+  });
+
+  it('does NOT include emit_handoff (FEATURE_190 deletion regression pin)', () => {
+    expect(ALLOWED_SUGGESTED_TOOLS).not.toContain('emit_handoff');
   });
 });

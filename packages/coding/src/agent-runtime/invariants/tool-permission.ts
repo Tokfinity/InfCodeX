@@ -90,12 +90,13 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     // can never be invoked because it's not in the registry).
     // AMA managed-protocol emitters (FEATURE_080+, canonical names since
     // v0.7.23). These are tier-`subagent` because emitting a verdict /
-    // contract / handoff / final-verdict structurally drives the
-    // multi-agent topology — equivalent capability surface to
-    // `dispatch_child_task` at the role-routing layer.
+    // contract / final-verdict structurally drives the multi-agent
+    // topology — equivalent capability surface to `dispatch_child_task`
+    // at the role-routing layer. FEATURE_190 (v0.7.43): `emit_handoff`
+    // removed — F184 retired the Worker→Evaluator handoff and Worker is
+    // now terminal via text-only termination + Sidecar Verifier.
     case 'emit_scout_verdict':
     case 'emit_contract':
-    case 'emit_handoff':
     case 'emit_verdict':
     case 'emit_managed_protocol':         // v0.7.22 deprecated alias — keep until removed
     case 'scaffold_tool':
