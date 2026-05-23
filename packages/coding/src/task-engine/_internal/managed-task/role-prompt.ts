@@ -214,13 +214,17 @@ export function createRolePrompt(
   // Generator reasoning-discipline block — adapted verbatim from Claude
   // Code's stuck-handling guidance (Anthropic-tuned). Bidirectional:
   // catches both retry-blindly and abandon-too-early failure modes. Sets
-  // a HIGH bar for emit_handoff status="blocked" ("genuine impasses after
+  // a HIGH bar for blocked terminations ("genuine impasses after
   // investigation"). Adopted as default v0.7.32 after FEATURE_107 P6 eval
-  // showed it is harmless across 6 aliases on low-context tasks. Only
-  // KodaX adaptation: emit_handoff status="blocked" replaces Claude
-  // Code's AskUserQuestion (different protocol surface).
+  // showed it is harmless across 6 aliases on low-context tasks.
+  //
+  // FEATURE_190 (v0.7.43) Phase 3: `emit_handoff` deleted. The original
+  // KodaX adaptation referred to `emit_handoff status="blocked"` as the
+  // "give up" surface; post-Phase-3 the equivalent is a brief text-only
+  // summary that names the blocker — the Sidecar Verifier reads it and
+  // returns a `blocked` verdict.
   const generatorReasoningDiscipline =
-    'If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Don\'t retry the identical action blindly, but don\'t abandon a viable approach after a single failure either. Reserve emit_handoff status="blocked" for genuine impasses after investigation, not as a first response to friction.';
+    'If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Don\'t retry the identical action blindly, but don\'t abandon a viable approach after a single failure either. Reserve a blocked text-only terminal summary for genuine impasses after investigation, not as a first response to friction.';
 
   const sharedWorkerDiscipline = [
     'Workspace discipline:',

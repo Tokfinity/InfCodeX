@@ -14,12 +14,10 @@ import { describe, expect, it } from 'vitest';
 import type { ProtocolEmitterMetadata } from './protocol-emitters.js';
 import {
   EMIT_CONTRACT_TOOL_NAME,
-  EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
   EMIT_VERDICT_TOOL_NAME,
   PROTOCOL_EMITTER_TOOLS,
   emitContract,
-  emitHandoff,
   emitScoutVerdict,
   emitVerdict,
 } from './protocol-emitters.js';
@@ -30,12 +28,14 @@ function runExecute(tool: typeof emitScoutVerdict, input: Record<string, unknown
 }
 
 describe('protocol emitters — tool shapes', () => {
-  it('exposes the four expected tool names', () => {
+  // FEATURE_190 (v0.7.43) Phase 3: shrank from 4 to 3 — `emitHandoff`
+  // deleted. Worker/Generator terminate text-only; Sidecar Verifier
+  // owns terminal decisions out-of-band.
+  it('exposes the three expected tool names', () => {
     expect(emitScoutVerdict.name).toBe(EMIT_SCOUT_VERDICT_TOOL_NAME);
     expect(emitContract.name).toBe(EMIT_CONTRACT_TOOL_NAME);
-    expect(emitHandoff.name).toBe(EMIT_HANDOFF_TOOL_NAME);
     expect(emitVerdict.name).toBe(EMIT_VERDICT_TOOL_NAME);
-    expect(PROTOCOL_EMITTER_TOOLS).toHaveLength(4);
+    expect(PROTOCOL_EMITTER_TOOLS).toHaveLength(3);
   });
 
   it('declares an execute function on each tool', () => {
@@ -44,10 +44,9 @@ describe('protocol emitters — tool shapes', () => {
     }
   });
 
-  it('requires confirmed_harness on scout, status on generator/evaluator, success_criteria on planner', () => {
+  it('requires confirmed_harness on scout, status on evaluator, success_criteria on planner', () => {
     expect(emitScoutVerdict.input_schema.required).toContain('confirmed_harness');
     expect(emitContract.input_schema.required).toContain('success_criteria');
-    expect(emitHandoff.input_schema.required).toContain('status');
     expect(emitVerdict.input_schema.required).toContain('status');
   });
 
@@ -125,33 +124,10 @@ describe('protocol emitters — planner (contract)', () => {
   });
 });
 
-describe('protocol emitters — generator (handoff)', () => {
-  it('normalizes a ready handoff with evidence + followup', async () => {
-    const result = await runExecute(emitHandoff, {
-      status: 'ready',
-      summary: 'Done, tests pass',
-      evidence: ['src/auth/login.ts', 'test/auth.test.ts passing'],
-      followup: [],
-    });
-    expect(result.isError).toBeUndefined();
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.role).toBe('generator');
-    expect(meta.payload.handoff?.status).toBe('ready');
-    expect(meta.payload.handoff?.evidence).toHaveLength(2);
-  });
-
-  it('accepts "partial" as alias for incomplete', async () => {
-    const result = await runExecute(emitHandoff, { status: 'partial' });
-    expect(result.isError).toBeUndefined();
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.payload.handoff?.status).toBe('incomplete');
-  });
-
-  it('surfaces is_error on unknown status', async () => {
-    const result = await runExecute(emitHandoff, { status: 'unknown-xyz' });
-    expect(result.isError).toBe(true);
-  });
-});
+// FEATURE_190 (v0.7.43) Phase 3: `emitHandoff` deleted. Worker/Generator
+// terminate text-only. The `coerceManagedProtocolToolPayload('generator',
+// ...)` normalizer is still exercised by the parity test below (legacy
+// fenced-block fallback parser path), but no tool wraps it any more.
 
 describe('protocol emitters — evaluator (verdict)', () => {
   it('normalizes an accept verdict with user_answer', async () => {
@@ -213,14 +189,11 @@ describe('protocol emitters — handoff target resolution (Shard 4)', () => {
     expect(meta.handoffTarget).toBe('kodax/role/generator');
   });
 
-  it('generator handoff → terminal (no handoffTarget), isTerminal=true', async () => {
-    // FEATURE_184 Phase C.1: Generator is now terminal — text-only
-    // terminates so Sidecar Verifier StopHook fires.
-    const result = await runExecute(emitHandoff, { status: 'ready' });
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    expect(meta.handoffTarget).toBeUndefined();
-    expect(meta.isTerminal).toBe(true);
-  });
+  // FEATURE_190 (v0.7.43) Phase 3: the previous "generator handoff →
+  // terminal" assertion exercised the deleted `emitHandoff` tool — the
+  // resolveHandoffTarget('generator', ...) function (still exported)
+  // remains terminal for the parser-fallback path and is covered by the
+  // parity test below.
 
   it('evaluator accept → no handoffTarget, isTerminal=true', async () => {
     const result = await runExecute(emitVerdict, { status: 'accept', user_answer: 'done' });
@@ -275,13 +248,10 @@ describe('protocol emitters — parity with legacy parser', () => {
     expect(meta.payload).toEqual(legacy);
   });
 
-  it('generator payload is byte-equivalent to legacy (partial → incomplete)', async () => {
-    const input = { status: 'partial', evidence: ['e1'] };
-    const result = await runExecute(emitHandoff, input);
-    const meta = result.metadata as unknown as ProtocolEmitterMetadata;
-    const legacy = coerceManagedProtocolToolPayload('generator', input);
-    expect(meta.payload).toEqual(legacy);
-  });
+  // FEATURE_190 (v0.7.43) Phase 3: `emitHandoff` deleted. The
+  // `coerceManagedProtocolToolPayload('generator', ...)` normalizer is
+  // still reachable via the fenced-block fallback parser; the parser
+  // tests in parse-helpers.test.ts pin its behavior on that path.
 });
 
 describe('coerceManagedProtocolToolPayload — FEATURE_097 nested skill_map regression', () => {

@@ -89,7 +89,7 @@ describe('detectIdleYield', () => {
     ).toBe(true);
   });
 
-  it('returns false when emit_handoff was emitted (Evaluator path owns next step)', () => {
+  it('returns false when hasEmittedHandoff=true (legacy handoff path owns next step; pre-FEATURE_190 compat)', () => {
     expect(
       detectIdleYield({
         lastAssistantToolCallCount: 0,

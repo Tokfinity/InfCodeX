@@ -37,7 +37,6 @@ import {
 import { listToolDefinitions } from '../tools/registry.js';
 import {
   EMIT_CONTRACT_TOOL_NAME,
-  EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
 } from '../agents/protocol-emitters.js';
 import type { KodaXToolExecutionContext } from '../types.js';
@@ -67,15 +66,18 @@ function getAgentToolNames(role: AmaRole): readonly string[] {
 // `wrapEmitterWithRecorder` in `buildRunnerAgentChain`. Subtract them
 // when comparing the agent's full tools list against the registry-derived
 // expected set.
-const ROLE_EMIT_TOOL_NAME: Record<AmaRole, string> = {
+//
+// FEATURE_190 (v0.7.43) Phase 3: Generator and Worker are terminal under
+// F184 — text-only termination triggers Sidecar Verifier out-of-band, no
+// emit tool. Only Scout and Planner have a per-run emit tool.
+const ROLE_EMIT_TOOL_NAME: Partial<Record<AmaRole, string>> = {
   scout: EMIT_SCOUT_VERDICT_TOOL_NAME,
   planner: EMIT_CONTRACT_TOOL_NAME,
-  generator: EMIT_HANDOFF_TOOL_NAME,
-  worker: EMIT_HANDOFF_TOOL_NAME, // Worker reuses Generator's emit shape (FEATURE_114)
 };
 
 function getAgentRegistryToolNames(role: AmaRole): readonly string[] {
   const emitName = ROLE_EMIT_TOOL_NAME[role];
+  if (emitName === undefined) return getAgentToolNames(role);
   return getAgentToolNames(role).filter((name) => name !== emitName);
 }
 
@@ -90,12 +92,19 @@ describe('FEATURE_168 — AMA agent tool wiring (per-role full set)', () => {
     });
   }
 
-  it('every role includes its own emit tool exactly once', () => {
+  it('scout/planner include emit tool exactly once; generator/worker have no emit tool (F190 Phase 3)', () => {
     for (const role of roles) {
       const allNames = getAgentToolNames(role);
       const emitName = ROLE_EMIT_TOOL_NAME[role];
-      const occurrences = allNames.filter((name) => name === emitName).length;
-      expect(occurrences, `${role} should emit ${emitName} once`).toBe(1);
+      if (emitName === undefined) {
+        // Generator / Worker: no emit tool in the surface.
+        for (const banned of [EMIT_SCOUT_VERDICT_TOOL_NAME, EMIT_CONTRACT_TOOL_NAME, 'emit_handoff', 'emit_verdict']) {
+          expect(allNames, `${role} should not carry ${banned}`).not.toContain(banned);
+        }
+      } else {
+        const occurrences = allNames.filter((name) => name === emitName).length;
+        expect(occurrences, `${role} should emit ${emitName} once`).toBe(1);
+      }
     }
   });
 });

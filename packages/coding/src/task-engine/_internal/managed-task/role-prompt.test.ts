@@ -125,12 +125,13 @@ describe('FEATURE_107 — Generator reasoning discipline (Claude Code verbatim)'
 
   it('Generator prompt includes the discipline block by default (no env hook)', () => {
     const rendered = renderGenerator();
-    // v3 core sentences (Claude Code verbatim with emit_handoff swap)
+    // FEATURE_190 (v0.7.43) Phase 3: emit_handoff deleted → blocked
+    // surface is now a text-only summary read by Sidecar Verifier.
     expect(rendered).toContain('diagnose why before switching tactics');
     expect(rendered).toContain('check your assumptions');
     expect(rendered).toContain('Don\'t retry the identical action blindly');
     expect(rendered).toContain('don\'t abandon a viable approach after a single failure');
-    expect(rendered).toContain('Reserve emit_handoff status="blocked"');
+    expect(rendered).toContain('Reserve a blocked text-only terminal summary');
     expect(rendered).toContain('genuine impasses after investigation');
     expect(rendered).toContain('not as a first response to friction');
   });
@@ -277,8 +278,9 @@ describe('FEATURE_144 — AMA worker capability-context parity', () => {
 //   1. Worker emits the canonical workspace / capability / overlay /
 //      decisionSummary / contract context layers (FEATURE_144 +
 //      FEATURE_086 parity).
-//   2. Worker uses `emit_handoff` (matches Generator wire format so
-//      the protocol-emitters pipeline plugs in unchanged).
+//   2. Worker terminates text-only (FEATURE_190 v0.7.43 Phase 3: the
+//      legacy `emit_handoff` tool was deleted; Sidecar Verifier runs
+//      out-of-band).
 //   3. Worker prompt actually splices `buildWorkerInstructions`
 //      (plan-first contract / scope commitment / dispatch RULE A/B/C
 //      / handoff fragments).

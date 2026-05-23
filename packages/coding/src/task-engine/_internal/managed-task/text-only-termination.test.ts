@@ -6,11 +6,11 @@
  * exit path under the F184 Sidecar Verifier architecture.
  *
  * Why these tests exist: F184 v0.7.45 retired the in-chain Evaluator
- * (Generator/Worker `handoffs = []` terminal). The Worker prompt + tool
- * surface still teaches `emit_handoff` as the terminal signal (Phase 2
- * and Phase 3 of FEATURE_190 will remove both). Before that prompt +
- * tool change ships, this suite proves the runtime side ALREADY handles
- * the "no emit_handoff, just a final text message" path correctly:
+ * (Generator/Worker `handoffs = []` terminal). FEATURE_190 Phase 2a
+ * rewrote the Worker prompt for text-only termination and Phase 3
+ * deleted the `emit_handoff` tool surface. This suite ratifies that
+ * the runtime side correctly handles the "no emit_handoff, just a final
+ * text message" canonical path:
  *
  *   - `detectIdleYield` correctly exits the outer loop on text-only
  *     termination when no children are pending

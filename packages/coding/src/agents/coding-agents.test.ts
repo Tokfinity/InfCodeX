@@ -22,7 +22,6 @@ import {
 } from './coding-agents.js';
 import {
   EMIT_CONTRACT_TOOL_NAME,
-  EMIT_HANDOFF_TOOL_NAME,
   EMIT_SCOUT_VERDICT_TOOL_NAME,
 } from './protocol-emitters.js';
 
@@ -57,9 +56,11 @@ describe('coding-agents — tool wiring', () => {
     expect(names).toContain(EMIT_CONTRACT_TOOL_NAME);
   });
 
-  it('generator agent carries emit_handoff', () => {
+  it('generator agent carries no tools — terminal under F184 + F190', () => {
+    // FEATURE_190 (v0.7.43) Phase 3: `emit_handoff` deleted. Generator
+    // terminates text-only; Sidecar Verifier runs out-of-band.
     const names = generatorCodingAgent.tools?.map((t) => t.name) ?? [];
-    expect(names).toContain(EMIT_HANDOFF_TOOL_NAME);
+    expect(names).toEqual([]);
   });
 });
 

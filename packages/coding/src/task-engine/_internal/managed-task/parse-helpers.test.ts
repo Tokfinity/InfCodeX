@@ -1,17 +1,21 @@
 /**
  * C1 parity tests — `attemptProtocolTextFallback` + `getEmitToolNameForRole`.
  *
- * Scenario coverage mirrors the 4 v0.7.22 call sites that consumed a
+ * Scenario coverage mirrors the v0.7.22 call sites that consumed a
  * `?? parseManagedTask*Directive(text)` fallback when the LLM forgot to
  * call the emit tool but wrote a well-formed `kodax-task-*` block:
  *   - Scout    → emit_scout_verdict  (block: kodax-task-scout)
  *   - Planner  → emit_contract       (block: kodax-task-contract)
- *   - Generator → emit_handoff       (block: kodax-task-handoff)
  *   - Evaluator → emit_verdict       (block: kodax-task-verdict, Sidecar slot)
  *
  * FEATURE_184 (v0.7.45) Phase C.3: Generator is now terminal (Sidecar Verifier
  * via StopHook). Evaluator `revise` without next_harness is terminal (no
  * in-chain agent to route back to).
+ *
+ * FEATURE_190 (v0.7.43) Phase 3: `emit_handoff` deleted. Generator and
+ * Worker have no emit tool — `getEmitToolNameForRole` returns
+ * `undefined` for both; the legacy `kodax-task-handoff` fenced-block
+ * fallback path also no-ops (no tool to synthesize a call to).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -25,8 +29,15 @@ describe('getEmitToolNameForRole', () => {
   it('maps each managed role to the registered emit tool name', () => {
     expect(getEmitToolNameForRole('scout')).toBe('emit_scout_verdict');
     expect(getEmitToolNameForRole('planner')).toBe('emit_contract');
-    expect(getEmitToolNameForRole('generator')).toBe('emit_handoff');
     expect(getEmitToolNameForRole('evaluator')).toBe('emit_verdict');
+  });
+
+  // FEATURE_190 (v0.7.43) Phase 3: `emit_handoff` deleted. Generator and
+  // Worker are terminal under F184 — text-only termination triggers the
+  // Sidecar Verifier StopHook out-of-band; no emit tool name to return.
+  it('returns undefined for generator and worker (text-only terminal roles)', () => {
+    expect(getEmitToolNameForRole('generator')).toBeUndefined();
+    expect(getEmitToolNameForRole('worker')).toBeUndefined();
   });
 });
 
