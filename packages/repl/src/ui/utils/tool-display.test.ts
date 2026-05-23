@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import {
+  resolveMemoryRoot,
+  setAgentConfigHome,
+} from "@kodax-ai/agent";
+
 import { ToolCallStatus, type ToolCall } from "../types.js";
 import {
   collapseToolCalls,
@@ -266,5 +276,81 @@ describe("tool-display", () => {
     expect(formatToolResultExplanation(tool)).toEqual([
       "Waiting: approval required before execution",
     ]);
+  });
+});
+
+describe("FEATURE_124 Phase D.2 — memory badge in tool-display", () => {
+  let tempHome: string;
+  let memoryDir: string;
+
+  beforeEach(() => {
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "kodax-tool-display-home-"));
+    setAgentConfigHome(tempHome);
+    // Resolve a real memory dir under the temp home so isAutoManagedMemoryFile
+    // recognizes it. cwd is irrelevant — the predicate inspects the path,
+    // not the filesystem, so we don't need to create the dir on disk.
+    const tempCwd = fs.mkdtempSync(path.join(os.tmpdir(), "kodax-tool-display-cwd-"));
+    memoryDir = resolveMemoryRoot(tempCwd);
+    fs.rmSync(tempCwd, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    setAgentConfigHome(undefined);
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("prefixes [memory:feedback] when Write target is a feedback_*.md file in memory dir", () => {
+    const memoryPath = path.join(memoryDir, "feedback_no_mock_db.md");
+    const summary = formatToolSummary("Write", { path: memoryPath });
+    expect(summary).toContain("[memory:feedback]");
+    // truncateValue caps path at 120 chars; the windows tempdir + sanitized
+    // project key make the full path > 120 chars in this test, so the
+    // basename is mid-cut. Assert the load-bearing structural signals:
+    // the badge is present, ordered before the path payload, and the
+    // path payload begins with the badge marker (Write - [memory:...] -).
+    expect(summary).toMatch(/^Write - \[memory:feedback\] - /);
+  });
+
+  it("prefixes [memory:user] for user_*.md files", () => {
+    const memoryPath = path.join(memoryDir, "user_role.md");
+    expect(formatToolSummary("Read", { path: memoryPath })).toContain("[memory:user]");
+  });
+
+  it("prefixes [memory:project] for project_*.md and [memory:reference] for reference_*.md", () => {
+    expect(
+      formatToolSummary("Read", { path: path.join(memoryDir, "project_q2.md") }),
+    ).toContain("[memory:project]");
+    expect(
+      formatToolSummary("Read", { path: path.join(memoryDir, "reference_grafana.md") }),
+    ).toContain("[memory:reference]");
+  });
+
+  it("falls back to bare [memory] for memory-dir files that don't match the naming convention", () => {
+    const memoryPath = path.join(memoryDir, "MEMORY.md");
+    const summary = formatToolSummary("Read", { path: memoryPath });
+    // MEMORY.md doesn't match user_/feedback_/project_/reference_ prefix
+    // → parseMemoryTypeFromFilename returns undefined → fallback to [memory].
+    expect(summary).toContain("[memory]");
+    expect(summary).not.toContain("[memory:");
+  });
+
+  it("does NOT prefix any badge for paths OUTSIDE the memory directory", () => {
+    // A regular project file path — must not collect a spurious badge.
+    const summary = formatToolSummary("Read", { path: "packages/coding/src/task-engine.ts" });
+    expect(summary).not.toMatch(/\[memory(:[a-z]+)?\]/);
+  });
+
+  it("threads the badge through formatCollapsedToolInlineText too", () => {
+    const memoryPath = path.join(memoryDir, "feedback_no_mock_db.md");
+    const tool: ToolCall = {
+      id: "tool-memwrite",
+      name: "Write",
+      status: ToolCallStatus.Success,
+      startTime: 100,
+      endTime: 250,
+      input: { path: memoryPath },
+    };
+    const [group] = collapseToolCalls([tool]);
+    expect(formatCollapsedToolInlineText(group!)).toContain("[memory:feedback]");
   });
 });

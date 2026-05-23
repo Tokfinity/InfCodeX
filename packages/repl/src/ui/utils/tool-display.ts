@@ -1,6 +1,29 @@
+import { isAutoManagedMemoryFile, parseMemoryTypeFromFilename } from "@kodax-ai/agent";
+
 import { ToolCallStatus, type ToolCall } from "../types.js";
 
 type ToolInputValue = Record<string, unknown> | string | undefined;
+
+/**
+ * FEATURE_124 Phase D.2 — `[memory:<type>]` badge for tool calls that
+ * land on per-project memory files. Uses substrate predicates from
+ * `@kodax-ai/agent` (Phase A) so the detection stays consistent with
+ * the agent-side `isAutoManagedMemoryFile` check used by permission
+ * carve-outs. Falls back to a bare `[memory]` badge for files whose
+ * name doesn't follow the `user_*` / `feedback_*` / `project_*` /
+ * `reference_*` filename convention — keeps the user informed that the
+ * tool touched persistent memory even when the type can't be inferred.
+ *
+ * Pure string transform; no side effects. Single-path tool calls (Write,
+ * Edit, Read targeting one file) get the badge inline. Multi-path calls
+ * (Glob results, Grep over directories) skip the badge — the user sees
+ * the path list and can disambiguate themselves.
+ */
+function memoryBadgeFor(filePath: string): string | undefined {
+  if (!isAutoManagedMemoryFile(filePath)) return undefined;
+  const type = parseMemoryTypeFromFilename(filePath);
+  return type ? `[memory:${type}]` : "[memory]";
+}
 
 export type ToolSummaryGroup = {
   tool: ToolCall;
@@ -194,6 +217,8 @@ function pushPathSummary(
 
   if (preferPathsArray && paths?.length) {
     if (paths.length === 1) {
+      const badge = memoryBadgeFor(paths[0]);
+      if (badge) parts.push(badge);
       parts.push(truncateValue(paths[0]));
     } else {
       parts.push(`${paths.length} files`);
@@ -202,12 +227,16 @@ function pushPathSummary(
   }
 
   if (explicitPath) {
+    const badge = memoryBadgeFor(explicitPath);
+    if (badge) parts.push(badge);
     parts.push(truncateValue(explicitPath));
     return;
   }
 
   if (paths?.length) {
     if (paths.length === 1) {
+      const badge = memoryBadgeFor(paths[0]);
+      if (badge) parts.push(badge);
       parts.push(truncateValue(paths[0]));
     } else {
       parts.push(`${paths.length} files`);
