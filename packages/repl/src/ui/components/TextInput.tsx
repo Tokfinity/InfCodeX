@@ -30,13 +30,6 @@ export interface TextInputProps {
   width?: number;
 }
 
-const MAX_DIVIDER_WIDTH = 200;
-
-function generateDivider(width: number): string {
-  const safeWidth = Math.min(MAX_DIVIDER_WIDTH, Math.max(1, width));
-  return "-".repeat(safeWidth);
-}
-
 /**
  * Hook to get terminal width via the renderer-owned terminal size context.
  *
@@ -94,16 +87,29 @@ export const TextInput: React.FC<TextInputProps> = ({
     return { row: visualRow, col: visualCol };
   }, [visualLayout, cursorRow, cursorCol]);
 
-  const divider = generateDivider(terminalWidth);
   const showCursor = focus && terminalFocused;
   const pasteHintVisible = isPasting && lines.some((line) => line.length > 0);
 
   const layout = visualLayout!;
   const vCursor = visualCursor!;
 
+  // Mirrors claudecode/src/components/PromptInput/PromptInput.tsx:2268 —
+  // Ink's built-in `borderStyle` + `borderTop`/`borderBottom` lets Yoga
+  // compute the border width from the box's resolved layout, so the rule
+  // always reaches the right edge. The hand-rolled `"-".repeat(columns)`
+  // path it replaces was capped + relied on implicit-stretch alignItems
+  // (Yoga C++ default), neither of which held under wide terminals.
   return (
-    <Box flexDirection="column" width={propWidth}>
-      <Text dimColor>{divider}</Text>
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={theme.colors.dim}
+      borderTop
+      borderBottom
+      borderLeft={false}
+      borderRight={false}
+      width={propWidth ?? "100%"}
+    >
       {pasteHintVisible ? (
         <Box>
           <Text dimColor>{editingMode === "pasting" ? "Pasting input..." : "Editing input..."}</Text>
@@ -151,8 +157,6 @@ export const TextInput: React.FC<TextInputProps> = ({
           );
         })
       )}
-
-      <Text dimColor>{divider}</Text>
     </Box>
   );
 };
