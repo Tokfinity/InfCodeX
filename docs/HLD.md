@@ -1,9 +1,11 @@
 # KodaX 高层设计（HLD）
 
-> Last updated: 2026-04-12
+> Last updated: 2026-04-12（V1 章节）；2026-05-23 stale 通知补丁
 >
 > 这份文档描述 `FEATURE_061/062` 之后的高层架构：
-> KodaX 现在是一个 Scout-first、以 `task` 为中心、强调”极简且智能”的执行引擎。
+> KodaX 当时是一个 Scout-first、以 `task` 为中心、强调"极简且智能"的执行引擎。
+>
+> **⚠️ Deprecation notice (2026-05-23, FEATURE_193)**: §3.3 / §4.3 / §4.4 / §5.1–5.5 / §6 描述的是 V1 chain 架构（Scout / Planner / Generator / Evaluator），已于 [FEATURE_193 v0.7.43](features/v0.7.43.md#feature_193-v1-chain-full-retirement--scoutplannergenerator-chain-agents--entry-routing--v1-emit-tools) 全量退役。当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**（详见 [ADR-030](ADR.md#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) + [ADR-033](ADR.md#adr-033-layered-prompt-principle-feature_189) + [v0.7.43.md §FEATURE_193 / §FEATURE_190](features/v0.7.43.md)）。Scout / Planner / Generator / Evaluator 节、`H1 / H2` harness 描述、`KODAX_HARNESS_V2` flag 引用、`emit_scout_verdict` / `emit_contract` / `emit_handoff` 工具引用均为历史记录（保留以便 archive 查阅），**不反映当前实现**。本 HLD 的 V2 完整重写排期至 v0.7.44+。
 
 ## 中文导读
 
