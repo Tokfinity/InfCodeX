@@ -78,6 +78,49 @@ export interface LoadAgentsFromMarkdownOptions {
   readonly configHome?: string;
 }
 
+/**
+ * FEATURE_197 (v0.7.43) — discovered markdown agent metadata.
+ *
+ * Read-only counterpart to `ConstructedAgentEntry` exposed by
+ * `discoverMarkdownAgents`. Differs from `ConstructedAgentEntry` in
+ * three ways: (1) no resolved `Agent` runtime object — discovery is
+ * purely file-system-side; (2) `source` is narrowed to the two
+ * markdown scopes only; (3) `path` carries the source file location
+ * so consumers can offer "open file" affordances.
+ */
+export interface DiscoveredMarkdownAgent {
+  /** Agent name from frontmatter `name` field. */
+  readonly name: string;
+  /** Agent description from frontmatter `description` field. */
+  readonly description: string;
+  /** Provenance: which scope the file was found in. */
+  readonly source: 'markdown:user' | 'markdown:project';
+  /** Absolute path of the markdown file on disk. */
+  readonly path: string;
+  /**
+   * Tool names declared in the frontmatter `tools` field, normalized
+   * to a string array. The `builtin:` prefix that the loader applies
+   * to `ToolRef`s is NOT applied here — discovery returns the raw
+   * names the user wrote.
+   */
+  readonly tools?: readonly string[];
+  /** Optional model alias from frontmatter `model` field. */
+  readonly model?: string;
+}
+
+export interface DiscoverMarkdownAgentsResult {
+  /**
+   * Well-formed agents found in the scanned directories. Same
+   * last-write-wins precedence as `loadAgentsFromMarkdown`: when a
+   * name appears in both user and project scopes, the project entry
+   * wins and the user entry is omitted. The returned set mirrors
+   * exactly what `loadAgentsFromMarkdown` would activate.
+   */
+  readonly agents: readonly DiscoveredMarkdownAgent[];
+  /** Files that had frontmatter but failed validation. */
+  readonly failed: readonly MarkdownLoadFailure[];
+}
+
 const USER_AGENTS_DIRNAME = 'agents';
 const PROJECT_AGENTS_DIRNAME = '.kodax/agents';
 
@@ -146,46 +189,14 @@ async function loadOneAgentFile(
   filePath: string,
   source: ConstructedAgentSource,
 ): Promise<LoadOutcome> {
-  let raw: string;
-  try {
-    raw = await readFile(filePath, 'utf8');
-  } catch (err) {
-    return { ok: false, reason: `read failed: ${errMsg(err)}` };
-  }
+  const parseOutcome = await parseMarkdownAgentFile(filePath);
+  if (parseOutcome.kind === 'silent-skip') return { ok: false, reason: null };
+  if (parseOutcome.kind === 'fail') return { ok: false, reason: parseOutcome.reason };
 
-  const [frontmatter, body] = parseYamlFrontmatter(raw);
-  // Files without frontmatter are reference docs (claudecode parity).
-  if (!frontmatter) return { ok: false, reason: null };
-
-  const nameField = frontmatter.name;
-  if (typeof nameField !== 'string' || nameField.trim().length === 0) {
-    // Missing/invalid name → silent skip; the file is not advertising
-    // itself as an agent definition.
-    return { ok: false, reason: null };
-  }
-  const name = nameField.trim();
-
-  const descriptionField = frontmatter.description;
-  if (typeof descriptionField !== 'string' || descriptionField.trim().length === 0) {
-    return {
-      ok: false,
-      reason: `frontmatter "description" is required (got ${typeof descriptionField})`,
-    };
-  }
-  const description = descriptionField.trim();
-
-  const instructions = body.trim();
-  if (instructions.length === 0) {
-    return { ok: false, reason: 'markdown body (instructions) is empty' };
-  }
-
-  const toolsField = frontmatter.tools;
-  const tools = parseToolsField(toolsField);
-
-  const modelField = frontmatter.model;
-  const model = typeof modelField === 'string' && modelField.trim().length > 0
-    ? modelField.trim()
-    : undefined;
+  const { name, description, instructions, toolNames, model } = parseOutcome.parsed;
+  const tools: readonly ToolRef[] | undefined = toolNames?.map((n) => ({
+    ref: n.includes(':') ? n : `builtin:${n}`,
+  }));
 
   const content: AgentContent = {
     instructions,
@@ -223,14 +234,156 @@ async function loadOneAgentFile(
 }
 
 /**
+ * FEATURE_197 (v0.7.43) — read-only counterpart to
+ * `loadAgentsFromMarkdown`. Scans the same two-tier path (user dir
+ * then project dir) and returns metadata for every well-formed
+ * agent found, WITHOUT calling `Runner.admit` or
+ * `registerConstructedAgent`. Pure file-system + YAML parse — no
+ * mutation of the in-memory agent registry.
+ *
+ * SDK consumers building an "agent picker" UI call this to preview
+ * available agents before deciding whether (and when) to call
+ * `loadAgentsFromMarkdown` to activate them.
+ *
+ * Validation semantics match `loadAgentsFromMarkdown` exactly so
+ * that `discoverMarkdownAgents` + `loadAgentsFromMarkdown` agree on
+ * which files are well-formed:
+ *   - Missing/empty `description` → reported in `failed`
+ *   - Empty body → reported in `failed`
+ *   - No frontmatter / missing `name` → silently skipped (treated
+ *     as reference doc, claudecode parity)
+ *   - I/O error on a single file → reported in `failed`
+ *
+ * Precedence: project entries shadow user entries of the same name
+ * (last-write-wins via `Map.set`), matching the loader's effective
+ * activation order. Consumers wanting to see shadowed user entries
+ * should run a separate pass with `cwd` pointing at a non-existent
+ * dir — feature not added by default per YAGNI.
+ *
+ * Does NOT validate against admission invariants — discovered
+ * agents may still be rejected when `loadAgentsFromMarkdown` runs
+ * (e.g. unknown tool refs). Validation happens at load time.
+ */
+export async function discoverMarkdownAgents(
+  opts: LoadAgentsFromMarkdownOptions = {},
+): Promise<DiscoverMarkdownAgentsResult> {
+  const userDir = join(opts.configHome ?? getAgentConfigHome(), USER_AGENTS_DIRNAME);
+  const projectDir = join(opts.cwd ?? process.cwd(), PROJECT_AGENTS_DIRNAME);
+
+  const failed: MarkdownLoadFailure[] = [];
+  // Map keyed by name → last-write-wins (project shadows user).
+  const byName = new Map<string, DiscoveredMarkdownAgent>();
+
+  for (const [dir, source] of [
+    [userDir, 'markdown:user' as const],
+    [projectDir, 'markdown:project' as const],
+  ] satisfies ReadonlyArray<readonly [string, 'markdown:user' | 'markdown:project']>) {
+    const files = await listMarkdownFiles(dir);
+    for (const filePath of files) {
+      const outcome = await parseMarkdownAgentFile(filePath);
+      if (outcome.kind === 'ok') {
+        byName.set(outcome.parsed.name, {
+          name: outcome.parsed.name,
+          description: outcome.parsed.description,
+          source,
+          path: filePath,
+          ...(outcome.parsed.toolNames !== undefined
+            ? { tools: outcome.parsed.toolNames }
+            : {}),
+          ...(outcome.parsed.model !== undefined ? { model: outcome.parsed.model } : {}),
+        });
+      } else if (outcome.kind === 'fail') {
+        failed.push({ path: filePath, reason: outcome.reason });
+      }
+      // outcome.kind === 'silent-skip' → no-op (reference doc / no name)
+    }
+  }
+
+  return { agents: Array.from(byName.values()), failed };
+}
+
+interface ParsedAgent {
+  readonly name: string;
+  readonly description: string;
+  readonly instructions: string;
+  /** Raw tool names without `builtin:` prefix. */
+  readonly toolNames?: readonly string[];
+  readonly model?: string;
+}
+
+type ParseOutcome =
+  | { readonly kind: 'ok'; readonly parsed: ParsedAgent }
+  | { readonly kind: 'silent-skip' }
+  | { readonly kind: 'fail'; readonly reason: string };
+
+/**
+ * Shared parser for `loadAgentsFromMarkdown` and
+ * `discoverMarkdownAgents`. Reads a markdown file, validates the
+ * frontmatter, and returns parsed metadata or a discriminated
+ * outcome. No file-system writes, no admission, no registration.
+ */
+async function parseMarkdownAgentFile(filePath: string): Promise<ParseOutcome> {
+  let raw: string;
+  try {
+    raw = await readFile(filePath, 'utf8');
+  } catch (err) {
+    return { kind: 'fail', reason: `read failed: ${errMsg(err)}` };
+  }
+
+  const [frontmatter, body] = parseYamlFrontmatter(raw);
+  // Files without frontmatter are reference docs (claudecode parity).
+  if (!frontmatter) return { kind: 'silent-skip' };
+
+  const nameField = frontmatter.name;
+  if (typeof nameField !== 'string' || nameField.trim().length === 0) {
+    // Missing/invalid name → silent skip; the file is not advertising
+    // itself as an agent definition.
+    return { kind: 'silent-skip' };
+  }
+  const name = nameField.trim();
+
+  const descriptionField = frontmatter.description;
+  if (typeof descriptionField !== 'string' || descriptionField.trim().length === 0) {
+    return {
+      kind: 'fail',
+      reason: `frontmatter "description" is required (got ${typeof descriptionField})`,
+    };
+  }
+  const description = descriptionField.trim();
+
+  const instructions = body.trim();
+  if (instructions.length === 0) {
+    return { kind: 'fail', reason: 'markdown body (instructions) is empty' };
+  }
+
+  const toolNames = parseToolNamesField(frontmatter.tools);
+
+  const modelField = frontmatter.model;
+  const model =
+    typeof modelField === 'string' && modelField.trim().length > 0
+      ? modelField.trim()
+      : undefined;
+
+  return {
+    kind: 'ok',
+    parsed: {
+      name,
+      description,
+      instructions,
+      ...(toolNames !== undefined ? { toolNames } : {}),
+      ...(model !== undefined ? { model } : {}),
+    },
+  };
+}
+
+/**
  * Tolerant parsing of the `tools` frontmatter field. Accepts a YAML
  * array of strings (`tools: [read, grep]`) or a comma-separated
- * string (`tools: "read, grep"`). Each entry is mapped to a
- * `builtin:<name>` ToolRef so admission's tool-permission invariant
- * sees them in the same shape as `.kodax/constructed/agents/`
- * artifacts.
+ * string (`tools: "read, grep"`). Returns raw names without the
+ * `builtin:` prefix — the loader applies the prefix when building
+ * `ToolRef`s for admission; discovery exposes the raw names.
  */
-function parseToolsField(value: unknown): readonly ToolRef[] | undefined {
+function parseToolNamesField(value: unknown): readonly string[] | undefined {
   if (value == null) return undefined;
   let names: string[] = [];
   if (Array.isArray(value)) {
@@ -241,7 +394,7 @@ function parseToolsField(value: unknown): readonly ToolRef[] | undefined {
     return undefined;
   }
   if (names.length === 0) return undefined;
-  return names.map((n) => ({ ref: n.includes(':') ? n : `builtin:${n}` }));
+  return names;
 }
 
 function errMsg(err: unknown): string {

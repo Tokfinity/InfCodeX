@@ -925,16 +925,22 @@ export {
   // calls `loadAgentsFromMarkdown` after `rehydrateActiveArtifacts` so
   // `.kodax/agents/*.md` agents register alongside on-disk artifacts.
   loadAgentsFromMarkdown,
+  // FEATURE_197 (v0.7.43) — read-only discovery API for SDK consumers
+  // (e.g. agent-picker UIs) that need to list markdown agents without
+  // triggering admission/registration side effects.
+  discoverMarkdownAgents,
   // Test-only — reset module-singleton state between hermetic test runs.
   _resetRuntimeForTesting,
 } from './construction/index.js';
-// FEATURE_191 — type exports for the markdown loader (consumed by REPL
-// `BootstrapConstructionRuntimeResult` so REPL can surface failures
-// with reasons).
+// FEATURE_191 + FEATURE_197 — type exports for the markdown loader +
+// discovery surfaces (consumed by REPL `BootstrapConstructionRuntimeResult`
+// + SDK embedders building agent-picker UIs).
 export type {
   LoadAgentsFromMarkdownOptions,
   LoadAgentsFromMarkdownResult,
   MarkdownLoadFailure,
+  DiscoveredMarkdownAgent,
+  DiscoverMarkdownAgentsResult,
 } from './construction/index.js';
 
 // ============== FEATURE_092 (v0.7.33): Auto-Mode Classifier ==============

@@ -89,13 +89,20 @@ export {
 // Called from REPL bootstrap after `rehydrateActiveArtifacts()` so
 // `.kodax/agents/` + `~/.kodax/agents/` agents register alongside
 // LLM/CLI-constructed ones.
+//
+// FEATURE_197 (v0.7.43) — read-only counterpart for SDK consumers
+// building agent-picker UIs that need to list available markdown
+// agents without triggering admission/registration side effects.
 export {
   loadAgentsFromMarkdown,
+  discoverMarkdownAgents,
 } from './markdown-loader.js';
 export type {
   LoadAgentsFromMarkdownOptions,
   LoadAgentsFromMarkdownResult,
   MarkdownLoadFailure,
+  DiscoveredMarkdownAgent,
+  DiscoverMarkdownAgentsResult,
 } from './markdown-loader.js';
 
 // FEATURE_089 Phase 3.5 — sandbox runner.

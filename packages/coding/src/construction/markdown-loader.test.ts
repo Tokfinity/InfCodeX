@@ -19,11 +19,12 @@ import { tmpdir } from 'node:os';
 
 import {
   _resetAgentResolverForTesting,
+  listConstructedAgents,
   listConstructedAgentsWithSource,
   resolveConstructedAgent,
   resolveConstructedAgentSource,
 } from './agent-resolver.js';
-import { loadAgentsFromMarkdown } from './markdown-loader.js';
+import { discoverMarkdownAgents, loadAgentsFromMarkdown } from './markdown-loader.js';
 
 let userHome: string;
 let projectCwd: string;
@@ -278,5 +279,281 @@ describe('loadAgentsFromMarkdown', () => {
     expect(result.loaded).toBe(1);
     const agent = resolveConstructedAgent('with-model');
     expect(agent?.model).toBe('claude-sonnet-4-6');
+  });
+});
+
+/**
+ * FEATURE_197 (v0.7.43) — read-only discovery API. Mirrors the
+ * loader's parse + filter semantics but performs zero admission /
+ * registration so SDK consumers can list available agents without
+ * mutating the in-memory registry.
+ */
+describe('discoverMarkdownAgents', () => {
+  async function discover() {
+    return discoverMarkdownAgents({ cwd: projectCwd, configHome: userHome });
+  }
+
+  it('returns empty result when both directories are empty', async () => {
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('returns empty result when directories do not exist', async () => {
+    const result = await discoverMarkdownAgents({
+      cwd: join(tmpdir(), 'definitely-not-a-real-dir-' + Date.now()),
+      configHome: join(tmpdir(), 'also-not-real-' + Date.now()),
+    });
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('discovers a minimal well-formed user agent without registering it', async () => {
+    await writeUserAgent(
+      'db-reviewer.md',
+      [
+        '---',
+        'name: db-reviewer',
+        'description: Reviews DB migrations for safety',
+        '---',
+        'You are a migration reviewer.',
+      ].join('\n'),
+    );
+    const before = listConstructedAgents().length;
+    const result = await discover();
+
+    expect(result.failed).toEqual([]);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]).toMatchObject({
+      name: 'db-reviewer',
+      description: 'Reviews DB migrations for safety',
+      source: 'markdown:user',
+    });
+    expect(result.agents[0].path).toContain('db-reviewer.md');
+
+    // Critical contract: discovery is read-only.
+    expect(listConstructedAgents().length).toBe(before);
+    expect(resolveConstructedAgent('db-reviewer')).toBeUndefined();
+  });
+
+  it('tags project agents with source markdown:project', async () => {
+    await writeProjectAgent(
+      'fixer.md',
+      [
+        '---',
+        'name: fixer',
+        'description: Fixes things',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]).toMatchObject({
+      name: 'fixer',
+      source: 'markdown:project',
+    });
+  });
+
+  it('project shadows user when names collide (last-write-wins, parity with loader)', async () => {
+    await writeUserAgent(
+      'reviewer.md',
+      [
+        '---',
+        'name: reviewer',
+        'description: USER description',
+        '---',
+        'user body',
+      ].join('\n'),
+    );
+    await writeProjectAgent(
+      'reviewer.md',
+      [
+        '---',
+        'name: reviewer',
+        'description: PROJECT description',
+        '---',
+        'project body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0]).toMatchObject({
+      name: 'reviewer',
+      description: 'PROJECT description',
+      source: 'markdown:project',
+    });
+  });
+
+  it('reports description missing as a failure (not a silent skip)', async () => {
+    await writeUserAgent(
+      'no-desc.md',
+      [
+        '---',
+        'name: no-desc',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].reason).toMatch(/description/);
+  });
+
+  it('silently skips files without frontmatter (reference doc convention)', async () => {
+    await writeUserAgent('readme-like.md', '# Some doc, no frontmatter\n\nbody');
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('silently skips files with frontmatter but no name', async () => {
+    await writeUserAgent(
+      'no-name.md',
+      [
+        '---',
+        'description: missing name field',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('reports empty body as a failure', async () => {
+    await writeUserAgent(
+      'empty-body.md',
+      [
+        '---',
+        'name: empty-body',
+        'description: has frontmatter but no body',
+        '---',
+        '',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0].reason).toMatch(/body/);
+  });
+
+  it('exposes raw tool names without the builtin: prefix (yaml array form)', async () => {
+    await writeUserAgent(
+      'with-tools.md',
+      [
+        '---',
+        'name: with-tools',
+        'description: tool advertisement',
+        'tools: [read, grep, write]',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].tools).toEqual(['read', 'grep', 'write']);
+  });
+
+  it('exposes raw tool names from comma-separated string form', async () => {
+    await writeUserAgent(
+      'with-tools-csv.md',
+      [
+        '---',
+        'name: with-tools-csv',
+        'description: csv tool form',
+        'tools: "read, grep"',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].tools).toEqual(['read', 'grep']);
+  });
+
+  it('exposes model alias from frontmatter', async () => {
+    await writeUserAgent(
+      'with-model.md',
+      [
+        '---',
+        'name: with-model',
+        'description: model alias passthrough',
+        'model: claude-sonnet-4-6',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].model).toBe('claude-sonnet-4-6');
+  });
+
+  it('does NOT validate admission (returns agents loader would later reject)', async () => {
+    // Reference an unknown tool — loader would reject this at admission,
+    // but discover should still surface it for UI preview. Discovery's
+    // purpose is "what's on disk", not "what will load successfully".
+    await writeUserAgent(
+      'bad-tool.md',
+      [
+        '---',
+        'name: bad-tool',
+        'description: references a tool that does not exist',
+        'tools: [definitely-not-a-real-tool]',
+        '---',
+        'body',
+      ].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].name).toBe('bad-tool');
+    expect(result.agents[0].tools).toEqual(['definitely-not-a-real-tool']);
+  });
+
+  it('accumulates failures across multiple bad files', async () => {
+    await writeUserAgent(
+      'bad1.md',
+      ['---', 'name: bad1', '---', 'body'].join('\n'),
+    );
+    await writeProjectAgent(
+      'bad2.md',
+      ['---', 'name: bad2', 'description: ""', '---', 'body'].join('\n'),
+    );
+    const result = await discover();
+    expect(result.agents).toEqual([]);
+    expect(result.failed).toHaveLength(2);
+    expect(result.failed.every((f) => /description/.test(f.reason))).toBe(true);
+  });
+
+  it('agrees with loader on which files are well-formed (round-trip parity)', async () => {
+    // Both well-formed and both ill-formed files in the mix.
+    await writeUserAgent(
+      'good1.md',
+      ['---', 'name: good1', 'description: ok', '---', 'body'].join('\n'),
+    );
+    await writeUserAgent(
+      'bad.md',
+      ['---', 'name: bad', '---', 'body'].join('\n'),
+    );
+    await writeProjectAgent(
+      'good2.md',
+      ['---', 'name: good2', 'description: ok', '---', 'body'].join('\n'),
+    );
+
+    const discovered = await discover();
+    const loaded = await load();
+
+    // Same well-formed count
+    expect(discovered.agents.length).toBe(loaded.loaded);
+    // Same failure paths (set equality)
+    expect(new Set(discovered.failed.map((f) => f.path))).toEqual(
+      new Set(loaded.failed.map((f) => f.path)),
+    );
+    // Discovered names match registered names
+    expect(new Set(discovered.agents.map((a) => a.name))).toEqual(
+      new Set(listConstructedAgentsWithSource().map((e) => e.agent.name)),
+    );
   });
 });
