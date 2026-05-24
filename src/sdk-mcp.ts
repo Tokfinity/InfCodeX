@@ -1,9 +1,10 @@
 /**
- * SDK subpath entry — `@kodax-ai/kodax/mcp` (v0.7.42).
+ * SDK subpath entry — `@kodax-ai/kodax/mcp` (v0.7.42; FEATURE_194 v0.7.43 inline).
  *
- * Re-exports the entire `@kodax-ai/agent` public API — MCP server config
+ * Re-exports the MCP surface from `@kodax-ai/agent` — MCP server config
  * types, capability provider, transport factory, catalog helpers, and
- * runtime diagnostics.
+ * runtime diagnostics. Post-FEATURE_194 the MCP code lives at
+ * `packages/agent/src/capabilities/mcp/`.
  *
  * Usage:
  * ```ts

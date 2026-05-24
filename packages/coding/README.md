@@ -195,8 +195,7 @@ export {
 ## 依赖
 
 - `@kodax-ai/llm` - LLM 抽象层
-- `@kodax-ai/agent` - Agent 框架
-- `@kodax-ai/skills` - Skills 系统
+- `@kodax-ai/agent` - Agent 框架（含 `/session-lineage`、`/capabilities/skills`、`/capabilities/mcp`、`/tracing` subpaths；FEATURE_194 v0.7.43）
 
 ## License
 

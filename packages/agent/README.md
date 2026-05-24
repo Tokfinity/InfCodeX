@@ -60,7 +60,7 @@ console.log(`Estimated tokens: ${tokenCount}`);
 
 ### 消息压缩
 
-> v0.7.27 起，原 `compactMessages()` 工具函数已移除。请使用 `@kodax-ai/agent` 的可插拔 `CompactionPolicy`：`DefaultSummaryCompaction`（通用）或 `LineageCompaction`（coding preset，来自 `@kodax-ai/session-lineage`）。
+> v0.7.27 起，原 `compactMessages()` 工具函数已移除。请使用 `@kodax-ai/agent` 的可插拔 `CompactionPolicy`：`DefaultSummaryCompaction`（通用）或 `LineageCompaction`（coding preset，源自 `@kodax-ai/agent/session-lineage`，FEATURE_194 v0.7.43 后内联到 agent 自身）。
 
 ```typescript
 import { DefaultSummaryCompaction } from '@kodax-ai/agent';

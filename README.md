@@ -277,30 +277,29 @@ KodaX uses a **monorepo architecture** with npm workspaces. Source layout has 9 
 
 ```
 KodaX/
-├── packages/
-│   ├── ai/                  # @kodax-ai/llm - LLM abstraction (12 providers)
+├── packages/                # 4 workspace packages (FEATURE_194 v0.7.43)
+│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (12 providers)
 │   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
-│   │   └── orchestration/   # Runner, runFanOut, runWithIdleYield, ChildTaskRegistry
-│   │
-│   ├── skills/              # @kodax-ai/skills - Skills standard implementation
-│   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
+│   │   ├── orchestration/   # Runner, runFanOut, runWithIdleYield, ChildTaskRegistry
+│   │   ├── session-lineage/ # branchable session tree (inline v0.7.43)
+│   │   ├── capabilities/
+│   │   │   ├── mcp/         # MCP integration (inline v0.7.43)
+│   │   │   └── skills/      # Skills standard implementation + builtin (inline v0.7.43)
+│   │   └── tracing/         # tracing / observability (inline v0.7.43)
 │   │
 │   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # 30+ tools: read, write, edit, bash, glob, grep, undo,
-│   │                        #   dispatch_child_task, send_message, task_stop,
-│   │                        #   ask_user_question, repo-intelligence, …
+│   │   ├── tools/           # 30+ tools: read, write, edit, bash, glob, grep, undo,
+│   │   │                    #   dispatch_child_task, send_message, task_stop,
+│   │   │                    #   ask_user_question, repo-intelligence, …
+│   │   └── repo-intelligence/ # incl. protocol.ts (inline v0.7.43)
 │   │
-│   ├── repl/                # @kodax-ai/repl - Interactive terminal UI (Ink TUI)
-│   ├── mcp/                 # @kodax-ai/mcp - MCP integration
-│   ├── repointel-protocol/  # @kodax-ai/repointel-protocol - repo-intel protocol
-│   ├── session-lineage/     # @kodax-ai/session-lineage - branchable session tree
-│   └── tracing/             # @kodax-ai/tracing - tracing / observability
+│   └── repl/                # @kodax-ai/repl - Interactive terminal UI (Ink TUI)
 │
-├── src/                     # CLI entry + 6 SDK subpath entries (sdk-{agent,llm,coding,repl,skills,mcp}.ts)
+├── src/                     # CLI entry + SDK subpath entries
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
-│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl,skills}
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl}
 │
 └── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
@@ -321,16 +320,16 @@ KodaX/
        │  UI Layer    │              │ Tools+Prompts  │
        └──────┬───────┘              └──────┬─────────┘
               │                             │
-              │              ┌──────────────┼──────────────┐
-              │              │              │              │
-              ▼              ▼              ▼              ▼
-       ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐
-       │@kodax-ai/    │ │@kodax-ai/    │ │@kodax-ai/llm │ │  External   │
-       │skills        │ │agent         │ │LLM Abstract  │ │   SDKs      │
-       │(zero deps)   │ │Runner +      │ │(12 providers)│ │             │
-       │              │ │fan-out +     │ │              │ │             │
-       │              │ │idle-yield    │ │              │ │             │
-       └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘
+              │              ┌──────────────┴──────────────┐
+              │              │                             │
+              ▼              ▼                             ▼
+       ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────┐
+       │@kodax-ai/    │ │@kodax-ai/agent           │ │@kodax-ai/llm │
+       │coding (via   │ │Runner + fan-out +        │ │LLM Abstract  │
+       │above)        │ │idle-yield + session-     │ │(12 providers)│
+       │              │ │lineage + skills + mcp +  │ │              │
+       │              │ │tracing (FEATURE_194)     │ │              │
+       └──────────────┘ └──────────────────────────┘ └──────────────┘
 ```
 
 ### Package Overview
@@ -340,9 +339,8 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 | Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
 | `@kodax-ai/llm` | LLM abstraction (12 providers + custom registration) | @anthropic-ai/sdk, openai |
-| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, session, tokenization (ADR-021 standalone-consumable) | @kodax-ai/llm, js-tiktoken |
-| `@kodax-ai/skills` | Skills standard implementation | Zero external deps |
-| `@kodax-ai/coding` | Coding Agent — 30+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue | @kodax-ai/llm, @kodax-ai/agent, @kodax-ai/skills |
+| `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, yaml |
+| `@kodax-ai/coding` | Coding Agent — 30+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
 ---
@@ -865,11 +863,13 @@ import { InkREPL } from '@kodax-ai/kodax/repl';
 ```
 @kodax-ai/llm    (zero business-logic deps)
     ↓
-@kodax-ai/agent  (depends @kodax-ai/llm; ADR-021 standalone-consumable)
+@kodax-ai/agent  (depends @kodax-ai/llm; ADR-021 standalone-consumable;
+                  inlines session-lineage + capabilities/{mcp,skills} +
+                  tracing per ADR-036 v0.7.43)
     ↓
-@kodax-ai/skills (zero external deps)  →  @kodax-ai/coding  (depends llm + agent + skills)
-                                                    ↓
-                                              @kodax-ai/repl (depends coding + ink + react)
+@kodax-ai/coding (depends llm + agent; inlines repo-intelligence/protocol per ADR-036)
+    ↓
+@kodax-ai/repl   (depends coding + ink + react)
 ```
 
 **Subpath Recommendations**:
@@ -877,8 +877,7 @@ import { InkREPL } from '@kodax-ai/kodax/repl';
 | Use Case | Subpath | Why |
 |----------|---------|-----|
 | Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 12 providers |
-| Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + sessions |
-| Using skills system | `@kodax-ai/kodax/skills` | Zero deps, pure skills |
+| Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + session-lineage + capabilities |
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
 

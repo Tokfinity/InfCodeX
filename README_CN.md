@@ -417,36 +417,33 @@ kodax --repo-intelligence premium-native --repo-intelligence-trace
 
 ## 仓库结构
 
-KodaX 是基于 npm workspaces 的 TypeScript monorepo，源码层 9 个 workspace 包，npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + 6 个 SDK subpath exports（`/agent`、`/llm`、`/coding`、`/repl`、`/skills`、`/mcp`；ADR-022 + ADR-024 v0.7.39 + ADR-032 v0.7.42 加 `/mcp`）。核心包：
+KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 workspace 包**（FEATURE_194 v0.7.43 包合并 — 9 → 4，ADR-036），npm 上以单 bundle 包 `@kodax-ai/kodax` 发布 + SDK subpath exports（`/agent`、`/llm`、`/coding`、`/repl`；ADR-022 + ADR-024 v0.7.39）。核心包：
 
 | Workspace 包 | 作用 | 主要依赖 |
 |----|------|---------|
 | `@kodax-ai/llm` | LLM 抽象层（12 个内置 provider + 自定义 provider 注册），可独立使用 | `@anthropic-ai/sdk`, `openai` |
-| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + 会话管理 + tokenization + 可插拔 compaction（ADR-021 standalone-consumable） | `@kodax-ai/llm`, `js-tiktoken` |
-| `@kodax-ai/skills` | Agent Skills 标准实现（自然语言触发、变量解析） | 零外部依赖 |
-| `@kodax-ai/coding` | Coding Agent：30+ 工具（含 `dispatch_child_task` / `send_message` / `task_stop`）、role prompts、agent loop、auto-continue | `@kodax-ai/llm`, `@kodax-ai/agent`, `@kodax-ai/skills` |
+| `@kodax-ai/agent` | 通用 Agent 框架 —— Runner / runFanOut / runWithIdleYield / ChildTaskRegistry + 会话管理 + tokenization + 可插拔 compaction + **inline 后**:session-lineage 子树 + capabilities (mcp + skills + builtin) + tracing（subpaths: `/session-lineage`、`/capabilities/mcp`、`/capabilities/skills`、`/tracing`） | `@kodax-ai/llm`, `js-tiktoken`, `fflate`, `yaml` |
+| `@kodax-ai/coding` | Coding Agent:30+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-辅助包：`@kodax-ai/mcp`、`@kodax-ai/repointel-protocol`、`@kodax-ai/session-lineage`、`@kodax-ai/tracing`（按需依赖）。
-
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills,mcp}.ts` 是 6 个 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
 
 ```
-KodaX/
+KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)
 ├── packages/
-│   ├── ai/                  # @kodax-ai/llm —— 12 个 LLM provider 实现
-│   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield / session
-│   ├── skills/              # @kodax-ai/skills —— 零依赖 skill 加载器
-│   │   └── builtin/         # 内置 skills：code-review / tdd / git-workflow / skill-creator
+│   ├── llm/                 # @kodax-ai/llm —— 12 个 LLM provider 实现
+│   ├── agent/               # @kodax-ai/agent —— Runner / fan-out / idle-yield + 子树:
+│   │   ├── session-lineage/ # 分支 session tree (v0.7.43 inline)
+│   │   ├── capabilities/
+│   │   │   ├── mcp/         # MCP 集成 (v0.7.43 inline)
+│   │   │   └── skills/      # Skills 标准实现 + builtin (v0.7.43 inline)
+│   │   └── tracing/         # 追踪 / 可观测性 (v0.7.43 inline)
 │   ├── coding/              # @kodax-ai/coding —— tools + prompts + agent loop
-│   ├── repl/                # @kodax-ai/repl —— Ink TUI
-│   ├── mcp/                 # @kodax-ai/mcp
-│   ├── repointel-protocol/  # @kodax-ai/repointel-protocol
-│   ├── session-lineage/     # @kodax-ai/session-lineage
-│   └── tracing/             # @kodax-ai/tracing
+│   │   └── repo-intelligence/ # 含 protocol.ts (v0.7.43 inline)
+│   └── repl/                # @kodax-ai/repl —— Ink TUI
 ├── src/
 │   ├── kodax_cli.ts         # CLI 主入口（bin: `kodax`）
-│   └── sdk-*.ts             # 6 个 SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl,skills,mcp}
+│   └── sdk-*.ts             # SDK subpath 入口 → @kodax-ai/kodax/{agent,llm,coding,repl}
 ├── scripts/
 │   ├── build-bundle.mjs     # esbuild 单 bundle 多 entry 打包（CLI + 6 SDK entry + chunks）
 │   ├── build-binary.mjs     # Bun --compile 单文件二进制打包
