@@ -537,11 +537,46 @@ function resolveInitialReasoningMode(
   return 'off';
 }
 
-export function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
+/**
+ * FEATURE_195 (v0.7.43) — Sidecar Verifier UI silent accept.
+ *
+ * Post-F184 the Sidecar Verifier's accept verdict reaches the REPL via
+ * `evidence.entries[]` with `role: 'evaluator'` (legacy backward-compat
+ * label — F184 architectural source-of-truth is `payload.verdict.source =
+ * 'sidecar'`, but observer-bridge writes the `'evaluator'` role string
+ * for the entry). For accept, `signal === 'COMPLETE'` per
+ * observer-bridge.ts buildEvidenceEntryForRoleEmit. The verdict's
+ * `reason` text (verifier reasoning, e.g. "用户用中文说'你好'... 这是恰
+ * 当回应") becomes the entry's `summary` and renders as a transcript
+ * event-item `[Evaluator] ...`. F184 design intent (`verifier.ts` JSDoc
+ * + ADR-030 §F184) is silent accept — the user only sees the `[AMA
+ * Verifying]` spinner during the call, then nothing. Filter accept
+ * entries out by default; revise / blocked verdicts and the
+ * `KODAX_VERIFIER_LOG=1` opt-in path keep rendering.
+ */
+function shouldFilterSidecarAcceptEntry(
+  entry: NonNullable<KodaXResult["managedTask"]>["evidence"]["entries"][number],
+  verifierLog: boolean,
+): boolean {
+  if (verifierLog) return false;
+  if (entry.role !== "evaluator") return false;
+  if (entry.signal !== "COMPLETE") return false;
+  return true;
+}
+
+export function buildManagedTaskTranscriptItems(
+  result: KodaXResult,
+  options?: { readonly verifierLog?: boolean },
+): string[] {
   const task = result.managedTask;
   if (!task) {
     return [];
   }
+  // FEATURE_195 (v0.7.43): default reads env var (already mirrored from
+  // `~/.kodax/config.json` `verifierLog: true` at REPL boot — see
+  // `repl/src/common/utils.ts:724`). Test paths pass the option
+  // explicitly to avoid env coupling.
+  const verifierLog = options?.verifierLog ?? process.env.KODAX_VERIFIER_LOG === "1";
 
   const isInterruptedCancellation = (entry: NonNullable<KodaXResult["managedTask"]>["evidence"]["entries"][number]): boolean => {
     if (!result.interrupted && !task.verdict.signalReason?.includes("Orchestration cancelled")) {
@@ -581,6 +616,11 @@ export function buildManagedTaskTranscriptItems(result: KodaXResult): string[] {
       return (orderByAssignment.get(left.assignmentId) ?? 0) - (orderByAssignment.get(right.assignmentId) ?? 0);
     })
     .filter((entry) => !isInterruptedCancellation(entry))
+    // FEATURE_195 (v0.7.43): hide Sidecar Verifier accept verdict entries
+    // by default. See `shouldFilterSidecarAcceptEntry` JSDoc above for the
+    // F184 silent-accept rationale + opt-in via `KODAX_VERIFIER_LOG=1` /
+    // `verifierLog: true` config.
+    .filter((entry) => !shouldFilterSidecarAcceptEntry(entry, verifierLog))
     .filter((entry) => result.interrupted || !(
       entry.assignmentId === finalAssignmentId
       && (entry.round ?? 1) === finalRound

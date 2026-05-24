@@ -287,6 +287,250 @@ describe("buildManagedTaskTranscriptItems", () => {
     const transcript = items.join("\n\n");
     expect(transcript).toContain("Evaluator identified three blocking issues.");
   });
+
+  // FEATURE_195 (v0.7.43) — Sidecar Verifier UI silent accept.
+  //
+  // Hides accept verdict evidence entries by default (post-F184 design
+  // intent — verifier.ts JSDoc + ADR-030 §F184 specify silent accept).
+  // Revise / blocked still surface (user-actionable). `verifierLog`
+  // opt-in (env `KODAX_VERIFIER_LOG=1` or config `verifierLog: true`)
+  // restores accept visibility for debug/audit.
+  describe("FEATURE_195 — Sidecar Verifier UI silent accept", () => {
+    const baseSidecarAcceptResult = (): unknown => ({
+      success: true,
+      messages: [],
+      lastText: "你好! 我是 KodaX 的开发助手。",
+      managedTask: {
+        runtime: {},
+        roleAssignments: [
+          { id: "worker", role: "worker", title: "Worker" },
+          { id: "evaluator", role: "evaluator", title: "Evaluator" },
+        ],
+        evidence: {
+          entries: [
+            {
+              assignmentId: "worker",
+              title: "Worker",
+              role: "worker",
+              round: 1,
+              status: "completed",
+              summary: "你好! 我是 KodaX 的开发助手。",
+            },
+            {
+              // Sidecar accept verdict — observer-bridge maps
+              // `verdict.status='accept'` → `signal: 'COMPLETE'` +
+              // `summary: verdict.reason` (the verifier reasoning text).
+              assignmentId: "evaluator",
+              title: "Evaluator",
+              role: "evaluator",
+              round: 1,
+              status: "completed",
+              signal: "COMPLETE",
+              signalReason: "Greeting is a fitting response, no pending tasks.",
+              summary: "用户用中文说\"你好\"，主 agent 用中文回复了问候。这是恰当回应，没有未完成的任务。",
+            },
+          ],
+        },
+        verdict: {
+          // FEATURE_195: trivial "你好" goes H0_DIRECT — `payload-builder.ts:218`
+          // sets decidedByAssignmentId='direct' (H0 branch wins over the
+          // verdictStatus → 'evaluator' branch). The Evaluator evidence
+          // entry's assignmentId='evaluator' ≠ 'direct', so the existing
+          // "skip final" filter at InkREPL:584 does NOT drop it. This is
+          // exactly the production path the F195 silent-accept filter targets.
+          decidedByAssignmentId: "direct",
+          disposition: "complete",
+        },
+      },
+    });
+
+    it("default mode (verifierLog=false): hides sidecar accept verdict entry", () => {
+      const items = buildManagedTaskTranscriptItems(
+        baseSidecarAcceptResult() as any,
+        { verifierLog: false },
+      );
+      const transcript = items.join("\n\n");
+      expect(transcript).not.toContain("[Evaluator]");
+      expect(transcript).not.toContain("用户用中文说");
+      // Worker entry still shows.
+      expect(transcript).toContain("你好! 我是 KodaX 的开发助手。");
+    });
+
+    it("verifierLog=true: shows sidecar accept verdict entry", () => {
+      const items = buildManagedTaskTranscriptItems(
+        baseSidecarAcceptResult() as any,
+        { verifierLog: true },
+      );
+      const transcript = items.join("\n\n");
+      expect(transcript).toContain("[Evaluator]");
+      expect(transcript).toContain("用户用中文说");
+    });
+
+    it("default mode: sidecar revise verdict (status='running', no signal) still surfaces — user actionable", () => {
+      const result = {
+        success: true,
+        messages: [],
+        lastText: "Worker text-only response before revise.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                // Sidecar revise — observer-bridge maps to
+                // status='running' with no `signal`. Filter must NOT
+                // hide because the user needs to see what to revise.
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "running",
+                summary: "Worker claimed completion but did not run any verification step — revise needed.",
+              },
+            ],
+          },
+          // Trivial-task H0_DIRECT path — decidedByAssignmentId='direct'
+          // (per payload-builder.ts:218) so the skip-final filter at
+          // InkREPL:584 does NOT drop the Evaluator entry. F195 silent-
+          // accept filter must NOT drop revise verdicts (signal !== 'COMPLETE'
+          // — user actionable).
+          verdict: { decidedByAssignmentId: "direct" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      expect(transcript).toContain("[Evaluator]");
+      expect(transcript).toContain("revise needed");
+    });
+
+    it("default mode: sidecar blocked verdict (signal='BLOCKED') still surfaces — user actionable", () => {
+      const result = {
+        success: false,
+        signal: "BLOCKED",
+        messages: [],
+        lastText: "Worker reported blocker.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+            { id: "evaluator", role: "evaluator", title: "Evaluator" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "evaluator",
+                title: "Evaluator",
+                role: "evaluator",
+                round: 1,
+                status: "blocked",
+                signal: "BLOCKED",
+                signalReason: "Cannot proceed — missing dependency in user environment.",
+                summary: "Cannot proceed — missing dependency in user environment.",
+              },
+            ],
+          },
+          // BLOCKED case — per payload-builder.ts:218, harness='H0_DIRECT'
+          // wins so decidedByAssignmentId='direct'. F195 filter must NOT
+          // drop blocked verdict (signal='BLOCKED', not 'COMPLETE' — user
+          // actionable).
+          verdict: { decidedByAssignmentId: "direct", disposition: "blocked" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      expect(transcript).toContain("[Evaluator]");
+      expect(transcript).toContain("missing dependency");
+    });
+
+    it("default mode: non-evaluator entries with signal='COMPLETE' (e.g. direct H0) still surface", () => {
+      // Filter must be evaluator-role-specific; a Worker / Scout / direct
+      // entry that happens to also carry signal='COMPLETE' must NOT be
+      // affected by the silent-accept filter.
+      const result = {
+        success: true,
+        messages: [],
+        lastText: "Done.",
+        managedTask: {
+          runtime: {},
+          roleAssignments: [
+            { id: "worker", role: "worker", title: "Worker" },
+          ],
+          evidence: {
+            entries: [
+              {
+                assignmentId: "worker",
+                title: "Worker",
+                role: "worker",
+                round: 1,
+                status: "completed",
+                signal: "COMPLETE",
+                summary: "Worker completed the trivial task.",
+              },
+            ],
+          },
+          // decidedByAssignmentId='direct' so the existing skip-final
+          // filter doesn't drop the Worker entry (Worker entry's
+          // assignmentId='worker' ≠ 'direct'). What we want to verify:
+          // F195 silent-accept filter does NOT drop this entry even though
+          // it has signal='COMPLETE' — because role !== 'evaluator'.
+          verdict: { decidedByAssignmentId: "direct", disposition: "complete" },
+        },
+      };
+      const items = buildManagedTaskTranscriptItems(result as any, { verifierLog: false });
+      const transcript = items.join("\n\n");
+      expect(transcript).toContain("[Worker]");
+      expect(transcript).toContain("Worker completed");
+    });
+
+    it("env var KODAX_VERIFIER_LOG=1 is honored when options.verifierLog omitted", () => {
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      process.env.KODAX_VERIFIER_LOG = "1";
+      try {
+        const items = buildManagedTaskTranscriptItems(baseSidecarAcceptResult() as any);
+        const transcript = items.join("\n\n");
+        expect(transcript).toContain("[Evaluator]");
+        expect(transcript).toContain("用户用中文说");
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_VERIFIER_LOG;
+        else process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+
+    it("env var unset + options omitted: defaults to filter-on (silent accept)", () => {
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      delete process.env.KODAX_VERIFIER_LOG;
+      try {
+        const items = buildManagedTaskTranscriptItems(baseSidecarAcceptResult() as any);
+        const transcript = items.join("\n\n");
+        expect(transcript).not.toContain("[Evaluator]");
+        expect(transcript).not.toContain("用户用中文说");
+      } finally {
+        if (prev !== undefined) process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+
+    it("options.verifierLog=false overrides env var KODAX_VERIFIER_LOG=1 (explicit option wins)", () => {
+      // Test paths need deterministic behavior independent of test-env
+      // env vars. The `options.verifierLog` arg must take precedence
+      // over the env-var fallback.
+      const prev = process.env.KODAX_VERIFIER_LOG;
+      process.env.KODAX_VERIFIER_LOG = "1";
+      try {
+        const items = buildManagedTaskTranscriptItems(
+          baseSidecarAcceptResult() as any,
+          { verifierLog: false },
+        );
+        const transcript = items.join("\n\n");
+        expect(transcript).not.toContain("[Evaluator]");
+      } finally {
+        if (prev === undefined) delete process.env.KODAX_VERIFIER_LOG;
+        else process.env.KODAX_VERIFIER_LOG = prev;
+      }
+    });
+  });
 });
 
 describe("buildRoundHistoryItems", () => {
