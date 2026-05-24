@@ -201,7 +201,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     description: [
       'Read a file from the local filesystem with bounded output.',
       '- Text files: returns line-numbered content. Large files are capped per call; use offset/limit to continue in smaller slices.',
-      '- Image files (PNG, JPG, JPEG, GIF, WEBP): returns the image as inline vision content. The model is multimodal — when an image is delivered through this tool, you can see the picture directly in your next turn. Describe what you see; do NOT claim binary files are unsupported.',
+      '- Image files (PNG, JPG, JPEG, GIF, WEBP): returns the image as inline vision content. The model is multimodal — when an image is delivered through this tool, you can see the picture directly in your next turn. Describe what you see; do NOT claim binary files are unsupported — the tool decodes the image bytes into vision content for the model, so refusing as "binary file" skips a valid read and frustrates the user.',
       '- For pasted/attached images already inlined in the user message, you already perceive them via native vision — no `read` call is needed. Use `read` on an image path only when the file is on disk and not yet in the conversation (e.g., a fresh path the user mentioned in text without attaching).',
     ].join('\n'),
     input_schema: {
@@ -491,7 +491,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         model_hint: {
           type: 'string',
           enum: ['fast', 'balanced', 'deep'],
-          description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short lookups (read 1-2 files, simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); a future routing feature will activate the hint. Mark "fast" only for trivial single-file lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
+          description: 'Optional hint for routing this child to a tier-appropriate model. "fast" for short focused lookups (reading a handful of files, a simple grep); "balanced" (default; same as omit) for normal subtasks; "deep" for heavy reasoning (multi-file analysis, complex audit). Routing is currently a no-op (every child runs on the parent\'s model); a future routing feature will activate the hint. Mark "fast" only for trivial focused lookups; mark "deep" only for multi-file research or analytical synthesis; when in doubt, omit.',
         },
         subagent_type: {
           type: 'string',
@@ -518,7 +518,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — but use it sparingly (typical pattern: 0-1 send_message per child), because a child needing more context mid-flight is usually a planning failure: you did not brief it well enough up front. Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
+      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — but use it sparingly (most children should need at most one mid-run steering message), because a child needing more context mid-flight is usually a planning failure: you did not brief it well enough up front. Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1339,7 +1339,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'scaffold_tool',
     description:
       'Generate a fillable ConstructionArtifact JSON skeleton for a new tool. Returns a draft you must edit before calling validate_tool / stage_construction. '
-      + 'Use this as the FIRST step when authoring a runtime tool — do NOT hand-write the JSON shape from scratch.',
+      + 'Use this as the FIRST step when authoring a runtime tool — do NOT hand-write the JSON shape from scratch, because the construction schema has required fields and version constraints that hand-authored JSON routinely misses, producing scaffolds the validator rejects.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1428,7 +1428,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'activate_tool',
     description:
       'Activate a staged-and-tested artifact. Invokes the construction policy gate, registers the handler into TOOL_REGISTRY, flips status=active. The tool is then immediately callable as `<name>` in subsequent turns. '
-      + 'Policy: in the Ink REPL, an approve/reject dialog is shown to the user; in non-interactive surfaces (ACP / single-shot CLI / child agents) activation is rejected by default to prevent silent activation.',
+      + 'Policy: in the Ink REPL, the user sees an approve/reject dialog before activation. '
+      + 'In non-interactive surfaces (ACP / single-shot CLI / child agents) activation is rejected by default — this prevents silent capability expansion without user consent.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1457,7 +1458,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     name: 'scaffold_agent',
     description:
       'Generate a fillable AgentArtifact JSON skeleton for a new agent. Returns a draft you must edit before calling validate_agent / stage_agent_construction. '
-      + 'Use this as the FIRST step when authoring a runtime agent — do NOT hand-write the JSON shape from scratch.',
+      + 'Use this as the FIRST step when authoring a runtime agent — do NOT hand-write the JSON shape from scratch, because the construction schema has required fields and version constraints that hand-authored JSON routinely misses, producing scaffolds the validator rejects.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1531,7 +1532,8 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     description:
       'Activate a staged-and-tested agent. Invokes the construction policy gate, flips status=active, records contentHash, '
       + 'and registers the agent in the resolver so Runner.run can find it by name. '
-      + 'Policy: in the Ink REPL, an approve/reject dialog is shown to the user; in non-interactive surfaces activation is rejected by default.',
+      + 'Policy: in the Ink REPL, the user sees an approve/reject dialog before activation. '
+      + 'In non-interactive surfaces activation is rejected by default — this prevents silent capability expansion without user consent.',
     input_schema: {
       type: 'object',
       properties: {

@@ -65,7 +65,8 @@ export function buildWorkerInstructions(
     '    * `activeForm` — OPTIONAL. Present-continuous form shown by the spinner while this item is `in_progress` (e.g. "Auditing handleAuth callers"). Supply alongside `subject` so the spinner reads natural while you work.',
     '    * `evaluator` — OPTIONAL `\'build\' | \'test\' | \'lint\'`. Use sparingly — only on milestone steps with a real ground-truth check.',
     '- If a task you started as trivial turns out to be multi-step mid-flight, call `todo_create` AT THAT MOMENT — one call per newly-realized step — to retrofit the plan. Do not silently grow scope.',
-    '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`). Mark exactly ONE item `in_progress` at a time.',
+    '- Each non-trivial item should carry a status (`pending` / `in_progress` / `completed` / `failed` / `cancelled` / `deleted`).',
+    '- Mark exactly ONE item `in_progress` at a time.',
     '- Replan iteratively as the picture firms up — use the per-item API:',
     '    * INSERT ONE NEW STEP mid-task: `todo_create({subject:"...", description?:"...", activeForm?:"..."})`. Use this when the plan needs one more step but the existing items must be preserved. The store auto-mints the id.',
     '    * EDIT ONE STEP: `todo_update({id, subject?, description?, activeForm?, evaluator?, metadata?})` — patch fields without changing status.',
@@ -127,8 +128,8 @@ export function buildWorkerInstructions(
     // v2 audit VALID (bash disagreement 8.9%, pull-correct 3.3%): C bash=0%
     // (vs A=9% baseline-low ceiling-flatten), pull-correct mention 41→76%
     // (+35pp lift), 5/6 alias C ≥ 70%.
-    '- DISPATCH OBJECTIVE QUALITY (FEATURE_169 — F0a): when writing a child\'s `objective`, prefer stating the goal abstractly. Avoid hand-feeding specific bash commands ("use `git diff X`", "run `git log`") — the child picks its own tools, and hand-feeding bash bypasses the child\'s pull-tool guidance. If you need to convey a specific git revision or scope (e.g., v0.7.39..HEAD), state it as data ("scope: v0.7.39..HEAD") rather than a command directive.',
-    '- DISPATCH OBJECTIVE GUIDANCE (FEATURE_169 — F0b): WHEN RELEVANT (review / change-audit / module-exploration objectives only — not trivial probes), briefly note the recommended pull-tool family in the objective. Examples:',
+    '- DISPATCH OBJECTIVE QUALITY: when writing a child\'s `objective`, prefer stating the goal abstractly. Avoid hand-feeding specific bash commands ("use `git diff X`", "run `git log`") — the child picks its own tools, and hand-feeding bash bypasses the child\'s pull-tool guidance. If you need to convey a specific git revision or scope (e.g., v0.7.39..HEAD), state it as data ("scope: v0.7.39..HEAD") rather than a command directive.',
+    '- DISPATCH OBJECTIVE GUIDANCE: WHEN RELEVANT (review / change-audit / module-exploration objectives only — not trivial probes), briefly note the recommended pull-tool family in the objective. Examples:',
     '    - Review tasks: "scope via `changed_scope`, then drill specific files with `changed_diff_bundle`"',
     '    - Module exploration: "use `module_context` to map the module surface before reading individual files"',
     '    - Symbol tracing: "start with `symbol_context` to find callers"',
@@ -208,7 +209,8 @@ export function buildWorkerInstructions(
     // "git ops" intent — the former goes through repo-intel capsules, the
     // latter stays in bash.
     'CHANGE-REVIEW POSITIVE REFRAME (FEATURE_169 v0.7.40 — review-specific):',
-    '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call), followed by `changed_diff_bundle(paths[])` for the files you need to read.',
+    '- For ANY task framed as "review", "audit", "compare changes", "check diff", or "what changed since X": your first scope-acquisition tool MUST be `changed_scope` (one call).',
+    '- Follow with `changed_diff_bundle(paths[])` to read the specific files surfaced by `changed_scope`.',
     '- Do NOT use `bash git diff …` for change review — that pattern reads opaque text the repo-intel daemon already structured for you.',
     '- `bash git …` is reserved for NON-review git ops: status, commit, tag, push, log (commit history), branch operations.',
   ].join('\n');

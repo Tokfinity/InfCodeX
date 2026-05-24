@@ -103,7 +103,7 @@ export function createRolePrompt(
 
   const sharedClosingRule = [
     'Preserve any exact machine-readable closing contract requested by the original task.',
-    'Do not claim completion authority unless your role explicitly owns final judgment.',
+    'Do not claim completion authority unless your role explicitly owns final judgment — a premature complete signal from a non-authoritative role causes the runner to terminate the task before the owning role validates the result.',
     'When proposing shell commands or command examples, match the current host OS and shell. Do not assume Unix-only tools such as head on Windows.',
   ].join('\n');
 
@@ -188,7 +188,7 @@ export function createRolePrompt(
     '- Helper scripts / scratch files are a last resort, not a default recovery path.',
     "- If you must write a temporary file, write it under `.agent/tmp/` (relative to the git root). That is the designated ephemeral workspace.",
     "- NEVER write scratch files to the project root, to `.agent/` top level (reserved for managed-tasks/, project/, repo-intelligence/), or to the system temp directory. Files in system tmp are invisible to the project and block code review.",
-    '- Directories are created automatically by the `write` tool. NEVER use `mkdir` before writing files.',
+    '- The `write` tool creates parent directories automatically. Calling `mkdir` before `write` is redundant and may fail on Windows shells where `mkdir -p` is unsupported.',
     '- If you truly need an empty directory: `mkdir dir` (Windows) or `mkdir -p dir` (Unix).',
     '',
     'Cross-platform shell:',
