@@ -246,22 +246,17 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'write',
     description:
-      'Write a file to the local filesystem. Large diffs may be summarized in the tool result. '
-      + 'ALWAYS prefer the `edit` tool over `write` when modifying an existing file — `edit` sends only the '
-      + 'diff and avoids output-token pressure. Only use `write` to create new files or for a complete rewrite '
-      + 'that the user explicitly asked for. '
-      + 'For new files small enough to write in one pass, call `write` directly. For larger files, use this two-step pattern: '
-      + '(1) `write(path, skeleton)` — a structural skeleton with placeholder markers like `<!-- SECTION_A -->` or '
-      + '`// === SECTION_A ===`; (2) one `edit(path, "<!-- SECTION_A -->", <real content>)` '
-      + 'per section. Each edit streams reliably. '
-      + 'NEVER fall back to `bash` (python/node heredoc, `echo >`, `cat > file <<EOF`) to generate a source file — '
-      + 'it bypasses mutation tracking, loses diff visibility, and recurses the same streaming limit onto the generator '
-      + 'script itself. If a `write` failed mid-stream, retry with a smaller skeleton, then `edit` each section. '
-      + 'Encoding note: `write` calls Node `fs.writeFile(path, content, "utf-8")` — the content goes directly from your '
-      + 'tool_use input to disk WITHOUT passing through any shell. There are NO "Windows shell encoding issues" for `write`. '
-      + 'Do NOT switch to `python`/`bash` scripts to "avoid encoding problems" — UTF-8 (including Chinese / emoji / etc.) '
-      + 'works correctly through `write` by default, and routing through a shell script adds encoding surface area '
-      + 'rather than removing it.',
+      'Write content to a file on the local filesystem. Large diffs may be summarized in the tool result.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- Creating a NEW file the user explicitly asked for.\n'
+      + '- Performing a complete rewrite of an existing file the user explicitly requested.\n'
+      + '- Writing a structural skeleton with placeholder markers (e.g. `<!-- SECTION_A -->` or `// === SECTION_A ===`), then filling each section with `edit` / `multi_edit`. This pattern streams reliably for files too large to write in one pass.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- Modifying an existing file — call `edit` (single change) or `multi_edit` (multiple independent changes) instead. `edit` sends only the diff and avoids output-token pressure and mid-stream truncation on large files.\n'
+      + '- Generating a known-content file through `bash` heredocs (`cat > file <<EOF`), `echo > file`, PowerShell `Set-Content` / `Out-File`, or python/node heredoc. Shell redirection bypasses mutation tracking, loses diff visibility to downstream verification, and recurses the same streaming limit onto the generator script itself.\n'
+      + '- Switching to `python` / `bash` scripts to "avoid encoding problems". `write` calls Node `fs.writeFile(path, content, "utf-8")` — content goes directly from your tool_use input to disk WITHOUT passing through any shell. UTF-8 (Chinese / emoji / etc.) works correctly by default; routing through a shell adds encoding surface area rather than removing it.\n\n'
+      + '## Recovery\n\n'
+      + 'If a `write` failed mid-stream, retry with a smaller skeleton, then `edit` each section.',
     input_schema: {
       type: 'object',
       properties: {
@@ -281,16 +276,15 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'edit',
     description:
-      'Perform safe exact-or-normalized string replacement in a file. '
-      + 'ALWAYS prefer editing an existing file with `edit` over rewriting the whole file with `write` — '
-      + '`edit` only sends the diff, avoiding output-token pressure and mid-stream truncation on large files. '
-      + 'REQUIREMENT: call `read` on this file at least once in the conversation BEFORE calling `edit`. '
-      + 'If you skip the read, your `old_string` is almost certainly wrong and the edit will fail with an '
-      + '"old_string not found" error — forcing a retry that costs more than the initial read. '
-      + 'When making multiple independent edits to the same file, use `multi_edit` instead — one tool call '
-      + 'batches N edits atomically. '
-      + 'If the anchor is unstable, retry with a smaller unique snippet or use `insert_after_anchor`; '
-      + 'do NOT fall back to `write` for the whole file as a recovery, because that discards the partial-edit context and re-streams the entire file — exactly what `edit` was designed to avoid.',
+      'Replace exact (or normalized) text in an existing file. The most efficient way to modify a file — only the diff is sent.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- Modifying an existing file with one targeted text change.\n'
+      + '- Renaming a single occurrence; use `replace_all: true` only when every match in the file should change.\n'
+      + '- Filling in one placeholder produced by a prior `write(path, skeleton)`.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- Without first calling `read` on the file in this conversation — your `old_string` will almost certainly be wrong and the edit will fail with "old_string not found", costing a retry round-trip more expensive than the initial read.\n'
+      + '- For multiple independent edits to the same file — call `multi_edit` instead, which batches N edits atomically in one tool call.\n'
+      + '- As a recovery from a failed `edit` by rewriting the whole file via `write` — that discards the partial-edit context and re-streams the entire file, which is exactly what `edit` was designed to avoid. Instead retry with a smaller unique snippet, or use `insert_after_anchor`.',
     input_schema: {
       type: 'object',
       properties: {
@@ -311,29 +305,21 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'multi_edit',
     description:
-      'Apply multiple exact-text replacements to a single file in ONE tool call. '
-      + 'Prefer this over N separate `edit` calls when you have several independent edits '
-      + 'to the same file — especially when filling in a skeleton you just created with `write`. '
-      + 'REQUIREMENT: call `read` on this file at least once in the conversation BEFORE calling `multi_edit`. '
-      + 'Skipping the read means your first failing `old_string` aborts the ENTIRE batch — '
-      + 'you pay for all the edits in tokens but land none of them. '
-      + 'Edits apply sequentially (each edit sees the result of the previous one), and the '
-      + 'whole batch is ATOMIC: if any single old_string fails to match, NO edits are written '
-      + 'to disk and you get back an index pointing at the failing edit. '
-      + 'ANCHOR WARNING: edits compose — when edits[k] rewrites a region, text inside it stops '
-      + 'being a valid anchor for edits[k+1..]. If later edits need to reference text an earlier '
-      + 'edit overlaps, either shrink the earlier edit so it preserves that anchor, or merge them '
-      + 'into one edit. '
-      + 'UNIQUENESS RULE: each `old_string` must be unique in the WHOLE current file, not just in '
-      + 'the window you last read. A short snippet from a narrow `read` (a single line, a 6-line '
-      + 'window, a common phrase) is the #1 cause of "matched N places" errors. Widen the anchor '
-      + 'with a nearby unique landmark (heading, function signature, distinctive comment, or a '
-      + 'multi-line block), or set `replace_all: true` if every occurrence should change. '
-      + 'Each `edits[i]` has the same semantics as one `edit` call — exact-match first, then '
-      + 'safe-normalized anchor fallback; `replace_all: true` per edit for bulk renames. '
-      + 'Typical skeleton-then-fill flow: '
-      + '(1) `write(path, skeleton_with_<!-- SECTION_A -->_placeholders)`; '
-      + '(2) `multi_edit(path, [{SECTION_A, realA}, {SECTION_B, realB}, ...])` — one batched call.',
+      'Apply multiple exact-text replacements to a single file in ONE atomic tool call.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- Several independent edits to the same file — especially when filling in a skeleton you just created with `write`.\n'
+      + '- Bulk renames within one file (use `replace_all: true` per edit).\n'
+      + '- Refactors that touch multiple spots in one file and should land all-or-nothing.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- For a single change — call `edit` directly; the extra wrapping is unnecessary overhead.\n'
+      + '- Without first calling `read` on the file in this conversation — your first failing `old_string` aborts the ENTIRE batch, so you pay for all the edits in tokens but land none of them.\n'
+      + '- When later edits need to reference text an earlier edit overlaps — edits compose sequentially (each sees the result of the previous), so once `edits[k]` rewrites a region, text inside that region is no longer a valid anchor for `edits[k+1..]`. Either shrink the earlier edit to preserve the anchor, or merge them into one edit.\n\n'
+      + '## Atomicity\n\n'
+      + 'The whole batch is atomic: if any single `old_string` fails to match, NO edits are written to disk and you get back an index pointing at the failing edit. Each `edits[i]` has the same semantics as one `edit` call — exact-match first, then safe-normalized anchor fallback; `replace_all: true` per edit for bulk renames.\n\n'
+      + '## Uniqueness\n\n'
+      + 'Each `old_string` must be unique in the WHOLE current file, not just in the window you last read. A short snippet from a narrow `read` (single line, 6-line window, common phrase) is the #1 cause of "matched N places" errors. Widen the anchor with a nearby unique landmark (heading, function signature, distinctive comment, or a multi-line block), or set `replace_all: true` if every occurrence should change.\n\n'
+      + '## Typical Pattern\n\n'
+      + '(1) `write(path, skeleton_with_<!-- SECTION_A -->_placeholders)`; (2) `multi_edit(path, [{SECTION_A, realA}, {SECTION_B, realB}, ...])` — one batched call.',
     input_schema: {
       type: 'object',
       properties: {
@@ -385,17 +371,16 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'bash',
     description:
-      'Execute a shell command. Use run_in_background for long-running commands. '
-      + 'Large output may be truncated to the most relevant tail. '
-      + 'When producing a SINGLE file whose content you already have, use the `write` / `edit` tools — '
-      + 'do NOT route it through shell (no `cat > file <<EOF`, no `echo ... >`, no PowerShell `Set-Content` / '
-      + '`Out-File`, no python/node heredoc). Shell redirection for a known-content file bypasses the mutation tracker, '
-      + 'loses diff visibility to downstream verification, and re-encounters the same streaming limit on the generator '
-      + 'script itself. Use a shell script ONLY when the output is computed (loops, templating over many files, data '
-      + 'transformation of an input you are reading) — e.g. generating 50 similar test fixtures from a template is a '
-      + 'legitimate script use; reproducing one hand-written HTML file you already have in memory is not. '
-      + 'Appropriate uses of `bash`: tests, builds, lint, git, package managers, grep/ls/cat for inspection, '
-      + 'process management, computed/templated multi-file generation.',
+      'Execute a shell command. Use `run_in_background` for long-running commands. Large output may be truncated to the most relevant tail.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- Tests, builds, lint, type-checking, package managers.\n'
+      + '- Git operations (status, diff, log, blame, commit, push).\n'
+      + '- Process inspection / management (ps, kill, top).\n'
+      + '- File system queries not covered by dedicated tools — `grep` and `glob` have dedicated tools, but `find` / `du` / `df` etc. go through bash.\n'
+      + '- Computed or templated multi-file generation — e.g. generating 50 similar test fixtures from a template script.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- Producing a SINGLE file whose content you already have — call `write` or `edit` instead. Shell redirection (`cat > file <<EOF`, `echo ... >`, PowerShell `Set-Content` / `Out-File`, python/node heredoc) bypasses the mutation tracker, loses diff visibility to downstream verification, and re-encounters the same streaming limit on the generator script itself.\n'
+      + '- Reproducing a hand-written file you already have in memory — write it directly with `write`. Use a shell script ONLY when the output is computed (loops, templating over many files, data transformation of an input you are reading).',
     input_schema: {
       type: 'object',
       properties: {
