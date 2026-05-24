@@ -104,12 +104,12 @@ export {
   REPORT_TOOL,
   renderTranscript,
   buildSidecarUserMessage as buildSidecarUserMessageFromParams,
-} from '../../../packages/coding/src/multi-instance/stall-sidecar-prompts.js';
+} from '../../../packages/coding/src/agent-runtime/middleware/stall-sidecar/prompts.js';
 
 import {
   REPORT_TOOL as REPORT_TOOL_REF,
   buildSidecarUserMessage as buildSidecarUserMessageFromParamsImport,
-} from '../../../packages/coding/src/multi-instance/stall-sidecar-prompts.js';
+} from '../../../packages/coding/src/agent-runtime/middleware/stall-sidecar/prompts.js';
 
 export const TOOLS = [REPORT_TOOL_REF];
 

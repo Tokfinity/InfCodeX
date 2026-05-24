@@ -77,7 +77,7 @@ export const VERIFIER_SYSTEM_PROMPT: string = [
   '',
   '# Output format',
   '',
-  'Call `emit_sidecar_verdict` exactly once. Do not narrate. Do not call any other tool. Do not produce free-form text — only the tool call.',
+  'Output ONLY the `emit_sidecar_verdict` tool call — no narration, no other tool calls, no free-form text.',
 ].join('\n');
 
 /**
@@ -92,7 +92,7 @@ export const VERIFIER_SYSTEM_PROMPT: string = [
 export const VERIFIER_REPORT_TOOL: KodaXToolDefinition = {
   name: 'emit_sidecar_verdict',
   description:
-    "Report your verification verdict on the main agent's final output. Call this exactly once.",
+    "Report your verification verdict on the main agent's final output.",
   input_schema: {
     type: 'object',
     properties: {
@@ -105,7 +105,7 @@ export const VERIFIER_REPORT_TOOL: KodaXToolDefinition = {
       reason: {
         type: 'string',
         description:
-          'One- to three-sentence rationale citing specific evidence. For revise, this becomes the synthetic user-message follow-up the main agent will see — write it like the user is asking for the fix. For blocked, this is shown to the user verbatim. ≤500 chars.',
+          'A brief rationale citing specific evidence — typically a few concise sentences. For revise, this becomes the synthetic user-message follow-up the main agent will see — write it like the user is asking for the fix. For blocked, this is shown to the user verbatim.',
       },
       suggestedFix: {
         type: 'string',

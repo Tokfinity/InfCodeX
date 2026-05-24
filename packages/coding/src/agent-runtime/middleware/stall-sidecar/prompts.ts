@@ -48,7 +48,8 @@ export const SIDECAR_SYSTEM_PROMPT: string = [
   '',
   'Classify the repetition as **isStuck=true** ONLY when the main agent has made no real progress between the repeated calls:',
   '- Same tool + same input args repeatedly invoked',
-  '- No new information gathered between calls (tool_results are identical or stub-served, OR no other tool was called between repeats)',
+  '- No new information gathered between calls (tool_results are identical or stub-served)',
+  '- No other tool was called between the repeated invocations',
   '- No substantive textual reasoning that indicates a forward step',
   '- The cache may have already served a "[Read Cache] unchanged" stub — if the model continues calling read on that target after the stub, that is a strong stall signal',
   '',
@@ -62,7 +63,7 @@ export const SIDECAR_SYSTEM_PROMPT: string = [
   '',
   'Call the `report_stall_judgment` tool exactly once. Do not narrate. Do not call any other tool.',
   '',
-  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop). Keep nudge ≤ 600 chars.',
+  'If isStuck=true, populate `nudge` with a concrete, actionable next step the main agent could take — reference one specific tool name from the registry (read, edit, write, grep, bash, task_stop). Keep the nudge short and focused on one action.',
   '',
   'If isStuck=false, leave nudge empty.',
 ].join('\n');
@@ -75,7 +76,7 @@ export const SIDECAR_SYSTEM_PROMPT: string = [
 export const REPORT_TOOL: KodaXToolDefinition = {
   name: 'report_stall_judgment',
   description:
-    'Report your second-pass judgment of whether the main agent is in a real stall. Call this exactly once.',
+    'Report your second-pass judgment of whether the main agent is in a real stall.',
   input_schema: {
     type: 'object',
     properties: {
@@ -87,17 +88,17 @@ export const REPORT_TOOL: KodaXToolDefinition = {
       reason: {
         type: 'string',
         description:
-          'One-sentence rationale citing the specific evidence in the recent history (≤200 chars).',
+          'A brief one-sentence rationale citing the specific evidence in the recent history.',
       },
       suggestedTool: {
         type: 'string',
         description:
-          'When isStuck=true, the specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop. Empty string when isStuck=false.',
+          'The specific tool name the main agent should call next. Must be one of: read, edit, write, multi_edit, grep, glob, bash, task_stop. Required when isStuck=true; pass empty string when isStuck=false.',
       },
       nudge: {
         type: 'string',
         description:
-          'When isStuck=true, a single concrete instruction the main agent will see as a synthetic user message. Reference suggestedTool by name. ≤600 chars. Empty string when isStuck=false.',
+          'A single concrete instruction the main agent will see as a synthetic user message. Reference suggestedTool by name. Required when isStuck=true; pass empty string when isStuck=false.',
       },
     },
     required: ['isStuck', 'reason', 'suggestedTool', 'nudge'],
