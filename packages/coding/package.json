@@ -26,7 +26,6 @@
   "dependencies": {
     "@kodax-ai/agent": "*",
     "@kodax-ai/llm": "*",
-    "@kodax-ai/repointel-protocol": "*",
     "glob": "^11.0.1",
     "iconv-lite": "^0.6.3",
     "tsx": "^4.21.0",

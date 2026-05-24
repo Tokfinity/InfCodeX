@@ -25,10 +25,7 @@
     },
     {
       "path": "../agent"
-    },
-    {
-      "path": "../repointel-protocol"
-    },
+    }
   ],
   "include": [
     "src/**/*.ts"

@@ -16,7 +16,7 @@ import {
   type RepointelRequestPayload,
   type RepointelRpcRequest,
   type RepointelRpcResponse,
-} from '@kodax-ai/repointel-protocol';
+} from './protocol.js';
 import { debugLogRepoIntelligence } from './internal.js';
 
 const PREMIUM_FAILURE_TTL_MS = 2_000;

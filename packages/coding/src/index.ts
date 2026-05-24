@@ -392,7 +392,7 @@ export {
 
 export {
   REPOINTEL_DEFAULT_ENDPOINT,
-} from '@kodax-ai/repointel-protocol';
+} from './repo-intelligence/protocol.js';
 
 export {
   renderModuleContext,

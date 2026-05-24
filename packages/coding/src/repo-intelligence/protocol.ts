@@ -1,10 +1,15 @@
 /**
  * KodaX Repo-Intelligence Protocol
  *
- * RPC contract between a host CLI (kodax/codex/claude/opencode) and the
- * repo-intelligence daemon. Kept as a standalone package so external
- * clients can depend on the contract without pulling the whole
- * `@kodax-ai/coding` runtime.
+ * RPC contract types for repo-intelligence daemon requests/responses.
+ *
+ * FEATURE_194 (v0.7.43): inlined from former `@kodax-ai/repointel-protocol`
+ * package. The original "multi-host (kodax/codex/claude/opencode)" intent
+ * had 0 external consumers — the only consumers were sibling files in
+ * `packages/coding/src/repo-intelligence/`. Per YAGNI / CLAUDE.md "3+ use
+ * cases" rule, the standalone-package abstraction was premature; if a
+ * future host genuinely needs the contract, re-extracting these 69 LoC
+ * is ~30 min of work.
  */
 
 export const REPOINTEL_CONTRACT_VERSION = 1 as const;

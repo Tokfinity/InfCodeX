@@ -18,16 +18,16 @@ export default defineConfig({
     // src/index.ts makes test runs source-truth and build-independent.
     //
     // Transitive deps matter: @kodax-ai/coding's source pulls in
-    // @kodax-ai/llm, @kodax-ai/agent, @kodax-ai/agent, @kodax-ai/repointel-protocol,
-    // @kodax-ai/session-lineage — even tests that don't import those
-    // directly will fail at module-graph resolution if they're missing.
+    // @kodax-ai/llm and @kodax-ai/agent (capabilities/skills,
+    // session-lineage, tracing subpaths after FEATURE_194 v0.7.43
+    // consolidation) — even tests that don't import those directly will
+    // fail at module-graph resolution if they're missing.
     alias: {
       '@kodax-ai/agent/capabilities/skills/shared/yaml': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
       '@kodax-ai/agent/messaging/queue': path.resolve(__dirname, '..', 'agent', 'src', 'messaging', 'queue.ts'),
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': path.resolve(__dirname, '..', 'coding', 'src', 'index.ts'),
-      '@kodax-ai/repointel-protocol': path.resolve(__dirname, '..', 'repointel-protocol', 'src', 'index.ts'),
       '@kodax-ai/agent/session-lineage': path.resolve(__dirname, '..', 'agent', 'src', 'session-lineage', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
       '@kodax-ai/agent/tracing': path.resolve(__dirname, '..', 'agent', 'src', 'tracing', 'index.ts'),
