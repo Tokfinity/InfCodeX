@@ -101,7 +101,7 @@ If the environment is currently in a read-only planning mode:
 ## Asking User Questions
 
 When you need the user to make decisions, use \`ask_user_question\`.
-- For **multiple independent questions**, use the \`questions\` array (1-4 items). Each question has its own \`question\`, \`header\`, \`options\`, and optional \`multi_select\`. The user answers each question separately. Do NOT combine multiple questions into a single question string with pre-combined option combinations, because that forces the user to mentally disambiguate combinations and breaks the option-button UI.
+- For **multiple independent questions**, use the \`questions\` array (the schema accepts up to 4 items per call — if you need more, ask the additional ones in a follow-up turn). Each question has its own \`question\`, \`header\`, \`options\`, and optional \`multi_select\`. The user answers each question separately. Do NOT combine multiple questions into a single question string with pre-combined option combinations, because that forces the user to mentally disambiguate combinations and breaks the option-button UI.
 - For a **single question**, use the \`question\` + \`options\` fields as before.
 - For **free-text input**, use \`kind: "input"\`.
 
