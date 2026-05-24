@@ -10,29 +10,26 @@
 
 ## ADR-001: Keep the Layered Monorepo
 
-**Status**: Accepted (updated 2026-05-06 after FEATURE_142 v0.7.35.1)
+**Status**: Accepted (updated 2026-05-24 after FEATURE_194 v0.7.43 — 9 → 4 packages 合并)
 
-KodaX 保持分层 monorepo，包结构经 v0.7.35.1 修正后为 **8 包**：
+KodaX 保持分层 monorepo，包结构经 FEATURE_194 v0.7.43 整合后为 **4 包**（pre-F194 是 9 包；mcp / skills / tracing / session-lineage / repointel-protocol 5 个子包并入 agent / coding 后达到此结构 — 详 [ADR-036](#adr-036-package-consolidation--inline-5-single-consumer-subpackages-into-agent--coding-feature_194-v0743)）：
 
 | 包 | 角色 | 说明 |
 |---|---|---|
 | `@kodax-ai/llm` | LLM 抽象 + provider 适配 | retry-after / cache markers / capability |
-| `@kodax-ai/tracing` | Trace / Span / Processor | 独立可替换 OpenTelemetry / Langfuse |
-| `@kodax-ai/session-lineage` | Session 持久化 + Lineage + Compaction 实现 | 承接 v0.7.35.1 从 `@kodax-ai/agent` 回流的 session 实体 |
-| `@kodax-ai/agent` | **通用 Agent 框架（智能体底座）** | Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware；不绑定 coding |
-| `@kodax-ai/skills` | Zero-dep skill packs | — |
-| `@kodax-ai/mcp` | MCP integration | progressive disclosure 5 模式 |
-| `@kodax-ai/coding` | **Coding agent 实例 + coding-specific 资产** | Coding tools / role prompts / H2 task-engine / coding-preset / repo-intelligence |
+| `@kodax-ai/agent` | **通用 Agent 框架（智能体底座）+ 内联子树** | Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware + `session-lineage/` (持久化 + Lineage + Compaction，v0.7.35.1 split / v0.7.43 inline) + `capabilities/{mcp,skills}/` (MCP progressive disclosure + zero-dep skill packs，v0.7.43 inline) + `tracing/` (Trace/Span/Processor，可对接 OpenTelemetry/Langfuse，v0.7.43 inline) |
+| `@kodax-ai/coding` | **Coding agent 实例 + coding-specific 资产** | Coding tools / role prompts / H2 task-engine / coding-preset / repo-intelligence (含 `protocol.ts` 内联，v0.7.43) |
 | `@kodax-ai/repl` | Ink TUI | — |
-| `@kodax-ai/repointel-protocol` | Repo intel 协议包 | 跨仓库共享协议 |
+
+Subpaths 用于外部 SDK 消费者（保持公开 API 稳定）：`@kodax-ai/agent/session-lineage`、`@kodax-ai/agent/capabilities/mcp`、`@kodax-ai/agent/capabilities/skills`、`@kodax-ai/agent/capabilities/skills/shared/yaml`、`@kodax-ai/agent/tracing`。
 
 Reasoning:
 
-- 包名 = 内容承诺：`@kodax-ai/agent` 是通用 agent 平台，`@kodax-ai/coding` 是 coding-specific 实例
+- 包名 = 内容承诺：`@kodax-ai/agent` 是通用 agent 平台 + 配套能力承诺集合，`@kodax-ai/coding` 是 coding-specific 实例
 - `@kodax-ai/agent` 不依赖 `@kodax-ai/coding`、不依赖 `@kodax-ai/repl` 就能跑一个 agent
 - 未来 `@kodax-ai/data-analysis-agent` / `@kodax-ai/ops-agent` 等按 `@kodax-ai/coding` 模式独立成包，统一依赖 `@kodax-ai/agent`
 - task engine 的增强应建立在现有层次之上，而不是把层全部揉平
-- 详细包归属规则见 ADR-021
+- 详细包归属规则见 ADR-021；包合并决策见 ADR-036
 
 **v0.7.35.1 之前（FEATURE_082 设计）**：曾包含 `@kodax/core`（含 Layer A primitives + 后续漂入的 runtime）和**设计但从未创建**的 `@kodax/capabilities`。v0.7.35.1 (FEATURE_142) 把 `@kodax/core` 30 文件全部并入 `@kodax-ai/agent`，并撤销 `@kodax/capabilities` 死设计，理由见 [v0.7.35.1 设计稿](features/v0.7.35.1.md) §FEATURE_142。
 
@@ -2148,7 +2145,7 @@ isolation: z.enum(['worktree']).optional().describe(
 
 ## ADR-036: Package Consolidation — Inline 5 Single-Consumer Subpackages into agent / coding (FEATURE_194, v0.7.43)
 
-**Status**: Planned 2026-05-23
+**Status**: ✅ Accepted + Shipped 2026-05-24 — 9 commits atomic ship (`b7235f0e → ced8a30d → 801eeae5 → c1301898 → 1fb0433a → 7523a5c0 → 324779b4 → 3bb70d1e → 本 commit`). 9 → 4 workspace packages 目标达成。5-gate per commit 全 PASS / net regression = 0 / $0 eval. See [docs/features/v0.7.43.md#feature_194-package-consolidation](features/v0.7.43.md#feature_194-package-consolidation--inline-5-single-consumer-subpackages--9--4-workspace-packages) for ship commit table + evidence.
 **Driver**: KodaX 9 包 monorepo 实测 ~132k LoC（之前 framing "70k" 是 `find ... | xargs wc -l` 在 Windows 路径下的 measurement bug，真实 coding=66k 不是 4.7k）。**KodaX 不是代码更少，是投入更多能力（construction / repo-intelligence / task-engine / multi-tier middleware）但同时把包结构碎切**。9 包里 5 个明显过度切分（grep 实测全 0 外部 npm consumer，违反 CLAUDE.md YAGNI "3+ use cases" 标准），且 `@kodax-ai/session-lineage` 还存在 latent bug（agent 4 文件 import 它但 agent/package.json 没声明 dep，monorepo workspace 下靠 tsconfig path 工作，发布 npm 会断）。包合并目的不是"减代码"，而是减包数对应的 carrying cost：10 → 4 包发布 cycle / 9 → 4 build graph 节点 / 84 处 cross-pkg import 收敛到内部 relative path / IDE jump-to-source 顺畅。
 
 **Decision**:
