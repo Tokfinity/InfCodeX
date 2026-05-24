@@ -14,7 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
@@ -308,7 +308,7 @@ describe('discoverMarkdownAgents', () => {
     expect(result.failed).toEqual([]);
   });
 
-  it('discovers a minimal well-formed user agent without registering it', async () => {
+  it('discovers a minimal well-formed user agent and returns an absolute path', async () => {
     await writeUserAgent(
       'db-reviewer.md',
       [
@@ -319,7 +319,6 @@ describe('discoverMarkdownAgents', () => {
         'You are a migration reviewer.',
       ].join('\n'),
     );
-    const before = listConstructedAgents().length;
     const result = await discover();
 
     expect(result.failed).toEqual([]);
@@ -330,10 +329,54 @@ describe('discoverMarkdownAgents', () => {
       source: 'markdown:user',
     });
     expect(result.agents[0].path).toContain('db-reviewer.md');
+    // API contract: `DiscoveredMarkdownAgent.path` is always absolute.
+    expect(isAbsolute(result.agents[0].path)).toBe(true);
+  });
 
-    // Critical contract: discovery is read-only.
-    expect(listConstructedAgents().length).toBe(before);
-    expect(resolveConstructedAgent('db-reviewer')).toBeUndefined();
+  it('does NOT register or mutate the agent registry (read-only contract)', async () => {
+    // Establish a non-zero baseline so the post-discover assertion is
+    // not trivially `0 === 0`. We load one agent via the side-effect
+    // loader so the registry has real state to protect.
+    await writeUserAgent(
+      'seed.md',
+      [
+        '---',
+        'name: seed',
+        'description: pre-existing registry entry',
+        '---',
+        'seed body',
+      ].join('\n'),
+    );
+    const loadResult = await load();
+    expect(loadResult.loaded).toBe(1);
+    expect(resolveConstructedAgent('seed')).toBeDefined();
+    const baselineCount = listConstructedAgents().length;
+    expect(baselineCount).toBeGreaterThan(0);
+
+    // Now add a distinct agent file and discover. Discover MUST NOT
+    // register `target` into the registry, and MUST NOT touch the
+    // existing `seed` entry.
+    await writeUserAgent(
+      'target.md',
+      [
+        '---',
+        'name: target',
+        'description: discover but do not register me',
+        '---',
+        'target body',
+      ].join('\n'),
+    );
+    const discoverResult = await discover();
+
+    // Discover sees both files (seed already exists + target new).
+    expect(discoverResult.agents.map((a) => a.name).sort()).toEqual(['seed', 'target']);
+
+    // Registry count unchanged from the load-only baseline.
+    expect(listConstructedAgents().length).toBe(baselineCount);
+    // target was NOT registered.
+    expect(resolveConstructedAgent('target')).toBeUndefined();
+    // seed is still the original registration (not re-registered).
+    expect(resolveConstructedAgent('seed')).toBeDefined();
   });
 
   it('tags project agents with source markdown:project', async () => {
