@@ -1,0 +1,311 @@
+/**
+ * FEATURE_196 (v0.7.43) — Sidecar Verifier content-aware gate unit tests.
+ *
+ * Verifies the 2-layer fire/skip gate primitives in isolation. Layer 2
+ * panel eval (`tests/feature-196-sidecar-content-gate.eval.ts`) covers
+ * end-to-end behavior across the canonical 5-alias panel.
+ */
+import { describe, expect, it } from 'vitest';
+import type { StopHookContext } from '@kodax-ai/agent';
+import type { KodaXMessage } from '@kodax-ai/llm';
+
+import {
+  composeGateDecision,
+  detectActionSurface,
+  detectConversationalIntent,
+} from './gate.js';
+
+/**
+ * Test helper — builds a minimal StopHookContext from a transcript.
+ * The non-transcript fields (`signal`, `reanimateCount`, etc.) aren't
+ * consulted by the gate helpers but are required by the type.
+ */
+function makeCtx(transcript: readonly KodaXMessage[]): StopHookContext {
+  const lastAssistant = [...transcript]
+    .reverse()
+    .find((m) => m.role === 'assistant');
+  const lastAssistantText = lastAssistant
+    ? typeof lastAssistant.content === 'string'
+      ? lastAssistant.content
+      : lastAssistant.content
+          .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+          .map((b) => b.text)
+          .join('\n')
+    : '';
+  return {
+    transcript,
+    lastAssistantText,
+    signal: 'natural-end',
+    reanimateCount: 0,
+    reanimateBudget: 2,
+  };
+}
+
+describe('FEATURE_196 — gate.detectActionSurface (Layer 1)', () => {
+  it('fires when last assistant turn invokes a mutation tool (write)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'add a hello function to foo.ts' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'I will add the function.' },
+          {
+            type: 'tool_use',
+            id: 't-1',
+            name: 'write',
+            input: { path: 'foo.ts', content: 'function hello() {}' },
+          },
+        ],
+      },
+    ]);
+    const decision = detectActionSurface(ctx);
+    expect(decision).toBeDefined();
+    expect(decision?.fire).toBe(true);
+    expect(decision?.reason).toMatch(/action-surface/);
+  });
+
+  it('fires when last assistant turn invokes a read-only tool (grep)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'search README for setup instructions' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 't-1',
+            name: 'grep',
+            input: { pattern: 'setup', path: 'README.md' },
+          },
+        ],
+      },
+    ]);
+    const decision = detectActionSurface(ctx);
+    expect(decision?.fire).toBe(true);
+  });
+
+  it('fires when last assistant turn invokes dispatch_child_task', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'investigate the auth bug' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 't-1',
+            name: 'dispatch_child_task',
+            input: { id: 'p-1', objective: 'investigate auth' },
+          },
+        ],
+      },
+    ]);
+    const decision = detectActionSurface(ctx);
+    expect(decision?.fire).toBe(true);
+  });
+
+  it('returns undefined when last assistant turn has no tool_use (text-only)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: '你好' },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: '你好! 我是 KodaX 的开发助手。' }],
+      },
+    ]);
+    const decision = detectActionSurface(ctx);
+    expect(decision).toBeUndefined();
+  });
+
+  it('returns undefined when last assistant turn has string content (text-only)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Hello! How can I help?' },
+    ]);
+    const decision = detectActionSurface(ctx);
+    expect(decision).toBeUndefined();
+  });
+
+  it('returns undefined when transcript has no assistant message', () => {
+    const ctx = makeCtx([{ role: 'user', content: 'hi' }]);
+    const decision = detectActionSurface(ctx);
+    expect(decision).toBeUndefined();
+  });
+});
+
+describe('FEATURE_196 — gate.detectConversationalIntent (Layer 2)', () => {
+  it('skips for Chinese greeting "你好"', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '你好! 我是 KodaX。' },
+    ]);
+    const decision = detectConversationalIntent(ctx);
+    expect(decision?.fire).toBe(false);
+    expect(decision?.reason).toMatch(/conversational-intent/);
+  });
+
+  it('skips for English greeting "hi"', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Hello!' },
+    ]);
+    expect(detectConversationalIntent(ctx)?.fire).toBe(false);
+  });
+
+  it('skips for "thanks"', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'thanks' },
+      { role: 'assistant', content: 'You are welcome.' },
+    ]);
+    expect(detectConversationalIntent(ctx)?.fire).toBe(false);
+  });
+
+  it('skips for "好的"', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: '好的' },
+      { role: 'assistant', content: 'OK!' },
+    ]);
+    expect(detectConversationalIntent(ctx)?.fire).toBe(false);
+  });
+
+  it('does NOT skip when user message contains imperative verb (Chinese)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: '查一下 README' },
+      { role: 'assistant', content: '好的，正在查找。' },
+    ]);
+    expect(detectConversationalIntent(ctx)).toBeUndefined();
+  });
+
+  it('does NOT skip when user message contains imperative verb (English)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'fix the bug' },
+      { role: 'assistant', content: 'OK, looking into it.' },
+    ]);
+    expect(detectConversationalIntent(ctx)).toBeUndefined();
+  });
+
+  it('does NOT skip when message exceeds length cap (long)', () => {
+    const ctx = makeCtx([
+      {
+        role: 'user',
+        content:
+          '你好啊，我想问一下今天天气怎么样，对了顺便看看 README 文件',
+      },
+      { role: 'assistant', content: 'OK.' },
+    ]);
+    expect(detectConversationalIntent(ctx)).toBeUndefined();
+  });
+
+  it('does NOT skip when message starts without a greeting prefix', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: 'show me the file' },
+      { role: 'assistant', content: 'OK.' },
+    ]);
+    expect(detectConversationalIntent(ctx)).toBeUndefined();
+  });
+
+  it('skips imperative-shaped greeting case "你好谢谢" (no actionable verb)', () => {
+    const ctx = makeCtx([
+      { role: 'user', content: '你好谢谢' },
+      { role: 'assistant', content: '不客气!' },
+    ]);
+    expect(detectConversationalIntent(ctx)?.fire).toBe(false);
+  });
+
+  it('returns undefined when transcript has no user message', () => {
+    const ctx = makeCtx([
+      { role: 'assistant', content: 'Hello' },
+    ]);
+    expect(detectConversationalIntent(ctx)).toBeUndefined();
+  });
+
+  it('skips _synthetic user messages and uses the prior real user message', () => {
+    // Harness-injected auto-continue prompts should NOT change the
+    // gate decision — defer to the original user intent.
+    const ctx = makeCtx([
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '你好!' },
+      { role: 'user', content: '[auto-continue]', _synthetic: true },
+      { role: 'assistant', content: 'Continuing.' },
+    ]);
+    expect(detectConversationalIntent(ctx)?.fire).toBe(false);
+  });
+});
+
+describe('FEATURE_196 — gate.composeGateDecision', () => {
+  const greetingCtx = makeCtx([
+    { role: 'user', content: '你好' },
+    { role: 'assistant', content: '你好! 我是 KodaX。' },
+  ]);
+  const imperativeCtx = makeCtx([
+    { role: 'user', content: '查一下 README 文件' },
+    {
+      role: 'assistant',
+      // Intent-vs-action: claims to search but no grep tool fired
+      // (the zhipu floor case F184 must catch).
+      content: [{ type: 'text', text: '明白，我用 grep 搜索 README...' }],
+    },
+  ]);
+  const mutationCtx = makeCtx([
+    { role: 'user', content: 'add hello to foo.ts' },
+    {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Added.' },
+        {
+          type: 'tool_use',
+          id: 't-1',
+          name: 'edit',
+          input: { path: 'foo.ts' },
+        },
+      ],
+    },
+  ]);
+
+  it('fires when KODAX_VERIFIER_ALWAYS=1 even for trivial chat', () => {
+    const decision = composeGateDecision(greetingCtx, {
+      KODAX_VERIFIER_ALWAYS: '1',
+    });
+    expect(decision.fire).toBe(true);
+    expect(decision.reason).toMatch(/escape-hatch/);
+  });
+
+  it('fires when Layer 1 action-surface signal present (mutation)', () => {
+    const decision = composeGateDecision(mutationCtx, {});
+    expect(decision.fire).toBe(true);
+    expect(decision.reason).toMatch(/action-surface/);
+  });
+
+  it('skips when Layer 2 conversational-intent matches (trivial chat)', () => {
+    const decision = composeGateDecision(greetingCtx, {});
+    expect(decision.fire).toBe(false);
+    expect(decision.reason).toMatch(/conversational-intent/);
+  });
+
+  it('fires (safe default) when imperative + zero action — zhipu floor catch', () => {
+    // F184 CORE CONTRACT: imperative user + zero tool action = zhipu
+    // intent-vs-action floor case. The gate MUST NOT skip this.
+    const decision = composeGateDecision(imperativeCtx, {});
+    expect(decision.fire).toBe(true);
+    expect(decision.reason).toMatch(/default/);
+  });
+
+  it('escape hatch wins over Layer 2 — opt-in user gets verifier even on greetings', () => {
+    const decision = composeGateDecision(greetingCtx, {
+      KODAX_VERIFIER_ALWAYS: '1',
+    });
+    expect(decision.fire).toBe(true);
+    expect(decision.reason).toMatch(/escape-hatch/);
+  });
+
+  it('escape hatch is OFF when env var unset or any value other than "1"', () => {
+    const variants: Array<Record<string, string | undefined>> = [
+      {},
+      { KODAX_VERIFIER_ALWAYS: '' },
+      { KODAX_VERIFIER_ALWAYS: '0' },
+      { KODAX_VERIFIER_ALWAYS: 'true' },
+      { KODAX_VERIFIER_ALWAYS: undefined },
+    ];
+    for (const env of variants) {
+      const decision = composeGateDecision(greetingCtx, env);
+      expect(decision.fire, JSON.stringify(env)).toBe(false);
+    }
+  });
+});
