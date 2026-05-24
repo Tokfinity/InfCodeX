@@ -32,7 +32,7 @@ export default defineConfig({
       '@kodax-ai/repointel-protocol': resolveFromRoot('packages', 'repointel-protocol', 'src', 'index.ts'),
       '@kodax-ai/session-lineage': resolveFromRoot('packages', 'session-lineage', 'src', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
-      '@kodax-ai/tracing': resolveFromRoot('packages', 'tracing', 'src', 'index.ts'),
+      '@kodax-ai/agent/tracing': resolveFromRoot('packages', 'agent', 'src', 'tracing', 'index.ts'),
     },
   },
   test: {

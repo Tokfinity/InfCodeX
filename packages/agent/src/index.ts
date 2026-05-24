@@ -462,3 +462,9 @@ export * from './capabilities/mcp/index.js';
 // Subpath '@kodax-ai/agent/capabilities/skills/shared/yaml' also available for
 // the markdown-loader (FEATURE_191) parseYamlFrontmatter consumer.
 export * from './capabilities/skills/index.js';
+
+// ============== FEATURE_194 v0.7.43 — Tracing (inlined from @kodax-ai/tracing, agent self-merge) ==============
+// agent 本就 depend on tracing; inline 把循环依赖收敛为 intra-package.
+// Public API byte-identical; downstream import via '@kodax-ai/agent' top-level
+// or '@kodax-ai/agent/tracing' subpath.
+export * from './tracing/index.js';

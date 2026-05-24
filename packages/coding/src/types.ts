@@ -462,7 +462,7 @@ export interface KodaXRepoIntelligenceTrace {
  * (interactive REPL), and `acp_server`.
  *
  * Note: FEATURE_083 (v0.7.24) initially marked this as superseded by
- * `EvidenceSpan` in `@kodax-ai/tracing`. **FEATURE_086 (v0.7.27) re-evaluated
+ * `EvidenceSpan` in `@kodax-ai/agent`. **FEATURE_086 (v0.7.27) re-evaluated
  * and retained it**: `EvidenceSpanData` is a generic
  * `{ source, queryPreview?, resultCount?, cacheHit?, error? }` abstraction
  * that does not carry the repo-intelligence-specific `stage` enum,

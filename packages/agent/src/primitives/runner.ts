@@ -18,8 +18,8 @@
  * `@kodax-ai/coding` retains a barrel re-export for batteries-included consumers.
  */
 
-import type { Span, Tracer, Trace } from '@kodax-ai/tracing';
-import { defaultTracer } from '@kodax-ai/tracing';
+import type { Span, Tracer, Trace } from '../tracing/index.js';
+import { defaultTracer } from '../tracing/index.js';
 
 import type { Agent, AgentMessage, Guardrail } from './agent.js';
 import type {

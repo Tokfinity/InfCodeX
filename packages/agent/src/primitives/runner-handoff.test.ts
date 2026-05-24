@@ -190,7 +190,7 @@ describe('Runner integration — handoff chain', () => {
   });
 
   it('emits HandoffSpan under the AgentSpan for each transition', async () => {
-    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
+    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('../tracing/index.js');
     setTracingProcessors([]);
     const ended: Array<{ kind: string; from?: string; to?: string }> = [];
     addTracingProcessor({

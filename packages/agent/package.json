@@ -26,6 +26,10 @@
     "./capabilities/skills/shared/yaml": {
       "types": "./dist/capabilities/skills/shared/yaml.d.ts",
       "import": "./dist/capabilities/skills/shared/yaml.js"
+    },
+    "./tracing": {
+      "types": "./dist/tracing/index.d.ts",
+      "import": "./dist/tracing/index.js"
     }
   },
   "scripts": {
@@ -38,7 +42,6 @@
   },
   "dependencies": {
     "@kodax-ai/llm": "*",
-    "@kodax-ai/tracing": "*",
     "js-tiktoken": "^1.0.12",
     "fflate": "^0.8.2",
     "yaml": "^2.8.2"

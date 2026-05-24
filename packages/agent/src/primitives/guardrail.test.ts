@@ -399,7 +399,7 @@ describe('Runner integration — guardrails active in generic path', () => {
 
 describe('Runner integration — GuardrailSpan emission', () => {
   it('emits a guardrail span for each check under the AgentSpan', async () => {
-    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
+    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('../tracing/index.js');
     setTracingProcessors([]);
     const ended: Array<{ name: string; kind: string; decision?: string; hook?: string }> = [];
     addTracingProcessor({
@@ -440,7 +440,7 @@ describe('Runner integration — GuardrailSpan emission', () => {
   });
 
   it('MED-3: a thrown guardrail emits a decision:"error" span and re-throws (fail-loud)', async () => {
-    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('@kodax-ai/tracing');
+    const { Tracer, addTracingProcessor, setTracingProcessors } = await import('../tracing/index.js');
     setTracingProcessors([]);
     const ended: Array<{ name: string; kind: string; decision?: string; error?: string; hook?: string }> = [];
     addTracingProcessor({

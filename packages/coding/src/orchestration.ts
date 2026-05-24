@@ -76,13 +76,13 @@ export type OrchestrationWorkerRunner<TTask extends OrchestrationWorkerSpec = Or
  * `appendTrace` to `{workspaceDir}/orchestration-trace.jsonl`.
  *
  * @deprecated FEATURE_083 (v0.7.24) originally superseded this by
- * `AgentSpan` / `HandoffSpan` in `@kodax-ai/tracing`. **FEATURE_086 (v0.7.27)
+ * `AgentSpan` / `HandoffSpan` in `@kodax-ai/agent`. **FEATURE_086 (v0.7.27)
  * evaluated removal and kept it**: AgentSpan is scoped to a single Runner
  * lifecycle, whereas OrchestrationTraceEvent spans across Tasks scheduled
  * by `runOrchestration` — no cross-task span equivalent exists yet, and
  * `runOrchestration` + this type are part of the `@kodax-ai/coding` public
  * surface. The `@deprecated` tag is kept as a signal that new code
- * targeting in-Runner tracing should prefer `@kodax-ai/tracing` spans;
+ * targeting in-Runner tracing should prefer `@kodax-ai/agent` spans;
  * cross-task orchestration code is free to continue using this event.
  */
 export interface OrchestrationTraceEvent {
