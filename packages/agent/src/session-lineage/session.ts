@@ -1,5 +1,5 @@
 /**
- * @kodax-ai/agent Session
+ * ../index.js Session
  *
  * 会话管理 - Session ID 生成和消息处理
  */

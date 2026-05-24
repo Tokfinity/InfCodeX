@@ -27,8 +27,8 @@
  */
 
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { CompactionResult } from '@kodax-ai/session-lineage';
-import { buildPostCompactAttachments, buildFileContentMessages, injectPostCompactAttachments, DEFAULT_POST_COMPACT_CONFIG, POST_COMPACT_TOKEN_BUDGET } from '@kodax-ai/session-lineage';
+import type { CompactionResult } from '@kodax-ai/agent';
+import { buildPostCompactAttachments, buildFileContentMessages, injectPostCompactAttachments, DEFAULT_POST_COMPACT_CONFIG, POST_COMPACT_TOKEN_BUDGET } from '@kodax-ai/agent';
 import { estimateTokens } from '../../tokenizer.js';
 
 export interface ApplyPostCompactAttachmentsInput {

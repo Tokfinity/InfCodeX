@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { KodaXSessionLineage } from '@kodax-ai/agent';
+import type { KodaXSessionLineage } from '../index.js';
 import {
   appendSessionLineageLabel,
   applyLineageTruncation,

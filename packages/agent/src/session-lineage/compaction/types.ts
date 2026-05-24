@@ -1,12 +1,12 @@
 /**
- * @kodax-ai/agent Compaction Types
+ * ../../index.js Compaction Types
  */
 
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type {
   KodaXCompactMemorySeed,
   KodaXSessionArtifactLedgerEntry,
-} from '@kodax-ai/agent';
+} from '../../index.js';
 
 export interface CompactionConfig {
   /** Whether automatic compaction is enabled. */

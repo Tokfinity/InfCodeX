@@ -27,13 +27,13 @@
  */
 
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
-import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import type { CompactionConfig } from '@kodax-ai/agent';
 import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_CONTEXT_WINDOW,
   resolveContextWindow,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 
 function fakeProvider(overrides: Partial<KodaXBaseProvider> = {}): KodaXBaseProvider {
   return {

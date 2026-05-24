@@ -4,7 +4,7 @@
  * Compares 3 compaction summary prompts head-to-head on a 10-fixture
  * dataset (5 coding + 5 non-coding) to pick the winner that ships as
  * `DEFAULT_SUMMARY_PROMPT` / `DEFAULT_UPDATE_SUMMARY_PROMPT` in
- * `@kodax-ai/session-lineage`:
+ * `@kodax-ai/agent`:
  *
  *   - baseline-coding         → verbatim v0.7.35 prompt (coding-flavored)
  *   - candidate-a-conservative → minimal neutralization
@@ -41,7 +41,7 @@ import {
   type KeyFact,
 } from '../benchmark/datasets/compaction-prompt/fixtures.js';
 
-// Mirrors @kodax-ai/session-lineage/src/compaction/summary-generator.ts
+// Mirrors @kodax-ai/agent/src/compaction/summary-generator.ts
 // SUMMARIZATION_SYSTEM_PROMPT (module-private). Copying is intentional —
 // the eval holds the system prompt fixed across candidates so only the
 // user prompt varies. If session-lineage's system prompt is ever changed,

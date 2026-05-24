@@ -21,7 +21,7 @@
 
 import { readFile } from 'fs/promises';
 import { getAgentConfigPath } from '@kodax-ai/agent';
-import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import type { CompactionConfig } from '@kodax-ai/agent';
 const LEGACY_DEFAULT_TRIGGER_PERCENT = 75;
 
 /**

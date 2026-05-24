@@ -100,11 +100,11 @@ export {
 
 // ============== Session entities + persistence + compaction implementations ==============
 // v0.7.35.1 FEATURE_142 Batch B: session.ts / session-lineage.ts / persistence.ts /
-// compaction/ moved from @kodax-ai/agent to @kodax-ai/session-lineage. Consumers should
-// `import ... from '@kodax-ai/session-lineage'` directly. @kodax-ai/agent stays as the
+// compaction/ moved from @kodax-ai/agent to ./session-lineage/index.js. Consumers should
+// `import ... from './session-lineage/index.js'` directly. @kodax-ai/agent stays as the
 // pure Agent platform foundation (primitives + admission + tokenizer + types);
 // session implementation, persistence, and compaction orchestration live in
-// @kodax-ai/session-lineage. See ADR-021 + docs/features/v0.7.35.1.md.
+// ./session-lineage/index.js. See ADR-021 + docs/features/v0.7.35.1.md.
 //
 // Symbols moved (NOT re-exported here to keep the agent → session-lineage
 // dependency direction unidirectional, avoiding a cycle):
@@ -434,10 +434,10 @@ export {
 //
 // v0.7.36 follow-up: the three compaction-related modules (`shouldCompact`,
 // `gracefulCompactDegradation`, `resolveContextWindow` + `DEFAULT_CONTEXT_WINDOW`
-// / `ShouldCompactInput`) moved to `@kodax-ai/session-lineage/runtime-middleware/`
+// / `ShouldCompactInput`) moved to `./session-lineage/index.js/runtime-middleware/`
 // to break the build cycle (agent → session-lineage → agent) introduced
 // when they were originally placed here. Downstream consumers in
-// `@kodax-ai/coding` now import them from `@kodax-ai/session-lineage` directly.
+// `@kodax-ai/coding` now import them from `./session-lineage/index.js` directly.
 export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
@@ -468,3 +468,12 @@ export * from './capabilities/skills/index.js';
 // Public API byte-identical; downstream import via '@kodax-ai/agent' top-level
 // or '@kodax-ai/agent/tracing' subpath.
 export * from './tracing/index.js';
+
+// ============== FEATURE_194 v0.7.43 — Session lineage (inlined from @kodax-ai/session-lineage) ==============
+// Originally split out of agent per FEATURE_142 Batch B (v0.7.35.1) to avoid
+// circular dep; FEATURE_194 inlines it back as the cycle resolution since
+// agent already imported session-lineage internally. Public API byte-identical
+// via '@kodax-ai/agent' top-level + './session-lineage' subpath.
+// Latent bug fix: agent/package.json previously imported session-lineage
+// without declaring it in dependencies; inline collapses to intra-package.
+export * from './session-lineage/index.js';

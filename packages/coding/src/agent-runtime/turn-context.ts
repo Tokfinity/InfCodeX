@@ -66,7 +66,7 @@ import type {
   SessionErrorMetadata,
 } from '../types.js';
 import type { KodaXMessage } from '@kodax-ai/llm';
-import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import type { CompactionConfig } from '@kodax-ai/agent';
 import type { CostTracker } from '@kodax-ai/llm';
 import type { RuntimeSessionState } from './runtime-session-state.js';
 import type { ReasoningPlan } from '../reasoning.js';

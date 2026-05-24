@@ -29,9 +29,6 @@
     {
       "path": "../repointel-protocol"
     },
-    {
-      "path": "../session-lineage"
-    },
   ],
   "include": [
     "src/**/*.ts"

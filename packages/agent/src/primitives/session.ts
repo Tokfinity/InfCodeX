@@ -2,7 +2,7 @@
  * Layer A Primitive: Session / SessionEntry / MessageEntry / SessionExtension
  *
  * FEATURE_081 (v0.7.23): Base Session shape. The thick
- * `KodaXSessionLineage` lives in `@kodax-ai/session-lineage` and is re-expressed
+ * `KodaXSessionLineage` lives in `../session-lineage/index.js` and is re-expressed
  * as a `LineageExtension` over this base.
  *
  * History: extracted to `@kodax-ai/core` in FEATURE_082 (v0.7.24); merged back
@@ -120,7 +120,7 @@ const _nextSessionId = (): string => {
 /**
  * In-memory Session suitable for tests, examples, and embedded SDK use. Not
  * durable across process restarts — persistence is provided by coding-specific
- * adapters in `@kodax-ai/session-lineage` and `@kodax-ai/agent`.
+ * adapters in `../session-lineage/index.js` and `@kodax-ai/agent`.
  */
 export function createInMemorySession(opts: InMemorySessionOptions = {}): Session {
   const id = opts.id ?? _nextSessionId();

@@ -26,9 +26,6 @@
       "path": "../agent"
     },
     {
-      "path": "../session-lineage"
-    },
-    {
       "path": "../coding"
     },
   ],

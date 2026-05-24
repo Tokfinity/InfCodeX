@@ -3,14 +3,14 @@
  *
  * These are the verbatim v0.7.35 compaction prompts (byte-identical to
  * the prior `SUMMARY_PROMPT` / `UPDATE_SUMMARY_PROMPT` constants in
- * `@kodax-ai/session-lineage/src/compaction/summary-generator.ts`). They
+ * `@kodax-ai/agent/src/compaction/summary-generator.ts`). They
  * remain the empirically best-performing prompts on the coding domain
  * (96.7% recall on the 10-fixture eval; see
  * `tests/compaction-prompt.eval.ts`) AND happen to also be the best on
  * the non-coding domain (97.0% recall) in the same eval — the wording
  * is coding-flavored but the structure generalizes.
  *
- * Why they live here: per ADR-021, @kodax-ai/session-lineage is the
+ * Why they live here: per ADR-021, @kodax-ai/agent is the
  * generic compaction primitive package and must not enumerate
  * coding-specific language ("coding agent", "file paths, function
  * names", "HTTP status codes", "## Files & Changes") in its public
@@ -24,7 +24,7 @@
  * coding path produces a byte-equivalent prompt to v0.7.35 — preserving
  * the empirically validated 96.7% recall.
  *
- * Generic / non-coding consumers of @kodax-ai/session-lineage get the
+ * Generic / non-coding consumers of @kodax-ai/agent get the
  * neutral `DEFAULT_SUMMARY_PROMPT` / `DEFAULT_UPDATE_SUMMARY_PROMPT`
  * (the candidate-a-conservative eval winner) by default — they pay a
  * 2-3pt non-coding recall cost for not knowing they should pass these

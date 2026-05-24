@@ -27,8 +27,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax-ai/session-lineage')>();
+vi.mock('@kodax-ai/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
   return {
     ...actual,
     compact: vi.fn(),
@@ -42,7 +42,7 @@ import {
   microcompact as mockedMicrocompact,
   gracefulCompactDegradation as mockedGracefulDegradation,
   type CompactionResult,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 import type { KodaXMessage } from '@kodax-ai/llm';
 import type { KodaXContextTokenSnapshot, KodaXOptions } from '../../../types.js';
 import {

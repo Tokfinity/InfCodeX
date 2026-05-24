@@ -30,7 +30,7 @@ export default defineConfig({
       '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
       '@kodax-ai/repl': resolveFromRoot('packages', 'repl', 'src', 'index.ts'),
       '@kodax-ai/repointel-protocol': resolveFromRoot('packages', 'repointel-protocol', 'src', 'index.ts'),
-      '@kodax-ai/session-lineage': resolveFromRoot('packages', 'session-lineage', 'src', 'index.ts'),
+      '@kodax-ai/agent/session-lineage': resolveFromRoot('packages', 'agent', 'src', 'session-lineage', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
       '@kodax-ai/agent/tracing': resolveFromRoot('packages', 'agent', 'src', 'tracing', 'index.ts'),
     },

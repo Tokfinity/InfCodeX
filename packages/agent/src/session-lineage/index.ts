@@ -4,9 +4,9 @@
  *
  * Originally populated in FEATURE_082 Slice 3 by moving the lineage
  * implementation out of `@kodax-ai/coding/src/extensions/lineage`.
- * v0.7.35.1 FEATURE_142 Batch B absorbed `@kodax-ai/agent`'s session.ts /
+ * v0.7.35.1 FEATURE_142 Batch B absorbed `../index.js`'s session.ts /
  * session-lineage.ts / persistence.ts / compaction/ subdirectory so this
- * package now owns the full session subsystem. Depends on `@kodax-ai/agent`
+ * package now owns the full session subsystem. Depends on `../index.js`
  * for `Session` / `SessionEntry` / `SessionExtension` / `CompactionPolicy`
  * primitives.
  *
@@ -118,15 +118,15 @@ export {
   createExtensionStore,
 } from './persistence.js';
 
-// ============== Runtime middleware (v0.7.36 — moved here from @kodax-ai/agent to break build cycle) ==============
-// Originally uplifted to @kodax-ai/agent in v0.7.35.1 FEATURE_142 Batch D under
+// ============== Runtime middleware (v0.7.36 — moved here from ../index.js to break build cycle) ==============
+// Originally uplifted to ../index.js in v0.7.35.1 FEATURE_142 Batch D under
 // the "generic agent platform middleware" framing, but that introduced a
 // circular `tsc -b` build dependency (agent → session-lineage → agent) which
 // only worked when stale dist artifacts were already present. v0.7.36 moves
 // these three modules back to session-lineage — semantically appropriate
 // since they all consume CompactionConfig / needsCompaction. The remaining
 // two Batch D middleware modules (history-cleanup / boundary-tracker-session)
-// stay in @kodax-ai/agent (no compaction-domain deps).
+// stay in ../index.js (no compaction-domain deps).
 export {
   shouldCompact,
   gracefulCompactDegradation,

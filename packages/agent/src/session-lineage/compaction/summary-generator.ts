@@ -1,5 +1,5 @@
 /**
- * @kodax-ai/agent Compaction Summary Generator
+ * ../../index.js Compaction Summary Generator
  *
  * Generates continuation-oriented summaries for compacted conversations.
  */
@@ -7,7 +7,7 @@
 import { createHash } from 'crypto';
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
 import type { CompactionDetails } from './types.js';
-import type { KodaXCompactMemorySeed } from '@kodax-ai/agent';
+import type { KodaXCompactMemorySeed } from '../../index.js';
 import { serializeConversation } from './utils.js';
 
 const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization specialist.

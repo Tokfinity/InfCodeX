@@ -1,5 +1,5 @@
 /**
- * @kodax-ai/agent Compaction Utils
+ * ../../index.js Compaction Utils
  *
  * 消息序列化工具 - 将消息转换为结构化文本格式
  */

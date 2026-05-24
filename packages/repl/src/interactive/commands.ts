@@ -49,8 +49,8 @@ import {
   saveConfig,
 } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
-import { compact } from '@kodax-ai/session-lineage';
-import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import { compact } from '@kodax-ai/agent';
+import type { CompactionConfig } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import {
   getSkillRegistry,

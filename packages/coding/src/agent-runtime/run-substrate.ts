@@ -42,7 +42,7 @@ import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { generateSessionId, extractTitleFromMessages } from '../session.js';
 // FEATURE_076 Q4: load-time normalization for pre-v0.7.25 session messages.
 import { normalizeLoadedSessionMessages } from '../task-engine/_internal/round-boundary.js';
-import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax-ai/session-lineage';
+import { microcompact, DEFAULT_MICROCOMPACTION_CONFIG, type CompactionConfig } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../compaction-config.js';
 // CAP-014/060/061/062 token estimation now happens inside the
 // substrate compaction modules; agent.ts no longer imports
@@ -140,7 +140,7 @@ import { getUnlockedDeferredTools } from '../tools/deferred-tools.js';
 // CAP-028 / CAP-062 (`gracefulCompactDegradation`) is wired inside
 // `agent-runtime/middleware/compaction-orchestration.ts` since
 // FEATURE_100 P3.4c.
-import { shouldCompact } from '@kodax-ai/session-lineage';
+import { shouldCompact } from '@kodax-ai/agent';
 import { runCompactionLifecycle } from './middleware/compaction-orchestration.js';
 import { maybeContinueAfterMaxTokens } from './max-tokens-continuation.js';
 import { maybeAutoContinueManagedProtocol } from './managed-protocol-continue.js';
@@ -162,7 +162,7 @@ import {
   applyPostToolProcessing,
 } from './tool-dispatch.js';
 import { buildReasoningExecutionState } from './reasoning-plan-entry.js';
-import { resolveContextWindow } from '@kodax-ai/session-lineage';
+import { resolveContextWindow } from '@kodax-ai/agent';
 import {
   type RuntimeSessionState,
   buildRuntimeSessionState,

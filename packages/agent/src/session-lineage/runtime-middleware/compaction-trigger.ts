@@ -18,7 +18,7 @@
  * Migration history:
  *   - extracted from `agent.ts:598-600` — pre-FEATURE_100 baseline —
  *     during FEATURE_100 P3.4a.
- *   - moved from `@kodax-ai/agent/src/runtime-middleware/` to
+ *   - moved from `../../index.js/src/runtime-middleware/` to
  *     `@kodax-ai/session-lineage/src/runtime-middleware/` in v0.7.36 to
  *     break the build cycle introduced by FEATURE_142 Batch D
  *     (agent → session-lineage → agent). session-lineage already

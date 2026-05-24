@@ -30,6 +30,10 @@
     "./tracing": {
       "types": "./dist/tracing/index.d.ts",
       "import": "./dist/tracing/index.js"
+    },
+    "./session-lineage": {
+      "types": "./dist/session-lineage/index.d.ts",
+      "import": "./dist/session-lineage/index.js"
     }
   },
   "scripts": {

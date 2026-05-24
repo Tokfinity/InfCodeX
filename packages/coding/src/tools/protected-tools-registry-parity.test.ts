@@ -1,7 +1,7 @@
 /**
  * FEATURE_183 (v0.7.42) — cross-package parity test.
  *
- * `PROTECTED_TOOL_NAMES` is declared in `@kodax-ai/session-lineage`
+ * `PROTECTED_TOOL_NAMES` is declared in `@kodax-ai/agent`
  * (compaction layer can't reach into @kodax-ai/coding without circular
  * tsc -b dependency). Its membership names KodaX tool registrations
  * declared in `@kodax-ai/coding`'s registry. This test verifies the two
@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { PROTECTED_TOOL_NAMES } from '@kodax-ai/session-lineage';
+import { PROTECTED_TOOL_NAMES } from '@kodax-ai/agent';
 import {
   MCP_TOOL_NAMES,
   REPO_INTELLIGENCE_WORKING_TOOL_NAMES,

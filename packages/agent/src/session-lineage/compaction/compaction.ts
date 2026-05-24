@@ -1,5 +1,5 @@
 /**
- * @kodax-ai/agent Compaction Core
+ * ../../index.js Compaction Core
  *
  * Progressive compaction with lightweight tool-result pruning and rolling
  * summarization to an internal low-water mark.
@@ -8,7 +8,7 @@
 import { randomUUID } from 'node:crypto';
 import type { KodaXBaseProvider, KodaXContentBlock, KodaXMessage } from '@kodax-ai/llm';
 import type { CompactionAnchor, CompactionConfig, CompactionResult } from './types.js';
-import { countTokens, estimateTokens } from '@kodax-ai/agent';
+import { countTokens, estimateTokens } from '../../tokenizer.js';
 import { extractArtifactLedger, extractFileOps } from './file-tracker.js';
 import { extractCompactMemorySeed, generateSummary } from './summary-generator.js';
 import { extractBashIntent } from './bash-intent.js';

@@ -7,7 +7,7 @@
  * See docs/features/v0.7.25.md#feature_076 for the full design.
  */
 
-import { COMPACTION_SUMMARY_PREFIX } from '@kodax-ai/session-lineage';
+import { COMPACTION_SUMMARY_PREFIX } from '@kodax-ai/agent';
 import type {
   KodaXInputArtifact,
   KodaXMessage,

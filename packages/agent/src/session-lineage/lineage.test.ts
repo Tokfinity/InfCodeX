@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createInMemorySession } from '@kodax-ai/agent';
+import { createInMemorySession } from '../index.js';
 import {
   LINEAGE_ENTRY_TYPES,
   LineageExtension,

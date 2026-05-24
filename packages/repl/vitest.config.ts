@@ -28,7 +28,7 @@ export default defineConfig({
       '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': path.resolve(__dirname, '..', 'coding', 'src', 'index.ts'),
       '@kodax-ai/repointel-protocol': path.resolve(__dirname, '..', 'repointel-protocol', 'src', 'index.ts'),
-      '@kodax-ai/session-lineage': path.resolve(__dirname, '..', 'session-lineage', 'src', 'index.ts'),
+      '@kodax-ai/agent/session-lineage': path.resolve(__dirname, '..', 'agent', 'src', 'session-lineage', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
       '@kodax-ai/agent/tracing': path.resolve(__dirname, '..', 'agent', 'src', 'tracing', 'index.ts'),
     },

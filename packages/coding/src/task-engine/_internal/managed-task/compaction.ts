@@ -70,7 +70,7 @@ import {
   POST_COMPACT_TOKEN_BUDGET,
   type CompactionConfig,
   type CompactionUpdate,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 import type { AgentMessage } from '@kodax-ai/agent';
 
 import { resolveProvider } from '../../../providers/index.js';

@@ -385,7 +385,7 @@ describe('round-boundary/reshapeToUserConversation', () => {
   it('preserves CompactionSummary system messages (does not strip them)', () => {
     // Step 1 strips the leading role-prompt system but only when it
     // is NOT a CompactionSummary. The discriminator is the
-    // `[对话历史摘要]\n\n` prefix that `@kodax-ai/session-lineage` writes.
+    // `[对话历史摘要]\n\n` prefix that `@kodax-ai/agent` writes.
     const compactionPrefix = '[对话历史摘要]\n\n';
     const messagesWithCompactionSystem: KodaXMessage[] = [
       { role: 'system', content: `${compactionPrefix}Summary of prior rounds: …` },

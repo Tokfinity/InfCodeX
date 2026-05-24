@@ -79,7 +79,7 @@ import type {
   KodaXAmaControllerDecision,
   KodaXReviewScale,
 } from '@kodax-ai/llm';
-import type { CompactionUpdate } from '@kodax-ai/session-lineage';
+import type { CompactionUpdate } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): use the narrow runtime contract from
 // `./extensions/runtime-contract.ts` to avoid `types.ts ↔ extensions/runtime.ts`
 // circular imports. The concrete `KodaXExtensionRuntime` class implements

@@ -6,7 +6,7 @@
 
 import { readFile } from 'fs/promises';
 import { getAgentConfigPath } from '@kodax-ai/agent';
-import type { CompactionConfig } from '@kodax-ai/session-lineage';
+import type { CompactionConfig } from '@kodax-ai/agent';
 /**
  * 默认压缩配置
  */

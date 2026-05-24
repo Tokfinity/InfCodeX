@@ -1,5 +1,5 @@
 /**
- * @kodax-ai/agent File Tracking — artifactLedger extraction.
+ * ../../index.js File Tracking — artifactLedger extraction.
  *
  * FEATURE_185 (v0.7.42) extends the previous input-only extractor to also
  * read each tool_use's matching tool_result, enriching `metadata` with parsed
@@ -35,7 +35,7 @@ import type {
   KodaXToolResultBlock,
 } from '@kodax-ai/llm';
 import type { FileOperations } from './types.js';
-import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '@kodax-ai/agent';
+import type { KodaXJsonValue, KodaXSessionArtifactLedgerEntry } from '../../index.js';
 import { extractGrepHits, extractGlobPaths, extractBashResult } from './result-extractors.js';
 
 const LEDGER_MAX_ENTRIES = 256;

@@ -10,12 +10,12 @@
  * v0.7.36 follow-up: the original Batch D landed three more modules
  * (`compaction-trigger`, `compaction-fallback`, `context-window`) here,
  * but they all consume `CompactionConfig` / `needsCompaction` from
- * `@kodax-ai/session-lineage`, which itself depends on `@kodax-ai/agent` —
+ * `../session-lineage/index.js`, which itself depends on `@kodax-ai/agent` —
  * that introduced a circular `tsc -b` build dependency that only worked
  * via stale dist artifacts. Those three modules moved to
- * `@kodax-ai/session-lineage/src/runtime-middleware/` to break the cycle;
+ * `../session-lineage/index.js/src/runtime-middleware/` to break the cycle;
  * downstream consumers in `@kodax-ai/coding` import them from
- * `@kodax-ai/session-lineage` directly.
+ * `../session-lineage/index.js` directly.
  *
  * Coding callers can keep importing the remaining symbols at their
  * existing sites — `@kodax-ai/coding`'s `index.ts` re-exports them at the

@@ -39,7 +39,7 @@ import type {
   KodaXExtensionStore,
   KodaXJsonValue,
 } from '../types.js';
-import { createExtensionStore } from '@kodax-ai/session-lineage';
+import { createExtensionStore } from '@kodax-ai/agent';
 import type {
   CapabilityProvider,
   ExtensionContributionSource,

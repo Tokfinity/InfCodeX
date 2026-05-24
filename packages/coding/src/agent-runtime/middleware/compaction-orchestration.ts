@@ -47,7 +47,7 @@
  */
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax-ai/session-lineage';
+import { compact as intelligentCompact, type CompactionConfig, type CompactionUpdate } from '@kodax-ai/agent';
 import {
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
@@ -58,7 +58,7 @@ import {
   createEstimatedContextTokenSnapshot,
 } from '../../token-accounting.js';
 import { validateAndFixToolHistory } from '@kodax-ai/agent';
-import { gracefulCompactDegradation } from '@kodax-ai/session-lineage';
+import { gracefulCompactDegradation } from '@kodax-ai/agent';
 import { applyPostCompactAttachments } from './post-compact-attachments.js';
 
 export const COMPACT_CIRCUIT_BREAKER_LIMIT = 3;

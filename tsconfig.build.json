@@ -3,7 +3,6 @@
   "references": [
     { "path": "./packages/llm" },
     { "path": "./packages/agent" },
-    { "path": "./packages/session-lineage" },
     { "path": "./packages/repointel-protocol" },
     { "path": "./packages/coding" },
     { "path": "./packages/repl" }

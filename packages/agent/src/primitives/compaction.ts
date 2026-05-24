@@ -7,7 +7,7 @@
  *   - Layer A (here): `CompactionPolicy` interface + `DefaultSummaryCompaction`
  *     — a minimal "token threshold → LLM summary of old messages" policy that
  *     any external Agent can pick up with zero KodaX runtime dependency.
- *   - Layer B (`@kodax-ai/session-lineage/src/lineage.ts`): `LineageCompaction`
+ *   - Layer B (`../session-lineage/index.js/src/lineage.ts`): `LineageCompaction`
  *     wraps the full FEATURE_072 lineage-native compaction for the coding
  *     preset.
  *

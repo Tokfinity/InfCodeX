@@ -6,7 +6,7 @@
     "paths": {
       "@kodax-ai/llm": [
         "../llm/src/index.ts"
-      ],
+      ]
     },
     "lib": [
       "ES2022"
@@ -26,7 +26,7 @@
   "references": [
     {
       "path": "../llm"
-    },
+    }
   ],
   "include": [
     "src/**/*"

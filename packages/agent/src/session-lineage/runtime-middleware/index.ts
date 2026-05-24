@@ -2,7 +2,7 @@
  * @kodax-ai/session-lineage/runtime-middleware — barrel export.
  *
  * Compaction-related substrate middleware. Originally uplifted to
- * `@kodax-ai/agent/src/runtime-middleware/` in v0.7.35.1 FEATURE_142
+ * `../../index.js/src/runtime-middleware/` in v0.7.35.1 FEATURE_142
  * Batch D under the "generic agent platform middleware" framing, but
  * that introduced a circular `tsc -b` build dependency
  * (`agent → session-lineage → agent`) which only worked when stale
@@ -14,7 +14,7 @@
  * implementation itself.
  *
  * The remaining two Batch D middleware modules (`history-cleanup` /
- * `boundary-tracker-session`) stay in `@kodax-ai/agent` because they have
+ * `boundary-tracker-session`) stay in `../../index.js` because they have
  * no compaction-domain dependencies.
  */
 

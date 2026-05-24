@@ -1,4 +1,4 @@
-export { extractArtifactLedger, mergeArtifactLedger, type CompactionAnchor, type CompactionUpdate } from '@kodax-ai/session-lineage';
+export { extractArtifactLedger, mergeArtifactLedger, type CompactionAnchor, type CompactionUpdate } from '@kodax-ai/agent';
 import type { KodaXToolUseBlock } from '@kodax-ai/llm';
 import { getRequiredToolParams } from './tools/index.js';
 

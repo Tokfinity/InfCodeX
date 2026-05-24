@@ -489,7 +489,7 @@ export {
 } from '@kodax-ai/agent';
 
 // v0.7.35.1 FEATURE_142 (B-R1): coding-flavored compaction summary
-// prompts moved here from @kodax-ai/session-lineage. Coding callers pass
+// prompts moved here from @kodax-ai/agent. Coding callers pass
 // these explicitly to preserve byte-equivalent v0.7.35 prompt behavior;
 // session-lineage now ships a neutral `DEFAULT_SUMMARY_PROMPT` as
 // fallback for generic / non-coding consumers.
@@ -723,7 +723,7 @@ export { exec, webhook } from './extensions/helpers.js';
 
 export type { Agent, AgentMessage, AgentReasoningProfile, AgentTool, Guardrail, Handoff, ReasoningDepth, InMemorySessionOptions, MessageEntry, Session, SessionEntry, SessionExtension, SessionForkOptions, CompactionContext, CompactionEntry, CompactionEntryPayload, CompactionPolicy, DefaultSummaryCompactionOptions, PresetDispatcher, RunEvent, RunOptions, RunResult } from '@kodax-ai/agent';
 
-export type { CompactionResult } from '@kodax-ai/session-lineage';
+export type { CompactionResult } from '@kodax-ai/agent';
 export {
   createAgent,
   createHandoff,
@@ -787,7 +787,7 @@ export {
 } from './tools/tool-result-truncation-guardrail.js';
 
 // FEATURE_082 (v0.7.24): LineageExtension and LineageCompaction moved to
-// `@kodax-ai/session-lineage`. Barrel re-export kept for
+// `@kodax-ai/agent`. Barrel re-export kept for
 // batteries-included consumers; not a deprecation shim.
 export type {
   LineageArtifactLedgerPayload,
@@ -795,9 +795,9 @@ export type {
   LineageLabelPayload,
   LineageTreeNode,
   LineageCompactionDelegates,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 
-export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax-ai/session-lineage';
+export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax-ai/agent';
 
 // NOTE: `KodaXSessionLineage` is exported above (line ~90) alongside the
 // legacy session types. As of FEATURE_081 (v0.7.23) it is superseded by

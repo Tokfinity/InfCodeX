@@ -32,16 +32,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { KodaXBaseProvider, KodaXMessage } from '@kodax-ai/llm';
-import type { CompactionConfig, CompactionResult } from '@kodax-ai/session-lineage';
+import type { CompactionConfig, CompactionResult } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 Batch B: compact() moved from @kodax-ai/agent to
-// @kodax-ai/session-lineage; mock the new home (see ADR-021).
+// @kodax-ai/agent; mock the new home (see ADR-021).
 // v0.7.36: gracefulCompactDegradation moved from @kodax-ai/agent to
-// @kodax-ai/session-lineage/runtime-middleware/ to break the build cycle
+// @kodax-ai/agent/runtime-middleware/ to break the build cycle
 // introduced by FEATURE_142 Batch D. Both `compact` and
-// `gracefulCompactDegradation` now live in @kodax-ai/session-lineage, so
+// `gracefulCompactDegradation` now live in @kodax-ai/agent, so
 // they can be mocked through a single boundary.
-vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@kodax-ai/session-lineage')>();
+vi.mock('@kodax-ai/agent', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
   return {
     ...actual,
     compact: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock('@kodax-ai/session-lineage', async (importOriginal) => {
 import {
   compact as mockedCompact,
   gracefulCompactDegradation as mockedDegrade,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 import {
   runCompactionLifecycle,
   COMPACT_CIRCUIT_BREAKER_LIMIT,

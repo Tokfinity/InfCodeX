@@ -4,7 +4,7 @@
  * The coding path's compaction summary prompt MUST stay byte-identical
  * to the v0.7.35 prompt — that's the whole point of preserving the
  * "another coding agent" / "## Files & Changes" / file-path-flavored
- * wording in @kodax-ai/coding instead of @kodax-ai/session-lineage. The eval
+ * wording in @kodax-ai/coding instead of @kodax-ai/agent. The eval
  * (`tests/compaction-prompt.eval.ts`) was scored against this exact
  * prompt and it shipped to v0.7.35 users; any drift is a behavior
  * regression, not a refactor.
@@ -25,7 +25,7 @@ import {
   buildCompactionPromptSnapshot,
   DEFAULT_SUMMARY_PROMPT,
   DEFAULT_UPDATE_SUMMARY_PROMPT,
-} from '@kodax-ai/session-lineage';
+} from '@kodax-ai/agent';
 
 import {
   CODING_SUMMARY_PROMPT,
