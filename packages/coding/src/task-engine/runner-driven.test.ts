@@ -761,6 +761,113 @@ describe('FEATURE_114 v0.7.36 Slice 5 — V2 Worker→Evaluator end-to-end', () 
   // FEATURE_193 v0.7.43: V1 flag-off routing test deleted (Scout chain agents retired).
 });
 
+// FEATURE_196 (v0.7.43) — content-aware sidecar fire gate integration.
+//
+// Gate logic + regex boundaries covered exhaustively in `gate.test.ts`
+// (23 unit tests). These integration tests verify the wire-up to
+// `runner-driven.ts:composedStopHook` — fire/skip routing produces the
+// right end-state in `managedProtocolPayload.verdict`. The unit-test
+// env has no API keys so when the sidecar verifier fires it fail-opens
+// to `accept` (trace=`provider_error`); when it skips, no verdict is
+// recorded.
+describe('FEATURE_196 v0.7.43 — sidecar content-aware fire gate (integration)', () => {
+  it('trivial greeting → gate skips → no sidecar verdict written', async () => {
+    // User: "你好" (Chinese greeting, 2 chars, no imperative).
+    // Worker: text-only "你好!". Layer 2 detects conversational
+    // intent → gate skips → composedStopHook returns through the
+    // extension chain without invoking the verifier.
+    //
+    // Pre-F196 the verifier would have fail-open to accept and
+    // stamped `source: 'sidecar'` on the verdict. Post-F196 the gate
+    // skips → no verdict slot is written → `managedProtocolPayload?.verdict`
+    // is undefined.
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          return {
+            textBlocks: [{ text: '你好! 我是 KodaX 的开发助手。' }],
+            toolBlocks: [],
+          };
+        }
+        return { textBlocks: [{ text: 'done' }], toolBlocks: [] };
+      },
+    });
+    const result = await runManagedTaskViaRunner(makeOptions(), '你好', mock);
+    expect(result.success).toBe(true);
+    expect(result.signal).toBe('COMPLETE');
+    // Gate skipped sidecar — verdict slot never populated.
+    expect(result.managedProtocolPayload?.verdict).toBeUndefined();
+  });
+
+  it('mutation tool call → gate fires → sidecar verdict written', async () => {
+    // Worker invokes a mutation tool (action-surface signal). Layer 1
+    // returns fire. Verifier fires + fail-opens to accept in the
+    // key-less test env.
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          return {
+            toolBlocks: [{
+              type: 'tool_use',
+              id: 'w-1',
+              name: 'todo_create',
+              input: { items: [{ subject: 'plan step', description: 'do work' }] },
+            }],
+          };
+        }
+        // Turn 2 — text-only termination after tool ran.
+        return {
+          textBlocks: [{ text: 'Done. Plan items recorded.' }],
+          toolBlocks: [],
+        };
+      },
+    });
+    const result = await runManagedTaskViaRunner(
+      makeOptions(),
+      // Imperative user message — even without Layer 1, Layer 2 would
+      // defer to default fire.
+      'plan three things and implement them',
+      mock,
+    );
+    // Mutation tool call signals "real work" — gate fires regardless
+    // of user-message intent.
+    expect(result.managedProtocolPayload?.verdict).toBeDefined();
+    expect(result.managedProtocolPayload?.verdict?.source).toBe('sidecar');
+    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+  });
+
+  it('imperative + zero tool action (zhipu floor) → gate fires safely (F184 contract)', async () => {
+    // The CORE F184 contract case: user asked Worker to do something
+    // imperative, Worker responds text-only without invoking a tool
+    // (intent-vs-action floor). Layer 2's conversational check must
+    // NOT skip this — safe default fires → sidecar verifies the claim.
+    const mock = makeChainMockLlm({
+      worker: (turn) => {
+        if (turn === 1) {
+          return {
+            // No tool call — Worker just claims to have done it.
+            textBlocks: [{ text: '明白，我用 grep 搜索了 README 文件。结果如下...' }],
+            toolBlocks: [],
+          };
+        }
+        return { textBlocks: [{ text: 'ok' }], toolBlocks: [] };
+      },
+    });
+    const result = await runManagedTaskViaRunner(
+      makeOptions(),
+      '查一下 README 文件',
+      mock,
+    );
+    // Imperative user + zero action ⇒ gate defaults to fire.
+    expect(result.managedProtocolPayload?.verdict).toBeDefined();
+    expect(result.managedProtocolPayload?.verdict?.source).toBe('sidecar');
+    // Fail-open accept in key-less test env. Production with real API
+    // would surface the verifier's actual verdict (likely revise/
+    // blocked given the false-action claim).
+    expect(result.managedProtocolPayload?.verdict?.status).toBe('accept');
+  });
+});
+
 // FEATURE_167 (v0.7.41) Evaluator terminal-verdict fallback (B1+B2) deleted
 // in FEATURE_184 Phase C.2 (v0.7.45). The three-layer B0/B1/B2 retry/synth
 // fallback block is superseded by the Sidecar Verifier StopHook (Phase D.2).

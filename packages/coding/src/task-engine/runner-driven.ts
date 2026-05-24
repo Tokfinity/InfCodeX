@@ -87,6 +87,7 @@ import {
 import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifier/verifier-context-builder.js';
 import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
+import { composeGateDecision } from '../agent-runtime/middleware/sidecar-verifier/gate.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
 // module was deleted — `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` /
@@ -1521,6 +1522,28 @@ async function runManagedTaskViaRunnerInner(
             mode: 'task-notification',
           });
         if (!isIdleYieldTurn) {
+          // FEATURE_196 (v0.7.43) — content-aware fire gate. Before
+          // paying the 3-10s sidecar latency + LLM call cost on every
+          // Worker text-only termination, check whether the turn is
+          // worth verifying. Skip trivial chat (greeting + zero tool
+          // action); fire on zhipu intent-vs-action floor (imperative
+          // user + Worker text-only). Conservative safe default = fire.
+          // Escape hatch: `KODAX_VERIFIER_ALWAYS=1` forces 100% fire.
+          // Design + SHIP gate evidence at
+          // `docs/features/v0.7.43.md#feature_196`.
+          const gateDecision = composeGateDecision(ctx, process.env);
+          if (process.env.KODAX_VERIFIER_LOG === '1') {
+            // Stderr trace so verifierLog opt-in users can audit gate
+            // fire/skip decisions without reading the raw session jsonl.
+            process.stderr.write(
+              `[sidecar-gate] ${gateDecision.fire ? 'fire' : 'skip'}: ${gateDecision.reason}\n`,
+            );
+          }
+          if (!gateDecision.fire) {
+            // Skip — let the rest of the StopHook chain (F178 stall-
+            // sidecar / F187 extension queue) run via extensionTurnComplete.
+            return extensionTurnCompleteHook(ctx);
+          }
           // FEATURE_184 Phase D.3 — surface a "Verifying..." spinner via
           // the observer so the user sees something during the sidecar
           // LLM call (typically 3-10s on inherit-main provider).
