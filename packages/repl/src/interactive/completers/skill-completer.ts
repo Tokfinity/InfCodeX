@@ -15,7 +15,7 @@ import {
   getSkillRegistry,
   initializeSkillRegistry,
   type SkillMetadata,
-} from '@kodax-ai/skills';
+} from '@kodax-ai/agent';
 
 /**
  * Skill Completer implementation

@@ -8,7 +8,7 @@ import {
   normalizeAllowedToolsString,
   normalizeYamlHookMap,
   parseYamlFrontmatter,
-} from '@kodax-ai/skills/shared/yaml';
+} from '@kodax-ai/agent/capabilities/skills/shared/yaml';
 import type { CommandRegistry } from './registry.js';
 import type { CommandExecutionMetadata, CommandHooks, CommandPriority } from './types.js';
 

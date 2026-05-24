@@ -58,7 +58,7 @@ import {
   expandSkillForLLM,
   type SkillMetadata,
   type SkillContext,
-} from '@kodax-ai/skills';
+} from '@kodax-ai/agent';
 import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
 import { memoryCommand } from '../commands/memory-command.js';

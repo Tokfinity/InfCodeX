@@ -36,7 +36,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Runner, getAgentConfigHome } from '@kodax-ai/agent';
-import { parseYamlFrontmatter } from '@kodax-ai/skills/shared/yaml';
+import { parseYamlFrontmatter } from '@kodax-ai/agent/capabilities/skills/shared/yaml';
 
 import { buildAdmissionManifest } from './admission-bridge.js';
 import {

@@ -32,7 +32,7 @@
  *     reuse is at the **pattern** level (each agent has its own
  *     `capability-sections.ts`), not the **content** level.
  *   - Hoisting to `@kodax-ai/agent/` would force `@kodax-ai/agent` →
- *     `@kodax-ai/skills` / `@kodax-ai/agent` cross-package dependencies,
+ *     `@kodax-ai/agent` / `@kodax-ai/agent` cross-package dependencies,
  *     breaking the "agent doesn't depend on application-layer
  *     packages" promise.
  *   - The drift problem this batch solves is "SA / AMA assemble the

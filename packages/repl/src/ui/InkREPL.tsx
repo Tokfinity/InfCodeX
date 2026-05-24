@@ -152,7 +152,7 @@ import {
 } from "../interactive/auto-mode-bootstrap.js";
 import { isAutoMode, createAutoInProjectDeprecationEmitter } from "../permission/types.js";
 import { copyTextToClipboard } from "../common/clipboard.js";
-import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/skills";
+import { initializeSkillRegistry, getSkillRegistry } from "@kodax-ai/agent";
 import { getTheme } from "./themes/index.js";
 import { KODAX_BANNER_LOGO_LINES } from "./constants/banner-logo.js";
 import chalk from "chalk";

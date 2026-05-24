@@ -1,7 +1,7 @@
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { spawn } from 'child_process';
-import { getDefaultSkillPaths } from '@kodax-ai/skills';
+import { getDefaultSkillPaths } from '@kodax-ai/agent';
 
 export const SKILL_CREATOR_TOOLS = {
   init: 'init-skill.js',

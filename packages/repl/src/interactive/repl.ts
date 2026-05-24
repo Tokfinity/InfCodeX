@@ -87,7 +87,7 @@ import {
   type Completion,
 } from './autocomplete.js';
 import { getCurrentTheme, setTheme, type Theme } from './themes.js';
-import { getSkillRegistry } from '@kodax-ai/skills';
+import { getSkillRegistry } from '@kodax-ai/agent';
 import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';

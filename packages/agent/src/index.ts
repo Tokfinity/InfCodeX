@@ -454,3 +454,11 @@ export * from './memory/index.js';
 // agent capabilities. Public API is byte-identical; downstream import via
 // '@kodax-ai/agent' top-level or '@kodax-ai/agent/capabilities/mcp' subpath.
 export * from './capabilities/mcp/index.js';
+
+// ============== FEATURE_194 v0.7.43 — Skills system (inlined from @kodax-ai/skills) ==============
+// Originally a standalone package, inlined per ADR-036 to consolidate single-consumer
+// agent capabilities. Public API is byte-identical; downstream import via
+// '@kodax-ai/agent' top-level or '@kodax-ai/agent/capabilities/skills' subpath.
+// Subpath '@kodax-ai/agent/capabilities/skills/shared/yaml' also available for
+// the markdown-loader (FEATURE_191) parseYamlFrontmatter consumer.
+export * from './capabilities/skills/index.js';

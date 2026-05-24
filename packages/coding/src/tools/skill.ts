@@ -27,7 +27,7 @@
  * claudecode layers on top (those can come incrementally if needed).
  */
 
-import { getSkillRegistry } from '@kodax-ai/skills';
+import { getSkillRegistry } from '@kodax-ai/agent';
 import type { KodaXToolExecutionContext } from '../types.js';
 
 export async function toolSkill(

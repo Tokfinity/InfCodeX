@@ -1,7 +1,7 @@
 {
   "name": "@kodax-ai/repl",
   "version": "0.7.43",
-  "description": "KodaX REPL - 完整的交互式终端体验",
+  "description": "KodaX REPL - \u5b8c\u6574\u7684\u4ea4\u4e92\u5f0f\u7ec8\u7aef\u4f53\u9a8c",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -27,7 +27,6 @@
     "@kodax-ai/agent": "*",
     "@kodax-ai/coding": "*",
     "@kodax-ai/session-lineage": "*",
-    "@kodax-ai/skills": "*",
     "chalk": "^5.4.1",
     "clipboardy": "^4.0.0",
     "ink": "^6.7.0",

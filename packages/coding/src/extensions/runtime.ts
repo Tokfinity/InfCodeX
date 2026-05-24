@@ -8,7 +8,7 @@ import {
 } from '@kodax-ai/llm';
 import {
   registerPluginSkillPath,
-} from '@kodax-ai/skills';
+} from '@kodax-ai/agent';
 import { tsImport } from 'tsx/esm/api';
 import {
   getBuiltinRegisteredToolDefinition,

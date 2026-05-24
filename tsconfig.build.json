@@ -6,7 +6,6 @@
     { "path": "./packages/agent" },
     { "path": "./packages/session-lineage" },
     { "path": "./packages/repointel-protocol" },
-    { "path": "./packages/skills" },
     { "path": "./packages/coding" },
     { "path": "./packages/repl" }
   ]

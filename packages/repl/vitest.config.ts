@@ -22,15 +22,14 @@ export default defineConfig({
     // @kodax-ai/session-lineage — even tests that don't import those
     // directly will fail at module-graph resolution if they're missing.
     alias: {
-      '@kodax-ai/skills/shared/yaml': path.resolve(__dirname, '..', 'skills', 'src', 'shared', 'yaml.ts'),
+      '@kodax-ai/agent/capabilities/skills/shared/yaml': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
       '@kodax-ai/agent/messaging/queue': path.resolve(__dirname, '..', 'agent', 'src', 'messaging', 'queue.ts'),
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': path.resolve(__dirname, '..', 'coding', 'src', 'index.ts'),
-      '@kodax-ai/agent': path.resolve(__dirname, '..', 'mcp', 'src', 'index.ts'),
       '@kodax-ai/repointel-protocol': path.resolve(__dirname, '..', 'repointel-protocol', 'src', 'index.ts'),
       '@kodax-ai/session-lineage': path.resolve(__dirname, '..', 'session-lineage', 'src', 'index.ts'),
-      '@kodax-ai/skills': path.resolve(__dirname, '..', 'skills', 'src', 'index.ts'),
+      '@kodax-ai/agent/capabilities/skills': path.resolve(__dirname, '..', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
       '@kodax-ai/tracing': path.resolve(__dirname, '..', 'tracing', 'src', 'index.ts'),
     },
   },

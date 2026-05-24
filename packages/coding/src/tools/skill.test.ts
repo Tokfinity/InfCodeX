@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { SkillRegistry } from '@kodax-ai/skills';
+import { SkillRegistry } from '@kodax-ai/agent';
 import { toolSkill } from './skill.js';
 
 // The skill tool reads the global singleton via `getSkillRegistry()`. To
@@ -92,7 +92,7 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
     // Publish into the singleton by constructing + discovering against
     // the scratch root. The singleton's projectRoot must match what
     // toolSkill sees via getSkillRegistry().
-    const { getSkillRegistry } = await import('@kodax-ai/skills');
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
     const registry = getSkillRegistry(tempDir, {
       projectPaths: [path.join(tempDir, 'project')],
       userPaths: [],
@@ -119,7 +119,7 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
       'Slash-tolerated skill',
       'Slash body',
     );
-    const { getSkillRegistry } = await import('@kodax-ai/skills');
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
     const registry = getSkillRegistry(tempDir, {
       projectPaths: [path.join(tempDir, 'project')],
       userPaths: [],
@@ -144,7 +144,7 @@ describe('toolSkill (claudecode-parity skill invocation)', () => {
       'A known skill',
       'body',
     );
-    const { getSkillRegistry } = await import('@kodax-ai/skills');
+    const { getSkillRegistry } = await import('@kodax-ai/agent');
     const registry = getSkillRegistry(tempDir, {
       projectPaths: [path.join(tempDir, 'project')],
       userPaths: [],

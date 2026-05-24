@@ -1,7 +1,7 @@
 {
   "name": "@kodax-ai/kodax",
   "version": "0.7.43",
-  "description": "极致轻量化 Coding Agent - TypeScript 实现，支持 12 个 LLM 提供商，可发布为免 Node 单文件二进制",
+  "description": "\u6781\u81f4\u8f7b\u91cf\u5316 Coding Agent - TypeScript \u5b9e\u73b0\uff0c\u652f\u6301 12 \u4e2a LLM \u63d0\u4f9b\u5546\uff0c\u53ef\u53d1\u5e03\u4e3a\u514d Node \u5355\u6587\u4ef6\u4e8c\u8fdb\u5236",
   "type": "module",
   "private": true,
   "publishConfig": {
@@ -53,7 +53,7 @@
   "scripts": {
     "build": "npm run build:packages && npm run build:bundle && npm run build:dts",
     "build:dts": "node scripts/build-dts.mjs",
-    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/skills",
+    "build:packages": "tsc -b tsconfig.build.json && npm run copy:builtin -w @kodax-ai/agent",
     "build:bundle": "node scripts/build-bundle.mjs",
     "dev": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
     "dev:cli": "node --max-old-space-size=4096 --require ./scripts/production-env.cjs --import tsx src/kodax_cli.ts",
