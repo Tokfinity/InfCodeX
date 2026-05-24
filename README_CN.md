@@ -426,7 +426,28 @@ KodaX 是基于 npm workspaces 的 TypeScript monorepo，**源码层 4 个 works
 | `@kodax-ai/coding` | Coding Agent:30+ 工具(含 `dispatch_child_task`/`send_message`/`task_stop`)、role prompts、agent loop、auto-continue + repo-intelligence protocol(v0.7.43 inline) | `@kodax-ai/llm`, `@kodax-ai/agent` |
 | `@kodax-ai/repl` | 完整交互式终端 UI（Ink / React、权限模式、命令系统、流式渲染） | `@kodax-ai/coding`, `ink`, `react` |
 
-根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+根目录 `src/kodax_cli.ts` 是 CLI 入口；`src/sdk-{agent,llm,coding,repl,skills,mcp,session}.ts` 是 SDK subpath 入口；构建产物在 `dist/`，单文件二进制在 `dist/binary/<target>/`。
+
+### 源码层 vs npm 发布层
+
+KodaX 有两层结构，SDK 用户需要分开理解：
+
+- **源码层**：上面 4 个 workspace 包（开发者读代码时看到的物理结构）。
+- **npm 发布层**：单个 bundled 包 `@kodax-ai/kodax`，对外暴露 7 个 SDK subpath（SDK 消费者 `import` 时看到的接口）。subpath 分两种角色：
+  - **完整包 subpath**（`/agent`、`/llm`、`/coding`、`/repl`）—— 每个 1:1 对应一个源码包，暴露完整公开 API。
+  - **窄子集 subpath**（`/skills`、`/mcp`、`/session`）—— 从 `/agent` 或 `/repl` 切出聚焦的能力子集，让"只用 Skills/MCP/会话管理"的消费者引入更小的依赖。
+
+| 源码包 | npm subpath | 类型 | 内容 | 典型消费者 |
+|---|---|---|---|---|
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | 完整包 | 12 provider LLM 抽象 (77 exports) | 独立 LLM 客户端 |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | 完整包 | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | 自定义 agent 框架 |
+| `packages/agent`  | `@kodax-ai/kodax/skills`  | **窄子集** | 仅 Skills 系统 —— `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` 等 (26 exports = v0.7.43 之前 `@kodax-ai/skills` 完整 API) | Skill 加载器、IDE 插件 |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **窄子集** | 仅 MCP —— `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` 等 (11 exports = v0.7.43 之前 `@kodax-ai/mcp` 完整 API) | MCP server 宿主 |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | 完整包 | Coding agent + 30+ 工具 + repo-intelligence (342 exports) | 构建 Claude Code 形态产品 |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | 完整包 | Ink TUI + 权限模式 + 命令系统 (193 exports) | 终端 UI 消费者 |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **窄子集** | 仅会话管理 —— `listSessions` / `forkSession` / `watchSessions` 等 (9 exports) | 读取 session 历史的 IDE 插件 |
+
+**经验法则**：需要 Runner / Agent / fan-out 时从 `/agent` 引入；只需要 skills 或 mcp API 时从 `/skills` 或 `/mcp` 引入，bundle 更小。窄子集是完整包的真子集 —— **不会**有额外符号。
 
 ```
 KodaX/                       # 4 workspace packages(FEATURE_194 v0.7.43)

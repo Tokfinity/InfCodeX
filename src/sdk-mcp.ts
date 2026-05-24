@@ -1,10 +1,17 @@
 /**
- * SDK subpath entry — `@kodax-ai/kodax/mcp` (v0.7.42; FEATURE_194 v0.7.43 inline).
+ * SDK subpath entry — `@kodax-ai/kodax/mcp` (v0.7.42; FEATURE_194 v0.7.43 inline + narrow).
  *
- * Re-exports the MCP surface from `@kodax-ai/agent` — MCP server config
- * types, capability provider, transport factory, catalog helpers, and
+ * Narrow subset alias: exposes ONLY the MCP capability surface — server
+ * config types, capability provider, transport factory, catalog helpers,
  * runtime diagnostics. Post-FEATURE_194 the MCP code lives at
  * `packages/agent/src/capabilities/mcp/`.
+ *
+ * Symbol set = the pre-FEATURE_194 `@kodax-ai/mcp` standalone package's
+ * complete public API. Migrating from v0.7.42 `@kodax-ai/mcp` requires
+ * only changing the import specifier; symbol coverage is unchanged.
+ *
+ * If you need agent framework symbols (Runner / fan-out / session) — those
+ * live under `@kodax-ai/kodax/agent`, not here.
  *
  * Usage:
  * ```ts
@@ -31,7 +38,57 @@
  * `@kodax-ai/kodax/mcp` minimal so consumers who only need the
  * transport / provider layer don't pull in the repl bundle.
  *
- * See docs/ADR.md ADR-024 for the SDK subpath formalization decision.
+ * Note: explicit named re-exports (not `export * from
+ * '@kodax-ai/agent/capabilities/mcp'`) because rollup-plugin-dts does
+ * not resolve package.json subpath exports for monorepo workspace packages
+ * — see sdk-session.ts comment. Runtime path is unchanged.
+ *
+ * See docs/ADR.md ADR-024 (SDK subpath formalization) and ADR-036
+ * (narrow-subset subpath convention).
  */
 
-export * from '@kodax-ai/agent';
+export type {
+  // config.js
+  McpServerConfig,
+  McpServersConfig,
+  McpTransportKind,
+  McpConnectMode,
+  // catalog.js
+  McpCapabilityKind,
+  McpCapabilityRisk,
+  McpCatalogItem,
+  McpCapabilityDescriptor,
+  McpServerCatalogSnapshot,
+  // runtime.js
+  McpServerRuntimeDiagnostics,
+  // provider.js
+  McpProviderOptions,
+  // transport.js
+  McpTransport,
+  McpTransportEvents,
+  // manager.js
+  McpServerStatus,
+  McpServerLogs,
+  McpServerToolList,
+  McpServerCatalog,
+} from '@kodax-ai/agent';
+
+export {
+  // catalog.js
+  defaultMcpCacheDir,
+  createMcpCapabilityId,
+  parseMcpCapabilityId,
+  searchMcpCatalog,
+  getMcpCachePaths,
+  // runtime.js
+  McpServerRuntime,
+  // provider.js
+  McpCapabilityProvider,
+  // transport.js
+  createMcpTransport,
+  // manager.js
+  McpManager,
+  createMcpManager,
+  // test-helpers.js
+  createMcpTestServerFixture,
+} from '@kodax-ai/agent';

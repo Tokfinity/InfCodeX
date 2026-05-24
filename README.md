@@ -334,7 +334,7 @@ KodaX/
 
 ### Package Overview
 
-Source-side workspace package names (`@kodax-ai/*`). npm consumers install the single bundled `@kodax-ai/kodax` package and import from SDK subpaths — see [SDK Usage](#sdk-usage) below.
+Source-side workspace package names (`@kodax-ai/*`). npm consumers install the single bundled `@kodax-ai/kodax` package and import from SDK subpaths — see [Source-side vs npm-published surface](#source-side-vs-npm-published-surface) and [SDK Usage](#sdk-usage) below.
 
 | Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
@@ -342,6 +342,27 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 | `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, yaml |
 | `@kodax-ai/coding` | Coding Agent — 30+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
+
+### Source-side vs npm-published surface
+
+KodaX has two layers that consumers should understand separately:
+
+- **Source-side**: 4 workspace packages above (what developers see when reading the repo).
+- **npm-published**: a single bundled package `@kodax-ai/kodax` with 7 SDK subpaths (what SDK consumers `import` from). The subpaths are split into two roles:
+  - **Full-package subpaths** (`/agent`, `/llm`, `/coding`, `/repl`) — each one maps 1:1 to a source workspace and exposes its complete public API.
+  - **Narrow-subset subpaths** (`/skills`, `/mcp`, `/session`) — each one exposes only a focused capability slice carved out of `/agent` or `/repl`. This lets consumers who only need (say) the Skills system import a much smaller surface without pulling in the full agent framework.
+
+| Source package | npm subpath | Type | What you get | Example consumer |
+|---|---|---|---|---|
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 12-provider LLM abstraction (77 exports) | Standalone LLM clients |
+| `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | Custom agent frameworks |
+| `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
+| `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (11 exports = pre-v0.7.43 `@kodax-ai/mcp` complete API) | MCP server hosts |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 30+ tools + repo-intelligence (342 exports) | Build a Claude Code-shape product |
+| `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (193 exports) | Terminal-UI consumers |
+| `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `forkSession` / `watchSessions` / ... (9 exports) | IDE plugins reading session history |
+
+**Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
 
 ---
 
