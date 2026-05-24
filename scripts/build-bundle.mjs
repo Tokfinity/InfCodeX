@@ -13,13 +13,18 @@
 //   8. dist/sdk-mcp.js       — SDK subpath `@kodax-ai/kodax/mcp` (v0.7.42)
 //   9. dist/chunks/*.js      — shared chunks produced by ESM code-splitting
 //                                across the 7 SDK entries (avoids 7× bundle bloat).
-//  10. dist/builtin/         — verbatim copy of packages/skills/dist/builtin/.
+//  10. dist/builtin/         — verbatim copy of
+//                                packages/agent/dist/capabilities/skills/builtin/
+//                                (FEATURE_194 v0.7.43; pre-v0.7.43 source was
+//                                packages/skills/dist/builtin/).
 //                                Path MUST stay 'dist/builtin/' (not 'builtin-skills/')
-//                                because @kodax-ai/skills resolveBuiltinPath() does
-//                                `path.join(__dirname, 'builtin')` and esbuild
+//                                because agent's resolveBuiltinPath() at
+//                                packages/agent/src/capabilities/skills/types.ts
+//                                computes `path.join(__dirname, 'builtin')` and esbuild
 //                                rewrites __dirname to the bundled dist/ directory.
 //
-// All 9 internal @kodax-ai/* sub-packages are inlined into the bundles via
+// All 4 internal @kodax-ai/* sub-packages (post-FEATURE_194 v0.7.43:
+// llm + agent + coding + repl) are inlined into the bundles via
 // esbuild's automatic transitive import tracking. All third-party packages
 // (and node built-ins) stay external and are listed in root package.json#dependencies.
 //
@@ -282,10 +287,16 @@ const sdkBytes = sdkBytesByEntry.index;
 //   relative depth: scripts (1) → <skill> (2) → builtin (3) → dist (root)
 //
 // CRITICAL: directory MUST be 'builtin' (not 'builtin-skills') because
-// @kodax-ai/skills' resolveBuiltinPath() at packages/skills/src/types.ts
-// computes path.join(__dirname, 'builtin'). esbuild rewrites __dirname to
-// the runtime bundled dist/ location, so we must mirror that name here.
-const skillsBuiltinSrc = path.join(repoRoot, 'packages/skills/dist/builtin');
+// agent's `resolveBuiltinPath()` at
+// packages/agent/src/capabilities/skills/types.ts computes
+// `path.join(__dirname, 'builtin')`. esbuild rewrites __dirname to the
+// runtime bundled dist/ location, so we must mirror that name here.
+//
+// FEATURE_194 (v0.7.43): skills inlined into agent at
+// `packages/agent/src/capabilities/skills/`; bundled builtin output now
+// lives at `packages/agent/dist/capabilities/skills/builtin` (produced by
+// `npm run copy:builtin -w @kodax-ai/agent` during `build:packages`).
+const skillsBuiltinSrc = path.join(repoRoot, 'packages/agent/dist/capabilities/skills/builtin');
 const skillsBuiltinDst = path.join(distDir, 'builtin');
 log(`Copying builtin skills: ${path.relative(repoRoot, skillsBuiltinSrc)} → ${path.relative(repoRoot, skillsBuiltinDst)}`);
 cpSync(skillsBuiltinSrc, skillsBuiltinDst, { recursive: true });
