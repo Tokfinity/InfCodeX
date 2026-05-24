@@ -805,7 +805,7 @@ export { LINEAGE_ENTRY_TYPES, LineageExtension, LineageCompaction } from '@kodax
 // (v0.7.27) alongside the `KodaX*` prefix cleanup.
 export type { ExecOptions, ExecResult, WebhookOptions, WebhookResult } from './extensions/helpers.js';
 
-// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax-ai/mcp`. Barrel
+// FEATURE_082 (v0.7.24): MCP provider moved to `@kodax-ai/agent`. Barrel
 // re-export kept for batteries-included consumers; not a deprecation shim.
 export type {
   McpServerConfig,
@@ -825,7 +825,7 @@ export type {
   McpServerLogs,
   McpServerToolList,
   McpServerCatalog,
-} from '@kodax-ai/mcp';
+} from '@kodax-ai/agent';
 export {
   McpCapabilityProvider,
   McpServerRuntime,
@@ -837,7 +837,7 @@ export {
   getMcpCachePaths,
   McpManager,
   createMcpManager,
-} from '@kodax-ai/mcp';
+} from '@kodax-ai/agent';
 
 // FEATURE_087 + FEATURE_088 (v0.7.28): Construction Runtime — runtime-
 // generated tools / agents / skills. v0.7.28 ships tool generation only.

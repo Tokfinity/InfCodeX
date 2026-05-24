@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createExtensionRuntime } from '../extensions/runtime.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { registerConfiguredMcpCapabilityProvider } from '../capabilities/providers/mcp-adapter.js';
-import { createMcpTestServerFixture } from '@kodax-ai/mcp';
+import { createMcpTestServerFixture } from '@kodax-ai/agent';
 import {
   toolMcpCall,
   toolMcpDescribe,

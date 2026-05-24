@@ -1,7 +1,7 @@
 {
   "name": "@kodax-ai/coding",
   "version": "0.7.43",
-  "description": "KodaX Coding Agent - Coding 工具 + Prompts",
+  "description": "KodaX Coding Agent - Coding \u5de5\u5177 + Prompts",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,6 @@
   "dependencies": {
     "@kodax-ai/agent": "*",
     "@kodax-ai/llm": "*",
-    "@kodax-ai/mcp": "*",
     "@kodax-ai/repointel-protocol": "*",
     "@kodax-ai/session-lineage": "*",
     "@kodax-ai/skills": "*",

@@ -4,7 +4,6 @@
     { "path": "./packages/llm" },
     { "path": "./packages/tracing" },
     { "path": "./packages/agent" },
-    { "path": "./packages/mcp" },
     { "path": "./packages/session-lineage" },
     { "path": "./packages/repointel-protocol" },
     { "path": "./packages/skills" },

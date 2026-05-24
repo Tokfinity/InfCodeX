@@ -1,7 +1,7 @@
 {
   "name": "@kodax-ai/agent",
   "version": "0.7.43",
-  "description": "KodaX Agent — 通用 Agent 框架（智能体底座）。Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware。不绑定 coding。",
+  "description": "KodaX Agent \u2014 \u901a\u7528 Agent \u6846\u67b6\uff08\u667a\u80fd\u4f53\u5e95\u5ea7\uff09\u3002Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware\u3002\u4e0d\u7ed1\u5b9a coding\u3002",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
@@ -14,6 +14,10 @@
     "./messaging/queue": {
       "types": "./dist/messaging/queue.d.ts",
       "import": "./dist/messaging/queue.js"
+    },
+    "./capabilities/mcp": {
+      "types": "./dist/capabilities/mcp/index.d.ts",
+      "import": "./dist/capabilities/mcp/index.js"
     }
   },
   "scripts": {

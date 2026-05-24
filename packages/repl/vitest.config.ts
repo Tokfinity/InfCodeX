@@ -18,7 +18,7 @@ export default defineConfig({
     // src/index.ts makes test runs source-truth and build-independent.
     //
     // Transitive deps matter: @kodax-ai/coding's source pulls in
-    // @kodax-ai/llm, @kodax-ai/agent, @kodax-ai/mcp, @kodax-ai/repointel-protocol,
+    // @kodax-ai/llm, @kodax-ai/agent, @kodax-ai/agent, @kodax-ai/repointel-protocol,
     // @kodax-ai/session-lineage — even tests that don't import those
     // directly will fail at module-graph resolution if they're missing.
     alias: {
@@ -27,7 +27,7 @@ export default defineConfig({
       '@kodax-ai/agent': path.resolve(__dirname, '..', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': path.resolve(__dirname, '..', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': path.resolve(__dirname, '..', 'coding', 'src', 'index.ts'),
-      '@kodax-ai/mcp': path.resolve(__dirname, '..', 'mcp', 'src', 'index.ts'),
+      '@kodax-ai/agent': path.resolve(__dirname, '..', 'mcp', 'src', 'index.ts'),
       '@kodax-ai/repointel-protocol': path.resolve(__dirname, '..', 'repointel-protocol', 'src', 'index.ts'),
       '@kodax-ai/session-lineage': path.resolve(__dirname, '..', 'session-lineage', 'src', 'index.ts'),
       '@kodax-ai/skills': path.resolve(__dirname, '..', 'skills', 'src', 'index.ts'),

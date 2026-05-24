@@ -448,3 +448,9 @@ export {
 // truncation. Consumed by `@kodax-ai/coding` SP builder (Phase B/C) and
 // `@kodax-ai/repl` `/memory` slash + transcript badge (Phase D).
 export * from './memory/index.js';
+
+// ============== FEATURE_194 v0.7.43 — MCP capability (inlined from @kodax-ai/mcp) ==============
+// Originally a standalone package, inlined per ADR-036 to consolidate single-consumer
+// agent capabilities. Public API is byte-identical; downstream import via
+// '@kodax-ai/agent' top-level or '@kodax-ai/agent/capabilities/mcp' subpath.
+export * from './capabilities/mcp/index.js';

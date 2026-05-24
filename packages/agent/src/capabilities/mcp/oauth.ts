@@ -9,7 +9,7 @@ import { randomBytes, createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
 
-import { getAgentConfigPath } from '@kodax-ai/agent';
+import { getAgentConfigPath } from '../../runtime/agent-home.js';
 
 /** Escape HTML special characters to prevent XSS in OAuth callback pages. */
 function escapeHtml(str: string): string {

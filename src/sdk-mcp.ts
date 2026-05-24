@@ -1,7 +1,7 @@
 /**
  * SDK subpath entry — `@kodax-ai/kodax/mcp` (v0.7.42).
  *
- * Re-exports the entire `@kodax-ai/mcp` public API — MCP server config
+ * Re-exports the entire `@kodax-ai/agent` public API — MCP server config
  * types, capability provider, transport factory, catalog helpers, and
  * runtime diagnostics.
  *
@@ -33,4 +33,4 @@
  * See docs/ADR.md ADR-024 for the SDK subpath formalization decision.
  */
 
-export * from '@kodax-ai/mcp';
+export * from '@kodax-ai/agent';

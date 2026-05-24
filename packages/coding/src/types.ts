@@ -403,14 +403,14 @@ export interface KodaXProviderPolicyHints {
   workIntent?: KodaXTaskWorkIntent;
 }
 
-// FEATURE_082 (v0.7.24): MCP server configuration moved to `@kodax-ai/mcp`.
+// FEATURE_082 (v0.7.24): MCP server configuration moved to `@kodax-ai/agent`.
 // `KodaX*` aliases re-exported for backward compatibility.
 import type {
   McpServerConfig,
   McpServersConfig,
   McpTransportKind,
   McpConnectMode,
-} from '@kodax-ai/mcp';
+} from '@kodax-ai/agent';
 
 export type KodaXMcpTransport = McpTransportKind;
 export type KodaXMcpConnectMode = McpConnectMode;

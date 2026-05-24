@@ -31,7 +31,7 @@
  * `createMcpManager` again) to pick up the new wire.
  */
 
-import type { CapabilityResult, CapabilityKind } from '@kodax-ai/agent';
+import type { CapabilityResult, CapabilityKind } from '@kodax-ai/llm';
 
 import type { McpCapabilityDescriptor, McpCatalogItem, McpServerCatalogSnapshot } from './catalog.js';
 import type { McpServerConfig, McpServersConfig, McpConnectMode } from './config.js';
