@@ -2146,3 +2146,126 @@ isolation: z.enum(['worktree']).optional().describe(
 
 ---
 
+## ADR-036: Package Consolidation — Inline 5 Single-Consumer Subpackages into agent / coding (FEATURE_194, v0.7.43)
+
+**Status**: Planned 2026-05-23
+**Driver**: KodaX 9 包 monorepo 实测 ~132k LoC（之前 framing "70k" 是 `find ... | xargs wc -l` 在 Windows 路径下的 measurement bug，真实 coding=66k 不是 4.7k）。**KodaX 不是代码更少，是投入更多能力（construction / repo-intelligence / task-engine / multi-tier middleware）但同时把包结构碎切**。9 包里 5 个明显过度切分（grep 实测全 0 外部 npm consumer，违反 CLAUDE.md YAGNI "3+ use cases" 标准），且 `@kodax-ai/session-lineage` 还存在 latent bug（agent 4 文件 import 它但 agent/package.json 没声明 dep，monorepo workspace 下靠 tsconfig path 工作，发布 npm 会断）。包合并目的不是"减代码"，而是减包数对应的 carrying cost：10 → 4 包发布 cycle / 9 → 4 build graph 节点 / 84 处 cross-pkg import 收敛到内部 relative path / IDE jump-to-source 顺畅。
+
+**Decision**:
+
+将 5 个 single-consumer 子包内联到 agent 或 coding：
+
+| 子包 | 目标位置 | 内联理由 |
+|---|---|---|
+| `@kodax-ai/mcp` (2.7k) | `agent/src/capabilities/mcp/` | single-consumer (coding+repl+root src)，已 depend on agent + llm |
+| `@kodax-ai/skills` (2.5k) | `agent/src/capabilities/skills/` | single ecosystem (coding+repl)，无非-agent 复用场景 |
+| `@kodax-ai/tracing` (0.8k) | `agent/src/tracing/` | **agent self-merge** — agent 本就 depend tracing |
+| `@kodax-ai/session-lineage` (5.6k) | `agent/src/session-lineage/` | **包描述自认 agent 子系统**，v0.7.35.1 是 deliberate split from agent，**修复 latent dep bug** |
+| `@kodax-ai/repointel-protocol` (0.07k) | `coding/src/repo-intelligence/protocol.ts` | 69 LoC type-only contract，0 外部消费者，未来 30 分钟可 re-extract |
+
+目标结构 **4 包**（对齐 pi 4 包数量）：
+
+```
+packages/
+├── llm/        # 7.3k — LLM provider 抽象 (12 provider + stream 协议 + model registry)
+├── agent/      # ~20.8k — Agent 框架 + capabilities + tracing + session-lineage
+│   └── src/
+│       ├── primitives/             # 现有：Agent / Runner / Handoff / Guardrail / Admission / Messaging / Memory / Team / Scratchpad / Construction
+│       ├── runtime-middleware/     # 现有
+│       ├── capabilities/           # 新增
+│       │   ├── mcp/                # 原 @kodax-ai/mcp 全部内容
+│       │   └── skills/             # 原 @kodax-ai/skills 全部内容
+│       ├── tracing/                # 原 @kodax-ai/tracing 全部内容（self-merge）
+│       ├── session-lineage/        # 原 @kodax-ai/session-lineage 全部内容（v0.7.35.1 Batch B 回流闭环）
+│       └── index.ts                # 顶层 re-export — 公开 API byte-identical
+├── coding/     # ~66.4k — Coding tools + prompts + agent-runtime + task-engine + construction + repo-intelligence
+│   └── src/
+│       ├── repo-intelligence/
+│       │   ├── protocol.ts         # 新增 — 原 @kodax-ai/repointel-protocol 内容
+│       │   ├── premium-client.ts
+│       │   └── runtime.ts
+│       ├── (其它 16 子目录不变)
+│       └── index.ts                # re-export REPOINTEL_* + 原 coding API
+└── repl/       # ~37.7k — Ink 终端 UI + REPL loop + slash commands + TUI 原语
+```
+
+### 包对应关系 — KodaX 4 包 vs pi 4 包
+
+| KodaX 4 包 | pi 4 包 | 量级对比 |
+|---|---|---|
+| `@kodax-ai/llm` 7.3k | `pi/ai` 30k | KodaX llm 更精简（pi 把更多 provider impl 直接 vendor 进 ai 包） |
+| `@kodax-ai/agent` 20.8k | `pi/agent` 8k | KodaX agent 含 capabilities + session-lineage + tracing 比 pi 大 2-3 倍 |
+| `@kodax-ai/coding` 66.4k | `pi/coding-agent` 47k | KodaX coding 更大（含 construction / repo-intelligence / multi-instance / 复杂 task-engine 等 pi 无的能力） |
+| `@kodax-ai/repl` 37.7k | `pi/tui` 11k + （pi/coding-agent 内含 REPL loop） | KodaX 单独包含 Ink UI + REPL loop + slash commands；pi 把 TUI primitives 单独包但 REPL loop 在 coding-agent 内 |
+
+包数对齐，但内容分布不一样：pi "少包大单元 + tui 独立" vs KodaX "少包大单元 + repl 独立"。本 ADR 后 KodaX 结构成熟到 pi-shape 的镜像（4 vs 4，不强求镜像内容分布）。
+
+### Why not alternatives
+
+- **方案 X — 全包合并到 agent 形成 3 包结构 (llm/agent/repl)**: rejected。`coding` 66k LoC + 多个 distinct subsystem (task-engine / agent-runtime / tools / construction / repo-intelligence) 量级独立。`coding` 是 KodaX 的"应用层"承载具体 coding agent 实现，跟 agent 的"框架层"职责分离明确。
+- **方案 Y — 保留 6 包（mcp/skills/tracing 合，session-lineage + repointel-protocol 保留独立）**: rejected per 2026-05-23 用户质疑后 grep 验证。session-lineage 包描述自认 agent 子系统 + latent dep bug；repointel-protocol "multi-host" 是意图非事实（0 外部消费者）。保留独立是 hypothetical-future-need rationalization 违反 YAGNI。
+- **方案 Z — 起新聚合包名 `@kodax-ai/agent-capabilities` 装 mcp+skills**: rejected。包数没减（9 → 9-2+1 = 8）、release 复杂度没降、capabilities 类型未收敛到 3+ 案例（YAGNI 拒绝抽象）、改名只是 cosmetic relabel 不解决核心问题。
+- **方案 W — 跨多版本拆分（v0.7.43 mcp / v0.7.44 skills / v0.7.45 tracing / v0.7.46 session-lineage / v0.7.47 repointel-protocol）**: rejected。5 个 inline 操作 wire pattern 完全同型（re-export + import 替换 + package.json + tsconfig），分版本只是无谓增加 release coordination；单 session 2.5-3 天 atomic ship 完成更经济，且 session-lineage 的 latent dep bug 应一次修不应拖。
+- **方案 V — 引入 feature flag dual-path 让旧 `@kodax-ai/mcp` 等 import 走 deprecation shim**: rejected per [[feedback_no_parallel_refactor_paths]] — KodaX 节奏是"ADR + 一次性替换 + 多 commit/push + 可延迟 release"，不引入并行新旧代码路径。
+- **方案 U — 保留 session-lineage 独立但修 agent/package.json deps**: rejected。修 deps 是把 latent bug 显式化为正式 dep 关系，但 session-lineage 跟 agent 是 circular dep（session-lineage depend agent + agent import session-lineage），修 deps 后 npm publish 仍可能因循环失败。合并消除循环。
+
+### Consequences
+
+**正面**：
+- **Release 周期简化**：npm publish 10 → 4 包 / build graph 节点 9 → 4 / tsc -b 拓扑链短
+- **84 处 cross-pkg import 收敛**：mcp 11 + skills 14 + tracing 10 + session-lineage 45+ + repointel 4 = 84 处 `@kodax-ai/*` import 转为 intra-package relative path，IDE jump-to-source 顺畅
+- **"独立可用" 话语真实化**：剩 4 包每个都有独立 SDK use case（llm 提供 LLM 抽象 / agent 提供 agent 框架 / coding 提供 coding agent / repl 提供终端 UI）
+- **修复 latent bug**：agent/package.json import-without-dep mismatch（session-lineage）自然消除
+- **维护负担下降**：不再为 5 个 sub-package 各维护 README / package.json / tsconfig / files glob
+
+**负面 / 风险**：
+- **session-lineage 是 MED risk 单点** —— agent compaction critical path，9 个 cap-* contract test 全依赖。**缓解**：4a/4b 拆 soft-delete 两步，4a 保留 stub + deprecation re-export 兜底，4a commit 强跑 compaction.test 全套 + agent runner.test + 9 个 cap-* contract test + task-engine compaction.test。
+- **skills 失去 zero-dep claim**：agent transitive deps（llm 现 agent-internal）通过 inline 后暴露给 skills 消费者。**缓解**：subpath export `@kodax-ai/agent/capabilities/skills` 兜底 tree-shake。
+- **外部 npm consumer breakage**（若有）：原 `import { X } from '@kodax-ai/{mcp,skills,tracing,session-lineage,repointel-protocol}'` 在 v0.7.43 后失败。**缓解**：CHANGELOG breaking note + sed 替换模板（per FEATURE_147 migration playbook）；先 `npm view` 5 包 download stats 确认（基本预计零）；如非零再发最后版 stub 带 deprecation warning。
+- **repointel-protocol 未来 re-extract**：69 LoC type-only 文件，若 codex/claude/opencode 真要接 daemon，30 分钟可 extract 出来。**可接受**。
+- **agent 包变大到 20.8k**：跟 pi/agent 8k 相比偏大，跟 pi/coding-agent 47k 相比仍是 1/2 量级，认知负担可控。
+
+### 保留行为（zero behavior change）
+
+- 所有公开 API 类型签名 / 函数语义 / 默认值 / 错误形态 byte-identical
+- agent 顶层 re-export：`MCPManager` / `MCPCatalog` / `SkillRegistry` / `SkillLoader` / `SkillResolver` / `Tracer` / `Span` / `SpanData` / `TracingProcessor` / `LineageExtension` / `LineageCompaction` / `appendSessionLineageLabel` / `applyLineageTruncation` / `applySessionCompaction` / `buildSessionTree` / `createSessionLineage` / `forkSessionLineage` / 等 ~30+ session-lineage helpers
+- coding 顶层 re-export：`REPOINTEL_CONTRACT_VERSION` / `REPOINTEL_DEFAULT_ENDPOINT` / `RepoIntelligenceHost` / `RepoIntelligenceIntent` / `RepointelCommand` / `RepointelRequestPayload` / `RepointelRpcRequest` / `RepointelRpcResponse` / `RepoPreturnBundle` 等 type/const
+- subpath export 兜底（optional 但提供）：
+  ```ts
+  import { MCPManager } from '@kodax-ai/agent/capabilities/mcp';
+  import { SkillRegistry } from '@kodax-ai/agent/capabilities/skills';
+  import { Tracer } from '@kodax-ai/agent/tracing';
+  import { LineageExtension } from '@kodax-ai/agent/session-lineage';
+  import { REPOINTEL_CONTRACT_VERSION } from '@kodax-ai/coding';
+  ```
+- 下游 consumer 仅需改 import source string 一处（5 个 sed 替换覆盖所有迁移）：
+  ```bash
+  sed -i 's|@kodax-ai/mcp|@kodax-ai/agent|g' src/**/*.ts
+  sed -i 's|@kodax-ai/skills|@kodax-ai/agent|g' src/**/*.ts
+  sed -i 's|@kodax-ai/tracing|@kodax-ai/agent|g' src/**/*.ts
+  sed -i 's|@kodax-ai/session-lineage|@kodax-ai/agent|g' src/**/*.ts
+  sed -i 's|@kodax-ai/repointel-protocol|@kodax-ai/coding|g' src/**/*.ts
+  ```
+
+### Sequencing
+
+本 ADR 配套 FEATURE_194 在 v0.7.43 release window 内 ship，**严格在 FEATURE_193（V1 Chain Full Retirement）12-commit 全部完成 + push + 全测试绿 + git working tree clean 之后启动**。FEATURE_193 已于 2026-05-23 ship 完成（commits `9fb07d67` → `26af8605`），working tree clean 已验证。两个 refactor 在文件层完全不相交（193 改 `packages/coding/src/agents/` + `agent-runtime/`；194 改 `packages/{mcp,skills,tracing,session-lineage,repointel-protocol}/` 包根 + 所有 `@kodax-ai/*` import 站点），但顺序化 ship 避免 import graph 在 193 删除 V1 dead code 过程中被 194 同时改写带来认知负担和 git merge 风险。
+
+### References
+
+- 配套实施：FEATURE_194 [v0.7.43.md](features/v0.7.43.md#feature_194-package-consolidation)
+- 先例：FEATURE_147 v0.7.37 npm publishing pipeline + `@kodax/ai` → `@kodax-ai/llm` rename（853 处 import-update 单次 atomic ship 成功，migration playbook 模板源）
+- 先例：FEATURE_142 v0.7.35.1 Batch B — session-lineage 从 agent 拆出去的历史；本 ADR 把它合回去 closure the loop
+- 先例：FEATURE_142 v0.7.35.1 Batch E — Package Boundary Cleanup + Capability Sections Dedup Helper
+- 前置：FEATURE_193 v0.7.43 V1 Chain Full Retirement（codebase 最小化 baseline，已 ship 12 commits）
+- pi reference（项目本地已不在，凭 2026-05-23 earlier session 数据）: 4 包 = ai / agent / coding-agent / tui
+- 关键 memory：
+  - [`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md) — 不引入并行新旧代码路径
+  - [`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md) — atomic `git add + commit`
+  - [`feedback_selective_hunk_staging`](../../memory/feedback_selective_hunk_staging.md) — 并发 thread 同文件用 `git add -p`
+  - [`feedback_workspace_packages_need_rebuild`](../../memory/feedback_workspace_packages_need_rebuild.md) — packages/*/src 改完必 `npm run build:packages`
+- [ADR-021](#adr-021-agent-framework-boundary) — agent 包边界历史 trade-off
+- CLAUDE.md "Add code cautiously" + "NEVER add abstractions without 3+ use cases" + "极致轻量化" 三条原则的 YAGNI 边界判定
+
+---
+
