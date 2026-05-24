@@ -265,8 +265,9 @@ import {
 
 // CAP-039 (`checkPromiseSignal`) lives in
 // `agent-runtime/thinking-mode-replay.ts` since FEATURE_100 P2.
-// Re-exported above so external callers (scout-signals.ts, ../index.js)
-// keep working without an import-path churn.
+// Re-exported above so external callers (`../index.js`) keep working
+// without an import-path churn. The former in-tree caller
+// `scout-signals.ts` was deleted in FEATURE_193 V1 cleanup.
 
 // CAP-038 (`hasQueuedFollowUp`) lives in
 // `agent-runtime/event-emitter.ts` since FEATURE_100 P2.
@@ -1155,9 +1156,11 @@ export async function runSubstrate(
         // run the iter-terminal helper so the final snapshot save + signal
         // extraction match the pre-FEATURE_100 byte-for-byte behavior, but
         // return with `limitReached: false` — this is a model-driven
-        // completion, NOT iteration-budget exhaustion. Without the explicit
-        // `false` flag, downstream `scout-signals.ts` would mis-tag this as
-        // 'budget-exhausted'.
+        // completion, NOT iteration-budget exhaustion. The explicit `false`
+        // flag previously kept the (since-deleted) `scout-signals.ts`
+        // budget-exhausted detection from mis-tagging this turn; FEATURE_193
+        // V1 cleanup retired that consumer but the flag is preserved as the
+        // canonical signal-extraction contract for future consumers.
         {
           const iterTerminal = await applyIterationLimitTerminal({
             options,
@@ -1307,8 +1310,11 @@ export async function runSubstrate(
         // tool turn returned no tool_use blocks. Same routing as the
         // text-only break above — run the iter-terminal helper for
         // snapshot save + signal extraction, return with
-        // `limitReached: false` so downstream `scout-signals.ts` does NOT
-        // mis-tag this as 'budget-exhausted'.
+        // `limitReached: false` so the canonical signal-extraction
+        // contract continues to mark this as a model-driven completion
+        // (the former `scout-signals.ts` budget-exhausted consumer was
+        // retired in FEATURE_193 V1 cleanup; the flag is preserved as
+        // the contract anchor).
         {
           const iterTerminal = await applyIterationLimitTerminal({
             options,

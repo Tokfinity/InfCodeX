@@ -3,11 +3,12 @@
  *
  * Capability inventory: docs/features/v0.7.29-capability-inventory.md#cap-039-promise-signal-split-for-thinking-mode-replay
  *
- * Recognises the convention used by managed-protocol harnesses (Scout,
- * Planner, Generator, Evaluator) to embed a single-line signal at the end
- * of an assistant turn — e.g. `[CONFIRMED H1_EXECUTE_EVAL]` — that downstream
- * lifecycle code (scout-signals.ts, evaluator gating, etc.) inspects to
- * decide whether to advance the harness state.
+ * Recognises the convention historically used by V1 managed-protocol
+ * harnesses (Scout / Planner / Generator / Evaluator) to embed a single-line
+ * signal at the end of an assistant turn — e.g. `[CONFIRMED H1_EXECUTE_EVAL]`.
+ * Most of those downstream consumers (`scout-signals.ts`, in-chain Evaluator
+ * gating) were retired in FEATURE_184 / FEATURE_193; the helper is kept as
+ * the canonical signal-extraction primitive for any future consumer.
  *
  * Returns `[signal, residual]` where:
  *   - `signal`  — uppercased tag (e.g. `CONFIRMED`) or `''` when absent

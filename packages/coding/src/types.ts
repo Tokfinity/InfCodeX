@@ -1327,81 +1327,27 @@ export interface KodaXManagedVerdictPayload {
 }
 
 /**
- * Signals surfaced by the harness (not the LLM) when Scout's completion looks
- * suspicious. See runManagedScoutStage for the detection logic.
+ * Signals surfaced by the harness (not the LLM) when V1 Scout's completion
+ * looked suspicious.
+ *
+ * FEATURE_193 (v0.7.43) deep V1 cleanup: V1 Scout role is retired and the
+ * Runner-driven path no longer fires `onScoutSuspiciousCompletion`. The
+ * type is kept on the SDK surface so the `KodaXEvents.onScoutSuspiciousCompletion`
+ * callback signature continues to compile for pre-1.0 SDK consumers (e.g.
+ * the REPL renderers that still register a handler). New code MUST NOT
+ * emit this signal.
  */
 export type KodaXScoutSuspiciousSignal =
   | 'mutation-expected-but-none'
   | 'budget-exhausted'
   | 'no-formal-completion';
 
-export interface KodaXManagedScoutPayload {
-  summary?: string;
-  scope: string[];
-  requiredEvidence: string[];
-  reviewFilesOrAreas?: string[];
-  evidenceAcquisitionMode?: 'overview' | 'diff-bundle' | 'diff-slice' | 'file-read';
-  confirmedHarness?: KodaXTaskRoutingDecision['harnessProfile'];
-  harnessRationale?: string;
-  blockingEvidence?: string[];
-  directCompletionReady?: 'yes' | 'no';
-  /**
-   * FEATURE_078 (v0.7.29): Scout's optional non-binding suggestion for
-   * the reasoning depth downstream workers (Planner / Generator /
-   * Evaluator) should use. Resolved by `resolveRoleReasoning(role,
-   * userCeiling, profile, scoutHint)` as the L3 input — clamped by L1
-   * (user ceiling) and L2 (agent profile max). Scout SHOULD set this
-   * sparingly: only when the scoped task signals atypically low
-   * complexity (`'quick'`) or atypically high stakes (`'deep'`); leave
-   * undefined for the default path so workers stick to their own
-   * `Agent.reasoning.default`.
-   */
-  downstreamReasoningHint?: KodaXReasoningMode;
-  userFacingText?: string;
-  skillMap?: {
-    skillSummary?: string;
-    executionObligations: string[];
-    verificationObligations: string[];
-    ambiguities: string[];
-    projectionConfidence?: KodaXSkillProjectionConfidence;
-  };
-  /**
-   * Harness-observed confidence in Scout's completion. 'confident' is the default
-   * (omitted). 'uncertain' means the harness detected signals that Scout may not
-   * have actually finished (e.g. mutation task with zero mutations, budget
-   * exhausted without explicit completion, tool calls followed by text-only exit
-   * without a completion statement).
-   *
-   * This field is set by the harness, not by the LLM — emit_managed_protocol
-   * payloads from models are ignored here and overwritten.
-   */
-  completionConfidence?: 'confident' | 'uncertain';
-  /** Which signals contributed to an 'uncertain' confidence verdict. */
-  suspiciousSignals?: KodaXScoutSuspiciousSignal[];
-}
-
-export interface KodaXManagedContractPayload {
-  summary?: string;
-  successCriteria: string[];
-  requiredEvidence: string[];
-  constraints: string[];
-}
-
-export interface KodaXManagedHandoffPayload {
-  status: 'ready' | 'incomplete' | 'blocked';
-  summary?: string;
-  evidence: string[];
-  followup: string[];
-  userFacingText: string;
-}
-
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the V1 chain payload slots
-// (`scout` / `contract` / `handoff`) have been removed physically. Only
-// the verdict slot remains — the Sidecar Verifier (FEATURE_184) is the
-// sole emitter on V2. The slice type defs above
+// (`scout` / `contract` / `handoff`) and their slice type defs
 // (`KodaXManagedScoutPayload` / `KodaXManagedContractPayload` /
-// `KodaXManagedHandoffPayload`) are retained so unit tests that mint
-// fixture payloads for the legacy parser still compile.
+// `KodaXManagedHandoffPayload`) have been removed physically — V1 chain
+// retired, no V2 caller mints these payloads. Only the verdict slot
+// remains; the Sidecar Verifier (FEATURE_184) is the sole emitter on V2.
 export interface KodaXManagedProtocolPayload {
   verdict?: KodaXManagedVerdictPayload;
 }

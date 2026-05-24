@@ -88,10 +88,14 @@ import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifi
 import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
 import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
-// FEATURE_193 (v0.7.43): `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` +
-// `detectScoutSuspiciousSignals` imports removed — last consumer
-// (H0_DIRECT scout suspicious-completion gate at the end of runManaged-
-// TaskViaRunnerInner) deleted alongside the V1 Scout role.
+// FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
+// module was deleted — `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` /
+// `detectScoutSuspiciousSignals` / `hadPriorAssistantToolCall` etc. had
+// zero callers after the V1 H0_DIRECT scout suspicious-completion gate
+// (at the end of runManagedTaskViaRunnerInner) was removed. The
+// `KodaXEvents.onScoutSuspiciousCompletion` callback remains exposed
+// on the SDK type surface for pre-1.0 consumer compat but is no longer
+// fired by the Runner-driven path.
 import type { ManagedRolePromptContext } from './_internal/managed-task/role-prompt-types.js';
 import {
   sanitizeEvaluatorPublicAnswer,
@@ -1792,11 +1796,11 @@ async function runManagedTaskViaRunnerInner(
   // Issue 127 (review feedback): clean up the checkpoint EARLY — the
   // moment Runner.run resolves successfully — so any throw from the
   // post-run synchronous block below (`buildManagedTaskPayload` /
-  // `observer.completed`'s user-provided callbacks /
-  // `detectScoutSuspiciousSignals`) cannot bypass cleanup and leave an
-  // orphan. None of the post-run code reads checkpoint.json from disk,
-  // so deleting it early is semantically equivalent to the original
-  // late-cleanup placement, just with broader error coverage.
+  // `observer.completed`'s user-provided callbacks) cannot bypass
+  // cleanup and leave an orphan. None of the post-run code reads
+  // checkpoint.json from disk, so deleting it early is semantically
+  // equivalent to the original late-cleanup placement, just with
+  // broader error coverage.
   await cleanupRunCheckpoint();
 
   // FEATURE_184 (v0.7.45) Phase C.2: F167 Evaluator terminal-verdict
