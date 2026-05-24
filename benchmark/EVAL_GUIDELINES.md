@@ -175,6 +175,77 @@ OK = process exit 0 是个**极其弱的信号**：
 4. **Positive-case 工具调用判定不能用 `tool_name\s*\(` 单一 syntax**。生产 panel 里 zhipu/glm51 等模型实测会用 `<tool_name>(args)` / `<tool_name>...</tool_name>` / `<tool_call>{"name":"tool_name", ...}</tool_call>` 等多种 syntax；要求 `name` 后紧跟 `(` 的 regex 会把 syntax 漂移误判成 FN。规则：tool-name detection 至少覆盖 4 种 syntax —— `tool_name(`、`"name":"tool_name"`、`<tool_name>`、`name=tool_name`/`name: tool_name`。参考实现见 `benchmark/datasets/feature-120-child-steering/cases.ts` `buildToolNamePatterns`。
 5. **真实案例 2026-05-12 (FEATURE_120 Phase 5b)**：第一版 `task_stop\s*\(` regex 让 zhipu/glm51 在 task_stop 触发 case 上误判 0/5；rejudge 后实际 5/5（regex 全部 false negative，zhipu 输出形式如 `<task_stop>(...)`、`<tool_call[]>{"name":"task_stop"...}</tool_call[]>`、XML 嵌套 + YAML 内嵌等）。整体 50 个 run disagreement 14%，超 §3 的 10% 阈值。是 FEATURE_151 Slice I 反模式 7 教训之后的第二次同类事故。
 
+### 反模式 8：Synthetic eval 用简化版 tool descriptions（2026-05-24 补充）
+
+很多 prompt-eval driver 在 system prompt 里只放 brief stub TOOL_DOCS（10-20 行）描述工具签名，而不是 production 实际下发给 LLM 的完整 description（每个 tool 1-10 KB）。
+
+**问题**：
+- Eval 测出的"prompt 改动效果"实际是 brief stub 环境的效果，不能 transfer 到 production
+- 工具 description 本身就是 LLM-facing prompt，重组 / 加长 / 改 layered structure 会影响模型决策
+- FEATURE_189 batch4 + todo desc refactor 2026-05-24 真实案例：原 batch2 eval driver 用 ~120 char brief desc，跑出来 zhipu/glm51 dispatch_intent rate 实际是"模型在 brief context 下的默认行为"，不是 production 的真实行为
+
+**强制规则**：
+1. 测试 worker-role-prompt 章节改动时，eval driver 必须包含 production 实际 `KodaXToolDefinition.description` 字节（不是简化版）。harness 的 `tools: readonly KodaXToolDefinition[]` 参数把它们走 LLM API tools 通道下发，与 production 一致
+2. 测试 tool description 本身改动时，**v_baseline 用 pre-change description bytes**、**v_proposed 用 post-change description bytes**，二者必须 byte-aligned，schema (`input_schema`) 不变只动 description
+3. 测试 prompt 章节 X 改动时，driver 必须包含**所有与 X 交互的章节 Y/Z**（PLAN-FIRST 改动测试要带 SCOPE COMMITMENT + PLAN-LIST HYGIENE + DISPATCH，不能只 mock PLAN-FIRST）
+
+**参考实现**：`tests/feature-189-todo-desc-refactor-pilot.eval.ts`（4 个 todo_* desc 通过 tools param 下发 baseline vs proposed）。
+
+### 反模式 9：Behavioral-neutral hygiene refactor 直接跑 5-alias panel（2026-05-24 补充）
+
+Content-equivalent refactor（语义保留 byte 重排：例如 monolithic prose → layered "When to Use / When NOT to Use" sections / 同样信息换叙述形式）的 expected behavior 是**行为中性**（no regression no lift），不需要花 ~$4-6 跑 5-alias panel。
+
+**正确成本曲线**：
+1. **Layer 1**（$0）：先做内容等价性 diff —— 是否 strictly preserves semantic content？如果是，behavioral neutrality is expected by construction
+2. **Layer 2 pilot 2-alias × 2 case × 3 runs**（~$1）：
+   - 至少 1 case 在两个 variant 都达到 saturation（floor 或 ceiling）→ 该 dimension 无信号 → behaviorally identical
+   - 至少 1 case 在两个 variant 都达 perfect parity（100/100% / 0/0%）→ regression 路径已封死
+3. **如果以上两条满足 → SHIP，不跑 panel**
+4. **如果 pilot 出现 cross-variant divergence**（即使 1-2 cell）→ 进 5-alias panel + 3-judge audit
+
+**为什么这样**：
+- Behavioral-neutral refactor 的 null hypothesis 是 "v_baseline == v_proposed"
+- Pilot 已经 12-24 cells 全 same → null 没被拒
+- Panel 多花 $4 也只能再次证明 null（每 cell 都 same）
+- Panel 的实际价值在 "lift / harm" detection，对 behavioral-neutral 价值很低
+
+**真实案例 2026-05-24**：F189 todo_* description claudecode-style layered refactor。Pilot 2 alias (ark/v4flash + zhipu/glm51) × 2 case × 3 runs = 24 cells：
+- C1 multi-step plan-first：4/4 cells (both alias × both variant) 0/3 PASS — saturation floor（model 选择 recon-then-plan，single-turn cutoff）
+- C2 trivial exemption：4/4 cells 3/3 PASS — perfect parity（"When NOT to Use" 没造成 false negative）
+- SHIP gate met 不跑 panel，省 ~$4-6 + 2 小时
+
+### 反模式 10：Eval-driven DROP 不 re-check substrate 变化就 stale（2026-05-24 补充）
+
+某个 prompt 改动 P 被 eval-driven DROP 后，后续 prompt 体（worker-role-prompt / tool descriptions / other sections）继续演进。**P 的 DROP rationale 只在 DROP-commit-time 的 substrate state 下成立**。如果 substrate 后续 ship 了 N 个 prompt 改动，P 的 DROP 数据**失效**。
+
+**真实案例 2026-05-22 → 2026-05-24**：
+- F189 B.4 (RULE A/B/C labels removal) 于 2026-05-22 eval-driven DROP（ark/v4flash 5/5 textLen < 220 systematic regression）
+- F189 B.5 (FEATURE_xxx version markers removal) 同日 DROP
+- 2026-05-22 → 2026-05-24 期间又 ship 了：F189 Batch 1 (✗ + WHY) + Batch 4 (quant→qual) + F190 (TERMINATION 改写) + F191 (SPECIALIST ROUTING + custom agents)。worker-role-prompt 已重组
+- Re-check 验证两个 DROP 在新 substrate 下仍然成立（ark/v4flash 仍 hit per-alias gate），DROP holds —— 但**如果不 re-check 就引用旧数据**，可能漏掉新 substrate 已经"修复"DROP 原因的情况
+
+**强制规则**：
+1. 引用历史 eval-driven DROP 作 ship 决策依据前，先 grep DROP-commit 到当前 HEAD 之间是否有 substrate 改动（同一文件、同一段落、interacting section）
+2. 有改动 → re-pilot 1 alias × 同 cases × 同 variants 验证 DROP 仍成立。Pilot 不成立则 escalate panel
+3. DROP 数据 archival 时在 commit message / project memory 标注"基于 substrate state @ <commit-sha>"，方便后续判断
+4. v0.7.X 版本 release 时，本版内 eval-driven DROP 的引用窗口截止到下一个 minor release —— 跨版本必须 re-check
+
+### 反模式 11：Floor saturation × strict per-alias gate 误判 refactor harm（2026-05-24 补充）
+
+Pre-registered strict gate (per `feedback_pre_registered_gate_saturation`) 用"任一 alias × case 退化 ≥1 cell = SHIP fail"类型时，floor-saturation 数据可被误判为 regression。
+
+**Floor saturation 的辨识标准**：
+- v_baseline 在该 cell 已达 metric 自然 floor / ceiling（plan-first metric baseline 0/5 / 5/5；trivial exemption baseline 5/5）
+- v_proposed 与 v_baseline 在该 cell 同号同幅（baseline 0/5 → proposed 0/5；baseline 5/5 → proposed 5/5）
+- 同一 alias × 同一 case 在 cross-alias pilot 复现（i.e. 至少 2 alias 都 floor saturate）
+
+**Evidence-driven override 准则**：
+1. 满足以上 3 条 + refactor 是 content-equivalent → SHIP gate per-alias strict failure 可被 override
+2. Override rationale 必须在 commit message / project memory 显式记录：包括 "saturation reason" + "cross-alias 复现证据" + "metric 局限性"（例如 single-turn 测不到 multi-turn recon-then-plan）
+3. Override 不能滥用：行为 lift / harm 类 metric 不可 override，只 hygiene refactor / behavioral-neutral refactor 可
+
+**真实案例 2026-05-24**：F189 todo desc refactor C1 multi_step ark/v4flash + zhipu/glm51 双 alias 4/4 cells 0/3 PASS。Per `feedback_eval_strict_criterion_under_counts_taught_behavior`：model 实际行为是 "I'll start by reading the existing files... then commit the plan"（healthy multi-turn recon-then-plan），single-turn metric 漏掉。Override 准则 1+2+3 全满足 → SHIP without panel。
+
 ### Judge 模型选择约束（2026-05-12 补充）
 
 **禁止用 anthropic claude / openai gpt 等"外来 strong model"做内部 eval 的 LLM-judge**：
