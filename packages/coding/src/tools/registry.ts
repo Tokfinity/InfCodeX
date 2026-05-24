@@ -947,26 +947,32 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_update',
     description:
-      'Drive the visible plan checklist so the user sees real-time progress — single-item PATCH plus status transition. '
-      + '`op="update"` (default; omit `op` for back-compat) is the primary mode: target ONE item by `id` and either change its status, patch its fields, or both in one call.\n\n'
-      + 'For ADDING new items (initial plan commitment or mid-task additive growth), use a batch of `todo_create` calls instead — purely additive and safe. The legacy `op="init"` whole-list replace path is reserved for runner-side seeding only; LLMs should not call it because it destructively drops any item not echoed back, which weaker models routinely under-echo and lose completed work.\n\n'
-      + 'Status transitions:\n'
-      + '- `in_progress` — set BEFORE starting work on an item. When transitioning to `in_progress`, ALWAYS supply `activeForm` (present-continuous rephrasing of the subject, e.g. subject "Run failing tests" → activeForm "Running failing tests") so the spinner shows the user what you are working on right now.\n'
-      + '- `completed` — set AFTER finishing that item.\n'
-      + '- Only ONE item should be `in_progress` per owner at any time — finish or fail the current item before starting the next.\n'
-      + '- `failed` — an attempt clearly failed and needs retry.\n'
-      + '- `skipped` — the item turned out to be unnecessary (e.g. planner-driven merging of two obligations into one).\n'
-      + '- `cancelled` — you decide mid-execution to drop an item the user no longer needs; UI shows strikethrough as a visible breadcrumb of the discarded record.\n'
-      + '- `deleted` — remove the item from the visible list entirely (no breadcrumb). Prefer `deleted` over `cancelled` when the item was wholly off-plan; prefer `cancelled` when the user benefits from seeing the discarded record.\n\n'
-      + 'Field patches (status optional when only patching):\n'
+      'Drive the visible plan checklist so the user sees real-time progress — single-item PATCH plus status transition for ONE existing todo item. `op="update"` is the default (omit `op` for back-compat); target one item by `id` and change its status, patch its fields, or both in one call.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- BEFORE starting work on an item — flip it to `in_progress` and supply `activeForm` (present-continuous form of the subject; e.g. subject "Run failing tests" → activeForm "Running failing tests") so the spinner reflects what you are doing right now.\n'
+      + '- AFTER finishing work on an item — flip it to `completed`. If the item carries an `evaluator` hint, the runner runs the deterministic check on transition and surfaces stderr on failure.\n'
+      + '- WHEN requirements clarify mid-task — patch `subject` and/or `description` to refine the row in place (e.g. "Run failing tests" → "Run failing tests AND clean up tmp").\n'
+      + '- WHEN an attempt clearly failed and needs retry — set status to `failed`.\n'
+      + '- WHEN the item turned out to be unnecessary (e.g. two obligations merged into one) — set status to `skipped`.\n'
+      + '- WHEN you decide mid-execution to drop an item the user no longer needs — set status to `cancelled` (UI shows strikethrough as a visible breadcrumb); use `deleted` instead if the item was wholly off-plan and a breadcrumb would just clutter.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- To ADD a new item — call `todo_create` instead (one call per planned step, batched). `todo_update` only mutates EXISTING items.\n'
+      + '- When the item is already in the target status — a redundant update is a silent no-op and clutters the transcript.\n'
+      + '- When uncertain about an item\'s current state — call `todo_get` first; runner-side auto-handlers may have flipped statuses between your turns, and mutating on a stale view produces silent no-op patches.\n'
+      + '- `op="init"` is reserved for runner-side seeding only. LLMs should never call it — it destructively replaces the whole list, dropping any item not echoed back, and weaker models routinely under-echo and lose completed work.\n\n'
+      + '## Status Transitions\n\n'
+      + 'Only ONE item per owner should be `in_progress` at any time — finish or fail the current item before starting the next. Valid statuses: `in_progress`, `completed`, `failed`, `skipped`, `cancelled`, `deleted`. `"pending"` is intentionally not allowed — items start pending automatically and only the runner moves them back to pending after a revise verdict. Prefer `deleted` over `cancelled` when the item was wholly off-plan; prefer `cancelled` when the user benefits from seeing the discarded record.\n\n'
+      + '## Field Patches (status optional when only patching)\n\n'
       + '- `subject` (non-empty string) replaces the brief imperative title shown in the row.\n'
-      + '- `description` (string; empty clears) replaces the fuller context shown by todo_get.\n'
+      + '- `description` (string; empty clears) replaces the fuller context shown by `todo_get`.\n'
+      + '- `activeForm` is required with `in_progress`; for other statuses the previous value is preserved but irrelevant.\n'
+      + '- `note` is optional free-text reason; when omitted, any pre-existing note is preserved.\n'
       + '- `evaluator` ("build" | "test" | "lint") replaces the deterministic evaluator hint.\n'
-      + '- `metadata` (object | null) — pass null to CLEAR the whole bag; pass an object to shallow-merge keys; inside the object, a value of null DELETES that specific key from existing metadata (mixed merge+delete in one call is supported, e.g. `{newKey: "v", oldKey: null}`).\n'
+      + '- `metadata` (object | null) — shallow-merge: top-level keys overwrite; a value of `null` inside the object DELETES that key (mixed merge+delete is supported, e.g. `{newKey: "v", oldKey: null}`); pass the whole field as `null` to clear ALL metadata.\n'
       + '- Patch fields can be combined with a status transition in a single call.\n\n'
-      + 'Error handling:\n'
-      + '- `ok=false` with reason "Unknown todo id" — inspect the listed valid ids and retry with a correct one.\n'
-      + '- `ok=false` with reason "todo_update is not active" — the current run has no plan list; continue working without further todo_update calls.\n'
+      + '## Error Handling\n\n'
+      + '- `ok=false` with reason "Unknown todo id" — inspect the listed valid ids and retry, or call `todo_list` to refresh.\n'
+      + '- `ok=false` with reason "todo_update is not active" — the current run has no plan list; continue without further `todo_update` calls.\n'
       + '- `ok=false` with reason "blocked-by-hook" (or an extension-supplied string) — an extension policy rejected the transition; re-read the visible plan and revise your approach before retrying.',
     input_schema: {
       type: 'object',
@@ -1075,16 +1081,24 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_create',
     description:
-      'Insert ONE new pending item into the visible plan list — purely additive, existing items untouched. ' +
-      'Use for plan commitment (one call per planned step, batched in the same response) AND for mid-task additive growth when an extra step is needed.\n\n' +
-      'Field semantics:\n' +
-      '- `subject` (required) — brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers")\n' +
-      '- `description` (optional) — fuller context / work instructions read when this item is later picked up via todo_get; multi-line OK; NOT rendered in the compact row\n' +
-      '- `activeForm` (optional) — present-continuous form (e.g. "Auditing handleAuth callers") shown by the spinner when this item later flips to `in_progress` via todo_update\n' +
-      '- `evaluator` (optional, "build" | "test" | "lint") — runs the corresponding deterministic check when the item flips to "completed". Use sparingly, only on milestone steps with a real ground-truth check\n' +
-      '- `metadata` (optional) — opaque key-value bag carried alongside the item for extension hooks / observability; the UI does NOT render it\n\n' +
-      'The store auto-generates the id (monotonic `todo_N`). Never pass an id — any caller-supplied id is rejected at the schema layer.\n\n' +
-      'Returns {ok: true, id: "todo_<n>"} on success or {ok: false, reason: "..."} when the store is not wired, validation fails, or an extension hook blocks the create.',
+      'Insert ONE new pending item into the visible plan list — purely additive, existing items untouched. The store auto-generates the id (monotonic `todo_<n>`); never pass an id — any caller-supplied id is rejected at the schema layer.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- AT THE START of a non-trivial multi-step task — commit the full plan up front by batching one `todo_create` call per planned step in the same response, so the user sees the intended trajectory.\n'
+      + '- WHEN you receive a user request with multiple distinct sub-tasks — capture each as its own item.\n'
+      + '- WHEN you discover an additional step mid-task — add it additively so the user sees the plan growing rather than the original list being silently rewritten.\n'
+      + '- BEFORE fanning out to child workers via `dispatch_child_task` — the plan list is the natural anchor for the work each child will execute.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- For a single straightforward operation that completes in one step — skip the plan list entirely.\n'
+      + '- For purely informational responses (answering a question, explaining code) where there is no execution work to track.\n'
+      + '- When an equivalent item already exists in the plan list — call `todo_list` first if unsure; duplicate items confuse the user.\n'
+      + '- For the actual work itself — `todo_create` only RECORDS planned work; you still need to perform the real operations (read, edit, run, etc.) in subsequent tool calls.\n\n'
+      + '## Fields\n\n'
+      + '- `subject` (required) — brief imperative title shown in the plan-list row (e.g. "Audit handleAuth callers").\n'
+      + '- `description` (optional) — fuller context / work instructions read when this item is later picked up via `todo_get`; multi-line OK; NOT rendered in the compact row.\n'
+      + '- `activeForm` (optional) — present-continuous form (e.g. "Auditing handleAuth callers") shown by the spinner when this item later flips to `in_progress` via `todo_update`.\n'
+      + '- `evaluator` (optional, "build" | "test" | "lint") — runs the corresponding deterministic check when the item flips to "completed". Use sparingly, only on milestone steps with a real ground-truth check.\n'
+      + '- `metadata` (optional) — opaque key-value bag carried alongside the item for extension hooks / observability; the UI does NOT render it.\n\n'
+      + 'Returns `{ok: true, id: "todo_<n>"}` on success or `{ok: false, reason: "..."}` when the store is not wired, validation fails, or an extension hook blocks the create.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1123,9 +1137,16 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_list',
     description:
-      'Read-only query that returns the current visible plan list as JSON. Use this when you want to confirm what items are pending before deciding the next move, when you need to see the canonical id set after an "Unknown todo id" error, or when refining a plan and want to compare it against the existing list. ' +
-      'Returns {ok: true, count: N, items: [{id, subject, status, description?, activeForm?, note?}, ...]} on success; {ok: false, reason: "todo_list is not active ..."} when no plan list infrastructure is wired (no managed task active). ' +
-      'This tool is read-only — it never mutates the store. Pair with `todo_create` to add new steps additively, `todo_update` to change item state, or `todo_get` to fetch a single item with full detail (incl. description / metadata / evaluator).',
+      'Read-only query that returns the current visible plan list as JSON. Never mutates the store.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- BEFORE deciding the next move — confirm what items are pending and which is currently `in_progress`.\n'
+      + '- AFTER an "Unknown todo id" error — see the canonical valid-id set before retrying `todo_update` or `todo_get`.\n'
+      + '- WHEN refining a plan — compare a proposed new step against existing items to avoid duplicates.\n'
+      + '- AFTER a long quiet stretch — re-sync with any auto-handler-driven status flips before continuing.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- When you already know the exact id and want one item\'s full detail — call `todo_get` directly.\n'
+      + '- When no plan list is active — the call returns `{ok: false, reason: "todo_list is not active ..."}`; further `todo_*` calls in this run will also be inactive.\n\n'
+      + 'Returns `{ok: true, count: N, items: [{id, subject, status, description?, activeForm?, note?}, ...]}` on success. Pair with `todo_create` (additive), `todo_update` (mutate), or `todo_get` (full single-item detail).',
     input_schema: {
       type: 'object',
       properties: {},
@@ -1138,12 +1159,15 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'todo_get',
     description:
-      'Read-only single-item lookup. Returns the full TodoItem detail for one id (subject + optional description + status + activeForm + note + evaluator + metadata).\n\n' +
-      'When to use:\n' +
-      '- BEFORE calling todo_update when uncertain about an item\'s current state — runner-side auto-handlers may have flipped statuses between your turns; mutating on a stale view produces silent no-op patches.\n' +
-      '- WHEN PICKING UP an item — the full `description` carries the work instruction; the compact row label (`subject`) alone often is not enough.\n' +
-      '- AFTER an "Unknown todo id" error on todo_update — first use todo_list to see all ids, then todo_get to drill into the specific one.\n\n' +
-      'Returns {ok: true, item: {...}} on success or {ok: false, reason: "..."} when the store is not wired or the id is unknown (the reason carries the canonical valid-id list).',
+      'Read-only single-item lookup. Returns the full TodoItem detail for one id — subject, optional description, status, activeForm, note, evaluator, metadata.\n\n'
+      + '## When to Use This Tool\n\n'
+      + '- BEFORE calling `todo_update` when uncertain about an item\'s current state — runner-side auto-handlers may have flipped statuses between your turns, and mutating on a stale view produces silent no-op patches.\n'
+      + '- WHEN PICKING UP an item to work on — the full `description` carries the work instruction; the compact row label (`subject`) alone is often not enough.\n'
+      + '- AFTER an "Unknown todo id" error on `todo_update` — call `todo_list` first to see all ids, then `todo_get` to drill into the specific one.\n\n'
+      + '## When NOT to Use This Tool\n\n'
+      + '- For a high-level overview of all items — call `todo_list` instead.\n'
+      + '- When you already have a clear status flip + field patch to apply — call `todo_update` directly; an extra `todo_get` round-trip adds latency without changing the outcome.\n\n'
+      + 'Returns `{ok: true, item: {...}}` on success or `{ok: false, reason: "..."}` when the store is not wired or the id is unknown (the reason carries the canonical valid-id list).',
     input_schema: {
       type: 'object',
       properties: {
