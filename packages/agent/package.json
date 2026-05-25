@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/agent",
-  "version": "0.7.43",
+  "version": "0.7.44",
   "description": "KodaX Agent \u2014 \u901a\u7528 Agent \u6846\u67b6\uff08\u667a\u80fd\u4f53\u5e95\u5ea7\uff09\u3002Agent / Runner / Handoff / Guardrail / Admission / Messaging / Orchestration / Memory / Team / Scratchpad / Construction / Runtime middleware\u3002\u4e0d\u7ed1\u5b9a coding\u3002",
   "private": true,
   "type": "module",
