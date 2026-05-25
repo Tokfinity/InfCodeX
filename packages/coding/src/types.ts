@@ -1072,6 +1072,29 @@ export interface KodaXContextOptions {
    * plan-mode enforcement.
    */
   planModeBlockCheck?: (tool: string, input: Record<string, unknown>) => string | null;
+  /**
+   * FEATURE_123 v0.7.44 — propagate the current agent's id into the
+   * spawned runtime so its tools can self-identify (and so peer
+   * `send_message` calls can stamp a `from=...` framing tag + reject
+   * self-targeted sends).
+   */
+  currentAgentId?: string;
+  /**
+   * FEATURE_123 v0.7.44 — propagate the dispatching agent's id (the
+   * parent of the soon-to-be-spawned runtime) so `send_message(to:
+   * "worker")` from a grand-child routes to its direct parent rather
+   * than the top-level Worker.
+   */
+  parentAgentId?: string;
+  /**
+   * FEATURE_123 v0.7.44 — when set, the spawned runtime's
+   * `ctx.childTaskRegistry` reuses this Map instead of allocating a
+   * fresh one. Children pass the parent's registry through so peer
+   * routing (`send_message` to a sibling task_id) finds the target.
+   * Children remain unable to mutate the registry because
+   * `dispatch_child_task` stays in `CHILD_EXCLUDE_TOOLS_BASE`.
+   */
+  inheritedChildTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
 }
 
 export interface KodaXOptions {
@@ -1471,6 +1494,33 @@ export interface KodaXToolExecutionContext {
     readonly model?: string;
     readonly reasoningMode?: KodaXReasoningMode;
   };
+  /**
+   * FEATURE_123 v0.7.44 — agentId of the agent whose tool call this
+   * context backs. `undefined` for the top-level Worker (main runtime
+   * loop); set to the child's `bundle.id` for sub-agent runtimes.
+   *
+   * Consumed by `send_message` to:
+   *   - know who "self" is for broadcast self-exclusion and for the
+   *     `from=...` framing tag,
+   *   - reject self-targeted sends as a single-hop cycle guard.
+   *
+   * Wired by `child-executor.executeReadChild` / `executeWriteChild`
+   * via `options.context.currentAgentId`.
+   */
+  currentAgentId?: string;
+  /**
+   * FEATURE_123 v0.7.44 — agentId of the agent that dispatched the one
+   * owning this context. `undefined` for the Worker (top of the tree)
+   * and for first-tier children (parent == Worker; routing uses the
+   * `'worker'` sentinel rather than an agentId). Set for grand-child
+   * runtimes whose parent is itself a child.
+   *
+   * Consumed by `send_message` when `to === 'worker'`:
+   *   - If `parentAgentId` is set, route to that specific id.
+   *   - If `parentAgentId` is undefined, route to `agentId: undefined`
+   *     (the main loop / top Worker).
+   */
+  parentAgentId?: string;
   /**
    * @deprecated FEATURE_067: Removed — use reportToolProgress instead.
    * Previously fired onManagedTaskStatus with activeWorkerId='child',

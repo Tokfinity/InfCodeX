@@ -504,19 +504,19 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
   {
     name: 'send_message',
     description:
-      'Append a refinement instruction to an in-flight child task launched via dispatch_child_task. The child will see your message as a <coordinator-instruction> block at its next LLM turn boundary. Use this when the user adds a follow-up requirement that affects a running child or when you realize the child needs additional context — but use it sparingly (most children should need at most one mid-run steering message), because a child needing more context mid-flight is usually a planning failure: you did not brief it well enough up front. Coordinator-only: child agents cannot call this tool. Returns confirmation or an error if the task_id is unknown.',
+      'Route a short message to another in-flight agent in this session. Worker → child appends a <coordinator-instruction> at user priority (drained next tool boundary). Child → child peer appends a <peer-message from=…> at background priority (drained when the peer next yields). Child → parent Worker uses to="worker" and appends a <child-notification from=…>. Broadcast to="*" fans the message out to every other in-flight sibling plus the parent Worker, framed as <peer-broadcast from=…>. Use sparingly — most children should not need mid-flight steering, and peer chatter is for coordination notes that change another agent\'s plan, not status updates.',
     input_schema: {
       type: 'object',
       properties: {
         to: {
           type: 'string',
           description:
-            'Target child task_id (must match an id returned by a prior dispatch_child_task call). Completed children are auto-cleaned and become invalid targets. Broadcast (to: "*") is not yet supported.',
+            'One of: an in-flight task_id from a prior dispatch_child_task call (single addressed send), the literal "worker" (notify the parent Worker; only valid when the sender is a child), or "*" (broadcast to all other in-flight siblings plus the parent Worker, capped at 20 recipients). Self-targeted sends are rejected.',
         },
         content: {
           type: 'string',
           description:
-            'Instruction text to append to the child queue. Will be wrapped in a <coordinator-instruction>…</coordinator-instruction> block in the child\'s next user message.',
+            'Message body. Will be wrapped in the framing tag matching the routing branch (<coordinator-instruction>, <peer-message from=…>, <child-notification from=…>, or <peer-broadcast from=…>) before the recipient sees it.',
         },
       },
       required: ['to', 'content'],

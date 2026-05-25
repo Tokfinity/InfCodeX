@@ -115,7 +115,19 @@ export function buildToolExecutionContext(
     // launch-and-await split. The dispatch tool gates async-vs-sync on
     // `KODAX_ASYNC_DISPATCH !== '0'`; the registry only reaches the tool
     // when async dispatch is enabled.
-    childTaskRegistry: new Map(),
+    //
+    // FEATURE_123 v0.7.44 — child runtimes pass the parent's registry
+    // through `options.context.inheritedChildTaskRegistry` so peer
+    // `send_message` lookups find sibling task_ids. Children stay
+    // unable to mutate the registry because `dispatch_child_task` is
+    // still in CHILD_EXCLUDE_TOOLS_BASE.
+    childTaskRegistry: options.context?.inheritedChildTaskRegistry ?? new Map(),
+    // FEATURE_123 v0.7.44 — agent identity propagation. Top-level
+    // Worker leaves both undefined; child-executor forwards
+    // `bundle.id` (self) + the parent's currentAgentId (parent) when
+    // spawning a sub-runtime.
+    currentAgentId: options.context?.currentAgentId,
+    parentAgentId: options.context?.parentAgentId,
     // FEATURE_120 v0.7.39 Phase 3b — per-child AbortController registry,
     // populated by `dispatch_child_task` at launch time and drained
     // when the child settles. The `task_stop` tool reads this map to

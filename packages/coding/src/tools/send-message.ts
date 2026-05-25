@@ -1,30 +1,150 @@
 /**
- * send_message — coordinator → in-flight child instruction tool.
+ * send_message — cross-agent text-routing tool.
  *
- * FEATURE_120 v0.7.39 Phase 2b. Lets a coordinator-class agent (Worker /
- * Scout) append a refinement instruction to a running child task's
- * message queue. The child sees the message as a
- * `<coordinator-instruction>…</coordinator-instruction>` block at its
- * next LLM turn boundary (drained by the runner-driven outer loop's
- * mid-turn drain at `priority: 'user'`).
+ * Lineage:
+ *   - FEATURE_120 v0.7.39: Worker → child only. `to === '*'` rejected,
+ *     child agents excluded from the tool entirely.
+ *   - FEATURE_123 v0.7.44: routing-agnostic. Same tool now also handles
+ *       child → child (peer)
+ *       child → Worker (`to: 'worker'`)
+ *       any → broadcast (`to: '*'`)
+ *     Children are no longer in `CHILD_EXCLUDE_TOOLS_BASE`. The policy
+ *     that used to live in "is this caller the Worker?" now lives in
+ *     the target-shape branches below.
  *
- * Parent-only: this tool is filtered out of child agents via
- * `CHILD_EXCLUDE_TOOLS_BASE` in `child-executor.ts` — children must not
- * be able to steer their siblings (recursion ban + protocol clarity).
+ * Routing surface (one tool, three target shapes):
+ *   - `*`         → fan out to every other in-flight sibling in the
+ *                   parent's `childTaskRegistry`, plus the parent
+ *                   Worker. Capped at 20 distinct targets (excluding
+ *                   self).
+ *   - `worker`    → addressed to `ctx.parentAgentId` (grand-child's
+ *                   parent) or to `agentId: undefined` (top-level
+ *                   Worker) when the caller has no parentAgentId.
+ *   - `<task_id>` → single sibling lookup against the shared
+ *                   `childTaskRegistry`. Self-targeted sends rejected
+ *                   as a single-hop cycle guard.
  *
- * Uses `routeMessage` (the generic cross-agent router primitive in
- * `@kodax-ai/agent`). Coding-flavor concerns owned here:
- *   - `<coordinator-instruction>` framing tag (the contract the child
- *     prompt is steered against — see Worker prompt Phase 5a).
- *   - Reject `to === '*'` broadcast (deferred to FEATURE_123 v0.7.44).
- *   - Reject when the runner is in sync-only mode (no registry).
+ * Priority + framing rules (mirrors the design doc table in v0.7.44.md):
+ *
+ *   sender → target          | priority    | wrapper tag
+ *   -------------------------+-------------+--------------------------------
+ *   Worker → child           | user        | <coordinator-instruction>
+ *   child  → child (peer)    | background  | <peer-message from=A>
+ *   child  → Worker          | background  | <child-notification from=A>
+ *   broadcast (any → *)      | background  | <peer-broadcast from=A>
+ *
+ * Background-priority messages are only drained when the recipient
+ * yields (idle / Sleep), so peer chatter does not interrupt active
+ * work; user-priority Worker → child instructions are drained at
+ * every tool boundary (existing FEATURE_115 behavior).
+ *
+ * **NOT in scope for v0.7.44 (deferred to v0.7.45)**:
+ *   - `seen_by` cycle hop list (A→B→A multi-hop loop guard). Self-send
+ *     rejection covers the 1-hop case; multi-hop forwarding is itself
+ *     a model intent — the floor risk does not justify the envelope
+ *     schema change in this version.
+ *   - Per-turn flood throttle (≤5/child-turn, ≤20/Worker-turn). Needs
+ *     a turn-boundary observer that the runtime does not currently
+ *     surface to tools. Broadcast cap is in place; aggregate per-run
+ *     limits will land alongside the goalContext / lifecycle composer
+ *     wiring in v0.7.45.
  */
 
 import { getMessageQueue, routeMessage } from '@kodax-ai/agent';
+import type { MessagePriority } from '@kodax-ai/agent';
 
 import type { KodaXToolExecutionContext } from '../types.js';
 
 const TOOL_NAME = 'send_message';
+const BROADCAST_TARGET_CAP = 20;
+
+/** Mirrors `MessageQueue` enqueue shape — re-declared narrow to keep the import surface small. */
+interface QueueLike {
+  enqueue: (input: {
+    priority: MessagePriority;
+    mode: 'prompt' | 'task-notification' | 'system-reminder';
+    agentId?: string;
+    content: string;
+  }) => string;
+}
+
+/**
+ * Send an addressed message to the Worker (or grand-parent child).
+ * Worker is uniquely keyed by `agentId: undefined` on the queue when
+ * the caller has no `parentAgentId`; grand-children route to their
+ * direct parent (a specific task_id) when one is set.
+ */
+function sendToWorker(
+  fromId: string,
+  content: string,
+  parentAgentId: string | undefined,
+  queue: QueueLike,
+): string {
+  const wrapped = `<child-notification from="${fromId}">\n${content}\n</child-notification>`;
+  queue.enqueue({
+    priority: 'background',
+    mode: 'task-notification',
+    agentId: parentAgentId,
+    content: wrapped,
+  });
+  const target = parentAgentId ?? 'worker';
+  return `Message sent to ${target}. It will surface as a <child-notification from="${fromId}"> block when the parent next yields.`;
+}
+
+/**
+ * Fan-out broadcast to all in-flight siblings (excluding self) +
+ * the parent Worker. Cap = BROADCAST_TARGET_CAP distinct addressed
+ * targets; over-cap returns a Tool Error with no enqueues.
+ */
+function broadcast(
+  fromId: string | undefined,
+  content: string,
+  ctx: KodaXToolExecutionContext,
+  queue: QueueLike,
+): string {
+  const registry = ctx.childTaskRegistry;
+  if (!registry) {
+    return `[Tool Error] ${TOOL_NAME}: Broadcast requires a sibling registry, but none is bound to this context (sync-mode dispatch). Send to a specific task_id or 'worker' instead.`;
+  }
+  // Exclude self AND the immediate parent (when the parent is also a
+  // registered child — happens for grand-children). The parent
+  // receives one enqueue on the dedicated worker channel below; the
+  // filter prevents a double-enqueue for the same agent.
+  const parentAgentId = ctx.parentAgentId;
+  const sibTargets = [...registry.keys()].filter(
+    (id) => id !== fromId && id !== parentAgentId,
+  );
+  // Whether to also notify the parent Worker. Children always notify
+  // their parent; the Worker broadcasting to its own children skips
+  // self (it has no parent in this process).
+  const includeWorker = fromId !== undefined;
+  const targetCount = sibTargets.length + (includeWorker ? 1 : 0);
+  if (targetCount > BROADCAST_TARGET_CAP) {
+    return `[Tool Error] ${TOOL_NAME}: Broadcast target count ${targetCount} exceeds cap ${BROADCAST_TARGET_CAP}. Narrow the audience by sending to specific task_ids.`;
+  }
+  if (targetCount === 0) {
+    return `[Tool Error] ${TOOL_NAME}: Broadcast has zero recipients (no other in-flight siblings, and you have no parent Worker to notify).`;
+  }
+  const fromLabel = fromId ?? 'worker';
+  const wrapped = `<peer-broadcast from="${fromLabel}">\n${content}\n</peer-broadcast>`;
+  for (const sibId of sibTargets) {
+    queue.enqueue({
+      priority: 'background',
+      mode: 'prompt',
+      agentId: sibId,
+      content: wrapped,
+    });
+  }
+  if (includeWorker) {
+    queue.enqueue({
+      priority: 'background',
+      mode: 'task-notification',
+      agentId: ctx.parentAgentId,
+      content: wrapped,
+    });
+  }
+  return `Broadcast sent from ${fromLabel} to ${targetCount} target(s) (${sibTargets.length} sibling(s)${includeWorker ? ' + parent' : ''}). Recipients will see the <peer-broadcast> block when they next yield.`;
+}
 
 export async function toolSendMessage(
   input: Record<string, unknown>,
@@ -35,28 +155,49 @@ export async function toolSendMessage(
   const content = typeof input.content === 'string' ? input.content.trim() : '';
 
   if (!to) {
-    return `[Tool Error] ${TOOL_NAME}: Missing required parameter: to (child task_id from dispatch_child_task)`;
+    return `[Tool Error] ${TOOL_NAME}: Missing required parameter: to (task_id of an in-flight sibling, 'worker' to notify the parent, or '*' to broadcast).`;
   }
   if (!content) {
-    return `[Tool Error] ${TOOL_NAME}: Missing required parameter: content (instruction text to append to the child's queue)`;
+    return `[Tool Error] ${TOOL_NAME}: Missing required parameter: content (the message body).`;
   }
 
-  // --- Reject broadcast sentinel (deferred to FEATURE_123) ---
+  const queue: QueueLike = getMessageQueue();
+  const myId = ctx.currentAgentId;
+
+  // --- Branch 1: broadcast ---
   if (to === '*') {
-    return `[Tool Error] ${TOOL_NAME}: Broadcast 'to: *' is not yet supported (planned in FEATURE_123 v0.7.44). Send to a specific task_id.`;
+    return broadcast(myId, content, ctx, queue);
   }
 
-  // --- Reject when async dispatch is disabled (no registry) ---
+  // --- Branch 2: address the parent Worker ---
+  if (to === 'worker') {
+    if (myId === undefined) {
+      return `[Tool Error] ${TOOL_NAME}: send_message(to='worker') is for children notifying their parent — you are the Worker (top of the agent tree).`;
+    }
+    return sendToWorker(myId, content, ctx.parentAgentId, queue);
+  }
+
+  // --- Branch 3: address a specific task_id (peer or Worker→child) ---
   const registry = ctx.childTaskRegistry;
   if (!registry) {
     return `[Tool Error] ${TOOL_NAME}: Async dispatch is disabled (no childTaskRegistry on context). Children run synchronously and complete inside their dispatch_child_task call — there is no in-flight target to steer.`;
   }
+  if (myId !== undefined && to === myId) {
+    return `[Tool Error] ${TOOL_NAME}: Cannot send a message to yourself (to='${to}'). Use task tools to record your own notes; send_message routes between distinct agents.`;
+  }
 
-  // --- Route via @kodax-ai/agent primitive ---
-  const wrapped = `<coordinator-instruction>\n${content}\n</coordinator-instruction>`;
+  // Priority + framing depends on who's sending:
+  //   Worker (myId === undefined) → child:    priority='user', <coordinator-instruction>
+  //   child  (myId !== undefined) → peer:     priority='background', <peer-message from=A>
+  const isCoordinatorPath = myId === undefined;
+  const priority: MessagePriority = isCoordinatorPath ? 'user' : 'background';
+  const wrapped = isCoordinatorPath
+    ? `<coordinator-instruction>\n${content}\n</coordinator-instruction>`
+    : `<peer-message from="${myId}">\n${content}\n</peer-message>`;
+
   const outcome = routeMessage({
     to,
-    priority: 'user',
+    priority,
     mode: 'prompt',
     content: wrapped,
     registry,
@@ -64,8 +205,11 @@ export async function toolSendMessage(
   });
 
   if (!outcome.ok) {
-    return `[Tool Error] ${TOOL_NAME}: Unknown task_id "${outcome.to}". Verify the task_id matches one returned by dispatch_child_task and that the child has not already completed (completed children are auto-cleaned from the registry).`;
+    return `[Tool Error] ${TOOL_NAME}: Unknown task_id "${outcome.to}". Verify the task_id matches one returned by dispatch_child_task and that the target has not already completed (completed children are auto-cleaned from the registry).`;
   }
 
-  return `Message sent to ${to}. It will be processed at the child's next LLM turn boundary as a <coordinator-instruction> block.`;
+  if (isCoordinatorPath) {
+    return `Message sent to ${to}. It will be processed at the child's next LLM turn boundary as a <coordinator-instruction> block.`;
+  }
+  return `Peer message sent to ${to} from ${myId}. It will be processed when the peer next yields as a <peer-message from="${myId}"> block.`;
 }

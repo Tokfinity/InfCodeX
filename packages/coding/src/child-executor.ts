@@ -315,6 +315,13 @@ async function executeReadChild(
           executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
           systemPromptOverride,
           excludeTools,
+          // FEATURE_123 v0.7.44 — propagate agentId + registry so the
+          // child runtime can answer peer `send_message` calls. The
+          // child stays unable to mutate the registry (no
+          // dispatch_child_task tool).
+          currentAgentId: bundle.id,
+          parentAgentId: parentCtx.currentAgentId,
+          inheritedChildTaskRegistry: parentCtx.childTaskRegistry,
         },
         events: childEvents,
       },
@@ -400,6 +407,12 @@ async function executeWriteChild(
           executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
           systemPromptOverride,
           excludeTools,
+          // FEATURE_123 v0.7.44 — write children share the same peer-
+          // routing surface as read children (same agentId + registry
+          // propagation rules).
+          currentAgentId: bundle.id,
+          parentAgentId: parentCtx.currentAgentId,
+          inheritedChildTaskRegistry: parentCtx.childTaskRegistry,
         },
         events: childEvents,
       },
@@ -569,6 +582,15 @@ export const CHILD_AGENT_SYSTEM_PROMPT = [
   '- When you need multiple independent tool calls (pull-tools, reads, or greps), emit them all in one response. Only serialize when a later call genuinely depends on an earlier result (e.g., you need a file path from grep before you can read it).',
   '- Open broad with a parallel fan-out covering the obvious scope axes, then narrow on follow-up turns. Prefer a few targeted calls over many tiny sequential probes.',
   '',
+  '## Peer Communication',
+  '',
+  'You can send short messages to other in-flight agents in this session with `send_message`:',
+  '- `send_message(to="<peer task_id>", content="…")` — notify a sibling child that your work overlaps with theirs or that you found something they need to know.',
+  '- `send_message(to="worker", content="…")` — surface a mid-flight finding to your parent Worker (drains when the Worker next yields).',
+  '- `send_message(to="*", content="…")` — broadcast to every sibling plus the parent Worker. Capped at 20 recipients per call.',
+  '',
+  'Send a peer message when it would change another agent\'s plan: a file you both edit, a fact you discovered that changes their scope, a blocker the parent should know about. Do not send routine status pings — peer chatter that does not change anyone\'s plan is noise.',
+  '',
   '## Execution Guidelines',
   '- Focus on the objective described in the user message. Do not deviate.',
   '- When you have sufficient evidence, stop investigating and synthesize your findings.',
@@ -641,7 +663,12 @@ export const CHILD_EXCLUDE_TOOLS_BASE: readonly string[] = [
   'dispatch_child_task',    // Prevent recursive child spawning
   // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed; the
   // tool no longer exists, so excluding it from children is moot.
-  'send_message',           // FEATURE_120: coordinator-only — children cannot steer siblings
+  // FEATURE_123 v0.7.44 — `send_message` is no longer coordinator-only.
+  // Children can now address peers via task_id, the parent Worker via
+  // `'worker'`, and all running siblings + Worker via `'*'`. The tool
+  // itself enforces target shapes (self-rejection, broadcast cap,
+  // priority/framing rules) so removing it from the exclusion list is
+  // safe — the policy lives in the tool, not the whitelist.
   'task_stop',              // FEATURE_120: coordinator-only — children cannot stop siblings
   'task_output',            // FEATURE_177: coordinator-only — children cannot peek at sibling progress
   'ask_user_question',      // Children cannot prompt the user

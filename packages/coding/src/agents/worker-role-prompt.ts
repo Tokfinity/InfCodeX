@@ -138,16 +138,18 @@ export function buildWorkerInstructions(
     '- SPECIALIST ROUTING: when a registered specialist agent matches the task domain (see "Available specialist agents" block above when present), prefer dispatching with `subagent_type=<name>` over a generic child.',
   ].join('\n');
 
-  // FEATURE_120 v0.7.39 — Worker can steer in-flight children via
-  // `send_message` (push instructions) and `task_stop` (graceful
-  // abort). Both are coordinator-only (children are filtered out
-  // via CHILD_EXCLUDE_TOOLS_BASE). The protocol section teaches
-  // when to reach for each tool and the anti-patterns that prompt
-  // eval will guard against.
+  // Worker steers in-flight children via `send_message` (push
+  // instructions) and `task_stop` (graceful abort). `task_stop` is
+  // coordinator-only; `send_message` is now also available to
+  // children for peer coordination (see CHILD_AGENT_SYSTEM_PROMPT
+  // Peer Communication section). The protocol section teaches when
+  // Worker should reach for each tool and the anti-patterns that
+  // prompt eval will guard against.
   const childSteeringRules = [
-    'ASYNC CHILD STEERING (FEATURE_120 v0.7.39 — `send_message` + `task_stop`):',
+    'ASYNC CHILD STEERING (FEATURE_120 + FEATURE_123 — `send_message` + `task_stop`):',
     'After `dispatch_child_task` launches a child, you may steer it while it runs:',
     '- `send_message(to=task_id, content="…")` — append an instruction to the child\'s queue. The child sees it as a `<coordinator-instruction>` block at its next LLM turn boundary. Use SPARINGLY: a child that needed more context is a planning failure — the typical pattern is 0-1 send_message calls per child.',
+    '- `send_message(to="*", content="…")` — broadcast a system-level update to every in-flight child at once. Capped at 20 recipients per call. Use when the same context shift applies to all children (e.g. "the user just narrowed scope to packages/coding").',
     '- `task_stop(task_id, reason="…")` — request the child to exit gracefully. Its currently-executing tool finishes atomically (no hard kill of a 90s `npm test` mid-run); the child then sees a `<coordinator-stop-request>` reminder and emits a final summary.',
     '',
     'WHEN TO `send_message`:',
@@ -160,6 +162,10 @@ export function buildWorkerInstructions(
     '- The user cancelled the parent task that justified this child.',
     '- The child is pathologically slow with no progress signal AND a faster path exists.',
     '- DO NOT task_stop a child just because it is slow but progressing — wait for it. Premature task_stop wastes the work already done.',
+    '',
+    'CHILD-AUTHORED MESSAGES YOU MAY SEE:',
+    '- `<child-notification from=…>` — a child volunteered a mid-flight update (background priority, drained when you next yield). Read it, but do not feel obligated to reply — children are not waiting on you.',
+    '- `<peer-broadcast from=…>` — a child broadcast a finding to all siblings + you. Same handling: integrate into your plan if relevant.',
     '',
     'PROMPT-INVARIANT: both tools are no-ops in sync-mode dispatch (no childTaskRegistry / childAbortControllers). Async dispatch is the default; sync only fires when `KODAX_ASYNC_DISPATCH=0` is set. Calling either tool in sync mode returns `[Tool Error]`.',
   ].join('\n');
