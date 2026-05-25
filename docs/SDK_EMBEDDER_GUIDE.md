@@ -1080,7 +1080,8 @@ interface KodaXModelCapabilities {
   displayName: string;              // human label — falls back to model id
   supportsThinking: boolean;        // native reasoning?
   reasoningCapability: 'native-budget' | 'native-effort' | 'native-toggle' | 'prompt-only' | 'none' | 'unknown';
-  contextWindow?: number;           // tokens (provider-level default + per-model override cascade)
+  contextWindow?: number;           // input tokens (provider default + per-model override cascade)
+  maxOutputTokens?: number;         // per-turn max_tokens KodaX requests — see note below
   thinkingBudgetCap?: number;       // tokens (native-budget providers only)
   isDefault: boolean;               // true for the provider's default model
 }
@@ -1121,32 +1122,39 @@ for (const providerName of Object.keys(KODAX_PROVIDER_SNAPSHOTS)) {
 }
 ```
 
-### What's intentionally NOT exposed: `maxOutputTokens`
+### A note on `maxOutputTokens`
 
-`maxOutputTokens` is **not part of `KodaXModelCapabilities`** even though
-KodaX tracks it internally. Two reasons:
+`KodaXModelCapabilities.maxOutputTokens` is the **per-turn `max_tokens`
+KodaX requests**, NOT the upstream "theoretical maximum". The two
+diverge because:
 
-1. **Upstream providers don't reliably expose it.** A 2026-05 probe
-   against `zhipu-coding` / `kimi-code` / `minimax-coding` / `ark-coding`
-   (Coding-Plan endpoint) / `deepseek` shows their `/v1/models` endpoints
-   return only `{id, object, owned_by, created}` — no context-window,
-   no max-output, no capabilities. Ark's pay-as-you-go `/v3/models`
-   catalog returns rich `token_limits` data, but **none of the models
-   KodaX uses on Ark's `/api/coding` Coding-Plan endpoint appear in
-   that catalog**, so the rich data doesn't apply. Upstream is not a
-   substitute for KodaX-maintained metadata.
-2. **The number KodaX uses is a KodaX runtime decision**, not a model
-   claim. Examples:
-   - DeepSeek V4 advertises 384K max output, but KodaX caps at
-     `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (~32K) so streams finish
-     well under server-side timeouts; the agent loop escalates via
-     L5 continuation if a turn needs more.
-   - `zhipu-coding` has a ~308s server-side kill window; KodaX caps at
-     16K so typical tool_use turns land in the window.
+- **What upstream advertises is often unreliable.** A 2026-05 probe
+  against `zhipu-coding` / `kimi-code` / `minimax-coding` / `ark-coding`
+  (Coding-Plan endpoint) / `deepseek` showed their `/v1/models`
+  endpoints return only `{id, object, owned_by, created}` — no
+  context-window, no max-output, no capabilities at all. Ark's
+  pay-as-you-go `/v3/models` returns rich `token_limits` but none of
+  the Coding-Plan models KodaX actually uses appear in that catalog.
+  Even when upstream does advertise a number, stream behavior often
+  deviates (the LLM stops early at unrelated stop conditions, or the
+  server enforces a tighter kill window). Upstream `/models` data is
+  not a substitute for KodaX-maintained metadata.
+- **What KodaX requests is the trustworthy number.** Values in
+  `KODAX_PROVIDER_SNAPSHOTS` are bench-validated against each provider
+  (kill-windows, decode-rate, cost-per-turn predictability). Examples:
+  - DeepSeek V4 *advertises* 384K max output; KodaX requests
+    `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (~32K) per turn so streams
+    finish under server-side timeouts. Long generation flows through
+    the L5 continuation meta path instead.
+  - `zhipu-coding` has a ~308s server-side kill window; KodaX caps at
+    16K so typical tool_use turns complete within the window.
 
-   Surfacing this number as if it were "what the model can output"
-   would mislead consumers. If your UI needs to display upper-bound
-   output for the user's decision, consult the provider's own docs.
+For a popout UI showing "expected output size for this model", use
+the KodaX value (`caps.maxOutputTokens`). It's exactly what KodaX
+asks the model for — i.e. the actual size budget your turn gets. If
+you also want to expose the model's *theoretical* max output, that
+comes from the upstream provider's own documentation; KodaX doesn't
+certify that number because we don't request it.
 
 ### Why no instance methods touch this
 

@@ -200,8 +200,7 @@ export function getCustomModelCapabilities(
     reasoningCapability:
       descriptor.reasoningCapability ?? config.reasoningCapability ?? 'none',
     contextWindow: descriptor.contextWindow ?? config.contextWindow,
-    // maxOutputTokens deliberately omitted — see registry.ts `KodaXModelCapabilities`
-    // JSDoc for rationale (unreliable upstream + KodaX-side cap, not model metadata).
+    maxOutputTokens: descriptor.maxOutputTokens ?? config.maxOutputTokens,
     thinkingBudgetCap:
       descriptor.thinkingBudgetCap ?? config.thinkingBudgetCap,
     isDefault,

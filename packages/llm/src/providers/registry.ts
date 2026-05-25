@@ -710,15 +710,14 @@ export function isProviderName(name: string): name is ProviderName {
  *
  * `displayName` falls back to `id` when not set; never undefined.
  *
- * **Why no `maxOutputTokens`**: Upstream providers report it inconsistently
- * (some advertise inflated "theoretical" ceilings, others don't expose it
- * at all, and stream behavior often deviates from the advertised value).
- * KodaX uses an internal per-turn output cap (`KodaXProviderConfig.maxOutputTokens`)
- * that the agent loop can escalate via L5 continuation — that cap is a KodaX
- * runtime decision, not a model claim, and surfacing it as model metadata
- * would mislead SDK consumers into building UIs around an unreliable number.
- * If you need to know "how much output a turn can produce", consult the
- * provider's own documentation; KodaX does not certify this value.
+ * **All fields below are KodaX-maintained values** — they reflect what
+ * KodaX itself uses at runtime (the per-turn `max_tokens` we request,
+ * the thinking budget we cap at, etc.), benchmarked against the upstream
+ * model so they are honest representations of the agent's behavior. They
+ * are deliberately NOT sourced from upstream `/models` API responses,
+ * which a 2026-05 cross-provider probe confirmed are sparse and often
+ * empty (see docs/SDK_EMBEDDER_GUIDE.md §9). Embedders showing these
+ * values in a popout UI can trust them.
  */
 export interface KodaXModelCapabilities {
   /** Provider name (`anthropic`, `kimi`, `ark-coding`, or any custom name). */
@@ -733,6 +732,16 @@ export interface KodaXModelCapabilities {
   reasoningCapability: KodaXReasoningCapability;
   /** Maximum input context window (tokens). `undefined` for CLI-bridge providers. */
   contextWindow?: number;
+  /**
+   * Per-turn `max_tokens` KodaX requests. KodaX-side decision —
+   * benchmarked against each provider (kill-windows, decode rate, cost
+   * predictability). NOT the upstream "theoretical maximum" — providers
+   * often advertise inflated ceilings; this value reflects what KodaX
+   * actually asks for. If you display "expected output size" in your UI,
+   * use this. Long generations escalate through the L5 continuation
+   * meta path, not by raising this number per-turn.
+   */
+  maxOutputTokens?: number;
   /** Upper bound on `thinking_budget` (native-budget providers only). */
   thinkingBudgetCap?: number;
   /** True when the model is the provider's default (the `model` field on the snapshot). */
@@ -761,6 +770,7 @@ function effectiveCapabilities(
     reasoningCapability:
       descriptor.reasoningCapability ?? snapshot.reasoningCapability,
     contextWindow: descriptor.contextWindow ?? snapshot.contextWindow,
+    maxOutputTokens: descriptor.maxOutputTokens ?? snapshot.maxOutputTokens,
     thinkingBudgetCap:
       descriptor.thinkingBudgetCap ?? snapshot.thinkingBudgetCap,
     isDefault,

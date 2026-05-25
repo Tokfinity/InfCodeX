@@ -27,22 +27,22 @@ import {
 } from './index.js';
 
 describe('built-in provider model capabilities (no API key required)', () => {
-  it('exposes Anthropic Sonnet 4.6 default at 200K context', () => {
+  it('exposes Anthropic Sonnet 4.6 default at 200K context / 64K max output', () => {
     const caps = getModelCapabilities('anthropic', 'claude-sonnet-4-6');
     expect(caps).toBeDefined();
     expect(caps?.contextWindow).toBe(200_000);
+    expect(caps?.maxOutputTokens).toBe(64000);
     expect(caps?.thinkingBudgetCap).toBe(28000);
     expect(caps?.supportsThinking).toBe(true);
     expect(caps?.isDefault).toBe(true);
-    // maxOutputTokens is NOT exposed — see KodaXModelCapabilities JSDoc.
-    expect((caps as Record<string, unknown>).maxOutputTokens).toBeUndefined();
   });
 
   it('honors per-model thinkingBudgetCap override for Haiku 4.5 (10K) without inheriting Opus 28K', () => {
     const haiku = getModelCapabilities('anthropic', 'claude-haiku-4-5');
     expect(haiku?.thinkingBudgetCap).toBe(10000);
-    // Provider-level contextWindow still cascades.
+    // Provider-level contextWindow + maxOutputTokens still cascade through.
     expect(haiku?.contextWindow).toBe(200_000);
+    expect(haiku?.maxOutputTokens).toBe(64000);
   });
 
   it('exposes kimi-k2.6 at 256K (issue history: FEATURE_098 wrongly pinned 128K)', () => {
@@ -89,10 +89,12 @@ describe('built-in provider model capabilities (no API key required)', () => {
   it('CLI-bridge providers (gemini-cli, codex-cli) leave context fields undefined', () => {
     const gemini = getModelCapabilities('gemini-cli', KODAX_PROVIDER_SNAPSHOTS['gemini-cli'].model);
     expect(gemini?.contextWindow).toBeUndefined();
+    expect(gemini?.maxOutputTokens).toBeUndefined();
     expect(gemini?.supportsThinking).toBe(false);
 
     const codex = getModelCapabilities('codex-cli', KODAX_PROVIDER_SNAPSHOTS['codex-cli'].model);
     expect(codex?.contextWindow).toBeUndefined();
+    expect(codex?.maxOutputTokens).toBeUndefined();
     expect(codex?.supportsThinking).toBe(false);
   });
 
@@ -169,11 +171,11 @@ describe('custom provider model capabilities', () => {
 
     const longCaps = getCustomModelCapabilities('my-corp-llm', 'corp-long');
     expect(longCaps?.contextWindow).toBe(2_000_000); // descriptor override
-    // maxOutputTokens not on the surface — see registry.ts JSDoc.
-    expect((longCaps as Record<string, unknown>)?.maxOutputTokens).toBeUndefined();
+    expect(longCaps?.maxOutputTokens).toBe(16_000); // provider fallback
 
     const miniCaps = getCustomModelCapabilities('my-corp-llm', 'corp-mini');
     expect(miniCaps?.contextWindow).toBe(128_000); // provider fallback
+    expect(miniCaps?.maxOutputTokens).toBe(16_000);
 
     const defaultCaps = getCustomModelCapabilities('my-corp-llm', 'corp-default');
     expect(defaultCaps?.isDefault).toBe(true);
@@ -282,12 +284,16 @@ describe('snapshot drift guard: every Provider class config matches snapshot dat
   // verify the snapshot directly — `buildProviderConfig` is exercised
   // implicitly by every Provider import.
 
-  it('every snapshot with supportsThinking=true also declares contextWindow', () => {
+  it('every snapshot with supportsThinking=true also declares contextWindow + maxOutputTokens', () => {
     for (const [name, snapshot] of Object.entries(KODAX_PROVIDER_SNAPSHOTS)) {
       if (snapshot.supportsThinking) {
         expect(
           snapshot.contextWindow,
           `provider ${name} has supportsThinking=true but no contextWindow`,
+        ).toBeDefined();
+        expect(
+          snapshot.maxOutputTokens,
+          `provider ${name} has supportsThinking=true but no maxOutputTokens`,
         ).toBeDefined();
       }
     }
