@@ -6,7 +6,8 @@
  *
  *   dist/binary/linux-x64/
  *     kodax              ← Bun-compiled standalone executable
- *     builtin/           ← @kodax/skills built-in skill assets
+ *     builtin/           ← built-in skill assets (post-F194 v0.7.43:
+ *                          packages/agent/dist/capabilities/skills/builtin/)
  *
  * Usage:
  *   node scripts/build-binary.mjs                    # current platform
@@ -34,7 +35,11 @@ import { parseArgs } from 'node:util';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const ENTRY = join(ROOT, 'dist', 'kodax_cli.js');
-const BUILTIN_SRC = join(ROOT, 'packages', 'skills', 'dist', 'builtin');
+// Post-FEATURE_194 (v0.7.43) — `@kodax-ai/skills` was inlined into
+// `packages/agent/src/capabilities/skills/`; `copy:builtin` workspace
+// script (run by `npm run build:packages`) emits builtin assets to
+// `packages/agent/dist/capabilities/skills/builtin/`.
+const BUILTIN_SRC = join(ROOT, 'packages', 'agent', 'dist', 'capabilities', 'skills', 'builtin');
 const OUT_ROOT = join(ROOT, 'dist', 'binary');
 
 const TARGETS = {
@@ -215,7 +220,7 @@ async function main() {
     rmSync(OUT_ROOT, { recursive: true, force: true });
   }
 
-  // Workspace TS build → produces dist/kodax_cli.js + packages/*/dist + skills/dist/builtin
+  // Workspace TS build → produces dist/kodax_cli.js + packages/*/dist + packages/agent/dist/capabilities/skills/builtin
   if (!args['skip-tsc']) {
     runStep('npm run build (workspaces + root tsc + copy:builtin)', 'npm', ['run', 'build']);
   } else if (!existsSync(ENTRY)) {
