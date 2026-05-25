@@ -10,6 +10,7 @@ import type {
   KodaXSessionBranchSummaryEntry,
   KodaXSessionCompactionEntry,
   KodaXSessionEntry,
+  KodaXSessionGoalEntry,
   KodaXSessionLabelEntry,
   KodaXSessionLineage,
   KodaXSessionMessageEntry,
@@ -17,7 +18,10 @@ import type {
   KodaXSessionTreeNode,
 } from '../index.js';
 
-type NavigableSessionEntry = Exclude<KodaXSessionEntry, KodaXSessionLabelEntry>;
+type NavigableSessionEntry = Exclude<
+  KodaXSessionEntry,
+  KodaXSessionLabelEntry | KodaXSessionGoalEntry
+>;
 
 const ENTRY_ID_LENGTH = 12;
 const MAX_BRANCH_SUMMARY_LENGTH = 600;
@@ -110,6 +114,10 @@ function cloneEntry(entry: KodaXSessionEntry): KodaXSessionEntry {
       return { ...entry };
     case 'archive_marker':
       return { ...entry };
+    case 'goal':
+      // KodaXSessionGoalEntry: shallow clone; the inner goal object is
+      // already immutable (readonly fields + frozen by goal/state.ts).
+      return { ...entry };
     default: {
       const exhaustiveCheck: never = entry;
       return exhaustiveCheck;
@@ -126,7 +134,11 @@ function isLabelEntry(entry: KodaXSessionEntry): entry is KodaXSessionLabelEntry
 }
 
 function isNavigableEntry(entry: KodaXSessionEntry): entry is NavigableSessionEntry {
-  return entry.type !== 'label';
+  // Labels and goals are session-level side-state, not part of the
+  // navigable message thread. They live in `lineage.entries` so they
+  // are persisted + cleaned up alongside their parent branch, but
+  // they MUST be excluded from path/tree/context computations.
+  return entry.type !== 'label' && entry.type !== 'goal';
 }
 
 function serializeMessageContent(content: KodaXMessage['content']): string {
@@ -154,7 +166,7 @@ function messagesEqual(left: KodaXMessage, right: KodaXMessage): boolean {
   return getMessageFingerprint(left) === getMessageFingerprint(right);
 }
 
-function generateEntryId(prefix: 'entry' | 'label' = 'entry'): string {
+function generateEntryId(prefix: 'entry' | 'label' | 'goal' = 'entry'): string {
   return `${prefix}_${randomUUID().replace(/-/g, '').slice(0, ENTRY_ID_LENGTH)}`;
 }
 
@@ -1008,11 +1020,52 @@ export function forkSessionLineage(
     parentId = labelEntry.id;
   }
 
+  // FEATURE_192 v0.7.44 — carry the active goal forward to the fork.
+  // Parity with the label-carry block above: `/goal` is session-level
+  // state and forking the active branch should not silently drop it.
+  // If the latest on-branch goal entry is `cleared`, the goal is null
+  // and there is nothing to carry. If non-null, append a new goal
+  // entry attached to the fork's tip with the same goal state — the
+  // goal `id` survives so consumers can correlate progress across the
+  // fork.
+  const sourceLatestGoal = findLatestGoalOnPath(lineage, path);
+  if (sourceLatestGoal && sourceLatestGoal.goal) {
+    const carriedGoalEntry: KodaXSessionGoalEntry = {
+      type: 'goal',
+      id: generateEntryId('goal'),
+      parentId,
+      timestamp: new Date().toISOString(),
+      goal: sourceLatestGoal.goal,
+      // Reuse the source event ('created' / 'updated' / 'paused' / etc.)
+      // so the fork's transcript honestly reflects the goal's last state
+      // at fork time, rather than fabricating a 'created' event.
+      event: sourceLatestGoal.event,
+    };
+    entries.push(carriedGoalEntry);
+  }
+
   return {
     version: 2,
     activeEntryId: idMap.get(target.id) ?? null,
     entries,
   };
+}
+
+function findLatestGoalOnPath(
+  lineage: KodaXSessionLineage,
+  path: NavigableSessionEntry[],
+): KodaXSessionGoalEntry | null {
+  if (path.length === 0) return null;
+  const pathIds = new Set(path.map((e) => e.id));
+  let latest: KodaXSessionGoalEntry | null = null;
+  for (const entry of lineage.entries) {
+    if (entry.type !== 'goal') continue;
+    if (entry.parentId === null || !pathIds.has(entry.parentId)) continue;
+    if (latest === null || entry.timestamp > latest.timestamp) {
+      latest = entry;
+    }
+  }
+  return latest;
 }
 
 /**

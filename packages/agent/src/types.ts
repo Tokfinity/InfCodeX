@@ -135,12 +135,70 @@ export interface KodaXSessionArchiveMarkerEntry extends KodaXSessionEntryBase {
   summary: string;
 }
 
+// ============== Goal (FEATURE_192 v0.7.44) ==============
+
+export type KodaXGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'budget_limited'
+  | 'blocked'
+  | 'complete';
+
+/**
+ * Persistent user-set goal state. v0.7.44 FEATURE_192 — backs the
+ * `/goal` slash command and the get_goal / create_goal / update_goal
+ * tools.
+ *
+ * Persistence model: each lifecycle event (create / update / pause /
+ * resume / clear / budget_limited / blocked / complete) appends a
+ * `KodaXSessionGoalEntry` carrying a frozen `KodaXGoalState` snapshot
+ * to the session lineage. `readLatestGoalFromBranch` walks the active
+ * branch's message-entry IDs and returns the latest goal entry whose
+ * parentId belongs to that branch — so forks and rewinds naturally
+ * drop goals attached to abandoned message paths.
+ */
+export interface KodaXGoalState {
+  readonly version: 1;
+  /** `${createdAt}-${rand}` — stable across updates of the same goal. */
+  readonly id: string;
+  readonly objective: string;
+  readonly status: KodaXGoalStatus;
+  /** Optional explicit token budget; null when the user did not set one. */
+  readonly tokenBudget: number | null;
+  readonly tokensUsed: number;
+  readonly timeUsedSeconds: number;
+  /** Consecutive turns the model has reported the same blocker. */
+  readonly blockerTurnCount: number;
+  /** The blocker_kind string the model last reported, or null. */
+  readonly lastBlockerKind: string | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type KodaXGoalEventType =
+  | 'created'
+  | 'updated'
+  | 'paused'
+  | 'resumed'
+  | 'cleared'
+  | 'budget_limited'
+  | 'blocked'
+  | 'complete';
+
+export interface KodaXSessionGoalEntry extends KodaXSessionEntryBase {
+  type: 'goal';
+  /** Snapshot at time of event; `null` only when `event === 'cleared'`. */
+  goal: KodaXGoalState | null;
+  event: KodaXGoalEventType;
+}
+
 export type KodaXSessionEntry =
   | KodaXSessionMessageEntry
   | KodaXSessionCompactionEntry
   | KodaXSessionBranchSummaryEntry
   | KodaXSessionLabelEntry
-  | KodaXSessionArchiveMarkerEntry;
+  | KodaXSessionArchiveMarkerEntry
+  | KodaXSessionGoalEntry;
 
 export interface KodaXSessionArtifactLedgerEntry {
   id: string;
@@ -194,7 +252,10 @@ export interface KodaXSessionNavigationOptions {
 }
 
 export interface KodaXSessionTreeNode {
-  entry: Exclude<KodaXSessionEntry, KodaXSessionLabelEntry>;
+  entry: Exclude<
+    KodaXSessionEntry,
+    KodaXSessionLabelEntry | KodaXSessionGoalEntry
+  >;
   children: KodaXSessionTreeNode[];
   label?: string;
   active: boolean;

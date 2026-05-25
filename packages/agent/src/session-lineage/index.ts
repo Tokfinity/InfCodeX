@@ -50,6 +50,14 @@ export {
   setSessionLineageActiveEntry,
 } from './kodax-session-lineage.js';
 
+// FEATURE_192 v0.7.44 — goal-entry helpers
+export {
+  appendGoalEntry,
+  isGoalEntry,
+  readLatestGoalFromBranch,
+  readLatestGoalState,
+} from './goal-helpers.js';
+
 // ============== Compaction orchestration (v0.7.35.1 FEATURE_142 Batch B) ==============
 export type {
   CompactionAnchor,
