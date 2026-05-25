@@ -302,6 +302,26 @@ log(`Copying builtin skills: ${path.relative(repoRoot, skillsBuiltinSrc)} → ${
 cpSync(skillsBuiltinSrc, skillsBuiltinDst, { recursive: true });
 log(`  ✓ dist/builtin/ copied`);
 
+// ---- copy provider-capabilities.json (FEATURE_198 v0.7.44) --------------
+//
+// The loader reads this JSON at runtime via `fs.readFileSync(__dirname +
+// 'provider-capabilities.json')`. In the bundled output the loader is
+// inlined into dist/index.js, so `import.meta.url` resolves to dist/ —
+// we copy the JSON to dist/ root so the lookup hits.
+//
+// Hot-update path: SDK consumers can edit dist/provider-capabilities.json
+// in-place and restart their process to see new capability values
+// without waiting for a KodaX release.
+//
+// esbuild's default JSON loader would INLINE the import — we avoid that
+// by reading via `fs.readFileSync` (string, not `import`), keeping the
+// JSON external and patchable.
+const capJsonSrc = path.join(repoRoot, 'packages/llm/src/providers/provider-capabilities.json');
+const capJsonDst = path.join(distDir, 'provider-capabilities.json');
+log(`Copying provider-capabilities.json → ${path.relative(repoRoot, capJsonDst)}`);
+cpSync(capJsonSrc, capJsonDst);
+log(`  ✓ dist/provider-capabilities.json copied`);
+
 // ---- sanity check: helper script depth contract -------------------------
 
 // Verify the layout contract: a known helper script must be exactly

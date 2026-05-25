@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "updatedAt": "2026-05-25",
+  "providers": {
+    "anthropic": {
+      "apiKeyEnv": "ANTHROPIC_API_KEY",
+      "model": "claude-sonnet-4-6",
+      "models": [
+        { "id": "claude-opus-4-6", "displayName": "Opus 4.6", "thinkingBudgetCap": 28000 },
+        { "id": "claude-haiku-4-5", "displayName": "Haiku 4.5", "thinkingBudgetCap": 10000 }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 64000,
+      "thinkingBudgetCap": 28000
+    },
+    "openai": {
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "model": "gpt-5.3-codex",
+      "models": [
+        { "id": "gpt-5.4", "displayName": "GPT-5.4" },
+        { "id": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark" }
+      ],
+      "reasoningCapability": "native-effort",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 400000,
+      "maxOutputTokens": 32768
+    },
+    "deepseek": {
+      "apiKeyEnv": "DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "models": [
+        { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro" }
+      ],
+      "reasoningCapability": "native-effort",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000
+    },
+    "kimi": {
+      "apiKeyEnv": "KIMI_API_KEY",
+      "model": "kimi-k2.6",
+      "models": [
+        { "id": "k2.5", "displayName": "K2.5" }
+      ],
+      "reasoningCapability": "native-effort",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 256000,
+      "maxOutputTokens": 32768
+    },
+    "kimi-code": {
+      "apiKeyEnv": "KIMI_API_KEY",
+      "model": "kimi-for-coding",
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 256000,
+      "maxOutputTokens": 32000
+    },
+    "qwen": {
+      "apiKeyEnv": "QWEN_API_KEY",
+      "model": "qwen3.5-plus",
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 256000,
+      "maxOutputTokens": 32768
+    },
+    "zhipu": {
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "model": "glm-5",
+      "models": [
+        { "id": "glm-5.1", "displayName": "GLM-5.1" },
+        { "id": "glm-5-turbo", "displayName": "GLM-5 Turbo" }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32768
+    },
+    "zhipu-coding": {
+      "apiKeyEnv": "ZHIPU_API_KEY",
+      "model": "glm-5",
+      "models": [
+        { "id": "glm-5.1", "displayName": "GLM-5.1" },
+        { "id": "glm-5-turbo", "displayName": "GLM-5 Turbo" }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 16000,
+      "thinkingBudgetCap": 16000
+    },
+    "minimax-coding": {
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "model": "MiniMax-M2.7",
+      "models": [
+        { "id": "MiniMax-M2.7-highspeed", "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)" },
+        { "id": "MiniMax-M2.5", "displayName": "MiniMax M2.5" },
+        { "id": "MiniMax-M2.5-highspeed", "displayName": "MiniMax M2.5 Highspeed (higher-tier plan)" },
+        { "id": "MiniMax-M2.1", "displayName": "MiniMax M2.1" },
+        { "id": "MiniMax-M2.1-highspeed", "displayName": "MiniMax M2.1 Highspeed (higher-tier plan)" },
+        { "id": "MiniMax-M2", "displayName": "MiniMax M2" }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 204800,
+      "maxOutputTokens": 32000
+    },
+    "mimo-coding": {
+      "apiKeyEnv": "MIMO_API_KEY",
+      "model": "mimo-v2.5-pro",
+      "models": [
+        { "id": "mimo-v2.5", "displayName": "MiMo V2.5" }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 32000,
+      "thinkingBudgetCap": 16000
+    },
+    "ark-coding": {
+      "apiKeyEnv": "ARK_API_KEY",
+      "model": "glm-5.1",
+      "models": [
+        { "id": "glm-4.7", "displayName": "GLM-4.7" },
+        { "id": "kimi-k2.6", "displayName": "Kimi K2.6", "contextWindow": 256000 },
+        { "id": "kimi-k2.5", "displayName": "Kimi K2.5", "contextWindow": 256000 },
+        { "id": "minimax-latest", "displayName": "MiniMax Latest", "contextWindow": 204800 },
+        { "id": "deepseek-v3.2", "displayName": "DeepSeek V3.2", "contextWindow": 128000 },
+        { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro", "contextWindow": 1000000 },
+        { "id": "deepseek-v4-flash", "displayName": "DeepSeek V4 Flash", "contextWindow": 1000000 },
+        { "id": "doubao-seed-2.0-code", "displayName": "Doubao Seed 2.0 Code", "contextWindow": 256000 },
+        { "id": "doubao-seed-2.0-pro", "displayName": "Doubao Seed 2.0 Pro", "contextWindow": 256000 },
+        { "id": "doubao-seed-2.0-lite", "displayName": "Doubao Seed 2.0 Lite", "contextWindow": 256000 }
+      ],
+      "reasoningCapability": "native-budget",
+      "capabilityProfile": "image-input-native",
+      "supportsThinking": true,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000
+    },
+    "gemini-cli": {
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "cliBridge": true,
+      "reasoningCapability": "prompt-only",
+      "capabilityProfile": "image-input-cli-bridge",
+      "supportsThinking": false
+    },
+    "codex-cli": {
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "cliBridge": true,
+      "reasoningCapability": "prompt-only",
+      "capabilityProfile": "cli-bridge",
+      "supportsThinking": false
+    }
+  }
+}

@@ -17,30 +17,12 @@ import {
 } from '../types.js';
 import { KodaXProviderError } from '../errors.js';
 import {
-  KODAX_CAPPED_MAX_OUTPUT_TOKENS,
-  KODAX_ESCALATED_MAX_OUTPUT_TOKENS,
-} from '../constants.js';
-import {
-  CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
-  IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
   cloneCapabilityProfile,
-  IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-  NATIVE_PROVIDER_CAPABILITY_PROFILE,
   normalizeCapabilityProfile,
 } from './capability-profile.js';
-import {
-  getCodexCliDefaultModel,
-  getCodexCliKnownModels,
-  getGeminiCliDefaultModel,
-  getGeminiCliKnownModels,
-} from './cli-bridge-models.js';
+import { getProviderSnapshots } from './provider-capabilities.loader.js';
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
-
-const GEMINI_CLI_DEFAULT_MODEL = getGeminiCliDefaultModel();
-const GEMINI_CLI_MODELS = getGeminiCliKnownModels();
-const CODEX_CLI_DEFAULT_MODEL = getCodexCliDefaultModel();
-const CODEX_CLI_MODELS = getCodexCliKnownModels();
 
 // ============== Provider 名称类型 ==============
 
@@ -60,19 +42,22 @@ export type ProviderName =
   | 'codex-cli';
 
 /**
- * Per-provider static metadata. v0.7.43 — promoted from a partial
+ * Per-provider static metadata. v0.7.43 promoted this from a partial
  * descriptor (`models: string[]`) to the full capability surface so
  * SDK consumers can read context windows / max output tokens /
  * thinking-budget caps / per-model descriptors without instantiating
  * a Provider class (which previously required a valid API key just
- * to read static metadata — architectural mismatch).
+ * to read static metadata).
  *
- * This map is now the single source of truth for capability data;
+ * v0.7.44 FEATURE_198 moved the data into a separate JSON file
+ * (`provider-capabilities.json`) so it can be patched without a
+ * KodaX release. The structural type below mirrors the JSON-resolved
+ * shape and remains the single source of truth for capability data;
  * Provider classes derive their runtime `config` from it via
  * `buildProviderConfig`.
  */
 type ProviderSnapshot = {
-  model: string;
+  readonly model: string;
   /**
    * Alternative model descriptors beyond the default `model`. Carries
    * per-model capability overrides (`contextWindow` / `maxOutputTokens` /
@@ -81,282 +66,36 @@ type ProviderSnapshot = {
    * gaps a descriptor leaves unset. The default model has no descriptor
    * entry — it inherits provider-level defaults directly.
    */
-  models?: readonly KodaXModelDescriptor[];
-  apiKeyEnv: string;
-  reasoningCapability: KodaXReasoningCapability;
-  modelReasoningCapabilities?: Partial<Record<string, KodaXReasoningCapability>>;
-  capabilityProfile: KodaXProviderCapabilityProfile;
+  readonly models?: readonly KodaXModelDescriptor[];
+  readonly apiKeyEnv: string;
+  readonly reasoningCapability: KodaXReasoningCapability;
+  readonly modelReasoningCapabilities?: Readonly<
+    Record<string, KodaXReasoningCapability>
+  >;
+  readonly capabilityProfile: KodaXProviderCapabilityProfile;
   /** Maximum input context window (tokens). Provider-level default. */
-  contextWindow?: number;
+  readonly contextWindow?: number;
   /** Per-turn output token cap KodaX requests. Provider-level default. */
-  maxOutputTokens?: number;
+  readonly maxOutputTokens?: number;
   /** Upper bound on `thinking_budget` for native-budget reasoning providers. */
-  thinkingBudgetCap?: number;
+  readonly thinkingBudgetCap?: number;
   /** Whether the provider supports `thinking_budget` / native reasoning. */
-  supportsThinking?: boolean;
+  readonly supportsThinking?: boolean;
 };
 
 // Canonical source for provider identity (apiKeyEnv, default model,
 // reasoning capability, capability profile). Per-class Provider configs
 // derive the three overlapping fields via `buildProviderConfig` so the
 // two structures cannot drift.
-export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> = {
-  anthropic: {
-    apiKeyEnv: 'ANTHROPIC_API_KEY',
-    model: 'claude-sonnet-4-6',
-    models: [
-      { id: 'claude-opus-4-6', displayName: 'Opus 4.6', thinkingBudgetCap: 28000 },
-      { id: 'claude-haiku-4-5', displayName: 'Haiku 4.5', thinkingBudgetCap: 10000 },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 200000,
-    // Anthropic API: max_tokens = thinking + output combined budget.
-    // With thinkingBudgetCap=28000, 32768 left only ~4768 for actual output.
-    // 64000 ensures ~36000+ tokens for output even at maximum thinking.
-    maxOutputTokens: 64000,
-    thinkingBudgetCap: 28000,
-  },
-  openai: {
-    apiKeyEnv: 'OPENAI_API_KEY',
-    model: 'gpt-5.3-codex',
-    models: [
-      { id: 'gpt-5.4', displayName: 'GPT-5.4' },
-      { id: 'gpt-5.3-codex-spark', displayName: 'GPT-5.3 Codex Spark' },
-    ],
-    reasoningCapability: 'native-effort',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 400000,
-    maxOutputTokens: 32768,
-  },
-  deepseek: {
-    apiKeyEnv: 'DEEPSEEK_API_KEY',
-    // DeepSeek V4 series (1M context, OpenAI-style `reasoning_effort`).
-    // The pre-V4 aliases `deepseek-chat` / `deepseek-reasoner` are slated
-    // for deprecation on 2026-07-24 and have been removed from KodaX —
-    // existing configs pointing at them should switch to v4-flash.
-    // Vision: inherits `KodaXOpenAICompatProvider` `image_url` serialization
-    // (openai.ts:904). Upstream model-level vision support varies per model
-    // — flag means KodaX does not artificially block the request; users see
-    // real API errors if a specific model is text-only. v0.7.40 FEATURE_134.
-    model: 'deepseek-v4-flash',
-    models: [
-      { id: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro' },
-    ],
-    reasoningCapability: 'native-effort',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    // V4 series ships a 1M context. Server advertises a 384K max output
-    // ceiling but we cap per-turn output at the standard escalation budget
-    // so streams finish well under server-side timeouts; the agent loop
-    // already escalates on `stop_reason: max_tokens`.
-    contextWindow: 1_000_000,
-    maxOutputTokens: KODAX_ESCALATED_MAX_OUTPUT_TOKENS,
-  },
-  kimi: {
-    apiKeyEnv: 'KIMI_API_KEY',
-    model: 'kimi-k2.6',
-    models: [
-      // Both K2.5 and K2.6 ship a 256K context (user-confirmed against
-      // the upstream catalog, 2026-04). FEATURE_098 originally pinned
-      // k2.5 to 128K based on documentation available at that time;
-      // either Moonshot upgraded K2.5 since or the original 128K figure
-      // was incorrect. No override — k2.5 inherits the 256K provider
-      // default below.
-      { id: 'k2.5', displayName: 'K2.5' },
-    ],
-    reasoningCapability: 'native-effort',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 256000,
-    maxOutputTokens: 32768,
-  },
-  'kimi-code': {
-    apiKeyEnv: 'KIMI_API_KEY',
-    // The Kimi-for-Coding endpoint ignores the request `model` field and
-    // always routes to whichever K2.x GA model the platform has currently
-    // promoted (K2.6 as of 2026-04). We surface a single stable label so
-    // users aren't tempted to pick a specific version that the server will
-    // silently ignore.
-    // Vision: inherits Anthropic-compat image-block serialization
-    // (anthropic.ts:770). User-validated 2026-05-13 — kimi-for-coding
-    // endpoint accepts and processes image input. v0.7.40 FEATURE_134.
-    model: 'kimi-for-coding',
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 256000,
-    // Bench-confirmed (2026-04): kimi-for-coding completes 64K stream
-    // cleanly at 525s with stop_reason=tool_use (23K output tokens, 1400
-    // HTML lines). Does NOT share the zhipu-coding 308s server-side kill
-    // window. Capped at 32K for cost predictability; tasks needing more
-    // output flow through the L5 continuation meta path. Override with
-    // `KODAX_MAX_OUTPUT_TOKENS` to allow larger single-turn generation.
-    maxOutputTokens: KODAX_CAPPED_MAX_OUTPUT_TOKENS,
-  },
-  qwen: {
-    apiKeyEnv: 'QWEN_API_KEY',
-    model: 'qwen3.5-plus',
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 256000,
-    maxOutputTokens: 32768,
-  },
-  zhipu: {
-    apiKeyEnv: 'ZHIPU_API_KEY',
-    model: 'glm-5',
-    models: [
-      { id: 'glm-5.1', displayName: 'GLM-5.1' },
-      // User-confirmed (2026-05): GLM-5 Turbo ships the same 200K window
-      // as GLM-5 / GLM-5.1 on the public endpoint. The original FEATURE_098
-      // 128K pin mirrored docs that were either outdated or wrong — same
-      // correction pattern as kimi/k2.5. Inherits the 200K provider default.
-      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 200000,
-    maxOutputTokens: 32768,
-  },
-  'zhipu-coding': {
-    apiKeyEnv: 'ZHIPU_API_KEY',
-    model: 'glm-5',
-    models: [
-      { id: 'glm-5.1', displayName: 'GLM-5.1' },
-      // User-confirmed (2026-05): GLM-5 Turbo ships the same 200K window as
-      // GLM-5 / GLM-5.1 on this endpoint. The original FEATURE_098 128K pin
-      // mirrored docs that were either outdated or wrong — same correction
-      // pattern as kimi/k2.5. Inheriting the 200K provider-level default.
-      { id: 'glm-5-turbo', displayName: 'GLM-5 Turbo' },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 200000,
-    // Bench-confirmed: GLM Coding Plan has a ~308s server-side kill window
-    // (mean 308.4s ± 0.2s, 6/6 reproductions on 64K stream tasks). 16K cap
-    // targets completion within the kill window for typical tool_use turns
-    // (~40-57 tok/s decode rate). Override with `KODAX_MAX_OUTPUT_TOKENS`
-    // to bypass.
-    maxOutputTokens: 16_000,
-    thinkingBudgetCap: 16000,
-  },
-  'minimax-coding': {
-    apiKeyEnv: 'MINIMAX_API_KEY',
-    model: 'MiniMax-M2.7',
-    // Probe (2026-04) against the public Token Plan: bare model IDs
-    // (no `-highspeed` suffix) resolve, the `-highspeed` variants
-    // return 500 "your current token plan not support model". Listing
-    // the bare IDs as the canonical surface; legacy `-highspeed`
-    // entries kept for users who do have them on a higher tier.
-    models: [
-      { id: 'MiniMax-M2.7-highspeed', displayName: 'MiniMax M2.7 Highspeed (higher-tier plan)' },
-      { id: 'MiniMax-M2.5', displayName: 'MiniMax M2.5' },
-      { id: 'MiniMax-M2.5-highspeed', displayName: 'MiniMax M2.5 Highspeed (higher-tier plan)' },
-      { id: 'MiniMax-M2.1', displayName: 'MiniMax M2.1' },
-      { id: 'MiniMax-M2.1-highspeed', displayName: 'MiniMax M2.1 Highspeed (higher-tier plan)' },
-      { id: 'MiniMax-M2', displayName: 'MiniMax M2' },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 204800,
-    // Bench-confirmed (2026-04, MiniMax-M2.7 64K stream): completes cleanly
-    // at 464.9s. Standard 32K cap + L5 continuation handles long generation.
-    maxOutputTokens: KODAX_CAPPED_MAX_OUTPUT_TOKENS,
-  },
-  'mimo-coding': {
-    // Xiaomi MiMo Token Plan subscription endpoint (Anthropic-compat).
-    // Token Plan keys are `tp-xxxxx`; pay-as-you-go keys (`sk-xxxxx`) are
-    // a separate product on a different host and are NOT cross-compatible.
-    apiKeyEnv: 'MIMO_API_KEY',
-    model: 'mimo-v2.5-pro',
-    models: [
-      { id: 'mimo-v2.5', displayName: 'MiMo V2.5' },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    // V2.5 series advertises a 1M context window (per platform docs).
-    contextWindow: 1_000_000,
-    // Bench-confirmed (2026-04): mimo-v2.5-pro completes 64K stream cleanly
-    // at 309.6s. Standard 32K cap + L5 continuation handles long generation.
-    maxOutputTokens: KODAX_CAPPED_MAX_OUTPUT_TOKENS,
-    thinkingBudgetCap: 16_000,
-  },
-  'ark-coding': {
-    // Volcengine Ark Coding Plan subscription endpoint (Anthropic-compat).
-    // Multi-model gateway routing by the request `model` field — unlike
-    // kimi-for-coding the gateway honors per-request model selection. Bench
-    // (2026-04) confirmed model routing with the standard `x-api-key` header
-    // (no Bearer needed despite the official Claude Code config recommending
-    // `ANTHROPIC_AUTH_TOKEN`). DeepSeek V4 added 2026-05.
-    apiKeyEnv: 'ARK_API_KEY',
-    model: 'glm-5.1',
-    // Per-model context windows below are user-confirmed against the
-    // Volcengine console model catalog (2026-04). Provider-level default
-    // 200K matches the GLM family; the rest get explicit overrides.
-    models: [
-      { id: 'glm-4.7', displayName: 'GLM-4.7' },
-      { id: 'kimi-k2.6', displayName: 'Kimi K2.6', contextWindow: 256_000 },
-      { id: 'kimi-k2.5', displayName: 'Kimi K2.5', contextWindow: 256_000 },
-      // `minimax-latest` is the Ark-side alias that resolves to the
-      // current MiniMax GA coding model (M2.7 as of 2026-04). Pinned to
-      // 204_800 to match the `minimax-coding` provider's M2.x family.
-      { id: 'minimax-latest', displayName: 'MiniMax Latest', contextWindow: 204_800 },
-      // V3 series 128K window; V4 series ships 1M (matches direct DeepSeek
-      // provider). Ark gateway exposed V4 via Coding Plan as of 2026-05.
-      { id: 'deepseek-v3.2', displayName: 'DeepSeek V3.2', contextWindow: 128_000 },
-      { id: 'deepseek-v4-pro', displayName: 'DeepSeek V4 Pro', contextWindow: 1_000_000 },
-      { id: 'deepseek-v4-flash', displayName: 'DeepSeek V4 Flash', contextWindow: 1_000_000 },
-      { id: 'doubao-seed-2.0-code', displayName: 'Doubao Seed 2.0 Code', contextWindow: 256_000 },
-      { id: 'doubao-seed-2.0-pro', displayName: 'Doubao Seed 2.0 Pro', contextWindow: 256_000 },
-      { id: 'doubao-seed-2.0-lite', displayName: 'Doubao Seed 2.0 Lite', contextWindow: 256_000 },
-    ],
-    reasoningCapability: 'native-budget',
-    capabilityProfile: IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: true,
-    contextWindow: 200_000,
-    // Bench-confirmed (2026-04, glm-5.1 32K stream + tool_use): completes
-    // cleanly at 947s. Standard 32K cap matches the kimi-code / mimo-coding
-    // / minimax-coding pattern; tasks needing more output flow through the
-    // L5 continuation meta path. Override with `KODAX_MAX_OUTPUT_TOKENS`.
-    maxOutputTokens: KODAX_CAPPED_MAX_OUTPUT_TOKENS,
-  },
-  'gemini-cli': {
-    // FEATURE_134 v0.7.40: Gemini CLI 2.x supports `@<path>` file-include
-    // syntax in prompts (including image files). KodaX's ACP bridge
-    // `KodaXGeminiCliProvider.serializeImageBlockToPromptToken` returns
-    // `@<abs-path>` for each image block on the latest user message,
-    // letting Gemini's CLI side resolve the file content. Other CLI-bridge
-    // providers (codex-cli) still default to text-only.
-    apiKeyEnv: 'GEMINI_API_KEY',
-    model: GEMINI_CLI_DEFAULT_MODEL,
-    // CLI bridge: model surface is owned by the local Gemini CLI binary
-    // (KodaX delegates the actual model call). KodaX-side context window
-    // and max output tokens are not authoritative — the upstream CLI
-    // resolves them per its own version + flag set. Leave capability
-    // fields undefined so consumers know to defer.
-    models: GEMINI_CLI_MODELS.filter((model) => model !== GEMINI_CLI_DEFAULT_MODEL).map((id) => ({ id })),
-    reasoningCapability: 'prompt-only',
-    capabilityProfile: IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: false,
-  },
-  'codex-cli': {
-    apiKeyEnv: 'OPENAI_API_KEY',
-    model: CODEX_CLI_DEFAULT_MODEL,
-    // CLI bridge — same rationale as gemini-cli above. Capability fields
-    // intentionally undefined; the local Codex CLI owns the model surface.
-    models: CODEX_CLI_MODELS.filter((model) => model !== CODEX_CLI_DEFAULT_MODEL).map((id) => ({ id })),
-    reasoningCapability: 'prompt-only',
-    capabilityProfile: CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
-    supportsThinking: false,
-  },
-};
+//
+// v0.7.44 FEATURE_198: backed by `provider-capabilities.json` via the
+// loader; the JSON is read once at module init, validated, and resolved
+// (profile-name strings → KodaXProviderCapabilityProfile objects;
+// cliBridge entries filled with local CLI's default/known models). The
+// export surface is unchanged — every consumer that read this Record
+// continues to read the same Record shape, no caller-side changes.
+export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> =
+  getProviderSnapshots() as Record<ProviderName, ProviderSnapshot>;
 
 // Derive a Provider class's config from the canonical snapshot plus the
 // per-class overrides (runtime-only fields: baseUrl, streamMaxDurationMs,

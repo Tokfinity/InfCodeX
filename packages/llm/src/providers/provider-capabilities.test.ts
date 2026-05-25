@@ -1,0 +1,393 @@
+/**
+ * FEATURE_198 v0.7.44 — Provider capability JSON loader tests.
+ *
+ * Coverage:
+ *   - JSON file schema validation (happy path)
+ *   - Validator rejects each major failure mode (missing required,
+ *     wrong type, unknown profile, cliBridge contradiction)
+ *   - Loader cache behavior (single read per process)
+ *   - `_resetProviderSnapshotsCache` test hook
+ *   - Profile-name → object resolution
+ *   - CLI-bridge dynamic fill (gemini-cli / codex-cli)
+ *   - **Drift guard**: every known KODAX provider exists in JSON with
+ *     the right shape (catches accidental field deletions in JSON edits)
+ *   - **Cross-check**: loader output identity for selected providers
+ *     against hard-coded expected values (catches data mis-transcription
+ *     during the F198 split)
+ */
+
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+  IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+  IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
+} from './capability-profile.js';
+import { KODAX_PROVIDER_SNAPSHOTS } from './registry.js';
+import {
+  _resetProviderSnapshotsCache,
+  getProviderSnapshots,
+} from './provider-capabilities.loader.js';
+import { validateProviderCapabilitiesJson } from './provider-capabilities.types.js';
+
+describe('FEATURE_198 — provider-capabilities loader', () => {
+  beforeEach(() => {
+    _resetProviderSnapshotsCache();
+  });
+
+  describe('basic loading', () => {
+    it('reads JSON from disk and produces the expected provider keys', () => {
+      const snapshots = getProviderSnapshots();
+      const names = Object.keys(snapshots).sort();
+      expect(names).toEqual(
+        [
+          'anthropic',
+          'ark-coding',
+          'codex-cli',
+          'deepseek',
+          'gemini-cli',
+          'kimi',
+          'kimi-code',
+          'minimax-coding',
+          'mimo-coding',
+          'openai',
+          'qwen',
+          'zhipu',
+          'zhipu-coding',
+        ].sort(),
+      );
+    });
+
+    it('caches the snapshot — second call returns the same object identity', () => {
+      const a = getProviderSnapshots();
+      const b = getProviderSnapshots();
+      expect(a).toBe(b);
+    });
+
+    it('_resetProviderSnapshotsCache forces a fresh load', () => {
+      const a = getProviderSnapshots();
+      _resetProviderSnapshotsCache();
+      const b = getProviderSnapshots();
+      expect(a).not.toBe(b);
+      // Same data, different identity
+      expect(b).toEqual(a);
+    });
+  });
+
+  describe('profile-name resolution', () => {
+    it('resolves "image-input-native" to the imported profile object', () => {
+      const anthropic = getProviderSnapshots().anthropic;
+      expect(anthropic.capabilityProfile).toBe(
+        IMAGE_INPUT_NATIVE_PROVIDER_CAPABILITY_PROFILE,
+      );
+    });
+
+    it('resolves "image-input-cli-bridge" for gemini-cli', () => {
+      const gemini = getProviderSnapshots()['gemini-cli'];
+      expect(gemini.capabilityProfile).toBe(
+        IMAGE_INPUT_CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE,
+      );
+    });
+
+    it('resolves "cli-bridge" for codex-cli', () => {
+      const codex = getProviderSnapshots()['codex-cli'];
+      expect(codex.capabilityProfile).toBe(CLI_BRIDGE_PROVIDER_CAPABILITY_PROFILE);
+    });
+  });
+
+  describe('CLI-bridge dynamic fill', () => {
+    it('gemini-cli has a non-empty model string filled from cli-bridge-models', () => {
+      const gemini = getProviderSnapshots()['gemini-cli'];
+      expect(typeof gemini.model).toBe('string');
+      expect(gemini.model.length).toBeGreaterThan(0);
+      expect(Array.isArray(gemini.models)).toBe(true);
+      // models[] excludes the default
+      for (const m of gemini.models ?? []) {
+        expect(m.id).not.toBe(gemini.model);
+      }
+    });
+
+    it('codex-cli has a non-empty model string filled from cli-bridge-models', () => {
+      const codex = getProviderSnapshots()['codex-cli'];
+      expect(typeof codex.model).toBe('string');
+      expect(codex.model.length).toBeGreaterThan(0);
+      expect(Array.isArray(codex.models)).toBe(true);
+      for (const m of codex.models ?? []) {
+        expect(m.id).not.toBe(codex.model);
+      }
+    });
+  });
+
+  describe('snapshot frozen', () => {
+    it('top-level snapshot map is frozen', () => {
+      const snap = getProviderSnapshots();
+      expect(Object.isFrozen(snap)).toBe(true);
+    });
+
+    it('per-provider snapshot object is frozen', () => {
+      const snap = getProviderSnapshots();
+      expect(Object.isFrozen(snap.anthropic)).toBe(true);
+    });
+
+    it('models array is frozen', () => {
+      const snap = getProviderSnapshots();
+      const models = snap.anthropic.models;
+      expect(Array.isArray(models)).toBe(true);
+      expect(Object.isFrozen(models)).toBe(true);
+      // each descriptor frozen too
+      if (models) {
+        for (const m of models) {
+          expect(Object.isFrozen(m)).toBe(true);
+        }
+      }
+    });
+  });
+
+  describe('registry KODAX_PROVIDER_SNAPSHOTS export', () => {
+    it('exports the same snapshot the loader produced', () => {
+      const fromLoader = getProviderSnapshots();
+      // KODAX_PROVIDER_SNAPSHOTS was initialized at module load; loader
+      // cache reset above means a fresh `getProviderSnapshots()` is a
+      // DIFFERENT object identity. But the data must be deep-equal.
+      expect(KODAX_PROVIDER_SNAPSHOTS).toEqual(fromLoader);
+    });
+  });
+
+  describe('field-level cross-check (catches data mis-transcription)', () => {
+    // The following block hard-codes the EXPECTED values for each
+    // statically-known field. If a JSON edit drops or mis-types a value,
+    // this fails immediately. CLI-bridge dynamic fields (model/models)
+    // are NOT asserted here — they're verified separately above.
+
+    it('anthropic: full field set matches expected', () => {
+      const a = getProviderSnapshots().anthropic;
+      expect(a.apiKeyEnv).toBe('ANTHROPIC_API_KEY');
+      expect(a.model).toBe('claude-sonnet-4-6');
+      expect(a.reasoningCapability).toBe('native-budget');
+      expect(a.supportsThinking).toBe(true);
+      expect(a.contextWindow).toBe(200000);
+      expect(a.maxOutputTokens).toBe(64000);
+      expect(a.thinkingBudgetCap).toBe(28000);
+      expect(a.models).toEqual([
+        { id: 'claude-opus-4-6', displayName: 'Opus 4.6', thinkingBudgetCap: 28000 },
+        { id: 'claude-haiku-4-5', displayName: 'Haiku 4.5', thinkingBudgetCap: 10000 },
+      ]);
+    });
+
+    it('deepseek: KODAX_ESCALATED_MAX_OUTPUT_TOKENS resolved to 64000', () => {
+      const d = getProviderSnapshots().deepseek;
+      expect(d.maxOutputTokens).toBe(64000);
+      expect(d.contextWindow).toBe(1_000_000);
+    });
+
+    it('kimi-code: KODAX_CAPPED_MAX_OUTPUT_TOKENS resolved to 32000, no models[]', () => {
+      const k = getProviderSnapshots()['kimi-code'];
+      expect(k.maxOutputTokens).toBe(32000);
+      expect(k.contextWindow).toBe(256000);
+      expect(k.models).toBeUndefined();
+    });
+
+    it('zhipu-coding: bench-tuned 16K maxOutputTokens + thinkingBudgetCap', () => {
+      const z = getProviderSnapshots()['zhipu-coding'];
+      expect(z.maxOutputTokens).toBe(16000);
+      expect(z.thinkingBudgetCap).toBe(16000);
+      expect(z.contextWindow).toBe(200000);
+    });
+
+    it('ark-coding: per-model contextWindow overrides preserved', () => {
+      const a = getProviderSnapshots()['ark-coding'];
+      expect(a.contextWindow).toBe(200000);
+      expect(a.maxOutputTokens).toBe(32000);
+      const v4pro = a.models?.find((m) => m.id === 'deepseek-v4-pro');
+      const v32 = a.models?.find((m) => m.id === 'deepseek-v3.2');
+      const minimax = a.models?.find((m) => m.id === 'minimax-latest');
+      expect(v4pro?.contextWindow).toBe(1_000_000);
+      expect(v32?.contextWindow).toBe(128_000);
+      expect(minimax?.contextWindow).toBe(204_800);
+    });
+  });
+});
+
+describe('FEATURE_198 — validator failure modes', () => {
+  function shouldThrow(raw: unknown, matcher: RegExp | string): void {
+    expect(() => validateProviderCapabilitiesJson(raw)).toThrow(matcher);
+  }
+
+  it('rejects non-object root', () => {
+    shouldThrow(null, /root must be an object/);
+    shouldThrow('foo', /root must be an object/);
+  });
+
+  it('rejects wrong version', () => {
+    shouldThrow({ version: 2, updatedAt: 'x', providers: {} }, /version must be 1/);
+  });
+
+  it('rejects missing updatedAt', () => {
+    shouldThrow({ version: 1, providers: {} }, /updatedAt/);
+  });
+
+  it('rejects missing providers', () => {
+    shouldThrow({ version: 1, updatedAt: 'x' }, /providers must be an object/);
+  });
+
+  it('rejects unknown reasoningCapability', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'magic',
+            capabilityProfile: 'native',
+          },
+        },
+      },
+      /reasoningCapability must be one of/,
+    );
+  });
+
+  it('rejects unknown capabilityProfile', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'super-deluxe',
+          },
+        },
+      },
+      /capabilityProfile must be one of/,
+    );
+  });
+
+  it('rejects static entry missing model', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+          },
+        },
+      },
+      /model is required/,
+    );
+  });
+
+  it('rejects cliBridge entry that defines model', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          'foo-cli': {
+            apiKeyEnv: 'F',
+            model: 'should-not-be-here',
+            reasoningCapability: 'none',
+            capabilityProfile: 'cli-bridge',
+            cliBridge: true,
+          },
+        },
+      },
+      /cliBridge entry but defines model/,
+    );
+  });
+
+  it('rejects negative contextWindow', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            contextWindow: -1,
+          },
+        },
+      },
+      /contextWindow must be a non-negative/,
+    );
+  });
+
+  it('rejects non-array models', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            models: 'not-an-array',
+          },
+        },
+      },
+      /models must be an array/,
+    );
+  });
+
+  it('rejects model descriptor missing id', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            models: [{ displayName: 'missing-id' }],
+          },
+        },
+      },
+      /id must be a non-empty string/,
+    );
+  });
+
+  it('accepts minimal valid static entry', () => {
+    const result = validateProviderCapabilitiesJson({
+      version: 1,
+      updatedAt: 'x',
+      providers: {
+        foo: {
+          apiKeyEnv: 'F',
+          model: 'm',
+          reasoningCapability: 'none',
+          capabilityProfile: 'native',
+        },
+      },
+    });
+    expect(result.providers.foo.model).toBe('m');
+  });
+
+  it('accepts minimal valid cliBridge entry', () => {
+    const result = validateProviderCapabilitiesJson({
+      version: 1,
+      updatedAt: 'x',
+      providers: {
+        'foo-cli': {
+          apiKeyEnv: 'F',
+          cliBridge: true,
+          reasoningCapability: 'prompt-only',
+          capabilityProfile: 'cli-bridge',
+        },
+      },
+    });
+    expect(result.providers['foo-cli'].cliBridge).toBe(true);
+    expect(result.providers['foo-cli'].model).toBeUndefined();
+  });
+});

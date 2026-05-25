@@ -182,6 +182,19 @@ function buildOne(target, version) {
   }
   cpSync(BUILTIN_SRC, join(outDir, 'builtin'), { recursive: true });
 
+  // 3. Sidecar provider-capabilities.json (FEATURE_198 v0.7.44)
+  //
+  // The capability JSON is read at runtime via fs.readFileSync — under
+  // KODAX_BUNDLED='true' the loader resolves to `dirname(process.execPath)
+  // + 'provider-capabilities.json'`. Same sidecar pattern as builtin/.
+  // Embedders / advanced users can edit this JSON in-place to patch
+  // capability metadata without rebuilding the binary.
+  const capJsonSrc = join(ROOT, 'packages', 'llm', 'src', 'providers', 'provider-capabilities.json');
+  if (!existsSync(capJsonSrc)) {
+    throw new Error(`Missing ${capJsonSrc}.`);
+  }
+  cpSync(capJsonSrc, join(outDir, 'provider-capabilities.json'));
+
   console.log(`    ✓ ${target}: ${binaryPath}`);
 }
 
