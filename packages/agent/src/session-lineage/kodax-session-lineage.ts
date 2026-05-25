@@ -1057,11 +1057,21 @@ function findLatestGoalOnPath(
 ): KodaXSessionGoalEntry | null {
   if (path.length === 0) return null;
   const pathIds = new Set(path.map((e) => e.id));
+  // Reverse iteration so insertion order breaks ties on same-ms
+  // timestamps — `/goal new` after a `complete` goal emits
+  // `(complete → cleared → created)` in the same Date.now() ms, and
+  // a strict `>` comparison would strand the latest (`created`)
+  // behind the earliest match. Mirrors `goal-helpers.readLatestGoalFromBranch`.
   let latest: KodaXSessionGoalEntry | null = null;
-  for (const entry of lineage.entries) {
+  for (let i = lineage.entries.length - 1; i >= 0; i--) {
+    const entry = lineage.entries[i];
     if (entry.type !== 'goal') continue;
     if (entry.parentId === null || !pathIds.has(entry.parentId)) continue;
-    if (latest === null || entry.timestamp > latest.timestamp) {
+    if (latest === null) {
+      latest = entry;
+      continue;
+    }
+    if (entry.timestamp > latest.timestamp) {
       latest = entry;
     }
   }

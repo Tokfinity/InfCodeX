@@ -269,4 +269,38 @@ describe('forkSessionLineage carries the active goal forward', () => {
     expect(forked).not.toBeNull();
     expect(readLatestGoalFromBranch(forked!)).toBeNull();
   });
+
+  it('carries the LATEST goal forward when same-ms timestamps tie (complete -> cleared -> created)', () => {
+    // Regression for the same-ms tie-break bug: `/goal new` after a
+    // `complete` goal emits 3 goal entries in the same Date.now() ms,
+    // and a strict `>` comparison in findLatestGoalOnPath would
+    // strand the latest (`created`) entry, carrying the stale
+    // `complete` state across the fork.
+    const m1 = makeMsg('m1', null);
+    let lineage = makeLineage([m1], 'm1');
+    const sameMs = '2026-05-25T00:00:00.000Z';
+    // Sequence the slash command would produce:
+    //   1) prior goal (status=complete) — already present on branch
+    //   2) /goal new -> emit cleared
+    //   3)            -> emit created (with new objective)
+    lineage = appendGoalEntry(
+      lineage,
+      { ...makeGoal({ objective: 'old-objective', id: 'goal-OLD' }), status: 'complete' },
+      'complete',
+      { timestamp: sameMs },
+    );
+    lineage = appendGoalEntry(lineage, null, 'cleared', { timestamp: sameMs });
+    lineage = appendGoalEntry(
+      lineage,
+      makeGoal({ objective: 'new-objective', id: 'goal-NEW' }),
+      'created',
+      { timestamp: sameMs },
+    );
+    const forked = forkSessionLineage(lineage);
+    expect(forked).not.toBeNull();
+    const carried = readLatestGoalFromBranch(forked!);
+    expect(carried?.goal?.id).toBe('goal-NEW');
+    expect(carried?.goal?.objective).toBe('new-objective');
+    expect(carried?.event).toBe('created');
+  });
 });

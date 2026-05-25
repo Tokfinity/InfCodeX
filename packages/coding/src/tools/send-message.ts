@@ -69,10 +69,22 @@ interface QueueLike {
 }
 
 /**
- * Send an addressed message to the Worker (or grand-parent child).
+ * Send an addressed message to the immediate parent agent.
  * Worker is uniquely keyed by `agentId: undefined` on the queue when
  * the caller has no `parentAgentId`; grand-children route to their
  * direct parent (a specific task_id) when one is set.
+ *
+ * **LLM-prompt semantics note**: the child role prompt teaches
+ * `to:"worker"` as "notify your parent Worker". For first-tier
+ * children (the only path that exists in v0.7.44 because
+ * `dispatch_child_task` is in CHILD_EXCLUDE_TOOLS_BASE), the
+ * immediate parent IS the Worker, so prompt and implementation
+ * agree. A future v0.7.4x that opens grand-child dispatch would
+ * need to either (a) keep this immediate-parent semantic and
+ * rephrase the prompt to "notify your immediate parent", or (b)
+ * introduce a separate `to:"parent"` sentinel and route
+ * `to:"worker"` always to the top Worker. Deferred to that
+ * version — see v0.7.44 CHANGELOG deferred-to-v0.7.45 list.
  */
 function sendToWorker(
   fromId: string,
