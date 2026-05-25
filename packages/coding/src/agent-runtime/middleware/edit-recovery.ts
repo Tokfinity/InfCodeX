@@ -161,7 +161,8 @@ export async function buildEditRecoveryUserMessage(
   const lines: string[] = [
     `The previous edit for ${resolvedPath} failed with ${code}.`,
     'Do not use write to rewrite the existing file.',
-    'Retry with edit using a smaller unique old_string, or use insert_after_anchor when you are appending a new section.',
+    'Retry with edit using a smaller unique old_string.',
+    'When appending a new section after a unique heading, use insert_after_anchor instead.',
   ];
 
   if (primary) {
