@@ -92,7 +92,7 @@ That's it. You're in the REPL — ask anything in natural language.
   <tr>
     <td align="center" valign="top">
       <h3>🤖 Multi-agent by default</h3>
-      <sub>V2 Worker + Evaluator + async children</sub>
+      <sub>V2 Worker single-loop + Sidecar Verifier + async children</sub>
       <br><br>
       <code>dispatch_child_task</code>, <code>send_message</code>, <code>task_stop</code>, multi-instance auto-coordination with content-hash safety net.
     </td>
@@ -370,7 +370,7 @@ KodaX has two layers that consumers should understand separately:
 
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
 - **12 LLM Providers** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding (Xiaomi Token Plan), Gemini CLI, Codex CLI — plus user-defined OpenAI/Anthropic-compatible providers
-- **Worker + Evaluator AMA (V2, default)** - Adaptive multi-agent with H0/H1/H2 harness levels. Worker single-loop replaces the V1 Scout/Planner/Generator chain (FEATURE_114, v0.7.36); structural Evaluator gate preserved. Async child steering via `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait (FEATURE_120 / FEATURE_155, v0.7.39).
+- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. V1 Scout/Planner/Generator/Evaluator chain fully retired (FEATURE_193 v0.7.43); `emit_handoff` tool deleted (FEATURE_190 v0.7.43); accept-verdict UI silently passes through (FEATURE_195 v0.7.43); content-aware fire gate skips trivial-chat sidecar calls (FEATURE_196 v0.7.43). Async child steering via `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait (FEATURE_120 / FEATURE_155, v0.7.39); specialist routing via `subagent_type` (FEATURE_191 v0.7.43).
 - **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
 - **Streaming Output** - Real-time response display
 - **Session Management** - JSONL format with branchable session lineage tree
@@ -838,7 +838,7 @@ const result = await executeSkill({
 
 ### `@kodax-ai/kodax/coding` — Coding Agent
 
-Complete coding agent: 30+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + role prompts (Worker / Evaluator) + agent loop + auto-continue + session management.
+Complete coding agent: 30+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
 
 ```typescript
 import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
@@ -860,7 +860,7 @@ await client.send('Create a new file');
 await client.send('Add a function to it'); // Has context from previous message
 ```
 
-**Key Features**: 30+ built-in tools (see [Tools](#tools)) · Worker+Evaluator V2 chain (FEATURE_114, v0.7.36 default) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · auto-continue · session lineage.
+**Key Features**: 30+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · specialist routing via `subagent_type` (FEATURE_191, v0.7.43) · auto-continue · session lineage.
 
 ### `@kodax-ai/kodax/repl` — Interactive Terminal UI
 
@@ -941,7 +941,7 @@ kodax --session list
 # Parallel tool execution
 kodax --parallel "Read package.json and tsconfig.json"
 
-# Adaptive multi-agent (AMA) mode — Scout-first fan-out for multi-file work
+# Adaptive multi-agent (AMA) mode — V2 Worker single-loop with `dispatch_child_task` fan-out
 kodax --agent-mode ama "Analyze code structure, check test coverage, find bugs"
 ```
 
@@ -1004,7 +1004,7 @@ KodaX ships 30+ built-in tools, grouped below. They are registered as a single f
 | `task_stop` | Request graceful exit of a specific child. Current tool finishes atomically, then the child sees a `<coordinator-stop-request>` and emits a final summary. Coordinator-only. (FEATURE_120, v0.7.39) |
 | `ask_user_question` | Single/multi-select or free-text prompt back to the user |
 | `exit_plan_mode` | Present a finalized plan for approval (REPL only) |
-| `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (handoff / verdict). V2 chain (Worker→Evaluator) is the default since v0.7.36 (FEATURE_114). |
+| `emit_managed_protocol` | Internal managed-task protocol side-channel for role payloads (verdict). V2 Worker single-loop + Sidecar Verifier is the default since v0.7.42 (FEATURE_184); V1 chain retired in v0.7.43 (FEATURE_193). |
 
 ---
 

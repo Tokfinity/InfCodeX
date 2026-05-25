@@ -92,7 +92,7 @@ kodax
   <tr>
     <td align="center" valign="top">
       <h3>🤖 默认多 agent</h3>
-      <sub>V2 Worker + Evaluator + 异步子 agent</sub>
+      <sub>V2 Worker 单循环 + Sidecar Verifier + 异步子 agent</sub>
       <br><br>
       <code>dispatch_child_task</code>、<code>send_message</code>、<code>task_stop</code>，多实例自动协调（content-hash safety net）。
     </td>
@@ -400,7 +400,7 @@ KodaX 有 30+ 个内置工具，按类别分组如下（实际暴露给 LLM 是�
 | `task_stop` | 请求指定 child 优雅退出。当前 tool 原子结束后 child 看到 `<coordinator-stop-request>` 并 emit 最终摘要。仅 coordinator 可用。(FEATURE_120, v0.7.39) |
 | `ask_user_question` | 向用户发起单选 / 多选 / 自由文本提问 |
 | `exit_plan_mode` | Plan 模式下提交最终方案给用户审批（仅 REPL） |
-| `emit_managed_protocol` | managed-task 协议侧信道（handoff / verdict 等 role payload）。v0.7.36 FEATURE_114 起默认走 V2 Worker→Evaluator 链。 |
+| `emit_managed_protocol` | managed-task 协议侧信道（verdict role payload）。v0.7.42 FEATURE_184 起默认走 V2 Worker 单循环 + Sidecar Verifier；v0.7.43 FEATURE_193 退役 V1 chain。 |
 
 ## Repo Intelligence（可选 premium 引擎）
 

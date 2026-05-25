@@ -2,8 +2,13 @@
 
 > Last updated: 2026-04-12
 >
-> 本 PRD 描述当前 `FEATURE_061/062` 之后的产品语义：
+> 本 PRD 描述 `FEATURE_061/062` 之后的产品语义：
 > KodaX 是一个 Scout-first、极简且智能的 task engine。
+>
+> **⚠️ Deprecation notice (2026-05-25, post FEATURE_184 + FEATURE_193 + FEATURE_190 v0.7.42-43)**: 本 PRD 中 Scout / Planner / Generator / Evaluator 角色描述、H0/H1/H2 harness 升级路径、Scout-first 入口语义均为**历史记录**。
+> 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**（claudecode-shape，详见 [ADR-030 §F184](ADR.md#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) + [v0.7.43.md §FEATURE_184/F190/F193](features/v0.7.43.md)）。
+> V1 chain (Scout/Planner/Generator/Evaluator) 已于 FEATURE_193 v0.7.43 全量退役（−4500 LoC）；in-chain Evaluator 角色已于 FEATURE_184 v0.7.42 替换为 out-of-band Sidecar Verifier；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
+> PRD 完整重写排期 v0.7.44+，保留本文档作为 archive 查阅用。
 
 ## 中文导读
 

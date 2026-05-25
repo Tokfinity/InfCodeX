@@ -1,8 +1,13 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-05-06
+> Last updated: 2026-05-25
 >
-> 这组 ADR 反映当前 `FEATURE_061/062` 之后的执行模型：
+> **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
+> 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
+> 早期 Scout-first ADR 保留以便 archive 查阅，不反映当前实现。
+>
+> 之前的执行模型注脚（v0.7.42 前）：
+> 这组 ADR 反映 `FEATURE_061/062` 之后的执行模型：
 > Scout-first、按证据升级 harness、skill-aware AMA。
 > v0.7.35.1 (FEATURE_142) 修正 v0.7.24 FEATURE_082 包结构漂移，详见 ADR-001 / ADR-021。
 
