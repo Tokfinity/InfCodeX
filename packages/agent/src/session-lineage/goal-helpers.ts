@@ -45,11 +45,22 @@ export function readLatestGoalFromBranch(
   const path = getSessionLineagePath(lineage);
   if (path.length === 0) return null;
   const branchIds = new Set(path.map((e) => e.id));
+  // Iterate in reverse so insertion order breaks timestamp ties — two
+  // entries appended within the same millisecond produce identical ISO
+  // timestamps; the later one in the array is causally later. Strict
+  // `>` comparison previously stranded the second of such pairs.
   let latest: KodaXSessionGoalEntry | null = null;
-  for (const entry of lineage.entries) {
+  for (let i = lineage.entries.length - 1; i >= 0; i--) {
+    const entry = lineage.entries[i];
     if (entry.type !== 'goal') continue;
     if (entry.parentId === null || !branchIds.has(entry.parentId)) continue;
-    if (latest === null || entry.timestamp > latest.timestamp) {
+    // First match in reverse iteration IS the latest by insertion order;
+    // confirm timestamp non-decrease to guard against out-of-order writes.
+    if (latest === null) {
+      latest = entry;
+      continue;
+    }
+    if (entry.timestamp > latest.timestamp) {
       latest = entry;
     }
   }

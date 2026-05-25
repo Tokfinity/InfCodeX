@@ -1072,3 +1072,34 @@ export type {
   BashPrefixExtractor,
   CreateBashPrefixExtractorOptions,
 } from './guardrails/auto-mode/bash-prefix-extractor.js';
+
+// ============== FEATURE_192 v0.7.44 — /goal Persistent Goal ==============
+export {
+  BLOCKER_REQUIRED_CONSECUTIVE_TURNS,
+  applyAccountingDelta,
+  buildBlockedGoal,
+  buildCompleteGoal,
+  buildCreatedGoal,
+  buildPausedGoal,
+  buildResumedGoal,
+  goalTokenDelta,
+  isValidTokenBudget,
+  makeDisabledGoalToolsContext,
+  recordBlockerAttempt,
+  resetBlockerCounter,
+  shouldFlipBudgetLimited,
+  turnWallTimeDelta,
+  verifyGoalCompletion,
+  withGoalBeforeNextTurn,
+  withGoalStopHook,
+} from './goal/index.js';
+export type {
+  BlockerAttemptResult,
+  GoalBlockedResult,
+  GoalCompleteResult,
+  GoalCompletionVerifier,
+  GoalCreateInput,
+  GoalLifecycleContext,
+  GoalToolsContext,
+  VerifyGoalCompletionOptions,
+} from './goal/index.js';
