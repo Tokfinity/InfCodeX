@@ -45,6 +45,7 @@ import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 import { toolSendMessage } from './send-message.js';
 import { toolTaskStop } from './task-stop.js';
 import { toolTaskOutput } from './task-output.js';
+import { toolGetGoal, toolCreateGoal, toolUpdateGoal } from './goal-tools.js';
 // FEATURE_155 v0.7.39 Slice C1 — `await_child_task` removed. Idle-yield
 // (default ON since Slice B1.D) is the canonical wait mechanic.
 import { TOOL_SEARCH_DEFINITION } from './tool-search.js';
@@ -909,6 +910,72 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     handler: toolAskUserQuestion,
     sideEffect: 'readonly',
     planModeAllowed: true,
+    toClassifierInput: () => '',
+  },
+  // FEATURE_192 v0.7.44 — `/goal` Persistent Goal tools.
+  // Gated by `KODAX_GOAL_ENABLED` at REPL adapter time: when the flag
+  // is off, `ctx.goalContext` stays undefined and the tools return a
+  // uniform "feature disabled" error so the model gets a clear signal
+  // rather than a silent failure. Registry shape stays constant.
+  {
+    name: 'get_goal',
+    description:
+      'Read the current goal for this session, including status, budget, token and elapsed-time usage, and remaining token budget.',
+    input_schema: { type: 'object', properties: {} },
+    handler: toolGetGoal,
+    sideEffect: 'readonly',
+    planModeAllowed: true,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'create_goal',
+    description:
+      'Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks. Set token_budget only when an explicit token budget is requested. Fails if a goal exists; use update_goal only for status changes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        objective: {
+          type: 'string',
+          description:
+            'The long-running objective the agent should pursue across turns. A clear, concrete sentence describing the target end-state.',
+        },
+        token_budget: {
+          type: 'number',
+          description:
+            'Optional positive integer token budget for the entire goal. Omit when the user did not request a budget.',
+        },
+      },
+      required: ['objective'],
+    },
+    handler: toolCreateGoal,
+    sideEffect: 'mutates-state',
+    planModeAllowed: true,
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'update_goal',
+    description:
+      'Mark the current goal complete or blocked.\n\nSet status to complete only when the objective is achieved and no required work remains. Completion triggers a runtime verifier; if the verifier does not confirm, the call is rejected and you must keep working.\n\nSet status to blocked only when the goal cannot proceed without external unblock, and the same blocking condition has persisted across recent goal turns. The runtime counter rejects blocked status until the same blocker_kind has repeated for 3 consecutive turns.\n\nPause, resume, and budget-limited transitions are controlled by the user, not this tool. Do not call to stop work — only call when the objective is truly achieved or truly blocked.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['complete', 'blocked'],
+          description:
+            'New status. "complete" requires verifier confirmation; "blocked" requires the same blocker_kind across 3 consecutive turns.',
+        },
+        blocker_kind: {
+          type: 'string',
+          description:
+            'Required when status=blocked. A short identifier for the persistent obstacle (e.g. "awaiting-user-permission", "missing-dependency"). The runtime counter compares this string across turns.',
+        },
+      },
+      required: ['status'],
+    },
+    handler: toolUpdateGoal,
+    sideEffect: 'mutates-state',
+    planModeAllowed: false,
     toClassifierInput: () => '',
   },
   {

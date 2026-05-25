@@ -35,3 +35,17 @@ export {
   withGoalStopHook,
 } from './lifecycle.js';
 export type { GoalLifecycleContext } from './lifecycle.js';
+
+export { makeDisabledGoalToolsContext } from './tools-context.js';
+export type {
+  GoalBlockedResult,
+  GoalCompleteResult,
+  GoalCreateInput,
+  GoalToolsContext,
+} from './tools-context.js';
+
+export { verifyGoalCompletion } from './sidecar-bind.js';
+export type {
+  GoalCompletionVerifier,
+  VerifyGoalCompletionOptions,
+} from './sidecar-bind.js';

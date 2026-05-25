@@ -53,6 +53,13 @@ export const DEFERRED_TOOL_HINTS: Readonly<Record<string, string>> = Object.free
   symbol_context:  'Definition + callers/callees for one symbol — call `tool_search("symbol_context")` for full schema and selection rules.',
   process_context: 'Static execution/process trace from an entry — call `tool_search("process_context")` for full schema.',
   impact_estimate: 'Blast radius estimate BEFORE a rename or refactor — call `tool_search("impact_estimate")` for full schema (replaces guessing impact from grep).',
+
+  // FEATURE_192 v0.7.44 — /goal Persistent Goal tools.
+  // Hint-only on turn-1 to keep no-goal sessions context-clean; full
+  // schema unlocks via `tool_search("goal")` once the model needs them.
+  get_goal:    'Read the current /goal status (objective / tokens / budget / elapsed) — call `tool_search("get_goal")` for full schema. Available when a goal is set.',
+  create_goal: 'Create a persistent /goal — only when explicitly requested by the user or system instructions. Call `tool_search("create_goal")` for full schema and discipline rules.',
+  update_goal: 'Mark the current /goal complete or blocked — runtime-verified (sidecar + 3-turn rule). Call `tool_search("update_goal")` for full schema.',
 });
 
 /**

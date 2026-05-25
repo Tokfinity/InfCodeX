@@ -1638,4 +1638,16 @@ export interface KodaXToolExecutionContext {
    * it into child `runKodaX` calls).
    */
   childProgressSnapshots?: Map<string, import('./child-progress-snapshot.js').ChildProgressSnapshot>;
+
+  /**
+   * FEATURE_192 v0.7.44 — `/goal` Persistent Goal runtime hook.
+   *
+   * Wired by the REPL adapter when `KODAX_GOAL_ENABLED=1`. When unset,
+   * the 3 goal tools (`get_goal` / `create_goal` / `update_goal`) fall
+   * back to a uniform-error context (`makeDisabledGoalToolsContext`)
+   * so the model gets a clear signal rather than a silent failure.
+   *
+   * See `packages/coding/src/goal/tools-context.ts`.
+   */
+  goalContext?: import('./goal/tools-context.js').GoalToolsContext;
 }
