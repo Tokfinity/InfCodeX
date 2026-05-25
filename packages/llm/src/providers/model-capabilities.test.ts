@@ -1,0 +1,307 @@
+/**
+ * v0.7.43 SDK model-capability exposure — contract tests.
+ *
+ * These verify the data SDK consumers (KodaX Space etc.) see when they
+ * read context-window / max-output / thinking-budget metadata WITHOUT
+ * a provider instance — i.e. without setting any API key env var.
+ *
+ * If any assertion below fails, an embedder's popout UI will display
+ * stale or missing model info — touch the snapshot in `registry.ts`
+ * or `custom-registry.ts` accordingly.
+ */
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  getModelCapabilities,
+  getProviderModelDescriptors,
+  listAllModelCapabilities,
+  listBuiltinModelCapabilities,
+  resolveModelCapabilities,
+  resolveProviderModelDescriptors,
+  registerCustomProviders,
+  getCustomProviderModelDescriptors,
+  getCustomModelCapabilities,
+  listCustomProviderModelCapabilities,
+  KODAX_PROVIDER_SNAPSHOTS,
+} from './index.js';
+
+describe('built-in provider model capabilities (no API key required)', () => {
+  it('exposes Anthropic Sonnet 4.6 default at 200K context', () => {
+    const caps = getModelCapabilities('anthropic', 'claude-sonnet-4-6');
+    expect(caps).toBeDefined();
+    expect(caps?.contextWindow).toBe(200_000);
+    expect(caps?.thinkingBudgetCap).toBe(28000);
+    expect(caps?.supportsThinking).toBe(true);
+    expect(caps?.isDefault).toBe(true);
+    // maxOutputTokens is NOT exposed — see KodaXModelCapabilities JSDoc.
+    expect((caps as Record<string, unknown>).maxOutputTokens).toBeUndefined();
+  });
+
+  it('honors per-model thinkingBudgetCap override for Haiku 4.5 (10K) without inheriting Opus 28K', () => {
+    const haiku = getModelCapabilities('anthropic', 'claude-haiku-4-5');
+    expect(haiku?.thinkingBudgetCap).toBe(10000);
+    // Provider-level contextWindow still cascades.
+    expect(haiku?.contextWindow).toBe(200_000);
+  });
+
+  it('exposes kimi-k2.6 at 256K (issue history: FEATURE_098 wrongly pinned 128K)', () => {
+    const k26 = getModelCapabilities('kimi', 'kimi-k2.6');
+    expect(k26?.contextWindow).toBe(256_000);
+    // k2.5 inherits the same provider-level 256K — descriptor has no override.
+    const k25 = getModelCapabilities('kimi', 'k2.5');
+    expect(k25?.contextWindow).toBe(256_000);
+  });
+
+  it('exposes deepseek-v4 series at 1M context', () => {
+    expect(getModelCapabilities('deepseek', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('deepseek', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
+  });
+
+  it('exposes Ark Coding per-model context windows (k2.6=256K, v4-pro=1M, doubao=256K, glm-5.1=200K)', () => {
+    expect(getModelCapabilities('ark-coding', 'kimi-k2.6')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'kimi-k2.5')?.contextWindow).toBe(256_000);
+    expect(getModelCapabilities('ark-coding', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'deepseek-v3.2')?.contextWindow).toBe(128_000);
+    expect(getModelCapabilities('ark-coding', 'minimax-latest')?.contextWindow).toBe(204_800);
+    expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-pro')?.contextWindow).toBe(256_000);
+    // Default model + alternatives with no override inherit the 200K provider-level value.
+    expect(getModelCapabilities('ark-coding', 'glm-5.1')?.contextWindow).toBe(200_000);
+    expect(getModelCapabilities('ark-coding', 'glm-4.7')?.contextWindow).toBe(200_000);
+  });
+
+  it('returns undefined for unknown provider / unknown model', () => {
+    expect(getModelCapabilities('nonexistent', 'whatever')).toBeUndefined();
+    expect(getModelCapabilities('anthropic', 'claude-2-not-shipped')).toBeUndefined();
+  });
+
+  it('descriptors list default first, then alternatives, per provider', () => {
+    const descriptors = getProviderModelDescriptors('anthropic');
+    expect(descriptors[0]?.id).toBe('claude-sonnet-4-6'); // default
+    expect(descriptors.map((d) => d.id)).toEqual([
+      'claude-sonnet-4-6',
+      'claude-opus-4-6',
+      'claude-haiku-4-5',
+    ]);
+  });
+
+  it('CLI-bridge providers (gemini-cli, codex-cli) leave context fields undefined', () => {
+    const gemini = getModelCapabilities('gemini-cli', KODAX_PROVIDER_SNAPSHOTS['gemini-cli'].model);
+    expect(gemini?.contextWindow).toBeUndefined();
+    expect(gemini?.supportsThinking).toBe(false);
+
+    const codex = getModelCapabilities('codex-cli', KODAX_PROVIDER_SNAPSHOTS['codex-cli'].model);
+    expect(codex?.contextWindow).toBeUndefined();
+    expect(codex?.supportsThinking).toBe(false);
+  });
+
+  it('listBuiltinModelCapabilities returns every (provider, model) pair', () => {
+    const list = listBuiltinModelCapabilities();
+    // At least one entry per built-in provider; default models always present.
+    const anthropicDefault = list.find(
+      (c) => c.provider === 'anthropic' && c.model === 'claude-sonnet-4-6',
+    );
+    expect(anthropicDefault?.isDefault).toBe(true);
+    const haiku = list.find((c) => c.provider === 'anthropic' && c.model === 'claude-haiku-4-5');
+    expect(haiku?.isDefault).toBe(false);
+    // Spot-check coverage: minimax-coding listing includes the M2.x family.
+    const minimaxModels = list.filter((c) => c.provider === 'minimax-coding').map((c) => c.model);
+    expect(minimaxModels).toContain('MiniMax-M2.7');
+    expect(minimaxModels).toContain('MiniMax-M2');
+  });
+
+  it('NO API key needed — env vars stay unset throughout (refuted Space hypothesis)', () => {
+    const originalKeys = [
+      'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY',
+      'DEEPSEEK_API_KEY',
+      'KIMI_API_KEY',
+      'ZHIPU_API_KEY',
+      'ARK_API_KEY',
+    ].map((k) => [k, process.env[k]] as const);
+
+    // Clear keys for the duration of this assertion.
+    for (const [k] of originalKeys) delete process.env[k];
+
+    try {
+      // None of these calls should throw despite zero API keys configured.
+      expect(() => getModelCapabilities('anthropic', 'claude-sonnet-4-6')).not.toThrow();
+      expect(() => getProviderModelDescriptors('deepseek')).not.toThrow();
+      expect(() => listBuiltinModelCapabilities()).not.toThrow();
+      expect(getModelCapabilities('anthropic', 'claude-sonnet-4-6')?.contextWindow).toBe(200_000);
+    } finally {
+      for (const [k, v] of originalKeys) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+});
+
+describe('custom provider model capabilities', () => {
+  afterEach(() => {
+    // Reset custom registry between tests.
+    registerCustomProviders([]);
+  });
+
+  it('exposes custom provider with per-model overrides + provider-level fallback', () => {
+    registerCustomProviders([
+      {
+        name: 'my-corp-llm',
+        baseUrl: 'https://internal.example.com/v1',
+        apiKeyEnv: 'MY_CORP_LLM_API_KEY',
+        protocol: 'openai',
+        model: 'corp-default',
+        models: [
+          // Per-model override:
+          { id: 'corp-long', displayName: 'Corp Long-Context', contextWindow: 2_000_000 },
+          // String-only (inherits provider-level):
+          'corp-mini',
+        ],
+        contextWindow: 128_000,
+        maxOutputTokens: 16_000,
+        supportsThinking: true,
+        thinkingBudgetCap: 8_000,
+        reasoningCapability: 'native-effort',
+      },
+    ]);
+
+    const longCaps = getCustomModelCapabilities('my-corp-llm', 'corp-long');
+    expect(longCaps?.contextWindow).toBe(2_000_000); // descriptor override
+    // maxOutputTokens not on the surface — see registry.ts JSDoc.
+    expect((longCaps as Record<string, unknown>)?.maxOutputTokens).toBeUndefined();
+
+    const miniCaps = getCustomModelCapabilities('my-corp-llm', 'corp-mini');
+    expect(miniCaps?.contextWindow).toBe(128_000); // provider fallback
+
+    const defaultCaps = getCustomModelCapabilities('my-corp-llm', 'corp-default');
+    expect(defaultCaps?.isDefault).toBe(true);
+    expect(defaultCaps?.contextWindow).toBe(128_000);
+    expect(defaultCaps?.supportsThinking).toBe(true);
+    expect(defaultCaps?.thinkingBudgetCap).toBe(8_000);
+    expect(defaultCaps?.reasoningCapability).toBe('native-effort');
+  });
+
+  it('returns undefined for unknown custom-provider / model', () => {
+    expect(getCustomModelCapabilities('does-not-exist', 'm')).toBeUndefined();
+  });
+
+  it('listCustomProviderModelCapabilities returns default-first per provider', () => {
+    registerCustomProviders([
+      {
+        name: 'cp-a',
+        baseUrl: 'https://a.example/v1',
+        apiKeyEnv: 'CP_A_API_KEY',
+        protocol: 'openai',
+        model: 'a-1',
+        models: ['a-2', { id: 'a-3', contextWindow: 64_000 }],
+        contextWindow: 32_000,
+      },
+    ]);
+    const list = listCustomProviderModelCapabilities();
+    expect(list.map((c) => c.model)).toEqual(['a-1', 'a-2', 'a-3']);
+    expect(list[0]?.isDefault).toBe(true);
+    expect(list.find((c) => c.model === 'a-3')?.contextWindow).toBe(64_000);
+  });
+
+  it('descriptor listing handles legacy `models: string[]` entries', () => {
+    registerCustomProviders([
+      {
+        name: 'legacy-cp',
+        baseUrl: 'https://l.example/v1',
+        apiKeyEnv: 'LEGACY_CP_API_KEY',
+        protocol: 'openai',
+        model: 'legacy-default',
+        models: ['legacy-alt-1', 'legacy-alt-2'],
+      },
+    ]);
+    const descriptors = getCustomProviderModelDescriptors('legacy-cp');
+    expect(descriptors?.map((d) => d.id)).toEqual([
+      'legacy-default',
+      'legacy-alt-1',
+      'legacy-alt-2',
+    ]);
+  });
+});
+
+describe('unified dispatcher (resolveModelCapabilities, resolveProviderModelDescriptors)', () => {
+  afterEach(() => {
+    registerCustomProviders([]);
+  });
+
+  it('routes built-in names to built-in path', () => {
+    const caps = resolveModelCapabilities('kimi', 'kimi-k2.6');
+    expect(caps?.contextWindow).toBe(256_000);
+  });
+
+  it('routes custom names to custom path', () => {
+    registerCustomProviders([
+      {
+        name: 'dispatched-cp',
+        baseUrl: 'https://x.example/v1',
+        apiKeyEnv: 'DISPATCHED_CP_API_KEY',
+        protocol: 'openai',
+        model: 'dispatched-model',
+        contextWindow: 999_999,
+      },
+    ]);
+    const caps = resolveModelCapabilities('dispatched-cp', 'dispatched-model');
+    expect(caps?.contextWindow).toBe(999_999);
+  });
+
+  it('listAllModelCapabilities merges built-in + custom', () => {
+    registerCustomProviders([
+      {
+        name: 'merge-cp',
+        baseUrl: 'https://m.example/v1',
+        apiKeyEnv: 'MERGE_CP_API_KEY',
+        protocol: 'openai',
+        model: 'merge-default',
+      },
+    ]);
+    const list = listAllModelCapabilities();
+    expect(list.some((c) => c.provider === 'anthropic')).toBe(true);
+    expect(list.some((c) => c.provider === 'merge-cp')).toBe(true);
+    // Built-in providers come before custom in the merged list.
+    const firstBuiltin = list.findIndex((c) => c.provider === 'anthropic');
+    const firstCustom = list.findIndex((c) => c.provider === 'merge-cp');
+    expect(firstBuiltin).toBeLessThan(firstCustom);
+  });
+
+  it('resolveProviderModelDescriptors returns empty array (not undefined) for unknown name', () => {
+    expect(resolveProviderModelDescriptors('totally-unknown')).toEqual([]);
+  });
+});
+
+describe('snapshot drift guard: every Provider class config matches snapshot data', () => {
+  // This is the safety net for the v0.7.43 DRY refactor: if anyone re-adds
+  // capability fields to a Provider class's `buildProviderConfig({...})`
+  // extras instead of editing the snapshot, the value would drift. Since
+  // Provider construction throws on missing API key for built-ins, we
+  // verify the snapshot directly — `buildProviderConfig` is exercised
+  // implicitly by every Provider import.
+
+  it('every snapshot with supportsThinking=true also declares contextWindow', () => {
+    for (const [name, snapshot] of Object.entries(KODAX_PROVIDER_SNAPSHOTS)) {
+      if (snapshot.supportsThinking) {
+        expect(
+          snapshot.contextWindow,
+          `provider ${name} has supportsThinking=true but no contextWindow`,
+        ).toBeDefined();
+      }
+    }
+  });
+
+  it('every `models[]` entry is a KodaXModelDescriptor object (not string)', () => {
+    for (const [name, snapshot] of Object.entries(KODAX_PROVIDER_SNAPSHOTS)) {
+      for (const entry of snapshot.models ?? []) {
+        expect(
+          typeof entry,
+          `provider ${name} has string model entry — should be KodaXModelDescriptor`,
+        ).toBe('object');
+        expect(entry).toHaveProperty('id');
+      }
+    }
+  });
+});

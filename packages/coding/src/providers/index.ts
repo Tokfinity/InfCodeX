@@ -43,5 +43,15 @@ export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
+  // v0.7.43 SDK model-capability exposure (built-in + custom, no API key).
+  getProviderModelDescriptors,
+  getModelCapabilities,
+  listBuiltinModelCapabilities,
+  getCustomProviderModelDescriptors,
+  getCustomModelCapabilities,
+  listCustomProviderModelCapabilities,
+  resolveProviderModelDescriptors,
+  resolveModelCapabilities,
+  listAllModelCapabilities,
 } from '@kodax-ai/llm';
-export type { ProviderName } from '@kodax-ai/llm';
+export type { ProviderName, KodaXModelCapabilities } from '@kodax-ai/llm';

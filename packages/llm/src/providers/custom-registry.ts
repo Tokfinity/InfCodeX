@@ -6,13 +6,16 @@
  * modifying the closed ProviderName union.
  */
 
-import type { KodaXCustomProviderConfig } from '../types.js';
+import type { KodaXCustomProviderConfig, KodaXModelDescriptor } from '../types.js';
 import type { KodaXBaseProvider } from './base.js';
 import {
   createCustomProvider,
   validateCustomProviderConfig,
 } from './custom-provider.js';
-import { KODAX_PROVIDERS } from './registry.js';
+import {
+  KODAX_PROVIDERS,
+  type KodaXModelCapabilities,
+} from './registry.js';
 import {
   cloneCapabilityProfile,
   NATIVE_PROVIDER_CAPABILITY_PROFILE,
@@ -137,4 +140,89 @@ export function getCustomProviderModels(name: string): string[] | undefined {
   return config.model && modelIds.length
     ? [...new Set([config.model, ...modelIds])]
     : [config.model];
+}
+
+// ============== SDK Model Capability Exposure for Custom Providers (v0.7.43) ==============
+//
+// Mirrors the built-in counterparts in `registry.ts` but reads from the
+// in-memory `customProviders` map populated by
+// `registerConfiguredCustomProviders` at startup (from `~/.kodax/config.json`).
+// No instantiation, no API key required.
+
+function customDescriptorToFull(
+  entry: string | KodaXModelDescriptor,
+): KodaXModelDescriptor {
+  return typeof entry === 'string' ? { id: entry } : entry;
+}
+
+/**
+ * List all model descriptors for a custom provider. Default model first,
+ * then alternatives. Returns undefined when the name doesn't match any
+ * registered custom provider — caller can fall through to the built-in
+ * `getProviderModelDescriptors`.
+ */
+export function getCustomProviderModelDescriptors(
+  name: string,
+): KodaXModelDescriptor[] | undefined {
+  const config = customProviders.get(name);
+  if (!config) return undefined;
+  const defaultEntry: KodaXModelDescriptor = { id: config.model };
+  const alternatives = (config.models ?? [])
+    .map(customDescriptorToFull)
+    .filter((m) => m.id !== config.model);
+  return [defaultEntry, ...alternatives];
+}
+
+/**
+ * Effective per-model capability surface for a custom provider. Returns
+ * undefined when the provider name is not a registered custom provider,
+ * OR when the model id doesn't appear under that provider. The same
+ * descriptor-then-provider cascade as the built-in counterpart.
+ */
+export function getCustomModelCapabilities(
+  providerName: string,
+  modelId: string,
+): KodaXModelCapabilities | undefined {
+  const config = customProviders.get(providerName);
+  if (!config) return undefined;
+  const isDefault = modelId === config.model;
+  const descriptor = isDefault
+    ? ({ id: config.model } as KodaXModelDescriptor)
+    : (config.models ?? [])
+        .map(customDescriptorToFull)
+        .find((m) => m.id === modelId);
+  if (!descriptor) return undefined;
+  return {
+    provider: providerName,
+    model: descriptor.id,
+    displayName: descriptor.displayName ?? descriptor.id,
+    supportsThinking: config.supportsThinking ?? false,
+    reasoningCapability:
+      descriptor.reasoningCapability ?? config.reasoningCapability ?? 'none',
+    contextWindow: descriptor.contextWindow ?? config.contextWindow,
+    // maxOutputTokens deliberately omitted — see registry.ts `KodaXModelCapabilities`
+    // JSDoc for rationale (unreliable upstream + KodaX-side cap, not model metadata).
+    thinkingBudgetCap:
+      descriptor.thinkingBudgetCap ?? config.thinkingBudgetCap,
+    isDefault,
+  };
+}
+
+/**
+ * Full capability listing for every registered custom provider / model.
+ * Mirrors `listBuiltinModelCapabilities`. Default model first per provider.
+ */
+export function listCustomProviderModelCapabilities(): KodaXModelCapabilities[] {
+  const result: KodaXModelCapabilities[] = [];
+  for (const [name, config] of customProviders) {
+    const defaultCaps = getCustomModelCapabilities(name, config.model);
+    if (defaultCaps) result.push(defaultCaps);
+    for (const entry of config.models ?? []) {
+      const id = typeof entry === 'string' ? entry : entry.id;
+      if (id === config.model) continue;
+      const caps = getCustomModelCapabilities(name, id);
+      if (caps) result.push(caps);
+    }
+  }
+  return result;
 }

@@ -240,8 +240,18 @@ export {
   resolveProvider,
   isKnownProvider,
   getAvailableProviderNames,
+  // v0.7.43 SDK model-capability exposure (no API key required).
+  getProviderModelDescriptors,
+  getModelCapabilities,
+  listBuiltinModelCapabilities,
+  getCustomProviderModelDescriptors,
+  getCustomModelCapabilities,
+  listCustomProviderModelCapabilities,
+  resolveProviderModelDescriptors,
+  resolveModelCapabilities,
+  listAllModelCapabilities,
 } from './providers/index.js';
-export type { ProviderName } from './providers/index.js';
+export type { ProviderName, KodaXModelCapabilities } from './providers/index.js';
 
 // ============== Tools ==============
 

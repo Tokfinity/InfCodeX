@@ -16,6 +16,7 @@ are NOT obvious from inspecting the type definitions alone:
 6. [Session persistence — wiring `runKodaX` to disk](#6-session-persistence--wiring-runkodax-to-disk)
 7. [Local development via `npm link` (iterating against in-tree KodaX)](#7-local-development-via-npm-link-iterating-against-in-tree-kodax)
 8. [Electron + `stdio: 'inherit'` on Windows — PowerShell input hijack](#8-electron--stdio-inherit-on-windows--powershell-input-hijack)
+9. [Model capabilities — context window, reasoning, descriptors](#9-model-capabilities--context-window-reasoning-descriptors)
 
 §1–§3 (and the Phase-7/8 MCP-popout surface in §1) land in v0.7.42
 under FEATURE_186 (see [ADR-032](ADR.md#adr-032-sdk-embedder-surface-closure-feature_186-v0742)).
@@ -1017,6 +1018,167 @@ raw-mode delta / signal-handler delta at each step. If every step shows
 "no state change ✓", the issue is in your spawn config — not in KodaX.
 If any step shows a non-zero delta, file an issue with the probe output
 and your Node / OS / SDK version.
+
+---
+
+## 9. Model capabilities — context window, reasoning, descriptors
+
+### Why this exists
+
+A popout-style UI typically wants to list every provider/model KodaX
+supports, with at minimum `context window` and `reasoning capability`
+shown next to each model — so the user can pick informed. Pre-v0.7.43,
+this metadata lived inside each `Provider` class's `config` field and
+was only readable via `provider.getContextWindow()` / `getModelDescriptor()`
+on an instantiated Provider. `getProvider(name)` instantiates which
+throws if the relevant API key env var is unset — meaning a UI couldn't
+show "Anthropic Sonnet 4.6 / 200K context" until the user had set
+`ANTHROPIC_API_KEY`. Capability metadata is **KodaX-maintained static
+data** (we know what context windows the upstream models advertise),
+so gating it on credentials is wrong.
+
+v0.7.43 promotes this metadata into `KODAX_PROVIDER_SNAPSHOTS` (a plain
+const map) and adds getters that read directly from it — no provider
+instance, no API key, no env vars touched.
+
+### The new surface
+
+All exports below come from `@kodax-ai/kodax/llm` (preferred) — also
+re-exported through `@kodax-ai/kodax` (root), `@kodax-ai/kodax/coding`,
+and `@kodax-ai/kodax/agent` for convenience.
+
+```ts
+import {
+  // Built-in providers (anthropic / kimi / zhipu / deepseek / ark-coding / ...):
+  getProviderModelDescriptors,           // (name) => KodaXModelDescriptor[]
+  getModelCapabilities,                  // (name, model) => KodaXModelCapabilities | undefined
+  listBuiltinModelCapabilities,          // () => KodaXModelCapabilities[]   (all built-ins, default-first per provider)
+
+  // Custom providers (registered via `registerConfiguredCustomProviders`
+  // from `~/.kodax/config.json#customProviders`):
+  getCustomProviderModelDescriptors,     // (name) => KodaXModelDescriptor[] | undefined
+  getCustomModelCapabilities,            // (name, model) => KodaXModelCapabilities | undefined
+  listCustomProviderModelCapabilities,   // () => KodaXModelCapabilities[]
+
+  // Unified dispatchers — built-in OR custom, transparent routing:
+  resolveProviderModelDescriptors,       // (name) => KodaXModelDescriptor[]   (empty if unknown)
+  resolveModelCapabilities,              // (name, model) => KodaXModelCapabilities | undefined
+  listAllModelCapabilities,              // () => KodaXModelCapabilities[]   (built-in + custom merged)
+
+  // Types:
+  type KodaXModelCapabilities,
+  type KodaXModelDescriptor,
+} from '@kodax-ai/kodax/llm';
+```
+
+### Shape
+
+```ts
+interface KodaXModelCapabilities {
+  provider: string;                 // 'anthropic' | 'kimi' | 'ark-coding' | <custom-name>
+  model: string;                    // model id (e.g. 'claude-sonnet-4-6', 'kimi-k2.6')
+  displayName: string;              // human label — falls back to model id
+  supportsThinking: boolean;        // native reasoning?
+  reasoningCapability: 'native-budget' | 'native-effort' | 'native-toggle' | 'prompt-only' | 'none' | 'unknown';
+  contextWindow?: number;           // tokens (provider-level default + per-model override cascade)
+  thinkingBudgetCap?: number;       // tokens (native-budget providers only)
+  isDefault: boolean;               // true for the provider's default model
+}
+```
+
+### Recipes
+
+**List every model KodaX supports (built-in + custom):**
+
+```ts
+import { listAllModelCapabilities } from '@kodax-ai/kodax/llm';
+
+for (const caps of listAllModelCapabilities()) {
+  console.log(`${caps.provider}/${caps.model}: ${caps.contextWindow ?? 'unknown'} tokens`);
+}
+```
+
+**Look up a single model:**
+
+```ts
+import { resolveModelCapabilities } from '@kodax-ai/kodax/llm';
+
+const caps = resolveModelCapabilities('kimi', 'kimi-k2.6');
+// → { contextWindow: 256_000, supportsThinking: true, reasoningCapability: 'native-effort', ... }
+```
+
+**Group by provider for a picker UI:**
+
+```ts
+import {
+  KODAX_PROVIDER_SNAPSHOTS,
+  resolveProviderModelDescriptors,
+} from '@kodax-ai/kodax/llm';
+
+for (const providerName of Object.keys(KODAX_PROVIDER_SNAPSHOTS)) {
+  const descriptors = resolveProviderModelDescriptors(providerName);
+  // descriptors[0] is the default model; descriptors.slice(1) are alternatives.
+}
+```
+
+### What's intentionally NOT exposed: `maxOutputTokens`
+
+`maxOutputTokens` is **not part of `KodaXModelCapabilities`** even though
+KodaX tracks it internally. Two reasons:
+
+1. **Upstream providers don't reliably expose it.** A 2026-05 probe
+   against `zhipu-coding` / `kimi-code` / `minimax-coding` / `ark-coding`
+   (Coding-Plan endpoint) / `deepseek` shows their `/v1/models` endpoints
+   return only `{id, object, owned_by, created}` — no context-window,
+   no max-output, no capabilities. Ark's pay-as-you-go `/v3/models`
+   catalog returns rich `token_limits` data, but **none of the models
+   KodaX uses on Ark's `/api/coding` Coding-Plan endpoint appear in
+   that catalog**, so the rich data doesn't apply. Upstream is not a
+   substitute for KodaX-maintained metadata.
+2. **The number KodaX uses is a KodaX runtime decision**, not a model
+   claim. Examples:
+   - DeepSeek V4 advertises 384K max output, but KodaX caps at
+     `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (~32K) so streams finish
+     well under server-side timeouts; the agent loop escalates via
+     L5 continuation if a turn needs more.
+   - `zhipu-coding` has a ~308s server-side kill window; KodaX caps at
+     16K so typical tool_use turns land in the window.
+
+   Surfacing this number as if it were "what the model can output"
+   would mislead consumers. If your UI needs to display upper-bound
+   output for the user's decision, consult the provider's own docs.
+
+### Why no instance methods touch this
+
+The existing `provider.getContextWindow()` / `getEffectiveContextWindow()`
+/ `getModelDescriptor()` instance methods still work — they're the
+runtime path the agent loop itself uses. The new getters layer above
+them at the **registry** layer so they don't need a Provider instance.
+A consumer that has a configured Provider and wants effective values
+in the four-step cascade (compactionConfig override → per-model →
+provider default → 200K fallback) should still use
+`resolveContextWindow(compactionConfig, provider, model)` from
+`@kodax-ai/kodax/agent`. The new registry-layer getters are for the
+*"list everything KodaX knows"* case — for picker UIs, comparison
+tables, capability-aware routing.
+
+### Confirming snapshot accuracy
+
+Snapshot values are encoded in
+[`packages/llm/src/providers/registry.ts`](../packages/llm/src/providers/registry.ts)
+(`KODAX_PROVIDER_SNAPSHOTS`). When upstream providers publish a new
+model or change a context-window cap, that file is the patch site —
+the new value flows to runtime (via `buildProviderConfig`) AND to SDK
+consumers (via the getters) in a single edit. The test suite at
+[`packages/llm/src/providers/model-capabilities.test.ts`](../packages/llm/src/providers/model-capabilities.test.ts)
+locks in specific values (e.g. kimi-k2.6 at 256K, deepseek-v4-pro at 1M)
+so accidental drift is caught at PR time.
+
+The probe scripts that surveyed upstream APIs live at
+[`scripts/probe-upstream-model-metadata.mjs`](../scripts/probe-upstream-model-metadata.mjs)
+and [`scripts/probe-ark-tokens.mjs`](../scripts/probe-ark-tokens.mjs) —
+re-run them periodically; if a provider starts returning richer model
+metadata, we can promote the snapshot to derive from it.
 
 ---
 
