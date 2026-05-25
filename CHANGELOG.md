@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
+## [0.7.44] - Unreleased
+
+### Theme
+
+**Peer-to-Peer SendMessage + `/goal` Persistent Goal + Provider Capability JSON SoT** — FEATURE_123 extends FEATURE_120 with full child↔child + child↔Worker peer routing + `to: '*'` broadcast; FEATURE_192 targets OpenAI Codex `/goal` parity (3 tools + 3 prompts + Sidecar Verifier strong-bind on `update_goal complete`); FEATURE_198 splits `KODAX_PROVIDER_SNAPSHOTS` to JSON + runtime loader (dist-patch update path; closes v0.7.43 SDK-MODEL-CAPS architectural debt).
+
+---
+
 ## [0.7.43] - 2026-05-25
 
 ### Breaking Changes
