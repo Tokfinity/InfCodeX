@@ -49,8 +49,11 @@ const DEFAULT_SCALE_PANEL: readonly ModelAlias[] = [
   'ark/v4flash',
 ];
 
+// Pilot defaults to kimi when ARK is unavailable (CodingPlan subscription
+// may lapse) — falls back to ark/v4flash when KODAX_F123_PILOT_ALIAS is set.
+const PILOT_ALIAS: ModelAlias = (process.env.KODAX_F123_PILOT_ALIAS as ModelAlias) ?? 'kimi';
 const REQUESTED_PANEL: readonly ModelAlias[] =
-  MODE === 'pilot' ? (['ark/v4flash'] as const) : DEFAULT_SCALE_PANEL;
+  MODE === 'pilot' ? [PILOT_ALIAS] : DEFAULT_SCALE_PANEL;
 
 const REQUESTED_CASES: readonly PeerEvalCase[] =
   MODE === 'pilot'
