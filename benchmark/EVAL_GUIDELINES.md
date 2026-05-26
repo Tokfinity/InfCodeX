@@ -75,6 +75,9 @@ SAMPLE SIZE: 5-10 次重复（取多数）
 - 必须能用一段 mock history 重现要测的场景
 - assertion 必须机械化（regex / JSON shape / tool name），**不能**靠人读"看起来对不对"
 - 报告必须给出 sample 比例（"8/10 通过"）而不是单次结论
+- **若 probe 涉及 tools**：tool descriptions 必须用 production `KodaXToolDefinition.description` 真实字节走 harness `tools` 通道，不是简化 stub（详见反模式 8）
+
+**结果解读注意**：当 prompt 教 multi-step 行为（X→Y）时，single-turn 只断言 Y 会漏掉 healthy "X-first then Y" 表现，呈 floor saturation。判 floor saturation 时按反模式 11 准则做 evidence-driven override。
 
 ### Layer 3: Multi-turn but choreographed（成本 $1-10/case）
 
@@ -116,9 +119,13 @@ ROUND 3: ...
 [ ] 总成本 budget：估计 $X。能换什么决定？($X 不值就放弃)
 [ ] raw output dump 路径？(强制条款，见 §Raw output preservation)
 [ ] LLM-judge 抽样审计计划？disagree 阈值多少触发 redo？(见反模式 7)
+[ ] 若 ship 决策依据包含历史 eval-driven DROP 数据：DROP-commit→HEAD 之间 substrate 是否有改动？需 re-pilot 吗？(见反模式 10)
+[ ] 若是 behavioral-neutral hygiene refactor：走 2-alias pilot 即可 SHIP，不进 5-alias panel？(见反模式 9)
 ```
 
-**特别强调**：第 6 条（pre-registered 阈值）必须在跑实验前定下来。否则跑完只会陷入"再多跑 N 个看看"的无限增量。第 8、9 条是 2026-05-10 FEATURE_151 Slice I 验证教训新增 — 没有 raw dump + LLM-judge 抽查，regex 假阴假阳会让你基于错误数据做错误决策（详见反模式 7 真实案例）。
+**特别强调**：第 6 条（pre-registered 阈值）必须在跑实验前定下来。否则跑完只会陷入"再多跑 N 个看看"的无限增量。第 8、9 条是 2026-05-10 FEATURE_151 Slice I 验证教训新增 — 没有 raw dump + LLM-judge 抽查，regex 假阴假阳会让你基于错误数据做错误决策（详见反模式 7 真实案例）。第 10、11 条是 2026-05-24 FEATURE_189 release-window 教训新增 —— DROP 数据 substrate-drift 失效 + behavioral-neutral refactor 5-alias panel 过度投资（详见反模式 9、10 真实案例）。
+
+**Pre-register 阈值的唯一 override**：floor saturation 场景下 strict per-alias gate 可 evidence-driven override（见反模式 11），但**只 hygiene / behavioral-neutral refactor 可，lift / harm 类不可**。
 
 ---
 
@@ -133,7 +140,7 @@ OK = process exit 0 是个**极其弱的信号**：
 
 **取代方案**：每个 eval 必须定义具体的 acceptance criteria，且**机械化可验证**：
 - 工具调用断言：assistant 的下一个 tool_use 的 name 是 X
-- 内容断言：assistant 文本包含 / 不包含某个 phrase
+- 内容断言：assistant 文本包含 / 不包含某个 phrase（**negative-case "不包含" 方向有 regex 陷阱，详见反模式 7**）
 - JSON shape 断言：emit_handoff 的 payload 必须含 X 字段
 - 副作用断言：跑完 vitest 某个特定 test 必须 pass
 
@@ -149,6 +156,8 @@ OK = process exit 0 是个**极其弱的信号**：
 
 探索期（不知道实验设计是否可行）= 1 alias（用便宜的，如 `ark/v4flash`）。验证期（信号清楚要看泛化）= 多 alias。次序不可反。
 
+**例外**：behavioral-neutral hygiene refactor 走 2-alias pilot（见反模式 9），不进 5-alias panel。
+
 ### 反模式 5：prompt 迭代用大规模实验
 
 `prompt v1` → 跑 36 cells → "v1 不够好" → `prompt v2` → 跑 36 cells → … 每轮都是 36 个 cell 是错的。
@@ -158,6 +167,8 @@ OK = process exit 0 是个**极其弱的信号**：
 ### 反模式 6：跑完才想"什么算 signal"
 
 如果跑完看着 17pp delta 在思考"是 signal 还是 noise"，说明决策阈值没事先定。**跑前必须 pre-register**：例如 "delta < 10pp 视为 0 差异，跨 alias 一致才算 real signal"。
+
+**唯一允许的 override**：pre-registered strict per-alias gate 在 floor saturation 场景下可 evidence-driven override（详见反模式 11 三项准则 + override rationale 必须显式落 commit / memory）。**只 hygiene refactor / behavioral-neutral refactor 可 override，lift / harm 类 metric 不可** —— 否则等于跑完才挑阈值。
 
 ### 反模式 7：用 regex 实现 "不应出现" 类否定断言
 
@@ -357,22 +368,26 @@ Total: $Z
 **例外**：
 - 某 feature 只影响特定 provider（例如 zhipu-only quirk）时 panel 收窄到 `zhipu/glm51` 单 alias，需在 eval docstring 显式说明
 - 需要跨 panel 泛化验证（ship 决策已下、做 sanity check）时 panel 扩到 7-8 alias 含 mimo 全档位 + `ark/glm51`（cross-gateway 同模型对照）+ 历史 `ds/v4*` 数据保留时纳入对比。**注**：`ark/v4*`（coding-plan, default panel）与 `ds/v4*`（deepseek 官方 API, 已退出 default panel）跑同样 deepseek-v4 模型但走不同 gateway，扩展验证时**不**默认同时纳入两条路 — 选择性 opt-in 避免成本翻倍。
+- **behavioral-neutral hygiene refactor**（content-equivalent byte 重排）走 2-alias × 2 case × 3 runs pilot 即可 SHIP，**不进 5-alias panel**（详见反模式 9）。pilot 必须满足：≥1 case 双 variant 同时 floor / ceiling saturation + ≥1 case 双 variant perfect parity。
+
+**Alias 失败兜底**：当 ark hard rate-limit 整个 panel 时不重试，用 `aliasFallback: { 'ark/v4pro': 'ds/v4pro', 'ark/v4flash': 'ds/v4flash' }` 自动降级 deepseek 官方 API（per `feedback_harness_alias_fallback`）。Cell.alias 保留 primary 不变（panel structure consistency），`fallbackUsed` 字段记录降级。Canonical panel 不放 `ds/v4*`，只做 fallback。
 
 ---
 
 ## 现成的 eval 工具（KodaX 现状）
 
-KodaX 已有 [benchmark/harness/](harness/) 但**主要支持 Layer 3.5**（端到端跑），不直接支持 Layer 2 single-turn probe。
+KodaX [benchmark/harness/](harness/) 已直接支持 Layer 2 single-turn probe + Layer 3 multi-turn choreographed，关键能力：
 
-**未来扩展方向**（不要本次做，等下次真有 Layer 2 需求再写）：
-- `singleTurnProbe(systemPrompt, history, alias)` → 一次 LLM call 返回 raw response
-- `assertToolCall(response, expectedName)` / `assertText(response, regex)` → 机械化 assertion
-- 多 sample 自动收集成 ratio（例如 8/10 pass）
+- `OneShotInput.tools: readonly KodaXToolDefinition[]` —— 把 production tool 定义走 LLM API tools 通道下发，**测 prompt 教学时强制用 production 真实 description bytes 不用 stub**（per 反模式 8）
+- `BenchmarkRunInput.aliasFallback: Partial<Record<ModelAlias, ModelAlias>>` —— 整 alias rate-limit 时自动降级到等价 fallback，不污染 primary alias 数据（per `feedback_harness_alias_fallback`）
+- Raw dump 落 `os.tmpdir() / kodax-eval-dumps / <feature-id> / <case>.json`（per §Raw output preservation；**不入 repo 工作树**）
 
-写这套 helper 之前，**强制完成 Layer 1 检查清单**。
+**跑 Layer 2 probe 前强制完成 Layer 1 检查清单 + checklist 中 substrate-recheck（反模式 10） + behavioral-neutral 判断（反模式 9）**。
 
 ---
 
-## 总结：一句话方法论
+## 总结：方法论核心
 
-> 每一次 LLM 请求都必须能用机械化 assertion 验证一个 pre-registered 假设。**raw output 必须落盘**（反模式 7 教训），跑完每个 cell 至少抽 1 条 fail 让干净-context 的 LLM-judge 独立复核 — 不复核就不能信 regex 数据。如果做不到机械 assertion，先用代码 reading 或 unit test 替代；替代不了的实验本身就是设计错的。
+> 每一次 LLM 请求都必须能用机械化 assertion 验证一个 pre-registered 假设。**raw output 必须落盘**（反模式 7），跑完每个 cell 至少抽 1 条 fail 让干净-context 的 LLM-judge 独立复核 — 不复核就不能信 regex 数据。如果做不到机械 assertion，先用代码 reading 或 unit test 替代；替代不了的实验本身就是设计错的。
+>
+> **配套约束**：production tool 真实字节（反模式 8）、behavioral-neutral 走 2-alias pilot 不进 panel（反模式 9）、引用历史 DROP 数据前 re-check substrate（反模式 10）、floor saturation 可 evidence-driven override 但必须落 rationale（反模式 11）。
