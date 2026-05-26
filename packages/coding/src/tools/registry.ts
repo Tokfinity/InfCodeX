@@ -468,7 +468,7 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         objective: { type: 'string', description: 'Detailed multi-step goal for this child agent' },
         readOnly: { type: 'boolean', description: 'true (default): child can only read files. false: child may edit files (Generator/Worker only); use for non-conflicting file-level edits across modules.' },
         scope_summary: { type: 'string', description: 'Optional scope hint (e.g. "packages/llm/src/")' },
-        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence: "file:path", "diff:path", or "finding:text"' },
+        evidence_refs: { type: 'array', items: { type: 'string' }, description: 'Optional known evidence. Prefixed strings: "file:path" inlines the first 200 lines of a working-tree file, "diff:path" inlines the git diff against HEAD, "finding:text" transcribes a fact you already know, "task_id:<child_id>" forwards a completed sibling child\'s output verbatim — use this after dispatching one child whose findings feed the next so the new child sees the sibling\'s full report without you re-narrating it. An unknown prefix is surfaced as an error in the next dispatch tool_result so you can correct it.' },
         constraints: { type: 'array', items: { type: 'string' }, description: 'Optional constraints' },
         // FEATURE_120 v0.7.39 Phase 4 — model tier hint. Routing is a
         // no-op for now; FEATURE_102 (v0.7.45) will translate this

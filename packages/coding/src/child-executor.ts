@@ -523,7 +523,15 @@ async function buildChildBriefing(
   return parts.join('\n');
 }
 
-async function resolveEvidenceRef(
+/**
+ * Exported for unit testing of the `evidence_refs[]` resolution contract
+ * (FEATURE_199 + pre-existing `file:` / `diff:` / `finding:` regression
+ * coverage). Not part of the SDK public surface — callers in production
+ * still hit it only through `buildChildBriefing`. Keep the implementation
+ * private semantics intact: every branch must produce a visible briefing
+ * fragment, no silent fallthrough.
+ */
+export async function resolveEvidenceRef(
   ref: string,
   ctx: KodaXToolExecutionContext,
 ): Promise<string> {
@@ -555,7 +563,37 @@ async function resolveEvidenceRef(
   if (ref.startsWith('finding:')) {
     return `- **Known fact**: ${ref.slice(8)}`;
   }
-  return `- ${ref}`;
+  // FEATURE_199 (v0.7.44) — sibling-aware child dispatch.
+  // Looks up a completed sibling child's `finalText` from the shared
+  // FEATURE_177 `childProgressSnapshots` ring buffer (cap=200, finalized
+  // in the dispatch tool's inner-IIFE `.finally`). All lifecycle states
+  // produce visible briefing output so a Worker that ref'd a stale id
+  // sees a friendly fallback instead of a silent miss.
+  if (ref.startsWith('task_id:')) {
+    const childId = ref.slice('task_id:'.length).trim();
+    if (!childId) {
+      return `- [evidence_refs error] task_id: prefix is missing the child id (write \`task_id:<id>\` where <id> is the value returned from a prior dispatch_child_task call)`;
+    }
+    const snap = ctx.childProgressSnapshots?.get(childId);
+    if (!snap) {
+      return `- task_id:${childId} (not found — child unknown, already cap-pruned, or sync-dispatch mode without snapshot map; verify the id matches a recent dispatch_child_task return)`;
+    }
+    if (snap.status === 'running') {
+      return `- task_id:${childId} (still running — use the \`task_output\` tool to poll, or wait for the \`<task-completed task_id="${childId}">\` block in your next user message)`;
+    }
+    const body = snap.finalText ?? '(no final text recorded)';
+    return `### task: ${childId} (${snap.status})\n${body}`;
+  }
+  // FEATURE_199 (v0.7.44) — unknown prefix → visible error instead of
+  // silent fallthrough. Pre-F199 this returned `- ${ref}` verbatim,
+  // which made `path:packages/x` (typo for `file:`) / `diff packages/x`
+  // (missing colon) / `file: packages/x` (stray whitespace) appear in
+  // the child briefing as a useless literal string while the parent LLM
+  // believed it had forwarded the evidence. The error string surfaces
+  // the failure to the parent on the next turn (it appears in the
+  // dispatch tool_result that wraps the child summary) so the Worker
+  // can self-correct the prefix.
+  return `- [evidence_refs error] unrecognized prefix in "${ref}" — valid prefixes: file:, diff:, finding:, task_id:`;
 }
 
 /* ---------- Child events (progress visibility) ---------- */

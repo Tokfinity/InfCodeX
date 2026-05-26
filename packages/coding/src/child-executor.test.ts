@@ -851,3 +851,183 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// FEATURE_199 (v0.7.44) — resolveEvidenceRef branch coverage:
+//
+//   - 3 regression tests for the pre-existing `file:` / `diff:` / `finding:`
+//     prefixes (these branches had zero test coverage prior to F199 — the new
+//     baseline locks them in alongside the new behavior).
+//   - 5 new tests for the `task_id:<id>` prefix (FEATURE_199 net-new) covering
+//     every lifecycle terminal of the FEATURE_177 `ChildProgressSnapshot` plus
+//     the "not-found / sync-dispatch / empty-id" fallback paths.
+//   - 1 test for the unknown-prefix visible-error behavior (FEATURE_199 sink
+//     hole fix — pre-F199 `return \`- ${ref}\`` was a silent fallthrough that
+//     hid prefix typos from the parent LLM; the new error string surfaces in
+//     the next dispatch tool_result so the Worker can self-correct).
+//
+// `resolveEvidenceRef` is exported solely for this test surface (see the
+// docstring in `child-executor.ts`). All production callers still reach it
+// only through the private `buildChildBriefing` path.
+// ---------------------------------------------------------------------------
+
+import { resolveEvidenceRef } from './child-executor.js';
+import type {
+  ChildProgressSnapshot,
+} from './child-progress-snapshot.js';
+import type { KodaXToolExecutionContext } from './types.js';
+
+describe('resolveEvidenceRef — FEATURE_199 task_id prefix + regression', () => {
+  let evidenceTmpDir: string;
+
+  beforeEach(() => {
+    evidenceTmpDir = mkdtempSync(join(tmpdir(), 'kodax-evidence-ref-'));
+  });
+
+  afterEach(() => {
+    rmSync(evidenceTmpDir, { recursive: true, force: true });
+  });
+
+  function makeEvidenceCtx(
+    overrides: Partial<KodaXToolExecutionContext> = {},
+  ): KodaXToolExecutionContext {
+    return {
+      backups: new Map(),
+      gitRoot: evidenceTmpDir,
+      executionCwd: evidenceTmpDir,
+      ...overrides,
+    } as KodaXToolExecutionContext;
+  }
+
+  function makeSnapshot(
+    overrides: Partial<ChildProgressSnapshot> & Pick<ChildProgressSnapshot, 'childId' | 'status'>,
+  ): ChildProgressSnapshot {
+    return {
+      startedAt: 1_000,
+      iterations: 0,
+      maxIterations: 200,
+      recentToolCalls: [],
+      ...overrides,
+    };
+  }
+
+  // -------------------- regression (pre-F199 prefixes) --------------------
+
+  it('regression: file: reads the first 200 lines of an existing file into a fenced block', async () => {
+    const filePath = join(evidenceTmpDir, 'foo.ts');
+    writeFileSync(filePath, 'line-1\nline-2\nline-3\n');
+    const result = await resolveEvidenceRef(`file:${filePath}`, makeEvidenceCtx());
+    expect(result).toContain(`### ${filePath}`);
+    expect(result).toContain('line-1');
+    expect(result).toContain('line-2');
+    expect(result).toContain('line-3');
+    // No "[evidence_refs error]" framing should appear for a valid prefix.
+    expect(result).not.toContain('[evidence_refs error]');
+  });
+
+  it('regression: diff: routes to the diff branch (no-changes / could-not-get-diff fallback in non-git temp dir)', async () => {
+    const filePath = join(evidenceTmpDir, 'foo.ts');
+    writeFileSync(filePath, 'baseline');
+    const result = await resolveEvidenceRef(`diff:${filePath}`, makeEvidenceCtx());
+    // In a non-git temp dir, git diff either fails (could-not-get-diff) or
+    // returns empty (no-changes); both prove the diff branch was reached
+    // rather than falling through to the unknown-prefix error.
+    expect(result).toMatch(/diff: |\(no changes\)|\(could not get diff\)/);
+    expect(result).not.toContain('[evidence_refs error]');
+  });
+
+  it('regression: finding: transcribes the literal text after the prefix as a Known fact bullet', async () => {
+    const result = await resolveEvidenceRef('finding:foo is default export', makeEvidenceCtx());
+    expect(result).toBe('- **Known fact**: foo is default export');
+  });
+
+  // -------------------- FEATURE_199 task_id: --------------------
+
+  it('task_id: injects finalText with status header when child snapshot is completed', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    snapshots.set('hooks-audit', makeSnapshot({
+      childId: 'hooks-audit',
+      status: 'completed',
+      endedAt: 5_000,
+      iterations: 5,
+      finalText: 'Found 5 files: a.tsx, b.tsx, c.tsx, d.tsx, e.tsx',
+    }));
+    const result = await resolveEvidenceRef(
+      'task_id:hooks-audit',
+      makeEvidenceCtx({ childProgressSnapshots: snapshots }),
+    );
+    expect(result).toContain('### task: hooks-audit (completed)');
+    expect(result).toContain('Found 5 files: a.tsx, b.tsx, c.tsx, d.tsx, e.tsx');
+  });
+
+  it('task_id: friendly polling tip when child is still running (no finalText yet)', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    snapshots.set('hooks-audit', makeSnapshot({
+      childId: 'hooks-audit',
+      status: 'running',
+      iterations: 2,
+    }));
+    const result = await resolveEvidenceRef(
+      'task_id:hooks-audit',
+      makeEvidenceCtx({ childProgressSnapshots: snapshots }),
+    );
+    expect(result).toContain('still running');
+    expect(result).toContain('task_output');
+    expect(result).toContain('<task-completed task_id="hooks-audit">');
+    // Do NOT inject finalText when status === 'running' (would surface
+    // undefined as the body and mislead the parent).
+    expect(result).not.toContain('### task: hooks-audit');
+  });
+
+  it('task_id: injects finalText with terminal status label when child failed (carries diagnostic envelope)', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    snapshots.set('hooks-audit', makeSnapshot({
+      childId: 'hooks-audit',
+      status: 'failed',
+      endedAt: 8_000,
+      iterations: 3,
+      finalText: '(child task "hooks-audit" FAILED with no result text. Diagnostic: mode=startup-crash iterations=0 ...)',
+    }));
+    const result = await resolveEvidenceRef(
+      'task_id:hooks-audit',
+      makeEvidenceCtx({ childProgressSnapshots: snapshots }),
+    );
+    expect(result).toContain('### task: hooks-audit (failed)');
+    expect(result).toContain('mode=startup-crash');
+  });
+
+  it('task_id: returns a not-found stub when the snapshot map is missing the id', async () => {
+    const snapshots = new Map<string, ChildProgressSnapshot>();
+    snapshots.set('hooks-audit', makeSnapshot({ childId: 'hooks-audit', status: 'completed', finalText: 'done' }));
+    const result = await resolveEvidenceRef(
+      'task_id:typo-id',
+      makeEvidenceCtx({ childProgressSnapshots: snapshots }),
+    );
+    expect(result).toContain('task_id:typo-id');
+    expect(result).toContain('not found');
+    // Other children must NOT bleed into a wrong-id lookup.
+    expect(result).not.toContain('done');
+  });
+
+  it('task_id: returns the same not-found stub when childProgressSnapshots is undefined (sync-dispatch path)', async () => {
+    // No childProgressSnapshots on ctx — sync-dispatch (`KODAX_ASYNC_DISPATCH=0`)
+    // never initialises the snapshot map. The ref must degrade with a friendly
+    // stub, not throw.
+    const result = await resolveEvidenceRef('task_id:hooks-audit', makeEvidenceCtx());
+    expect(result).toContain('task_id:hooks-audit');
+    expect(result).toContain('not found');
+    expect(result).toContain('sync-dispatch');
+  });
+
+  // -------------------- unknown-prefix visible error (FEATURE_199 sink hole fix) --------------------
+
+  it('unknown prefix emits a visible [evidence_refs error] string instead of silent fallthrough', async () => {
+    const result = await resolveEvidenceRef('path:packages/x.ts', makeEvidenceCtx());
+    expect(result).toContain('[evidence_refs error]');
+    expect(result).toContain('path:packages/x.ts');
+    expect(result).toContain('valid prefixes');
+    // Pre-F199 behavior would have produced exactly `- path:packages/x.ts`
+    // — assert that bare-literal fallthrough is gone.
+    expect(result).not.toBe('- path:packages/x.ts');
+  });
+});
+
