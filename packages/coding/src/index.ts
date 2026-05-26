@@ -1080,6 +1080,7 @@ export {
   buildBlockedGoal,
   buildCompleteGoal,
   buildCreatedGoal,
+  buildGoalRuntimeBinding,
   buildPausedGoal,
   buildResumedGoal,
   goalTokenDelta,
@@ -1100,6 +1101,8 @@ export type {
   GoalCompletionVerifier,
   GoalCreateInput,
   GoalLifecycleContext,
+  GoalRuntimeBinding,
+  GoalRuntimeBindingDeps,
   GoalToolsContext,
   VerifyGoalCompletionOptions,
 } from './goal/index.js';

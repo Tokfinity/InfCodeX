@@ -1619,8 +1619,15 @@ async function runManagedTaskViaRunnerInner(
 
   // Base `beforeNextTurn` — the existing FEATURE_164 mid-turn user-
   // prompt drain. Extracted into a named const so the goal lifecycle
-  // composer can wrap it without losing semantics.
-  const baseBeforeNextTurn = async () => {
+  // composer can wrap it without losing semantics. Ctx param is kept
+  // so the signature matches both `withGoalBeforeNextTurn`'s expected
+  // `BeforeNextTurnFn` (narrow `{transcript, iteration}`) AND Runner's
+  // wider `(ctx: {agent, transcript, iteration}) => ...` shape via
+  // structural subtyping.
+  const baseBeforeNextTurn: (ctx: {
+    readonly transcript: readonly KodaXMessage[];
+    readonly iteration: number;
+  }) => Promise<readonly KodaXMessage[]> = async () => {
     const drained = getMessageQueue().dequeue({
       agentId: undefined,
       maxPriority: 'user',
@@ -1644,7 +1651,10 @@ async function runManagedTaskViaRunnerInner(
         enabled: true,
       })
     : baseBeforeNextTurn;
-  const beforeNextTurn = async (turnCtx: Parameters<typeof baseBeforeNextTurn>[0]) => {
+  const beforeNextTurn = async (turnCtx: {
+    readonly transcript: readonly KodaXMessage[];
+    readonly iteration: number;
+  }) => {
     const result = await wrappedBeforeNextTurn(turnCtx);
     turnStartMsRef.current = Date.now();
     // FEATURE_123 v0.7.44 — reset the per-turn send_message flood
