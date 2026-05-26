@@ -1,0 +1,234 @@
+/**
+ * FEATURE_192 v0.7.44 Phase F — runtime-wiring tests.
+ *
+ * Covers `buildGoalRuntimeBinding`:
+ *   - readGoal pulls from the host's lineage (via getLineage)
+ *   - createGoal appends a `created` event AND replaces lineage
+ *   - createGoal after a `complete` goal emits cleared → created
+ *   - createGoal rejects when an active goal exists
+ *   - requestComplete calls deps.verifyComplete + persists on accept
+ *   - requestComplete short-circuits when verifier rejects
+ *   - requestBlocked enforces the 3-turn rule (rejects 1st + 2nd, accepts 3rd)
+ *   - requestBlocked persists the in-progress count even on reject
+ *   - lifecycleCtx.buildContinuationPrompt produces the codex-parity body
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+
+import {
+  appendGoalEntry,
+  type KodaXSessionLineage,
+  type KodaXSessionMessageEntry,
+} from '@kodax-ai/agent';
+import { buildGoalRuntimeBinding } from './runtime-wiring.js';
+import { buildCreatedGoal } from './state.js';
+
+function makeMsgLineage(): KodaXSessionLineage {
+  const m1: KodaXSessionMessageEntry = {
+    type: 'message',
+    id: 'm1',
+    parentId: null,
+    timestamp: '2026-05-27T00:00:00.000Z',
+    message: { role: 'user', content: 'kick off' },
+  };
+  return { version: 2, activeEntryId: 'm1', entries: [m1] };
+}
+
+interface HostState {
+  lineage: KodaXSessionLineage;
+  saved: number;
+}
+
+function makeBinding(overrides: {
+  state?: HostState;
+  verifyComplete?: ReturnType<typeof vi.fn>;
+  hasPendingUserInput?: () => boolean;
+} = {}) {
+  const state: HostState = overrides.state ?? {
+    lineage: makeMsgLineage(),
+    saved: 0,
+  };
+  const saveSession = vi.fn(async () => {
+    state.saved++;
+  });
+  const verifyComplete =
+    overrides.verifyComplete ?? vi.fn(async () => ({ ok: true }));
+  const binding = buildGoalRuntimeBinding({
+    getLineage: () => state.lineage,
+    setLineage: (next) => {
+      state.lineage = next;
+    },
+    saveSession,
+    getLatestUsage: () => undefined,
+    getTurnStartMs: () => undefined,
+    hasPendingUserInput: overrides.hasPendingUserInput ?? (() => false),
+    verifyComplete,
+  });
+  return { binding, state, saveSession, verifyComplete };
+}
+
+describe('buildGoalRuntimeBinding — readGoal', () => {
+  it('returns null when no goal entry on branch', async () => {
+    const { binding } = makeBinding();
+    expect(await binding.goalContext.readGoal()).toBeNull();
+  });
+
+  it('returns latest active goal from lineage', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('build the thing', 1000),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    const goal = await binding.goalContext.readGoal();
+    expect(goal?.objective).toBe('build the thing');
+    expect(goal?.status).toBe('active');
+  });
+});
+
+describe('buildGoalRuntimeBinding — createGoal', () => {
+  it('appends a created event and flushes via saveSession', async () => {
+    const { binding, state, saveSession } = makeBinding();
+    const goal = await binding.goalContext.createGoal({ objective: 'X' });
+    expect(goal.objective).toBe('X');
+    expect(saveSession).toHaveBeenCalled();
+    const latest = state.lineage.entries[state.lineage.entries.length - 1];
+    expect(latest.type).toBe('goal');
+    expect((latest as { event: string }).event).toBe('created');
+  });
+
+  it('rejects when an active goal already exists', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('first', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    await expect(
+      binding.goalContext.createGoal({ objective: 'second' }),
+    ).rejects.toThrow(/already active/);
+  });
+
+  it('after a complete goal: emits cleared → created (codex parity transition)', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      { ...buildCreatedGoal('done thing', null), status: 'complete' },
+      'complete',
+    );
+    const { binding } = makeBinding({ state });
+    await binding.goalContext.createGoal({ objective: 'next thing' });
+    const events = state.lineage.entries
+      .filter((e) => e.type === 'goal')
+      .map((e) => (e as { event: string }).event);
+    expect(events).toEqual(['complete', 'cleared', 'created']);
+  });
+});
+
+describe('buildGoalRuntimeBinding — requestComplete', () => {
+  it('returns ok:false when no active goal', async () => {
+    const { binding } = makeBinding();
+    const r = await binding.goalContext.requestComplete();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/no active goal/);
+  });
+
+  it('calls deps.verifyComplete and persists complete event on accept', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const verify = vi.fn(async () => ({ ok: true }));
+    const { binding } = makeBinding({ state, verifyComplete: verify });
+    const r = await binding.goalContext.requestComplete();
+    expect(r.ok).toBe(true);
+    expect(verify).toHaveBeenCalled();
+    const events = state.lineage.entries
+      .filter((e) => e.type === 'goal')
+      .map((e) => (e as { event: string }).event);
+    expect(events).toEqual(['created', 'complete']);
+  });
+
+  it('short-circuits on verifier reject — no complete event, no persist', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const verify = vi.fn(async () => ({
+      ok: false,
+      reason: 'tests still failing',
+      suggestedFix: 'run npm test',
+    }));
+    const { binding, saveSession } = makeBinding({
+      state,
+      verifyComplete: verify,
+    });
+    const initialEntries = state.lineage.entries.length;
+    const r = await binding.goalContext.requestComplete();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/tests still failing/);
+    expect(r.suggestedFix).toBe('run npm test');
+    expect(state.lineage.entries.length).toBe(initialEntries); // no new entry
+    expect(saveSession).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildGoalRuntimeBinding — requestBlocked (3-turn rule)', () => {
+  it('first blocker_kind attempt is recorded but transition rejected', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    const r = await binding.goalContext.requestBlocked('awaiting-creds');
+    expect(r.ok).toBe(false);
+    expect(r.counter.current).toBe(1);
+    expect(r.counter.required).toBe(3);
+    // In-progress count persisted (event=updated)
+    const events = state.lineage.entries
+      .filter((e) => e.type === 'goal')
+      .map((e) => (e as { event: string }).event);
+    expect(events).toEqual(['created', 'updated']);
+  });
+
+  it('third consecutive same-kind blocker accepts and persists blocked event', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    await binding.goalContext.requestBlocked('awaiting-creds');
+    await binding.goalContext.requestBlocked('awaiting-creds');
+    const r3 = await binding.goalContext.requestBlocked('awaiting-creds');
+    expect(r3.ok).toBe(true);
+    expect(r3.counter.current).toBe(3);
+    const latest = state.lineage.entries[state.lineage.entries.length - 1];
+    expect((latest as { event: string }).event).toBe('blocked');
+  });
+
+  it('different blocker_kind resets the counter to 1', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    await binding.goalContext.requestBlocked('first-kind');
+    await binding.goalContext.requestBlocked('first-kind');
+    // count = 2; now switch kind:
+    const r = await binding.goalContext.requestBlocked('second-kind');
+    expect(r.ok).toBe(false);
+    expect(r.counter.current).toBe(1);
+  });
+});

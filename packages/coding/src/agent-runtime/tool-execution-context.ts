@@ -128,6 +128,15 @@ export function buildToolExecutionContext(
     // spawning a sub-runtime.
     currentAgentId: options.context?.currentAgentId,
     parentAgentId: options.context?.parentAgentId,
+    // FEATURE_192 v0.7.44 Phase F — pull the goal-tools context from
+    // the host-supplied binding (built by `buildGoalRuntimeBinding`).
+    // When unset, leave undefined; the 3 goal tools fall back to
+    // `makeDisabledGoalToolsContext()` at their own call site.
+    goalContext: options.context?.goalRuntime?.goalContext,
+    // FEATURE_123 v0.7.44 — per-turn send_message flood throttle
+    // counter. Allocated once per runtime; runner-driven.ts resets
+    // `count = 0` at each turn boundary via beforeNextTurn.
+    sendMessageTurnCounter: { count: 0 },
     // FEATURE_120 v0.7.39 Phase 3b — per-child AbortController registry,
     // populated by `dispatch_child_task` at launch time and drained
     // when the child settles. The `task_stop` tool reads this map to

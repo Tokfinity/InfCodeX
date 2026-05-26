@@ -470,3 +470,111 @@ describe("toolSendMessage — broadcast `to: '*'`", () => {
     expect(getMessageQueue().size()).toBe(0);
   });
 });
+
+// ---------- FEATURE_123 v0.7.44 — per-turn flood throttle ----------
+
+describe('toolSendMessage — per-turn flood throttle', () => {
+  it('child cap = 5 outbound enqueues per turn (6th targeted send rejected)', async () => {
+    const counter = { count: 0 };
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-a',
+      sendMessageTurnCounter: counter,
+    });
+    // 5 successful peer sends to child-b
+    for (let i = 0; i < 5; i++) {
+      const r = await toolSendMessage({ to: 'child-b', content: `msg ${i}` }, ctx);
+      expect(r).toMatch(/^Peer message sent/);
+    }
+    expect(counter.count).toBe(5);
+    // 6th rejected
+    const r6 = await toolSendMessage({ to: 'child-b', content: 'msg 6' }, ctx);
+    expect(r6).toMatch(/^\[Tool Error\]/);
+    expect(r6).toMatch(/per-turn send_message limit reached/);
+    expect(r6).toMatch(/cap 5/);
+    expect(counter.count).toBe(5); // counter not incremented on reject
+  });
+
+  it('Worker cap = 20 outbound enqueues per turn (21st targeted send rejected)', async () => {
+    const counter = { count: 0 };
+    const childIds = Array.from({ length: 25 }, (_, i) => `c${i}`);
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(childIds),
+      currentAgentId: undefined,
+      sendMessageTurnCounter: counter,
+    });
+    for (let i = 0; i < 20; i++) {
+      const r = await toolSendMessage({ to: `c${i}`, content: 'hi' }, ctx);
+      expect(r).toMatch(/^Message sent/);
+    }
+    expect(counter.count).toBe(20);
+    const r21 = await toolSendMessage({ to: 'c20', content: 'overflow' }, ctx);
+    expect(r21).toMatch(/^\[Tool Error\]/);
+    expect(r21).toMatch(/per-turn send_message limit reached/);
+    expect(r21).toMatch(/cap 20/);
+  });
+
+  it('broadcast charges N recipients against the counter in one call', async () => {
+    const counter = { count: 0 };
+    const ctx = makeCtx({
+      // 5 siblings (excluding self) + Worker = 6 recipients > 5-cap
+      childTaskRegistry: makeRegistry(['child-a', 'b', 'c', 'd', 'e', 'f']),
+      currentAgentId: 'child-a',
+      sendMessageTurnCounter: counter,
+    });
+    const r = await toolSendMessage({ to: '*', content: 'storm' }, ctx);
+    expect(r).toMatch(/^\[Tool Error\]/);
+    expect(r).toMatch(/per-turn send_message limit reached/);
+    // No enqueues happened — throttle blocked pre-fanout
+    expect(counter.count).toBe(0);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('mixes peer + broadcast charges against the same counter', async () => {
+    const counter = { count: 0 };
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'b', 'c']),
+      currentAgentId: 'child-a',
+      sendMessageTurnCounter: counter,
+    });
+    // 2 peer sends + 1 broadcast (3 recipients) = 5 charges = exactly at cap
+    await toolSendMessage({ to: 'b', content: 'one' }, ctx);
+    await toolSendMessage({ to: 'c', content: 'two' }, ctx);
+    const br = await toolSendMessage({ to: '*', content: 'three' }, ctx);
+    expect(br).toMatch(/^Broadcast sent/);
+    expect(counter.count).toBe(5);
+    // Next single send overflows
+    const r4 = await toolSendMessage({ to: 'b', content: 'four' }, ctx);
+    expect(r4).toMatch(/per-turn send_message limit reached/);
+  });
+
+  it('throttle bypassed when counter is undefined (sync-mode dispatch)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'b']),
+      currentAgentId: 'child-a',
+      sendMessageTurnCounter: undefined,
+    });
+    // 10 sends — would exceed child cap = 5 with throttle on
+    for (let i = 0; i < 10; i++) {
+      const r = await toolSendMessage({ to: 'b', content: `m${i}` }, ctx);
+      expect(r).toMatch(/^Peer message sent/);
+    }
+  });
+
+  it('counter increment is observable across calls (caller resets via runner-driven beforeNextTurn)', async () => {
+    const counter = { count: 0 };
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'b']),
+      currentAgentId: 'child-a',
+      sendMessageTurnCounter: counter,
+    });
+    await toolSendMessage({ to: 'b', content: 'one' }, ctx);
+    expect(counter.count).toBe(1);
+    await toolSendMessage({ to: 'b', content: 'two' }, ctx);
+    expect(counter.count).toBe(2);
+    // Simulate a turn boundary reset (runner-driven does this)
+    counter.count = 0;
+    await toolSendMessage({ to: 'b', content: 'three' }, ctx);
+    expect(counter.count).toBe(1);
+  });
+});

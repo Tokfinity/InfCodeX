@@ -1095,6 +1095,26 @@ export interface KodaXContextOptions {
    * `dispatch_child_task` stays in `CHILD_EXCLUDE_TOOLS_BASE`.
    */
   inheritedChildTaskRegistry?: ChildTaskRegistry<KodaXChildExecutionResult>;
+  /**
+   * FEATURE_192 v0.7.44 Phase F — `/goal` runtime binding.
+   *
+   * When set, the runner-driven adapter:
+   *   1. Wires `binding.goalContext` onto the tool-execution context
+   *      so the 3 goal tools (get_goal / create_goal / update_goal)
+   *      read + mutate live state.
+   *   2. Wraps the `beforeNextTurn` hook with `withGoalBeforeNextTurn`
+   *      for turn-end token + wall-time accounting and budget-limit
+   *      transitions.
+   *   3. Wraps the `stopHook` with `withGoalStopHook` so a Worker
+   *      text-only termination with an active goal returns a
+   *      continuation prompt (auto-continue on goal).
+   *
+   * Constructed by the REPL via `buildGoalRuntimeBinding(deps)` from
+   * `packages/coding/src/goal/runtime-wiring.ts`. When undefined, the
+   * tool context falls back to `makeDisabledGoalToolsContext()` and
+   * the lifecycle hooks pass through unmodified.
+   */
+  goalRuntime?: import('./goal/runtime-wiring.js').GoalRuntimeBinding;
 }
 
 export interface KodaXOptions {
@@ -1521,6 +1541,27 @@ export interface KodaXToolExecutionContext {
    *     (the main loop / top Worker).
    */
   parentAgentId?: string;
+  /**
+   * FEATURE_123 v0.7.44 — per-turn `send_message` flood throttle counter.
+   *
+   * Mutable ref that the `send_message` tool increments on every
+   * outbound enqueue (broadcast counts as N — one per recipient).
+   * `runner-driven.ts`' `beforeNextTurn` resets `count = 0` at every
+   * turn boundary so the limit is "per LLM turn", matching the
+   * design's "≤5 per child-turn / ≤20 per Worker-turn".
+   *
+   * The cap chosen by `send_message` is per-call:
+   *   - Worker (`currentAgentId === undefined`): 20 outbound enqueues
+   *     per turn — Worker is the coordinator + has the higher fan-out
+   *     budget.
+   *   - Child (`currentAgentId !== undefined`): 5 outbound enqueues
+   *     per turn — peer chatter that goes over this is almost always
+   *     a misfire (storm vs coordination).
+   *
+   * When undefined (sync-mode dispatch, no async substrate), the
+   * throttle is bypassed.
+   */
+  sendMessageTurnCounter?: { count: number };
   /**
    * @deprecated FEATURE_067: Removed — use reportToolProgress instead.
    * Previously fired onManagedTaskStatus with activeWorkerId='child',

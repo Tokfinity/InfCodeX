@@ -125,8 +125,20 @@ export function withGoalBeforeNextTurn(
               ? turnWallTimeDelta(turnStartMs, Date.now())
               : 0;
           const result = applyAccountingDelta(goal, usage, wallSeconds);
-          if (result.budgetLimited) {
-            await ctx.persistEvent(result.nextState, 'budget_limited');
+          // Persist whenever the state moved — otherwise the per-turn
+          // delta is lost and `/goal status` shows 0 tokens / 0 seconds
+          // until the budget actually trips. The event kind reflects
+          // whether the budget threshold was just crossed:
+          //   - budget_limited: this turn's delta crossed `tokenBudget`
+          //   - updated:        regular per-turn accounting, status unchanged
+          // We skip the persist entirely when `nextState === goal`
+          // (delta was zero) so a quiet turn doesn't append a noop
+          // entry to the lineage.
+          if (result.nextState !== goal) {
+            await ctx.persistEvent(
+              result.nextState,
+              result.budgetLimited ? 'budget_limited' : 'updated',
+            );
           }
         }
       }

@@ -40,7 +40,10 @@ import {
   KODAX_DEFAULT_PROVIDER,
   setSessionLineageActiveEntry,
   getCustomProvider,
+  buildGoalRuntimeBinding,
 } from '@kodax-ai/coding';
+import { getMessageQueue } from '@kodax-ai/agent';
+import { isGoalFeatureEnabled } from '../commands/goal-command.js';
 import type { AgentsFile } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
@@ -1243,6 +1246,54 @@ Keyboard Shortcuts:
         statusBar?.update({ messageCount: context.messages.length });
 
         // Run agent (copy main loop logic) - 运行 agent (复制主循环逻辑)
+        // FEATURE_192 v0.7.44 Phase F — when the goal feature is
+        // enabled AND the session has a lineage, build the goal runtime
+        // binding so the runner-driven adapter can wire turn-end
+        // accounting + auto-continue on a Worker text-only termination.
+        // The binding is a pure factory (no global state) so it's safe
+        // to rebuild per turn.
+        const goalRuntime =
+          isGoalFeatureEnabled() && context.lineage
+            ? buildGoalRuntimeBinding({
+                getLineage: () => context.lineage!,
+                setLineage: (next) => {
+                  context.lineage = next;
+                },
+                saveSession: async () => {
+                  await storage.save(context.sessionId, {
+                    messages: context.messages,
+                    title: context.title ?? extractTitle(context.messages),
+                    gitRoot: context.gitRoot ?? '',
+                    runtimeInfo: context.runtimeInfo,
+                    artifactLedger: context.artifactLedger,
+                    lineage: context.lineage,
+                  });
+                },
+                // getLatestUsage + getTurnStartMs are overridden inside
+                // runner-driven.ts (it owns the per-turn token state +
+                // turn-start clock). Stubs here.
+                getLatestUsage: () => undefined,
+                getTurnStartMs: () => undefined,
+                getPermissionMode: () => currentPermissionMode,
+                // user-priority `mode:'prompt'` messages on the main
+                // queue mean the user is typing — defer goal auto-
+                // continue so their input lands naturally.
+                hasPendingUserInput: () =>
+                  getMessageQueue().has({
+                    agentId: undefined,
+                    maxPriority: 'user',
+                    mode: 'prompt',
+                  }),
+                // update_goal({complete}) verifier strong-bind in
+                // v0.7.44 relies on the F184 sidecar verifier firing
+                // on the same Worker text-only termination that
+                // typically follows a complete claim. The deps stub
+                // here accepts unconditionally; the dedicated tool-
+                // level verifier wrap is a v0.7.45 follow-up.
+                verifyComplete: async () => ({ ok: true }),
+              })
+            : undefined;
+
         try {
           const result = await runManagedTask(
             {
@@ -1274,6 +1325,7 @@ Keyboard Shortcuts:
                 ...(preparedArtifacts.inputArtifacts.length > 0
                   ? { inputArtifacts: preparedArtifacts.inputArtifacts }
                   : {}),
+                ...(goalRuntime ? { goalRuntime } : {}),
               },
             },
             processed

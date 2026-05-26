@@ -94,7 +94,14 @@ describe('withGoalBeforeNextTurn', () => {
     expect((state as KodaXGoalState).status).toBe('budget_limited');
   });
 
-  it('does NOT persist when under budget', async () => {
+  it("persists an 'updated' event on under-budget turns so /goal status reflects per-turn deltas", async () => {
+    // Pre-fix-2026-05-27 behavior LOST the per-turn delta on non-flip
+    // turns — `applyAccountingDelta` produced a `nextState` with
+    // updated `tokensUsed` but the composer skipped persistEvent so
+    // the lineage never recorded it; `/goal status` displayed 0 until
+    // the budget actually tripped. Fixed by persisting `'updated'`
+    // on every active-turn delta > 0 and `'budget_limited'` only on
+    // the threshold-crossing turn.
     const persist = vi.fn(async () => undefined);
     const inner = vi.fn(async () => []);
     const ctx = makeCtx({
@@ -103,6 +110,27 @@ describe('withGoalBeforeNextTurn', () => {
         inputTokens: 100,
         outputTokens: 50,
         totalTokens: 150,
+      }),
+      persistEvent: persist,
+    });
+    const wrapped = withGoalBeforeNextTurn(ctx, inner);
+    await wrapped(TURN_CTX);
+    expect(persist).toHaveBeenCalledTimes(1);
+    const [state, event] = persist.mock.calls[0]!;
+    expect(event).toBe('updated');
+    expect((state as { tokensUsed: number }).tokensUsed).toBe(150);
+  });
+
+  it('skips persistEvent entirely on a zero-delta turn (no noop entry in the lineage)', async () => {
+    const persist = vi.fn(async () => undefined);
+    const inner = vi.fn(async () => []);
+    const ctx = makeCtx({
+      goal: buildCreatedGoal('x', 10_000, 1_700_000_000_000),
+      // No usage reported AND no turnStartMs — both deltas are 0.
+      getLatestUsage: () => ({
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
       }),
       persistEvent: persist,
     });

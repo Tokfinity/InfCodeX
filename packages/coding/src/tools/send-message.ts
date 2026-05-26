@@ -57,6 +57,36 @@ import type { KodaXToolExecutionContext } from '../types.js';
 
 const TOOL_NAME = 'send_message';
 const BROADCAST_TARGET_CAP = 20;
+const WORKER_PER_TURN_CAP = 20;
+const CHILD_PER_TURN_CAP = 5;
+
+/**
+ * Per-turn flood throttle. Counts each outbound enqueue (broadcast
+ * counts as N — one per recipient). Cap is 20/Worker-turn, 5/child-
+ * turn; over-cap returns a Tool Error before any enqueue happens.
+ *
+ * The counter lives on `ctx.sendMessageTurnCounter` (allocated by
+ * `buildToolExecutionContext`, reset to 0 in runner-driven's
+ * `beforeNextTurn`). Bypassed when the counter is unset (sync-mode
+ * dispatch / test ctx without the substrate).
+ *
+ * Returns `null` on accept (counter pre-charged with `additional`)
+ * or an error message on reject.
+ */
+function chargeTurnCounter(
+  ctx: KodaXToolExecutionContext,
+  additional: number,
+): string | null {
+  const counter = ctx.sendMessageTurnCounter;
+  if (!counter) return null;
+  const cap = ctx.currentAgentId === undefined ? WORKER_PER_TURN_CAP : CHILD_PER_TURN_CAP;
+  const role = ctx.currentAgentId === undefined ? 'Worker' : 'child';
+  if (counter.count + additional > cap) {
+    return `[Tool Error] ${TOOL_NAME}: per-turn send_message limit reached for this ${role} (${counter.count} already sent this turn + ${additional} requested > cap ${cap}). Wait until the next LLM turn — peer coordination that needs more than ${cap} messages per turn is almost always a storm or a misfire.`;
+  }
+  counter.count += additional;
+  return null;
+}
 
 /** Mirrors `MessageQueue` enqueue shape — re-declared narrow to keep the import surface small. */
 interface QueueLike {
@@ -91,7 +121,10 @@ function sendToWorker(
   content: string,
   parentAgentId: string | undefined,
   queue: QueueLike,
+  ctx: KodaXToolExecutionContext,
 ): string {
+  const chargeError = chargeTurnCounter(ctx, 1);
+  if (chargeError) return chargeError;
   const wrapped = `<child-notification from="${fromId}">\n${content}\n</child-notification>`;
   queue.enqueue({
     priority: 'background',
@@ -137,6 +170,12 @@ function broadcast(
   if (targetCount === 0) {
     return `[Tool Error] ${TOOL_NAME}: Broadcast has zero recipients (no other in-flight siblings, and you have no parent Worker to notify).`;
   }
+  // Pre-charge the per-turn counter before any enqueue. Counter is
+  // bumped by `targetCount` because broadcast fan-out is the worst-
+  // case storm vector — a single broadcast call could otherwise
+  // skip the throttle that targeted sends respect.
+  const chargeError = chargeTurnCounter(ctx, targetCount);
+  if (chargeError) return chargeError;
   const fromLabel = fromId ?? 'worker';
   const wrapped = `<peer-broadcast from="${fromLabel}">\n${content}\n</peer-broadcast>`;
   for (const sibId of sibTargets) {
@@ -186,7 +225,7 @@ export async function toolSendMessage(
     if (myId === undefined) {
       return `[Tool Error] ${TOOL_NAME}: send_message(to='worker') is for children notifying their parent — you are the Worker (top of the agent tree).`;
     }
-    return sendToWorker(myId, content, ctx.parentAgentId, queue);
+    return sendToWorker(myId, content, ctx.parentAgentId, queue, ctx);
   }
 
   // --- Branch 3: address a specific task_id (peer or Worker→child) ---
@@ -206,6 +245,14 @@ export async function toolSendMessage(
   const wrapped = isCoordinatorPath
     ? `<coordinator-instruction>\n${content}\n</coordinator-instruction>`
     : `<peer-message from="${myId}">\n${content}\n</peer-message>`;
+
+  // Pre-charge before enqueue — keep the throttle ahead of every
+  // outbound message, including the cheap targeted single-recipient
+  // path. If the recipient is unknown we still consumed the charge
+  // (the agent wasted a budget unit on a misfired call — matches
+  // codex semantics where bad sends count against the rate limit).
+  const chargeError = chargeTurnCounter(ctx, 1);
+  if (chargeError) return chargeError;
 
   const outcome = routeMessage({
     to,

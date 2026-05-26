@@ -49,3 +49,9 @@ export type {
   GoalCompletionVerifier,
   VerifyGoalCompletionOptions,
 } from './sidecar-bind.js';
+
+export { buildGoalRuntimeBinding } from './runtime-wiring.js';
+export type {
+  GoalRuntimeBinding,
+  GoalRuntimeBindingDeps,
+} from './runtime-wiring.js';
