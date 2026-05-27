@@ -214,7 +214,7 @@ describe('toolSendMessage — child → child peer (FEATURE_123)', () => {
       mode: 'prompt',
     });
     expect(drained[0]?.content).toBe(
-      '<peer-message from="child-a">\nI touched auth/middleware.ts — heads up\n</peer-message>',
+      '<peer-message from="child-a" seen_by="child-a">\nI touched auth/middleware.ts — heads up\n</peer-message>',
     );
   });
 
@@ -274,7 +274,7 @@ describe("toolSendMessage — child → Worker (to='worker')", () => {
     });
     expect(drained[0]?.agentId).toBeUndefined();
     expect(drained[0]?.content).toBe(
-      '<child-notification from="child-a">\nauth migration is half-done\n</child-notification>',
+      '<child-notification from="child-a" seen_by="child-a">\nauth migration is half-done\n</child-notification>',
     );
   });
 
@@ -294,7 +294,7 @@ describe("toolSendMessage — child → Worker (to='worker')", () => {
       maxPriority: 'background',
     });
     expect(drained).toHaveLength(1);
-    expect(drained[0]?.content).toMatch(/^<child-notification from="gc-1">/);
+    expect(drained[0]?.content).toMatch(/^<child-notification from="gc-1" seen_by="gc-1">/);
   });
 
   it("rejects when Worker itself sends to='worker' (no parent)", async () => {
@@ -347,7 +347,7 @@ describe("toolSendMessage — broadcast `to: '*'`", () => {
 
     for (const m of [peerB[0], peerC[0], worker[0]]) {
       expect(m?.priority).toBe('background');
-      expect(m?.content).toMatch(/^<peer-broadcast from="child-a">/);
+      expect(m?.content).toMatch(/^<peer-broadcast from="child-a" seen_by="child-a">/);
       expect(m?.content).toMatch(/db\/migrations/);
     }
     // sender NOT enqueued to itself
@@ -380,7 +380,7 @@ describe("toolSendMessage — broadcast `to: '*'`", () => {
     });
     expect(peerA).toHaveLength(1);
     expect(peerB).toHaveLength(1);
-    expect(peerA[0]?.content).toMatch(/^<peer-broadcast from="worker">/);
+    expect(peerA[0]?.content).toMatch(/^<peer-broadcast from="worker" seen_by="worker">/);
 
     // Worker did NOT enqueue to itself
     const worker = getMessageQueue().dequeue({
@@ -455,8 +455,8 @@ describe("toolSendMessage — broadcast `to: '*'`", () => {
     expect(aOnPeer).toHaveLength(0);
     expect(aOnWorker).toHaveLength(1);
     expect(b).toHaveLength(1);
-    expect(aOnWorker[0]?.content).toMatch(/^<peer-broadcast from="gc-1">/);
-    expect(b[0]?.content).toMatch(/^<peer-broadcast from="gc-1">/);
+    expect(aOnWorker[0]?.content).toMatch(/^<peer-broadcast from="gc-1" seen_by="gc-1">/);
+    expect(b[0]?.content).toMatch(/^<peer-broadcast from="gc-1" seen_by="gc-1">/);
   });
 
   it('rejects broadcast when registry is absent', async () => {
@@ -576,5 +576,193 @@ describe('toolSendMessage — per-turn flood throttle', () => {
     counter.count = 0;
     await toolSendMessage({ to: 'b', content: 'three' }, ctx);
     expect(counter.count).toBe(1);
+  });
+});
+
+// ---------- FEATURE_123 (v0.7.44 follow-up): seen_by multi-hop cycle list ----------
+
+describe('toolSendMessage — seen_by multi-hop cycle list', () => {
+  it('peer wrapper embeds chain with caller auto-appended (fresh send)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-a',
+    });
+    await toolSendMessage({ to: 'child-b', content: 'hi' }, ctx);
+    const drained = getMessageQueue().dequeue({
+      agentId: 'child-b',
+      maxPriority: 'background',
+    });
+    expect(drained[0]?.content).toBe(
+      '<peer-message from="child-a" seen_by="child-a">\nhi\n</peer-message>',
+    );
+  });
+
+  it('forward auto-appends caller — wrapper carries the full chain', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b', 'child-c']),
+      currentAgentId: 'child-b',
+    });
+    await toolSendMessage(
+      { to: 'child-c', content: 'A said to look at X', seen_by: ['child-a'] },
+      ctx,
+    );
+    const drained = getMessageQueue().dequeue({
+      agentId: 'child-c',
+      maxPriority: 'background',
+    });
+    expect(drained[0]?.content).toBe(
+      '<peer-message from="child-b" seen_by="child-a,child-b">\nA said to look at X\n</peer-message>',
+    );
+  });
+
+  it('rejects forward when target is already in seen_by (2-hop A→B→A cycle)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-b',
+    });
+    const result = await toolSendMessage(
+      { to: 'child-a', content: 'pinging back', seen_by: ['child-a'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/Cycle detected/);
+    expect(result).toMatch(/child-a/);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('rejects forward when target is already in seen_by (3-hop A→B→C→A cycle)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b', 'child-c']),
+      currentAgentId: 'child-c',
+    });
+    const result = await toolSendMessage(
+      { to: 'child-a', content: 'forwarding back', seen_by: ['child-a', 'child-b'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/Cycle detected/);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('rejects to="worker" when worker sentinel is already in seen_by', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a']),
+      currentAgentId: 'child-a',
+    });
+    const result = await toolSendMessage(
+      { to: 'worker', content: 'looping back', seen_by: ['worker'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/Cycle detected/);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('rejects forward when chain depth exceeds MAX_FORWARD_DEPTH (5)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['a', 'b', 'c', 'd', 'e', 'f']),
+      currentAgentId: 'f',
+    });
+    // Chain ["a","b","c","d","e"] (5 prior) + self "f" = 6 > 5 cap
+    const result = await toolSendMessage(
+      { to: 'a', content: 'too deep', seen_by: ['a', 'b', 'c', 'd', 'e'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/chain length/i);
+    expect(result).toMatch(/exceeds cap 5/);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('broadcast silently filters siblings already in seen_by (no re-circulation)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b', 'child-c', 'child-d']),
+      currentAgentId: 'child-c',
+    });
+    await toolSendMessage(
+      { to: '*', content: 'forwarding finding', seen_by: ['child-a', 'child-b'] },
+      ctx,
+    );
+    // child-a + child-b already saw the chain → filtered out.
+    // Only child-d (sibling) and worker (parent) should receive.
+    const aMsgs = getMessageQueue().dequeue({
+      agentId: 'child-a',
+      maxPriority: 'background',
+    });
+    const bMsgs = getMessageQueue().dequeue({
+      agentId: 'child-b',
+      maxPriority: 'background',
+    });
+    const dMsgs = getMessageQueue().dequeue({
+      agentId: 'child-d',
+      maxPriority: 'background',
+    });
+    const workerMsgs = getMessageQueue().dequeue({
+      agentId: undefined,
+      maxPriority: 'background',
+    });
+    expect(aMsgs).toHaveLength(0);
+    expect(bMsgs).toHaveLength(0);
+    expect(dMsgs).toHaveLength(1);
+    expect(workerMsgs).toHaveLength(1);
+    expect(dMsgs[0]?.content).toBe(
+      '<peer-broadcast from="child-c" seen_by="child-a,child-b,child-c">\nforwarding finding\n</peer-broadcast>',
+    );
+  });
+
+  it('broadcast errors when every recipient is already in seen_by (chain exhausted)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-b',
+    });
+    const result = await toolSendMessage(
+      // Only sibling is child-a (already in chain) + worker (also in chain).
+      { to: '*', content: 'nowhere to go', seen_by: ['child-a', 'worker'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/zero novel recipients/i);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
+  it('ignores non-string entries in incoming seen_by (defensive parse)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-a',
+    });
+    await toolSendMessage(
+      {
+        to: 'child-b',
+        content: 'hi',
+        seen_by: ['valid', 42, null, '   ', { junk: true }, 'also-valid'],
+      },
+      ctx,
+    );
+    const drained = getMessageQueue().dequeue({
+      agentId: 'child-b',
+      maxPriority: 'background',
+    });
+    expect(drained[0]?.content).toBe(
+      '<peer-message from="child-a" seen_by="valid,also-valid,child-a">\nhi\n</peer-message>',
+    );
+  });
+
+  it('non-array seen_by parameter is ignored (fresh chain)', async () => {
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: 'child-a',
+    });
+    await toolSendMessage(
+      { to: 'child-b', content: 'hi', seen_by: 'not-an-array' as unknown },
+      ctx,
+    );
+    const drained = getMessageQueue().dequeue({
+      agentId: 'child-b',
+      maxPriority: 'background',
+    });
+    // Non-array seen_by → treated as empty → just self.
+    expect(drained[0]?.content).toBe(
+      '<peer-message from="child-a" seen_by="child-a">\nhi\n</peer-message>',
+    );
   });
 });

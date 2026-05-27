@@ -518,6 +518,12 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           description:
             'Message body. Will be wrapped in the framing tag matching the routing branch (<coordinator-instruction>, <peer-message from=…>, <child-notification from=…>, or <peer-broadcast from=…>) before the recipient sees it.',
         },
+        seen_by: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Optional chain of agents that have already handled this message — only relevant when you are forwarding a peer message you received. The incoming wrapper carries a seen_by="A,B,…" attribute; copy that list into this parameter so the tool can detect cycles (forwarding back to a prior sender is rejected) and cap chain depth. Omit entirely for fresh sends; the tool always auto-appends you to the chain before enqueue.',
+        },
       },
       required: ['to', 'content'],
     },

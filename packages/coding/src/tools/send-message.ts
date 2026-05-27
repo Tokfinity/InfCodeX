@@ -38,16 +38,21 @@
  * work; user-priority Worker → child instructions are drained at
  * every tool boundary (existing FEATURE_115 behavior).
  *
- * **NOT in scope for v0.7.44 (deferred to v0.7.45)**:
- *   - `seen_by` cycle hop list (A→B→A multi-hop loop guard). Self-send
- *     rejection covers the 1-hop case; multi-hop forwarding is itself
- *     a model intent — the floor risk does not justify the envelope
- *     schema change in this version.
- *   - Per-turn flood throttle (≤5/child-turn, ≤20/Worker-turn). Needs
- *     a turn-boundary observer that the runtime does not currently
- *     surface to tools. Broadcast cap is in place; aggregate per-run
- *     limits will land alongside the goalContext / lifecycle composer
- *     wiring in v0.7.45.
+ * Cycle protection (`seen_by`):
+ *   Every peer-direction wrapper (`<peer-message>` / `<child-notification>`
+ *   / `<peer-broadcast>`) carries a `seen_by="A,B,…"` attribute listing
+ *   the agents that have already handled the chain. A forwarding agent
+ *   passes the chain through the optional `seen_by: string[]` tool
+ *   parameter; the tool auto-appends the caller before enqueue. Single-
+ *   target sends reject when `to` is already in the chain; worker-
+ *   target sends reject when the parent is in the chain; broadcasts
+ *   silently filter recipients that have already seen the chain.
+ *   `MAX_FORWARD_DEPTH=5` is a hard structural cap independent of
+ *   cooperation: even if the LLM never echoes the prior `seen_by`,
+ *   a deeply layered forwarding cascade trips the depth check.
+ *   Worker→child dispatch (`<coordinator-instruction>`) is a fresh
+ *   dispatch line, not a forward — coordinator-instruction does not
+ *   carry `seen_by`.
  */
 
 import { getMessageQueue, routeMessage } from '@kodax-ai/agent';
@@ -59,6 +64,36 @@ const TOOL_NAME = 'send_message';
 const BROADCAST_TARGET_CAP = 20;
 const WORKER_PER_TURN_CAP = 20;
 const CHILD_PER_TURN_CAP = 5;
+const MAX_FORWARD_DEPTH = 5;
+const WORKER_SENTINEL = 'worker';
+
+/**
+ * Parse the optional `seen_by` parameter. Accepts only a string array;
+ * other shapes (string, object, missing) collapse to an empty chain.
+ * Filters out non-string entries and trims whitespace so a sloppy LLM
+ * pass-through doesn't poison cycle detection.
+ */
+function parseSeenBy(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (trimmed.length > 0) out.push(trimmed);
+  }
+  return out;
+}
+
+/** Stable label for the caller — `task_id` for children, `'worker'` for the top Worker. */
+function selfLabel(currentAgentId: string | undefined): string {
+  return currentAgentId ?? WORKER_SENTINEL;
+}
+
+/** Render the chain for embedding in a wrapper tag attribute. */
+function formatSeenByAttr(chain: readonly string[]): string {
+  if (chain.length === 0) return '';
+  return ` seen_by="${chain.join(',')}"`;
+}
 
 /**
  * Per-turn flood throttle. Counts each outbound enqueue (broadcast
@@ -122,17 +157,24 @@ function sendToWorker(
   parentAgentId: string | undefined,
   queue: QueueLike,
   ctx: KodaXToolExecutionContext,
+  nextSeenBy: readonly string[],
 ): string {
+  // Cycle guard: if the parent (or the generic 'worker' sentinel) is
+  // already in the chain, forwarding back would close a loop.
+  const parentLabel = parentAgentId ?? WORKER_SENTINEL;
+  if (nextSeenBy.slice(0, -1).includes(parentLabel)) {
+    return `[Tool Error] ${TOOL_NAME}: Cycle detected — parent "${parentLabel}" is already in seen_by (${nextSeenBy.slice(0, -1).join(' → ')}). Forwarding back to a prior sender would close a loop; the Worker has already handled this chain.`;
+  }
   const chargeError = chargeTurnCounter(ctx, 1);
   if (chargeError) return chargeError;
-  const wrapped = `<child-notification from="${fromId}">\n${content}\n</child-notification>`;
+  const wrapped = `<child-notification from="${fromId}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</child-notification>`;
   queue.enqueue({
     priority: 'background',
     mode: 'task-notification',
     agentId: parentAgentId,
     content: wrapped,
   });
-  const target = parentAgentId ?? 'worker';
+  const target = parentAgentId ?? WORKER_SENTINEL;
   return `Message sent to ${target}. It will surface as a <child-notification from="${fromId}"> block when the parent next yields.`;
 }
 
@@ -146,6 +188,7 @@ function broadcast(
   content: string,
   ctx: KodaXToolExecutionContext,
   queue: QueueLike,
+  nextSeenBy: readonly string[],
 ): string {
   const registry = ctx.childTaskRegistry;
   if (!registry) {
@@ -156,18 +199,31 @@ function broadcast(
   // receives one enqueue on the dedicated worker channel below; the
   // filter prevents a double-enqueue for the same agent.
   const parentAgentId = ctx.parentAgentId;
+  // Cycle-aware filter: agents already in the chain (excluding the
+  // newly-appended self) have already seen this message — silently
+  // skip them to avoid re-circulation.
+  const priorChain = nextSeenBy.slice(0, -1);
+  const seenSet = new Set(priorChain);
   const sibTargets = [...registry.keys()].filter(
-    (id) => id !== fromId && id !== parentAgentId,
+    (id) => id !== fromId && id !== parentAgentId && !seenSet.has(id),
   );
+  const parentLabel = parentAgentId ?? WORKER_SENTINEL;
   // Whether to also notify the parent Worker. Children always notify
   // their parent; the Worker broadcasting to its own children skips
-  // self (it has no parent in this process).
-  const includeWorker = fromId !== undefined;
+  // self (it has no parent in this process). Also skip when the parent
+  // has already seen the chain.
+  const includeWorker =
+    fromId !== undefined &&
+    !seenSet.has(parentLabel) &&
+    !seenSet.has(WORKER_SENTINEL);
   const targetCount = sibTargets.length + (includeWorker ? 1 : 0);
   if (targetCount > BROADCAST_TARGET_CAP) {
     return `[Tool Error] ${TOOL_NAME}: Broadcast target count ${targetCount} exceeds cap ${BROADCAST_TARGET_CAP}. Narrow the audience by sending to specific task_ids.`;
   }
   if (targetCount === 0) {
+    if (priorChain.length > 0) {
+      return `[Tool Error] ${TOOL_NAME}: Broadcast has zero novel recipients — every in-flight sibling and the parent are already in seen_by (${priorChain.join(' → ')}). The chain is exhausted; stop forwarding.`;
+    }
     return `[Tool Error] ${TOOL_NAME}: Broadcast has zero recipients (no other in-flight siblings, and you have no parent Worker to notify).`;
   }
   // Pre-charge the per-turn counter before any enqueue. Counter is
@@ -176,8 +232,8 @@ function broadcast(
   // skip the throttle that targeted sends respect.
   const chargeError = chargeTurnCounter(ctx, targetCount);
   if (chargeError) return chargeError;
-  const fromLabel = fromId ?? 'worker';
-  const wrapped = `<peer-broadcast from="${fromLabel}">\n${content}\n</peer-broadcast>`;
+  const fromLabel = fromId ?? WORKER_SENTINEL;
+  const wrapped = `<peer-broadcast from="${fromLabel}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</peer-broadcast>`;
   for (const sibId of sibTargets) {
     queue.enqueue({
       priority: 'background',
@@ -214,10 +270,19 @@ export async function toolSendMessage(
 
   const queue: QueueLike = getMessageQueue();
   const myId = ctx.currentAgentId;
+  const me = selfLabel(myId);
+
+  // Parse + extend the forward chain. Cycle/depth checks run BEFORE
+  // any branch so a bad chain rejects identically across target shapes.
+  const incomingSeenBy = parseSeenBy(input.seen_by);
+  const nextSeenBy = [...incomingSeenBy, me];
+  if (nextSeenBy.length > MAX_FORWARD_DEPTH) {
+    return `[Tool Error] ${TOOL_NAME}: Forward chain length ${nextSeenBy.length} exceeds cap ${MAX_FORWARD_DEPTH} (chain: ${nextSeenBy.join(' → ')}). Peer messages are short coordination notes, not cascading forwards — stop the chain and let the Worker re-plan.`;
+  }
 
   // --- Branch 1: broadcast ---
   if (to === '*') {
-    return broadcast(myId, content, ctx, queue);
+    return broadcast(myId, content, ctx, queue, nextSeenBy);
   }
 
   // --- Branch 2: address the parent Worker ---
@@ -225,7 +290,7 @@ export async function toolSendMessage(
     if (myId === undefined) {
       return `[Tool Error] ${TOOL_NAME}: send_message(to='worker') is for children notifying their parent — you are the Worker (top of the agent tree).`;
     }
-    return sendToWorker(myId, content, ctx.parentAgentId, queue, ctx);
+    return sendToWorker(myId, content, ctx.parentAgentId, queue, ctx, nextSeenBy);
   }
 
   // --- Branch 3: address a specific task_id (peer or Worker→child) ---
@@ -236,15 +301,26 @@ export async function toolSendMessage(
   if (myId !== undefined && to === myId) {
     return `[Tool Error] ${TOOL_NAME}: Cannot send a message to yourself (to='${to}'). Use task tools to record your own notes; send_message routes between distinct agents.`;
   }
+  // Cycle guard for peer/Worker→child path: target already in chain
+  // means a forward-back. Excludes the just-appended self (chain[-1])
+  // so the error is about who's downstream, not about the caller.
+  const priorChain = nextSeenBy.slice(0, -1);
+  if (priorChain.includes(to)) {
+    return `[Tool Error] ${TOOL_NAME}: Cycle detected — target "${to}" is already in seen_by (${priorChain.join(' → ')}). Forwarding back to a prior sender would close a loop.`;
+  }
 
   // Priority + framing depends on who's sending:
   //   Worker (myId === undefined) → child:    priority='user', <coordinator-instruction>
   //   child  (myId !== undefined) → peer:     priority='background', <peer-message from=A>
+  // Worker→child is a fresh dispatch line (not a forward), so
+  // coordinator-instruction does not carry seen_by. Peer wrappers
+  // embed nextSeenBy so the receiving LLM can echo it back on
+  // intentional forwards.
   const isCoordinatorPath = myId === undefined;
   const priority: MessagePriority = isCoordinatorPath ? 'user' : 'background';
   const wrapped = isCoordinatorPath
     ? `<coordinator-instruction>\n${content}\n</coordinator-instruction>`
-    : `<peer-message from="${myId}">\n${content}\n</peer-message>`;
+    : `<peer-message from="${myId}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</peer-message>`;
 
   // Pre-charge before enqueue — keep the throttle ahead of every
   // outbound message, including the cheap targeted single-recipient
