@@ -1615,12 +1615,22 @@ async function runManagedTaskViaRunnerInner(
       content: m.content,
     }));
   };
+  // Transcript snapshot ref — populated by the adapter's beforeNextTurn
+  // each turn boundary; read by the goal verifyComplete closure when
+  // `update_goal({complete})` fires mid-turn.
+  const goalTranscriptRef: { current: readonly KodaXMessage[] } = {
+    current: [],
+  };
   const { beforeNextTurn, stopHook } = buildRunnerGoalAdapter({
     goalRuntime: options.context?.goalRuntime,
     tokenStateRef,
     baseCtx,
     baseBeforeNextTurn,
     composedStopHook,
+    transcriptRef: goalTranscriptRef,
+    mutationTracker,
+    verifierProvider: resolvedVerifier?.provider,
+    verifierModel: resolvedVerifier?.model,
   });
 
   // One-shot Runner invocation closure, used by the idle-yield outer

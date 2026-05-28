@@ -133,6 +133,7 @@ describe('buildRunnerGoalAdapter — goal runtime wrap', () => {
         getTurnStartMs: () => undefined,
         hasPendingUserInput: () => false,
       },
+      installVerifyComplete: () => {},
     };
   }
 
@@ -207,6 +208,76 @@ describe('buildRunnerGoalAdapter — goal runtime wrap', () => {
       reanimateBudget: 3,
     });
     expect(r).toBeUndefined();
+  });
+
+  it('does NOT call installVerifyComplete when verifierProvider is missing (binding keeps stub)', () => {
+    const goalRuntime = makeGoalRuntime();
+    const installSpy = vi.spyOn(goalRuntime, 'installVerifyComplete');
+    buildRunnerGoalAdapter({
+      goalRuntime,
+      tokenStateRef: makeTokenStateRef(),
+      baseCtx: makeBaseCtx(),
+      baseBeforeNextTurn: NOOP_BEFORE_NEXT_TURN,
+      composedStopHook: NOOP_STOP_HOOK,
+      transcriptRef: { current: [] },
+      // verifierProvider omitted
+    });
+    expect(installSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call installVerifyComplete when transcriptRef is missing (binding keeps stub)', () => {
+    const goalRuntime = makeGoalRuntime();
+    const installSpy = vi.spyOn(goalRuntime, 'installVerifyComplete');
+    buildRunnerGoalAdapter({
+      goalRuntime,
+      tokenStateRef: makeTokenStateRef(),
+      baseCtx: makeBaseCtx(),
+      baseBeforeNextTurn: NOOP_BEFORE_NEXT_TURN,
+      composedStopHook: NOOP_STOP_HOOK,
+      // transcriptRef omitted
+      verifierProvider: { name: 'fake' } as never,
+    });
+    expect(installSpy).not.toHaveBeenCalled();
+  });
+
+  it('calls installVerifyComplete when all verifier deps are supplied', () => {
+    const goalRuntime = makeGoalRuntime();
+    const installSpy = vi.spyOn(goalRuntime, 'installVerifyComplete');
+    buildRunnerGoalAdapter({
+      goalRuntime,
+      tokenStateRef: makeTokenStateRef(),
+      baseCtx: makeBaseCtx(),
+      baseBeforeNextTurn: NOOP_BEFORE_NEXT_TURN,
+      composedStopHook: NOOP_STOP_HOOK,
+      transcriptRef: { current: [] },
+      verifierProvider: { name: 'fake' } as never,
+      verifierModel: 'fake-model',
+    });
+    expect(installSpy).toHaveBeenCalledTimes(1);
+    // Inspect the installed fn shape — it should be an async function
+    // taking a goal and returning a GoalCompleteResult shape.
+    const installedFn = installSpy.mock.calls[0]![0];
+    expect(typeof installedFn).toBe('function');
+  });
+
+  it('beforeNextTurn updates transcriptRef.current to the latest snapshot', async () => {
+    const transcriptRef: { current: readonly { role: 'user'; content: string }[] } = {
+      current: [],
+    };
+    const { beforeNextTurn } = buildRunnerGoalAdapter({
+      goalRuntime: undefined,
+      tokenStateRef: makeTokenStateRef(),
+      baseCtx: makeBaseCtx(),
+      baseBeforeNextTurn: NOOP_BEFORE_NEXT_TURN,
+      composedStopHook: NOOP_STOP_HOOK,
+      transcriptRef: transcriptRef as never,
+    });
+    const newTranscript = [
+      { role: 'user' as const, content: 'first' },
+      { role: 'user' as const, content: 'second' },
+    ];
+    await beforeNextTurn({ transcript: newTranscript, iteration: 0 });
+    expect(transcriptRef.current).toEqual(newTranscript);
   });
 
   it('wrappedStopHook prefers inner stop hook result when defined (priority over goal continuation)', async () => {

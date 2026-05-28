@@ -127,6 +127,26 @@ export interface GoalRuntimeBindingDeps {
 export interface GoalRuntimeBinding {
   readonly goalContext: GoalToolsContext;
   readonly lifecycleCtx: GoalLifecycleContext;
+  /**
+   * Replace the verifyComplete implementation at runtime.
+   *
+   * The REPL constructs the binding eagerly (before the runner exists)
+   * and supplies a stub verifyComplete. The runner-driven adapter
+   * then has access to runner-local context the REPL doesn't
+   * (transcript ref, mutation tracker, resolved verifier provider/
+   * model) and installs a real F184-backed verifier via this method.
+   *
+   * Idempotent: calling more than once just replaces the slot. The
+   * `goalContext.requestComplete` closure reads the slot fresh on
+   * every invocation, so any later swap is observed immediately.
+   *
+   * Called only from `buildRunnerGoalAdapter` in production; tests
+   * may also call it directly when exercising the goal-complete
+   * verifier path without a full runner harness.
+   */
+  readonly installVerifyComplete: (
+    fn: GoalRuntimeBindingDeps['verifyComplete'],
+  ) => void;
 }
 
 /**
@@ -249,6 +269,14 @@ export function buildGoalRuntimeBinding(
     await deps.saveSession();
   }
 
+  // Pluggable verifyComplete slot. The REPL passes a stub at
+  // construction time; the runner-driven adapter swaps it for a real
+  // F184-backed verifier once it has access to transcript +
+  // mutation tracker. The `requestComplete` closure below reads this
+  // local fresh on every invocation, so any later install is
+  // observed without rebuilding the binding.
+  let verifyCompleteImpl: GoalRuntimeBindingDeps['verifyComplete'] = deps.verifyComplete;
+
   const goalContext: GoalToolsContext = {
     readGoal: async () => readLatestGoalState(deps.getLineage()),
 
@@ -281,7 +309,7 @@ export function buildGoalRuntimeBinding(
       if (goal.status === 'complete') {
         return { ok: false, reason: 'goal is already complete' };
       }
-      const verdict = await deps.verifyComplete(goal);
+      const verdict = await verifyCompleteImpl(goal);
       if (!verdict.ok) {
         return verdict;
       }
@@ -353,5 +381,11 @@ export function buildGoalRuntimeBinding(
     hasPendingUserInput: deps.hasPendingUserInput,
   };
 
-  return { goalContext, lifecycleCtx };
+  const installVerifyComplete = (
+    fn: GoalRuntimeBindingDeps['verifyComplete'],
+  ): void => {
+    verifyCompleteImpl = fn;
+  };
+
+  return { goalContext, lifecycleCtx, installVerifyComplete };
 }

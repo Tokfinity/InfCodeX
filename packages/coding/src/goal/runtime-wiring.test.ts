@@ -236,6 +236,89 @@ describe('buildGoalRuntimeBinding — requestBlocked (3-turn rule)', () => {
   });
 });
 
+describe('buildGoalRuntimeBinding — installVerifyComplete (pluggable verifier slot)', () => {
+  it('replaces the initial deps.verifyComplete with the installed implementation', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const initialStub = vi.fn(async () => ({ ok: true as const }));
+    const { binding } = makeBinding({ state, verifyComplete: initialStub });
+    // Install replacement BEFORE first call — initial stub never fires.
+    const replacement = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'replacement says no',
+    }));
+    binding.installVerifyComplete(replacement);
+    const r = await binding.goalContext.requestComplete();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('replacement says no');
+    expect(initialStub).not.toHaveBeenCalled();
+    expect(replacement).toHaveBeenCalledTimes(1);
+  });
+
+  it('subsequent installs swap the slot — last writer wins', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    const v1 = vi.fn(async () => ({ ok: false as const, reason: 'v1' }));
+    const v2 = vi.fn(async () => ({ ok: false as const, reason: 'v2' }));
+    binding.installVerifyComplete(v1);
+    binding.installVerifyComplete(v2);
+    const r = await binding.goalContext.requestComplete();
+    expect(r.reason).toBe('v2');
+    expect(v1).not.toHaveBeenCalled();
+    expect(v2).toHaveBeenCalledTimes(1);
+  });
+
+  it('install AFTER first call still observed on next call (closure reads slot fresh)', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const initial = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'initial',
+    }));
+    const { binding } = makeBinding({ state, verifyComplete: initial });
+    const r1 = await binding.goalContext.requestComplete();
+    expect(r1.reason).toBe('initial');
+    binding.installVerifyComplete(async () => ({
+      ok: false as const,
+      reason: 'after install',
+    }));
+    const r2 = await binding.goalContext.requestComplete();
+    expect(r2.reason).toBe('after install');
+  });
+
+  it('verifier reject propagates suggestedFix through requestComplete', async () => {
+    const state: HostState = { lineage: makeMsgLineage(), saved: 0 };
+    state.lineage = appendGoalEntry(
+      state.lineage,
+      buildCreatedGoal('X', null),
+      'created',
+    );
+    const { binding } = makeBinding({ state });
+    binding.installVerifyComplete(async () => ({
+      ok: false as const,
+      reason: 'tests not yet run',
+      suggestedFix: 'run `npm test`',
+    }));
+    const r = await binding.goalContext.requestComplete();
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('tests not yet run');
+    expect(r.suggestedFix).toBe('run `npm test`');
+  });
+});
+
 describe('buildGoalRuntimeBinding — buildContinuationPrompt structure', () => {
   // Structural smoke test (added per independent review 2026-05-28).
   // Locks in Codex parity at the section-heading level + the two
