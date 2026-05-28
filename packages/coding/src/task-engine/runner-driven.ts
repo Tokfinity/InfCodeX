@@ -169,11 +169,11 @@ import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 // FEATURE_074 (set_permission_mode NOT forwarded) and FEATURE_067
 // (onChildProgress undefined) invariants so AMA and SA can't drift.
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
-// FEATURE_192 v0.7.44 Phase F — `/goal` lifecycle composers. Thin
-// wrappers around `beforeNextTurn` + `stopHook` that are no-ops when
-// `options.context.goalRuntime` is undefined (sync-dispatch / non-
-// REPL test harness; REPL sessions always wire it).
-import { withGoalBeforeNextTurn, withGoalStopHook } from '../goal/index.js';
+// FEATURE_192 v0.7.44 — `/goal` lifecycle adapter. Owns the
+// composition of FEATURE_164 mid-turn drain + FEATURE_192 goal
+// accounting/continuation + FEATURE_123 per-turn flood counter
+// reset. No-op when `options.context.goalRuntime` is undefined.
+import { buildRunnerGoalAdapter } from './runner-goal-adapter.js';
 import path from 'node:path';
 import os from 'node:os';
 import { resolveExecutionCwd } from '../runtime-paths.js';
@@ -1592,42 +1592,16 @@ async function runManagedTaskViaRunnerInner(
     return extensionTurnCompleteHook(ctx);
   };
 
-  // FEATURE_192 v0.7.44 Phase F — `/goal` lifecycle wiring.
-  //
-  // When the host (REPL) supplied a `goalRuntime` binding via
-  // `options.context.goalRuntime`, decorate its lifecycleCtx with two
-  // runner-local accessors that only this scope owns:
-  //   - `getTurnStartMs`  → reads `turnStartMsRef.current`, updated
-  //                          right after every `beforeNextTurn` so the
-  //                          next turn's wall-time delta starts from
-  //                          "now after the queue drain".
-  //   - `getLatestUsage`  → reads `tokenStateRef.current.lastUsage`,
-  //                          the latest per-call token usage written
-  //                          by the LLM adapter.
-  // When the binding is absent (sync-dispatch / non-REPL test harness;
-  // REPL sessions always wire it) both wrappers are no-ops via
-  // `enabled: false` and the existing hook semantics are preserved.
-  const goalRuntime = options.context?.goalRuntime;
-  const turnStartMsRef = { current: Date.now() };
-  const goalLifecycleCtx = goalRuntime
-    ? {
-        ...goalRuntime.lifecycleCtx,
-        getLatestUsage: () => tokenStateRef.current.lastUsage,
-        getTurnStartMs: () => turnStartMsRef.current,
-      }
-    : undefined;
-
-  // Base `beforeNextTurn` — the existing FEATURE_164 mid-turn user-
-  // prompt drain. Extracted into a named const so the goal lifecycle
-  // composer can wrap it without losing semantics. Ctx param is kept
-  // so the signature matches both `withGoalBeforeNextTurn`'s expected
-  // `BeforeNextTurnFn` (narrow `{transcript, iteration}`) AND Runner's
-  // wider `(ctx: {agent, transcript, iteration}) => ...` shape via
-  // structural subtyping.
+  // FEATURE_192 v0.7.44 — `/goal` lifecycle adapter. See
+  // `runner-goal-adapter.ts` for the full composition rationale.
+  // Pre-extraction this block was ~80 LoC inline; the adapter module
+  // owns the goal-accounting + sendMessage-counter-reset + base-drain
+  // composition so runner-driven stays at the dispatch-loop layer.
   const baseBeforeNextTurn: (ctx: {
     readonly transcript: readonly KodaXMessage[];
     readonly iteration: number;
   }) => Promise<readonly KodaXMessage[]> = async () => {
+    // FEATURE_164 mid-turn user-prompt drain.
     const drained = getMessageQueue().dequeue({
       agentId: undefined,
       maxPriority: 'user',
@@ -1641,40 +1615,13 @@ async function runManagedTaskViaRunnerInner(
       content: m.content,
     }));
   };
-
-  // Wrap base with goal accounting (no-op when goalRuntime is unset).
-  // After every fire, advance turnStartMsRef so the NEXT turn's
-  // accounting measures wall-time from this boundary, not from the
-  // adapter-construction moment.
-  const wrappedBeforeNextTurn = goalLifecycleCtx
-    ? withGoalBeforeNextTurn(goalLifecycleCtx, baseBeforeNextTurn, {
-        enabled: true,
-      })
-    : baseBeforeNextTurn;
-  const beforeNextTurn = async (turnCtx: {
-    readonly transcript: readonly KodaXMessage[];
-    readonly iteration: number;
-  }) => {
-    const result = await wrappedBeforeNextTurn(turnCtx);
-    turnStartMsRef.current = Date.now();
-    // FEATURE_123 v0.7.44 — reset the per-turn send_message flood
-    // throttle counter at every turn boundary. Counter lives on
-    // baseCtx (the substrate's tool-exec context, allocated once
-    // per runtime by `buildToolExecutionContext`).
-    if (baseCtx.sendMessageTurnCounter) {
-      baseCtx.sendMessageTurnCounter.count = 0;
-    }
-    return result;
-  };
-
-  // Wrap composedStopHook with goal-driven continuation (no-op when
-  // goalRuntime is unset). The wrapper fires the inner stopHook first
-  // (sidecar verifier + extension turn:complete bridge) and only
-  // returns a continuation prompt when the inner returned undefined
-  // AND the goal is active AND no user input is pending.
-  const stopHook = goalLifecycleCtx
-    ? withGoalStopHook(goalLifecycleCtx, composedStopHook, { enabled: true })
-    : composedStopHook;
+  const { beforeNextTurn, stopHook } = buildRunnerGoalAdapter({
+    goalRuntime: options.context?.goalRuntime,
+    tokenStateRef,
+    baseCtx,
+    baseBeforeNextTurn,
+    composedStopHook,
+  });
 
   // One-shot Runner invocation closure, used by the idle-yield outer
   // loop. Lifting it to a named function lets the wrapper reuse the
