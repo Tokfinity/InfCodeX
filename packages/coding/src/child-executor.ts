@@ -581,8 +581,25 @@ export async function resolveEvidenceRef(
     if (snap.status === 'running') {
       return `- task_id:${childId} (still running — use the \`task_output\` tool to poll, or wait for the \`<task-completed task_id="${childId}">\` block in your next user message)`;
     }
-    const body = snap.finalText ?? '(no final text recorded)';
-    return `### task: ${childId} (${snap.status})\n${body}`;
+    // Cap + code-fence wrap finalText so multi-hop prompt injection
+    // through a compromised child cannot escape the briefing framing.
+    // Mirrors the `diff:` branch's slice(0, 4000) cap pattern. The
+    // ``` fence prevents internal Markdown / XML tags in finalText
+    // from being interpreted as new briefing sections by the next
+    // child's LLM. Cap is 10000 chars — large enough for a thorough
+    // scout report, small enough to bound a hostile payload.
+    const FINAL_TEXT_CAP = 10000;
+    const FENCE = '```';
+    const rawBody = snap.finalText ?? '(no final text recorded)';
+    let body = rawBody.length > FINAL_TEXT_CAP
+      ? `${rawBody.slice(0, FINAL_TEXT_CAP)}\n[…truncated ${rawBody.length - FINAL_TEXT_CAP} chars; use \`task_output\` for the full text]`
+      : rawBody;
+    // Defensive: if the body itself contains the exact fence
+    // sequence, escape it so the fence cannot be closed mid-body.
+    if (body.includes(FENCE)) {
+      body = body.replace(/```/g, '`​`​`');
+    }
+    return `### task: ${childId} (${snap.status})\n${FENCE}\n${body}\n${FENCE}`;
   }
   // FEATURE_199 (v0.7.44) — unknown prefix → visible error instead of
   // silent fallthrough. Pre-F199 this returned `- ${ref}` verbatim,

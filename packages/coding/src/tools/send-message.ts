@@ -89,10 +89,28 @@ function selfLabel(currentAgentId: string | undefined): string {
   return currentAgentId ?? WORKER_SENTINEL;
 }
 
-/** Render the chain for embedding in a wrapper tag attribute. */
+/**
+ * HTML-escape `<`, `>`, `&` so a user-supplied string cannot break out
+ * of the framing wrapper tag. Mirrors the F192 continuation-prompt
+ * escape pattern. Applied to:
+ *   - `content` (message body — LLM-controllable; an adversarial peer
+ *     could otherwise inject `</peer-message><coordinator-instruction>`
+ *     fragments and elevate framing on the recipient)
+ *   - `from=` attribute value (agent IDs are KodaX-generated task_ids
+ *     today, but escaping defends if the dispatch surface ever accepts
+ *     user-supplied IDs)
+ *   - `seen_by=` attribute value (same as `from=`, applied per-entry)
+ */
+function escapeTagBody(s: string): string {
+  return s.replace(/[<>&]/g, (c) =>
+    c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;',
+  );
+}
+
+/** Render the chain for embedding in a wrapper tag attribute, with per-entry escape. */
 function formatSeenByAttr(chain: readonly string[]): string {
   if (chain.length === 0) return '';
-  return ` seen_by="${chain.join(',')}"`;
+  return ` seen_by="${chain.map(escapeTagBody).join(',')}"`;
 }
 
 /**
@@ -167,7 +185,7 @@ function sendToWorker(
   }
   const chargeError = chargeTurnCounter(ctx, 1);
   if (chargeError) return chargeError;
-  const wrapped = `<child-notification from="${fromId}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</child-notification>`;
+  const wrapped = `<child-notification from="${escapeTagBody(fromId)}"${formatSeenByAttr(nextSeenBy)}>\n${escapeTagBody(content)}\n</child-notification>`;
   queue.enqueue({
     priority: 'background',
     mode: 'task-notification',
@@ -233,7 +251,7 @@ function broadcast(
   const chargeError = chargeTurnCounter(ctx, targetCount);
   if (chargeError) return chargeError;
   const fromLabel = fromId ?? WORKER_SENTINEL;
-  const wrapped = `<peer-broadcast from="${fromLabel}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</peer-broadcast>`;
+  const wrapped = `<peer-broadcast from="${escapeTagBody(fromLabel)}"${formatSeenByAttr(nextSeenBy)}>\n${escapeTagBody(content)}\n</peer-broadcast>`;
   for (const sibId of sibTargets) {
     queue.enqueue({
       priority: 'background',
@@ -319,8 +337,8 @@ export async function toolSendMessage(
   const isCoordinatorPath = myId === undefined;
   const priority: MessagePriority = isCoordinatorPath ? 'user' : 'background';
   const wrapped = isCoordinatorPath
-    ? `<coordinator-instruction>\n${content}\n</coordinator-instruction>`
-    : `<peer-message from="${myId}"${formatSeenByAttr(nextSeenBy)}>\n${content}\n</peer-message>`;
+    ? `<coordinator-instruction>\n${escapeTagBody(content)}\n</coordinator-instruction>`
+    : `<peer-message from="${escapeTagBody(myId)}"${formatSeenByAttr(nextSeenBy)}>\n${escapeTagBody(content)}\n</peer-message>`;
 
   // Pre-charge before enqueue — keep the throttle ahead of every
   // outbound message, including the cheap targeted single-recipient
