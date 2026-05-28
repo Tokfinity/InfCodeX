@@ -27,12 +27,12 @@
  * `core/templates/goals/continuation.md` verbatim in structure and
  * intent — Continuation behavior / Budget / Work from evidence /
  * Progress visibility / Fidelity / Completion audit / Blocked audit —
- * with two KodaX-specific runtime-enforcement paragraphs appended to
- * Completion audit (Sidecar Verifier hard gate) and Blocked audit
- * (3-turn counter). The KodaX-specific paragraphs make the runtime
- * harness behavior legible to the model so it does not waste a turn
- * being rejected; they do not replace the Codex teaching, they
- * complement it.
+ * with 6 documented KodaX-specific deviations (see the function
+ * JSDoc below for the full list). Two of the six are trailing
+ * "Runtime enforcement" paragraphs that make the KodaX runtime gates
+ * legible to the model (Sidecar Verifier on Completion audit + 3-turn
+ * counter on Blocked audit) so the model does not waste a turn being
+ * rejected; they do not replace the Codex teaching, they complement it.
  *
  * The earlier v0.7.44 draft trimmed this prompt aggressively under
  * ADR-033 §4 ("no enumerated taxonomies"). That was a mechanical
@@ -132,11 +132,31 @@ export interface GoalRuntimeBinding {
 /**
  * Codex-faithful continuation prompt with KodaX runtime-enforcement
  * appends. Mirrors `codex-rs/core/templates/goals/continuation.md`
- * section-by-section; substitutes KodaX's `todo_*` tools for Codex's
- * `update_plan`; adds two trailing paragraphs documenting the Sidecar
- * Verifier hard gate (on Completion audit) and 3-turn blocker counter
- * (on Blocked audit) so the model knows the runtime will actually
- * enforce these audits, not just teach them.
+ * section-by-section. KodaX-specific deviations (all intentional):
+ *
+ *   1. "thread" → "session" in the header line. KodaX persists goals
+ *      in session-lineage, not Codex's `thread_goals` table.
+ *   2. `<objective>` body HTML-escapes `<`, `>`, `&` so a user-supplied
+ *      objective cannot break out of the framing tag (defense against
+ *      prompt-injection via the `objective` argument).
+ *   3. Progress visibility cites KodaX's `todo_*` tools (FEATURE_170
+ *      v0.7.41 todo V2) instead of Codex's `update_plan`. KodaX has
+ *      no `update_plan` — the multi-step planning surface lives in
+ *      `todo_create` / `todo_update` / `todo_list` / `todo_get`.
+ *   4. Budget section adds a 4th line `Elapsed: ${seconds}s` after the
+ *      3 Codex lines (used / budget / remaining). KodaX `lifecycle.ts`
+ *      tracks wall-time and `/goal status` surfaces it — keeping the
+ *      same data on the continuation prompt avoids a divergence between
+ *      what the user sees and what the model sees.
+ *   5. Null `tokenBudget` renders gracefully (`(none set — ...)`,
+ *      `(unbounded)`) — Codex's template assumes `token_budget` is
+ *      always present, but KodaX's `isValidTokenBudget` accepts null
+ *      (optional budget) so the render needs to handle it.
+ *   6. Two trailing paragraphs document the KodaX-specific runtime
+ *      gates: Sidecar Verifier on Completion audit + 3-turn blocker
+ *      counter on Blocked audit. The model knowing the audits are
+ *      enforced (not just teaching) saves a wasted turn on rejected
+ *      `update_goal` attempts.
  */
 function defaultContinuationPrompt(goal: KodaXGoalState): string {
   const objective = goal.objective.replace(/[<>&]/g, (c) =>

@@ -747,6 +747,25 @@ describe('toolSendMessage — seen_by multi-hop cycle list', () => {
     );
   });
 
+  it('Worker coordinator path also enforces cycle reject when target is in seen_by', async () => {
+    // Edge case from independent review: Branch 3 cycle guard runs
+    // BEFORE the isCoordinatorPath branching, so it applies to the
+    // Worker→child path too. If the Worker passes seen_by containing
+    // the target, the call must be rejected even though the wrapper
+    // is <coordinator-instruction> (which itself does not carry seen_by).
+    const ctx = makeCtx({
+      childTaskRegistry: makeRegistry(['child-a', 'child-b']),
+      currentAgentId: undefined, // Worker
+    });
+    const result = await toolSendMessage(
+      { to: 'child-a', content: 'looping', seen_by: ['child-a'] },
+      ctx,
+    );
+    expect(result).toMatch(/^\[Tool Error\]/);
+    expect(result).toMatch(/Cycle detected/);
+    expect(getMessageQueue().size()).toBe(0);
+  });
+
   it('non-array seen_by parameter is ignored (fresh chain)', async () => {
     const ctx = makeCtx({
       childTaskRegistry: makeRegistry(['child-a', 'child-b']),

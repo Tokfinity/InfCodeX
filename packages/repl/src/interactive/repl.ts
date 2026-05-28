@@ -1290,6 +1290,14 @@ Keyboard Shortcuts:
                 // typically follows a complete claim. The deps stub
                 // here accepts unconditionally; the dedicated tool-
                 // level verifier wrap is a v0.7.45 follow-up.
+                //
+                // SAFETY BOUNDARY: this stub is reachable only when
+                // `isGoalFeatureEnabled()` (env `KODAX_GOAL_ENABLED=1`)
+                // is true — see line 1256 above. The whole goal feature
+                // is opt-in default-off in v0.7.44 precisely because
+                // the tool-level verifier wrap is not yet in place.
+                // Users who set the env var have opted into the stub
+                // behavior; users who haven't never see the tool.
                 verifyComplete: async () => ({ ok: true }),
               })
             : undefined;
