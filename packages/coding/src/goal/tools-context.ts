@@ -68,7 +68,7 @@ export interface GoalToolsContext {
  * clear signal rather than a silent failure.
  */
 export function makeDisabledGoalToolsContext(): GoalToolsContext {
-  const disabled = '[Tool Error] /goal feature is not enabled in this session. Set KODAX_GOAL_ENABLED=1 to opt in.';
+  const disabled = '[Tool Error] /goal feature is not wired in this session (no host adapter — likely an isolated test harness or sync-dispatch context). Goal tools require a REPL session with lineage persistence.';
   return {
     readGoal: async () => null,
     createGoal: async () => {

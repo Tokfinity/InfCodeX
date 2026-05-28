@@ -13,12 +13,6 @@
  *   /goal clear                     — clear the current goal entirely
  *   /goal help                      — show usage
  *
- * Feature flag: when `KODAX_GOAL_ENABLED` is not `'1'` AND config
- * `goal.enabled` is not true, the command returns a "feature flag
- * required" message. This matches the FEATURE_177 KODAX_TASK_OUTPUT
- * gated-ramp pattern — Phase D ships the surface; Phase E eval +
- * runtime continuation wiring follow.
- *
  * Persistence: the command mutates `context.lineage` via
  * `appendGoalEntry` from `@kodax-ai/agent`, then calls
  * `callbacks.saveSession()` to flush. When `context.lineage` is
@@ -45,13 +39,9 @@ import {
 
 import type { Command } from './types.js';
 
-export function isGoalFeatureEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.KODAX_GOAL_ENABLED === '1';
-}
-
 function printHelp(): void {
   console.log(`
-${chalk.bold('/goal')} — persistent session goal (KODAX_GOAL_ENABLED required)
+${chalk.bold('/goal')} — persistent session goal
 
 ${chalk.bold('Subcommands:')}
   ${chalk.cyan('/goal <objective> [--tokens N]')}  Create a new persistent goal.
@@ -62,7 +52,7 @@ ${chalk.bold('Subcommands:')}
   ${chalk.cyan('/goal help')}                      Show this help.
 
 ${chalk.bold('Notes:')}
-  - The agent only auto-continues on a goal when KODAX_GOAL_ENABLED=1.
+  - The agent auto-continues toward an active goal on every Worker turn end.
   - Token budget is optional; set it only when you want a hard ceiling.
   - update_goal({complete}) is verifier-gated; the agent cannot
     self-declare done without runtime confirmation.
@@ -270,15 +260,6 @@ export const goalCommand: Command = {
   usage: '/goal [<objective> [--tokens N] | status | pause | resume | clear | help]',
   argumentHint: '<objective> | status | pause | resume | clear | help',
   handler: async (args, context, callbacks) => {
-    if (!isGoalFeatureEnabled()) {
-      console.log(
-        chalk.yellow(
-          '[/goal] feature flag required. Set KODAX_GOAL_ENABLED=1 to enable. (See docs/features/v0.7.44.md FEATURE_192.)',
-        ),
-      );
-      return;
-    }
-
     const sub = (args[0] ?? 'status').toLowerCase();
     if (sub === 'help' || sub === '--help' || sub === '-h') {
       printHelp();

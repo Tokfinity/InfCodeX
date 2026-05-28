@@ -43,7 +43,6 @@ import {
   buildGoalRuntimeBinding,
 } from '@kodax-ai/coding';
 import { getMessageQueue } from '@kodax-ai/agent';
-import { isGoalFeatureEnabled } from '../commands/goal-command.js';
 import type { AgentsFile } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {
@@ -1246,14 +1245,14 @@ Keyboard Shortcuts:
         statusBar?.update({ messageCount: context.messages.length });
 
         // Run agent (copy main loop logic) - 运行 agent (复制主循环逻辑)
-        // FEATURE_192 v0.7.44 Phase F — when the goal feature is
-        // enabled AND the session has a lineage, build the goal runtime
-        // binding so the runner-driven adapter can wire turn-end
-        // accounting + auto-continue on a Worker text-only termination.
-        // The binding is a pure factory (no global state) so it's safe
-        // to rebuild per turn.
+        // FEATURE_192 v0.7.44 — build the goal runtime binding so the
+        // runner-driven adapter can wire turn-end accounting + auto-
+        // continue on a Worker text-only termination. Default ON; the
+        // binding is a no-op until the user creates a goal via `/goal`
+        // or the model calls `create_goal` (the ADR-033 §1 prompt
+        // discourages autonomous goal creation on simple tasks).
         const goalRuntime =
-          isGoalFeatureEnabled() && context.lineage
+          context.lineage
             ? buildGoalRuntimeBinding({
                 getLineage: () => context.lineage!,
                 setLineage: (next) => {
@@ -1284,20 +1283,14 @@ Keyboard Shortcuts:
                     maxPriority: 'user',
                     mode: 'prompt',
                   }),
-                // update_goal({complete}) verifier strong-bind in
-                // v0.7.44 relies on the F184 sidecar verifier firing
-                // on the same Worker text-only termination that
-                // typically follows a complete claim. The deps stub
-                // here accepts unconditionally; the dedicated tool-
-                // level verifier wrap is a v0.7.45 follow-up.
-                //
-                // SAFETY BOUNDARY: this stub is reachable only when
-                // `isGoalFeatureEnabled()` (env `KODAX_GOAL_ENABLED=1`)
-                // is true — see line 1256 above. The whole goal feature
-                // is opt-in default-off in v0.7.44 precisely because
-                // the tool-level verifier wrap is not yet in place.
-                // Users who set the env var have opted into the stub
-                // behavior; users who haven't never see the tool.
+                // STUB — Commit 3 of the v0.7.44 review-cycle replaces
+                // this with a real verifier wire that closes over the
+                // runner's per-turn transcript + fileEdits. Until the
+                // adapter extraction lands (Commit 2 of the same cycle),
+                // verifyComplete is constructed inside runner-driven.ts
+                // (where transcript/edits are accessible) and overrides
+                // the stub via the same dep-injection pattern as
+                // getLatestUsage / getTurnStartMs.
                 verifyComplete: async () => ({ ok: true }),
               })
             : undefined;

@@ -171,8 +171,8 @@ import { CANCELLED_TOOL_RESULT_MESSAGE } from '../constants.js';
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
 // FEATURE_192 v0.7.44 Phase F — `/goal` lifecycle composers. Thin
 // wrappers around `beforeNextTurn` + `stopHook` that are no-ops when
-// `options.context.goalRuntime` is undefined (the production default
-// in v0.7.44 without `KODAX_GOAL_ENABLED=1` + REPL binding).
+// `options.context.goalRuntime` is undefined (sync-dispatch / non-
+// REPL test harness; REPL sessions always wire it).
 import { withGoalBeforeNextTurn, withGoalStopHook } from '../goal/index.js';
 import path from 'node:path';
 import os from 'node:os';
@@ -1604,8 +1604,8 @@ async function runManagedTaskViaRunnerInner(
   //   - `getLatestUsage`  → reads `tokenStateRef.current.lastUsage`,
   //                          the latest per-call token usage written
   //                          by the LLM adapter.
-  // When the binding is absent (production default in v0.7.44 without
-  // `KODAX_GOAL_ENABLED=1` + REPL wiring) both wrappers are no-ops via
+  // When the binding is absent (sync-dispatch / non-REPL test harness;
+  // REPL sessions always wire it) both wrappers are no-ops via
   // `enabled: false` and the existing hook semantics are preserved.
   const goalRuntime = options.context?.goalRuntime;
   const turnStartMsRef = { current: Date.now() };

@@ -919,10 +919,11 @@ const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     toClassifierInput: () => '',
   },
   // FEATURE_192 v0.7.44 — `/goal` Persistent Goal tools.
-  // Gated by `KODAX_GOAL_ENABLED` at REPL adapter time: when the flag
-  // is off, `ctx.goalContext` stays undefined and the tools return a
-  // uniform "feature disabled" error so the model gets a clear signal
-  // rather than a silent failure. Registry shape stays constant.
+  // `ctx.goalContext` is wired by the REPL adapter for every session
+  // with a lineage; in non-REPL test harnesses or sync-dispatch the
+  // context stays undefined and the tools return a uniform "not wired
+  // here" error so the model gets a clear signal rather than a silent
+  // failure. Registry shape stays constant.
   {
     name: 'get_goal',
     description:

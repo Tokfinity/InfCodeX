@@ -25,7 +25,8 @@ const NO_GOAL_MESSAGE =
 
 /**
  * Pull the goal-tools context from the execution context, or a
- * uniform-error fallback when not wired (KODAX_GOAL_ENABLED off).
+ * uniform-error fallback when not wired (sync-dispatch / isolated test
+ * harness — REPL-driven sessions always provide it).
  */
 function getCtx(ctx: KodaXToolExecutionContext) {
   return ctx.goalContext ?? makeDisabledGoalToolsContext();

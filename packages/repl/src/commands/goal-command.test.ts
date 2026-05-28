@@ -11,7 +11,7 @@ import {
   type KodaXSessionLineage,
 } from '@kodax-ai/agent';
 import { buildCreatedGoal } from '@kodax-ai/coding';
-import { goalCommand, isGoalFeatureEnabled } from './goal-command.js';
+import { goalCommand } from './goal-command.js';
 
 function makeLineage(): KodaXSessionLineage {
   return {
@@ -61,46 +61,18 @@ const CONFIG = {
 };
 
 let logSpy: ReturnType<typeof vi.spyOn>;
-let originalEnabled: string | undefined;
 
 beforeEach(() => {
   logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-  originalEnabled = process.env.KODAX_GOAL_ENABLED;
-  process.env.KODAX_GOAL_ENABLED = '1';
 });
 
 afterEach(() => {
   logSpy.mockRestore();
-  if (originalEnabled === undefined) {
-    delete process.env.KODAX_GOAL_ENABLED;
-  } else {
-    process.env.KODAX_GOAL_ENABLED = originalEnabled;
-  }
 });
 
 function output(): string {
   return logSpy.mock.calls.map((args) => args.join(' ')).join('\n');
 }
-
-describe('isGoalFeatureEnabled', () => {
-  it('returns true when KODAX_GOAL_ENABLED=1', () => {
-    expect(isGoalFeatureEnabled({ KODAX_GOAL_ENABLED: '1' })).toBe(true);
-  });
-
-  it('returns false otherwise', () => {
-    expect(isGoalFeatureEnabled({})).toBe(false);
-    expect(isGoalFeatureEnabled({ KODAX_GOAL_ENABLED: '0' })).toBe(false);
-    expect(isGoalFeatureEnabled({ KODAX_GOAL_ENABLED: 'true' })).toBe(false);
-  });
-});
-
-describe('/goal — feature flag', () => {
-  it('returns feature-flag message when disabled', async () => {
-    delete process.env.KODAX_GOAL_ENABLED;
-    await goalCommand.handler(['build the thing'], makeContext(), makeCallbacks(), CONFIG);
-    expect(output()).toMatch(/feature flag required/);
-  });
-});
 
 describe('/goal create', () => {
   it('creates a goal and persists', async () => {

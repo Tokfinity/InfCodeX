@@ -13,9 +13,10 @@
  *   - agent_end continuation → `stopHook` (fires on text-only
  *     termination, can return a continuation prompt to reanimate)
  *
- * Flag-gated: the composer accepts `enabled: false` and returns
- * pass-through wrappers when the goal feature is OFF. Production CLI
- * is OFF by default in v0.7.44 (KODAX_GOAL_ENABLED).
+ * `enabled: false` returns pass-through wrappers — useful for hosts
+ * that build the binding eagerly but want to no-op when no goal is
+ * active. Goal feature ships default ON in v0.7.44; the `enabled`
+ * knob is for embedders, not user-facing gating.
  */
 
 import type {
