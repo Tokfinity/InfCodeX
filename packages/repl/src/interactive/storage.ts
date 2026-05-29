@@ -291,6 +291,68 @@ function buildLineage(
   return createSessionLineage(snapshot.legacyMessages);
 }
 
+function serializeMessageContentForCompare(content: KodaXMessage['content']): string {
+  return typeof content === 'string' ? `t:${content}` : `j:${JSON.stringify(content)}`;
+}
+
+function sameMessageByContent(left: KodaXMessage, right: KodaXMessage): boolean {
+  if (left === right) {
+    return true;
+  }
+  return left.role === right.role
+    && serializeMessageContentForCompare(left.content) === serializeMessageContentForCompare(right.content);
+}
+
+/**
+ * FEATURE_173 no-regress guard.
+ *
+ * Resolve the lineage a snapshot `save()` should persist. The runner's
+ * `saveSessionSnapshot` writes flat messages with NO lineage; rebuilding via
+ * `createSessionLineage(messages, existing)` keeps every existing entry but
+ * sets `activeEntryId` from the message walk. When the snapshot's messages
+ * are a PREFIX of the persisted active path (a stale / subset view — exactly
+ * what a delayed runner save carries), that walk regresses `activeEntryId`
+ * to an earlier round, so resume only replays up to that point ("resume only
+ * loads the first round"). In that case the snapshot has nothing new to
+ * contribute, so reuse the persisted lineage verbatim — the active pointer
+ * never moves backward.
+ *
+ * An EMPTY message set is treated the same as a prefix — it carries nothing
+ * new, so the persisted lineage is reused verbatim. This guards the
+ * error-recovery save path (`runner-driven.ts:419` passes `messages: []`
+ * when no in-flight messages were recovered): rebuilding via
+ * `createSessionLineage([], existing)` would reset `activeEntryId` to null
+ * and make resume load an empty conversation, while the errorMetadata that
+ * the caller DOES want persisted still lands via the merge.
+ *
+ * A caller-supplied lineage (the REPL's authoritative `context.lineage`) is
+ * always honoured. Divergent / extending message sets reconcile normally,
+ * so legitimate new rounds and headless single-writer saves are unaffected.
+ * Rewind / fork / setActiveEntry never reach here — they own dedicated
+ * methods that set `activeEntryId` explicitly.
+ */
+function resolveSnapshotLineage(
+  data: SessionData,
+  existingLineage: KodaXSessionLineage | undefined,
+): KodaXSessionLineage {
+  if (data.lineage) {
+    return data.lineage;
+  }
+  if (existingLineage) {
+    const activeMessages = getSessionMessagesFromLineage(existingLineage);
+    const messages = data.messages;
+    // Empty or prefix-of-active → the snapshot adds nothing; keep the
+    // persisted lineage so `activeEntryId` never regresses (incl. to null).
+    const carriesNothingNew =
+      messages.length <= activeMessages.length
+      && messages.every((message, index) => sameMessageByContent(message, activeMessages[index]!));
+    if (carriesNothingNew) {
+      return existingLineage;
+    }
+  }
+  return createSessionLineage(data.messages, existingLineage);
+}
+
 function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSnapshot {
   const lineage = buildLineage(snapshot);
   return {
@@ -549,10 +611,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
       errorMetadata: data.errorMetadata ?? existing?.data.errorMetadata,
-      lineage: data.lineage ?? createSessionLineage(
-        data.messages,
-        existing?.data.lineage,
-      ),
+      // FEATURE_173 no-regress guard — a lineage-less snapshot whose messages
+      // are a prefix of the persisted active path reuses the existing lineage
+      // instead of regressing `activeEntryId` (the dual-writer corruption).
+      lineage: resolveSnapshotLineage(data, existing?.data.lineage),
     };
     await this.writeSessionInternal(id, merged, existing?.createdAt);
     this.syncAppendState(id, merged);

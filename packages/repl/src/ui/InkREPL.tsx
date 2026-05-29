@@ -4474,6 +4474,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     session: {
       ...options.session,
       id: context.sessionId,
+      // FEATURE_173 dual-writer fix: the Ink REPL owns session persistence
+      // (full lineage + uiHistory + artifactLedger via persistContextState).
+      // Suppress the runner's redundant flat snapshot so it can't clobber
+      // the active-entry pointer on resume.
+      persistedByHost: true,
     },
     // FEATURE_092 phase 2b.7b: seed guardrails from the initial permission
     // mode. setSessionPermissionMode keeps this in sync on subsequent toggles.

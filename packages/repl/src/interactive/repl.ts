@@ -621,6 +621,10 @@ Keyboard Shortcuts:
     session: {
       ...options.session,
       id: context.sessionId,
+      // FEATURE_173 dual-writer fix: the REPL owns session persistence
+      // (full lineage + uiHistory + artifactLedger via persistContextState).
+      // Suppress the runner's redundant flat snapshot so it can't clobber.
+      persistedByHost: true,
     },
   };
 

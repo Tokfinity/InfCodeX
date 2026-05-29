@@ -379,6 +379,22 @@ export interface KodaXSessionOptions {
   scope?: KodaXSessionScope;
   storage?: KodaXSessionStorage;
   initialMessages?: KodaXMessage[];
+  /**
+   * Persistence ownership signal (FEATURE_173 dual-writer fix).
+   *
+   * When `true`, a higher-level host (the interactive REPL) owns writing
+   * this session to `storage` — it persists the full lineage / uiHistory /
+   * artifactLedger incrementally via `appendSessionDelta`. The runner MUST
+   * NOT also snapshot the session: `saveSessionSnapshot` early-returns so
+   * the runner's flat full-rewrite `storage.save` can never race / clobber
+   * the host's richer incremental writes (which regressed `activeEntryId`
+   * to the first round on resume).
+   *
+   * `storage` is still consulted for LOAD (resume / `resolveInitialMessages`
+   * tier 2). When absent (print CLI, ACP, SDK headless), the runner remains
+   * the sole writer — unchanged behaviour, fail-safe default.
+   */
+  persistedByHost?: boolean;
 }
 
 export interface KodaXContextTokenSnapshot {

@@ -83,6 +83,25 @@ export async function saveSessionSnapshot(
     runtimeSessionState?: RuntimeSessionState;
   },
 ): Promise<void> {
+  // FEATURE_173 dual-writer fix: when the host (interactive REPL) owns
+  // persistence it writes the full lineage / uiHistory / artifactLedger
+  // incrementally via `appendSessionDelta`. The runner must NOT also write
+  // ROUTINE snapshots — its flat full-rewrite `storage.save` raced the
+  // host's appends and regressed `activeEntryId` to the first round on
+  // resume (the "resume only loads the first round" report).
+  //
+  // Error / crash-recovery saves (which carry `errorMetadata`) are the one
+  // job the host does NOT replicate, so they bypass the gate and still
+  // persist — the storage layer's no-regress guard (mergeAndWriteInternal)
+  // keeps them from clobbering the host's lineage. `storage` stays wired so
+  // resume / `resolveInitialMessages` can still LOAD.
+  //
+  // Headless callers (print CLI, ACP, SDK) leave `persistedByHost` unset and
+  // remain the sole writer for every save — unchanged behaviour.
+  if (options.session?.persistedByHost && !data.errorMetadata) {
+    return;
+  }
+
   if (!options.session?.storage) {
     // v0.7.43 — when an SDK embedder supplies `session.id` but no
     // `session.storage`, the run completes successfully but nothing

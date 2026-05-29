@@ -104,6 +104,40 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  // FEATURE_173 dual-writer fix — persistedByHost ownership gate.
+  it('persistedByHost: skips ROUTINE save (host owns persistence)', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `host-routine-${Date.now()}`,
+        scope: 'user' as const,
+        storage: { save: saveMock } as never,
+        persistedByHost: true,
+      },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, minimalData);
+    expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  it('persistedByHost: STILL persists error-recovery save (carries errorMetadata)', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `host-error-${Date.now()}`,
+        scope: 'user' as const,
+        storage: { save: saveMock } as never,
+        persistedByHost: true,
+      },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      ...minimalData,
+      errorMetadata: { lastError: 'boom', lastErrorTime: 1, consecutiveErrors: 1 },
+    });
+    expect(saveMock).toHaveBeenCalledTimes(1);
+  });
+
   it('absorbs storage.save errors via console.error (does NOT throw to caller)', async () => {
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const saveMock = vi.fn().mockRejectedValue(new Error('disk full'));
