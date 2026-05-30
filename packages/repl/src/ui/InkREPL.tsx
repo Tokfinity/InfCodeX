@@ -160,6 +160,10 @@ import {
 } from "./InkREPL-managed-task-renderers.js";
 // FEATURE_200 Phase B.3 (v0.7.45) — managed-task live event drafts extracted.
 import { buildManagedLiveEventDrafts } from "./InkREPL-live-event-drafts.js";
+// FEATURE_200 Phase B.4 (v0.7.45) — managed-task transcript builders extracted.
+// Re-exported so existing `from "./InkREPL.js"` importers (tests) keep working.
+import { buildManagedTaskTranscriptItems } from "./InkREPL-transcript-builders.js";
+export { buildManagedTaskTranscriptItems };
 import { KODAX_VERSION } from "../common/utils.js";
 import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUser, loadAutoModeSettings } from "../common/permission-config.js";
 import {
@@ -553,133 +557,6 @@ function resolveInitialReasoningMode(
   return 'off';
 }
 
-/**
- * FEATURE_195 (v0.7.43) — Sidecar Verifier UI silent accept.
- *
- * Post-F184 the Sidecar Verifier's accept verdict reaches the REPL via
- * `evidence.entries[]` with `role: 'evaluator'` (legacy backward-compat
- * label — F184 architectural source-of-truth is `payload.verdict.source =
- * 'sidecar'`, but observer-bridge writes the `'evaluator'` role string
- * for the entry). For accept, `signal === 'COMPLETE'` per
- * observer-bridge.ts buildEvidenceEntryForRoleEmit. The verdict's
- * `reason` text (verifier reasoning, e.g. "用户用中文说'你好'... 这是恰
- * 当回应") becomes the entry's `summary` and renders as a transcript
- * event-item `[Evaluator] ...`. F184 design intent (`verifier.ts` JSDoc
- * + ADR-030 §F184) is silent accept — the user only sees the `[AMA
- * Verifying]` spinner during the call, then nothing. Filter accept
- * entries out by default; revise / blocked verdicts and the
- * `KODAX_VERIFIER_LOG=1` opt-in path keep rendering.
- */
-function shouldFilterSidecarAcceptEntry(
-  entry: NonNullable<KodaXResult["managedTask"]>["evidence"]["entries"][number],
-  verifierLog: boolean,
-): boolean {
-  if (verifierLog) return false;
-  if (entry.role !== "evaluator") return false;
-  if (entry.signal !== "COMPLETE") return false;
-  return true;
-}
-
-export function buildManagedTaskTranscriptItems(
-  result: KodaXResult,
-  options?: { readonly verifierLog?: boolean },
-): string[] {
-  const task = result.managedTask;
-  if (!task) {
-    return [];
-  }
-  // FEATURE_195 (v0.7.43): default reads env var (already mirrored from
-  // `~/.kodax/config.json` `verifierLog: true` at REPL boot — see
-  // `repl/src/common/utils.ts:724`). Test paths pass the option
-  // explicitly to avoid env coupling.
-  const verifierLog = options?.verifierLog ?? process.env.KODAX_VERIFIER_LOG === "1";
-
-  const isInterruptedCancellation = (entry: NonNullable<KodaXResult["managedTask"]>["evidence"]["entries"][number]): boolean => {
-    if (!result.interrupted && !task.verdict.signalReason?.includes("Orchestration cancelled")) {
-      return false;
-    }
-    const signalReason = entry.signalReason?.trim() ?? "";
-    const summary = entry.summary?.trim() ?? "";
-    const output = entry.output?.trim() ?? "";
-    const cancelledSignal = signalReason.includes("Orchestration cancelled");
-    const cancelledSummary = summary.includes("Orchestration cancelled");
-    const emptyOrPlaceholderOutput = !output || summary === "No textual output produced.";
-    return (
-      (entry.status !== "completed" && (cancelledSignal || cancelledSummary || emptyOrPlaceholderOutput))
-      || ((cancelledSignal || cancelledSummary) && emptyOrPlaceholderOutput)
-    );
-  };
-
-  const routingTranscript = buildManagedTaskRoutingTranscript(task);
-
-  const orderByAssignment = new Map(
-    task.roleAssignments.map((assignment, index) => [assignment.id, index]),
-  );
-  const finalAssignmentId = task.verdict.decidedByAssignmentId;
-  const finalRound = Math.max(
-    0,
-    ...task.evidence.entries
-      .filter((entry) => entry.assignmentId === finalAssignmentId)
-      .map((entry) => entry.round ?? 1),
-  );
-
-  const evidenceTranscripts = [...task.evidence.entries]
-    .sort((left, right) => {
-      const roundDelta = (left.round ?? 1) - (right.round ?? 1);
-      if (roundDelta !== 0) {
-        return roundDelta;
-      }
-      return (orderByAssignment.get(left.assignmentId) ?? 0) - (orderByAssignment.get(right.assignmentId) ?? 0);
-    })
-    .filter((entry) => !isInterruptedCancellation(entry))
-    // FEATURE_195 (v0.7.43): hide Sidecar Verifier accept verdict entries
-    // by default. See `shouldFilterSidecarAcceptEntry` JSDoc above for the
-    // F184 silent-accept rationale + opt-in via `KODAX_VERIFIER_LOG=1` /
-    // `verifierLog: true` config.
-    .filter((entry) => !shouldFilterSidecarAcceptEntry(entry, verifierLog))
-    .filter((entry) => result.interrupted || !(
-      entry.assignmentId === finalAssignmentId
-      && (entry.round ?? 1) === finalRound
-    ))
-    .map((entry) => {
-      const rawOutput = entry.output?.trim() ?? "";
-      const rawSummary = entry.summary?.trim() ?? "";
-      const sanitizedOutput = rawOutput ? sanitizeUserFacingAssistantText(rawOutput) : "";
-      const sanitizedSummary = rawSummary ? sanitizeUserFacingAssistantText(rawSummary) : "";
-      const fallbackText = entry.role === 'scout'
-        ? sanitizedSummary
-          ? `Scout completed: ${sanitizedSummary}`
-          : 'Scout completed.'
-        : sanitizedSummary;
-      return {
-        entry,
-        text: sanitizedSummary || sanitizedOutput || fallbackText,
-      };
-    })
-    .filter(({ text }) => Boolean(text))
-    .map(({ entry, text }) => {
-      const labelSuffix = entry.role === "scout"
-        ? " Preflight"
-        : (entry.round ?? 1) > 1
-          ? ` Round ${entry.round}`
-          : "";
-      return `[${entry.title ?? entry.assignmentId}${labelSuffix}]\n${text}`;
-    });
-  const completionLabel = task.verdict.disposition === 'complete'
-    ? t("managed.completed")
-    : task.verdict.disposition === 'needs_continuation'
-      ? t("managed.completed.continuation")
-      : task.verdict.disposition === 'blocked'
-        ? t("managed.completed.blocked")
-        : undefined;
-
-  return [
-    ...(routingTranscript ? [routingTranscript] : []),
-    ...evidenceTranscripts,
-    ...(completionLabel ? [`[${completionLabel}]`] : []),
-  ];
-}
-
 function buildManagedTranscriptCompactText(text: string): string | undefined {
   const lines = text
     .split(/\r?\n/)
@@ -755,40 +632,6 @@ function toCreatableHistoryItem(item: HistoryItem): CreatableHistoryItem {
         return exhaustiveCheck;
       }
   }
-}
-
-function buildManagedTaskRoutingTranscript(task: NonNullable<KodaXResult["managedTask"]>): string | undefined {
-  const raw = task.runtime?.rawRoutingDecision;
-  const final = task.runtime?.finalRoutingDecision;
-  if (!raw || !final) {
-    return undefined;
-  }
-  // Skip routing diagnostics for simple direct responses — no useful signal.
-  if (raw.harnessProfile === "H0_DIRECT" && final.harnessProfile === "H0_DIRECT") {
-    return undefined;
-  }
-
-  const lines = [
-    "[Routing]",
-    `AMA routing: raw=${raw.harnessProfile}(${raw.routingSource ?? "unknown"}) -> final=${final.harnessProfile}`,
-    `Primary task: ${raw.primaryTask}`,
-    `Review target: ${final.reviewTarget ?? "general"}`,
-    `Review scale: ${final.reviewScale ?? "unknown"}`,
-    `Solo boundary: ${raw.soloBoundaryConfidence?.toFixed(2) ?? "n/a"}`,
-    `Independent QA: ${raw.needsIndependentQA ? "yes" : "no"}`,
-    task.runtime?.qualityAssuranceMode
-      ? `Quality assurance: ${task.runtime.qualityAssuranceMode}`
-      : undefined,
-    task.runtime?.budget
-      ? `Adaptive budget: rounds=${task.runtime.budget.plannedRounds} total=${task.runtime.budget.totalBudget} reserve=${task.runtime.budget.reserveBudget}`
-      : undefined,
-    task.runtime?.routingOverrideReason
-      ? `Override reason: ${task.runtime.routingOverrideReason}`
-      : undefined,
-    final.upgradeCeiling ? `Upgrade ceiling: ${final.upgradeCeiling}` : undefined,
-  ].filter((line): line is string => Boolean(line));
-
-  return lines.join("\n");
 }
 
 function sanitizeInterruptedAssistantText(text: string): string {
