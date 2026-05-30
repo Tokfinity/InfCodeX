@@ -79,15 +79,8 @@ import { attachManagedTaskRepoIntelligence } from './_internal/managed-task/repo
 import { buildManagedWorkerToolPolicy } from './_internal/managed-task/tool-policy.js';
 import { applyCurrentDiffReviewRoutingFloor } from './_internal/managed-task/review-routing.js';
 import { createTodoStore, type TodoStore } from './todo-store.js';
-import { createExtensionTurnCompleteStopHook } from '../agent-runtime/middleware/extension-queue.js';
-import {
-  createSidecarVerifierStopHook,
-  type SidecarVerifierVerdict,
-} from '../agent-runtime/middleware/sidecar-verifier/verifier.js';
-import { buildVerifierContext } from '../agent-runtime/middleware/sidecar-verifier/verifier-context-builder.js';
 import { applySidecarVerdictToRecorder } from '../agent-runtime/middleware/sidecar-verifier/verifier-recorder-bridge.js';
-import { resolveVerifierProvider } from '../agent-runtime/middleware/sidecar-verifier/verifier-provider-resolver.js';
-import { composeGateDecision } from '../agent-runtime/middleware/sidecar-verifier/gate.js';
+import { buildRunnerSidecarVerifierAdapter } from './runner-sidecar-verifier-adapter.js';
 import { createTodoReminderState } from './todo-throttle-reminder.js';
 // FEATURE_193 (v0.7.43) deep V1 cleanup: the entire `scout-signals.ts`
 // module was deleted — `SUSPICIOUS_LAST_TEXT_PREVIEW_LIMIT` /
@@ -1320,209 +1313,36 @@ async function runManagedTaskViaRunnerInner(
     permissionEventsObserver,
   );
 
-  // FEATURE_184 (v0.7.45) Phase C.1 — current-agent role ref.
-  // Tracks which role is currently executing so composedStopHook can gate
-  // the sidecar verifier to execution-role (worker) turns only.
-  //
-  // FEATURE_193 (v0.7.43) follow-up: V1 Scout/Planner/Generator chain
-  // retired; the only V2 chain agent is the Worker (see
-  // `agent-chain.ts:RunnerAgentChain`). The earlier V1 `'scout'` init
-  // sentinel relied on a Scout→Worker handoff firing `onAgentSwitched`
-  // to flip the ref; on V2 the Runner enters at `chain.worker` directly
-  // and `Runner.run` does NOT fire `onAgentSwitched` for the entry
-  // agent on a single-agent chain (see
-  // `packages/agent/src/primitives/runner-handoff.test.ts`).
-  //
-  // The sentinel was therefore stuck at `'scout'` for the entire V2 run,
-  // making `isExecutionRole === 'worker'` permanently `false` and
-  // silently disabling the Sidecar Verifier StopHook. F184's "verifier
-  // always installed in production" invariant (verifier-provider-resolver
-  // JSDoc) was broken from F193 Commit 2 (`c5d4b829`) onwards. Initialise
-  // directly to `'worker'` to restore the verifier path.
-  const currentAgentRoleRef: { current: KodaXTaskRole } = {
-    current: 'worker',
-  };
-
-  // FEATURE_184 (v0.7.45) Phase D.2 — Sidecar Verifier wiring.
-  //
-  // Resolve the verifier's (provider, model). **Default behaviour is
-  // inherit-from-main-agent** — sidecar runs on the same model as the
-  // Main Agent unless the user explicitly sets KODAX_VERIFIER_PROVIDER
-  // + KODAX_VERIFIER_MODEL. The architectural value of FEATURE_184 is
-  // the Stop-hook shape (out-of-chain verification fires after Worker
-  // text-only termination), NOT automatic model-family decoupling.
-  // Decoupling is an opt-in escape hatch for users routing around
-  // documented quirks (e.g. zhipu/glm-5.1 intent-vs-action floor,
-  // memory: project_feature_167).
-  //
-  // The verifier StopHook is composed with the extension `turn:complete`
-  // bridge below: sidecar tries first; on `accept` (undefined) we defer
-  // to the extension bridge so user-installed extensions still see the
-  // turn-complete event and can override (e.g. their own validation
-  // rule that wants another round). This is the "first-party first,
-  // second-party fallback" precedence documented in v0.7.45.md §D.
-  // FEATURE_184 (v0.7.45) Phase C.1: Transient gate dropped — chain no
-  // longer has an in-chain evaluator slot, so Sidecar Verifier always
-  // activates when a verifier provider can be resolved.
-  const mainProviderName = options.provider ?? 'anthropic';
-  const resolvedVerifier = resolveVerifierProvider({
-    mainProvider: resolveProvider(mainProviderName),
-    mainProviderName,
-    // FEATURE_187 Phase B code review found a latent bug also affecting
-    // this F184 verifier wiring: a truthy `'unknown'` sentinel would
-    // resolve to `modelOverride: 'unknown'` at `provider.stream`, forcing
-    // the provider to call a model literally named "unknown". The
-    // `options.model ? {modelOverride} : undefined` guard inside
-    // `invokeSidecarVerifier` only works when the sentinel is `undefined`.
+  // FEATURE_184 Sidecar Verifier stop-hook wiring — extracted to
+  // `runner-sidecar-verifier-adapter.ts` (FEATURE_200 Phase A.2). The adapter
+  // owns verifier provider resolution, the captured-verdict ref, the sidecar +
+  // extension-fallback hooks, and `currentAgentRoleRef` (flipped below by
+  // `onAgentSwitched`). The verdict side-effect (`applySidecarVerdictToRecorder`,
+  // which needs recorder/todoStore/budget/budgetExtension) stays here as the
+  // `onVerdict` callback so the adapter need not depend on that whole surface.
+  const verifierAdapter = buildRunnerSidecarVerifierAdapter({
+    mainProvider: resolveProvider(options.provider ?? 'anthropic'),
+    mainProviderName: options.provider ?? 'anthropic',
     mainModel: options.modelOverride ?? options.model,
+    mutationTracker,
+    observer,
+    onVerdict: (verdict) => {
+      void applySidecarVerdictToRecorder({
+        recorder,
+        observer,
+        verdict,
+        todoStore,
+        pendingFailedResetRef,
+        budget,
+        budgetExtension,
+      }).catch(() => undefined);
+    },
+    getSessionId: () => sessionIdRef.current,
+    getChildTaskRegistrySize: () => baseCtx.childTaskRegistry?.size ?? 0,
   });
-  // Opt-in verifier observability: when the user enables verifier-log
-  // (env var KODAX_VERIFIER_LOG=1 OR `verifierLog: true` in
-  // ~/.kodax/config.json), the composedStopHook below emits a
-  // persisted `sidecarFinished` note after every verdict. The captured
-  // verdict ref is used in the body to attach `verifier_ok/timeout/...`
-  // trace + elapsedMs to the log line — onVerdict gives us the verdict
-  // shape, the call-site times the await.
-  const capturedSidecarVerdictRef: {
-    current: SidecarVerifierVerdict | undefined;
-  } = { current: undefined };
-  const sidecarVerifierHook = resolvedVerifier
-    ? createSidecarVerifierStopHook({
-        provider: resolvedVerifier.provider,
-        model: resolvedVerifier.model,
-        buildContext: (ctx) =>
-          buildVerifierContext({
-            transcript: ctx.transcript,
-            lastAssistantText: ctx.lastAssistantText,
-            mutationTracker,
-          }),
-        onVerdict: (verdict) => {
-          capturedSidecarVerdictRef.current = verdict;
-          // Side-effect bridge: writes recorder.verdict in Evaluator-
-          // shape, fires observer.onRoleEmit('evaluator', recorder)
-          // for downstream parity, dispatches TodoStore action keyed
-          // on verdict.status, and triggers the 90%-threshold budget-
-          // extension dialog when sidecar returns revise on a high-
-          // utilisation run. Mirrors the legacy wrapEmitterWithRecorder
-          // verdict-slot behaviour minus the V1 H1-cap / handoff-rewrite
-          // branches that the sidecar architecturally retires. Errors
-          // are swallowed (best-effort) — the stop-hook return value is
-          // the user-visible contract; bridge failures must not crash
-          // the run.
-          void applySidecarVerdictToRecorder({
-            recorder,
-            observer,
-            verdict,
-            todoStore,
-            pendingFailedResetRef,
-            budget,
-            budgetExtension,
-          }).catch(() => undefined);
-        },
-      })
-    : undefined;
-
-  const extensionTurnCompleteHook = createExtensionTurnCompleteStopHook(
-    () => sessionIdRef.current,
-  );
-
-  // Composed stopHook: sidecar verifier wins when non-undefined; falls
-  // through to extension bridge on undefined (sidecar accepted, or no
-  // sidecar configured). Order matters — flip it and user extensions
-  // could second-guess a sidecar `revise` / `blocked` verdict.
-  //
-  // FEATURE_184 (v0.7.45) Phase C.1 idle-yield guard: skip the sidecar
-  // verifier when the stop hook fires on an intermediate text-only idle-
-  // yield turn (i.e. Worker is waiting for a pending child or a queued
-  // background banner). Invoking the verifier here would:
-  //   (a) waste an LLM call on a non-terminal agent state, and
-  //   (b) set recorder.verdict synchronously inside onVerdict, which
-  //       makes computeSnapshot's `hasEmittedTerminalVerdict` flip to
-  //       true, causing detectIdleYield to return false and stranding
-  //       the outer loop — Worker never resumes after the child settles.
-  // The guard mirrors the detectIdleYield conditions: if there are still
-  // pending children OR pending background banners, defer verification to
-  // the next stop-hook invocation that fires after the real terminal turn.
-  const composedStopHook: StopHookFn = async (ctx) => {
-    if (sidecarVerifierHook) {
-      // FEATURE_184 (v0.7.45) Phase C.1 role gate: only invoke the sidecar
-      // verifier on execution-role text-only termination. FEATURE_193
-      // (v0.7.43) collapsed V1 chain — Worker is the only execution role;
-      // the original gate's `=== 'generator'` arm is dead.
-      const isExecutionRole = currentAgentRoleRef.current === 'worker';
-      if (isExecutionRole) {
-        const isIdleYieldTurn =
-          (baseCtx.childTaskRegistry?.size ?? 0) > 0 ||
-          getMessageQueue().has({
-            agentId: undefined,
-            maxPriority: 'background',
-            mode: 'task-notification',
-          });
-        if (!isIdleYieldTurn) {
-          // FEATURE_196 (v0.7.43) — content-aware fire gate. Before
-          // paying the 3-10s sidecar latency + LLM call cost on every
-          // Worker text-only termination, check whether the turn is
-          // worth verifying. Skip trivial chat (greeting + zero tool
-          // action); fire on zhipu intent-vs-action floor (imperative
-          // user + Worker text-only). Conservative safe default = fire.
-          // Escape hatch: `KODAX_VERIFIER_ALWAYS=1` forces 100% fire.
-          // Design + SHIP gate evidence at
-          // `docs/features/v0.7.43.md#feature_196`.
-          const gateDecision = composeGateDecision(ctx, process.env);
-          if (process.env.KODAX_VERIFIER_LOG === '1') {
-            // Stderr trace so verifierLog opt-in users can audit gate
-            // fire/skip decisions without reading the raw session jsonl.
-            process.stderr.write(
-              `[sidecar-gate] ${gateDecision.fire ? 'fire' : 'skip'}: ${gateDecision.reason}\n`,
-            );
-          }
-          if (!gateDecision.fire) {
-            // Skip — let the rest of the StopHook chain (F178 stall-
-            // sidecar / F187 extension queue) run via extensionTurnComplete.
-            return extensionTurnCompleteHook(ctx);
-          }
-          // FEATURE_184 Phase D.3 — surface a "Verifying..." spinner via
-          // the observer so the user sees something during the sidecar
-          // LLM call (typically 3-10s on inherit-main provider).
-          observer.sidecarStarted();
-          capturedSidecarVerdictRef.current = undefined;
-          const verifierStartedAt = Date.now();
-          const sidecarResult = await sidecarVerifierHook(ctx);
-          // Phase D.3 follow-up (v0.7.42): when the user opts in via
-          // `KODAX_VERIFIER_LOG=1` (or `verifierLog:true` in
-          // `~/.kodax/config.json`), emit a persisted note summarizing
-          // the verifier call so users can confirm it fired without
-          // reading the raw session jsonl. Off by default — sidecar
-          // accept is the silent happy path.
-          //
-          // Widen with `as` cast: TS narrows `.current` to `undefined`
-          // after the reset assignment above and does not widen back
-          // across the awaited onVerdict mutation (closure mutation is
-          // opaque to control-flow analysis). Explicit annotation does
-          // not override the narrowed RHS type; `as` is the escape.
-          const captured = capturedSidecarVerdictRef.current as
-            | SidecarVerifierVerdict
-            | undefined;
-          if (
-            process.env.KODAX_VERIFIER_LOG === '1' &&
-            captured &&
-            resolvedVerifier
-          ) {
-            observer.sidecarFinished({
-              verdict: captured.verdict,
-              providerName: resolvedVerifier.providerName,
-              model: resolvedVerifier.model,
-              source: resolvedVerifier.source,
-              elapsedMs: Date.now() - verifierStartedAt,
-              trace: captured.trace,
-            });
-          }
-          if (sidecarResult !== undefined) return sidecarResult;
-        }
-      }
-    }
-    return extensionTurnCompleteHook(ctx);
-  };
+  const resolvedVerifier = verifierAdapter.resolvedVerifier;
+  const composedStopHook = verifierAdapter.composedStopHook;
+  const currentAgentRoleRef = verifierAdapter.currentAgentRoleRef;
 
   // FEATURE_192 v0.7.44 — `/goal` lifecycle adapter. See
   // `runner-goal-adapter.ts` for the full composition rationale.
