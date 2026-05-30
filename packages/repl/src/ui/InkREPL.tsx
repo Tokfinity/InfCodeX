@@ -157,8 +157,9 @@ import {
   formatManagedLiveActivityLabel,
   formatManagedLiveToolLabel,
   areManagedLiveItemsEquivalent,
-  localizeManagedCompletionSummary,
 } from "./InkREPL-managed-task-renderers.js";
+// FEATURE_200 Phase B.3 (v0.7.45) — managed-task live event drafts extracted.
+import { buildManagedLiveEventDrafts } from "./InkREPL-live-event-drafts.js";
 import { KODAX_VERSION } from "../common/utils.js";
 import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUser, loadAutoModeSettings } from "../common/permission-config.js";
 import {
@@ -788,107 +789,6 @@ function buildManagedTaskRoutingTranscript(task: NonNullable<KodaXResult["manage
   ].filter((line): line is string => Boolean(line));
 
   return lines.join("\n");
-}
-
-type ManagedLiveItemDraft = {
-  item: HistoryItem;
-  persistToHistory: boolean;
-};
-
-function buildManagedLiveEventDrafts(
-  status: KodaXManagedTaskStatusEvent,
-): ManagedLiveItemDraft[] {
-  if (status.events && status.events.length > 0) {
-    return status.events.reduce<ManagedLiveItemDraft[]>((acc, event) => {
-        const compactText = event.summary.trim();
-        const text = (event.detail ?? event.summary).trim();
-        if (!compactText || !text) {
-          return acc;
-        }
-        const itemId = `managed-live-${event.key}`;
-        const timestamp = Date.now();
-        const persistToHistory = event.persistToHistory ?? status.persistToHistory ?? false;
-        if (event.presentation === "thinking") {
-          acc.push({
-            item: {
-              id: itemId,
-              type: "thinking",
-              timestamp,
-              text,
-              ...(compactText !== text ? { compactText } : {}),
-            },
-            persistToHistory,
-          });
-          return acc;
-        }
-        if (event.presentation === "assistant") {
-          acc.push({
-            item: {
-              id: itemId,
-              type: "assistant",
-              timestamp,
-              text,
-              ...(compactText !== text ? { compactText } : {}),
-            },
-            persistToHistory,
-          });
-          return acc;
-        }
-        const isCompleted = event.kind === "completed";
-        // v0.7.38 (2026-05-11) \u2014 suppress task-completed lifecycle marker
-        // by default to match Claude Code (which has no equivalent
-        // marker \u2014 turn boundaries are signaled by the spinner halting,
-        // not by transcript text). The harness still runs the full
-        // completion machinery (Scout verdict, Evaluator handoff,
-        // emit_handoff contract) \u2014 only the transcript rendering is
-        // gated. Set KODAX_TRANSCRIPT_HARNESS_MARKERS=1 to restore the
-        // legacy behaviour for debugging / replay analysis.
-        if (isCompleted && !TRANSCRIPT_HARNESS_MARKERS_ENABLED) {
-          return acc;
-        }
-        const localizedLabel = isCompleted
-          ? `[${localizeManagedCompletionSummary(compactText)}]`
-          : undefined;
-        const localizedCompact = localizedLabel ?? compactText;
-        const localizedText = localizedLabel ?? text;
-        acc.push({
-          item: {
-            id: itemId,
-            type: "event",
-            timestamp,
-            text: localizedText,
-            icon: event.kind === "warning" ? "!" : isCompleted ? "\u2713" : ">",
-            ...(localizedCompact !== localizedText ? { compactText: localizedCompact } : {}),
-          },
-          persistToHistory,
-        });
-        return acc;
-      }, []);
-  }
-
-  // v0.7.38 (2026-05-11) — suppress the fallback "AMA H0 - Task
-  // completed" breadcrumb by default (parity with Claude Code, which
-  // signals turn end via spinner halt). Gate mirrors the events-array
-  // branch above. Set KODAX_TRANSCRIPT_HARNESS_MARKERS=1 to restore.
-  if (status.phase === "completed" && !TRANSCRIPT_HARNESS_MARKERS_ENABLED) {
-    return [];
-  }
-  const compactText = formatManagedTaskBreadcrumb(status);
-  const text = formatManagedTaskBreadcrumb(status, { expanded: true }) ?? compactText;
-  if (!compactText || !text) {
-    return [];
-  }
-  return [{
-    item: {
-      id: `managed-live-fallback-${status.phase ?? "worker"}-${compactText.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 48)}`,
-      type: "event",
-      timestamp: Date.now(),
-      text,
-      icon: ">",
-      ...(compactText !== text ? { compactText } : {}),
-    },
-    persistToHistory: status.persistToHistory ?? false,
-  }];
 }
 
 function sanitizeInterruptedAssistantText(text: string): string {
