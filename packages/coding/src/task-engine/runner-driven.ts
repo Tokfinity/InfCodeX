@@ -133,12 +133,7 @@ import {
 } from '@kodax-ai/agent';
 import { createContentHashCache } from '../multi-instance/content-hash-cache.js';
 import { createReadFileStateCache } from '../multi-instance/read-file-state-cache.js';
-import { createStallDetector } from '../multi-instance/stall-detector.js';
-import {
-  createStallSidecarToolObserver,
-  type StallSidecarHandle,
-} from '../agent-runtime/middleware/stall-sidecar/index.js';
-import { resolveStallSidecarProvider } from '../agent-runtime/middleware/stall-sidecar/provider-resolver.js';
+import { buildRunnerStallSidecarAdapter } from './runner-stall-sidecar-adapter.js';
 import { composeToolObservers } from '../agent-runtime/middleware/compose-tool-observers.js';
 // FEATURE_193 (v0.7.43): createScopeAwareHarnessGuardrail import removed —
 // scope-aware-harness-guardrail.ts deleted (V1 Scout H0→H1/H2 guardrail).
@@ -646,86 +641,24 @@ async function runManagedTaskViaRunnerInner(
   // below at line ~1284). Disabled at runtime by
   // KODAX_READ_DEDUP_KILLSWITCH=1 — the factory returns a no-op shim.
   const readFileStateCache = createReadFileStateCache();
-  // FEATURE_178 v0.7.42 — anti-loop stall detector + sidecar
-  // orchestrator. The detector (rule-based L1) records every tool
-  // invocation and fires when `(toolName, input)` repeats hit a
-  // threshold. The orchestrator wraps the detector with the L2
-  // sidecar invocation (validated SHIP-SIDECAR-ALL in eval `1909d5d2`)
-  // and a small transcript buffer; on a stall + isStuck=true verdict
-  // it queues a nudge string that the next `beforeTool` gate consumes
-  // as a synthesized tool_result. Same lifetime as readFileStateCache;
-  // compaction post-hook resets both. Killswitch:
-  // KODAX_STALL_DETECT=0 returns a no-op detector (the orchestrator
-  // never sees a stall signal, never fires the sidecar).
-  const stallDetector = createStallDetector();
-  // FEATURE_187 (v0.7.43) Phase A — factory-encapsulated stall sidecar.
-  // The handle's `observer` is a `RunnerToolObserver` whose beforeTool /
-  // onToolCall / onToolResult are called inline from this file's
-  // toolObserver below (Phase D will replace the manual chain with
-  // `composeToolObservers`). `reset` is wired to the compaction
-  // post-hook — `RunnerToolObserver` has no lifecycle hook for that.
-  // Prompt assets (SIDECAR_SYSTEM_PROMPT + REPORT_TOOL + sample output)
-  // are pinned by `byte-identity-lock.test.ts` to preserve F178 eval
-  // 1909d5d2 SHIP-SIDECAR-ALL evidence across this plumbing-only move.
-  //
-  // FEATURE_187 Phase B — provider resolution mirrors the FEATURE_184
-  // verifier pattern: default inherit-main, env-var override via
-  // KODAX_STALL_PROVIDER + KODAX_STALL_MODEL (both required for
-  // override to take effect; typo on provider name silently falls
-  // through to inherit-main). F178 eval was run with inherit-main on
-  // all 5 canonical aliases, so the default behaviour preserves the
-  // SHIP-SIDECAR-ALL baseline exactly.
+  // FEATURE_178 v0.7.42 / FEATURE_187 v0.7.43 — anti-loop stall detector +
+  // sidecar orchestrator. Extracted to `runner-stall-sidecar-adapter.ts`
+  // (FEATURE_200 Phase A) which owns the detector, the resolved sidecar
+  // provider, and the deferred observer ref. Same lifetime as
+  // readFileStateCache: the compaction post-hook resets both `stallDetector`
+  // and `stallSidecar` (search `stallDetector.reset` / `stallSidecar.reset`).
+  // The handle's `.observer` is threaded into the tool-observer chain below;
+  // the observer bridge is late-bound via `stallAdapter.attachObserver` once
+  // `buildObserverBridge` has run (the onVerdict log emit only fires at
+  // runtime on an L2 judgement, always after that point).
   const stallMainProviderName = options.provider ?? 'anthropic';
-  const resolvedStallSidecar = resolveStallSidecarProvider({
+  const stallAdapter = buildRunnerStallSidecarAdapter({
     mainProvider: resolveProvider(stallMainProviderName),
     mainProviderName: stallMainProviderName,
-    // Sentinel intentionally `undefined` (not the truthy string 'unknown'):
-    // the inherit-main path threads this string down to
-    // `provider.stream(...{modelOverride: ...})` via the `options.model ?
-    // {modelOverride} : undefined` guard in `sidecar.ts`. A truthy
-    // sentinel would resolve to `modelOverride: 'unknown'` and force the
-    // provider to call a model literally named "unknown" — bug discovered
-    // in Phase B code review, same pattern below in verifier wiring.
     mainModel: options.modelOverride ?? options.model,
   });
-  // Forward ref for the stall observer's opt-in log emit. The factory
-  // is built here (line ~690) before `observer` (`buildObserverBridge`
-  // at ~line 870); the onVerdict callback fires only at runtime when a
-  // tool call triggers an L2 stall judgement, which is always AFTER
-  // observer construction. We hold a mutable ref + assign it where
-  // observer is built (search `stallObserverBridgeRef.current = `).
-  const stallObserverBridgeRef: { current: ObserverBridge | undefined } = {
-    current: undefined,
-  };
-  const stallSidecar: StallSidecarHandle = createStallSidecarToolObserver({
-    detector: stallDetector,
-    provider: resolvedStallSidecar.provider,
-    model: resolvedStallSidecar.model,
-    onVerdict: (_signal, verdict, elapsedMs) => {
-      // FEATURE_187 Phase C (v0.7.43) opt-in observability: when the
-      // user enables `KODAX_STALL_LOG=1` (env or `stallLog:true` in
-      // `~/.kodax/config.json`), persist a one-line summary per L2
-      // stall verdict so users can confirm the sidecar fired without
-      // reading raw session jsonl. Off by default — stall sidecar is
-      // silent on the happy path (verdict.isStuck=false is the common
-      // case; no nudge injected).
-      if (process.env.KODAX_STALL_LOG !== '1') return;
-      const obs = stallObserverBridgeRef.current;
-      if (!obs) return;
-      obs.stallSidecarFired({
-        isStuck: verdict.isStuck,
-        providerName: resolvedStallSidecar.providerName,
-        model: resolvedStallSidecar.model,
-        source: resolvedStallSidecar.source,
-        elapsedMs,
-        // `unknown_trace` (not `sidecar_ok`) when verdict.trace is
-        // absent: the SidecarVerdictTrace enum has a specific
-        // `'sidecar_ok'` value meaning "ran cleanly". Conflating
-        // missing-trace with clean-trace would mislead audit reads.
-        trace: verdict.trace ?? 'unknown_trace',
-      });
-    },
-  });
+  const stallDetector = stallAdapter.detector;
+  const stallSidecar = stallAdapter.sidecar;
   const siblingSnapshotRef: {
     current: readonly DiscoveredInstance[] | undefined;
   } = { current: undefined };
@@ -894,12 +827,11 @@ async function runManagedTaskViaRunnerInner(
     sessionIdRef,
     checkpointWriter,
   );
-  // FEATURE_187 Phase C — wire the stall sidecar's deferred observer
-  // ref (declared at ~line 690 before observer existed). All L2 stall
-  // verdicts arrive async via the orchestrator promise — always after
-  // this line — so the ref is safely populated before any onVerdict
-  // fires.
-  stallObserverBridgeRef.current = observer;
+  // FEATURE_187 Phase C — late-bind the stall sidecar's deferred observer
+  // ref (the adapter was built before `observer` existed). All L2 stall
+  // verdicts arrive async via the orchestrator promise — always after this
+  // line — so the ref is safely populated before any onVerdict fires.
+  stallAdapter.attachObserver(observer);
 
   // H3 parity (v0.7.26) — emit the `routing` phase before Scout's
   // preflight. Legacy `task-engine.ts:6545` fired this event right after
