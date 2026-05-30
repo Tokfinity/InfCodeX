@@ -144,6 +144,14 @@ import {
 } from "../common/utils.js";
 import { buildToolConfirmationPrompt } from "../common/tool-confirmation.js";
 import { t } from "../common/i18n.js";
+// FEATURE_200 Phase B.1 (v0.7.45) — leaf string/predicate helpers extracted.
+import {
+  truncateToolPreview,
+  truncateToolOutputPreview,
+  stripToolRolePrefix,
+  normalizeToolNameForMatch,
+  isCompletionTranscriptItem,
+} from "./InkREPL-misc-helpers.js";
 import { KODAX_VERSION } from "../common/utils.js";
 import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUser, loadAutoModeSettings } from "../common/permission-config.js";
 import {
@@ -685,12 +693,6 @@ function buildManagedTranscriptCompactText(text: string): string | undefined {
   return combined.length > 220 ? `${combined.slice(0, 217)}...` : combined;
 }
 
-function isCompletionTranscriptItem(text: string): boolean {
-  return text === `[${t("managed.completed")}]`
-    || text === `[${t("managed.completed.blocked")}]`
-    || text === `[${t("managed.completed.continuation")}]`;
-}
-
 function toManagedTranscriptEventItem(text: string): CreatableHistoryItem {
   const compactText = buildManagedTranscriptCompactText(text);
   return {
@@ -779,22 +781,6 @@ function buildManagedTaskRoutingTranscript(task: NonNullable<KodaXResult["manage
   ].filter((line): line is string => Boolean(line));
 
   return lines.join("\n");
-}
-
-function truncateToolPreview(value: string, maxLength = 240): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 3)}...` : trimmed;
-}
-
-function truncateToolOutputPreview(value: string, maxLength = 800): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength - 3)}...` : trimmed;
 }
 
 function formatManagedLiveActivityLabel(label: string | undefined, workerTitle?: string): string | undefined {
@@ -976,17 +962,6 @@ function buildManagedLiveEventDrafts(
     },
     persistToHistory: status.persistToHistory ?? false,
   }];
-}
-
-function stripToolRolePrefix(toolName: string): string {
-  return toolName
-    .replace(/^\[[^\]]+\]\s+/, "")
-    .replace(/^[A-Za-z][A-Za-z0-9_-]*:\s*/, "")
-    .trim();
-}
-
-function normalizeToolNameForMatch(toolName: string): string {
-  return stripToolRolePrefix(toolName).toLowerCase();
 }
 
 function sanitizeInterruptedAssistantText(text: string): string {
