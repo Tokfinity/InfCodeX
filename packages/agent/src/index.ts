@@ -332,6 +332,14 @@ export {
   getAppDataDir,
 } from './runtime/agent-home.js';
 
+// FEATURE_208 (v0.7.45): process hardening (debug-preserving subset).
+export {
+  applyProcessHardening,
+  stripHardenedEnvVars,
+  HARDENED_ENV_VARS,
+  HARDENING_OPT_OUT_ENV,
+} from './runtime/process-hardening.js';
+
 // ============== Messaging (v0.7.36 FEATURE_115) ==============
 // agentId-scoped 2-tier priority queue infrastructure. Generic agent-platform
 // primitive per ADR-021 — downstream consumers in @kodax-ai/coding (runner-driven

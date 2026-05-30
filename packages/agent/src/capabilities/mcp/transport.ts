@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import type { McpServerConfig as KodaXMcpServerConfig } from './config.js';
+import { stripHardenedEnvVars } from '../../runtime/process-hardening.js';
 
 // ---------------------------------------------------------------------------
 // Transport interface
@@ -97,7 +98,10 @@ export function createStdioTransport(config: {
       buffer = Buffer.alloc(0);
       const child = spawn(config.command, config.args ?? [], {
         cwd: config.cwd,
-        env: { ...globalThis.process.env, ...(config.env ?? {}) },
+        // FEATURE_208 (v0.7.45): strip dynamic-linker preload vars so a
+        // poisoned MCP server cannot inject into the child via its own
+        // config.env. No-op under KODAX_DISABLE_HARDENING=1.
+        env: stripHardenedEnvVars({ ...globalThis.process.env, ...(config.env ?? {}) }),
         stdio: 'pipe',
         windowsHide: true,
       });

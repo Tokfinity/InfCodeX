@@ -85,7 +85,7 @@ import {
   KodaXTerminalError,
   bootstrapTracing,
 } from '@kodax-ai/coding';
-import { shutdownTracing } from '@kodax-ai/agent';
+import { shutdownTracing, applyProcessHardening } from '@kodax-ai/agent';
 import {
   getGitRoot,
   prepareRuntimeConfig,
@@ -526,6 +526,12 @@ function showBasicHelp(): void {
 }
 
 async function main() {
+  // FEATURE_208 (v0.7.45): strip dynamic-linker preload env vars
+  // (LD_PRELOAD / DYLD_*) before anything spawns children or loads native
+  // addons. Opt-out: KODAX_DISABLE_HARDENING=1. Debug-preserving (no
+  // PR_SET_DUMPABLE). No-op on Windows.
+  applyProcessHardening();
+
   const argv = process.argv.slice(2);
 
   // FEATURE_209 (v0.7.45): activate tracing so Runner spans persist to
