@@ -83,7 +83,9 @@ import {
   getAvailableProviderNames,
   KODAX_TOOLS,
   KodaXTerminalError,
+  bootstrapTracing,
 } from '@kodax-ai/coding';
+import { shutdownTracing } from '@kodax-ai/agent';
 import {
   getGitRoot,
   prepareRuntimeConfig,
@@ -525,6 +527,17 @@ function showBasicHelp(): void {
 
 async function main() {
   const argv = process.argv.slice(2);
+
+  // FEATURE_209 (v0.7.45): activate tracing so Runner spans persist to
+  // ~/.kodax/.traces/<traceId>.jsonl. FileTracingProcessor flushes per-trace
+  // on completion, so completed traces are durable without the beforeExit
+  // handler; that handler only flushes a trace still in flight when the event
+  // loop drains naturally (it does NOT fire on process.exit()). Opt-out via
+  // KODAX_TRACING=0.
+  bootstrapTracing();
+  process.once('beforeExit', () => {
+    void shutdownTracing();
+  });
   const program = new Command()
     .name('kodax')
     .description('KodaX - Intelligent Coding Agent')

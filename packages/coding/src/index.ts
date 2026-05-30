@@ -1106,3 +1106,7 @@ export type {
   GoalToolsContext,
   VerifyGoalCompletionOptions,
 } from './goal/index.js';
+
+// FEATURE_209 (v0.7.45): tracing activation in production.
+export { bootstrapTracing, TRACING_ENV } from './runtime/tracing-bootstrap.js';
+export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
