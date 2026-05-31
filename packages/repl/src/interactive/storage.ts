@@ -413,11 +413,20 @@ function createSessionMeta(
 }
 
 async function readPersistedSessionFile(filePath: string): Promise<PersistedSessionSnapshot | null> {
-  if (!fsSync.existsSync(filePath)) {
-    return null;
+  // Read directly and treat a missing file as "no session" rather than doing a
+  // separate `existsSync` precheck — the precheck was TOCTOU-racy: a concurrent
+  // deletion (another window, or opt-in session retention cleanup) between the
+  // check and the read would surface as an uncaught ENOENT crash instead of a
+  // graceful null. `load()` already treats null as "session not found".
+  let rawContent: string;
+  try {
+    rawContent = await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
   }
-
-  const rawContent = await fs.readFile(filePath, 'utf-8');
   const trimmedContent = rawContent.trim();
   if (!trimmedContent) {
     return null;
@@ -486,6 +495,56 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
   }
 
   return snapshot;
+}
+
+// Session-list scale fix (modeled on claudecode `sessionStoragePortable.ts`):
+// `list()` only needs the `meta` first line of each session, but historically
+// `fs.readFile`'d the WHOLE file (a 24MB archive or 6MB transcript) just to read
+// line 1 + count lines. On a large sessions dir (hundreds of files / hundreds of
+// MB) that turned `kodax -c` + the session picker into a multi-second blocking
+// read. We now read only the first chunk via a single fd. The whole-file read is
+// kept ONLY as a fallback for the rare cases that genuinely need it (a first line
+// longer than the buffer, or a legacy non-`meta` session whose msgCount is the
+// total line count).
+const SESSION_HEAD_READ_BYTES = 65536;
+
+async function readSessionFirstLine(filePath: string): Promise<string | null> {
+  let fh: fs.FileHandle | undefined;
+  try {
+    fh = await fs.open(filePath, 'r');
+    const buf = Buffer.allocUnsafe(SESSION_HEAD_READ_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, SESSION_HEAD_READ_BYTES, 0);
+    if (bytesRead === 0) {
+      return null;
+    }
+    const head = buf.toString('utf8', 0, bytesRead);
+    const newlineIdx = head.indexOf('\n');
+    if (newlineIdx >= 0) {
+      return head.slice(0, newlineIdx).trim();
+    }
+    // First line longer than the read buffer (pathological — meta lines are
+    // normally < a few KB). Fall back to a full read so we never silently drop
+    // an otherwise-valid session from the list.
+    const full = await fs.readFile(filePath, 'utf-8');
+    const fullNewline = full.indexOf('\n');
+    return (fullNewline >= 0 ? full.slice(0, fullNewline) : full).trim();
+  } catch {
+    return null;
+  } finally {
+    await fh?.close();
+  }
+}
+
+async function countSessionLines(filePath: string): Promise<number> {
+  try {
+    const content = (await fs.readFile(filePath, 'utf-8')).trim();
+    if (!content) {
+      return 0;
+    }
+    return content.split('\n').length;
+  } catch {
+    return 0;
+  }
 }
 
 export class FileSessionStorage implements KodaXSessionStorage {
@@ -956,7 +1015,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? process.cwd(),
     });
-    const files = (await fs.readdir(this.sessionsDir)).filter((file) => file.endsWith('.jsonl'));
+    // Exclude `.archive.jsonl` — archives are not resumable sessions and were
+    // historically the largest files read here. Read only the first line of each
+    // remaining file (see `readSessionFirstLine`) instead of the whole file.
+    const files = (await fs.readdir(this.sessionsDir)).filter(
+      (file) => file.endsWith('.jsonl') && !file.endsWith('.archive.jsonl'),
+    );
     const sessions: Array<{
       id: string;
       title: string;
@@ -965,12 +1029,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
       runtimeInfo?: KodaXSessionRuntimeInfo;
     }> = [];
 
-    for (const file of files) {
+    type SessionEntry = (typeof sessions)[number];
+    const parseSessionFile = async (file: string): Promise<SessionEntry | null> => {
       try {
-        const content = (await fs.readFile(path.join(this.sessionsDir, file), 'utf-8')).trim();
-        const firstLine = content.split('\n')[0];
+        const filePath = path.join(this.sessionsDir, file);
+        const firstLine = await readSessionFirstLine(filePath);
         if (!firstLine) {
-          continue;
+          return null;
         }
 
         const first = JSON.parse(firstLine);
@@ -994,35 +1059,51 @@ export class FileSessionStorage implements KodaXSessionStorage {
               ? pathsEqual(sessionRuntime.workspaceRoot, currentRuntime.workspaceRoot ?? '')
               : pathsEqual(sessionGitRoot, currentGitRoot);
             if (!sameCanonicalRepo && !sameWorkspace) {
-              continue;
+              return null;
             }
           }
           if (scope !== 'user') {
-            continue;
+            return null;
           }
 
-          const lineCount = content.split('\n').length;
           const extensionRecordCount =
             typeof first.extensionRecordCount === 'number' && first.extensionRecordCount > 0
               ? first.extensionRecordCount
               : 0;
+          // `activeMessageCount` (present on modern meta records) lets us avoid
+          // reading the whole file. Only legacy meta records without it need a
+          // full line count — rare, and these tend to be small/old sessions.
           const activeMessageCount =
             typeof first.activeMessageCount === 'number' && first.activeMessageCount >= 0
               ? first.activeMessageCount
-              : Math.max(0, lineCount - 1 - extensionRecordCount);
-          sessions.push({
+              : Math.max(0, (await countSessionLines(filePath)) - 1 - extensionRecordCount);
+          return {
             id: file.replace('.jsonl', ''),
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
             createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
             runtimeInfo: sessionRuntime ? { ...sessionRuntime } : undefined,
-          });
-        } else {
-          const lineCount = content.split('\n').length;
-          sessions.push({ id: file.replace('.jsonl', ''), title: '', msgCount: lineCount });
+          };
         }
+        const lineCount = await countSessionLines(filePath);
+        return { id: file.replace('.jsonl', ''), title: '', msgCount: lineCount };
       } catch {
-        continue;
+        return null;
+      }
+    };
+
+    // Head-read every candidate concurrently (bounded so we never exhaust fds
+    // on a large sessions dir). Order-independent: the result is sorted below,
+    // so collection order does not affect output.
+    const LIST_READ_CONCURRENCY = 48;
+    for (let i = 0; i < files.length; i += LIST_READ_CONCURRENCY) {
+      const batch = await Promise.all(
+        files.slice(i, i + LIST_READ_CONCURRENCY).map(parseSessionFile),
+      );
+      for (const entry of batch) {
+        if (entry) {
+          sessions.push(entry);
+        }
       }
     }
 
@@ -1062,5 +1143,43 @@ export class FileSessionStorage implements KodaXSessionStorage {
     for (const session of sessions) {
       await this.delete(session.id);
     }
+  }
+
+  /**
+   * Auto-retention: delete session files (`.jsonl` + `.archive.jsonl`) whose
+   * mtime is older than `retentionDays`. Modeled on claudecode's
+   * `cleanup.ts` (`unlinkIfOld`). Bounds the sessions directory so it never
+   * accumulates unboundedly — which is what keeps `list()`'s head-read pass
+   * fast (its cost scales with file COUNT, not size). A non-positive /
+   * non-finite `retentionDays` disables cleanup (no-op). Best-effort: per-file
+   * errors are swallowed so a single locked/racing file never aborts the
+   * sweep. Returns the number of files removed. mtime-based, so the session
+   * currently being written/resumed (fresh mtime) is never eligible.
+   */
+  async cleanupOldSessions(retentionDays: number): Promise<number> {
+    if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+      return 0;
+    }
+    let removed = 0;
+    try {
+      await fs.mkdir(this.sessionsDir, { recursive: true });
+      const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+      const files = (await fs.readdir(this.sessionsDir)).filter((file) => file.endsWith('.jsonl'));
+      for (const file of files) {
+        const filePath = path.join(this.sessionsDir, file);
+        try {
+          const stat = await fs.stat(filePath);
+          if (stat.mtimeMs < cutoffMs) {
+            await fs.unlink(filePath);
+            removed++;
+          }
+        } catch {
+          continue;
+        }
+      }
+    } catch {
+      // best-effort — never block startup on cleanup
+    }
+    return removed;
   }
 }

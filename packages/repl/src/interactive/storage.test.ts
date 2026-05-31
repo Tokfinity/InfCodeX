@@ -1,6 +1,7 @@
 import os from 'os';
 import path from 'path';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { existsSync } from 'fs';
+import { mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applySessionCompaction, createSessionLineage } from '@kodax-ai/coding';
 
@@ -528,6 +529,119 @@ describe('FileSessionStorage', () => {
         msgCount: 1,
       },
     ]);
+  });
+
+  it('excludes .archive.jsonl files from the session list', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260401_120000', {
+      messages: [{ role: 'user', content: 'live session' }],
+      title: 'Live',
+      gitRoot,
+      scope: 'user',
+    });
+
+    // An archive file ends in `.jsonl` too — the old listing logic read it and
+    // surfaced a bogus `<id>.archive` session. It must be excluded entirely.
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    await writeFile(
+      path.join(sessionsDir, '20260330_090000.archive.jsonl'),
+      `${JSON.stringify({
+        _type: 'meta',
+        title: 'Archived',
+        gitRoot,
+        createdAt: '2026-03-30T09:00:00.000Z',
+        scope: 'user',
+        activeMessageCount: 9,
+      })}\n`,
+      'utf8',
+    );
+
+    const ids = (await storage.list(gitRoot)).map((session) => session.id);
+    expect(ids).toContain('20260401_120000');
+    expect(ids).not.toContain('20260330_090000.archive');
+    expect(ids).not.toContain('20260330_090000');
+  });
+
+  it('reports msgCount from the meta head only — ignores appended body lines (no full-file read)', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260401_130000', {
+      messages: [{ role: 'user', content: 'hi' }],
+      title: 'Head',
+      gitRoot,
+      scope: 'user',
+    });
+
+    // Append 2000 junk lines AFTER the meta line. A whole-file line count would
+    // inflate msgCount; the head-read path uses the meta's activeMessageCount and
+    // never sees these lines.
+    const filePath = path.join(tempHome, '.kodax', 'sessions', '20260401_130000.jsonl');
+    const junk = `${Array.from({ length: 2000 }, (_, i) => JSON.stringify({ _type: 'noise', i })).join('\n')}\n`;
+    await writeFile(filePath, `${await readFile(filePath, 'utf8')}${junk}`, 'utf8');
+
+    const session = (await storage.list(gitRoot)).find((s) => s.id === '20260401_130000');
+    expect(session?.msgCount).toBe(1);
+  });
+
+  it('cleanupOldSessions removes files (and archives) older than the retention window, keeps recent', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260101_000000', {
+      messages: [{ role: 'user', content: 'old' }],
+      title: 'Old',
+      gitRoot,
+      scope: 'user',
+    });
+    await storage.save('20260401_000000', {
+      messages: [{ role: 'user', content: 'recent' }],
+      title: 'Recent',
+      gitRoot,
+      scope: 'user',
+    });
+
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const oldPath = path.join(sessionsDir, '20260101_000000.jsonl');
+    const oldArchivePath = path.join(sessionsDir, '20260101_000000.archive.jsonl');
+    const recentPath = path.join(sessionsDir, '20260401_000000.jsonl');
+    await writeFile(oldArchivePath, 'archived\n', 'utf8');
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    await utimes(oldPath, sixtyDaysAgo, sixtyDaysAgo);
+    await utimes(oldArchivePath, sixtyDaysAgo, sixtyDaysAgo);
+
+    const removed = await storage.cleanupOldSessions(30);
+    expect(removed).toBe(2);
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(oldArchivePath)).toBe(false);
+    expect(existsSync(recentPath)).toBe(true);
+  });
+
+  it('cleanupOldSessions is a no-op when retention is disabled (0 / negative / NaN)', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260101_010000', {
+      messages: [{ role: 'user', content: 'old' }],
+      title: 'Old',
+      gitRoot,
+      scope: 'user',
+    });
+    const oldPath = path.join(tempHome, '.kodax', 'sessions', '20260101_010000.jsonl');
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+    await utimes(oldPath, sixtyDaysAgo, sixtyDaysAgo);
+
+    await expect(storage.cleanupOldSessions(0)).resolves.toBe(0);
+    await expect(storage.cleanupOldSessions(-5)).resolves.toBe(0);
+    await expect(storage.cleanupOldSessions(Number.NaN)).resolves.toBe(0);
+    expect(existsSync(oldPath)).toBe(true);
   });
 
   it('appendSessionDelta round-trips correctly: append → load → data consistent', async () => {

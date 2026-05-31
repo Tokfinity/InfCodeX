@@ -545,6 +545,18 @@ async function main() {
   process.once('beforeExit', () => {
     void shutdownTracing();
   });
+
+  // Session retention: opt-in best-effort background prune of session files
+  // older than KODAX_SESSION_RETENTION_DAYS. DEFAULT OFF (0) — auto-deleting a
+  // user's accumulated history is destructive and surprising, so it must be
+  // explicitly enabled (e.g. KODAX_SESSION_RETENTION_DAYS=30). The `list()`
+  // head-read path already keeps `kodax -c` + the picker fast regardless of
+  // file count, so retention is a housekeeping convenience, not a perf
+  // requirement. Fire-and-forget — never blocks startup; errors are swallowed
+  // inside cleanupOldSessions, and a non-positive value is a no-op.
+  const sessionRetentionDays = Number(process.env.KODAX_SESSION_RETENTION_DAYS ?? 0);
+  void new FileSessionStorage().cleanupOldSessions(sessionRetentionDays);
+
   const program = new Command()
     .name('kodax')
     .description('KodaX - Intelligent Coding Agent')
