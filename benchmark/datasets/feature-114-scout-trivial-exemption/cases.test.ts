@@ -3,8 +3,6 @@
  * dataset. Zero LLM cost. Locks down dataset invariants the eval relies
  * on, plus a Layer 1 drift guard against the runtime Scout role-prompt.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -211,40 +209,12 @@ emit_scout_verdict({
   });
 });
 
-describe('FEATURE_114 Slice 8b drift guard — runtime Scout role-prompt anchors', () => {
-  // Layer 1 protection: if the runtime Scout role-prompt source removes or
-  // renames the anchor strings the eval depends on, fail here BEFORE
-  // spending money on a Layer 2 run that would have measured a desynced
-  // prompt. Slice 8a's role-prompt.test.ts already pins the exact wording
-  // line-by-line; this is the dataset-side mirror so the eval-snapshot
-  // and the source stay tied.
-  const RUNTIME_PROMPT_PATH = join(
-    'packages',
-    'coding',
-    'src',
-    'task-engine',
-    '_internal',
-    'managed-task',
-    'role-prompt.ts',
-  );
-
-  it('runtime role-prompt.ts contains TRIVIAL-EXEMPTION anchor', () => {
-    const source = readFileSync(RUNTIME_PROMPT_PATH, 'utf8');
-    expect(source).toContain('TRIVIAL-EXEMPTION');
-  });
-
-  it('runtime role-prompt.ts contains EMIT TIMING anchor', () => {
-    const source = readFileSync(RUNTIME_PROMPT_PATH, 'utf8');
-    expect(source).toContain('EMIT TIMING');
-  });
-
-  it('runtime role-prompt.ts contains emit_scout_verdict anchor', () => {
-    const source = readFileSync(RUNTIME_PROMPT_PATH, 'utf8');
-    expect(source).toContain('emit_scout_verdict');
-  });
-
-  it('runtime role-prompt.ts contains executionObligations anchor', () => {
-    const source = readFileSync(RUNTIME_PROMPT_PATH, 'utf8');
-    expect(source).toContain('executionObligations');
-  });
-});
+// RETIRED 2026-05-31 (v0.7.45) — the "runtime Scout role-prompt anchors" drift
+// guard tested anchors (TRIVIAL-EXEMPTION / EMIT TIMING / executionObligations)
+// in `_internal/managed-task/role-prompt.ts` that FEATURE_193 deleted in v0.7.43
+// (`ef82e99c` — V1 prompts + emit-tools deletion, single-Worker cutover). The
+// V1 Scout role no longer exists, so a source-side mirror of its prompt has
+// nothing live to pin — the assertions were failing on deleted code, not real
+// drift. The dataset-shape / variant / judge tests above are kept as-is. The
+// broader FEATURE_114 Scout eval is orphaned by the V1 retirement and is a
+// candidate for full removal in a later cleanup pass.

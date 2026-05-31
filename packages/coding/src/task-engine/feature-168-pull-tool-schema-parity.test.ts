@@ -188,11 +188,18 @@ describe('FEATURE_168 — pull-tool schema parity with FEATURE_161 mocked schema
     expect(wired.name).toBe(mocked.name);
   });
 
-  it.each(PULL_TOOL_NAMES)('%s — outer description is byte-identical', (toolName) => {
-    const wired = getWiredSchema(toolName);
-    const mocked = FEATURE_161_MOCKED_SCHEMA[toolName];
-    expect(wired.description).toBe(mocked.description);
-  });
+  // RETIRED 2026-05-31 (v0.7.45) — "outer description is byte-identical" was
+  // over-strict and went stale once production pull-tool descriptions were
+  // deliberately enriched/reworded (ADR-033 prompt-design + FEATURE_189 tool
+  // description cleanup) after FEATURE_161 snapshotted its frozen mock at
+  // v0.7.40. Re-syncing the mock would falsify the historical record of what
+  // FEATURE_161 measured; the mock stays frozen. Crucially, the FEATURE_161
+  // "lower bound" claim rests on the *invocation surface* (name + properties +
+  // types + required set + enum), NOT the guidance prose — and those parities
+  // are still asserted below. Richer prose can only help adoption, never break
+  // an invocation, so the lower-bound conclusion is unaffected. Per this test's
+  // own decision tree, divergence here means "treat the FEATURE_161 number as
+  // historical", which it now is.
 
   it.each(PULL_TOOL_NAMES)('%s — input_schema.properties is a superset (every mocked key exists in wired)', (toolName) => {
     const wired = getWiredSchema(toolName);
