@@ -1155,7 +1155,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // `emitInfoItemToCorrectLayer` instead — see its JSDoc (~L1510) for
   // the hard rule. Plain assistant / tool_group / thinking items are
   // fine to `addHistoryItem` directly.
-  const { addHistoryItem, clearHistory: clearUIHistory, setSessionId } = useUIActions();
+  const { addHistoryItem, addHistoryItems, clearHistory: clearUIHistory, setSessionId } = useUIActions();
   const historyRef = useRef(history);
   const persistedUiHistoryRef = useRef<KodaXSessionUiHistoryItem[]>(
     serializeUiHistorySnapshot(history),
@@ -4998,25 +4998,26 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         if (persistedHistory.length !== context.uiHistory.length) {
           context.uiHistory = persistedHistory;
         }
-        for (const item of persistedHistory) {
-          addHistoryItem({
+        // FEATURE_212 (v0.7.45) — bulk-add in ONE dispatch. The per-item loop
+        // here triggered N dispatches → N re-renders, each re-resolving the
+        // growing transcript: O(n²) resume lag on long `kodax -c` sessions.
+        addHistoryItems(
+          persistedHistory.map((item) => ({
             type: item.type,
             text: item.text,
             ...(item.icon ? { icon: item.icon } : {}),
             ...(item.compactText ? { compactText: item.compactText } : {}),
-          });
-        }
+          })),
+        );
         return;
       }
 
-      for (const msg of context.messages) {
-        const historySeeds = extractHistorySeedsFromMessage(msg);
-        for (const item of historySeeds) {
-          addHistoryItem(seedToHistoryItem(item));
-        }
-      }
+      const seededItems = context.messages.flatMap((msg) =>
+        extractHistorySeedsFromMessage(msg).map(seedToHistoryItem),
+      );
+      addHistoryItems(seededItems);
     }
-  }, [context.messages, context.uiHistory, history.length, addHistoryItem]);
+  }, [context.messages, context.uiHistory, history.length, addHistoryItems]);
 
   // Preload skills on mount to ensure they're available for first /skill:xxx call
   // Issue 059: Skills lazy loading caused first skill invocation to fail

@@ -555,6 +555,9 @@ export interface UIActions {
 
   // History operations - 历史操作
   addHistoryItem: (item: CreatableHistoryItem) => void;
+  // FEATURE_212 (v0.7.45) — add many items in ONE dispatch (one re-render).
+  // Used by session resume to avoid N dispatches → N re-renders (O(n²)).
+  addHistoryItems: (items: CreatableHistoryItem[]) => void;
   updateHistoryItem: (id: string, updates: Partial<HistoryItem>) => void;
   clearHistory: () => void;
 
