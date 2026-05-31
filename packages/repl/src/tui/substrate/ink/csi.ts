@@ -107,6 +107,31 @@ export function eraseLines(n: number): string {
 export const RESET_SCROLL_REGION = csi("r");
 
 /**
+ * FEATURE_212 (v0.7.45) — DECSTBM scroll-region + hardware scroll, for the
+ * fullscreen scroll optimization (a scroll writes a region+scroll command
+ * instead of repainting every shifted row).
+ *
+ * Set the vertical scroll region to rows `[top, bottom]` (DECSTBM, CSI t;b r).
+ * Rows are **1-based** per the VT spec. Setting a region homes the cursor.
+ * Pair with `RESET_SCROLL_REGION` to restore full-screen scrolling afterward.
+ */
+export function setScrollRegion(top: number, bottom: number): string {
+  return csi(top, bottom, "r");
+}
+
+/** Scroll the current scroll region up `n` lines (CSI n S) — new blank rows
+ * appear at the bottom; the top `n` rows scroll out. */
+export function scrollUp(n = 1): string {
+  return csi(n, "S");
+}
+
+/** Scroll the current scroll region down `n` lines (CSI n T) — new blank rows
+ * appear at the top; the bottom `n` rows scroll out. */
+export function scrollDown(n = 1): string {
+  return csi(n, "T");
+}
+
+/**
  * SGR reset — clears all active graphical attributes (color, bold, inverse,
  * underline, etc.) and returns the terminal to its default rendition.
  * Phase 2 emits this between style transitions because KodaX's `Cell.style`

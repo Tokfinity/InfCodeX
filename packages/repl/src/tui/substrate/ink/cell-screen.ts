@@ -222,6 +222,61 @@ export function shiftRows(screen: Screen, n: number): Screen {
   return { ...screen, cells: next };
 }
 
+/**
+ * FEATURE_212 (v0.7.45) — region-scoped row shift, the in-memory model of a
+ * DECSTBM hardware scroll. Shifts ONLY rows `[top, bottom]` by `delta`
+ * (positive = content scrolls up, blanks appear at the region bottom;
+ * negative = scrolls down, blanks at the region top). Rows OUTSIDE the region
+ * (e.g. a sticky header above or the input/footer below) are preserved
+ * byte-for-byte — this is what lets `render()` emit a scroll for just the
+ * transcript region and leave the footer alone.
+ *
+ * `top`/`bottom` are 0-based, inclusive, and clamped to the screen. Returns a
+ * NEW screen (immutable, like `shiftRows`); a no-op delta returns the input.
+ * The result must equal what the terminal shows after
+ * `setScrollRegion(top+1, bottom+1) + scrollUp/Down(|delta|)` — the render()
+ * scroll fast-path applies this to `prev` so the diff loop then only paints
+ * the rows that actually changed.
+ */
+export function shiftRowsRegion(
+  screen: Screen,
+  top: number,
+  bottom: number,
+  delta: number,
+): Screen {
+  if (delta === 0 || screen.height === 0) return screen;
+  const t = Math.max(0, top);
+  const b = Math.min(screen.height - 1, bottom);
+  if (t > b) return screen;
+  const w = screen.width;
+  const next = screen.cells.slice(); // preserve rows outside [t, b]
+  const regionHeight = b - t + 1;
+  const blankRow = (y: number): void => {
+    for (let x = 0; x < w; x++) next[y * w + x] = EMPTY_CELL;
+  };
+  if (Math.abs(delta) >= regionHeight) {
+    for (let y = t; y <= b; y++) blankRow(y);
+    return { ...screen, cells: next };
+  }
+  if (delta > 0) {
+    for (let y = t; y <= b - delta; y++) {
+      for (let x = 0; x < w; x++) {
+        next[y * w + x] = screen.cells[(y + delta) * w + x] ?? EMPTY_CELL;
+      }
+    }
+    for (let y = b - delta + 1; y <= b; y++) blankRow(y);
+  } else {
+    const d = -delta;
+    for (let y = b; y >= t + d; y--) {
+      for (let x = 0; x < w; x++) {
+        next[y * w + x] = screen.cells[(y - d) * w + x] ?? EMPTY_CELL;
+      }
+    }
+    for (let y = t; y <= t + d - 1; y++) blankRow(y);
+  }
+  return { ...screen, cells: next };
+}
+
 function cellsEqual(a: Cell | undefined, b: Cell | undefined): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
