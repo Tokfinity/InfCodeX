@@ -40,14 +40,14 @@ const PROBES: ProbeCase[] = [
   {
     id: 'kimi-code',
     provider: 'kimi-code',
-    apiKeyEnv: 'KIMI_API_KEY',
+    apiKeyEnv: 'KIMI_CODE_API_KEY',
     model: 'kimi-for-coding',
     expectedIdentityTokens: ['KodaX', 'kimi'],
   },
   {
     id: 'zhipu-coding',
     provider: 'zhipu-coding',
-    apiKeyEnv: 'ZHIPU_API_KEY',
+    apiKeyEnv: 'ZHIPU_CODING_API_KEY',
     model: 'glm-5',
     expectedIdentityTokens: ['KodaX', 'glm', 'zhipu', '智谱'],
   },
@@ -162,7 +162,7 @@ describe('L2: Identity Roundtrip (coding-plan providers)', () => {
     const configured = PROBES.filter((p) => Boolean(process.env[p.apiKeyEnv]));
     if (configured.length === 0) {
       console.warn(
-        '[L2 eval] No provider API keys found. Set KIMI_API_KEY / ZHIPU_API_KEY / MINIMAX_CODING_API_KEY / MIMO_CODING_API_KEY to run identity probes.',
+        '[L2 eval] No provider API keys found. Set KIMI_CODE_API_KEY / ZHIPU_CODING_API_KEY / MINIMAX_CODING_API_KEY / MIMO_CODING_API_KEY to run identity probes.',
       );
     }
     // This assertion always passes; the warning above is the signal.
