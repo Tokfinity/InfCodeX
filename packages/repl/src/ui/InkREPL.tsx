@@ -1365,11 +1365,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     pendingText: string;
   }>({ itemId: undefined, kind: "thinking", pendingText: "" });
   const foregroundFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // FEATURE_201 (v0.7.45) Phase A: 80ms → 16ms (60fps) to match the streaming
-  // cadence of every modern TUI (Claude Code / opencode 16ms, codex 120fps).
-  // The ref-accumulation + single flush-per-tick batching below already coalesces
-  // bursts, so dropping to 16ms lowers visible latency without a flush per delta.
-  const FOREGROUND_FLUSH_INTERVAL = 16;
+  // FEATURE_201 (v0.7.45) Phase A set this to 16ms (60fps); FEATURE_212
+  // (v0.7.45) reverted it to 80ms. The 16ms cadence multiplied a per-frame
+  // cost that scales with history length (each re-render re-resolved the full
+  // transcript surface), so on long sessions it dropped the whole UI's frame
+  // rate. 80ms was the proven-good value; smoothness at 60fps is only safe once
+  // per-frame work is O(1) — see the memoization fixes in this feature.
+  const FOREGROUND_FLUSH_INTERVAL = 80;
   // Issue 079: Limit visible history to last 20 conversation rounds
   // A "round" = one user input + AI response(s)
   // Full history remains in state, only rendering is limited
@@ -2364,12 +2366,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   );
   const foregroundManagedLedgerHasContent = managedForegroundTurnItems.length > 0;
   const foregroundManagedOwnsLivePreview = fullscreenPolicy.streamingPreview && foregroundManagedLedgerVisible;
-  const rawTranscriptDisplayItems = resolveTranscriptSurfaceItems({
-    surface: "transcript",
-    snapshot: displaySnapshot,
-    promptItems: renderHistory,
-    transcriptItems: transcriptHistory,
-  });
+  // FEATURE_212 (v0.7.45) perf — memoize the transcript surface resolve. It
+  // does an O(history) shallow copy and previously re-ran on EVERY InkREPLInner
+  // re-render (i.e. on every streaming notify / forceUpdate), so per-frame cost
+  // scaled with history length. Now it recomputes only when the underlying
+  // items actually change.
+  const rawTranscriptDisplayItems = useMemo(
+    () => resolveTranscriptSurfaceItems({
+      surface: "transcript",
+      snapshot: displaySnapshot,
+      promptItems: renderHistory,
+      transcriptItems: transcriptHistory,
+    }),
+    [displaySnapshot, renderHistory, transcriptHistory],
+  );
   // FEATURE_060 Tier 2 (v0.7.30): when transcript-mode is active and the
   // user has NOT toggled show-all, slice to the last 30 messages and
   // prepend a synthetic `buildTranscriptHiddenDivider` info-row so the
