@@ -460,8 +460,11 @@ const Ink = class Ink {
             // FEATURE_096 originally worked around). DEFAULT ON (validated:
             // typing smooth, no ConPTY flicker on Win10); escape hatch
             // `KODAX_FULLSCREEN_CELLDIFF=0` restores the legacy full-frame
-            // repaint. Scroll-heavy frames (streaming) still degrade to a
-            // near-full write until the DECSTBM scroll optimization lands.
+            // repaint. Scroll-heavy frames (streaming) take the DECSTBM
+            // hardware-scroll fast path (FEATURE_212): `applyCellFrame` threads
+            // `{altScreen, decstbmSafe}` into `render()`, which on a scrolled
+            // frame emits a region-scroll + paints only the rows that scrolled
+            // in (escape hatch `KODAX_SCROLL_DECSTBM=0`).
             if (process.env.KODAX_FULLSCREEN_CELLDIFF !== '0'
                 && this.altScreenActive
                 && this.fullStaticOutput === '') {
@@ -559,7 +562,15 @@ const Ink = class Ink {
             prevFrame: this.prevFrame,
             stdout: this.options.stdout,
         };
-        const applied = applyCellFrameHelper(state, frame);
+        // FEATURE_212 — enable the DECSTBM scroll fast path only in synchronized
+        // alt-screen (where a scroll otherwise costs a full ~6KB frame write).
+        // The fast path additionally requires `frame.scrollHint`, so on non-scroll
+        // frames these opts are inert.
+        const opts = {
+            altScreen: this.altScreenActive,
+            decstbmSafe: shouldSynchronize(this.options.stdout),
+        };
+        const applied = applyCellFrameHelper(state, frame, opts);
         this.prevFrame = state.prevFrame;
         return applied;
     };

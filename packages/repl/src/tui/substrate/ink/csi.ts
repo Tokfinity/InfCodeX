@@ -107,6 +107,17 @@ export function eraseLines(n: number): string {
 export const RESET_SCROLL_REGION = csi("r");
 
 /**
+ * FEATURE_212 (v0.7.45) — DEC save/restore cursor (ESC 7 / ESC 8). Used to
+ * bracket the DECSTBM scroll sequence: `setScrollRegion`/`RESET_SCROLL_REGION`
+ * home the cursor per spec, so saving before and restoring after leaves the
+ * cursor exactly where it was — which is what the incremental diff that
+ * follows assumes (`renderIncremental` starts its virtual cursor at
+ * `prev.cursor`). Without this, every relative move after the scroll is off.
+ */
+export const SAVE_CURSOR = `${ESC}7`;
+export const RESTORE_CURSOR = `${ESC}8`;
+
+/**
  * FEATURE_212 (v0.7.45) — DECSTBM scroll-region + hardware scroll, for the
  * fullscreen scroll optimization (a scroll writes a region+scroll command
  * instead of repainting every shifted row).

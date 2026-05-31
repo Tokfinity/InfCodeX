@@ -179,10 +179,14 @@ function screenRows(screen: Screen): string[] {
 }
 
 /** Render prev→next, replay the emitted bytes onto a model seeded with prev,
- * return the reconstructed top `next.height` rows. */
-function applyRender(prev: Frame, next: Frame): string[] {
+ * return the reconstructed top `next.height` rows + the raw diff. */
+function applyRender(
+  prev: Frame,
+  next: Frame,
+  opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
+): { rows: string[]; diff: ReturnType<LogUpdate["render"]> } {
   const lu = new LogUpdate({ isTTY: true });
-  const diff = lu.render(prev, next);
+  const diff = lu.render(prev, next, opts);
   const bytes = diff.map(patchToBytes).join("");
   const model = new TerminalModel(next.viewport.width, next.viewport.height, prev.screen);
   // Seed cursor where the previous frame left it (renderer's invariant).
@@ -190,7 +194,11 @@ function applyRender(prev: Frame, next: Frame): string[] {
   // first relative move assumes the cursor is at prev.cursor, so pre-position.
   model.apply(`${ESC}[${prev.cursor.y + 1};1H`);
   model.apply(bytes);
-  return model.rows(next.screen.height);
+  return { rows: model.rows(next.screen.height), diff };
+}
+
+function withScrollHint(frame: Frame, top: number, bottom: number, delta: number): Frame {
+  return { ...frame, scrollHint: { top, bottom, delta } };
 }
 
 describe("TerminalModel calibration vs trusted renderer (FEATURE_212 gate)", () => {
@@ -200,24 +208,105 @@ describe("TerminalModel calibration vs trusted renderer (FEATURE_212 gate)", () 
   it("single-cell change reconstructs next", () => {
     const prev = frameFromRows(["aaaaa", "bbbbb", "ccccc"], W, VH);
     const next = frameFromRows(["aaaaa", "bXbbb", "ccccc"], W, VH);
-    expect(applyRender(prev, next)).toEqual(screenRows(next.screen));
+    expect(applyRender(prev, next).rows).toEqual(screenRows(next.screen));
   });
 
   it("whole-row change reconstructs next", () => {
     const prev = frameFromRows(["aaaaa", "bbbbb", "ccccc"], W, VH);
     const next = frameFromRows(["aaaaa", "ZZZZZ", "ccccc"], W, VH);
-    expect(applyRender(prev, next)).toEqual(screenRows(next.screen));
+    expect(applyRender(prev, next).rows).toEqual(screenRows(next.screen));
   });
 
   it("growing (append a row) reconstructs next", () => {
     const prev = frameFromRows(["aaaaa", "bbbbb"], W, VH);
     const next = frameFromRows(["aaaaa", "bbbbb", "ddddd"], W, VH);
-    expect(applyRender(prev, next)).toEqual(screenRows(next.screen));
+    expect(applyRender(prev, next).rows).toEqual(screenRows(next.screen));
   });
 
   it("multi-row edit reconstructs next", () => {
     const prev = frameFromRows(["aaaaa", "bbbbb", "ccccc", "ddddd"], W, VH);
     const next = frameFromRows(["aaaaa", "11111", "ccccc", "22222"], W, VH);
-    expect(applyRender(prev, next)).toEqual(screenRows(next.screen));
+    expect(applyRender(prev, next).rows).toEqual(screenRows(next.screen));
+  });
+});
+
+// ---- step 3: the DECSTBM scroll gate -------------------------------------
+//
+// These are the payload tests the calibrated model exists for. A scroll-up is
+// `prev` (8 distinct rows) → `next` (rows shifted up by 1, new row at bottom),
+// stamped with a `scrollHint`. With `{altScreen, decstbmSafe}` set, `render()`
+// takes the DECSTBM fast path: a `scrollRegion` patch + an incremental diff
+// against the *shifted* prev. The gate proves that path's serialized bytes
+// replayed on a real cursor+grid emulator reconstruct EXACTLY `next.screen`
+// (cursor included — the garble risk), AND that without the opts the path is
+// inert (no `scrollRegion` patch) yet still correct.
+
+describe("DECSTBM scroll gate (FEATURE_212)", () => {
+  const W = 5;
+  const VH = 12; // viewport taller than the 8-row screen ⇒ no offscreen reset
+
+  const ROWS = ["r0aaa", "r1bbb", "r2ccc", "r3ddd", "r4eee", "r5fff", "r6ggg", "r7hhh"];
+
+  function scrolledUpBy1(): { prev: Frame; next: Frame } {
+    const prev = frameFromRows(ROWS, W, VH);
+    // Content scrolls up by 1: rows[1..7] move to [0..6], a new row enters at 7.
+    const next = frameFromRows([...ROWS.slice(1), "NEW77"], W, VH);
+    return { prev, next };
+  }
+
+  it("scroll-up fast path reconstructs next exactly", () => {
+    const { prev, next } = scrolledUpBy1();
+    const nextHinted = withScrollHint(next, 0, 7, 1);
+    const { rows, diff } = applyRender(prev, nextHinted, {
+      altScreen: true,
+      decstbmSafe: true,
+    });
+    // The screen the bytes reconstruct must be byte-for-byte `next`.
+    expect(rows).toEqual(screenRows(next.screen));
+    // And it must have actually taken the hardware-scroll path.
+    expect(diff.some((p) => p.type === "scrollRegion")).toBe(true);
+  });
+
+  it("scroll-down fast path reconstructs next exactly", () => {
+    // Content scrolls down by 1: a new row enters at the top, rows[0..6] move down.
+    const prev = frameFromRows(ROWS, W, VH);
+    const next = frameFromRows(["NEW00", ...ROWS.slice(0, 7)], W, VH);
+    const nextHinted = withScrollHint(next, 0, 7, -1);
+    const { rows, diff } = applyRender(prev, nextHinted, {
+      altScreen: true,
+      decstbmSafe: true,
+    });
+    expect(rows).toEqual(screenRows(next.screen));
+    expect(diff.some((p) => p.type === "scrollRegion")).toBe(true);
+  });
+
+  it("no-regression: without opts the scroll path is inert but still correct", () => {
+    const { prev, next } = scrolledUpBy1();
+    const nextHinted = withScrollHint(next, 0, 7, 1);
+    // No opts ⇒ altScreen/decstbmSafe undefined ⇒ DECSTBM branch skipped.
+    const { rows, diff } = applyRender(prev, nextHinted);
+    expect(rows).toEqual(screenRows(next.screen));
+    expect(diff.some((p) => p.type === "scrollRegion")).toBe(false);
+  });
+
+  it("no-regression: decstbmSafe=false keeps the path inert", () => {
+    const { prev, next } = scrolledUpBy1();
+    const nextHinted = withScrollHint(next, 0, 7, 1);
+    const { rows, diff } = applyRender(prev, nextHinted, {
+      altScreen: true,
+      decstbmSafe: false,
+    });
+    expect(rows).toEqual(screenRows(next.screen));
+    expect(diff.some((p) => p.type === "scrollRegion")).toBe(false);
+  });
+
+  it("guard: a frame with no scrollHint never takes the fast path", () => {
+    const { prev, next } = scrolledUpBy1();
+    const { rows, diff } = applyRender(prev, next, {
+      altScreen: true,
+      decstbmSafe: true,
+    });
+    expect(rows).toEqual(screenRows(next.screen));
+    expect(diff.some((p) => p.type === "scrollRegion")).toBe(false);
   });
 });

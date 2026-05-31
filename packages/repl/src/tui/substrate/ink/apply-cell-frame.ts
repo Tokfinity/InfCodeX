@@ -51,9 +51,14 @@ export interface CellFrameState {
 export function applyCellFrame(
   state: CellFrameState,
   frame: Frame | undefined,
+  opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
 ): boolean {
   if (frame === undefined) return false;
-  const diff = state.cellLogUpdate.render(state.prevFrame, frame);
+  // `opts` enables the FEATURE_212 DECSTBM scroll fast path inside
+  // `render()` — it only fires when `frame.scrollHint` is present (the
+  // transcript scrolled) AND the engine is in synchronized alt-screen, so
+  // passing the opts unconditionally is safe: a non-scroll frame ignores them.
+  const diff = state.cellLogUpdate.render(state.prevFrame, frame, opts);
   applyDiff(state.stdout, diff);
   state.prevFrame = frame;
   return true;

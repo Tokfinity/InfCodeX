@@ -16,7 +16,18 @@
  * `stream.write(buf)` call inside `applyDiff`.
  */
 
-import { CURSOR_HOME, cursorMove, cursorTo, eraseLines } from "./csi.js";
+import {
+  CURSOR_HOME,
+  RESET_SCROLL_REGION,
+  RESTORE_CURSOR,
+  SAVE_CURSOR,
+  cursorMove,
+  cursorTo,
+  eraseLines,
+  scrollDown,
+  scrollUp,
+  setScrollRegion,
+} from "./csi.js";
 import type { Diff, Patch } from "./frame.js";
 import { link } from "./osc.js";
 
@@ -70,6 +81,28 @@ export function patchToBytes(patch: Patch): string {
       return CLEAR_TERMINAL;
     case "hyperlink":
       return link(patch.uri);
+    case "scrollRegion": {
+      // DECSTBM hardware scroll: set region → scroll → reset region.
+      // Rows are 1-based in the VT spec; the Patch carries 0-based rows.
+      const top1 = patch.top + 1;
+      const bottom1 = patch.bottom + 1;
+      const absDelta = Math.abs(patch.delta);
+      const scroll = patch.delta > 0 ? scrollUp(absDelta) : scrollDown(absDelta);
+      // setScrollRegion / RESET_SCROLL_REGION both home the cursor per spec.
+      // The incremental diff that FOLLOWS this patch starts its virtual cursor
+      // at `prev.cursor`, so we bracket the whole sequence in DEC save/restore
+      // (ESC 7 / ESC 8): the cursor returns to exactly where it was, leaving
+      // the diff's relative moves valid. (CURSOR_HOME instead would force the
+      // diff to be computed from home, which changes the cursor-overflow logic
+      // in computeViewportState — riskier.)
+      return (
+        SAVE_CURSOR +
+        setScrollRegion(top1, bottom1) +
+        scroll +
+        RESET_SCROLL_REGION +
+        RESTORE_CURSOR
+      );
+    }
   }
 }
 

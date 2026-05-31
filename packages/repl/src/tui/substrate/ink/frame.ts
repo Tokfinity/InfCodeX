@@ -111,7 +111,17 @@ export type Patch =
       readonly type: "clearTerminal";
       readonly reason: FlickerReason;
     }
-  | { readonly type: "hyperlink"; readonly uri: string };
+  | { readonly type: "hyperlink"; readonly uri: string }
+  | {
+      /** FEATURE_212 DECSTBM hardware scroll — set scroll region + scroll + reset. */
+      readonly type: "scrollRegion";
+      /** 0-based inclusive top row of the scroll region. */
+      readonly top: number;
+      /** 0-based inclusive bottom row of the scroll region. */
+      readonly bottom: number;
+      /** Positive = scroll content up (new blank rows at bottom), negative = down. */
+      readonly delta: number;
+    };
 
 export type Diff = ReadonlyArray<Patch>;
 

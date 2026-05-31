@@ -20,7 +20,7 @@
  * (CC reference at `C:/Works/claudecode/src/ink/log-update.ts:43`).
  */
 
-import { diffEach } from "./cell-screen.js";
+import { diffEach, shiftRowsRegion } from "./cell-screen.js";
 import type { Diff, Frame, Patch } from "./frame.js";
 import {
   CARRIAGE_RETURN,
@@ -97,7 +97,11 @@ export class LogUpdate {
    *     incremental moves. The CC-aligned path leaves the cursor at
    *     `(0, screen.height)` deterministically.
    */
-  render(prev: Frame, next: Frame): Diff {
+  render(
+    prev: Frame,
+    next: Frame,
+    opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
+  ): Diff {
     if (!this.options.isTTY) {
       return renderFullFrame(next);
     }
@@ -111,6 +115,41 @@ export class LogUpdate {
     const decision = shouldFullReset(prev, next, readLine);
     if (decision.reset) {
       return fullResetSequence_CAUSES_FLICKER(next, decision.reason);
+    }
+
+    // FEATURE_212 (v0.7.45) — DECSTBM scroll fast path. When the transcript
+    // scrolled this render (scrollHint, captured in render-node-to-output) in
+    // fullscreen with synchronized output, emit a hardware scroll for the
+    // scrolled region + shift `prev` in memory by the same amount, so the
+    // incremental diff below only paints the rows that scrolled IN — instead
+    // of every shifted row (~6KB ConPTY write that blocks the event loop and
+    // stutters streaming/scroll + the spinner animation). The scroll patch is
+    // bracketed in DEC save/restore (see apply-diff) so the cursor returns to
+    // `prev.cursor`, leaving `renderIncremental`'s relative moves valid.
+    // Default ON; `KODAX_SCROLL_DECSTBM=0` is an emergency escape hatch.
+    const hint = next.scrollHint;
+    if (
+      hint &&
+      opts.altScreen &&
+      opts.decstbmSafe &&
+      process.env.KODAX_SCROLL_DECSTBM !== "0" &&
+      hint.delta !== 0 &&
+      hint.top >= 0 &&
+      hint.bottom < prev.screen.height &&
+      hint.bottom < next.screen.height &&
+      Math.abs(hint.delta) <= hint.bottom - hint.top
+    ) {
+      const scrollPatch: Patch = {
+        type: "scrollRegion",
+        top: hint.top,
+        bottom: hint.bottom,
+        delta: hint.delta,
+      };
+      const shiftedPrev: Frame = {
+        ...prev,
+        screen: shiftRowsRegion(prev.screen, hint.top, hint.bottom, hint.delta),
+      };
+      return [scrollPatch, ...renderIncremental(shiftedPrev, next)];
     }
 
     return renderIncremental(prev, next);
