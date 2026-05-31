@@ -24,6 +24,7 @@ import type {
 } from './types.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
+import { invokeChildWithFallback } from './child-fallback.js';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
@@ -331,7 +332,8 @@ async function executeReadChild(
     bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
-    const result = await (await getRunKodaX())(
+    const runFn = await getRunKodaX();
+    const result = await invokeChildWithFallback(
       {
         provider,
         model: bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model,
@@ -360,6 +362,13 @@ async function executeReadChild(
         events: childEvents,
       },
       briefing,
+      runFn,
+      {
+        onFallback: ({ fromProvider, toProvider, reason }) =>
+          options.onProgress?.(
+            `[fallback] ${bundle.id}: ${fromProvider} → ${toProvider} (${reason})`,
+          ),
+      },
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
@@ -437,7 +446,8 @@ async function executeWriteChild(
     bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
-    const result = await (await getRunKodaX())(
+    const runFn = await getRunKodaX();
+    const result = await invokeChildWithFallback(
       {
         provider,
         model: bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model,
@@ -465,6 +475,13 @@ async function executeWriteChild(
         events: childEvents,
       },
       briefing,
+      runFn,
+      {
+        onFallback: ({ fromProvider, toProvider, reason }) =>
+          options.onProgress?.(
+            `[fallback] ${bundle.id}: ${fromProvider} → ${toProvider} (${reason})`,
+          ),
+      },
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
