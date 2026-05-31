@@ -59,7 +59,7 @@
  *
  *   KODAX_EVAL_DUMP_DIR=c:/tmp/ npm run test:eval -- feature-dispatch-prompt-pilot
  *
- * Skips when KIMI_API_KEY + ARK_API_KEY both absent.
+ * Skips when KIMI_API_KEY + ARK_CODING_API_KEY both absent.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -148,7 +148,7 @@ describe('Pilot v3: dispatch_child prompt — quantitative threshold isolation t
   const aliases = availableAliases(...PILOT_ALIASES);
 
   if (aliases.length === 0) {
-    it('skips: neither KIMI_API_KEY nor ARK_API_KEY in env', () => {
+    it('skips: neither KIMI_API_KEY nor ARK_CODING_API_KEY in env', () => {
       // No-op test makes the skip visible.
     });
     return;

@@ -56,14 +56,14 @@ export interface ModelAliasTarget {
 }
 
 export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Object.freeze({
-  'zhipu/glm51':  { provider: 'zhipu-coding',   model: 'glm-5.1',           apiKeyEnv: 'ZHIPU_API_KEY' },
-  'kimi':         { provider: 'kimi-code',      model: 'kimi-for-coding',   apiKeyEnv: 'KIMI_API_KEY' },
-  'mimo/v25':     { provider: 'mimo-coding',    model: 'mimo-v2.5',         apiKeyEnv: 'MIMO_API_KEY' },
-  'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_API_KEY' },
-  'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_API_KEY' },
-  'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_API_KEY' },
-  'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_API_KEY' },
-  'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_API_KEY' },
+  'zhipu/glm51':  { provider: 'zhipu-coding',   model: 'glm-5.1',           apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
+  'kimi':         { provider: 'kimi-code',      model: 'kimi-for-coding',   apiKeyEnv: 'KIMI_CODE_API_KEY' },
+  'mimo/v25':     { provider: 'mimo-coding',    model: 'mimo-v2.5',         apiKeyEnv: 'MIMO_CODING_API_KEY' },
+  'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_CODING_API_KEY' },
+  'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
+  'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_CODING_API_KEY' },
+  'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_CODING_API_KEY' },
+  'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ds/v4pro':     { provider: 'deepseek',       model: 'deepseek-v4-pro',   apiKeyEnv: 'DEEPSEEK_API_KEY' },
   'ds/v4flash':   { provider: 'deepseek',       model: 'deepseek-v4-flash', apiKeyEnv: 'DEEPSEEK_API_KEY' },
 });

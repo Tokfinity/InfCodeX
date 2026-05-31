@@ -120,7 +120,7 @@ describe('built-in provider model capabilities (no API key required)', () => {
       'DEEPSEEK_API_KEY',
       'KIMI_API_KEY',
       'ZHIPU_API_KEY',
-      'ARK_API_KEY',
+      'ARK_CODING_API_KEY',
     ].map((k) => [k, process.env[k]] as const);
 
     // Clear keys for the duration of this assertion.

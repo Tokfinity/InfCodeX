@@ -38,8 +38,8 @@ describe('provider registry', () => {
     expect(() => getProvider('missing-provider')).toThrowError(KodaXProviderError);
   });
 
-  it('registers Xiaomi MiMo Token Plan as mimo-coding (Anthropic-compat, MIMO_API_KEY)', () => {
-    vi.stubEnv('MIMO_API_KEY', 'tp-test-key');
+  it('registers Xiaomi MiMo Token Plan as mimo-coding (Anthropic-compat, MIMO_CODING_API_KEY)', () => {
+    vi.stubEnv('MIMO_CODING_API_KEY', 'tp-test-key');
     const mimo = getProvider('mimo-coding');
     expect(mimo.name).toBe('mimo-coding');
     expect(mimo.getEffectiveContextWindow('mimo-v2.5-pro')).toBe(1_000_000);
@@ -47,8 +47,8 @@ describe('provider registry', () => {
     expect(getProviderConfiguredReasoningCapability('mimo-coding', 'mimo-v2.5-pro')).toBe('native-budget');
   });
 
-  it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_API_KEY)', () => {
-    vi.stubEnv('ARK_API_KEY', 'ark-test-key');
+  it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_CODING_API_KEY)', () => {
+    vi.stubEnv('ARK_CODING_API_KEY', 'ark-test-key');
     const ark = getProvider('ark-coding');
     expect(ark.name).toBe('ark-coding');
 
@@ -88,6 +88,8 @@ describe('provider registry', () => {
   });
 
   it('exposes a stable default provider snapshot', () => {
+    // Default provider (zhipu-coding) needs its key to instantiate.
+    vi.stubEnv('ZHIPU_CODING_API_KEY', 'test-key');
     expect(typeof KODAX_DEFAULT_PROVIDER).toBe('string');
     expect(getProvider()).toBeDefined();
   });
@@ -122,6 +124,7 @@ describe('provider registry', () => {
   it('pins true context windows for models that diverge from provider defaults', () => {
     vi.stubEnv('KIMI_API_KEY', 'test-key');
     vi.stubEnv('ZHIPU_API_KEY', 'test-key');
+    vi.stubEnv('ZHIPU_CODING_API_KEY', 'test-key');
 
     const kimi = getProvider('kimi');
     expect(kimi.getEffectiveContextWindow('kimi-k2.6')).toBe(256_000);

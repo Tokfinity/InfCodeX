@@ -71,12 +71,12 @@ and import from `../benchmark/harness/*` for shared helpers.
 
 | Alias | Provider | Model | API key env |
 |---|---|---|---|
-| `zhipu/glm51` | `zhipu-coding` | `glm-5.1` | `ZHIPU_API_KEY` |
-| `kimi` | `kimi-code` | `kimi-for-coding` | `KIMI_API_KEY` |
-| `mimo/v25` | `mimo-coding` | `mimo-v2.5` | `MIMO_API_KEY` |
-| `mimo/v25pro` | `mimo-coding` | `mimo-v2.5-pro` | `MIMO_API_KEY` |
-| `mmx/m27` | `minimax-coding` | `MiniMax-M2.7` | `MINIMAX_API_KEY` |
-| `ark/glm51` | `ark-coding` | `glm-5.1` | `ARK_API_KEY` |
+| `zhipu/glm51` | `zhipu-coding` | `glm-5.1` | `ZHIPU_CODING_API_KEY` |
+| `kimi` | `kimi-code` | `kimi-for-coding` | `KIMI_CODE_API_KEY` |
+| `mimo/v25` | `mimo-coding` | `mimo-v2.5` | `MIMO_CODING_API_KEY` |
+| `mimo/v25pro` | `mimo-coding` | `mimo-v2.5-pro` | `MIMO_CODING_API_KEY` |
+| `mmx/m27` | `minimax-coding` | `MiniMax-M2.7` | `MINIMAX_CODING_API_KEY` |
+| `ark/glm51` | `ark-coding` | `glm-5.1` | `ARK_CODING_API_KEY` |
 | `ds/v4pro` | `deepseek` | `deepseek-v4-pro` | `DEEPSEEK_API_KEY` |
 | `ds/v4flash` | `deepseek` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
 

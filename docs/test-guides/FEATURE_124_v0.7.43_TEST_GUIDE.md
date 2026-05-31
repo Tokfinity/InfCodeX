@@ -5,7 +5,7 @@
 > **前置**：
 > - KodaX v0.7.43 已构建（`npm run build`）
 > - 测试在任意 git 仓库下做（KodaX 自身仓库即可）
-> - smoke eval 部分需要 `ARK_API_KEY` 或 `ZHIPU_API_KEY` 至少一个（无 key 自动 skip）
+> - smoke eval 部分需要 `ARK_CODING_API_KEY` 或 `ZHIPU_API_KEY` 至少一个（无 key 自动 skip）
 
 ---
 
@@ -169,7 +169,7 @@
 
 1. 设至少一个 API key：
    ```bash
-   export ARK_API_KEY=<key>
+   export ARK_CODING_API_KEY=<key>
    # 或
    export ZHIPU_API_KEY=<key>
    ```
@@ -192,7 +192,7 @@
 
 | 现象 | 诊断 |
 |---|---|
-| 测试整体 skip（"no provider API keys"）| 确认设了 ARK_API_KEY 或 ZHIPU_API_KEY 中至少一个 |
+| 测试整体 skip（"no provider API keys"）| 确认设了 ARK_CODING_API_KEY 或 ZHIPU_API_KEY 中至少一个 |
 | 某 cell timeout | 单 cell 限时来自全局 900_000ms ÷ 12 ≈ 75s/cell，正常 < 30s；timeout 多半是 provider 那端慢 — 重跑 |
 | 整体 < 50% pass | memory-rules prompt 有问题 — 看 raw dump 里 LLM 的 reasoning 文本，常见是模型没识别出 path 应该落在 memory dir。**这是 prompt iteration 信号，不是 ship blocker**（per design 注释） |
 
@@ -242,7 +242,7 @@ npx vitest run \
   tests/memory-prompt-injection.test.ts
 
 # Smoke eval（需 API key）
-ARK_API_KEY=<key> npx vitest run -c vitest.eval.config.ts tests/memory-smoke.eval.ts
+ARK_CODING_API_KEY=<key> npx vitest run -c vitest.eval.config.ts tests/memory-smoke.eval.ts
 ```
 
 预期：单元+集成全绿（76 tests），smoke eval ≥ 8/12 cells PASS。

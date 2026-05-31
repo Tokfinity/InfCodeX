@@ -86,15 +86,15 @@ describe('FEATURE_104 aliases', () => {
   });
 
   it('availableAliases() returns subset whose API key env var is set', () => {
-    const before = process.env.ZHIPU_API_KEY;
-    process.env.ZHIPU_API_KEY = 'test-key';
+    const before = process.env.ZHIPU_CODING_API_KEY;
+    process.env.ZHIPU_CODING_API_KEY = 'test-key';
     try {
       const got = availableAliases('zhipu/glm51', 'kimi');
       expect(got).toContain('zhipu/glm51');
       // 'kimi' may or may not be set; assert at minimum zhipu is there.
     } finally {
-      if (before === undefined) delete process.env.ZHIPU_API_KEY;
-      else process.env.ZHIPU_API_KEY = before;
+      if (before === undefined) delete process.env.ZHIPU_CODING_API_KEY;
+      else process.env.ZHIPU_CODING_API_KEY = before;
     }
   });
 

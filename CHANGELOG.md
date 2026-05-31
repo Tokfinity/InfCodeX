@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
+## [0.7.45] - Unreleased
+
+### ⚠️ BREAKING — coding-plan providers now use dedicated API-key env vars
+
+The coding-plan providers used to read the **same** env var as their regular-API
+sibling (e.g. both `zhipu` and `zhipu-coding` read `ZHIPU_API_KEY`), which meant
+you couldn't enable the two providers independently — and the regular key could
+get handed to a coding-plan provider you hadn't actually subscribed to. Each
+coding-plan provider now reads its **own** key, so setting both keys lets you use
+both providers' models at once.
+
+| Provider | Old env var | **New env var** |
+|---|---|---|
+| `zhipu-coding` | `ZHIPU_API_KEY` | `ZHIPU_CODING_API_KEY` |
+| `kimi-code` | `KIMI_API_KEY` | `KIMI_CODE_API_KEY` |
+| `minimax-coding` | `MINIMAX_API_KEY` | `MINIMAX_CODING_API_KEY` |
+| `mimo-coding` | `MIMO_API_KEY` | `MIMO_CODING_API_KEY` |
+| `ark-coding` | `ARK_API_KEY` | `ARK_CODING_API_KEY` |
+
+**Migration**: set the new env var(s) for whichever coding plans you use. Regular
+providers (`zhipu`, `kimi`, …) are unchanged. There is no fallback to the old
+shared names — the new name is required for the coding-plan provider to start.
+
 ## [0.7.44] - 2026-05-28
 
 ### Theme

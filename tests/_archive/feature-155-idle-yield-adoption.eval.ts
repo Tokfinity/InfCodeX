@@ -427,7 +427,7 @@ describe('FEATURE_155 — idle-yield adoption (Layer 2)', () => {
       // eslint-disable-next-line no-console
       console.warn(
         `[fea155 idle-yield] No alias keys present — eval is skipped. `
-        + `Set provider keys (e.g. DEEPSEEK_API_KEY, KIMI_API_KEY, MINIMAX_API_KEY) to run.`,
+        + `Set provider keys (e.g. DEEPSEEK_API_KEY, KIMI_API_KEY, MINIMAX_CODING_API_KEY) to run.`,
       );
     }
     expect(true).toBe(true);

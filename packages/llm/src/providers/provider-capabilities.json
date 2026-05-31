@@ -54,7 +54,7 @@
       "maxOutputTokens": 32768
     },
     "kimi-code": {
-      "apiKeyEnv": "KIMI_API_KEY",
+      "apiKeyEnv": "KIMI_CODE_API_KEY",
       "model": "kimi-for-coding",
       "reasoningCapability": "native-budget",
       "capabilityProfile": "image-input-native",
@@ -85,7 +85,7 @@
       "maxOutputTokens": 32768
     },
     "zhipu-coding": {
-      "apiKeyEnv": "ZHIPU_API_KEY",
+      "apiKeyEnv": "ZHIPU_CODING_API_KEY",
       "model": "glm-5",
       "models": [
         { "id": "glm-5.1", "displayName": "GLM-5.1" },
@@ -99,7 +99,7 @@
       "thinkingBudgetCap": 16000
     },
     "minimax-coding": {
-      "apiKeyEnv": "MINIMAX_API_KEY",
+      "apiKeyEnv": "MINIMAX_CODING_API_KEY",
       "model": "MiniMax-M2.7",
       "models": [
         { "id": "MiniMax-M2.7-highspeed", "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)" },
@@ -116,7 +116,7 @@
       "maxOutputTokens": 32000
     },
     "mimo-coding": {
-      "apiKeyEnv": "MIMO_API_KEY",
+      "apiKeyEnv": "MIMO_CODING_API_KEY",
       "model": "mimo-v2.5-pro",
       "models": [
         { "id": "mimo-v2.5", "displayName": "MiMo V2.5" }
@@ -129,7 +129,7 @@
       "thinkingBudgetCap": 16000
     },
     "ark-coding": {
-      "apiKeyEnv": "ARK_API_KEY",
+      "apiKeyEnv": "ARK_CODING_API_KEY",
       "model": "glm-5.1",
       "models": [
         { "id": "glm-4.7", "displayName": "GLM-4.7" },

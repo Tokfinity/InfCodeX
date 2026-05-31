@@ -245,7 +245,7 @@ const JUDGES: readonly PromptJudge[] = [
 describe('PLAN-FIRST quant→qual pilot (ADR-033 hygiene follow-up to FEATURE_188)', () => {
   const aliases = availableAliases(...PILOT_ALIASES);
   if (aliases.length === 0) {
-    it('skips: ARK_API_KEY absent', () => {
+    it('skips: ARK_CODING_API_KEY absent', () => {
       // No-op.
     });
     return;

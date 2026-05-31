@@ -11,7 +11,7 @@
  * 运行：
  *   npm run test:eval -- tests/construction-mimo-smoke.eval.ts
  *
- * 需要：MIMO_API_KEY 环境变量
+ * 需要：MIMO_CODING_API_KEY 环境变量
  * 无 key 时自动 skip（跟 ANTHROPIC eval 同一模式）
  */
 
@@ -36,7 +36,7 @@ const COUNT_LINES_TOOL: KodaXToolDefinition = {
 };
 
 describe('Eval: mimo-coding constructed-tool 透传 + dispatch 冒烟', () => {
-  const hasKey = Boolean(process.env.MIMO_API_KEY);
+  const hasKey = Boolean(process.env.MIMO_CODING_API_KEY);
 
   describe.skipIf(!hasKey)('mimo-coding (mimo-v2.5)', () => {
     it('L1: gateway 接受携带 constructed-tool input_schema 的请求 (不报 4xx)', async () => {
@@ -95,10 +95,10 @@ describe('Eval: mimo-coding constructed-tool 透传 + dispatch 冒烟', () => {
     }, 60_000);
   });
 
-  it('MIMO_API_KEY is configured (warning only)', () => {
+  it('MIMO_CODING_API_KEY is configured (warning only)', () => {
     if (!hasKey) {
       console.warn(
-        '[mimo smoke] MIMO_API_KEY not set. Skipping mimo-coding constructed-tool smoke probe.',
+        '[mimo smoke] MIMO_CODING_API_KEY not set. Skipping mimo-coding constructed-tool smoke probe.',
       );
     }
     expect(true).toBe(true);

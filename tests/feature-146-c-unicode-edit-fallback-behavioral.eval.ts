@@ -335,7 +335,7 @@ describe('FEATURE_146-C — Unicode edit fallback behavioral eval', () => {
       // eslint-disable-next-line no-console
       console.warn(
         `[fea146-C behavioral eval] No alias keys present (need any of ` +
-          `ZHIPU_API_KEY / KIMI_API_KEY / MINIMAX_API_KEY / DEEPSEEK_API_KEY) — eval is skipped.`,
+          `ZHIPU_API_KEY / KIMI_API_KEY / MINIMAX_CODING_API_KEY / DEEPSEEK_API_KEY) — eval is skipped.`,
       );
     }
     expect(true).toBe(true);

@@ -42,11 +42,11 @@ interface AliasTarget {
 }
 
 const PANEL: AliasTarget[] = [
-  { alias: 'zhipu/glm51', provider: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_API_KEY' },
-  { alias: 'kimi', provider: 'kimi-code', model: 'kimi-for-coding', apiKeyEnv: 'KIMI_API_KEY' },
-  { alias: 'mmx/m27', provider: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_API_KEY' },
-  { alias: 'ark/v4pro', provider: 'ark-coding', model: 'deepseek-v4-pro', apiKeyEnv: 'ARK_API_KEY' },
-  { alias: 'ark/v4flash', provider: 'ark-coding', model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_API_KEY' },
+  { alias: 'zhipu/glm51', provider: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
+  { alias: 'kimi', provider: 'kimi-code', model: 'kimi-for-coding', apiKeyEnv: 'KIMI_CODE_API_KEY' },
+  { alias: 'mmx/m27', provider: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
+  { alias: 'ark/v4pro', provider: 'ark-coding', model: 'deepseek-v4-pro', apiKeyEnv: 'ARK_CODING_API_KEY' },
+  { alias: 'ark/v4flash', provider: 'ark-coding', model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
 ];
 
 const RUNS = 5;

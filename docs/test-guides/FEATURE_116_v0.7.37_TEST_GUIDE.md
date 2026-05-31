@@ -3,7 +3,7 @@
 > **目的**：验证 prompt cache 在真实 Anthropic-compat provider 上工作；OpenAI-compat / ACP CLI bridge 路径无副作用回归。
 >
 > **前置**：
-> - 至少一个有效 Anthropic-compat API key（`ANTHROPIC_API_KEY` / `KIMI_API_KEY` for kimi-code / `ZHIPU_API_KEY` for zhipu-coding / `MIMO_API_KEY` / `MINIMAX_API_KEY` / `ARK_API_KEY`）
+> - 至少一个有效 Anthropic-compat API key（`ANTHROPIC_API_KEY` / `KIMI_API_KEY` for kimi-code / `ZHIPU_API_KEY` for zhipu-coding / `MIMO_CODING_API_KEY` / `MINIMAX_CODING_API_KEY` / `ARK_CODING_API_KEY`）
 > - KodaX v0.7.37 已构建（`npm run build`）
 
 ---
@@ -58,7 +58,7 @@ Cache: 50,000 tokens (40,000 read / 10,000 write, 80% hit rate)
 ### 设置
 
 ```bash
-export ZHIPU_API_KEY=...   # 或 KIMI_API_KEY / MIMO_API_KEY / MINIMAX_API_KEY / ARK_API_KEY
+export ZHIPU_API_KEY=...   # 或 KIMI_API_KEY / MIMO_CODING_API_KEY / MINIMAX_CODING_API_KEY / ARK_CODING_API_KEY
 ```
 
 ### 步骤
