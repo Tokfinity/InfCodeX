@@ -12,21 +12,44 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
-import { getAvailableProviderNames } from '@kodax-ai/coding';
+import { KODAX_PROVIDER_SNAPSHOTS } from '@kodax-ai/coding';
 
 interface DirSummary {
   readonly count: number;
   readonly bytes: number;
 }
 
+interface ProviderStatus {
+  readonly name: string;
+  /** The env var that configures this provider's API key. */
+  readonly apiKeyEnv: string;
+  /** Key env var is present. NOT the same as "reachable" — see note below. */
+  readonly configured: boolean;
+}
+
 interface DoctorReport {
   readonly version: string;
   readonly runtime: { readonly node: string; readonly platform: string };
   readonly terminal: { readonly tty: boolean; readonly truecolor: boolean };
-  readonly providers: readonly string[];
+  /**
+   * Per-provider key-presence. `configured` = the provider's env var is set —
+   * it does NOT verify the key works or (for coding-plan providers) that the
+   * subscription is active; that needs a live probe (a future `--ping`).
+   */
+  readonly providers: readonly ProviderStatus[];
   readonly configHome: string;
   readonly sessions: DirSummary | null;
   readonly traces: DirSummary | null;
+}
+
+function buildProviderStatuses(): ProviderStatus[] {
+  return Object.entries(KODAX_PROVIDER_SNAPSHOTS)
+    .map(([name, snap]) => ({
+      name,
+      apiKeyEnv: (snap as { apiKeyEnv: string }).apiKeyEnv,
+      configured: Boolean(process.env[(snap as { apiKeyEnv: string }).apiKeyEnv]),
+    }))
+    .sort((a, b) => Number(b.configured) - Number(a.configured) || a.name.localeCompare(b.name));
 }
 
 function summarizeDir(dir: string): DirSummary | null {
@@ -73,7 +96,7 @@ function buildReport(version: string): DoctorReport {
       tty: Boolean(process.stdout.isTTY),
       truecolor: process.env.COLORTERM === 'truecolor',
     },
-    providers: getAvailableProviderNames(),
+    providers: buildProviderStatuses(),
     configHome: home,
     sessions: summarizeDir(path.join(home, 'sessions')),
     traces: summarizeDir(path.join(home, '.traces')),
@@ -102,10 +125,12 @@ export function runDoctor(version: string, asJson: boolean): void {
     `  TTY: ${report.terminal.tty ? 'yes' : 'no'}`,
     `  Truecolor: ${report.terminal.truecolor ? 'yes' : 'unknown'}`,
     '',
-    'Providers (configured / available)',
-    report.providers.length > 0
-      ? `  ${report.providers.join(', ')}`
-      : '  (none configured)',
+    'Providers (configured = API key env var present; NOT verified reachable)',
+    ...report.providers.map((p) =>
+      p.configured
+        ? `  ✓ ${p.name.padEnd(16)} ${p.apiKeyEnv}`
+        : `  ✗ ${p.name.padEnd(16)} ${p.apiKeyEnv}  (set to enable)`,
+    ),
     '',
     `Storage (${report.configHome})`,
     summaryLine('sessions', report.sessions),
