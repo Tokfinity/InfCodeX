@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/repl",
-  "version": "0.7.44",
+  "version": "0.7.45",
   "description": "KodaX REPL - \u5b8c\u6574\u7684\u4ea4\u4e92\u5f0f\u7ec8\u7aef\u4f53\u9a8c",
   "private": true,
   "type": "module",
