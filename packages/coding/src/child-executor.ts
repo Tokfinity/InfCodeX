@@ -23,6 +23,7 @@ import type {
   KodaXToolExecutionContext,
 } from './types.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
+import { resolveModelHintTier } from './model-hint-routing.js';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
@@ -316,13 +317,24 @@ async function executeReadChild(
       CHILD_EXCLUDE_TOOLS_READONLY,
     );
 
-  const provider = bundle.provider ?? providerOverride ?? options.parentOptions.provider ?? 'anthropic';
+  // FEATURE_102 P1-auto — model_hint routing applies only when the dispatcher
+  // gave neither an explicit provider/model (P2) nor a specialist (P1).
+  const hintTier =
+    bundle.provider === undefined &&
+    bundle.model === undefined &&
+    providerOverride === undefined &&
+    modelOverride === undefined
+      ? resolveModelHintTier(bundle.modelHint, /* readOnly */ true)
+      : undefined;
+
+  const provider =
+    bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: bundle.model ?? modelOverride ?? options.parentOptions.model,
+        model: bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -410,13 +422,25 @@ async function executeWriteChild(
       CHILD_EXCLUDE_TOOLS_BASE,
     );
 
-  const provider = bundle.provider ?? providerOverride ?? options.parentOptions.provider ?? 'anthropic';
+  // FEATURE_102 P1-auto — write children are NOT eligible for `fast`→cheap
+  // (eval covered read-only only); `deep`→strong still applies. Same gate:
+  // only when no explicit (P2) / specialist (P1) override is present.
+  const hintTier =
+    bundle.provider === undefined &&
+    bundle.model === undefined &&
+    providerOverride === undefined &&
+    modelOverride === undefined
+      ? resolveModelHintTier(bundle.modelHint, /* readOnly */ false)
+      : undefined;
+
+  const provider =
+    bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: bundle.model ?? modelOverride ?? options.parentOptions.model,
+        model: bundle.model ?? modelOverride ?? hintTier?.model ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,

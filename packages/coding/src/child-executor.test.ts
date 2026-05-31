@@ -945,6 +945,122 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
   });
 });
 
+describe('executeChildAgents — FEATURE_102 P1-auto model_hint routing', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetAgentResolverForTesting();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetAgentResolverForTesting();
+  });
+
+  const okResult = (lastText = 'done') => ({
+    success: true,
+    lastText,
+    messages: [{ role: 'assistant', content: lastText }],
+    sessionId: 's-hint',
+  });
+
+  function buildSpecialistArtifact(overrides: Partial<AgentArtifact> = {}): AgentArtifact {
+    return {
+      kind: 'agent',
+      name: overrides.name ?? 'spec',
+      version: overrides.version ?? '1.0.0',
+      content: overrides.content ?? { instructions: 'SPEC', tools: [{ ref: 'builtin:read' }], description: 'r' },
+      status: overrides.status ?? 'active',
+      createdAt: overrides.createdAt ?? Date.now(),
+      testedAt: overrides.testedAt ?? Date.now(),
+      activatedAt: overrides.activatedAt ?? Date.now(),
+    };
+  }
+
+  it('routes a read-only `fast` child to the configured cheap tier', async () => {
+    vi.stubEnv('KODAX_FAST_PROVIDER', 'ark-coding');
+    vi.stubEnv('KODAX_FAST_MODEL', 'deepseek-v4-flash');
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-fast', readOnly: true, modelHint: 'fast' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('ark-coding');
+    expect(childOptions.model).toBe('deepseek-v4-flash');
+  });
+
+  it('keeps a WRITE `fast` child on the parent tier (cheap is read-only-gated)', async () => {
+    vi.stubEnv('KODAX_FAST_PROVIDER', 'ark-coding');
+    vi.stubEnv('KODAX_FAST_MODEL', 'deepseek-v4-flash');
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-fast-w', readOnly: false, modelHint: 'fast' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentRole: 'worker',
+      parentHarness: 'tool-dispatch',
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('anthropic');
+    expect(childOptions.model).toBe('claude-opus-4-8');
+  });
+
+  it('falls back to parent when the tier is unconfigured (routing OFF by default)', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-fast-off', readOnly: true, modelHint: 'fast' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('anthropic');
+    expect(childOptions.model).toBe('claude-opus-4-8');
+  });
+
+  it('specialist model takes priority over the `fast` hint (P1 > P1-auto)', async () => {
+    vi.stubEnv('KODAX_FAST_PROVIDER', 'ark-coding');
+    vi.stubEnv('KODAX_FAST_MODEL', 'deepseek-v4-flash');
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'fast-spec',
+      content: {
+        instructions: 'SPEC', tools: [{ ref: 'builtin:read' }], description: 'r',
+        model: 'claude-opus-4-8', provider: 'anthropic',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-fast-spec', readOnly: true, modelHint: 'fast', specialistName: 'fast-spec' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'zhipu-coding' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('anthropic');
+    expect(childOptions.model).toBe('claude-opus-4-8');
+  });
+
+  it('explicit bundle.provider/model (P2) takes priority over the `fast` hint', async () => {
+    vi.stubEnv('KODAX_FAST_PROVIDER', 'ark-coding');
+    vi.stubEnv('KODAX_FAST_MODEL', 'deepseek-v4-flash');
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({
+      id: 'cb-fast-explicit', readOnly: true, modelHint: 'fast',
+      provider: 'kimi-code', model: 'kimi-k2.6',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('kimi-code');
+    expect(childOptions.model).toBe('kimi-k2.6');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // FEATURE_199 (v0.7.44) — resolveEvidenceRef branch coverage:
 //
