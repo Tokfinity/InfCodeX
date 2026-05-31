@@ -30,6 +30,7 @@ import { toolModuleContext } from './module-context.js';
 import { toolSymbolContext } from './symbol-context.js';
 import { toolProcessContext } from './process-context.js';
 import { toolImpactEstimate } from './impact-estimate.js';
+import { toolCyclicDependencies } from './cyclic-dependencies.js';
 import { toolWebSearch } from './web-search.js';
 import { toolWebFetch } from './web-fetch.js';
 import { toolCodeSearch } from './code-search.js';
@@ -1278,6 +1279,17 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolImpactEstimate,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'cyclic_dependencies',
+    description: 'Detect circular import/dependency chains (Tarjan SCC) over the module-level import graph. Answers "is there a dependency cycle" — the one question the 1-hop tools (impact_estimate / module_context / symbol_context) cannot. Use when refactoring or moving modules, before merging a PR that reshapes imports, or to enforce a no-cycles rule. Returns each cycle as an ordered module chain with a hop count + severity. Distinct from impact_estimate (that is 1-hop blast radius; this is reachability cycles).',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    },
+    handler: toolCyclicDependencies,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },

@@ -21,6 +21,7 @@ export const REPO_INTELLIGENCE_WORKING_TOOL_NAMES = [
   'symbol_context',
   'process_context',
   'impact_estimate',
+  'cyclic_dependencies',
 ] as const;
 
 const REPO_INTELLIGENCE_WORKING_TOOL_NAME_SET = new Set<string>(

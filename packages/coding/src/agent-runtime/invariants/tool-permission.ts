@@ -52,6 +52,7 @@ export function resolveToolCapability(toolName: string): ToolCapability {
     case 'symbol_context':
     case 'process_context':
     case 'impact_estimate':
+    case 'cyclic_dependencies':
     // Interaction-only tools (no FS / shell side effect — they just
     // surface state to the user or the planner).
     case 'ask_user_question':

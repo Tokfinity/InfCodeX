@@ -55,9 +55,10 @@ const STRUCTURED_PRUNE_PROTECT_TOKENS = 40000;
  *                                memory mid-run
  *   - worktree / undo (3)      — worktree_create, worktree_remove, undo
  *   - MCP (5)                  — mcp_search/describe/call/read_resource/get_prompt
- *   - repo intelligence (8)    — repo_overview, changed_scope, changed_diff,
+ *   - repo intelligence (9)    — repo_overview, changed_scope, changed_diff,
  *                                changed_diff_bundle, module_context,
- *                                symbol_context, process_context, impact_estimate
+ *                                symbol_context, process_context, impact_estimate,
+ *                                cyclic_dependencies
  */
 const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   // Pre-F183
@@ -104,6 +105,7 @@ const PRUNE_PROTECTED_TOOLS: ReadonlySet<string> = new Set([
   'symbol_context',
   'process_context',
   'impact_estimate',
+  'cyclic_dependencies',
 ]);
 
 /**
