@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-05-16_
+_Last Updated: 2026-05-31_
 
 ---
 
@@ -80,12 +80,53 @@ _Last Updated: 2026-05-16_
 | 133 | Low | Open | `repo-intelligence/runtime.test.ts` "falls back to OSS when premium returns malformed preturn payloads" intermittent flake under heavy parallel load — failure mode not yet captured | 待调研 | - | 2026-05-16 | - |
 | 134 | High | Resolved | Plan list shows `0/N completed` mid-task when Worker re-calls `op:'init'` — `todoStore.init()` unconditional reset wipes completed/skipped/cancelled status | v0.7.34 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 | 135 | Medium | Resolved | FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept` | v0.7.41 | v0.7.42 | 2026-05-19 | 2026-05-19 |
+| 136 | Low | Open | 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 根因在 CPU 侧每帧渲染（React reconciliation + outputToScreen 全量重建），**非**终端写入字节量（cell-diff + DECSTBM 两次否证 I/O 假设） | 待调研 | - | 2026-05-31 | - |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 ---
+### 136: 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 瓶颈在 CPU 侧每帧渲染，非终端写入字节量
+
+- **Priority**: Low（用户实测"影响不大"；不阻塞功能，纯视觉/手感）
+- **Status**: **Open**（根因待 trace 确认）
+- **Introduced**: 待调研（疑似一直存在；v0.7.41 spinner stats 尾巴 `58682cbf` 让每 tick 输出变化，可能放大可见度）
+- **Created**: 2026-05-31
+
+#### Symptom
+
+流式输出过程中、以及上下文很长时滚动过程中，spinner 动画明显卡顿、计时变慢（驱动 spinner 的 `setInterval` 回调被推迟，帧率不稳）。注意：**打字卡顿是另一个独立症状，已由 FEATURE_212 cell-diff（`60c38896`）修复**；本 issue 的 spinner 卡顿独立存在，未被修复。
+
+#### Investigation — 已排除的假设（两次 I/O 否证）
+
+- ❌ **假设 1「全屏每帧整屏重画（~6KB ANSI 写）是瓶颈」** → FEATURE_212 fullscreen cell-diff（`60c38896`，default ON）把打字时的写入量从整屏降到只画变化的格子，**打字卡顿消失**，但 spinner 卡顿无变化。
+- ❌ **假设 2「滚动时 cell-diff 退化成近整屏写」** → FEATURE_212 DECSTBM 硬件滚动快路径（`870f59aa`→`424b1a34`，default ON）把滚动写入量降到只画滚进来的行（terminal-model gate 证明逐字节重建正确），**实测 spinner 卡顿仍无变化**。
+- **结论**：两次都否证了「终端写入字节量（I/O 侧）是瓶颈」。DECSTBM 对本症状无效（见下方 Related 的回滚评估）。
+
+#### Likely root cause（待 trace 确认）
+
+瓶颈在 **CPU 侧每帧渲染工作**，不在 I/O 字节量：
+
+- 流式每个 token 到达 / 滚动每帧都触发 React reconciliation 重建整棵 transcript 子树；
+- `outputToScreen` / `Output.getGrid` 全量重建 Screen 网格（参考 FEATURE_172 Phase A 诊断 + Issue 094 的"核心渲染文件过大/耦合"）；
+- 上述同步 CPU 工作（叠加同步 stdout 写）占满主线程 → 驱动 spinner 动画的 `setInterval` 回调被推迟 → 动画帧率不稳 + 计时变慢。
+
+DECSTBM 只优化了「把字节写到终端」这一 I/O 步，没有触碰上面的 CPU 侧重建——这正解释了为何它对 spinner 无效。
+
+#### Next
+
+- 用 `KODAX_RENDER_TRACE` + 多 agent 并行 trace（参考 `feedback_render_pipeline_full_trace`）定位 CPU 侧热点，**端到端测 wall-time**（参考 `feedback_bench_must_be_end_to_end`，不要只测 inner function）。
+- 对照 `C:/Works/claudecode` 的 spinner 机制：是否用不受 render 阻塞的独立 timer，或对流式 render 做节流（throttle / coalesce）。
+
+#### Related
+
+- **FEATURE_212**：`60c38896`（cell-diff）有效修复打字卡顿，保留。DECSTBM 部分（`870f59aa`→`424b1a34`）对本 issue（spinner）**无效**——它只降低滚动帧的 I/O 写入量（对滚动本身流畅度有边际效果），不碰 CPU 侧重建。是否保留取决于 `KODAX_SCROLL_DECSTBM=0` 的 A/B 实测能否复现滚动手感差异；若不可复现则回滚（极简哲学：不保留解决"非真实瓶颈"的代码）。
+- [FEATURE_172](FEATURE_LIST.md#feature_172) / ADR-028 — render pipeline 底层瓶颈（真实瓶颈在 ink 底层 ~80%，非数据层）。
+- Issue 094 — 核心渲染文件过大、职责耦合。
+
+---
+
 ### 135: FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept`
 
 - **Priority**: Medium（与 Issue 134 叠加放大 user-facing 症状；独立暴露率较低，需 Evaluator text-only 终止 → B2 synth 触发才会单发）
