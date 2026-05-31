@@ -665,8 +665,9 @@ complete -c kodax -l version -d 'Show version'`);
     .command('doctor')
     .description('Print environment diagnostics (runtime, providers, session/trace disk usage)')
     .option('--json', 'Output machine-readable JSON')
-    .action((opts: { json?: boolean }) => {
-      runDoctor(version, Boolean(opts?.json));
+    .option('--ping', 'Live-probe each configured provider (network + small token cost)')
+    .action(async (opts: { json?: boolean; ping?: boolean }) => {
+      await runDoctor(version, Boolean(opts?.json), { ping: Boolean(opts?.ping) });
     });
 
   const skillCommand = program

@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { getAgentConfigHome } from '@kodax-ai/agent';
 import { KODAX_PROVIDER_SNAPSHOTS } from '@kodax-ai/coding';
+import { resolveProvider, sideQuery } from '@kodax-ai/llm';
 
 interface DirSummary {
   readonly count: number;
@@ -27,6 +28,17 @@ interface ProviderStatus {
   readonly configured: boolean;
 }
 
+/** Live reachability probe result for one provider (`--ping`). */
+interface ProviderPing {
+  readonly name: string;
+  readonly apiKeyEnv: string;
+  /** The provider answered a minimal request. */
+  readonly reachable: boolean;
+  readonly latencyMs?: number;
+  /** Human-readable outcome: `ok` / `timeout` / a short error reason. */
+  readonly detail: string;
+}
+
 interface DoctorReport {
   readonly version: string;
   readonly runtime: { readonly node: string; readonly platform: string };
@@ -34,12 +46,61 @@ interface DoctorReport {
   /**
    * Per-provider key-presence. `configured` = the provider's env var is set —
    * it does NOT verify the key works or (for coding-plan providers) that the
-   * subscription is active; that needs a live probe (a future `--ping`).
+   * subscription is active; that needs the live `--ping` probe below.
    */
   readonly providers: readonly ProviderStatus[];
   readonly configHome: string;
   readonly sessions: DirSummary | null;
   readonly traces: DirSummary | null;
+  /** Present only when `--ping` ran. Live reachability per configured provider. */
+  readonly providersPing?: readonly ProviderPing[];
+}
+
+/**
+ * Probe one provider with the smallest possible live request. Unlike the
+ * key-presence check, this proves the key actually works AND (for coding-plan
+ * providers) that the subscription is active. Costs a few output tokens; only
+ * runs under `--ping`.
+ */
+async function pingProvider(name: string, apiKeyEnv: string): Promise<ProviderPing> {
+  const startedAt = performance.now();
+  try {
+    const provider = resolveProvider(name);
+    const result = await sideQuery({
+      provider,
+      model: provider.getModel(),
+      system: 'Connectivity probe.',
+      messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+      timeoutMs: 10_000,
+      querySource: 'doctor-ping',
+    });
+    const latencyMs = Math.round(performance.now() - startedAt);
+    if (result.stopReason === 'end_turn' || result.stopReason === 'max_tokens') {
+      return { name, apiKeyEnv, reachable: true, latencyMs, detail: 'ok' };
+    }
+    if (result.stopReason === 'timeout') {
+      return { name, apiKeyEnv, reachable: false, latencyMs, detail: 'timeout (>10s)' };
+    }
+    const reason = result.error?.message ?? result.stopReason;
+    return { name, apiKeyEnv, reachable: false, latencyMs, detail: shortReason(reason) };
+  } catch (error) {
+    const latencyMs = Math.round(performance.now() - startedAt);
+    const reason = error instanceof Error ? error.message : String(error);
+    return { name, apiKeyEnv, reachable: false, latencyMs, detail: shortReason(reason) };
+  }
+}
+
+function shortReason(reason: string): string {
+  const oneLine = reason.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 80 ? `${oneLine.slice(0, 77)}...` : oneLine;
+}
+
+/** Ping every provider whose key is present, concurrently. */
+async function pingConfiguredProviders(
+  providers: readonly ProviderStatus[],
+): Promise<ProviderPing[]> {
+  const configured = providers.filter((p) => p.configured);
+  return Promise.all(configured.map((p) => pingProvider(p.name, p.apiKeyEnv)));
 }
 
 function buildProviderStatuses(): ProviderStatus[] {
@@ -108,8 +169,15 @@ function summaryLine(label: string, summary: DirSummary | null): string {
   return `  ${label}: ${summary.count} files, ${formatBytes(summary.bytes)}`;
 }
 
-export function runDoctor(version: string, asJson: boolean): void {
-  const report = buildReport(version);
+export async function runDoctor(
+  version: string,
+  asJson: boolean,
+  opts: { readonly ping?: boolean } = {},
+): Promise<void> {
+  const base = buildReport(version);
+  const providersPing = opts.ping ? await pingConfiguredProviders(base.providers) : undefined;
+  const report: DoctorReport = providersPing ? { ...base, providersPing } : base;
+
   if (asJson) {
     console.log(JSON.stringify(report, null, 2));
     return;
@@ -136,5 +204,18 @@ export function runDoctor(version: string, asJson: boolean): void {
     summaryLine('sessions', report.sessions),
     summaryLine('traces  ', report.traces),
   ];
+  if (report.providersPing) {
+    lines.push(
+      '',
+      'Provider reachability (live probe — sent a minimal request, small token cost)',
+      ...(report.providersPing.length === 0
+        ? ['  (no configured providers to probe)']
+        : report.providersPing.map((p) =>
+            p.reachable
+              ? `  ✓ ${p.name.padEnd(16)} ${p.detail} (${p.latencyMs}ms)`
+              : `  ✗ ${p.name.padEnd(16)} ${p.detail}`,
+          )),
+    );
+  }
   console.log(lines.join('\n'));
 }
