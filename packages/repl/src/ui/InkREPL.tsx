@@ -6051,6 +6051,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const showConfirmDialog = (tool: string, input: Record<string, unknown>): Promise<ConfirmResult> => {
     const promptText = buildToolConfirmationPrompt(tool, input);
 
+    // FEATURE_203 (v0.7.45): commit any pending streamed text before raising the
+    // approval popup, so the popup never appears mid-sentence (the trailing
+    // ≤16ms foreground buffer is flushed into the same React render as the
+    // dialog). Replaces the heavier OverlayQueue rewrite — same core UX win.
+    flushForegroundTextBuffer();
+
     // Return a promise that resolves when the user answers.
     return new Promise<ConfirmResult>((resolve) => {
       confirmResolveRef.current = resolve;
