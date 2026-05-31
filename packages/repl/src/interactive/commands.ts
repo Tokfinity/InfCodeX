@@ -64,6 +64,7 @@ import { copyCommand } from '../commands/copy-command.js';
 import { memoryCommand } from '../commands/memory-command.js';
 import { goalCommand } from '../commands/goal-command.js';
 import { newCommand } from '../commands/new-command.js';
+import { reviewCommand } from '../commands/review-command.js';
 import { getActivePasteStore } from '../ui/utils/paste-store.js';
 import { retrievePastedText } from '../ui/utils/paste-cache.js';
 import {
@@ -1759,6 +1760,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   memoryCommand,
   goalCommand,
   newCommand,
+  reviewCommand,
 ];
 
 // Print help.
