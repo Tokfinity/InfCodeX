@@ -7,7 +7,7 @@
  * opt-in escape hatch via env vars.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
 
 import {
@@ -15,6 +15,18 @@ import {
   VERIFIER_PROVIDER_ENV,
   resolveVerifierProvider,
 } from './verifier-provider-resolver.js';
+
+// `tryGetProvider` instantiates the named provider, which requires its API key
+// (v0.7.45 FEATURE_102-A moved coding-plan keys onto dedicated env vars). Stub
+// the keys used by the explicit-override cases so the named providers resolve
+// instead of silently falling back to inherit-main.
+beforeEach(() => {
+  vi.stubEnv('KIMI_CODE_API_KEY', 'test-key');
+  vi.stubEnv('ARK_CODING_API_KEY', 'test-key');
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function fakeMainProvider(): KodaXBaseProvider {
   return {

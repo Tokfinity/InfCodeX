@@ -660,7 +660,7 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
   // pin the membership + sanity-check the actual prune semantics against
   // representative protected tools.
 
-  it('contains the 27 F183-canonical members exactly (+ todo_get v0.7.42)', () => {
+  it('contains the 28 canonical members exactly (+ todo_get v0.7.42, + cyclic_dependencies v0.7.45)', () => {
     // Snapshot the full membership so any future drift (add / drop) is
     // caught immediately by this test rather than discovered in production.
     expect([...PROTECTED_TOOL_NAMES].sort()).toEqual(
@@ -701,9 +701,12 @@ describe('FEATURE_183 (v0.7.42): PROTECTED_TOOL_NAMES whitelist expansion', () =
         'symbol_context',
         'process_context',
         'impact_estimate',
+        // v0.7.45 FEATURE_205-A — cyclic_dependencies (Tarjan SCC pull-tool)
+        // joins the read-only repo-intelligence family.
+        'cyclic_dependencies',
       ].sort(),
     );
-    expect(PROTECTED_TOOL_NAMES.size).toBe(27);
+    expect(PROTECTED_TOOL_NAMES.size).toBe(28);
   });
 
   it('exposes the set as a ReadonlySet (frozen API surface)', () => {

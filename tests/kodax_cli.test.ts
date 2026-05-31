@@ -283,7 +283,10 @@ describe('CLI Entry Point', () => {
   it('should have correct CLI entry in package.json', async () => {
     const pkgPath = path.join(process.cwd(), 'package.json');
     const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
-    expect(pkg.bin.kodax).toBe('./scripts/kodax-bin.cjs');
+    // v0.7.43 76e471cc deliberately baked the published bin shape (no `./`
+    // prefix) into the dev package.json so `npm link` matches the published
+    // package. Assert the intentional value.
+    expect(pkg.bin.kodax).toBe('scripts/kodax-bin.cjs');
   });
 
   it('should export commands directory constant', () => {

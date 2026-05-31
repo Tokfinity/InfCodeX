@@ -388,6 +388,16 @@ describe('Tool Definitions', () => {
 // ============== Provider 测试 ==============
 
 describe('Provider System', () => {
+  // `getProvider` instantiates the provider, which requires its API key.
+  // v0.7.45 FEATURE_102-A moved coding-plan keys onto dedicated env vars, so
+  // zhipu-coding now needs ZHIPU_CODING_API_KEY specifically.
+  beforeEach(() => {
+    vi.stubEnv('ZHIPU_CODING_API_KEY', 'test-key');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it('should have at least the v0.7.0 baseline of 11 providers', () => {
     const providerCount = Object.keys(KODAX_PROVIDERS).length;
     // FEATURE_099 (v0.7.28) added DeepSeek V4 + ark-coding (Volcengine
