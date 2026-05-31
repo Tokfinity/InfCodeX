@@ -230,11 +230,26 @@ export async function executeChildAgents(
  * matches the "specialist override is opportunistic, not load-bearing"
  * semantic of the FEATURE_191 design.
  */
+interface SpecialistOverride {
+  systemPromptOverride: string;
+  excludeTools: readonly string[];
+  /**
+   * FEATURE_102 Phase 1 (v0.7.45): the specialist agent's explicit model /
+   * provider, when its manifest declared them. The child-executor prefers
+   * these over the parent's. This is the SAFE, explicit (user-authored) slice
+   * of model routing — no capability auto-inference (that is billing-sensitive
+   * and gated on the Phase 4 quality eval). Undefined when the specialist set
+   * no model/provider → falls through to the parent default.
+   */
+  modelOverride?: string;
+  providerOverride?: string;
+}
+
 function resolveSpecialistOverride(
   bundle: KodaXChildContextBundle,
   defaultSystemPrompt: string,
   defaultExcludeTools: readonly string[],
-): { systemPromptOverride: string; excludeTools: readonly string[] } {
+): SpecialistOverride {
   if (!bundle.specialistName) {
     return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
   }
@@ -246,6 +261,11 @@ function resolveSpecialistOverride(
     // child run.
     return { systemPromptOverride: defaultSystemPrompt, excludeTools: defaultExcludeTools };
   }
+  // FEATURE_102 Phase 1: surface the specialist's explicit model/provider.
+  const modelProvider: Pick<SpecialistOverride, 'modelOverride' | 'providerOverride'> = {
+    ...(specialist.model ? { modelOverride: specialist.model } : {}),
+    ...(specialist.provider ? { providerOverride: specialist.provider } : {}),
+  };
   // Agent.instructions is `string | ((ctx) => string)`. Constructed agents
   // built by agent-resolver.buildAgentFromContent assign the literal
   // string straight through; the function variant is reserved for
@@ -263,12 +283,12 @@ function resolveSpecialistOverride(
     // Specialist declared no tools — fall back to defaults so the child
     // still has the standard CHILD_EXCLUDE_TOOLS_BASE/READONLY guard
     // rather than an unrestricted toolset.
-    return { systemPromptOverride, excludeTools: defaultExcludeTools };
+    return { systemPromptOverride, excludeTools: defaultExcludeTools, ...modelProvider };
   }
   const specialistToolNames = new Set(specialist.tools.map(t => t.name));
   const allToolNames = getAllRegisteredTools().map(t => t.name);
   const excludeTools = allToolNames.filter(n => !specialistToolNames.has(n));
-  return { systemPromptOverride, excludeTools };
+  return { systemPromptOverride, excludeTools, ...modelProvider };
 }
 
 /* ---------- Read-only child execution ---------- */
@@ -286,21 +306,23 @@ async function executeReadChild(
     options.snapshotUpdater,
   );
 
-  const provider = options.parentOptions.provider ?? 'anthropic';
-
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
   // is undefined; falls through to v0.7.42 defaults).
-  const { systemPromptOverride, excludeTools } = resolveSpecialistOverride(
-    bundle,
-    CHILD_AGENT_SYSTEM_PROMPT,
-    CHILD_EXCLUDE_TOOLS_READONLY,
-  );
+  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider.
+  const { systemPromptOverride, excludeTools, modelOverride, providerOverride } =
+    resolveSpecialistOverride(
+      bundle,
+      CHILD_AGENT_SYSTEM_PROMPT,
+      CHILD_EXCLUDE_TOOLS_READONLY,
+    );
+
+  const provider = providerOverride ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: options.parentOptions.model,
+        model: modelOverride ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -373,8 +395,6 @@ async function executeWriteChild(
     options.planModeBlockCheck,
     options.snapshotUpdater,
   );
-  const provider = options.parentOptions.provider ?? 'anthropic';
-
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
   // (they don't mutate, so project rules don't apply).
@@ -382,17 +402,21 @@ async function executeWriteChild(
 
   // FEATURE_191 — specialist override switch on the write path. Same fail-safe
   // semantic as the read path: unknown specialist falls back to defaults.
-  const { systemPromptOverride, excludeTools } = resolveSpecialistOverride(
-    bundle,
-    writeSystemPrompt,
-    CHILD_EXCLUDE_TOOLS_BASE,
-  );
+  // FEATURE_102 Phase 1 — also surfaces the specialist's explicit model/provider.
+  const { systemPromptOverride, excludeTools, modelOverride, providerOverride } =
+    resolveSpecialistOverride(
+      bundle,
+      writeSystemPrompt,
+      CHILD_EXCLUDE_TOOLS_BASE,
+    );
+
+  const provider = providerOverride ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: options.parentOptions.model,
+        model: modelOverride ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,

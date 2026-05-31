@@ -798,6 +798,47 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     expect(childOptions.context?.systemPromptOverride).toBe(CHILD_AGENT_SYSTEM_PROMPT);
   });
 
+  it('applies the specialist explicit model + provider to the child (FEATURE_102 P1)', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'opus-reviewer',
+      content: {
+        instructions: 'REVIEWER PROMPT',
+        tools: [{ ref: 'builtin:read' }],
+        description: 'review',
+        model: 'claude-opus-4-8',
+        provider: 'anthropic',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-sp-mp', readOnly: true, specialistName: 'opus-reviewer' })];
+    // Parent runs deepseek; the specialist must override to anthropic/opus.
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('anthropic');
+    expect(childOptions.model).toBe('claude-opus-4-8');
+  });
+
+  it('falls through to the parent model/provider when the specialist declares none (FEATURE_102 P1)', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'plain-reviewer',
+      content: { instructions: 'PLAIN PROMPT', tools: [{ ref: 'builtin:read' }], description: 'r' },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-sp-noMP', readOnly: true, specialistName: 'plain-reviewer' })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'deepseek', model: 'deepseek-v4-flash' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('deepseek');
+    expect(childOptions.model).toBe('deepseek-v4-flash');
+  });
+
   it('uses default excludeTools when specialist declares no tools', async () => {
     registerConstructedAgent(buildSpecialistArtifact({
       name: 'narrator',
