@@ -6344,24 +6344,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     if (items.length === 0) {
       return;
     }
-    for (const item of items) {
-      addHistoryItem(item);
-    }
+    // FEATURE_212 (v0.7.45) — one dispatch for the batch (was a per-item loop).
+    addHistoryItems([...items]);
     persistHistoryAdditionsInBackground(items);
-  }, [addHistoryItem, persistHistoryAdditionsInBackground]);
+  }, [addHistoryItems, persistHistoryAdditionsInBackground]);
 
   const appendHistoryItemsToCurrentSnapshot = useCallback((items: readonly CreatableHistoryItem[]) => {
     if (items.length === 0) {
       return;
     }
-    for (const item of items) {
-      addHistoryItem(item);
-    }
+    // FEATURE_212 (v0.7.45) — one dispatch for the batch (was a per-item loop).
+    addHistoryItems([...items]);
     persistedUiHistoryRef.current = appendPersistedUiHistorySnapshot(
       persistedUiHistoryRef.current,
       items,
     );
-  }, [addHistoryItem]);
+  }, [addHistoryItems]);
 
   useEffect(() => {
     appendHistoryItemsWithPersistenceRef.current = appendHistoryItemsWithPersistence;
@@ -6442,33 +6440,35 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearThinkingContent();
     clearResponse();
 
-    for (const item of managedForegroundRoundItems) {
-      addHistoryItem(toCreatableHistoryItem(item));
-    }
-    for (const item of roundHistoryItems) {
-      addHistoryItem(item);
-    }
-
-    if (!roundFailed) {
-      for (const transcript of managedTranscriptItems) {
-        addHistoryItem(toManagedTranscriptEventItem(transcript));
-      }
-      for (const eventItem of managedRoundEvents) {
-        addHistoryItem(toCreatableHistoryItem(eventItem));
-      }
-    }
-
-    if (needsFinalResponseItem) {
-      addHistoryItem({
-        type: "assistant",
-        text: result.interrupted ? `${finalResponse}\n\n[Interrupted]` : finalResponse,
-      });
-    } else if (!finalResponse && !foregroundCoversAssistantText && !result.interrupted && !roundFailed) {
-      // No assistant text was produced — neither from the foreground ledger nor
-      // from the resolved result.  Surface a visible notice so the user is aware
-      // the response was empty rather than silently showing nothing.
-      addHistoryItem({ type: "info", text: "[No response text was produced for this round]" });
-    }
+    // FEATURE_212 (v0.7.45) — collapse the per-item addHistoryItem loops into a
+    // single bulk dispatch. Previously every round-end added K items via K
+    // dispatches → K re-renders, each re-rendering the growing transcript:
+    // per-round O(K·history). This is the hot path (every agent turn), the
+    // dominant "越用越卡 / second-query lag" cost. One dispatch = one re-render.
+    // Order + conditions preserved exactly (foreground → round → [transcript →
+    // events, unless failed] → final/empty-notice).
+    const roundUiAdditions: CreatableHistoryItem[] = [
+      ...managedForegroundRoundItems.map((item) => toCreatableHistoryItem(item)),
+      ...roundHistoryItems,
+      ...(roundFailed
+        ? []
+        : [
+            ...managedTranscriptItems.map((transcript) => toManagedTranscriptEventItem(transcript)),
+            ...managedRoundEvents.map((eventItem) => toCreatableHistoryItem(eventItem)),
+          ]),
+      ...(needsFinalResponseItem
+        ? [{
+            type: "assistant" as const,
+            text: result.interrupted ? `${finalResponse}\n\n[Interrupted]` : finalResponse,
+          }]
+        // No assistant text was produced — neither from the foreground ledger
+        // nor from the resolved result. Surface a visible notice so the user is
+        // aware the response was empty rather than silently showing nothing.
+        : !finalResponse && !foregroundCoversAssistantText && !result.interrupted && !roundFailed
+          ? [{ type: "info" as const, text: "[No response text was produced for this round]" }]
+          : []),
+    ];
+    addHistoryItems(roundUiAdditions);
 
     iterationToolsRef.current = [];
     iterationToolCallsRef.current = [];
@@ -6486,7 +6486,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     // as soon as the final answer is on screen.
     void persistContextStateInBackground(nextUiHistory).catch(() => {});
   }, [
-    addHistoryItem,
+    addHistoryItems,
     clearIterationHistory,
     clearToolInputContent,
     clearResponse,
