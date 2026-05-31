@@ -444,6 +444,40 @@ const Ink = class Ink {
             && usesManagedVirtualFullscreenShell;
         const outputToRender = shouldUseFullscreenFrameOwnership ? output : output + '\n';
         if (this.lastOutputHeight >= this.options.stdout.rows && usesManagedVirtualFullscreenShell) {
+            // FEATURE_212 (v0.7.45) gated fast path — minimal cell-diff under
+            // synchronized output instead of a full ~screen-sized atomic
+            // repaint. The full-frame repaint below writes the whole viewport
+            // (~6KB ANSI) on EVERY render, so a ticking spinner-stats tail
+            // (FEATURE_058682 elapsed+tokens) or a single typed character
+            // triggers a full repaint every frame — on Win10/ConPTY each such
+            // synchronous write costs tens of ms and blocks the event loop
+            // (typing lag + spinner drift + global slowdown). In fullscreen the
+            // transcript does NOT use Ink `<Static>` (MessageList gates Static
+            // on `!windowed`), so `fullStaticOutput` is empty and the cell
+            // `frame` already represents the entire viewport — a cell-diff
+            // paints only the changed cells. Wrapped in BSU/ESU so the
+            // incremental writes are atomic to the terminal (the flicker that
+            // FEATURE_096 originally worked around). DEFAULT ON (validated:
+            // typing smooth, no ConPTY flicker on Win10); escape hatch
+            // `KODAX_FULLSCREEN_CELLDIFF=0` restores the legacy full-frame
+            // repaint. Scroll-heavy frames (streaming) still degrade to a
+            // near-full write until the DECSTBM scroll optimization lands.
+            if (process.env.KODAX_FULLSCREEN_CELLDIFF !== '0'
+                && this.altScreenActive
+                && this.fullStaticOutput === '') {
+                const cellSync = shouldSynchronize(this.options.stdout);
+                if (cellSync) {
+                    this.options.stdout.write(bsu);
+                }
+                this.applyCellFrame(frame);
+                if (cellSync) {
+                    this.options.stdout.write(esu);
+                }
+                this.lastOutput = output;
+                this.lastOutputToRender = outputToRender;
+                this.lastOutputHeight = outputHeight;
+                return;
+            }
             // Phase 6 fullscreen branch: previous render filled or exceeded
             // the viewport. We need to clear the visible area + repaint with
             // the new full-frame content. Cell renderer's `shouldFullReset`

@@ -5672,9 +5672,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           if (appendHistoryItemsWithPersistenceRef.current) {
             appendHistoryItemsWithPersistenceRef.current(previousRoundItems);
           } else {
-            for (const item of previousRoundItems) {
-              addHistoryItem(item);
-            }
+            // FEATURE_212 — bulk even on the mount-race fallback (one dispatch).
+            addHistoryItems([...previousRoundItems]);
           }
         }
       }
@@ -6579,10 +6578,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
 
     const historySeeds = extractHistorySeedsFromMessage(lastAssistant);
-    for (const item of historySeeds) {
-      addHistoryItem(seedToHistoryItem(item));
-    }
-  }, [addHistoryItem]);
+    // FEATURE_212 — one dispatch for the batch (was a per-item loop).
+    addHistoryItems(historySeeds.map(seedToHistoryItem));
+  }, [addHistoryItems]);
 
   const executeInvocation = useCallback(async (
     invocation: CommandInvocationRequest,
