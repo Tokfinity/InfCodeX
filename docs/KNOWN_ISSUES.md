@@ -121,7 +121,7 @@ DECSTBM 只优化了「把字节写到终端」这一 I/O 步，没有触碰上�
 
 #### Related
 
-- **FEATURE_212**：`60c38896`（cell-diff）有效修复打字卡顿，保留。DECSTBM 部分（`870f59aa`→`424b1a34`）对本 issue（spinner）**无效**——它只降低滚动帧的 I/O 写入量（对滚动本身流畅度有边际效果），不碰 CPU 侧重建。是否保留取决于 `KODAX_SCROLL_DECSTBM=0` 的 A/B 实测能否复现滚动手感差异；若不可复现则回滚（极简哲学：不保留解决"非真实瓶颈"的代码）。
+- **FEATURE_212**：`60c38896`（cell-diff）有效修复打字卡顿，保留。DECSTBM 部分（`870f59aa`→`424b1a34`）对本 issue（spinner）**无效**——它只降低滚动帧的 I/O 写入量，不碰 CPU 侧重建。但用户实测**滚动本身手感有改善**（I/O 写入量下降的预期效果，与 spinner 症状独立）→ **保留**（2026-05-31，escape hatch `KODAX_SCROLL_DECSTBM=0`）。本 issue 的 spinner 卡顿仍 **Open**，需 CPU 侧 trace。
 - [FEATURE_172](FEATURE_LIST.md#feature_172) / ADR-028 — render pipeline 底层瓶颈（真实瓶颈在 ink 底层 ~80%，非数据层）。
 - Issue 094 — 核心渲染文件过大、职责耦合。
 
