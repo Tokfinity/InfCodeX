@@ -50,10 +50,26 @@ export interface Cursor {
  * `readonly scrollDrainPending?: boolean` — adding optional fields is a
  * non-breaking change.
  */
+/**
+ * FEATURE_212 (v0.7.45) — DECSTBM scroll hint. When the fullscreen transcript
+ * scrolled since the previous render, `render-node-to-output` stamps the
+ * scrolled region's screen rows (`top`/`bottom`, 0-based inclusive) and how
+ * many rows the content moved (`delta`; positive = scrolled up). `render()`
+ * uses it to emit a hardware scroll for that region instead of repainting
+ * every shifted row. Absent/`null` when nothing scrolled.
+ */
+export interface ScrollHint {
+  readonly top: number;
+  readonly bottom: number;
+  readonly delta: number;
+}
+
 export interface Frame {
   readonly screen: Screen;
   readonly viewport: Size;
   readonly cursor: Cursor;
+  /** FEATURE_212 — present only when the transcript scrolled this render. */
+  readonly scrollHint?: ScrollHint | null;
 }
 
 /**

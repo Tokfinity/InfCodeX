@@ -1,4 +1,4 @@
-import renderNodeToOutput, { renderNodeToScreenReaderOutput, } from './render-node-to-output.js';
+import renderNodeToOutput, { renderNodeToScreenReaderOutput, resetScrollHint, getScrollHint, } from './render-node-to-output.js';
 import Output from './output.js';
 import { outputToScreen } from './output-to-screen.js';
 /**
@@ -40,6 +40,9 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
             width: node.yogaNode.getComputedWidth(),
             height: node.yogaNode.getComputedHeight(),
         });
+        // FEATURE_212 — reset the scroll-hint side-channel before the walk;
+        // the scroll block stamps it if the transcript scrolled this render.
+        resetScrollHint();
         renderNodeToOutput(node, output, {
             skipStaticElements: true,
         });
@@ -68,6 +71,10 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
             // render's incremental diff starts from a deterministic
             // position. CC reference behavior (cursor at content bottom).
             cursor: { x: 0, y: screen.height, visible: true },
+            // FEATURE_212 — scroll hint captured during the walk above (null
+            // unless the transcript scrolled). Read-only metadata; does not
+            // affect `screen`. Consumed by cell-renderer render() step 3.
+            scrollHint: getScrollHint(),
         };
         return {
             output: generatedOutput,

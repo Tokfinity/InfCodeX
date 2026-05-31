@@ -67,6 +67,21 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
     }
     return output;
 };
+// FEATURE_212 (v0.7.45) — scroll-hint capture for the DECSTBM optimization.
+// READ-ONLY side-channel: the `overflowY:'scroll'` block below stamps the
+// active scroll region's screen rows + the delta the content moved since the
+// previous render. This does NOT change `output`/the rendered screen — the
+// `renderer` resets it before the walk and reads it after, attaching it to the
+// Frame. `cell-renderer`'s `render()` consumes it to emit a hardware scroll
+// instead of repainting every shifted row. Mirrors CC's render-node-to-output
+// module-level `scrollHint`.
+let _scrollHint = null;
+export function resetScrollHint() {
+    _scrollHint = null;
+}
+export function getScrollHint() {
+    return _scrollHint;
+}
 // After nodes are laid out, render each to output object, which later gets rendered to terminal
 const renderNodeToOutput = (node, output, options) => {
     const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, } = options;
@@ -138,6 +153,27 @@ const renderNodeToOutput = (node, output, options) => {
                 node.scrollHeight = contentHeight;
                 node.scrollViewportHeight = viewportHeight;
                 node.scrollViewportTop = clampedViewportTop;
+                // FEATURE_212 — capture scroll delta for the DECSTBM hint
+                // BEFORE overwriting node.scrollTop. Read-only: only reads the
+                // node's previously-applied scroll position + computed screen
+                // region, never touches `output`. The region is this scroll
+                // box's visible rows in absolute screen coords (`y` is the
+                // node's screen top, `borderTop` the inner offset).
+                const previousAppliedScrollTop = node.appliedScrollTop;
+                node.appliedScrollTop = clampedViewportTop;
+                if (previousAppliedScrollTop !== undefined
+                    && previousAppliedScrollTop !== clampedViewportTop
+                    && viewportHeight > 0) {
+                    const regionTop = y + borderTop;
+                    const regionBottom = regionTop + viewportHeight - 1;
+                    if (regionBottom >= regionTop) {
+                        _scrollHint = {
+                            top: regionTop,
+                            bottom: regionBottom,
+                            delta: clampedViewportTop - previousAppliedScrollTop,
+                        };
+                    }
+                }
                 node.scrollTop = clampedViewportTop;
                 if (!virtualScrollWindowed) {
                     scrollOffsetY = clampedViewportTop;
