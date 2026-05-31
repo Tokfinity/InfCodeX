@@ -224,9 +224,17 @@ describe('executeChildAgents', () => {
       createBundle({ id: 'cb-2', objective: 'Find bugs in cache', evidenceRefs: ['file:src/cache.ts'] }),
     ];
 
-    mockRunKodaX
-      .mockResolvedValueOnce({ success: true, lastText: 'Found null check bug', messages: [{ role: 'assistant', content: '' }], sessionId: 's1' })
-      .mockResolvedValueOnce({ success: true, lastText: 'Found race condition', messages: [{ role: 'assistant', content: '' }], sessionId: 's2' });
+    // Children run in parallel, so runKodaX call order is non-deterministic —
+    // key the mock on the child's briefing (auth vs cache) instead of a
+    // call-order sequence, otherwise this test flakes on whichever child
+    // reaches runKodaX first.
+    mockRunKodaX.mockImplementation((_opts: unknown, briefing: string) =>
+      Promise.resolve(
+        briefing.includes('auth')
+          ? { success: true, lastText: 'Found null check bug', messages: [{ role: 'assistant', content: '' }], sessionId: 's1' }
+          : { success: true, lastText: 'Found race condition', messages: [{ role: 'assistant', content: '' }], sessionId: 's2' },
+      ),
+    );
 
     const result = await executeChildAgents(bundles, createCtx(), createOptions());
 
@@ -820,6 +828,51 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
     const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
     expect(childOptions.provider).toBe('anthropic');
     expect(childOptions.model).toBe('claude-opus-4-8');
+  });
+
+  it('applies bundle.provider + bundle.model to the child (FEATURE_102 P2 dispatch override)', async () => {
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    const bundles = [createBundle({ id: 'cb-bd-mp', readOnly: true, provider: 'deepseek', model: 'deepseek-v4-pro' })];
+    // Parent runs anthropic; the per-dispatch bundle override must win.
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'anthropic', model: 'claude-opus-4-8' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('deepseek');
+    expect(childOptions.model).toBe('deepseek-v4-pro');
+  });
+
+  it('bundle.provider/model take priority over the specialist override (FEATURE_102 P2 > P1)', async () => {
+    registerConstructedAgent(buildSpecialistArtifact({
+      name: 'opus-spec',
+      content: {
+        instructions: 'SPEC PROMPT',
+        tools: [{ ref: 'builtin:read' }],
+        description: 'r',
+        model: 'claude-opus-4-8',
+        provider: 'anthropic',
+      },
+    }));
+    mockRunKodaX.mockResolvedValue(okResult());
+
+    // Bundle names a specialist (anthropic/opus) AND an explicit dispatch
+    // override (deepseek/flash). The explicit per-dispatch choice wins.
+    const bundles = [createBundle({
+      id: 'cb-bd-over-spec',
+      readOnly: true,
+      specialistName: 'opus-spec',
+      provider: 'deepseek',
+      model: 'deepseek-v4-flash',
+    })];
+    await executeChildAgents(bundles, createCtx(), createOptions({
+      parentOptions: { provider: 'zhipu-coding' },
+    }));
+
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
+    expect(childOptions.provider).toBe('deepseek');
+    expect(childOptions.model).toBe('deepseek-v4-flash');
   });
 
   it('falls through to the parent model/provider when the specialist declares none (FEATURE_102 P1)', async () => {

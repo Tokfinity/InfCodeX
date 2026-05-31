@@ -460,6 +460,14 @@ export async function* toolDispatchChildTask(
     }
   }
 
+  // FEATURE_102 Phase 2 — optional explicit provider/model for this child.
+  // Parsed tolerantly (empty → undefined). An unconfigured provider falls back
+  // to the parent in child-executor, so a misuse never fails the dispatch.
+  const childProvider =
+    typeof input.provider === 'string' && input.provider.trim() ? input.provider.trim() : undefined;
+  const childModel =
+    typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined;
+
   const bundle: KodaXChildContextBundle = {
     id: childId,
     fanoutClass: 'evidence-scan' as KodaXAmaFanoutClass,
@@ -474,6 +482,8 @@ export async function* toolDispatchChildTask(
       : [],
     modelHint,
     specialistName,
+    ...(childProvider ? { provider: childProvider } : {}),
+    ...(childModel ? { model: childModel } : {}),
   };
 
   // --- Build executor options ---

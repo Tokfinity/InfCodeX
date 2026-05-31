@@ -381,6 +381,15 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
           type: 'string',
           description: 'When the task matches a registered specialist (e.g., db-reviewer for SQL changes, e2e-runner for browser tests), dispatch as that specialist instead of a generic child.',
         },
+        // FEATURE_102 Phase 2 (v0.7.45) — explicit per-dispatch model targeting.
+        provider: {
+          type: 'string',
+          description: 'Optional. Run this child on a specific provider instead of inheriting yours. Use when you deliberately want a different model family — e.g. a second independent review of the same change by a different family, to catch blind spots a single family would share. Omit to inherit your provider (the default). An unconfigured provider falls back to yours.',
+        },
+        model: {
+          type: 'string',
+          description: 'Optional. Specific model id for this child, paired with `provider`. Omit to inherit your model.',
+        },
       },
       required: ['objective'],
     },

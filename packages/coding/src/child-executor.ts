@@ -316,13 +316,13 @@ async function executeReadChild(
       CHILD_EXCLUDE_TOOLS_READONLY,
     );
 
-  const provider = providerOverride ?? options.parentOptions.provider ?? 'anthropic';
+  const provider = bundle.provider ?? providerOverride ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: modelOverride ?? options.parentOptions.model,
+        model: bundle.model ?? modelOverride ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -410,13 +410,13 @@ async function executeWriteChild(
       CHILD_EXCLUDE_TOOLS_BASE,
     );
 
-  const provider = providerOverride ?? options.parentOptions.provider ?? 'anthropic';
+  const provider = bundle.provider ?? providerOverride ?? options.parentOptions.provider ?? 'anthropic';
 
   try {
     const result = await (await getRunKodaX())(
       {
         provider,
-        model: modelOverride ?? options.parentOptions.model,
+        model: bundle.model ?? modelOverride ?? options.parentOptions.model,
         reasoningMode: options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: options.maxIterationsPerChild,
@@ -887,9 +887,19 @@ function mergeChildResults(
   cancelledChildren: readonly string[],
 ): KodaXChildExecutionResult {
   const bundleMap = new Map(bundles.map((b) => [b.id, b]));
+  const resultByChildId = new Map(results.map((r) => [r.childId, r]));
 
-  const mergedFindings: KodaXChildFinding[] = results
-    .filter((r) => r.status === 'completed' || r.summary.length > 0)
+  // Findings follow dispatch (bundle) order, not completion order. `results`
+  // intentionally stays in completion order for crash attribution, but
+  // consumers read `mergedFindings` positionally against the order they
+  // requested — so we re-align here. Without this, parallel children that
+  // finish out of order produce nondeterministic finding ordering.
+  const mergedFindings: KodaXChildFinding[] = bundles
+    .map((b) => resultByChildId.get(b.id))
+    .filter(
+      (r): r is KodaXChildAgentResult =>
+        r !== undefined && (r.status === 'completed' || r.summary.length > 0),
+    )
     .map((r) => ({
       childId: r.childId,
       objective: bundleMap.get(r.childId)?.objective ?? '',

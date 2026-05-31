@@ -561,6 +561,14 @@ export interface KodaXChildContextBundle {
    * preserves byte-identical v0.7.42 baseline dispatch behavior.
    */
   specialistName?: string;
+  /**
+   * FEATURE_102 Phase 2 (v0.7.45) — explicit per-dispatch provider/model the
+   * dispatching agent chose for this child (e.g. a cross-family second review).
+   * Priority in child-executor: `bundle.provider/model` > specialist's declared
+   * model > parent default. Omitting both inherits the parent (byte-identical).
+   */
+  provider?: string;
+  model?: string;
 }
 
 /**
