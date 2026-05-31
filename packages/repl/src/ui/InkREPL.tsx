@@ -164,6 +164,8 @@ import { buildManagedLiveEventDrafts } from "./InkREPL-live-event-drafts.js";
 // Re-exported so existing `from "./InkREPL.js"` importers (tests) keep working.
 import { buildManagedTaskTranscriptItems } from "./InkREPL-transcript-builders.js";
 export { buildManagedTaskTranscriptItems };
+// FEATURE_202 (v0.7.45) — live reasoning topic header from the thinking stream.
+import { extractBoldHeader } from "../tui/streaming/bold-header-extractor.js";
 import { KODAX_VERSION } from "../common/utils.js";
 import { saveAlwaysAllowToolPattern, loadAlwaysAllowTools, savePermissionModeUser, loadAutoModeSettings } from "../common/permission-config.js";
 import {
@@ -5042,11 +5044,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         setCurrentTool(undefined);
         clearToolInputContent();
       }
+      // FEATURE_202 (v0.7.45): surface the model's first **bold** reasoning
+      // topic as "Thinking: <topic>" instead of a static "[Thinking]".
+      const { header: reasoningHeader } = extractBoldHeader(getThinkingContent() + text);
+      const thinkingLabel = reasoningHeader ? `[Thinking: ${reasoningHeader}]` : "[Thinking]";
       setLastLiveActivityLabel(
         formatManagedLiveActivityLabel(
           managedTaskStatusRef.current?.activeWorkerTitle
-            ? `[${managedTaskStatusRef.current.activeWorkerTitle}] [Thinking]`
-            : "[Thinking]",
+            ? `[${managedTaskStatusRef.current.activeWorkerTitle}] ${thinkingLabel}`
+            : thinkingLabel,
           managedTaskStatusRef.current?.activeWorkerTitle,
         ),
       );
