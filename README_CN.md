@@ -327,13 +327,14 @@ dist/binary/linux-x64/
 | anthropic | `ANTHROPIC_API_KEY` | Native | claude-sonnet-4-6 |
 | openai | `OPENAI_API_KEY` | Native | gpt-5.3-codex |
 | kimi | `KIMI_API_KEY` | Native | kimi-k2.6 |
-| kimi-code | `KIMI_API_KEY` | Native | kimi-for-coding |
+| kimi-code | `KIMI_CODE_API_KEY` | Native | kimi-for-coding |
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 |
-| zhipu-coding | `ZHIPU_API_KEY` | Native | glm-5（GLM Coding Plan 端点） |
-| minimax-coding | `MINIMAX_API_KEY` | Native | MiniMax-M2.7 |
-| mimo-coding | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
-| ark-coding | `ARK_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan，多模型网关，Anthropic 协议） |
+| zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan 端点） |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 |
+| mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
+| mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
+| ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan，多模型网关，Anthropic 协议） |
 | deepseek | `DEEPSEEK_API_KEY` | Native | deepseek-v4-flash |
 | gemini-cli | `GEMINI_API_KEY` | Prompt-only / CLI bridge | （通过 gemini CLI） |
 | codex-cli | `OPENAI_API_KEY` | Prompt-only / CLI bridge | （通过 codex CLI） |
