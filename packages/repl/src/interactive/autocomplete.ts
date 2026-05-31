@@ -10,6 +10,7 @@ import * as path from 'path';
 import type * as readline from 'readline';
 import { getActiveExtensionRuntime } from '@kodax-ai/coding';
 import { getCommandRegistry } from './commands.js';
+import { getRecentWorkingSetFiles } from './recent-files.js';
 
 /**
  * Completion item - 补全项
@@ -64,9 +65,17 @@ export class FileCompleter implements Completer {
   private cwdSource?: string | (() => string);
   private cache = new Map<string, { entries: string[]; expiresAt: number }>();
   private cacheTimeout = 5000; // 5 second cache - 5 秒缓存
+  // FEATURE_207 — recent (git working-set) files, cached like the dir listing.
+  private recentCache = new Map<string, { files: string[]; expiresAt: number }>();
+  private recentFilesProvider: (cwd: string) => Promise<string[]>;
 
-  constructor(cwd?: string | (() => string)) {
+  constructor(
+    cwd?: string | (() => string),
+    // Injectable for testing; defaults to the git working-set source.
+    recentFilesProvider: (cwd: string) => Promise<string[]> = getRecentWorkingSetFiles,
+  ) {
     this.cwdSource = cwd;
+    this.recentFilesProvider = recentFilesProvider;
   }
 
   canComplete(input: string, cursorPos: number): boolean {
@@ -123,7 +132,39 @@ export class FileCompleter implements Completer {
       // Directory doesn't exist or unreadable - 目录不存在或无法读取
     }
 
+    // FEATURE_207 — when the user hasn't navigated into a specific directory
+    // (no '/' in the @-segment), surface recent git working-set files first.
+    // They may live in nested dirs, so they complement (not duplicate) the
+    // flat cwd listing above. A specific path like `@src/` keeps the plain
+    // directory listing untouched.
+    if (lastSlash === -1) {
+      const recent = await this.getRecentFiles(cwd);
+      const seen = new Set(completions.map((c) => c.text));
+      const lowerPrefix = prefix.toLowerCase();
+      const recentCompletions: Completion[] = [];
+      for (const rel of recent) {
+        if (prefix && !path.basename(rel).toLowerCase().startsWith(lowerPrefix)) continue;
+        const text = '@' + rel;
+        if (seen.has(text)) continue;
+        seen.add(text);
+        recentCompletions.push({ text, display: rel, description: 'recent', type: 'file' });
+      }
+      // Prepend so recent files rank first when the pattern is empty.
+      completions.unshift(...recentCompletions);
+    }
+
     return completions;
+  }
+
+  private async getRecentFiles(cwd: string): Promise<string[]> {
+    const now = Date.now();
+    const cached = this.recentCache.get(cwd);
+    if (cached && cached.expiresAt > now) {
+      return cached.files;
+    }
+    const files = await this.recentFilesProvider(cwd);
+    this.recentCache.set(cwd, { files, expiresAt: Date.now() + this.cacheTimeout });
+    return files;
   }
 
   private resolveCwd(): string {
