@@ -1363,7 +1363,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     pendingText: string;
   }>({ itemId: undefined, kind: "thinking", pendingText: "" });
   const foregroundFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const FOREGROUND_FLUSH_INTERVAL = 80;
+  // FEATURE_201 (v0.7.45) Phase A: 80ms → 16ms (60fps) to match the streaming
+  // cadence of every modern TUI (Claude Code / opencode 16ms, codex 120fps).
+  // The ref-accumulation + single flush-per-tick batching below already coalesces
+  // bursts, so dropping to 16ms lowers visible latency without a flush per delta.
+  const FOREGROUND_FLUSH_INTERVAL = 16;
   // Issue 079: Limit visible history to last 20 conversation rounds
   // A "round" = one user input + AI response(s)
   // Full history remains in state, only rendering is limited
