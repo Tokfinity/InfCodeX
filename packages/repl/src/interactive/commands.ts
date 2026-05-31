@@ -836,6 +836,57 @@ export const BUILTIN_COMMANDS: Command[] = [
     },
   },
   {
+    name: 'fallback',
+    description: 'Configure the cross-provider fallback chain for child tasks',
+    usage: '/fallback [status | <p1,p2,...> | off]',
+    handler: async (args, _context, _callbacks, _currentConfig) => {
+      // Read the live env (set at startup from config, or updated by this
+      // command) so status always reflects the running session.
+      const current = (process.env.KODAX_FALLBACK_PROVIDERS ?? '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      const sub = args[0]?.toLowerCase();
+
+      if (!sub || sub === 'status') {
+        if (current.length === 0) {
+          console.log(chalk.dim('\nChild-task provider fallback: ') + chalk.yellow('off') + chalk.dim(' (no chain configured)'));
+        } else {
+          console.log(chalk.dim('\nChild-task provider fallback: ') + chalk.green('on'));
+          console.log(chalk.dim('  Order: ') + chalk.cyan(current.join(' → ')));
+        }
+        console.log(chalk.dim('\n  When a child\'s primary provider is exhausted/down, KodaX re-runs it'));
+        console.log(chalk.dim('  on the next provider in this list. Set: /fallback ark-coding,kimi-code\n'));
+        return;
+      }
+
+      if (sub === 'off' || sub === 'clear' || sub === 'none') {
+        saveConfig({ fallbackProviders: undefined });
+        delete process.env.KODAX_FALLBACK_PROVIDERS;
+        console.log(chalk.green('\n✓ ') + chalk.dim('Child-task provider fallback disabled.\n'));
+        return;
+      }
+
+      // Treat the rest as the chain — accept comma- or space-separated ids.
+      const chain = args
+        .join(',')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (chain.length === 0) {
+        console.log(chalk.red('\n[/fallback: no provider ids given]'));
+        console.log(chalk.dim('Usage: /fallback ark-coding,kimi-code   (or /fallback off)\n'));
+        return;
+      }
+
+      saveConfig({ fallbackProviders: chain });
+      // Live override (the startup env mirror is env-wins, so set it directly).
+      process.env.KODAX_FALLBACK_PROVIDERS = chain.join(',');
+      console.log(chalk.green('\n✓ ') + chalk.dim('Child-task fallback order: ') + chalk.cyan(chain.join(' → ')));
+      console.log(chalk.dim('  Provider ids must match your configured providers (see /status or kodax doctor).\n'));
+    },
+  },
+  {
     name: 'mode',
     description: 'Show or switch permission mode (plan/accept-edits/auto)',
     usage: '/mode [plan|accept-edits|auto]',

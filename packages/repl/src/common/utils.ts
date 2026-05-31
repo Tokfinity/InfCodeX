@@ -645,6 +645,14 @@ export function loadConfig(): {
    * Mirrored to env var `KODAX_STALL_LOG=1`.
    */
   stallLog?: boolean;
+  /**
+   * FEATURE_102 Phase 3 (v0.7.45) — ordered cross-provider fallback chain for
+   * child dispatch. When a child's primary provider is exhausted/down, the
+   * runtime re-runs it on the next provider here. Empty/absent = OFF. Mirrored
+   * to env var `KODAX_FALLBACK_PROVIDERS` (comma-separated) for the coding
+   * layer, which has no config access. Set via the `/fallback` command.
+   */
+  fallbackProviders?: string[];
 } {
   try {
     if (fsSync.existsSync(KODAX_CONFIG_FILE)) {
@@ -669,6 +677,7 @@ export function loadConfig(): {
         streamIdleTimeoutMs?: number;
         verifierLog?: boolean;
         stallLog?: boolean;
+        fallbackProviders?: string[];
       };
       // FEATURE_078: collapse `reasoningCeiling` (preferred) onto
       // `reasoningMode` so existing call sites that read
@@ -737,6 +746,19 @@ function applyStallSidecarRuntimeEnv(config: ReturnType<typeof loadConfig>): voi
   }
 }
 
+/**
+ * FEATURE_102 Phase 3 (v0.7.45) — propagate the user-config
+ * `fallbackProviders` chain to `KODAX_FALLBACK_PROVIDERS` (comma-separated)
+ * for the coding layer's child-fallback resolver. Same env-wins precedence as
+ * the verifier/stall counterparts.
+ */
+function applyFallbackRuntimeEnv(config: ReturnType<typeof loadConfig>): void {
+  const chain = config.fallbackProviders?.filter((entry) => entry.trim().length > 0) ?? [];
+  if (chain.length > 0 && !process.env.KODAX_FALLBACK_PROVIDERS) {
+    process.env.KODAX_FALLBACK_PROVIDERS = chain.join(',');
+  }
+}
+
 export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   ensureShellEnvironmentHydrated();
   const config = loadConfig();
@@ -744,6 +766,7 @@ export function prepareRuntimeConfig(): ReturnType<typeof loadConfig> {
   applyRepoIntelligenceRuntimeEnv(config);
   applyVerifierRuntimeEnv(config);
   applyStallSidecarRuntimeEnv(config);
+  applyFallbackRuntimeEnv(config);
   registerConfiguredCustomProviders(config);
   // Initialize i18n locale from config (falls back to system LANG)
   setLocale(config.locale);
@@ -772,6 +795,8 @@ export function saveConfig(config: {
   verifierLog?: boolean;
   /** FEATURE_187 Phase C — opt-in stall sidecar log line. */
   stallLog?: boolean;
+  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
+  fallbackProviders?: string[];
 }): void {
   const current = loadConfig();
   const merged = { ...current, ...config };

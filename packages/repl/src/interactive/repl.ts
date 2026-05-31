@@ -383,6 +383,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
     repointelEndpoint: repoIntelligenceRuntime.endpoint,
     repointelBin: repoIntelligenceRuntime.bin,
     repoIntelligenceTrace: repoIntelligenceRuntime.trace,
+    fallbackProviders: config.fallbackProviders,
   };
 
   // Local permission state - 本地权限状态

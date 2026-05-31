@@ -57,6 +57,8 @@ export interface CurrentConfig {
   repointelEndpoint?: string;
   repointelBin?: string;
   repoIntelligenceTrace?: boolean;
+  /** FEATURE_102 Phase 3 — cross-provider child fallback chain. */
+  fallbackProviders?: string[];
 }
 
 export type SessionLoadStatus = 'loaded' | 'missing' | 'blocked';
