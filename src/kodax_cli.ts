@@ -37,6 +37,7 @@ import fsSync from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { runAcpServer } from './acp_server.js';
+import { runDoctor } from './kodax_doctor.js';
 import {
   getDefaultCommandDir,
   KODAX_COMMANDS_DIR,
@@ -659,6 +660,15 @@ complete -c kodax -l version -d 'Show version'`);
       }
     });
 
+  // ============== doctor subcommand (FEATURE_204) ==============
+  program
+    .command('doctor')
+    .description('Print environment diagnostics (runtime, providers, session/trace disk usage)')
+    .option('--json', 'Output machine-readable JSON')
+    .action((opts: { json?: boolean }) => {
+      runDoctor(version, Boolean(opts?.json));
+    });
+
   const skillCommand = program
     .command('skill')
     .description('Built-in skill packaging and installation helpers')
@@ -1112,7 +1122,7 @@ complete -c kodax -l version -d 'Show version'`);
   }
 
   await program.parseAsync(process.argv);
-  if (argv[0] === 'skill' || argv[0] === 'acp' || argv[0] === 'tools') {
+  if (argv[0] === 'skill' || argv[0] === 'acp' || argv[0] === 'tools' || argv[0] === 'doctor') {
     return;
   }
 
