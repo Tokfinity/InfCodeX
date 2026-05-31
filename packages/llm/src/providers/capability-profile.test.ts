@@ -87,6 +87,7 @@ describe('provider capability profiles', () => {
       'zhipu-coding',
       'minimax-coding',
       'mimo-coding',
+      'mimo',
       'ark-coding',
       'gemini-cli',
     ] as const;

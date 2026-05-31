@@ -48,6 +48,7 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
           'kimi',
           'kimi-code',
           'minimax-coding',
+          'mimo',
           'mimo-coding',
           'openai',
           'qwen',

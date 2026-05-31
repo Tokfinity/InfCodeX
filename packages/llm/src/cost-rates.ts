@@ -71,6 +71,15 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'mimo-v2.5-pro': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'mimo-v2.5': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
+  mimo: {
+    // Xiaomi MiMo public pay-per-token Anthropic-compat endpoint
+    // (https://platform.xiaomimimo.com/docs/zh-CN/api/chat/anthropic-api).
+    // Same model family as mimo-coding but billed per token. Placeholders
+    // mirror mimo-coding so cost-tracker output is non-zero until the
+    // user supplies real CNY rates via `~/.kodax/config.json`.
+    'mimo-v2.5-pro': { inputPer1M: 0.01, outputPer1M: 0.03 },
+    'mimo-v2.5': { inputPer1M: 0.01, outputPer1M: 0.03 },
+  },
   'ark-coding': {
     // Volcengine Ark Coding Plan is a 5-hour sliding-window subscription —
     // per-token rates here are nominal placeholders for cost-tracker

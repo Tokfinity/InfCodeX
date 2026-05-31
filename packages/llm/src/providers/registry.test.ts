@@ -47,6 +47,19 @@ describe('provider registry', () => {
     expect(getProviderConfiguredReasoningCapability('mimo-coding', 'mimo-v2.5-pro')).toBe('native-budget');
   });
 
+  it('registers Xiaomi MiMo pay-per-token as mimo (Anthropic-compat, MIMO_API_KEY)', () => {
+    // Same upstream model family and capability shape as mimo-coding —
+    // only the baseUrl and the API key env differ. Mirroring the
+    // mimo-coding assertions guards against JSON ↔ class drift after
+    // the two-provider split.
+    vi.stubEnv('MIMO_API_KEY', 'sk-test-key');
+    const mimo = getProvider('mimo');
+    expect(mimo.name).toBe('mimo');
+    expect(mimo.getEffectiveContextWindow('mimo-v2.5-pro')).toBe(1_000_000);
+    expect(mimo.getEffectiveContextWindow('mimo-v2.5')).toBe(1_000_000);
+    expect(getProviderConfiguredReasoningCapability('mimo', 'mimo-v2.5-pro')).toBe('native-budget');
+  });
+
   it('registers Volcengine Ark Coding Plan as ark-coding (Anthropic-compat, ARK_CODING_API_KEY)', () => {
     vi.stubEnv('ARK_CODING_API_KEY', 'ark-test-key');
     const ark = getProvider('ark-coding');

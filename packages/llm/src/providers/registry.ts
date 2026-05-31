@@ -37,6 +37,7 @@ export type ProviderName =
   | 'zhipu-coding'
   | 'minimax-coding'
   | 'mimo-coding'
+  | 'mimo'
   | 'ark-coding'
   | 'gemini-cli'
   | 'codex-cli';
@@ -204,6 +205,21 @@ class MimoCodingProvider extends KodaXAnthropicCompatProvider {
   constructor() { super(); this.initClient(); }
 }
 
+class MimoProvider extends KodaXAnthropicCompatProvider {
+  readonly name = 'mimo';
+  protected readonly config: KodaXProviderConfig = buildProviderConfig('mimo', {
+    // Xiaomi MiMo public pay-per-token Anthropic-compat endpoint
+    // (https://platform.xiaomimimo.com/docs/zh-CN/api/chat/anthropic-api).
+    // Same upstream model family as `mimo-coding` (mimo-v2.5-pro /
+    // mimo-v2.5) — the two providers differ only in baseUrl and the
+    // billing model (pay-per-token here vs Token-Plan subscription on
+    // mimo-coding). All capability fields (context window, thinking
+    // budget, max_tokens, etc.) come from `provider-capabilities.json`.
+    baseUrl: 'https://api.xiaomimimo.com/anthropic',
+  });
+  constructor() { super(); this.initClient(); }
+}
+
 class ArkCodingProvider extends KodaXAnthropicCompatProvider {
   readonly name = 'ark-coding';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('ark-coding', {
@@ -288,6 +304,7 @@ export const KODAX_PROVIDERS: Record<string, () => KodaXBaseProvider> = {
   'zhipu-coding': () => new ZhipuCodingProvider(),
   'minimax-coding': () => new MiniMaxCodingProvider(),
   'mimo-coding': () => new MimoCodingProvider(),
+  mimo: () => new MimoProvider(),
   'ark-coding': () => new ArkCodingProvider(),
   'gemini-cli': () => new KodaXGeminiCliProvider(),
   'codex-cli': () => new KodaXCodexCliProvider(),
