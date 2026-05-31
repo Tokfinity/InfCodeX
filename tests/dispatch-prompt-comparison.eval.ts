@@ -91,7 +91,7 @@ interface ProviderTarget {
 const PROVIDERS: ProviderTarget[] = [
   { name: 'zhipu-coding', model: 'glm-5.1', apiKeyEnv: 'ZHIPU_CODING_API_KEY' },
   { name: 'minimax-coding', model: 'MiniMax-M2.7', apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
-  // kimi: KIMI_API_KEY in env returns 401 — endpoint mismatch, skip
+  // kimi: KIMI_CODE_API_KEY in env returns 401 — endpoint mismatch, skip
   // deepseek: model pinned to current default (v4-flash). Earlier runs used
   // the deprecated `deepseek-chat` alias (slated for 2026-07-24 removal) and
   // saw 40% fan-out variance. Variance probe at
@@ -407,7 +407,7 @@ describe('Eval: dispatch_child_task prompt redesign', () => {
 
   if (availableProviders.length === 0) {
     it('skips: no provider API keys in env', () => {
-      console.warn('[eval] No provider API keys found. Set ZHIPU_API_KEY/MINIMAX_CODING_API_KEY/KIMI_API_KEY/DEEPSEEK_API_KEY.');
+      console.warn('[eval] No provider API keys found. Set ZHIPU_CODING_API_KEY/MINIMAX_CODING_API_KEY/KIMI_CODE_API_KEY/DEEPSEEK_API_KEY.');
       expect(true).toBe(true);
     });
     return;
