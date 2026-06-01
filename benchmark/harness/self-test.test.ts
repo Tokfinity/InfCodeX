@@ -66,6 +66,7 @@ describe('FEATURE_104 aliases', () => {
         'mimo/v25',
         'mimo/v25pro',
         'mmx/m27',
+        'mmx/m3',
         'zhipu/glm51',
       ].sort(),
     );

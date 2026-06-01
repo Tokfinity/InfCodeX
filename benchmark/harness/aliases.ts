@@ -16,6 +16,7 @@
  *   'mimo-coding/mimo-v2.5':        'mimo/v25'
  *   'mimo-coding/mimo-v2.5-pro':    'mimo/v25pro'
  *   'minimax-coding/MiniMax-M2.7':  'mmx/m27'
+ *   'minimax-coding/MiniMax-M3':    'mmx/m3'
  *   'ark-coding/glm-5.1':           'ark/glm51'
  *   'ark-coding/deepseek-v4-pro':   'ark/v4pro'
  *   'ark-coding/deepseek-v4-flash': 'ark/v4flash'
@@ -40,6 +41,7 @@ export type ModelAlias =
   | 'mimo/v25'
   | 'mimo/v25pro'
   | 'mmx/m27'
+  | 'mmx/m3'
   | 'ark/glm51'
   | 'ark/v4pro'
   | 'ark/v4flash'
@@ -61,6 +63,7 @@ export const MODEL_ALIASES: Readonly<Record<ModelAlias, ModelAliasTarget>> = Obj
   'mimo/v25':     { provider: 'mimo-coding',    model: 'mimo-v2.5',         apiKeyEnv: 'MIMO_CODING_API_KEY' },
   'mimo/v25pro':  { provider: 'mimo-coding',    model: 'mimo-v2.5-pro',     apiKeyEnv: 'MIMO_CODING_API_KEY' },
   'mmx/m27':      { provider: 'minimax-coding', model: 'MiniMax-M2.7',      apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
+  'mmx/m3':       { provider: 'minimax-coding', model: 'MiniMax-M3',        apiKeyEnv: 'MINIMAX_CODING_API_KEY' },
   'ark/glm51':    { provider: 'ark-coding',     model: 'glm-5.1',           apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ark/v4pro':    { provider: 'ark-coding',     model: 'deepseek-v4-pro',   apiKeyEnv: 'ARK_CODING_API_KEY' },
   'ark/v4flash':  { provider: 'ark-coding',     model: 'deepseek-v4-flash', apiKeyEnv: 'ARK_CODING_API_KEY' },
