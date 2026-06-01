@@ -277,6 +277,10 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       return false; // crossed a quantum bin → caller commits a fresh block (React)
     }
     const block = computeOverscanWindow({ ...overscanInput, globalScrollTop: newGlobalTop });
+    // Drive the exact fields render-node reads. NOTE: node.scrollTop here is the
+    // GLOBAL viewport top (rows-from-top) — render-node's rawScrollTop convention —
+    // intentionally bypassing the attributes-layer rows-from-bottom nativeScrollTop;
+    // render-node owns node.scrollTop from first paint, so this is the live source.
     node.scrollTop = newGlobalTop;
     if (node.attributes) {
       node.attributes.inWindowScrollTop = block.inBlockOffset;
@@ -344,6 +348,13 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     if (!host) {
       return;
     }
+    // FEATURE_214: this is a committing path (it reads the renderer's geometry
+    // back into the snapshot), so clear any in-flight bypass burst — like every
+    // other commit path (scrollTo/scrollToBottom/scrollToElement/setClampBounds).
+    // Otherwise a DOM readback mid-bypass leaves bypassOffsetRef stale vs the
+    // freshly committed scrollTop and the next bypass computes from a wrong base.
+    // No-op when overscan is off (bypassOffsetRef is always null then).
+    bypassOffsetRef.current = null;
 
     const nextScrollHeight = typeof host.scrollHeight === "number"
       ? Math.max(0, Math.floor(host.scrollHeight))
