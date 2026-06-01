@@ -535,16 +535,21 @@ export function renderFrameSlice(
     // `claudecode/src/ink/log-update.ts:615`. Phase 3b's main loop assumes
     // the post-slice cursor is at (0, endY).
     //
-    // FEATURE_212 (v0.7.45) EXCEPTION: when this row is the LAST visible
-    // viewport row (`y + 1 >= frame.viewport.height`), a trailing `\n` would
-    // move the cursor off the bottom of the screen, which a real terminal
-    // turns into a SCROLL — pushing the whole managed viewport up one row
-    // (banner top clipped, blank row under the status bar). On that row emit
-    // only `\r` (cursor to column 0, same row). The resting cursor is then
-    // (0, viewport.height - 1), which is exactly where `clampRestingCursor`
+    // FEATURE_212 (v0.7.45) EXCEPTION: when this is the LAST row of the slice
+    // AND it sits on/below the last viewport row (`y + 1 >= viewport.height`),
+    // a trailing `\n` would move the cursor off the bottom of the screen, which
+    // a real terminal turns into a SCROLL — pushing the whole managed viewport
+    // up one row (banner top clipped, blank row under the status bar). On that
+    // row emit only `\r` (cursor to column 0, same row). The resting cursor is
+    // then (0, viewport.height - 1), exactly where `clampRestingCursor`
     // (cell-renderer.ts) puts `next.cursor`, so `restoreCursor` is a no-op and
     // Phase 3b's cursor accounting stays consistent — no scroll, no drift.
-    const wouldScrollOffBottom = y + 1 >= frame.viewport.height;
+    //
+    // The `y === endY - 1` guard is essential: a NON-final row at the viewport
+    // bottom (an offscreen frame whose content exceeds the viewport, painted by
+    // `fullResetSequence`) MUST still advance via `\n` so the following row
+    // isn't overwritten — only the final row of the slice suppresses it.
+    const wouldScrollOffBottom = y === endY - 1 && y + 1 >= frame.viewport.height;
     screen.txn((prev) =>
       wouldScrollOffBottom
         ? [[CARRIAGE_RETURN], { dx: -prev.x, dy: 0 }]
