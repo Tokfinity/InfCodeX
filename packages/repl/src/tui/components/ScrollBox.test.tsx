@@ -234,4 +234,89 @@ describe("ScrollBox", () => {
       await vi.waitFor(() => expect(direct.lastFrame()).toContain("w:75-95@25"));
     });
   });
+
+  // FEATURE_214 (v0.7.46) — overscan window capability (Phase A). OFF unless
+  // `overscanRows` is passed, so every existing ScrollBox + the pre-overscan
+  // transcript path stays byte-identical (the contract tests above stay green).
+  // ink-testing-library ignores the renderer's inWindowScrollTop translation, so
+  // these assert the WINDOW resolveScrollWindow hands to renderWindow — the exact
+  // data the overscan/React-bypass refactor depends on.
+  describe("FEATURE_214 overscan window capability", () => {
+    it("renders an overscan block around the viewport and exposes the in-block offset", () => {
+      const { lastFrame } = render(
+        <ScrollBox
+          scrollTop={500}
+          scrollHeight={1000}
+          viewportHeight={20}
+          overscanRows={80}
+          renderWindow={(w) => (
+            <Text>{`blk:${w.start}-${w.end}|vt:${w.viewportTop}|in:${w.inWindowScrollTop}`}</Text>
+          )}
+        >
+          <Text>ignored</Text>
+        </ScrollBox>,
+      );
+      // viewport top = 1000 - 500 - 20 = 480 (bin 12, anchor 480) → block [400, 580);
+      // the REAL viewport top stays 480 (hit-test), in-block offset = 80.
+      expect(lastFrame()).toContain("blk:400-580|vt:480|in:80");
+    });
+
+    it("is inert without overscanRows (window == viewport, in-block 0)", () => {
+      const { lastFrame } = render(
+        <ScrollBox
+          scrollTop={500}
+          scrollHeight={1000}
+          viewportHeight={20}
+          renderWindow={(w) => (
+            <Text>{`blk:${w.start}-${w.end}|in:${w.inWindowScrollTop}`}</Text>
+          )}
+        >
+          <Text>ignored</Text>
+        </ScrollBox>,
+      );
+      expect(lastFrame()).toContain("blk:480-500|in:0");
+    });
+
+    it("keeps the same block start while translating within a quantum bin", async () => {
+      const ref = React.createRef<ScrollBoxHandle>();
+      const { lastFrame } = render(
+        <ScrollBox
+          scrollRef={ref}
+          scrollTop={500}
+          scrollHeight={1000}
+          viewportHeight={20}
+          overscanRows={80}
+          renderWindow={(w) => <Text>{`blk:${w.start}-${w.end}|in:${w.inWindowScrollTop}`}</Text>}
+        >
+          <Text>ignored</Text>
+        </ScrollBox>,
+      );
+      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580|in:80"));
+      // scroll toward newer 20 rows: viewport top 480 → 500, still bin 12
+      // ([480,520)) → SAME block start, only the in-block offset moves 80 → 100.
+      ref.current?.scrollBy(-20);
+      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580|in:100"));
+    });
+
+    it("shifts the block when scrolling across a quantum boundary", async () => {
+      const ref = React.createRef<ScrollBoxHandle>();
+      const { lastFrame } = render(
+        <ScrollBox
+          scrollRef={ref}
+          scrollTop={500}
+          scrollHeight={1000}
+          viewportHeight={20}
+          overscanRows={80}
+          renderWindow={(w) => <Text>{`blk:${w.start}-${w.end}`}</Text>}
+        >
+          <Text>ignored</Text>
+        </ScrollBox>,
+      );
+      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580"));
+      // scroll toward older 80 rows: viewport top 480 → 400 (bin 10, anchor 400)
+      // → block shifts to [320, 500).
+      ref.current?.scrollBy(80);
+      await vi.waitFor(() => expect(lastFrame()).toContain("blk:320-500"));
+    });
+  });
 });

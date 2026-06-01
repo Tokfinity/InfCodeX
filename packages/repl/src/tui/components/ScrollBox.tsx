@@ -9,6 +9,7 @@ import React, {
 // FEATURE_093 (v0.7.24): import Box directly from renderer-runtime to
 // avoid the `tui/index.ts ↔ components/ScrollBox.tsx` barrel cycle.
 import { Box } from "../renderer-runtime.js";
+import { computeOverscanWindow } from "../../ui/utils/overscan-window.js";
 
 export interface ScrollBoxHandle {
   scrollTo: (y: number) => void;
@@ -34,6 +35,13 @@ export interface ScrollBoxWindow {
   viewportTop: number;
   pendingDelta: number;
   sticky: boolean;
+  /**
+   * FEATURE_214 (v0.7.46) — when overscan is active, [start, end) is the larger
+   * OVERSCAN BLOCK and this is how far down within it the viewport sits (feeds
+   * the renderer's `inWindowScrollTop` so the block translates without React).
+   * 0 when overscan is off (the window == the viewport).
+   */
+  inWindowScrollTop: number;
 }
 
 export interface ScrollBoxProps {
@@ -51,6 +59,13 @@ export interface ScrollBoxProps {
   onStickyChange?: (sticky: boolean) => void;
   onWindowChange?: (window: ScrollBoxWindow) => void;
   renderWindow?: (window: ScrollBoxWindow) => React.ReactNode;
+  /**
+   * FEATURE_214 (v0.7.46) — rows of overscan margin to render above+below the
+   * viewport. When > 0 (and `renderWindow` is provided) the box renders an
+   * overscan block and exposes the in-block offset for React-bypass scrolling.
+   * Undefined/0 = the pre-FEATURE_214 behaviour (window == viewport).
+   */
+  overscanRows?: number;
 }
 
 interface ScrollSnapshot {
@@ -61,6 +76,8 @@ interface ScrollSnapshot {
   clampMin?: number;
   clampMax?: number;
   sticky: boolean;
+  /** FEATURE_214: rows of overscan margin (0/undefined = no overscan). */
+  overscanRows?: number;
 }
 
 function normalizeScrollSnapshot(snapshot: ScrollSnapshot): ScrollSnapshot {
@@ -84,7 +101,8 @@ function areSnapshotsEqual(left: ScrollSnapshot, right: ScrollSnapshot): boolean
     && left.pendingDelta === right.pendingDelta
     && left.clampMin === right.clampMin
     && left.clampMax === right.clampMax
-    && left.sticky === right.sticky;
+    && left.sticky === right.sticky
+    && left.overscanRows === right.overscanRows;
 }
 
 function areWindowsEqual(left: ScrollBoxWindow, right: ScrollBoxWindow): boolean {
@@ -95,7 +113,8 @@ function areWindowsEqual(left: ScrollBoxWindow, right: ScrollBoxWindow): boolean
     && left.viewportHeight === right.viewportHeight
     && left.viewportTop === right.viewportTop
     && left.pendingDelta === right.pendingDelta
-    && left.sticky === right.sticky;
+    && left.sticky === right.sticky
+    && left.inWindowScrollTop === right.inWindowScrollTop;
 }
 
 function clampScrollTop(snapshot: ScrollSnapshot, nextScrollTop: number): number {
@@ -111,6 +130,32 @@ function resolveScrollWindow(snapshot: ScrollSnapshot): ScrollBoxWindow {
   const end = Math.max(0, snapshot.scrollHeight - clampedOffset);
   const start = Math.max(0, end - viewportHeight);
 
+  const overscanRows = Math.max(0, Math.floor(snapshot.overscanRows ?? 0));
+  if (overscanRows > 0 && viewportHeight > 0) {
+    // FEATURE_214 (v0.7.46) — render an OVERSCAN BLOCK around the viewport and
+    // translate within it (`inWindowScrollTop`) so a scroll within the block
+    // can repaint via the renderer without a React re-window. `start..end` is
+    // now the block; `viewportTop` stays the REAL viewport top (rows-from-top)
+    // so hit-testing/selection are unaffected.
+    const block = computeOverscanWindow({
+      globalScrollTop: start,
+      viewportHeight,
+      contentHeight: snapshot.scrollHeight,
+      overscan: overscanRows,
+    });
+    return {
+      start: block.blockTop,
+      end: block.blockTop + block.blockHeight,
+      scrollTop: clampedOffset,
+      scrollHeight: snapshot.scrollHeight,
+      viewportHeight,
+      viewportTop: start,
+      pendingDelta: snapshot.pendingDelta,
+      sticky: snapshot.sticky,
+      inWindowScrollTop: block.inBlockOffset,
+    };
+  }
+
   return {
     start,
     end,
@@ -120,6 +165,7 @@ function resolveScrollWindow(snapshot: ScrollSnapshot): ScrollBoxWindow {
     viewportTop: start,
     pendingDelta: snapshot.pendingDelta,
     sticky: snapshot.sticky,
+    inWindowScrollTop: 0,
   };
 }
 
@@ -143,6 +189,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
   onStickyChange,
   onWindowChange,
   renderWindow,
+  overscanRows,
 }) => {
   const domRef = useRef<any>(null);
   const listenersRef = useRef(new Set<() => void>());
@@ -152,6 +199,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     viewportHeight,
     pendingDelta: 0,
     sticky: stickyScroll,
+    overscanRows,
   }));
   const [windowState, setWindowState] = useState<ScrollBoxWindow>(
     () => resolveScrollWindow(snapshotRef.current),
@@ -200,6 +248,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       clampMin: previous.clampMin,
       clampMax: previous.clampMax,
       sticky: stickyScroll,
+      overscanRows,
     };
 
     const result = commitSnapshot(next);
@@ -213,6 +262,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     commitSnapshot,
     onStickyChange,
     onScrollTopChange,
+    overscanRows,
     scrollHeight,
     scrollTop,
     stickyScroll,
@@ -380,6 +430,11 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       scrollViewportTop: windowState.viewportTop,
       pendingScrollDelta: snapshotRef.current.pendingDelta,
       virtualScrollWindowed: Boolean(renderWindow),
+      // FEATURE_214: only emit inWindowScrollTop in overscan mode. Setting it
+      // (even 0) flips the renderer onto the overscan path, so gating on
+      // `overscanRows` keeps the pre-FEATURE_214 windowed path (incl. the
+      // FEATURE_212 streaming-shift DECSTBM) byte-identical when overscan is off.
+      ...(snapshotRef.current.overscanRows ? { inWindowScrollTop: windowState.inWindowScrollTop } : {}),
       ...(snapshotRef.current.clampMin !== undefined ? { scrollClampMin: snapshotRef.current.clampMin } : {}),
       ...(snapshotRef.current.clampMax !== undefined ? { scrollClampMax: snapshotRef.current.clampMax } : {}),
       ...(stickyScroll ? { stickyScroll: true } : {}),
