@@ -531,7 +531,7 @@ describe('FileSessionStorage', () => {
     ]);
   });
 
-  it('excludes .archive.jsonl files from the session list', async () => {
+  it('excludes .archive.jsonl and archived- prefixed files from the session list', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();
     const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
@@ -543,26 +543,21 @@ describe('FileSessionStorage', () => {
       scope: 'user',
     });
 
-    // An archive file ends in `.jsonl` too — the old listing logic read it and
-    // surfaced a bogus `<id>.archive` session. It must be excluded entirely.
     const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
-    await writeFile(
-      path.join(sessionsDir, '20260330_090000.archive.jsonl'),
-      `${JSON.stringify({
-        _type: 'meta',
-        title: 'Archived',
-        gitRoot,
-        createdAt: '2026-03-30T09:00:00.000Z',
-        scope: 'user',
-        activeMessageCount: 9,
-      })}\n`,
-      'utf8',
-    );
+    const metaLine = (title: string, createdAt: string) =>
+      `${JSON.stringify({ _type: 'meta', title, gitRoot, createdAt, scope: 'user', activeMessageCount: 9 })}\n`;
+    // A round archive ends in `.jsonl` too — the old listing logic read it and
+    // surfaced a bogus `<id>.archive` session. It must be excluded.
+    await writeFile(path.join(sessionsDir, '20260330_090000.archive.jsonl'), metaLine('RoundArchive', '2026-03-30T09:00:00.000Z'), 'utf8');
+    // `archived-` prefixed files are the session-archive mechanism — hidden from
+    // the picker/SDK fast path, consistent with the public-api slow path.
+    await writeFile(path.join(sessionsDir, 'archived-20260301_080000.jsonl'), metaLine('ArchivedSession', '2026-03-01T08:00:00.000Z'), 'utf8');
 
     const ids = (await storage.list(gitRoot)).map((session) => session.id);
     expect(ids).toContain('20260401_120000');
     expect(ids).not.toContain('20260330_090000.archive');
     expect(ids).not.toContain('20260330_090000');
+    expect(ids).not.toContain('archived-20260301_080000');
   });
 
   it('reports msgCount from the meta head only — ignores appended body lines (no full-file read)', async () => {

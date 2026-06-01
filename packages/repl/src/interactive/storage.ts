@@ -1015,11 +1015,18 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? process.cwd(),
     });
-    // Exclude `.archive.jsonl` — archives are not resumable sessions and were
-    // historically the largest files read here. Read only the first line of each
-    // remaining file (see `readSessionFirstLine`) instead of the whole file.
+    // Exclude `.archive.jsonl` (round archives, not resumable sessions — and
+    // historically the largest files read here) and `archived-` prefixed files
+    // (the session-archive mechanism documented on `ListSessionsOptions.
+    // includeArchived` in session/public-api.ts; this keeps the interactive
+    // picker + the SDK fast path consistent with the public-api slow path,
+    // which already hides `archived-` sessions). Read only the first line of
+    // each remaining file (see `readSessionFirstLine`) instead of the whole file.
     const files = (await fs.readdir(this.sessionsDir)).filter(
-      (file) => file.endsWith('.jsonl') && !file.endsWith('.archive.jsonl'),
+      (file) =>
+        file.endsWith('.jsonl') &&
+        !file.endsWith('.archive.jsonl') &&
+        !file.startsWith('archived-'),
     );
     const sessions: Array<{
       id: string;
