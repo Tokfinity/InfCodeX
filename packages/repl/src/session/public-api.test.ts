@@ -56,6 +56,16 @@ async function writeMinimalSession(
 // Test state ───────────────────────────────────────────────────────────────────
 
 describe('Session Management Public SDK', () => {
+  // Each test re-imports the whole public-api module graph after
+  // `vi.resetModules()` (required so the module-load-time-frozen
+  // KODAX_SESSIONS_DIR picks up the per-test HOME override — see header). That
+  // cold import runs ~4s alone and slows further under full-suite (160+ file)
+  // CPU contention, straddling vitest's default 5s test / 10s hook timeout and
+  // surfacing as an intermittent timeout. Give the cold import ample headroom
+  // so a slow-but-correct re-import can't flake; a genuinely hung test still
+  // fails (just later).
+  vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
+
   let tempHome: string;
   let sessionsDir: string;
   let previousHome: string | undefined;
