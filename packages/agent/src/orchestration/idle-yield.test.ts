@@ -641,6 +641,37 @@ describe('composeIdleYieldUserMessage', () => {
     expect(drainCalls.length).toBe(1);
   });
 
+  // FEATURE_213 (v0.7.45) — the user-typed prompt drained on a wake must be
+  // reported to the UI sink, else a follow-up typed while waiting for a
+  // sub-agent reaches the agent (non-synthetic user message) but never the
+  // transcript.
+  it('FEATURE_213: reports the drained user prompt via onUserPrompts', async () => {
+    const reported: string[][] = [];
+    const result = await composeIdleYieldUserMessage(
+      {
+        kind: 'messages-arrived',
+        messages: [queuedMessage('did you dispatch the agents?', 'user', 'prompt')],
+      },
+      () => [],
+      undefined,
+      (prompts) => { reported.push([...prompts]); },
+    );
+    const promptMsg = result.find((m) => !m._synthetic);
+    expect(promptMsg?.content).toBe('did you dispatch the agents?');
+    expect(reported).toEqual([['did you dispatch the agents?']]);
+  });
+
+  it('FEATURE_213: does NOT fire onUserPrompts for banner-only (synthetic) wakes', async () => {
+    const reported: string[][] = [];
+    await composeIdleYieldUserMessage(
+      { kind: 'child-completed', taskId: 'child-Y', result: { results: [], mergedFindings: [] } },
+      () => [queuedMessage('<task-completed task_id="child-Y"/>', 'background', 'task-notification')],
+      undefined,
+      (prompts) => { reported.push([...prompts]); },
+    );
+    expect(reported).toEqual([]);
+  });
+
   it('child-completed: pulls the canonical <task-completed> banner from the drained queue (synthetic)', async () => {
     const result = await composeIdleYieldUserMessage(
       {

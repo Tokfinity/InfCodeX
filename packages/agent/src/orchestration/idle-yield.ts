@@ -452,6 +452,11 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   wakeEvent: WakeEvent<TChildResult>,
   drainBackgroundQueue: () => readonly QueuedMessage[],
   enforceAggregate?: EnvelopeAggregateEnforcer,
+  // FEATURE_213 (v0.7.45) — reports the user-typed `mode:'prompt'` fragments
+  // drained on this wake, so the caller can surface them to the UI. The wake
+  // path splices the prompt into the agent transcript directly; this is the
+  // only signal the UI gets about a follow-up typed during idle-yield.
+  onUserPrompts?: (prompts: readonly string[]) => void,
 ): Promise<readonly KodaXMessage[]> {
   const promptFragments: string[] = [];
   const syntheticFragments: string[] = [];
@@ -511,6 +516,10 @@ export async function composeIdleYieldUserMessage<TChildResult = unknown>(
   }
 
   if (promptFragments.length > 0) {
+    // FEATURE_213 — tell the caller about the user's typed prompt(s) so the UI
+    // records them. The message below only reaches the AGENT transcript; the UI
+    // renders from its own history/ledger and would otherwise never see this.
+    onUserPrompts?.(promptFragments);
     messages.push({
       role: 'user',
       // No `_synthetic` flag — this IS the user's typed input echoed

@@ -1588,6 +1588,14 @@ async function runManagedTaskViaRunnerInner(
         currentAgent.name === WORKER_AGENT_NAME ? 'worker' : undefined;
       observer.idleWaiting(idleRole, baseCtx.childTaskRegistry?.size ?? 0);
     },
+    // FEATURE_213 (v0.7.45) — a follow-up typed while waiting for a sub-agent
+    // is drained by the idle-yield WAKE path (`composeIdleYieldUserMessage`),
+    // NOT the `beforeNextTurn` mid-turn drain, so it reached the agent but
+    // never the UI. Route it to the same `onMidTurnUserMessages` sink so it is
+    // recorded + rendered in the transcript exactly like a mid-turn message.
+    onResumedUserPrompts: (contents) => {
+      options.events?.onMidTurnUserMessages?.(contents);
+    },
     // `maxIterations` omitted — wrapper defaults to 64, matching the
     // legacy `IDLE_YIELD_MAX_ITERATIONS` constant. The cap fires on
     // the (max+1)th iteration AFTER runOnce returns but BEFORE the

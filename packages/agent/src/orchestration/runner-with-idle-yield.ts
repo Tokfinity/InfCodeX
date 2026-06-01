@@ -116,6 +116,16 @@ export interface RunWithIdleYieldOptions<
     runResult: TRunResult,
   ) => void;
   /**
+   * FEATURE_213 (v0.7.45) — fired with the user-typed prompt(s) drained on
+   * an idle-yield wake (the `mode:'prompt'` fragments spliced into the resume
+   * input). The wake path splices these into the agent transcript directly, so
+   * unlike the mid-turn `beforeNextTurn` drain there is no other surface that
+   * tells the UI about them — without this hook a follow-up typed while waiting
+   * for a sub-agent reaches the agent (it answers) but never appears in the
+   * transcript. Coding wires this to the same `onMidTurnUserMessages` UI sink.
+   */
+  readonly onResumedUserPrompts?: (contents: readonly string[]) => void;
+  /**
    * Optional hook fired when the iteration cap is hit. Coding does not
    * currently log here (matches v0.7.38 behavior — silent break) but
    * the hook exists so SDK consumers can record the prompt-bug signal.
@@ -227,6 +237,10 @@ export async function runWithIdleYield<
           maxPriority: 'background',
         }),
       opts.envelopeAggregateEnforcer,
+      // FEATURE_213 — surface the user-typed prompt(s) drained on this wake to
+      // the UI, so a follow-up typed while waiting for a sub-agent appears in
+      // the transcript (it otherwise only reaches the agent input below).
+      opts.onResumedUserPrompts,
     );
     if (resumeMessages.length === 0) break;
 
