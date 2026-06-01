@@ -153,6 +153,7 @@ const renderNodeToOutput = (node, output, options) => {
                     clampMin: node.attributes?.scrollClampMin,
                     clampMax: node.attributes?.scrollClampMax,
                     virtualScrollWindowed,
+                    inWindowScrollTop: node.attributes?.inWindowScrollTop,
                     previousAppliedScrollTop: node.appliedScrollTop,
                     regionTop: y + borderTop,
                 });

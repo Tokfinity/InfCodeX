@@ -30,10 +30,50 @@ describe("computeScrollState (FEATURE_214 gate)", () => {
     expect(r.scrollHeight).toBe(100);
   });
 
-  it("windowed never translates children (scrollOffsetY stays 0)", () => {
+  it("windowed without an in-block offset does not translate (back-compat)", () => {
     const r = computeScrollState({ ...base, rawScrollTop: 30, virtualScrollWindowed: true });
-    expect(r.scrollOffsetY).toBe(0);
-    expect(r.viewportTop).toBe(30); // applied position still tracked
+    expect(r.scrollOffsetY).toBe(0); // content renders at offset 0
+    // FEATURE_212: appliedScrollTop tracks the WINDOW shift (not 0), so the
+    // streaming-scroll DECSTBM hint keeps firing. Regressing this to 0 silently
+    // drops FEATURE_212's hardware scroll — the tui suite does NOT catch it.
+    expect(r.appliedScrollTop).toBe(30);
+    expect(r.viewportTop).toBe(30);
+  });
+
+  it("windowed no-overscan still emits the streaming-shift hint (FEATURE_212 preserved)", () => {
+    // Sticky-follow during streaming: clampedViewportTop grew from 22 → 30.
+    const r = computeScrollState({
+      ...base,
+      rawScrollTop: 30,
+      virtualScrollWindowed: true,
+      previousAppliedScrollTop: 22,
+      regionTop: 5,
+    });
+    expect(r.scrollHint).toEqual({ top: 5, bottom: 24, delta: 8 });
+  });
+
+  it("windowed-overscan translates the block by the in-block offset", () => {
+    const r = computeScrollState({
+      ...base,
+      rawScrollTop: 30,
+      virtualScrollWindowed: true,
+      inWindowScrollTop: 12,
+    });
+    expect(r.scrollOffsetY).toBe(12); // block translated by the in-block offset
+    expect(r.appliedScrollTop).toBe(12);
+    expect(r.viewportTop).toBe(30); // global position (for hit-test) unchanged
+  });
+
+  it("windowed-overscan hint tracks the in-block translation, not the global scroll", () => {
+    const r = computeScrollState({
+      ...base,
+      rawScrollTop: 30,
+      virtualScrollWindowed: true,
+      inWindowScrollTop: 12,
+      previousAppliedScrollTop: 5,
+      regionTop: 5,
+    });
+    expect(r.scrollHint).toEqual({ top: 5, bottom: 24, delta: 7 }); // 12 - 5
   });
 
   it("clamps the requested scroll to [0, contentHeight - viewportHeight]", () => {

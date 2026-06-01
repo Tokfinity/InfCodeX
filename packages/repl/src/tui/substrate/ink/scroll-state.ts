@@ -31,6 +31,16 @@ export interface ScrollComputeInput {
   readonly clampMax?: number;
   /** True when only the visible window is rendered (managed transcript). */
   readonly virtualScrollWindowed: boolean;
+  /**
+   * FEATURE_214 (v0.7.46) — windowed-overscan in-block translation. When the
+   * windowed content is an OVERSCAN BLOCK (visible rows + margin above/below),
+   * this is how far down within that block the viewport sits (0..2*overscan).
+   * Scrolling within the block changes ONLY this value → the block translates
+   * via `scrollOffsetY` (→ scrollHint → DECSTBM) with no React re-render.
+   * Ignored when not windowed. Defaults to 0 (= the pre-overscan behaviour where
+   * the window == the viewport and never translates).
+   */
+  readonly inWindowScrollTop?: number;
   /** node.appliedScrollTop from the previous frame (undefined on first paint). */
   readonly previousAppliedScrollTop: number | undefined;
   /** Absolute screen row of the viewport's top (y + borderTop) — for the hint. */
@@ -66,6 +76,7 @@ export function computeScrollState(input: ScrollComputeInput): ScrollComputeResu
     clampMin,
     clampMax,
     virtualScrollWindowed,
+    inWindowScrollTop,
     previousAppliedScrollTop,
     regionTop,
   } = input;
@@ -78,10 +89,33 @@ export function computeScrollState(input: ScrollComputeInput): ScrollComputeResu
     ? Math.max(clampMin ?? 0, Math.min(logicalScrollTop, Math.min(maxScrollTop, clampMax ?? maxScrollTop)))
     : logicalScrollTop;
 
+  // Overscan is "active" only when the caller actually supplies an in-block
+  // offset (the FEATURE_214 wiring). Until then every existing scroll box keeps
+  // its pre-FEATURE_214 behaviour exactly.
+  const overscanActive = virtualScrollWindowed && inWindowScrollTop !== undefined;
+  const inWindowOffset = Math.max(0, Math.floor(inWindowScrollTop ?? 0));
+
+  // The actual vertical translation applied to children during paint:
+  // - non-windowed: translate the whole mounted content by the logical scroll.
+  // - windowed-overscan: translate the rendered block by the in-block offset.
+  // - windowed no-overscan: content renders at offset 0 (window == viewport).
+  const scrollOffsetY = virtualScrollWindowed
+    ? (overscanActive ? inWindowOffset : 0)
+    : clampedViewportTop;
+
+  // `appliedScrollTop` = the on-screen shift the DECSTBM hint reflects:
+  // - non-windowed / windowed-overscan: equals the child translation.
+  // - windowed no-overscan (FEATURE_212): the content renders at offset 0, but
+  //   the re-windowed VIEW scrolled by `clampedViewportTop` (e.g. sticky follows
+  //   the bottom while streaming) — the hint must track THAT shift so streaming
+  //   scroll keeps its hardware-scroll fast path. MUST stay `clampedViewportTop`
+  //   here or FEATURE_212's streaming DECSTBM silently regresses to full repaint.
+  const appliedScrollTop = overscanActive ? scrollOffsetY : clampedViewportTop;
+
   let scrollHint: ScrollHint | null = null;
   if (
     previousAppliedScrollTop !== undefined &&
-    previousAppliedScrollTop !== clampedViewportTop &&
+    previousAppliedScrollTop !== appliedScrollTop &&
     viewportHeight > 0
   ) {
     const regionBottom = regionTop + viewportHeight - 1;
@@ -89,7 +123,7 @@ export function computeScrollState(input: ScrollComputeInput): ScrollComputeResu
       scrollHint = {
         top: regionTop,
         bottom: regionBottom,
-        delta: clampedViewportTop - previousAppliedScrollTop,
+        delta: appliedScrollTop - previousAppliedScrollTop,
       };
     }
   }
@@ -97,9 +131,9 @@ export function computeScrollState(input: ScrollComputeInput): ScrollComputeResu
   return {
     scrollHeight: contentHeight,
     viewportTop: clampedViewportTop,
-    appliedScrollTop: clampedViewportTop,
+    appliedScrollTop,
     scrollTop: clampedViewportTop,
-    scrollOffsetY: virtualScrollWindowed ? 0 : clampedViewportTop,
+    scrollOffsetY,
     scrollHint,
   };
 }
