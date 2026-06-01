@@ -1,8 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from 'fs/promises';
+import os from 'os';
+import path from 'path';
 
 import {
   resolveRepoIntelligenceStorageDir,
   withRepoIntelligenceStorageDir,
+  writeJsonFileAtomic,
 } from './internal.js';
 
 describe('repo-intelligence internal storage overrides', () => {
@@ -40,5 +52,74 @@ describe('repo-intelligence internal storage overrides', () => {
 
     delete process.env.KODAX_REPO_INTELLIGENCE_STORAGE_DIR;
     expect(resolveRepoIntelligenceStorageDir('.agent/repo-intelligence')).toBe('.agent/repo-intelligence');
+  });
+});
+
+describe('writeJsonFileAtomic', () => {
+  let dir: string;
+  const tempFiles = (entries: string[]): string[] =>
+    entries.filter((name) => name.endsWith('.tmp')).sort();
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), 'kodax-ri-atomic-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('writes JSON atomically and leaves no temp file behind on success', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    await writeJsonFileAtomic(target, { a: 1 });
+
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ a: 1 });
+    expect(tempFiles(await readdir(dir))).toEqual([]);
+  });
+
+  it('removes its own temp file when rename fails (no orphan accumulation)', async () => {
+    // Making the target a directory forces rename() to fail, simulating the
+    // Windows EPERM-on-locked-target / interrupted-write failure mode that
+    // was leaking one orphan `.tmp` per failed write.
+    const target = path.join(dir, 'changed-scope.json');
+    await mkdir(target);
+
+    await expect(writeJsonFileAtomic(target, { a: 1 })).rejects.toBeTruthy();
+    expect(tempFiles(await readdir(dir))).toEqual([]);
+  });
+
+  it('sweeps stale orphan temp files for the same base on a successful write', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    const orphan = path.join(dir, 'changed-scope.json.99999.1700000000000.tmp');
+    await writeFile(orphan, 'stale', 'utf8');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(orphan, twoHoursAgo, twoHoursAgo);
+
+    await writeJsonFileAtomic(target, { a: 1 });
+
+    expect(tempFiles(await readdir(dir))).toEqual([]);
+  });
+
+  it('preserves a recent temp file (concurrent-writer safety)', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    const recent = 'changed-scope.json.88888.1700000000001.tmp';
+    await writeFile(path.join(dir, recent), 'in-flight', 'utf8');
+
+    await writeJsonFileAtomic(target, { a: 1 });
+
+    expect(tempFiles(await readdir(dir))).toEqual([recent]);
+  });
+
+  it('only sweeps temps for the same base file, not siblings', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    const otherOrphan = path.join(dir, 'repo-overview.json.99999.1700000000000.tmp');
+    await writeFile(otherOrphan, 'stale', 'utf8');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(otherOrphan, twoHoursAgo, twoHoursAgo);
+
+    await writeJsonFileAtomic(target, { a: 1 });
+
+    expect(tempFiles(await readdir(dir))).toEqual([
+      'repo-overview.json.99999.1700000000000.tmp',
+    ]);
   });
 });

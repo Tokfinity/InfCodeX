@@ -46,6 +46,12 @@ export function resolveRepoIntelligenceStorageDir(
     || defaultStorageDir;
 }
 
+// Orphan temp files older than this are from writes that never completed
+// (the process was hard-killed between writeFile and rename, so the catch
+// below never ran). A generous window keeps the sweep from ever touching a
+// concurrent writer's in-flight temp, whose mtime is always near-now.
+const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
+
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
@@ -53,6 +59,42 @@ export async function writeJsonFileAtomic(
   const directory = path.dirname(filePath);
   await fs.mkdir(directory, { recursive: true });
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  await fs.rename(tempPath, filePath);
+  try {
+    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    // The write or rename failed (e.g. Windows EPERM when the target is
+    // locked by a concurrent reader). Remove our own temp so failed writes
+    // don't accumulate one orphan `.tmp` each, then surface the error.
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+  // Best-effort mop-up of stale orphans left by writes that were hard-killed
+  // before the catch above could run. Never lets a sweep failure break the
+  // write that just succeeded.
+  await sweepStaleTempFiles(directory, path.basename(filePath)).catch(() => {});
+}
+
+async function sweepStaleTempFiles(
+  directory: string,
+  baseName: string,
+): Promise<void> {
+  const prefix = `${baseName}.`;
+  const now = Date.now();
+  const entries = await fs.readdir(directory);
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith(prefix) && name.endsWith('.tmp'))
+      .map(async (name) => {
+        const fullPath = path.join(directory, name);
+        try {
+          const info = await fs.stat(fullPath);
+          if (now - info.mtimeMs >= STALE_TEMP_FILE_MS) {
+            await fs.rm(fullPath, { force: true });
+          }
+        } catch {
+          // Raced another sweeper or the owning writer — ignore.
+        }
+      }),
+  );
 }
