@@ -6,6 +6,7 @@ import getMaxWidth from './get-max-width.js';
 import squashTextNodes from './squash-text-nodes.js';
 import renderBorder from './render-border.js';
 import renderBackground from './render-background.js';
+import { computeScrollState } from './scroll-state.js';
 // If parent container is `<Box>`, text nodes will be treated as separate nodes in
 // the tree and will have their own coordinates in the layout.
 // To ensure text nodes are aligned correctly, take X and Y of the first text node
@@ -137,47 +138,33 @@ const renderNodeToOutput = (node, output, options) => {
                 const previousScrollHeight = typeof node.scrollHeight === 'number'
                     ? node.scrollHeight
                     : contentHeight;
-                const rawScrollTop = node.scrollTop ?? node.attributes?.scrollTop ?? 0;
-                const maxScrollTop = Math.max(0, contentHeight - viewportHeight);
-                const stickyScroll = node.stickyScroll ?? Boolean(node.attributes?.stickyScroll);
-                const clampMin = node.attributes?.scrollClampMin;
-                const clampMax = node.attributes?.scrollClampMax;
-                const normalizedScrollTop = Math.max(0, Math.min(Math.floor(rawScrollTop), maxScrollTop));
-                const shouldFollowBottom = stickyScroll && contentHeight >= previousScrollHeight;
-                const logicalScrollTop = shouldFollowBottom
-                    ? maxScrollTop
-                    : normalizedScrollTop;
-                const clampedViewportTop = clampMin !== undefined || clampMax !== undefined
-                    ? Math.max(clampMin ?? 0, Math.min(logicalScrollTop, Math.min(maxScrollTop, clampMax ?? maxScrollTop)))
-                    : logicalScrollTop;
-                node.scrollHeight = contentHeight;
+                // FEATURE_214 (v0.7.46) — scroll math extracted to the pure
+                // `computeScrollState` (unit-gated). It computes the clamped/
+                // sticky-followed applied scroll position, the child translation
+                // (`scrollOffsetY`, 0 when windowed), and the DECSTBM hint
+                // (FEATURE_212) when the applied position moved. The node-mutation
+                // glue below is the only side-effecting part.
+                const scrollState = computeScrollState({
+                    rawScrollTop: node.scrollTop ?? node.attributes?.scrollTop ?? 0,
+                    contentHeight,
+                    viewportHeight,
+                    previousScrollHeight,
+                    stickyScroll: node.stickyScroll ?? Boolean(node.attributes?.stickyScroll),
+                    clampMin: node.attributes?.scrollClampMin,
+                    clampMax: node.attributes?.scrollClampMax,
+                    virtualScrollWindowed,
+                    previousAppliedScrollTop: node.appliedScrollTop,
+                    regionTop: y + borderTop,
+                });
+                node.scrollHeight = scrollState.scrollHeight;
                 node.scrollViewportHeight = viewportHeight;
-                node.scrollViewportTop = clampedViewportTop;
-                // FEATURE_212 — capture scroll delta for the DECSTBM hint
-                // BEFORE overwriting node.scrollTop. Read-only: only reads the
-                // node's previously-applied scroll position + computed screen
-                // region, never touches `output`. The region is this scroll
-                // box's visible rows in absolute screen coords (`y` is the
-                // node's screen top, `borderTop` the inner offset).
-                const previousAppliedScrollTop = node.appliedScrollTop;
-                node.appliedScrollTop = clampedViewportTop;
-                if (previousAppliedScrollTop !== undefined
-                    && previousAppliedScrollTop !== clampedViewportTop
-                    && viewportHeight > 0) {
-                    const regionTop = y + borderTop;
-                    const regionBottom = regionTop + viewportHeight - 1;
-                    if (regionBottom >= regionTop) {
-                        _scrollHint = {
-                            top: regionTop,
-                            bottom: regionBottom,
-                            delta: clampedViewportTop - previousAppliedScrollTop,
-                        };
-                    }
+                node.scrollViewportTop = scrollState.viewportTop;
+                node.appliedScrollTop = scrollState.appliedScrollTop;
+                if (scrollState.scrollHint) {
+                    _scrollHint = scrollState.scrollHint;
                 }
-                node.scrollTop = clampedViewportTop;
-                if (!virtualScrollWindowed) {
-                    scrollOffsetY = clampedViewportTop;
-                }
+                node.scrollTop = scrollState.scrollTop;
+                scrollOffsetY = scrollState.scrollOffsetY;
             }
             if (clipHorizontally || clipVertically) {
                 const x1 = clipHorizontally
