@@ -109,6 +109,20 @@ describe('writeJsonFileAtomic', () => {
     expect(tempFiles(await readdir(dir))).toEqual([recent]);
   });
 
+  it('preserves a stale .tmp sibling that does not match the <pid>.<ts> name', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    // Same base + `.tmp`, but not the format this module produces — must not
+    // be swept even though it is old.
+    const foreign = 'changed-scope.json.backup.tmp';
+    await writeFile(path.join(dir, foreign), 'keep', 'utf8');
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await utimes(path.join(dir, foreign), twoHoursAgo, twoHoursAgo);
+
+    await writeJsonFileAtomic(target, { a: 1 });
+
+    expect(tempFiles(await readdir(dir))).toEqual([foreign]);
+  });
+
   it('only sweeps temps for the same base file, not siblings', async () => {
     const target = path.join(dir, 'changed-scope.json');
     const otherOrphan = path.join(dir, 'repo-overview.json.99999.1700000000000.tmp');

@@ -52,6 +52,11 @@ export function resolveRepoIntelligenceStorageDir(
 // concurrent writer's in-flight temp, whose mtime is always near-now.
 const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
 
+// Matches only the `<pid>.<epoch-ms>.tmp` suffix this module produces, so the
+// sweep never deletes an unrelated sibling that merely shares the base name
+// and a `.tmp` extension (e.g. a hypothetical `<base>.backup.tmp`).
+const OWN_TEMP_SUFFIX = /^\d+\.\d+\.tmp$/;
+
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
@@ -81,10 +86,15 @@ async function sweepStaleTempFiles(
 ): Promise<void> {
   const prefix = `${baseName}.`;
   const now = Date.now();
+  // Normally a no-op cost: after the backlog clears, readdir finds zero
+  // matching temps, so this is one readdir per successful write and no stats.
   const entries = await fs.readdir(directory);
   await Promise.all(
     entries
-      .filter((name) => name.startsWith(prefix) && name.endsWith('.tmp'))
+      .filter(
+        (name) =>
+          name.startsWith(prefix) && OWN_TEMP_SUFFIX.test(name.slice(prefix.length)),
+      )
       .map(async (name) => {
         const fullPath = path.join(directory, name);
         try {
