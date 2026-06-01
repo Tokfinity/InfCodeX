@@ -549,7 +549,17 @@ export function renderFrameSlice(
     // bottom (an offscreen frame whose content exceeds the viewport, painted by
     // `fullResetSequence`) MUST still advance via `\n` so the following row
     // isn't overwritten — only the final row of the slice suppresses it.
-    const wouldScrollOffBottom = y === endY - 1 && y + 1 >= frame.viewport.height;
+    //
+    // The `screen.height <= viewport.height` guard scopes the suppression to
+    // frames that fit within the viewport (the filling / drift case). For a
+    // genuinely OFFSCREEN frame (content taller than the viewport) the final
+    // row legitimately sits past the viewport bottom and keeps its `\n` — the
+    // pre-existing scroll-into-scrollback behavior, and it preserves the
+    // post-slice "cursor at (0, endY)" invariant that `restoreCursor` relies on.
+    const wouldScrollOffBottom =
+      y === endY - 1 &&
+      frame.screen.height <= frame.viewport.height &&
+      y + 1 >= frame.viewport.height;
     screen.txn((prev) =>
       wouldScrollOffBottom
         ? [[CARRIAGE_RETURN], { dx: -prev.x, dy: 0 }]

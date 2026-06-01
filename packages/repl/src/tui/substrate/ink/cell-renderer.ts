@@ -330,6 +330,13 @@ function diffPass(
  * the `renderer.js` "one past last row" convention applied to a full screen)
  * is rewritten so its cursor sits on `viewport.height - 1` — preventing the
  * scroll-inducing newline. Pure; allocates a new frame only when clamping.
+ *
+ * Side effect on `computeViewportState`: a clamped `prev.cursor.y` is now
+ * `< screen.height`, so `prevHadScrollback` reads false and `cursorRestoreScroll`
+ * is 0 for the next diff. That is correct for the fixed renderer — the LF that
+ * the `=1` accounting compensated for is exactly the one we now suppress — and
+ * harmless in practice because a viewport-filling frame is already at max height
+ * and never grows.
  */
 function clampRestingCursor(frame: Frame): Frame {
   const maxY = Math.max(0, frame.viewport.height - 1);
