@@ -9,6 +9,7 @@ import {
   resolveToolExplanationTone,
 } from "./tool-display.js";
 import { truncateUserMessageForDisplay } from "./user-message-display.js";
+import { stripOuterBlankLines } from "./strip-outer-blank-lines.js";
 
 export type TranscriptColorToken =
   | "primary"
@@ -560,7 +561,7 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         pushWrappedRows(
           rows,
           `${item.id}-body`,
-          `${item.icon ?? "\u2139"} ${showAllContent ? item.text : item.compactText ?? item.text}`,
+          `${item.icon ?? "\u2139"} ${stripOuterBlankLines(showAllContent ? item.text : item.compactText ?? item.text)}`,
           viewportWidth,
           {
           color: "info",

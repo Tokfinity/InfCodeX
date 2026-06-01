@@ -142,6 +142,29 @@ describe("transcript-layout", () => {
     expect(expandedText).toContain("Full planner detail line 2");
   });
 
+  it("keeps the icon on the same row as the message when an info item has a leading blank line", () => {
+    // Slash-command output captured into an info item keeps its leading
+    // newline (e.g. console.log(chalk.cyan("\n[Switched ...]"))). The icon
+    // must not end up alone on its own row.
+    const esc = String.fromCharCode(27);
+    const item: HistoryItem = {
+      id: "info-leading-blank",
+      type: "info",
+      text: `${esc}[36m\n[Switched to minimax-coding/MiniMax-M3] (saved)${esc}[39m`,
+      timestamp: Date.now(),
+    };
+
+    const rows = buildTranscriptRows({ items: [item], viewportWidth: 80 });
+    const bodyRows = rows.filter(
+      (row) => row.itemId === "info-leading-blank" && row.text.trim() !== "",
+    );
+
+    // Exactly one content row, and it carries BOTH the icon and the message.
+    expect(bodyRows).toHaveLength(1);
+    expect(bodyRows[0].text).toContain("ℹ");
+    expect(bodyRows[0].text).toContain("[Switched to minimax-coding/MiniMax-M3] (saved)");
+  });
+
   it("includes streaming and loading rows in a single transcript", () => {
     const rows = buildTranscriptRows({
       items: [],

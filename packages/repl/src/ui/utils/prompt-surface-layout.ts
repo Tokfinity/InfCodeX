@@ -13,6 +13,7 @@ import {
   formatToolResultExplanation,
   resolveToolExplanationTone,
 } from "./tool-display.js";
+import { stripOuterBlankLines } from "./strip-outer-blank-lines.js";
 import { truncateUserMessageForDisplay } from "./user-message-display.js";
 
 export interface PromptSurfaceRenderModelOptions {
@@ -276,7 +277,7 @@ function buildPromptSurfaceSection(
       });
       break;
     case "info":
-      pushWrappedRows(rows, `${item.id}-body`, `${item.icon ?? "\u2139"} ${item.compactText ?? item.text}`, viewportWidth, {
+      pushWrappedRows(rows, `${item.id}-body`, `${item.icon ?? "\u2139"} ${stripOuterBlankLines(item.compactText ?? item.text)}`, viewportWidth, {
         color: "info",
         itemId: item.id,
       });
