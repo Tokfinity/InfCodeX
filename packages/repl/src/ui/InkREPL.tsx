@@ -48,6 +48,7 @@ import {
   useStreamingActions,
   KeypressProvider,
   useKeypress,
+  selectUncommittedLedgerUserItems,
 } from "./contexts/index.js";
 import { AutocompleteContextProvider, useAutocompleteContext } from "./hooks/index.js";
 import {
@@ -1347,6 +1348,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const managedLiveEventsRef = useRef<HistoryItem[]>([]);
   const managedRoundEventHistoryRef = useRef<HistoryItem[]>([]);
   const managedForegroundTurnItemsRef = useRef<HistoryItem[]>([]);
+  // FEATURE_213 (v0.7.45) — ids of mid-turn user messages already committed to
+  // history (by a round-end / fresh-submit / interrupt commit). The ledger-wipe
+  // rescue pass uses this to commit any UNcommitted mid-turn user message before
+  // a premature clear loses it, without double-adding ones already committed.
+  const committedMidTurnUserIdsRef = useRef<Set<string>>(new Set());
   const managedForegroundOwnerRef = useRef<{ workerId?: string; workerTitle?: string }>({});
   const managedForegroundLedgerRef = useRef<ManagedForegroundLedgerState>({
     activeToolGroupTools: [],
@@ -1497,12 +1503,41 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
   }, []);
 
+  // FEATURE_213 (v0.7.45) — mark a batch of just-committed ledger items so the
+  // ledger-wipe rescue pass does not re-add their (mid-turn user) entries.
+  const markLedgerUserItemsCommitted = useCallback((items: readonly HistoryItem[]) => {
+    for (const item of items) {
+      if (item.type === "user" && typeof item.id === "string") {
+        committedMidTurnUserIdsRef.current.add(item.id);
+      }
+    }
+  }, []);
+
   const clearManagedForegroundTurnHistory = useCallback(() => {
     // Clear text buffer to prevent stale flushes after clear
     foregroundTextBufferRef.current = { itemId: undefined, kind: "thinking", pendingText: "" };
     if (foregroundFlushTimerRef.current) {
       clearTimeout(foregroundFlushTimerRef.current);
       foregroundFlushTimerRef.current = null;
+    }
+    // FEATURE_213 (v0.7.45) — rescue any mid-turn user message that has NOT yet
+    // been committed to history before wiping the ledger. Without this, a clear
+    // that fires before the round-end commit (the bug: a queued query typed
+    // while waiting for a sub-agent) silently drops the user's message. Deduped
+    // by id via `committedMidTurnUserIdsRef`, so the post-commit clear (which
+    // follows a real round-end commit that already marked these ids) is a no-op
+    // here and never double-adds.
+    const pendingUserItems = selectUncommittedLedgerUserItems(
+      managedForegroundTurnItemsRef.current,
+      committedMidTurnUserIdsRef.current,
+    );
+    if (pendingUserItems.length > 0) {
+      for (const item of pendingUserItems) {
+        committedMidTurnUserIdsRef.current.add(item.id as string);
+      }
+      appendHistoryItemsWithPersistenceRef.current?.(
+        pendingUserItems.map((item) => toCreatableHistoryItem(item)),
+      );
     }
     resetManagedForegroundLedgerState({ clearOwner: true });
     setManagedForegroundTurnHistory([]);
@@ -4247,8 +4282,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     }
 
     interruptPersistenceQueuedRef.current = true;
+    // FEATURE_213 — this commit includes the foreground ledger (incl any
+    // mid-turn user message); mark them so the ensuing clear's rescue skips them.
+    markLedgerUserItemsCommitted(managedForegroundTurnItemsRef.current);
     appendHistoryItemsWithPersistenceRef.current?.(interruptedItems);
-  }, [getFullResponse, getThinkingContent]);
+  }, [getFullResponse, getThinkingContent, markLedgerUserItemsCommitted]);
 
   useEffect(() => {
     pendingInputsRef.current = streamingState.pendingInputs;
@@ -6387,6 +6425,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     );
     const managedForegroundRoundItems = [...managedForegroundTurnItemsRef.current];
     const hasManagedForegroundLedger = managedForegroundRoundItems.length > 0;
+    // FEATURE_213 (v0.7.45) — a mid-turn user message that this round commits
+    // inline (below) is now durable; mark its id so the post-commit ledger
+    // clear's rescue pass does not double-add it.
+    markLedgerUserItemsCommitted(managedForegroundRoundItems);
     // The foreground ledger may contain only tool_group/thinking items without a
     // substantive assistant text block.  When that happens we must still append
     // the resolved finalResponse so the user sees the answer.
@@ -6861,6 +6903,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const currentManagedForegroundItems = managedForegroundTurnItemsRef.current.map((item) => toCreatableHistoryItem(item));
       const hasManagedForegroundLedger = currentManagedForegroundItems.length > 0;
       if (currentManagedForegroundItems.length > 0) {
+        // FEATURE_213 — committing the ledger here (incl any mid-turn user
+        // message); mark them so the clear below does not re-add via its rescue.
+        markLedgerUserItemsCommitted(managedForegroundTurnItemsRef.current);
         appendHistoryItemsToCurrentSnapshot(currentManagedForegroundItems);
       }
       if (!hasManagedForegroundLedger && currentFullResponse) {

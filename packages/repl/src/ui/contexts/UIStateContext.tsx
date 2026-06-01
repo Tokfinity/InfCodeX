@@ -102,6 +102,32 @@ export function trimHistoryToRounds(history: HistoryItem[]): HistoryItem[] {
 }
 
 /**
+ * FEATURE_213 (v0.7.45) — rescue mid-turn user messages from a ledger wipe.
+ *
+ * A user message queued while a managed worker owns the foreground (e.g. typed
+ * while waiting for a sub-agent) is appended to the foreground ledger and only
+ * committed to history at round-end. If the ledger is cleared before that
+ * commit (a premature `clearManagedForegroundTurnHistory`), the message is
+ * lost. This returns the ledger's `user` items whose id has NOT already been
+ * committed — the caller commits them to history before wiping, deduped by id
+ * so a clear that follows a real round-end commit does not double-add.
+ *
+ * Pure. Skips items without a string id (only the managed-foreground ledger
+ * assigns ids, so id-less items are never mid-turn user messages).
+ */
+export function selectUncommittedLedgerUserItems(
+  ledger: readonly HistoryItem[],
+  committedIds: ReadonlySet<string>,
+): HistoryItem[] {
+  return ledger.filter(
+    (item) =>
+      item.type === "user" &&
+      typeof item.id === "string" &&
+      !committedIds.has(item.id),
+  );
+}
+
+/**
  * Create tool call with auto-generated ID and start time - 创建带自动生成 ID 和开始时间的工具调用
  */
 export function createToolCall(
