@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { render } from "ink-testing-library";
 import { Box, Text } from "../../ui/tui.js";
 import { ScrollBox, type ScrollBoxHandle } from "./ScrollBox.js";
+import { scheduleRenderFromNode } from "./scroll-render-trigger.js";
+
+// FEATURE_214 (v0.7.46) — the React-bypass repaint is an engine-only side effect
+// ink-testing-library can't run faithfully, so mock it. Default true = "engine
+// present, bypass available"; tests flip it to exercise both branches. The pure
+// bypass MATH is gated separately in overscan-window.test.ts / scroll-state.test.ts.
+vi.mock("./scroll-render-trigger.js", () => ({
+  scheduleRenderFromNode: vi.fn(() => true),
+}));
+const mockScheduleRender = vi.mocked(scheduleRenderFromNode);
 
 const ScrollBoxHarness = React.forwardRef<ScrollBoxHandle>((_, ref) => {
   const [scrollTop, setScrollTop] = useState(0);
@@ -277,29 +287,38 @@ describe("ScrollBox", () => {
       expect(lastFrame()).toContain("blk:480-500|in:0");
     });
 
-    it("keeps the same block start while translating within a quantum bin", async () => {
+    it("scrolls within a bin via the React-bypass path (no re-window commit)", () => {
+      mockScheduleRender.mockClear();
+      mockScheduleRender.mockReturnValue(true); // engine present → bypass available
       const ref = React.createRef<ScrollBoxHandle>();
-      const { lastFrame } = render(
+      const onScrollTopChange = vi.fn();
+      render(
         <ScrollBox
           scrollRef={ref}
           scrollTop={500}
           scrollHeight={1000}
           viewportHeight={20}
           overscanRows={80}
+          onScrollTopChange={onScrollTopChange}
           renderWindow={(w) => <Text>{`blk:${w.start}-${w.end}|in:${w.inWindowScrollTop}`}</Text>}
         >
           <Text>ignored</Text>
         </ScrollBox>,
       );
-      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580|in:80"));
-      // scroll toward newer 20 rows: viewport top 480 → 500, still bin 12
-      // ([480,520)) → SAME block start, only the in-block offset moves 80 → 100.
+      onScrollTopChange.mockClear();
+      // scroll toward newer 20 rows: viewport top 480 → 500, still bin 12 ([480,520)).
       ref.current?.scrollBy(-20);
-      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580|in:100"));
+      expect(mockScheduleRender).toHaveBeenCalled();        // repainted via the engine
+      expect(onScrollTopChange).not.toHaveBeenCalled();      // NO React re-window
+      expect(ref.current?.getScrollTop()).toBe(480);         // live (un-committed) offset
+      expect(ref.current?.isSticky()).toBe(false);           // sticky flipped synchronously
     });
 
-    it("shifts the block when scrolling across a quantum boundary", async () => {
+    it("crossing a quantum boundary falls back to a React re-window commit", async () => {
+      mockScheduleRender.mockClear();
+      mockScheduleRender.mockReturnValue(true);
       const ref = React.createRef<ScrollBoxHandle>();
+      const onScrollTopChange = vi.fn();
       const { lastFrame } = render(
         <ScrollBox
           scrollRef={ref}
@@ -307,16 +326,43 @@ describe("ScrollBox", () => {
           scrollHeight={1000}
           viewportHeight={20}
           overscanRows={80}
+          onScrollTopChange={onScrollTopChange}
           renderWindow={(w) => <Text>{`blk:${w.start}-${w.end}`}</Text>}
         >
           <Text>ignored</Text>
         </ScrollBox>,
       );
-      await vi.waitFor(() => expect(lastFrame()).toContain("blk:400-580"));
-      // scroll toward older 80 rows: viewport top 480 → 400 (bin 10, anchor 400)
-      // → block shifts to [320, 500).
+      onScrollTopChange.mockClear();
+      // scroll toward older 80 rows: viewport top 480 → 400 (bin 10) — crosses the
+      // bin, so the bypass declines and the slow path commits the new block.
       ref.current?.scrollBy(80);
+      expect(onScrollTopChange).toHaveBeenCalled();          // re-window committed
       await vi.waitFor(() => expect(lastFrame()).toContain("blk:320-500"));
+    });
+
+    it("falls back to a React commit when no engine root is present (no bypass)", () => {
+      mockScheduleRender.mockClear();
+      mockScheduleRender.mockReturnValue(false); // e.g. teardown / non-engine host
+      const ref = React.createRef<ScrollBoxHandle>();
+      const onScrollTopChange = vi.fn();
+      render(
+        <ScrollBox
+          scrollRef={ref}
+          scrollTop={500}
+          scrollHeight={1000}
+          viewportHeight={20}
+          overscanRows={80}
+          onScrollTopChange={onScrollTopChange}
+          renderWindow={(w) => <Text>{`blk:${w.start}-${w.end}|in:${w.inWindowScrollTop}`}</Text>}
+        >
+          <Text>ignored</Text>
+        </ScrollBox>,
+      );
+      onScrollTopChange.mockClear();
+      // same in-bin move, but the bypass repaint is unavailable → commit instead.
+      ref.current?.scrollBy(-20);
+      expect(onScrollTopChange).toHaveBeenCalled();          // committed (graceful fallback)
+      expect(ref.current?.getScrollTop()).toBe(480);
     });
   });
 });

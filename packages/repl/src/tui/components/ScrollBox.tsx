@@ -9,7 +9,8 @@ import React, {
 // FEATURE_093 (v0.7.24): import Box directly from renderer-runtime to
 // avoid the `tui/index.ts ↔ components/ScrollBox.tsx` barrel cycle.
 import { Box } from "../renderer-runtime.js";
-import { computeOverscanWindow } from "../../ui/utils/overscan-window.js";
+import { computeOverscanWindow, staysWithinOverscanBlock } from "../../ui/utils/overscan-window.js";
+import { scheduleRenderFromNode } from "./scroll-render-trigger.js";
 
 export interface ScrollBoxHandle {
   scrollTo: (y: number) => void;
@@ -204,6 +205,11 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
   const [windowState, setWindowState] = useState<ScrollBoxWindow>(
     () => resolveScrollWindow(snapshotRef.current),
   );
+  // FEATURE_214 (v0.7.46) — live, un-committed offset during a React-bypass scroll
+  // burst (null = no active bypass; the committed snapshot is authoritative). The
+  // render reads it via `effectiveSnapshot` so a stray React re-render can't revert
+  // a bypassed scroll, and a later commit folds it back into the snapshot.
+  const bypassOffsetRef = useRef<number | null>(null);
 
   const notify = useCallback(() => {
     for (const listener of listenersRef.current) {
@@ -237,6 +243,70 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       changed: !areSnapshotsEqual(previous, normalized),
     };
   }, [notify]);
+
+  // FEATURE_214 (v0.7.46) — attempt a React-bypass scroll. When overscan is on and
+  // the move stays inside the current overscan block, translate within the block by
+  // mutating the node fields render-node reads (scrollTop = rawScrollTop, then
+  // attributes.inWindowScrollTop) and repainting the existing subtree via the
+  // engine — no React re-window, and the moved appliedScrollTop makes the DECSTBM
+  // hint fire. Returns true when handled; false → the caller commits (re-window via
+  // React), which also covers the no-engine host (tests) where the repaint is a
+  // no-op. The branch decision uses the unit-gated overscan-window math.
+  const tryBypassScroll = useCallback((dy: number): boolean => {
+    const snap = snapshotRef.current;
+    const overscanRows = Math.max(0, Math.floor(snap.overscanRows ?? 0));
+    const node = domRef.current;
+    if (overscanRows <= 0 || !node || snap.viewportHeight <= 0) {
+      return false;
+    }
+    const maxOffset = Math.max(0, snap.scrollHeight - snap.viewportHeight);
+    const curOffset = bypassOffsetRef.current ?? clampScrollTop(snap, snap.scrollTop);
+    const newOffset = Math.max(0, Math.min(Math.floor(curOffset + dy), maxOffset));
+    if (newOffset === curOffset) {
+      return true; // clamped at an edge — swallow the tick, no re-render needed
+    }
+    // offset (rows-from-bottom) → global viewport top (rows-from-top)
+    const curGlobalTop = Math.max(0, snap.scrollHeight - snap.viewportHeight - curOffset);
+    const newGlobalTop = Math.max(0, snap.scrollHeight - snap.viewportHeight - newOffset);
+    const overscanInput = {
+      viewportHeight: snap.viewportHeight,
+      contentHeight: snap.scrollHeight,
+      overscan: overscanRows,
+    };
+    if (!staysWithinOverscanBlock(curGlobalTop, newGlobalTop, overscanInput)) {
+      return false; // crossed a quantum bin → caller commits a fresh block (React)
+    }
+    const block = computeOverscanWindow({ ...overscanInput, globalScrollTop: newGlobalTop });
+    node.scrollTop = newGlobalTop;
+    if (node.attributes) {
+      node.attributes.inWindowScrollTop = block.inBlockOffset;
+    }
+    if (!scheduleRenderFromNode(node)) {
+      return false; // no engine root (tests/teardown) → fall back to a React commit
+    }
+    bypassOffsetRef.current = newOffset;
+    if (snap.sticky) {
+      // Flip sticky synchronously in the ref (not just via onStickyChange, which is
+      // async) so isSticky() + the "new content arrives → snap to bottom" decision
+      // don't yank the user back while they're scrolled up mid-bypass.
+      snapshotRef.current = { ...snapshotRef.current, sticky: false };
+      onStickyChange?.(false);
+    }
+    notify();
+    return true;
+  }, [notify, onStickyChange]);
+
+  // FEATURE_214 (v0.7.46) — after a React commit in overscan mode, drive
+  // node.scrollTop to the committed global top. render-node owns node.scrollTop
+  // once it has written it (the scrollTop prop maps to attributes.scrollTop, which
+  // it ignores thereafter), so without this the viewportTop/DECSTBM hint would lag
+  // the freshly-mounted block. No-op when overscan is off (the pre-FEATURE_214 path).
+  const syncOverscanNodeTop = useCallback((committedWindow: ScrollBoxWindow) => {
+    const node = domRef.current;
+    if (node && snapshotRef.current.overscanRows) {
+      node.scrollTop = committedWindow.viewportTop;
+    }
+  }, []);
 
   useEffect(() => {
     const previous = snapshotRef.current;
@@ -316,6 +386,7 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
 
   const handle = useMemo<ScrollBoxHandle>(() => ({
     scrollTo(y: number) {
+      bypassOffsetRef.current = null;
       const result = commitSnapshot({
         ...snapshotRef.current,
         scrollTop: y,
@@ -325,21 +396,32 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       if (result.previous.sticky !== false) {
         onStickyChange?.(false);
       }
+      syncOverscanNodeTop(result.window);
       onScrollTopChange?.(result.window.scrollTop);
     },
     scrollBy(dy: number) {
+      if (tryBypassScroll(dy)) {
+        return;
+      }
+      // Slow path (overscan off, or the move crossed a quantum bin): commit a new
+      // window through React. Base off the live bypassed offset if a burst was in
+      // flight, then clear it.
+      const base = bypassOffsetRef.current ?? snapshotRef.current.scrollTop;
+      bypassOffsetRef.current = null;
       const result = commitSnapshot({
         ...snapshotRef.current,
-        scrollTop: snapshotRef.current.scrollTop + dy,
+        scrollTop: base + dy,
         pendingDelta: snapshotRef.current.pendingDelta + Math.floor(dy),
         sticky: false,
       });
       if (result.previous.sticky !== false) {
         onStickyChange?.(false);
       }
+      syncOverscanNodeTop(result.window);
       onScrollTopChange?.(result.window.scrollTop);
     },
     scrollToElement(y: number, offset = 0) {
+      bypassOffsetRef.current = null;
       const result = commitSnapshot({
         ...snapshotRef.current,
         scrollTop: y - offset,
@@ -349,22 +431,27 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       if (result.previous.sticky !== false) {
         onStickyChange?.(false);
       }
+      syncOverscanNodeTop(result.window);
       onScrollTopChange?.(result.window.scrollTop);
     },
     scrollToBottom() {
+      bypassOffsetRef.current = null;
       const result = commitSnapshot({
         ...snapshotRef.current,
         scrollTop: 0,
         pendingDelta: 0,
         sticky: true,
       });
+      syncOverscanNodeTop(result.window);
       onScrollTopChange?.(result.window.scrollTop);
       if (result.previous.sticky !== true) {
         onStickyChange?.(true);
       }
     },
     getScrollTop() {
-      return snapshotRef.current.scrollTop;
+      // Live offset: surface the in-flight bypass position so consumers (jump-to-
+      // latest, search anchor) see where the user actually is between commits.
+      return bypassOffsetRef.current ?? snapshotRef.current.scrollTop;
     },
     getPendingDelta() {
       return snapshotRef.current.pendingDelta;
@@ -388,16 +475,18 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       };
     },
     setClampBounds(min: number | undefined, max: number | undefined) {
+      bypassOffsetRef.current = null;
       const result = commitSnapshot({
         ...snapshotRef.current,
         clampMin: min,
         clampMax: max,
       });
+      syncOverscanNodeTop(result.window);
       if (result.window.scrollTop !== result.previous.scrollTop) {
         onScrollTopChange?.(result.window.scrollTop);
       }
     },
-  }), [commitSnapshot, onScrollTopChange, onStickyChange]);
+  }), [commitSnapshot, onScrollTopChange, onStickyChange, tryBypassScroll, syncOverscanNodeTop]);
 
   useImperativeHandle(scrollRef, () => handle, [handle]);
 
@@ -405,10 +494,19 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
     onWindowChange?.(windowState);
   }, [onWindowChange, windowState]);
 
-  const content = renderWindow ? renderWindow(windowState) : children;
+  // FEATURE_214: during a React-bypass burst render from the LIVE offset, so a
+  // stray React re-render reflects the bypassed scroll instead of reverting it.
+  // Safe in Ink's synchronous renderer (no concurrent tearing). null = no burst →
+  // the committed snapshot/window is authoritative (pre-FEATURE_214 behaviour).
+  const bypassActive = bypassOffsetRef.current !== null;
+  const effectiveSnapshot = bypassActive
+    ? { ...snapshotRef.current, scrollTop: bypassOffsetRef.current as number }
+    : snapshotRef.current;
+  const renderedWindow = bypassActive ? resolveScrollWindow(effectiveSnapshot) : windowState;
+  const content = renderWindow ? renderWindow(renderedWindow) : children;
 
   const totalViewportHeight = Math.max(0, viewportHeight + paddingTop);
-  const nativeScrollTop = resolveNativeScrollTop(snapshotRef.current);
+  const nativeScrollTop = resolveNativeScrollTop(effectiveSnapshot);
   return React.createElement(
     "ink-box",
     {
@@ -427,14 +525,14 @@ export const ScrollBox: React.FC<ScrollBoxProps> = ({
       scrollTop: nativeScrollTop,
       scrollHeight: snapshotRef.current.scrollHeight,
       scrollViewportHeight: snapshotRef.current.viewportHeight,
-      scrollViewportTop: windowState.viewportTop,
+      scrollViewportTop: renderedWindow.viewportTop,
       pendingScrollDelta: snapshotRef.current.pendingDelta,
       virtualScrollWindowed: Boolean(renderWindow),
       // FEATURE_214: only emit inWindowScrollTop in overscan mode. Setting it
       // (even 0) flips the renderer onto the overscan path, so gating on
       // `overscanRows` keeps the pre-FEATURE_214 windowed path (incl. the
       // FEATURE_212 streaming-shift DECSTBM) byte-identical when overscan is off.
-      ...(snapshotRef.current.overscanRows ? { inWindowScrollTop: windowState.inWindowScrollTop } : {}),
+      ...(snapshotRef.current.overscanRows ? { inWindowScrollTop: renderedWindow.inWindowScrollTop } : {}),
       ...(snapshotRef.current.clampMin !== undefined ? { scrollClampMin: snapshotRef.current.clampMin } : {}),
       ...(snapshotRef.current.clampMax !== undefined ? { scrollClampMax: snapshotRef.current.clampMax } : {}),
       ...(stickyScroll ? { stickyScroll: true } : {}),
