@@ -28,6 +28,8 @@ export interface FullscreenTranscriptLayoutProps {
   onScrollTopChange?: (nextScrollTop: number) => void;
   onStickyChange?: (sticky: boolean) => void;
   onWindowChange?: (window: ScrollBoxWindow) => void;
+  /** FEATURE_214 (v0.7.46) — overscan margin rows for React-bypass scrolling. */
+  overscanRows?: number;
 }
 
 export const FullscreenTranscriptLayout: React.FC<FullscreenTranscriptLayoutProps> = ({
@@ -48,6 +50,7 @@ export const FullscreenTranscriptLayout: React.FC<FullscreenTranscriptLayoutProp
   onScrollTopChange,
   onStickyChange,
   onWindowChange,
+  overscanRows,
 }) => {
   return (
     <FullscreenLayout
@@ -68,6 +71,7 @@ export const FullscreenTranscriptLayout: React.FC<FullscreenTranscriptLayoutProp
       onScrollTopChange={onScrollTopChange}
       onStickyChange={onStickyChange}
       onWindowChange={onWindowChange}
+      overscanRows={overscanRows}
     />
   );
 };

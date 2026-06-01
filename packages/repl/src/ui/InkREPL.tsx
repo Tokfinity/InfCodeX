@@ -298,6 +298,7 @@ import {
   resolveTranscriptOwnedWindowGeometry,
   type TranscriptOwnedWindowGeometry,
 } from "./utils/transcript-window-geometry.js";
+import { OVERSCAN_ROWS } from "./utils/overscan-window.js";
 import {
   buildTranscriptRowIndexByKey,
   buildTranscriptScreenBuffer,
@@ -868,6 +869,14 @@ const MAX_PERSISTED_UI_HISTORY_ROUNDS = 50;
 // replays where you want explicit turn-boundary anchors).
 const TRANSCRIPT_HARNESS_MARKERS_ENABLED =
   process.env.KODAX_TRANSCRIPT_HARNESS_MARKERS === '1';
+
+// FEATURE_214 (v0.7.46) — React-bypass fullscreen scroll. Default OFF: the
+// fullscreen transcript renders only the viewport window (pre-FEATURE_214). Set
+// `KODAX_SCROLL_OVERSCAN=1` to render an overscan block and translate within it
+// without a React re-window per wheel tick (the lag fix). Opt-in while it's
+// validated on real terminals; the env gate is removed once it ships on by default.
+const FULLSCREEN_SCROLL_OVERSCAN_ROWS =
+  process.env.KODAX_SCROLL_OVERSCAN === '1' ? OVERSCAN_ROWS : undefined;
 
 export function trimPersistedUiHistorySnapshot(
   items: readonly KodaXSessionUiHistoryItem[],
@@ -8124,6 +8133,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           scrollHeight={effectiveTranscriptScrollHeight}
           viewportHeight={viewportBudget.messageRows}
           stickyScroll={!isTranscriptMode && !isAwaitingUserInteraction && viewportSticky}
+          overscanRows={FULLSCREEN_SCROLL_OVERSCAN_ROWS}
           scrollRef={transcriptScrollRef}
           onWindowChange={handleTranscriptWindowChange}
           onScrollTopChange={handleTranscriptScrollTopChange}

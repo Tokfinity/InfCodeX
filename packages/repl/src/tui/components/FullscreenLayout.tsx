@@ -33,6 +33,8 @@ export interface FullscreenLayoutProps {
   onScrollTopChange?: (nextScrollTop: number) => void;
   onStickyChange?: (sticky: boolean) => void;
   onWindowChange?: (window: ScrollBoxWindow) => void;
+  /** FEATURE_214 (v0.7.46) — overscan margin rows for React-bypass scrolling. */
+  overscanRows?: number;
 }
 
 export const FullscreenLayout: React.FC<FullscreenLayoutProps> = ({
@@ -53,6 +55,7 @@ export const FullscreenLayout: React.FC<FullscreenLayoutProps> = ({
   onScrollTopChange,
   onStickyChange,
   onWindowChange,
+  overscanRows,
 }) => {
   const renderChromeSlot = (slot: FullscreenChromeSlot | undefined, text: string | undefined) => {
     if (!text) {
@@ -94,6 +97,7 @@ export const FullscreenLayout: React.FC<FullscreenLayoutProps> = ({
           onStickyChange={onStickyChange}
           onWindowChange={onWindowChange}
           renderWindow={renderScrollableWindow}
+          overscanRows={overscanRows}
         >
           {scrollable}
         </ScrollBox>
