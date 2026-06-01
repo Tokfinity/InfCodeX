@@ -111,6 +111,7 @@ describe('provider capability profiles', () => {
   it('exposes the current MiniMax coding model lineup in snapshot metadata', () => {
     expect(getProviderModels('minimax-coding')).toEqual([
       'MiniMax-M2.7',
+      'MiniMax-M3',
       'MiniMax-M2.7-highspeed',
       'MiniMax-M2.5',
       'MiniMax-M2.5-highspeed',
