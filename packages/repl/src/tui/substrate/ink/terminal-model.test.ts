@@ -10,7 +10,7 @@ import {
   createScreen,
   setCellAt,
 } from "./cell-screen.js";
-import type { Frame } from "./frame.js";
+import { emptyFrame, type Frame } from "./frame.js";
 
 // FEATURE_212 (v0.7.45) — cursor+grid terminal model (the differential-test
 // gate for the DECSTBM scroll optimization).
@@ -64,7 +64,17 @@ class TerminalModel {
       } else if (ch === "\r") {
         this.cx = 0; i++;
       } else if (ch === "\n") {
-        this.cy = this.clampY(this.cy + 1); i++;
+        // Real-terminal LF: at the bottom of the scroll region a line-feed
+        // scrolls the region up one row rather than moving the cursor off
+        // screen. This is the exact behavior the fullscreen drift trips on —
+        // a row-final/cursor-restore `\n` emitted while the cursor sits on the
+        // last viewport row pushes the whole screen up one line.
+        if (this.cy >= this.bot) {
+          this.scroll(1);
+        } else {
+          this.cy = this.clampY(this.cy + 1);
+        }
+        i++;
       } else if (ch >= " ") {
         if (this.cy >= 0 && this.cy < this.h && this.cx >= 0 && this.cx < this.w) {
           this.grid[this.cy]![this.cx] = ch;
@@ -308,5 +318,58 @@ describe("DECSTBM scroll gate (FEATURE_212)", () => {
     });
     expect(rows).toEqual(screenRows(next.screen));
     expect(diff.some((p) => p.type === "scrollRegion")).toBe(false);
+  });
+});
+
+// ---- the fullscreen viewport-fill drift (real engine sequence) -----------
+//
+// Reproduces the user-visible "whole managed viewport drifts up one row" in the
+// cell-diff fullscreen path. Mirrors the engine sequence: a first paint from an
+// EMPTY prev into a viewport-FILLING frame (banner + flex middle + input +
+// status = full height), then a steady-state render that changes only the
+// bottom (status) row. On a real terminal the first paint's row-final `\n`
+// after the LAST row (and `restoreCursor`'s `\n`) land on the bottom row and
+// SCROLL the screen up one line — the banner's top row is lost and a blank row
+// appears at the bottom. The gate drives the ACTUAL emitted bytes through the
+// scroll-faithful model and asserts the full viewport (banner row 0 included)
+// is reconstructed across the whole sequence.
+
+/** Replay a sequence of frames through ONE persistent terminal (as the engine
+ * does — the alt-screen survives between renders), starting from an empty prev
+ * at cursor home. Returns the final terminal state. */
+function driveFullscreenSequence(frames: Frame[]): TerminalModel {
+  const vh = frames[0]!.viewport.height;
+  const w = frames[0]!.viewport.width;
+  const lu = new LogUpdate({ isTTY: true });
+  const model = new TerminalModel(w, vh); // blank screen, cursor home (0,0)
+  let prev: Frame = emptyFrame(vh, w); // screen.height 0 — engine's seed prev
+  for (const frame of frames) {
+    const diff = lu.render(prev, frame);
+    model.apply(diff.map((p) => patchToBytes(p)).join(""));
+    prev = frame;
+  }
+  return model;
+}
+
+describe("fullscreen viewport-fill drift (real engine sequence)", () => {
+  const W = 6;
+  const VH = 7; // the frame fills the viewport exactly (screen.height === VH)
+
+  function full(rows: string[]): Frame {
+    return frameFromRows(rows, W, VH); // cursor.y === rows.length === VH
+  }
+
+  const ROWS_1 = ["BANNER", "body01", "body02", "body03", "      ", "inputX", "STAT_1"];
+  // Steady-state render: only the bottom (status) row changes.
+  const ROWS_2 = ["BANNER", "body01", "body02", "body03", "      ", "inputX", "STAT_2"];
+
+  it("first paint + steady-state keep the banner (row 0) — no upward drift", () => {
+    const model = driveFullscreenSequence([full(ROWS_1), full(ROWS_2)]);
+    expect(model.rows(VH)).toEqual(screenRows(full(ROWS_2).screen));
+  });
+
+  it("first paint alone keeps the banner (row 0)", () => {
+    const model = driveFullscreenSequence([full(ROWS_1)]);
+    expect(model.rows(VH)).toEqual(screenRows(full(ROWS_1).screen));
   });
 });

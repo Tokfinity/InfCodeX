@@ -98,13 +98,30 @@ export class LogUpdate {
    *     `(0, screen.height)` deterministically.
    */
   render(
-    prev: Frame,
-    next: Frame,
+    prevRaw: Frame,
+    nextRaw: Frame,
     opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
   ): Diff {
     if (!this.options.isTTY) {
-      return renderFullFrame(next);
+      return renderFullFrame(nextRaw);
     }
+
+    // FEATURE_212 (v0.7.45) — clamp the resting cursor to the last VISIBLE row.
+    // `renderer.js` sets `cursor.y = screen.height` (one row PAST the last
+    // content row) so the next diff starts deterministically. In managed
+    // fullscreen the frame FILLS the viewport (`screen.height ===
+    // viewport.height`), so that resting position is OFF-SCREEN — and the
+    // `\n` `restoreCursor` emits to reach it scrolls the whole alt-screen up
+    // one row (the visible "everything drifts up, banner top clipped, blank
+    // row under the status bar"). Clamping the resting cursor to
+    // `viewport.height - 1` makes `restoreCursor` take the no-scroll
+    // `moveCursorTo` branch. Applied to BOTH prev and next so the virtual
+    // cursor the diff is computed against stays in lock-step with the real
+    // terminal cursor across renders (an inconsistent clamp desyncs them and
+    // misplaces the spinner/input by a row). Inline frames (content shorter
+    // than the viewport) are untouched — their cursor is already on-screen.
+    const prev = clampRestingCursor(prevRaw);
+    const next = clampRestingCursor(nextRaw);
 
     // Reset short-circuit. Decision logic is in `shouldFullReset` (Phase 3b)
     // — see `viewport-state.ts` for the four-case taxonomy. `readLine` is
@@ -305,6 +322,21 @@ function diffPass(
  *   - **Cursor within content** (`next.cursor.y < next.screen.height`):
  *     a plain `moveCursorTo` is sufficient since the row already exists.
  */
+/**
+ * FEATURE_212 (v0.7.45) — clamp a frame's resting cursor to the last VISIBLE
+ * viewport row. Returns the frame unchanged when its cursor is already
+ * on-screen (`cursor.y < viewport.height`), so inline/non-filling frames are
+ * untouched. Only a viewport-filling frame (`cursor.y === viewport.height`,
+ * the `renderer.js` "one past last row" convention applied to a full screen)
+ * is rewritten so its cursor sits on `viewport.height - 1` — preventing the
+ * scroll-inducing newline. Pure; allocates a new frame only when clamping.
+ */
+function clampRestingCursor(frame: Frame): Frame {
+  const maxY = Math.max(0, frame.viewport.height - 1);
+  if (frame.cursor.y <= maxY) return frame;
+  return { ...frame, cursor: { ...frame.cursor, y: maxY } };
+}
+
 function restoreCursor(screen: VirtualScreen, next: Frame): void {
   if (next.cursor.y >= next.screen.height) {
     screen.txn((prev) => {
