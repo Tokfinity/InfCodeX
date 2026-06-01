@@ -38,6 +38,20 @@ describe('provider registry', () => {
     expect(() => getProvider('missing-provider')).toThrowError(KodaXProviderError);
   });
 
+  it('registers MiniMax Coding Plan as minimax-coding (Anthropic-compat, MINIMAX_CODING_API_KEY)', () => {
+    // Pin the load-bearing pieces of the multi-model gateway: the provider
+    // default (M2.7 at the 204K provider window) and the M3 per-model
+    // override (1M frontier context). M3 carries an explicit override
+    // because it diverges from the provider default — guard the value so
+    // future edits to the JSON catalog have to update this assertion.
+    vi.stubEnv('MINIMAX_CODING_API_KEY', 'mm-test-key');
+    const minimax = getProvider('minimax-coding');
+    expect(minimax.name).toBe('minimax-coding');
+    expect(minimax.getEffectiveContextWindow('MiniMax-M2.7')).toBe(204_800);
+    expect(minimax.getEffectiveContextWindow('MiniMax-M3')).toBe(1_000_000);
+    expect(getProviderConfiguredReasoningCapability('minimax-coding', 'MiniMax-M3')).toBe('native-budget');
+  });
+
   it('registers Xiaomi MiMo Token Plan as mimo-coding (Anthropic-compat, MIMO_CODING_API_KEY)', () => {
     vi.stubEnv('MIMO_CODING_API_KEY', 'tp-test-key');
     const mimo = getProvider('mimo-coding');

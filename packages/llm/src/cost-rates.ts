@@ -56,6 +56,7 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'minimax-coding': {
+    'MiniMax-M3': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'MiniMax-M2.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'MiniMax-M2.7-highspeed': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'MiniMax-M2.5': { inputPer1M: 0.01, outputPer1M: 0.03 },

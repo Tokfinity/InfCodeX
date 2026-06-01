@@ -102,6 +102,7 @@
       "apiKeyEnv": "MINIMAX_CODING_API_KEY",
       "model": "MiniMax-M2.7",
       "models": [
+        { "id": "MiniMax-M3", "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)", "contextWindow": 1000000 },
         { "id": "MiniMax-M2.7-highspeed", "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)" },
         { "id": "MiniMax-M2.5", "displayName": "MiniMax M2.5" },
         { "id": "MiniMax-M2.5-highspeed", "displayName": "MiniMax M2.5 Highspeed (higher-tier plan)" },
