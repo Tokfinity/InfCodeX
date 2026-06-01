@@ -31,7 +31,11 @@ import type {
 import { KODAX_ESCALATED_MAX_OUTPUT_TOKENS } from '@kodax-ai/llm';
 import type { Agent, RunnerLlmResult } from '@kodax-ai/agent';
 import { resolveProvider } from '../../../providers/index.js';
-import { KODAX_MAX_MAXTOKENS_RETRIES } from '../../../constants.js';
+import {
+  KODAX_MAX_MAXTOKENS_RETRIES,
+  KODAX_MAX_EMPTY_COMPLETION_RETRIES,
+  KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS,
+} from '../../../constants.js';
 import {
   bucketProviderPayloadSize,
   cleanupIncompleteToolCalls,
@@ -111,6 +115,25 @@ export interface RunnerAdapterTokenState {
 // before either helper ran. The Sidecar Verifier (FEATURE_184) drives
 // verdicts out-of-band and does not need the V2 worker to fall through
 // to the fence-synthesizer.
+
+/**
+ * True when a successfully-returned provider turn carries nothing
+ * actionable — no text, no tool calls, and no thinking. Distinct from a
+ * stream-incomplete error (which throws before reaching here) and from a
+ * canonical text-only termination (text present, no tool — the FEATURE_190
+ * V2 exit path). See KODAX_MAX_EMPTY_COMPLETION_RETRIES for why the
+ * adapter re-streams instead of returning such a turn to the runner.
+ */
+function isEmptyCompletion(raw: {
+  textBlocks?: readonly { text: string }[];
+  toolBlocks?: readonly KodaXToolUseBlock[];
+  thinkingBlocks?: readonly unknown[];
+}): boolean {
+  const text = (raw.textBlocks ?? []).map((b) => b.text).join('').trim();
+  const toolCount = raw.toolBlocks?.length ?? 0;
+  const thinkingCount = raw.thinkingBlocks?.length ?? 0;
+  return text.length === 0 && toolCount === 0 && thinkingCount === 0;
+}
 
 export function buildRunnerLlmAdapter(
   options: KodaXOptions,
@@ -336,6 +359,9 @@ export function buildRunnerLlmAdapter(
       // + write/edit tool descriptions rather than framework plumbing
       // through the Runner turn boundary.
       let hasEscalatedForCurrentAdapterCall = false;
+      // Independent budget (separate from the resilience error budget and
+      // the max_tokens escalation) for re-streaming a fully-empty turn.
+      let emptyCompletionRetries = 0;
       while (true) {
         attempt += 1;
         boundaryTracker.beginRequest(
@@ -457,6 +483,41 @@ export function buildRunnerLlmAdapter(
             // next iteration's attempt will be the same as this one, and subsequent real
             // errors still get the full retry budget.
             attempt -= 1;
+            continue;
+          }
+          // Empty-completion retry: a finish_reason-complete turn with no
+          // text, no tool calls, and no thinking is a degraded response
+          // (common on budget OpenAI-compat providers under load / right
+          // after a 429). Handing it back would hit the runner's no-tool
+          // terminal branch and end the task silently. Re-stream the same
+          // turn a bounded number of times. Mirrors the L1 escalation's
+          // `attempt -= 1` so this does not consume the resilience error
+          // budget. Timers are cleared before the backoff await so the
+          // idle/hard timeout cannot abort the controller mid-wait. A
+          // genuine text-only termination (text present) is untouched, and
+          // the `max_tokens` stop reason is excluded so the escalation + L5
+          // ladder above keeps sole ownership of that path.
+          if (
+            isEmptyCompletion(raw)
+            && raw.stopReason !== 'max_tokens'
+            && emptyCompletionRetries < KODAX_MAX_EMPTY_COMPLETION_RETRIES
+            && !options.abortSignal?.aborted
+          ) {
+            emptyCompletionRetries += 1;
+            options.events?.onRetry?.(
+              `Provider returned an empty turn, retrying ${emptyCompletionRetries}/${KODAX_MAX_EMPTY_COMPLETION_RETRIES}`,
+              emptyCompletionRetries,
+              KODAX_MAX_EMPTY_COMPLETION_RETRIES,
+            );
+            if (hardTimer) clearTimeout(hardTimer);
+            if (idleTimer) clearTimeout(idleTimer);
+            hardTimer = undefined;
+            idleTimer = undefined;
+            attempt -= 1;
+            await waitForRetryDelay(
+              KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS * emptyCompletionRetries,
+              options.abortSignal,
+            );
             continue;
           }
           break;

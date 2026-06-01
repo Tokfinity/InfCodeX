@@ -15,6 +15,23 @@ export {
   PROMISE_PATTERN,
 } from '@kodax-ai/agent';
 
+/**
+ * Empty-completion retry budget for the managed-task LLM adapter.
+ *
+ * When a provider returns a syntactically-complete turn (finish_reason
+ * received — so NOT a stream-incomplete error) that carries no text, no
+ * tool calls, and no thinking, the adapter re-streams the same turn up to
+ * this many times before falling through to the runner's terminal
+ * no-tool branch. Without it, a degraded/empty completion — common on
+ * budget OpenAI-compatible providers under load or right after a 429 — is
+ * misread by the runner as a clean text-only task completion and the task
+ * exits silently. A genuine text-only termination (text present, no tool)
+ * is unaffected: the guard only fires on the fully-empty turn.
+ */
+export const KODAX_MAX_EMPTY_COMPLETION_RETRIES = 2;
+/** Base backoff (ms) between empty-completion re-streams; scales by attempt. */
+export const KODAX_EMPTY_COMPLETION_RETRY_BASE_DELAY_MS = 500;
+
 /** Prefix used to detect user-cancelled tool results in the agent loop. */
 export const CANCELLED_TOOL_RESULT_PREFIX = '[Cancelled]';
 /** Standard cancellation message returned when a tool is cancelled by the user. */

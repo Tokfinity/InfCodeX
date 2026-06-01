@@ -611,6 +611,172 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
   }, 15_000);
 });
 
+describe('buildRunnerLlmAdapter — empty-completion retry', () => {
+  // A finish_reason-complete turn carrying no text, no tool calls, and no
+  // thinking is a degraded response (common on budget OpenAI-compat
+  // providers under load / right after a 429). The runner's no-tool
+  // terminal branch would otherwise misread it as a clean text-only task
+  // completion and end the task silently. The adapter re-streams the same
+  // turn a bounded number of times. A canonical text-only termination
+  // (text present, no tool) must be left untouched — FEATURE_190.
+  const EMPTY_PROVIDER_NAME = 'runner-driven-empty-completion-test';
+  const EMPTY_PROVIDER_API_KEY_ENV = 'RUNNER_DRIVEN_EMPTY_COMPLETION_TEST_API_KEY';
+
+  let KodaXBaseProviderRef: typeof import('@kodax-ai/llm').KodaXBaseProvider;
+  let registerModelProviderFn: typeof import('@kodax-ai/llm').registerModelProvider;
+  let clearRuntimeModelProvidersFn: typeof import('@kodax-ai/llm').clearRuntimeModelProviders;
+
+  beforeAll(async () => {
+    const aiModule = await import('@kodax-ai/llm');
+    KodaXBaseProviderRef = aiModule.KodaXBaseProvider;
+    registerModelProviderFn = aiModule.registerModelProvider;
+    clearRuntimeModelProvidersFn = aiModule.clearRuntimeModelProviders;
+  });
+
+  afterEach(() => {
+    clearRuntimeModelProvidersFn();
+    delete process.env[EMPTY_PROVIDER_API_KEY_ENV];
+  });
+
+  interface ScriptedTurn {
+    textBlocks?: { type: 'text'; text: string }[];
+    toolBlocks?: KodaXToolUseBlock[];
+    thinkingBlocks?: { type: 'thinking'; thinking: string }[];
+    stopReason?: string;
+  }
+
+  function registerScriptedProvider(turns: ScriptedTurn[], callLog: number[]): void {
+    let callIdx = 0;
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = EMPTY_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: EMPTY_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        maxOutputTokens: 8192,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+      async stream(): Promise<any> {
+        callLog.push(++callIdx);
+        const turn = turns[callIdx - 1];
+        if (!turn) throw new Error(`No scripted turn for stream call #${callIdx}`);
+        return {
+          textBlocks: turn.textBlocks ?? [],
+          toolBlocks: turn.toolBlocks ?? [],
+          thinkingBlocks: turn.thinkingBlocks ?? [],
+          stopReason: turn.stopReason ?? 'stop',
+        };
+      }
+    }
+    process.env[EMPTY_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(EMPTY_PROVIDER_NAME, () => new Scripted());
+  }
+
+  function makeEmptyAdapterOptions(): KodaXOptions {
+    return { ...makeOptions(), provider: EMPTY_PROVIDER_NAME };
+  }
+
+  it('re-streams on a fully-empty turn, then returns the recovered turn', async () => {
+    const callLog: number[] = [];
+    registerScriptedProvider(
+      [
+        { textBlocks: [], toolBlocks: [], thinkingBlocks: [], stopReason: 'stop' },
+        { textBlocks: [{ type: 'text', text: 'recovered answer' }], stopReason: 'stop' },
+      ],
+      callLog,
+    );
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(callLog.length).toBe(2); // original empty + 1 retry
+    expect(result.text).toBe('recovered answer');
+  }, 15_000);
+
+  it('gives up after KODAX_MAX_EMPTY_COMPLETION_RETRIES and returns the empty turn', async () => {
+    const { KODAX_MAX_EMPTY_COMPLETION_RETRIES } = await import('../constants.js');
+    const callLog: number[] = [];
+    const turns: ScriptedTurn[] = [];
+    // original + cap retries all empty.
+    for (let i = 0; i < KODAX_MAX_EMPTY_COMPLETION_RETRIES + 1; i += 1) {
+      turns.push({ textBlocks: [], toolBlocks: [], thinkingBlocks: [], stopReason: 'stop' });
+    }
+    // Sentinel beyond the cap — must NEVER be consumed.
+    turns.push({ textBlocks: [{ type: 'text', text: 'SHOULD_NEVER_APPEAR' }], stopReason: 'stop' });
+    registerScriptedProvider(turns, callLog);
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    // original (1) + cap retries — sentinel never reached.
+    expect(callLog.length).toBe(KODAX_MAX_EMPTY_COMPLETION_RETRIES + 1);
+    expect(result.text).toBe('');
+    expect(result.text).not.toContain('SHOULD_NEVER_APPEAR');
+  }, 15_000);
+
+  it('does NOT retry a canonical text-only termination (FEATURE_190 guard)', async () => {
+    const callLog: number[] = [];
+    registerScriptedProvider(
+      [
+        { textBlocks: [{ type: 'text', text: 'final text-only answer' }], stopReason: 'stop' },
+        { textBlocks: [{ type: 'text', text: 'SHOULD_NEVER_APPEAR' }], stopReason: 'stop' },
+      ],
+      callLog,
+    );
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(callLog.length).toBe(1); // no retry — text present
+    expect(result.text).toBe('final text-only answer');
+  }, 15_000);
+
+  it('does NOT retry a turn that has tool calls but no text', async () => {
+    const callLog: number[] = [];
+    registerScriptedProvider(
+      [
+        {
+          textBlocks: [],
+          toolBlocks: [{ type: 'tool_use', id: 't1', name: 'read', input: { path: 'x' } }],
+          stopReason: 'tool_use',
+        },
+        { textBlocks: [{ type: 'text', text: 'SHOULD_NEVER_APPEAR' }], stopReason: 'stop' },
+      ],
+      callLog,
+    );
+
+    const adapter = buildRunnerLlmAdapter(makeEmptyAdapterOptions());
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'do work' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(callLog.length).toBe(1); // tool call present → not empty → no retry
+    expect(result.toolCalls.length).toBe(1);
+  }, 15_000);
+});
+
 describe('runManagedTaskViaRunner — end-to-end', () => {
   // FEATURE_193 v0.7.43: Scout H0_DIRECT emit_scout_verdict flow it deleted (V1 chain retired — Scout role + emit_scout_verdict tool retired)
 
