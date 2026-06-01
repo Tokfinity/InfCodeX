@@ -190,5 +190,3 @@ export function needsContinuation(input: string): boolean {
 
   return false;
 }
-
-// Process special syntax - 处理特殊语法

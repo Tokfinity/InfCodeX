@@ -16,7 +16,7 @@ import process from 'node:process';
 const TARGETS = [
   {
     name: 'zhipu-coding',
-    apiKeyEnv: 'ZHIPU_API_KEY',
+    apiKeyEnv: 'ZHIPU_CODING_API_KEY',
     // Coding-plan endpoint is Anthropic-style; the standard model
     // listing lives on the OpenAI-style sibling endpoint.
     url: 'https://open.bigmodel.cn/api/paas/v4/models',
@@ -24,7 +24,7 @@ const TARGETS = [
   },
   {
     name: 'kimi-code',
-    apiKeyEnv: 'KIMI_API_KEY',
+    apiKeyEnv: 'KIMI_CODE_API_KEY',
     // Coding endpoint owns its own model list; the OpenAI-style sibling
     // exposes a /models listing.
     url: 'https://api.moonshot.cn/v1/models',
@@ -32,7 +32,7 @@ const TARGETS = [
   },
   {
     name: 'minimax-coding',
-    apiKeyEnv: 'MINIMAX_API_KEY',
+    apiKeyEnv: 'MINIMAX_CODING_API_KEY',
     // MiniMax doesn't expose a public Anthropic-style /models endpoint
     // on the Token Plan host. Try the platform's official chat host.
     url: 'https://api.minimaxi.com/v1/models',
@@ -40,7 +40,7 @@ const TARGETS = [
   },
   {
     name: 'ark-coding',
-    apiKeyEnv: 'ARK_API_KEY',
+    apiKeyEnv: 'ARK_CODING_API_KEY',
     // Volcengine Ark public catalog endpoint.
     url: 'https://ark.cn-beijing.volces.com/api/v3/models',
     auth: (k) => `Bearer ${k}`,

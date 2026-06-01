@@ -2,8 +2,8 @@
 // Drill-down: look at Ark's response in detail for the models KodaX actually uses.
 import process from 'node:process';
 
-const key = process.env.ARK_API_KEY;
-if (!key) { console.error('ARK_API_KEY not set'); process.exit(1); }
+const key = process.env.ARK_CODING_API_KEY;
+if (!key) { console.error('ARK_CODING_API_KEY not set'); process.exit(1); }
 
 const res = await fetch('https://ark.cn-beijing.volces.com/api/v3/models', {
   headers: { Authorization: `Bearer ${key}` },
