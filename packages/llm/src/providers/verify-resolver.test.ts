@@ -15,6 +15,11 @@ import {
   verifyProviderCredential,
 } from './resolver.js';
 import { registerCustomProviders } from './custom-registry.js';
+import {
+  clearRuntimeModelProviders,
+  registerModelProvider,
+} from './runtime-registry.js';
+import { KodaXBaseProvider } from './base.js';
 
 describe('FEATURE_216 verifyProviderCredential — short-circuit paths', () => {
   it('unknown provider name → unsupported (no instantiation)', async () => {
@@ -66,6 +71,7 @@ describe('FEATURE_216 verifyProviderCredential — short-circuit paths', () => {
 
   it('custom provider with anthropic protocol → strategy defaults to count-tokens', async () => {
     const apiKeyEnv = 'KODAX_TEST_UNSET_KEY_DO_NOT_USE';
+    const previous = process.env[apiKeyEnv];
     delete process.env[apiKeyEnv];
     registerCustomProviders([{
       name: 'custom-anthropic-unconfigured',
@@ -80,11 +86,13 @@ describe('FEATURE_216 verifyProviderCredential — short-circuit paths', () => {
       expect(r.strategy).toBe('count-tokens'); // anthropic protocol default
     } finally {
       registerCustomProviders([]);
+      if (previous !== undefined) process.env[apiKeyEnv] = previous;
     }
   });
 
   it('custom provider with explicit verifyStrategy override wins', async () => {
     const apiKeyEnv = 'KODAX_TEST_UNSET_KEY_DO_NOT_USE';
+    const previous = process.env[apiKeyEnv];
     delete process.env[apiKeyEnv];
     registerCustomProviders([{
       name: 'custom-explicit-strategy',
@@ -100,6 +108,7 @@ describe('FEATURE_216 verifyProviderCredential — short-circuit paths', () => {
       expect(r.strategy).toBe('minimal-message');
     } finally {
       registerCustomProviders([]);
+      if (previous !== undefined) process.env[apiKeyEnv] = previous;
     }
   });
 });
@@ -144,6 +153,40 @@ describe('FEATURE_216 listProviderModels — static path', () => {
       expect(r.models).toEqual(['custom-default', 'custom-alt-1', 'custom-alt-2']);
     } finally {
       registerCustomProviders([]);
+    }
+  });
+});
+
+describe('FEATURE_216 verifyProviderCredential — runtime-provider never-throws guard', () => {
+  // Regression for H2: a runtime-registered provider whose
+  // verifyCredential() throws (e.g. a 3rd-party extension that predates
+  // FEATURE_216) must NOT crash the top-level helper — the never-throws
+  // contract has to hold for all provider source types.
+  class ThrowingTestProvider extends KodaXBaseProvider {
+    readonly name = 'throwing-runtime-provider';
+    readonly supportsThinking = false;
+    protected readonly config = {
+      apiKeyEnv: 'NEVER_READ',
+      model: 'fake',
+      supportsThinking: false,
+    } as const;
+    override isConfigured(): boolean { return true; }
+    override async verifyCredential(): Promise<never> {
+      throw new Error('legacy 3rd-party extension throws instead of returning envelope');
+    }
+    async stream(): Promise<never> { throw new Error('not used in test'); }
+  }
+
+  it('runtime provider that throws → caught + returned as error="unknown" envelope', async () => {
+    clearRuntimeModelProviders();
+    registerModelProvider('throwing-runtime-provider', () => new ThrowingTestProvider());
+    try {
+      const r = await verifyProviderCredential('throwing-runtime-provider');
+      expect(r.ok).toBe(false);
+      expect(r.error).toBe('unknown');
+      expect(r.message).toContain('legacy 3rd-party extension');
+    } finally {
+      clearRuntimeModelProviders();
     }
   });
 });

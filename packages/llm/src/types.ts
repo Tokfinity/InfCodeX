@@ -449,6 +449,7 @@ export interface KodaXVerifyCredentialResult {
     | 'unsupported'
     | 'unconfigured'
     | 'server_error'
+    | 'rate_limited'
     | 'unknown';
   /** Upstream error body or short diagnostic, capped to 240 chars. */
   readonly message?: string;

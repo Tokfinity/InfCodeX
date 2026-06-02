@@ -248,6 +248,7 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       runners,
       timeoutMs: opts?.timeoutMs,
       signal: opts?.signal,
+      providerName: this.name,
     });
   }
 

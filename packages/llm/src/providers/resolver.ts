@@ -228,7 +228,22 @@ export async function verifyProviderCredential(
       message: String((err as Error)?.message ?? err).slice(0, 240),
     };
   }
-  return provider.verifyCredential(opts);
+  // Wrap the actual verify call too — preserves the never-throws
+  // contract even for runtime-registered providers whose verifyCredential
+  // override (third-party extensions predating FEATURE_216) might throw
+  // instead of returning a result envelope.
+  try {
+    return await provider.verifyCredential(opts);
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'unknown',
+      strategy: meta?.verifyStrategy ?? 'unsupported',
+      durationMs: 0,
+      approxTokensSpent: 0,
+      message: String((err as Error)?.message ?? err).slice(0, 240),
+    };
+  }
 }
 
 /**

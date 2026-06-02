@@ -140,6 +140,63 @@ describe('FEATURE_216 runVerifyCredential — orchestrator', () => {
     expect(r.status).toBe(400);
   });
 
+  it('429 rate-limit response → rate_limited (distinct from unauthorized)', async () => {
+    const r = await runVerifyCredential({
+      strategy: 'models-list',
+      runners: [{
+        strategy: 'models-list',
+        approxTokensSpent: 0,
+        run: async () => { throw fakeSdkError({ status: 429, message: '429 Too Many Requests' }); },
+      }],
+    });
+    expect(r.error).toBe('rate_limited');
+    expect(r.status).toBe(429);
+  });
+
+  it('ETIMEDOUT (TCP connect timeout) → network', async () => {
+    const r = await runVerifyCredential({
+      strategy: 'models-list',
+      runners: [{
+        strategy: 'models-list',
+        approxTokensSpent: 0,
+        run: async () => { throw fakeSdkError({ code: 'ETIMEDOUT', message: 'connect ETIMEDOUT' }); },
+      }],
+    });
+    expect(r.error).toBe('network');
+  });
+
+  it('ENETUNREACH → network', async () => {
+    const r = await runVerifyCredential({
+      strategy: 'models-list',
+      runners: [{
+        strategy: 'models-list',
+        approxTokensSpent: 0,
+        run: async () => { throw fakeSdkError({ code: 'ENETUNREACH', message: 'no route' }); },
+      }],
+    });
+    expect(r.error).toBe('network');
+  });
+
+  it('sk-... key fragment in upstream message → redacted to sk-***', async () => {
+    const r = await runVerifyCredential({
+      strategy: 'minimal-message',
+      runners: [{
+        strategy: 'minimal-message',
+        approxTokensSpent: 6,
+        run: async () => {
+          throw fakeSdkError({
+            status: 401,
+            className: 'AuthenticationError',
+            message: '401 Authentication Fails, Your api key: sk-deadbeef1234567890abc is invalid',
+          });
+        },
+      }],
+    });
+    expect(r.error).toBe('unauthorized');
+    expect(r.message).not.toContain('sk-deadbeef');
+    expect(r.message).toContain('sk-***');
+  });
+
   it('5xx server error → server_error', async () => {
     const r = await runVerifyCredential({
       strategy: 'models-list',
@@ -233,18 +290,66 @@ describe('FEATURE_216 classifyVerifyError — direct classifier coverage', () =>
     expect(r.status).toBe(400);
   });
 
-  it('kimi-code-style 400 (no AuthenticationError class) on count-tokens → unauthorized (strategy-specific)', () => {
-    // Empirical kimi-code behavior: count_tokens with bad key returns
-    // 400 invalid_request_error rather than 401. The classifier maps
-    // this ONLY when running count-tokens to avoid false positives.
+  it('kimi-code 400 on count-tokens (with providerName="kimi-code") → unauthorized', () => {
+    // Empirical kimi-code-specific behavior: count_tokens with bad key
+    // returns 400 invalid_request_error rather than 401, and the SDK
+    // class isn't AuthenticationError. Gated by providerName so other
+    // count-tokens providers (anthropic / zhipu-coding / minimax-coding /
+    // ark-coding) don't false-positive on legitimate 400s.
     const err = fakeSdkError({ status: 400, message: '400 Invalid request Error' });
     const r = classifyVerifyError(err, {
       strategy: 'count-tokens',
       durationMs: 100,
       approxTokensSpent: 0,
+      providerName: 'kimi-code',
     });
     expect(r.error).toBe('unauthorized');
     expect(r.status).toBe(400);
+  });
+
+  it('400 on count-tokens for OTHER providers (no providerName="kimi-code") → unknown', () => {
+    // Regression guard for the H1 fix: a bare 400 from any other
+    // count-tokens provider must NOT be mapped to unauthorized.
+    for (const provider of ['anthropic', 'zhipu-coding', 'minimax-coding', 'ark-coding']) {
+      const err = fakeSdkError({ status: 400, message: '400 Bad model id' });
+      const r = classifyVerifyError(err, {
+        strategy: 'count-tokens',
+        durationMs: 100,
+        approxTokensSpent: 0,
+        providerName: provider,
+      });
+      expect(r.error).toBe('unknown');
+    }
+  });
+
+  it('429 with no class → rate_limited (status check)', () => {
+    const r = classifyVerifyError(fakeSdkError({ status: 429, message: '429 Too Many Requests' }), {
+      strategy: 'minimal-message',
+      durationMs: 50,
+      approxTokensSpent: 0,
+    });
+    expect(r.error).toBe('rate_limited');
+  });
+
+  it('redacts sk-... key fragments from message before truncation', () => {
+    const raw = 'Authentication failed: provided key sk-abc123def456ghi789jkl is invalid';
+    const r = classifyVerifyError(new Error(raw), {
+      strategy: 'minimal-message',
+      durationMs: 0,
+      approxTokensSpent: 0,
+    });
+    expect(r.message).not.toContain('sk-abc123');
+    expect(r.message).toContain('sk-***');
+  });
+
+  it('preserves non-sk- text in message intact (redaction is targeted)', () => {
+    const raw = 'Authentication failed: invalid credentials';
+    const r = classifyVerifyError(new Error(raw), {
+      strategy: 'minimal-message',
+      durationMs: 0,
+      approxTokensSpent: 0,
+    });
+    expect(r.message).toBe(raw);
   });
 
   it('500 server error → server_error', () => {

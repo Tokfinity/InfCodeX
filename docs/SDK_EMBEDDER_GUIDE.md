@@ -1211,11 +1211,12 @@ if (result.ok) {
   console.log(`✓ Verified in ${result.durationMs}ms (${result.approxTokensSpent} tokens)`);
 } else {
   switch (result.error) {
-    case 'unauthorized':  /* show "invalid key" */ break;
+    case 'unauthorized':  /* show "invalid key — auth failed" (covers 401/403 + kimi-code 400 special) */ break;
     case 'unconfigured':  /* env var not set */ break;
-    case 'network':       /* show "check network" */ break;
+    case 'network':       /* show "check network" (DNS/conn/socket errors) */ break;
     case 'timeout':       /* upstream didn't respond in time */ break;
     case 'server_error':  /* upstream 5xx; transient */ break;
+    case 'rate_limited':  /* 429 — key is valid but throttled; suggest retry */ break;
     case 'unsupported':   /* cli-bridge provider or unknown name */ break;
     case 'unknown':       /* unexpected; surface result.message */ break;
   }
@@ -1224,10 +1225,11 @@ if (result.ok) {
 
 ### Guarantees
 
-- **Never throws** — every failure mode is captured in the returned `KodaXVerifyCredentialResult` envelope. Mirrors the `side-query.ts` pattern.
+- **Never throws** — every failure mode is captured in the returned `KodaXVerifyCredentialResult` envelope. Mirrors the `side-query.ts` pattern. Guarantee holds even for runtime-registered providers whose `verifyCredential()` override might throw (legacy 3rd-party extensions that predate FEATURE_216): the top-level helper wraps the call in try/catch and returns `error: 'unknown'`.
 - **No ctor throw on missing env** — the helper short-circuits to `error: 'unconfigured'` BEFORE attempting to instantiate the provider class (which would call `getApiKey()` and throw).
 - **Lightweight** — 9 of the 12 verifiable providers run a **zero-token** primitive; the remaining 3 cost ~6–7 tokens per call (~$0.00001 at typical rates).
 - **Cancellable** — pass `opts.signal` (any `AbortSignal`); the helper distinguishes timeout vs parent-abort in the result.
+- **Key redaction** — `result.message` redacts `sk-...` patterns before being surfaced, so an upstream error body that echoes the submitted key won't leak the fragment into a UI log or display.
 
 ### How the strategy is chosen
 

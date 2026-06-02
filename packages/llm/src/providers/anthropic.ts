@@ -182,6 +182,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       runners,
       timeoutMs: opts?.timeoutMs,
       signal: opts?.signal,
+      providerName: this.name,
     });
   }
 

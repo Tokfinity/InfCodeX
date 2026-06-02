@@ -46,6 +46,14 @@ export interface RunVerifyCredentialOpts {
   readonly runners: readonly VerifyPrimitiveRunner[];
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
+  /**
+   * Optional provider identity used by `classifyVerifyError` for
+   * provider-specific empirical workarounds (currently: kimi-code's
+   * count_tokens-with-bad-key returns 400 instead of 401). Threading
+   * the name keeps the workaround scoped — generic 400 responses on
+   * other providers correctly stay as `unknown`.
+   */
+  readonly providerName?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -118,6 +126,7 @@ export async function runVerifyCredential(
       durationMs: Date.now() - t0,
       approxTokensSpent: 0,
       abortCause,
+      providerName: opts.providerName,
     });
   } finally {
     clearTimeout(timeoutHandle);
@@ -132,6 +141,22 @@ interface ClassifyContext {
   readonly durationMs: number;
   readonly approxTokensSpent: number;
   readonly abortCause?: 'timeout' | 'parent';
+  /** Provider name for empirical-workaround scoping (see kimi-code 400 branch). */
+  readonly providerName?: string;
+}
+
+/**
+ * Redact common API-key prefixes (`sk-...`) from upstream error bodies
+ * before they're surfaced in `result.message`. Some providers echo the
+ * submitted key in their 401 body (e.g. DeepSeek: "your api key:
+ * ****oute is invalid"). KodaX is a single-user CLI so the key already
+ * belongs to the user reading the message, but SDK consumers may log
+ * or display `message` in contexts where leaking the key fragment is
+ * undesirable. The redaction is intentionally narrow — only matches
+ * the `sk-` prefix family used by Anthropic / OpenAI / most compats.
+ */
+function redactKeyMaterial(raw: string): string {
+  return raw.replace(/\bsk-[A-Za-z0-9_-]{6,}/g, 'sk-***');
 }
 
 /**
@@ -166,7 +191,7 @@ export function classifyVerifyError(
     errObj.status ??
     errObj.statusCode ??
     errObj.response?.status;
-  const message = String(errObj.message ?? err).slice(0, 240);
+  const message = redactKeyMaterial(String(errObj.message ?? err)).slice(0, 240);
   const errCode = errObj.cause?.code ?? errObj.code;
   const className = errObj.constructor?.name ?? '';
 
@@ -183,20 +208,34 @@ export function classifyVerifyError(
     error = 'unauthorized';
   } else if (status === 401 || status === 403) {
     error = 'unauthorized';
-  } else if (status === 400 && ctx.strategy === 'count-tokens') {
-    // kimi-code-specific empirical behaviour: bad credential on the
+  } else if (status === 429) {
+    // FEATURE_216 v0.7.45 — provider rate-limited the verify probe.
+    // Distinct from `unauthorized` (key valid but currently throttled)
+    // so UI consumers can surface "try again in a moment" instead of
+    // misleading "invalid key". The verify primitives shouldn't trip
+    // rate limits at UI button frequency, but upstream may already be
+    // throttling the account from concurrent stream() traffic.
+    error = 'rate_limited';
+  } else if (
+    status === 400 &&
+    ctx.strategy === 'count-tokens' &&
+    ctx.providerName === 'kimi-code'
+  ) {
+    // kimi-code-specific empirical behavior: bad credential on the
     // `messages.count_tokens` endpoint returns 400 (not 401) with a
-    // generic `invalid_request_error` class. Confirmed by the
-    // 2026-05-28 probe matrix (probe-alt-endpoints.mjs). Limit this
-    // mapping to the count-tokens strategy to avoid false positives
-    // on legitimate 400s (bad model id, malformed body, etc.) on
-    // other primitives.
+    // generic `invalid_request_error` class — NOT an `AuthenticationError`
+    // class (which is why the className check above doesn't catch it).
+    // Confirmed by the 2026-05-28 probe matrix (probe-alt-endpoints.mjs)
+    // AND by integration test `kimi-code fake key → ok:false, error="unauthorized"`.
+    // Scoping by providerName prevents false-positive `unauthorized` if
+    // any other count-tokens provider returns 400 for a legitimate
+    // reason (bad model id, schema mismatch, etc.).
     error = 'unauthorized';
   } else if (status !== undefined && status >= 500 && status < 600) {
     error = 'server_error';
   } else if (
     errCode !== undefined &&
-    /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EPIPE/i.test(errCode)
+    /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|EPIPE|ETIMEDOUT|ENETUNREACH|ENETDOWN|EHOSTUNREACH/i.test(errCode)
   ) {
     error = 'network';
   } else if (/timeout/i.test(message)) {
