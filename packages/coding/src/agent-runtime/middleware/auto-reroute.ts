@@ -171,9 +171,16 @@ export async function maybeAdvanceAutoReroute<TExecutionState>(
   await params.onApply?.();
 
   if (params.persistSession) {
+    // v0.7.45 fix — thread context.gitRoot for the mid-flow auto-reroute
+    // snapshot. The middleware fallback (tier 2) covers this site
+    // independently, but threading explicitly here keeps the
+    // "project-tag intent visible at every call site" convention
+    // consistent with run-substrate.ts:1459 / catch-terminals.ts:109 /
+    // iteration-limit-terminal.ts:66 / runner-driven.ts:407+1786.
     await saveSessionSnapshot(params.options, params.persistSession.sessionId, {
       messages: params.persistSession.messages,
       title: params.persistSession.title,
+      gitRoot: params.options.context?.gitRoot ?? undefined,
       runtimeSessionState: params.persistSession.runtimeSessionState,
     });
   }
