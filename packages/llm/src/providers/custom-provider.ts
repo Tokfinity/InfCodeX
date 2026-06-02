@@ -8,12 +8,33 @@
 import {
   type KodaXCustomProviderConfig,
   type KodaXProviderConfig,
+  type KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXBaseProvider } from './base.js';
 import { KodaXAnthropicCompatProvider } from './anthropic.js';
 import { KodaXOpenAICompatProvider } from './openai.js';
 
 const VALID_CUSTOM_PROVIDER_USER_AGENT_MODES = new Set(['compat', 'sdk']);
+const VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES = new Set<KodaXVerifyStrategy>([
+  'count-tokens',
+  'models-list',
+  'minimal-message',
+  'unsupported',
+]);
+
+/**
+ * FEATURE_216 v0.7.45 — Derive the default verify strategy when a custom
+ * provider config does not set `verifyStrategy` explicitly:
+ *   - anthropic protocol → count-tokens (true 0-token if implemented)
+ *   - openai protocol    → models-list (auth-gated GET if implemented)
+ * Custom providers that hit an upstream where these defaults fail should
+ * set `verifyStrategy: 'minimal-message'` explicitly in their config.
+ */
+function defaultVerifyStrategyForProtocol(
+  protocol: 'anthropic' | 'openai',
+): KodaXVerifyStrategy {
+  return protocol === 'anthropic' ? 'count-tokens' : 'models-list';
+}
 
 export function validateCustomProviderConfig(
   custom: KodaXCustomProviderConfig,
@@ -37,6 +58,22 @@ export function validateCustomProviderConfig(
     throw new Error(
       `Unknown userAgentMode "${custom.userAgentMode}" for custom provider "${custom.name}". Must be "compat" or "sdk".`,
     );
+  }
+
+  // FEATURE_216 v0.7.45 — Validate explicit verifyStrategy. Also guard
+  // against the most common misconfiguration: 'count-tokens' on openai
+  // protocol (openai-compat servers do not implement count_tokens).
+  if (custom.verifyStrategy !== undefined) {
+    if (!VALID_CUSTOM_PROVIDER_VERIFY_STRATEGIES.has(custom.verifyStrategy)) {
+      throw new Error(
+        `Unknown verifyStrategy "${custom.verifyStrategy}" for custom provider "${custom.name}". Must be one of "count-tokens" | "models-list" | "minimal-message" | "unsupported".`,
+      );
+    }
+    if (custom.protocol === 'openai' && custom.verifyStrategy === 'count-tokens') {
+      throw new Error(
+        `Custom provider "${custom.name}": verifyStrategy="count-tokens" requires Anthropic protocol; got protocol="openai". Use "models-list" or "minimal-message" for OpenAI-compat.`,
+      );
+    }
   }
 }
 
@@ -69,6 +106,10 @@ function buildProviderConfig(custom: KodaXCustomProviderConfig): KodaXProviderCo
     replayReasoningContent: custom.replayReasoningContent ?? false,
     strictThinkingSignature: custom.strictThinkingSignature ?? false,
     streamMaxDurationMs: custom.streamMaxDurationMs,
+    // FEATURE_216 v0.7.45 — explicit verifyStrategy wins; otherwise
+    // derive from protocol per the table in the type's JSDoc.
+    verifyStrategy:
+      custom.verifyStrategy ?? defaultVerifyStrategyForProtocol(custom.protocol),
   };
 }
 

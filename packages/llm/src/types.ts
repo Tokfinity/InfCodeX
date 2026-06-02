@@ -397,6 +397,83 @@ export interface KodaXModelDescriptor {
 export type KodaXProtocolFamily = 'anthropic' | 'openai';
 export type KodaXProviderUserAgentMode = 'compat' | 'sdk';
 
+/**
+ * FEATURE_216 v0.7.45 — Strategy KodaX uses to verify a provider's API
+ * credentials. Per-provider data-driven (set in `provider-capabilities.json`)
+ * because the 14 providers KodaX ships do not share a single zero-token
+ * verify primitive — empirically 3 distinct strategies are needed:
+ *
+ *   - `count-tokens`: Anthropic-protocol `messages.countTokens()` —
+ *     true 0-token (input_tokens reported but no model invocation).
+ *     Use for Anthropic-compat providers whose upstream implements
+ *     `/v1/messages/count_tokens`.
+ *   - `models-list`: `models.list()` — 0-token, authenticated GET.
+ *     Use ONLY when the provider's `/v1/models` endpoint actually
+ *     gates on auth (some compat layers expose it publicly → false
+ *     positives; others 401 even for valid keys → false negatives).
+ *   - `minimal-message`: `{messages,chat.completions}.create({max_tokens:1})`
+ *     — ~6-7 tokens / call. Universal fallback for providers where
+ *     the above two are unreliable. Cost is trivial for UI-button
+ *     "test connection" use cases (≈ $0.00001 per verify).
+ *   - `unsupported`: Provider has no verify primitive (CLI bridges
+ *     own credentials in their own subprocess token store; the SDK
+ *     does not enter that surface).
+ */
+export type KodaXVerifyStrategy =
+  | 'count-tokens'
+  | 'models-list'
+  | 'minimal-message'
+  | 'unsupported';
+
+/**
+ * FEATURE_216 v0.7.45 — Never-throws result envelope for
+ * `provider.verifyCredential()` / `verifyProviderCredential(name)`.
+ * Mirrors `side-query.ts` `SideQueryResult` pattern: every failure
+ * mode is captured in the returned object — no rejection, no throw.
+ */
+export interface KodaXVerifyCredentialResult {
+  readonly ok: boolean;
+  /** HTTP status when applicable (verify primitives that hit the wire). */
+  readonly status?: number;
+  /**
+   * Error category. Stable for UI consumers to map to user-facing
+   * states ("invalid key", "no network", "provider doesn't support
+   * verification", etc.). `unconfigured` is set by the top-level
+   * helper when env var is missing — avoids the provider ctor throw
+   * (per FEATURE_198 model-capabilities exposure pattern).
+   */
+  readonly error?:
+    | 'unauthorized'
+    | 'network'
+    | 'timeout'
+    | 'unsupported'
+    | 'unconfigured'
+    | 'server_error'
+    | 'unknown';
+  /** Upstream error body or short diagnostic, capped to 240 chars. */
+  readonly message?: string;
+  readonly durationMs: number;
+  /** Estimated token cost: 0 (count-tokens / models-list) or ~6-7 (minimal-message). */
+  readonly approxTokensSpent: number;
+  /** Which strategy ran (or 'unsupported' if no primitive was attempted). */
+  readonly strategy: KodaXVerifyStrategy;
+}
+
+/**
+ * FEATURE_216 v0.7.45 — Best-effort upstream model listing. Distinct from
+ * credential verification: this is for "model picker" UIs. Mixes upstream
+ * `/v1/models` data with static `provider-capabilities.json` fallback when
+ * the upstream endpoint is unreliable. NOT a cred test — for that, call
+ * `verifyProviderCredential()`.
+ */
+export interface KodaXListModelsResult {
+  readonly ok: boolean;
+  readonly source: 'upstream' | 'static' | 'failed';
+  readonly models?: readonly string[];
+  readonly error?: string;
+  readonly durationMs: number;
+}
+
 export interface KodaXCustomProviderConfig {
   name: string;
   protocol: KodaXProtocolFamily;
@@ -444,6 +521,15 @@ export interface KodaXCustomProviderConfig {
    * override.
    */
   streamMaxDurationMs?: number;
+  /**
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider supports.
+   * Optional: when unset, the SDK derives a default from `protocol`
+   * (anthropic → count-tokens / openai → models-list). Set explicitly when
+   * the upstream `/v1/models` is public (false-positive risk) or the
+   * `messages.count_tokens` endpoint is unimplemented (404), in which
+   * case `minimal-message` is the only safe fallback.
+   */
+  verifyStrategy?: KodaXVerifyStrategy;
 }
 
 export interface KodaXProviderConfig {
@@ -507,6 +593,15 @@ export interface KodaXProviderConfig {
    * the ~RTT margin between client send and server kill timestamp).
    */
   streamMaxDurationMs?: number;
+  /**
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider's compat
+   * base class uses for `verifyCredential()`. Sourced from
+   * `provider-capabilities.json` for built-in providers; for custom
+   * providers, falls back to a protocol-derived default
+   * (anthropic → count-tokens / openai → models-list) when the custom
+   * config does not set it explicitly.
+   */
+  verifyStrategy?: KodaXVerifyStrategy;
 }
 
 export interface KodaXProviderStreamOptions {

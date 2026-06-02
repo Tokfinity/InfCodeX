@@ -161,6 +161,7 @@ function buildSnapshot(
       apiKeyEnv: entry.apiKeyEnv,
       reasoningCapability: entry.reasoningCapability,
       capabilityProfile,
+      verifyStrategy: entry.verifyStrategy,
     };
     if (entry.supportsThinking !== undefined) {
       (snapshot as { supportsThinking: boolean }).supportsThinking =
@@ -176,6 +177,7 @@ function buildSnapshot(
     apiKeyEnv: entry.apiKeyEnv,
     reasoningCapability: entry.reasoningCapability,
     capabilityProfile,
+    verifyStrategy: entry.verifyStrategy,
   };
   if (entry.models !== undefined) {
     (snapshot as { models: typeof entry.models }).models = entry.models;

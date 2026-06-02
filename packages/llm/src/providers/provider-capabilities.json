@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-05-25",
+  "updatedAt": "2026-06-02",
   "providers": {
     "anthropic": {
       "apiKeyEnv": "ANTHROPIC_API_KEY",
@@ -14,7 +14,8 @@
       "supportsThinking": true,
       "contextWindow": 200000,
       "maxOutputTokens": 64000,
-      "thinkingBudgetCap": 28000
+      "thinkingBudgetCap": 28000,
+      "verifyStrategy": "count-tokens"
     },
     "openai": {
       "apiKeyEnv": "OPENAI_API_KEY",
@@ -27,7 +28,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 400000,
-      "maxOutputTokens": 32768
+      "maxOutputTokens": 32768,
+      "verifyStrategy": "models-list"
     },
     "deepseek": {
       "apiKeyEnv": "DEEPSEEK_API_KEY",
@@ -39,7 +41,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 1000000,
-      "maxOutputTokens": 64000
+      "maxOutputTokens": 64000,
+      "verifyStrategy": "models-list"
     },
     "kimi": {
       "apiKeyEnv": "KIMI_API_KEY",
@@ -51,7 +54,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 256000,
-      "maxOutputTokens": 32768
+      "maxOutputTokens": 32768,
+      "verifyStrategy": "models-list"
     },
     "kimi-code": {
       "apiKeyEnv": "KIMI_CODE_API_KEY",
@@ -60,7 +64,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 256000,
-      "maxOutputTokens": 32000
+      "maxOutputTokens": 32000,
+      "verifyStrategy": "count-tokens"
     },
     "qwen": {
       "apiKeyEnv": "QWEN_API_KEY",
@@ -69,7 +74,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 256000,
-      "maxOutputTokens": 32768
+      "maxOutputTokens": 32768,
+      "verifyStrategy": "models-list"
     },
     "zhipu": {
       "apiKeyEnv": "ZHIPU_API_KEY",
@@ -82,7 +88,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 200000,
-      "maxOutputTokens": 32768
+      "maxOutputTokens": 32768,
+      "verifyStrategy": "minimal-message"
     },
     "zhipu-coding": {
       "apiKeyEnv": "ZHIPU_CODING_API_KEY",
@@ -96,7 +103,8 @@
       "supportsThinking": true,
       "contextWindow": 200000,
       "maxOutputTokens": 16000,
-      "thinkingBudgetCap": 16000
+      "thinkingBudgetCap": 16000,
+      "verifyStrategy": "count-tokens"
     },
     "minimax-coding": {
       "apiKeyEnv": "MINIMAX_CODING_API_KEY",
@@ -114,7 +122,8 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 204800,
-      "maxOutputTokens": 32000
+      "maxOutputTokens": 32000,
+      "verifyStrategy": "count-tokens"
     },
     "mimo-coding": {
       "apiKeyEnv": "MIMO_CODING_API_KEY",
@@ -127,7 +136,8 @@
       "supportsThinking": true,
       "contextWindow": 1000000,
       "maxOutputTokens": 32000,
-      "thinkingBudgetCap": 16000
+      "thinkingBudgetCap": 16000,
+      "verifyStrategy": "minimal-message"
     },
     "mimo": {
       "apiKeyEnv": "MIMO_API_KEY",
@@ -140,7 +150,8 @@
       "supportsThinking": true,
       "contextWindow": 1000000,
       "maxOutputTokens": 32000,
-      "thinkingBudgetCap": 16000
+      "thinkingBudgetCap": 16000,
+      "verifyStrategy": "minimal-message"
     },
     "ark-coding": {
       "apiKeyEnv": "ARK_CODING_API_KEY",
@@ -161,21 +172,24 @@
       "capabilityProfile": "image-input-native",
       "supportsThinking": true,
       "contextWindow": 200000,
-      "maxOutputTokens": 32000
+      "maxOutputTokens": 32000,
+      "verifyStrategy": "count-tokens"
     },
     "gemini-cli": {
       "apiKeyEnv": "GEMINI_API_KEY",
       "cliBridge": true,
       "reasoningCapability": "prompt-only",
       "capabilityProfile": "image-input-cli-bridge",
-      "supportsThinking": false
+      "supportsThinking": false,
+      "verifyStrategy": "unsupported"
     },
     "codex-cli": {
       "apiKeyEnv": "OPENAI_API_KEY",
       "cliBridge": true,
       "reasoningCapability": "prompt-only",
       "capabilityProfile": "cli-bridge",
-      "supportsThinking": false
+      "supportsThinking": false,
+      "verifyStrategy": "unsupported"
     }
   }
 }

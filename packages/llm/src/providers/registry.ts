@@ -14,6 +14,7 @@ import {
   KodaXProviderCapabilityProfile,
   KodaXProviderConfig,
   KodaXReasoningCapability,
+  KodaXVerifyStrategy,
 } from '../types.js';
 import { KodaXProviderError } from '../errors.js';
 import {
@@ -82,6 +83,12 @@ type ProviderSnapshot = {
   readonly thinkingBudgetCap?: number;
   /** Whether the provider supports `thinking_budget` / native reasoning. */
   readonly supportsThinking?: boolean;
+  /**
+   * FEATURE_216 v0.7.45 — Which verify primitive this provider supports
+   * for credential checks. Mirrors `provider-capabilities.types.ts`
+   * ProviderSnapshot's required field.
+   */
+  readonly verifyStrategy: KodaXVerifyStrategy;
 };
 
 // Canonical source for provider identity (apiKeyEnv, default model,
@@ -96,7 +103,12 @@ type ProviderSnapshot = {
 // export surface is unchanged — every consumer that read this Record
 // continues to read the same Record shape, no caller-side changes.
 export const KODAX_PROVIDER_SNAPSHOTS: Record<ProviderName, ProviderSnapshot> =
-  getProviderSnapshots() as Record<ProviderName, ProviderSnapshot>;
+  // Loader returns Readonly<Record<string, ProviderSnapshot>>; the boot
+  // validator ensures every ProviderName key is populated, so the
+  // narrowed cast is safe. Double-cast (via unknown) silences the TS
+  // overlap warning that FEATURE_216's stricter ProviderSnapshot
+  // (mandatory verifyStrategy) surfaces.
+  getProviderSnapshots() as unknown as Record<ProviderName, ProviderSnapshot>;
 
 // Derive a Provider class's config from the canonical snapshot plus the
 // per-class overrides (runtime-only fields: baseUrl, streamMaxDurationMs,
@@ -116,6 +128,7 @@ type ProviderRuntimeExtras = Omit<
   | 'maxOutputTokens'
   | 'thinkingBudgetCap'
   | 'supportsThinking'
+  | 'verifyStrategy'
 > & { supportsThinking?: boolean };
 
 function buildProviderConfig<K extends ProviderName>(
@@ -132,6 +145,7 @@ function buildProviderConfig<K extends ProviderName>(
     maxOutputTokens: snapshot.maxOutputTokens,
     thinkingBudgetCap: snapshot.thinkingBudgetCap,
     supportsThinking: snapshot.supportsThinking ?? false,
+    verifyStrategy: snapshot.verifyStrategy,
     ...extras,
   };
 }

@@ -55,4 +55,12 @@ export {
   resolveProviderModelDescriptors,
   resolveModelCapabilities,
   listAllModelCapabilities,
+  // v0.7.45 FEATURE_216 SDK credential verification + model listing.
+  verifyProviderCredential,
+  listProviderModels,
 } from './resolver.js';
+export {
+  runVerifyCredential,
+  classifyVerifyError,
+} from './verify-credential.js';
+export type { VerifyPrimitiveRunner, RunVerifyCredentialOpts } from './verify-credential.js';

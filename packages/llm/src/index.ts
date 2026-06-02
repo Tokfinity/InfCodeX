@@ -62,6 +62,10 @@ export type {
   KodaXThinkingBudgetMap,
   KodaXTaskBudgetOverrides,
   KodaXReasoningRequest,
+  // v0.7.45 FEATURE_216 credential verification surface.
+  KodaXVerifyStrategy,
+  KodaXVerifyCredentialResult,
+  KodaXListModelsResult,
 } from './types.js';
 
 // ============== Errors ==============
@@ -147,8 +151,17 @@ export {
   resolveProviderModelDescriptors,
   resolveModelCapabilities,
   listAllModelCapabilities,
+  // v0.7.45 FEATURE_216 SDK credential verification + model listing.
+  verifyProviderCredential,
+  listProviderModels,
+  runVerifyCredential,
+  classifyVerifyError,
 } from './providers/index.js';
 export type { ProviderName, KodaXModelCapabilities } from './providers/index.js';
+export type {
+  VerifyPrimitiveRunner,
+  RunVerifyCredentialOpts,
+} from './providers/index.js';
 export {
   getCodexCliDefaultModel,
   getCodexCliKnownModels,

@@ -14,6 +14,7 @@ import type {
   KodaXModelDescriptor,
   KodaXProviderCapabilityProfile,
   KodaXReasoningCapability,
+  KodaXVerifyStrategy,
 } from '../types.js';
 
 /**
@@ -53,6 +54,13 @@ export interface ProviderCapabilityJsonEntry {
   readonly supportsThinking?: boolean;
   /** When true, loader injects `model` + `models` from cli-bridge-models.ts. */
   readonly cliBridge?: boolean;
+  /**
+   * FEATURE_216 v0.7.45 — Verify primitive this provider uses for
+   * credential checks. Required (no silent default) because the choice
+   * is provider-empirical, not protocol-derived. cliBridge entries MUST
+   * be 'unsupported' (CLI binary owns its own credentials).
+   */
+  readonly verifyStrategy: KodaXVerifyStrategy;
 }
 
 export interface ProviderCapabilitiesJson {
@@ -79,6 +87,8 @@ export interface ProviderSnapshot {
   readonly maxOutputTokens?: number;
   readonly thinkingBudgetCap?: number;
   readonly supportsThinking?: boolean;
+  /** FEATURE_216 v0.7.45 — verify primitive for this provider. */
+  readonly verifyStrategy: KodaXVerifyStrategy;
 }
 
 const VALID_REASONING_CAPABILITIES: readonly KodaXReasoningCapability[] = [
@@ -95,6 +105,13 @@ const VALID_PROFILE_NAMES: readonly CapabilityProfileName[] = [
   'image-input-native',
   'cli-bridge',
   'image-input-cli-bridge',
+];
+
+const VALID_VERIFY_STRATEGIES: readonly KodaXVerifyStrategy[] = [
+  'count-tokens',
+  'models-list',
+  'minimal-message',
+  'unsupported',
 ];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -162,6 +179,18 @@ function requireProfileName(value: unknown, path: string): CapabilityProfileName
     );
   }
   return value as CapabilityProfileName;
+}
+
+function requireVerifyStrategy(value: unknown, path: string): KodaXVerifyStrategy {
+  if (
+    typeof value !== 'string' ||
+    !VALID_VERIFY_STRATEGIES.includes(value as KodaXVerifyStrategy)
+  ) {
+    throw new Error(
+      `provider-capabilities.json: ${path} must be one of ${VALID_VERIFY_STRATEGIES.join(', ')}, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value as KodaXVerifyStrategy;
 }
 
 function validateModelDescriptor(
@@ -257,6 +286,17 @@ function validateProviderEntry(
     raw.capabilityProfile,
     `providers.${name}.capabilityProfile`,
   );
+  const verifyStrategy = requireVerifyStrategy(
+    raw.verifyStrategy,
+    `providers.${name}.verifyStrategy`,
+  );
+  // cliBridge providers' credentials live in the CLI binary's own token
+  // store, outside SDK reach — there is no HTTP primitive to probe.
+  if (cliBridge && verifyStrategy !== 'unsupported') {
+    throw new Error(
+      `provider-capabilities.json: providers.${name} is a cliBridge entry but verifyStrategy="${verifyStrategy}" — must be "unsupported" (CLI binary owns credentials)`,
+    );
+  }
   const contextWindow = optionalNumber(
     raw.contextWindow,
     `providers.${name}.contextWindow`,
@@ -307,6 +347,7 @@ function validateProviderEntry(
     apiKeyEnv,
     reasoningCapability,
     capabilityProfile,
+    verifyStrategy,
   };
   if (model !== undefined) (entry as { model: string }).model = model;
   if (models !== undefined) (entry as { models: typeof models }).models = models;

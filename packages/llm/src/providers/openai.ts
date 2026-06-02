@@ -22,7 +22,9 @@ import {
   KodaXTextBlock,
   KodaXTokenUsage,
   KodaXToolUseBlock,
+  KodaXVerifyCredentialResult,
 } from '../types.js';
+import { runVerifyCredential, type VerifyPrimitiveRunner } from './verify-credential.js';
 import {
   clampThinkingBudget,
   isReasoningEnabled,
@@ -190,6 +192,63 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
 
   protected override onStaleConnection(): void {
     this.initClient();
+  }
+
+  /**
+   * FEATURE_216 v0.7.45 — Lightweight credential verification.
+   * Dispatches by `this.config.verifyStrategy`:
+   *   - `models-list` (default for OpenAI protocol): 0-token
+   *     `models.list()` — empirically reliable for openai-compat
+   *     providers where `/v1/models` gates on auth (kimi / qwen /
+   *     deepseek confirmed). Verified by opencode `setup-recording-env.ts`
+   *     for OPENAI_API_KEY proper.
+   *   - `minimal-message`: ~6-token `chat.completions.create({max_tokens:1})`
+   *     fallback for OpenAI-compat providers whose `/v1/models` is
+   *     publicly accessible (zhipu — false-positive risk).
+   *   - `count-tokens`: NOT supported on OpenAI protocol. Custom provider
+   *     validator rejects this combo at config time; built-in providers
+   *     never declare it. Orchestrator returns `unsupported` if it slips
+   *     through, surfacing the misconfiguration.
+   */
+  override async verifyCredential(opts?: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<KodaXVerifyCredentialResult> {
+    const model = this.config.model;
+    const client = this.client;
+    const runners: VerifyPrimitiveRunner[] = [
+      {
+        strategy: 'models-list',
+        approxTokensSpent: 0,
+        run: async (signal) => {
+          await client.models.list({ signal });
+        },
+      },
+      {
+        strategy: 'minimal-message',
+        approxTokensSpent: 6,
+        run: async (signal) => {
+          await client.chat.completions.create(
+            {
+              model,
+              max_tokens: 1,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal },
+          );
+        },
+      },
+      // No 'count-tokens' runner: OpenAI protocol has no equivalent of
+      // Anthropic's messages.countTokens(). Config-level validator
+      // already prevents this combo; orchestrator surfaces a clear
+      // "not implemented" if it slips through.
+    ];
+    return runVerifyCredential({
+      strategy: this.config.verifyStrategy ?? 'models-list',
+      runners,
+      timeoutMs: opts?.timeoutMs,
+      signal: opts?.signal,
+    });
   }
 
   /**

@@ -6,7 +6,11 @@
  * modifying the closed ProviderName union.
  */
 
-import type { KodaXCustomProviderConfig, KodaXModelDescriptor } from '../types.js';
+import type {
+  KodaXCustomProviderConfig,
+  KodaXModelDescriptor,
+  KodaXVerifyStrategy,
+} from '../types.js';
 import type { KodaXBaseProvider } from './base.js';
 import {
   createCustomProvider,
@@ -205,6 +209,31 @@ export function getCustomModelCapabilities(
       descriptor.thinkingBudgetCap ?? config.thinkingBudgetCap,
     isDefault,
   };
+}
+
+/**
+ * FEATURE_216 v0.7.45 — Look up `(apiKeyEnv, verifyStrategy)` for a
+ * registered custom provider without instantiation. Mirrors the
+ * built-in `KODAX_PROVIDER_SNAPSHOTS` lookup. Returns undefined when
+ * the name is not registered, signaling fall-through.
+ *
+ * verifyStrategy precedence:
+ *   1. Explicit `customProviders[name].verifyStrategy` (user-provided)
+ *   2. Protocol-derived default (anthropic → count-tokens / openai → models-list)
+ *
+ * Matches the same precedence `createCustomProvider()` applies when
+ * building the runtime `KodaXProviderConfig` — keeps the two paths
+ * (resolver short-circuit vs in-class verifyCredential) consistent.
+ */
+export function getCustomProviderVerifyMetadata(
+  name: string,
+): { apiKeyEnv: string; verifyStrategy: KodaXVerifyStrategy } | undefined {
+  const config = customProviders.get(name);
+  if (!config) return undefined;
+  const verifyStrategy: KodaXVerifyStrategy =
+    config.verifyStrategy ??
+    (config.protocol === 'anthropic' ? 'count-tokens' : 'models-list');
+  return { apiKeyEnv: config.apiKeyEnv, verifyStrategy };
 }
 
 /**

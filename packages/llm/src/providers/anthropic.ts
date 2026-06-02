@@ -21,7 +21,9 @@ import {
   KodaXToolUseBlock,
   KodaXThinkingBlock,
   KodaXRedactedThinkingBlock,
+  KodaXVerifyCredentialResult,
 } from '../types.js';
+import { runVerifyCredential, type VerifyPrimitiveRunner } from './verify-credential.js';
 import {
   clampThinkingBudget,
   resolveThinkingBudget,
@@ -120,6 +122,67 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   protected override onStaleConnection(): void {
     // Rebuild the Anthropic client to discard the stale keep-alive socket pool.
     this.initClient();
+  }
+
+  /**
+   * FEATURE_216 v0.7.45 — Lightweight credential verification.
+   * Dispatches by `this.config.verifyStrategy`:
+   *   - `count-tokens` (default for Anthropic protocol): 0-token
+   *     `messages.countTokens()` — empirically reliable across 5/5
+   *     Anthropic-compat providers tested (anthropic / zhipu-coding /
+   *     kimi-code / minimax-coding / ark-coding).
+   *   - `models-list`: 0-token `models.list()` — supported by Anthropic
+   *     SDK 0.80+; not used by any Anthropic built-in but available
+   *     for custom providers that explicitly opt-in.
+   *   - `minimal-message`: ~7-token `messages.create({max_tokens:1})`
+   *     fallback for Anthropic-compat providers whose `count_tokens`
+   *     endpoint returns 404 (mimo / mimo-coding empirically).
+   */
+  override async verifyCredential(opts?: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<KodaXVerifyCredentialResult> {
+    const model = this.config.model;
+    const client = this.client;
+    const runners: VerifyPrimitiveRunner[] = [
+      {
+        strategy: 'count-tokens',
+        approxTokensSpent: 0,
+        run: async (signal) => {
+          await client.messages.countTokens(
+            { model, messages: [{ role: 'user', content: 'hi' }] },
+            { signal },
+          );
+        },
+      },
+      {
+        strategy: 'models-list',
+        approxTokensSpent: 0,
+        run: async (signal) => {
+          await client.models.list({}, { signal });
+        },
+      },
+      {
+        strategy: 'minimal-message',
+        approxTokensSpent: 7,
+        run: async (signal) => {
+          await client.messages.create(
+            {
+              model,
+              max_tokens: 1,
+              messages: [{ role: 'user', content: 'hi' }],
+            },
+            { signal },
+          );
+        },
+      },
+    ];
+    return runVerifyCredential({
+      strategy: this.config.verifyStrategy ?? 'count-tokens',
+      runners,
+      timeoutMs: opts?.timeoutMs,
+      signal: opts?.signal,
+    });
   }
 
   /**

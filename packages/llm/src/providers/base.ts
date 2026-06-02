@@ -15,6 +15,7 @@ import {
   KodaXReasoningOverride,
   KodaXReasoningRequest,
   KodaXStreamResult,
+  KodaXVerifyCredentialResult,
 } from '../types.js';
 import { KodaXError, KodaXRateLimitError, KodaXProviderError } from '../errors.js';
 import { parseRetryAfter, extractHeadersFromError } from '../retry/retry-after.js';
@@ -186,6 +187,33 @@ export abstract class KodaXBaseProvider {
 
   isConfigured(): boolean {
     return !!process.env[this.config.apiKeyEnv];
+  }
+
+  /**
+   * FEATURE_216 v0.7.45 — Lightweight credential verification. Returns
+   * a never-throws envelope with `ok` + categorized `error`. Concrete
+   * compat base classes (`KodaXAnthropicCompatProvider`,
+   * `KodaXOpenAICompatProvider`) override this to dispatch by the
+   * `verifyStrategy` field. The default here returns `unsupported` so
+   * Provider classes that don't extend a compat base — or future ones
+   * yet to be wired — fail safely instead of throwing.
+   *
+   * Distinct from `isConfigured()`: that one is env-only (no network);
+   * this one hits the wire (zero or ~7 tokens depending on strategy)
+   * and verifies the key is actually accepted by the upstream.
+   */
+  async verifyCredential(_opts?: {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  }): Promise<KodaXVerifyCredentialResult> {
+    return {
+      ok: false,
+      error: 'unsupported',
+      strategy: this.config.verifyStrategy ?? 'unsupported',
+      durationMs: 0,
+      approxTokensSpent: 0,
+      message: `Provider class "${this.name}" does not implement verifyCredential()`,
+    };
   }
 
   getModel(): string {

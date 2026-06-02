@@ -206,6 +206,53 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(minimax?.contextWindow).toBe(204_800);
     });
   });
+
+  // FEATURE_216 v0.7.45 — per-provider verifyStrategy drift guard.
+  // Distribution (from 2026-05-28 12-provider real+fake key probe):
+  //   count-tokens (5):    anthropic + 4 anthropic-coding (zhipu/kimi/minimax/ark)
+  //   models-list (4):     openai, deepseek, kimi, qwen
+  //   minimal-message (3): zhipu, mimo, mimo-coding (each empirical reason)
+  //   unsupported (2):     gemini-cli, codex-cli
+  describe('FEATURE_216 verifyStrategy per-provider', () => {
+    it('count-tokens providers (5): anthropic + 4 anthropic-coding', () => {
+      const snap = getProviderSnapshots();
+      for (const name of ['anthropic', 'zhipu-coding', 'kimi-code', 'minimax-coding', 'ark-coding']) {
+        expect(snap[name].verifyStrategy).toBe('count-tokens');
+      }
+    });
+
+    it('models-list providers (4): openai-compat with auth-gated /v1/models', () => {
+      const snap = getProviderSnapshots();
+      for (const name of ['openai', 'deepseek', 'kimi', 'qwen']) {
+        expect(snap[name].verifyStrategy).toBe('models-list');
+      }
+    });
+
+    it('minimal-message providers (3): zhipu (public /models false-positive) + mimo+mimo-coding (count_tokens 404)', () => {
+      const snap = getProviderSnapshots();
+      for (const name of ['zhipu', 'mimo', 'mimo-coding']) {
+        expect(snap[name].verifyStrategy).toBe('minimal-message');
+      }
+    });
+
+    it('cli-bridge providers (2) MUST be unsupported (credentials in CLI binary)', () => {
+      const snap = getProviderSnapshots();
+      for (const name of ['gemini-cli', 'codex-cli']) {
+        expect(snap[name].verifyStrategy).toBe('unsupported');
+      }
+    });
+
+    it('all 14 providers have an explicit verifyStrategy (no silent default)', () => {
+      const snap = getProviderSnapshots();
+      const expected = new Set(['count-tokens', 'models-list', 'minimal-message', 'unsupported']);
+      let total = 0;
+      for (const [, s] of Object.entries(snap)) {
+        expect(expected.has(s.verifyStrategy)).toBe(true);
+        total++;
+      }
+      expect(total).toBe(14);
+    });
+  });
 });
 
 describe('FEATURE_198 — validator failure modes', () => {
@@ -276,6 +323,7 @@ describe('FEATURE_198 — validator failure modes', () => {
             apiKeyEnv: 'F',
             reasoningCapability: 'none',
             capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
           },
         },
       },
@@ -295,6 +343,7 @@ describe('FEATURE_198 — validator failure modes', () => {
             reasoningCapability: 'none',
             capabilityProfile: 'cli-bridge',
             cliBridge: true,
+            verifyStrategy: 'unsupported',
           },
         },
       },
@@ -313,6 +362,7 @@ describe('FEATURE_198 — validator failure modes', () => {
             model: 'm',
             reasoningCapability: 'none',
             capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
             contextWindow: -1,
           },
         },
@@ -332,6 +382,7 @@ describe('FEATURE_198 — validator failure modes', () => {
             model: 'm',
             reasoningCapability: 'none',
             capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
             models: 'not-an-array',
           },
         },
@@ -351,6 +402,7 @@ describe('FEATURE_198 — validator failure modes', () => {
             model: 'm',
             reasoningCapability: 'none',
             capabilityProfile: 'native',
+            verifyStrategy: 'models-list',
             models: [{ displayName: 'missing-id' }],
           },
         },
@@ -369,10 +421,12 @@ describe('FEATURE_198 — validator failure modes', () => {
           model: 'm',
           reasoningCapability: 'none',
           capabilityProfile: 'native',
+          verifyStrategy: 'models-list',
         },
       },
     });
     expect(result.providers.foo.model).toBe('m');
+    expect(result.providers.foo.verifyStrategy).toBe('models-list');
   });
 
   it('accepts minimal valid cliBridge entry', () => {
@@ -385,10 +439,69 @@ describe('FEATURE_198 — validator failure modes', () => {
           cliBridge: true,
           reasoningCapability: 'prompt-only',
           capabilityProfile: 'cli-bridge',
+          verifyStrategy: 'unsupported',
         },
       },
     });
     expect(result.providers['foo-cli'].cliBridge).toBe(true);
     expect(result.providers['foo-cli'].model).toBeUndefined();
+    expect(result.providers['foo-cli'].verifyStrategy).toBe('unsupported');
+  });
+
+  // FEATURE_216 v0.7.45 — verifyStrategy validator
+  it('rejects missing verifyStrategy', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+          },
+        },
+      },
+      /verifyStrategy must be one of/,
+    );
+  });
+
+  it('rejects unknown verifyStrategy', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          foo: {
+            apiKeyEnv: 'F',
+            model: 'm',
+            reasoningCapability: 'none',
+            capabilityProfile: 'native',
+            verifyStrategy: 'send-postcard',
+          },
+        },
+      },
+      /verifyStrategy must be one of/,
+    );
+  });
+
+  it('rejects cliBridge entry whose verifyStrategy is not "unsupported"', () => {
+    shouldThrow(
+      {
+        version: 1,
+        updatedAt: 'x',
+        providers: {
+          'foo-cli': {
+            apiKeyEnv: 'F',
+            cliBridge: true,
+            reasoningCapability: 'prompt-only',
+            capabilityProfile: 'cli-bridge',
+            verifyStrategy: 'count-tokens',
+          },
+        },
+      },
+      /cliBridge entry but verifyStrategy=/,
+    );
   });
 });

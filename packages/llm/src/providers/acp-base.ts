@@ -15,7 +15,8 @@ import type {
     KodaXToolDefinition,
     KodaXTextBlock,
     KodaXTokenUsage,
-    KodaXToolUseBlock
+    KodaXToolUseBlock,
+    KodaXVerifyCredentialResult
 } from '../types.js';
 
 interface ActiveStreamContext {
@@ -69,6 +70,25 @@ export abstract class KodaXAcpProvider extends KodaXBaseProvider {
     // CLI-backed ACP adapters do not require a real API key.
     override isConfigured(): boolean {
         return true;
+    }
+
+    /**
+     * FEATURE_216 v0.7.45 — CLI-bridge providers manage credentials in
+     * the CLI binary's own token store (gemini CLI / codex CLI OAuth
+     * tokens, etc.), which lives outside SDK reach. There is no HTTP
+     * primitive to probe. Always returns `unsupported` regardless of
+     * `verifyStrategy` (which provider-capabilities.json validates as
+     * 'unsupported' for cliBridge entries).
+     */
+    override async verifyCredential(): Promise<KodaXVerifyCredentialResult> {
+        return {
+            ok: false,
+            error: 'unsupported',
+            strategy: 'unsupported',
+            durationMs: 0,
+            approxTokensSpent: 0,
+            message: `CLI-bridge provider "${this.name}" manages credentials in its CLI binary's token store; not verifiable from the KodaX SDK`,
+        };
     }
 
     override getCapabilityProfile(): KodaXProviderCapabilityProfile {

@@ -1190,6 +1190,106 @@ metadata, we can promote the snapshot to derive from it.
 
 ---
 
+## 10. Provider credential verification — `verifyProviderCredential` (FEATURE_216, v0.7.45)
+
+### Why
+
+The original SDK exposed `provider.isConfigured()` (env-only check) and the full streaming surface (`provider.stream()` / `sideQuery()`). Neither fits the "test connection" UI use case: env check doesn't validate the key actually works against the upstream; streaming costs ~50–200 tokens and several seconds. KodaX Space (and any third-party SDK consumer building a provider-settings UI) needs a lightweight server-validated check.
+
+FEATURE_216 ships **`verifyProviderCredential(name, opts?)`** — never-throws, lightweight, per-provider-strategy.
+
+### Quick start
+
+```typescript
+import { verifyProviderCredential } from '@kodax-ai/kodax/llm';
+
+const result = await verifyProviderCredential('zhipu-coding', { timeoutMs: 8000 });
+
+if (result.ok) {
+  // Key works. result.durationMs is wall-clock; result.approxTokensSpent
+  // is 0 for count-tokens/models-list strategies, ~6-7 for minimal-message.
+  console.log(`✓ Verified in ${result.durationMs}ms (${result.approxTokensSpent} tokens)`);
+} else {
+  switch (result.error) {
+    case 'unauthorized':  /* show "invalid key" */ break;
+    case 'unconfigured':  /* env var not set */ break;
+    case 'network':       /* show "check network" */ break;
+    case 'timeout':       /* upstream didn't respond in time */ break;
+    case 'server_error':  /* upstream 5xx; transient */ break;
+    case 'unsupported':   /* cli-bridge provider or unknown name */ break;
+    case 'unknown':       /* unexpected; surface result.message */ break;
+  }
+}
+```
+
+### Guarantees
+
+- **Never throws** — every failure mode is captured in the returned `KodaXVerifyCredentialResult` envelope. Mirrors the `side-query.ts` pattern.
+- **No ctor throw on missing env** — the helper short-circuits to `error: 'unconfigured'` BEFORE attempting to instantiate the provider class (which would call `getApiKey()` and throw).
+- **Lightweight** — 9 of the 12 verifiable providers run a **zero-token** primitive; the remaining 3 cost ~6–7 tokens per call (~$0.00001 at typical rates).
+- **Cancellable** — pass `opts.signal` (any `AbortSignal`); the helper distinguishes timeout vs parent-abort in the result.
+
+### How the strategy is chosen
+
+Each provider has one `verifyStrategy` value baked into `provider-capabilities.json`. Three primitives, picked per-provider empirically:
+
+| Strategy | What runs | Cost | Used by built-ins |
+|---|---|---|---|
+| `count-tokens` | `client.messages.countTokens({ messages: [{role:'user',content:'hi'}] })` | 0 token | `anthropic`, `zhipu-coding`, `kimi-code`, `minimax-coding`, `ark-coding` |
+| `models-list` | `client.models.list()` | 0 token | `openai`, `deepseek`, `kimi`, `qwen` |
+| `minimal-message` | `chat.completions.create({max_tokens:1, content:'hi'})` (or Anthropic equivalent) | ~6–7 token | `zhipu`, `mimo`, `mimo-coding` |
+| `unsupported` | nothing — short-circuits | — | `gemini-cli`, `codex-cli` (cli-bridge: credentials live in CLI binary) |
+
+`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 12-provider probe matrix captured these empirically; opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
+
+### Custom providers
+
+Custom providers (`registerCustomProviders` / `~/.kodax/config.json`) inherit the verify primitive from their base class. The strategy default is derived from `protocol`:
+
+- `protocol: 'anthropic'` → defaults to `count-tokens`
+- `protocol: 'openai'` → defaults to `models-list`
+
+Override with explicit `verifyStrategy` when the upstream needs a different primitive (e.g. an openai-compat gateway whose `/v1/models` is public — set `verifyStrategy: 'minimal-message'`):
+
+```typescript
+registerCustomProviders([{
+  name: 'my-gateway',
+  protocol: 'openai',
+  baseUrl: 'https://api.example.com/v1',
+  apiKeyEnv: 'MY_GATEWAY_KEY',
+  model: 'gpt-4-mini',
+  verifyStrategy: 'minimal-message',  // optional override
+}]);
+```
+
+The validator rejects illegal combinations:
+- `protocol: 'openai'` + `verifyStrategy: 'count-tokens'` → throws (OpenAI protocol has no count_tokens endpoint).
+
+### Model listing — `listProviderModels(name)`
+
+Separate API for "model picker" UIs. Returns the static model list KodaX maintains in `provider-capabilities.json` (or the custom provider's `models` field). Always `source: 'static'` in v0.7.45 — KodaX's curated list is more reliable than upstream `/v1/models` (which is noisy, includes deprecated entries, or — in zhipu's case — is publicly served regardless of auth).
+
+```typescript
+import { listProviderModels } from '@kodax-ai/kodax/llm';
+
+const r = await listProviderModels('ark-coding');
+if (r.ok) {
+  // r.models is e.g. ['glm-5.1', 'glm-4.7', 'kimi-k2.6', ...]
+  // r.source is 'static'; durationMs is 0 (no wire call)
+  showModelPicker(r.models);
+}
+```
+
+Cli-bridge providers (`gemini-cli`, `codex-cli`) return their CLI binary's known model list — filled at SDK load via `cli-bridge-models.ts`.
+
+### Reference
+
+- Source: `packages/llm/src/providers/verify-credential.ts` (orchestrator + classifier) + `verify-credential.test.ts` (19 unit tests) + `verify-credential-integration.test.ts` (10 real-key tests, gated on `KODAX_INTEGRATION_TEST=1`).
+- Data: `packages/llm/src/providers/provider-capabilities.json` `verifyStrategy` field per provider.
+- Design notes + probe matrix: [docs/features/v0.7.45.md FEATURE_216](features/v0.7.45.md#feature_216-provider-credential-verification-api).
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start
