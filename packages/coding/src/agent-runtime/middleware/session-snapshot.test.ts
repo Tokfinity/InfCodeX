@@ -154,3 +154,108 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     errSpy.mockRestore();
   });
 });
+
+/**
+ * v0.7.45 fix — gitRoot 3-tier resolution.
+ *
+ * Bug: in-process embedders (KodaX Space ADR-003) serve multiple projects
+ * from a single runtime. Pre-fix, the middleware only honored
+ * `data.gitRoot` and fell through to `process.cwd()`-bound `git rev-parse`,
+ * tagging every session with the host process's startup directory rather
+ * than the user-opened project.
+ *
+ * Fix: resolution order is
+ *   1. `data.gitRoot` (explicit, highest)
+ *   2. `options.context.gitRoot` (SDK context — closes the bug independently
+ *      of the call-site fix)
+ *   3. `getGitRoot(options.context.executionCwd)` (runs in correct cwd)
+ *   4. `''` (legacy default)
+ */
+describe('saveSessionSnapshot — v0.7.45 gitRoot 3-tier resolution', () => {
+  it('tier 1: data.gitRoot wins over options.context.gitRoot', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `gr-tier1-${Date.now()}`,
+        storage: { save: saveMock } as never,
+      },
+      context: { gitRoot: '/from-context' },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      title: 't',
+      gitRoot: '/from-data',
+    });
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(saveMock.mock.calls[0]?.[1]?.gitRoot).toBe('/from-data');
+  });
+
+  it('tier 2: falls through to options.context.gitRoot when data.gitRoot absent', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `gr-tier2-${Date.now()}`,
+        storage: { save: saveMock } as never,
+      },
+      context: { gitRoot: '/user-opened-project' },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      title: 't',
+      // no data.gitRoot — must fall through to context
+    });
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(saveMock.mock.calls[0]?.[1]?.gitRoot).toBe('/user-opened-project');
+  });
+
+  it('tier 2: explicit null context.gitRoot still falls through to git rev-parse fallback', async () => {
+    // null is documented as "explicitly no gitRoot known" (distinct from
+    // undefined "never set"). The ?? operator treats both the same way
+    // for the purposes of this fallback chain.
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `gr-tier2-null-${Date.now()}`,
+        storage: { save: saveMock } as never,
+      },
+      context: { gitRoot: null as unknown as string },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      title: 't',
+    });
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    // Whatever git rev-parse returns (likely the KodaX repo root since
+    // we're running in it) or '' — the key assertion is the bug doesn't
+    // produce undefined / throw.
+    const persisted = saveMock.mock.calls[0]?.[1]?.gitRoot;
+    expect(typeof persisted).toBe('string');
+  });
+
+  it('regression — context.gitRoot is NOT silently dropped (the actual reported bug)', async () => {
+    // Pre-fix: this test would fail — the persisted gitRoot would be
+    // whatever `git rev-parse --show-toplevel` returned from
+    // process.cwd(), NOT the value the embedder passed in context.
+    // Post-fix: context.gitRoot is honored, sessions get tagged with
+    // the user-opened project as the embedder intended.
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const HOST_INDEPENDENT = '/dev/embedder-passed/project-A';
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `gr-regress-${Date.now()}`,
+        storage: { save: saveMock } as never,
+      },
+      context: { gitRoot: HOST_INDEPENDENT },
+    } as unknown as KodaXOptions;
+    await saveSessionSnapshot(opts, opts.session!.id!, {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      title: 't',
+    });
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(saveMock.mock.calls[0]?.[1]?.gitRoot).toBe(HOST_INDEPENDENT);
+  });
+});

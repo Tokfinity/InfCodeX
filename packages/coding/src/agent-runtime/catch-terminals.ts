@@ -103,9 +103,13 @@ export async function runCatchCleanup(
     consecutiveErrors: (input.errorMetadata?.consecutiveErrors ?? 0) + 1,
   };
 
+  // v0.7.45 fix — thread context.gitRoot so in-process embedders
+  // (KodaX Space) tag the snapshot with the actual project, not the
+  // host's startup directory.
   await saveSessionSnapshot(input.options, input.sessionId, {
     messages: cleanedMessages,
     title: input.title,
+    gitRoot: input.options.context?.gitRoot ?? undefined,
     errorMetadata: updatedErrorMetadata,
     runtimeSessionState: input.runtimeSessionState,
   });

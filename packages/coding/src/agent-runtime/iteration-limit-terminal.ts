@@ -60,9 +60,13 @@ export interface IterationLimitTerminalOutput {
 export async function applyIterationLimitTerminal(
   input: IterationLimitTerminalInput,
 ): Promise<IterationLimitTerminalOutput> {
+  // v0.7.45 fix — thread context.gitRoot so in-process embedders
+  // (KodaX Space) tag the snapshot with the actual project, not the
+  // host's startup directory.
   await saveSessionSnapshot(input.options, input.sessionId, {
     messages: input.messages,
     title: input.title,
+    gitRoot: input.options.context?.gitRoot ?? undefined,
     runtimeSessionState: input.runtimeSessionState,
   });
   const [finalSignal, finalReason] = checkPromiseSignal(input.lastText);

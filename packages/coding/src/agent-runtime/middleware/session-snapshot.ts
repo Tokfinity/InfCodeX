@@ -54,9 +54,16 @@ import {
 
 const execAsync = promisify(exec);
 
-async function getGitRoot(): Promise<string | null> {
+/**
+ * v0.7.45 fix — accept optional `cwd` so the git resolution runs in the
+ * caller's project directory rather than `process.cwd()`. In-process
+ * embedders (KodaX Space) serve multiple projects from a single runtime;
+ * without an explicit cwd, the git rev-parse fallback would resolve to
+ * the host process's startup directory, mis-tagging all sessions.
+ */
+async function getGitRoot(cwd?: string): Promise<string | null> {
   try {
-    const { stdout } = await execAsync('git rev-parse --show-toplevel');
+    const { stdout } = await execAsync('git rev-parse --show-toplevel', { cwd });
     return stdout.trim();
   } catch {
     return null;
@@ -125,7 +132,28 @@ export async function saveSessionSnapshot(
     return;
   }
 
-  const gitRoot = data.gitRoot ?? (await getGitRoot()) ?? '';
+  // v0.7.45 fix — 3-tier gitRoot resolution. Previously the middleware
+  // only honored `data.gitRoot` and fell straight through to a
+  // process.cwd()-bound `git rev-parse`, which mis-tagged sessions in
+  // in-process multi-project embedders (KodaX Space ADR-003): the host
+  // ran from its own directory but the user had opened a different
+  // project, and every session ended up labeled with the host's git
+  // root instead of the project's.
+  //
+  // Resolution order:
+  //   1. `data.gitRoot` — explicit override (highest priority; existing API).
+  //   2. `options.context.gitRoot` — the canonical SDK context field
+  //      callers already populate (used by tool-execution-context.ts,
+  //      repo-intelligence.ts, run-substrate.ts repo routing). This tier
+  //      closes the bug independently of the call-site fix.
+  //   3. `getGitRoot(executionCwd)` — fallback git rev-parse, now run in
+  //      the SDK consumer's executionCwd rather than process.cwd().
+  //   4. `''` — empty string when git resolution fails (legacy behavior).
+  const gitRoot =
+    data.gitRoot
+    ?? options.context?.gitRoot
+    ?? (await getGitRoot(options.context?.executionCwd))
+    ?? '';
   // CAP-013-003 / CAP-SESSION-SNAPSHOT-003: storage failures are absorbed
   // here so a transient backend issue (disk full, FS permission, race) cannot
   // mask the caller's original error nor abort an otherwise-successful run.

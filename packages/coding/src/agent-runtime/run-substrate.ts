@@ -1452,9 +1452,14 @@ export async function runSubstrate(
       }
 
       // 保存会话
+      // v0.7.45 fix — explicitly thread context.gitRoot so in-process
+      // embedders (KodaX Space) tag the snapshot with the actual project
+      // the user opened, not the host process's startup directory.
+      // Matches runner-driven.ts:407/1786 convention.
       await saveSessionSnapshot(options, sessionId, {
         messages,
         title,
+        gitRoot: options.context?.gitRoot ?? undefined,
         runtimeSessionState,
       });
 
