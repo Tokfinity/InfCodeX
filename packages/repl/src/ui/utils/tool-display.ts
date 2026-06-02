@@ -110,7 +110,7 @@ function normalizeDisplayToolName(toolName: string): string {
   return rolePrefix ? `${rolePrefix} ${toolLabel}` : toolLabel;
 }
 
-function stripRolePrefix(toolName: string): string {
+export function stripRolePrefix(toolName: string): string {
   return splitDisplayToolName(toolName).toolLabel;
 }
 

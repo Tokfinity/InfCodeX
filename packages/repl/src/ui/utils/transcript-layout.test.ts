@@ -546,6 +546,112 @@ describe("transcript-layout", () => {
     expect(text).not.toContain("more lines");
   });
 
+  it("renders a colored inline diff for edit results by default (no show-all)", () => {
+    const output = [
+      "File edited: /repo/src/foo.ts (1 replacements)",
+      "  (+2 lines, -1 lines)",
+      "",
+      "--- /repo/src/foo.ts",
+      "+++ /repo/src/foo.ts",
+      "@@ -42,3 +42,4 @@",
+      "  function processInput(input) {",
+      "- return input.toLowerCase();",
+      "+ if (!input) return '';",
+      "+ return input.trim();",
+      "  }",
+    ].join("\n");
+    const rows = buildTranscriptRows({
+      items: [
+        {
+          id: "tool-group-edit",
+          type: "tool_group",
+          timestamp: Date.now(),
+          tools: [
+            {
+              id: "edit-1",
+              name: "edit",
+              status: ToolCallStatus.Success,
+              input: { file_path: "/repo/src/foo.ts" },
+              output,
+              startTime: Date.now(),
+            },
+          ],
+        },
+      ],
+      viewportWidth: 80,
+      // Crucially NOT showDetailedTools — diff must show by default.
+    });
+
+    const added = rows.find((r) => r.text.includes("return input.trim();"));
+    const removed = rows.find((r) => r.text.includes("return input.toLowerCase();"));
+    expect(added?.color).toBe("success");
+    expect(removed?.color).toBe("error");
+    // The redundant `--- ` / `+++ ` file headers are dropped.
+    expect(rows.some((r) => r.text.startsWith("--- "))).toBe(false);
+    expect(rows.some((r) => r.text.startsWith("+++ "))).toBe(false);
+  });
+
+  it("does not render diff rows for a write that creates a new file (no diff)", () => {
+    const output = "File created: /repo/src/new.ts\n  (12 lines written)";
+    const rows = buildTranscriptRows({
+      items: [
+        {
+          id: "tool-group-write",
+          type: "tool_group",
+          timestamp: Date.now(),
+          tools: [
+            {
+              id: "write-1",
+              name: "write",
+              status: ToolCallStatus.Success,
+              input: { file_path: "/repo/src/new.ts" },
+              output,
+              startTime: Date.now(),
+            },
+          ],
+        },
+      ],
+      viewportWidth: 80,
+    });
+
+    // No +/- diff content → pushDiffRows bails and emits no diff body. (The
+    // `✓ write` main status row is legitimately success-colored, so we assert
+    // on the diff-row keys rather than on color.)
+    expect(rows.some((r) => r.key.includes("-diff-"))).toBe(false);
+  });
+
+  it("does not color-diff non-mutation tool output content", () => {
+    const output = "- a normal bullet\n+ another bullet";
+    const rows = buildTranscriptRows({
+      items: [
+        {
+          id: "tool-group-bash",
+          type: "tool_group",
+          timestamp: Date.now(),
+          tools: [
+            {
+              id: "bash-1",
+              name: "bash",
+              status: ToolCallStatus.Success,
+              input: { command: "echo hi" },
+              output,
+              startTime: Date.now(),
+            },
+          ],
+        },
+      ],
+      viewportWidth: 80,
+      showDetailedTools: true,
+    });
+
+    // bash is not a mutation tool: its output lines render as plain dim text,
+    // never tinted success/error like a diff would be. (The `✓ bash` status
+    // row is legitimately success-colored — assert on the content rows.)
+    const bulletRows = rows.filter((r) => r.text.includes("bullet"));
+    expect(bulletRows.length).toBeGreaterThan(0);
+    expect(bulletRows.every((r) => r.color === "dim")).toBe(true);
+  });
+
   it("shows AMA harness level and active worker in the live thinking row", () => {
     const rows = buildTranscriptRows({
       items: [],

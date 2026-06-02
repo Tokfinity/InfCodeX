@@ -7,9 +7,111 @@ import {
   formatToolResultExplanation,
   formatLiveToolLabel,
   resolveToolExplanationTone,
+  stripRolePrefix,
 } from "./tool-display.js";
 import { truncateUserMessageForDisplay } from "./user-message-display.js";
 import { stripOuterBlankLines } from "./strip-outer-blank-lines.js";
+
+/**
+ * FEATURE_141 (v0.7.37) wired a colored `<DiffHunk>` component, but the live
+ * transcript renders through the flat `TranscriptRow[]` model (FEATURE_172/214
+ * windowing), not the React component tree — so that path was never reached and
+ * file edits showed no diff. This renders the unified-diff text that edit /
+ * write / multi_edit / insert_after_anchor already embed in their result string
+ * directly into colored rows (green added / red removed), inline in the
+ * transcript, without leaving the row model.
+ */
+const MUTATION_TOOL_NAMES = new Set([
+  "edit",
+  "write",
+  "multi_edit",
+  "insert_after_anchor",
+]);
+
+/** Default fold cap for an inline diff body when not in show-all mode. */
+const DIFF_PREVIEW_MAX_LINES = 20;
+
+function isMutationTool(tool: ToolCall): boolean {
+  return MUTATION_TOOL_NAMES.has(stripRolePrefix(tool.name).trim().toLowerCase());
+}
+
+function classifyDiffLine(line: string): { color: TranscriptColorToken; skip: boolean } {
+  // File headers and the result-summary preamble are redundant with the tool's
+  // own main row (which already names the file) — drop them.
+  if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+    return { color: "dim", skip: true };
+  }
+  if (/^(File (edited|created|updated|written)|Content inserted)/.test(line)) {
+    return { color: "dim", skip: true };
+  }
+  if (line.startsWith("@@")) {
+    return { color: "dim", skip: false };
+  }
+  if (line.startsWith("+")) {
+    return { color: "success", skip: false };
+  }
+  if (line.startsWith("-")) {
+    return { color: "error", skip: false };
+  }
+  return { color: "dim", skip: false };
+}
+
+/**
+ * Emit colored diff rows for a mutation tool result. Returns true if any diff
+ * row was emitted (so the caller can skip the generic dim-output branch and
+ * avoid double-rendering).
+ */
+function pushDiffRows(
+  rows: TranscriptRow[],
+  keyPrefix: string,
+  output: string,
+  viewportWidth: number,
+  showAllContent: boolean,
+): boolean {
+  const classified: Array<{ text: string; color: TranscriptColorToken }> = [];
+  let hasDiffContent = false;
+  for (const raw of output.split(/\r?\n/)) {
+    const { color, skip } = classifyDiffLine(raw);
+    if (skip) continue;
+    if (color === "success" || color === "error") hasDiffContent = true;
+    classified.push({ text: raw, color });
+  }
+  // Only render when the result actually contains added/removed lines. A
+  // `write` that creates a new file emits a summary ("File created: … / N
+  // lines written") with no diff — fall through to the normal output path so
+  // we don't surface an orphaned stat line.
+  if (!hasDiffContent) return false;
+
+  // Drop leading/trailing blank rows left after removing the preamble, without
+  // mutating the collected array (CLAUDE.md immutability).
+  let start = 0;
+  let end = classified.length;
+  while (start < end && classified[start]!.text.trim() === "") start++;
+  while (end > start && classified[end - 1]!.text.trim() === "") end--;
+  const visible = classified.slice(start, end);
+  if (visible.length === 0) return false;
+
+  const shown = showAllContent ? visible : visible.slice(0, DIFF_PREVIEW_MAX_LINES);
+  shown.forEach((row, index) => {
+    pushWrappedRows(
+      rows,
+      `${keyPrefix}-diff-${index}`,
+      row.text,
+      getBodyWidth(viewportWidth, 4),
+      { color: row.color, indent: 4 },
+    );
+  });
+  if (!showAllContent && visible.length > shown.length) {
+    pushWrappedRows(
+      rows,
+      `${keyPrefix}-diff-more`,
+      `... (${visible.length - shown.length} more lines)`,
+      getBodyWidth(viewportWidth, 4),
+      { color: "dim", indent: 4 },
+    );
+  }
+  return true;
+}
 
 export type TranscriptColorToken =
   | "primary"
@@ -335,6 +437,17 @@ function buildToolRows(
     );
   });
 
+  // Default-on colored diff for file mutations: edit / write / multi_edit /
+  // insert_after_anchor embed unified-diff text in their result string. Render
+  // it inline (green added / red removed) regardless of `showDetailedTools` so
+  // edits are visible at a glance; folded unless show-all is active.
+  const renderedDiff =
+    tool.status === ToolCallStatus.Success &&
+    typeof tool.output === "string" &&
+    tool.output.trim().length > 0 &&
+    isMutationTool(tool) &&
+    pushDiffRows(rows, `${itemKey}-tool-${tool.id}`, tool.output, viewportWidth, showAllContent);
+
   if (showDetailedTools) {
     const inputLines = buildToolInputPreview(tool);
     const visibleInputLines = showAllContent ? inputLines : inputLines.slice(0, 6);
@@ -358,7 +471,7 @@ function buildToolRows(
     }
   }
 
-  if (showDetailedTools && typeof tool.output === "string" && tool.output.trim()) {
+  if (showDetailedTools && !renderedDiff && typeof tool.output === "string" && tool.output.trim()) {
     const allOutputLines = tool.output.trim().split(/\r?\n/);
     const outputLines = showAllContent
       ? allOutputLines
