@@ -913,7 +913,7 @@ import { InkREPL } from '@kodax-ai/kodax/repl';
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5 |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 (M2 family default; `MiniMax-M3` Frontier Coding with native multimodal + 1M ctx available via `/model`, plus M2.7-highspeed / M2.5 / M2.5-highspeed / M2.1 / M2.1-highspeed / M2 on the same gateway) |
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro (Xiaomi MiMo pay-per-token, Anthropic-compat) |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro (Xiaomi Token Plan, Anthropic-compat) |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1 (Volcengine Ark Coding Plan, multi-model gateway, Anthropic-compat) |

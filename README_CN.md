@@ -331,7 +331,7 @@ dist/binary/linux-x64/
 | qwen | `QWEN_API_KEY` | Native | qwen3.5-plus |
 | zhipu | `ZHIPU_API_KEY` | Native | glm-5 |
 | zhipu-coding | `ZHIPU_CODING_API_KEY` | Native | glm-5（GLM Coding Plan 端点） |
-| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7 |
+| minimax-coding | `MINIMAX_CODING_API_KEY` | Native | MiniMax-M2.7（M2 系列默认；`MiniMax-M3` 原生多模态 + 1M 上下文 Frontier Coding 模型可 `/model` 切换，同网关还有 M2.7-highspeed / M2.5 / M2.5-highspeed / M2.1 / M2.1-highspeed / M2）|
 | mimo | `MIMO_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo 按量计费，Anthropic 协议） |
 | mimo-coding | `MIMO_CODING_API_KEY` | Native | mimo-v2.5-pro（小米 MiMo Token Plan，Anthropic 协议） |
 | ark-coding | `ARK_CODING_API_KEY` | Native | glm-5.1（火山方舟 Coding Plan，多模型网关，Anthropic 协议） |
