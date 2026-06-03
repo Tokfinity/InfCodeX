@@ -146,4 +146,44 @@ describe("substrate/ink/apply-diff (FEATURE_057 Track F, Phase 4a)", () => {
       expect(s.written[0]).toBe(`\x1b[31mx${cursorMove(1, 0)}${SGR_RESET}`);
     });
   });
+
+  describe("applyDiff — synchronized output (BSU/ESU) around a clearTerminal reset", () => {
+    it("synchronized + clearTerminal: brackets the frame in mode-2026 begin/end so erase+repaint present atomically (no black flash)", () => {
+      const s = mockStream();
+      applyDiff(
+        s,
+        [
+          { type: "clearTerminal", reason: "resize" },
+          { type: "stdout", content: "repainted" },
+        ],
+        true,
+      );
+      // Still a single write, now wrapped: BSU + clear + home + repaint + ESU.
+      expect(s.written).toEqual([
+        `\x1b[?2026h\x1b[2J${CURSOR_HOME}repainted\x1b[?2026l`,
+      ]);
+    });
+
+    it("synchronized=false + clearTerminal: unchanged bare write (back-compat default)", () => {
+      const s = mockStream();
+      applyDiff(s, [
+        { type: "clearTerminal", reason: "resize" },
+        { type: "stdout", content: "repainted" },
+      ]);
+      expect(s.written).toEqual([`\x1b[2J${CURSOR_HOME}repainted`]);
+    });
+
+    it("synchronized + no clearTerminal: incremental diff stays unwrapped (zero extra bytes on the hot path)", () => {
+      const s = mockStream();
+      applyDiff(
+        s,
+        [
+          { type: "stdout", content: "\x1b[31m" },
+          { type: "stdout", content: "x" },
+        ],
+        true,
+      );
+      expect(s.written).toEqual(["\x1b[31mx"]);
+    });
+  });
 });

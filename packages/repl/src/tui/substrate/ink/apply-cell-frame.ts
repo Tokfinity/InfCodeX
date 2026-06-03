@@ -51,7 +51,7 @@ export interface CellFrameState {
 export function applyCellFrame(
   state: CellFrameState,
   frame: Frame | undefined,
-  opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
+  opts: { altScreen?: boolean; decstbmSafe?: boolean; synchronized?: boolean } = {},
 ): boolean {
   if (frame === undefined) return false;
   // `opts` enables the FEATURE_212 DECSTBM scroll fast path inside
@@ -59,7 +59,9 @@ export function applyCellFrame(
   // transcript scrolled) AND the engine is in synchronized alt-screen, so
   // passing the opts unconditionally is safe: a non-scroll frame ignores them.
   const diff = state.cellLogUpdate.render(state.prevFrame, frame, opts);
-  applyDiff(state.stdout, diff);
+  // `synchronized` brackets a `clearTerminal` reset in BSU/ESU so the erase +
+  // repaint present atomically (no black flash). Inert for non-reset frames.
+  applyDiff(state.stdout, diff, opts.synchronized ?? false);
   state.prevFrame = frame;
   return true;
 }

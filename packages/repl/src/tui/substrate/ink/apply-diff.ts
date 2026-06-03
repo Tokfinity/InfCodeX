@@ -50,6 +50,19 @@ const CURSOR_SHOW = "\x1b[?25h";
 const CLEAR_TERMINAL = `\x1b[2J${CURSOR_HOME}`;
 
 /**
+ * Synchronized-output mode (DEC private mode 2026 — Begin/End Sync Update).
+ * Brackets a frame the terminal must present atomically: it buffers everything
+ * between BSU and ESU, then swaps it in one step. Used to wrap a `clearTerminal`
+ * reset so the erase (`\x1b[2J`, a momentarily black screen) and the repaint that
+ * follows it in the SAME write are never shown as two separate frames — the
+ * "black flash" on submit / resize. Terminals without mode 2026 ignore the
+ * private-mode set (it is never printed literally), so this is safe to emit on
+ * any TTY that `shouldSynchronize` already greenlit.
+ */
+const BEGIN_SYNC_UPDATE = "\x1b[?2026h";
+const END_SYNC_UPDATE = "\x1b[?2026l";
+
+/**
  * Translate one `Patch` into terminal bytes. Pure function, total over
  * the `Patch` discriminated union — `tsc --strict` exhaustiveness check
  * pins coverage if a new variant is added.
@@ -122,12 +135,27 @@ export interface StreamLike {
  * a single `stream.write(buf)`. Empty buffer ⇒ no-op (skip the write
  * entirely so the stream's drain queue doesn't churn on idle frames).
  */
-export function applyDiff(stream: StreamLike, diff: Diff): void {
+export function applyDiff(
+  stream: StreamLike,
+  diff: Diff,
+  synchronized = false,
+): void {
   let buf = "";
+  let hasClearTerminal = false;
   for (const patch of diff) {
+    if (patch.type === "clearTerminal") hasClearTerminal = true;
     buf += patchToBytes(patch);
   }
-  if (buf.length > 0) {
-    stream.write(buf);
+  if (buf.length === 0) {
+    return;
   }
+  // Only a `clearTerminal` reset erases-then-repaints in one write, so only it
+  // can flash; bracket exactly those frames in synchronized output. Plain
+  // incremental diffs never erase the screen — leave them unwrapped so the hot
+  // path keeps its single bare `write` with zero extra bytes.
+  if (synchronized && hasClearTerminal) {
+    stream.write(BEGIN_SYNC_UPDATE + buf + END_SYNC_UPDATE);
+    return;
+  }
+  stream.write(buf);
 }

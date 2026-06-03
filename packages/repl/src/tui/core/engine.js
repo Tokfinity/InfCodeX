@@ -565,10 +565,13 @@ const Ink = class Ink {
         // FEATURE_212 — enable the DECSTBM scroll fast path only in synchronized
         // alt-screen (where a scroll otherwise costs a full ~6KB frame write).
         // The fast path additionally requires `frame.scrollHint`, so on non-scroll
-        // frames these opts are inert.
+        // frames these opts are inert. `synchronized` (same gate) brackets a
+        // clearTerminal reset in BSU/ESU so its erase+repaint never flashes black.
+        const sync = shouldSynchronize(this.options.stdout);
         const opts = {
             altScreen: this.altScreenActive,
-            decstbmSafe: shouldSynchronize(this.options.stdout),
+            decstbmSafe: sync,
+            synchronized: sync,
         };
         const applied = applyCellFrameHelper(state, frame, opts);
         this.prevFrame = state.prevFrame;
