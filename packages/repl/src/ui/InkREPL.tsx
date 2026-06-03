@@ -870,11 +870,14 @@ const MAX_PERSISTED_UI_HISTORY_ROUNDS = 50;
 const TRANSCRIPT_HARNESS_MARKERS_ENABLED =
   process.env.KODAX_TRANSCRIPT_HARNESS_MARKERS === '1';
 
-// FEATURE_214 (v0.7.46) — React-bypass fullscreen scroll. Default OFF: the
-// fullscreen transcript renders only the viewport window (pre-FEATURE_214). Set
-// `KODAX_SCROLL_OVERSCAN=1` to render an overscan block and translate within it
-// without a React re-window per wheel tick (the lag fix). Opt-in while it's
-// validated on real terminals; the env gate is removed once it ships on by default.
+// FEATURE_214 (v0.7.46) — React-bypass fullscreen scroll. Opt-in via
+// `KODAX_SCROLL_OVERSCAN=1`. The bypass kills the per-wheel-tick React re-window
+// (the 1-3fps stall) by translating within an overscan block, but it leans on the
+// DECSTBM hardware scroll — which Windows ConPTY mis-renders, leaving ghost cells
+// (错行). NOT default-on until that's resolved: validate `OVERSCAN=1` together
+// with `KODAX_SCROLL_DECSTBM=0` (bypass repaints the window directly instead of
+// hardware-scrolling — still no React re-render, but no ConPTY ghosting) before
+// flipping this default.
 const FULLSCREEN_SCROLL_OVERSCAN_ROWS =
   process.env.KODAX_SCROLL_OVERSCAN === '1' ? OVERSCAN_ROWS : undefined;
 
@@ -4194,7 +4197,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useEffect(() => {
     permissionModeRef.current = currentConfig.permissionMode;
   }, [currentConfig.permissionMode]);
-  const alwaysAllowToolsRef = useRef<string[]>(loadAlwaysAllowTools());
+  // FEATURE_214 (v0.7.46) perf — `loadAlwaysAllowTools()` reads a config file off
+  // disk. As a bare `useRef(loadAlwaysAllowTools())` argument it was evaluated on
+  // EVERY InkREPLInner render (useRef ignores the arg after the first, but still
+  // computes it) — a synchronous file read per streaming flush / scroll tick.
+  // Hoist it into a `useMemo(…, [])` so the read happens once; explicit reloads
+  // still go through `alwaysAllowToolsRef.current = loadAlwaysAllowTools()`.
+  const initialAlwaysAllowTools = useMemo(() => loadAlwaysAllowTools(), []);
+  const alwaysAllowToolsRef = useRef<string[]>(initialAlwaysAllowTools);
 
   // FEATURE_153 (v0.7.38): live currentConfig ref + LLM-backed bash prefix
   // extractor for `isToolCallAllowed`. The ref-based getter pattern mirrors

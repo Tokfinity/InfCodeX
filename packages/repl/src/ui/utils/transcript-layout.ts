@@ -944,6 +944,30 @@ export function buildStaticTranscriptSections(
   return buildHistoryItemTranscriptSections(items, viewportWidth, maxLines, showDetailedTools, undefined, showAllContent);
 }
 
+/**
+ * FEATURE_214 (v0.7.46) perf — per-item transcript-section cache.
+ *
+ * The owned (fullscreen, windowed) render model keeps the WHOLE transcript
+ * "active" — `buildTranscriptStaticPortion({ windowed: true })` puts every item
+ * in `activeItems`, so `buildHistoryItemTranscriptSections` re-wraps ALL
+ * committed items on every 80ms streaming flush (the streaming text itself is a
+ * separate pending section). Measured cost is strictly linear, ~0.09ms/item, so
+ * a long resumed session (~2-3K items) re-wraps for ~200-300ms PER FLUSH — the
+ * 3-6fps streaming stutter the spinner can't keep up with.
+ *
+ * Committed items are immutable (any content change produces a new object — the
+ * same invariant the surrounding `useMemo`/`buildPromptSurfaceItems` chain already
+ * relies on), so a WeakMap keyed by the item reference returns the prior section
+ * untouched. The param signature invalidates on viewport-width / show-flag /
+ * per-item-expand changes (resize, Ctrl+E, Ctrl+R). WeakMap auto-evicts on GC, so
+ * there is no unbounded growth. Output is byte-identical to the uncached map — a
+ * pure memoization, verified by transcript-layout.test.ts.
+ */
+const _itemSectionCache = new WeakMap<
+  HistoryItem,
+  { sig: string; section: TranscriptSection }
+>();
+
 export function buildHistoryItemTranscriptSections(
   items: HistoryItem[],
   viewportWidth: number,
@@ -952,16 +976,26 @@ export function buildHistoryItemTranscriptSections(
   expandedItemKeys?: ReadonlySet<string>,
   showAllContent = false,
 ): TranscriptSection[] {
-  return items.map((item) => ({
-    key: item.id,
-    rows: buildTranscriptRows({
-      items: [item],
-      viewportWidth,
-      maxLines,
-      showAllContent,
-      showDetailedTools: showDetailedTools || Boolean(expandedItemKeys?.has(item.id)),
-    }),
-  }));
+  return items.map((item) => {
+    const expanded = showDetailedTools || Boolean(expandedItemKeys?.has(item.id));
+    const sig = `${viewportWidth}|${maxLines}|${showAllContent ? 1 : 0}|${expanded ? 1 : 0}`;
+    const cached = _itemSectionCache.get(item);
+    if (cached !== undefined && cached.sig === sig) {
+      return cached.section;
+    }
+    const section: TranscriptSection = {
+      key: item.id,
+      rows: buildTranscriptRows({
+        items: [item],
+        viewportWidth,
+        maxLines,
+        showAllContent,
+        showDetailedTools: expanded,
+      }),
+    };
+    _itemSectionCache.set(item, { sig, section });
+    return section;
+  });
 }
 
 export function buildDynamicTranscriptSection(
