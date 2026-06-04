@@ -12,6 +12,31 @@ import Yoga from 'yoga-layout';
 import wrapAnsi from 'wrap-ansi';
 import terminalSize from 'terminal-size';
 import { isDev } from './utils.js';
+// FEATURE_214 — claudecode ink.tsx displayCursor model. All input-cursor moves are
+// RELATIVE between actually-tracked positions (resting cursor, displayCursor,
+// input target); never recomputed from raw screen.height. `cursorMoveSeq` is the
+// relative move; `toVisibleCursor` (below) maps a frame-coordinate point to the
+// VISIBLE terminal row the cell renderer actually leaves the cursor on. Computing
+// relative to the VISIBLE row, not raw screen.height, is what stays correct once
+// scrollback history makes the content taller than the viewport.
+const cursorMoveSeq = (dx, dy) =>
+    (dy < 0 ? ansiEscapes.cursorUp(-dy) : dy > 0 ? ansiEscapes.cursorDown(dy) : '') +
+    (dx < 0 ? ansiEscapes.cursorBackward(-dx) : dx > 0 ? ansiEscapes.cursorForward(dx) : '');
+// Translate a FRAME-coordinate point (where renderer.js / render-node-to-output
+// placed it, measured from the top of the full content) into the VISIBLE terminal
+// row the cell renderer actually paints it on. When the content is taller than the
+// viewport, the top `viewportY` rows are in scrollback; the visible row is
+// `y - viewportY`, clamped to the viewport. WITHOUT this, the input target's large
+// frame-Y produces a huge cursorDown to content-bottom instead of a small move to
+// the input bar — the "input lands below the status bar with scrollback" bug.
+const toVisibleCursor = (frame) => {
+    const viewportY = Math.max(0, frame.screen.height - frame.viewport.height);
+    const maxY = Math.max(0, frame.viewport.height - 1);
+    return (point) => ({
+        x: point.x,
+        y: Math.min(Math.max(point.y - viewportY, 0), maxY),
+    });
+};
 import reconciler from './internals/reconciler.js';
 import render from './internals/renderer.js';
 import * as dom from './internals/dom.js';
@@ -209,6 +234,9 @@ const Ink = class Ink {
             // scratch. `shouldFullReset` Case 1 also catches viewport-shrink /
             // width-change on the next render's own merits, but the explicit
             // erase-on-shrink keeps the screen clean across the resize.
+            // FEATURE_214: return the cursor to content-bottom before the erase
+            // (and before prevFrame is reseeded below, which returnCursorToRest reads).
+            this.returnCursorToRest();
             const eraseSeq = this.lastOutputHeight > 0
                 ? ansiEscapes.eraseLines(this.lastOutputHeight)
                 : '';
@@ -457,6 +485,11 @@ const Ink = class Ink {
         if (hasStaticOutput) {
             this.fullStaticOutput += staticOutput;
         }
+        // FEATURE_214 cursor PREFIX: every render path past this point (eraseLines,
+        // cell growth, cell diff) assumes the terminal cursor rests at content-
+        // bottom. If the previous render parked it at the input anchor (the suffix),
+        // return it there first.
+        this.returnCursorToRest();
         const usesManagedVirtualFullscreenShell = this.altScreenActive;
         const shouldUseFullscreenFrameOwnership = this.options.stdout.isTTY
             && outputHeight >= this.options.stdout.rows
@@ -549,6 +582,8 @@ const Ink = class Ink {
             // main render via the cell renderer. invalidateCellFrame()
             // before applyCellFrame so the cell path treats this as a
             // first-render at the current cursor position (post-static).
+            // The entry-level cursor prefix (FEATURE_214) already dropped the
+            // terminal cursor to content-bottom, so eraseLines erases the full area.
             const eraseSeq = this.lastOutputHeight > 0
                 ? ansiEscapes.eraseLines(this.lastOutputHeight)
                 : '';
@@ -559,12 +594,56 @@ const Ink = class Ink {
                 this.options.stdout.write(esu);
             }
         }
-        else {
-            // Phase 6: cell renderer is the sole render path. Returns true
-            // when the cell path consumed the frame; with `frame` always
-            // populated post-Phase-6 (renderer.js gate is now unconditional
-            // for non-screen-reader paths), the call always succeeds.
+        else if (!this.altScreenActive
+            && this.prevFrame
+            && this.prevFrame.screen.height !== frame.screen.height
+            && this.lastOutputHeight > 0) {
+            // FEATURE_214 (codex diagnosis): the inline footer/prompt is a LIVE
+            // BLOCK. When its height changes (completion list opens, status line
+            // reflows, footer grows after a response ends), the cell renderer's
+            // incremental grow/shrink appends new rows DOWNWARD via
+            // `renderFrameSlice` (\r\n) — leaving the OLD block in place and shoving
+            // the cursor + input below the status bar (the "input lands at terminal
+            // bottom" bug). A live block must ERASE the old block and repaint clean,
+            // exactly like the static-commit branch above. The cursor PREAMBLE
+            // (returnCursorToRest) already dropped the physical cursor to the old
+            // block's resting row at render start, so eraseLines clears the whole
+            // block; invalidateCellFrame makes applyCellFrame a clean first-render;
+            // the suffix below then re-parks the cursor at the input target.
+            const sync = shouldSynchronize(this.options.stdout);
+            if (sync) {
+                this.options.stdout.write(bsu);
+            }
+            this.options.stdout.write(ansiEscapes.eraseLines(this.lastOutputHeight));
+            this.invalidateCellFrame();
             this.applyCellFrame(frame);
+            if (sync) {
+                this.options.stdout.write(esu);
+            }
+        }
+        else {
+            // Phase 6: cell renderer is the sole render path. No inline height
+            // change here, so the incremental diff is correct (and cheap).
+            this.applyCellFrame(frame);
+        }
+        // FEATURE_214 cursor SUFFIX: the cell renderer left the (hidden) terminal
+        // cursor at content-bottom (frame.cursor). Park it at the input anchor so
+        // IME composition / typing lands in the input bar. Relative (cursorUp) so
+        // it tracks the just-rendered frame; the next render's prefix returns it to
+        // content-bottom. inputCursor.y < screen.height for the small interactive
+        // frame (history lives in scrollback), so no viewport clamp interaction.
+        if (frame?.inputCursor) {
+            // Suffix (claudecode ink.tsx 696-713): park the physical cursor at the
+            // input target via a RELATIVE move from where the diff left it (the
+            // resting cursor). Both translated to VISIBLE rows so the move stays
+            // correct under scrollback. Record displayCursor (visible) so the next
+            // render's preamble knows where the cursor actually is.
+            const toVisible = toVisibleCursor(frame);
+            const rest = toVisible(frame.cursor);
+            const target = toVisible(frame.inputCursor);
+            const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
+            if (seq) this.options.stdout.write(seq);
+            this.displayCursor = target;
         }
         this.lastOutput = output;
         this.lastOutputToRender = outputToRender;
@@ -622,6 +701,25 @@ const Ink = class Ink {
             reconciler.flushSyncWork();
         }
     }
+    // FEATURE_214: the cursor SUFFIX (end of render) parks the hidden terminal
+    // cursor at the input anchor for IME. Any path that erases/repaints from the
+    // cursor (render, writeToStdout, writeToStderr) must first return it to
+    // content-bottom — the resting position every such path assumes. Relative
+    // (cursorDown) so it composes with the terminal's current scroll state; a no-op
+    // when the cursor is already at rest (visibleInputCursor undefined).
+    returnCursorToRest() {
+        // Preamble (claudecode ink.tsx 676-685): if the previous render parked the
+        // physical cursor at the input, move it back to that frame's RESTING cursor
+        // — the spot the next diff / eraseLines assumes — before anything draws.
+        // Relative move from the ACTUAL tracked position (displayCursor), never a
+        // recomputed cursorDown from raw screen.height.
+        if (this.displayCursor && this.prevFrame) {
+            const rest = toVisibleCursor(this.prevFrame)(this.prevFrame.cursor);
+            const seq = cursorMoveSeq(rest.x - this.displayCursor.x, rest.y - this.displayCursor.y);
+            if (seq) this.options.stdout.write(seq);
+            this.displayCursor = null;
+        }
+    }
     writeToStdout(data) {
         if (this.isUnmounted) {
             return;
@@ -650,6 +748,9 @@ const Ink = class Ink {
         // replay the last cell frame at the new cursor position via
         // `restoreLastOutput`. After the replay the cell renderer's
         // prevFrame is in sync with the screen — no invalidation needed.
+        // FEATURE_214: return the cursor from the input anchor to content-bottom
+        // before the erase, which erases upward assuming that resting position.
+        this.returnCursorToRest();
         const eraseSeq = this.lastOutputHeight > 0
             ? ansiEscapes.eraseLines(this.lastOutputHeight)
             : '';
@@ -687,6 +788,9 @@ const Ink = class Ink {
         // separate streams (stdout for erase, stderr for data), so it's
         // inherently a two-write sequence — cell-renderer atomicity does
         // not apply across stream boundaries.
+        // FEATURE_214: return the cursor from the input anchor to content-bottom
+        // before the erase, which erases upward assuming that resting position.
+        this.returnCursorToRest();
         const eraseSeq = this.lastOutputHeight > 0
             ? ansiEscapes.eraseLines(this.lastOutputHeight)
             : '';
@@ -807,6 +911,8 @@ const Ink = class Ink {
         if (!isInCi && !this.options.debug) {
             // Phase 6: erase the visible render area; reseed cell renderer's
             // prevFrame so the next applyCellFrame paints from scratch.
+            // FEATURE_214: return the cursor to content-bottom before the erase.
+            this.returnCursorToRest();
             const eraseSeq = this.lastOutputHeight > 0
                 ? ansiEscapes.eraseLines(this.lastOutputHeight)
                 : '';

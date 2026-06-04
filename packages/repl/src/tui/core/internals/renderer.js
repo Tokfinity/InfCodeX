@@ -71,9 +71,16 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
         const frame = {
             screen,
             viewport: { width: viewportWidth, height: viewportHeight },
-            cursor: anchored
-                ? { x: anchored.x, y: anchored.y, visible: true }
-                : { x: 0, y: screen.height, visible: false },
+            // FEATURE_214: the render cursor RESTS at content-bottom — the engine's
+            // eraseLines and the cell renderer's growth (renderFrameSlice) + diff all
+            // assume that. The input's cursor anchor travels SEPARATELY as
+            // `inputCursor`; engine.js parks the (hidden) terminal cursor there as the
+            // final step each render (so IME composition lands in the input) and
+            // returns it to content-bottom before the next render. Keeping the render
+            // cursor at content-bottom is what stops the input/text from drifting
+            // below the status bar once there is scrollback history.
+            cursor: { x: 0, y: screen.height, visible: false },
+            ...(anchored ? { inputCursor: { x: anchored.x, y: anchored.y } } : {}),
         };
         return {
             output: generatedOutput,
