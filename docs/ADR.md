@@ -1,6 +1,6 @@
 # KodaX Architecture Decision Records
 
-> Last updated: 2026-05-25
+> Last updated: 2026-06-04
 >
 > **⚠️ Architecture state notice (2026-05-25)**: 早期 ADR (ADR-005/006/007/008 等) 描述 `FEATURE_061/062` Scout-first + Planner/Generator/Evaluator H2 chain 模型，已被 [**ADR-030 claudecode-shape Main Agent + Sidecar Verifier**](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) (FEATURE_184 v0.7.42) 取代。
 > 当前运行时架构：**V2 Worker 单循环 + Sidecar Verifier**。V1 chain (Scout/Planner/Generator/Evaluator) 已于 [ADR-030 §F193 cross-ref](#adr-030-claudecode-shape-main-agent--sidecar-verifier-substrate-feature_184-v0745) FEATURE_193 v0.7.43 全量退役；`emit_handoff` 工具已于 FEATURE_190 v0.7.43 删除。
@@ -1223,7 +1223,7 @@ runner-driven.ts (主循环 + 顶部 re-export)
 3. **真正的 ~80% 总开销** 来自 KodaX `tui/substrate/ink/` 渲染底层缺失了 claudecode 的 7 项核心优化:`nodeCache` blit / Packed Int32Array Screen / `markDirty` propagation / `screen.damage` bounding box / `Output.charCache` 跨帧 / `StylePool.transition` 缓存 / 16ms throttle
 4. **原 Phase 2-5 计划完全没覆盖**这些底层优化 — 即使全做完,SSH 仍会卡
 
-错误根因:静态代码分析定位 root cause 时**没 trace 到 engine 层 `onRender` 完整管线**(`tui/core/engine.js:347-516` + `tui/core/internals/renderer.js` + `tui/substrate/ink/cell-screen.ts setCellAt` O(N²))。Bench 设计也是错的 — 只测 `buildTranscriptRenderModel` inner function 而不是 end-to-end `onRender` wall-time。
+错误根因:静态代码分析定位 root cause 时**没 trace 到 engine 层 `render()` 之后的屏幕应用/写屏阶段**(`applyCellFrame` / `cellLogUpdate.render` / `applyDiff` / `stdout.write`)。Bench 设计也是错的 — 只测 `buildTranscriptRenderModel` inner function；后续 `onRender` bench 也必须注意 `onRender` 在 `applyCellFrame` 之前触发，不能当作完整端到端 wall-time。
 
 ### 教训(写入 feedback memory)
 
@@ -1245,6 +1245,20 @@ runner-driven.ts (主循环 + 顶部 re-export)
 ## ADR-028: KodaX 渲染底层 — Port claudecode 的 7 项核心 perf 优化 (FEATURE_172 Phase A-E, v0.7.41+)
 
 **Status**: Drafting (2026-05-19; pending user SSH 实测 + 工作日预算确认)
+
+### 2026-06-04 校正：Windows Terminal transcript 卡顿根因
+
+本 ADR 2026-05-19 版的方向仍然有价值（渲染层比数据层更关键），但有三处判断已经被代码复查推翻或收窄：
+
+1. **`onRender` 不是完整渲染管线终点。** 当前 `engine.js` 在 `render(rootNode, ...)` 之后立刻调用 `options.onRender?.({ renderTime })`，随后才进入 `applyCellFrame(frame)` / `cellLogUpdate.render` / `applyDiff` / `stdout.write`。因此 `renderTime` 和基于 `onRender` 时间戳的 wall-time 不能证明终端写屏不慢；它们漏掉了最可疑的同步写屏阶段。
+2. **`benchmark/perf/repl-render-engine-e2e.bench.ts` 的“端到端”说明不准确。** 该 bench 的 `wallTime = rerender -> onRender callback`，不覆盖 `applyCellFrame` 和真实 `stdout.write` 完成时间。`bytes` 统计仍可用于观察写入量，但不能把 `wallTime - rendererTime` 解释为 apply/write 成本。
+3. **assistant 正式输出和 thinking 历史行没有明显不同的 React 渲染分支。** 二者在 transcript 中都进入 `TranscriptRowRenderer`，差异主要是 color / italic / header。若 Windows Terminal 中“大段中文正式输出”比“大段英文 thinking”更卡，根因应定位为：Windows/degraded_vt 仍启用 virtual transcript + streaming renderer，滚动/流式每帧重建并写虚拟屏幕；正式输出的 CJK 宽字符在 Windows Terminal/ConPTY 真实写屏阶段放大阻塞。不是 `assistant` item 类型本身更慢。
+
+修正后的根因表述：
+
+> 在 Windows Terminal / degraded_vt 上，KodaX 仍把 transcript 和 streaming preview 放进 virtual fullscreen/managed viewport。历史 item 虽然不变，但滚动和流式时当前可见窗口仍会走 `renderNodeToOutput -> Output.get()/getGrid -> outputToScreen -> cell diff -> stdout.write`。大段中文正式输出触发宽字符与真实终端渲染成本，阻塞 Node 主线程，spinner 因而卡顿。Thinking 英文走同一 KodaX 代码路径，但真实终端写屏成本低，所以不明显卡。
+
+后续验证必须补真实 TTY 分段 trace：`render()`、`output.get()`、`outputToScreen()`、`applyCellFrame/cellLogUpdate.render`、`applyDiff/stdout.write` 分开计时，并同时记录 viewport、visible rows、CJK/wide-char 比例、bytes。不要再只用 `onRender.renderTime` 判断是否修复。
 
 ### 背景
 
@@ -1327,14 +1341,14 @@ ADR-027 把 SSH `kodax -c` 长 session 2-3s/frame 卡顿的根因定位在数据
 
 ### 保障(Layer 0/1/2/5,参考 ADR-027 验证过的结构)
 
-- **Layer 0 — Baseline**:补 **端到端 wall-time bench**(`ink-testing-library` 跑 engine.onRender 全链路 + 测 stdout.write 调用次数 + 总 bytes)。当前 `benchmark/perf/repl-render-perf.bench.ts` 只测 inner function,**必须扩展**才能有 phase gate 数据。
+- **Layer 0 — Baseline**:补 **真实端到端 wall-time bench / trace**。不能把 `engine.onRender` 当作全链路终点；必须分段测 `render()`、`applyCellFrame`、`applyDiff/stdout.write`，并记录 stdout.write 次数、bytes、viewport、visible rows、wide-char 比例。当前 `benchmark/perf/repl-render-perf.bench.ts` 只测 inner function,`benchmark/perf/repl-render-engine-e2e.bench.ts` 又停在 `onRender` 时间戳，二者都不足以作为修复 gate。
 - **Layer 1 — TDD per phase**:每 phase RED → GREEN。golden byte-equal 是硬底线。
 - **Layer 2 — Phase gates**:每 phase 完成必须(a) Layer 0 golden 全 byte-equal PASS;(b) end-to-end wall-time bench 不退化 >5% vs 上 phase 末;(c) phase-specific 测试 PASS。
 - **Layer 5 — 24h soak + SSH 实测**:用户 SSH 长 session 实测体验改善。
 
 ### 端到端 Bench Contract(Phase A 启动前)
 
-**Bench harness shipped** 2026-05-19:`benchmark/perf/repl-render-engine-e2e.bench.ts` — 通过 KodaX 真实 `render()` 入口 + mock stdout(timestamped writes)+ `onRender` callback 同步,测端到端 wall-time(rerender → React reconcile → Yoga → renderNodeToOutput → outputToScreen → cellLogUpdate.render → applyDiff → stdout.write 完成全链路)。run via `npm run bench:perf:e2e`。
+**Bench harness shipped** 2026-05-19:`benchmark/perf/repl-render-engine-e2e.bench.ts` — 通过 KodaX 真实 `render()` 入口 + mock stdout(timestamped writes)+ `onRender` callback 同步。**2026-06-04 校正**：该 bench 的 `wallTime` 实际是 `rerender → onRender callback`，覆盖 React reconcile / Yoga / renderNodeToOutput / outputToScreen，但 `onRender` 在 `applyCellFrame` 之前触发；因此它不覆盖 `cellLogUpdate.render` / `applyDiff` / 真实 `stdout.write` 完成时间。run via `npm run bench:perf:e2e`，但不要把结果当完整端到端写屏耗时。
 
 **Baseline 实测**(`benchmark/perf-baselines/baseline-e2e-<sha>.json`,Win11 / Node v24.13.1 / x64,viewport 120×40,30 ticks × 45ms gap per tier):
 
@@ -1360,33 +1374,33 @@ ADR-027 把 SSH `kodax -c` 长 session 2-3s/frame 卡顿的根因定位在数据
 
 **关键发现**:
 
-1. **bytes per tick ≈ 0-10B** — KodaX cell-renderer **确实**在做增量 diff。SSH bandwidth **不是**主要瓶颈(每帧只写几 byte 给 SSH 链路)
-2. **rendererTime(engine 内部 Yoga + renderNodeToOutput + outputToScreen)只有 5-8ms** — 这层已经很快
-3. **wall-time 跟 rendererTime 的差(20-80ms)**全部在 `applyCellFrame`(`cellLogUpdate.render` + `diffEach` + `applyDiff`)— 真正的瓶颈在这里
+1. **bytes per tick ≈ 0-10B 只能说明 mock bench 场景下 diff 输出少**。它不能证明真实 Windows Terminal / ConPTY 写屏不慢，也不能覆盖 CJK 宽字符 glyph shaping / terminal repaint 成本。
+2. **rendererTime(engine 内部 Yoga + renderNodeToOutput + outputToScreen)只有 5-8ms** — 这只覆盖 `onRender` 之前的阶段；不能用它排除 `applyCellFrame` / `applyDiff` / `stdout.write`。
+3. **wall-time 跟 rendererTime 的差(20-80ms)不能再归因到 `applyCellFrame`**。该 bench 的 wall-time 时间戳停在 `onRender` callback；真正的屏幕应用/写屏阶段未被纳入 wall-time。需要补真实 TTY 分段 trace 才能定位。
 4. **windowed mode at 200 items: 90ms p95** — **已经超过 80ms flush 窗口**,会开始 backlog
 5. **mainscreen at 800 items: 84ms p95** — 同上,刚好饱和
 6. **windowed mode 在小 items(50-100)反而比 mainscreen 慢 5×** — `<Static>` bypass 后所有 items 进主 React tree,固定 overhead 大
 
 ### Phase 路线修正(基于实测数据)
 
-实测显示 **Phase 1 后 200 items mainscreen wall-time = 25ms p95**,远小于 ADR-028 草稿假设的"400-800ms/frame"。两种解释:
+旧 bench 显示 **Phase 1 后 200 items mainscreen `rerender -> onRender` = 25ms p95**，远小于 ADR-028 草稿假设的"400-800ms/frame"。2026-06-04 校正后，这个数字只能说明 `onRender` 前半段较快，不能代表完整写屏 wall-time。两种解释调整为:
 
-(a) **Phase 1 实际改善比想象大** — 数据层 + React.memo 联合让 mainscreen path 在 200 items 已可接受;800 items 需要 Phase A-E
-(b) **bench 没复现 2-3s 症状** — 可能与:viewport rows / 实际 message 复杂度 / 多 commit 在 throttle window 内 coalesce / 真实 streaming 频率 ≠ 45ms 间隔 / SSH round-trip 叠加 等因素相关
+(a) **Phase 1 改善了数据层和 onRender 前半段** — 但不能证明真实终端写屏已可接受。
+(b) **bench 没复现真实症状** — 可能与:未计入 apply/write / mock stdout 不模拟 Windows Terminal CJK 宽字符渲染 / viewport rows / 实际 message 复杂度 / 多 commit 在 throttle window 内 coalesce / 真实 streaming 频率 ≠ 45ms 间隔 / SSH round-trip 叠加 等因素相关。
 
 **修正后的 Phase 启动门槛**:
 
 - 用户 SSH 实测 Phase 1 后体验 → 若 200 items 流畅,Phase A-E 转 deferred 到 800+ items 卡顿场景
 - 若仍卡 → 用 bench 复现并定位(可能需要扩 bench 覆盖更复杂 fixture)
-- bench gate 目标重设:
+- 旧 onRender bench 目标仅保留为前半段渲染参考；真正 gate 需等真实端到端 trace 补齐后重设:
 
-| Items | 当前 mainscreen p95(P1 后) | Phase B 目标 | Phase D 目标 |
+| Items | 当前 mainscreen `rerender -> onRender` p95(P1 后) | Phase B 参考目标 | Phase D 参考目标 |
 |---|---|---|---|
 | 200 | 25.39ms | ≤10ms | ≤5ms |
 | 400 | 47.04ms | ≤15ms | ≤8ms |
 | 800 | 84.35ms | ≤25ms | ≤10ms |
 
-| Items | 当前 windowed p95(P1 后) | Phase B 目标 | Phase D 目标 |
+| Items | 当前 windowed `rerender -> onRender` p95(P1 后) | Phase B 参考目标 | Phase D 参考目标 |
 |---|---|---|---|
 | 200 | 90.17ms | ≤15ms | ≤8ms |
 | 800 | 84.77ms | ≤30ms | ≤12ms |
