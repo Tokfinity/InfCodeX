@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import { LogUpdate } from "./cell-renderer.js";
 import { patchToBytes } from "./apply-diff.js";
@@ -252,6 +252,20 @@ describe("TerminalModel calibration vs trusted renderer (FEATURE_212 gate)", () 
 // inert (no `scrollRegion` patch) yet still correct.
 
 describe("DECSTBM scroll gate (FEATURE_212)", () => {
+  // FEATURE_214 (v0.7.46): DECSTBM hardware scroll is now opt-in (default OFF —
+  // ConPTY mis-renders the scroll region on full-width cells). This gate still
+  // verifies the path's byte-level correctness WHEN enabled, so it opts in
+  // explicitly. Phase 1 deletes the path (and this block) with the inline migration.
+  let _prevDecstbm: string | undefined;
+  beforeEach(() => {
+    _prevDecstbm = process.env.KODAX_SCROLL_DECSTBM;
+    process.env.KODAX_SCROLL_DECSTBM = "1";
+  });
+  afterEach(() => {
+    if (_prevDecstbm === undefined) delete process.env.KODAX_SCROLL_DECSTBM;
+    else process.env.KODAX_SCROLL_DECSTBM = _prevDecstbm;
+  });
+
   const W = 5;
   const VH = 12; // viewport taller than the 8-row screen ⇒ no offscreen reset
 

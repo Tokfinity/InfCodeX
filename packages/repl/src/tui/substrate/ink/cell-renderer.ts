@@ -143,13 +143,17 @@ export class LogUpdate {
     // stutters streaming/scroll + the spinner animation). The scroll patch is
     // bracketed in DEC save/restore (see apply-diff) so the cursor returns to
     // `prev.cursor`, leaving `renderIncremental`'s relative moves valid.
-    // Default ON; `KODAX_SCROLL_DECSTBM=0` is an emergency escape hatch.
+    // Default OFF on every platform. No measured benefit anywhere — the
+    // fullscreen-scroll bottleneck is the ConPTY write, not this fast path
+    // (measured 2026-06-04) — and Windows ConPTY mis-renders the scroll region on
+    // full-width (CJK) cells (错行). Opt back in with `KODAX_SCROLL_DECSTBM=1` only
+    // to re-measure. FEATURE_214 deletes this whole path with the inline migration.
     const hint = next.scrollHint;
     if (
       hint &&
       opts.altScreen &&
       opts.decstbmSafe &&
-      process.env.KODAX_SCROLL_DECSTBM !== "0" &&
+      process.env.KODAX_SCROLL_DECSTBM === "1" &&
       hint.delta !== 0 &&
       hint.top >= 0 &&
       hint.bottom < prev.screen.height &&
