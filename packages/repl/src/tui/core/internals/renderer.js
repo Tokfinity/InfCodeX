@@ -63,10 +63,17 @@ const renderer = (node, isScreenReaderEnabled, terminalSize) => {
         const screen = outputToScreen(output);
         const viewportWidth = terminalSize?.columns ?? node.yogaNode.getComputedWidth();
         const viewportHeight = terminalSize?.rows ?? node.yogaNode.getComputedHeight();
+        // FEATURE_214: when the interactive tree marked a cursor anchor (the
+        // input's cursor cell), position the real terminal cursor there + show it
+        // (visible) so IME composition / typing lands in the input. Otherwise the
+        // resting cursor parks at content-bottom and stays hidden (visible:false).
+        const anchored = output.cursorPosition;
         const frame = {
             screen,
             viewport: { width: viewportWidth, height: viewportHeight },
-            cursor: { x: 0, y: screen.height, visible: true },
+            cursor: anchored
+                ? { x: anchored.x, y: anchored.y, visible: true }
+                : { x: 0, y: screen.height, visible: false },
         };
         return {
             output: generatedOutput,

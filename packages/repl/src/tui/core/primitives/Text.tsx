@@ -16,6 +16,12 @@ export interface TextProps extends React.PropsWithChildren {
   wrap?: "wrap" | "truncate" | "truncate-middle";
   "aria-label"?: string;
   "aria-hidden"?: boolean;
+  /**
+   * FEATURE_214: marks this text node as the input cursor cell so the renderer
+   * captures its absolute position for IME / typing (render-node-to-output →
+   * frame.cursor → engine shows + positions the OS cursor there).
+   */
+  internal_cursorAnchor?: boolean;
 }
 
 export default function Text({
@@ -31,6 +37,7 @@ export default function Text({
   children,
   "aria-label": ariaLabel,
   "aria-hidden": ariaHidden = false,
+  internal_cursorAnchor = false,
 }: TextProps) {
   const { isScreenReaderEnabled } = useContext(accessibilityContext);
   const inheritedBackgroundColor = useContext(backgroundContext);
@@ -82,6 +89,7 @@ export default function Text({
     {
       style: { flexGrow: 0, flexShrink: 1, flexDirection: "row", textWrap: wrap },
       internal_transform: transform,
+      ...(internal_cursorAnchor ? { internal_cursorAnchor: true } : {}),
     },
     isScreenReaderEnabled && ariaLabel ? ariaLabel : children,
   );

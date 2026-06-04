@@ -269,10 +269,12 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     expect(mocks.stdoutWrite).toHaveBeenCalled();
   });
 
-  it("hides the OS cursor on first onRender and only once (legacy log-update parity)", () => {
-    mocks.renderTree.mockReturnValue(
-      fakeRenderResult(80, 1, "row"),
-    );
+  it("hides the OS cursor (DECTCEM ?25l) once when no input cursor anchor (frame.cursor.visible false)", () => {
+    // FEATURE_214: cursor visibility is driven by frame.cursor.visible — no input
+    // cursor on screen → visible:false → engine hides once (cursorHidden latch).
+    const r = fakeRenderResult(80, 1, "row");
+    r.frame.cursor = { x: 0, y: 1, visible: false };
+    mocks.renderTree.mockReturnValue(r);
 
     const engine = new Engine({
       stdout: mocks.stdout,
@@ -295,6 +297,35 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     const writes = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string);
     const hideMatches = writes.filter((bytes) => bytes.includes("[?25l"));
     expect(hideMatches).toHaveLength(1);
+  });
+
+  it("shows the OS cursor (DECTCEM ?25h) when the input marks a cursor anchor (frame.cursor.visible true)", () => {
+    // FEATURE_214: input cursor cell on screen (internal_cursorAnchor →
+    // render-node-to-output → frame.cursor.visible true) → engine shows the OS
+    // cursor so IME / typing lands in the input; the cell renderer positions it.
+    const r = fakeRenderResult(80, 1, "row");
+    r.frame.cursor = { x: 3, y: 0, visible: true };
+    mocks.renderTree.mockReturnValue(r);
+
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      onRender: () => void;
+      cursorHidden: boolean;
+    };
+
+    engine.cursorHidden = true;
+    engine.onRender();
+
+    const writes = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string);
+    const showMatches = writes.filter((bytes) => bytes.includes("[?25h"));
+    expect(showMatches).toHaveLength(1);
   });
 
   it("setCursorPosition clamps out-of-bounds coordinates so a future re-application can't hit setCellAt RangeError", () => {

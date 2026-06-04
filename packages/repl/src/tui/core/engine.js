@@ -360,7 +360,10 @@ const Ink = class Ink {
         // / debug / screen-reader modes — those paths bypass the cell renderer
         // entirely and don't render an interactive UI that would benefit from
         // cursor hiding.
-        if (!this.cursorHidden
+        // FEATURE_214: legacy one-shot hide replaced by per-render cursor
+        // management driven by `frame.cursor.visible` right after render() below.
+        if (false
+            && !this.cursorHidden
             && !isInCi
             && !this.options.debug
             && !this.isScreenReaderEnabled) {
@@ -377,6 +380,22 @@ const Ink = class Ink {
         };
         const { output, outputHeight, staticOutput, frame } = render(this.rootNode, this.isScreenReaderEnabled, cellTerminalSize);
         this.options.onRender?.({ renderTime: performance.now() - startTime });
+        // FEATURE_214: drive the OS terminal cursor from the input's cursor anchor.
+        // `render` captured the input cursor cell's absolute position into
+        // `frame.cursor` (visible:true) via internal_cursorAnchor; show it + (through
+        // the cell renderer's restoreCursor → moveCursorTo) position it there for
+        // IME / typing, and hide it when no input cursor is on screen.
+        if (!isInCi && !this.options.debug && !this.isScreenReaderEnabled) {
+            const wantCursor = frame?.cursor?.visible === true;
+            if (wantCursor && this.cursorHidden) {
+                this.options.stdout.write('[?25h');
+                this.cursorHidden = false;
+            }
+            else if (!wantCursor && !this.cursorHidden) {
+                this.options.stdout.write('[?25l');
+                this.cursorHidden = true;
+            }
+        }
         const hasStaticOutput = staticOutput && staticOutput !== '\n';
         if (this.options.debug) {
             if (hasStaticOutput) {

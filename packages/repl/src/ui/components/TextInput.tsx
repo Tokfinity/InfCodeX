@@ -121,7 +121,7 @@ export const TextInput: React.FC<TextInputProps> = ({
           <Text color={theme.colors.primary}>{prompt} </Text>
           {showCursor ? (
             <>
-              <Text backgroundColor={theme.colors.primary} color="#000000"> </Text>
+              <Text internal_cursorAnchor backgroundColor={theme.colors.primary} color="#000000"> </Text>
               <Text dimColor>{placeholder}</Text>
             </>
           ) : (
@@ -141,7 +141,7 @@ export const TextInput: React.FC<TextInputProps> = ({
               <Box key={visualRowIndex}>
                 <Text color={theme.colors.primary}>{linePrompt} </Text>
                 <Text color={theme.colors.text}>{before}</Text>
-                <Text backgroundColor={theme.colors.primary} color="#000000">
+                <Text internal_cursorAnchor backgroundColor={theme.colors.primary} color="#000000">
                   {cursorChar}
                 </Text>
                 <Text color={theme.colors.text}>{after}</Text>

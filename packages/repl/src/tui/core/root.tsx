@@ -167,6 +167,12 @@ export interface TextProps extends PropsWithChildren {
   wrap?: "wrap" | "truncate" | "truncate-middle";
   "aria-label"?: string;
   "aria-hidden"?: boolean;
+  /**
+   * FEATURE_214: marks the input cursor cell so the renderer captures its
+   * absolute position for IME / typing (core/primitives/Text forwards it to
+   * the ink-text node; render-node-to-output records it into frame.cursor).
+   */
+  internal_cursorAnchor?: boolean;
 }
 
 export type BoxProps = PropsWithChildren<Record<string, unknown>>;

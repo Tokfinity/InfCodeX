@@ -32,14 +32,17 @@ function fakeRootNode(width: number, height: number): object {
 
 describe("core/internals/renderer (FEATURE_057 Track F, Phase 6: cell renderer is sole render path — engine-side mirror)", () => {
   describe("non-screen-reader path: frame populated unconditionally", () => {
-    it("empty 5x1 root: frame has the right dimensions, cursor lands at content bottom", () => {
+    it("empty 5x1 root: frame has the right dimensions, cursor rests at content bottom (hidden: no input cursor anchor)", () => {
       const node = fakeRootNode(5, 1);
       const result = renderer(node, false);
       expect(result.frame).toBeDefined();
       const frame = result.frame!;
       expect(frame.screen.width).toBe(5);
       expect(frame.screen.height).toBe(1);
-      expect(frame.cursor).toEqual({ x: 0, y: 1, visible: true });
+      // FEATURE_214: with no `internal_cursorAnchor` in the tree, the cursor parks
+      // at content bottom and is hidden (visible:false). The engine only shows the
+      // OS cursor when the input marks a cursor cell (frame.cursor.visible === true).
+      expect(frame.cursor).toEqual({ x: 0, y: 1, visible: false });
     });
 
     it("viewport defaults to yoga-computed content size when terminalSize not supplied", () => {

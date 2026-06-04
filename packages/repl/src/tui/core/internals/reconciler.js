@@ -120,6 +120,10 @@ export default createReconciler({
                 node.internal_transform = value;
                 continue;
             }
+            if (key === 'internal_cursorAnchor') {
+                node.internal_cursorAnchor = value;
+                continue;
+            }
             if (key === 'internal_static') {
                 currentRootNode = rootNode;
                 node.internal_static = true;
@@ -203,6 +207,10 @@ export default createReconciler({
                 }
                 if (key === 'internal_transform') {
                     node.internal_transform = value;
+                    continue;
+                }
+                if (key === 'internal_cursorAnchor') {
+                    node.internal_cursorAnchor = value;
                     continue;
                 }
                 if (key === 'internal_static') {

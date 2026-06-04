@@ -81,6 +81,13 @@ const renderNodeToOutput = (node, output, options) => {
         // Left and top positions in Yoga are relative to their parent node
         const x = offsetX + yogaNode.getComputedLeft();
         const y = offsetY + yogaNode.getComputedTop();
+        // FEATURE_214: capture the input cursor cell's absolute position for IME /
+        // typing. The marked node is the inverse cursor <Text>; its (x, y) is the
+        // exact terminal cell the OS cursor must sit on. Layout is already resolved
+        // here, so the coordinate is final (no React-effect timing race).
+        if (node.internal_cursorAnchor) {
+            output.cursorPosition = { x, y };
+        }
         // Transformers are functions that transform final text output of each component
         // See Output class for logic that applies transformers
         let newTransformers = transformers;
