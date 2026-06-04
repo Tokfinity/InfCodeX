@@ -336,16 +336,16 @@ describe("terminal-host-profile", () => {
       })).toBe("xtermjs_host");
     });
 
-    it("returns main-screen + mouse off + spinner-only (no streaming) for remote_conpty_host (owned)", () => {
-      // Streaming preview is intentionally OFF in main-screen paths to avoid
-      // ghost frames in the terminal scrollback (see KODAX_FULLSCREEN_DISABLE_POLICY).
-      // Spinner stays on so users still see the app is alive.
+    it("returns inline mixed shell (main-screen prompt + virtual transcript) for remote_conpty_host (owned)", () => {
+      // FEATURE_214 (v0.7.46): SSH is inline by default. The prompt stays on the
+      // main screen (native scrollback); the transcript/review surface enters an
+      // alt-screen virtual viewport on Ctrl+O so it never duplicates scrollback.
       expect(resolveFullscreenPolicy("remote_conpty_host", "owned")).toEqual({
-        enabled: false,
+        enabled: true,
         promptShell: "main-screen",
-        transcriptShell: "main-screen",
-        mouseWheel: false,
-        mouseClicks: false,
+        transcriptShell: "virtual",
+        mouseWheel: true,
+        mouseClicks: true,
         streamingPreview: false,
         transcriptSpinnerAnimation: true,
       });
@@ -376,32 +376,43 @@ describe("terminal-host-profile", () => {
       })).toBe("degraded_vt");
     });
 
-    it("=0 forces main-screen + mouse off + spinner-only (no streaming) on any host", () => {
-      // Disable fullscreen wins at policy layer regardless of host classification.
-      // streamingPreview is OFF to avoid ghost frames in main-screen scrollback;
-      // spinner stays ON so the app still feels alive.
+    it("=0 selects inline mixed shell on an alt-screen-capable host (native_vt)", () => {
+      // FEATURE_214 (v0.7.46): opting out of fullscreen selects inline mode —
+      // main-screen prompt (native scrollback) + alt-screen virtual transcript.
       const policy = resolveFullscreenPolicy("native_vt", "owned", {
         env: { KODAX_FULLSCREEN: "0" } as NodeJS.ProcessEnv,
       });
       expect(policy).toEqual({
-        enabled: false,
+        enabled: true,
         promptShell: "main-screen",
-        transcriptShell: "main-screen",
-        mouseWheel: false,
-        mouseClicks: false,
+        transcriptShell: "virtual",
+        mouseWheel: true,
+        mouseClicks: true,
         streamingPreview: false,
         transcriptSpinnerAnimation: true,
       });
     });
 
-    it("=0 also overrides xtermjs_host into main-screen + spinner-only (no streaming)", () => {
+    it("=0 selects inline mixed shell for xtermjs_host (main-screen prompt + virtual transcript)", () => {
       const policy = resolveFullscreenPolicy("xtermjs_host", "owned", {
+        env: { KODAX_FULLSCREEN: "0" } as NodeJS.ProcessEnv,
+      });
+      expect(policy.enabled).toBe(true);
+      expect(policy.promptShell).toBe("main-screen");
+      expect(policy.transcriptShell).toBe("virtual");
+      expect(policy.streamingPreview).toBe(false);
+      expect(policy.transcriptSpinnerAnimation).toBe(true);
+    });
+
+    it("=0 still fully disables a host that cannot drive alt-screen (tmux control mode)", () => {
+      // The inline transcript modal needs alt-screen; hosts that can't drive it
+      // keep the historical all-main-screen disable policy.
+      const policy = resolveFullscreenPolicy("tmux_control_mode", "owned", {
         env: { KODAX_FULLSCREEN: "0" } as NodeJS.ProcessEnv,
       });
       expect(policy.enabled).toBe(false);
       expect(policy.promptShell).toBe("main-screen");
-      expect(policy.streamingPreview).toBe(false);
-      expect(policy.transcriptSpinnerAnimation).toBe(true);
+      expect(policy.transcriptShell).toBe("main-screen");
     });
 
     it("unset value falls back to per-host default (no override)", () => {

@@ -288,6 +288,25 @@ const KODAX_FULLSCREEN_DISABLE_POLICY: FullscreenPolicy = {
   transcriptSpinnerAnimation: true,
 };
 
+// FEATURE_214 (v0.7.46): inline mode = mixed shell. The prompt surface stays on
+// the main screen (native scrollback, codex-style commit-once history), while the
+// transcript/review surface enters an alt-screen virtual viewport on Ctrl+O so it
+// never duplicates scrollback. SSH is inline by default; other alt-screen-capable
+// hosts opt in via KODAX_FULLSCREEN=0. streamingPreview stays OFF until the inline
+// live region is bounded (FEATURE_214 Phase 3).
+const KODAX_FULLSCREEN_INLINE_POLICY: FullscreenPolicy = {
+  enabled: true,
+  promptShell: "main-screen",
+  transcriptShell: "virtual",
+  // Mouse tracking ON so the alt-screen transcript modal gets the fast managed
+  // wheel (parity with fullscreen). It only activates on the virtual (transcript)
+  // surface; the main-screen prompt keeps native terminal mouse/scroll.
+  mouseWheel: true,
+  mouseClicks: true,
+  streamingPreview: false,
+  transcriptSpinnerAnimation: true,
+};
+
 export function resolveFullscreenPolicy(
   host: TerminalRenderHost,
   rendererMode: EffectiveTuiRendererMode = "owned",
@@ -295,7 +314,13 @@ export function resolveFullscreenPolicy(
 ): FullscreenPolicy {
   const env = options.env ?? process.env;
   if (isFalseyEnv(env.KODAX_FULLSCREEN)) {
-    return KODAX_FULLSCREEN_DISABLE_POLICY;
+    // FEATURE_214 Req 1 (v0.7.46): opting out of fullscreen selects inline mode
+    // (mixed shell) on alt-screen-capable owned hosts; control-mode hosts that
+    // can't drive alt-screen keep the historical all-main-screen disable policy.
+    const canInline = rendererMode === "owned"
+      && host !== "tmux_control_mode"
+      && host !== "unsupported_control_host";
+    return canInline ? KODAX_FULLSCREEN_INLINE_POLICY : KODAX_FULLSCREEN_DISABLE_POLICY;
   }
   return buildFullscreenPolicy(host, rendererMode);
 }
@@ -375,7 +400,11 @@ function buildFullscreenPolicy(
         transcriptSpinnerAnimation: true,
       };
     case "remote_conpty_host":
-      return KODAX_FULLSCREEN_DISABLE_POLICY;
+      // FEATURE_214 Req 2 (v0.7.46): SSH (Windows ConPTY) is inline by default —
+      // inline prompt + alt-screen transcript modal. ConPTY drives alt-screen
+      // fine; the prior all-main-screen policy is what caused transcript-mode
+      // scrollback duplication (the growing-frame bug).
+      return KODAX_FULLSCREEN_INLINE_POLICY;
     case "tmux_control_mode":
     case "unsupported_control_host":
     default:
