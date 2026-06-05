@@ -68,6 +68,16 @@ export interface Frame {
   readonly screen: Screen;
   readonly viewport: Size;
   readonly cursor: Cursor;
+  /**
+   * FEATURE_214 — the input's cursor anchor in FRAME coordinates (measured from
+   * the top of the full content), distinct from `cursor` (the diff RESTING cursor
+   * at content-bottom). `render-node-to-output` stamps it from the focused input's
+   * marked cursor cell; the engine parks the real terminal cursor here each render
+   * (translated to its visible row) so IME / typing lands in the input bar. Absent
+   * when no focused input marked an anchor this render — the engine then leaves the
+   * cursor at the resting position.
+   */
+  readonly inputCursor?: Point;
   /** FEATURE_212 — present only when the transcript scrolled this render. */
   readonly scrollHint?: ScrollHint | null;
 }

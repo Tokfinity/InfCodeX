@@ -109,6 +109,7 @@ vi.mock("terminal-size", () => ({
 
 import Engine from "./engine.js";
 import { createScreen } from "../substrate/ink/cell-screen.js";
+import ansiEscapes from "ansi-escapes";
 
 /**
  * Build the renderer.js return shape with a fully-populated `frame` so the
@@ -299,12 +300,14 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     expect(hideMatches).toHaveLength(1);
   });
 
-  it("shows the OS cursor (DECTCEM ?25h) when the input marks a cursor anchor (frame.cursor.visible true)", () => {
-    // FEATURE_214: input cursor cell on screen (internal_cursorAnchor →
-    // render-node-to-output → frame.cursor.visible true) → engine shows the OS
-    // cursor so IME / typing lands in the input; the cell renderer positions it.
-    const r = fakeRenderResult(80, 1, "row");
-    r.frame.cursor = { x: 3, y: 0, visible: true };
+  it("main-screen: parks the cursor at the input anchor via a relative move (FEATURE_214 displayCursor suffix)", () => {
+    // Production renderer: frame.cursor is the RESTING cursor (content-bottom,
+    // visible:false); the input anchor travels separately as frame.inputCursor.
+    // The engine emits a RELATIVE cursor move from the (visible-translated)
+    // resting row up to the anchor so IME / typing lands in the input bar.
+    const r = fakeRenderResult(80, 4, "a\nb\nc\nd");
+    r.frame.cursor = { x: 0, y: 4, visible: false };
+    (r.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 3, y: 2 };
     mocks.renderTree.mockReturnValue(r);
 
     const engine = new Engine({
@@ -317,15 +320,87 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
       kittyKeyboard: { mode: "disabled" },
     } as ConstructorParameters<typeof Engine>[0]) as unknown as {
       onRender: () => void;
-      cursorHidden: boolean;
     };
 
-    engine.cursorHidden = true;
     engine.onRender();
 
-    const writes = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string);
-    const showMatches = writes.filter((bytes) => bytes.includes("[?25h"));
-    expect(showMatches).toHaveLength(1);
+    const out = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
+    // viewport 24 ≫ content 4 → no scrollback: resting visible row 4 → anchor row 2
+    // ⇒ cursorUp(2); column 0 → 3 ⇒ cursorForward(3).
+    expect(out).toContain(ansiEscapes.cursorUp(2));
+    expect(out).toContain(ansiEscapes.cursorForward(3));
+  });
+
+  it("main-screen: a second render with a parked input cursor runs returnCursorToRest without throwing (FEATURE_214 regression)", () => {
+    // The preamble (returnCursorToRest) moves the physical cursor back from the
+    // parked input anchor to the prev frame's resting row before the next diff.
+    // This is the exact path the `restingCursor`→`toVisibleCursor` rename broke at
+    // runtime while the suite stayed green — it was never exercised. Now it is.
+    const r1 = fakeRenderResult(80, 4, "a\nb\nc\nd");
+    r1.frame.cursor = { x: 0, y: 4, visible: false };
+    (r1.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 3, y: 2 };
+
+    const r2 = fakeRenderResult(80, 4, "a\nb\nc\nd");
+    r2.frame.cursor = { x: 0, y: 4, visible: false };
+    (r2.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 5, y: 1 };
+
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      onRender: () => void;
+    };
+
+    mocks.renderTree.mockReturnValueOnce(r1).mockReturnValueOnce(r2);
+    engine.onRender(); // parks displayCursor at the {3,2} anchor
+    mocks.stdoutWrite.mockClear();
+    expect(() => engine.onRender()).not.toThrow(); // preamble must not ReferenceError
+
+    const out = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
+    // return-to-rest: from the parked row 2 down to the resting row 4 ⇒ cursorDown(2).
+    expect(out).toContain(ansiEscapes.cursorDown(2));
+  });
+
+  it("main-screen: an inline footer HEIGHT CHANGE erases + repaints instead of incremental grow (FEATURE_214 live-block redraw)", () => {
+    // codex diagnosis: a live-block height change must ERASE the old block and
+    // repaint clean, not append new rows downward (which shoves input below the
+    // status bar). A same-height render must NOT erase (cheap incremental diff).
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      onRender: () => void;
+    };
+
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 4, "a\nb\nc\nd"));
+    engine.onRender(); // establishes lastOutputHeight = 4
+
+    // height 4 → 6: live block grew → erase the old 4-row block, then repaint.
+    const grow = fakeRenderResult(80, 6, "a\nb\nc\nd\ne\nf");
+    grow.frame.cursor = { x: 0, y: 6, visible: false };
+    (grow.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 2, y: 3 };
+    mocks.renderTree.mockReturnValue(grow);
+    mocks.stdoutWrite.mockClear();
+    engine.onRender();
+    const grownOut = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
+    expect(grownOut).toContain(ansiEscapes.eraseLines(4));
+
+    // height stays 6: no height change → incremental diff, no full erase.
+    mocks.renderTree.mockReturnValue(grow);
+    mocks.stdoutWrite.mockClear();
+    engine.onRender();
+    const sameOut = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
+    expect(sameOut).not.toContain(ansiEscapes.eraseLines(6));
   });
 
   it("setCursorPosition clamps out-of-bounds coordinates so a future re-application can't hit setCellAt RangeError", () => {
