@@ -377,27 +377,6 @@ const Ink = class Ink {
         if (this.isUnmounted) {
             return;
         }
-        // Phase 6 cursor visibility: legacy `log-update.js`'s `createStandard`
-        // called `cliCursor.hide(stream)` on the first render when `showCursor`
-        // was unset (the engine never set it, so this fired by default). The
-        // cell renderer doesn't emit `cursorHide` patches automatically — the
-        // OS terminal cursor would otherwise blink at the bottom-left of the
-        // rendered UI (the post-render cursor lands at `(0, screen.height)`).
-        // Emit a one-time `\x1b[?25l` here, paired with `App.js`'s useEffect
-        // cleanup that calls `cliCursor.show(stdout)` on unmount. Skip in CI
-        // / debug / screen-reader modes — those paths bypass the cell renderer
-        // entirely and don't render an interactive UI that would benefit from
-        // cursor hiding.
-        // FEATURE_214: legacy one-shot hide replaced by per-render cursor
-        // management driven by `frame.cursor.visible` right after render() below.
-        if (false
-            && !this.cursorHidden
-            && !isInCi
-            && !this.options.debug
-            && !this.isScreenReaderEnabled) {
-            this.options.stdout.write('[?25l');
-            this.cursorHidden = true;
-        }
         const startTime = performance.now();
         // Phase 6: pass terminalSize so renderer.js can build `frame.viewport`
         // from the real TTY dimensions (Phase 3b's scrollback decisions need
@@ -408,21 +387,15 @@ const Ink = class Ink {
         };
         const { output, outputHeight, staticOutput, frame } = render(this.rootNode, this.isScreenReaderEnabled, cellTerminalSize);
         this.options.onRender?.({ renderTime: performance.now() - startTime });
-        // FEATURE_214: drive the OS terminal cursor from the input's cursor anchor.
-        // `render` captured the input cursor cell's absolute position into
-        // `frame.cursor` (visible:true) via internal_cursorAnchor; show it + (through
-        // the cell renderer's restoreCursor → moveCursorTo) position it there for
-        // IME / typing, and hide it when no input cursor is on screen.
-        if (!isInCi && !this.options.debug && !this.isScreenReaderEnabled) {
-            const wantCursor = frame?.cursor?.visible === true;
-            if (wantCursor && this.cursorHidden) {
-                this.options.stdout.write('[?25h');
-                this.cursorHidden = false;
-            }
-            else if (!wantCursor && !this.cursorHidden) {
-                this.options.stdout.write('[?25l');
-                this.cursorHidden = true;
-            }
+        // FEATURE_214: hide the OS terminal cursor ONCE at first render and keep it
+        // hidden for the session. The app draws the visible cursor block in the input
+        // bar; the engine only POSITIONS the hidden OS cursor at the input anchor (the
+        // displayCursor SUFFIX after render) so IME composition lands there. The input
+        // anchor travels via `frame.inputCursor`, NOT `frame.cursor.visible` (always
+        // false now), so there is no per-render show/hide toggling.
+        if (!isInCi && !this.options.debug && !this.isScreenReaderEnabled && !this.cursorHidden) {
+            this.options.stdout.write(ansiEscapes.cursorHide);
+            this.cursorHidden = true;
         }
         const hasStaticOutput = staticOutput && staticOutput !== '\n';
         if (this.options.debug) {
@@ -733,6 +706,11 @@ const Ink = class Ink {
             return;
         }
         if (!this.shouldRestoreManagedShellAfterExternalWrite()) {
+            // FEATURE_214: the cursor may be parked at the input anchor (displayCursor).
+            // Return it to the resting row before injecting external data so the data
+            // lands at content-bottom, not the input bar, and the next render is not
+            // computed from a stale parked position. No-op when displayCursor is null.
+            this.returnCursorToRest();
             this.options.stdout.write(data);
             // Raw stdout write bypasses the cell-renderer pipeline; the
             // next applyCellFrame must repaint from a clean slate.
@@ -774,6 +752,9 @@ const Ink = class Ink {
             return;
         }
         if (!this.shouldRestoreManagedShellAfterExternalWrite()) {
+            // FEATURE_214: return the cursor from the input anchor to the resting row
+            // before injecting external data (see writeToStdout). No-op when unparked.
+            this.returnCursorToRest();
             this.options.stderr.write(data);
             // Raw stderr write bypasses the cell-renderer pipeline.
             this.invalidateCellFrame();
