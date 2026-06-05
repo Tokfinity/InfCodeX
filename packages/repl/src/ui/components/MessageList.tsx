@@ -782,6 +782,13 @@ export const MessageList: React.FC<MessageListProps> = ({
     : viewportRows;
 
   useEffect(() => {
+    // FEATURE_214: in the inline prompt (un-materialized model) `allTranscriptRows` is
+    // the dynamic/live rows ONLY — finalized history lives in `staticSections`,
+    // committed to native scrollback via <Static>/the scrollback ledger and scrolled by
+    // the terminal, not the app. So `scrollHeight` here is intentionally the live-frame
+    // height, not the whole document, and the inline path does not use scroll-offset.
+    // The windowed/fullscreen transcript uses a materialized model, so its
+    // `scrollHeight` is the full document (correct for its owned-viewport scrolling).
     onMetricsChange?.({
       scrollHeight: allTranscriptRows.length,
       viewportHeight: rendererWindow
