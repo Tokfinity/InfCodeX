@@ -262,6 +262,35 @@ function migrateLegacyPermissionModeInConfig<T extends { permissionMode?: string
   return migrated;
 }
 
+/**
+ * FEATURE_092 follow-up (v0.7.46): the `auto-in-project` permission-mode alias is
+ * retired. Self-heal the user config to the canonical `auto` instead of nagging a
+ * deprecation notice on every startup. Uses a TARGETED rewrite of just the
+ * permissionMode value (preserves every other field, comment and formatting,
+ * unlike the lossy `JSON.stringify` rewrite above) and canonicalizes the in-memory
+ * value so the once-per-session deprecation emitter never fires.
+ */
+function migrateAutoInProjectAliasInConfig<T extends { permissionMode?: string }>(
+  config: T,
+): T {
+  if (config.permissionMode !== 'auto-in-project') {
+    return config;
+  }
+  try {
+    const raw = fsSync.readFileSync(KODAX_CONFIG_FILE, 'utf-8');
+    const next = raw.replace(
+      /("permissionMode"\s*:\s*)"auto-in-project"/,
+      '$1"auto"',
+    );
+    if (next !== raw) {
+      fsSync.writeFileSync(KODAX_CONFIG_FILE, next);
+    }
+  } catch {
+    // Best-effort self-heal; the in-memory canonicalization below still applies.
+  }
+  return { ...config, permissionMode: 'auto' } as T;
+}
+
 // Read version from package.json dynamically - 动态读取版本号
 // In standalone binary builds (Bun --compile), package.json is not on disk;
 // the build script injects `process.env.KODAX_VERSION` via --define so this
@@ -687,11 +716,13 @@ export function loadConfig(): {
       // typically left over from older configs the user forgot about.
       const collapsedReasoning: KodaXReasoningMode | undefined =
         parsed.reasoningCeiling ?? parsed.reasoningMode;
-      return migrateLegacyPermissionModeInConfig({
-        ...parsed,
-        reasoningMode: collapsedReasoning,
-        extensions: normalizeConfiguredExtensions(parsed.extensions),
-      });
+      return migrateAutoInProjectAliasInConfig(
+        migrateLegacyPermissionModeInConfig({
+          ...parsed,
+          reasoningMode: collapsedReasoning,
+          extensions: normalizeConfiguredExtensions(parsed.extensions),
+        }),
+      );
     }
   } catch {
     // Unreadable user config should fall back to defaults instead of breaking startup.
