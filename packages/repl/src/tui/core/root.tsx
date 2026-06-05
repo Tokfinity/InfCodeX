@@ -103,6 +103,18 @@ export interface TuiRendererInstance {
     phase: "enter-alt-screen" | "exit-alt-screen",
   ) => void;
   clearTextSelection?: () => void;
+  /**
+   * FEATURE_214 — commit finalized inline history to native scrollback through the
+   * engine (never raw writes, which leave prevFrame/lastOutputHeight stale). The
+   * inline scrollback ledger calls this via `getRendererInstance(stdout)`.
+   *   - append:  erase the old live block, write the new finalized rows.
+   *   - rebuild: clear screen + scrollback (ESC[3J), re-render all retained rows.
+   * Then the live frame is repainted. alt-screen/transcript never route here.
+   */
+  commitInlineScrollback?: (options: {
+    mode: "append" | "rebuild";
+    text: string;
+  }) => void;
 }
 
 export interface RenderOptions {

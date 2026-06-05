@@ -468,3 +468,86 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     expect(engine.prevFrame.screen.height).toBe(0);
   });
 });
+
+describe("commitInlineScrollback (FEATURE_214 inline ledger primitive)", () => {
+  function makeEngine() {
+    return new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      commitInlineScrollback: (o: { mode: "append" | "rebuild"; text: string }) => void;
+      setAltScreenActive: (active: boolean) => void;
+      lastOutputHeight: number;
+      prevFrame: { screen: { height: number } };
+    };
+  }
+
+  const writes = () => mocks.stdoutWrite.mock.calls.map((c) => String(c[0])).join("");
+
+  beforeEach(() => {
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 2, "live"));
+  });
+
+  it("rebuild does NOT read a stale lastOutputHeight (no eraseLines), clears scrollback instead", () => {
+    const engine = makeEngine();
+    engine.lastOutputHeight = 99; // stale; rebuild must ignore it
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "rebuild", text: "HISTORY\n" });
+
+    const out = writes();
+    expect(out).not.toContain(ansiEscapes.eraseLines(99));
+    expect(out).toContain("[3J"); // scrollback purge
+    expect(out).toContain("HISTORY\n");
+  });
+
+  it("rebuild = ESC[2J + ESC[3J + home (scrollback purge) + history + repaint", () => {
+    const engine = makeEngine();
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "rebuild", text: "ALL\n" });
+
+    const out = writes();
+    expect(out).toContain("[2J[3J[H" + "ALL\n");
+    // repaint happened after the history (cell renderer wrote the live frame too)
+    expect(mocks.stdoutWrite.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("append erases the old live block (eraseLines lastOutputHeight) + history + repaint", () => {
+    const engine = makeEngine();
+    engine.lastOutputHeight = 5;
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "append", text: "NEW\n" });
+
+    const out = writes();
+    expect(out).toContain(ansiEscapes.eraseLines(5) + "NEW\n");
+    expect(out).not.toContain("[3J"); // append never purges scrollback
+    expect(mocks.stdoutWrite.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("reseeds prevFrame (next paint is a clean first-render, not a diff vs a stale frame)", () => {
+    const engine = makeEngine();
+    engine.prevFrame = { screen: { height: 99 } } as unknown as { screen: { height: number } };
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "append", text: "X\n" });
+
+    expect(engine.prevFrame.screen.height).not.toBe(99);
+  });
+
+  it("alt-screen / transcript does NOT route through this path (no writes)", () => {
+    const engine = makeEngine();
+    engine.setAltScreenActive(true);
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "rebuild", text: "SHOULD NOT WRITE" });
+
+    expect(mocks.stdoutWrite).not.toHaveBeenCalled();
+  });
+});

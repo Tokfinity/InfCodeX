@@ -663,6 +663,73 @@ const Ink = class Ink {
             this.getTerminalWidth(),
         );
     };
+    /**
+     * FEATURE_214 — commit finalized inline history to native scrollback through a
+     * single narrow primitive, then repaint the live frame. The inline scrollback
+     * ledger calls THIS — never raw stdout writes, which leave prevFrame /
+     * lastOutputHeight stale and corrupt the next live diff.
+     *
+     *   - append:  erase the old live block (eraseLines lastOutputHeight), write `text`
+     *              (the new finalized rows scroll up into native scrollback).
+     *   - rebuild: clearTerminal (ESC[2J + ESC[3J scrollback purge + home), write `text`
+     *              (all retained finalized rows, re-rendered from source at the current
+     *              width). Does NOT read lastOutputHeight — that block is being discarded.
+     *
+     * Then: reset output tracking, clear fullStaticOutput (ledger owns history now),
+     * reseed prevFrame, recompute layout, repaint the live frame, re-park the cursor.
+     * alt-screen / transcript use the windowed owned viewport and MUST NOT route here.
+     */
+    commitInlineScrollback = ({ mode, text }) => {
+        if (this.altScreenActive || this.isUnmounted) {
+            return;
+        }
+        // Drop the (possibly input-parked) cursor to its resting row so the erase/clear
+        // and the history text land at content-bottom, not the input anchor.
+        this.returnCursorToRest();
+        const sync = shouldSynchronize(this.options.stdout);
+        if (sync)
+            this.options.stdout.write(bsu);
+        // NOTE: ansiEscapes.clearTerminal OMITS ESC[3J (scrollback purge) on Windows
+        // (it emits ESC[0f instead), so we build the clear explicitly — ESC[2J (erase
+        // screen) + ESC[3J (purge scrollback) + ESC[H (home) — to guarantee the stale
+        // old-width finalized rows are gone from scrollback on EVERY platform.
+        const prefix = mode === 'rebuild'
+            ? '[2J[3J[H'
+            : (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '');
+        this.options.stdout.write(prefix + (text ?? ''));
+        // The live block we just erased/cleared is gone; reset output tracking.
+        // fullStaticOutput is owned by the ledger now (the <Static> path is retiring).
+        this.lastOutput = '';
+        this.lastOutputToRender = '';
+        this.lastOutputHeight = 0;
+        this.fullStaticOutput = '';
+        // Reseed prevFrame so the next paint is a clean first-render against the
+        // erased/cleared screen — never a diff against a stale prevFrame.
+        this.invalidateCellFrame();
+        // Recompute + repaint the current live frame below the committed history.
+        this.calculateLayout();
+        const cellTerminalSize = {
+            rows: this.options.stdout.rows ?? 24,
+            columns: this.getTerminalWidth(),
+        };
+        const { output, outputHeight, frame } = render(this.rootNode, this.isScreenReaderEnabled, cellTerminalSize);
+        this.applyCellFrame(frame);
+        // Park the hidden cursor at the input anchor (same suffix as onRender).
+        if (frame?.inputCursor) {
+            const toVisible = toVisibleCursor(frame);
+            const rest = toVisible(frame.cursor);
+            const target = toVisible(frame.inputCursor);
+            const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
+            if (seq)
+                this.options.stdout.write(seq);
+            this.displayCursor = target;
+        }
+        this.lastOutput = output;
+        this.lastOutputToRender = output;
+        this.lastOutputHeight = outputHeight;
+        if (sync)
+            this.options.stdout.write(esu);
+    };
     render(node) {
         const tree = (React.createElement(AccessibilityContext.Provider, { value: { isScreenReaderEnabled: this.isScreenReaderEnabled } },
             React.createElement(App, { stdin: this.options.stdin, stdout: this.options.stdout, stderr: this.options.stderr, exitOnCtrlC: this.options.exitOnCtrlC, writeToStdout: this.writeToStdout, writeToStderr: this.writeToStderr, setCursorPosition: this.setCursorPosition, onExit: this.handleAppExit }, node)));
