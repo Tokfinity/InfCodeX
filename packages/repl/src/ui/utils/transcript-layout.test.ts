@@ -3,6 +3,7 @@ import { ToolCallStatus, type HistoryItem } from "../types.js";
 import {
   buildDynamicTranscriptSection,
   buildHistoryItemTranscriptSections,
+  buildInlinePromptRenderModel,
   buildTranscriptHiddenDivider,
   buildTranscriptRenderModel,
   buildTranscriptRows,
@@ -21,6 +22,9 @@ import {
   TRANSCRIPT_RENDER_CAP,
   TRANSCRIPT_RENDER_CAP_STEP,
   type TranscriptCapAnchor,
+  type TranscriptDynamicPortion,
+  type TranscriptSection,
+  type TranscriptStaticPortion,
 } from "./transcript-layout.js";
 
 function renderedText(model: ReturnType<typeof buildTranscriptRenderModel>): string {
@@ -1569,5 +1573,64 @@ describe("transcript-layout/transcript-hidden-divider", () => {
     expect(flat).toContain("7 earlier messages hidden");
     expect(flat).toContain("Ctrl+E");
     expect(flat).toContain("↑");
+  });
+});
+
+describe("buildInlinePromptRenderModel (FEATURE_214 Phase 2b)", () => {
+  const section = (key: string, ...texts: string[]): TranscriptSection => ({
+    key,
+    rows: texts.map((text, i) => ({ key: `${key}-r${i}`, text })),
+  });
+  const staticPortion = (sections: TranscriptSection[]): TranscriptStaticPortion => ({
+    staticSections: sections,
+    activeItems: [],
+  });
+  const dynamicPortion = (sections: TranscriptSection[]): TranscriptDynamicPortion => ({
+    sections,
+    previewSections: [],
+  });
+
+  const finalized = section("final", "history line 1", "history line 2");
+  const dynamic = section("live", "streaming…");
+  const banner = section("banner", "KodaX");
+
+  it("keeps finalized history in staticSections and OUT of the live rows", () => {
+    const model = buildInlinePromptRenderModel(
+      staticPortion([finalized]),
+      dynamicPortion([dynamic]),
+      undefined,
+    );
+    // finalized → staticSections (committed once via <Static>), NOT in the live cell-frame rows
+    expect(model.staticSections).toEqual([finalized]);
+    expect(model.rows).toEqual(dynamic.rows);
+    const liveText = model.rows.map((r) => r.text).join("\n");
+    expect(liveText).not.toContain("history line 1");
+    expect(liveText).toContain("streaming…");
+  });
+
+  it("prepends the banner as the FIRST staticSection (commits to scrollback once, not the live frame)", () => {
+    const model = buildInlinePromptRenderModel(
+      staticPortion([finalized]),
+      dynamicPortion([dynamic]),
+      banner,
+    );
+    expect(model.staticSections).toEqual([banner, finalized]);
+    expect(model.rows.map((r) => r.text).join("\n")).not.toContain("KodaX");
+  });
+
+  it("CONTRAST: materialize floods the live rows with finalized history (the duplication root the inline prompt avoids)", () => {
+    const composed = buildInlinePromptRenderModel(
+      staticPortion([finalized]),
+      dynamicPortion([dynamic]),
+      undefined,
+    );
+    const materialized = materializeTranscriptRenderModel(composed);
+    // materialize empties staticSections and pours finalized into rows — exactly what
+    // the inline prompt must NOT do (finalized would re-paint in the live cell-frame).
+    expect(materialized.staticSections).toEqual([]);
+    expect(materialized.rows.map((r) => r.text)).toContain("history line 1");
+    // buildInlinePromptRenderModel keeps them apart:
+    expect(composed.staticSections).not.toEqual([]);
+    expect(composed.rows.map((r) => r.text)).not.toContain("history line 1");
   });
 });

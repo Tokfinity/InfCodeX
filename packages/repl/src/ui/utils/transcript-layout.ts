@@ -1142,6 +1142,34 @@ export function composeTranscriptRenderModel(
   };
 }
 
+/**
+ * FEATURE_214 Phase 2b — assemble the INLINE prompt render model.
+ *
+ * Unlike the transcript surface (which `materializeTranscriptRenderModel`-merges
+ * finalized + dynamic into one `rows` array so a windowed viewport can paint a
+ * complete frame), the inline prompt must keep finalized history in `staticSections`
+ * and OUT of `rows`. That routes finalized through `<Static>` → the engine's
+ * `hasStaticOutput` branch (erase live region → write the block into native
+ * scrollback ONCE → repaint the live region), so finalized history never enters the
+ * live cell-frame — killing the growing-path duplication (docs/features/v0.7.46.md
+ * §4). The banner joins `staticSections` so it, too, commits to scrollback once at
+ * the top of the session rather than re-painting in the live frame each render.
+ */
+export function buildInlinePromptRenderModel(
+  staticPortion: TranscriptStaticPortion,
+  dynamicPortion: TranscriptDynamicPortion,
+  bannerSection: TranscriptSection | undefined,
+): TranscriptRenderModel {
+  const composed = composeTranscriptRenderModel(staticPortion, dynamicPortion);
+  if (!bannerSection) {
+    return composed;
+  }
+  return {
+    ...composed,
+    staticSections: [bannerSection, ...composed.staticSections],
+  };
+}
+
 export function buildTranscriptRenderModel(
   options: TranscriptRenderModelOptions,
 ): TranscriptRenderModel {

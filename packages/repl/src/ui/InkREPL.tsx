@@ -256,6 +256,7 @@ import {
   buildAlternateScreenExitSequence,
 } from "../tui/core/termio.js";
 import {
+  buildInlinePromptRenderModel,
   buildTranscriptDynamicPortion,
   buildTranscriptHiddenDivider,
   buildTranscriptRenderModel,
@@ -2668,10 +2669,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         showAllContent: false,
         showLiveProgressRows: promptNeedsFallbackLiveStatus,
       });
-      return prependTranscriptSection(
-        materializeTranscriptRenderModel(
-          composeTranscriptRenderModel(promptStaticPortion, dynamicPortion),
-        ),
+      // FEATURE_214 Phase 2b: the inline prompt does NOT materialize. materialize
+      // merges staticSections(finalized)+sections(dynamic) into one rows array, so the
+      // live cell-frame would render the WHOLE transcript and the growing path
+      // duplicates finalized history into scrollback. Keeping finalized in
+      // staticSections routes it through <Static> → the engine hasStaticOutput branch
+      // (scrollback ONCE), out of the live frame. The transcript surface (below) keeps
+      // materialize for its windowed complete-frame paint.
+      return buildInlinePromptRenderModel(
+        promptStaticPortion,
+        dynamicPortion,
         fullscreenBannerSection,
       );
     },
@@ -2809,7 +2816,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       }
 
       if (!isTranscriptMode) {
-        return promptMainScreenRenderModel;
+        // FEATURE_214 Phase 2b: promptMainScreenRenderModel is un-materialized for the
+        // INLINE path (finalized → staticSections → <Static>). The windowed/fullscreen
+        // viewport does NOT render <Static> (MessageList gates it on !windowed) and is
+        // already bounded (no growing-path duplication), so re-materialize here to keep
+        // the complete frame intact for the owned viewport — no fullscreen regression.
+        return materializeTranscriptRenderModel(promptMainScreenRenderModel);
       }
 
       return prependTranscriptSection(
