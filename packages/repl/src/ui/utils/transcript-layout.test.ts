@@ -12,6 +12,7 @@ import {
   computeTranscriptCapStart,
   flattenTranscriptSections,
   getVisibleTranscriptRows,
+  identifyTranscriptSection,
   isTranscriptHiddenDivider,
   materializeTranscriptRenderModel,
   sliceHistoryToRecentRounds,
@@ -1632,5 +1633,40 @@ describe("buildInlinePromptRenderModel (FEATURE_214 Phase 2b)", () => {
     // buildInlinePromptRenderModel keeps them apart:
     expect(composed.staticSections).not.toEqual([]);
     expect(composed.rows.map((r) => r.text)).not.toContain("history line 1");
+  });
+});
+
+describe("identifyTranscriptSection (FEATURE_214 ledger identity)", () => {
+  const sec = (key: string, ...texts: string[]): TranscriptSection => ({
+    key,
+    rows: texts.map((text, i) => ({ key: `${key}-r${i}`, text })),
+  });
+
+  it("is stable for identical sections", () => {
+    expect(identifyTranscriptSection(sec("a", "x", "y"))).toEqual(
+      identifyTranscriptSection(sec("a", "x", "y")),
+    );
+  });
+
+  it("preserves the section key", () => {
+    expect(identifyTranscriptSection(sec("msg-7", "hi")).key).toBe("msg-7");
+  });
+
+  it("fingerprint changes on in-place text edit (→ ledger rebuild)", () => {
+    expect(identifyTranscriptSection(sec("a", "hello")).fingerprint).not.toBe(
+      identifyTranscriptSection(sec("a", "HELLO")).fingerprint,
+    );
+  });
+
+  it("fingerprint changes when row count changes", () => {
+    expect(identifyTranscriptSection(sec("a", "x")).fingerprint).not.toBe(
+      identifyTranscriptSection(sec("a", "x", "y")).fingerprint,
+    );
+  });
+
+  it("fingerprint changes when rows are reordered", () => {
+    expect(identifyTranscriptSection(sec("a", "x", "y")).fingerprint).not.toBe(
+      identifyTranscriptSection(sec("a", "y", "x")).fingerprint,
+    );
   });
 });

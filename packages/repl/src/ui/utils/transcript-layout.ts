@@ -1195,6 +1195,31 @@ export function flattenTranscriptSections(sections: TranscriptSection[]): Transc
   return sections.flatMap((section) => section.rows);
 }
 
+/**
+ * FEATURE_214 — derive an inline-scrollback ledger identity for a rendered section:
+ * its stable `key` + a content `fingerprint` over the rendered row text. An in-place
+ * content edit, reorder, or compact changes the fingerprint (→ ledger rebuild); a
+ * pure terminal-width change is handled separately by the ledger's width check, so a
+ * width-dependent row fingerprint is acceptable here. Cheap djb2 over `key\0text`
+ * per row, prefixed with the row count to make collisions vanishingly unlikely.
+ */
+export function identifyTranscriptSection(section: TranscriptSection): {
+  key: string;
+  fingerprint: string;
+} {
+  let hash = 5381;
+  for (const row of section.rows) {
+    const cell = `${row.key} ${row.text}`;
+    for (let i = 0; i < cell.length; i++) {
+      hash = (Math.imul(hash, 33) + cell.charCodeAt(i)) | 0;
+    }
+  }
+  return {
+    key: section.key,
+    fingerprint: `${section.rows.length}:${(hash >>> 0).toString(36)}`,
+  };
+}
+
 export function materializeTranscriptRenderModel(
   model: TranscriptRenderModel,
 ): TranscriptRenderModel {
