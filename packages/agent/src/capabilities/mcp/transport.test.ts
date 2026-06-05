@@ -159,6 +159,132 @@ function createTestStreamableHttpServer(): {
   };
 }
 
+function createSessionStreamableHttpServer(): {
+  server: http.Server;
+  start: () => Promise<{ url: string }>;
+  stop: () => Promise<void>;
+  receivedMessages: string[];
+  observedSessionHeaders: string[];
+  observedGetSessionHeaders: string[];
+  deleteSessionHeaders: string[];
+  sessionId: string;
+} {
+  const sessionId = 'session-abc-123';
+  const receivedMessages: string[] = [];
+  const observedSessionHeaders: string[] = [];
+  const observedGetSessionHeaders: string[] = [];
+  const deleteSessionHeaders: string[] = [];
+
+  const server = http.createServer((req, res) => {
+    const requestSessionId = req.headers['mcp-session-id'];
+    const normalizedSessionId = Array.isArray(requestSessionId)
+      ? requestSessionId[0] ?? ''
+      : requestSessionId ?? '';
+
+    if (req.method === 'GET' && req.headers.accept?.includes('text/event-stream')) {
+      observedGetSessionHeaders.push(normalizedSessionId);
+      if (normalizedSessionId !== sessionId) {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+      res.end();
+      return;
+    }
+
+    if (req.method === 'DELETE') {
+      deleteSessionHeaders.push(normalizedSessionId);
+      if (normalizedSessionId !== sessionId) {
+        res.writeHead(400);
+        res.end();
+        return;
+      }
+      res.writeHead(200);
+      res.end();
+      return;
+    }
+
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', () => {
+        receivedMessages.push(body);
+        try {
+          const parsed = JSON.parse(body) as { id?: number; method?: string };
+          if (parsed.method !== 'initialize') {
+            observedSessionHeaders.push(normalizedSessionId);
+            if (normalizedSessionId !== sessionId) {
+              res.writeHead(400);
+              res.end();
+              return;
+            }
+          }
+
+          if (parsed.method === 'initialize') {
+            res.writeHead(200, {
+              'Content-Type': 'application/json',
+              'Mcp-Session-Id': sessionId,
+            });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              id: parsed.id,
+              result: {
+                protocolVersion: '2025-06-18',
+                capabilities: {},
+                serverInfo: { name: 'session-test', version: '1.0.0' },
+              },
+            }));
+            return;
+          }
+
+          if (parsed.id === undefined) {
+            res.writeHead(202);
+            res.end();
+            return;
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            id: parsed.id,
+            result: { ok: true, method: parsed.method },
+          }));
+        } catch {
+          res.writeHead(400);
+          res.end();
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404);
+    res.end();
+  });
+
+  return {
+    server,
+    receivedMessages,
+    observedSessionHeaders,
+    observedGetSessionHeaders,
+    deleteSessionHeaders,
+    sessionId,
+    start: () => new Promise<{ url: string }>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as { port: number };
+        resolve({ url: `http://127.0.0.1:${addr.port}` });
+      });
+    }),
+    stop: () => new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    }),
+  };
+}
+
 // =========================================================================
 // Tests
 // =========================================================================
@@ -260,5 +386,49 @@ describe('Streamable HTTP transport', () => {
     expect(parsed.result.echo).toBe('test/sse');
 
     await transport.close();
+  });
+
+  it('persists Mcp-Session-Id from initialize and sends it on later POST, GET, and DELETE requests', async () => {
+    const mock = createSessionStreamableHttpServer();
+    servers.push(mock);
+    const { url } = await mock.start();
+
+    const transport = createStreamableHttpTransport({ url });
+    const messages: string[] = [];
+
+    await transport.open({
+      onMessage: (raw) => messages.push(raw),
+      onError: () => {},
+      onClose: () => {},
+    });
+
+    await transport.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {},
+    }));
+    await transport.send(JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'notifications/initialized',
+      params: {},
+    }));
+    await transport.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      method: 'tools/list',
+      params: {},
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await transport.close();
+
+    expect(messages).toHaveLength(2);
+    expect(mock.observedSessionHeaders).toEqual([
+      mock.sessionId,
+      mock.sessionId,
+    ]);
+    expect(mock.observedGetSessionHeaders).toContain(mock.sessionId);
+    expect(mock.deleteSessionHeaders).toEqual([mock.sessionId]);
   });
 });

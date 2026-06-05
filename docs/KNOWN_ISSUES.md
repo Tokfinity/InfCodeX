@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-05-31_
+_Last Updated: 2026-06-05_
 
 ---
 
@@ -81,11 +81,60 @@ _Last Updated: 2026-05-31_
 | 134 | High | Resolved | Plan list shows `0/N completed` mid-task when Worker re-calls `op:'init'` — `todoStore.init()` unconditional reset wipes completed/skipped/cancelled status | v0.7.34 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 | 135 | Medium | Resolved | FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept` | v0.7.41 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 | 136 | Low | Open | 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 根因在 CPU 侧每帧渲染（React reconciliation + outputToScreen 全量重建），**非**终端写入字节量（cell-diff + DECSTBM 两次否证 I/O 假设） | 待调研 | - | 2026-05-31 | - |
+| 137 | High | Resolved | Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers | v0.7.16 | v0.7.45 | 2026-06-05 | 2026-06-05 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
+---
+### 137: Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers
+
+- **Priority**: High（sessionful Streamable HTTP MCP server 会导致所有后续 MCP 工具请求失败）
+- **Status**: **Resolved**（v0.7.45）
+- **Introduced**: v0.7.16（Streamable HTTP MCP transport path）
+- **Created**: 2026-06-05
+- **Resolved**: 2026-06-05
+- **Fixed**: v0.7.45
+
+#### Original Problem
+
+用户接入 sessionful Streamable HTTP MCP server 时，`initialize` 可以返回 `Mcp-Session-Id`，但 KodaX transport 没有保存该 session id，也没有在后续 `notifications/initialized`、`tools/list`、工具调用和 GET notification stream 中继续携带。严格实现 MCP session management 的 server 会返回 `400 Bad Request`，导致模型看到 MCP 工具不可用。
+
+复现信号：
+
+- `mcpServers.local-mcp.type = "streamable-http"`
+- `HTTP POST failed: 400 Bad Request`
+- 对 bundle chunk 手工补丁时容易和 minified helper 变量冲突，出现 `i is not a function`
+
+#### Root Cause
+
+`createStreamableHttpTransport` 只按 stateless Streamable HTTP 发送请求：POST / GET / close 都只使用固定 headers，没有读取 `initialize` 响应头里的 `Mcp-Session-Id`，也没有在 session 过期时清理本地 session state。
+
+#### Resolution
+
+- 保存响应头中的有效 `Mcp-Session-Id`。
+- 后续 POST、GET notification stream、best-effort DELETE close 都自动携带该 session id。
+- GET notification stream 延迟到首次成功 POST 后启动，避免严格 session server 在 initialize 前拒绝无 session GET。
+- 404 session expiry 时清理本地 session state 并关闭当前 transport 状态。
+
+#### Files Changed
+
+- `packages/agent/src/capabilities/mcp/transport.ts`
+- `packages/agent/src/capabilities/mcp/transport.test.ts`
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- 新增 Streamable HTTP session regression mock：验证 initialize 返回 session id 后，后续 POST、GET 和 DELETE 都携带 `Mcp-Session-Id`。
+
+#### Verification
+
+- `npm test -- --run packages/agent/src/capabilities/mcp/transport.test.ts`
+- `npm test -- --run packages/coding/src/tools/mcp-tools.test.ts packages/coding/src/capabilities/providers/mcp-adapter.test.ts packages/agent/src/capabilities/mcp/manager.test.ts`
+- `npx tsc --noEmit -p packages/agent/tsconfig.json`
+- Against `http://82.156.201.14:4747/api/mcp`: `toolMcpSearch`, `toolMcpCall(list_repos)` and `toolMcpCall(query)` all succeeded.
+
 ---
 ### 136: 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 瓶颈在 CPU 侧每帧渲染，非终端写入字节量
 
@@ -4179,11 +4228,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 63 (27 Open, 36 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 64 (27 Open, 37 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-05: Issue 137 added & resolved
+- Added & Resolved 137: Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers (High)
+- Root cause: `createStreamableHttpTransport` did not persist the session id returned by initialize and did not attach it to later POST / GET / DELETE requests.
+- Fix: persist `Mcp-Session-Id`, inject it into later requests, delay notification stream startup until after the first successful POST, and clear session state on 404 expiry.
+- Verification: transport regression tests, MCP provider/tool tests, agent package typecheck, and live `toolMcpCall` smoke against `http://82.156.201.14:4747/api/mcp`.
 
 ### 2026-05-16: Issue 132 resolved (v0.7.41)
 - Resolved 132: `h2-boundary-runner.test.ts` "session.jsonl" ENOENT — eager-read + retry budget enlargement

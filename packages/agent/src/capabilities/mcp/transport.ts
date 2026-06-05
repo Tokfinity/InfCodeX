@@ -368,6 +368,41 @@ export function createStreamableHttpTransport(config: {
   let abortController: AbortController | undefined;
   let events: McpTransportEvents | undefined;
   let isConnected = false;
+  let sessionId: string | undefined;
+  let notificationStreamStarted = false;
+
+  function readSessionId(headers: Headers): string | undefined {
+    const value = headers.get('mcp-session-id');
+    if (!value || !/^[\x21-\x7E]+$/.test(value)) {
+      return undefined;
+    }
+    return value;
+  }
+
+  function captureSessionId(response: Response): void {
+    const nextSessionId = readSessionId(response.headers);
+    if (nextSessionId) {
+      sessionId = nextSessionId;
+    }
+  }
+
+  function withSessionHeaders(headers: Record<string, string>): Record<string, string> {
+    return {
+      ...headers,
+      ...(config.headers ?? {}),
+      ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
+    };
+  }
+
+  function handleExpiredSession(status: number): void {
+    if (status !== 404 || !sessionId) {
+      return;
+    }
+    sessionId = undefined;
+    notificationStreamStarted = false;
+    isConnected = false;
+    abortController?.abort();
+  }
 
   /** Optional background SSE stream for server-initiated messages. */
   async function openNotificationStream(): Promise<void> {
@@ -377,14 +412,14 @@ export function createStreamableHttpTransport(config: {
     try {
       const response = await fetch(config.url, {
         method: 'GET',
-        headers: {
+        headers: withSessionHeaders({
           'Accept': 'text/event-stream',
-          ...(config.headers ?? {}),
-        },
+        }),
         signal: abortController.signal,
       });
       // A 405 means the server does not support server-initiated messages — that's OK.
       if (response.status === 405 || !response.ok || !response.body) {
+        handleExpiredSession(response.status);
         return;
       }
       const reader = (response.body as ReadableStream<Uint8Array>).getReader();
@@ -408,6 +443,14 @@ export function createStreamableHttpTransport(config: {
     }
   }
 
+  function startNotificationStream(): void {
+    if (notificationStreamStarted || !abortController) {
+      return;
+    }
+    notificationStreamStarted = true;
+    openNotificationStream().catch(() => {});
+  }
+
   return {
     get connected() {
       return isConnected;
@@ -417,8 +460,6 @@ export function createStreamableHttpTransport(config: {
       events = ev;
       abortController = new AbortController();
       isConnected = true;
-      // Fire-and-forget: server notification stream (optional).
-      openNotificationStream().catch(() => {});
     },
 
     async send(json) {
@@ -427,17 +468,19 @@ export function createStreamableHttpTransport(config: {
       }
       const response = await fetch(config.url, {
         method: 'POST',
-        headers: {
+        headers: withSessionHeaders({
           'Content-Type': 'application/json',
           'Accept': 'application/json, text/event-stream',
-          ...(config.headers ?? {}),
-        },
+        }),
         body: json,
         signal: abortController?.signal,
       });
+      captureSessionId(response);
       if (!response.ok) {
+        handleExpiredSession(response.status);
         throw new Error(`HTTP POST failed: ${response.status} ${response.statusText}`);
       }
+      startNotificationStream();
 
       const contentType = response.headers.get('content-type') ?? '';
 
@@ -468,7 +511,20 @@ export function createStreamableHttpTransport(config: {
     },
 
     async close() {
+      const sessionIdToClose = sessionId;
       isConnected = false;
+      sessionId = undefined;
+      notificationStreamStarted = false;
+      if (sessionIdToClose && abortController && !abortController.signal.aborted) {
+        await fetch(config.url, {
+          method: 'DELETE',
+          headers: {
+            ...(config.headers ?? {}),
+            'Mcp-Session-Id': sessionIdToClose,
+          },
+          signal: abortController.signal,
+        }).catch(() => {});
+      }
       abortController?.abort();
       abortController = undefined;
     },
