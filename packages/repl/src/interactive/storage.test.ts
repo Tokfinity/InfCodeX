@@ -154,14 +154,19 @@ describe('FileSessionStorage', () => {
       }),
     });
 
-    await expect(storage.list(gitRoot)).resolves.toEqual([
-      {
-        id: 'session-1',
-        title: 'Persisted Runtime',
-        msgCount: 1,
-        runtimeInfo,
-      },
-    ]);
+    // v0.7.45 — list() now surfaces `createdAt` so the fast path in
+    // session/public-api.ts can populate SessionSummary.createdAt
+    // instead of silently dropping it. Use objectContaining since the
+    // session writer auto-stamps createdAt with `new Date().toISOString()`.
+    const listed = await storage.list(gitRoot);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      id: 'session-1',
+      title: 'Persisted Runtime',
+      msgCount: 1,
+      runtimeInfo,
+    });
+    expect(typeof listed[0]?.createdAt).toBe('string');
   });
 
   it('lists sibling workspace sessions when canonical repo identity matches', async () => {
@@ -517,18 +522,25 @@ describe('FileSessionStorage', () => {
       ),
     ]);
 
-    await expect(storage.list(gitRoot)).resolves.toEqual([
-      {
-        id: 'custom-user-session',
-        title: 'Newer User',
-        msgCount: 1,
-      },
-      {
-        id: '20260326_100000',
-        title: 'Older User',
-        msgCount: 1,
-      },
-    ]);
+    // v0.7.45 — list() now surfaces `createdAt` (F3 fix). Verify
+    // ordering + payload via toMatchObject so we don't have to enumerate
+    // exact timestamps.
+    const listed = await storage.list(gitRoot);
+    expect(listed).toHaveLength(2);
+    expect(listed[0]).toMatchObject({
+      id: 'custom-user-session',
+      title: 'Newer User',
+      msgCount: 1,
+    });
+    expect(listed[1]).toMatchObject({
+      id: '20260326_100000',
+      title: 'Older User',
+      msgCount: 1,
+    });
+    // createdAt is the sort key for these two — verify both are present
+    // strings so a future regression that drops it surfaces here too.
+    expect(typeof listed[0]?.createdAt).toBe('string');
+    expect(typeof listed[1]?.createdAt).toBe('string');
   });
 
   it('excludes .archive.jsonl and archived- prefixed files from the session list', async () => {

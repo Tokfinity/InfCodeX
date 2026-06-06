@@ -845,10 +845,23 @@ export function saveConfig(config: {
   fsSync.writeFileSync(KODAX_CONFIG_FILE, JSON.stringify(merged, null, 2));
 }
 
-// Get git root directory
-export async function getGitRoot(): Promise<string | null> {
+/**
+ * Get git root directory.
+ *
+ * v0.7.45 fix — accepts optional `cwd` so in-process SDK embedders (KodaX
+ * Space) that serve multiple projects from a single runtime can resolve
+ * the git root of the project the user opened, NOT the embedder's
+ * startup directory. Without `cwd`, `git rev-parse --show-toplevel`
+ * inherits the host process's cwd, which mis-tags storage operations
+ * for multi-project embedders (the same root cause as the
+ * `saveSessionSnapshot` gitRoot bug in agent-runtime/middleware/).
+ *
+ * No `cwd` arg → behaves identically to the pre-v0.7.45 form
+ * (process.cwd() of the host).
+ */
+export async function getGitRoot(cwd?: string): Promise<string | null> {
   try {
-    const { stdout } = await execAsync('git rev-parse --show-toplevel');
+    const { stdout } = await execAsync('git rev-parse --show-toplevel', { cwd });
     return stdout.trim();
   } catch {
     return null;

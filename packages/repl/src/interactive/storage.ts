@@ -556,8 +556,21 @@ export class FileSessionStorage implements KodaXSessionStorage {
   // mutating the agent-config-home singleton.
   private readonly sessionsDir: string;
 
-  constructor(opts?: { sessionsDir?: string }) {
+  /**
+   * v0.7.45 — optional explicit project cwd for in-process embedders
+   * (KodaX Space) serving multiple projects from a single runtime.
+   * Threaded through `getGitRoot(this.hostCwd)` and `inspectWorkspaceRuntime({cwd: this.hostCwd})`
+   * so the workspace-mismatch check in `load()` compares against the
+   * project the embedder opened, NOT the embedder's startup directory.
+   * When set, mismatch warnings are also suppressed (the embedder is
+   * authoritative about project scope; the CLI-mode warning is noise).
+   * Unset → all paths behave identically to the pre-v0.7.45 form.
+   */
+  private readonly hostCwd?: string;
+
+  constructor(opts?: { sessionsDir?: string; cwd?: string }) {
     this.sessionsDir = opts?.sessionsDir ?? KODAX_SESSIONS_DIR;
+    this.hostCwd = opts?.cwd;
   }
 
   // ── Session-level write serialization ──
@@ -831,18 +844,30 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const { data, createdAt } = resolved;
     const filePath = this.getSessionFilePath(id);
 
-    const currentGitRoot = await getGitRoot();
-    const currentRuntime = await inspectWorkspaceRuntime();
+    // v0.7.45 fix — thread `this.hostCwd` so in-process embedders compare
+    // against the project they actually opened, not the embedder
+    // process's startup directory. With this, an embedder serving
+    // multiple projects no longer gets false-positive workspace-mismatch
+    // warnings (and the embedder-supplied scope is authoritative;
+    // we also suppress the warning entirely when `hostCwd` is set —
+    // the CLI-mode "you cd'd into a different repo than the session
+    // belongs to" semantics don't apply to a programmatic SDK consumer).
+    const currentGitRoot = await getGitRoot(this.hostCwd);
+    const currentRuntime = await inspectWorkspaceRuntime({ cwd: this.hostCwd });
     const sessionRuntime = resolveSessionRuntimeInfo(data);
     const canonicalMismatch =
       currentRuntime.canonicalRepoRoot
       && sessionRuntime?.canonicalRepoRoot
       && !isSameCanonicalRepo(currentRuntime, sessionRuntime);
 
-    if (canonicalMismatch || (currentGitRoot && data.gitRoot && currentGitRoot !== data.gitRoot && !isSameCanonicalRepo(
-      currentRuntime,
-      { canonicalRepoRoot: data.gitRoot },
-    ))) {
+    const shouldEmitMismatchWarning = !this.hostCwd && (canonicalMismatch || (
+      currentGitRoot && data.gitRoot && currentGitRoot !== data.gitRoot && !isSameCanonicalRepo(
+        currentRuntime,
+        { canonicalRepoRoot: data.gitRoot },
+      )
+    ));
+
+    if (shouldEmitMismatchWarning) {
       writeStorageNotice(chalk.yellow('\n[Warning] Session project mismatch:'));
       if (currentRuntime.workspaceRoot) {
         writeStorageNotice(`  Current workspace:  ${currentRuntime.workspaceRoot}`);
@@ -1004,16 +1029,32 @@ export class FileSessionStorage implements KodaXSessionStorage {
     return result;
   }
 
-  async list(gitRoot?: string): Promise<Array<{
+  /**
+   * v0.7.45 — `opts.limit` added so SDK consumers can request more than
+   * the legacy 10-entry cap. Default stays at 10 to preserve the
+   * interactive REPL picker's behavior. The `public-api.ts` fast path
+   * forwards the caller's `limit`; `deleteAll()` passes a large value
+   * so it can enumerate ALL sessions for the gitRoot.
+   *
+   * v0.7.45 — return now carries `createdAt` so the fast path in
+   * `public-api.ts` no longer silently strips it. Pre-v0.7.45 callers
+   * that only destructured `{id, title, msgCount, runtimeInfo}` are
+   * unaffected (extra fields are ignored).
+   */
+  async list(
+    gitRoot?: string,
+    opts?: { limit?: number },
+  ): Promise<Array<{
     id: string;
     title: string;
     msgCount: number;
     runtimeInfo?: KodaXSessionRuntimeInfo;
+    createdAt?: string;
   }>> {
     await fs.mkdir(this.sessionsDir, { recursive: true });
-    const currentGitRoot = gitRoot ?? await getGitRoot();
+    const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
     const currentRuntime = await inspectWorkspaceRuntime({
-      cwd: currentGitRoot ?? process.cwd(),
+      cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
     });
     // Exclude `.archive.jsonl` (round archives, not resumable sessions — and
     // historically the largest files read here) and `archived-` prefixed files
@@ -1089,7 +1130,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
             createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
-            runtimeInfo: sessionRuntime ? { ...sessionRuntime } : undefined,
+            // v0.7.45 fix — fall back to `sessionGitRoot` when the meta
+            // record predates the nested `runtimeInfo` field. Without
+            // this, legacy meta records returned `runtimeInfo:
+            // undefined` even though `gitRoot` was right there at the
+            // top level — the in-process embedder bug Space reported.
+            //
+            // Wrapped as `{ canonicalRepoRoot }` (NOT `{ gitRoot }`)
+            // because `KodaXSessionRuntimeInfo` uses canonicalRepoRoot
+            // as the project-identity field — verified semantic match
+            // in storage.ts:842 (`isSameCanonicalRepo(...,
+            // { canonicalRepoRoot: data.gitRoot })`) and in
+            // session/public-api.ts:234 where `extractRuntimeInfoSummary`
+            // remaps `canonicalRepoRoot → gitRoot` on the consumer side.
+            runtimeInfo: sessionRuntime
+              ? { ...sessionRuntime }
+              : sessionGitRoot
+                ? { canonicalRepoRoot: sessionGitRoot }
+                : undefined,
           };
         }
         const lineCount = await countSessionLines(filePath);
@@ -1114,6 +1172,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
     }
 
+    // v0.7.45 — `opts.limit` overrides the legacy 10-entry hard cap.
+    // Default stays at 10 so the interactive REPL picker keeps its
+    // existing behavior; SDK consumers pass an explicit limit.
+    const limit = opts?.limit ?? 10;
     return sessions
       .sort((left, right) => {
         const leftTime = left.createdAt ? Date.parse(left.createdAt) : Number.NaN;
@@ -1129,11 +1191,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
         }
         return right.id.localeCompare(left.id);
       })
-      .slice(0, 10)
-      .map(({ id, title, msgCount, runtimeInfo }) => (
+      .slice(0, limit)
+      // v0.7.45 — surface `createdAt` so the public-api fast path can
+      // populate `SessionSummary.createdAt` instead of silently
+      // emitting `undefined` (previously every fast-path summary had
+      // createdAt=undefined → consumer UIs sorting by date got
+      // random order).
+      .map(({ id, title, msgCount, runtimeInfo, createdAt }) => (
         runtimeInfo
-          ? { id, title, msgCount, runtimeInfo }
-          : { id, title, msgCount }
+          ? { id, title, msgCount, runtimeInfo, createdAt }
+          : { id, title, msgCount, createdAt }
       ));
   }
 
@@ -1145,8 +1212,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   async deleteAll(gitRoot?: string): Promise<void> {
-    const currentGitRoot = gitRoot ?? await getGitRoot();
-    const sessions = await this.list(currentGitRoot ?? undefined);
+    const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
+    // v0.7.45 fix — bypass the legacy 10-entry cap so "delete all
+    // sessions for this project" actually deletes ALL of them. Pre-fix
+    // `deleteAll()` silently leaked any session beyond the 10 most
+    // recent because it reused `list()`'s default cap.
+    const sessions = await this.list(currentGitRoot ?? undefined, {
+      limit: Number.MAX_SAFE_INTEGER,
+    });
     for (const session of sessions) {
       await this.delete(session.id);
     }
