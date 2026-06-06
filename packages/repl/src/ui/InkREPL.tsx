@@ -274,6 +274,12 @@ import {
   type TranscriptRow,
   type TranscriptSection,
 } from "./utils/transcript-layout.js";
+import { EMPTY_INLINE_SCROLLBACK_STATE } from "../tui/substrate/ink/inline-scrollback-ledger.js";
+import { renderFinalizedSectionsToScrollbackText } from "./utils/render-finalized-sections.js";
+import {
+  computeInlineLedgerStep,
+  isInlineLedgerActive,
+} from "./utils/inline-ledger-controller.js";
 import {
   buildTranscriptCopyText,
   buildTranscriptSelectionSummary,
@@ -1132,6 +1138,11 @@ function prependTranscriptSection(
     rows: [...section.rows, ...model.rows],
   };
 }
+
+// FEATURE_214 — opt-in inline scrollback ledger. Default OFF: the inline prompt keeps
+// committing finalized history through <Static>. Set KODAX_INLINE_LEDGER=1 to route it
+// through the explicit ledger + engine commitInlineScrollback instead.
+const INLINE_LEDGER_ENABLED = process.env.KODAX_INLINE_LEDGER === "1";
 
 /**
  * Inner REPL component that uses contexts
@@ -2619,6 +2630,19 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       : undefined),
     [bannerProps, fullscreenPolicy.enabled, showBanner],
   );
+  // FEATURE_214 — inline scrollback ledger. Active ONLY on the inline main-screen path
+  // AND only when the live renderer handle actually exposes commitInlineScrollback;
+  // otherwise the prompt model keeps its staticSections and falls back to <Static> so
+  // history is never dropped (req 1/2/3/6).
+  const inlineLedgerStateRef = useRef(EMPTY_INLINE_SCROLLBACK_STATE);
+  const inlineLedgerWasActiveRef = useRef(false);
+  const inlineLedgerActive = isInlineLedgerActive({
+    enabled: INLINE_LEDGER_ENABLED,
+    useRendererViewportShell,
+    isTranscriptMode,
+    hasCommitHandle:
+      typeof getRendererInstance(stdout)?.commitInlineScrollback === "function",
+  });
   // FEATURE_172 P1.1 (v0.7.41) — split static / dynamic cache keys.
   // The static portion (committed rounds) recomputes only when items / viewport /
   // max change. The dynamic portion (current round + streaming) recomputes per
@@ -2676,14 +2700,22 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // staticSections routes it through <Static> → the engine hasStaticOutput branch
       // (scrollback ONCE), out of the live frame. The transcript surface (below) keeps
       // materialize for its windowed complete-frame paint.
-      return buildInlinePromptRenderModel(
+      const inlinePromptModel = buildInlinePromptRenderModel(
         promptStaticPortion,
         dynamicPortion,
         fullscreenBannerSection,
       );
+      // FEATURE_214 — when the inline ledger is active it OWNS finalized history (commits
+      // it to native scrollback via the engine), so the live model drops staticSections
+      // and MessageList stops rendering <Static> for them (req 1). The ledger reads the
+      // RAW promptStaticPortion (in the effect below), NOT this emptied model (req 3).
+      return inlineLedgerActive
+        ? { ...inlinePromptModel, staticSections: [] }
+        : inlinePromptModel;
     },
     [
       currentConfig.agentMode,
+      inlineLedgerActive,
       effectivePromptIsLoading,
       effectivePromptStreamingState.activeToolCalls,
       effectivePromptStreamingState.currentIteration,
@@ -2713,6 +2745,57 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentTodoActiveForm,
     ],
   );
+  // FEATURE_214 — drive the inline scrollback ledger. Runs ONLY when active (inline
+  // main-screen + a live handle exposing commitInlineScrollback). Plans from the RAW
+  // source (promptStaticPortion.staticSections + fullscreenBannerSection — req 3),
+  // commits via the engine, and advances ledger state ONLY after a successful commit.
+  useEffect(() => {
+    const handle = getRendererInstance(stdout);
+    const hasCommitHandle = typeof handle?.commitInlineScrollback === "function";
+    const step = computeInlineLedgerStep({
+      active: inlineLedgerActive,
+      hasCommitHandle,
+      wasActive: inlineLedgerWasActiveRef.current,
+      prior: inlineLedgerStateRef.current,
+      finalizedSections: promptStaticPortion.staticSections, // RAW source (req 3)
+      bannerSection: fullscreenBannerSection,
+      width: terminalWidth,
+    });
+    inlineLedgerWasActiveRef.current = inlineLedgerActive && hasCommitHandle;
+
+    if (step.kind === "reset") {
+      // Left the inline-ledger path — drop bookkeeping so a re-entry rebuilds rather than
+      // appending onto a stale prefix (req 5). No commit (req 6).
+      inlineLedgerStateRef.current = EMPTY_INLINE_SCROLLBACK_STATE;
+      return;
+    }
+    if (step.kind === "skip") {
+      return; // handle gone between render and effect — fall back, do NOT advance (req 2/4)
+    }
+    if (step.kind === "noop") {
+      inlineLedgerStateRef.current = step.nextState; // unchanged; nothing to commit
+      return;
+    }
+    const text = renderFinalizedSectionsToScrollbackText(step.sections, {
+      width: terminalWidth,
+      theme: getTheme("dark"),
+    });
+    if (!text) {
+      return; // renderer produced nothing — do NOT advance (req 4)
+    }
+    try {
+      handle?.commitInlineScrollback?.({ mode: step.mode, text });
+    } catch {
+      return; // commit failed — do NOT advance (req 4); the next frame retries
+    }
+    inlineLedgerStateRef.current = step.nextState; // advance ONLY after a successful commit (req 4)
+  }, [
+    inlineLedgerActive,
+    promptStaticPortion.staticSections,
+    fullscreenBannerSection,
+    terminalWidth,
+    stdout,
+  ]);
   // FEATURE_172 P1.2 (v0.7.41) — same static/dynamic split for transcript view.
   // Static cache key includes `showAllInTranscript` because toggling it changes
   // `showDetailedTools` / `showAllContent`, which affect the committed (static)

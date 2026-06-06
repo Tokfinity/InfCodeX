@@ -1209,7 +1209,7 @@ export function identifyTranscriptSection(section: TranscriptSection): {
 } {
   let hash = 5381;
   for (const row of section.rows) {
-    const cell = `${row.key} ${row.text}`;
+    const cell = `${row.key}\u0000${row.text}\u0001`;
     for (let i = 0; i < cell.length; i++) {
       hash = (Math.imul(hash, 33) + cell.charCodeAt(i)) | 0;
     }
