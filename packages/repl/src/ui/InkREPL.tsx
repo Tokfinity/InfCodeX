@@ -278,6 +278,7 @@ import { EMPTY_INLINE_SCROLLBACK_STATE } from "../tui/substrate/ink/inline-scrol
 import { renderFinalizedSectionsToScrollbackText } from "./utils/render-finalized-sections.js";
 import {
   computeInlineLedgerStep,
+  gateInlinePromptModel,
   isInlineLedgerActive,
   resolveInlineLedgerState,
 } from "./utils/inline-ledger-controller.js";
@@ -2652,6 +2653,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   // history is never dropped (req 1/2/3/6).
   const inlineLedgerStateRef = useRef(EMPTY_INLINE_SCROLLBACK_STATE);
   const inlineLedgerWasActiveRef = useRef(false);
+  // Whether the native scrollback is owned/dirtied by the ledger — forces a rebuild on the
+  // next active entry even with an empty source (cleared by a successful rebuild-empty), so
+  // a stale owned scrollback is purged on re-entry but a fresh start never clears it (req 2).
+  const inlineLedgerOwnsScrollbackRef = useRef(false);
   const inlineLedgerActive = isInlineLedgerActive({
     enabled: INLINE_LEDGER_ENABLED,
     useRendererViewportShell,
@@ -2725,9 +2730,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // it to native scrollback via the engine), so the live model drops staticSections
       // and MessageList stops rendering <Static> for them (req 1). The ledger reads the
       // RAW promptStaticPortion (in the effect below), NOT this emptied model (req 3).
-      return inlineLedgerActive
-        ? { ...inlinePromptModel, staticSections: [] }
-        : inlinePromptModel;
+      return gateInlinePromptModel(inlinePromptModel, inlineLedgerActive);
     },
     [
       currentConfig.agentMode,
@@ -2772,25 +2775,29 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       active: inlineLedgerActive,
       hasCommitHandle,
       wasActive: inlineLedgerWasActiveRef.current,
+      forceRebuild: inlineLedgerOwnsScrollbackRef.current,
       prior: inlineLedgerStateRef.current,
-      finalizedSections: promptStaticPortion.staticSections, // RAW source (req 3)
+      finalizedSections: promptStaticPortion.staticSections, // RAW source (req 3/4)
       bannerSection: fullscreenBannerSection,
       width: terminalWidth,
     });
-    // Perform the side effects (render + commit) and track whether the commit LANDED.
-    // wasActive / state are resolved PURELY from (step, committed) below — so an empty
-    // render or a thrown commit never advances state and never leaves wasActive true; the
-    // next change then forces a re-entry rebuild instead of appending onto a stale or
-    // unknown scrollback (req 1/2/4).
+    // Side effects (render + commit), tracking whether the commit LANDED and whether it
+    // wrote content. state / wasActive / owns are resolved PURELY below — so an empty
+    // append or a thrown commit never advances state and never leaves wasActive true.
     let committed = false;
+    let hadContent = false;
     if (step.kind === "commit") {
       const text = renderFinalizedSectionsToScrollbackText(step.sections, {
         width: terminalWidth,
         theme: getTheme("dark"),
       });
-      if (!text) {
-        reportInlineLedgerFailure("empty-render-text"); // req 3
+      hadContent = text.length > 0;
+      if (step.mode === "append" && !text) {
+        // An append with no rendered text means something is wrong — that IS a failure.
+        reportInlineLedgerFailure("empty-append-text"); // req 1/3
       } else {
+        // A rebuild may LEGITIMATELY commit empty text — a clear (/clear, rollback-to-0,
+        // re-entry onto an owned scrollback whose source is now empty). req 1.
         try {
           handle?.commitInlineScrollback?.({ mode: step.mode, text });
           committed = true;
@@ -2799,9 +2806,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
       }
     }
-    const resolved = resolveInlineLedgerState(step, committed);
+    const resolved = resolveInlineLedgerState(
+      step,
+      { committed, hadContent },
+      inlineLedgerOwnsScrollbackRef.current,
+    );
     inlineLedgerStateRef.current = resolved.state;
     inlineLedgerWasActiveRef.current = resolved.wasActive;
+    inlineLedgerOwnsScrollbackRef.current = resolved.owns;
   }, [
     inlineLedgerActive,
     promptStaticPortion.staticSections,

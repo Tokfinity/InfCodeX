@@ -518,6 +518,18 @@ describe("commitInlineScrollback (FEATURE_214 inline ledger primitive)", () => {
     expect(mocks.stdoutWrite.mock.calls.length).toBeGreaterThan(1);
   });
 
+  it("rebuild with EMPTY text is a legitimate clear — still purges scrollback + repaints (FEATURE_214 step 1)", () => {
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 2, "live"));
+    const engine = makeEngine();
+    mocks.stdoutWrite.mockClear();
+
+    engine.commitInlineScrollback({ mode: "rebuild", text: "" });
+
+    const out = writes();
+    expect(out).toContain("[3J"); // scrollback purged even with empty history text
+    expect(mocks.stdoutWrite.mock.calls.length).toBeGreaterThan(1); // live frame repainted
+  });
+
   it("append erases the old live block (eraseLines lastOutputHeight) + history + repaint", () => {
     const engine = makeEngine();
     engine.lastOutputHeight = 5;

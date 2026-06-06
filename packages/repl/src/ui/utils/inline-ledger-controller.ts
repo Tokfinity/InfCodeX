@@ -1,17 +1,21 @@
 /**
  * FEATURE_214 — inline scrollback ledger controller (pure decision layer for the
- * InkREPL wiring). Kept pure + separate so the flag/surface gating and the per-frame
- * plan/commit decision are unit-testable without mounting InkREPL. The caller (the
- * InkREPL effect) performs the side effects: render the sections to text, call the
- * engine's commitInlineScrollback, and advance ledger state ONLY after a successful
- * commit.
+ * InkREPL wiring). Kept pure + separate so the flag/surface gating, the per-frame
+ * plan/commit decision, and the failure / re-entry state machine are unit-testable
+ * without mounting InkREPL. The caller (the InkREPL effect) performs the side effects:
+ * render the sections to text, call the engine's commitInlineScrollback, and feed the
+ * outcome back through resolveInlineLedgerState.
  */
 import {
   EMPTY_INLINE_SCROLLBACK_STATE,
   planInlineScrollback,
   type InlineScrollbackLedgerState,
 } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
-import { identifyTranscriptSection, type TranscriptSection } from "./transcript-layout.js";
+import {
+  identifyTranscriptSection,
+  type TranscriptRenderModel,
+  type TranscriptSection,
+} from "./transcript-layout.js";
 
 export interface InlineLedgerActiveInput {
   /** KODAX_INLINE_LEDGER opt-in (default off). */
@@ -43,6 +47,13 @@ export interface InlineLedgerStepInput {
   readonly active: boolean;
   readonly hasCommitHandle: boolean;
   readonly wasActive: boolean;
+  /**
+   * Whether the native scrollback is currently OWNED by the ledger (it committed content
+   * earlier, or is in a dirty/unknown state after a failed commit). On a re-entry with an
+   * EMPTY source this forces a rebuild-clear; on a true first activation with nothing owned
+   * it stays false so we never pointlessly purge the user's terminal scrollback.
+   */
+  readonly forceRebuild: boolean;
   readonly prior: InlineScrollbackLedgerState;
   readonly finalizedSections: readonly TranscriptSection[];
   readonly bannerSection: TranscriptSection | undefined;
@@ -56,14 +67,22 @@ export type InlineLedgerStep =
   | {
       readonly kind: "commit";
       readonly mode: "append" | "rebuild";
+      // May be EMPTY for a rebuild (a legitimate clear: /clear, rollback-to-0, re-entry
+      // onto an owned-but-now-empty scrollback). Never empty for an append.
       readonly sections: readonly TranscriptSection[];
       readonly nextState: InlineScrollbackLedgerState;
     };
 
 /**
- * Decide what the ledger effect should do this frame from the RAW source sections.
- * Pure. A re-entry (`wasActive` false) forces a rebuild so a stale scrollback prefix is
- * never appended onto; a width change is already a rebuild via planInlineScrollback.
+ * Decide what the ledger effect should do this frame from the RAW source sections. Pure.
+ *
+ * Re-entry (wasActive false) forces a rebuild so a stale prefix is never appended onto:
+ *   - source non-empty → rebuild ALL at the current width;
+ *   - source empty → rebuild EMPTY (clear) only when `forceRebuild` (the ledger owns or
+ *     dirtied the scrollback); otherwise noop, so a true first activation with no history
+ *     never 3J-clears the user's terminal.
+ * Steady state delegates to planInlineScrollback (append / width-or-content rebuild /
+ * none); a source that shrank to empty there is already a rebuild with empty sections.
  */
 export function computeInlineLedgerStep(input: InlineLedgerStepInput): InlineLedgerStep {
   if (!input.active) {
@@ -83,35 +102,80 @@ export function computeInlineLedgerStep(input: InlineLedgerStepInput): InlineLed
     identifyTranscriptSection,
     prior,
   );
+
+  if (reentered) {
+    if (plan.kind === "none") {
+      // Empty source on re-entry: clear only if the ledger owns/dirtied the scrollback.
+      if (input.forceRebuild) {
+        return { kind: "commit", mode: "rebuild", sections: input.finalizedSections, nextState };
+      }
+      return { kind: "noop", nextState };
+    }
+    // Non-empty source on re-entry → rebuild ALL from source at the current width.
+    return { kind: "commit", mode: "rebuild", sections: plan.sections, nextState };
+  }
+
   if (plan.kind === "none") {
     return { kind: "noop", nextState };
   }
-  return {
-    kind: "commit",
-    mode: reentered ? "rebuild" : plan.kind,
-    sections: plan.sections,
-    nextState,
-  };
+  return { kind: "commit", mode: plan.kind, sections: plan.sections, nextState };
+}
+
+export interface InlineLedgerCommitOutcome {
+  /** Whether commitInlineScrollback was actually invoked AND did not throw. */
+  readonly committed: boolean;
+  /** Whether the committed text was non-empty (content written vs a clear). */
+  readonly hadContent: boolean;
+}
+
+export interface InlineLedgerResolution {
+  readonly state: InlineScrollbackLedgerState;
+  readonly wasActive: boolean;
+  /** Updated scrollback-ownership / force-rebuild flag. */
+  readonly owns: boolean;
 }
 
 /**
- * Resolve the next ledger state + `wasActive` from a step and whether a commit actually
- * SUCCEEDED. `wasActive` may become true ONLY in a known-consistent state — a no-op
- * (source already matches committed) or a successful commit. Every other outcome (not
- * active, handle gone, empty render text, or a thrown commit) drops the bookkeeping to
- * EMPTY with `wasActive` false, so the NEXT change forces a re-entry REBUILD rather than
- * appending onto a stale / unknown scrollback. This is the failure-path guarantee: a
- * commit that does not land never advances state and never leaves `wasActive` true.
+ * Resolve the next (state, wasActive, owns) from a step, the commit OUTCOME, and the prior
+ * ownership flag. The failure-path guarantee: a commit that did not land never advances
+ * state, never leaves wasActive true, and keeps `owns` true (dirty) so the next change
+ * forces a rebuild rather than appending onto a stale / unknown scrollback.
+ *
+ *   - noop                → keep state, wasActive true, owns unchanged.
+ *   - commit + landed     → advance state, wasActive true; owns = whether content was
+ *                           written (a successful rebuild-EMPTY clears ownership).
+ *   - commit + NOT landed → EMPTY state, wasActive false, owns true (dirty → rebuild next).
+ *   - reset / skip        → EMPTY state, wasActive false, owns carried from prior.
  */
 export function resolveInlineLedgerState(
   step: InlineLedgerStep,
-  committed: boolean,
-): { state: InlineScrollbackLedgerState; wasActive: boolean } {
+  outcome: InlineLedgerCommitOutcome,
+  priorOwns: boolean,
+): InlineLedgerResolution {
   if (step.kind === "noop") {
-    return { state: step.nextState, wasActive: true };
+    return { state: step.nextState, wasActive: true, owns: priorOwns };
   }
-  if (step.kind === "commit" && committed) {
-    return { state: step.nextState, wasActive: true };
+  if (step.kind === "commit") {
+    if (outcome.committed) {
+      return { state: step.nextState, wasActive: true, owns: outcome.hadContent };
+    }
+    // Commit did not land → scrollback is dirty/unknown; force a rebuild next time.
+    return { state: EMPTY_INLINE_SCROLLBACK_STATE, wasActive: false, owns: true };
   }
-  return { state: EMPTY_INLINE_SCROLLBACK_STATE, wasActive: false };
+  // reset / skip — carry the prior ownership so a later re-entry still rebuilds if owned.
+  return { state: EMPTY_INLINE_SCROLLBACK_STATE, wasActive: false, owns: priorOwns };
+}
+
+/**
+ * Gate the inline prompt render model for the ledger (FEATURE_214 step 4). When active the
+ * ledger OWNS finalized history (committed to native scrollback), so the live model drops
+ * `staticSections` and MessageList renders NO `<Static>` for finalized. When inactive the
+ * model is returned UNCHANGED so `<Static>` stays the fallback. The ledger always reads the
+ * RAW source (promptStaticPortion) in the effect — never this gated model.
+ */
+export function gateInlinePromptModel(
+  model: TranscriptRenderModel,
+  ledgerActive: boolean,
+): TranscriptRenderModel {
+  return ledgerActive ? { ...model, staticSections: [] } : model;
 }
