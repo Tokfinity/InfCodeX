@@ -591,7 +591,9 @@ const TranscriptRowRenderer: React.FC<TranscriptRowRendererProps> = memo(({
   );
 }, areTranscriptRowPropsEqual);
 
-const StaticTranscriptItemRenderer: React.FC<{
+// Exported so the FEATURE_214 offline section→scrollback renderer can reuse the
+// EXACT same React render path (no hand-rewritten styling) via renderToString.
+export const StaticTranscriptItemRenderer: React.FC<{
   section: TranscriptSection;
   theme: Theme;
   animateSpinners?: boolean;
