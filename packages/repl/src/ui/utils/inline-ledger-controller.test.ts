@@ -2,8 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   isInlineLedgerActive,
   computeInlineLedgerStep,
+  resolveInlineLedgerState,
 } from "./inline-ledger-controller.js";
-import { EMPTY_INLINE_SCROLLBACK_STATE } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
+import {
+  EMPTY_INLINE_SCROLLBACK_STATE,
+  type InlineScrollbackLedgerState,
+} from "../../tui/substrate/ink/inline-scrollback-ledger.js";
 import type { TranscriptSection } from "./transcript-layout.js";
 
 const sec = (key: string, text: string): TranscriptSection => ({
@@ -108,5 +112,84 @@ describe("computeInlineLedgerStep (FEATURE_214 wiring decision)", () => {
       finalizedSections: [sec("a", "one")],
     });
     expect(same.kind).toBe("noop");
+  });
+});
+
+describe("resolveInlineLedgerState (FEATURE_214 failure-path guarantee)", () => {
+  const someState: InlineScrollbackLedgerState = {
+    committed: [{ key: "a", fingerprint: "1" }],
+    width: 80,
+    hasBanner: false,
+  };
+
+  it("noop → advance to nextState, wasActive true (state consistent)", () => {
+    expect(resolveInlineLedgerState({ kind: "noop", nextState: someState }, false)).toEqual({
+      state: someState,
+      wasActive: true,
+    });
+  });
+
+  it("successful commit → advance, wasActive true", () => {
+    expect(
+      resolveInlineLedgerState(
+        { kind: "commit", mode: "append", sections: [], nextState: someState },
+        true,
+      ),
+    ).toEqual({ state: someState, wasActive: true });
+  });
+
+  it("commit that did NOT land (empty text / throw) → state EMPTY, wasActive false", () => {
+    const r = resolveInlineLedgerState(
+      { kind: "commit", mode: "append", sections: [sec("a", "x")], nextState: someState },
+      false,
+    );
+    expect(r.state).toBe(EMPTY_INLINE_SCROLLBACK_STATE);
+    expect(r.wasActive).toBe(false);
+  });
+
+  it("reset → state EMPTY, wasActive false", () => {
+    expect(resolveInlineLedgerState({ kind: "reset" }, false)).toEqual({
+      state: EMPTY_INLINE_SCROLLBACK_STATE,
+      wasActive: false,
+    });
+  });
+
+  it("skip (handle gone) → state EMPTY, wasActive false", () => {
+    expect(resolveInlineLedgerState({ kind: "skip" }, false)).toEqual({
+      state: EMPTY_INLINE_SCROLLBACK_STATE,
+      wasActive: false,
+    });
+  });
+
+  it("after a commit that did NOT land, the NEXT change forces a re-entry rebuild (never append)", () => {
+    const firstStep = computeInlineLedgerStep({
+      active: true,
+      hasCommitHandle: true,
+      wasActive: true,
+      prior: EMPTY_INLINE_SCROLLBACK_STATE,
+      finalizedSections: [sec("a", "one")],
+      bannerSection: undefined,
+      width: 80,
+    });
+    if (firstStep.kind !== "commit") throw new Error("expected commit");
+    // Commit failed to land → state EMPTY, wasActive false (the failure-path guarantee).
+    const afterFailure = resolveInlineLedgerState(firstStep, false);
+    expect(afterFailure.wasActive).toBe(false);
+    expect(afterFailure.state).toBe(EMPTY_INLINE_SCROLLBACK_STATE);
+
+    // Next change: wasActive=false → forced re-entry rebuild, NOT an append onto a stale
+    // / unknown scrollback.
+    const nextStep = computeInlineLedgerStep({
+      active: true,
+      hasCommitHandle: true,
+      wasActive: afterFailure.wasActive,
+      prior: afterFailure.state,
+      finalizedSections: [sec("a", "one"), sec("b", "two")],
+      bannerSection: undefined,
+      width: 80,
+    });
+    expect(nextStep.kind).toBe("commit");
+    if (nextStep.kind !== "commit") throw new Error("expected commit");
+    expect(nextStep.mode).toBe("rebuild");
   });
 });

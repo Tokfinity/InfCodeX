@@ -279,6 +279,7 @@ import { renderFinalizedSectionsToScrollbackText } from "./utils/render-finalize
 import {
   computeInlineLedgerStep,
   isInlineLedgerActive,
+  resolveInlineLedgerState,
 } from "./utils/inline-ledger-controller.js";
 import {
   buildTranscriptCopyText,
@@ -1143,6 +1144,21 @@ function prependTranscriptSection(
 // committing finalized history through <Static>. Set KODAX_INLINE_LEDGER=1 to route it
 // through the explicit ledger + engine commitInlineScrollback instead.
 const INLINE_LEDGER_ENABLED = process.env.KODAX_INLINE_LEDGER === "1";
+
+// FEATURE_214 — diagnostic for the rare inline-ledger commit failure (empty render text
+// or a thrown commit). Gated on KODAX_INLINE_LEDGER_DEBUG=1 and written to stderr (the
+// project's non-console diagnostic path), NOT console.log. The ledger always rebuilds on
+// the next change after a failure, so this is a heads-up, not a crash.
+function reportInlineLedgerFailure(reason: string, error?: unknown): void {
+  if (process.env.KODAX_INLINE_LEDGER_DEBUG !== "1") {
+    return;
+  }
+  const detail =
+    error instanceof Error ? error.message : error !== undefined ? String(error) : "";
+  process.stderr.write(
+    `[inline-ledger] ${reason}${detail ? `: ${detail}` : ""} — rebuilding on next change\n`,
+  );
+}
 
 /**
  * Inner REPL component that uses contexts
@@ -2761,34 +2777,31 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       bannerSection: fullscreenBannerSection,
       width: terminalWidth,
     });
-    inlineLedgerWasActiveRef.current = inlineLedgerActive && hasCommitHandle;
-
-    if (step.kind === "reset") {
-      // Left the inline-ledger path — drop bookkeeping so a re-entry rebuilds rather than
-      // appending onto a stale prefix (req 5). No commit (req 6).
-      inlineLedgerStateRef.current = EMPTY_INLINE_SCROLLBACK_STATE;
-      return;
+    // Perform the side effects (render + commit) and track whether the commit LANDED.
+    // wasActive / state are resolved PURELY from (step, committed) below — so an empty
+    // render or a thrown commit never advances state and never leaves wasActive true; the
+    // next change then forces a re-entry rebuild instead of appending onto a stale or
+    // unknown scrollback (req 1/2/4).
+    let committed = false;
+    if (step.kind === "commit") {
+      const text = renderFinalizedSectionsToScrollbackText(step.sections, {
+        width: terminalWidth,
+        theme: getTheme("dark"),
+      });
+      if (!text) {
+        reportInlineLedgerFailure("empty-render-text"); // req 3
+      } else {
+        try {
+          handle?.commitInlineScrollback?.({ mode: step.mode, text });
+          committed = true;
+        } catch (err) {
+          reportInlineLedgerFailure("commit-threw", err); // req 3 — not silently swallowed
+        }
+      }
     }
-    if (step.kind === "skip") {
-      return; // handle gone between render and effect — fall back, do NOT advance (req 2/4)
-    }
-    if (step.kind === "noop") {
-      inlineLedgerStateRef.current = step.nextState; // unchanged; nothing to commit
-      return;
-    }
-    const text = renderFinalizedSectionsToScrollbackText(step.sections, {
-      width: terminalWidth,
-      theme: getTheme("dark"),
-    });
-    if (!text) {
-      return; // renderer produced nothing — do NOT advance (req 4)
-    }
-    try {
-      handle?.commitInlineScrollback?.({ mode: step.mode, text });
-    } catch {
-      return; // commit failed — do NOT advance (req 4); the next frame retries
-    }
-    inlineLedgerStateRef.current = step.nextState; // advance ONLY after a successful commit (req 4)
+    const resolved = resolveInlineLedgerState(step, committed);
+    inlineLedgerStateRef.current = resolved.state;
+    inlineLedgerWasActiveRef.current = resolved.wasActive;
   }, [
     inlineLedgerActive,
     promptStaticPortion.staticSections,

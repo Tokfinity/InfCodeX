@@ -93,3 +93,25 @@ export function computeInlineLedgerStep(input: InlineLedgerStepInput): InlineLed
     nextState,
   };
 }
+
+/**
+ * Resolve the next ledger state + `wasActive` from a step and whether a commit actually
+ * SUCCEEDED. `wasActive` may become true ONLY in a known-consistent state — a no-op
+ * (source already matches committed) or a successful commit. Every other outcome (not
+ * active, handle gone, empty render text, or a thrown commit) drops the bookkeeping to
+ * EMPTY with `wasActive` false, so the NEXT change forces a re-entry REBUILD rather than
+ * appending onto a stale / unknown scrollback. This is the failure-path guarantee: a
+ * commit that does not land never advances state and never leaves `wasActive` true.
+ */
+export function resolveInlineLedgerState(
+  step: InlineLedgerStep,
+  committed: boolean,
+): { state: InlineScrollbackLedgerState; wasActive: boolean } {
+  if (step.kind === "noop") {
+    return { state: step.nextState, wasActive: true };
+  }
+  if (step.kind === "commit" && committed) {
+    return { state: step.nextState, wasActive: true };
+  }
+  return { state: EMPTY_INLINE_SCROLLBACK_STATE, wasActive: false };
+}
