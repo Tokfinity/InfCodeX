@@ -130,9 +130,9 @@ async function listSessionsImpl(
       // Fast path: delegate to storage.list() which already handles the
       // common case (head-read every meta file, sorted newest-first,
       // archived/.archive.jsonl filtered, runtimeInfo + gitRoot
-      // fallback applied). v0.7.45 — pass `limit` so the caller's
+      // fallback applied). v0.7.46 — pass `limit` so the caller's
       // requested page size actually lands at the storage layer
-      // (pre-v0.7.45 storage.list() had a hardcoded `.slice(0, 10)`
+      // (pre-v0.7.46 storage.list() had a hardcoded `.slice(0, 10)`
       // that silently truncated any larger limit).
       const raw = await storage.list(gitRoot, { limit });
       return raw.map(toSessionSummary);
@@ -246,8 +246,8 @@ function toSessionSummary(raw: {
   msgCount: number;
   runtimeInfo?: KodaXSessionRuntimeInfo;
   /**
-   * v0.7.45 — carried through from `storage.list()` so the fast path
-   * populates `SessionSummary.createdAt`. Pre-v0.7.45 this field was
+   * v0.7.46 — carried through from `storage.list()` so the fast path
+   * populates `SessionSummary.createdAt`. Pre-v0.7.46 this field was
    * dropped on the fast path (storage.list() return shape lacked it),
    * so any consumer sorting by createdAt got `undefined` for every
    * entry on the common-case call.

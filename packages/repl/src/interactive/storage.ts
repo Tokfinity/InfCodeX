@@ -557,14 +557,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
   private readonly sessionsDir: string;
 
   /**
-   * v0.7.45 — optional explicit project cwd for in-process embedders
+   * v0.7.46 — optional explicit project cwd for in-process embedders
    * (KodaX Space) serving multiple projects from a single runtime.
    * Threaded through `getGitRoot(this.hostCwd)` and `inspectWorkspaceRuntime({cwd: this.hostCwd})`
    * so the workspace-mismatch check in `load()` compares against the
    * project the embedder opened, NOT the embedder's startup directory.
    * When set, mismatch warnings are also suppressed (the embedder is
    * authoritative about project scope; the CLI-mode warning is noise).
-   * Unset → all paths behave identically to the pre-v0.7.45 form.
+   * Unset → all paths behave identically to the pre-v0.7.46 form.
    */
   private readonly hostCwd?: string;
 
@@ -844,7 +844,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const { data, createdAt } = resolved;
     const filePath = this.getSessionFilePath(id);
 
-    // v0.7.45 fix — thread `this.hostCwd` so in-process embedders compare
+    // v0.7.46 fix — thread `this.hostCwd` so in-process embedders compare
     // against the project they actually opened, not the embedder
     // process's startup directory. With this, an embedder serving
     // multiple projects no longer gets false-positive workspace-mismatch
@@ -1030,14 +1030,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   /**
-   * v0.7.45 — `opts.limit` added so SDK consumers can request more than
+   * v0.7.46 — `opts.limit` added so SDK consumers can request more than
    * the legacy 10-entry cap. Default stays at 10 to preserve the
    * interactive REPL picker's behavior. The `public-api.ts` fast path
    * forwards the caller's `limit`; `deleteAll()` passes a large value
    * so it can enumerate ALL sessions for the gitRoot.
    *
-   * v0.7.45 — return now carries `createdAt` so the fast path in
-   * `public-api.ts` no longer silently strips it. Pre-v0.7.45 callers
+   * v0.7.46 — return now carries `createdAt` so the fast path in
+   * `public-api.ts` no longer silently strips it. Pre-v0.7.46 callers
    * that only destructured `{id, title, msgCount, runtimeInfo}` are
    * unaffected (extra fields are ignored).
    */
@@ -1130,7 +1130,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
             createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
-            // v0.7.45 fix — fall back to `sessionGitRoot` when the meta
+            // v0.7.46 fix — fall back to `sessionGitRoot` when the meta
             // record predates the nested `runtimeInfo` field. Without
             // this, legacy meta records returned `runtimeInfo:
             // undefined` even though `gitRoot` was right there at the
@@ -1172,7 +1172,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       }
     }
 
-    // v0.7.45 — `opts.limit` overrides the legacy 10-entry hard cap.
+    // v0.7.46 — `opts.limit` overrides the legacy 10-entry hard cap.
     // Default stays at 10 so the interactive REPL picker keeps its
     // existing behavior; SDK consumers pass an explicit limit.
     const limit = opts?.limit ?? 10;
@@ -1192,7 +1192,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return right.id.localeCompare(left.id);
       })
       .slice(0, limit)
-      // v0.7.45 — surface `createdAt` so the public-api fast path can
+      // v0.7.46 — surface `createdAt` so the public-api fast path can
       // populate `SessionSummary.createdAt` instead of silently
       // emitting `undefined` (previously every fast-path summary had
       // createdAt=undefined → consumer UIs sorting by date got
@@ -1213,7 +1213,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
   async deleteAll(gitRoot?: string): Promise<void> {
     const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
-    // v0.7.45 fix — bypass the legacy 10-entry cap so "delete all
+    // v0.7.46 fix — bypass the legacy 10-entry cap so "delete all
     // sessions for this project" actually deletes ALL of them. Pre-fix
     // `deleteAll()` silently leaked any session beyond the 10 most
     // recent because it reused `list()`'s default cap.

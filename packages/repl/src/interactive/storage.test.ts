@@ -154,7 +154,7 @@ describe('FileSessionStorage', () => {
       }),
     });
 
-    // v0.7.45 — list() now surfaces `createdAt` so the fast path in
+    // v0.7.46 — list() now surfaces `createdAt` so the fast path in
     // session/public-api.ts can populate SessionSummary.createdAt
     // instead of silently dropping it. Use objectContaining since the
     // session writer auto-stamps createdAt with `new Date().toISOString()`.
@@ -522,7 +522,7 @@ describe('FileSessionStorage', () => {
       ),
     ]);
 
-    // v0.7.45 — list() now surfaces `createdAt` (F3 fix). Verify
+    // v0.7.46 — list() now surfaces `createdAt` (F3 fix). Verify
     // ordering + payload via toMatchObject so we don't have to enumerate
     // exact timestamps.
     const listed = await storage.list(gitRoot);

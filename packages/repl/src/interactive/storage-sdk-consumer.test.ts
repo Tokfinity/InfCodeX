@@ -1,5 +1,5 @@
 /**
- * v0.7.45 — Regression tests for SDK-consumer footguns reported by
+ * v0.7.46 — Regression tests for SDK-consumer footguns reported by
  * KodaX Space (in-process embedder, ADR-003) plus 3 sibling issues
  * surfaced by the same audit. Each test corresponds to one bug class:
  *
@@ -39,7 +39,7 @@ async function writeMeta(id: string, meta: Record<string, unknown>): Promise<voi
   await writeFile(filePath, JSON.stringify({ _type: 'meta', ...meta }) + '\n', 'utf-8');
 }
 
-describe('v0.7.45 SDK-consumer footgun regression', () => {
+describe('v0.7.46 SDK-consumer footgun regression', () => {
   describe('F1 — fast path falls back to legacy top-level gitRoot', () => {
     it('legacy meta (no runtimeInfo, top-level gitRoot) → list() surfaces gitRoot via runtimeInfo.canonicalRepoRoot', async () => {
       // cwd: tempRoot is not a git repo → getGitRoot returns null → the
@@ -50,7 +50,7 @@ describe('v0.7.45 SDK-consumer footgun regression', () => {
       const storage = new FileSessionStorage({ sessionsDir, cwd: tempRoot });
       const legacyGitRoot = '/some/project/dir';
 
-      // Legacy meta shape: top-level gitRoot, NO runtimeInfo field. Pre-v0.7.45
+      // Legacy meta shape: top-level gitRoot, NO runtimeInfo field. Pre-v0.7.46
       // the fast path returned runtimeInfo: undefined for these.
       await writeMeta('legacy-session', {
         title: 'legacy',
@@ -240,7 +240,7 @@ describe('v0.7.45 SDK-consumer footgun regression', () => {
         });
         await storage.load(id);
 
-        // Pre-v0.7.45: at least one chunk would contain "[Warning]
+        // Pre-v0.7.46: at least one chunk would contain "[Warning]
         // Session project mismatch". Post-fix: hostCwd suppresses the
         // warning entirely.
         const warningChunks = stderrChunks.filter((c) =>
@@ -278,7 +278,7 @@ describe('v0.7.45 SDK-consumer footgun regression', () => {
 
       // deleteAll(undefined) deletes anything matching the storage's
       // resolved gitRoot (null in our tempRoot setup → no filter, all
-      // sessions targeted). Pre-v0.7.45 only the first 10 would be
+      // sessions targeted). Pre-v0.7.46 only the first 10 would be
       // deleted (deleteAll reused list()'s 10-cap), and 5 would
       // silently survive.
       await storage.deleteAll();
