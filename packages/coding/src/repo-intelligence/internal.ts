@@ -57,6 +57,31 @@ const STALE_TEMP_FILE_MS = 60 * 60 * 1000;
 // and a `.tmp` extension (e.g. a hypothetical `<base>.backup.tmp`).
 const OWN_TEMP_SUFFIX = /^\d+\.\d+\.tmp$/;
 
+// Windows transiently fails `rename` with these codes when the target (or the
+// temp source) is momentarily locked by AV / the search indexer / a concurrent
+// reader — the exact "locked by a concurrent reader" case noted below, and the
+// source of rare full-suite flakes (EPERM on the rename of a cache file). These
+// clear within milliseconds, so a few short retries recover; a genuinely
+// permanent failure (e.g. target is a directory → EISDIR/ENOTEMPTY, or EPERM
+// that never clears) still surfaces after the retry budget is spent.
+const RENAME_TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'EMFILE', 'ENFILE']);
+
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const maxAttempts = 5;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await fs.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (attempt >= maxAttempts || !code || !RENAME_TRANSIENT_CODES.has(code)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, attempt * 20));
+    }
+  }
+}
+
 export async function writeJsonFileAtomic(
   filePath: string,
   value: unknown,
@@ -66,7 +91,7 @@ export async function writeJsonFileAtomic(
   const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
     await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    await fs.rename(tempPath, filePath);
+    await renameWithRetry(tempPath, filePath);
   } catch (error) {
     // The write or rename failed (e.g. Windows EPERM when the target is
     // locked by a concurrent reader). Remove our own temp so failed writes

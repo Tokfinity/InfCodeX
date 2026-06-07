@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   mkdir,
   mkdtemp,
@@ -8,6 +8,7 @@ import {
   utimes,
   writeFile,
 } from 'fs/promises';
+import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 
@@ -85,6 +86,27 @@ describe('writeJsonFileAtomic', () => {
 
     await expect(writeJsonFileAtomic(target, { a: 1 })).rejects.toBeTruthy();
     expect(tempFiles(await readdir(dir))).toEqual([]);
+  });
+
+  it('retries a transient EPERM on rename and then succeeds (Windows lock flake)', async () => {
+    const target = path.join(dir, 'changed-scope.json');
+    const realRename = fs.rename.bind(fs);
+    let calls = 0;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      calls += 1;
+      if (calls === 1) {
+        throw Object.assign(new Error('mock transient lock'), { code: 'EPERM' });
+      }
+      return realRename(from, to);
+    });
+    try {
+      await writeJsonFileAtomic(target, { a: 1 });
+      expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ a: 1 });
+      expect(calls).toBeGreaterThanOrEqual(2); // failed once → retried → succeeded
+      expect(tempFiles(await readdir(dir))).toEqual([]); // temp consumed by the successful rename
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('sweeps stale orphan temp files for the same base on a successful write', async () => {
