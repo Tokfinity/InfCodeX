@@ -1213,7 +1213,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }>> {
     await this.ensureMigrated();
     await fs.mkdir(this.sessionsDir, { recursive: true });
-    // v0.7.47 fix — only auto-resolve gitRoot when the caller has
+    // v0.7.46 fix — only auto-resolve gitRoot when the caller has
     // signaled project intent (explicit `gitRoot` arg OR `hostCwd`
     // on the FileSessionStorage instance). Previously this fell
     // through to `getGitRoot(undefined)` → `git rev-parse` in the
@@ -1533,7 +1533,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   async deleteAll(gitRoot?: string): Promise<void> {
-    // v0.7.47 fix — mirror list()'s revised gitRoot semantic. Only
+    // v0.7.46 fix — mirror list()'s revised gitRoot semantic. Only
     // auto-resolve when caller has signaled project intent (either
     // explicit gitRoot OR hostCwd on the storage instance). Otherwise
     // null → list() returns all projects' sessions → deleteAll wipes

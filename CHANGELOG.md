@@ -4,16 +4,6 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
-## [0.7.47] - Unreleased
-
-### Fixed
-
-- **SDK session listing — fast path no longer auto-filters by `process.cwd()` when no project intent is supplied.** KodaX Space (in-process embedder, ADR-003) reported that after v0.7.46's FEATURE_219 (per-project session storage) ship, their sidebar still showed only Space-repo sessions even though the user had opened a different project. Root cause: `FileSessionStorage.list(undefined)` resolved `currentGitRoot` via `getGitRoot(this.hostCwd)`, and when the embedder constructed `new FileSessionStorage()` WITHOUT `cwd`, that fell through to `git rev-parse` in the host process's `process.cwd()` — Space's own startup directory, NOT the project the user opened. The resulting `currentGitRoot` then drove the per-project loop at `storage.ts:1237` (`projectDirNames = currentGitRoot ? [currentProjectKey] : <all>`) to scan only Space's project subdir → user saw nothing. v0.7.46's fix had inadvertently preserved the broken behavior for the common SDK-consumer shape (storage constructed with no `cwd`). The Space team shipped a workaround in their own code that forces the slow path by injecting `before: '2999-01-01T00:00:00.000Z'` — fragile and surprising.
-  - **Fix**: when both `gitRoot` arg AND `this.hostCwd` are unset, no auto-resolve from `process.cwd()` — `currentGitRoot` stays null, and the per-project loop scans all project dirs (matching the slow path's semantic). Applied to both `list()` (Space's reported case) and `deleteAll()` (no production callers; consistency). The CLI is unaffected: REPL paths already pass `gitRoot` explicitly via `storage.list(context.gitRoot ?? undefined)`.
-  - **Side update**: `packages/coding/src/agent-runtime/middleware/auto-resume.ts` now passes `options.context?.gitRoot` to `storage.list()` so CLI `kodax --resume` preserves its "pick the most recent session in this project" semantic (pre-v0.7.47 it relied on the implicit `process.cwd()` resolution we just removed).
-  - 2 new regression tests (`storage-sdk-consumer.test.ts`) — cross-project listing without project intent + filter-by-cwd when set; existing 10 tests in the same file unchanged.
-  - SDK consumers can now revert workarounds that force the slow path; the natural call shape works.
-
 ## [0.7.46] - 2026-06-07
 
 ### Added
@@ -39,6 +29,11 @@ All notable changes to this project will be documented in this file.
   - **F5 — `deleteAll()` no longer silently caps at 10.** Pre-fix it reused `list()`'s default cap, so "delete all sessions for this project" left up to N−10 sessions behind. Now passes `limit: Number.MAX_SAFE_INTEGER` so it enumerates the full set.
   - **Defense-in-depth**: `common/utils.ts` `getGitRoot()` now accepts an optional `cwd` parameter (same shape as the agent-runtime `getGitRoot` fixed earlier in v0.7.45). Existing zero-arg callers (5 sites: storage, REPL, InkREPL) unchanged.
   - 10 new regression tests (`interactive/storage-sdk-consumer.test.ts`) cover all 5 fixes + 2 existing tests in `storage.test.ts` updated to assert the new `createdAt` field. Pre-existing 237 interactive/session tests still pass.
+- **SDK session listing — F6 follow-up: fast path no longer auto-filters by `process.cwd()` when no project intent is supplied.** KodaX Space reported that even after the F1–F5 fixes above + FEATURE_219 (per-project session storage), the sidebar still showed only Space-repo sessions when the user had opened a different project. Root cause: `FileSessionStorage.list(undefined)` resolved `currentGitRoot` via `getGitRoot(this.hostCwd)`, and when an embedder constructs `new FileSessionStorage()` WITHOUT `cwd`, that fell through to `git rev-parse` in the host process's `process.cwd()` — the embedder's own startup directory, NOT the project the user opened. The resulting `currentGitRoot` then drove the per-project loop at `storage.ts:1237` (`projectDirNames = currentGitRoot ? [currentProjectKey] : <all>`) to scan only the embedder's project subdir → user saw nothing. F4 above had inadvertently preserved the broken behavior for the common SDK-consumer shape (storage constructed with no `cwd`). The Space team shipped a workaround in their own code that forces the slow path by injecting `before: '2999-01-01T00:00:00.000Z'` — fragile and surprising.
+  - **Fix**: when both `gitRoot` arg AND `this.hostCwd` are unset, no auto-resolve from `process.cwd()` — `currentGitRoot` stays null, and the per-project loop scans all project dirs (matching the slow path's semantic). Applied to both `list()` (Space's reported case) and `deleteAll()` (no production callers; consistency). The CLI is unaffected: REPL paths already pass `gitRoot` explicitly via `storage.list(context.gitRoot ?? undefined)`.
+  - **Side update**: `packages/coding/src/agent-runtime/middleware/auto-resume.ts` now passes `options.context?.gitRoot` to `storage.list()` so CLI `kodax --resume` preserves its "pick the most recent session in this project" semantic (pre-fix it relied on the implicit `process.cwd()` resolution we just removed).
+  - 2 new regression tests in `storage-sdk-consumer.test.ts` — cross-project listing without project intent + filter-by-cwd when set.
+  - SDK consumers can now revert workarounds that force the slow path; the natural call shape works.
 
 ## [0.7.45] - 2026-06-01
 

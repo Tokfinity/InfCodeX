@@ -178,12 +178,12 @@ export async function discoverAutoResumeSessionId(
   const storage = options.session?.storage;
   if (!storage?.list) return undefined;
 
-  // v0.7.47 fix — pass `options.context?.gitRoot` explicitly so CLI
+  // v0.7.46 fix — pass `options.context?.gitRoot` explicitly so CLI
   // auto-resume keeps filtering by the user's current project
   // (`kodax --resume` should pick the most recent session IN THIS
-  // PROJECT, not across all projects). Pre-v0.7.47 the storage
+  // PROJECT, not across all projects). Pre-v0.7.46 the storage
   // layer auto-resolved from `process.cwd()`, which was correct for
-  // CLI but wrong for in-process SDK embedders. v0.7.47 stops the
+  // CLI but wrong for in-process SDK embedders. v0.7.46 stops the
   // implicit cwd resolution; this caller now signals project intent
   // via the existing `context.gitRoot` field. SDK callers typically
   // pass `options.session.id` explicitly and short-circuit at line

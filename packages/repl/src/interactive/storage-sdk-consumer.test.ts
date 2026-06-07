@@ -253,7 +253,7 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
   });
 
-  describe('F6 v0.7.47 — list() with no project intent → scans ALL projects (not process.cwd())', () => {
+  describe('F6 v0.7.46 — list() with no project intent → scans ALL projects (not process.cwd())', () => {
     // Regression for the bug Space reported after v0.7.46 ship:
     // even with v0.7.46's `getGitRoot(this.hostCwd)` fix, when an
     // in-process embedder constructs `new FileSessionStorage()` WITHOUT
@@ -261,7 +261,7 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     // silently filtered by `process.cwd()` of the host process (e.g.
     // KodaX-Space's startup dir). The user saw an empty sidebar.
     //
-    // v0.7.47 fix: when both signals are absent, don't filter at all —
+    // v0.7.46 fix: when both signals are absent, don't filter at all —
     // return sessions from every project directory.
 
     it('storage with no hostCwd + list(undefined) → returns sessions across multiple project dirs', async () => {
@@ -308,7 +308,7 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
 
       const result = await storage.list(undefined, { limit: 50 });
 
-      // Pre-v0.7.47: storage resolved process.cwd() → some-implicit-project
+      // Pre-v0.7.46: storage resolved process.cwd() → some-implicit-project
       // → only that project's dir scanned → either 0 or 1 sessions
       // returned depending on whether tests happened to run in a matching
       // project. Post-fix: both projects' sessions surface.
