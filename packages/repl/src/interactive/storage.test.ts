@@ -959,4 +959,38 @@ describe('FileSessionStorage', () => {
     expect(existsSync(path.join(sessionsDir, '20260701_000000.jsonl'))).toBe(false); // moved out of flat
     expect(listed.map((s) => s.id).sort()).toEqual(['20260701_000000', '20260701_000001']);
   });
+
+  it('FEATURE_219: archive() hides a session from the default list; includeArchived + unarchive restore it', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260801_000000', {
+      messages: [{ role: 'user', content: 'to archive' }],
+      title: 'Archive Me',
+      gitRoot,
+      scope: 'user',
+    });
+
+    expect(await storage.archive('20260801_000000')).toBe(true);
+
+    const projectDir = path.join(
+      tempHome, '.kodax', 'sessions', deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    expect(existsSync(path.join(projectDir, 'archived', '20260801_000000.jsonl'))).toBe(true);
+    expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(false);
+
+    // Hidden from default list, visible with includeArchived, still loadable by id.
+    expect((await storage.list(gitRoot)).map((s) => s.id)).not.toContain('20260801_000000');
+    const withArchived = await storage.list(gitRoot, { includeArchived: true });
+    const archivedEntry = withArchived.find((s) => s.id === '20260801_000000');
+    expect(archivedEntry?.archived).toBe(true);
+    expect((await storage.load('20260801_000000'))?.title).toBe('Archive Me');
+
+    // Unarchive restores it to the default list.
+    expect(await storage.unarchive('20260801_000000')).toBe(true);
+    expect(existsSync(path.join(projectDir, '20260801_000000.jsonl'))).toBe(true);
+    expect((await storage.list(gitRoot)).map((s) => s.id)).toContain('20260801_000000');
+  });
 });

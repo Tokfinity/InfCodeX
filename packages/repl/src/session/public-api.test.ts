@@ -271,8 +271,8 @@ describe('Session Management Public SDK', () => {
     process.platform === 'win32' ? 5000 : 2000,
   );
 
-  // ── Test 12: createSessionManager returns object with all 8 methods + storage ───
-  it('createSessionManager returns an object with all 8 expected methods and a storage field', async () => {
+  // ── Test 12: createSessionManager returns object with all methods + storage ───
+  it('createSessionManager returns an object with all expected methods and a storage field', async () => {
     const manager = api.createSessionManager() as Record<string, unknown>;
     const expectedMethods = [
       'listSessions',
@@ -281,6 +281,8 @@ describe('Session Management Public SDK', () => {
       'rewindSession',
       'setActiveEntry',
       'deleteSession',
+      'archiveSession', // FEATURE_219
+      'unarchiveSession', // FEATURE_219
       'listRunningSessions',
       'watchSessions',
     ];

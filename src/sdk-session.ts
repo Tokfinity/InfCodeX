@@ -51,6 +51,8 @@ export {
   rewindSession,
   setActiveEntry,
   deleteSession,
+  archiveSession,
+  unarchiveSession,
   listRunningSessions,
   watchSessions,
   createSessionManager,

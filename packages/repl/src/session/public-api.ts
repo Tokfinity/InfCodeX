@@ -93,6 +93,9 @@ export interface SessionSummary {
    * for precise disambiguation, but `loadSession(id)` works without it.
    */
   readonly projectKey?: string;
+  /** FEATURE_219 — true when the session is whole-session archived (only ever
+   * surfaced when `includeArchived` is set). */
+  readonly archived?: boolean;
 }
 
 export interface ListSessionsOptions {
@@ -109,8 +112,9 @@ export interface ListSessionsOptions {
    */
   readonly scope?: 'user' | 'managed-task-worker' | 'all';
   /**
-   * Whether to include archived sessions (filename starts with `archived-`).
-   * Default false — no archived sessions exist today; reserved for future use.
+   * Whether to include whole-session-archived sessions. FEATURE_219 (v0.7.46):
+   * archived sessions live in `<projectKey>/archived/` (see `archiveSession`);
+   * also still hides the legacy `archived-` filename prefix. Default false.
    */
   readonly includeArchived?: boolean;
   /** Maximum number of sessions to return. Default 50. */
@@ -133,6 +137,8 @@ export interface SessionManager {
   rewindSession: typeof rewindSession;
   setActiveEntry: typeof setActiveEntry;
   deleteSession: typeof deleteSession;
+  archiveSession: typeof archiveSession;
+  unarchiveSession: typeof unarchiveSession;
   listRunningSessions: typeof listRunningSessions;
   watchSessions: typeof watchSessions;
   /**
@@ -215,6 +221,7 @@ async function listSessionsImpl(
       try {
         const id = path.basename(filePath, '.jsonl');
         if (seenIds.has(id)) continue;
+        const archived = path.basename(path.dirname(filePath)) === 'archived';
         const content = (await fsPromises.readFile(filePath, 'utf-8')).trim();
         const firstLine = content.split('\n')[0];
         if (!firstLine) continue;
@@ -269,6 +276,7 @@ async function listSessionsImpl(
           createdAt,
           runtimeInfo: ri,
           projectKey,
+          ...(archived ? { archived: true } : {}),
           _createdAtMs: createdAt ? Date.parse(createdAt) : undefined,
         });
       } catch {
@@ -289,13 +297,14 @@ async function listSessionsImpl(
       return b.id.localeCompare(a.id);
     });
 
-    return sessions.slice(0, limit).map(({ id, title, msgCount, createdAt, runtimeInfo, projectKey }) => ({
+    return sessions.slice(0, limit).map(({ id, title, msgCount, createdAt, runtimeInfo, projectKey, archived }) => ({
       id,
       title,
       msgCount,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
       ...(projectKey !== undefined ? { projectKey } : {}),
+      ...(archived ? { archived: true } : {}),
     }));
   } catch {
     return [];
@@ -514,6 +523,39 @@ async function deleteSessionImpl(
   }
 }
 
+// ── archiveSession / unarchiveSession ─────────────────────────────────────────
+
+/**
+ * FEATURE_219 (v0.7.46) — whole-session archive. Moves the session (and its
+ * island sidecar) into `<projectKey>/archived/`. Returns false for a missing
+ * session. NEVER throws. Archived sessions are hidden from the default listing
+ * and resurface only with `listSessions({ includeArchived: true })`.
+ */
+export async function archiveSession(id: string): Promise<boolean> {
+  return archiveSessionImpl(id, undefined);
+}
+
+async function archiveSessionImpl(id: string, sessionsDirOverride: string | undefined): Promise<boolean> {
+  try {
+    return await getStorage(sessionsDirOverride).archive(id);
+  } catch {
+    return false;
+  }
+}
+
+/** Restore an archived session back into its project directory. NEVER throws. */
+export async function unarchiveSession(id: string): Promise<boolean> {
+  return unarchiveSessionImpl(id, undefined);
+}
+
+async function unarchiveSessionImpl(id: string, sessionsDirOverride: string | undefined): Promise<boolean> {
+  try {
+    return await getStorage(sessionsDirOverride).unarchive(id);
+  } catch {
+    return false;
+  }
+}
+
 // ── watchSessions ─────────────────────────────────────────────────────────────
 
 /**
@@ -726,6 +768,8 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
       rewindSession,
       setActiveEntry,
       deleteSession,
+      archiveSession,
+      unarchiveSession,
       listRunningSessions,
       watchSessions,
       storage,
@@ -738,6 +782,8 @@ export function createSessionManager(opts?: { sessionsDir?: string }): SessionMa
     rewindSession: (id, o) => rewindSessionImpl(id, o, sessionsDir),
     setActiveEntry: (id, selector) => setActiveEntryImpl(id, selector, sessionsDir),
     deleteSession: (id) => deleteSessionImpl(id, sessionsDir),
+    archiveSession: (id) => archiveSessionImpl(id, sessionsDir),
+    unarchiveSession: (id) => unarchiveSessionImpl(id, sessionsDir),
     listRunningSessions,
     watchSessions: (cb) => watchSessionsImpl(cb, sessionsDir),
     storage,

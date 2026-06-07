@@ -1198,12 +1198,13 @@ export class FileSessionStorage implements KodaXSessionStorage {
    */
   async list(
     gitRoot?: string,
-    opts?: { limit?: number },
+    opts?: { limit?: number; includeArchived?: boolean },
   ): Promise<Array<{
     id: string;
     title: string;
     msgCount: number;
     runtimeInfo?: KodaXSessionRuntimeInfo;
+    archived?: boolean;
     createdAt?: string;
   }>> {
     await this.ensureMigrated();
@@ -1223,11 +1224,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // IS the canonical identity, so they skip the per-file canonical match
     // filter below (which could otherwise hide a correctly-placed session on a
     // stored-runtimeInfo quirk). Flat-pool files are untrusted and still filter.
-    const candidatePaths: Array<{ path: string; trusted: boolean }> = [];
+    const candidatePaths: Array<{ path: string; trusted: boolean; archived: boolean }> = [];
     const currentProjectKey = deriveProjectKeyFromData({
       gitRoot: currentGitRoot ?? undefined,
       runtimeInfo: currentRuntime,
     }).key;
+    const isSidecar = (f: string): boolean => f.endsWith('.archive.jsonl') || f.endsWith('.islands.jsonl');
     const projectDirNames = currentGitRoot
       ? [currentProjectKey]
       : topEntries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
@@ -1239,8 +1241,26 @@ export class FileSessionStorage implements KodaXSessionStorage {
         continue;
       }
       for (const f of dirFiles) {
-        if (f.endsWith('.jsonl') && !f.endsWith('.archive.jsonl') && !f.endsWith('.islands.jsonl')) {
-          candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: Boolean(currentGitRoot) });
+        if (f.endsWith('.jsonl') && !isSidecar(f)) {
+          candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: Boolean(currentGitRoot), archived: false });
+        }
+      }
+      // FEATURE_219 Phase 4 — whole-session archive lives in <key>/archived/.
+      if (opts?.includeArchived) {
+        let archivedFiles: string[] = [];
+        try {
+          archivedFiles = await fs.readdir(path.join(this.projectDir(key), 'archived'));
+        } catch {
+          archivedFiles = [];
+        }
+        for (const f of archivedFiles) {
+          if (f.endsWith('.jsonl') && !isSidecar(f)) {
+            candidatePaths.push({
+              path: path.join(this.projectDir(key), 'archived', f),
+              trusted: Boolean(currentGitRoot),
+              archived: true,
+            });
+          }
         }
       }
     }
@@ -1248,12 +1268,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
       if (
         e.isFile() &&
         e.name.endsWith('.jsonl') &&
-        !e.name.endsWith('.archive.jsonl') &&
-        !e.name.endsWith('.islands.jsonl') &&
+        !isSidecar(e.name) &&
         !e.name.startsWith('archived-') &&
         !e.name.startsWith('.') // skip control files like .migration-journal.jsonl
       ) {
-        candidatePaths.push({ path: path.join(this.sessionsDir, e.name), trusted: false });
+        candidatePaths.push({ path: path.join(this.sessionsDir, e.name), trusted: false, archived: false });
       }
     }
 
@@ -1262,11 +1281,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
       title: string;
       msgCount: number;
       createdAt?: string;
+      archived?: boolean;
       runtimeInfo?: KodaXSessionRuntimeInfo;
     }> = [];
 
     type SessionEntry = (typeof sessions)[number];
-    const parseSessionFile = async (filePath: string, trusted: boolean): Promise<SessionEntry | null> => {
+    const parseSessionFile = async (filePath: string, trusted: boolean, archived: boolean): Promise<SessionEntry | null> => {
       try {
         const firstLine = await readSessionFirstLine(filePath);
         if (!firstLine) {
@@ -1335,10 +1355,16 @@ export class FileSessionStorage implements KodaXSessionStorage {
               : sessionGitRoot
                 ? { canonicalRepoRoot: sessionGitRoot }
                 : undefined,
+            ...(archived ? { archived: true } : {}),
           };
         }
         const lineCount = await countSessionLines(filePath);
-        return { id: path.basename(filePath, '.jsonl'), title: '', msgCount: lineCount };
+        return {
+          id: path.basename(filePath, '.jsonl'),
+          title: '',
+          msgCount: lineCount,
+          ...(archived ? { archived: true } : {}),
+        };
       } catch {
         return null;
       }
@@ -1351,7 +1377,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const seenIds = new Set<string>();
     for (let i = 0; i < candidatePaths.length; i += LIST_READ_CONCURRENCY) {
       const batch = await Promise.all(
-        candidatePaths.slice(i, i + LIST_READ_CONCURRENCY).map((c) => parseSessionFile(c.path, c.trusted)),
+        candidatePaths.slice(i, i + LIST_READ_CONCURRENCY).map((c) => parseSessionFile(c.path, c.trusted, c.archived)),
       );
       for (const entry of batch) {
         if (entry && !seenIds.has(entry.id)) {
@@ -1386,11 +1412,61 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // emitting `undefined` (previously every fast-path summary had
       // createdAt=undefined → consumer UIs sorting by date got
       // random order).
-      .map(({ id, title, msgCount, runtimeInfo, createdAt }) => (
-        runtimeInfo
-          ? { id, title, msgCount, runtimeInfo, createdAt }
-          : { id, title, msgCount, createdAt }
-      ));
+      .map(({ id, title, msgCount, runtimeInfo, createdAt, archived }) => ({
+        id,
+        title,
+        msgCount,
+        ...(runtimeInfo ? { runtimeInfo } : {}),
+        ...(createdAt !== undefined ? { createdAt } : {}),
+        ...(archived ? { archived: true } : {}),
+      }));
+  }
+
+  /**
+   * FEATURE_219 Phase 4 — whole-session archive (ADR-038 §4). Moves the session
+   * file together with its island sidecar into `<projectKey>/archived/`. Paired
+   * (never orphans the sidecar). No-op + returns false for a missing session.
+   */
+  async archive(id: string): Promise<boolean> {
+    await this.ensureMigrated();
+    const located = await this.resolveSessionLocation(id);
+    if (!located) {
+      return false;
+    }
+    const dir = path.dirname(located);
+    if (path.basename(dir) === 'archived') {
+      return true; // already archived
+    }
+    await this.movePair(id, dir, path.join(dir, 'archived'));
+    this.sessionDirCache.delete(id);
+    return true;
+  }
+
+  /** Restore an archived session back into its project directory. */
+  async unarchive(id: string): Promise<boolean> {
+    await this.ensureMigrated();
+    const located = await this.resolveSessionLocation(id);
+    if (!located) {
+      return false;
+    }
+    const dir = path.dirname(located);
+    if (path.basename(dir) !== 'archived') {
+      return true; // not archived
+    }
+    await this.movePair(id, dir, path.dirname(dir));
+    this.sessionDirCache.delete(id);
+    return true;
+  }
+
+  /** Move a session + its island sidecar between two directories. */
+  private async movePair(id: string, fromDir: string, toDir: string): Promise<void> {
+    await fs.mkdir(toDir, { recursive: true });
+    for (const name of [`${id}.jsonl`, `${id}.islands.jsonl`]) {
+      const src = path.join(fromDir, name);
+      if (fsSync.existsSync(src)) {
+        await fs.rename(src, path.join(toDir, name)).catch(() => undefined);
+      }
+    }
   }
 
   async delete(id: string): Promise<void> {
