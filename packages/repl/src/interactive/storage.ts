@@ -1213,7 +1213,21 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }>> {
     await this.ensureMigrated();
     await fs.mkdir(this.sessionsDir, { recursive: true });
-    const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
+    // v0.7.47 fix — only auto-resolve gitRoot when the caller has
+    // signaled project intent (explicit `gitRoot` arg OR `hostCwd`
+    // on the FileSessionStorage instance). Previously this fell
+    // through to `getGitRoot(undefined)` → `git rev-parse` in the
+    // host process's `process.cwd()`, which is the SDK consumer's
+    // startup directory (NOT the project the user opened) for
+    // in-process embedders like KodaX Space. Result: the
+    // per-project filter at line 1237 (`currentGitRoot ? [currentProjectKey]
+    // : <all dirs>`) silently selected the wrong project,
+    // and the user saw an empty session list. With no project
+    // intent supplied, `currentGitRoot` stays null → the
+    // per-project loop scans all project dirs (the "show me
+    // everything" behavior the slow path provides).
+    const currentGitRoot =
+      gitRoot ?? (this.hostCwd ? await getGitRoot(this.hostCwd) : null);
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
     });
@@ -1519,7 +1533,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   async deleteAll(gitRoot?: string): Promise<void> {
-    const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
+    // v0.7.47 fix — mirror list()'s revised gitRoot semantic. Only
+    // auto-resolve when caller has signaled project intent (either
+    // explicit gitRoot OR hostCwd on the storage instance). Otherwise
+    // null → list() returns all projects' sessions → deleteAll wipes
+    // everything. No production callers were found at v0.7.46; the
+    // method is purely SDK surface.
+    const currentGitRoot =
+      gitRoot ?? (this.hostCwd ? await getGitRoot(this.hostCwd) : null);
     // v0.7.46 fix — bypass the legacy 10-entry cap so "delete all
     // sessions for this project" actually deletes ALL of them. Pre-fix
     // `deleteAll()` silently leaked any session beyond the 10 most

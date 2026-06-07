@@ -253,6 +253,89 @@ describe('v0.7.46 SDK-consumer footgun regression', () => {
     });
   });
 
+  describe('F6 v0.7.47 — list() with no project intent → scans ALL projects (not process.cwd())', () => {
+    // Regression for the bug Space reported after v0.7.46 ship:
+    // even with v0.7.46's `getGitRoot(this.hostCwd)` fix, when an
+    // in-process embedder constructs `new FileSessionStorage()` WITHOUT
+    // a `cwd` arg AND calls `list()` WITHOUT a `gitRoot` arg, the storage
+    // silently filtered by `process.cwd()` of the host process (e.g.
+    // KodaX-Space's startup dir). The user saw an empty sidebar.
+    //
+    // v0.7.47 fix: when both signals are absent, don't filter at all —
+    // return sessions from every project directory.
+
+    it('storage with no hostCwd + list(undefined) → returns sessions across multiple project dirs', async () => {
+      // FEATURE_219 (v0.7.46) uses `{sessionsDir}/{projectKey}/{id}.jsonl`
+      // layout. To simulate cross-project sessions, write to two
+      // distinct project subdirs. The list() call should surface BOTH
+      // when no project intent is supplied.
+      const storage = new FileSessionStorage({ sessionsDir });
+      // Create per-project subdirs the way FEATURE_219 expects.
+      const projAKey = 'proj-a-key';
+      const projBKey = 'proj-b-key';
+      await mkdir(path.join(sessionsDir, projAKey), { recursive: true });
+      await mkdir(path.join(sessionsDir, projBKey), { recursive: true });
+      // Each session's meta carries the relevant project gitRoot;
+      // .layout.json marker tells the migrator the dir is already
+      // migrated so list() goes straight to the per-project loop.
+      await writeFile(
+        path.join(sessionsDir, '.layout.json'),
+        JSON.stringify({ version: 1 }),
+        'utf-8',
+      );
+      await writeFile(
+        path.join(sessionsDir, projAKey, 'sess-a.jsonl'),
+        JSON.stringify({
+          _type: 'meta',
+          title: 'A',
+          gitRoot: '/project/A',
+          createdAt: '2026-06-01T10:00:00.000Z',
+          activeMessageCount: 1,
+        }) + '\n',
+        'utf-8',
+      );
+      await writeFile(
+        path.join(sessionsDir, projBKey, 'sess-b.jsonl'),
+        JSON.stringify({
+          _type: 'meta',
+          title: 'B',
+          gitRoot: '/project/B',
+          createdAt: '2026-06-02T10:00:00.000Z',
+          activeMessageCount: 1,
+        }) + '\n',
+        'utf-8',
+      );
+
+      const result = await storage.list(undefined, { limit: 50 });
+
+      // Pre-v0.7.47: storage resolved process.cwd() → some-implicit-project
+      // → only that project's dir scanned → either 0 or 1 sessions
+      // returned depending on whether tests happened to run in a matching
+      // project. Post-fix: both projects' sessions surface.
+      const ids = result.map((s) => s.id).sort();
+      expect(ids).toEqual(['sess-a', 'sess-b']);
+    });
+
+    it('storage WITH hostCwd → respects embedder filter (only matching project)', async () => {
+      // When the embedder explicitly tells the SDK which project they
+      // opened (via the constructor cwd option), the per-project
+      // filter is correct. Use tempRoot — a non-git directory — so
+      // `getGitRoot(tempRoot)` returns null and the test still
+      // exercises the "embedder set hostCwd but no git root resolves"
+      // branch: still falls into the "scan all" path, because hostCwd
+      // alone without a resolvable git root produces null currentGitRoot.
+      const storage = new FileSessionStorage({
+        sessionsDir,
+        cwd: tempRoot,
+      });
+      await writeMeta('alone', { title: 'x', gitRoot: '/anywhere', activeMessageCount: 1 });
+
+      const result = await storage.list(undefined, { limit: 50 });
+      expect(result.length).toBe(1);
+      expect(result[0]?.id).toBe('alone');
+    });
+  });
+
   describe('F5 — deleteAll() removes ALL sessions (no silent cap)', () => {
     it('15 sessions for gitRoot → deleteAll deletes all 15', async () => {
       // cwd: tempRoot is not a git repo → getGitRoot returns null → the
