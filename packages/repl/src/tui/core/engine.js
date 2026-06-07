@@ -29,9 +29,21 @@ const cursorMoveSeq = (dx, dy) =>
 // `y - viewportY`, clamped to the viewport. WITHOUT this, the input target's large
 // frame-Y produces a huge cursorDown to content-bottom instead of a small move to
 // the input bar — the "input lands below the status bar with scrollback" bug.
-const toVisibleCursor = (frame) => {
+// FEATURE_214: on the inline main-screen path (`inlineBottomAnchored`) the clamp
+// ceiling is `min(viewport.height - 1, screen.height - 1)`, so the resting cursor
+// (renderer.js parks it at `screen.height`, one past the last row) maps to the
+// frame's OWN last row — matching where `clampRestingCursor` + the suppressed
+// last-row `\n` physically leave it, so the suffix's relative move to the input
+// anchor and `returnCursorToRest` stay byte-accurate. The input anchor itself
+// (y ≤ screen.height - 1) is never clipped, so the cursor still lands in the input
+// bar exactly as before. WITHOUT the flag (alt-screen / fullscreen) the ceiling is
+// the original `viewport.height - 1`, so a non-filling fullscreen frame whose
+// resting cursor is genuinely one past its last row is mapped without an off-by-one.
+const toVisibleCursor = (frame, inlineBottomAnchored = false) => {
     const viewportY = Math.max(0, frame.screen.height - frame.viewport.height);
-    const maxY = Math.max(0, frame.viewport.height - 1);
+    const maxY = inlineBottomAnchored
+        ? Math.max(0, Math.min(frame.viewport.height - 1, frame.screen.height - 1))
+        : Math.max(0, frame.viewport.height - 1);
     return (point) => ({
         x: point.x,
         y: Math.min(Math.max(point.y - viewportY, 0), maxY),
@@ -236,9 +248,9 @@ const Ink = class Ink {
             // erase-on-shrink keeps the screen clean across the resize.
             // FEATURE_214: return the cursor to content-bottom before the erase
             // (and before prevFrame is reseeded below, which returnCursorToRest reads).
-            // Inline (main-screen) erases lastOutputHeight+1 rows to clear row 0 too
-            // (eraseInlineLiveBlock); fullscreen/alt-screen keeps the clamped-cursor
-            // eraseLines(lastOutputHeight) which already covers row 0.
+            // Both paths now rest on the last content row and erase lastOutputHeight
+            // rows (row 0 included): inline via eraseInlineLiveBlock, fullscreen/
+            // alt-screen via the clamped-cursor eraseLines(lastOutputHeight).
             this.returnCursorToRest();
             const eraseSeq = this.altScreenActive
                 ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')
@@ -461,11 +473,29 @@ const Ink = class Ink {
         if (hasStaticOutput) {
             this.fullStaticOutput += staticOutput;
         }
-        // FEATURE_214 cursor PREFIX: every render path past this point (eraseLines,
-        // cell growth, cell diff) assumes the terminal cursor rests at content-
-        // bottom. If the previous render parked it at the input anchor (the suffix),
-        // return it there first.
-        this.returnCursorToRest();
+        // FEATURE_214 — inline cursor TRANSACTION. The inline main-screen frame
+        // (prefix return-to-rest + erase/static + cell diff + suffix move-to-input)
+        // must reach the terminal as ONE atomic write. Three separate writes let
+        // Windows Terminal / ConPTY / IME sample the cursor at the resting row
+        // mid-frame, so the CJK preedit / candidate box flickers between the input
+        // bar and the status line at the spinner frame rate. When inline AND an input
+        // anchor exists, buffer every byte into `txn` and flush once below (BSU/ESU
+        // when the terminal supports synchronized output); otherwise `emit` writes
+        // straight through (fullscreen / no-anchor paths, byte-identical to before).
+        // `sink` routes applyCellFrame's diff into the same buffer.
+        const inlineCursorTxn = !this.altScreenActive && !!(frame && frame.inputCursor);
+        const txn = inlineCursorTxn ? [] : null;
+        const emit = (seq) => {
+            if (!seq) return;
+            if (txn) txn.push(seq);
+            else this.options.stdout.write(seq);
+        };
+        const sink = txn ? { write: emit } : null;
+        // PREFIX: every render path past this point (eraseLines, cell growth, cell
+        // diff) assumes the terminal cursor rests at content-bottom. If the previous
+        // render parked it at the input anchor (the suffix), return it there first —
+        // buffered into the txn for the inline path so it is never a standalone write.
+        emit(this.computeReturnToRestSeq());
         const usesManagedVirtualFullscreenShell = this.altScreenActive;
         const shouldUseFullscreenFrameOwnership = this.options.stdout.isTTY
             && outputHeight >= this.options.stdout.rows
@@ -548,89 +578,101 @@ const Ink = class Ink {
             }
             return;
         }
-        if (hasStaticOutput) {
-            const sync = shouldSynchronize(this.options.stdout);
-            if (sync) {
-                this.options.stdout.write(bsu);
+        // Per-branch BSU/ESU only when NOT buffering the inline txn (the txn flush
+        // below owns the brackets for the inline path; the alt-screen non-filling
+        // path that also reaches here keeps its per-branch sync, byte-identical).
+        const branchSync = !txn && shouldSynchronize(this.options.stdout);
+        // try/finally: the buffered txn MUST be flushed even if applyCellFrame throws,
+        // so the prefix return-to-rest still reaches the terminal and the physical
+        // cursor stays consistent with the displayCursor that computeReturnToRestSeq
+        // already cleared (parity with the old immediate-write returnCursorToRest —
+        // without this, a render exception would strand the cursor at the input anchor
+        // while displayCursor reads null, corrupting every later erase).
+        try {
+            if (hasStaticOutput) {
+                if (branchSync) emit(bsu);
+                // Phase 6: erase main render area, write the new <Static> block
+                // (which scrolls up into terminal scrollback), then paint the
+                // main render via the cell renderer. invalidateCellFrame()
+                // before applyCellFrame so the cell path treats this as a
+                // first-render at the current cursor position (post-static).
+                // The entry-level cursor prefix (FEATURE_214) already dropped the
+                // terminal cursor to content-bottom (the last content row); the
+                // inline-live-block erase covers row 0 too so no live row leaks above
+                // the freshly committed <Static> block.
+                emit(this.eraseInlineLiveBlock() + staticOutput);
+                this.invalidateCellFrame();
+                this.applyCellFrame(frame, sink);
+                if (branchSync) emit(esu);
             }
-            // Phase 6: erase main render area, write the new <Static> block
-            // (which scrolls up into terminal scrollback), then paint the
-            // main render via the cell renderer. invalidateCellFrame()
-            // before applyCellFrame so the cell path treats this as a
-            // first-render at the current cursor position (post-static).
-            // The entry-level cursor prefix (FEATURE_214) already dropped the
-            // terminal cursor to content-bottom (one past the last row); the
-            // inline-live-block erase covers row 0 too so no live row leaks above
-            // the freshly committed <Static> block.
-            const eraseSeq = this.eraseInlineLiveBlock();
-            this.options.stdout.write(eraseSeq + staticOutput);
-            this.invalidateCellFrame();
-            this.applyCellFrame(frame);
-            if (sync) {
-                this.options.stdout.write(esu);
+            else if (!this.altScreenActive
+                && this.prevFrame
+                && this.prevFrame.screen.height !== frame.screen.height
+                && this.lastOutputHeight > 0
+                // FEATURE_214 step 5 — the erase+repaint only manages the VISIBLE live
+                // block; eraseLines cannot reach rows already in native scrollback. So it
+                // is valid ONLY when both the old and new live blocks fit the viewport. A
+                // taller-than-viewport frame means the upstream live frame was NOT bounded
+                // (a bug to fix there, not here) — fall through to the plain cell diff,
+                // which scrolls naturally (each row once) instead of duplicating.
+                && outputHeight <= this.options.stdout.rows
+                && this.lastOutputHeight < this.options.stdout.rows) {
+                // FEATURE_214 (codex diagnosis): the inline footer/prompt is a LIVE
+                // BLOCK. When its height changes (completion list opens, status line
+                // reflows, footer grows after a response ends), the cell renderer's
+                // incremental grow/shrink appends new rows DOWNWARD via
+                // `renderFrameSlice` (\r\n) — leaving the OLD block in place and shoving
+                // the cursor + input below the status bar (the "input lands at terminal
+                // bottom" bug). A live block must ERASE the old block and repaint clean,
+                // exactly like the static-commit branch above. The cursor PREFIX
+                // (computeReturnToRestSeq, buffered above) already dropped the physical
+                // cursor to the old block's resting row, so eraseLines clears the whole
+                // block; invalidateCellFrame makes applyCellFrame a clean first-render;
+                // the suffix below then re-parks the cursor at the input target.
+                // eraseInlineLiveBlock erases lastOutputHeight rows so row 0 (the live
+                // block's top, e.g. the `You` header) is cleared too — the inline resting
+                // cursor sits ON the last content row, so no +1 is needed.
+                if (branchSync) emit(bsu);
+                emit(this.eraseInlineLiveBlock());
+                this.invalidateCellFrame();
+                this.applyCellFrame(frame, sink);
+                if (branchSync) emit(esu);
+            }
+            else {
+                // Phase 6: cell renderer is the sole render path. No inline height
+                // change here, so the incremental diff is correct (and cheap).
+                this.applyCellFrame(frame, sink);
+            }
+            // FEATURE_214 cursor SUFFIX: the cell renderer left the (hidden) terminal
+            // cursor at content-bottom (frame.cursor). Park it at the input anchor so
+            // IME composition / typing lands in the input bar. Relative (cursorUp) so
+            // it tracks the just-rendered frame; the next render's prefix returns it to
+            // content-bottom. inputCursor.y < screen.height for the small interactive
+            // frame (history lives in scrollback), so no viewport clamp interaction.
+            if (frame?.inputCursor) {
+                // Suffix (claudecode ink.tsx 696-713): park the physical cursor at the
+                // input target via a RELATIVE move from where the diff left it (the
+                // resting cursor). Both translated to VISIBLE rows so the move stays
+                // correct under scrollback. Record displayCursor (visible) so the next
+                // render's preamble knows where the cursor actually is. Buffered into the
+                // txn so it lands in the SAME write as the prefix + diff (no exposed
+                // intermediate the IME could anchor the preedit to).
+                const toVisible = toVisibleCursor(frame, !this.altScreenActive);
+                const rest = toVisible(frame.cursor);
+                const target = toVisible(frame.inputCursor);
+                const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
+                emit(seq);
+                this.displayCursor = target;
             }
         }
-        else if (!this.altScreenActive
-            && this.prevFrame
-            && this.prevFrame.screen.height !== frame.screen.height
-            && this.lastOutputHeight > 0
-            // FEATURE_214 step 5 — the erase+repaint only manages the VISIBLE live
-            // block; eraseLines cannot reach rows already in native scrollback. So it
-            // is valid ONLY when both the old and new live blocks fit the viewport. A
-            // taller-than-viewport frame means the upstream live frame was NOT bounded
-            // (a bug to fix there, not here) — fall through to the plain cell diff,
-            // which scrolls naturally (each row once) instead of duplicating.
-            && outputHeight <= this.options.stdout.rows
-            && this.lastOutputHeight < this.options.stdout.rows) {
-            // FEATURE_214 (codex diagnosis): the inline footer/prompt is a LIVE
-            // BLOCK. When its height changes (completion list opens, status line
-            // reflows, footer grows after a response ends), the cell renderer's
-            // incremental grow/shrink appends new rows DOWNWARD via
-            // `renderFrameSlice` (\r\n) — leaving the OLD block in place and shoving
-            // the cursor + input below the status bar (the "input lands at terminal
-            // bottom" bug). A live block must ERASE the old block and repaint clean,
-            // exactly like the static-commit branch above. The cursor PREAMBLE
-            // (returnCursorToRest) already dropped the physical cursor to the old
-            // block's resting row at render start, so eraseLines clears the whole
-            // block; invalidateCellFrame makes applyCellFrame a clean first-render;
-            // the suffix below then re-parks the cursor at the input target.
-            // eraseInlineLiveBlock erases lastOutputHeight+1 rows so row 0 (the live
-            // block's top, e.g. the `You` header) is cleared too — a plain
-            // eraseLines(lastOutputHeight) leaves it behind to leak into scrollback.
-            const sync = shouldSynchronize(this.options.stdout);
-            if (sync) {
-                this.options.stdout.write(bsu);
+        finally {
+            // Flush the inline cursor transaction as ONE write (BSU/ESU when the
+            // terminal supports synchronized output) — prefix → erase/static → diff →
+            // suffix are atomic, so ConPTY/IME never samples the resting-cursor
+            // mid-frame. In `finally` so a throw above still lands the prefix.
+            if (txn) {
+                this.flushCursorTxn(txn);
             }
-            this.options.stdout.write(this.eraseInlineLiveBlock());
-            this.invalidateCellFrame();
-            this.applyCellFrame(frame);
-            if (sync) {
-                this.options.stdout.write(esu);
-            }
-        }
-        else {
-            // Phase 6: cell renderer is the sole render path. No inline height
-            // change here, so the incremental diff is correct (and cheap).
-            this.applyCellFrame(frame);
-        }
-        // FEATURE_214 cursor SUFFIX: the cell renderer left the (hidden) terminal
-        // cursor at content-bottom (frame.cursor). Park it at the input anchor so
-        // IME composition / typing lands in the input bar. Relative (cursorUp) so
-        // it tracks the just-rendered frame; the next render's prefix returns it to
-        // content-bottom. inputCursor.y < screen.height for the small interactive
-        // frame (history lives in scrollback), so no viewport clamp interaction.
-        if (frame?.inputCursor) {
-            // Suffix (claudecode ink.tsx 696-713): park the physical cursor at the
-            // input target via a RELATIVE move from where the diff left it (the
-            // resting cursor). Both translated to VISIBLE rows so the move stays
-            // correct under scrollback. Record displayCursor (visible) so the next
-            // render's preamble knows where the cursor actually is.
-            const toVisible = toVisibleCursor(frame);
-            const rest = toVisible(frame.cursor);
-            const target = toVisible(frame.inputCursor);
-            const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
-            if (seq) this.options.stdout.write(seq);
-            this.displayCursor = target;
         }
         this.lastOutput = output;
         this.lastOutputToRender = outputToRender;
@@ -641,11 +683,14 @@ const Ink = class Ink {
      * cell path consumed the frame, `false` when it didn't (frame was
      * undefined — only happens on the screen-reader path).
      */
-    applyCellFrame = (frame) => {
+    applyCellFrame = (frame, sink = null) => {
         const state = {
             cellLogUpdate: this.cellLogUpdate,
             prevFrame: this.prevFrame,
-            stdout: this.options.stdout,
+            // FEATURE_214: when an inline cursor transaction is buffering, the diff
+            // bytes go into the txn `sink` (flushed as ONE write so the IME never
+            // samples a mid-frame cursor) instead of straight to stdout.
+            stdout: sink ?? this.options.stdout,
         };
         // FEATURE_212 — enable the DECSTBM scroll fast path only in synchronized
         // alt-screen (where a scroll otherwise costs a full ~6KB frame write).
@@ -656,7 +701,15 @@ const Ink = class Ink {
         const opts = {
             altScreen: this.altScreenActive,
             decstbmSafe: sync,
-            synchronized: sync,
+            // When buffering into the txn sink, the OUTER transaction owns BSU/ESU,
+            // so don't let applyDiff add inner brackets around a clearTerminal.
+            synchronized: sink ? false : sync,
+            // FEATURE_214: inline main-screen frames are physically anchored to the
+            // terminal bottom (the live frame is always the last content), so the
+            // cell renderer rests the cursor on the frame's own last row instead of
+            // one past it — no scrolled-in blank line under the status bar. Never on
+            // the alt-screen (fullscreen) path, which owns the whole viewport.
+            inlineBottomAnchored: !this.altScreenActive,
         };
         const applied = applyCellFrameHelper(state, frame, opts);
         this.prevFrame = state.prevFrame;
@@ -681,25 +734,26 @@ const Ink = class Ink {
      * FEATURE_214 — erase the current main-screen INLINE live block so the next
      * paint repaints it CLEAN, row 0 included.
      *
-     * The renderer parks the resting cursor at `frame.cursor = (0, screen.height)`
-     * — ONE ROW PAST the last content row (content is rows `0..height-1`). A plain
-     * `eraseLines(height)` from there clears rows `height..1` and LEAVES row 0 (the
-     * TOP of the live block — e.g. the `You [HH:MM]` header) in place; the next
-     * paint then lands one row lower and the orphaned row 0 scrolls up into native
-     * scrollback. That is the "You repeats once per streaming/thinking/tool update"
-     * bug (reproduces with the ledger OFF too — it is a baseline live-frame bug, not
-     * a ledger bug). Erasing `height + 1` lines clears rows `height..0` (the empty
-     * resting row + EVERY content row, row 0 included) and leaves the cursor on the
-     * block's top row, so the repaint re-aligns exactly where the old block began
-     * (no downward drift, committed scrollback above untouched).
+     * The inline resting cursor now sits on the live block's LAST content row
+     * (row `lastOutputHeight - 1`): `clampRestingCursor` caps it at
+     * `screen.height - 1` and `renderFrameSlice` suppresses the last row's scroll
+     * `\n` (so no blank row is pushed under the status bar when the frame is
+     * anchored to the terminal bottom). From there `eraseLines(lastOutputHeight)`
+     * clears rows `lastOutputHeight-1 .. 0` — EVERY content row, row 0 (the live
+     * block's top, e.g. the `You [HH:MM]` header) included — and leaves the cursor
+     * on the block's top row, so the repaint re-aligns exactly where the old block
+     * began (no downward drift, committed scrollback above untouched). This is the
+     * fix for the "You repeats once per streaming/thinking/tool update" leak. A
+     * `+ 1` here would now reach ONE row INTO the committed scrollback above and
+     * eat it (the resting cursor is no longer one past the last row).
      *
-     * INLINE ONLY. The fullscreen / alt-screen path clamps the resting cursor to the
-     * last VISIBLE row (FEATURE_212 `clampRestingCursor`), where `eraseLines(height)`
-     * already covers row 0 — callers on that path must NOT use this helper.
+     * INLINE ONLY. The fullscreen / alt-screen path clamps the resting cursor to
+     * the last VISIBLE row the same way and repaints the whole managed viewport;
+     * callers on that path must NOT use this helper.
      */
     eraseInlineLiveBlock = () => {
         return this.lastOutputHeight > 0
-            ? ansiEscapes.eraseLines(this.lastOutputHeight + 1)
+            ? ansiEscapes.eraseLines(this.lastOutputHeight)
             : '';
     };
     /**
@@ -708,9 +762,10 @@ const Ink = class Ink {
      * ledger calls THIS — never raw stdout writes, which leave prevFrame /
      * lastOutputHeight stale and corrupt the next live diff.
      *
-     *   - append:  erase the old live block (eraseInlineLiveBlock — lastOutputHeight+1
-     *              rows so the block's row 0 is cleared too), write `text` (the new
-     *              finalized rows scroll up into native scrollback).
+     *   - append:  erase the old live block (eraseInlineLiveBlock — lastOutputHeight
+     *              rows from the last-content-row resting cursor, so the block's row 0
+     *              is cleared too), write `text` (the new finalized rows scroll up
+     *              into native scrollback).
      *   - rebuild: clearTerminal (ESC[2J + ESC[3J scrollback purge + home), write `text`
      *              (all retained finalized rows, re-rendered from source at the current
      *              width). Does NOT read lastOutputHeight — that block is being discarded.
@@ -723,12 +778,19 @@ const Ink = class Ink {
         if (this.altScreenActive || this.isUnmounted) {
             return;
         }
-        // Drop the (possibly input-parked) cursor to its resting row so the erase/clear
-        // and the history text land at content-bottom, not the input anchor.
-        this.returnCursorToRest();
-        const sync = shouldSynchronize(this.options.stdout);
-        if (sync)
-            this.options.stdout.write(bsu);
+        // FEATURE_214 — commit + repaint as ONE atomic write, the same IME-safe
+        // transaction as onRender. With the ledger default-ON this is a core inline
+        // repaint path, and it ALSO re-parks the cursor (prefix return-to-rest →
+        // scrollback commit → live diff → suffix). Three+ separate writes let Windows
+        // Terminal / ConPTY / IME sample the cursor at the resting row mid-commit, so a
+        // CJK composition active during a ledger append/rebuild flickers the preedit —
+        // the same root cause. Buffer every byte into `txn`, flush once below.
+        const txn = [];
+        const emit = (seq) => { if (seq) txn.push(seq); };
+        const sink = { write: emit };
+        // PREFIX: drop the (possibly input-parked) cursor to its resting row so the
+        // erase/clear and the history text land at content-bottom, not the input anchor.
+        emit(this.computeReturnToRestSeq());
         // NOTE: ansiEscapes.clearTerminal OMITS ESC[3J (scrollback purge) on Windows
         // (it emits ESC[0f instead), so we build the clear explicitly — ESC[2J (erase
         // screen) + ESC[3J (purge scrollback) + ESC[H (home) — to guarantee the stale
@@ -736,7 +798,7 @@ const Ink = class Ink {
         const prefix = mode === 'rebuild'
             ? '[2J[3J[H'
             : this.eraseInlineLiveBlock();
-        this.options.stdout.write(prefix + (text ?? ''));
+        emit(prefix + (text ?? ''));
         // The live block we just erased/cleared is gone; reset output tracking.
         // fullStaticOutput is owned by the ledger now (the <Static> path is retiring).
         this.lastOutput = '';
@@ -747,29 +809,53 @@ const Ink = class Ink {
         // erased/cleared screen — never a diff against a stale prevFrame.
         this.invalidateCellFrame();
         // Recompute + repaint the current live frame below the committed history.
-        this.calculateLayout();
-        const cellTerminalSize = {
-            rows: this.options.stdout.rows ?? 24,
-            columns: this.getTerminalWidth(),
-        };
-        const { output, outputHeight, frame } = render(this.rootNode, this.isScreenReaderEnabled, cellTerminalSize);
-        this.applyCellFrame(frame);
-        // Park the hidden cursor at the input anchor (same suffix as onRender).
-        if (frame?.inputCursor) {
-            const toVisible = toVisibleCursor(frame);
-            const rest = toVisible(frame.cursor);
-            const target = toVisible(frame.inputCursor);
-            const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
-            if (seq)
-                this.options.stdout.write(seq);
-            this.displayCursor = target;
+        // try/finally so the txn (prefix + committed history + diff + suffix) is
+        // flushed even if render()/applyCellFrame throws — keeping the physical cursor
+        // consistent with the displayCursor computeReturnToRestSeq already cleared.
+        try {
+            this.calculateLayout();
+            const cellTerminalSize = {
+                rows: this.options.stdout.rows ?? 24,
+                columns: this.getTerminalWidth(),
+            };
+            const { output, outputHeight, frame } = render(this.rootNode, this.isScreenReaderEnabled, cellTerminalSize);
+            // Diff into the txn buffer (synchronized:false there — the flush owns BSU/ESU).
+            this.applyCellFrame(frame, sink);
+            // SUFFIX: park the hidden cursor at the input anchor (same as onRender),
+            // buffered so it lands in the SAME write as the commit + diff.
+            if (frame?.inputCursor) {
+                const toVisible = toVisibleCursor(frame, !this.altScreenActive);
+                const rest = toVisible(frame.cursor);
+                const target = toVisible(frame.inputCursor);
+                const seq = cursorMoveSeq(target.x - rest.x, target.y - rest.y);
+                emit(seq);
+                this.displayCursor = target;
+            }
+            this.lastOutput = output;
+            this.lastOutputToRender = output;
+            this.lastOutputHeight = outputHeight;
         }
-        this.lastOutput = output;
-        this.lastOutputToRender = output;
-        this.lastOutputHeight = outputHeight;
-        if (sync)
-            this.options.stdout.write(esu);
+        finally {
+            // Flush the whole commit as ONE write (BSU/ESU when synchronized).
+            this.flushCursorTxn(txn);
+        }
     };
+    /**
+     * Flush a buffered inline cursor TRANSACTION (prefix return-to-rest + erase/static
+     * + cell diff + suffix move-to-input) as ONE stdout.write — BSU/ESU-bracketed when
+     * the terminal supports synchronized output. Single source of truth for the two
+     * inline repaint paths that re-park the cursor (onRender + commitInlineScrollback),
+     * so neither can leave a mid-transaction cursor for ConPTY/IME to sample. No-op on
+     * an empty buffer (idle frame) so the stream's drain queue doesn't churn.
+     */
+    flushCursorTxn(txn) {
+        const out = txn.join('');
+        if (!out) {
+            return;
+        }
+        const sync = shouldSynchronize(this.options.stdout);
+        this.options.stdout.write(sync ? bsu + out + esu : out);
+    }
     render(node) {
         const tree = (React.createElement(AccessibilityContext.Provider, { value: { isScreenReaderEnabled: this.isScreenReaderEnabled } },
             React.createElement(App, { stdin: this.options.stdin, stdout: this.options.stdout, stderr: this.options.stderr, exitOnCtrlC: this.options.exitOnCtrlC, writeToStdout: this.writeToStdout, writeToStderr: this.writeToStderr, setCursorPosition: this.setCursorPosition, onExit: this.handleAppExit }, node)));
@@ -787,18 +873,30 @@ const Ink = class Ink {
     // content-bottom — the resting position every such path assumes. Relative
     // (cursorDown) so it composes with the terminal's current scroll state; a no-op
     // when the cursor is already at rest (visibleInputCursor undefined).
-    returnCursorToRest() {
-        // Preamble (claudecode ink.tsx 676-685): if the previous render parked the
-        // physical cursor at the input, move it back to that frame's RESTING cursor
-        // — the spot the next diff / eraseLines assumes — before anything draws.
-        // Relative move from the ACTUAL tracked position (displayCursor), never a
-        // recomputed cursorDown from raw screen.height.
+    /**
+     * Compute the return-to-rest PREFIX sequence (and clear `displayCursor`) WITHOUT
+     * writing. Preamble (claudecode ink.tsx 676-685): if the previous render parked
+     * the physical cursor at the input, this is the relative move back to that frame's
+     * RESTING cursor — the spot the next diff / eraseLines assumes. Relative from the
+     * ACTUAL tracked position (displayCursor), never a recomputed cursorDown from raw
+     * screen.height. Returning the bytes (instead of writing) lets onRender fold the
+     * prefix into the inline cursor transaction so it is never a standalone write the
+     * IME can sample mid-frame. Empty string when the cursor is already at rest.
+     */
+    computeReturnToRestSeq() {
         if (this.displayCursor && this.prevFrame) {
-            const rest = toVisibleCursor(this.prevFrame)(this.prevFrame.cursor);
+            const rest = toVisibleCursor(this.prevFrame, !this.altScreenActive)(this.prevFrame.cursor);
             const seq = cursorMoveSeq(rest.x - this.displayCursor.x, rest.y - this.displayCursor.y);
-            if (seq) this.options.stdout.write(seq);
             this.displayCursor = null;
+            return seq;
         }
+        return '';
+    }
+    returnCursorToRest() {
+        // Non-transaction callers (writeToStdout / writeToStderr / resize) write the
+        // prefix directly; onRender's inline path uses computeReturnToRestSeq + the txn.
+        const seq = this.computeReturnToRestSeq();
+        if (seq) this.options.stdout.write(seq);
     }
     writeToStdout(data) {
         if (this.isUnmounted) {
@@ -1000,8 +1098,9 @@ const Ink = class Ink {
             // Phase 6: erase the visible render area; reseed cell renderer's
             // prevFrame so the next applyCellFrame paints from scratch.
             // FEATURE_214: return the cursor to content-bottom before the erase.
-            // Inline clears row 0 too (eraseInlineLiveBlock = lastOutputHeight+1 rows);
-            // fullscreen/alt-screen keeps the clamped-cursor eraseLines(lastOutputHeight).
+            // Both paths rest on the last content row and erase lastOutputHeight rows
+            // (row 0 included): inline via eraseInlineLiveBlock, fullscreen/alt-screen
+            // via the clamped-cursor eraseLines(lastOutputHeight).
             this.returnCursorToRest();
             const eraseSeq = this.altScreenActive
                 ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')

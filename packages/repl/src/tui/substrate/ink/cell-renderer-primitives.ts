@@ -453,6 +453,7 @@ export function renderFrameSlice(
   frame: Frame,
   startY: number,
   endY: number,
+  inlineBottomAnchored = false,
 ): void {
   let currentStyle = "";
   let currentHyperlink: string | undefined = undefined;
@@ -535,31 +536,40 @@ export function renderFrameSlice(
     // `claudecode/src/ink/log-update.ts:615`. Phase 3b's main loop assumes
     // the post-slice cursor is at (0, endY).
     //
-    // FEATURE_212 (v0.7.45) EXCEPTION: when this is the LAST row of the slice
-    // AND it sits on/below the last viewport row (`y + 1 >= viewport.height`),
-    // a trailing `\n` would move the cursor off the bottom of the screen, which
-    // a real terminal turns into a SCROLL — pushing the whole managed viewport
-    // up one row (banner top clipped, blank row under the status bar). On that
-    // row emit only `\r` (cursor to column 0, same row). The resting cursor is
-    // then (0, viewport.height - 1), exactly where `clampRestingCursor`
-    // (cell-renderer.ts) puts `next.cursor`, so `restoreCursor` is a no-op and
-    // Phase 3b's cursor accounting stays consistent — no scroll, no drift.
+    // FEATURE_212 / FEATURE_214 EXCEPTION: for the LAST row of a slice whose
+    // frame FITS the viewport (`screen.height <= viewport.height`) AND is anchored
+    // to the physical bottom of the screen, emit only `\r` (column 0, same row) —
+    // never the trailing `\n`. A `\n` on the last content row resolves to a
+    // real-terminal SCROLL when that row sits on the screen's last line, pushing
+    // everything up one and leaving a blank row under the status bar. Two anchors,
+    // both suppressed here:
+    //   - FEATURE_212 fullscreen (`y + 1 >= viewport.height`): the frame FILLS the
+    //     viewport, so its last row IS the last visible row (managed alt-screen
+    //     drift). Inferable from frame geometry, so it needs no caller signal.
+    //   - FEATURE_214 inline (`inlineBottomAnchored`): a SMALL main-screen frame
+    //     physically pinned to the terminal's last row by the scrollback/history
+    //     above it (the "blank line under the status bar when KodaX opens at the
+    //     bottom" bug). The renderer cannot see that physical offset, so the engine
+    //     passes the flag for its inline main-screen path (`!altScreenActive`).
+    // The resting cursor is then (0, screen.height - 1), exactly where
+    // `clampRestingCursor` (cell-renderer.ts) puts `next.cursor` for the same two
+    // cases, so `restoreCursor` is a no-op and Phase 3b's cursor accounting stays
+    // consistent — no scroll, no drift. WITHOUT the flag (generic / non-engine
+    // callers, low-level tests) only the fullscreen case fires, so the legacy
+    // "cursor at (0, endY) after every row-final \r\n" contract is preserved.
     //
-    // The `y === endY - 1` guard is essential: a NON-final row at the viewport
-    // bottom (an offscreen frame whose content exceeds the viewport, painted by
-    // `fullResetSequence`) MUST still advance via `\n` so the following row
-    // isn't overwritten — only the final row of the slice suppresses it.
-    //
-    // The `screen.height <= viewport.height` guard scopes the suppression to
-    // frames that fit within the viewport (the filling / drift case). For a
-    // genuinely OFFSCREEN frame (content taller than the viewport) the final
-    // row legitimately sits past the viewport bottom and keeps its `\n` — the
-    // pre-existing scroll-into-scrollback behavior, and it preserves the
-    // post-slice "cursor at (0, endY)" invariant that `restoreCursor` relies on.
+    // The `y === endY - 1` guard is essential: a NON-final row (including one at
+    // the viewport bottom of an OFFSCREEN frame painted by `fullResetSequence`)
+    // MUST still advance via `\n` so the following row isn't overwritten — only
+    // the final row of the slice suppresses it. The `screen.height <=
+    // viewport.height` guard keeps a genuinely OFFSCREEN frame (content taller
+    // than the viewport) on the legacy `\n` scroll-into-scrollback path, where
+    // the final row legitimately sits past the viewport bottom and the post-slice
+    // "cursor at (0, endY)" invariant `restoreCursor` relies on still holds.
     const wouldScrollOffBottom =
       y === endY - 1 &&
       frame.screen.height <= frame.viewport.height &&
-      y + 1 >= frame.viewport.height;
+      (y + 1 >= frame.viewport.height || inlineBottomAnchored);
     screen.txn((prev) =>
       wouldScrollOffBottom
         ? [[CARRIAGE_RETURN], { dx: -prev.x, dy: 0 }]
@@ -619,14 +629,26 @@ export function readLine(screen: Screen, y: number): string {
  * are visible in `grep` output and new flicker-causing call sites are
  * discouraged.
  *
+ * FEATURE_214: `inlineBottomAnchored` is forwarded to `renderFrameSlice` so the
+ * post-reset resting cursor matches the inline convention. The `clearTerminal`
+ * homes the cursor and the frame repaints from the top (so there is no scroll to
+ * suppress here), but `LogUpdate.render` has already `clampRestingCursor`-clamped
+ * `next.cursor` to the last content row for the inline path — and this function
+ * does NOT call `restoreCursor`. Without the flag the last row's `\n` would land
+ * the physical cursor one PAST the last row, desyncing it from the clamped
+ * `next.cursor` / the engine's `toVisibleCursor` bookkeeping → a one-row error in
+ * the next frame's input-anchor suffix / `returnCursorToRest`. With the flag the
+ * last row ends on `\r`, so physical and bookkept resting cursor agree.
+ *
  * Mirrors `claudecode/src/ink/log-update.ts:503-513`.
  */
 export function fullResetSequence_CAUSES_FLICKER(
   frame: Frame,
   reason: FlickerReason,
+  inlineBottomAnchored = false,
 ): Diff {
   const screen = new VirtualScreen({ x: 0, y: 0 }, frame.viewport.width);
-  renderFrameSlice(screen, frame, 0, frame.screen.height);
+  renderFrameSlice(screen, frame, 0, frame.screen.height, inlineBottomAnchored);
   const patches: Patch[] = [{ type: "clearTerminal", reason }];
   for (const p of screen.diff) patches.push(p);
   return patches;

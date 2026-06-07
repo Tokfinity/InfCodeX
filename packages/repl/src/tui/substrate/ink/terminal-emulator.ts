@@ -184,6 +184,12 @@ export class TerminalModel {
     return this.scrollbackRows.slice();
   }
 
+  /** Current cursor position (0-based) — for asserting where a render parks it
+   * (e.g. the input anchor after the suffix, or the resting row after a reset). */
+  cursor(): { x: number; y: number } {
+    return { x: this.cx, y: this.cy };
+  }
+
   /** Scrollback rows + the visible grid — everything the user could scroll to see. */
   scrollbackPlusVisible(): string[] {
     return [...this.scrollbackRows, ...this.allRows()];

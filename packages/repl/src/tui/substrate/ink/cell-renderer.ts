@@ -100,11 +100,19 @@ export class LogUpdate {
   render(
     prevRaw: Frame,
     nextRaw: Frame,
-    opts: { altScreen?: boolean; decstbmSafe?: boolean } = {},
+    opts: {
+      altScreen?: boolean;
+      decstbmSafe?: boolean;
+      inlineBottomAnchored?: boolean;
+    } = {},
   ): Diff {
     if (!this.options.isTTY) {
       return renderFullFrame(nextRaw);
     }
+    // FEATURE_214 — the engine sets this for its inline main-screen path so the
+    // resting cursor lands on the frame's own last row (no scrolled-in blank line
+    // under the status bar when the frame is anchored to the terminal bottom).
+    const inlineBottomAnchored = opts.inlineBottomAnchored ?? false;
 
     // FEATURE_212 (v0.7.45) — clamp the resting cursor to the last VISIBLE row.
     // `renderer.js` sets `cursor.y = screen.height` (one row PAST the last
@@ -120,8 +128,8 @@ export class LogUpdate {
     // terminal cursor across renders (an inconsistent clamp desyncs them and
     // misplaces the spinner/input by a row). Inline frames (content shorter
     // than the viewport) are untouched — their cursor is already on-screen.
-    const prev = clampRestingCursor(prevRaw);
-    const next = clampRestingCursor(nextRaw);
+    const prev = clampRestingCursor(prevRaw, inlineBottomAnchored);
+    const next = clampRestingCursor(nextRaw, inlineBottomAnchored);
 
     // Reset short-circuit. Decision logic is in `shouldFullReset` (Phase 3b)
     // — see `viewport-state.ts` for the four-case taxonomy. `readLine` is
@@ -131,7 +139,7 @@ export class LogUpdate {
     // rendering primitives).
     const decision = shouldFullReset(prev, next, readLine);
     if (decision.reset) {
-      return fullResetSequence_CAUSES_FLICKER(next, decision.reason);
+      return fullResetSequence_CAUSES_FLICKER(next, decision.reason, inlineBottomAnchored);
     }
 
     // FEATURE_212 (v0.7.45) — DECSTBM scroll fast path. When the transcript
@@ -170,10 +178,10 @@ export class LogUpdate {
         ...prev,
         screen: shiftRowsRegion(prev.screen, hint.top, hint.bottom, hint.delta),
       };
-      return [scrollPatch, ...renderIncremental(shiftedPrev, next)];
+      return [scrollPatch, ...renderIncremental(shiftedPrev, next, inlineBottomAnchored)];
     }
 
-    return renderIncremental(prev, next);
+    return renderIncremental(prev, next, inlineBottomAnchored);
   }
 
   /**
@@ -327,23 +335,40 @@ function diffPass(
  *     a plain `moveCursorTo` is sufficient since the row already exists.
  */
 /**
- * FEATURE_212 (v0.7.45) — clamp a frame's resting cursor to the last VISIBLE
- * viewport row. Returns the frame unchanged when its cursor is already
- * on-screen (`cursor.y < viewport.height`), so inline/non-filling frames are
- * untouched. Only a viewport-filling frame (`cursor.y === viewport.height`,
- * the `renderer.js` "one past last row" convention applied to a full screen)
- * is rewritten so its cursor sits on `viewport.height - 1` — preventing the
- * scroll-inducing newline. Pure; allocates a new frame only when clamping.
+ * FEATURE_212 (v0.7.45) / FEATURE_214 — clamp a frame's resting cursor to its
+ * own last content row, never one past it. `renderer.js` parks `cursor.y =
+ * screen.height` (one row PAST the last content row) so the next diff starts
+ * deterministically, but that row does not physically exist until a scroll
+ * creates it — and on a bottom-anchored frame that scroll pushes the whole
+ * screen up one (drift / "blank row under the status bar"). Clamping to
+ * `min(viewport.height - 1, screen.height - 1)` makes `restoreCursor` take the
+ * no-scroll `moveCursorTo` branch:
+ *   - fullscreen / viewport-FILLING (`screen.height === viewport.height`) and
+ *     OFFSCREEN (`screen.height > viewport.height`) → `viewport.height - 1`,
+ *     unchanged from the original FEATURE_212 clamp.
+ *   - inline (`inlineBottomAnchored`, `screen.height < viewport.height`) →
+ *     `screen.height - 1`, so the small main-screen frame rests on its own last
+ *     row (the status bar) instead of one below — pairing with `renderFrameSlice`'s
+ *     last-row `\n` suppression. The engine passes the flag only for its inline
+ *     main-screen path (`!altScreenActive`); WITHOUT it the original FEATURE_212
+ *     ceiling (`viewport.height - 1`) is used, so generic / non-engine callers and
+ *     low-level tests keep the unchanged one-past-last resting convention.
+ * Returns the frame unchanged when the cursor is already on/above that row, so a
+ * non-resting cursor is untouched. Applied to BOTH prev and next so the virtual
+ * cursor the diff is computed against stays in lock-step with the real terminal
+ * cursor across renders. Pure; allocates a new frame only when clamping.
  *
- * Side effect on `computeViewportState`: a clamped `prev.cursor.y` is now
- * `< screen.height`, so `prevHadScrollback` reads false and `cursorRestoreScroll`
- * is 0 for the next diff. That is correct for the fixed renderer — the LF that
- * the `=1` accounting compensated for is exactly the one we now suppress — and
- * harmless in practice because a viewport-filling frame is already at max height
- * and never grows.
+ * Side effect on `computeViewportState`: a clamped `prev.cursor.y < screen.height`
+ * makes `prevHadScrollback` read false / `cursorRestoreScroll` 0 for the next
+ * diff. Correct for BOTH the viewport-filling frame (already at max height, never
+ * grows) and the inline frame (its history lives in native scrollback, never in
+ * the frame, so it genuinely has none) — the LF the `=1` accounting compensated
+ * for is exactly the one the last-row suppression now removes.
  */
-function clampRestingCursor(frame: Frame): Frame {
-  const maxY = Math.max(0, frame.viewport.height - 1);
+function clampRestingCursor(frame: Frame, inlineBottomAnchored: boolean): Frame {
+  const maxY = inlineBottomAnchored
+    ? Math.max(0, Math.min(frame.viewport.height - 1, frame.screen.height - 1))
+    : Math.max(0, frame.viewport.height - 1);
   if (frame.cursor.y <= maxY) return frame;
   return { ...frame, cursor: { ...frame.cursor, y: maxY } };
 }
@@ -389,7 +414,11 @@ function restoreCursor(screen: VirtualScreen, next: Frame): void {
  *   - `renderFrameSlice` — render new rows in the grow region
  *   - `restoreCursor` — move cursor to next.cursor for next render
  */
-function renderIncremental(prev: Frame, next: Frame): Diff {
+function renderIncremental(
+  prev: Frame,
+  next: Frame,
+  inlineBottomAnchored = false,
+): Diff {
   const state = computeViewportState(prev, next);
   const screen = new VirtualScreen(prev.cursor, next.viewport.width);
 
@@ -399,14 +428,14 @@ function renderIncremental(prev: Frame, next: Frame): Diff {
 
   const passResult = diffPass(screen, prev, next, state);
   if (passResult.needsFullReset) {
-    return fullResetSequence_CAUSES_FLICKER(next, "offscreen");
+    return fullResetSequence_CAUSES_FLICKER(next, "offscreen", inlineBottomAnchored);
   }
 
   // Reset open trackers before grow rows take over the row state.
   resetStyleAndHyperlink(screen, passResult.currentStyle, passResult.currentHyperlink);
 
   if (state.growing) {
-    renderFrameSlice(screen, next, prev.screen.height, next.screen.height);
+    renderFrameSlice(screen, next, prev.screen.height, next.screen.height, inlineBottomAnchored);
   }
 
   restoreCursor(screen, next);

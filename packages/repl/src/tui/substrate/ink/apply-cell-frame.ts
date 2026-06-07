@@ -51,7 +51,12 @@ export interface CellFrameState {
 export function applyCellFrame(
   state: CellFrameState,
   frame: Frame | undefined,
-  opts: { altScreen?: boolean; decstbmSafe?: boolean; synchronized?: boolean } = {},
+  opts: {
+    altScreen?: boolean;
+    decstbmSafe?: boolean;
+    synchronized?: boolean;
+    inlineBottomAnchored?: boolean;
+  } = {},
 ): boolean {
   if (frame === undefined) return false;
   // `opts` enables the FEATURE_212 DECSTBM scroll fast path inside

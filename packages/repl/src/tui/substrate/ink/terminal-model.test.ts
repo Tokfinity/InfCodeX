@@ -79,6 +79,40 @@ describe("TerminalModel calibration vs trusted renderer (FEATURE_212 gate)", () 
   });
 });
 
+// FEATURE_214 — fullResetSequence_CAUSES_FLICKER must honor inlineBottomAnchored.
+// LogUpdate.render clamps next.cursor to the last content row for the inline path,
+// and the full-reset path does NOT call restoreCursor; if its renderFrameSlice still
+// emitted the last-row \n the physical cursor would land one PAST that row, desyncing
+// it from the clamped cursor / the engine's toVisibleCursor bookkeeping → a one-row
+// error in the next frame's input-anchor suffix / returnCursorToRest.
+describe("inline full-reset path honors inlineBottomAnchored (FEATURE_214)", () => {
+  const W = 8;
+  // viewport height SHRINK (24 → 20) trips shouldFullReset Case 1 ('resize'), so
+  // render() returns fullResetSequence rather than an incremental diff.
+  const rowsA = ["You 1", "body a", "sep---", "> in", "status"];
+  const rowsB = ["You 1", "body B", "sep---", "> in", "status"];
+  const countNewlines = (diff: ReturnType<LogUpdate["render"]>): number =>
+    diff.map(patchToBytes).join("").split("\n").length - 1;
+
+  it("inline full reset ends the last row on \\r (cursor on last content row), not a scrolling \\n", () => {
+    const prev = frameFromRows(rowsA, W, 24);
+    const next = frameFromRows(rowsB, W, 20);
+    const flagged = new LogUpdate({ isTTY: true }).render(prev, next, { inlineBottomAnchored: true });
+    // Sanity: this really is the full-reset path.
+    expect(flagged.some((p) => p.type === "clearTerminal")).toBe(true);
+    // 5 rows → 4 inter-row newlines and NO trailing newline after the last row.
+    expect(countNewlines(flagged)).toBe(rowsB.length - 1);
+  });
+
+  it("WITHOUT the flag the same full reset keeps the trailing \\n (cursor one past last) — the bug being fixed", () => {
+    const prev = frameFromRows(rowsA, W, 24);
+    const next = frameFromRows(rowsB, W, 20);
+    const plain = new LogUpdate({ isTTY: true }).render(prev, next, { inlineBottomAnchored: false });
+    expect(plain.some((p) => p.type === "clearTerminal")).toBe(true);
+    expect(countNewlines(plain)).toBe(rowsB.length); // trailing \n after the last row
+  });
+});
+
 // ---- step 3: the DECSTBM scroll gate -------------------------------------
 //
 // These are the payload tests the calibrated model exists for. A scroll-up is

@@ -18,7 +18,8 @@ import {
 } from "./transcript-layout.js";
 
 export interface InlineLedgerActiveInput {
-  /** KODAX_INLINE_LEDGER opt-in (default off). */
+  /** KODAX_INLINE_LEDGER gate. Default ON: enabled unless explicitly `=0`
+   * (resolved by the InkREPL caller); `=0` falls back to the `<Static>` path. */
   readonly enabled: boolean;
   /** True on the windowed / fullscreen owned-viewport path. */
   readonly useRendererViewportShell: boolean;
