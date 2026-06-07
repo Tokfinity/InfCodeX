@@ -27,8 +27,8 @@ import os from 'os';
 import path from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createSessionLineage } from '@kodax-ai/coding';
-import type { KodaXMessage, KodaXSessionLineage } from '@kodax-ai/coding';
+import type { KodaXMessage, KodaXSessionLineage } from '@kodax-ai/agent';
+import { createSessionLineage } from '@kodax-ai/agent';
 
 // Use the real repo root so load()'s workspace-mismatch check stays quiet;
 // the value is only stored as session metadata, never validated by the

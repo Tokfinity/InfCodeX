@@ -17,7 +17,7 @@
 
 import path from 'path';
 import { createHash } from 'crypto';
-import type { KodaXSessionRuntimeInfo } from '@kodax-ai/coding';
+import type { KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
 import { resolveSessionRuntimeInfo } from './workspace-runtime.js';
 
 /** Shared bucket for sessions with no resolvable path (no gitRoot AND no cwd). */

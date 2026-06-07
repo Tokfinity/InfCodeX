@@ -17,7 +17,7 @@ import type {
   KodaXSessionRuntimeInfo,
   KodaXSessionScope,
   KodaXSessionStorage,
-} from '@kodax-ai/coding';
+} from '@kodax-ai/agent';
 import {
   appendSessionLineageLabel,
   archiveOldIslands,
@@ -30,7 +30,7 @@ import {
   getSessionMessagesFromLineage,
   rewindSessionLineage,
   setSessionLineageActiveEntry,
-} from '@kodax-ai/coding';
+} from '@kodax-ai/agent';
 import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-storage.js';
 // `KODAX_SESSIONS_DIR` is a module-load-time-frozen constant (see
 // `../common/utils.ts` JSDoc — v0.7.35.1 FEATURE_145). It is the default

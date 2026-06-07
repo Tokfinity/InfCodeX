@@ -3,7 +3,7 @@ import path from 'path';
 import { existsSync } from 'fs';
 import { mkdtemp, readFile, rm, utimes, writeFile } from 'fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applySessionCompaction, createSessionLineage } from '@kodax-ai/coding';
+import { applySessionCompaction, createSessionLineage } from '@kodax-ai/agent';
 
 describe('FileSessionStorage', () => {
   let tempHome: string;

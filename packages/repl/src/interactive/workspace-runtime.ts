@@ -2,7 +2,7 @@ import { execFile as execFileCallback } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
-import type { KodaXSessionData, KodaXSessionRuntimeInfo, KodaXSessionWorkspaceKind } from '@kodax-ai/coding';
+import type { KodaXSessionData, KodaXSessionRuntimeInfo, KodaXSessionWorkspaceKind } from '@kodax-ai/agent';
 
 const execFileAsync = promisify(execFileCallback);
 
