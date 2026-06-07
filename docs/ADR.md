@@ -2286,3 +2286,52 @@ packages/
 
 ---
 
+## ADR-038: Per-Project Session Storage — Canonical-Keyed Directory Layout + Archive Semantics Split + Flat-Pool Migration (FEATURE_219, v0.7.46)
+
+**Status**: 📝 Proposed（设计待 review） — FEATURE_219, v0.7.46。代码未动,先出文档。
+
+> **编号说明**:ADR-037 已由 [FEATURE_208 (v0.7.45)](features/v0.7.45.md#L1797) 预留(process hardening threat model),本 ADR 让号取 038。
+
+**Driver**:
+
+1. **全平铺无分层**:`~/.kodax/sessions/` 实测 580 文件 / 242MB,全部 `{id}.jsonl` 平铺。项目归属只靠每文件首行 `meta.gitRoot` / `runtimeInfo.canonicalRepoRoot`。`list()`([storage.ts:1044-1205](features/../../packages/repl/src/interactive/storage.ts)) 要列「当前项目会话」得**遍历全部文件、各读 64KB 头**再过滤 —— O(all sessions),正是 FEATURE_157 / SDK listing 一串性能补丁的根因。
+2. **三套"archive"语义撞车**(用户困惑根源):(A) `{id}.archive.jsonl` **island 边车**(单 session 内部被 rewind 掉的 off-path 分支,lineage >500 条时 `runMaintenance()` 抽出瘦身,与主文件**配对**、本就该留在原地)；(B) `archived-` 前缀**整 session 归档**([public-api.ts:47-50](../../packages/repl/src/session/public-api.ts) 注释自陈 "reserved for future use",**从未实现**)；(C) `~/.kodax/sessions-archive/` **旧目录**(2-3 月老文件,代码零引用)。A↔B 命名撞车让用户误以为 A 是"没归档成功的 session"。实测 13 个 `.archive.jsonl` 全是 A、12 个 PAIRED、1 个孤儿(`20260509_152541` 主文件已删边车残留)。
+3. **非 git / 临时 / 无路径会话污染主池**:实测含海致交付目录、`kodax-storage-*` 嵌入测试临时目录、`(none)` 无 gitRoot 会话、`C:\` vs `C:/` 大小写漂移脏数据。
+4. **参照系**:claudecode(每 cwd 一目录 `projects/<sanitize(cwd)>/<uuid>.jsonl`,无索引,worktree 前缀扫描兜)、codex(日期分层 `sessions/YYYY/MM/DD/` + cwd 写 meta + SQLite state DB)、opencode(单 SQLite + 内容寻址 project id = git-remote-url 哈希/root-commit 哈希)。三者布局差异由**主产品轴**决定:claudecode/KodaX 主轴=「resume 当前项目」,codex 主轴=「全局按时间翻 + cwd 当过滤器」。
+
+**Decision**:
+
+1. **布局 = 每项目一目录**(对齐 claudecode 主轴):`~/.kodax/sessions/<projectKey>/<id>.jsonl`。列表退化成 `readdir(单目录)` = O(sessions-in-project),消掉 scan-all。
+2. **projectKey 分层**:`canonical 仓根`(git,源自 [workspace-runtime.ts:48-61](../../packages/repl/src/interactive/workspace-runtime.ts) 的 `--git-common-dir` 派生,**今天每个 session 已在算**)→ `裸 cwd`(非 git)→ `_unknown/`(连 cwd 都没有的老孤儿兜底桶)。文件夹名 = 路径归一化(小写盘符消 Windows 大小写漂移)后 sanitize 成**可读 slug + 短 hash 后缀**(`<slug>-<8hex(canonicalRoot)>`,对齐 claudecode `sanitizePath` 的 hash 兜底):slug 给人眼,hash 后缀防碰撞 —— `C:/a-b`、`C:/a/b`、大小写/符号折叠后 slug 可能撞,hash 后缀保证唯一。每文件夹放 `project.json` 清单(`canonicalRoot` / `displayName` / `lastUsed`),picker 读它即可不必解析每个 session meta,**写入时比对 `project.json.canonicalRoot` 做最终冲突检测**(slug+hash 仍撞 → 第二段 hash)。
+3. **worktree = canonical 自动归并 + UI 标签**:一个仓所有 worktree 共享同一 `--git-common-dir` → 同一 canonical key → 同住项目文件夹(满足"归到出仓项目一起")。扁平存放,**零新存储字段** —— `meta.runtimeInfo.workspaceRoot`(`--show-toplevel`,worktree 时 ≠ canonicalRepoRoot)已记录,picker 凡 `workspaceRoot ≠ canonicalRepoRoot` 打 `[wt: <basename>]` 标签区分(满足"明确显示是单独 worktree")。可选「只看当前 worktree」过滤复用 `workspaceRoot` 精确匹配。
+4. **归档语义彻底分家**:(A) island 边车 `{id}.archive.jsonl` → **`{id}.islands.jsonl`** 改名,把 "archive" 一词**只留给整 session 归档 B**；(B) 整 session 归档 = **move 到 `<projectKey>/archived/`**(codex 风格物理搬家,KodaX 是文件不是 DB,move 比 soft-delete 列更贴) + `archive` / `unarchive` + 落地预留的 `includeArchived`(语义从「`archived-` 前缀」改为「`archived/` 子目录」)。**`archive` / `unarchive` / `delete` 一律成对处理 `{id}.jsonl` + `{id}.islands.jsonl`**(只移主文件会再造孤儿边车,正是本次要消除的那种)。迁移时**退役 `sessions-archive/` 旧目录** + **隔离**现存孤儿边车(迁 `_unknown/orphan-islands/` + 报告,**不删**)。
+5. **附带减码**:folder key 即项目身份 → 删 `list()` 的 scan-all 过滤 + [storage.ts](../../packages/repl/src/interactive/storage.ts) 的 `pathsEqual` Windows 大小写 hack(归一化已在 folder key 收口) + 部分 `isSameCanonicalRepo` 跨过滤体操。净 LoC 预期下降,符合「minimalist & 少打补丁」。
+6. **迁移器(planner + executor，destination 规则)**:对每个平铺文件,**用 runtime 同一解析器**作用在它记录的 `gitRoot` 路径上(老 session 的 gitRoot 多半还在盘上 → 现场解析出与未来 live 行为**确定性收敛到同一 key**,避免老文件路径键、新文件键裂成两目录)；盘上已不存在的 gitRoot → 归一化路径 + 短 hash 桶;非 git/临时 → 各自 cwd 文件夹;真无路径 → `_unknown/`。**planner 只算** `{from, to, sidecarFrom?, sidecarTo?, projectKey, reason}`(可测、可 dry-run、可打印「580 files → N projects」对账)、**executor 才 move**,连带 `{id}.archive.jsonl → {id}.islands.jsonl` 成对搬。**孤儿边车(主文件已不在)绝不自动删** —— 移到 `_unknown/orphan-islands/` 并记入 migration report(客户数据不许被「聪明地」清掉)。**真实 move 不得早于 locator-reader(见 7)落地**:现有 reader([storage.ts:612](../../packages/repl/src/interactive/storage.ts) 只找 `<sessionsDir>/<id>.jsonl`)会读不到已被移走的 session,中间态不可读。
+7. **id-only locator 层(保 SDK 契约不破)**:现有公开 API `loadSession(id)` / `forkSession(id)` / `rewindSession(id)` / `deleteSession(id)` 都是 **id-only**([public-api.ts:275-419](../../packages/repl/src/session/public-api.ts)),FEATURE_173 起 Space 还要跨项目列 + watch。分目录后**不改 id-only 签名**,在 `FileSessionStorage` 内加 `resolveSessionLocation(id)`,查找顺序:① 当前 projectKey `<key>/<id>.jsonl` → ② 当前 `<key>/archived/<id>.jsonl` → ③ legacy 平铺 `<sessionsDir>/<id>.jsonl` → ④ bounded scan `<sessionsDir>/*/<id>.jsonl` + `<sessionsDir>/*/archived/<id>.jsonl`。load/fork/rewind/delete 均先过它。`listSessions` summary 加**可选** `projectKey?` / `archived?`(向后兼容,Space 可当 hint 但不强制)。`watchSessions` 改 watch/poll 各 project dir(POSIX:顶层发现新 project dir + 每个 project/archived dir 注册 watcher;Windows:poll snapshot 从「顶层 .jsonl」扩成「所有 project dir 下的 id 集合」)。legacy 平铺 fallback(③)**保留 ≥1 版本周期**:新写入走 project dir,旧平铺仍可 `load(id)` 命中。**不把完整文件路径暴露给 SDK** —— 只露 `projectKey`,完整 path 会把存储布局变成 public contract,日后更难改。
+   - **全局唯一 id(硬决策,堵 §7 ④ bounded-scan 歧义)**:现 `generateSessionId()` 是秒级 `YYYYMMDD_HHMMSS`([session.ts:50](../../packages/agent/src/session-lineage/session.ts) 无 ms/random),平铺池靠文件名碰撞「掩盖」同秒冲突(实为静默 overwrite 隐患),**分目录后不同项目可同 id → `loadSession(id)` 不确定**。故新写入 id **必须全局唯一**(追加 ms + 短 random,或 collision-retry + `O_EXCL` 原子创建);迁移**检测重复 id**,历史重复时 id-only **优先当前 projectKey**,仍歧义 → 返回明确 **ambiguity(null + 日志,不猜)**,`listSessions` 已带 `projectKey` 供消费侧精确定位。此决策**顺带堵掉**平铺期同秒静默 overwrite 的 latent bug。
+8. **升级后首次使用自动迁移(transparent、locked、journaled、resumable、non-destructive)** —— 别的客户不会手动跑迁移器,所以做成自动,但**先有 §7 双布局兼容读、再自动迁移**,中断也不丢、不变不可读:
+   - **触发点**:不放 constructor(不能 async)。在 `list/load/save/fork/rewind/delete/watchSessions` 每个入口开头 `await this.ensureLayoutMigrated()`,内部用**一次性 Promise cache** 保证每进程只跑一次。
+   - **检测(layout marker)+ 完成顺序写死**:`~/.kodax/sessions/.layout.json` = `{version:2, migratedAt, from:"flat-v1"}`。无 marker **且**顶层存在 `*.jsonl` → 判定需迁移。**marker 只在「所有 move 完成 + 顶层平铺清空 + journal complete」之后,用 temp file + atomic rename 写入**。**启动时若存在 incomplete journal → 优先 resume journal,不能仅凭 marker 跳过**(marker 在则隐含 journal 已 complete,但仍以 journal 状态为防御性真值)。
+   - **跨进程锁 + stale 回收**:`~/.kodax/sessions/.migration-lock/` 目录锁(`fs.mkdir` 原子,跨平台)。抢不到 → 另一个 KodaX/Space 正在迁移,当前进程**继续走 §7 兼容读**(不阻塞读);**写操作等迁移结束**,避免一边搬一边写同一 id。锁目录内放 `owner.json` `{pid, startTime, heartbeatAt}`;**stale 回收**:进程不存在或 heartbeat 超时 → reclaim(防持锁进程崩溃后 lock 永久残留 / 写永久等待)。测试覆盖「持锁者崩溃后下次启动能续 journal」。
+   - **journal(可中断续跑)**:`~/.kodax/sessions/.migration-journal.jsonl`,每 move 一步 append `{from, to, done:true}`。下次启动发现 journal 未完成 → **继续 forward 迁移**(不自动回滚、不自动删数据)。
+   - **rollback 降级为 dev 工具**:生产姿态是 forward-only + journaled + 非破坏;`move 回平铺` 仅作开发期手动 escape hatch,不在中断时自动触发。
+   - 我的 580 文件只是这套自动迁移的**一个实例**,不再是特殊手动流程。
+
+**Why not alternatives**:
+
+- **裸 cwd 做 key(claudecode 原样)**: rejected。会**退化** KodaX 今天已免费算好的两个归并 —— 同仓子目录启动被拆散、worktree 与主仓分家;且 sanitize 不消 Windows 盘符大小写 → **FEATURE_157 resume-loss 复活**;且"列整个项目"需跨文件夹交叉扫(成本回来)。claudecode 用裸 cwd 是因它无 canonical 层、接受 worktree 前缀扫描兜;KodaX 既已付费算 canonical,用裸 cwd 等于买好东西不用。
+- **日期分层 `YYYY/MM/DD`(codex)**: rejected。codex 主轴=全局时间线、cwd 仅过滤器,与 KodaX「按项目 resume」相反;真按项目分目录会丢失 newest-first 单路 walk;按 cwd 过滤又贵到必须补 SQLite。KodaX 规模(百级/项目)未到单目录爆炸,日期分层是**未来逃生舱**(某项目涨到数千文件再在其内部加 `YYYY/MM/`),现在不建。
+- **单 SQLite 库(opencode)**: rejected。丢掉 JSONL append-only 即崩溃恢复日志 + 可检视性;ORM 层重,违背「极致轻量 / 3+ 用例才抽象」;当前无关系查询刚需。**目录即索引**给 90% 收益、5% 复杂度;待 Space 真出现「跨项目全局列表 @ 规模」3+ 实例再上索引(YAGNI)。
+- **内容寻址身份 = git-remote-url 哈希(opencode)**: rejected as over-engineering。其主卖点"统一 worktree"被 `--git-common-dir` canonical 路径**今天就已满足**;remote 哈希额外只多买「仓被移动/重新 clone 后会话仍跟随」—— hypothetical,违 YAGNI,且要 `.git/kodax` 缓存 + 启动跑 `git remote`。folder 名也从可读退化成不透明哈希。
+- **物理 `worktrees/<名>/` 子文件夹**: rejected(用户 2026-06-07 定)。扁平 + meta 标签更简、信息(`workspaceRoot`)全现成、列表一次 readdir;物理隔离的 eyeball 收益不抵两层 walk + 写入判 workspaceRoot 的成本。
+
+**Eval posture**: 无需 prompt eval —— 纯 session persistence infrastructure,CLAUDE.md「Prompt Eval — Non-triggers」明列 "Compaction / session persistence infrastructure"。验证靠单测(folder key 解析 + 碰撞矩阵 / **id 全局唯一 + 重复 id 歧义解析** / **迁移幂等 + journal resume + stale-lock recovery + non-destructive orphan handling** / archive-unarchive 成对 / list 单目录) + 迁移 dry-run 实跑 580 文件对账。
+
+**先例 / 关键 memory**:
+- 参照对照三家(claudecode `sessionStoragePortable.ts` / codex `rollout/recorder.rs` / opencode `core/project.ts`),2026-06-07 三 Explore agent 实地核实。
+- [`feedback_no_parallel_refactor_paths`](../../memory/feedback_no_parallel_refactor_paths.md) — 不引入并行新旧路径;迁移用双布局兼容读 + journaled forward(非破坏、可中断续跑),不做 dual-path flag(rollback 仅 dev escape hatch)。
+- [`feedback_workspace_packages_need_rebuild`](../../memory/feedback_workspace_packages_need_rebuild.md) — 改 `packages/repl/src` 后必 `npm run build:packages`。
+- FEATURE_157(Windows 大小写 resume-loss)的 `pathsEqual` hack 在本 ADR 后由 folder-key 归一化收口、可退役。
+
+---
+
