@@ -5,9 +5,11 @@
  *
  * Test obligations:
  * - CAP-SESSION-ID-001: returns a non-empty string in the
- *   `YYYYMMDD_HHMMSS` timestamp format
+ *   `YYYYMMDD_HHMMSS_<suffix>` format (suffix added in FEATURE_219 v0.7.46
+ *   for global uniqueness — see ADR-038 §7)
  * - CAP-SESSION-ID-002: encodes the current local date as the leading
  *   8 digits of the id
+ * - CAP-SESSION-ID-003: ids are globally unique even within one second
  *
  * Note on the original P1 stub: the obligation text said "crypto-random
  * string" but the actual implementation
@@ -34,11 +36,18 @@ import { describe, expect, it } from 'vitest';
 import { generateSessionId } from '../../session.js';
 
 describe('CAP-044: session id generation fallback contract', () => {
-  it('CAP-SESSION-ID-001: returns a non-empty string in the YYYYMMDD_HHMMSS format', async () => {
+  it('CAP-SESSION-ID-001: returns a date-prefixed string in YYYYMMDD_HHMMSS_<suffix> format', async () => {
+    // FEATURE_219 (v0.7.46): a per-call suffix was appended to make ids
+    // globally unique under the per-project directory layout (ADR-038 §7).
+    // The sortable date+time prefix is preserved.
     const id = await generateSessionId();
     expect(typeof id).toBe('string');
-    expect(id).toMatch(/^\d{8}_\d{6}$/);
-    expect(id.length).toBe(15); // 8 digits + '_' + 6 digits
+    expect(id).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+  });
+
+  it('CAP-SESSION-ID-003: generates globally unique ids within the same second (FEATURE_219)', async () => {
+    const ids = await Promise.all(Array.from({ length: 100 }, () => generateSessionId()));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('CAP-SESSION-ID-002: encodes the current local date as the leading 8 digits (YYYYMMDD)', async () => {

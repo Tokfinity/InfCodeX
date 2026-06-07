@@ -672,17 +672,15 @@ describe('Tool Execution Context', () => {
 describe('Session ID Generation', () => {
   it('should generate valid session ID', async () => {
     const sessionId = await generateSessionId();
-    expect(sessionId).toMatch(/^\d{8}_\d{6}$/);
+    // FEATURE_219: YYYYMMDD_HHMMSS_<suffix>
+    expect(sessionId).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
   });
 
   it('should generate unique session IDs', async () => {
     const id1 = await generateSessionId();
-    // Small delay to ensure different timestamp
-    await new Promise(r => setTimeout(r, 10));
     const id2 = await generateSessionId();
-    // IDs should be different or same if generated in same second
-    expect(typeof id1).toBe('string');
-    expect(typeof id2).toBe('string');
+    // FEATURE_219: globally unique by construction (no same-second collision).
+    expect(id1).not.toBe(id2);
   });
 });
 
@@ -819,19 +817,17 @@ describe('Session Initial Messages', () => {
 describe('generateSessionId', () => {
   it('should generate session ID in correct format', async () => {
     const id = await generateSessionId();
-    // Format: YYYYMMDD_HHMMSS
-    expect(id).toMatch(/^\d{8}_\d{6}$/);
+    // FEATURE_219: Format YYYYMMDD_HHMMSS_<suffix> (date prefix + unique suffix)
+    expect(id).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
   });
 
-  it('should generate unique IDs', async () => {
+  it('should generate unique IDs even within the same second', async () => {
+    // FEATURE_219: ids are now globally unique by construction (suffix).
     const id1 = await generateSessionId();
-    // Small delay to ensure different timestamp
-    await new Promise(resolve => setTimeout(resolve, 10));
     const id2 = await generateSessionId();
-    // They might be the same if called within the same second
-    // So we just check the format
-    expect(id1).toMatch(/^\d{8}_\d{6}$/);
-    expect(id2).toMatch(/^\d{8}_\d{6}$/);
+    expect(id1).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id2).toMatch(/^\d{8}_\d{6}_[a-z0-9]+$/);
+    expect(id1).not.toBe(id2);
   });
 });
 

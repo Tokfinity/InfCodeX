@@ -17,8 +17,64 @@ import { discoverInstances } from '@kodax-ai/agent';
 import type { KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
 
 import { FileSessionStorage } from '../interactive/storage.js';
+import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
+
+/**
+ * FEATURE_219 — collect candidate session file paths from the per-project
+ * layout (flat legacy pool + every `<projectKey>/` dir, plus each project's
+ * `archived/` subdir when requested). Returns absolute file paths. Excludes
+ * island sidecars (`.archive.jsonl` / `.islands.jsonl`).
+ */
+async function collectSessionFilePaths(
+  sessionsDir: string,
+  includeArchived: boolean,
+): Promise<string[]> {
+  const out: string[] = [];
+  const isSession = (name: string): boolean =>
+    name.endsWith('.jsonl') && !name.endsWith('.archive.jsonl') && !name.endsWith('.islands.jsonl');
+  let top: import('node:fs').Dirent[] = [];
+  try {
+    top = await fsPromises.readdir(sessionsDir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of top) {
+    if (entry.isFile()) {
+      if (isSession(entry.name) && (includeArchived || !entry.name.startsWith('archived-'))) {
+        out.push(path.join(sessionsDir, entry.name));
+      }
+      continue;
+    }
+    if (!entry.isDirectory() || entry.name.startsWith('.')) {
+      continue;
+    }
+    const dir = path.join(sessionsDir, entry.name);
+    try {
+      for (const f of await fsPromises.readdir(dir)) {
+        if (isSession(f)) {
+          out.push(path.join(dir, f));
+        }
+      }
+    } catch {
+      // unreadable project dir — skip
+    }
+    if (includeArchived) {
+      const archivedDir = path.join(dir, 'archived');
+      try {
+        for (const f of await fsPromises.readdir(archivedDir)) {
+          if (isSession(f)) {
+            out.push(path.join(archivedDir, f));
+          }
+        }
+      } catch {
+        // no archived subdir — fine
+      }
+    }
+  }
+  return out;
+}
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -28,6 +84,12 @@ export interface SessionSummary {
   readonly msgCount: number;
   readonly createdAt?: string;
   readonly runtimeInfo?: { workspaceRoot?: string; gitRoot?: string };
+  /**
+   * FEATURE_219 (v0.7.46) — the per-project directory key this session lives
+   * under (ADR-038 §7). A backward-compatible hint: consumers may pass it back
+   * for precise disambiguation, but `loadSession(id)` works without it.
+   */
+  readonly projectKey?: string;
 }
 
 export interface ListSessionsOptions {
@@ -138,17 +200,19 @@ async function listSessionsImpl(
       return raw.map(toSessionSummary);
     }
 
-    // Slow path: read the sessions directory ourselves for scope / before filtering.
-    const files = (await fsPromises.readdir(sessionsDir))
-      .filter((f) => f.endsWith('.jsonl') && (includeArchived || !f.startsWith('archived-')));
+    // Slow path: read the sessions directory ourselves for scope / before
+    // filtering. FEATURE_219 — gather from the per-project layout (+ flat
+    // legacy pool), dedup by id (a session mid-migration may appear twice).
+    const filePaths = await collectSessionFilePaths(sessionsDir, includeArchived);
 
     const sessions: Array<SessionSummary & { _createdAtMs?: number }> = [];
+    const seenIds = new Set<string>();
 
-    for (const file of files) {
+    for (const filePath of filePaths) {
       try {
-        const content = (
-          await fsPromises.readFile(path.join(sessionsDir, file), 'utf-8')
-        ).trim();
+        const id = path.basename(filePath, '.jsonl');
+        if (seenIds.has(id)) continue;
+        const content = (await fsPromises.readFile(filePath, 'utf-8')).trim();
         const firstLine = content.split('\n')[0];
         if (!firstLine) continue;
 
@@ -191,13 +255,17 @@ async function listSessionsImpl(
             : undefined;
 
         const gitRootVal = typeof meta.gitRoot === 'string' ? meta.gitRoot : undefined;
+        const ri = runtimeInfo ?? (gitRootVal ? { gitRoot: gitRootVal } : undefined);
+        const projectKey = deriveProjectKeyFromRoot(ri?.gitRoot ?? ri?.workspaceRoot).key;
 
+        seenIds.add(id);
         sessions.push({
-          id: file.replace('.jsonl', ''),
+          id,
           title: typeof meta.title === 'string' ? meta.title : '',
           msgCount: activeMessageCount,
           createdAt,
-          runtimeInfo: runtimeInfo ?? (gitRootVal ? { gitRoot: gitRootVal } : undefined),
+          runtimeInfo: ri,
+          projectKey,
           _createdAtMs: createdAt ? Date.parse(createdAt) : undefined,
         });
       } catch {
@@ -218,12 +286,13 @@ async function listSessionsImpl(
       return b.id.localeCompare(a.id);
     });
 
-    return sessions.slice(0, limit).map(({ id, title, msgCount, createdAt, runtimeInfo }) => ({
+    return sessions.slice(0, limit).map(({ id, title, msgCount, createdAt, runtimeInfo, projectKey }) => ({
       id,
       title,
       msgCount,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
+      ...(projectKey !== undefined ? { projectKey } : {}),
     }));
   } catch {
     return [];
@@ -257,12 +326,16 @@ function toSessionSummary(raw: {
   const runtimeInfo = raw.runtimeInfo
     ? extractRuntimeInfoSummary(raw.runtimeInfo)
     : undefined;
+  const projectKey = deriveProjectKeyFromRoot(
+    runtimeInfo?.gitRoot ?? runtimeInfo?.workspaceRoot,
+  ).key;
   return {
     id: raw.id,
     title: raw.title,
     msgCount: raw.msgCount,
     ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
     ...(raw.createdAt !== undefined ? { createdAt: raw.createdAt } : {}),
+    projectKey,
   };
 }
 
@@ -467,8 +540,17 @@ function watchSessionsImpl(
 }
 
 function sessionIdFromFilename(filename: string): string | null {
-  if (!filename.endsWith('.jsonl')) return null;
-  return filename.slice(0, -6); // strip ".jsonl"
+  // FEATURE_219 — recursive watch events carry a `<projectKey>/<id>.jsonl`
+  // relative path; reduce to the basename and reject island sidecars.
+  const base = path.basename(filename);
+  if (
+    !base.endsWith('.jsonl')
+    || base.endsWith('.archive.jsonl')
+    || base.endsWith('.islands.jsonl')
+  ) {
+    return null;
+  }
+  return base.slice(0, -6); // strip ".jsonl"
 }
 
 function watchSessionsPosix(
@@ -498,13 +580,22 @@ function watchSessionsPosix(
         setTimeout(startWatch, 1000);
         return;
       }
-      watcher = fs.watch(sessionsDir, (eventType, filename) => {
+      // FEATURE_219 — watch recursively so per-project subdir writes surface.
+      // Linux does not support `{ recursive: true }` and throws; fall back to a
+      // flat watch of the top dir (degraded — sees flat + new project dirs).
+      const onEvent = (eventType: string, filename: string | Buffer | null): void => {
         if (!filename) return;
-        const sessionId = sessionIdFromFilename(filename);
+        const name = typeof filename === 'string' ? filename : filename.toString();
+        const sessionId = sessionIdFromFilename(name);
         if (!sessionId) return;
-        const kind = eventType === 'rename' ? detectRenameKind(sessionsDir, filename) : 'change';
+        const kind = eventType === 'rename' ? detectRenameKind(sessionsDir, name) : 'change';
         emitDebounced(kind, sessionId);
-      });
+      };
+      try {
+        watcher = fs.watch(sessionsDir, { recursive: true }, onEvent);
+      } catch {
+        watcher = fs.watch(sessionsDir, onEvent);
+      }
       watcher.on('error', () => {
         // Watcher error (e.g. directory deleted) — restart.
         watcher?.close();
@@ -546,18 +637,37 @@ function watchSessionsWindows(
   let closed = false;
   let lastSnapshot = new Set<string>();
 
-  function buildSnapshot(): Set<string> {
+  function addIds(target: Set<string>, dir: string): void {
     try {
-      if (!fs.existsSync(sessionsDir)) return new Set();
-      return new Set(
-        fs
-          .readdirSync(sessionsDir)
-          .filter((f) => f.endsWith('.jsonl'))
-          .map((f) => f.slice(0, -6)),
-      );
+      for (const f of fs.readdirSync(dir)) {
+        const id = sessionIdFromFilename(f);
+        if (id) target.add(id);
+      }
     } catch {
-      return new Set();
+      // unreadable dir — skip
     }
+  }
+
+  function buildSnapshot(): Set<string> {
+    const ids = new Set<string>();
+    try {
+      if (!fs.existsSync(sessionsDir)) return ids;
+      // FEATURE_219 — snapshot the flat pool + every <projectKey>/ dir + each
+      // project's archived/ subdir, so Space sees per-project writes.
+      for (const entry of fs.readdirSync(sessionsDir, { withFileTypes: true })) {
+        if (entry.isFile()) {
+          const id = sessionIdFromFilename(entry.name);
+          if (id) ids.add(id);
+        } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          const dir = path.join(sessionsDir, entry.name);
+          addIds(ids, dir);
+          addIds(ids, path.join(dir, 'archived'));
+        }
+      }
+    } catch {
+      // best-effort
+    }
+    return ids;
   }
 
   // Build initial snapshot without emitting events.

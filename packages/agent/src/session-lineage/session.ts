@@ -45,11 +45,21 @@ function formatSessionTitle(text: string): string {
 
 /**
  * 生成会话 ID
- * 格式: YYYYMMDD_HHMMSS
+ * 格式: YYYYMMDD_HHMMSS_<suffix>  (suffix = ms 低位 + 随机, base36)
+ *
+ * FEATURE_219 (v0.7.46): the date-prefix is preserved (sortable +
+ * human-readable), but a per-call suffix makes the id GLOBALLY unique.
+ * Under the pre-FEATURE_219 flat layout the filename collision silently
+ * masked two same-second sessions (overwrite risk); under the per-project
+ * directory layout the same id could otherwise exist in two project folders
+ * and make `loadSession(id)` ambiguous. See ADR-038 §7.
  */
 export async function generateSessionId(): Promise<string> {
   const now = new Date();
-  return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+  const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
+  const suffix = `${(now.getMilliseconds() % 1000).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  return `${datePart}_${timePart}_${suffix}`;
 }
 
 /**

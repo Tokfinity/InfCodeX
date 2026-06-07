@@ -43,6 +43,7 @@ import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-stor
 // `createSessionManager()` instead.
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
+import { deriveProjectKeyFromData, deriveProjectKeyFromRoot, type ProjectIdentity } from './project-key.js';
 import {
   isKodaXExtensionSessionRecord,
   isKodaXExtensionSessionState,
@@ -598,6 +599,14 @@ export class FileSessionStorage implements KodaXSessionStorage {
     metaUpdateCount: number;
   }>();
 
+  // ── FEATURE_219 per-project directory cache ──
+  // Pins a session id to the absolute project directory it lives in for this
+  // process, so repeated writes for one id never drift between folders even
+  // if the in-memory runtimeInfo changes between saves. Populated on read
+  // (via resolveSessionLocation) and on write (via resolveWriteDir).
+  private sessionDirCache = new Map<string, string>();
+  private projectJsonWritten = new Set<string>();
+
   /** Update watermarks. Only overwrites fields the caller actually provided. */
   private syncAppendState(id: string, data: SessionData, metaUpdateCount?: number): void {
     const prev = this.appendState.get(id);
@@ -609,16 +618,106 @@ export class FileSessionStorage implements KodaXSessionStorage {
     });
   }
 
-  private getSessionFilePath(id: string): string {
+  // ── FEATURE_219 path resolution ──
+  // Legacy flat paths (pre-FEATURE_219 layout) are still read as a fallback
+  // and lazily superseded on the next write.
+  private legacyFlatPath(id: string): string {
     return path.join(this.sessionsDir, `${id}.jsonl`);
   }
 
-  private getArchiveFilePath(id: string): string {
+  private legacyFlatArchivePath(id: string): string {
     return path.join(this.sessionsDir, `${id}.archive.jsonl`);
   }
 
+  private projectDir(key: string): string {
+    return path.join(this.sessionsDir, key);
+  }
+
+  /** Resolve (and cache) the project directory a write for `id` should land in. */
+  private resolveWriteDir(id: string, data: SessionData): string {
+    const cached = this.sessionDirCache.get(id);
+    if (cached) {
+      return cached;
+    }
+    const identity = deriveProjectKeyFromData(data);
+    const dir = this.projectDir(identity.key);
+    this.sessionDirCache.set(id, dir);
+    return dir;
+  }
+
+  private writeFilePath(id: string, data: SessionData): string {
+    return path.join(this.resolveWriteDir(id, data), `${id}.jsonl`);
+  }
+
+  /**
+   * id-only locator (ADR-038 §7). Resolution order:
+   *   1. cached project dir for this id
+   *   2. bounded scan of project dirs:  <key>/<id>.jsonl
+   *   3. bounded scan of archived:      <key>/archived/<id>.jsonl
+   *   4. legacy flat:                   <sessionsDir>/<id>.jsonl
+   * On multiple matches (only possible for pre-FEATURE_219 same-second
+   * duplicate ids) it prefers the current process's project dir, else
+   * returns null with a warning rather than guessing.
+   */
+  private async resolveSessionLocation(id: string): Promise<string | null> {
+    const cached = this.sessionDirCache.get(id);
+    if (cached) {
+      const cachedPath = path.join(cached, `${id}.jsonl`);
+      if (fsSync.existsSync(cachedPath)) {
+        return cachedPath;
+      }
+      const cachedArchived = path.join(cached, 'archived', `${id}.jsonl`);
+      if (fsSync.existsSync(cachedArchived)) {
+        return cachedArchived;
+      }
+    }
+
+    const matches: string[] = [];
+    let entries: import('fs').Dirent[] = [];
+    try {
+      entries = await fs.readdir(this.sessionsDir, { withFileTypes: true });
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) {
+        continue;
+      }
+      const inProject = path.join(this.sessionsDir, entry.name, `${id}.jsonl`);
+      if (fsSync.existsSync(inProject)) {
+        matches.push(inProject);
+      }
+      const inArchived = path.join(this.sessionsDir, entry.name, 'archived', `${id}.jsonl`);
+      if (fsSync.existsSync(inArchived)) {
+        matches.push(inArchived);
+      }
+    }
+
+    if (matches.length === 0) {
+      const flat = this.legacyFlatPath(id);
+      return fsSync.existsSync(flat) ? flat : null;
+    }
+    if (matches.length === 1) {
+      this.sessionDirCache.set(id, path.dirname(matches[0]!).replace(/[/\\]archived$/, ''));
+      return matches[0]!;
+    }
+    // Ambiguous (legacy same-second duplicate ids across projects).
+    const currentDir = this.projectDir(deriveProjectKeyFromRoot(this.hostCwd ?? process.cwd()).key);
+    const preferred = matches.find((m) => path.dirname(m) === currentDir);
+    if (preferred) {
+      return preferred;
+    }
+    writeStorageNotice(
+      `[KodaX] Ambiguous session id ${id} found in ${matches.length} projects; specify projectKey to disambiguate.`,
+    );
+    return null;
+  }
+
   private async readSession(id: string): Promise<ResolvedSessionSnapshot | null> {
-    const filePath = this.getSessionFilePath(id);
+    const filePath = await this.resolveSessionLocation(id);
+    if (!filePath) {
+      return null;
+    }
     const snapshot = await readPersistedSessionFile(filePath);
     if (!snapshot) {
       return null;
@@ -626,6 +725,25 @@ export class FileSessionStorage implements KodaXSessionStorage {
 
     warnMalformedSessionData(filePath, snapshot.malformedCount);
     return buildSessionData(snapshot);
+  }
+
+  /** Write `<dir>/project.json` once per process per directory (best-effort). */
+  private async ensureProjectJson(dir: string, identity: ProjectIdentity): Promise<void> {
+    if (identity.canonicalRoot === null || this.projectJsonWritten.has(dir)) {
+      return;
+    }
+    this.projectJsonWritten.add(dir);
+    const manifestPath = path.join(dir, 'project.json');
+    try {
+      const payload = JSON.stringify({
+        canonicalRoot: identity.canonicalRoot,
+        displayName: identity.displayName,
+        lastUsed: new Date().toISOString(),
+      });
+      await fs.writeFile(manifestPath, payload + '\n', 'utf-8');
+    } catch {
+      // best-effort — manifest is an optimization, not a correctness requirement
+    }
   }
 
   // ── Phase 2: Streaming write (no join) ──
@@ -636,9 +754,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
     data: SessionData,
     createdAt?: string,
   ): Promise<void> {
-    await fs.mkdir(this.sessionsDir, { recursive: true });
+    const dir = this.resolveWriteDir(id, data);
+    await fs.mkdir(dir, { recursive: true });
 
-    const targetPath = this.getSessionFilePath(id);
+    const targetPath = path.join(dir, `${id}.jsonl`);
     const tempPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
     const lineage = data.lineage ?? createSessionLineage(data.messages);
     const meta = createSessionMeta(id, data, lineage, createdAt);
@@ -660,6 +779,18 @@ export class FileSessionStorage implements KodaXSessionStorage {
         await handle.close();
       }
       await fs.rename(tempPath, targetPath);
+      await this.ensureProjectJson(dir, deriveProjectKeyFromData(data));
+      // Lazy migrate-on-write: a legacy flat copy is now superseded by the
+      // per-project file. Remove it (and relocate its sidecar) so the locator
+      // never sees the same id in two places.
+      const legacy = this.legacyFlatPath(id);
+      if (legacy !== targetPath && fsSync.existsSync(legacy)) {
+        await fs.unlink(legacy).catch(() => undefined);
+        const legacyArchive = this.legacyFlatArchivePath(id);
+        if (fsSync.existsSync(legacyArchive)) {
+          await fs.rename(legacyArchive, path.join(dir, `${id}.archive.jsonl`)).catch(() => undefined);
+        }
+      }
     } finally {
       if (fsSync.existsSync(tempPath)) {
         await fs.unlink(tempPath).catch(() => undefined);
@@ -700,9 +831,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
   //   - No lineage provided by caller
   //   - Watermark inconsistency (rewind/fork occurred)
   async appendSessionDelta(id: string, data: SessionData): Promise<void> {
-    const filePath = this.getSessionFilePath(id);
+    const filePath = this.writeFilePath(id, data);
 
-    // Pre-checks that don't need serialization
+    // Pre-checks that don't need serialization. A session still living in the
+    // legacy flat pool (no per-project file yet) takes the save() path, which
+    // writes to the project dir and supersedes the flat copy.
     if (!fsSync.existsSync(filePath) || !data.lineage) {
       await this.save(id, data);
       return;
@@ -794,8 +927,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
 
-      // Write sidecar (streaming append — no join)
-      const archivePath = this.getArchiveFilePath(id);
+      // Write sidecar (streaming append — no join) into the same project dir.
+      const archiveDir = this.resolveWriteDir(id, resolved.data);
+      await fs.mkdir(archiveDir, { recursive: true });
+      const archivePath = path.join(archiveDir, `${id}.archive.jsonl`);
       const archiveHandle = await fs.open(archivePath, 'a');
       try {
         await archiveHandle.write(JSON.stringify({
@@ -842,7 +977,10 @@ export class FileSessionStorage implements KodaXSessionStorage {
     this.syncAppendState(id, resolved.data);
 
     const { data, createdAt } = resolved;
-    const filePath = this.getSessionFilePath(id);
+    // Label only — used by the no-op `warnMalformedSessionData(filePath, 0)`
+    // call below (count 0 returns early). The actual file was already located
+    // by `readSession` via the id-only locator.
+    const filePath = this.legacyFlatPath(id);
 
     // v0.7.46 fix — thread `this.hostCwd` so in-process embedders compare
     // against the project they actually opened, not the embedder
@@ -1056,19 +1194,49 @@ export class FileSessionStorage implements KodaXSessionStorage {
     const currentRuntime = await inspectWorkspaceRuntime({
       cwd: currentGitRoot ?? this.hostCwd ?? process.cwd(),
     });
-    // Exclude `.archive.jsonl` (round archives, not resumable sessions — and
-    // historically the largest files read here) and `archived-` prefixed files
-    // (the session-archive mechanism documented on `ListSessionsOptions.
-    // includeArchived` in session/public-api.ts; this keeps the interactive
-    // picker + the SDK fast path consistent with the public-api slow path,
-    // which already hides `archived-` sessions). Read only the first line of
-    // each remaining file (see `readSessionFirstLine`) instead of the whole file.
-    const files = (await fs.readdir(this.sessionsDir)).filter(
-      (file) =>
-        file.endsWith('.jsonl') &&
-        !file.endsWith('.archive.jsonl') &&
-        !file.startsWith('archived-'),
-    );
+    // FEATURE_219 — candidate files come from the CURRENT project's directory
+    // (O(sessions-in-project), the whole point of the per-project layout) plus
+    // the legacy flat pool (compat until auto-migration empties it). When there
+    // is no resolvable project root (rootless `kodax -c`), fall back to scanning
+    // every project dir so the "show me everything" behavior is preserved.
+    // Exclude `.archive.jsonl` island sidecars and the `archived/` subdir.
+    const topEntries = await fs.readdir(this.sessionsDir, { withFileTypes: true });
+    // `trusted` files live in the resolved current-project dir — the folder key
+    // IS the canonical identity, so they skip the per-file canonical match
+    // filter below (which could otherwise hide a correctly-placed session on a
+    // stored-runtimeInfo quirk). Flat-pool files are untrusted and still filter.
+    const candidatePaths: Array<{ path: string; trusted: boolean }> = [];
+    const currentProjectKey = deriveProjectKeyFromData({
+      gitRoot: currentGitRoot ?? undefined,
+      runtimeInfo: currentRuntime,
+    }).key;
+    const projectDirNames = currentGitRoot
+      ? [currentProjectKey]
+      : topEntries.filter((e) => e.isDirectory() && !e.name.startsWith('.')).map((e) => e.name);
+    for (const key of projectDirNames) {
+      let dirFiles: string[] = [];
+      try {
+        dirFiles = await fs.readdir(this.projectDir(key));
+      } catch {
+        continue;
+      }
+      for (const f of dirFiles) {
+        if (f.endsWith('.jsonl') && !f.endsWith('.archive.jsonl')) {
+          candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: Boolean(currentGitRoot) });
+        }
+      }
+    }
+    for (const e of topEntries) {
+      if (
+        e.isFile() &&
+        e.name.endsWith('.jsonl') &&
+        !e.name.endsWith('.archive.jsonl') &&
+        !e.name.startsWith('archived-')
+      ) {
+        candidatePaths.push({ path: path.join(this.sessionsDir, e.name), trusted: false });
+      }
+    }
+
     const sessions: Array<{
       id: string;
       title: string;
@@ -1078,9 +1246,8 @@ export class FileSessionStorage implements KodaXSessionStorage {
     }> = [];
 
     type SessionEntry = (typeof sessions)[number];
-    const parseSessionFile = async (file: string): Promise<SessionEntry | null> => {
+    const parseSessionFile = async (filePath: string, trusted: boolean): Promise<SessionEntry | null> => {
       try {
-        const filePath = path.join(this.sessionsDir, file);
         const firstLine = await readSessionFirstLine(filePath);
         if (!firstLine) {
           return null;
@@ -1095,7 +1262,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
           const scope: KodaXSessionScope = first.scope === 'managed-task-worker'
             ? 'managed-task-worker'
             : 'user';
-          if (currentGitRoot) {
+          if (currentGitRoot && !trusted) {
             const sameCanonicalRepo = isSameCanonicalRepo(currentRuntime, sessionRuntime);
             // FEATURE_157: Windows-aware comparison (case-insensitive on
             // win32/darwin) — see `pathsEqual` JSDoc for the resume-loss
@@ -1126,7 +1293,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
               ? first.activeMessageCount
               : Math.max(0, (await countSessionLines(filePath)) - 1 - extensionRecordCount);
           return {
-            id: file.replace('.jsonl', ''),
+            id: path.basename(filePath, '.jsonl'),
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
             createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
@@ -1151,22 +1318,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
           };
         }
         const lineCount = await countSessionLines(filePath);
-        return { id: file.replace('.jsonl', ''), title: '', msgCount: lineCount };
+        return { id: path.basename(filePath, '.jsonl'), title: '', msgCount: lineCount };
       } catch {
         return null;
       }
     };
 
     // Head-read every candidate concurrently (bounded so we never exhaust fds
-    // on a large sessions dir). Order-independent: the result is sorted below,
-    // so collection order does not affect output.
+    // on a large sessions dir). Project-dir paths are listed before flat paths,
+    // so on a duplicate id (a session mid-migration) the project-dir copy wins.
     const LIST_READ_CONCURRENCY = 48;
-    for (let i = 0; i < files.length; i += LIST_READ_CONCURRENCY) {
+    const seenIds = new Set<string>();
+    for (let i = 0; i < candidatePaths.length; i += LIST_READ_CONCURRENCY) {
       const batch = await Promise.all(
-        files.slice(i, i + LIST_READ_CONCURRENCY).map(parseSessionFile),
+        candidatePaths.slice(i, i + LIST_READ_CONCURRENCY).map((c) => parseSessionFile(c.path, c.trusted)),
       );
       for (const entry of batch) {
-        if (entry) {
+        if (entry && !seenIds.has(entry.id)) {
+          seenIds.add(entry.id);
           sessions.push(entry);
         }
       }
@@ -1205,10 +1374,24 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   async delete(id: string): Promise<void> {
-    const filePath = this.getSessionFilePath(id);
-    if (fsSync.existsSync(filePath)) {
-      await fs.unlink(filePath);
+    // Locate the session anywhere (project dir / archived / legacy flat), then
+    // remove it together with its island sidecar (paired — never orphan a
+    // sidecar, ADR-038 §4). Also sweep a legacy flat copy if one lingers.
+    const located = await this.resolveSessionLocation(id);
+    const targets = new Set<string>();
+    if (located) {
+      targets.add(located);
+      targets.add(located.replace(/\.jsonl$/, '.archive.jsonl'));
+      targets.add(located.replace(/\.jsonl$/, '.islands.jsonl'));
     }
+    targets.add(this.legacyFlatPath(id));
+    targets.add(this.legacyFlatArchivePath(id));
+    for (const target of targets) {
+      if (fsSync.existsSync(target)) {
+        await fs.unlink(target).catch(() => undefined);
+      }
+    }
+    this.sessionDirCache.delete(id);
   }
 
   async deleteAll(gitRoot?: string): Promise<void> {
@@ -1241,20 +1424,57 @@ export class FileSessionStorage implements KodaXSessionStorage {
       return 0;
     }
     let removed = 0;
+    const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const unlinkIfOld = async (filePath: string): Promise<void> => {
+      if (!filePath.endsWith('.jsonl')) {
+        return;
+      }
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.mtimeMs < cutoffMs) {
+          await fs.unlink(filePath);
+          removed++;
+        }
+      } catch {
+        // ignore — locked/racing file
+      }
+    };
     try {
       await fs.mkdir(this.sessionsDir, { recursive: true });
-      const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-      const files = (await fs.readdir(this.sessionsDir)).filter((file) => file.endsWith('.jsonl'));
-      for (const file of files) {
-        const filePath = path.join(this.sessionsDir, file);
+      // FEATURE_219 — sweep the flat pool (legacy), every project dir, and each
+      // project's `archived/` subdir. One level of recursion is enough; the
+      // layout is never deeper than `<key>/archived/<id>.jsonl`.
+      const top = await fs.readdir(this.sessionsDir, { withFileTypes: true });
+      for (const entry of top) {
+        const entryPath = path.join(this.sessionsDir, entry.name);
+        if (entry.isFile()) {
+          await unlinkIfOld(entryPath);
+          continue;
+        }
+        if (!entry.isDirectory() || entry.name.startsWith('.')) {
+          continue;
+        }
+        let inner: import('fs').Dirent[] = [];
         try {
-          const stat = await fs.stat(filePath);
-          if (stat.mtimeMs < cutoffMs) {
-            await fs.unlink(filePath);
-            removed++;
-          }
+          inner = await fs.readdir(entryPath, { withFileTypes: true });
         } catch {
           continue;
+        }
+        for (const child of inner) {
+          const childPath = path.join(entryPath, child.name);
+          if (child.isFile()) {
+            await unlinkIfOld(childPath);
+          } else if (child.isDirectory() && child.name === 'archived') {
+            let archived: string[] = [];
+            try {
+              archived = await fs.readdir(childPath);
+            } catch {
+              continue;
+            }
+            for (const f of archived) {
+              await unlinkIfOld(path.join(childPath, f));
+            }
+          }
         }
       }
     } catch {

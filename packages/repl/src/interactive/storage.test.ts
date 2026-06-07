@@ -501,7 +501,8 @@ describe('FileSessionStorage', () => {
       scope: 'user',
     });
 
-    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions', deriveProjectKeyFromRoot(gitRoot).key);
     const olderPath = path.join(sessionsDir, '20260326_100000.jsonl');
     const newerPath = path.join(sessionsDir, 'custom-user-session.jsonl');
     const olderContent = await readFile(olderPath, 'utf8');
@@ -586,8 +587,10 @@ describe('FileSessionStorage', () => {
 
     // Append 2000 junk lines AFTER the meta line. A whole-file line count would
     // inflate msgCount; the head-read path uses the meta's activeMessageCount and
-    // never sees these lines.
-    const filePath = path.join(tempHome, '.kodax', 'sessions', '20260401_130000.jsonl');
+    // never sees these lines. FEATURE_219: the file lives under the per-project dir.
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const projectKey = deriveProjectKeyFromRoot(gitRoot).key;
+    const filePath = path.join(tempHome, '.kodax', 'sessions', projectKey, '20260401_130000.jsonl');
     const junk = `${Array.from({ length: 2000 }, (_, i) => JSON.stringify({ _type: 'noise', i })).join('\n')}\n`;
     await writeFile(filePath, `${await readFile(filePath, 'utf8')}${junk}`, 'utf8');
 
@@ -613,7 +616,8 @@ describe('FileSessionStorage', () => {
       scope: 'user',
     });
 
-    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions', deriveProjectKeyFromRoot(gitRoot).key);
     const oldPath = path.join(sessionsDir, '20260101_000000.jsonl');
     const oldArchivePath = path.join(sessionsDir, '20260101_000000.archive.jsonl');
     const recentPath = path.join(sessionsDir, '20260401_000000.jsonl');
@@ -641,7 +645,10 @@ describe('FileSessionStorage', () => {
       gitRoot,
       scope: 'user',
     });
-    const oldPath = path.join(tempHome, '.kodax', 'sessions', '20260101_010000.jsonl');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const oldPath = path.join(
+      tempHome, '.kodax', 'sessions', deriveProjectKeyFromRoot(gitRoot).key, '20260101_010000.jsonl',
+    );
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
     await utimes(oldPath, sixtyDaysAgo, sixtyDaysAgo);
 
@@ -837,5 +844,92 @@ describe('FileSessionStorage', () => {
     const final = await storage.load('session-mixed');
     expect(final?.title).toBe('Mixed Path Final');
     expect(final?.messages[final.messages.length - 1]).toEqual({ role: 'assistant', content: 'reply 3' });
+  });
+
+  // ── FEATURE_219: per-project layout + id-only locator ──
+
+  it('FEATURE_219: writes sessions under a per-project directory (not flat) + project.json', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await storage.save('20260601_120000', {
+      messages: [{ role: 'user', content: 'hi' }],
+      title: 'In Project Dir',
+      gitRoot,
+      scope: 'user',
+    });
+
+    const projectDir = path.join(
+      tempHome, '.kodax', 'sessions', deriveProjectKeyFromRoot(gitRoot).key,
+    );
+    expect(existsSync(path.join(projectDir, '20260601_120000.jsonl'))).toBe(true);
+    expect(existsSync(path.join(projectDir, 'project.json'))).toBe(true);
+    // The legacy flat path must NOT be used.
+    expect(existsSync(path.join(tempHome, '.kodax', 'sessions', '20260601_120000.jsonl'))).toBe(false);
+  });
+
+  it('FEATURE_219: id-only locator resolves a project-dir session from a cold storage instance', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+
+    await new FileSessionStorage().save('20260601_130000', {
+      messages: [{ role: 'user', content: 'persisted' }],
+      title: 'Cold Load',
+      gitRoot,
+      scope: 'user',
+    });
+
+    // Fresh instance → empty sessionDirCache → must locate by bounded scan.
+    const cold = new FileSessionStorage();
+    const loaded = await cold.load('20260601_130000');
+    expect(loaded?.title).toBe('Cold Load');
+    expect(loaded?.messages[0]).toEqual({ role: 'user', content: 'persisted' });
+  });
+
+  it('FEATURE_219: load(id) still reads a legacy flat-pool session (compat)', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const { mkdir } = await import('fs/promises');
+    await mkdir(sessionsDir, { recursive: true });
+    const meta = JSON.stringify({
+      _type: 'meta',
+      id: '20260101_999999',
+      title: 'Legacy Flat',
+      gitRoot: '/legacy/repo',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      activeMessageCount: 1,
+    });
+    const msg = JSON.stringify({ role: 'user', content: 'old flat session' });
+    await writeFile(path.join(sessionsDir, '20260101_999999.jsonl'), `${meta}\n${msg}\n`, 'utf8');
+
+    const loaded = await new FileSessionStorage().load('20260101_999999');
+    expect(loaded?.title).toBe('Legacy Flat');
+  });
+
+  it('FEATURE_219: saving a legacy flat session migrates it into the project dir + removes the flat copy', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const { mkdir } = await import('fs/promises');
+    await mkdir(sessionsDir, { recursive: true });
+    const flatPath = path.join(sessionsDir, '20260101_888888.jsonl');
+    const meta = JSON.stringify({
+      _type: 'meta', id: '20260101_888888', title: 'Pre-migration', gitRoot, activeMessageCount: 1,
+    });
+    await writeFile(flatPath, `${meta}\n${JSON.stringify({ role: 'user', content: 'x' })}\n`, 'utf8');
+
+    const storage = new FileSessionStorage();
+    const loaded = await storage.load('20260101_888888');
+    await storage.save('20260101_888888', { ...loaded!, title: 'Migrated', gitRoot });
+
+    const projectPath = path.join(
+      sessionsDir, deriveProjectKeyFromRoot(gitRoot).key, '20260101_888888.jsonl',
+    );
+    expect(existsSync(projectPath)).toBe(true);
+    expect(existsSync(flatPath)).toBe(false); // flat copy superseded
+    expect((await storage.load('20260101_888888'))?.title).toBe('Migrated');
   });
 });
