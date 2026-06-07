@@ -18,6 +18,7 @@ import type { KodaXSessionRuntimeInfo } from '@kodax-ai/agent';
 
 import { FileSessionStorage } from '../interactive/storage.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
+import { ensureLayoutMigrated } from '../interactive/session-migration.js';
 import type { SessionData } from '../ui/utils/session-storage.js';
 import { KODAX_SESSIONS_DIR } from '../common/utils.js';
 
@@ -182,6 +183,11 @@ async function listSessionsImpl(
 ): Promise<SessionSummary[]> {
   try {
     const sessionsDir = resolveSessionsDir(sessionsDirOverride);
+    // FEATURE_219 — trigger the one-shot auto-migration here too, so the SDK
+    // SLOW path (scope='all' / before / includeArchived) which reads the
+    // directory directly (collectSessionFilePaths) doesn't bypass the gate the
+    // FileSessionStorage entry points enforce. Idempotent (marker fast-path).
+    await ensureLayoutMigrated(sessionsDir);
     // FileSessionStorage.list() accepts an optional gitRoot to scope to the
     // current workspace. Map projectRoot alias to gitRoot.
     const gitRoot = opts?.projectRoot;
@@ -578,6 +584,10 @@ function watchSessionsImpl(
   sessionsDirOverride: string | undefined,
 ): { close: () => void } {
   const sessionsDir = resolveSessionsDir(sessionsDirOverride);
+  // FEATURE_219 — kick off the one-shot migration so a watcher started before
+  // any read/write still observes the per-project layout (fire-and-forget; the
+  // recursive watcher / poll picks up the moved files as migration lands).
+  void ensureLayoutMigrated(sessionsDir).catch(() => undefined);
   if (process.platform === 'win32') {
     return watchSessionsWindows(cb, sessionsDir);
   }

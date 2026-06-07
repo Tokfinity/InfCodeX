@@ -127,15 +127,16 @@ describe('resolveSkillContent — embedder hook dispatch (v0.7.42)', () => {
   });
 
   it('Tier 3 (no hook): safe whitelist still permits read-only commands', async () => {
-    // `pwd` is on the whitelist. Verifies the legacy path still works when
-    // neither tier 1 nor tier 2 is engaged.
+    // `echo` is on the whitelist and exists on every platform (unlike `pwd`,
+    // which is absent on Windows and made this test fail there). Verifies the
+    // legacy path still works when neither tier 1 nor tier 2 is engaged.
     const resolved = await resolveSkillContent(
-      'CWD: !`pwd`',
+      'OUT: !`echo skilltest`',
       '',
       { workingDirectory: process.cwd() },
     );
     expect(resolved).not.toContain('[Error');
-    expect(resolved.startsWith('CWD: ')).toBe(true);
-    expect(resolved.length).toBeGreaterThan('CWD: '.length);
+    expect(resolved.startsWith('OUT: ')).toBe(true);
+    expect(resolved).toContain('skilltest');
   });
 });

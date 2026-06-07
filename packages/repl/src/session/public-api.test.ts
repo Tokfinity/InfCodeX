@@ -271,6 +271,20 @@ describe('Session Management Public SDK', () => {
     process.platform === 'win32' ? 5000 : 2000,
   );
 
+  // ── FEATURE_219: SDK slow path triggers auto-migration ──
+  it('listSessions (slow path, scope=all) triggers auto-migration of the flat pool', async () => {
+    await writeMinimalSession(sessionsDir, '20260901_000000');
+    expect(fs.existsSync(path.join(sessionsDir, '.layout.json'))).toBe(false);
+
+    const sessions = await api.listSessions({ scope: 'all' });
+
+    expect(sessions.map((s) => s.id)).toContain('20260901_000000');
+    // The slow path must have run the migration gate (not just the fast path).
+    expect(fs.existsSync(path.join(sessionsDir, '.layout.json'))).toBe(true);
+    // Flat file moved into a per-project dir.
+    expect(fs.existsSync(path.join(sessionsDir, '20260901_000000.jsonl'))).toBe(false);
+  });
+
   // ── Test 12: createSessionManager returns object with all methods + storage ───
   it('createSessionManager returns an object with all expected methods and a storage field', async () => {
     const manager = api.createSessionManager() as Record<string, unknown>;
