@@ -64,7 +64,7 @@ const OWN_TEMP_SUFFIX = /^\d+\.\d+\.tmp$/;
 // clear within milliseconds, so a few short retries recover; a genuinely
 // permanent failure (e.g. target is a directory → EISDIR/ENOTEMPTY, or EPERM
 // that never clears) still surfaces after the retry budget is spent.
-const RENAME_TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'EACCES', 'EMFILE', 'ENFILE']);
+const RENAME_TRANSIENT_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 async function renameWithRetry(from: string, to: string): Promise<void> {
   const maxAttempts = 5;
