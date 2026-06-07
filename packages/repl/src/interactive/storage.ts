@@ -564,15 +564,31 @@ export class FileSessionStorage implements KodaXSessionStorage {
    * Threaded through `getGitRoot(this.hostCwd)` and `inspectWorkspaceRuntime({cwd: this.hostCwd})`
    * so the workspace-mismatch check in `load()` compares against the
    * project the embedder opened, NOT the embedder's startup directory.
-   * When set, mismatch warnings are also suppressed (the embedder is
-   * authoritative about project scope; the CLI-mode warning is noise).
    * Unset → all paths behave identically to the pre-v0.7.46 form.
    */
   private readonly hostCwd?: string;
 
-  constructor(opts?: { sessionsDir?: string; cwd?: string }) {
+  /**
+   * v0.7.46 F7 — explicit opt-in for the CLI-style "[Warning] Session
+   * project mismatch" stderr notice emitted from `load()`. Pre-v0.7.46
+   * the gate was `!this.hostCwd` which fired whenever the embedder
+   * hadn't supplied a cwd — but that ALSO matched SDK consumers who
+   * don't set cwd (e.g. KodaX Space), bleeding the yellow warning into
+   * their stdout/stderr UI channels on every cross-project load. The
+   * v0.7.46 default is `false` — silent. CLI surfaces that want the
+   * old behavior (warn when user resumes a session from outside its
+   * original project) can pass `emitMismatchWarnings: true`.
+   */
+  private readonly emitMismatchWarnings: boolean;
+
+  constructor(opts?: {
+    sessionsDir?: string;
+    cwd?: string;
+    emitMismatchWarnings?: boolean;
+  }) {
     this.sessionsDir = opts?.sessionsDir ?? KODAX_SESSIONS_DIR;
     this.hostCwd = opts?.cwd;
+    this.emitMismatchWarnings = opts?.emitMismatchWarnings ?? false;
   }
 
   // ── Session-level write serialization ──
@@ -718,15 +734,29 @@ export class FileSessionStorage implements KodaXSessionStorage {
       return matches[0]!;
     }
     // Ambiguous (legacy same-second duplicate ids across projects).
-    const currentDir = this.projectDir(deriveProjectKeyFromRoot(this.hostCwd ?? process.cwd()).key);
-    const preferred = matches.find((m) => path.dirname(m) === currentDir);
-    if (preferred) {
-      return preferred;
+    // v0.7.46 F8 — only try cwd-based disambiguation when the caller has
+    // signaled project intent via `this.hostCwd`. Pre-fix this fell
+    // through to `process.cwd()`, which for SDK consumers without
+    // `cwd` (e.g. KodaX Space) resolved to the embedder's startup
+    // directory — neither candidate matched → `preferred = undefined`
+    // → `null` returned → session load silently failed. Now: with no
+    // hostCwd, take the first match (best-effort; FEATURE_219 added
+    // an id uniqueness suffix so new sessions can't trigger this
+    // path; only legacy same-second cross-project duplicates do).
+    // The diagnostic notice still fires so the caller can debug.
+    if (this.hostCwd) {
+      const currentDir = this.projectDir(deriveProjectKeyFromRoot(this.hostCwd).key);
+      const preferred = matches.find((m) => path.dirname(m) === currentDir);
+      if (preferred) {
+        return preferred;
+      }
     }
     writeStorageNotice(
-      `[KodaX] Ambiguous session id ${id} found in ${matches.length} projects; specify projectKey to disambiguate.`,
+      `[KodaX] Ambiguous session id ${id} found in ${matches.length} projects; ` +
+      `${this.hostCwd ? 'no current-project match — ' : ''}returning the first match. ` +
+      `Specify projectKey to disambiguate.`,
     );
-    return null;
+    return matches[0]!;
   }
 
   private async readSession(id: string): Promise<ResolvedSessionSnapshot | null> {
@@ -1003,46 +1033,46 @@ export class FileSessionStorage implements KodaXSessionStorage {
     // by `readSession` via the id-only locator.
     const filePath = this.legacyFlatPath(id);
 
-    // v0.7.46 fix — thread `this.hostCwd` so in-process embedders compare
-    // against the project they actually opened, not the embedder
-    // process's startup directory. With this, an embedder serving
-    // multiple projects no longer gets false-positive workspace-mismatch
-    // warnings (and the embedder-supplied scope is authoritative;
-    // we also suppress the warning entirely when `hostCwd` is set —
-    // the CLI-mode "you cd'd into a different repo than the session
-    // belongs to" semantics don't apply to a programmatic SDK consumer).
-    const currentGitRoot = await getGitRoot(this.hostCwd);
-    const currentRuntime = await inspectWorkspaceRuntime({ cwd: this.hostCwd });
-    const sessionRuntime = resolveSessionRuntimeInfo(data);
-    const canonicalMismatch =
-      currentRuntime.canonicalRepoRoot
-      && sessionRuntime?.canonicalRepoRoot
-      && !isSameCanonicalRepo(currentRuntime, sessionRuntime);
-
-    const shouldEmitMismatchWarning = !this.hostCwd && (canonicalMismatch || (
-      currentGitRoot && data.gitRoot && currentGitRoot !== data.gitRoot && !isSameCanonicalRepo(
-        currentRuntime,
-        { canonicalRepoRoot: data.gitRoot },
-      )
-    ));
-
-    if (shouldEmitMismatchWarning) {
-      writeStorageNotice(chalk.yellow('\n[Warning] Session project mismatch:'));
-      if (currentRuntime.workspaceRoot) {
-        writeStorageNotice(`  Current workspace:  ${currentRuntime.workspaceRoot}`);
+    // v0.7.46 F7 — Workspace-mismatch warning is gated on the explicit
+    // `emitMismatchWarnings` flag (default off) rather than the original
+    // `!this.hostCwd` gate, which silently fired for any SDK consumer
+    // that didn't set cwd (e.g. KodaX Space) — bleeding yellow stderr
+    // noise into their UI output channel on every cross-project load.
+    // When the flag is off, skip the runtime/git resolution entirely so
+    // the common SDK case is also cheap. CLI surfaces that want the
+    // legacy warning can opt-in via `new FileSessionStorage({ emitMismatchWarnings: true })`.
+    if (this.emitMismatchWarnings) {
+      const currentGitRoot = await getGitRoot(this.hostCwd);
+      const currentRuntime = await inspectWorkspaceRuntime({ cwd: this.hostCwd });
+      const sessionRuntime = resolveSessionRuntimeInfo(data);
+      const canonicalMismatch =
+        currentRuntime.canonicalRepoRoot
+        && sessionRuntime?.canonicalRepoRoot
+        && !isSameCanonicalRepo(currentRuntime, sessionRuntime);
+      const shouldEmitMismatchWarning = Boolean(canonicalMismatch || (
+        currentGitRoot && data.gitRoot && currentGitRoot !== data.gitRoot && !isSameCanonicalRepo(
+          currentRuntime,
+          { canonicalRepoRoot: data.gitRoot },
+        )
+      ));
+      if (shouldEmitMismatchWarning) {
+        writeStorageNotice(chalk.yellow('\n[Warning] Session project mismatch:'));
+        if (currentRuntime.workspaceRoot) {
+          writeStorageNotice(`  Current workspace:  ${currentRuntime.workspaceRoot}`);
+        }
+        if (sessionRuntime?.workspaceRoot) {
+          writeStorageNotice(`  Session workspace:  ${sessionRuntime.workspaceRoot}`);
+        }
+        if (currentRuntime.canonicalRepoRoot) {
+          writeStorageNotice(`  Current repo:      ${currentRuntime.canonicalRepoRoot}`);
+        }
+        if (sessionRuntime?.canonicalRepoRoot) {
+          writeStorageNotice(`  Session repo:      ${sessionRuntime.canonicalRepoRoot}`);
+        } else if (data.gitRoot) {
+          writeStorageNotice(`  Session repo:      ${data.gitRoot}`);
+        }
+        writeStorageNotice('  Continuing anyway...\n');
       }
-      if (sessionRuntime?.workspaceRoot) {
-        writeStorageNotice(`  Session workspace:  ${sessionRuntime.workspaceRoot}`);
-      }
-      if (currentRuntime.canonicalRepoRoot) {
-        writeStorageNotice(`  Current repo:      ${currentRuntime.canonicalRepoRoot}`);
-      }
-      if (sessionRuntime?.canonicalRepoRoot) {
-        writeStorageNotice(`  Session repo:      ${sessionRuntime.canonicalRepoRoot}`);
-      } else if (data.gitRoot) {
-        writeStorageNotice(`  Session repo:      ${data.gitRoot}`);
-      }
-      writeStorageNotice('  Continuing anyway...\n');
     }
 
     if (data.errorMetadata?.consecutiveErrors && data.errorMetadata.consecutiveErrors > 0) {
