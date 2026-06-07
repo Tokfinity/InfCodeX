@@ -19,21 +19,14 @@ import YAML from 'yaml';
 //      Resolution: relative path '../../../index.js' (3 levels up from scripts/ to dist/)
 //      → Strategy 1 covers 99%+ of bundle-installed users.
 //
-//   2. Dev monorepo (npm run dev / direct invocation against built sub-packages):
+//   2. Dev monorepo / unusual bundle layouts:
 //      this file → <repo>/packages/skills/dist/builtin/skill-creator/scripts/utils.js
-//      SDK       → not at relative path; resolved via npm workspace symlink
-//      Resolution: bare-name `@kodax-ai/coding` (workspace alias)
+//      SDK       → resolved via npm workspace symlink or installed package
+//      Resolution: bare-name `@kodax-ai/kodax` (canonical SDK package)
 //
-//   3. Rare edge case — bundle install with non-standard layout (manual copy,
-//      symlinked dist dir, etc.) where Strategy 1 path-existence check fails:
-//      fall back to bare-name `@kodax-ai/kodax`.
-//
-// Legacy fallback (`@kodax-ai/cli` v0.7.37/v0.7.38 RC, `@kodax-ai/kodax-cli`
-// v0.7.38 dual-publish) is intentionally NOT in this chain. Both legacy names
-// are deprecated/unpublished on npm and the user base was effectively zero
-// (placeholder publish + 2-hour dual-publish window). Anyone who installed
-// the legacy names still hits Strategy 1 (relative path resolution doesn't
-// care about package name) — bare-name fallback was over-defensive.
+// Workspace-internal package names and legacy package aliases are intentionally
+// NOT in this chain. Published helper scripts must not rely on workspace-only
+// package names.
 //
 // See docs/ADR.md ADR-022 / ADR-024 + docs/HLD.md §12 for the SDK distribution
 // contract.
@@ -55,15 +48,7 @@ export async function loadKodaXSDK() {
   }
   errors.push(`relative SDK path not found: ${relSdkPath}`);
 
-  // Strategy 2: dev monorepo — workspace symlink resolves bare name
-  try {
-    _cachedSdk = await import('@kodax-ai/coding');
-    return _cachedSdk;
-  } catch (err) {
-    errors.push(`bare-name @kodax-ai/coding failed: ${err?.code ?? err?.message}`);
-  }
-
-  // Strategy 3: bare-name canonical (rare edge case fallback)
+  // Strategy 2: bare-name canonical (dev monorepo / rare edge-case fallback)
   try {
     _cachedSdk = await import('@kodax-ai/kodax');
     return _cachedSdk;

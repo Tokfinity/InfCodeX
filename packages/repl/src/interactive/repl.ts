@@ -16,13 +16,19 @@ import {
   extractArtifactLedger,
   KodaXInputArtifact,
   KodaXOptions,
-  KodaXMessage,
   KodaXResult,
   KodaXReasoningMode,
-  KodaXSessionData,
   mergeArtifactLedger,
   runManagedTask,
   resolveRepoIntelligenceRuntimeConfig,
+  KodaXError,
+  KodaXRateLimitError,
+  KodaXProviderError,
+  KODAX_DEFAULT_PROVIDER,
+  getCustomProvider,
+  buildGoalRuntimeBinding,
+} from '@kodax-ai/coding';
+import {
   appendSessionLineageLabel,
   buildSessionTree,
   countActiveLineageMessages,
@@ -31,18 +37,16 @@ import {
   forkSessionLineage,
   generateSessionId as generateCoreSessionId,
   findPreviousUserEntryId,
+  getMessageQueue,
   getSessionMessagesFromLineage,
   rewindSessionLineage,
-  KodaXSessionStorage,
-  KodaXError,
-  KodaXRateLimitError,
-  KodaXProviderError,
-  KODAX_DEFAULT_PROVIDER,
   setSessionLineageActiveEntry,
-  getCustomProvider,
-  buildGoalRuntimeBinding,
-} from '@kodax-ai/coding';
-import { getMessageQueue } from '@kodax-ai/agent';
+} from '@kodax-ai/agent';
+import type {
+  KodaXMessage,
+  KodaXSessionData,
+  KodaXSessionStorage,
+} from '@kodax-ai/agent';
 import type { AgentsFile } from '@kodax-ai/coding';
 import type { PermissionMode, ConfirmResult } from '../permission/types.js';
 import {

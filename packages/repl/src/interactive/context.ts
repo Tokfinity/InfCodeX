@@ -4,12 +4,14 @@
 
 import type {
   KodaXContextTokenSnapshot,
+} from '@kodax-ai/coding';
+import type {
   KodaXMessage,
   KodaXSessionArtifactLedgerEntry,
   KodaXSessionLineage,
   KodaXSessionRuntimeInfo,
   KodaXSessionUiHistoryItem,
-} from '@kodax-ai/coding';
+} from '@kodax-ai/agent';
 
 // Interactive mode - 交互模式
 export type InteractiveMode = 'code' | 'ask';

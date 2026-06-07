@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { KodaXMessage } from "@kodax-ai/coding";
+import type { KodaXMessage } from "@kodax-ai/agent";
 import {
   type HistorySeedSourceMessage,
   extractHistorySeedsFromMessage,

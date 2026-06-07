@@ -3,11 +3,11 @@ import type {
   KodaXExtensionSessionRecord,
   KodaXExtensionSessionState,
   KodaXJsonValue,
-  KodaXManagedTask,
   KodaXMessage,
   KodaXSessionUiHistoryItem,
   SessionErrorMetadata,
-} from '@kodax-ai/coding';
+} from '@kodax-ai/agent';
+import type { KodaXManagedTask } from '@kodax-ai/coding';
 
 const MESSAGE_ROLES = new Set<KodaXMessage['role']>(['user', 'assistant', 'system']);
 const TASK_SURFACES = new Set<NonNullable<KodaXManagedTask['contract']['surface']>>(['cli', 'repl', 'plan']);
