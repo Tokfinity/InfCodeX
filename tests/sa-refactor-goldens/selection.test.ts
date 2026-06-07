@@ -265,6 +265,43 @@ const HAS_REAL_SESSIONS = existsSync(REAL_SESSIONS_DIR);
 
 const describeOrSkip = HAS_REAL_SESSIONS ? describe : describe.skip;
 
+// ---------------------------------------------------------------------------
+// Deterministic layout test — guards listSessionFiles across the FEATURE_219
+// per-project storage layout WITHOUT depending on the user's real corpus, so
+// correctness holds even when ~/.kodax/sessions has been migrated (or is empty).
+// ---------------------------------------------------------------------------
+
+describe('listSessionFiles across the FEATURE_219 per-project layout', () => {
+  it('returns only active session files, skipping control + sidecar files', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'sa-goldens-layout-'));
+    try {
+      // legacy flat session at the top level
+      await fs.writeFile(path.join(dir, 'legacy-session.jsonl'), '{"type":"meta"}\n', 'utf8');
+      // per-project active session one level deep
+      const projectDir = path.join(dir, 'c-some-project-abc123');
+      await fs.mkdir(projectDir);
+      await fs.writeFile(path.join(projectDir, 'session.jsonl'), '{"type":"meta"}\n', 'utf8');
+      // control + sidecar files that must NOT be returned
+      await fs.writeFile(path.join(dir, '.layout.json'), '{"version":1}\n', 'utf8');
+      await fs.writeFile(path.join(dir, '.migration-journal.jsonl'), '{}\n', 'utf8');
+      await fs.writeFile(path.join(projectDir, 'foo.islands.jsonl'), '{}\n', 'utf8');
+      await fs.writeFile(path.join(projectDir, 'session.archive.jsonl'), '{}\n', 'utf8');
+      await fs.writeFile(path.join(projectDir, 'project.json'), '{}\n', 'utf8');
+
+      const files = await listSessionFiles(dir);
+
+      expect(files).toEqual(
+        [
+          path.join(projectDir, 'session.jsonl'),
+          path.join(dir, 'legacy-session.jsonl'),
+        ].sort(),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 // The two corpus-scanning tests below iterate over every jsonl in the
 // user's `~/.kodax/sessions/` directory (can be 100s of files in active
 // development environments). Under heavy parallel test load (~4800
@@ -274,7 +311,10 @@ const describeOrSkip = HAS_REAL_SESSIONS ? describe : describe.skip;
 describeOrSkip('against real .kodax/sessions/ corpus', () => {
   it('parses every jsonl file without throwing and reports basic shape', { timeout: 30_000 }, async () => {
     const files = await listSessionFiles(REAL_SESSIONS_DIR);
-    expect(files.length).toBeGreaterThan(0);
+    // Dir exists but has no usable corpus (fresh install, or migrated into a
+    // layout with no active sessions) — nothing to assert here; the synthetic
+    // per-project layout test above guards listSessionFiles correctness.
+    if (files.length === 0) return;
 
     const failures: Array<{ file: string; error: string }> = [];
     let totalMessages = 0;
@@ -302,6 +342,7 @@ describeOrSkip('against real .kodax/sessions/ corpus', () => {
 
   it('selectSessions over the real corpus returns a report with no parser-level warnings', { timeout: 30_000 }, async () => {
     const files = await listSessionFiles(REAL_SESSIONS_DIR);
+    if (files.length === 0) return;
     const sessions = await Promise.all(files.map(parseSessionFile));
     const report = selectSessions(sessions);
     expect(report.totalCandidates).toBe(sessions.length);

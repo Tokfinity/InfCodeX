@@ -2288,9 +2288,11 @@ packages/
 
 ## ADR-038: Per-Project Session Storage — Canonical-Keyed Directory Layout + Archive Semantics Split + Flat-Pool Migration (FEATURE_219, v0.7.46)
 
-**Status**: 📝 Proposed（设计待 review） — FEATURE_219, v0.7.46。代码未动,先出文档。
+**Status**: ✅ Accepted & Implemented — FEATURE_219, v0.7.46（Phase 1-4 + review hardening 已 ship：per-project 布局 + archive 语义拆分 + flat-pool auto-migration 全部落地）。
 
 > **编号说明**:ADR-037 已由 [FEATURE_208 (v0.7.45)](features/v0.7.45.md#L1797) 预留(process hardening threat model),本 ADR 让号取 038。
+
+> **Note — migration 默认开启**:flat-pool → per-project auto-migration 默认 ON(locked + journaled + non-destructive),**首次以本版运行即对真实 `~/.kodax/sessions` 生效**,把平铺的 `{id}.jsonl` 一次性归入 `<projectKey>/` 子目录。因此任何直接扫描该目录的工具/测试都必须按 per-project 布局读取(见 [v0.7.46 SA-goldens `listSessionFiles` 递归读取修复](features/v0.7.46.md))。
 
 **Driver**:
 

@@ -152,12 +152,56 @@ export function parseSessionContent(raw: string, filePath: string): RawSession {
   };
 }
 
-/** Enumerate jsonl session files in a directory. */
+/**
+ * True only for an *active* session jsonl — i.e. a real session transcript,
+ * not a control/sidecar file. Skips:
+ *   - dotfiles (`.layout.json`, `.migration-journal.jsonl`, other `.*` control)
+ *   - a non-dotted `migration-journal.jsonl` (defensive)
+ *   - archived sidecars (`*.archive.jsonl`) and island sidecars (`*.islands.jsonl`)
+ *   - non-jsonl files (`project.json` etc. are excluded by the extension check)
+ */
+function isActiveSessionJsonl(name: string): boolean {
+  if (!name.endsWith('.jsonl')) return false;
+  if (name.startsWith('.')) return false;
+  if (name === 'migration-journal.jsonl') return false;
+  if (name.endsWith('.archive.jsonl')) return false;
+  if (name.endsWith('.islands.jsonl')) return false;
+  return true;
+}
+
+/**
+ * Enumerate active session jsonl files across BOTH storage layouts:
+ *   - legacy flat: `<sessionsDir>/<session>.jsonl`
+ *   - FEATURE_219 per-project: `<sessionsDir>/<projectKey>/<session>.jsonl` (one level deep)
+ *
+ * Control files (`.layout.json`, `.migration-journal.jsonl`, `project.json`)
+ * and sidecars (`*.archive.jsonl`, `*.islands.jsonl`) are skipped. Results are
+ * sorted so golden selection is deterministic regardless of readdir order.
+ */
 export async function listSessionFiles(sessionsDir: string): Promise<string[]> {
   const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
-  return entries
-    .filter((e) => e.isFile() && e.name.endsWith('.jsonl'))
-    .map((e) => path.join(sessionsDir, e.name));
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.isFile()) {
+      if (isActiveSessionJsonl(entry.name)) {
+        files.push(path.join(sessionsDir, entry.name));
+      }
+      continue;
+    }
+    if (entry.isDirectory()) {
+      // Skip dot-prefixed control directories (e.g. a future `.trash`/`.locks`);
+      // real per-project keys never start with a dot.
+      if (entry.name.startsWith('.')) continue;
+      const projectDir = path.join(sessionsDir, entry.name);
+      const projectEntries = await fs.readdir(projectDir, { withFileTypes: true });
+      for (const child of projectEntries) {
+        if (child.isFile() && isActiveSessionJsonl(child.name)) {
+          files.push(path.join(projectDir, child.name));
+        }
+      }
+    }
+  }
+  return files.sort();
 }
 
 // ---------------------------------------------------------------------------

@@ -206,6 +206,12 @@ describe('runKodaX extension runtime integration', () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
+  // Every runKodaX integration it-block below passes an explicit 30_000ms
+  // timeout (vitest default is 5_000). A full extension-runtime + runKodaX run
+  // is ~3s single but can exceed 5s under full-suite parallel scheduling — and a
+  // 5s timeout aborts the it-block WITHOUT halting the underlying async runKodaX,
+  // which then keeps writing the shared static `Feature034TestProvider.calls`
+  // and pollutes the next test (shows up as `calls` length 2 instead of 1).
   it('lets extensions drive tools, model selection, thinking level, and queued follow-ups', async () => {
     const extensionPath = path.join(tempDir, 'feature-034-extension.mjs');
     await writeFile(
@@ -261,9 +267,6 @@ describe('runKodaX extension runtime integration', () => {
     ).toBe(true);
 
     await runtime.dispose();
-  // 30_000 (was vitest default 5_000): runKodaX with full extension runtime
-  // takes ~3s baseline single-run; under full-suite parallel load it
-  // occasionally exceeds the 5s default.
   }, 30_000);
 
   it('respects empty active tool sets and provider hook reasoning overrides', async () => {
@@ -308,9 +311,6 @@ describe('runKodaX extension runtime integration', () => {
     });
 
     await runtime.dispose();
-  // 30_000 (was vitest default 5_000): same rationale as the previous
-  // it-block — extension runtime + runKodaX integration occasionally
-  // exceeds 5s under full-suite parallel scheduling.
   }, 30_000);
 
   it('persists extension session state and records across session resume', async () => {
@@ -427,7 +427,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(Feature034TestProvider.calls[0]?.streamOptions?.modelOverride).toBe('resumed-model');
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   it('restores the previously active runtime when startup fails', async () => {
     delete process.env.ANTHROPIC_API_KEY;
@@ -511,7 +511,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(metrics?.max).toBe(2);
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   it('removes repo-intelligence working tools from the provider-visible tool list in off mode', async () => {
     const extensionPath = path.join(tempDir, 'feature-034-off-mode-tools.mjs');
@@ -557,7 +557,7 @@ describe('runKodaX extension runtime integration', () => {
     expect(toolNames).not.toContain('impact_estimate');
 
     await runtime.dispose();
-  });
+  }, 30_000);
 
   // FEATURE_193 (v0.7.43) deep V1 cleanup: the "captures hidden managed
   // protocol tool payloads" integration test was tied to the
