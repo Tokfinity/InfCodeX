@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
-## [0.7.46] - Unreleased
+## [0.7.46] - 2026-06-07
 
 ### Added
 
