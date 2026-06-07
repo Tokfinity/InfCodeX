@@ -236,10 +236,13 @@ const Ink = class Ink {
             // erase-on-shrink keeps the screen clean across the resize.
             // FEATURE_214: return the cursor to content-bottom before the erase
             // (and before prevFrame is reseeded below, which returnCursorToRest reads).
+            // Inline (main-screen) erases lastOutputHeight+1 rows to clear row 0 too
+            // (eraseInlineLiveBlock); fullscreen/alt-screen keeps the clamped-cursor
+            // eraseLines(lastOutputHeight) which already covers row 0.
             this.returnCursorToRest();
-            const eraseSeq = this.lastOutputHeight > 0
-                ? ansiEscapes.eraseLines(this.lastOutputHeight)
-                : '';
+            const eraseSeq = this.altScreenActive
+                ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')
+                : this.eraseInlineLiveBlock();
             if (eraseSeq.length > 0) {
                 this.options.stdout.write(eraseSeq);
             }
@@ -556,10 +559,10 @@ const Ink = class Ink {
             // before applyCellFrame so the cell path treats this as a
             // first-render at the current cursor position (post-static).
             // The entry-level cursor prefix (FEATURE_214) already dropped the
-            // terminal cursor to content-bottom, so eraseLines erases the full area.
-            const eraseSeq = this.lastOutputHeight > 0
-                ? ansiEscapes.eraseLines(this.lastOutputHeight)
-                : '';
+            // terminal cursor to content-bottom (one past the last row); the
+            // inline-live-block erase covers row 0 too so no live row leaks above
+            // the freshly committed <Static> block.
+            const eraseSeq = this.eraseInlineLiveBlock();
             this.options.stdout.write(eraseSeq + staticOutput);
             this.invalidateCellFrame();
             this.applyCellFrame(frame);
@@ -570,7 +573,15 @@ const Ink = class Ink {
         else if (!this.altScreenActive
             && this.prevFrame
             && this.prevFrame.screen.height !== frame.screen.height
-            && this.lastOutputHeight > 0) {
+            && this.lastOutputHeight > 0
+            // FEATURE_214 step 5 — the erase+repaint only manages the VISIBLE live
+            // block; eraseLines cannot reach rows already in native scrollback. So it
+            // is valid ONLY when both the old and new live blocks fit the viewport. A
+            // taller-than-viewport frame means the upstream live frame was NOT bounded
+            // (a bug to fix there, not here) — fall through to the plain cell diff,
+            // which scrolls naturally (each row once) instead of duplicating.
+            && outputHeight <= this.options.stdout.rows
+            && this.lastOutputHeight < this.options.stdout.rows) {
             // FEATURE_214 (codex diagnosis): the inline footer/prompt is a LIVE
             // BLOCK. When its height changes (completion list opens, status line
             // reflows, footer grows after a response ends), the cell renderer's
@@ -583,11 +594,14 @@ const Ink = class Ink {
             // block's resting row at render start, so eraseLines clears the whole
             // block; invalidateCellFrame makes applyCellFrame a clean first-render;
             // the suffix below then re-parks the cursor at the input target.
+            // eraseInlineLiveBlock erases lastOutputHeight+1 rows so row 0 (the live
+            // block's top, e.g. the `You` header) is cleared too — a plain
+            // eraseLines(lastOutputHeight) leaves it behind to leak into scrollback.
             const sync = shouldSynchronize(this.options.stdout);
             if (sync) {
                 this.options.stdout.write(bsu);
             }
-            this.options.stdout.write(ansiEscapes.eraseLines(this.lastOutputHeight));
+            this.options.stdout.write(this.eraseInlineLiveBlock());
             this.invalidateCellFrame();
             this.applyCellFrame(frame);
             if (sync) {
@@ -664,13 +678,39 @@ const Ink = class Ink {
         );
     };
     /**
+     * FEATURE_214 — erase the current main-screen INLINE live block so the next
+     * paint repaints it CLEAN, row 0 included.
+     *
+     * The renderer parks the resting cursor at `frame.cursor = (0, screen.height)`
+     * — ONE ROW PAST the last content row (content is rows `0..height-1`). A plain
+     * `eraseLines(height)` from there clears rows `height..1` and LEAVES row 0 (the
+     * TOP of the live block — e.g. the `You [HH:MM]` header) in place; the next
+     * paint then lands one row lower and the orphaned row 0 scrolls up into native
+     * scrollback. That is the "You repeats once per streaming/thinking/tool update"
+     * bug (reproduces with the ledger OFF too — it is a baseline live-frame bug, not
+     * a ledger bug). Erasing `height + 1` lines clears rows `height..0` (the empty
+     * resting row + EVERY content row, row 0 included) and leaves the cursor on the
+     * block's top row, so the repaint re-aligns exactly where the old block began
+     * (no downward drift, committed scrollback above untouched).
+     *
+     * INLINE ONLY. The fullscreen / alt-screen path clamps the resting cursor to the
+     * last VISIBLE row (FEATURE_212 `clampRestingCursor`), where `eraseLines(height)`
+     * already covers row 0 — callers on that path must NOT use this helper.
+     */
+    eraseInlineLiveBlock = () => {
+        return this.lastOutputHeight > 0
+            ? ansiEscapes.eraseLines(this.lastOutputHeight + 1)
+            : '';
+    };
+    /**
      * FEATURE_214 — commit finalized inline history to native scrollback through a
      * single narrow primitive, then repaint the live frame. The inline scrollback
      * ledger calls THIS — never raw stdout writes, which leave prevFrame /
      * lastOutputHeight stale and corrupt the next live diff.
      *
-     *   - append:  erase the old live block (eraseLines lastOutputHeight), write `text`
-     *              (the new finalized rows scroll up into native scrollback).
+     *   - append:  erase the old live block (eraseInlineLiveBlock — lastOutputHeight+1
+     *              rows so the block's row 0 is cleared too), write `text` (the new
+     *              finalized rows scroll up into native scrollback).
      *   - rebuild: clearTerminal (ESC[2J + ESC[3J scrollback purge + home), write `text`
      *              (all retained finalized rows, re-rendered from source at the current
      *              width). Does NOT read lastOutputHeight — that block is being discarded.
@@ -695,7 +735,7 @@ const Ink = class Ink {
         // old-width finalized rows are gone from scrollback on EVERY platform.
         const prefix = mode === 'rebuild'
             ? '[2J[3J[H'
-            : (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '');
+            : this.eraseInlineLiveBlock();
         this.options.stdout.write(prefix + (text ?? ''));
         // The live block we just erased/cleared is gone; reset output tracking.
         // fullStaticOutput is owned by the ledger now (the <Static> path is retiring).
@@ -960,10 +1000,12 @@ const Ink = class Ink {
             // Phase 6: erase the visible render area; reseed cell renderer's
             // prevFrame so the next applyCellFrame paints from scratch.
             // FEATURE_214: return the cursor to content-bottom before the erase.
+            // Inline clears row 0 too (eraseInlineLiveBlock = lastOutputHeight+1 rows);
+            // fullscreen/alt-screen keeps the clamped-cursor eraseLines(lastOutputHeight).
             this.returnCursorToRest();
-            const eraseSeq = this.lastOutputHeight > 0
-                ? ansiEscapes.eraseLines(this.lastOutputHeight)
-                : '';
+            const eraseSeq = this.altScreenActive
+                ? (this.lastOutputHeight > 0 ? ansiEscapes.eraseLines(this.lastOutputHeight) : '')
+                : this.eraseInlineLiveBlock();
             if (eraseSeq.length > 0) {
                 this.options.stdout.write(eraseSeq);
             }

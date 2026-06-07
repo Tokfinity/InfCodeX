@@ -64,9 +64,31 @@ describe("computeInlineLedgerStep (FEATURE_214 wiring decision)", () => {
     expect(computeInlineLedgerStep({ ...stepBase, hasCommitHandle: false }).kind).toBe("skip");
   });
 
-  it("re-entry with non-empty source → rebuild ALL", () => {
+  it("first activation (NOT owned) + non-empty source → APPEND all (no rebuild/clear) — startup-clear fix", () => {
+    // wasActive false + forceRebuild false = a true first activation onto a pristine
+    // scrollback. The history was never painted (gated model dropped staticSections),
+    // so it is committed ONCE via append — NEVER a 2J/3J rebuild that flashes-clears
+    // the user's terminal on a fresh start.
     const s = expectCommit(
-      computeInlineLedgerStep({ ...stepBase, wasActive: false, finalizedSections: [sec("a", "one")] }),
+      computeInlineLedgerStep({
+        ...stepBase,
+        wasActive: false,
+        forceRebuild: false,
+        finalizedSections: [sec("a", "one"), sec("b", "two")],
+      }),
+    );
+    expect(s.mode).toBe("append");
+    expect(s.sections.map((x) => x.key)).toEqual(["a", "b"]);
+  });
+
+  it("re-entry with OWNED scrollback + non-empty source → rebuild ALL (purge stale + repaint)", () => {
+    const s = expectCommit(
+      computeInlineLedgerStep({
+        ...stepBase,
+        wasActive: false,
+        forceRebuild: true,
+        finalizedSections: [sec("a", "one")],
+      }),
     );
     expect(s.mode).toBe("rebuild");
     expect(s.sections.map((x) => x.key)).toEqual(["a"]);

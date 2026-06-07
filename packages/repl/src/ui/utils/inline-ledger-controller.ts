@@ -58,6 +58,13 @@ export interface InlineLedgerStepInput {
   readonly finalizedSections: readonly TranscriptSection[];
   readonly bannerSection: TranscriptSection | undefined;
   readonly width: number;
+  /**
+   * Section identity for the plan diff. Defaults to `identifyTranscriptSection`. The
+   * inline bounded path passes `identifyInlineCommitSection` (timestamp-insensitive) so a
+   * streamed `Assistant` line and its finalized `Assistant [HH:MM]` render align (append,
+   * never rebuild) despite the header-timestamp text difference.
+   */
+  readonly identify?: (section: TranscriptSection) => { key: string; fingerprint: string };
 }
 
 export type InlineLedgerStep =
@@ -76,11 +83,18 @@ export type InlineLedgerStep =
 /**
  * Decide what the ledger effect should do this frame from the RAW source sections. Pure.
  *
- * Re-entry (wasActive false) forces a rebuild so a stale prefix is never appended onto:
- *   - source non-empty → rebuild ALL at the current width;
- *   - source empty → rebuild EMPTY (clear) only when `forceRebuild` (the ledger owns or
- *     dirtied the scrollback); otherwise noop, so a true first activation with no history
- *     never 3J-clears the user's terminal.
+ * Entry (wasActive false — first activation OR re-entry) resets the prior to EMPTY so a
+ * stale prefix is never appended onto. What it does then depends on ownership
+ * (`forceRebuild` = the ledger owns / dirtied the native scrollback):
+ *   - source non-empty, NOT owned (true first activation) → APPEND all. The finalized
+ *     history was never painted (the gated live model dropped staticSections), so it is
+ *     committed to scrollback ONCE. This must NOT rebuild — a 2J/3J clear on a fresh
+ *     start wipes the user's terminal for nothing (the "startup clear" bug).
+ *   - source non-empty, owned (real re-entry / resize / rollback) → REBUILD all at the
+ *     current width: purge the stale owned scrollback, repaint every section fresh.
+ *   - source empty, owned → REBUILD empty (a clear: /clear, rollback-to-0).
+ *   - source empty, NOT owned → noop, so a first activation with no history never
+ *     3J-clears the terminal.
  * Steady state delegates to planInlineScrollback (append / width-or-content rebuild /
  * none); a source that shrank to empty there is already a rebuild with empty sections.
  */
@@ -99,20 +113,27 @@ export function computeInlineLedgerStep(input: InlineLedgerStepInput): InlineLed
       finalizedSections: input.finalizedSections,
       width: input.width,
     },
-    identifyTranscriptSection,
+    input.identify ?? identifyTranscriptSection,
     prior,
   );
 
   if (reentered) {
     if (plan.kind === "none") {
-      // Empty source on re-entry: clear only if the ledger owns/dirtied the scrollback.
+      // Empty source on entry: clear only if the ledger owns/dirtied the scrollback.
       if (input.forceRebuild) {
         return { kind: "commit", mode: "rebuild", sections: input.finalizedSections, nextState };
       }
       return { kind: "noop", nextState };
     }
-    // Non-empty source on re-entry → rebuild ALL from source at the current width.
-    return { kind: "commit", mode: "rebuild", sections: plan.sections, nextState };
+    // Non-empty source on entry. Owned scrollback (re-entry / resize / rollback) → REBUILD
+    // (purge + repaint all). Pristine scrollback (true first activation) → APPEND all: the
+    // history was never on screen, so commit it once WITHOUT a 2J/3J clear (startup-clear fix).
+    return {
+      kind: "commit",
+      mode: input.forceRebuild ? "rebuild" : "append",
+      sections: plan.sections,
+      nextState,
+    };
   }
 
   if (plan.kind === "none") {

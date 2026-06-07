@@ -1170,6 +1170,110 @@ export function buildInlinePromptRenderModel(
   };
 }
 
+export interface InlineLedgerSplit {
+  /**
+   * The unified scrollback commit source = finalized history rows + the active round's
+   * overflow rows (completed-item AND already-stable streaming lines, minus mutable
+   * spinner rows), as ONE positional 1-row section per line. Both the section key AND the
+   * row's key are normalised to positional `il-${i}` so the per-line fingerprint depends
+   * ONLY on position + text — NOT on the original row key. That is what makes finalize
+   * align: a row rendered while "active" and the SAME content rendered after it moves into
+   * finalized history land at the same position with the same text, so the ledger sees a
+   * prefix match and APPENDS the previously-live tail rather than rebuilding (a raw row key
+   * differs across that transition and would force a full rebuild; the Assistant header's
+   * timestamp difference is handled by the caller's `identifyInlineCommitSection`).
+   * Transcript rows only — input/footer/status are separate React nodes, never here.
+   */
+  readonly committedSections: TranscriptSection[];
+  /** The bounded live tail rendered in the live frame (≤ liveBudget rows). */
+  readonly liveRows: TranscriptRow[];
+}
+
+/**
+ * FEATURE_214 — split the inline active round into {committed scrollback source,
+ * bounded live tail} for the ledger=1 path. Pure.
+ *
+ * The active block = `completedRows` (completed-item rows) + `previewRows` (the in-flight
+ * streaming render). The live frame is a HARD CAP — ALWAYS the last `liveBudget` rows — so
+ * a spinner anywhere can never inflate it. Everything above overflows into the commit
+ * source (joined after finalized history), INCLUDING already-stable streaming lines, so a
+ * long streaming answer's body does not stay live (the unbounded-preview bug). Completed
+ * rows are byte-identical to their post-finalization render (same
+ * `buildHistoryItemTranscriptSections`) so they align positionally; the streaming header's
+ * timestamp difference is reconciled by the caller's `identifyInlineCommitSection`
+ * (timestamp-insensitive fingerprint). The ONLY thing dropped from the overflow is a
+ * mutable spinner row (`row.spinner`) — a transient animation must never freeze into
+ * scrollback; the current spinner stays in the bounded live tail and is shown there.
+ */
+export function splitInlineLedgerModel(
+  finalizedSections: readonly TranscriptSection[],
+  completedRows: readonly TranscriptRow[],
+  previewRows: readonly TranscriptRow[],
+  liveBudget: number,
+): InlineLedgerSplit {
+  const budget = Number.isFinite(liveBudget) ? Math.max(1, Math.floor(liveBudget)) : 1;
+  // The active block = completed-item rows + the streaming preview rows. The live frame is
+  // a TRUE HARD CAP: ALWAYS the last `budget` rows of the active block — a spinner anywhere
+  // (even at the top) can never inflate it. Everything above the last `budget` rows
+  // overflows into the commit source, INCLUDING already-stable streaming lines (so a long
+  // streaming answer never keeps its whole body live — the unbounded-preview bug).
+  const active = [...completedRows, ...previewRows];
+  const overflowCount = Math.max(0, active.length - budget);
+  const liveRows = active.slice(overflowCount);
+  // The overflow commits, MINUS mutable spinner rows: a spinner pushed above the live
+  // budget is a transient animation and must NEVER be frozen into scrollback, so it is
+  // dropped (not committed); the current spinner lives in the bounded tail and is shown
+  // there. Dropping it is safe — the finalized render has no spinner, so the committed
+  // (spinner-free) prefix still aligns at finalize.
+  const finalizedRows = finalizedSections.flatMap((section) => section.rows);
+  const overflowStable = active.slice(0, overflowCount).filter((row) => row.spinner !== true);
+  const committedRows = [...finalizedRows, ...overflowStable];
+  const committedSections: TranscriptSection[] = committedRows.map((row, index) => ({
+    key: `il-${index}`,
+    // Normalise the row key to positional so the fingerprint is position+text only
+    // (Codex review): the raw key differs between the active and finalized renders of
+    // the same content. (Timestamp text differences are handled by the commit-time
+    // canonical identify — see identifyInlineCommitSection.)
+    rows: [{ ...row, key: `il-${index}` }],
+  }));
+  return { committedSections, liveRows };
+}
+
+/**
+ * FEATURE_214 — strip a trailing ` [HH:MM …]` header timestamp for inline-commit
+ * fingerprinting. The streaming render emits an `Assistant` header WITHOUT a timestamp
+ * while the finalized render emits `Assistant [02:24 PM]`; without this, the same
+ * committed line would mismatch at finalize and force a full ledger rebuild. The
+ * DISPLAYED text is untouched — only the fingerprint is canonicalised.
+ */
+function stripHeaderTimestamp(text: string): string {
+  // ONLY a full header row "You|Assistant|Tools|System [HH:MM …]" → its prefix word.
+  // A body line that merely ends in "[02:24 PM]" must KEEP its identity (not be stripped
+  // and mis-aligned with another line), so the match is anchored to the whole row.
+  return text.replace(/^(You|Assistant|Tools|System) \[\d{1,2}:\d{2}[^\]]*\]$/u, "$1");
+}
+
+/**
+ * Canonical section identity for the inline scrollback commit: positional key + a
+ * timestamp-insensitive content fingerprint. Drop-in for `identifyTranscriptSection`
+ * (djb2 over each row's key + text) but on timestamp-stripped text,
+ * so a streamed line and its post-finalization render align (append, never rebuild).
+ */
+export function identifyInlineCommitSection(section: TranscriptSection): {
+  key: string;
+  fingerprint: string;
+} {
+  let hash = 5381;
+  for (const row of section.rows) {
+    const text = stripHeaderTimestamp(row.text);
+    for (let i = 0; i < row.key.length; i++) hash = ((hash << 5) + hash + row.key.charCodeAt(i)) | 0;
+    hash = ((hash << 5) + hash + 0) | 0;
+    for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+    hash = ((hash << 5) + hash + 1) | 0;
+  }
+  return { key: section.key, fingerprint: `${hash >>> 0}` };
+}
+
 export function buildTranscriptRenderModel(
   options: TranscriptRenderModelOptions,
 ): TranscriptRenderModel {

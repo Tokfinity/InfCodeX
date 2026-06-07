@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ToolCallStatus, type HistoryItem } from "../types.js";
+import { computeInlineLedgerStep } from "./inline-ledger-controller.js";
+import { EMPTY_INLINE_SCROLLBACK_STATE } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
 import {
   buildDynamicTranscriptSection,
   buildHistoryItemTranscriptSections,
@@ -8,6 +10,8 @@ import {
   buildTranscriptRenderModel,
   buildTranscriptRows,
   buildStaticTranscriptSections,
+  splitInlineLedgerModel,
+  identifyInlineCommitSection,
   capHistoryByTranscriptRows,
   computeTranscriptCapStart,
   flattenTranscriptSections,
@@ -31,6 +35,202 @@ import {
 function renderedText(model: ReturnType<typeof buildTranscriptRenderModel>): string {
   return [...model.rows, ...model.previewRows].map((row) => row.text).join("\n");
 }
+
+describe("splitInlineLedgerModel (FEATURE_214 bounded live + unified line commit source)", () => {
+  const row = (text: string, key = `k-${text}`) => ({ key, text });
+  const sec = (key: string, texts: string[]) => ({ key, rows: texts.map((t) => row(t)) });
+  // splitInlineLedgerModel(finalizedSections, completedRows, previewRows, budget)
+
+  it("within budget → all completed rows + preview live; commit source = finalized only", () => {
+    const split = splitInlineLedgerModel([sec("f", ["F1", "F2"])], [row("You"), row("done")], [row("stream")], 8);
+    expect(split.liveRows.map((r) => r.text)).toEqual(["You", "done", "stream"]);
+    expect(split.committedSections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["F1", "F2"]);
+  });
+
+  it("over budget → older COMPLETED rows overflow; finalized + overflow commit (positional)", () => {
+    const completed = ["You", "t1", "t2", "t3"].map((t) => row(t)); // 4 completed rows
+    const split = splitInlineLedgerModel([sec("f", ["F1"])], completed, [row("live")], 2);
+    // budget 2 − preview 1 = 1 completed row stays live (t3); You,t1,t2 overflow.
+    expect(split.liveRows.map((r) => r.text)).toEqual(["t3", "live"]);
+    expect(split.committedSections.map((s) => s.key)).toEqual(["il-0", "il-1", "il-2", "il-3"]);
+    expect(split.committedSections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["F1", "You", "t1", "t2"]);
+    // row keys are normalised to positional so the fingerprint is position+text only.
+    expect(split.committedSections.flatMap((s) => s.rows.map((r) => r.key))).toEqual(["il-0", "il-1", "il-2", "il-3"]);
+  });
+
+  it("HARD CAP: a long streaming preview is bounded — liveRows ≤ budget, overflow committed", () => {
+    // The unbounded-preview bug: previewRows=30, messageRows=5 must NOT leave 30 rows live.
+    const preview = Array.from({ length: 30 }, (_, i) => row(`s${i}`));
+    const split = splitInlineLedgerModel([sec("f", ["F"])], [], preview, 5);
+    expect(split.liveRows.length).toBe(5); // bounded — NOT 30
+    expect(split.liveRows.map((r) => r.text)).toEqual(["s25", "s26", "s27", "s28", "s29"]);
+    // the older 25 stable preview lines spilled into the commit source (after finalized F).
+    expect(split.committedSections.length).toBe(1 + 25);
+    expect(split.committedSections[0].rows[0].text).toBe("F");
+    expect(split.committedSections.at(-1)!.rows[0].text).toBe("s24");
+  });
+
+  it("a mutable SPINNER row is NEVER committed — dropped from the overflow", () => {
+    const spinner = { key: "spin", text: "Worker", spinner: true };
+    // active = [You, s0, <spinner>, s1, s2]; budget 2 → live = last 2 = [s1,s2];
+    // overflow [You, s0, spinner] → spinner filtered → committed [You, s0].
+    const split = splitInlineLedgerModel([], [row("You")], [row("s0"), spinner, row("s1"), row("s2")], 2);
+    expect(split.committedSections.some((s) => s.rows.some((r) => r.spinner))).toBe(false);
+    expect(split.committedSections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["You", "s0"]);
+    expect(split.liveRows.length).toBeLessThanOrEqual(2);
+  });
+
+  it("a SPINNER at the TOP cannot inflate live (Codex review): spinner + 30 rows, budget 5 → live 5", () => {
+    const spinner = { key: "spin", text: "Worker", spinner: true };
+    const rows30 = Array.from({ length: 30 }, (_, i) => row(`r${i}`));
+    const split = splitInlineLedgerModel([], [], [spinner, ...rows30], 5);
+    expect(split.liveRows.length).toBe(5); // NOT 31 — the hard cap holds regardless of spinner position
+    expect(split.committedSections.some((s) => s.rows.some((r) => r.spinner))).toBe(false); // spinner dropped, never frozen
+  });
+
+  it("commit source is TRANSCRIPT-ONLY — exactly finalized + active overflow, nothing injected", () => {
+    const split = splitInlineLedgerModel([sec("f", ["history"])], [row("You"), row("answer")], [], 1);
+    expect(split.committedSections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["history", "You"]);
+    expect(split.liveRows.map((r) => r.text)).toEqual(["answer"]);
+  });
+
+  it("BLACKLIST: commit source injects NOTHING — it is a subset of the passed transcript rows", () => {
+    // The input/footer/status/separator are SEPARATE React nodes in InkREPL (rendered
+    // below MessageList), never part of the transcript render model passed to split — so
+    // they can never reach the commit source. split only ever commits rows drawn from
+    // finalizedSections + completedRows + previewRows, all transcript. (The end-to-end
+    // "no UI row in TerminalModel scrollback" is asserted by the engine UNBOUNDED test.)
+    const finalized = [sec("f", ["history line"])];
+    const completed = [row("You"), row("answer a"), row("answer b")];
+    const preview = [row("Assistant"), row("streaming line")];
+    const split = splitInlineLedgerModel(finalized, completed, preview, 2);
+    const passed = new Set([
+      ...finalized.flatMap((s) => s.rows.map((r) => r.text)),
+      ...completed.map((r) => r.text),
+      ...preview.map((r) => r.text),
+    ]);
+    for (const s of split.committedSections) {
+      for (const r of s.rows) expect(passed.has(r.text)).toBe(true); // nothing injected
+    }
+    const committedText = split.committedSections.flatMap((s) => s.rows.map((r) => r.text)).join("\n");
+    for (const banned of ["Queue a follow-up", "Type a message", "KodaX -", "────"]) {
+      expect(committedText.includes(banned)).toBe(false);
+    }
+  });
+
+  it("FINALIZE ALIGNMENT across DIFFERENT row keys (Codex review): finalize APPENDS, never rebuilds", () => {
+    // Frame 1 — streaming: active completed rows carry their ACTIVE keys; budget 1 + no
+    // preview ⇒ You overflows + commits, t1 stays live.
+    const f1 = splitInlineLedgerModel(
+      [],
+      [row("You", "active-you"), row("t1", "active-t1")],
+      [],
+      1,
+    );
+    const step1 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: EMPTY_INLINE_SCROLLBACK_STATE,
+      finalizedSections: f1.committedSections, bannerSection: undefined, width: 80,
+    });
+    if (step1.kind !== "commit") throw new Error(`expected commit, got ${step1.kind}`);
+    expect(step1.sections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["You"]);
+
+    // Frame 2 — finalized: SAME text but DIFFERENT raw keys (final-*). Because split
+    // normalises keys to positional, the fingerprint is position+text → prefix match →
+    // APPEND the previously-live tail [t1], NOT a full rebuild.
+    const f2 = splitInlineLedgerModel(
+      [{ key: "round", rows: [row("You", "final-you"), row("t1", "final-t1")] }],
+      [],
+      [],
+      1,
+    );
+    const step2 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: step1.nextState,
+      finalizedSections: f2.committedSections, bannerSection: undefined, width: 80,
+    });
+    if (step2.kind !== "commit") throw new Error(`expected commit, got ${step2.kind}`);
+    expect(step2.mode).toBe("append"); // NOT "rebuild"
+    expect(step2.sections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["t1"]);
+  });
+
+  it("FINALIZE ALIGNMENT across the Assistant header TIMESTAMP (streaming vs finalized text)", () => {
+    // Frame 1 — streaming: the preview header is `Assistant` (no timestamp); it overflows
+    // + commits. (completed empty, preview = header+body, budget 1.)
+    const f1 = splitInlineLedgerModel([], [], [row("Assistant"), row("body")], 1);
+    const step1 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: EMPTY_INLINE_SCROLLBACK_STATE,
+      finalizedSections: f1.committedSections, bannerSection: undefined, width: 80,
+      identify: identifyInlineCommitSection,
+    });
+    if (step1.kind !== "commit") throw new Error(`expected commit, got ${step1.kind}`);
+    expect(step1.sections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["Assistant"]);
+
+    // Frame 2 — finalized: header is now `Assistant [02:24 PM]` (timestamp added). With the
+    // timestamp-insensitive identify it fingerprints the same as `Assistant` → prefix match
+    // → APPEND [body], NOT a full rebuild. (Without the identify this would rebuild.)
+    const f2 = splitInlineLedgerModel(
+      [{ key: "a", rows: [row("Assistant [02:24 PM]"), row("body")] }],
+      [],
+      [],
+      1,
+    );
+    const step2 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: step1.nextState,
+      finalizedSections: f2.committedSections, bannerSection: undefined, width: 80,
+      identify: identifyInlineCommitSection,
+    });
+    if (step2.kind !== "commit") throw new Error(`expected commit, got ${step2.kind}`);
+    expect(step2.mode).toBe("append"); // NOT "rebuild"
+    expect(step2.sections.flatMap((s) => s.rows.map((r) => r.text))).toEqual(["body"]);
+  });
+
+  it("BANNER: the ledger commits the banner ONCE (folded above the source), never re-sent", () => {
+    // Under inline mixed policy the banner only reaches scrollback via the ledger's
+    // bannerSection param — assert it commits first and is not re-committed next frame.
+    const banner = { key: "banner", rows: [row("KODAX"), row("v0.7.46")] };
+    const f1 = splitInlineLedgerModel([sec("f", ["F1"])], [row("You")], [], 5);
+    const step1 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: EMPTY_INLINE_SCROLLBACK_STATE,
+      finalizedSections: f1.committedSections, bannerSection: banner, width: 80,
+      identify: identifyInlineCommitSection,
+    });
+    if (step1.kind !== "commit") throw new Error(`expected commit, got ${step1.kind}`);
+    const committed1 = step1.sections.flatMap((s) => s.rows.map((r) => r.text));
+    expect(committed1.slice(0, 2)).toEqual(["KODAX", "v0.7.46"]); // banner folded in first
+    expect(committed1).toContain("F1");
+    expect(committed1).not.toContain("You"); // You is the live tail, not committed
+
+    // Next frame: banner unchanged, a completed row overflows → APPEND only it; banner not re-sent.
+    const f2 = splitInlineLedgerModel([sec("f", ["F1"])], [row("You"), row("t1")], [], 1);
+    const step2 = computeInlineLedgerStep({
+      active: true, hasCommitHandle: true, wasActive: true, forceRebuild: false,
+      prior: step1.nextState,
+      finalizedSections: f2.committedSections, bannerSection: banner, width: 80,
+      identify: identifyInlineCommitSection,
+    });
+    if (step2.kind !== "commit") throw new Error(`expected commit, got ${step2.kind}`);
+    expect(step2.mode).toBe("append");
+    const committed2 = step2.sections.flatMap((s) => s.rows.map((r) => r.text));
+    expect(committed2).not.toContain("KODAX"); // banner already committed, not re-sent
+    expect(committed2).toContain("You");
+  });
+
+  it("identifyInlineCommitSection strips the timestamp ONLY from full header rows", () => {
+    const fp = (text: string) =>
+      identifyInlineCommitSection({ key: "il-0", rows: [{ key: "il-0", text }] }).fingerprint;
+    // header rows: streaming `Assistant` and finalized `Assistant [02:24 PM]` align.
+    expect(fp("Assistant [02:24 PM]")).toBe(fp("Assistant"));
+    expect(fp("You [02:24 PM]")).toBe(fp("You"));
+    expect(fp("Assistant [02:24 PM]")).not.toBe(fp("different"));
+    // a BODY line that merely ENDS in a time is NOT a header → NOT stripped (stays distinct).
+    expect(fp("see you at [02:24 PM]")).not.toBe(fp("see you at"));
+    expect(fp("see you at [02:24 PM]")).not.toBe(fp("Assistant"));
+  });
+});
 
 function assistant(text: string): HistoryItem {
   return {

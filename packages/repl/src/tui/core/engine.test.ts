@@ -109,6 +109,10 @@ vi.mock("terminal-size", () => ({
 
 import Engine from "./engine.js";
 import { createScreen } from "../substrate/ink/cell-screen.js";
+import {
+  TerminalModel,
+  frameFromRows,
+} from "../substrate/ink/terminal-emulator.js";
 import ansiEscapes from "ansi-escapes";
 
 /**
@@ -382,25 +386,30 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
       onRender: () => void;
     };
 
-    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 4, "a\nb\nc\nd"));
-    engine.onRender(); // establishes lastOutputHeight = 4
+    // Heights fit the 4-row mock terminal so the erase-repaint branch is allowed
+    // (FEATURE_214 step 5 gates it OFF for taller-than-viewport frames).
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 2, "a\nb"));
+    engine.onRender(); // establishes lastOutputHeight = 2
 
-    // height 4 → 6: live block grew → erase the old 4-row block, then repaint.
-    const grow = fakeRenderResult(80, 6, "a\nb\nc\nd\ne\nf");
-    grow.frame.cursor = { x: 0, y: 6, visible: false };
-    (grow.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 2, y: 3 };
+    // height 2 → 3: live block grew → erase the old 2-row block, then repaint.
+    const grow = fakeRenderResult(80, 3, "a\nb\nc");
+    grow.frame.cursor = { x: 0, y: 3, visible: false };
+    (grow.frame as { inputCursor?: { x: number; y: number } }).inputCursor = { x: 2, y: 2 };
     mocks.renderTree.mockReturnValue(grow);
     mocks.stdoutWrite.mockClear();
     engine.onRender();
     const grownOut = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
-    expect(grownOut).toContain(ansiEscapes.eraseLines(4));
+    // eraseInlineLiveBlock erases lastOutputHeight+1 (=3) rows: the resting cursor
+    // sits one past the last content row, so +1 is what covers row 0 (the live
+    // block's top — the `You` header) instead of leaving it to leak into scrollback.
+    expect(grownOut).toContain(ansiEscapes.eraseLines(3));
 
-    // height stays 6: no height change → incremental diff, no full erase.
+    // height stays 3: no height change → incremental diff, no full erase.
     mocks.renderTree.mockReturnValue(grow);
     mocks.stdoutWrite.mockClear();
     engine.onRender();
     const sameOut = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
-    expect(sameOut).not.toContain(ansiEscapes.eraseLines(6));
+    expect(sameOut).not.toContain(ansiEscapes.eraseLines(4));
   });
 
   it("setCursorPosition clamps out-of-bounds coordinates so a future re-application can't hit setCellAt RangeError", () => {
@@ -538,7 +547,9 @@ describe("commitInlineScrollback (FEATURE_214 inline ledger primitive)", () => {
     engine.commitInlineScrollback({ mode: "append", text: "NEW\n" });
 
     const out = writes();
-    expect(out).toContain(ansiEscapes.eraseLines(5) + "NEW\n");
+    // eraseInlineLiveBlock = eraseLines(lastOutputHeight + 1) so the live block's
+    // row 0 is cleared too (resting cursor is one past the last content row).
+    expect(out).toContain(ansiEscapes.eraseLines(6) + "NEW\n");
     expect(out).not.toContain("[3J"); // append never purges scrollback
     expect(mocks.stdoutWrite.mock.calls.length).toBeGreaterThan(1);
   });
@@ -561,5 +572,181 @@ describe("commitInlineScrollback (FEATURE_214 inline ledger primitive)", () => {
     engine.commitInlineScrollback({ mode: "rebuild", text: "SHOULD NOT WRITE" });
 
     expect(mocks.stdoutWrite).not.toHaveBeenCalled();
+  });
+});
+
+// FEATURE_214 baseline — the inline (main-screen, NON-alt-screen) live block must
+// be a BOUNDED repaint: every grow / shrink / same-height update erases the OLD
+// block COMPLETELY (row 0 included) and repaints clean, so the active round's
+// `You [HH:MM]` header is never left behind to scroll into native scrollback. These
+// reproduce the user-reported "You repeats once per streaming/thinking/tool update"
+// bug by replaying the ENGINE's real emitted bytes onto the faithful TerminalModel
+// — and they reproduce with the inline ledger OFF, proving it is a live-frame bug.
+describe("inline live-block bounded repaint (FEATURE_214 baseline, ledger OFF)", () => {
+  // Width MUST match the mocked terminal-size (80) and height MUST match the frame
+  // viewport (VH) — otherwise the reseeded emptyFrame's viewport differs from the
+  // frame's and the cell renderer fires a full-screen reset (ESC[2J) every render,
+  // which would mask the very row-0 off-by-one these tests exist to catch.
+  const W = 80;
+  const VH = 24; // viewport ≫ content ⇒ nothing scrolls off; orphans stay visible
+
+  // A stdout whose rows match the frame viewport, so the reseeded emptyFrame
+  // (emptyFrame(stdout.rows, terminalWidth)) has the SAME viewport as the frames
+  // and no spurious full reset intervenes.
+  const inlineStdout = {
+    isTTY: true,
+    rows: VH,
+    columns: W,
+    write: mocks.stdoutWrite,
+    on: mocks.stdoutOn,
+    off: mocks.stdoutOff,
+  } as unknown as NodeJS.WriteStream;
+
+  function makeEngine() {
+    return new Engine({
+      stdout: inlineStdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      onRender: () => void;
+      eraseInlineLiveBlock: () => string;
+      lastOutputHeight: number;
+    };
+  }
+
+  /**
+   * Drive a sequence of inline frames through ONE engine, replaying EVERY emitted
+   * byte onto a faithful terminal model (what the real terminal renders). Row 0 of
+   * each frame is the active round's header; the body grows/shrinks beneath it with
+   * the input pinned to the last row (inputCursor). A step may carry `staticOutput`
+   * (a finalized round committed to scrollback) — that exercises the <Static> commit
+   * branch, mirroring a round boundary / resubmit.
+   */
+  function driveInline(steps: Array<{ rows: string[]; staticOutput?: string }>): TerminalModel {
+    const engine = makeEngine();
+    const model = new TerminalModel(W, VH);
+    mocks.stdoutWrite.mockClear();
+    let applied = 0;
+    for (const step of steps) {
+      const frame = frameFromRows(step.rows, W, VH);
+      (frame as { inputCursor?: { x: number; y: number } }).inputCursor = {
+        x: 2,
+        y: Math.max(0, step.rows.length - 1),
+      };
+      mocks.renderTree.mockReturnValue({
+        output: step.rows.join("\n"),
+        outputHeight: step.rows.length,
+        staticOutput: step.staticOutput ?? "",
+        frame,
+      });
+      engine.onRender();
+      const calls = mocks.stdoutWrite.mock.calls;
+      model.apply(calls.slice(applied).map((c) => String(c[0])).join(""));
+      applied = calls.length;
+    }
+    return model;
+  }
+
+  const countRows = (model: TerminalModel, needle: string): number =>
+    model.allRows().filter((r) => r.includes(needle)).length;
+
+  const HDR = "You 02:24 PM";
+
+  it("a growing active round commits the You header exactly once (no per-update leak)", () => {
+    const model = driveInline([
+      { rows: [HDR, "latest changes", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "Tool changed_scope", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "Tool changed_scope", "Assistant reply", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "Tool changed_scope", "Assistant reply", "Tool bash", "> "] },
+    ]);
+    expect(countRows(model, HDR)).toBe(1);
+  });
+
+  it("a height SHRINK leaves no residual body rows below and no header leak", () => {
+    const model = driveInline([
+      { rows: [HDR, "q", "Thinking", "Tool A", "Assistant", "> "] }, // height 6
+      { rows: [HDR, "q", "> "] }, // collapse to height 3
+    ]);
+    expect(countRows(model, HDR)).toBe(1);
+    expect(countRows(model, "Thinking")).toBe(0);
+    expect(countRows(model, "Assistant")).toBe(0);
+  });
+
+  it("a SAME-HEIGHT content tick overwrites in place — no header leak, no stale row", () => {
+    const model = driveInline([
+      { rows: [HDR, "q", "Worker 1s", "> "] },
+      { rows: [HDR, "q", "Worker 2s", "> "] },
+      { rows: [HDR, "q", "Worker 3s", "> "] },
+    ]);
+    expect(countRows(model, HDR)).toBe(1);
+    expect(countRows(model, "Worker 1s")).toBe(0);
+    expect(countRows(model, "Worker 3s")).toBe(1);
+  });
+
+  it("interrupt (collapse) then resubmit the SAME query (regrow) keeps the header to ONE copy", () => {
+    // The user submits → it streams (grows) → Ctrl+C interrupts (collapses back
+    // to the prompt) → they resubmit the SAME query → it streams again. Through
+    // the whole grow → shrink → regrow cycle the active round's header must stay a
+    // single copy in the bounded live frame; the bug leaked one copy per update.
+    const model = driveInline([
+      { rows: [HDR, "latest changes", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "> "] },
+      { rows: [HDR, "latest changes", "Thinking", "Tool A", "> "] },
+      { rows: [HDR, "latest changes", "> "] }, // Ctrl+C → collapse
+      { rows: [HDR, "latest changes", "Thinking", "> "] }, // resubmit, streams
+      { rows: [HDR, "latest changes", "Thinking", "Tool A", "> "] },
+    ]);
+    expect(countRows(model, HDR)).toBe(1);
+  });
+
+  it("UNBOUNDED active round taller than the viewport must NOT leak UI rows or duplicate transcript into scrollback (FEATURE_214 RED)", () => {
+    // Today's inline output puts the WHOLE active round + the input separator +
+    // status into ONE frame; a long streaming answer makes it taller than the
+    // terminal. The engine's erase-repaint cannot reach rows already in native
+    // scrollback, so transcript duplicates and UI rows can be pushed up. This is
+    // the real bug behind the garbled `LEDGER=1` screenshot + the scroll-up
+    // re-render. The fix (bounded live + commit overflow via insert-history /
+    // gate erase-repaint off for >viewport frames) makes scrollback transcript-only.
+    const SEP = "--------------------------------";
+    const mkFrame = (n: number): string[] => {
+      const rows = ["You 05:19 PM"];
+      for (let i = 1; i <= n; i++) rows.push(`Tool line ${i}`);
+      rows.push(SEP, "> Queue a follow-up...", "KodaX - AMA status");
+      return rows;
+    };
+    const model = driveInline([
+      { rows: mkFrame(22) }, // ~26 rows > 24-row viewport
+      { rows: mkFrame(28) },
+      { rows: mkFrame(34) },
+    ]);
+    const sb = model.scrollback();
+    // UI chrome must NEVER enter scrollback.
+    expect(sb.some((r) => r.includes("Queue a follow-up"))).toBe(false);
+    expect(sb.some((r) => r.includes("KodaX -"))).toBe(false);
+    expect(sb.some((r) => r.includes(SEP))).toBe(false);
+    // No transcript line duplicated in scrollback.
+    const toolLines = sb.filter((r) => r.startsWith("Tool line "));
+    expect(new Set(toolLines).size).toBe(toolLines.length);
+  });
+
+  it("eraseInlineLiveBlock clears the WHOLE block incl row 0 from the one-past-last cursor", () => {
+    const engine = makeEngine();
+    engine.lastOutputHeight = 3; // a 3-row live block (rows 0..2)
+    const erase = engine.eraseInlineLiveBlock();
+    const esc = String.fromCharCode(27);
+    const model = new TerminalModel(20, 10);
+    model.apply(`${esc}[1;1HYou header`); // row 0 — the leak-prone top row
+    model.apply(`${esc}[2;1Hbody one`); // row 1
+    model.apply(`${esc}[3;1Hbody two`); // row 2
+    model.apply(`${esc}[4;1H`); // park cursor ONE PAST the last row (renderer convention)
+    model.apply(erase);
+    // All three content rows blank — row 0 included (the off-by-one bug would
+    // leave "You header" on row 0).
+    expect(model.rows(3).every((r) => r.trim() === "")).toBe(true);
   });
 });

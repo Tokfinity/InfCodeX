@@ -257,6 +257,8 @@ import {
 } from "../tui/core/termio.js";
 import {
   buildInlinePromptRenderModel,
+  splitInlineLedgerModel,
+  identifyInlineCommitSection,
   buildTranscriptDynamicPortion,
   buildTranscriptHiddenDivider,
   buildTranscriptRenderModel,
@@ -1141,10 +1143,12 @@ function prependTranscriptSection(
   };
 }
 
-// FEATURE_214 — opt-in inline scrollback ledger. Default OFF: the inline prompt keeps
-// committing finalized history through <Static>. Set KODAX_INLINE_LEDGER=1 to route it
-// through the explicit ledger + engine commitInlineScrollback instead.
-const INLINE_LEDGER_ENABLED = process.env.KODAX_INLINE_LEDGER === "1";
+// FEATURE_214 — inline scrollback ledger. Default ON: the inline prompt commits finalized
+// history (banner + completed rounds + stable streaming lines) through the explicit ledger
+// + engine commitInlineScrollback, with a bounded live frame. Set KODAX_INLINE_LEDGER=0 to
+// fall back to the legacy <Static> path (append-only, no resize/clear/rollback rebuild).
+// Only affects INLINE main-screen (KODAX_FULLSCREEN=0 / SSH); fullscreen is unaffected.
+const INLINE_LEDGER_ENABLED = process.env.KODAX_INLINE_LEDGER !== "0";
 
 // FEATURE_214 — diagnostic for the rare inline-ledger commit failure (empty render text
 // or a thrown commit). Gated on KODAX_INLINE_LEDGER_DEBUG=1 and written to stderr (the
@@ -2764,63 +2768,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       currentTodoActiveForm,
     ],
   );
-  // FEATURE_214 — drive the inline scrollback ledger. Runs ONLY when active (inline
-  // main-screen + a live handle exposing commitInlineScrollback). Plans from the RAW
-  // source (promptStaticPortion.staticSections + fullscreenBannerSection — req 3),
-  // commits via the engine, and advances ledger state ONLY after a successful commit.
-  useEffect(() => {
-    const handle = getRendererInstance(stdout);
-    const hasCommitHandle = typeof handle?.commitInlineScrollback === "function";
-    const step = computeInlineLedgerStep({
-      active: inlineLedgerActive,
-      hasCommitHandle,
-      wasActive: inlineLedgerWasActiveRef.current,
-      forceRebuild: inlineLedgerOwnsScrollbackRef.current,
-      prior: inlineLedgerStateRef.current,
-      finalizedSections: promptStaticPortion.staticSections, // RAW source (req 3/4)
-      bannerSection: fullscreenBannerSection,
-      width: terminalWidth,
-    });
-    // Side effects (render + commit), tracking whether the commit LANDED and whether it
-    // wrote content. state / wasActive / owns are resolved PURELY below — so an empty
-    // append or a thrown commit never advances state and never leaves wasActive true.
-    let committed = false;
-    let hadContent = false;
-    if (step.kind === "commit") {
-      const text = renderFinalizedSectionsToScrollbackText(step.sections, {
-        width: terminalWidth,
-        theme: getTheme("dark"),
-      });
-      hadContent = text.length > 0;
-      if (step.mode === "append" && !text) {
-        // An append with no rendered text means something is wrong — that IS a failure.
-        reportInlineLedgerFailure("empty-append-text"); // req 1/3
-      } else {
-        // A rebuild may LEGITIMATELY commit empty text — a clear (/clear, rollback-to-0,
-        // re-entry onto an owned scrollback whose source is now empty). req 1.
-        try {
-          handle?.commitInlineScrollback?.({ mode: step.mode, text });
-          committed = true;
-        } catch (err) {
-          reportInlineLedgerFailure("commit-threw", err); // req 3 — not silently swallowed
-        }
-      }
-    }
-    const resolved = resolveInlineLedgerState(
-      step,
-      { committed, hadContent },
-      inlineLedgerOwnsScrollbackRef.current,
-    );
-    inlineLedgerStateRef.current = resolved.state;
-    inlineLedgerWasActiveRef.current = resolved.wasActive;
-    inlineLedgerOwnsScrollbackRef.current = resolved.owns;
-  }, [
-    inlineLedgerActive,
-    promptStaticPortion.staticSections,
-    fullscreenBannerSection,
-    terminalWidth,
-    stdout,
-  ]);
+  // FEATURE_214 — the inline scrollback ledger effect is defined BELOW, right after
+  // `inlineLedgerBounded` (which computes the bounded commit source from
+  // viewportBudget.messageRows). It depends directly on that source — no render-phase
+  // ref bridge — so it commits exactly what was bounded.
   // FEATURE_172 P1.2 (v0.7.41) — same static/dynamic split for transcript view.
   // Static cache key includes `showAllInTranscript` because toggling it changes
   // `showDetailedTools` / `showAllContent`, which affect the committed (static)
@@ -3640,6 +3591,101 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       uiRequest,
     ]
   );
+  // FEATURE_214 — ledger=1 bounded inline live frame + unified line-level commit source.
+  // Runs AFTER viewportBudget so it can cap the live frame to `messageRows`. Splits the
+  // active round (completed-item rows + streaming preview rows) into a HARD-CAPPED live
+  // tail (always the last `messageRows` rows) + an overflow that joins finalized history
+  // in a positional line-level commit source — so a long streaming answer's stable lines
+  // also overflow + commit (only mutable spinner rows in the overflow are dropped). The
+  // ledger effect just below consumes `committedSections` directly (no render-phase ref).
+  // Inactive (ledger off / fullscreen / transcript): pass the model through untouched.
+  const inlineLedgerBounded = useMemo<{
+    model: typeof promptMainScreenRenderModel;
+    committedSections: TranscriptSection[];
+  }>(() => {
+    if (!inlineLedgerActive) {
+      return { model: promptMainScreenRenderModel, committedSections: [] };
+    }
+    const { committedSections, liveRows } = splitInlineLedgerModel(
+      promptStaticPortion.staticSections,
+      promptMainScreenRenderModel.rows, // completed-item rows (same renderer as finalized)
+      promptMainScreenRenderModel.previewRows, // streaming preview (stable lines overflow + commit)
+      viewportBudget.messageRows,
+    );
+    return {
+      model: { ...promptMainScreenRenderModel, staticSections: [], rows: liveRows, previewRows: [] },
+      committedSections,
+    };
+  }, [
+    inlineLedgerActive,
+    promptMainScreenRenderModel,
+    promptStaticPortion.staticSections,
+    viewportBudget.messageRows,
+  ]);
+  const inlineLedgerBoundedModel = inlineLedgerBounded.model;
+  // FEATURE_214 — drive the inline scrollback ledger. Active ONLY on inline main-screen
+  // with a live commitInlineScrollback handle. Commits the bounded unified source (banner
+  // + finalized history + active-round overflow [completed + stable streaming], positional
+  // 1-row line sections) via the engine; advances ledger state ONLY after a successful
+  // commit. Re-runs when `committedSections` changes (every streaming flush that overflows
+  // new stable rows, and on round finalization) — no ref bridge, reads the source directly.
+  useEffect(() => {
+    const handle = getRendererInstance(stdout);
+    const hasCommitHandle = typeof handle?.commitInlineScrollback === "function";
+    const step = computeInlineLedgerStep({
+      active: inlineLedgerActive,
+      hasCommitHandle,
+      wasActive: inlineLedgerWasActiveRef.current,
+      forceRebuild: inlineLedgerOwnsScrollbackRef.current,
+      prior: inlineLedgerStateRef.current,
+      finalizedSections: inlineLedgerBounded.committedSections,
+      // Under inline mixed policy (KODAX_FULLSCREEN=0) the separate <Banner> is NOT
+      // rendered and the ledger gate clears the banner from the live model — so the LEDGER
+      // must commit it. planInlineScrollback folds it in as the first scrollback section;
+      // the committed source above excludes the banner, so it is committed exactly once.
+      bannerSection: fullscreenBannerSection,
+      width: terminalWidth,
+      // Timestamp-insensitive identity so a streamed `Assistant` line aligns with its
+      // finalized `Assistant [HH:MM]` render (append, not rebuild) at round finalize.
+      identify: identifyInlineCommitSection,
+    });
+    let committed = false;
+    let hadContent = false;
+    if (step.kind === "commit") {
+      // step.sections are positional 1-row sections; flatten the delta into ONE section
+      // so the rendered scrollback text is contiguous (no per-line spacing).
+      const deltaRows = step.sections.flatMap((section) => section.rows);
+      const text = renderFinalizedSectionsToScrollbackText(
+        deltaRows.length > 0 ? [{ key: "il-delta", rows: deltaRows }] : [],
+        { width: terminalWidth, theme: getTheme("dark") },
+      );
+      hadContent = text.length > 0;
+      if (step.mode === "append" && !text) {
+        reportInlineLedgerFailure("empty-append-text");
+      } else {
+        try {
+          handle?.commitInlineScrollback?.({ mode: step.mode, text });
+          committed = true;
+        } catch (err) {
+          reportInlineLedgerFailure("commit-threw", err);
+        }
+      }
+    }
+    const resolved = resolveInlineLedgerState(
+      step,
+      { committed, hadContent },
+      inlineLedgerOwnsScrollbackRef.current,
+    );
+    inlineLedgerStateRef.current = resolved.state;
+    inlineLedgerWasActiveRef.current = resolved.wasActive;
+    inlineLedgerOwnsScrollbackRef.current = resolved.owns;
+  }, [
+    inlineLedgerActive,
+    inlineLedgerBounded.committedSections,
+    fullscreenBannerSection,
+    terminalWidth,
+    stdout,
+  ]);
   const suggestionsSurface = useMemo(
     () => (
       <PromptSuggestionsSurface
@@ -8052,7 +8098,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       scrollOffset={historyScrollOffset}
       windowed={Boolean(options?.rendererWindow)}
       rendererWindow={options?.rendererWindow}
-      transcriptModel={options?.rendererWindow ? ownedTranscriptRenderModel : promptMainScreenRenderModel}
+      transcriptModel={options?.rendererWindow ? ownedTranscriptRenderModel : inlineLedgerBoundedModel}
       maxLines={transcriptMaxLines}
       selectedTextRanges={useManagedSelection ? promptTextSelection?.rowRanges : undefined}
       onMetricsChange={handleTranscriptMetricsChange}
@@ -8065,7 +8111,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     handleTranscriptMetricsChange,
     handleVisibleTranscriptRowsChange,
     historyScrollOffset,
-    promptMainScreenRenderModel,
+    inlineLedgerBoundedModel,
     terminalWidth,
     transcriptMaxLines,
     promptTextSelection?.rowRanges,
