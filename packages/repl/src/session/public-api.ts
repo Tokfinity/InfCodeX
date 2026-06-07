@@ -33,7 +33,10 @@ async function collectSessionFilePaths(
 ): Promise<string[]> {
   const out: string[] = [];
   const isSession = (name: string): boolean =>
-    name.endsWith('.jsonl') && !name.endsWith('.archive.jsonl') && !name.endsWith('.islands.jsonl');
+    name.endsWith('.jsonl')
+    && !name.endsWith('.archive.jsonl')
+    && !name.endsWith('.islands.jsonl')
+    && !name.startsWith('.'); // skip control files (.migration-journal.jsonl)
   let top: import('node:fs').Dirent[] = [];
   try {
     top = await fsPromises.readdir(sessionsDir, { withFileTypes: true });
@@ -547,6 +550,7 @@ function sessionIdFromFilename(filename: string): string | null {
     !base.endsWith('.jsonl')
     || base.endsWith('.archive.jsonl')
     || base.endsWith('.islands.jsonl')
+    || base.startsWith('.') // skip control files (.migration-journal.jsonl)
   ) {
     return null;
   }

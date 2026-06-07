@@ -44,6 +44,7 @@ import type { SessionData, SessionErrorMetadata } from '../ui/utils/session-stor
 import { getGitRoot, KODAX_SESSIONS_DIR } from '../common/utils.js';
 import { inspectWorkspaceRuntime, isSameCanonicalRepo, resolveSessionRuntimeInfo } from './workspace-runtime.js';
 import { deriveProjectKeyFromData, deriveProjectKeyFromRoot, type ProjectIdentity } from './project-key.js';
+import { ensureLayoutMigrated } from './session-migration.js';
 import {
   isKodaXExtensionSessionRecord,
   isKodaXExtensionSessionState,
@@ -607,6 +608,17 @@ export class FileSessionStorage implements KodaXSessionStorage {
   private sessionDirCache = new Map<string, string>();
   private projectJsonWritten = new Set<string>();
 
+  // ── FEATURE_219 one-shot auto-migration gate (ADR-038 §8) ──
+  // Runs the flat→per-project migration once per process on the first storage
+  // entry point. Cached so concurrent / repeated calls await the same run.
+  private migrationPromise?: Promise<void>;
+  private ensureMigrated(): Promise<void> {
+    if (!this.migrationPromise) {
+      this.migrationPromise = ensureLayoutMigrated(this.sessionsDir);
+    }
+    return this.migrationPromise;
+  }
+
   /** Update watermarks. Only overwrites fields the caller actually provided. */
   private syncAppendState(id: string, data: SessionData, metaUpdateCount?: number): void {
     const prev = this.appendState.get(id);
@@ -714,6 +726,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   private async readSession(id: string): Promise<ResolvedSessionSnapshot | null> {
+    await this.ensureMigrated();
     const filePath = await this.resolveSessionLocation(id);
     if (!filePath) {
       return null;
@@ -831,6 +844,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   //   - No lineage provided by caller
   //   - Watermark inconsistency (rewind/fork occurred)
   async appendSessionDelta(id: string, data: SessionData): Promise<void> {
+    await this.ensureMigrated();
     const filePath = this.writeFilePath(id, data);
 
     // Pre-checks that don't need serialization. A session still living in the
@@ -1189,6 +1203,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     runtimeInfo?: KodaXSessionRuntimeInfo;
     createdAt?: string;
   }>> {
+    await this.ensureMigrated();
     await fs.mkdir(this.sessionsDir, { recursive: true });
     const currentGitRoot = gitRoot ?? await getGitRoot(this.hostCwd);
     const currentRuntime = await inspectWorkspaceRuntime({
@@ -1231,7 +1246,8 @@ export class FileSessionStorage implements KodaXSessionStorage {
         e.isFile() &&
         e.name.endsWith('.jsonl') &&
         !e.name.endsWith('.archive.jsonl') &&
-        !e.name.startsWith('archived-')
+        !e.name.startsWith('archived-') &&
+        !e.name.startsWith('.') // skip control files like .migration-journal.jsonl
       ) {
         candidatePaths.push({ path: path.join(this.sessionsDir, e.name), trusted: false });
       }
@@ -1374,6 +1390,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
   }
 
   async delete(id: string): Promise<void> {
+    await this.ensureMigrated();
     // Locate the session anywhere (project dir / archived / legacy flat), then
     // remove it together with its island sidecar (paired — never orphan a
     // sidecar, ADR-038 §4). Also sweep a legacy flat copy if one lingers.
@@ -1423,6 +1440,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
       return 0;
     }
+    await this.ensureMigrated();
     let removed = 0;
     const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
     const unlinkIfOld = async (filePath: string): Promise<void> => {

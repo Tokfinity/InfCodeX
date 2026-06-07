@@ -932,4 +932,27 @@ describe('FileSessionStorage', () => {
     expect(existsSync(flatPath)).toBe(false); // flat copy superseded
     expect((await storage.load('20260101_888888'))?.title).toBe('Migrated');
   });
+
+  it('FEATURE_219: first list() auto-migrates the flat pool into per-project dirs + stamps marker', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const gitRoot = path.resolve('C:/Works/GitWorks/KodaX').replace(/\\/g, '/');
+    const sessionsDir = path.join(tempHome, '.kodax', 'sessions');
+    const { mkdir } = await import('fs/promises');
+    await mkdir(sessionsDir, { recursive: true });
+    // Seed two legacy flat sessions directly.
+    for (const id of ['20260701_000000', '20260701_000001']) {
+      const meta = JSON.stringify({ _type: 'meta', id, title: id, gitRoot, activeMessageCount: 1 });
+      await writeFile(path.join(sessionsDir, `${id}.jsonl`), `${meta}\n${JSON.stringify({ role: 'user', content: 'x' })}\n`, 'utf8');
+    }
+
+    const storage = new FileSessionStorage();
+    const listed = await storage.list(gitRoot); // first entry point → triggers migration
+
+    const projectDir = path.join(sessionsDir, deriveProjectKeyFromRoot(gitRoot).key);
+    expect(existsSync(path.join(sessionsDir, '.layout.json'))).toBe(true);
+    expect(existsSync(path.join(projectDir, '20260701_000000.jsonl'))).toBe(true);
+    expect(existsSync(path.join(sessionsDir, '20260701_000000.jsonl'))).toBe(false); // moved out of flat
+    expect(listed.map((s) => s.id).sort()).toEqual(['20260701_000000', '20260701_000001']);
+  });
 });
