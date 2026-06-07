@@ -562,6 +562,8 @@ describe('FileSessionStorage', () => {
     // A round archive ends in `.jsonl` too — the old listing logic read it and
     // surfaced a bogus `<id>.archive` session. It must be excluded.
     await writeFile(path.join(sessionsDir, '20260330_090000.archive.jsonl'), metaLine('RoundArchive', '2026-03-30T09:00:00.000Z'), 'utf8');
+    // FEATURE_219 — the renamed island sidecar must also be excluded.
+    await writeFile(path.join(sessionsDir, '20260330_091000.islands.jsonl'), metaLine('IslandSidecar', '2026-03-30T09:10:00.000Z'), 'utf8');
     // `archived-` prefixed files are the session-archive mechanism — hidden from
     // the picker/SDK fast path, consistent with the public-api slow path.
     await writeFile(path.join(sessionsDir, 'archived-20260301_080000.jsonl'), metaLine('ArchivedSession', '2026-03-01T08:00:00.000Z'), 'utf8');
@@ -570,6 +572,8 @@ describe('FileSessionStorage', () => {
     expect(ids).toContain('20260401_120000');
     expect(ids).not.toContain('20260330_090000.archive');
     expect(ids).not.toContain('20260330_090000');
+    expect(ids).not.toContain('20260330_091000.islands');
+    expect(ids).not.toContain('20260330_091000');
     expect(ids).not.toContain('archived-20260301_080000');
   });
 

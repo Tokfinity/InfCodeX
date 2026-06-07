@@ -801,7 +801,8 @@ export class FileSessionStorage implements KodaXSessionStorage {
         await fs.unlink(legacy).catch(() => undefined);
         const legacyArchive = this.legacyFlatArchivePath(id);
         if (fsSync.existsSync(legacyArchive)) {
-          await fs.rename(legacyArchive, path.join(dir, `${id}.archive.jsonl`)).catch(() => undefined);
+          // Rename the legacy `.archive.jsonl` sidecar to `.islands.jsonl` (Phase 3).
+          await fs.rename(legacyArchive, path.join(dir, `${id}.islands.jsonl`)).catch(() => undefined);
         }
       }
     } finally {
@@ -941,10 +942,12 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
 
-      // Write sidecar (streaming append — no join) into the same project dir.
+      // Write island sidecar (streaming append — no join) into the same project
+      // dir. FEATURE_219 — `.islands.jsonl` (renamed from the old `.archive.jsonl`,
+      // whose "archive" word now means whole-session archival; ADR-038 §4).
       const archiveDir = this.resolveWriteDir(id, resolved.data);
       await fs.mkdir(archiveDir, { recursive: true });
-      const archivePath = path.join(archiveDir, `${id}.archive.jsonl`);
+      const archivePath = path.join(archiveDir, `${id}.islands.jsonl`);
       const archiveHandle = await fs.open(archivePath, 'a');
       try {
         await archiveHandle.write(JSON.stringify({
@@ -1236,7 +1239,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         continue;
       }
       for (const f of dirFiles) {
-        if (f.endsWith('.jsonl') && !f.endsWith('.archive.jsonl')) {
+        if (f.endsWith('.jsonl') && !f.endsWith('.archive.jsonl') && !f.endsWith('.islands.jsonl')) {
           candidatePaths.push({ path: path.join(this.projectDir(key), f), trusted: Boolean(currentGitRoot) });
         }
       }
@@ -1246,6 +1249,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         e.isFile() &&
         e.name.endsWith('.jsonl') &&
         !e.name.endsWith('.archive.jsonl') &&
+        !e.name.endsWith('.islands.jsonl') &&
         !e.name.startsWith('archived-') &&
         !e.name.startsWith('.') // skip control files like .migration-journal.jsonl
       ) {
