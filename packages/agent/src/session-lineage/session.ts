@@ -58,7 +58,7 @@ export async function generateSessionId(): Promise<string> {
   const now = new Date();
   const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
   const timePart = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
-  const suffix = `${(now.getMilliseconds() % 1000).toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  const suffix = `${now.getMilliseconds().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   return `${datePart}_${timePart}_${suffix}`;
 }
 

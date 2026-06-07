@@ -710,7 +710,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
       return fsSync.existsSync(flat) ? flat : null;
     }
     if (matches.length === 1) {
-      this.sessionDirCache.set(id, path.dirname(matches[0]!).replace(/[/\\]archived$/, ''));
+      // Cache the PROJECT dir (strip a trailing `archived/` segment) so later
+      // writes for this id resolve to the project root, not the archive subdir.
+      const matchDir = path.dirname(matches[0]!);
+      const projectDir = path.basename(matchDir) === 'archived' ? path.dirname(matchDir) : matchDir;
+      this.sessionDirCache.set(id, projectDir);
       return matches[0]!;
     }
     // Ambiguous (legacy same-second duplicate ids across projects).
@@ -1429,42 +1433,65 @@ export class FileSessionStorage implements KodaXSessionStorage {
    */
   async archive(id: string): Promise<boolean> {
     await this.ensureMigrated();
-    const located = await this.resolveSessionLocation(id);
-    if (!located) {
-      return false;
-    }
-    const dir = path.dirname(located);
-    if (path.basename(dir) === 'archived') {
-      return true; // already archived
-    }
-    await this.movePair(id, dir, path.join(dir, 'archived'));
-    this.sessionDirCache.delete(id);
-    return true;
+    // Serialized through the per-session write queue so a concurrent
+    // appendSessionDelta / save can't write to a path we're moving.
+    let result = false;
+    await this.serializedWrite(id, async () => {
+      const located = await this.resolveSessionLocation(id);
+      if (!located) {
+        return;
+      }
+      const dir = path.dirname(located);
+      if (path.basename(dir) === 'archived') {
+        result = true; // already archived
+        return;
+      }
+      await this.movePair(id, dir, path.join(dir, 'archived'));
+      this.sessionDirCache.delete(id);
+      result = true;
+    });
+    return result;
   }
 
   /** Restore an archived session back into its project directory. */
   async unarchive(id: string): Promise<boolean> {
     await this.ensureMigrated();
-    const located = await this.resolveSessionLocation(id);
-    if (!located) {
-      return false;
-    }
-    const dir = path.dirname(located);
-    if (path.basename(dir) !== 'archived') {
-      return true; // not archived
-    }
-    await this.movePair(id, dir, path.dirname(dir));
-    this.sessionDirCache.delete(id);
-    return true;
+    let result = false;
+    await this.serializedWrite(id, async () => {
+      const located = await this.resolveSessionLocation(id);
+      if (!located) {
+        return;
+      }
+      const dir = path.dirname(located);
+      if (path.basename(dir) !== 'archived') {
+        result = true; // not archived
+        return;
+      }
+      await this.movePair(id, dir, path.dirname(dir));
+      this.sessionDirCache.delete(id);
+      result = true;
+    });
+    return result;
   }
 
-  /** Move a session + its island sidecar between two directories. */
+  /**
+   * Move a session + its island sidecar between two directories. Propagates a
+   * non-ENOENT rename error (e.g. Windows file-in-use) so a partial move is
+   * surfaced as a failure instead of silently splitting main + sidecar.
+   */
   private async movePair(id: string, fromDir: string, toDir: string): Promise<void> {
     await fs.mkdir(toDir, { recursive: true });
     for (const name of [`${id}.jsonl`, `${id}.islands.jsonl`]) {
       const src = path.join(fromDir, name);
-      if (fsSync.existsSync(src)) {
-        await fs.rename(src, path.join(toDir, name)).catch(() => undefined);
+      if (!fsSync.existsSync(src)) {
+        continue;
+      }
+      try {
+        await fs.rename(src, path.join(toDir, name));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw err;
+        }
       }
     }
   }

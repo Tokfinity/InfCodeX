@@ -47,6 +47,17 @@ function isSessionFile(name: string): boolean {
     && !name.startsWith('.');
 }
 
+/** The session id of an island sidecar, or null if `name` is not a sidecar. */
+function sidecarId(name: string): string | null {
+  if (name.endsWith('.archive.jsonl')) {
+    return name.slice(0, -'.archive.jsonl'.length);
+  }
+  if (name.endsWith('.islands.jsonl')) {
+    return name.slice(0, -'.islands.jsonl'.length);
+  }
+  return null;
+}
+
 /** Read just the meta head line of a flat session file. */
 async function readMeta(filePath: string): Promise<{ gitRoot?: string; runtimeInfo?: unknown } | null> {
   let fh: fs.FileHandle | undefined;
@@ -111,7 +122,7 @@ async function collectFlatSources(sessionsDir: string): Promise<string[]> {
       if (!e.isFile() || e.name.startsWith('.')) {
         continue;
       }
-      if (isSessionFile(e.name) || (allowSidecars && e.name.endsWith('.archive.jsonl'))) {
+      if (isSessionFile(e.name) || (allowSidecars && sidecarId(e.name) !== null)) {
         sources.push(path.join(dir, e.name));
       }
     }
@@ -137,22 +148,21 @@ export async function planMigration(sessionsDir: string): Promise<MovePlan[]> {
     const id = path.basename(main, '.jsonl');
     const key = await destKeyFor(main);
     plans.push({ from: main, to: path.join(sessionsDir, key, `${id}.jsonl`), reason: `session→${key}` });
-    // Paired island sidecar (same dir as the main source).
-    const sidecar = path.join(path.dirname(main), `${id}.archive.jsonl`);
-    if (fsSync.existsSync(sidecar)) {
-      plans.push({ from: sidecar, to: path.join(sessionsDir, key, `${id}.islands.jsonl`), reason: 'sidecar→islands' });
+    // Paired island sidecar (same dir as the main source) — either the old
+    // `.archive.jsonl` or an already-renamed `.islands.jsonl`.
+    for (const suffix of ['.archive.jsonl', '.islands.jsonl']) {
+      const sidecar = path.join(path.dirname(main), `${id}${suffix}`);
+      if (fsSync.existsSync(sidecar)) {
+        plans.push({ from: sidecar, to: path.join(sessionsDir, key, `${id}.islands.jsonl`), reason: 'sidecar→islands' });
+      }
     }
   }
 
-  // Orphan sidecars: a `.archive.jsonl` whose main is gone → preserve, not delete.
+  // Orphan sidecars (either suffix) whose main is gone → preserve, not delete.
   for (const src of sources) {
-    const base = path.basename(src);
-    if (!base.endsWith('.archive.jsonl')) {
-      continue;
-    }
-    const id = base.slice(0, -'.archive.jsonl'.length);
-    if (mainIds.has(id)) {
-      continue; // handled as a paired sidecar above
+    const id = sidecarId(path.basename(src));
+    if (id === null || mainIds.has(id)) {
+      continue; // a session file, or handled as a paired sidecar above
     }
     plans.push({
       from: src,
