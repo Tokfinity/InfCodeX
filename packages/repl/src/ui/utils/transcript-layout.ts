@@ -224,6 +224,49 @@ const THINKING_SHOW_ALL_TRUNCATION_HINT =
  */
 export const TRANSCRIPT_HARD_LINE_CAP = 100_000;
 
+/**
+ * FEATURE_220 (v0.7.47) — collapse a finalized `thinking` block to a single
+ * summary line by default, so a run of think→call→think reads as one compact
+ * "agent working" block instead of a stack of full reasoning dumps. Mirrors
+ * Claude Code's `∴ Thinking <Ctrl+O to expand>` fold and Codex/opencode's
+ * one-line reasoning summary. Expanding (Ctrl+O → `showFullThinking`, or
+ * transcript show-all → `showAllContent`) bypasses the fold entirely. Set
+ * `KODAX_THINKING_COLLAPSE=0` to restore the legacy multi-line preview inline.
+ *
+ * Collapse is a pure function of the finalized item text, so a thinking
+ * section's rendered rows stay identical across frames — the inline scrollback
+ * ledger keeps appending finalized history rather than rebuilding it.
+ */
+const THINKING_COLLAPSE_SUMMARY_MAX_CHARS = 120;
+const THINKING_COLLAPSE_EXPAND_HINT = " … (Ctrl+O to expand)";
+
+function isThinkingCollapseEnabled(): boolean {
+  return process.env.KODAX_THINKING_COLLAPSE !== "0";
+}
+
+/**
+ * Reduce a thinking block to a single summary line plus a flag for whether
+ * anything is hidden behind it. `hasMore` is false only when the whole block
+ * already fits on one short line — in that case the caller renders it verbatim
+ * (no fold, no expand hint), so short reasoning is untouched.
+ */
+export function buildCollapsedThinkingLine(text: string): {
+  summary: string;
+  hasMore: boolean;
+} {
+  const nonEmpty = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const firstLine = nonEmpty[0] ?? "";
+  const multiLine = nonEmpty.length > 1;
+  const tooLong = firstLine.length > THINKING_COLLAPSE_SUMMARY_MAX_CHARS;
+  const summary = tooLong
+    ? `${firstLine.slice(0, THINKING_COLLAPSE_SUMMARY_MAX_CHARS).trimEnd()}…`
+    : firstLine;
+  return { summary, hasMore: multiLine || tooLong };
+}
+
 function normalizeManagedLiveActivityLabel(label: string | undefined, workerTitle?: string): string | undefined {
   if (!label || !workerTitle) {
     return label;
@@ -636,6 +679,32 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         break;
       case "thinking":
         {
+          pushWrappedRows(rows, `${item.id}-header`, "Thinking", viewportWidth, {
+            color: "thinking",
+            italic: true,
+            itemId: item.id,
+          });
+          // FEATURE_220: fold a finalized thinking block to one summary line by
+          // default. Only fold when there is genuinely something hidden behind
+          // the summary (`hasMore`) — a short single-line block falls through to
+          // the legacy preview path below and renders verbatim. Expanding
+          // (showFullThinking / showAllContent) or KODAX_THINKING_COLLAPSE=0
+          // also skips the fold.
+          const collapsed =
+            isThinkingCollapseEnabled() && !showFullThinking && !showAllContent
+              ? buildCollapsedThinkingLine(item.compactText ?? item.text)
+              : undefined;
+          if (collapsed?.hasMore) {
+            pushWrappedRows(
+              rows,
+              `${item.id}-body`,
+              `${collapsed.summary}${THINKING_COLLAPSE_EXPAND_HINT}`,
+              getBodyWidth(viewportWidth, 2),
+              { color: "thinking", indent: 2, italic: true, itemId: item.id },
+            );
+            rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
+            break;
+          }
           // FEATURE_060 Track 3: route show-all through buildThinkingPreview
           // so the per-block hard char cap fires even when showAllContent is
           // true. The previous short-circuit `showAllContent ? item.text : ...`
@@ -643,11 +712,6 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
           const preview = showAllContent
             ? buildThinkingPreview(item.text, maxLines, showFullThinking, showAllContent)
             : item.compactText ?? buildThinkingPreview(item.text, maxLines, showFullThinking, showAllContent);
-        pushWrappedRows(rows, `${item.id}-header`, "Thinking", viewportWidth, {
-          color: "thinking",
-          italic: true,
-          itemId: item.id,
-        });
         pushWrappedRows(rows, `${item.id}-body`, preview, getBodyWidth(viewportWidth, 2), {
           color: "thinking",
           indent: 2,
@@ -978,7 +1042,10 @@ export function buildHistoryItemTranscriptSections(
 ): TranscriptSection[] {
   return items.map((item) => {
     const expanded = showDetailedTools || Boolean(expandedItemKeys?.has(item.id));
-    const sig = `${viewportWidth}|${maxLines}|${showAllContent ? 1 : 0}|${expanded ? 1 : 0}`;
+    // FEATURE_220: the thinking-collapse mode (KODAX_THINKING_COLLAPSE) changes
+    // a thinking item's rendered rows, so it MUST be part of the cache key — else
+    // a toggle would serve stale sections for a reused item reference.
+    const sig = `${viewportWidth}|${maxLines}|${showAllContent ? 1 : 0}|${expanded ? 1 : 0}|${isThinkingCollapseEnabled() ? 1 : 0}`;
     const cached = _itemSectionCache.get(item);
     if (cached !== undefined && cached.sig === sig) {
       return cached.section;

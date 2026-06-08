@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolCallStatus, type HistoryItem } from "../types.js";
 import { computeInlineLedgerStep } from "./inline-ledger-controller.js";
 import { EMPTY_INLINE_SCROLLBACK_STATE } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
 import {
+  buildCollapsedThinkingLine,
   buildDynamicTranscriptSection,
   buildHistoryItemTranscriptSections,
   buildInlinePromptRenderModel,
@@ -680,25 +681,33 @@ describe("transcript-layout", () => {
     expect(text).not.toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
   });
 
-  it("truncates persisted thinking blocks in compact mode using transcript maxLines", () => {
-    const rows = buildTranscriptRows({
-      items: [
-        {
-          id: "thinking-1",
-          type: "thinking",
-          text: Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n"),
-          timestamp: Date.now(),
-        },
-      ],
-      viewportWidth: 80,
-      maxLines: 5,
-    });
+  it("truncates persisted thinking blocks in compact mode using transcript maxLines (collapse disabled)", () => {
+    // FEATURE_220: the default now collapses a multi-line finalized thinking block
+    // to a single summary line. This test pins the LEGACY multi-line preview path,
+    // reachable via KODAX_THINKING_COLLAPSE=0.
+    vi.stubEnv("KODAX_THINKING_COLLAPSE", "0");
+    try {
+      const rows = buildTranscriptRows({
+        items: [
+          {
+            id: "thinking-1",
+            type: "thinking",
+            text: Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n"),
+            timestamp: Date.now(),
+          },
+        ],
+        viewportWidth: 80,
+        maxLines: 5,
+      });
 
-    const text = rows.map((row) => row.text).join("\n");
-    expect(text).toContain("line 1");
-    expect(text).toContain("line 5");
-    expect(text).toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
-    expect(text).not.toContain("line 6");
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("line 1");
+      expect(text).toContain("line 5");
+      expect(text).toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
+      expect(text).not.toContain("line 6");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("does not truncate persisted thinking blocks when full thinking is enabled", () => {
@@ -1868,5 +1877,115 @@ describe("identifyTranscriptSection (FEATURE_214 ledger identity)", () => {
     expect(identifyTranscriptSection(sec("a", "x", "y")).fingerprint).not.toBe(
       identifyTranscriptSection(sec("a", "y", "x")).fingerprint,
     );
+  });
+});
+
+describe("FEATURE_220 — finalized thinking collapse", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const TS = 1_000_000;
+  const thinkingItem = (id: string, text: string): HistoryItem => ({
+    id,
+    type: "thinking",
+    text,
+    timestamp: TS,
+  });
+
+  describe("buildCollapsedThinkingLine", () => {
+    it("flags multi-line reasoning as having more, summarizing the first non-empty line", () => {
+      const { summary, hasMore } = buildCollapsedThinkingLine(
+        "First, inspect the auth module.\nThen trace the token refresh path.",
+      );
+      expect(hasMore).toBe(true);
+      expect(summary).toBe("First, inspect the auth module.");
+    });
+
+    it("flags an over-long single line as having more and truncates with an ellipsis", () => {
+      const longLine = "A".repeat(200);
+      const { summary, hasMore } = buildCollapsedThinkingLine(longLine);
+      expect(hasMore).toBe(true);
+      expect(summary.endsWith("…")).toBe(true);
+      expect(summary.length).toBeLessThan(longLine.length);
+    });
+
+    it("does not flag a short single line as having more", () => {
+      const { summary, hasMore } = buildCollapsedThinkingLine("Quick check of the config.");
+      expect(hasMore).toBe(false);
+      expect(summary).toBe("Quick check of the config.");
+    });
+
+    it("skips leading blank lines when picking the summary", () => {
+      const { summary, hasMore } = buildCollapsedThinkingLine("\n\n  Real reasoning here.\nmore");
+      expect(hasMore).toBe(true);
+      expect(summary).toBe("Real reasoning here.");
+    });
+  });
+
+  describe("thinking item rendering", () => {
+    const multiLine = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
+
+    it("collapses a multi-line finalized thinking block to one summary line with an expand hint", () => {
+      const rows = buildTranscriptRows({
+        items: [thinkingItem("th-1", multiLine)],
+        viewportWidth: 80,
+        maxLines: 1000,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("Thinking");
+      expect(text).toContain("line 1");
+      expect(text).toContain("Ctrl+O to expand");
+      expect(text).not.toContain("line 2");
+      expect(text).not.toContain("line 5");
+    });
+
+    it("renders a short single-line thinking block verbatim with no expand hint", () => {
+      const rows = buildTranscriptRows({
+        items: [thinkingItem("th-2", "I'll start by examining the existing structure.")],
+        viewportWidth: 80,
+        maxLines: 1000,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("I'll start by examining the existing structure.");
+      expect(text).not.toContain("Ctrl+O to expand");
+    });
+
+    it("expands fully when showFullThinking is on (collapse bypassed)", () => {
+      const rows = buildTranscriptRows({
+        items: [thinkingItem("th-3", multiLine)],
+        viewportWidth: 80,
+        maxLines: 1000,
+        showFullThinking: true,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("line 20");
+      expect(text).not.toContain("Ctrl+O to expand");
+    });
+
+    it("expands fully when showAllContent is on (collapse bypassed)", () => {
+      const rows = buildTranscriptRows({
+        items: [thinkingItem("th-4", multiLine)],
+        viewportWidth: 80,
+        maxLines: 1000,
+        showAllContent: true,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("line 20");
+      expect(text).not.toContain("Ctrl+O to expand");
+    });
+
+    it("restores the legacy multi-line preview when KODAX_THINKING_COLLAPSE=0", () => {
+      vi.stubEnv("KODAX_THINKING_COLLAPSE", "0");
+      const rows = buildTranscriptRows({
+        items: [thinkingItem("th-5", multiLine)],
+        viewportWidth: 80,
+        maxLines: 5,
+      });
+      const text = rows.map((row) => row.text).join("\n");
+      expect(text).toContain("line 5");
+      expect(text).toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
+      expect(text).not.toContain("Ctrl+O to expand");
+    });
   });
 });
