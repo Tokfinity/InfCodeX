@@ -1,0 +1,319 @@
+/**
+ * FEATURE_218 — the bundled KodaX self-manual registry.
+ *
+ * Drift discipline: dynamic facts (the provider list, the default provider)
+ * are imported from live constants in `@kodax-ai/llm`, never copied as string
+ * literals. A drift-guard test (registry.test.ts) asserts the providers topic
+ * covers every provider in provider-capabilities.json.
+ */
+
+import { KODAX_PROVIDER_SNAPSHOTS, KODAX_DEFAULT_PROVIDER } from '@kodax-ai/llm';
+
+import type { KodaXManualTopic, KodaXManualTopicId } from './types.js';
+
+/** Live provider names — drift-proof source for the `providers` topic. */
+const PROVIDER_NAMES: readonly string[] = Object.keys(KODAX_PROVIDER_SNAPSHOTS);
+const PROVIDER_LIST = PROVIDER_NAMES.join(', ');
+
+/** Canonical topic order (also the index ordering). */
+export const MANUAL_TOPIC_IDS: readonly KodaXManualTopicId[] = [
+  'overview',
+  'install',
+  'quickstart',
+  'providers',
+  'custom-providers',
+  'config',
+  'permissions',
+  'commands',
+  'tools',
+  'agents',
+  'skills',
+  'mcp',
+  'repo-intelligence',
+  'sessions',
+  'doctor',
+  'sdk',
+  'troubleshooting',
+];
+
+const TOPICS: readonly KodaXManualTopic[] = [
+  {
+    id: 'overview',
+    title: 'What KodaX is',
+    aliases: ['about', 'what is kodax', 'intro', '介绍', '是什么', '概览'],
+    summary: 'What KodaX is, what it is for, and how it differs from Claude Code / Codex CLI.',
+    body: [
+      'KodaX is a multi-provider AI coding CLI: an interactive REPL + SDK that plans,',
+      'edits code, runs tools, and reviews its own work across 12 LLM provider families.',
+      '',
+      'Boundary: KodaX is its own product. It does NOT read .claude/settings.json (Claude',
+      'Code) or config.toml (Codex CLI). KodaX is configured via ~/.kodax/config.json and',
+      'KODAX_* env vars. When in doubt about a KodaX behavior, prefer this manual over',
+      'general pretraining knowledge.',
+    ].join('\n'),
+    sources: [{ label: 'README', path: 'README.md' }],
+    nextTopics: ['install', 'quickstart', 'providers'],
+  },
+  {
+    id: 'install',
+    title: 'Install & start KodaX',
+    aliases: ['setup', 'getting started', '安装', '启动', '怎么装'],
+    summary: 'npm install, Node version, first launch, updating.',
+    body: [
+      'Install (Node >= 18):',
+      '  npm install -g @kodax-ai/kodax',
+      'Then run `kodax` in any project directory to start the interactive REPL.',
+      '',
+      'Native binaries (no Node needed) are published per release on GitHub Releases',
+      '(darwin/linux/win, arm64/x64).',
+      'Update: re-run the npm install, or download the new binary.',
+    ].join('\n'),
+    sources: [{ label: 'package', path: 'package.json' }],
+    nextTopics: ['quickstart', 'providers', 'config'],
+  },
+  {
+    id: 'quickstart',
+    title: 'Quickstart workflow',
+    aliases: ['workflow', 'first task', '快速开始', '上手', '怎么用'],
+    summary: 'Open a project, give a task, review, run tests, continue a session.',
+    body: [
+      '1. `cd` into your repo and run `kodax`.',
+      '2. Describe the task in plain language; KodaX plans, edits, and runs tools.',
+      '3. Review proposed edits (permission mode controls auto-accept vs prompt).',
+      '4. Ask it to run tests / build to verify.',
+      '5. Continue later: `kodax -c` (continue last) or `kodax -r` (resume a picker).',
+    ].join('\n'),
+    sources: [{ label: 'commands', path: 'packages/repl/src/interactive/commands.ts' }],
+    nextTopics: ['commands', 'permissions', 'sessions'],
+  },
+  {
+    id: 'providers',
+    title: 'Providers & models',
+    aliases: ['provider', 'model', 'models', 'llm', '供应商', '模型', '提供商'],
+    summary: 'Built-in providers, choosing a model, credential check, cross-provider fallback.',
+    body: [
+      `KodaX ships ~12 provider families (capability entries: ${PROVIDER_NAMES.length}):`,
+      `  ${PROVIDER_LIST}`,
+      '',
+      `Default provider: ${KODAX_DEFAULT_PROVIDER} (override with KODAX_PROVIDER env or`,
+      '"provider" in ~/.kodax/config.json). Switch model live with the /model command.',
+      '',
+      'Check a key works: `verifyCredential` (SDK) / a configured provider is validated via',
+      'its verifyStrategy in provider-capabilities.json.',
+      'Cross-provider fallback on hard errors: /fallback slash + KODAX_FALLBACK_PROVIDERS.',
+      'Cheap/strong tiers for dispatched children: KODAX_FAST_* / KODAX_DEEP_*.',
+    ].join('\n'),
+    sources: [
+      { label: 'provider capabilities', path: 'packages/llm/src/providers/provider-capabilities.json' },
+    ],
+    nextTopics: ['custom-providers', 'config', 'troubleshooting'],
+  },
+  {
+    id: 'custom-providers',
+    title: 'Custom providers',
+    aliases: ['custom provider', 'baseurl', 'openai compatible', '自定义供应商', '自定义模型'],
+    summary: 'Point KodaX at an OpenAI/Anthropic-compatible endpoint.',
+    body: [
+      'Add a `customProviders` entry in ~/.kodax/config.json for an OpenAI/Anthropic-',
+      'compatible endpoint: specify the protocol, baseUrl, auth header(s), and model name(s).',
+      'KodaX infers a verifyStrategy from the protocol; you can override it explicitly.',
+      'Once added, the custom provider is selectable like any built-in one.',
+    ].join('\n'),
+    sources: [{ label: 'config loader', path: 'packages/repl/src/common/utils.ts' }],
+    nextTopics: ['providers', 'config'],
+  },
+  {
+    id: 'config',
+    title: 'Configuration',
+    aliases: ['settings', 'config.json', 'env', '配置', '设置', '环境变量'],
+    summary: '~/.kodax/config.json fields and KODAX_* env precedence (no YAML).',
+    body: [
+      'KodaX config is JSON + env vars — there is no YAML and no single loader entry.',
+      'File: ~/.kodax/config.json. Common keys: provider, model, reasoningCeiling,',
+      'permissionMode, customProviders, mcpServers, repoIntelligenceMode, fallbackProviders,',
+      'autoMode, verifierLog, stallLog.',
+      'Env mirrors / extras: KODAX_PROVIDER, KODAX_FALLBACK_PROVIDERS, KODAX_FAST_*/KODAX_DEEP_*,',
+      'KODAX_REPO_INTELLIGENCE_MODE. Env generally overrides file. Project vs user config:',
+      'user config is ~/.kodax; project-scoped state lives under <repo>/.kodax/.',
+    ].join('\n'),
+    sources: [
+      { label: 'config loader', path: 'packages/repl/src/common/utils.ts' },
+      { label: 'permission config', path: 'packages/repl/src/common/permission-config.ts' },
+    ],
+    nextTopics: ['providers', 'permissions', 'mcp'],
+  },
+  {
+    id: 'permissions',
+    title: 'Permission modes',
+    aliases: ['permission', 'approval', 'dangerous', '权限', '审批', '权限模式'],
+    summary: 'File/command permission modes, approvals, read-only.',
+    body: [
+      'permissionMode controls when KodaX asks before file/command actions:',
+      '- accept-edits: auto-apply edits, still gate risky commands.',
+      '- plan: read-only planning, no mutations until you switch.',
+      '- auto: data-driven classifier decides per action (KODAX_AUTO_MODE_*).',
+      'Set via ~/.kodax/config.json "permissionMode" or the relevant slash command.',
+      'Threat model: KodaX is a single-user CLI; workspace integrity is the user’s responsibility.',
+    ].join('\n'),
+    sources: [{ label: 'permission config', path: 'packages/repl/src/common/permission-config.ts' }],
+    nextTopics: ['tools', 'commands', 'config'],
+  },
+  {
+    id: 'commands',
+    title: 'Commands (slash & CLI)',
+    aliases: ['command', 'slash', 'cli', 'flags', '命令', '斜杠命令', '指令'],
+    summary: 'REPL slash commands, CLI flags, and the doctor command.',
+    body: [
+      'Common REPL slash commands: /help, /compact, /model, /fallback, /mcp, /skills, /goal.',
+      'Use /help <topic> to read this manual from inside the REPL.',
+      'CLI: `kodax` (start), `kodax -c` (continue last session), `kodax -r` (resume picker),',
+      '`kodax doctor` (diagnose config/providers, add --ping for live reachability).',
+      'The authoritative command list is BUILTIN_COMMANDS in the REPL.',
+    ].join('\n'),
+    sources: [{ label: 'commands', path: 'packages/repl/src/interactive/commands.ts' }],
+    nextTopics: ['doctor', 'sessions', 'permissions'],
+  },
+  {
+    id: 'tools',
+    title: 'Tools',
+    aliases: ['tool', 'read', 'write', 'edit', 'bash', '工具'],
+    summary: 'What KodaX tools do, when they read/write/run shell, completion verification.',
+    body: [
+      'KodaX agents use file tools (read, write, edit, multi_edit), search (grep, glob),',
+      'and bash — gated by your permission mode. Write tools only mutate the workspace;',
+      'read/search are side-effect free.',
+      'On completion, an out-of-band Sidecar Verifier may re-check the result (a second',
+      'opinion). This is automatic; you do not invoke it.',
+    ].join('\n'),
+    sources: [{ label: 'tools', path: 'packages/coding/src/tools/' }],
+    nextTopics: ['agents', 'repo-intelligence', 'permissions'],
+  },
+  {
+    id: 'agents',
+    title: 'Custom agents',
+    aliases: ['agent', 'subagent', 'specialist', '自定义agent', '智能体', '子代理'],
+    summary: 'Author specialist agents in markdown; dispatch them as children.',
+    body: [
+      'Write a specialist agent as a markdown file with frontmatter (name, description,',
+      'tools, model) + a body prompt. KodaX loads:',
+      '  - user agents:    ~/.kodax/agents/*.md',
+      '  - project agents: <repo>/.kodax/agents/*.md  (override user agents of the same name)',
+      'The main agent dispatches one as a child via dispatch_child_task(subagent_type="<name>").',
+      'Difference from skills: an agent is a full sub-agent (own prompt/tools); a skill is',
+      'reference knowledge injected into the current agent.',
+    ].join('\n'),
+    sources: [{ label: 'markdown loader', path: 'packages/coding/src/construction/markdown-loader.ts' }],
+    nextTopics: ['skills', 'tools', 'sdk'],
+  },
+  {
+    id: 'skills',
+    title: 'Skills',
+    aliases: ['skill', 'agent skills', '技能'],
+    summary: 'What skills are, where they live, how they trigger, vs AGENTS.md.',
+    body: [
+      'Skills are reusable, zero-dependency knowledge/instruction bundles the agent can pull',
+      'in on demand. Built-in skills ship inside the agent package',
+      '(packages/agent/src/capabilities/skills/); user skills are discovered from disk.',
+      'Trigger: the agent selects a relevant skill for the task. Versus AGENTS.md — AGENTS.md',
+      'sets repo-wide rules always in context; a skill is task-specific and loaded when needed.',
+    ].join('\n'),
+    sources: [{ label: 'skills', path: 'packages/agent/src/capabilities/skills/' }],
+    nextTopics: ['agents', 'mcp', 'tools'],
+  },
+  {
+    id: 'mcp',
+    title: 'MCP servers',
+    aliases: ['mcp server', 'model context protocol', 'mcp配置'],
+    summary: 'Configure, connect, and troubleshoot MCP servers.',
+    body: [
+      'Add MCP servers under "mcpServers" in ~/.kodax/config.json (stdio or remote). Their',
+      'tools become available to the agent once connected. Use /mcp in the REPL to inspect',
+      'connection status. Common issues: wrong command/args, missing binary on PATH, or a',
+      'server that needs interactive auth (may be absent in headless runs).',
+    ].join('\n'),
+    sources: [{ label: 'mcp', path: 'packages/agent/src/capabilities/mcp/' }],
+    nextTopics: ['config', 'tools', 'troubleshooting'],
+  },
+  {
+    id: 'repo-intelligence',
+    title: 'Repo intelligence',
+    aliases: ['repointel', 'repo intel', 'code intelligence', '仓库智能', '代码库理解'],
+    summary: 'What the repo-intelligence tools do and their limits.',
+    body: [
+      'Repo intelligence gives the agent a repo-scope map (overview, symbols, module/flow',
+      'capsules, change-impact) to narrow scope before large reviews/refactors — cached under',
+      '<repo>/.agent/repo-intelligence/. Modes via repoIntelligenceMode / KODAX_REPO_INTELLIGENCE_MODE',
+      '(auto/off/oss/premium). It is batch, pre-task context — not a realtime type checker.',
+    ].join('\n'),
+    sources: [{ label: 'repo-intelligence', path: 'packages/coding/src/repo-intelligence/' }],
+    nextTopics: ['tools', 'config', 'sessions'],
+  },
+  {
+    id: 'sessions',
+    title: 'Sessions, memory & goals',
+    aliases: ['session', 'resume', 'memory', 'compaction', 'goal', '会话', '恢复', '记忆', '目标'],
+    summary: 'resume / -c / -r, compaction, memory, per-project storage, /goal.',
+    body: [
+      'Continue work: `kodax -c` (most recent session) or `kodax -r` (pick one). Long sessions',
+      'compact automatically to stay within context. Sessions are stored per project. Memory',
+      'persists project lessons across sessions. Set a persistent objective with the /goal',
+      'command; the agent tracks it and a verifier checks completion.',
+    ].join('\n'),
+    sources: [{ label: 'session storage', path: 'packages/repl/src/interactive/storage.ts' }],
+    nextTopics: ['commands', 'config', 'troubleshooting'],
+  },
+  {
+    id: 'doctor',
+    title: 'kodax doctor',
+    aliases: ['doctor', 'diagnose', 'health check', 'ping', '诊断', '体检'],
+    summary: 'Diagnose config/provider/credential issues; --ping live reachability.',
+    body: [
+      'Run `kodax doctor` to print a health report: configured provider(s), credential/config',
+      'state, and storage directories. Add `kodax doctor --ping` to live-probe whether each',
+      'configured provider is reachable with the current key. This is the first stop for',
+      'connection / 401 / 429 / "provider not working" problems.',
+    ].join('\n'),
+    sources: [{ label: 'doctor CLI', path: 'src/kodax_doctor.ts' }],
+    nextTopics: ['troubleshooting', 'providers', 'config'],
+  },
+  {
+    id: 'sdk',
+    title: 'SDK',
+    aliases: ['embed', 'library', 'api', 'sdk入门', '嵌入'],
+    summary: 'The 4 packages and the minimal entry to run a task / query capabilities.',
+    body: [
+      'KodaX is 4 npm packages: @kodax-ai/llm (provider abstraction), @kodax-ai/agent (agent',
+      'framework + skills + mcp + tracing), @kodax-ai/coding (coding tools + prompts +',
+      'repo-intelligence), @kodax-ai/repl (interactive REPL).',
+      'Embed by importing @kodax-ai/coding to run a task, or @kodax-ai/llm for raw provider',
+      'calls. Capability queries (per-model context/limits, verifyCredential, discoverMarkdownAgents)',
+      'work without an API key for embedder UIs.',
+    ].join('\n'),
+    sources: [{ label: 'packages', path: 'packages/' }],
+    nextTopics: ['providers', 'agents', 'tools'],
+  },
+  {
+    id: 'troubleshooting',
+    title: 'Troubleshooting',
+    aliases: ['error', 'problem', '401', '429', 'fix', '排障', '报错', '问题'],
+    summary: 'First run kodax doctor; provider 401/429, network, Windows paths, Node/npm.',
+    body: [
+      'First: run `kodax doctor --ping` to localize the problem.',
+      '- 401 / unauthorized: key missing/invalid — check provider env var or config.json.',
+      '- 429 / rate limit: back off, or set KODAX_FALLBACK_PROVIDERS for cross-provider fallback.',
+      '- Network: corporate proxy / region blocks can fail provider endpoints.',
+      '- Windows: paths use forward slashes internally; case-insensitive workspace match is handled.',
+      '- Node/npm: ensure Node >= 18; reinstall the global package if the CLI is stale.',
+    ].join('\n'),
+    sources: [{ label: 'doctor CLI', path: 'src/kodax_doctor.ts' }],
+    nextTopics: ['doctor', 'providers', 'config'],
+  },
+];
+
+export const MANUAL_REGISTRY: Readonly<Record<KodaXManualTopicId, KodaXManualTopic>> =
+  Object.freeze(
+    Object.fromEntries(TOPICS.map((t) => [t.id, t])) as Record<KodaXManualTopicId, KodaXManualTopic>,
+  );
+
+/** Exposed for drift-guard tests (providers topic must cover every provider). */
+export const MANUAL_PROVIDER_NAMES = PROVIDER_NAMES;
