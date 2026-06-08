@@ -18,12 +18,19 @@ import {
 } from '@kodax-ai/coding';
 import type { KodaXToolDefinition } from '@kodax-ai/llm';
 
-const manualTool = getBuiltinToolDefinition('kodax_manual');
-if (!manualTool) {
-  throw new Error('FEATURE_218 eval: kodax_manual tool is not registered');
-}
+// Advertise a REALISTIC tool set (not just kodax_manual). A single-tool
+// environment confounds the anti-trigger measurement: a model asked to fix
+// code with only kodax_manual available grasps it for lack of a file tool.
+// With read/edit/grep present, a coding task routes to those, and calling
+// kodax_manual is a genuine over-trigger.
+const TOOL_NAMES = ['kodax_manual', 'read', 'edit', 'grep'] as const;
+const resolved: KodaXToolDefinition[] = TOOL_NAMES.map((n) => {
+  const def = getBuiltinToolDefinition(n);
+  if (!def) throw new Error(`FEATURE_218 eval: tool "${n}" is not registered`);
+  return def;
+});
 
-export const TOOLS: readonly KodaXToolDefinition[] = [manualTool];
+export const TOOLS: readonly KodaXToolDefinition[] = resolved;
 
 export const SYSTEM_PROMPT = [
   'You are KodaX, a multi-provider AI coding CLI. You have tools available.',
@@ -61,4 +68,12 @@ export function classifyToolCall(
   toolCalls: ReadonlyArray<{ name: string; input: unknown }>,
 ): boolean {
   return toolCalls.some((c) => c.name === 'kodax_manual');
+}
+
+/**
+ * Binding-based PASS: a product question should route to kodax_manual; a
+ * coding task should NOT (it should use read/edit/grep or answer in text).
+ */
+export function isAppropriateRouting(kind: Kind, calledManual: boolean): boolean {
+  return kind === 'product' ? calledManual : !calledManual;
 }

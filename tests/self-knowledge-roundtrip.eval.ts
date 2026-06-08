@@ -27,6 +27,7 @@ import { runOneShot } from '../benchmark/harness/harness.js';
 import {
   CASES,
   classifyToolCall,
+  isAppropriateRouting,
   SYSTEM_PROMPT,
   TOOLS,
 } from '../benchmark/datasets/feature-218-self-knowledge/cases.js';
@@ -59,8 +60,8 @@ describe(`Eval: FEATURE_218 self-knowledge roundtrip (${MODE})`, () => {
   it(
     `runs ${aliases.length} alias × ${CASES.length} case × ${RUNS} run`,
     async () => {
-      // perCase[id] = { product, called, total }
-      const perCase = new Map<string, { kind: string; called: number; total: number }>();
+      // perCase[id] = { kind, called (kodax_manual), ok (appropriate routing), total }
+      const perCase = new Map<string, { kind: string; called: number; ok: number; total: number }>();
 
       for (const alias of aliases) {
         for (const c of CASES) {
@@ -71,15 +72,18 @@ describe(`Eval: FEATURE_218 self-knowledge roundtrip (${MODE})`, () => {
               tools: TOOLS,
             });
             const calledManual = classifyToolCall(out.toolCalls);
+            const ok = isAppropriateRouting(c.kind, calledManual);
+            const toolNames = out.toolCalls.map((t) => t.name);
 
-            const agg = perCase.get(c.id) ?? { kind: c.kind, called: 0, total: 0 };
+            const agg = perCase.get(c.id) ?? { kind: c.kind, called: 0, ok: 0, total: 0 };
             agg.called += calledManual ? 1 : 0;
+            agg.ok += ok ? 1 : 0;
             agg.total += 1;
             perCase.set(c.id, agg);
 
             dump(
               `${alias.replace('/', '_')}.jsonl`,
-              JSON.stringify({ alias, case: c.id, kind: c.kind, run, calledManual, text: out.text.slice(0, 400) }),
+              JSON.stringify({ alias, case: c.id, kind: c.kind, run, calledManual, toolNames, text: out.text.slice(0, 400) }),
             );
           }
         }
@@ -90,9 +94,13 @@ describe(`Eval: FEATURE_218 self-knowledge roundtrip (${MODE})`, () => {
       console.log(`\n[FEATURE_218 ${MODE}] dump: ${DUMP_ROOT}`);
       for (const c of CASES) {
         const agg = perCase.get(c.id)!;
-        const pct = Math.round((agg.called / agg.total) * 100);
+        const calledPct = Math.round((agg.called / agg.total) * 100);
+        const okPct = Math.round((agg.ok / agg.total) * 100);
         // eslint-disable-next-line no-console
-        console.log(`  ${c.kind === 'product' ? 'PRODUCT' : 'coding '} ${c.id.padEnd(18)} kodax_manual ${pct}% (${agg.called}/${agg.total})`);
+        console.log(
+          `  ${c.kind === 'product' ? 'PRODUCT' : 'coding '} ${c.id.padEnd(18)}` +
+            ` called ${String(calledPct).padStart(3)}%  routing-OK ${String(okPct).padStart(3)}% (${agg.ok}/${agg.total})`,
+        );
       }
 
       // Data-validity assertion only — SHIP decision is read off the rates above.
