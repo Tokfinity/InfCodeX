@@ -1989,3 +1989,94 @@ describe("FEATURE_220 — finalized thinking collapse", () => {
     });
   });
 });
+
+describe("FEATURE_220 — tight-spacing run (consecutive thinking/tool_group)", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const TS = 1_000_000;
+  const thinking = (id: string): HistoryItem => ({ id, type: "thinking", text: `reason ${id}`, timestamp: TS });
+  const toolGroup = (id: string): HistoryItem => ({
+    id,
+    type: "tool_group",
+    tools: [{ id: `${id}-c`, name: "grep", status: ToolCallStatus.Success, startTime: TS, endTime: TS + 1, output: "ok" }],
+    timestamp: TS,
+  });
+  const assistant = (id: string): HistoryItem => ({ id, type: "assistant", text: `answer ${id}`, timestamp: TS });
+  const user = (id: string): HistoryItem => ({ id, type: "user", text: `q ${id}`, timestamp: TS });
+
+  const endsWithBlank = (section: { rows: { key: string; text: string }[] }): boolean => {
+    const last = section.rows[section.rows.length - 1];
+    return !!last && last.text === " " && last.key.endsWith("-blank");
+  };
+
+  it("drops the trailing blank between consecutive thinking and tool_group items", () => {
+    const items = [thinking("th"), toolGroup("tg"), assistant("a")];
+    const sections = buildHistoryItemTranscriptSections(items, 80);
+    // thinking is followed by tool_group (both run members) → blank suppressed
+    expect(endsWithBlank(sections[0]!)).toBe(false);
+    // tool_group is followed by assistant (not a run member) → keep blank
+    expect(endsWithBlank(sections[1]!)).toBe(true);
+  });
+
+  it("keeps the blank on the last member of a run, suppresses internal ones", () => {
+    const items = [thinking("th1"), thinking("th2"), assistant("a")];
+    const sections = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(sections[0]!)).toBe(false); // followed by thinking
+    expect(endsWithBlank(sections[1]!)).toBe(true); // followed by assistant
+  });
+
+  it("does not suppress when a tool_group is followed by a user turn", () => {
+    const items = [toolGroup("tg"), user("u")];
+    const sections = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(sections[0]!)).toBe(true);
+  });
+
+  it("does not suppress an assistant blank even when followed by thinking", () => {
+    const items = [assistant("a"), thinking("th")];
+    const sections = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(sections[0]!)).toBe(true);
+  });
+
+  it("restores all blanks when KODAX_TRANSCRIPT_TIGHT=0", () => {
+    vi.stubEnv("KODAX_TRANSCRIPT_TIGHT", "0");
+    const items = [thinking("th"), toolGroup("tg"), assistant("a")];
+    const sections = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(sections[0]!)).toBe(true);
+    expect(endsWithBlank(sections[1]!)).toBe(true);
+  });
+});
+
+describe("FEATURE_220 — tight-spacing cache invariant", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const TS = 1_000_000;
+  const thinking = (id: string): HistoryItem => ({ id, type: "thinking", text: `reason ${id}`, timestamp: TS });
+  const toolGroup = (id: string): HistoryItem => ({
+    id,
+    type: "tool_group",
+    tools: [{ id: `${id}-c`, name: "grep", status: ToolCallStatus.Success, startTime: TS, endTime: TS + 1, output: "ok" }],
+    timestamp: TS,
+  });
+  const assistant = (id: string): HistoryItem => ({ id, type: "assistant", text: `answer ${id}`, timestamp: TS });
+  const endsWithBlank = (section: { rows: { key: string; text: string }[] }): boolean => {
+    const last = section.rows[section.rows.length - 1];
+    return !!last && last.text === " " && last.key.endsWith("-blank");
+  };
+
+  it("applies suppression post-cache: same item objects give per-call results across tight on/off", () => {
+    // The per-item section cache stores UNSUPPRESSED sections; suppression is a
+    // post-cache pass. So reusing the same item references with the env flag
+    // toggled must still honour the current flag, not a cached suppressed result.
+    const items = [thinking("th"), toolGroup("tg"), assistant("a")];
+    const first = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(first[0]!)).toBe(false);
+
+    vi.stubEnv("KODAX_TRANSCRIPT_TIGHT", "0");
+    const second = buildHistoryItemTranscriptSections(items, 80);
+    expect(endsWithBlank(second[0]!)).toBe(true);
+  });
+});

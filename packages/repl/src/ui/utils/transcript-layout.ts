@@ -1032,6 +1032,55 @@ const _itemSectionCache = new WeakMap<
   { sig: string; section: TranscriptSection }
 >();
 
+/**
+ * FEATURE_220 (v0.7.47) — items whose blocks form a continuous "agent working"
+ * run. Within a maximal run of consecutive thinking/tool_group items, the blank
+ * spacer between members is dropped so the run reads as one block; the run's
+ * last member keeps its blank, separating it from the following assistant text /
+ * user turn. Set `KODAX_TRANSCRIPT_TIGHT=0` to restore per-item spacing.
+ */
+const TIGHT_RUN_ITEM_TYPES: ReadonlySet<HistoryItem["type"]> = new Set([
+  "thinking",
+  "tool_group",
+]);
+
+function isTightRunSpacingEnabled(): boolean {
+  return process.env.KODAX_TRANSCRIPT_TIGHT !== "0";
+}
+
+/**
+ * Drop the trailing blank row of each run-member section that is itself followed
+ * by another run member. Pure: returns new section objects only for the trimmed
+ * entries (immutability — the per-item cache keeps the untrimmed originals).
+ * Deterministic from item order, so inline scrollback fingerprints stay stable.
+ */
+function suppressTightRunBlanks(
+  items: readonly HistoryItem[],
+  sections: TranscriptSection[],
+): TranscriptSection[] {
+  if (!isTightRunSpacingEnabled()) {
+    return sections;
+  }
+  return sections.map((section, index) => {
+    const item = items[index];
+    const next = items[index + 1];
+    if (
+      !item ||
+      !next ||
+      !TIGHT_RUN_ITEM_TYPES.has(item.type) ||
+      !TIGHT_RUN_ITEM_TYPES.has(next.type)
+    ) {
+      return section;
+    }
+    const rows = section.rows;
+    const last = rows[rows.length - 1];
+    if (last && last.text === " " && last.key.endsWith("-blank")) {
+      return { ...section, rows: rows.slice(0, -1) };
+    }
+    return section;
+  });
+}
+
 export function buildHistoryItemTranscriptSections(
   items: HistoryItem[],
   viewportWidth: number,
@@ -1040,7 +1089,7 @@ export function buildHistoryItemTranscriptSections(
   expandedItemKeys?: ReadonlySet<string>,
   showAllContent = false,
 ): TranscriptSection[] {
-  return items.map((item) => {
+  const sections = items.map((item) => {
     const expanded = showDetailedTools || Boolean(expandedItemKeys?.has(item.id));
     // FEATURE_220: the thinking-collapse mode (KODAX_THINKING_COLLAPSE) changes
     // a thinking item's rendered rows, so it MUST be part of the cache key — else
@@ -1063,6 +1112,7 @@ export function buildHistoryItemTranscriptSections(
     _itemSectionCache.set(item, { sig, section });
     return section;
   });
+  return suppressTightRunBlanks(items, sections);
 }
 
 export function buildDynamicTranscriptSection(
