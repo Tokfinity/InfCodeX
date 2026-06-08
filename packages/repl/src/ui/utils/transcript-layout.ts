@@ -1004,8 +1004,9 @@ export function buildStaticTranscriptSections(
   maxLines = 1000,
   showDetailedTools = false,
   showAllContent = false,
+  showFullThinking = false,
 ): TranscriptSection[] {
-  return buildHistoryItemTranscriptSections(items, viewportWidth, maxLines, showDetailedTools, undefined, showAllContent);
+  return buildHistoryItemTranscriptSections(items, viewportWidth, maxLines, showDetailedTools, undefined, showAllContent, showFullThinking);
 }
 
 /**
@@ -1081,107 +1082,6 @@ function suppressTightRunBlanks(
   });
 }
 
-/**
- * FEATURE_220 (v0.7.47) — read-only tools whose consecutive calls are pure
- * context-gathering noise (mirrors Codex `ExecCell` exploring + opencode
- * `groupParts` CONTEXT_GROUP_TOOLS). A run of these collapses to one
- * "gathered context" summary so a read-heavy exploration phase does not bury
- * the transcript in one row per file. Mutating tools (edit/write/…) and any
- * errored call are never grouped — their detail must stay visible.
- *
- * Kept in sync with the canonical read-only set in the agent runtime
- * (`packages/coding/src/task-engine/runner-nudges.ts` `READ_TOOL_NAMES`); these
- * are the real KodaX tool names, so a name absent here just means less grouping
- * (safe), while a mutating tool must never appear here.
- */
-const READONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "read",
-  "grep",
-  "glob",
-  "code_search",
-  "semantic_lookup",
-]);
-
-/** The calls of `item` when it is a tool_group whose every call is a succeeded
- * read-only lookup; otherwise null (so it breaks a gathered-context run). */
-function readOnlyToolCalls(item: HistoryItem): readonly ToolCall[] | null {
-  if (item.type !== "tool_group" || item.tools.length === 0) {
-    return null;
-  }
-  const allReadOnly = item.tools.every(
-    (tool) =>
-      tool.status === ToolCallStatus.Success &&
-      READONLY_TOOL_NAMES.has(stripRolePrefix(tool.name).trim().toLowerCase()),
-  );
-  return allReadOnly ? item.tools : null;
-}
-
-function formatGatheredContextSummary(calls: readonly ToolCall[]): string {
-  const counts = new Map<string, number>();
-  for (const tool of calls) {
-    const name = stripRolePrefix(tool.name).trim().toLowerCase();
-    counts.set(name, (counts.get(name) ?? 0) + 1);
-  }
-  const parts = [...counts.entries()].map(([name, count]) => `${name} ×${count}`);
-  return `gathered context — ${parts.join(", ")}`;
-}
-
-/**
- * Replace each maximal run of ≥2 consecutive read-only tool_group sections with
- * a single "gathered context" summary section. Bypassed when the user asked for
- * detail (showDetailedTools / showAllContent) or expanded a specific item.
- * Deterministic from item order → inline scrollback fingerprints stay stable.
- */
-function groupReadOnlyToolRuns(
-  items: readonly HistoryItem[],
-  sections: TranscriptSection[],
-  viewportWidth: number,
-  disabled: boolean,
-  expandedItemKeys?: ReadonlySet<string>,
-): TranscriptSection[] {
-  if (disabled) {
-    return sections;
-  }
-  const groupable = (item: HistoryItem | undefined): readonly ToolCall[] | null => {
-    if (!item || expandedItemKeys?.has(item.id)) {
-      return null;
-    }
-    return readOnlyToolCalls(item);
-  };
-  const out: TranscriptSection[] = [];
-  let i = 0;
-  while (i < items.length) {
-    const calls = groupable(items[i]);
-    if (calls) {
-      const runCalls: ToolCall[] = [...calls];
-      let j = i;
-      for (let next = groupable(items[j + 1]); next; next = groupable(items[j + 1])) {
-        runCalls.push(...next);
-        j += 1;
-      }
-      if (j > i) {
-        const firstId = items[i]!.id;
-        const key = `${firstId}-gathered`;
-        const rows: TranscriptRow[] = [];
-        pushWrappedRows(
-          rows,
-          `${key}-summary`,
-          `✓ ${formatGatheredContextSummary(runCalls)}`,
-          viewportWidth,
-          { color: "success", itemId: firstId },
-        );
-        rows.push({ key: `${key}-blank`, text: " ", itemId: firstId });
-        out.push({ key, rows });
-        i = j + 1;
-        continue;
-      }
-    }
-    out.push(sections[i]!);
-    i += 1;
-  }
-  return out;
-}
-
 export function buildHistoryItemTranscriptSections(
   items: HistoryItem[],
   viewportWidth: number,
@@ -1189,13 +1089,15 @@ export function buildHistoryItemTranscriptSections(
   showDetailedTools = false,
   expandedItemKeys?: ReadonlySet<string>,
   showAllContent = false,
+  showFullThinking = false,
 ): TranscriptSection[] {
   const sections = items.map((item) => {
     const expanded = showDetailedTools || Boolean(expandedItemKeys?.has(item.id));
-    // FEATURE_220: the thinking-collapse mode (KODAX_THINKING_COLLAPSE) changes
-    // a thinking item's rendered rows, so it MUST be part of the cache key — else
-    // a toggle would serve stale sections for a reused item reference.
-    const sig = `${viewportWidth}|${maxLines}|${showAllContent ? 1 : 0}|${expanded ? 1 : 0}|${isThinkingCollapseEnabled() ? 1 : 0}`;
+    // FEATURE_220: the thinking-collapse mode (KODAX_THINKING_COLLAPSE) and the
+    // showFullThinking expand both change a thinking item's rendered rows, so
+    // they MUST be part of the cache key — else a toggle would serve stale
+    // sections for a reused item reference.
+    const sig = `${viewportWidth}|${maxLines}|${showAllContent ? 1 : 0}|${expanded ? 1 : 0}|${isThinkingCollapseEnabled() ? 1 : 0}|${showFullThinking ? 1 : 0}`;
     const cached = _itemSectionCache.get(item);
     if (cached !== undefined && cached.sig === sig) {
       return cached.section;
@@ -1208,19 +1110,13 @@ export function buildHistoryItemTranscriptSections(
         maxLines,
         showAllContent,
         showDetailedTools: expanded,
+        showFullThinking,
       }),
     };
     _itemSectionCache.set(item, { sig, section });
     return section;
   });
-  const tightened = suppressTightRunBlanks(items, sections);
-  return groupReadOnlyToolRuns(
-    items,
-    tightened,
-    viewportWidth,
-    showDetailedTools || showAllContent,
-    expandedItemKeys,
-  );
+  return suppressTightRunBlanks(items, sections);
 }
 
 export function buildDynamicTranscriptSection(
@@ -1263,6 +1159,7 @@ export interface TranscriptStaticBuildOptions {
   maxLines?: number;
   showDetailedTools?: boolean;
   showAllContent?: boolean;
+  showFullThinking?: boolean;
   windowed?: boolean;
 }
 
@@ -1280,6 +1177,7 @@ export function buildTranscriptStaticPortion(
     maxLines = 1000,
     showDetailedTools = false,
     showAllContent = false,
+    showFullThinking = false,
     windowed = false,
   } = options;
 
@@ -1298,6 +1196,7 @@ export function buildTranscriptStaticPortion(
     maxLines,
     showDetailedTools,
     showAllContent,
+    showFullThinking,
   );
   return { staticSections, activeItems };
 }
@@ -1324,6 +1223,7 @@ export function buildTranscriptDynamicPortion(
     maxLines = 1000,
     showDetailedTools = false,
     showAllContent = false,
+    showFullThinking = false,
     expandedItemKeys,
     ...dynamicOptions
   } = options;
@@ -1335,6 +1235,7 @@ export function buildTranscriptDynamicPortion(
     showDetailedTools,
     expandedItemKeys,
     showAllContent,
+    showFullThinking,
   );
   const pendingSection = buildDynamicTranscriptSection("active-pending", {
     ...dynamicOptions,
@@ -1510,6 +1411,7 @@ export function buildTranscriptRenderModel(
     maxLines: options.maxLines,
     showDetailedTools: options.showDetailedTools,
     showAllContent: options.showAllContent,
+    showFullThinking: options.showFullThinking,
     windowed: options.windowed,
   });
   const { items: _items, ...rest } = options;

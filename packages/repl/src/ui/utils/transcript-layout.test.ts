@@ -11,6 +11,7 @@ import {
   buildTranscriptRenderModel,
   buildTranscriptRows,
   buildStaticTranscriptSections,
+  buildTranscriptStaticPortion,
   splitInlineLedgerModel,
   identifyInlineCommitSection,
   capHistoryByTranscriptRows,
@@ -2081,85 +2082,42 @@ describe("FEATURE_220 — tight-spacing cache invariant", () => {
   });
 });
 
-describe("FEATURE_220 — consecutive read-only tool grouping", () => {
+describe("FEATURE_220 — finalized thinking expand reaches the section render path", () => {
   const TS = 1_000_000;
-  const call = (name: string, status = ToolCallStatus.Success) => ({
-    id: `${name}-${Math.round(status.length)}-c`,
-    name,
-    status,
-    startTime: TS,
-    endTime: TS + 1,
-    output: "ok",
-  });
-  const toolGroup = (id: string, calls: ReturnType<typeof call>[]): HistoryItem => ({
+  const multiThinking = (id: string): HistoryItem => ({
     id,
-    type: "tool_group",
-    tools: calls,
+    type: "thinking",
+    text: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n"),
     timestamp: TS,
   });
-  const readTG = (id: string, name = "read"): HistoryItem => toolGroup(id, [call(name)]);
-  const assistant = (id: string): HistoryItem => ({ id, type: "assistant", text: `answer ${id}`, timestamp: TS });
-  const sectionText = (s: { rows: { text: string }[] }): string => s.rows.map((r) => r.text).join("\n");
+  const flat = (sections: { rows: { text: string }[] }[]): string =>
+    sections.flatMap((s) => s.rows.map((r) => r.text)).join("\n");
 
-  it("merges a run of consecutive read-only tool_groups into one gathered-context summary", () => {
-    const items = [readTG("t1", "read"), toolGroup("t2", [call("grep")]), assistant("a")];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    // 2 tool_groups merged into 1 + assistant = 2 sections
-    expect(sections).toHaveLength(2);
-    const summary = sectionText(sections[0]!);
-    expect(summary.toLowerCase()).toContain("gathered context");
-    expect(summary).toContain("read");
-    expect(summary).toContain("grep");
+  it("collapses by default through buildHistoryItemTranscriptSections", () => {
+    const sections = buildHistoryItemTranscriptSections([multiThinking("th")], 80);
+    const text = flat(sections);
+    expect(text).toContain("Ctrl+O to expand");
+    expect(text).not.toContain("line 20");
   });
 
-  it("aggregates call counts across the run", () => {
-    const items = [toolGroup("t1", [call("read"), call("read")]), readTG("t2", "read")];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    expect(sections).toHaveLength(1);
-    expect(sectionText(sections[0]!)).toContain("read ×3");
+  it("expands fully when showFullThinking is threaded through (Ctrl+O / transcript mode)", () => {
+    // (items, viewportWidth, maxLines, showDetailedTools, expandedItemKeys, showAllContent, showFullThinking)
+    const sections = buildHistoryItemTranscriptSections([multiThinking("th")], 80, 1000, false, undefined, false, true);
+    const text = flat(sections);
+    expect(text).toContain("line 20");
+    expect(text).not.toContain("Ctrl+O to expand");
   });
 
-  it("does not merge a single read-only tool_group", () => {
-    const items = [readTG("t1", "read"), assistant("a")];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    expect(sections).toHaveLength(2);
-    expect(sectionText(sections[0]!).toLowerCase()).not.toContain("gathered context");
-  });
-
-  it("breaks the run on a non-read-only (mutation) tool_group", () => {
-    const items = [readTG("t1", "read"), toolGroup("t2", [call("write")]), readTG("t3", "grep")];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    // none merged: read(single) + write + grep(single) = 3 sections
-    expect(sections).toHaveLength(3);
-  });
-
-  it("does not collapse a read-only group that contains an errored call", () => {
-    const items = [readTG("t1", "read"), toolGroup("t2", [call("grep", ToolCallStatus.Error)])];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    expect(sections).toHaveLength(2);
-    expect(sectionText(sections[0]!).toLowerCase()).not.toContain("gathered context");
-  });
-
-  it("does not group when showDetailedTools is on (detail escape)", () => {
-    const items = [readTG("t1", "read"), readTG("t2", "grep")];
-    const sections = buildHistoryItemTranscriptSections(items, 80, 1000, true);
-    expect(sections).toHaveLength(2);
-  });
-});
-
-describe("FEATURE_220 — read-only set matches canonical KodaX tools", () => {
-  const TS = 1_000_000;
-  const call = (name: string) => ({ id: `${name}-c`, name, status: ToolCallStatus.Success, startTime: TS, endTime: TS + 1, output: "ok" });
-  const tg = (id: string, name: string): HistoryItem => ({ id, type: "tool_group", tools: [call(name)], timestamp: TS });
-  const sectionText = (s: { rows: { text: string }[] }): string => s.rows.map((r) => r.text).join("\n");
-
-  it("groups code_search + semantic_lookup runs (canonical READ_TOOL_NAMES parity)", () => {
-    const items = [tg("t1", "code_search"), tg("t2", "semantic_lookup")];
-    const sections = buildHistoryItemTranscriptSections(items, 80);
-    expect(sections).toHaveLength(1);
-    const text = sectionText(sections[0]!);
-    expect(text).toContain("code_search ×1");
-    expect(text).toContain("semantic_lookup ×1");
+  it("transcript static portion expands finalized thinking (showFullThinking wired end-to-end)", () => {
+    const portion = buildTranscriptStaticPortion({
+      items: [multiThinking("th"), { id: "u", type: "user", text: "next", timestamp: TS }],
+      viewportWidth: 80,
+      maxLines: 1000,
+      showFullThinking: true,
+    });
+    const text = flat(portion.staticSections);
+    expect(text).toContain("line 20");
+    expect(text).not.toContain("Ctrl+O to expand");
   });
 });
 

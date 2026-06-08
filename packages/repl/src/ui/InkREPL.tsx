@@ -2783,6 +2783,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       maxLines: transcriptMaxLines,
       showDetailedTools: showAllInTranscript,
       showAllContent: showAllInTranscript,
+      // FEATURE_220: transcript mode (Ctrl+O) always expands finalized thinking
+      // — matches the dynamic portion's showFullThinking and honours the
+      // collapsed-thinking "Ctrl+O to expand" affordance.
+      showFullThinking: true,
       windowed: false,
     }),
     [transcriptDisplayItems, terminalWidth, transcriptMaxLines, showAllInTranscript],
