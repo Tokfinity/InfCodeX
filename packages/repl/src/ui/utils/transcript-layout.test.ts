@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolCallStatus, type HistoryItem } from "../types.js";
 import { computeInlineLedgerStep } from "./inline-ledger-controller.js";
-import { EMPTY_INLINE_SCROLLBACK_STATE } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
+import { EMPTY_INLINE_SCROLLBACK_STATE, planInlineScrollback } from "../../tui/substrate/ink/inline-scrollback-ledger.js";
 import {
   buildCollapsedThinkingLine,
   buildDynamicTranscriptSection,
@@ -2160,5 +2160,86 @@ describe("FEATURE_220 — read-only set matches canonical KodaX tools", () => {
     const text = sectionText(sections[0]!);
     expect(text).toContain("code_search ×1");
     expect(text).toContain("semantic_lookup ×1");
+  });
+});
+
+describe("FEATURE_220 — inline scrollback stability (keystone regression)", () => {
+  const TS = 1_000_000;
+  const user = (id: string): HistoryItem => ({ id, type: "user", text: `q ${id}`, timestamp: TS });
+  const assistant = (id: string): HistoryItem => ({ id, type: "assistant", text: `answer ${id}`, timestamp: TS });
+  const thinking = (id: string): HistoryItem => ({
+    id,
+    type: "thinking",
+    text: Array.from({ length: 12 }, (_, i) => `reason ${id} line ${i + 1}`).join("\n"),
+    timestamp: TS,
+  });
+  const readCall = (name: string, i: number) => ({
+    id: `${name}-${i}-c`,
+    name,
+    status: ToolCallStatus.Success,
+    startTime: TS,
+    endTime: TS + 1,
+    output: "ok",
+  });
+  const readGroup = (id: string, name: string): HistoryItem => ({
+    id,
+    type: "tool_group",
+    tools: [readCall(name, 1)],
+    timestamp: TS,
+  });
+
+  // A realistic round exercising all three transforms: collapsed thinking,
+  // tight-spaced think->tool, and a gathered-context read-only run.
+  const round = (n: number): HistoryItem[] => [
+    user(`u${n}`),
+    thinking(`th${n}`),
+    readGroup(`r${n}a`, "read"),
+    readGroup(`r${n}b`, "grep"),
+    assistant(`a${n}`),
+  ];
+
+  // Finalize a full items array into positional committed sections, exactly as
+  // the inline prompt path does (all finalized, nothing live).
+  const committedOf = (items: HistoryItem[]) =>
+    splitInlineLedgerModel(buildHistoryItemTranscriptSections(items, 80), [], [], 4096).committedSections;
+
+  const plan = (
+    items: HistoryItem[],
+    prior: Parameters<typeof planInlineScrollback>[2],
+  ) =>
+    planInlineScrollback(
+      { bannerSection: null, finalizedSections: committedOf(items), width: 80 },
+      identifyInlineCommitSection,
+      prior,
+    );
+
+  it("identical frames re-commit nothing (no rebuild churn) for collapsed/tight/gathered content", () => {
+    const items = round(1);
+    const first = plan(items, EMPTY_INLINE_SCROLLBACK_STATE);
+    expect(first.plan.kind).toBe("append"); // initial commit
+    const second = plan(items, first.nextState);
+    expect(second.plan.kind).toBe("none"); // stable fingerprints → nothing to do
+  });
+
+  it("appending a new round APPENDS the new tail, never rebuilds the committed prefix", () => {
+    const r1 = round(1);
+    const firstCommit = plan(r1, EMPTY_INLINE_SCROLLBACK_STATE);
+    const r1r2 = [...round(1), ...round(2)];
+    const next = plan(r1r2, firstCommit.nextState);
+    expect(next.plan.kind).toBe("append");
+    if (next.plan.kind !== "append") throw new Error("expected append");
+    // the appended rows must all belong to round 2 (round 1's prefix untouched)
+    const appendedText = next.plan.sections
+      .flatMap((s) => s.rows.map((r) => r.text))
+      .join("\n");
+    expect(appendedText).toContain("answer a2");
+    expect(appendedText).not.toContain("answer a1");
+  });
+
+  it("renders identically across distinct equal item arrays (no time/streaming state)", () => {
+    const flatten = (items: HistoryItem[]) =>
+      committedOf(items).flatMap((s) => s.rows.map((r) => `${r.key}:${r.text}`));
+    // distinct object identities, equal content → bypasses the per-item ref cache
+    expect(flatten(round(1))).toEqual(flatten(round(1)));
   });
 });
