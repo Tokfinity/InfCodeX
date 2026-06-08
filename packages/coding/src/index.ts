@@ -1115,6 +1115,7 @@ export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
 // kodax_manual tool and the REPL `/help <topic>` path.
 export { resolveKodaXManual } from './self-knowledge/resolver.js';
 export { MANUAL_TOPIC_IDS } from './self-knowledge/registry.js';
+export { SELF_KNOWLEDGE_ROUTING_RULE } from './self-knowledge/routing-rule.js';
 export type {
   KodaXManualTopicId,
   ResolveKodaXManualInput,
