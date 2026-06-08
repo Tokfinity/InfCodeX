@@ -103,4 +103,26 @@ describe('help command output', () => {
     expect(output).toContain('Workspace unchanged');
     expect(output).toContain('feature/runtime-docs');
   });
+
+  it('FEATURE_218: /help <manual-topic> falls through to the self-knowledge manual', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const helpCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'help');
+
+    await helpCommand!.handler(['providers'], {} as never, {} as never, {} as never);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('Providers & models');
+    expect(output).not.toContain('Unknown command');
+  });
+
+  it('FEATURE_218: /help <unknown> shows the manual index, not an error', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const helpCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'help');
+
+    await helpCommand!.handler(['totally-unknown-xyz'], {} as never, {} as never, {} as never);
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(output).toContain('KodaX Manual — Index');
+    expect(output).not.toContain('Unknown command');
+  });
 });

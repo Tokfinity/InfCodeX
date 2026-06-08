@@ -24,6 +24,7 @@ import {
   warmRepoIntelligenceRuntime,
   CODING_SUMMARY_PROMPT,
   CODING_UPDATE_SUMMARY_PROMPT,
+  resolveKodaXManual,
 } from '@kodax-ai/coding';
 import type { AgentsFile } from '@kodax-ai/coding';
 import {
@@ -129,8 +130,21 @@ export const BUILTIN_COMMANDS: Command[] = [
     usage: '/help [command]',
     handler: async (args) => {
       if (args.length > 0) {
-        // Show detailed help for a specific command.
-        printDetailedHelp(args[0]!);
+        const name = args[0]!;
+        if (commandRegistry.size === 0) {
+          initCommandRegistry();
+        }
+        const isKnownCommand =
+          commandRegistry.has(name.toLowerCase()) || Boolean(getActiveExtensionCommand(name));
+        if (isKnownCommand) {
+          // Show detailed help for a specific command.
+          printDetailedHelp(name);
+        } else {
+          // FEATURE_218 — fall through to the KodaX self-knowledge manual for
+          // product topics (/help providers, /help config, ...). Unknown topics
+          // return the manual index, not an "unknown command" error.
+          printManualTopic(name);
+        }
       } else {
         printHelp();
       }
@@ -2133,6 +2147,21 @@ function printHelp(): void {
 }
 
 // Print detailed help for a specific command.
+/**
+ * FEATURE_218 — render a KodaX self-knowledge manual topic in the REPL,
+ * reusing the same bounded resolver the `kodax_manual` tool uses. Unknown
+ * topics resolve to the manual index instead of erroring.
+ */
+function printManualTopic(topic: string): void {
+  const result = resolveKodaXManual({ topic });
+  console.log(`\n${chalk.cyan(result.title)}`);
+  console.log(result.content);
+  if (result.nextTopics.length > 0) {
+    console.log(chalk.dim(`\nRelated topics: ${result.nextTopics.join(', ')}`));
+  }
+  console.log();
+}
+
 function printDetailedHelp(commandName: string): void {
   // Lazy initialization.
   if (commandRegistry.size === 0) {

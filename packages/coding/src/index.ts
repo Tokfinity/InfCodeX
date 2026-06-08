@@ -1110,3 +1110,13 @@ export type {
 // FEATURE_209 (v0.7.45): tracing activation in production.
 export { bootstrapTracing, TRACING_ENV } from './runtime/tracing-bootstrap.js';
 export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
+
+// FEATURE_218 (v0.7.47): self-knowledge manual — resolver reused by the
+// kodax_manual tool and the REPL `/help <topic>` path.
+export { resolveKodaXManual } from './self-knowledge/resolver.js';
+export { MANUAL_TOPIC_IDS } from './self-knowledge/registry.js';
+export type {
+  KodaXManualTopicId,
+  ResolveKodaXManualInput,
+  ResolveKodaXManualResult,
+} from './self-knowledge/types.js';
