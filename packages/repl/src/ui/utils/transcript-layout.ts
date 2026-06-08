@@ -1081,6 +1081,107 @@ function suppressTightRunBlanks(
   });
 }
 
+/**
+ * FEATURE_220 (v0.7.47) — read-only tools whose consecutive calls are pure
+ * context-gathering noise (mirrors Codex `ExecCell` exploring + opencode
+ * `groupParts` CONTEXT_GROUP_TOOLS). A run of these collapses to one
+ * "gathered context" summary so a read-heavy exploration phase does not bury
+ * the transcript in one row per file. Mutating tools (edit/write/…) and any
+ * errored call are never grouped — their detail must stay visible.
+ *
+ * Kept in sync with the canonical read-only set in the agent runtime
+ * (`packages/coding/src/task-engine/runner-nudges.ts` `READ_TOOL_NAMES`); these
+ * are the real KodaX tool names, so a name absent here just means less grouping
+ * (safe), while a mutating tool must never appear here.
+ */
+const READONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "read",
+  "grep",
+  "glob",
+  "code_search",
+  "semantic_lookup",
+]);
+
+/** The calls of `item` when it is a tool_group whose every call is a succeeded
+ * read-only lookup; otherwise null (so it breaks a gathered-context run). */
+function readOnlyToolCalls(item: HistoryItem): readonly ToolCall[] | null {
+  if (item.type !== "tool_group" || item.tools.length === 0) {
+    return null;
+  }
+  const allReadOnly = item.tools.every(
+    (tool) =>
+      tool.status === ToolCallStatus.Success &&
+      READONLY_TOOL_NAMES.has(stripRolePrefix(tool.name).trim().toLowerCase()),
+  );
+  return allReadOnly ? item.tools : null;
+}
+
+function formatGatheredContextSummary(calls: readonly ToolCall[]): string {
+  const counts = new Map<string, number>();
+  for (const tool of calls) {
+    const name = stripRolePrefix(tool.name).trim().toLowerCase();
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  const parts = [...counts.entries()].map(([name, count]) => `${name} ×${count}`);
+  return `gathered context — ${parts.join(", ")}`;
+}
+
+/**
+ * Replace each maximal run of ≥2 consecutive read-only tool_group sections with
+ * a single "gathered context" summary section. Bypassed when the user asked for
+ * detail (showDetailedTools / showAllContent) or expanded a specific item.
+ * Deterministic from item order → inline scrollback fingerprints stay stable.
+ */
+function groupReadOnlyToolRuns(
+  items: readonly HistoryItem[],
+  sections: TranscriptSection[],
+  viewportWidth: number,
+  disabled: boolean,
+  expandedItemKeys?: ReadonlySet<string>,
+): TranscriptSection[] {
+  if (disabled) {
+    return sections;
+  }
+  const groupable = (item: HistoryItem | undefined): readonly ToolCall[] | null => {
+    if (!item || expandedItemKeys?.has(item.id)) {
+      return null;
+    }
+    return readOnlyToolCalls(item);
+  };
+  const out: TranscriptSection[] = [];
+  let i = 0;
+  while (i < items.length) {
+    const calls = groupable(items[i]);
+    if (calls) {
+      const runCalls: ToolCall[] = [...calls];
+      let j = i;
+      for (let next = groupable(items[j + 1]); next; next = groupable(items[j + 1])) {
+        runCalls.push(...next);
+        j += 1;
+      }
+      if (j > i) {
+        const firstId = items[i]!.id;
+        const key = `${firstId}-gathered`;
+        const rows: TranscriptRow[] = [];
+        pushWrappedRows(
+          rows,
+          `${key}-summary`,
+          `✓ ${formatGatheredContextSummary(runCalls)}`,
+          viewportWidth,
+          { color: "success", itemId: firstId },
+        );
+        rows.push({ key: `${key}-blank`, text: " ", itemId: firstId });
+        out.push({ key, rows });
+        i = j + 1;
+        continue;
+      }
+    }
+    out.push(sections[i]!);
+    i += 1;
+  }
+  return out;
+}
+
 export function buildHistoryItemTranscriptSections(
   items: HistoryItem[],
   viewportWidth: number,
@@ -1112,7 +1213,14 @@ export function buildHistoryItemTranscriptSections(
     _itemSectionCache.set(item, { sig, section });
     return section;
   });
-  return suppressTightRunBlanks(items, sections);
+  const tightened = suppressTightRunBlanks(items, sections);
+  return groupReadOnlyToolRuns(
+    items,
+    tightened,
+    viewportWidth,
+    showDetailedTools || showAllContent,
+    expandedItemKeys,
+  );
 }
 
 export function buildDynamicTranscriptSection(
