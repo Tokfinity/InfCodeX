@@ -57,6 +57,7 @@ import type { KodaXOptions } from '../types.js';
 import { buildMemoryRulesSection } from './memory-rules.js';
 import { buildMemorySection } from './memory-section.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
+import { SELF_KNOWLEDGE_ROUTING_RULE } from '../self-knowledge/routing-rule.js';
 import { SYSTEM_PROMPT } from './system.js';
 import {
   TOOL_CONSTRUCTION_PROMPT,
@@ -197,6 +198,18 @@ export async function buildCapabilityContextSections(
       ),
     );
   }
+
+  // FEATURE_218 — always route KodaX product/usage/config questions to the
+  // kodax_manual tool instead of pretraining (which mixes in Claude Code /
+  // Codex CLI knowledge). Bounded routing rule only; the manual content is
+  // read on demand via the tool, never injected here (keeps prompt cache stable).
+  sections.push(
+    createPromptSection(
+      'self-knowledge-routing',
+      SELF_KNOWLEDGE_ROUTING_RULE,
+      'Route KodaX usage/config/troubleshooting questions to the kodax_manual tool as the version-bound product source of truth.',
+    ),
+  );
 
   if (options.context?.promptOverlay?.trim()) {
     sections.push(

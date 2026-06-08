@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest';
+
+import type { KodaXToolExecutionContext } from '../types.js';
+import { toolKodaxManual } from './manual.js';
+import { getBuiltinToolDefinition, isToolMutation } from './registry.js';
+
+const ctx = {} as KodaXToolExecutionContext;
+
+describe('FEATURE_218 kodax_manual tool', () => {
+  it('is registered and read-only (not a mutation)', () => {
+    const def = getBuiltinToolDefinition('kodax_manual');
+    expect(def).toBeDefined();
+    expect(def?.name).toBe('kodax_manual');
+    expect(isToolMutation('kodax_manual')).toBe(false);
+  });
+
+  it('description disambiguates KodaX from Claude Code / Codex', () => {
+    const def = getBuiltinToolDefinition('kodax_manual');
+    expect(def?.description).toContain('~/.kodax/config.json');
+    expect(def?.description?.toLowerCase()).toContain('codex');
+  });
+
+  it('returns a topic answer with title + content + related topics', async () => {
+    const out = await toolKodaxManual({ topic: 'providers' }, ctx);
+    expect(out).toContain('# Providers & models');
+    expect(out.toLowerCase()).toContain('provider');
+    expect(out).toContain('Related topics');
+  });
+
+  it('returns the index for empty input (never fabricates)', async () => {
+    const out = await toolKodaxManual({}, ctx);
+    expect(out).toContain('KodaX Manual — Index');
+    expect(out).toContain('troubleshooting');
+  });
+
+  it('ignores non-string topic/query without throwing', async () => {
+    const out = await toolKodaxManual({ topic: 42, query: null }, ctx);
+    expect(out).toContain('KodaX Manual — Index');
+  });
+});

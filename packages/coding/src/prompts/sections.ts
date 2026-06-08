@@ -159,6 +159,15 @@ export const PROMPT_SECTION_REGISTRY: Record<string, KodaXPromptSectionDefinitio
     order: 300,
     stability: 'dynamic',
   },
+  'self-knowledge-routing': {
+    id: 'self-knowledge-routing',
+    title: 'KodaX Self-Knowledge',
+    owner: 'prompts',
+    feature: 'FEATURE_218',
+    slot: 'capability-truth',
+    order: 350,
+    stability: 'stable',
+  },
   'long-running-overlay': {
     id: 'long-running-overlay',
     title: 'Long-Running Overlay',

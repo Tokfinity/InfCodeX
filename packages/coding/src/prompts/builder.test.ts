@@ -135,6 +135,13 @@ describe('buildSystemPrompt', () => {
           "stability": "dynamic",
         },
         {
+          "feature": "FEATURE_218",
+          "id": "self-knowledge-routing",
+          "owner": "prompts",
+          "slot": "capability-truth",
+          "stability": "stable",
+        },
+        {
           "feature": "FEATURE_048",
           "id": "prompt-overlay",
           "owner": "reasoning",

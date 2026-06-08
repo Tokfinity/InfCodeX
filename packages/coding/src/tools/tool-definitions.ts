@@ -12,6 +12,7 @@ import {
   mcpToClassifierInput,
 } from './classifier-projection.js';
 import { toolRead } from './read.js';
+import { toolKodaxManual } from './manual.js';
 import { toolSkill } from './skill.js';
 import { toolWrite } from './write.js';
 import { toolEdit } from './edit.js';
@@ -113,6 +114,33 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       required: ['path'],
     },
     handler: toolRead,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'kodax_manual',
+    description: [
+      'Look up how to use, install, configure, troubleshoot, or extend KodaX itself.',
+      'Covers providers, custom providers, config, permissions, slash commands, tools, custom agents, skills, MCP, repo intelligence, sessions, the doctor command, and the SDK.',
+      'Call this first for any "how do I … in KodaX" question and answer from its result.',
+      'Do not answer KodaX product questions from pretraining, because pretraining mixes in Claude Code and Codex CLI details that do not match KodaX — KodaX uses ~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or config.toml.',
+      'Pass an exact topic id, or a free-text query, or neither to get the topic index. It explains where to check a value rather than reading your secrets.',
+    ].join('\n'),
+    input_schema: {
+      type: 'object',
+      properties: {
+        topic: {
+          type: 'string',
+          description: 'A manual topic id (e.g. "providers", "config", "agents", "doctor"). Unknown topics return the index.',
+        },
+        query: {
+          type: 'string',
+          description: 'A free-text question when you do not know the topic id (English or Chinese).',
+        },
+      },
+      required: [],
+    },
+    handler: toolKodaxManual,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },
