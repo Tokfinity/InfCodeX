@@ -3,6 +3,7 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { LSP_SERVERS, serversForLanguage } from './servers.js';
 import { runInstallCommand } from './acquirer.js';
+import { LANGUAGE_EXTENSIONS } from './language.js';
 
 describe('LSP server registry', () => {
   it('registers all five languages', () => {
@@ -46,6 +47,17 @@ describe('LSP server registry', () => {
   it('only gopls exposes an opt-in acquire (the Go-toolchain cheap acquirer)', () => {
     const withAcquire = LSP_SERVERS.filter((s) => typeof s.acquire === 'function').map((s) => s.id);
     expect(withAcquire).toEqual(['gopls']);
+  });
+
+  it('drift guard: every server languageId is reachable from the extension map', () => {
+    // If a server serves a languageId no extension maps to, it can never be
+    // triggered by an edit — catch that mismatch here.
+    const mappedLanguageIds = new Set(Object.values(LANGUAGE_EXTENSIONS));
+    for (const server of LSP_SERVERS) {
+      for (const languageId of server.languageIds) {
+        expect(mappedLanguageIds.has(languageId), `${server.id} serves unmapped languageId "${languageId}"`).toBe(true);
+      }
+    }
   });
 });
 
