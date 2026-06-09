@@ -111,12 +111,7 @@
       "model": "MiniMax-M2.7",
       "models": [
         { "id": "MiniMax-M3", "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)", "contextWindow": 1000000 },
-        { "id": "MiniMax-M2.7-highspeed", "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)" },
-        { "id": "MiniMax-M2.5", "displayName": "MiniMax M2.5" },
-        { "id": "MiniMax-M2.5-highspeed", "displayName": "MiniMax M2.5 Highspeed (higher-tier plan)" },
-        { "id": "MiniMax-M2.1", "displayName": "MiniMax M2.1" },
-        { "id": "MiniMax-M2.1-highspeed", "displayName": "MiniMax M2.1 Highspeed (higher-tier plan)" },
-        { "id": "MiniMax-M2", "displayName": "MiniMax M2" }
+        { "id": "MiniMax-M2.7-highspeed", "displayName": "MiniMax M2.7 Highspeed (higher-tier plan)" }
       ],
       "reasoningCapability": "native-budget",
       "capabilityProfile": "image-input-native",

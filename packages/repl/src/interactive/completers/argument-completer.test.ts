@@ -198,7 +198,9 @@ describe('ArgumentCompleter', () => {
         const modelNames = completions.map(c => c.display.replace('minimax-coding/', ''));
         expect(modelNames).toContain('MiniMax-M2.7');
         expect(modelNames).toContain('MiniMax-M2.7-highspeed');
-        expect(modelNames).toContain('MiniMax-M2.5');
+        // 2026-06: M2.5 family retired upstream; M3 Frontier Coding
+        // promoted into the completer surface in its place.
+        expect(modelNames).toContain('MiniMax-M3');
       });
 
       it('should expose the default CLI bridge model for codex-cli two-stage completion', async () => {

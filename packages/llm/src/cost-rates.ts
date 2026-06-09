@@ -56,14 +56,13 @@ export const DEFAULT_COST_RATES: Readonly<Record<string, Readonly<Record<string,
     'glm-5-turbo': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'minimax-coding': {
+    // 2026-06: official MiniMax Coding Plan endpoint retired the
+    // M2.x family (M2.5 / M2.1 / M2 + their -highspeed variants).
+    // Only M2.7 / M2.7-highspeed (legacy GA) and M3 (Frontier
+    // Coding) remain on the gateway.
     'MiniMax-M3': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'MiniMax-M2.7': { inputPer1M: 0.01, outputPer1M: 0.03 },
     'MiniMax-M2.7-highspeed': { inputPer1M: 0.01, outputPer1M: 0.03 },
-    'MiniMax-M2.5': { inputPer1M: 0.01, outputPer1M: 0.03 },
-    'MiniMax-M2.5-highspeed': { inputPer1M: 0.01, outputPer1M: 0.03 },
-    'MiniMax-M2.1': { inputPer1M: 0.01, outputPer1M: 0.03 },
-    'MiniMax-M2.1-highspeed': { inputPer1M: 0.01, outputPer1M: 0.03 },
-    'MiniMax-M2': { inputPer1M: 0.01, outputPer1M: 0.03 },
   },
   'mimo-coding': {
     // MiMo Token Plan is a flat-rate subscription — per-token rates here are
