@@ -1246,6 +1246,10 @@ export function buildTranscriptDynamicPortion(
     maxLines,
     showAllContent,
     showDetailedTools,
+    // FEATURE_220 P1 closure: the live streaming thinking (thinkingContent) also
+    // honours showFullThinking, so transcript mode (Ctrl+O) expands the in-flight
+    // reasoning too, not just the finalized history sections.
+    showFullThinking,
     expandedItemKeys,
   });
   const previewSections = pendingSection.rows.length > 0

@@ -12,6 +12,7 @@ import {
   buildTranscriptRows,
   buildStaticTranscriptSections,
   buildTranscriptStaticPortion,
+  buildTranscriptDynamicPortion,
   splitInlineLedgerModel,
   identifyInlineCommitSection,
   capHistoryByTranscriptRows,
@@ -2118,6 +2119,29 @@ describe("FEATURE_220 — finalized thinking expand reaches the section render p
     const text = flat(portion.staticSections);
     expect(text).toContain("line 20");
     expect(text).not.toContain("Ctrl+O to expand");
+  });
+
+  it("dynamic portion's LIVE pending thinking honours showFullThinking (P1 closure)", () => {
+    const longThinking = "Z".repeat(450);
+    const previewText = (showFullThinking: boolean): string => {
+      const { previewSections } = buildTranscriptDynamicPortion({
+        activeItems: [],
+        viewportWidth: 80,
+        maxLines: 1000,
+        isLoading: true,
+        isThinking: true,
+        thinkingContent: longThinking,
+        thinkingCharCount: longThinking.length,
+        showFullThinking,
+      });
+      return flat(previewSections);
+    };
+    // compact (inline) → truncated preview
+    expect(previewText(false)).toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
+    // transcript mode (showFullThinking) → full live reasoning, no truncation hint
+    const full = previewText(true).replace(/\n/g, "");
+    expect(full).toContain("Z".repeat(430));
+    expect(previewText(true)).not.toContain("thinking truncated; press Ctrl+O to inspect full reasoning");
   });
 });
 
