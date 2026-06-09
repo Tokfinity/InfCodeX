@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 > Full history for versions prior to v0.7.0: [CHANGELOG_ARCHIVE.md](docs/CHANGELOG_ARCHIVE.md)
 
+## [0.7.47] - Unreleased
+
+### Added
+
+- **FEATURE_221 — Injectable self-manual for SDK consumers (`selfManual`).** Products built on the KodaX SDK (e.g. KodaX-Space) can now inject their **own** product manual so the built-in `kodax_manual` tool answers *their* users' "how do I use / configure …?" questions on-brand, instead of returning KodaX's internal manual. `runKodaX({ selfManual: { productName, topics } })` re-brands the ≤250-token routing rule + scope anchors to `productName` and **extend-merges** your `KodaXManualTopicInput[]` over KodaX's base topics (same `id` overrides, new `id` appends), so users can still ask about the underlying provider / config / SDK topics. **Opt-in and backward-compatible** — omit `selfManual` and the system prompt is byte-identical to before. Topics stay **tool-on-demand and 4 KB-capped**: nothing large is injected into the prompt, only the short routing rule. New exports from `@kodax-ai/coding`: `KodaXManualTopicInput`, `KodaXSelfManualConfig`, `ResolveKodaXManualOptions`, `buildSelfKnowledgeRoutingRule`. See [SDK Embedder Guide §11](docs/SDK_EMBEDDER_GUIDE.md) + [docs/features/v0.7.47.md FEATURE_221](docs/features/v0.7.47.md).
+- **FEATURE_218 — KodaX self-knowledge manual + `kodax_manual` help tool.** KodaX now ships a version-bound, structured product manual (17 topics: overview / install / providers / custom-providers / config / permissions / commands / tools / agents / skills / mcp / repo-intelligence / sessions / doctor / sdk / troubleshooting) behind a read-only `kodax_manual` tool, plus a ≤250-token routing rule that tells the model to look up KodaX usage/config questions instead of guessing or mixing in Claude Code / Codex CLI knowledge. The provider list is sourced from the single-source-of-truth capability snapshots (drift-proof, not hand-copied) and each answer is anchored to KodaX scope. REPL `/help <topic>` reuses the same registry. Lookup is deterministic (exact id → alias, incl. Chinese → query token-overlap → index) and never fabricates; single-topic output ≤4 KB, index ≤2 KB. No RAG, no vector DB, no background index, no prompt bloat. See [docs/features/v0.7.47.md FEATURE_218](docs/features/v0.7.47.md).
+
+### Changed
+
+- **FEATURE_220 — Continuous thinking + tool-call block rendering.** Consecutive `thinking` blocks now render collapsed to a single line by default (`Ctrl+O` / show-all still expands the full content; `KODAX_THINKING_COLLAPSE=0` opts out), and a run of consecutive thinking / tool-call items reads as one continuous "working block" with the inter-item blank lines suppressed (`KODAX_TRANSCRIPT_TIGHT=0` opts out), instead of a stack of separately-titled cards. Pure transcript-rendering change — no LLM-facing prompt is touched. (The originally-planned read-only tool grouping was implemented then reverted after review, because the synthetic group key broke scroll / selection / search and churned the inline scrollback ledger.) See [docs/features/v0.7.47.md FEATURE_220](docs/features/v0.7.47.md).
+
 ## [0.7.46] - 2026-06-07
 
 ### Added
