@@ -55,6 +55,7 @@ export class LspService {
   private readonly broken = new Set<string>();
   private readonly spawning = new Map<string, Promise<LspClient | undefined>>();
   private readonly servers: readonly LspServerInfo[];
+  private shuttingDown = false;
 
   constructor(private readonly config: LspServiceConfig = {}) {
     this.servers = config.servers ?? LSP_SERVERS;
@@ -170,10 +171,20 @@ export class LspService {
 
   /** Shut down all spawned servers gracefully (call on session teardown). */
   async shutdownAll(): Promise<void> {
-    const all = [...this.clients.values()];
-    this.clients.clear();
-    this.broken.clear();
-    await Promise.all(all.map((client) => client.shutdown().catch(() => undefined)));
+    this.shuttingDown = true;
+    try {
+      // Await in-flight spawns first: a server still starting would otherwise
+      // surface AFTER this returns and leak as a zombie. The `shuttingDown`
+      // guard in spawnClient self-shuts those, so we just drain them here.
+      await Promise.all([...this.spawning.values()].map((task) => task.catch(() => undefined)));
+      const all = [...this.clients.values()];
+      this.clients.clear();
+      this.broken.clear();
+      await Promise.all(all.map((client) => client.shutdown().catch(() => undefined)));
+    } finally {
+      // Allow reuse after a clean teardown (tests, or a host that re-opens).
+      this.shuttingDown = false;
+    }
   }
 
   /** Synchronous best-effort kill of all servers — for `process.on('exit')`. */
@@ -240,6 +251,12 @@ export class LspService {
         launch,
         debug: this.config.debug,
       });
+      // If teardown began while this server was starting, don't register it —
+      // shut it down immediately so it isn't orphaned after shutdownAll().
+      if (this.shuttingDown) {
+        await client.shutdown().catch(() => undefined);
+        return undefined;
+      }
       this.clients.set(key, client);
       return client;
     } catch (error) {
@@ -308,4 +325,5 @@ export async function shutdownDefaultLspService(): Promise<void> {
 /** Test seam — reset the process-wide singleton. */
 export function __resetDefaultLspServiceForTest(): void {
   defaultService = undefined;
+  exitCleanupRegistered = false;
 }

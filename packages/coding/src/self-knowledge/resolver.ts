@@ -3,7 +3,7 @@
  * FEATURE_221 — extended to merge SDK-consumer-injected topics over the KodaX
  * base (override by id) and to re-brand the scope anchor with a product name.
  *
- * Matching order: exact topic id → alias contains → query token overlap →
+ * Matching order: exact topic id → alias exact match → query token overlap →
  * unknown falls back to the index (never fabricates). Output is byte-capped
  * and prefixed with an anti-confusion scope anchor on every topic answer.
  */
@@ -35,12 +35,15 @@ interface ManualEntry {
 }
 
 function normalizeInjected(t: KodaXManualTopicInput): ManualEntry {
+  // Coerce the string fields defensively: an SDK consumer is plain JS and may
+  // pass a null/undefined body/summary, which would otherwise blow up in
+  // Buffer.byteLength during truncation with an opaque Node TypeError.
   return {
-    id: t.id,
-    title: t.title,
+    id: String(t.id ?? ''),
+    title: String(t.title ?? ''),
     aliases: t.aliases ?? [],
-    summary: t.summary,
-    body: t.body,
+    summary: String(t.summary ?? ''),
+    body: String(t.body ?? ''),
     sources: t.sources ?? [],
     nextTopics: t.nextTopics ?? [],
   };

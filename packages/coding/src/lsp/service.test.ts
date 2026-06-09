@@ -134,6 +134,23 @@ describe('LspService.getDiagnosticsBlock', () => {
     expect(client.killSync).toHaveBeenCalledTimes(1);
   });
 
+  it('shuts down a client that finishes spawning DURING teardown (no zombie)', async () => {
+    let resolveCreate!: (c: LspClient) => void;
+    const client = fakeClient([err(0, 'x')]);
+    const createClient = vi.fn(
+      () => new Promise<LspClient>((res) => {
+        resolveCreate = res;
+      }),
+    );
+    const service = new LspService({ servers: [fakeServer()], createClient });
+    const pending = service.getDiagnosticsBlock(TS_FILE, { gitRoot: ROOT });
+    await Promise.resolve(); // let the spawn task start awaiting createClient
+    const teardown = service.shutdownAll(); // sets shuttingDown, drains spawning
+    resolveCreate(client); // createClient resolves → spawnClient sees teardown
+    await Promise.all([pending, teardown]);
+    expect(client.shutdown).toHaveBeenCalledTimes(1);
+  });
+
   it('does NOT auto-install when KODAX_LSP_DOWNLOAD is unset', async () => {
     const acquire = vi.fn(async () => ({ command: 'noop', args: [] as string[] }));
     const service = new LspService({

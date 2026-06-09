@@ -76,4 +76,21 @@ describe('FEATURE_221 injectable self-manual', () => {
     expect(buildSelfKnowledgeRoutingRule('KodaX-Space')).toContain('KodaX-Space self-knowledge');
     expect(buildSelfKnowledgeRoutingRule()).toContain('KodaX self-knowledge');
   });
+
+  it('re-brands the config-path clause too (no leftover "KodaX uses" for a consumer)', () => {
+    const rule = buildSelfKnowledgeRoutingRule('KodaX-Space');
+    expect(rule).toContain('does not match KodaX-Space — KodaX-Space uses');
+    // Default stays byte-identical at the clause.
+    expect(buildSelfKnowledgeRoutingRule()).toContain('does not match KodaX — KodaX uses');
+  });
+
+  it('tolerates an injected topic with a missing (null) body — no raw TypeError', () => {
+    const r = resolveKodaXManual(
+      { topic: 'broken' },
+      // A plain-JS SDK consumer may pass null/undefined fields.
+      { extraTopics: [{ id: 'broken', title: 'Broken', summary: undefined as never, body: null as never }] },
+    );
+    expect(r.matchedTopic).toBe('broken');
+    expect(typeof r.content).toBe('string');
+  });
 });

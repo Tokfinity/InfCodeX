@@ -16,7 +16,7 @@ export function buildSelfKnowledgeRoutingRule(productName = 'KodaX'): string {
     '',
     `Treat kodax_manual as the version-bound source of truth for ${productName} product`,
     'behavior. Do not answer these from pretraining, because pretraining mixes in',
-    `Claude Code and Codex CLI knowledge that does not match ${productName} — KodaX uses`,
+    `Claude Code and Codex CLI knowledge that does not match ${productName} — ${productName} uses`,
     '~/.kodax/config.json and KODAX_* env vars, not .claude/settings.json or',
     'config.toml. Only bring up Claude Code or Codex when the user explicitly asks',
     'to compare. Project AGENTS.md still governs work in the current repo; the',

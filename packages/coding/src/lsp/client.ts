@@ -91,6 +91,11 @@ export interface LspClient {
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  // Consume a late rejection: if the timeout wins the race, the underlying
+  // request promise is abandoned — without this catch, a server that later
+  // rejects it (e.g. a JSON-RPC error after a nav timeout) would surface as an
+  // unhandled rejection and can terminate the process on Node ≥15.
+  promise.catch(() => undefined);
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms);
     promise.then(
