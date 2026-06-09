@@ -12,8 +12,9 @@
  * Phase E.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { readFile } from 'fs/promises';
+import { spawnLspProcess } from './spawn.js';
 import { pathToFileURL, fileURLToPath } from 'url';
 import {
   createProtocolConnection,
@@ -143,18 +144,10 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
   const { serverId, root, launch, debug } = params;
   const initTimeout = params.initializeTimeoutMs ?? DEFAULT_INITIALIZE_TIMEOUT_MS;
 
-  // Node entry (process.execPath) and native .exe spawn directly. A Windows
-  // `.cmd`/`.bat` shim needs a shell. POSIX never needs one.
-  const useShell =
-    process.platform === 'win32'
-    && launch.command !== process.execPath
-    && !/\.exe$/i.test(launch.command);
-
-  const proc = spawn(launch.command, [...launch.args], {
+  const proc = spawnLspProcess(launch.command, launch.args, {
     cwd: root,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
-    shell: useShell,
   }) as ChildProcessWithoutNullStreams;
 
   proc.stderr.on('data', (chunk: Buffer) => debug?.(`[${serverId}] stderr: ${chunk.toString().trim()}`));

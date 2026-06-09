@@ -13,9 +13,11 @@ export { normalizeFsPath } from './paths.js';
 export {
   LSP_SERVERS,
   serversForLanguage,
+  isAutoInstallEnabled,
   type LspServerInfo,
   type LspServerLaunch,
   type DiscoverContext,
+  type AcquireContext,
 } from './servers.js';
 export {
   LspService,
@@ -25,5 +27,5 @@ export {
   type DiagnosticsRequest,
   type LspServiceConfig,
 } from './service.js';
-export { isDownloadDisabled, NOOP_ACQUIRER, type ServerAcquirer, type AcquireContext } from './acquirer.js';
+export { runInstallCommand, type InstallCommand } from './acquirer.js';
 export type { LspClient, DiagnosticsWaitOptions } from './client.js';

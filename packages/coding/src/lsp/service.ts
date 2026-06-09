@@ -20,7 +20,8 @@ import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
 import { normalizeFsPath } from './paths.js';
 import { findNearestRoot } from './discovery.js';
-import { LSP_SERVERS, type LspServerInfo } from './servers.js';
+import { LSP_SERVERS, type LspServerInfo, type LspServerLaunch } from './servers.js';
+import { isAutoInstallEnabled } from './acquirer.js';
 import { createLspClient, type CreateLspClientParams, type LspClient } from './client.js';
 
 /** Per-edit hints the service needs to root + cancel work. */
@@ -154,7 +155,10 @@ export class LspService {
     request: DiagnosticsRequest,
   ): Promise<LspClient | undefined> {
     try {
-      const launch = server.discover({ root, moduleUrl: this.config.moduleUrl });
+      let launch = server.discover({ root, moduleUrl: this.config.moduleUrl });
+      if (!launch) {
+        launch = await this.acquireIfEnabled(server, root, request);
+      }
       if (!launch) {
         this.broken.add(key);
         this.config.debug?.(`${server.id} not installed at ${root} — ${server.installGuidance}`);
@@ -173,6 +177,26 @@ export class LspService {
     } catch (error) {
       this.broken.add(key);
       this.config.debug?.(`${server.id} failed to start at ${root}: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Cascade step ②: opt-in auto-install, only when the user enabled it. */
+  private async acquireIfEnabled(
+    server: LspServerInfo,
+    root: string,
+    request: DiagnosticsRequest,
+  ): Promise<LspServerLaunch | undefined> {
+    if (!server.acquire || !isAutoInstallEnabled()) return undefined;
+    try {
+      return await server.acquire({
+        root,
+        signal: request.signal,
+        onProgress: request.onProgress,
+        debug: this.config.debug,
+      });
+    } catch (error) {
+      this.config.debug?.(`${server.id} auto-install failed: ${(error as Error).message}`);
       return undefined;
     }
   }

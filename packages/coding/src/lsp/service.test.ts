@@ -129,4 +129,32 @@ describe('LspService.getDiagnosticsBlock', () => {
     service.killAllSync();
     expect(client.killSync).toHaveBeenCalledTimes(1);
   });
+
+  it('does NOT auto-install when KODAX_LSP_DOWNLOAD is unset', async () => {
+    const acquire = vi.fn(async () => ({ command: 'noop', args: [] as string[] }));
+    const service = new LspService({
+      servers: [fakeServer({ discover: () => undefined, acquire })],
+      createClient: async () => fakeClient([err(0, 'x')]),
+    });
+    expect(await service.getDiagnosticsBlock(TS_FILE, { gitRoot: ROOT })).toBe('');
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it('auto-installs (opt-in) when KODAX_LSP_DOWNLOAD=1 and discovery fails', async () => {
+    const prev = process.env.KODAX_LSP_DOWNLOAD;
+    process.env.KODAX_LSP_DOWNLOAD = '1';
+    try {
+      const acquire = vi.fn(async () => ({ command: 'noop', args: [] as string[] }));
+      const service = new LspService({
+        servers: [fakeServer({ discover: () => undefined, acquire })],
+        createClient: async () => fakeClient([err(0, 'boom')]),
+      });
+      const block = await service.getDiagnosticsBlock(TS_FILE, { gitRoot: ROOT });
+      expect(acquire).toHaveBeenCalledTimes(1);
+      expect(block).toContain('boom');
+    } finally {
+      if (prev === undefined) delete process.env.KODAX_LSP_DOWNLOAD;
+      else process.env.KODAX_LSP_DOWNLOAD = prev;
+    }
+  });
 });
