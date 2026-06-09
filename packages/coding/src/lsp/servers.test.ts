@@ -5,8 +5,14 @@ import { LSP_SERVERS, serversForLanguage } from './servers.js';
 import { runInstallCommand } from './acquirer.js';
 
 describe('LSP server registry', () => {
-  it('registers TS/JS, Python, and Go', () => {
-    expect([...LSP_SERVERS.map((s) => s.id)].sort()).toEqual(['gopls', 'pyright', 'typescript']);
+  it('registers all five languages', () => {
+    expect([...LSP_SERVERS.map((s) => s.id)].sort()).toEqual([
+      'gopls',
+      'jdtls',
+      'pyright',
+      'rust-analyzer',
+      'typescript',
+    ]);
   });
 
   it('maps languageIds to the right servers', () => {
@@ -14,7 +20,9 @@ describe('LSP server registry', () => {
     expect(serversForLanguage('javascriptreact').map((s) => s.id)).toEqual(['typescript']);
     expect(serversForLanguage('python').map((s) => s.id)).toEqual(['pyright']);
     expect(serversForLanguage('go').map((s) => s.id)).toEqual(['gopls']);
-    expect(serversForLanguage('rust')).toEqual([]);
+    expect(serversForLanguage('rust').map((s) => s.id)).toEqual(['rust-analyzer']);
+    expect(serversForLanguage('java').map((s) => s.id)).toEqual(['jdtls']);
+    expect(serversForLanguage('ruby')).toEqual([]);
   });
 
   it('every server has root markers + actionable install guidance', () => {

@@ -130,8 +130,51 @@ const GOPLS: LspServerInfo = {
     + '(requires the Go toolchain; ensure GOBIN is on PATH).',
 };
 
+// ── Rust (rust-analyzer) ───────────────────────────────────────────────────
+
+function discoverRustAnalyzer(): LspServerLaunch | undefined {
+  // rust-analyzer speaks LSP over stdio with no arguments.
+  return globalLaunch('rust-analyzer');
+}
+
+const RUST_ANALYZER: LspServerInfo = {
+  id: 'rust-analyzer',
+  languageIds: ['rust'],
+  rootMarkers: ['Cargo.toml', 'Cargo.lock', 'rust-project.json', '.git'],
+  discover: discoverRustAnalyzer,
+  installGuidance:
+    'Install rust-analyzer for Rust diagnostics: `rustup component add rust-analyzer` '
+    + '(or download a release from https://github.com/rust-lang/rust-analyzer/releases).',
+};
+
+// ── Java (jdtls / Eclipse JDT Language Server) ──────────────────────────────
+
+function discoverJdtls(): LspServerLaunch | undefined {
+  // The `jdtls` launcher script (on PATH) handles the equinox bootstrap; it
+  // requires a Java 21+ runtime. When the runtime is wrong, startup fails and
+  // the service blacklists the root + logs guidance — no synchronous probe.
+  return globalLaunch('jdtls');
+}
+
+const JDTLS: LspServerInfo = {
+  id: 'jdtls',
+  languageIds: ['java'],
+  rootMarkers: ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', '.git'],
+  discover: discoverJdtls,
+  installGuidance:
+    'Install the Eclipse JDT language server (jdtls) for Java diagnostics and put '
+    + 'its launcher on PATH; it requires a Java 21+ runtime. See '
+    + 'https://github.com/eclipse-jdtls/eclipse.jdt.ls.',
+};
+
 /** All servers KodaX knows how to drive. */
-export const LSP_SERVERS: readonly LspServerInfo[] = Object.freeze([TYPESCRIPT, PYRIGHT, GOPLS]);
+export const LSP_SERVERS: readonly LspServerInfo[] = Object.freeze([
+  TYPESCRIPT,
+  PYRIGHT,
+  GOPLS,
+  RUST_ANALYZER,
+  JDTLS,
+]);
 
 /** Servers that can serve the given languageId. */
 export function serversForLanguage(languageId: string): readonly LspServerInfo[] {
