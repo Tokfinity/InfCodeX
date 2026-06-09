@@ -1292,6 +1292,48 @@ Cli-bridge providers (`gemini-cli`, `codex-cli`) return their CLI binary's known
 
 ---
 
+## 11. Inject your product's manual — `selfManual` (FEATURE_221, v0.7.47)
+
+### Why
+
+KodaX has a built-in self-knowledge manual + a read-only `kodax_manual` tool: when a user asks how to use / configure / troubleshoot KodaX, the model looks it up instead of guessing (and instead of mixing in Claude Code / Codex knowledge). If you embed KodaX in your own product (say **KodaX-Space**), your users ask about **your product** — and by default they'd get KodaX's internal manual. `selfManual` lets you inject your product's manual so those questions are answered correctly and on-brand.
+
+### Shape
+
+```ts
+import { runKodaX, type KodaXManualTopicInput } from '@kodax-ai/coding';
+
+const SPACE_TOPICS: KodaXManualTopicInput[] = [
+  { id: 'overview',  title: 'KodaX-Space', summary: 'What KodaX-Space is.', body: 'A desktop coding app built on KodaX.' },
+  { id: 'settings',  title: 'KodaX-Space Settings', summary: 'Configure KodaX-Space.', body: 'Open Settings → Providers …', aliases: ['配置'] },
+];
+
+runKodaX({
+  /* …your usual config… */
+  selfManual: {
+    productName: 'KodaX-Space',   // re-brands the routing rule + every answer's scope anchor
+    topics: SPACE_TOPICS,         // extend the KodaX base; same id overrides a base topic
+  },
+});
+```
+
+### Semantics
+
+- **Extend, not replace.** Your topics are merged on top of KodaX's base topics (same `id` overrides, new `id` adds). So a KodaX-Space user can ask about KodaX-Space *and* about the underlying provider/config (KodaX base topics).
+- **`productName` re-brands the prose**, not the tool. The routing rule and each answer's anti-confusion anchor say your product name; the tool stays `kodax_manual` (the model doesn't care about the tool name).
+- **Still tool-on-demand + bounded.** Nothing big is injected into the prompt — only the ≤250-token routing rule. Topics live in the registry and are returned one at a time when the model calls the tool, each capped at 4 KB. Drift-guarding your own topics (e.g. not referencing a removed setting) is your responsibility.
+
+### Topic shape (`KodaXManualTopicInput`)
+
+`{ id, title, summary, body }` required; `aliases?`, `nextTopics?`, `sources?` optional. Keep `body` short (a few lines) — it is a bounded on-demand answer, not a document.
+
+### Reference
+
+- Types/exports: `KodaXManualTopicInput`, `KodaXSelfManualConfig`, `ResolveKodaXManualOptions`, `buildSelfKnowledgeRoutingRule` from `@kodax-ai/coding`.
+- Design: [docs/features/v0.7.47.md FEATURE_221](features/v0.7.47.md#feature_221-injectable-self-manual-for-sdk-consumers).
+
+---
+
 ## See also
 
 - [README.md](../README.md) — end-user CLI quick start

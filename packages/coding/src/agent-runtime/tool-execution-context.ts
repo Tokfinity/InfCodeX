@@ -71,6 +71,7 @@ export function buildToolExecutionContext(
   return {
     backups: new Map(),
     gitRoot: options.context?.gitRoot ?? undefined,
+    selfManual: options.selfManual,
     executionCwd,
     extensionRuntime: runtime,
     askUser: events.askUser, // Issue 069

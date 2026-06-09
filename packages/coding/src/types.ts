@@ -7,6 +7,9 @@
 // ============== Import from @kodax-ai/agent ==============
 // 通用 Agent 类型从 @kodax-ai/agent 导入
 
+// FEATURE_221: SDK consumers inject their own product manual topics.
+import type { KodaXManualTopicInput } from './self-knowledge/types.js';
+
 import type {
   KodaXImageBlock,
   KodaXTextBlock,
@@ -970,6 +973,18 @@ export interface KodaXContextOptions {
   goalRuntime?: import('./goal/runtime-wiring.js').GoalRuntimeBinding;
 }
 
+/**
+ * FEATURE_221 — an SDK consumer (a product built on KodaX, e.g. KodaX-Space)
+ * injects its own product manual so that when ITS users ask "how do I use /
+ * configure <product>?", the kodax_manual tool answers with the consumer's
+ * topics. `topics` extend the KodaX base (override by id); `productName`
+ * re-brands the routing rule + scope anchor. Topics are still byte-capped.
+ */
+export interface KodaXSelfManualConfig {
+  readonly productName?: string;
+  readonly topics?: readonly KodaXManualTopicInput[];
+}
+
 export interface KodaXOptions {
   provider: string;
   model?: string;
@@ -982,6 +997,8 @@ export interface KodaXOptions {
   context?: KodaXContextOptions;
   events?: KodaXEvents;
   extensionRuntime?: ExtensionRuntimeContract;
+  /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
+  selfManual?: KodaXSelfManualConfig;
   /**
    * FEATURE_092 (v0.7.33): caller-supplied run-scoped guardrails forwarded
    * to `Runner.run` via `RunOptions.guardrails`. Merged with the START
@@ -1321,6 +1338,8 @@ export interface KodaXToolExecutionContext {
   backups: Map<string, string>;
   /** Git root directory - Git 根目录 */
   gitRoot?: string;
+  /** FEATURE_221: SDK-consumer self-manual injection, forwarded from KodaXOptions. */
+  selfManual?: KodaXSelfManualConfig;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */

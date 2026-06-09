@@ -12,12 +12,16 @@ import { resolveKodaXManual } from '../self-knowledge/resolver.js';
 
 export async function toolKodaxManual(
   input: Record<string, unknown>,
-  _ctx: KodaXToolExecutionContext,
+  ctx: KodaXToolExecutionContext,
 ): Promise<string> {
   const topic = typeof input.topic === 'string' ? input.topic : undefined;
   const query = typeof input.query === 'string' ? input.query : undefined;
 
-  const result = resolveKodaXManual({ topic, query });
+  // FEATURE_221: merge any SDK-consumer-injected topics + product re-brand.
+  const result = resolveKodaXManual(
+    { topic, query },
+    { extraTopics: ctx.selfManual?.topics, productName: ctx.selfManual?.productName },
+  );
 
   const parts: string[] = [`# ${result.title}`, '', result.content];
   if (result.sources.length > 0) {

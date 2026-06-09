@@ -57,7 +57,7 @@ import type { KodaXOptions } from '../types.js';
 import { buildMemoryRulesSection } from './memory-rules.js';
 import { buildMemorySection } from './memory-section.js';
 import { createPromptSection, type KodaXPromptSection } from './sections.js';
-import { SELF_KNOWLEDGE_ROUTING_RULE } from '../self-knowledge/routing-rule.js';
+import { buildSelfKnowledgeRoutingRule } from '../self-knowledge/routing-rule.js';
 import { SYSTEM_PROMPT } from './system.js';
 import {
   TOOL_CONSTRUCTION_PROMPT,
@@ -206,8 +206,9 @@ export async function buildCapabilityContextSections(
   sections.push(
     createPromptSection(
       'self-knowledge-routing',
-      SELF_KNOWLEDGE_ROUTING_RULE,
-      'Route KodaX usage/config/troubleshooting questions to the kodax_manual tool as the version-bound product source of truth.',
+      // FEATURE_221: re-brand the routing rule for SDK consumers (productName).
+      buildSelfKnowledgeRoutingRule(options.selfManual?.productName),
+      'Route product usage/config/troubleshooting questions to the kodax_manual tool as the version-bound product source of truth.',
     ),
   );
 

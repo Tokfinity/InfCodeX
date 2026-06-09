@@ -55,11 +55,37 @@ export interface ResolveKodaXManualInput {
   readonly query?: string;
 }
 
+/**
+ * FEATURE_221 — a topic an SDK consumer (e.g. a product built on KodaX)
+ * injects via `KodaXOptions.selfManual.topics`. Same shape as a KodaX base
+ * topic but `id` is a free string (new id = add; existing base id = override),
+ * and aliases/nextTopics/sources are optional to lower the authoring burden.
+ * Bodies are still byte-capped by the resolver (no unbounded items).
+ */
+export interface KodaXManualTopicInput {
+  readonly id: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly body: string;
+  readonly aliases?: readonly string[];
+  readonly nextTopics?: readonly string[];
+  readonly sources?: readonly KodaXManualSource[];
+}
+
+/** Per-call resolver options — consumer topic injection + product re-branding. */
+export interface ResolveKodaXManualOptions {
+  /** Injected consumer topics, merged over the KodaX base (override by id). */
+  readonly extraTopics?: readonly KodaXManualTopicInput[];
+  /** Product name used in the scope anchor (default "KodaX"). */
+  readonly productName?: string;
+}
+
 export interface ResolveKodaXManualResult {
-  readonly matchedTopic: KodaXManualTopicId | 'index';
+  /** A topic id (KodaX base or injected consumer topic), or 'index'. */
+  readonly matchedTopic: string;
   readonly title: string;
   /** Assembled, byte-capped content (scope anchor + body, or index list). */
   readonly content: string;
   readonly sources: readonly KodaXManualSource[];
-  readonly nextTopics: readonly KodaXManualTopicId[];
+  readonly nextTopics: readonly string[];
 }

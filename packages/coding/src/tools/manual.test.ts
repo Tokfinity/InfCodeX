@@ -37,4 +37,23 @@ describe('FEATURE_218 kodax_manual tool', () => {
     const out = await toolKodaxManual({ topic: 42, query: null }, ctx);
     expect(out).toContain('KodaX Manual — Index');
   });
+
+  it('FEATURE_221: serves an SDK-consumer injected topic via ctx.selfManual', async () => {
+    const spaceCtx = {
+      selfManual: {
+        productName: 'KodaX-Space',
+        topics: [
+          { id: 'space-settings', title: 'KodaX-Space Settings', summary: 'config', body: 'Open Settings → Providers' },
+        ],
+      },
+    } as KodaXToolExecutionContext;
+
+    const injected = await toolKodaxManual({ topic: 'space-settings' }, spaceCtx);
+    expect(injected).toContain('# KodaX-Space Settings');
+    expect(injected).toContain('Settings → Providers');
+
+    // base KodaX topics still reachable (extend) and re-branded.
+    const base = await toolKodaxManual({ topic: 'providers' }, spaceCtx);
+    expect(base).toContain('about KodaX-Space itself');
+  });
 });

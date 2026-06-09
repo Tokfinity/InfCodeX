@@ -122,6 +122,7 @@ export type {
   KodaXAgentMode,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
+  KodaXSelfManualConfig,
   KodaXResult,
   KodaXSessionControl,
   KodaXSessionMutators,
@@ -1115,9 +1116,14 @@ export type { BootstrapTracingOptions } from './runtime/tracing-bootstrap.js';
 // kodax_manual tool and the REPL `/help <topic>` path.
 export { resolveKodaXManual } from './self-knowledge/resolver.js';
 export { MANUAL_TOPIC_IDS } from './self-knowledge/registry.js';
-export { SELF_KNOWLEDGE_ROUTING_RULE } from './self-knowledge/routing-rule.js';
+export {
+  SELF_KNOWLEDGE_ROUTING_RULE,
+  buildSelfKnowledgeRoutingRule,
+} from './self-knowledge/routing-rule.js';
 export type {
   KodaXManualTopicId,
+  KodaXManualTopicInput,
   ResolveKodaXManualInput,
+  ResolveKodaXManualOptions,
   ResolveKodaXManualResult,
 } from './self-knowledge/types.js';
