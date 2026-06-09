@@ -159,8 +159,8 @@
       "models": [
         { "id": "glm-4.7", "displayName": "GLM-4.7" },
         { "id": "kimi-k2.6", "displayName": "Kimi K2.6", "contextWindow": 256000 },
-        { "id": "kimi-k2.5", "displayName": "Kimi K2.5", "contextWindow": 256000 },
-        { "id": "minimax-latest", "displayName": "MiniMax Latest", "contextWindow": 204800 },
+        { "id": "MiniMax-M3", "displayName": "MiniMax M3 (Frontier Coding, 1M ctx)", "contextWindow": 1000000 },
+        { "id": "MiniMax-M2.7", "displayName": "MiniMax M2.7", "contextWindow": 204800 },
         { "id": "deepseek-v3.2", "displayName": "DeepSeek V3.2", "contextWindow": 128000 },
         { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro", "contextWindow": 1000000 },
         { "id": "deepseek-v4-flash", "displayName": "DeepSeek V4 Flash", "contextWindow": 1000000 },

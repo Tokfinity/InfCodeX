@@ -58,13 +58,16 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(getModelCapabilities('deepseek', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
   });
 
-  it('exposes Ark Coding per-model context windows (k2.6=256K, v4-pro=1M, doubao=256K, glm-5.1=200K)', () => {
+  it('exposes Ark Coding per-model context windows (k2.6=256K, M3=1M, M2.7=204K, v4-pro=1M, doubao=256K, glm-5.1=200K)', () => {
     expect(getModelCapabilities('ark-coding', 'kimi-k2.6')?.contextWindow).toBe(256_000);
-    expect(getModelCapabilities('ark-coding', 'kimi-k2.5')?.contextWindow).toBe(256_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-pro')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v4-flash')?.contextWindow).toBe(1_000_000);
     expect(getModelCapabilities('ark-coding', 'deepseek-v3.2')?.contextWindow).toBe(128_000);
-    expect(getModelCapabilities('ark-coding', 'minimax-latest')?.contextWindow).toBe(204_800);
+    // 2026-06: kimi-k2.5 retired + minimax-latest replaced by MiniMax-M3
+    // (1M Frontier Coding) + MiniMax-M2.7 (204K). User-confirmed against
+    // the Ark console.
+    expect(getModelCapabilities('ark-coding', 'MiniMax-M3')?.contextWindow).toBe(1_000_000);
+    expect(getModelCapabilities('ark-coding', 'MiniMax-M2.7')?.contextWindow).toBe(204_800);
     expect(getModelCapabilities('ark-coding', 'doubao-seed-2.0-pro')?.contextWindow).toBe(256_000);
     // Default model + alternatives with no override inherit the 200K provider-level value.
     expect(getModelCapabilities('ark-coding', 'glm-5.1')?.contextWindow).toBe(200_000);

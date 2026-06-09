@@ -200,10 +200,15 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(a.maxOutputTokens).toBe(32000);
       const v4pro = a.models?.find((m) => m.id === 'deepseek-v4-pro');
       const v32 = a.models?.find((m) => m.id === 'deepseek-v3.2');
-      const minimax = a.models?.find((m) => m.id === 'minimax-latest');
+      // 2026-06: minimax-latest retired, replaced by explicit M3 (1M
+      // frontier) + M2.7 (204K) entries per user confirmation against
+      // the Ark console.
+      const m3 = a.models?.find((m) => m.id === 'MiniMax-M3');
+      const m27 = a.models?.find((m) => m.id === 'MiniMax-M2.7');
       expect(v4pro?.contextWindow).toBe(1_000_000);
       expect(v32?.contextWindow).toBe(128_000);
-      expect(minimax?.contextWindow).toBe(204_800);
+      expect(m3?.contextWindow).toBe(1_000_000);
+      expect(m27?.contextWindow).toBe(204_800);
     });
   });
 
