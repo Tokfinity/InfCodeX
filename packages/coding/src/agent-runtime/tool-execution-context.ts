@@ -39,6 +39,7 @@ import type {
 import type { ExtensionRuntimeContract } from '../extensions/runtime-contract.js';
 import { mergeManagedProtocolPayload } from '../managed-protocol.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
+import { getDefaultLspService } from '../lsp/service.js';
 
 export interface ToolExecutionContextInput {
   readonly options: KodaXOptions;
@@ -72,6 +73,10 @@ export function buildToolExecutionContext(
     backups: new Map(),
     gitRoot: options.context?.gitRoot ?? undefined,
     selfManual: options.selfManual,
+    // FEATURE_132 v0.7.47 — LSP service for edit-time diagnostics reflux.
+    // Host-injected when present, else the process-wide default (which is
+    // a no-op unless a language server is installed; `KODAX_LSP=0` disables).
+    lspService: options.context?.lspService ?? getDefaultLspService(),
     executionCwd,
     extensionRuntime: runtime,
     askUser: events.askUser, // Issue 069

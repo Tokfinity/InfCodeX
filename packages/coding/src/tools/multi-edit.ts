@@ -31,6 +31,7 @@ import {
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
+import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
 
 const MAX_SAFE_EDIT_CHARS = 64 * 1024;
 const MAX_SAFE_EDIT_LINES = 400;
@@ -82,7 +83,7 @@ export async function toolMultiEdit(
   }
 
   // FEATURE_131 Part A: serialize same-file mutations.
-  return withFileMutation(filePath, async () => {
+  const result = await withFileMutation(filePath, async () => {
     // FEATURE_125 v0.7.41 — Layer 4 hard gate. Check BEFORE reading
     // the file so a peer-modified file is detected without paying the
     // read cost. checkStale itself re-reads the file to hash, but
@@ -145,6 +146,11 @@ export async function toolMultiEdit(
       : null;
     return warningBanner ? `${warningBanner}\n\n${result}` : result;
   });
+
+  // FEATURE_132 v0.7.47 — reflux LSP diagnostics OUTSIDE the mutation lock so
+  // a concurrent same-file writer isn't blocked during the diagnostics wait.
+  if (result.startsWith('[Tool Error]')) return result;
+  return result + (await appendLspDiagnostics(filePath, ctx));
 }
 
 function applyOneEdit(

@@ -1127,3 +1127,20 @@ export type {
   ResolveKodaXManualOptions,
   ResolveKodaXManualResult,
 } from './self-knowledge/types.js';
+
+// FEATURE_132 (v0.7.47): native LSP integration — edit-time diagnostics
+// reflux. Hosts inject/own a service via `options.context.lspService` and
+// call `shutdownAll()` on teardown; default is the process-wide singleton.
+export {
+  LspService,
+  getDefaultLspService,
+  shutdownDefaultLspService,
+  languageIdForPath,
+  report as reportLspDiagnostics,
+  LSP_SERVERS,
+} from './lsp/index.js';
+export type {
+  LspServerInfo,
+  DiagnosticsRequest,
+  LspServiceConfig,
+} from './lsp/index.js';

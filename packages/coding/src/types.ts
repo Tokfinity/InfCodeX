@@ -971,6 +971,16 @@ export interface KodaXContextOptions {
    * the lifecycle hooks pass through unmodified.
    */
   goalRuntime?: import('./goal/runtime-wiring.js').GoalRuntimeBinding;
+
+  /**
+   * FEATURE_132 (v0.7.47) — native LSP service for edit-time diagnostics
+   * reflux. When omitted, `buildToolExecutionContext` falls back to the
+   * process-wide default (`getDefaultLspService()`), so diagnostics work
+   * out of the box; hosts/tests inject their own to control or disable it.
+   *
+   * See `packages/coding/src/lsp/service.ts`.
+   */
+  lspService?: import('./lsp/service.js').LspService;
 }
 
 /**
@@ -1496,6 +1506,14 @@ export interface KodaXToolExecutionContext {
    * See `packages/coding/src/multi-instance/content-hash-cache.ts`.
    */
   contentHashCache?: import('./multi-instance/content-hash-cache.js').ContentHashCache;
+
+  /**
+   * FEATURE_132 (v0.7.47) — native LSP service. The write-family tools call
+   * `getDiagnosticsBlock(filePath, …)` after a successful write to reflux any
+   * type errors into the tool result. Forwarded by `buildToolExecutionContext`
+   * from `options.context.lspService` or the process-wide default.
+   */
+  lspService?: import('./lsp/service.js').LspService;
 
   /**
    * FEATURE_177 v0.7.42 — per-task read-file-state cache (anti-loop).

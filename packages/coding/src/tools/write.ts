@@ -8,6 +8,7 @@ import { formatDiffPreview } from './truncate.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
+import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
 
 const FILE_BACKUPS = new Map<string, string>();
 
@@ -22,7 +23,7 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
   // FEATURE_131 Part A: serialize same-file mutations across the
   // process so concurrent children (Pattern B fan-out) can't race
   // the read-modify-write cycle and silently lose one side's changes.
-  return withFileMutation(filePath, async () => {
+  const result = await withFileMutation(filePath, async () => {
     let oldContent = '';
     const isNewFile = !fsSync.existsSync(filePath);
 
@@ -86,4 +87,11 @@ export async function toolWrite(input: Record<string, unknown>, ctx: KodaXToolEx
 
     return warningBanner ? `${warningBanner}\n\n${body}` : body;
   });
+
+  // FEATURE_132 v0.7.47 — reflux any type errors the language server finds in
+  // the just-written file so the agent fixes them this turn. Done OUTSIDE the
+  // mutation lock so a concurrent same-file writer isn't blocked during the
+  // (up to 5s) diagnostics wait.
+  if (result.startsWith('[Tool Error]')) return result;
+  return result + (await appendLspDiagnostics(filePath, ctx));
 }

@@ -29,7 +29,8 @@
     "glob": "^11.0.1",
     "iconv-lite": "^0.6.3",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vscode-languageserver-protocol": "^3.17.5"
   },
   "devDependencies": {
     "@lezer/common": "^1.5.1",

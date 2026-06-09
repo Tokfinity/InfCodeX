@@ -13,6 +13,7 @@ import {
   readResolvedTextFile,
 } from './text-anchor.js';
 import { findExactMatchPositions, formatLineList } from './multi-edit.js';
+import { appendLspDiagnostics } from './_internal/lsp-reflux.js';
 import { withFileMutation } from './_internal/file-mutation-queue.js';
 import { buildStaleWriteReason } from '../multi-instance/content-hash-cache.js';
 import { formatActiveFileWarning } from '../multi-instance/active-file-warning.js';
@@ -53,9 +54,13 @@ export async function toolEdit(input: Record<string, unknown>, ctx: KodaXToolExe
   // FEATURE_131 Part A: serialize same-file mutations so concurrent
   // children can't race the read-modify-write cycle. Different files
   // still proceed in parallel.
-  return withFileMutation(filePath, async () => {
+  const result = await withFileMutation(filePath, async () => {
     return await runEditOnce(filePath, oldStr, newStr, replaceAll, ctx);
   });
+  // FEATURE_132 v0.7.47 — reflux LSP diagnostics OUTSIDE the mutation lock so
+  // a concurrent same-file writer isn't blocked during the diagnostics wait.
+  if (result.startsWith('[Tool Error]')) return result;
+  return result + (await appendLspDiagnostics(filePath, ctx));
 }
 
 async function runEditOnce(
