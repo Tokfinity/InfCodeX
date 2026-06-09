@@ -1,6 +1,6 @@
 {
   "name": "@kodax-ai/kodax",
-  "version": "0.7.46",
+  "version": "0.7.47",
   "description": "极致轻量化 Coding Agent - TypeScript 实现，支持 12 个 LLM 提供商，可发布为免 Node 单文件二进制",
   "type": "module",
   "private": true,
@@ -122,6 +122,7 @@
     "terminal-size": "^4.0.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
+    "vscode-languageserver-protocol": "^3.17.5",
     "widest-line": "^6.0.0",
     "wrap-ansi": "^8.1.0",
     "ws": "^8.18.0",

@@ -40,12 +40,13 @@ export default defineConfig({
     // Raised from vitest's 5s default: many fs-heavy integration tests already
     // set local 15_000/30_000 timeouts, i.e. 5s stopped fitting this suite's
     // scale (~600 files run in parallel). Under that contention an otherwise-
-    // fast fs test can occasionally cross 5s and false-fail — which file gets
-    // squeezed varies run-to-run. Raising the global ceiling to 15s converges
-    // that existing per-file pattern; passing tests don't get slower and a real
-    // deadlock still fails (just at 15s instead of 5s).
-    testTimeout: 15_000,
-    hookTimeout: 15_000,
+    // fast fs test can occasionally cross the ceiling and false-fail — which
+    // file gets squeezed varies run-to-run. 15s still let the session-storage /
+    // selection fs suites flake on a busy Windows box (they pass in isolation
+    // in <3s but were squeezed past 15s under full-suite load), so the ceiling
+    // is 30s. Passing tests don't get slower; a real deadlock still fails.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     // FEATURE_159 (v0.7.40) — global MessageQueue singleton reset before
     // each test. See `vitest.setup.queue.ts` for the rationale.
     setupFiles: [resolveFromRoot('vitest.setup.queue.ts')],
