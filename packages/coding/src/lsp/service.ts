@@ -15,9 +15,10 @@
  */
 
 import path from 'path';
-import type { Diagnostic } from 'vscode-languageserver-protocol';
+import type { Diagnostic, Position } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { report } from './diagnostic.js';
+import { formatHover, formatLocations, formatSymbols } from './format.js';
 import { normalizeFsPath } from './paths.js';
 import { findNearestRoot } from './discovery.js';
 import { LSP_SERVERS, type LspServerInfo, type LspServerLaunch } from './servers.js';
@@ -98,6 +99,73 @@ export class LspService {
     for (const client of clients) issues.push(...client.diagnostics(absolute));
     const block = report(absolute, issues);
     return block ? `\n\nLSP errors detected in this file, please fix:\n${block}` : '';
+  }
+
+  /** Definition site(s) of the symbol at `position` (0-based), as text. */
+  async getDefinition(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const locations = await resolved.client
+      .definition(path.resolve(file), position)
+      .catch(() => []);
+    return formatLocations(locations, 'No definition found at that position.');
+  }
+
+  /** Hover (type/signature/doc) for the symbol at `position` (0-based). */
+  async getHover(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const hover = await resolved.client.hover(path.resolve(file), position).catch(() => null);
+    return formatHover(hover);
+  }
+
+  /** All references to the symbol at `position` (0-based), as text. */
+  async getReferences(file: string, position: Position, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const locations = await resolved.client
+      .references(path.resolve(file), position)
+      .catch(() => []);
+    return formatLocations(locations, 'No references found at that position.');
+  }
+
+  /** The file's symbol outline, as indented text. */
+  async getDocumentSymbols(file: string, request: DiagnosticsRequest = {}): Promise<string> {
+    const resolved = await this.navClient(file, request);
+    if (resolved.kind !== 'client') return resolved.message;
+    const symbols = await resolved.client.documentSymbols(path.resolve(file)).catch(() => []);
+    return formatSymbols(symbols, 'No symbols found in this file.');
+  }
+
+  /**
+   * Resolve the primary client for a navigation request, opening the file so
+   * the server has current content. Returns guidance text when no server is
+   * installed (navigation is user-initiated, so — unlike diagnostics — it is
+   * NOT silent), or an unsupported message for non-LSP file types.
+   */
+  private async navClient(
+    file: string,
+    request: DiagnosticsRequest,
+  ): Promise<{ kind: 'client'; client: LspClient } | { kind: 'message'; message: string }> {
+    const languageId = languageIdForPath(file);
+    if (!languageId) {
+      return { kind: 'message', message: `No language server is configured for ${path.basename(file)}.` };
+    }
+    const servers = this.servers.filter((server) => server.languageIds.includes(languageId));
+    if (servers.length === 0) {
+      return { kind: 'message', message: `No language server is configured for ${path.basename(file)}.` };
+    }
+    const absolute = path.resolve(file);
+    const stopDir = request.gitRoot ?? path.dirname(absolute);
+    for (const server of servers) {
+      const root = findNearestRoot(absolute, server.rootMarkers, stopDir);
+      const client = await this.getClient(server, root, request);
+      if (client) {
+        await client.notifyOpenOrChange(absolute).catch(() => undefined);
+        return { kind: 'client', client };
+      }
+    }
+    return { kind: 'message', message: servers.map((server) => server.installGuidance).join('\n') };
   }
 
   /** Shut down all spawned servers gracefully (call on session teardown). */

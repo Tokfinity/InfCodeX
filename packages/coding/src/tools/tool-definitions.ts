@@ -32,6 +32,12 @@ import { toolSymbolContext } from './symbol-context.js';
 import { toolProcessContext } from './process-context.js';
 import { toolImpactEstimate } from './impact-estimate.js';
 import { toolCyclicDependencies } from './cyclic-dependencies.js';
+import {
+  toolLspDefinition,
+  toolLspHover,
+  toolLspReferences,
+  toolLspDocumentSymbols,
+} from './lsp-navigation.js';
 import { toolWebSearch } from './web-search.js';
 import { toolWebFetch } from './web-fetch.js';
 import { toolCodeSearch } from './code-search.js';
@@ -1267,6 +1273,68 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
       },
     },
     handler: toolModuleContext,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_definition',
+    description: "Jump to where the symbol at a specific line/column is DEFINED, using the language server's live view of the current code. Use this when you are looking at a usage and need its exact definition site — it resolves through imports, re-exports, and overloads the way the compiler does, which `grep` cannot. Give the 1-based line and column of the symbol as it appears in the file you just read. Prefer this when you want the precise single definition of the symbol right where you are; prefer `symbol_context` when you want the repo-wide usage graph (callers/callees) of a named symbol. Needs a language server for the file's language installed (TypeScript/JS, Python, Go, Rust, Java); returns install guidance otherwise.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol (defaults to the line start)' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspDefinition,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_hover',
+    description: 'Show the type, signature, and doc of the symbol at a specific line/column, as the language server sees it. Use this to confirm an inferred type, a function\'s parameter/return types, or a value\'s declared type before editing — it reflects the real compiler state, including generics resolved in context, so you do not have to open and read the definition just for its signature. Give the 1-based line and column of the symbol. Needs the matching language server installed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspHover,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_references',
+    description: 'List every place the symbol at a specific line/column is USED (including its declaration), from the language server. Use this before renaming or changing a symbol\'s signature to see exactly what would break — it finds the structural references `grep` misses (re-exports, aliased imports) and skips the string/comment matches `grep` wrongly includes. Give the 1-based line and column. When you only have a NAME and want a quick repo-scope blast-radius estimate, use `impact_estimate`; use `lsp_references` when you have the exact position and want the compiler-accurate reference list. Needs the matching language server installed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File containing the symbol' },
+        line: { type: 'number', description: '1-based line of the symbol' },
+        character: { type: 'number', description: 'Optional 1-based column of the symbol' },
+      },
+      required: ['path', 'line'],
+    },
+    handler: toolLspReferences,
+    sideEffect: 'readonly',
+    toClassifierInput: () => '',
+  },
+  {
+    name: 'lsp_document_symbols',
+    description: 'Outline the symbols (classes, functions, methods, fields) declared in a single file, with their lines, from the language server. Use this to get oriented in an unfamiliar file without reading all of it, or to find the line of a member before an `lsp_definition` / `lsp_hover` / `edit`. For a repo-scope structural view across modules use `module_context`; `lsp_document_symbols` is the precise single-file outline. Needs the matching language server installed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File to outline' },
+      },
+      required: ['path'],
+    },
+    handler: toolLspDocumentSymbols,
     sideEffect: 'readonly',
     toClassifierInput: () => '',
   },

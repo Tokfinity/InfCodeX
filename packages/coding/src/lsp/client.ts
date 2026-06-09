@@ -28,11 +28,21 @@ import {
   DidOpenTextDocumentNotification,
   DidChangeTextDocumentNotification,
   PublishDiagnosticsNotification,
+  DefinitionRequest,
+  HoverRequest,
+  ReferencesRequest,
+  DocumentSymbolRequest,
   ShutdownRequest,
   ExitNotification,
   type Diagnostic,
   type InitializeParams,
   type PublishDiagnosticsParams,
+  type Position,
+  type Location,
+  type LocationLink,
+  type Hover,
+  type DocumentSymbol,
+  type SymbolInformation,
 } from 'vscode-languageserver-protocol';
 import { languageIdForPath } from './language.js';
 import { normalizeFsPath } from './paths.js';
@@ -40,6 +50,8 @@ import type { LspServerLaunch } from './servers.js';
 
 /** Coalesce a burst of publishes into one settle. */
 const DIAGNOSTICS_DEBOUNCE_MS = 150;
+/** Navigation requests (definition/hover/…) give up after this long. */
+const REQUEST_TIMEOUT_MS = 10_000;
 /** Cold monorepo TypeScript servers can take a while to answer `initialize`. */
 const DEFAULT_INITIALIZE_TIMEOUT_MS = 30_000;
 
@@ -64,6 +76,14 @@ export interface LspClient {
   waitForDiagnostics(file: string, options: DiagnosticsWaitOptions): Promise<void>;
   /** Latest cached diagnostics for a file (empty when none/unknown). */
   diagnostics(file: string): readonly Diagnostic[];
+  /** Resolve the definition site(s) of the symbol at a position. */
+  definition(file: string, position: Position): Promise<Location[]>;
+  /** Type/signature/doc hover for the symbol at a position (null if none). */
+  hover(file: string, position: Position): Promise<Hover | null>;
+  /** All references to the symbol at a position (incl. its declaration). */
+  references(file: string, position: Position): Promise<Location[]>;
+  /** The document's symbol outline. */
+  documentSymbols(file: string): Promise<Array<DocumentSymbol | SymbolInformation>>;
   /** Graceful shutdown (await server exit so the OS releases handles). */
   shutdown(): Promise<void>;
   /** Synchronous best-effort kill, for a `process.on('exit')` last resort. */
@@ -84,6 +104,21 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
       },
     );
   });
+}
+
+function isLocationLink(value: Location | LocationLink): value is LocationLink {
+  return (value as LocationLink).targetUri !== undefined;
+}
+
+/** Flatten definition results (Location | Location[] | LocationLink[]) to Location[]. */
+function normalizeLocations(
+  result: Location | Location[] | LocationLink[] | null | undefined,
+): Location[] {
+  if (!result) return [];
+  const items = Array.isArray(result) ? result : [result];
+  return items.map((item) =>
+    isLocationLink(item) ? { uri: item.targetUri, range: item.targetSelectionRange } : item,
+  );
 }
 
 /** Dot-path lookup into the server's initializationOptions for `workspace/configuration`. */
@@ -117,9 +152,10 @@ function buildInitializeParams(root: string, init: Record<string, unknown> | und
       textDocument: {
         synchronization: { dynamicRegistration: true, didSave: true },
         publishDiagnostics: { relatedInformation: true },
-        // Navigation capabilities (definition/hover/references/documentSymbol)
-        // are advertised in Phase E when the matching client methods land —
-        // advertising them now would ask servers to build indexes we never query.
+        definition: { dynamicRegistration: true, linkSupport: true },
+        hover: { dynamicRegistration: true, contentFormat: ['markdown', 'plaintext'] },
+        references: { dynamicRegistration: true },
+        documentSymbol: { dynamicRegistration: true, hierarchicalDocumentSymbolSupport: true },
       },
       window: { workDoneProgress: true },
     },
@@ -274,6 +310,46 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     return pushDiagnostics.get(normalizeFsPath(file)) ?? [];
   }
 
+  function navTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+    return withTimeout(promise, REQUEST_TIMEOUT_MS, `${serverId} ${label} timed out`);
+  }
+
+  async function definition(file: string, position: Position): Promise<Location[]> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    const result = await navTimeout(
+      connection.sendRequest(DefinitionRequest.type, { textDocument, position }),
+      'definition',
+    );
+    return normalizeLocations(result);
+  }
+
+  async function hover(file: string, position: Position): Promise<Hover | null> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    return navTimeout(connection.sendRequest(HoverRequest.type, { textDocument, position }), 'hover');
+  }
+
+  async function references(file: string, position: Position): Promise<Location[]> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    const result = await navTimeout(
+      connection.sendRequest(ReferencesRequest.type, {
+        textDocument,
+        position,
+        context: { includeDeclaration: true },
+      }),
+      'references',
+    );
+    return result ?? [];
+  }
+
+  async function documentSymbols(file: string): Promise<Array<DocumentSymbol | SymbolInformation>> {
+    const textDocument = { uri: pathToFileURL(file).href };
+    const result = await navTimeout(
+      connection.sendRequest(DocumentSymbolRequest.type, { textDocument }),
+      'documentSymbol',
+    );
+    return result ?? [];
+  }
+
   function killSync(): void {
     try {
       proc.kill();
@@ -319,5 +395,17 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     });
   }
 
-  return { serverId, root, notifyOpenOrChange, waitForDiagnostics, diagnostics, shutdown, killSync };
+  return {
+    serverId,
+    root,
+    notifyOpenOrChange,
+    waitForDiagnostics,
+    diagnostics,
+    definition,
+    hover,
+    references,
+    documentSymbols,
+    shutdown,
+    killSync,
+  };
 }

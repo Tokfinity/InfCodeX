@@ -71,6 +71,55 @@ function handle(message) {
     case 'textDocument/didChange':
       publish(message.params.textDocument.uri);
       return;
+    case 'textDocument/definition':
+      send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: [
+          {
+            uri: message.params.textDocument.uri,
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+          },
+        ],
+      });
+      return;
+    case 'textDocument/hover':
+      send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: { contents: { kind: 'plaintext', value: 'const x: number' } },
+      });
+      return;
+    case 'textDocument/references':
+      send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: [
+          {
+            uri: message.params.textDocument.uri,
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+          },
+          {
+            uri: message.params.textDocument.uri,
+            range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } },
+          },
+        ],
+      });
+      return;
+    case 'textDocument/documentSymbol':
+      send({
+        jsonrpc: '2.0',
+        id: message.id,
+        result: [
+          {
+            name: 'x',
+            kind: 13,
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+            selectionRange: { start: { line: 0, character: 6 }, end: { line: 0, character: 7 } },
+          },
+        ],
+      });
+      return;
     default:
       // Answer any other server-bound request with null so nothing stalls.
       if (typeof message.id !== 'undefined' && message.method) {

@@ -59,6 +59,29 @@ describe('LSP protocol integration (real stdio handshake)', () => {
     }
   }, 15000);
 
+  it('navigation: definition / hover / references / symbols via a real server', async () => {
+    const server: LspServerInfo = {
+      id: 'fake',
+      languageIds: ['typescript'],
+      rootMarkers: ['package.json', '.git'],
+      discover: () => ({ command: process.execPath, args: [FIXTURE] }),
+      installGuidance: 'n/a',
+    };
+    const service = new LspService({ servers: [server], documentTimeoutMs: 4000 });
+    try {
+      const def = await service.getDefinition(tsFile, { line: 0, character: 0 }, { gitRoot: tempDir });
+      expect(def).toContain(':1:1');
+      const hover = await service.getHover(tsFile, { line: 0, character: 0 }, { gitRoot: tempDir });
+      expect(hover).toContain('const x: number');
+      const refs = await service.getReferences(tsFile, { line: 0, character: 0 }, { gitRoot: tempDir });
+      expect(refs.split('\n')).toHaveLength(2);
+      const symbols = await service.getDocumentSymbols(tsFile, { gitRoot: tempDir });
+      expect(symbols).toContain('Variable x (1)');
+    } finally {
+      await service.shutdownAll();
+    }
+  }, 15000);
+
   it('reports a fresh diagnostic after a second change (didChange path)', async () => {
     const client = await createLspClient({
       serverId: 'fake',

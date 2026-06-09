@@ -21,6 +21,10 @@ function fakeClient(diagnostics: readonly Diagnostic[]): LspClient {
     notifyOpenOrChange: vi.fn(async () => 0),
     waitForDiagnostics: vi.fn(async () => undefined),
     diagnostics: () => diagnostics,
+    definition: vi.fn(async () => []),
+    hover: vi.fn(async () => null),
+    references: vi.fn(async () => []),
+    documentSymbols: vi.fn(async () => []),
     shutdown: vi.fn(async () => undefined),
     killSync: vi.fn(() => undefined),
   };
@@ -138,6 +142,28 @@ describe('LspService.getDiagnosticsBlock', () => {
     });
     expect(await service.getDiagnosticsBlock(TS_FILE, { gitRoot: ROOT })).toBe('');
     expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it('navigation returns install guidance when no server is available', async () => {
+    const service = new LspService({ servers: [fakeServer({ discover: () => undefined })] });
+    const out = await service.getDefinition(TS_FILE, { line: 0, character: 0 }, { gitRoot: ROOT });
+    expect(out).toBe('install fake-server');
+  });
+
+  it('navigation returns an unsupported message for non-LSP file types', async () => {
+    const service = new LspService({ servers: [fakeServer()] });
+    const out = await service.getHover(path.join(ROOT, 'note.txt'), { line: 0, character: 0 }, { gitRoot: ROOT });
+    expect(out).toContain('No language server is configured');
+  });
+
+  it('getDocumentSymbols formats the server outline', async () => {
+    const client = fakeClient([]);
+    client.documentSymbols = vi.fn(async () => [
+      { name: 'Foo', kind: 5, range: { start: { line: 4, character: 0 }, end: { line: 9, character: 0 } }, selectionRange: { start: { line: 4, character: 6 }, end: { line: 4, character: 9 } } },
+    ]);
+    const service = new LspService({ servers: [fakeServer()], createClient: async () => client });
+    const out = await service.getDocumentSymbols(TS_FILE, { gitRoot: ROOT });
+    expect(out).toBe('Class Foo (5)');
   });
 
   it('auto-installs (opt-in) when KODAX_LSP_DOWNLOAD=1 and discovery fails', async () => {
