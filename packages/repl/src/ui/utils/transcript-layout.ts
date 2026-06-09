@@ -712,14 +712,14 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
           const preview = showAllContent
             ? buildThinkingPreview(item.text, maxLines, showFullThinking, showAllContent)
             : item.compactText ?? buildThinkingPreview(item.text, maxLines, showFullThinking, showAllContent);
-        pushWrappedRows(rows, `${item.id}-body`, preview, getBodyWidth(viewportWidth, 2), {
-          color: "thinking",
-          indent: 2,
-          italic: true,
-          itemId: item.id,
-        });
-        rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
-        break;
+          pushWrappedRows(rows, `${item.id}-body`, preview, getBodyWidth(viewportWidth, 2), {
+            color: "thinking",
+            indent: 2,
+            italic: true,
+            itemId: item.id,
+          });
+          rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
+          break;
         }
       case "error":
         pushWrappedRows(rows, `${item.id}-header`, "\u2717 Error", viewportWidth, {

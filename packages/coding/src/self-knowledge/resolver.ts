@@ -84,10 +84,13 @@ function truncateToBytes(text: string, maxBytes: number): string {
 
 /** Anti-confusion anchor — this product, not Claude Code / Codex CLI. */
 function scopeAnchor(topicId: string, productName: string): string {
-  return (
-    `(${productName} ${topicId} manual — about ${productName} itself, not Claude Code or Codex CLI. ` +
-    `KodaX config lives in ~/.kodax/config.json + KODAX_* env vars.)`
-  );
+  const base = `(${productName} ${topicId} manual — about ${productName} itself, not Claude Code or Codex CLI.`;
+  // The ~/.kodax config-path hint only belongs on KodaX's own manual; a
+  // re-branded consumer manual must not assert KodaX paths on the consumer's
+  // (possibly fully white-labeled) topics. Default stays byte-identical.
+  const tail =
+    productName === 'KodaX' ? ' KodaX config lives in ~/.kodax/config.json + KODAX_* env vars.)' : ')';
+  return base + tail;
 }
 
 function tokenize(text: string): string[] {

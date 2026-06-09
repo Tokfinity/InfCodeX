@@ -14,6 +14,7 @@
 import { existsSync, readFileSync, statSync } from 'fs';
 import path from 'path';
 import { createRequire } from 'module';
+import { normalizeFsPath } from './paths.js';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -123,14 +124,17 @@ export function findNearestRoot(
   stopDir: string,
 ): string {
   const stop = path.resolve(stopDir);
+  const stopKey = normalizeFsPath(stop);
   let dir = path.dirname(path.resolve(fromFile));
-  // Guard against fromFile being outside stopDir entirely.
-  if (!dir.startsWith(stop)) return stop;
+  // Compare via normalized keys (Windows drive/casing differences between
+  // resolved paths would otherwise break the prefix/equality checks); return
+  // the original-case directory.
+  if (!normalizeFsPath(dir).startsWith(stopKey)) return stop;
   for (;;) {
     for (const marker of markers) {
       if (existsSync(path.join(dir, marker))) return dir;
     }
-    if (dir === stop) return stop;
+    if (normalizeFsPath(dir) === stopKey) return stop;
     const parent = path.dirname(dir);
     if (parent === dir) return stop;
     dir = parent;

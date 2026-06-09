@@ -30,5 +30,9 @@ export function spawnLspProcess(
 }
 
 function quoteIfNeeded(value: string): string {
-  return /\s/.test(value) ? `"${value}"` : value;
+  // Windows filenames cannot contain `"` (it's illegal), so a resolved binary
+  // path never has one — but escape cmd-style (`"` → `""`) defensively so the
+  // quoted command line is well-formed for any input. Quote on whitespace or quote.
+  if (!/[\s"]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
 }

@@ -57,6 +57,13 @@ describe('FEATURE_221 injectable self-manual', () => {
     expect(resolveKodaXManual({}, SPACE).title).toBe('KodaX-Space Manual — Index');
   });
 
+  it('does not leak the ~/.kodax config path into a re-branded consumer manual', () => {
+    // A white-labeled consumer topic must not carry KodaX's config-path hint.
+    expect(resolveKodaXManual({ topic: 'space-settings' }, SPACE).content).not.toContain('~/.kodax');
+    // …but KodaX's own manual still keeps it (default byte-identity preserved).
+    expect(resolveKodaXManual({ topic: 'providers' }).content).toContain('~/.kodax/config.json');
+  });
+
   it('byte-caps an oversized injected topic body', () => {
     const huge = 'x'.repeat(20000);
     const r = resolveKodaXManual(

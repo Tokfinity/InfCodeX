@@ -1923,6 +1923,16 @@ describe("FEATURE_220 — finalized thinking collapse", () => {
       expect(hasMore).toBe(true);
       expect(summary).toBe("Real reasoning here.");
     });
+
+    it("returns an empty, non-expandable summary for empty/whitespace-only text", () => {
+      for (const text of ["", "   ", "\n\n  \n"]) {
+        const { summary, hasMore } = buildCollapsedThinkingLine(text);
+        expect(summary).toBe("");
+        // hasMore=false → renderer falls through to the legacy preview path,
+        // so no dangling "Ctrl+O to expand" hint on an empty thinking block.
+        expect(hasMore).toBe(false);
+      }
+    });
   });
 
   describe("thinking item rendering", () => {
