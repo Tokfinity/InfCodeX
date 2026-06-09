@@ -340,4 +340,26 @@ describe('FEATURE_191 — specialist-agents section (A.3)', () => {
       expect(specialistIdx).toBeLessThan(projectAgentsIdx);
     }
   });
+
+  it('FEATURE_221: self-knowledge-routing rule is re-branded end-to-end by selfManual.productName', async () => {
+    const cwd = await createTempDir('kodax-capsec-selfmanual-');
+    cleanupDirs.push(cwd);
+    const base = makeOptions({ executionCwd: cwd, gitRoot: cwd });
+
+    // Default (no selfManual) → "KodaX self-knowledge" in the rendered section.
+    const dft = await buildCapabilityContextSections(base, false, cwd);
+    expect(dft.find((s) => s.id === 'self-knowledge-routing')?.content).toContain(
+      'KodaX self-knowledge',
+    );
+
+    // Injected productName flows through into the rendered prompt section.
+    const branded = await buildCapabilityContextSections(
+      { ...base, selfManual: { productName: 'KodaX-Space' } } as KodaXOptions,
+      false,
+      cwd,
+    );
+    const rule = branded.find((s) => s.id === 'self-knowledge-routing');
+    expect(rule?.content).toContain('KodaX-Space self-knowledge');
+    expect(rule?.content).not.toContain('KodaX self-knowledge:');
+  });
 });
