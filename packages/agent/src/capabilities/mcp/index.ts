@@ -2,13 +2,12 @@
  * @kodax-ai/mcp — MCP capability provider with progressive disclosure.
  *
  * FEATURE_082 (v0.7.24): moved from
- * `@kodax-ai/coding/src/capabilities/providers/mcp/`. Preserves all five
+ * `@kodax-ai/coding/src/capabilities/providers/mcp/`. Preserves the
  * progressive-disclosure modes:
  *   1. lazy connect (per-server `connect: 'lazy' | 'prewarm' | 'disabled'`)
  *   2. two-tier descriptors (McpCatalogItem vs McpCapabilityDescriptor)
  *   3. search -> describe flow
- *   4. elicitation for missing tool args
- *   5. on-disk catalog cache under .kodax/mcp/
+ *   4. on-disk catalog cache under .kodax/mcp/
  *
  * The coding-runtime adapter `registerConfiguredMcpCapabilityProvider` lives
  * in `@kodax-ai/coding/src/capabilities/providers/mcp-adapter.ts` — it is not

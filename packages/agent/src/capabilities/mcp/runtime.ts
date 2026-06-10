@@ -4,14 +4,20 @@ import {
   createMcpCapabilityId,
   deriveMcpCapabilityRisk,
   readMcpServerCatalog,
+  sanitizeMcpIcons,
   summarizeMcpCatalogEntry,
   type McpCapabilityDescriptor,
+  type McpToolTaskSupport,
   type McpCapabilityKind,
   type McpCatalogItem,
   type McpServerCatalogSnapshot,
   writeMcpServerCatalog,
 } from './catalog.js';
-import { createMcpTransport, type McpTransport } from './transport.js';
+import {
+  McpExpiredSessionError,
+  createMcpTransport,
+  type McpTransport,
+} from './transport.js';
 import { getValidToken } from './oauth.js';
 
 interface JsonRpcRequestRecord {
@@ -131,10 +137,18 @@ function buildToolDescriptor(
     tags: toStringArray(raw.tags),
     risk: deriveMcpCapabilityRisk('tool', name, annotations),
     annotations,
+    icons: sanitizeMcpIcons(raw.icons),
+    taskSupport: readToolTaskSupport(raw.execution),
     inputSchema: raw.inputSchema ?? raw.input_schema,
     outputSchema: raw.outputSchema ?? raw.output_schema,
     cachedAt,
   };
+}
+function readToolTaskSupport(execution: unknown): McpToolTaskSupport | undefined {
+  const value = readString(asRecord(execution)?.taskSupport);
+  return value === 'optional' || value === 'required' || value === 'forbidden'
+    ? value
+    : undefined;
 }
 function buildResourceDescriptor(
   serverId: string,
@@ -154,6 +168,7 @@ function buildResourceDescriptor(
     tags: toStringArray(raw.tags),
     risk: deriveMcpCapabilityRisk('resource', uri, annotations),
     annotations,
+    icons: sanitizeMcpIcons(raw.icons),
     uri,
     mimeType: readString(raw.mimeType) ?? readString(raw.mime_type),
     cachedAt,
@@ -177,6 +192,7 @@ function buildPromptDescriptor(
     tags: toStringArray(raw.tags),
     risk: deriveMcpCapabilityRisk('prompt', name, annotations),
     annotations,
+    icons: sanitizeMcpIcons(raw.icons),
     promptArgsSchema: raw.arguments ?? raw.argsSchema ?? raw.args_schema,
     cachedAt,
   };
@@ -190,6 +206,8 @@ function toCatalogItem(
     promptArgsSchema: _promptArgsSchema,
     uri: _uri,
     mimeType: _mimeType,
+    icons: _icons,
+    taskSupport: _taskSupport,
     ...item
   } = descriptor;
   return item;
@@ -221,6 +239,34 @@ function extractListEntries(
 // or globally via MCP_TIMEOUT / MCP_REQUEST_TIMEOUT env vars.
 const DEFAULT_STARTUP_TIMEOUT_MS = 30_000;   // Claude Code: 30s
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;   // Claude Code: 60s
+
+// Requested base protocol version. Optional client features are advertised
+// separately via initialize.capabilities; KodaX currently sends {} there.
+const MCP_PROTOCOL_VERSION = '2025-11-25';
+const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
+  '2025-11-25',
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+]);
+
+class McpProtocolVersionError extends Error {
+  constructor(version: string | undefined) {
+    super(version
+      ? `Unsupported MCP protocol version from server: ${version}`
+      : 'MCP initialize response did not include protocolVersion.');
+    this.name = 'McpProtocolVersionError';
+  }
+}
+
+function readNegotiatedProtocolVersion(result: unknown): string {
+  const initialized = asRecord(result);
+  const version = readString(initialized?.protocolVersion);
+  if (!version || !SUPPORTED_MCP_PROTOCOL_VERSIONS.has(version)) {
+    throw new McpProtocolVersionError(version);
+  }
+  return version;
+}
 
 function getStartupTimeoutMs(config: KodaXMcpServerConfig): number {
   return config.startupTimeoutMs
@@ -315,6 +361,19 @@ export class McpServerRuntime {
     metadata?: Record<string, unknown>;
   }> {
     await this.connect();
+    // A tool marked execution.taskSupport: "required" only runs via task
+    // augmentation (2025-11-25). KodaX does not implement tasks yet, so surface
+    // a clear error instead of a plain tools/call the server will reject.
+    const catalog = this.catalog ?? await this.getCatalog();
+    const taskSupport = catalog.descriptors.find(
+      (descriptor) => descriptor.kind === 'tool' && descriptor.name === name,
+    )?.taskSupport;
+    if (taskSupport === 'required') {
+      throw new Error(
+        `MCP tool "${name}" on "${this.serverId}" only runs as a task `
+        + `(execution.taskSupport: "required"), which KodaX does not yet support.`,
+      );
+    }
     const response = await this.request('tools/call', { name, arguments: args });
     const record = asRecord(response);
     return {
@@ -456,14 +515,14 @@ export class McpServerRuntime {
       }
     }
 
-    // For stdio, try Content-Length framing first (MCP spec). If it fails,
-    // retry with NDJSON (Python MCP SDK default).
+    // MCP stdio uses newline-delimited JSON. Keep Content-Length only as a
+    // compatibility fallback for legacy/custom servers.
     const isStdio = (this.config.type ?? 'stdio') === 'stdio';
-    const framings = isStdio ? ['content-length', 'ndjson'] as const : [undefined] as const;
+    const framings = isStdio ? ['ndjson', 'content-length'] as const : [undefined] as const;
 
     for (const framing of framings) {
       await this.resetTransport();
-      // Merge OAuth headers with any user-configured headers
+      // Merge OAuth headers with user-configured headers.
       const effectiveConfig = authHeaders
         ? { ...this.config, headers: { ...this.config.headers, ...authHeaders } }
         : this.config;
@@ -492,25 +551,28 @@ export class McpServerRuntime {
         // Empty capabilities: KodaX does not support optional client features
         // (roots, sampling) — server requests for these get a -32601 error reply.
         const baseStartup = getStartupTimeoutMs(this.config);
-        const timeoutMs = framing === 'content-length'
-          ? Math.min(baseStartup, 10_000) // shorter for first framing attempt
-          : baseStartup;
         const initializeResult = await this.request('initialize', {
-          protocolVersion: '2024-11-05',
+          protocolVersion: MCP_PROTOCOL_VERSION,
           capabilities: {},
           clientInfo: {
             name: 'KodaX',
             version: '0.7',
           },
-        }, timeoutMs);
-        await this.notify('notifications/initialized', {});
+        }, baseStartup, false);
         const initialized = asRecord(initializeResult);
+        const protocolVersion = readNegotiatedProtocolVersion(initializeResult);
+        transport.setProtocolVersion?.(protocolVersion);
+        await this.notify('notifications/initialized', {});
         this.initialized = true;
         this.diagnostics.status = 'ready';
         this.diagnostics.lastError = undefined;
         this.diagnostics.dirty = this.diagnostics.dirty || initialized?.capabilities !== undefined;
         return; // Success — stop trying other framings.
       } catch (error) {
+        if (error instanceof McpProtocolVersionError) {
+          await this.resetTransport();
+          throw error;
+        }
         // If this is the last framing option, propagate the error.
         if (framing === framings[framings.length - 1]) {
           throw error;
@@ -568,6 +630,24 @@ export class McpServerRuntime {
     method: string,
     params: Record<string, unknown>,
     timeoutMs = getRequestTimeoutMs(this.config),
+    retryExpiredSession = true,
+  ): Promise<unknown> {
+    try {
+      return await this.sendRequest(method, params, timeoutMs);
+    } catch (error) {
+      if (retryExpiredSession && error instanceof McpExpiredSessionError) {
+        await this.resetTransport();
+        await this.connect();
+        return this.request(method, params, timeoutMs, false);
+      }
+      throw error;
+    }
+  }
+
+  private sendRequest(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
   ): Promise<unknown> {
     if (!this.transport?.connected) {
       throw new Error(`MCP server "${this.serverId}" is not connected.`);
@@ -584,6 +664,15 @@ export class McpServerRuntime {
     return new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
+        // Spec (utilities/cancellation): on timeout the client SHOULD notify the
+        // server so it can stop processing and release resources. The initialize
+        // request MUST NOT be cancelled, so it is exempt.
+        if (method !== 'initialize') {
+          void this.notify('notifications/cancelled', {
+            requestId,
+            reason: `Client request timed out after ${timeoutMs}ms`,
+          });
+        }
         reject(new Error(`MCP request timed out for ${this.serverId}:${method}`));
       }, timeoutMs);
       timeout.unref?.();
@@ -648,10 +737,23 @@ export class McpServerRuntime {
       this.diagnostics.dirty = true;
     }
 
-    // Server→client request (has both method and id): respond with
-    // "method not found" so the server does not hang.
+    // Server→client request (has both method and id).
     const requestId = payload.id;
     if (requestId !== undefined && requestId !== null) {
+      // Ping is mandatory in every protocol revision: the receiver MUST answer
+      // with an empty result. Replying -32601 would violate the spec and lets a
+      // health-checking server treat the connection as stale and drop it.
+      if (method === 'ping') {
+        this.transport?.send(jsonRpcString({
+          jsonrpc: '2.0',
+          id: requestId as string | number,
+          result: {},
+        })).catch(() => {});
+        return;
+      }
+      // Every other server→client request targets a client capability KodaX
+      // does not advertise (sampling, roots, elicitation). Reply method-not-found
+      // so the server does not hang waiting for a response.
       this.transport?.send(jsonRpcString({
         jsonrpc: '2.0',
         id: requestId as string | number,

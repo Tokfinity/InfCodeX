@@ -1,7 +1,7 @@
 /**
  * v0.7.42 — McpManager tests. Uses the real MCP test fixture (a Node-
- * scripted MCP server speaking stdio JSON-RPC over Content-Length
- * framing) so the manager exercises actual transport + catalog +
+ * scripted MCP server speaking stdio JSON-RPC over NDJSON framing) so the
+ * manager exercises actual transport + catalog +
  * lifecycle paths — no mocking of @kodax-ai/mcp internals.
  *
  * Each test gets a per-case temp dir so cache state never leaks between

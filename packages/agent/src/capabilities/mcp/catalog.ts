@@ -6,6 +6,17 @@ import { getAgentConfigPath } from '../../runtime/agent-home.js';
 export type McpCapabilityKind = 'tool' | 'resource' | 'prompt';
 export type McpCapabilityRisk = 'read' | 'write' | 'network' | 'exec';
 
+/** Per-tool task-augmentation support (2025-11-25 `execution.taskSupport`). */
+export type McpToolTaskSupport = 'forbidden' | 'optional' | 'required';
+
+/** Icon metadata (2025-11-25) attached to tools / resources / prompts. */
+export interface McpIcon {
+  src: string;
+  mimeType?: string;
+  sizes?: string[];
+  theme?: 'light' | 'dark';
+}
+
 export interface McpCatalogItem {
   id: string;
   serverId: string;
@@ -24,6 +35,10 @@ export interface McpCapabilityDescriptor extends McpCatalogItem {
   promptArgsSchema?: unknown;
   uri?: string;
   mimeType?: string;
+  /** Sanitized icon metadata (unsafe-scheme icons dropped). */
+  icons?: McpIcon[];
+  /** Tool only — `execution.taskSupport`. Absent is treated as 'forbidden'. */
+  taskSupport?: McpToolTaskSupport;
 }
 
 export interface McpServerCatalogSnapshot {
@@ -82,6 +97,55 @@ export function summarizeMcpCatalogEntry(
     ? value.title.trim()
     : '';
   return description || title || fallback;
+}
+
+// Per 2025-11-25 icon security rules clients MUST reject unsafe schemes
+// (javascript:, file:, ftp:, ws:, local app schemes). Allow only http(s) and
+// data: URIs; relative URLs are unresolvable without a server origin and dropped.
+const SAFE_ICON_SCHEMES = ['https:', 'http:', 'data:'];
+
+function isSafeIconSrc(src: string): boolean {
+  const lower = src.toLowerCase();
+  return SAFE_ICON_SCHEMES.some((scheme) => lower.startsWith(scheme));
+}
+
+/**
+ * Validate and normalize a raw `icons` array from a tool/resource/prompt entry,
+ * dropping malformed entries and unsafe-scheme sources. Returns undefined when
+ * nothing safe remains so callers can omit the field entirely.
+ */
+export function sanitizeMcpIcons(raw: unknown): McpIcon[] | undefined {
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const icons: McpIcon[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    const record = entry as Record<string, unknown>;
+    const src = typeof record.src === 'string' ? record.src.trim() : '';
+    if (!src || !isSafeIconSrc(src)) {
+      continue;
+    }
+    const icon: McpIcon = { src };
+    if (typeof record.mimeType === 'string' && record.mimeType.trim()) {
+      icon.mimeType = record.mimeType.trim();
+    }
+    if (Array.isArray(record.sizes)) {
+      const sizes = record.sizes.filter(
+        (size): size is string => typeof size === 'string' && size.trim().length > 0,
+      );
+      if (sizes.length > 0) {
+        icon.sizes = sizes;
+      }
+    }
+    if (record.theme === 'light' || record.theme === 'dark') {
+      icon.theme = record.theme;
+    }
+    icons.push(icon);
+  }
+  return icons.length > 0 ? icons : undefined;
 }
 
 export function deriveMcpCapabilityRisk(

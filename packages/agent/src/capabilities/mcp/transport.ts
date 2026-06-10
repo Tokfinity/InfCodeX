@@ -25,8 +25,16 @@ export interface McpTransport {
   open(events: McpTransportEvents): Promise<void>;
   /** Send a JSON string. The transport handles framing. */
   send(json: string): Promise<void>;
+  setProtocolVersion?(version: string | undefined): void;
   close(): Promise<void>;
   readonly connected: boolean;
+}
+
+export class McpExpiredSessionError extends Error {
+  constructor() {
+    super('MCP Streamable HTTP session expired.');
+    this.name = 'McpExpiredSessionError';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +57,7 @@ export function createStdioTransport(config: {
   let process: ChildProcessWithoutNullStreams | undefined;
   let buffer = Buffer.alloc(0);
   let events: McpTransportEvents | undefined;
-  let framing: StdioFraming = config.framing ?? 'content-length';
+  let framing: StdioFraming = config.framing ?? 'ndjson';
   let cleanupOnProcessExit: (() => void) | undefined;
   let removeCleanupOnProcessExit: (() => void) | undefined;
   let unregisterManagedChild: (() => void) | undefined;
@@ -227,15 +235,27 @@ export function createStdioTransport(config: {
 interface SseEvent {
   event: string;
   data: string;
+  /** SSE `id:` field, used as the resumption cursor (Last-Event-ID). */
+  id?: string;
+}
+
+interface SseParseHandlers {
+  onEvent: (event: SseEvent) => void;
+  /** SSE `retry:` field (milliseconds) — the server's reconnect-delay hint. */
+  onRetry?: (retryMs: number) => void;
 }
 
 function parseSseChunks(
   text: string,
   remainder: string,
-  onEvent: (event: SseEvent) => void,
+  handlers: SseParseHandlers | ((event: SseEvent) => void),
 ): string {
+  const onEvent = typeof handlers === 'function' ? handlers : handlers.onEvent;
+  const onRetry = typeof handlers === 'function' ? undefined : handlers.onRetry;
   let buf = remainder + text;
   let currentEvent = '';
+  let currentId: string | undefined;
+  let currentIdSeen = false;
   const currentData: string[] = [];
 
   while (true) {
@@ -249,9 +269,15 @@ function parseSseChunks(
     if (line === '') {
       // End of event block.
       if (currentData.length > 0) {
-        onEvent({ event: currentEvent || 'message', data: currentData.join('\n') });
+        const event: SseEvent = { event: currentEvent || 'message', data: currentData.join('\n') };
+        if (currentIdSeen) {
+          event.id = currentId ?? '';
+        }
+        onEvent(event);
       }
       currentEvent = '';
+      currentId = undefined;
+      currentIdSeen = false;
       currentData.length = 0;
       continue;
     }
@@ -262,14 +288,22 @@ function parseSseChunks(
       currentEvent = line.slice(6).trim();
     } else if (line.startsWith('data:')) {
       currentData.push(line.slice(5).trimStart());
+    } else if (line.startsWith('id:')) {
+      currentId = line.slice(3).trim();
+      currentIdSeen = true;
+    } else if (line.startsWith('retry:')) {
+      const retryMs = Number(line.slice(6).trim());
+      if (Number.isFinite(retryMs) && retryMs >= 0) {
+        onRetry?.(retryMs);
+      }
     }
-    // id: and retry: lines are ignored for now.
   }
 
   // Return what remains (incomplete last line / partial event).
   // If we have accumulated data for an in-progress event, prepend that state.
-  if (currentData.length > 0 || currentEvent) {
+  if (currentData.length > 0 || currentEvent || currentIdSeen) {
     const pending = (currentEvent ? `event:${currentEvent}\n` : '')
+      + (currentIdSeen ? `id:${currentId ?? ''}\n` : '')
       + currentData.map((d) => `data:${d}\n`).join('');
     return pending + buf;
   }
@@ -425,7 +459,40 @@ export function createStreamableHttpTransport(config: {
   let events: McpTransportEvents | undefined;
   let isConnected = false;
   let sessionId: string | undefined;
+  let protocolVersion: string | undefined;
   let notificationStreamStarted = false;
+  // Resumption cursor for the GET notification stream (SSE Last-Event-ID).
+  let lastEventId: string | undefined;
+  const DEFAULT_RECONNECT_DELAY_MS = 1_000;
+  const MAX_RECONNECT_ATTEMPTS = 5;
+
+  function delayBeforeReconnect(ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        abortController?.signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      timer.unref?.();
+      abortController?.signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  function readMessageMethod(json: string): string | undefined {
+    try {
+      const payload = JSON.parse(json) as unknown;
+      if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
+        return undefined;
+      }
+      const method = (payload as Record<string, unknown>).method;
+      return typeof method === 'string' ? method : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   function readSessionId(headers: Headers): string | undefined {
     const value = headers.get('mcp-session-id');
@@ -446,56 +513,89 @@ export function createStreamableHttpTransport(config: {
     return {
       ...headers,
       ...(config.headers ?? {}),
-      ...(sessionId ? { 'Mcp-Session-Id': sessionId } : {}),
+      ...(protocolVersion ? { 'MCP-Protocol-Version': protocolVersion } : {}),
+      ...(sessionId ? { 'MCP-Session-Id': sessionId } : {}),
     };
   }
 
-  function handleExpiredSession(status: number): void {
+  function handleExpiredSession(status: number): boolean {
     if (status !== 404 || !sessionId) {
-      return;
+      return false;
     }
     sessionId = undefined;
+    lastEventId = undefined;
     notificationStreamStarted = false;
     isConnected = false;
     abortController?.abort();
+    return true;
   }
 
-  /** Optional background SSE stream for server-initiated messages. */
+  /**
+   * Optional background SSE stream for server-initiated messages. Per the
+   * 2025-11-25 transport spec a dropped stream is NOT a cancellation: the client
+   * resumes via GET with a `Last-Event-ID` header, honoring the `retry` hint,
+   * so missed notifications can be replayed.
+   */
   async function openNotificationStream(): Promise<void> {
-    if (!abortController) {
-      return;
-    }
-    try {
-      const response = await fetch(config.url, {
-        method: 'GET',
-        headers: withSessionHeaders({
-          'Accept': 'text/event-stream',
-        }),
-        signal: abortController.signal,
-      });
-      // A 405 means the server does not support server-initiated messages — that's OK.
-      if (response.status === 405 || !response.ok || !response.body) {
-        handleExpiredSession(response.status);
-        return;
-      }
-      const reader = (response.body as ReadableStream<Uint8Array>).getReader();
-      const decoder = new TextDecoder();
-      let remainder = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
+    let attempts = 0;
+    while (abortController && !abortController.signal.aborted && isConnected) {
+      let reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS;
+      try {
+        const headers = withSessionHeaders({ 'Accept': 'text/event-stream' });
+        if (lastEventId) {
+          headers['Last-Event-ID'] = lastEventId;
         }
-        remainder = parseSseChunks(decoder.decode(value, { stream: true }), remainder, (event) => {
-          if (event.event === 'message') {
-            events?.onMessage(event.data);
-          }
+        const response = await fetch(config.url, {
+          method: 'GET',
+          headers,
+          signal: abortController.signal,
         });
-      }
-    } catch (error) {
-      if ((error as Error).name !== 'AbortError') {
+        // A 405 means the server does not support server-initiated messages —
+        // that's OK; stop trying rather than reconnect-looping.
+        if (response.status === 405 || !response.ok || !response.body) {
+          handleExpiredSession(response.status);
+          return;
+        }
+        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
+        const decoder = new TextDecoder();
+        let remainder = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          remainder = parseSseChunks(decoder.decode(value, { stream: true }), remainder, {
+            onEvent: (event) => {
+              // A real event proves the (re)connect is healthy — reset the
+              // budget so only empty / immediately-dropped streams exhaust it.
+              attempts = 0;
+              if (event.id !== undefined) {
+                lastEventId = event.id;
+              }
+              if (event.event === 'message') {
+                events?.onMessage(event.data);
+              }
+            },
+            onRetry: (ms) => { reconnectDelayMs = ms; },
+          });
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') {
+          return;
+        }
         events?.onError(error instanceof Error ? error : new Error(String(error)));
       }
+
+      // Stream ended (clean EOF or a recoverable error). Resume unless the
+      // transport is closing or the reconnect budget is exhausted.
+      if (!isConnected || !abortController || abortController.signal.aborted) {
+        return;
+      }
+      attempts += 1;
+      if (attempts > MAX_RECONNECT_ATTEMPTS) {
+        return;
+      }
+      await delayBeforeReconnect(reconnectDelayMs);
     }
   }
 
@@ -512,6 +612,10 @@ export function createStreamableHttpTransport(config: {
       return isConnected;
     },
 
+    setProtocolVersion(version) {
+      protocolVersion = version;
+    },
+
     async open(ev) {
       events = ev;
       abortController = new AbortController();
@@ -522,6 +626,7 @@ export function createStreamableHttpTransport(config: {
       if (!isConnected) {
         throw new Error('Streamable HTTP transport is not connected.');
       }
+      const method = readMessageMethod(json);
       const response = await fetch(config.url, {
         method: 'POST',
         headers: withSessionHeaders({
@@ -533,15 +638,20 @@ export function createStreamableHttpTransport(config: {
       });
       captureSessionId(response);
       if (!response.ok) {
-        handleExpiredSession(response.status);
+        if (handleExpiredSession(response.status)) {
+          throw new McpExpiredSessionError();
+        }
         throw new Error(`HTTP POST failed: ${response.status} ${response.statusText}`);
       }
-      startNotificationStream();
+      if (method !== 'initialize') {
+        startNotificationStream();
+      }
 
       const contentType = response.headers.get('content-type') ?? '';
 
       if (contentType.includes('text/event-stream') && response.body) {
-        // Streaming response — parse SSE events.
+        // Streaming response — parse SSE events. Track event ids here too so a
+        // later GET-stream resume can pick up from the right cursor.
         const reader = (response.body as ReadableStream<Uint8Array>).getReader();
         const decoder = new TextDecoder();
         let remainder = '';
@@ -550,10 +660,15 @@ export function createStreamableHttpTransport(config: {
           if (done) {
             break;
           }
-          remainder = parseSseChunks(decoder.decode(value, { stream: true }), remainder, (event) => {
-            if (event.event === 'message') {
-              events?.onMessage(event.data);
-            }
+          remainder = parseSseChunks(decoder.decode(value, { stream: true }), remainder, {
+            onEvent: (event) => {
+              if (event.id !== undefined) {
+                lastEventId = event.id;
+              }
+              if (event.event === 'message') {
+                events?.onMessage(event.data);
+              }
+            },
           });
         }
         return;
@@ -568,15 +683,18 @@ export function createStreamableHttpTransport(config: {
 
     async close() {
       const sessionIdToClose = sessionId;
+      const protocolVersionToClose = protocolVersion;
       isConnected = false;
       sessionId = undefined;
+      protocolVersion = undefined;
       notificationStreamStarted = false;
       if (sessionIdToClose && abortController && !abortController.signal.aborted) {
         await fetch(config.url, {
           method: 'DELETE',
           headers: {
             ...(config.headers ?? {}),
-            'Mcp-Session-Id': sessionIdToClose,
+            ...(protocolVersionToClose ? { 'MCP-Protocol-Version': protocolVersionToClose } : {}),
+            'MCP-Session-Id': sessionIdToClose,
           },
           signal: abortController.signal,
         }).catch(() => {});

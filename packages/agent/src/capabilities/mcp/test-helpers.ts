@@ -11,12 +11,10 @@ const TEST_PROMPT_NAME = 'draft_prompt';
 const MCP_TEST_SERVER_SOURCE = String.raw`const TOOL_NAME = 'echo_tool';
 const RESOURCE_URI = 'memory://guide';
 const PROMPT_NAME = 'draft_prompt';
-let buffer = Buffer.alloc(0);
+let buffer = '';
 
 function writeMessage(payload) {
-  const body = Buffer.from(JSON.stringify(payload), 'utf8');
-  process.stdout.write('Content-Length: ' + body.length + '\r\n\r\n');
-  process.stdout.write(body);
+  process.stdout.write(JSON.stringify(payload) + '\n');
 }
 
 function handleRequest(message) {
@@ -28,7 +26,7 @@ function handleRequest(message) {
       jsonrpc: '2.0',
       id,
       result: {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2025-11-25',
         capabilities: {
           tools: {},
           resources: {},
@@ -172,28 +170,19 @@ function handleFrame(raw) {
   }
 }
 
+process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => {
-  buffer = Buffer.concat([buffer, chunk]);
+  buffer += chunk;
   while (true) {
-    const headerEnd = buffer.indexOf('\r\n\r\n');
-    if (headerEnd < 0) {
+    const lineEnd = buffer.indexOf('\n');
+    if (lineEnd < 0) {
       return;
     }
-    const header = buffer.subarray(0, headerEnd).toString('utf8');
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      process.stderr.write('missing content-length\n');
-      buffer = Buffer.alloc(0);
-      return;
+    const line = buffer.slice(0, lineEnd).replace(/\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (line) {
+      handleFrame(line);
     }
-    const length = Number(match[1]);
-    const frameEnd = headerEnd + 4 + length;
-    if (buffer.length < frameEnd) {
-      return;
-    }
-    const body = buffer.subarray(headerEnd + 4, frameEnd).toString('utf8');
-    buffer = buffer.subarray(frameEnd);
-    handleFrame(body);
   }
 });
 
