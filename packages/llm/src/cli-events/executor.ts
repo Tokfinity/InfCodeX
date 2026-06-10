@@ -40,6 +40,7 @@ export abstract class CLIExecutor {
             cwd: this.config.cwd ?? process.cwd(),
             env,
             stdio: ['ignore', 'pipe', 'pipe'],
+            detached: process.platform !== 'win32',
         });
 
         // Capture stderr for diagnostics without interleaving it into stdout JSONL.

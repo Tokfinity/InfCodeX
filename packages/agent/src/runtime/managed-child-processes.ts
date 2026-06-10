@@ -12,7 +12,7 @@ import { killPidTree } from './process-tree.js';
 
 const REGISTRY_VERSION = 1;
 const WINDOWS_CREATION_SKEW_MS = 60_000;
-const PROCESS_QUERY_TIMEOUT_MS = 2_000;
+const PROCESS_QUERY_TIMEOUT_MS = 5_000;
 const PID_EXIT_WAIT_MS = 2_000;
 
 export interface ManagedChildProcessMetadata {
@@ -44,6 +44,16 @@ interface WindowsProcessInfo {
   readonly CreationDate?: string;
   readonly CommandLine?: string;
 }
+
+type WindowsProcessLookup =
+  | { readonly status: 'found'; readonly info: WindowsProcessInfo }
+  | { readonly status: 'missing' }
+  | { readonly status: 'unknown' };
+
+type PosixCommandLineLookup =
+  | { readonly status: 'found'; readonly commandLine: string }
+  | { readonly status: 'missing' }
+  | { readonly status: 'unknown' };
 
 function registryDir(): string {
   return getAgentConfigPath('processes', 'children');
@@ -110,7 +120,7 @@ function parseWindowsDate(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function getWindowsProcessInfo(pid: number): WindowsProcessInfo | undefined {
+function getWindowsProcessInfo(pid: number): WindowsProcessLookup {
   const script = [
     `$p = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"`,
     'if ($null -eq $p) { exit 0 }',
@@ -126,25 +136,38 @@ function getWindowsProcessInfo(pid: number): WindowsProcessInfo | undefined {
     timeout: PROCESS_QUERY_TIMEOUT_MS,
     windowsHide: true,
   });
-  if (result.status !== 0 || !result.stdout.trim()) {
-    return undefined;
+  if (result.error) {
+    return { status: 'unknown' };
+  }
+  if (result.status !== 0) {
+    return { status: 'unknown' };
+  }
+  if (!result.stdout.trim()) {
+    return { status: 'missing' };
   }
   try {
-    return JSON.parse(result.stdout) as WindowsProcessInfo;
+    return { status: 'found', info: JSON.parse(result.stdout) as WindowsProcessInfo };
   } catch {
-    return undefined;
+    return { status: 'unknown' };
   }
 }
 
-function getPosixCommandLine(pid: number): string | undefined {
+function getPosixCommandLine(pid: number): PosixCommandLineLookup {
   const result = spawnSync('ps', ['-p', String(pid), '-o', 'command='], {
     encoding: 'utf8',
     timeout: PROCESS_QUERY_TIMEOUT_MS,
   });
-  if (result.status !== 0) {
-    return undefined;
+  if (result.error) {
+    return { status: 'unknown' };
   }
-  return result.stdout.trim() || undefined;
+  if (result.status !== 0) {
+    return { status: 'missing' };
+  }
+  const commandLine = result.stdout.trim();
+  if (!commandLine) {
+    return { status: 'missing' };
+  }
+  return { status: 'found', commandLine };
 }
 
 async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> {
@@ -158,20 +181,35 @@ async function waitForPidExit(pid: number, timeoutMs: number): Promise<boolean> 
   return !isPidAlive(pid);
 }
 
-function isConfirmedRecord(record: ManagedChildProcessRecord): boolean {
+function isConfirmedRecord(record: ManagedChildProcessRecord): boolean | undefined {
   if (process.platform === 'win32') {
-    const info = getWindowsProcessInfo(record.pid);
+    const lookup = getWindowsProcessInfo(record.pid);
+    if (lookup.status === 'unknown') {
+      return undefined;
+    }
+    if (lookup.status === 'missing') {
+      return false;
+    }
+    const info = lookup.info;
     if (!info?.CommandLine || !commandMatches(record, info.CommandLine)) {
       return false;
     }
     const creationMs = parseWindowsDate(info.CreationDate);
-    return creationMs !== undefined
-      && creationMs <= record.registeredAtMs + 5_000
+    if (creationMs === undefined) {
+      return undefined;
+    }
+    return creationMs <= record.registeredAtMs + 5_000
       && creationMs >= record.registeredAtMs - WINDOWS_CREATION_SKEW_MS;
   }
 
-  const commandLine = getPosixCommandLine(record.pid);
-  return commandLine !== undefined && commandMatches(record, commandLine);
+  const lookup = getPosixCommandLine(record.pid);
+  if (lookup.status === 'unknown') {
+    return undefined;
+  }
+  if (lookup.status === 'missing') {
+    return false;
+  }
+  return commandMatches(record, lookup.commandLine);
 }
 
 function readRecord(filePath: string): ManagedChildProcessRecord | undefined {
@@ -275,7 +313,13 @@ export async function cleanupRegisteredManagedChildren(
       continue;
     }
 
-    if (!isConfirmedRecord(record)) {
+    const confirmed = isConfirmedRecord(record);
+    if (confirmed === undefined) {
+      skipped += 1;
+      continue;
+    }
+
+    if (!confirmed) {
       removeRecord(record.pid);
       pruned += 1;
       continue;

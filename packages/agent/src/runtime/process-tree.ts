@@ -4,6 +4,9 @@ import {
   type ChildProcess,
 } from 'node:child_process';
 
+// Keep this file in sync with packages/llm/src/cli-events/process-tree.ts.
+// @kodax-ai/llm stays dependency-light, so it carries a small local copy.
+
 const DEFAULT_GRACE_MS = 300;
 const DEFAULT_FORCE_MS = 2_000;
 const DEFAULT_TASKKILL_MS = 2_000;
@@ -79,6 +82,49 @@ function runTaskkill(pid: number, timeoutMs: number): Promise<void> {
   });
 }
 
+function signalPosixPidTree(pid: number, signal: NodeJS.Signals): boolean {
+  let signaled = false;
+  try {
+    process.kill(-pid, signal);
+    signaled = true;
+  } catch {
+    // The child may not be a process-group leader (older registrations or
+    // callers that did not use detached:true). Fall back to direct PID below.
+  }
+
+  try {
+    process.kill(pid, signal);
+    signaled = true;
+  } catch {
+    // If the group signal succeeded, the direct PID may already be gone.
+  }
+  return signaled;
+}
+
+function signalTargetExists(target: number): boolean {
+  try {
+    process.kill(target, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
+function isPosixPidTreeAlive(pid: number): boolean {
+  return signalTargetExists(-pid) || signalTargetExists(pid);
+}
+
+async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isPosixPidTreeAlive(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !isPosixPidTreeAlive(pid);
+}
+
 export async function killPidTree(
   pid: number,
   options: ProcessTreeKillOptions = {},
@@ -88,11 +134,15 @@ export async function killPidTree(
     return;
   }
 
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
+  const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
+  if (!signalPosixPidTree(pid, 'SIGTERM')) {
     return;
   }
+  if (await waitForPosixPidTreeExit(pid, forceMs)) {
+    return;
+  }
+  signalPosixPidTree(pid, 'SIGKILL');
+  await waitForPosixPidTreeExit(pid, forceMs);
 }
 
 export function killPidTreeSync(pid: number): void {
@@ -104,11 +154,8 @@ export function killPidTreeSync(pid: number): void {
     return;
   }
 
-  try {
-    process.kill(pid, 'SIGTERM');
-  } catch {
-    // Best-effort process-exit cleanup.
-  }
+  signalPosixPidTree(pid, 'SIGTERM');
+  signalPosixPidTree(pid, 'SIGKILL');
 }
 
 export async function killChildProcessTree(
@@ -138,6 +185,18 @@ export async function killChildProcessTree(
     if (await waitForChildProcessExit(child, forceMs)) {
       return;
     }
+  }
+
+  if (child.pid !== undefined && process.platform !== 'win32') {
+    if (!signalPosixPidTree(child.pid, 'SIGTERM')) {
+      return;
+    }
+    if (await waitForPosixPidTreeExit(child.pid, forceMs)) {
+      return;
+    }
+    signalPosixPidTree(child.pid, 'SIGKILL');
+    await waitForPosixPidTreeExit(child.pid, forceMs);
+    return;
   }
 
   try {

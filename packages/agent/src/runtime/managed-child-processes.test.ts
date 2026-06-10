@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,30 @@ import {
   registerManagedChildProcess,
 } from './managed-child-processes.js';
 import { killChildProcessTree } from './process-tree.js';
+
+function childRegistryPath(home: string, pid: number): string {
+  return path.join(home, 'processes', 'children', `${pid}.json`);
+}
+
+async function writeRegistryRecord(home: string, record: Record<string, unknown>): Promise<void> {
+  const pid = record.pid;
+  if (typeof pid !== 'number') {
+    throw new Error('test registry record needs a numeric pid');
+  }
+  await mkdir(path.dirname(childRegistryPath(home, pid)), { recursive: true });
+  await writeFile(childRegistryPath(home, pid), JSON.stringify(record), 'utf8');
+}
+
+function findDeadPid(): number {
+  for (let pid = 999_999; pid < 1_010_000; pid += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return pid;
+    }
+  }
+  throw new Error('could not find an unused pid for test');
+}
 
 function waitForExit(child: ChildProcess, timeoutMs = 5_000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) {
@@ -81,5 +105,51 @@ describe('managed child process registry', () => {
     expect(summary.killed).toBe(0);
     expect(summary.skipped).toBe(1);
     expect(child.exitCode).toBeNull();
+  });
+
+  it('prunes an unconfirmed live pid without killing it', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (child.pid === undefined) {
+      throw new Error('child pid missing');
+    }
+    await writeRegistryRecord(tempHome, {
+      version: 1,
+      pid: child.pid,
+      ownerPid: 0,
+      registeredAtMs: Date.now(),
+      kind: 'test-child',
+      command: 'definitely-not-this-process',
+      args: ['not-present-in-command-line'],
+    });
+
+    const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
+
+    expect(summary.killed).toBe(0);
+    expect(summary.pruned).toBe(1);
+    expect(child.exitCode).toBeNull();
+  });
+
+  it('prunes a dead pid record', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    const deadPid = findDeadPid();
+    await writeRegistryRecord(tempHome, {
+      version: 1,
+      pid: deadPid,
+      ownerPid: 0,
+      registeredAtMs: Date.now(),
+      kind: 'test-child',
+      command: process.execPath,
+    });
+
+    const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
+
+    expect(summary.killed).toBe(0);
+    expect(summary.pruned).toBe(1);
   });
 });

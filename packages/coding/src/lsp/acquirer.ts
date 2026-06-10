@@ -10,6 +10,7 @@
  * server falls straight through to step ③ (actionable install guidance).
  */
 
+import { killChildProcessTree } from '@kodax-ai/agent';
 import { spawnLspProcess } from './spawn.js';
 
 /** True only when the user has explicitly opted into server auto-install. */
@@ -36,25 +37,37 @@ const DEFAULT_INSTALL_TIMEOUT_MS = 5 * 60_000;
  * timeout resolves `false` so the caller falls back to install guidance.
  */
 export function runInstallCommand(command: InstallCommand, options: RunInstallOptions = {}): Promise<boolean> {
+  if (options.signal?.aborted) {
+    return Promise.resolve(false);
+  }
+
   return new Promise<boolean>((resolve) => {
     let settled = false;
+    let onAbort: (() => void) | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const done = (ok: boolean): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (onAbort) {
+        options.signal?.removeEventListener('abort', onAbort);
+      }
       resolve(ok);
     };
     const child = spawnLspProcess(command.command, command.args, {
       stdio: 'ignore',
       env: process.env,
-      signal: options.signal,
+      detached: process.platform !== 'win32',
     });
-    const timer = setTimeout(() => {
-      try {
-        child.kill();
-      } catch {
-        // ignore
-      }
+    onAbort = (): void => {
+      void killChildProcessTree(child);
+      done(false);
+    };
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    timer = setTimeout(() => {
+      void killChildProcessTree(child);
       options.debug?.(`install timed out: ${command.command} ${command.args.join(' ')}`);
       done(false);
     }, options.timeoutMs ?? DEFAULT_INSTALL_TIMEOUT_MS);

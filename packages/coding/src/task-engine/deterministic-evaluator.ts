@@ -22,6 +22,7 @@
  */
 
 import { spawn } from 'child_process';
+import { killChildProcessTree } from '@kodax-ai/agent';
 
 export type DeterministicEvaluatorHint = 'build' | 'test' | 'lint';
 
@@ -106,6 +107,7 @@ export async function runDeterministicEvaluator(
       cwd: input.cwd,
       shell: true,
       windowsHide: true,
+      detached: process.platform !== 'win32',
     });
 
     let stdout = '';
@@ -115,11 +117,7 @@ export async function runDeterministicEvaluator(
 
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
-      try {
-        proc.kill('SIGTERM');
-      } catch {
-        // best-effort
-      }
+      void killChildProcessTree(proc);
     }, timeoutMs);
 
     proc.stdout?.on('data', (chunk: Buffer | string) => {

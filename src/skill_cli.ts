@@ -39,6 +39,7 @@ export async function defaultSkillToolRunner(
   return await new Promise<number>((resolve, reject) => {
     const child = spawn(process.execPath, [scriptPath, ...args], {
       stdio: 'inherit',
+      detached: process.platform !== 'win32',
     });
     const unregisterManagedChild = registerManagedChildProcess(child, {
       kind: 'skill-cli',

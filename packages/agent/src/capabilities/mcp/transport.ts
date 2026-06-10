@@ -116,6 +116,7 @@ export function createStdioTransport(config: {
         env: stripHardenedEnvVars({ ...globalThis.process.env, ...(config.env ?? {}) }),
         stdio: 'pipe',
         windowsHide: true,
+        detached: globalThis.process.platform !== 'win32',
       });
       process = child;
       cleanupOnProcessExit = () => killChildProcessTreeSync(child);

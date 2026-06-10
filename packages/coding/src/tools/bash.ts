@@ -170,7 +170,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
   }
 
   return new Promise(resolve => {
-    const proc = spawn(command, [], { shell: true, windowsHide: true, cwd });
+    const proc = spawn(command, [], {
+      shell: true,
+      windowsHide: true,
+      cwd,
+      detached: process.platform !== 'win32',
+    });
     const unregisterManagedChild = registerManagedChildProcess(proc, {
       kind: 'bash',
       command,
