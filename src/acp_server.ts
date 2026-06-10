@@ -35,6 +35,7 @@ import {
   runKodaX,
   createExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
+  shutdownDefaultLspService,
   type KodaXExtensionRuntime,
 } from '@kodax-ai/coding';
 import {
@@ -349,6 +350,7 @@ export class KodaXAcpServer implements Agent {
   private promptQueue: Promise<unknown> = Promise.resolve();
   private extensionRuntime?: KodaXExtensionRuntime;
   private extensionRuntimeReady?: Promise<void>;
+  private disposePromise?: Promise<void>;
 
   constructor(options: KodaXAcpServerOptions = {}) {
     const config = prepareRuntimeConfig();
@@ -423,25 +425,54 @@ export class KodaXAcpServer implements Agent {
       fixedCwd: this.hasFixedCwd,
     });
     connection.signal.addEventListener('abort', () => {
-      this.sessions.forEach((session) => {
-        session.activeController?.abort();
-        session.extensionRuntime?.dispose();
-      });
+      const activeSessions = this.sessions.size;
       this.events.emit({
         type: 'connection_closed',
-        activeSessions: this.sessions.size,
+        activeSessions,
       });
-      this.sessions.clear();
-      this.connection = null;
-      // Dispose global MCP runtime so child processes / sockets are cleaned up.
-      this.extensionRuntime?.dispose();
-      this.extensionRuntime = undefined;
+      void this.dispose();
     });
     return connection;
   }
 
   async waitForClose(): Promise<void> {
     await this.connection?.closed;
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposePromise) {
+      return this.disposePromise;
+    }
+
+    this.disposePromise = (async () => {
+      for (const session of this.sessions.values()) {
+        session.activeController?.abort();
+      }
+
+      const runtimes = new Set<KodaXExtensionRuntime>();
+      for (const session of this.sessions.values()) {
+        if (session.extensionRuntime) {
+          runtimes.add(session.extensionRuntime);
+          session.extensionRuntime = undefined;
+        }
+      }
+      this.sessions.clear();
+      this.connection = null;
+
+      const ready = this.extensionRuntimeReady;
+      this.extensionRuntimeReady = undefined;
+      await ready?.catch(() => undefined);
+
+      if (this.extensionRuntime) {
+        runtimes.add(this.extensionRuntime);
+        this.extensionRuntime = undefined;
+      }
+
+      await Promise.all([...runtimes].map((runtime) => runtime.dispose()));
+      await shutdownDefaultLspService();
+    })();
+
+    return this.disposePromise;
   }
 
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
@@ -1036,5 +1067,9 @@ export async function runAcpServer(options: KodaXAcpServerOptions = {}): Promise
   const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
   const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
   server.attach(input, output);
-  await server.waitForClose();
+  try {
+    await server.waitForClose();
+  } finally {
+    await server.dispose();
+  }
 }

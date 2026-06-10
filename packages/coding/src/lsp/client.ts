@@ -17,6 +17,11 @@ import { readFile } from 'fs/promises';
 import { spawnLspProcess } from './spawn.js';
 import { pathToFileURL, fileURLToPath } from 'url';
 import {
+  killChildProcessTree,
+  killChildProcessTreeSync,
+  registerManagedChildProcess,
+} from '@kodax-ai/agent';
+import {
   createProtocolConnection,
   StreamMessageReader,
   StreamMessageWriter,
@@ -190,6 +195,12 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
   }) as ChildProcessWithoutNullStreams;
+  const unregisterManagedChild = registerManagedChildProcess(proc, {
+    kind: `lsp:${serverId}`,
+    command: launch.command,
+    args: launch.args,
+    cwd: root,
+  });
 
   proc.stderr.on('data', (chunk: Buffer) => debug?.(`[${serverId}] stderr: ${chunk.toString().trim()}`));
 
@@ -244,6 +255,15 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
       ),
       earlyExit,
     ]);
+  } catch (error) {
+    try {
+      connection.dispose();
+    } catch {
+      // ignore
+    }
+    await killChildProcessTree(proc);
+    unregisterManagedChild();
+    throw error;
   } finally {
     // Swallow the late rejection from earlyExit on normal lifetime (e.g.
     // shutdown's proc.kill) so it never surfaces as an unhandledRejection.
@@ -356,11 +376,7 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
   }
 
   function killSync(): void {
-    try {
-      proc.kill();
-    } catch {
-      // ignore
-    }
+    killChildProcessTreeSync(proc);
   }
 
   async function shutdown(): Promise<void> {
@@ -387,14 +403,11 @@ export async function createLspClient(params: CreateLspClientParams): Promise<Ls
         return;
       }
       const killTimer = setTimeout(() => {
-        try {
-          proc.kill();
-        } catch {
-          // ignore
-        }
+        killChildProcessTreeSync(proc);
       }, 1_500);
       proc.once('exit', () => {
         clearTimeout(killTimer);
+        unregisterManagedChild();
         resolve();
       });
     });

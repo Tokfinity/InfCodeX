@@ -10,6 +10,7 @@ import {
     type RequestPermissionRequest,
     type RequestPermissionResponse
 } from '@agentclientprotocol/sdk';
+import { killChildProcessTree } from './process-tree.js';
 
 export interface AcpClientOptions {
     /** Command used to launch a native ACP server process. */
@@ -140,9 +141,12 @@ export class AcpClient {
     }
 
     disconnect(): void {
-        this.agentProcess?.kill();
+        if (this.agentProcess) {
+            void killChildProcessTree(this.agentProcess);
+        }
         this.options.abort?.();
         try { (this.client as any)?.close?.(); } catch { }
         this.client = null;
+        this.agentProcess = null;
     }
 }

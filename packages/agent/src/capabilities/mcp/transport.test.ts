@@ -1,6 +1,9 @@
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createSseTransport, createStreamableHttpTransport } from './transport.js';
+import { createSseTransport, createStdioTransport, createStreamableHttpTransport } from './transport.js';
 
 // ---------------------------------------------------------------------------
 // Minimal SSE server for testing
@@ -288,6 +291,42 @@ function createSessionStreamableHttpServer(): {
 // =========================================================================
 // Tests
 // =========================================================================
+
+describe('Stdio transport', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('closes stdin subprocesses gracefully before returning', async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'kodax-mcp-stdio-close-'));
+    tempDirs.push(tempDir);
+    const markerPath = path.join(tempDir, 'closed.txt');
+    const source = `
+const fs = require('node:fs');
+process.stdin.resume();
+process.stdin.on('end', () => {
+  fs.writeFileSync(${JSON.stringify(markerPath)}, 'closed');
+  process.exit(0);
+});
+`;
+    const transport = createStdioTransport({
+      command: process.execPath,
+      args: ['-e', source],
+    });
+
+    await transport.open({
+      onMessage: () => {},
+      onError: () => {},
+      onClose: () => {},
+    });
+    await transport.close();
+
+    await expect(readFile(markerPath, 'utf8')).resolves.toBe('closed');
+    expect(transport.connected).toBe(false);
+  });
+});
 
 describe('SSE transport', () => {
   const servers: Array<{ stop: () => Promise<void> }> = [];

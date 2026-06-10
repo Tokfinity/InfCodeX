@@ -85,8 +85,13 @@ import {
   KODAX_TOOLS,
   KodaXTerminalError,
   bootstrapTracing,
+  shutdownDefaultLspService,
 } from '@kodax-ai/coding';
-import { shutdownTracing, applyProcessHardening } from '@kodax-ai/agent';
+import {
+  cleanupRegisteredManagedChildren,
+  shutdownTracing,
+  applyProcessHardening,
+} from '@kodax-ai/agent';
 import {
   getGitRoot,
   prepareRuntimeConfig,
@@ -532,6 +537,7 @@ async function main() {
   // addons. Opt-out: KODAX_DISABLE_HARDENING=1. Debug-preserving (no
   // PR_SET_DUMPABLE). No-op on Windows.
   applyProcessHardening();
+  await cleanupRegisteredManagedChildren();
 
   const argv = process.argv.slice(2);
 
@@ -1199,7 +1205,9 @@ complete -c kodax -l version -d 'Show version'`);
     noSession: opts.noSession ?? false,
     print: opts.print ? true : false,
   };
+  let extensionRuntime: ReturnType<typeof createExtensionRuntime> | undefined;
 
+  try {
   // Session list: show all saved sessions.
   if (options.session === 'list') {
     const storage = new FileSessionStorage();
@@ -1229,7 +1237,7 @@ complete -c kodax -l version -d 'Show version'`);
   validateCliModeSelection(options, { resumeWithoutId: opts.resume === true });
 
   if ((options.extensions?.length ?? 0) > 0 || hasActiveMcp) {
-    const extensionRuntime = createExtensionRuntime({ config });
+    extensionRuntime = createExtensionRuntime({ config });
     await registerConfiguredMcpCapabilityProvider(extensionRuntime, configWithExtensions.mcpServers);
     const extensionLoader = extensionRuntime as typeof extensionRuntime & {
       loadExtensions: (
@@ -1371,6 +1379,12 @@ complete -c kodax -l version -d 'Show version'`);
     },
   }, userPrompt);
   emitJsonRunResultIfNeeded(options.outputMode, result);
+  } finally {
+    await extensionRuntime?.dispose();
+    extensionRuntime = undefined;
+    await shutdownDefaultLspService();
+    await shutdownTracing();
+  }
 }
 
 /**

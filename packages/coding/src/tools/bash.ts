@@ -3,6 +3,11 @@ import { createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import iconv from 'iconv-lite';
+import {
+  killChildProcessTree,
+  killChildProcessTreeSync,
+  registerManagedChildProcess,
+} from '@kodax-ai/agent';
 import { KODAX_DEFAULT_TIMEOUT, KODAX_HARD_TIMEOUT } from '../constants.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 import { resolveExecutionCwd } from '../runtime-paths.js';
@@ -166,6 +171,17 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
 
   return new Promise(resolve => {
     const proc = spawn(command, [], { shell: true, windowsHide: true, cwd });
+    const unregisterManagedChild = registerManagedChildProcess(proc, {
+      kind: 'bash',
+      command,
+      cwd,
+    });
+    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(proc);
+    process.once('exit', cleanupOnProcessExit);
+    const unregisterForegroundCommand = (): void => {
+      process.off('exit', cleanupOnProcessExit);
+      unregisterManagedChild();
+    };
     const stdout = createCollector();
     const stderr = createCollector();
     let settled = false;
@@ -177,7 +193,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     };
 
     const timer = setTimeout(() => {
-      proc.kill();
+      void killChildProcessTree(proc);
       const partialStdout = decodeCollector(stdout).text;
       const partialStderr = decodeCollector(stderr).text;
       let partial = partialStdout;
@@ -209,12 +225,12 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     const abortSignal = ctx.abortSignal;
     if (abortSignal) {
       if (abortSignal.aborted) {
-        proc.kill();
+        void killChildProcessTree(proc);
         clearTimeout(timer);
         settle(`[Cancelled] Operation cancelled by user`);
       } else {
         const onAbort = () => {
-          proc.kill();
+          void killChildProcessTree(proc);
           clearTimeout(timer);
           settle(`[Cancelled] Operation cancelled by user`);
         };
@@ -271,6 +287,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     });
     proc.on('close', code => {
       clearTimeout(timer);
+      unregisterForegroundCommand();
       // Skip trailing flush + entire close-handler processing once
       // `settle` has fired (abort path: `onAbort` calls `settle('[Cancelled]…')`
       // synchronously, then `proc.kill()` triggers `close` next tick).
@@ -342,6 +359,7 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     });
     proc.on('error', error => {
       clearTimeout(timer);
+      unregisterForegroundCommand();
       // Y-1/Y-2: Same hints on spawn-level errors — a malformed command
       // string (newlines in `-c`, heredoc not understood by cmd) can surface
       // as a spawn error on some platforms.

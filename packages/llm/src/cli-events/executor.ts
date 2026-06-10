@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import process from 'node:process';
 import type { CLIExecutorConfig, CLIEvent, CLIExecutionOptions } from './types.js';
+import { killChildProcessTree } from './process-tree.js';
 
 export abstract class CLIExecutor {
     protected config: CLIExecutorConfig;
@@ -49,7 +50,11 @@ export abstract class CLIExecutor {
 
         // Forward abort requests to the child process.
         let exited = false;
-        const abortHandler = () => { if (!exited) child.kill('SIGTERM'); };
+        const abortHandler = () => {
+            if (!exited) {
+                void killChildProcessTree(child);
+            }
+        };
         options.signal?.addEventListener('abort', abortHandler);
         child.on('exit', () => { exited = true; });
 
@@ -62,7 +67,9 @@ export abstract class CLIExecutor {
             }
         } finally {
             options.signal?.removeEventListener('abort', abortHandler);
-            if (!exited) child.kill();
+            if (!exited) {
+                await killChildProcessTree(child);
+            }
         }
     }
 

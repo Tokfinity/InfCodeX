@@ -340,6 +340,23 @@ export {
   HARDENING_OPT_OUT_ENV,
 } from './runtime/process-hardening.js';
 
+export {
+  isChildProcessExited,
+  waitForChildProcessExit,
+  killChildProcessTree,
+  killChildProcessTreeSync,
+  killPidTree,
+  killPidTreeSync,
+  type ProcessTreeKillOptions,
+} from './runtime/process-tree.js';
+
+export {
+  registerManagedChildProcess,
+  cleanupRegisteredManagedChildren,
+  type ManagedChildProcessMetadata,
+  type ManagedChildCleanupSummary,
+} from './runtime/managed-child-processes.js';
+
 // ============== Messaging (v0.7.36 FEATURE_115) ==============
 // agentId-scoped 2-tier priority queue infrastructure. Generic agent-platform
 // primitive per ADR-021 — downstream consumers in @kodax-ai/coding (runner-driven

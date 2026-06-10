@@ -1,6 +1,14 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import {
+  spawn,
+  type ChildProcessWithoutNullStreams,
+} from 'child_process';
 import type { McpServerConfig as KodaXMcpServerConfig } from './config.js';
 import { stripHardenedEnvVars } from '../../runtime/process-hardening.js';
+import {
+  killChildProcessTree,
+  killChildProcessTreeSync,
+} from '../../runtime/process-tree.js';
+import { registerManagedChildProcess } from '../../runtime/managed-child-processes.js';
 
 // ---------------------------------------------------------------------------
 // Transport interface
@@ -42,6 +50,10 @@ export function createStdioTransport(config: {
   let buffer = Buffer.alloc(0);
   let events: McpTransportEvents | undefined;
   let framing: StdioFraming = config.framing ?? 'content-length';
+  let cleanupOnProcessExit: (() => void) | undefined;
+  let removeCleanupOnProcessExit: (() => void) | undefined;
+  let unregisterManagedChild: (() => void) | undefined;
+  const closingChildren = new WeakSet<ChildProcessWithoutNullStreams>();
 
   function drainBuffer(): void {
     if (!events) {
@@ -106,6 +118,30 @@ export function createStdioTransport(config: {
         windowsHide: true,
       });
       process = child;
+      cleanupOnProcessExit = () => killChildProcessTreeSync(child);
+      const childCleanupOnProcessExit = cleanupOnProcessExit;
+      const removeChildCleanupOnProcessExit = (): void => {
+        globalThis.process.off('exit', childCleanupOnProcessExit);
+        if (cleanupOnProcessExit === childCleanupOnProcessExit) {
+          cleanupOnProcessExit = undefined;
+          removeCleanupOnProcessExit = undefined;
+        }
+      };
+      removeCleanupOnProcessExit = removeChildCleanupOnProcessExit;
+      globalThis.process.once('exit', cleanupOnProcessExit);
+      unregisterManagedChild = registerManagedChildProcess(child, {
+        kind: 'mcp-stdio',
+        command: config.command,
+        args: config.args,
+        cwd: config.cwd,
+      });
+      const childUnregisterManagedChild = unregisterManagedChild;
+      const unregisterChildRecord = (): void => {
+        childUnregisterManagedChild();
+        if (unregisterManagedChild === childUnregisterManagedChild) {
+          unregisterManagedChild = undefined;
+        }
+      };
 
       // Absorb EPIPE on stdin — the server may exit before we finish writing
       // (e.g. during framing auto-detection when Content-Length is rejected).
@@ -122,12 +158,26 @@ export function createStdioTransport(config: {
         }
       });
       child.on('error', (error) => {
-        process = undefined;
+        if (process === child) {
+          process = undefined;
+        }
+        removeChildCleanupOnProcessExit();
+        unregisterChildRecord();
+        if (closingChildren.has(child)) {
+          return;
+        }
         ev.onError(error);
         ev.onClose(`Process error: ${error.message}`);
       });
       child.on('exit', (code, signal) => {
-        process = undefined;
+        if (process === child) {
+          process = undefined;
+        }
+        removeChildCleanupOnProcessExit();
+        unregisterChildRecord();
+        if (closingChildren.has(child)) {
+          return;
+        }
         ev.onClose(
           `Process exited (${code ?? 'signal'}${signal ? `:${signal}` : ''}).`,
         );
@@ -154,11 +204,16 @@ export function createStdioTransport(config: {
     async close() {
       buffer = Buffer.alloc(0);
       if (process) {
-        process.removeAllListeners();
-        process.stdout.removeAllListeners();
-        process.stderr.removeAllListeners();
-        process.kill();
+        const child = process;
         process = undefined;
+        events = undefined;
+        closingChildren.add(child);
+        child.stdout.removeAllListeners('data');
+        child.stderr.removeAllListeners('data');
+        removeCleanupOnProcessExit?.();
+        await killChildProcessTree(child, { gracefulStdinEnd: true });
+        unregisterManagedChild?.();
+        unregisterManagedChild = undefined;
       }
     },
   } as McpTransport & { detectedFraming: StdioFraming; switchFraming: (mode: StdioFraming) => void };
