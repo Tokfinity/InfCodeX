@@ -162,27 +162,16 @@ export async function killChildProcessTree(
   child: ChildProcess,
   options: ProcessTreeKillOptions = {},
 ): Promise<void> {
-  if (isChildProcessExited(child)) {
-    return;
-  }
-
   const gracefulMs = options.gracefulMs ?? DEFAULT_GRACE_MS;
   const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
 
-  if (options.gracefulStdinEnd && child.stdin?.writable) {
+  if (options.gracefulStdinEnd && !isChildProcessExited(child) && child.stdin?.writable) {
     try {
       child.stdin.end();
     } catch {
       // Fall through to forceful termination below.
     }
-    if (await waitForChildProcessExit(child, gracefulMs)) {
-      return;
-    }
-  }
-
-  if (process.platform === 'win32' && child.pid !== undefined) {
-    await killPidTree(child.pid, options);
-    if (await waitForChildProcessExit(child, forceMs)) {
+    if (await waitForChildProcessExit(child, gracefulMs) && process.platform === 'win32') {
       return;
     }
   }
@@ -197,6 +186,17 @@ export async function killChildProcessTree(
     signalPosixPidTree(child.pid, 'SIGKILL');
     await waitForPosixPidTreeExit(child.pid, forceMs);
     return;
+  }
+
+  if (isChildProcessExited(child)) {
+    return;
+  }
+
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    await killPidTree(child.pid, options);
+    if (await waitForChildProcessExit(child, forceMs)) {
+      return;
+    }
   }
 
   try {
@@ -217,7 +217,11 @@ export async function killChildProcessTree(
 }
 
 export function killChildProcessTreeSync(child: ChildProcess): void {
-  if (isChildProcessExited(child) || child.pid === undefined) {
+  if (child.pid === undefined) {
+    return;
+  }
+
+  if (process.platform === 'win32' && isChildProcessExited(child)) {
     return;
   }
 

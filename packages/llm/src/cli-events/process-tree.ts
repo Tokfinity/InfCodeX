@@ -107,17 +107,16 @@ async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<
 }
 
 export async function killChildProcessTree(child: ChildProcess): Promise<void> {
-  if (isExited(child)) {
-    return;
-  }
-
   if (process.platform === 'win32' && child.pid !== undefined) {
+    if (isExited(child)) {
+      return;
+    }
     await runTaskkill(child.pid);
     await waitForExit(child, FORCE_WAIT_MS);
     return;
   }
 
-  if (child.pid !== undefined) {
+  if (child.pid !== undefined && process.platform !== 'win32') {
     if (!signalPosixPidTree(child.pid, 'SIGTERM')) {
       return;
     }
@@ -126,6 +125,10 @@ export async function killChildProcessTree(child: ChildProcess): Promise<void> {
     }
     signalPosixPidTree(child.pid, 'SIGKILL');
     await waitForPosixPidTreeExit(child.pid, FORCE_WAIT_MS);
+    return;
+  }
+
+  if (isExited(child)) {
     return;
   }
 
