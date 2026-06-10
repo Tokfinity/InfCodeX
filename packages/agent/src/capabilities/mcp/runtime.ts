@@ -19,6 +19,10 @@ import {
   type McpTransport,
 } from './transport.js';
 import { getValidToken } from './oauth.js';
+import {
+  buildInitializeCapabilities,
+  type McpReverseCapabilities,
+} from './reverse-capabilities.js';
 
 interface JsonRpcRequestRecord {
   resolve: (value: unknown) => void;
@@ -243,6 +247,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;   // Claude Code: 60s
 // Requested base protocol version. Optional client features are advertised
 // separately via initialize.capabilities; KodaX currently sends {} there.
 const MCP_PROTOCOL_VERSION = '2025-11-25';
+
+/** Sentinel from {@link McpServerRuntime.dispatchServerRequest} = not an advertised capability (→ -32601). */
+const UNHANDLED_SERVER_REQUEST = Symbol('mcp.unhandled-server-request');
 const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
   '2025-11-25',
   '2025-06-18',
@@ -291,6 +298,8 @@ export class McpServerRuntime {
     private readonly serverId: string,
     private readonly config: KodaXMcpServerConfig,
     private readonly cacheDir: string,
+    /** FEATURE_222 — host-injected server→client reverse capabilities. */
+    private readonly reverse?: McpReverseCapabilities,
   ) {
     this.diagnostics = {
       serverId,
@@ -548,12 +557,13 @@ export class McpServerRuntime {
       });
 
       try {
-        // Empty capabilities: KodaX does not support optional client features
-        // (roots, sampling) — server requests for these get a -32601 error reply.
+        // FEATURE_222 — advertise only the reverse capabilities whose handlers
+        // the host injected (capability declaration = implementation promise);
+        // unadvertised server→client requests still get a -32601 reply.
         const baseStartup = getStartupTimeoutMs(this.config);
         const initializeResult = await this.request('initialize', {
           protocolVersion: MCP_PROTOCOL_VERSION,
-          capabilities: {},
+          capabilities: buildInitializeCapabilities(this.reverse),
           clientInfo: {
             name: 'KodaX',
             version: '0.7',
@@ -744,23 +754,67 @@ export class McpServerRuntime {
       // with an empty result. Replying -32601 would violate the spec and lets a
       // health-checking server treat the connection as stale and drop it.
       if (method === 'ping') {
-        this.transport?.send(jsonRpcString({
-          jsonrpc: '2.0',
-          id: requestId as string | number,
-          result: {},
-        })).catch(() => {});
+        this.sendResponse(requestId as string | number, {});
         return;
       }
-      // Every other server→client request targets a client capability KodaX
-      // does not advertise (sampling, roots, elicitation). Reply method-not-found
-      // so the server does not hang waiting for a response.
-      this.transport?.send(jsonRpcString({
-        jsonrpc: '2.0',
-        id: requestId as string | number,
-        error: { code: -32601, message: `Method not supported by client: ${method}` },
-      })).catch(() => {
-        // Best-effort; if the transport is closed the server will time out on its own.
-      });
+      // FEATURE_222 — reverse capabilities resolve asynchronously (roots read,
+      // user elicitation, LLM sampling). Dispatch off the sync message handler
+      // and reply when the handler settles; an unhandled method still gets
+      // -32601 so the server does not hang.
+      void this.handleServerRequest(method, asRecord(payload.params), requestId as string | number);
+    }
+  }
+
+  /** Best-effort JSON-RPC response send (server times out on its own if closed). */
+  private sendResponse(id: string | number, result: unknown): void {
+    this.transport?.send(jsonRpcString({ jsonrpc: '2.0', id, result })).catch(() => {});
+  }
+
+  /** Best-effort JSON-RPC error send. */
+  private sendError(id: string | number, code: number, message: string): void {
+    this.transport?.send(jsonRpcString({ jsonrpc: '2.0', id, error: { code, message } })).catch(() => {});
+  }
+
+  /**
+   * FEATURE_222 — handle a server→client request for an advertised reverse
+   * capability. Each slice adds a case to {@link dispatchServerRequest};
+   * anything unhandled replies -32601, and a handler that throws replies
+   * -32603 so the server never hangs.
+   */
+  private async handleServerRequest(
+    method: string,
+    params: Record<string, unknown> | undefined,
+    requestId: string | number,
+  ): Promise<void> {
+    try {
+      const handled = await this.dispatchServerRequest(method, params);
+      if (handled === UNHANDLED_SERVER_REQUEST) {
+        this.sendError(requestId, -32601, `Method not supported by client: ${method}`);
+        return;
+      }
+      this.sendResponse(requestId, handled);
+    } catch (error) {
+      this.sendError(requestId, -32603, error instanceof Error ? error.message : 'internal error');
+    }
+  }
+
+  /**
+   * Route a reverse request to its handler, or return the sentinel when the
+   * method is not an advertised capability. Slices add cases here.
+   */
+  private async dispatchServerRequest(
+    method: string,
+    _params: Record<string, unknown> | undefined,
+  ): Promise<unknown> {
+    switch (method) {
+      case 'roots/list': {
+        // Slice A — only handled when the host injected workspace roots.
+        if (!this.reverse?.listRoots) return UNHANDLED_SERVER_REQUEST;
+        const roots = await this.reverse.listRoots();
+        return { roots };
+      }
+      default:
+        return UNHANDLED_SERVER_REQUEST;
     }
   }
 

@@ -25,9 +25,16 @@ import {
   McpServerRuntime,
   type McpServerRuntimeDiagnostics,
 } from './runtime.js';
+import type { McpReverseCapabilities } from './reverse-capabilities.js';
 
 export interface McpProviderOptions {
   cacheDir?: string;
+  /**
+   * FEATURE_222 — host-injected server→client reverse capabilities (workspace
+   * roots / elicitation / sampling), applied to every server in this provider.
+   * Omitted in headless hosts, in which case reverse requests reply -32601.
+   */
+  reverse?: McpReverseCapabilities;
 }
 
 function enabledServerEntries(
@@ -66,7 +73,7 @@ export class McpCapabilityProvider implements CapabilityProvider {
     for (const [serverId, serverConfig] of enabledServerEntries(servers)) {
       this.runtimes.set(
         serverId,
-        new McpServerRuntime(serverId, serverConfig, this.cacheDir),
+        new McpServerRuntime(serverId, serverConfig, this.cacheDir, options.reverse),
       );
     }
   }

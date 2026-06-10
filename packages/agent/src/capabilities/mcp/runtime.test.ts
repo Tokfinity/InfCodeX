@@ -4,6 +4,7 @@ import path from 'node:path';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { McpServerRuntime } from './runtime.js';
+import type { McpReverseCapabilities } from './reverse-capabilities.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -383,11 +384,47 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createRootsServerSource(recordPath: string): string {
+  return `
+const fs = require('node:fs');
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function record(p){ fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === undefined && m.id !== undefined) { record(m); return; } // client response
+  if (m.method === 'initialize') {
+    record(m); // capture the negotiated capabilities
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'roots-test', version: '1.0.0' } } });
+    writeMessage({ jsonrpc: '2.0', id: 'roots-1', method: 'roots/list' });
+    return;
+  }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } }); return; }
+  if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
+  if (m.method === 'prompts/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } }); }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
   startupTimeoutMs = 1_000,
   requestTimeoutMs = 1_000,
+  reverse?: McpReverseCapabilities,
 ): Promise<McpServerRuntime> {
   return new McpServerRuntime(
     'test-server',
@@ -400,6 +437,7 @@ async function createRuntime(
       requestTimeoutMs,
     },
     path.join(dir, 'cache'),
+    reverse,
   );
 }
 
@@ -828,5 +866,40 @@ describe('McpServerRuntime protocol compatibility', () => {
       expect.objectContaining({ id: 'sampling-1', error: expect.objectContaining({ code: -32601 }) }),
       expect.objectContaining({ id: 'elicitation-1', error: expect.objectContaining({ code: -32601 }) }),
     ]));
+  });
+
+  it('FEATURE_222 Slice A: advertises roots + serves roots/list from injected workspace roots', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'roots.jsonl');
+    const scriptPath = await writeScript(dir, createRootsServerSource(recordPath));
+    const reverse: McpReverseCapabilities = {
+      listRoots: () => [{ uri: 'file:///workspace/proj', name: 'proj' }],
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect
+        .poll(() => readFile(recordPath, 'utf8').catch(() => ''))
+        .toContain('roots-1');
+    } finally {
+      await runtime.dispose();
+    }
+
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)));
+
+    // initialize advertised the roots capability
+    const initialize = records.find((r) => r?.method === 'initialize');
+    const advertised = asRecord(asRecord(initialize?.params)?.capabilities);
+    expect(advertised?.roots).toEqual({ listChanged: false });
+
+    // roots/list was answered with the injected file:// root (not -32601)
+    const rootsResponse = records.find((r) => r?.id === 'roots-1' && r?.method === undefined);
+    expect(asRecord(rootsResponse?.result)?.roots).toEqual([
+      { uri: 'file:///workspace/proj', name: 'proj' },
+    ]);
   });
 });

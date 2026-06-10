@@ -42,6 +42,17 @@ export { McpServerRuntime } from './runtime.js';
 export type { McpProviderOptions } from './provider.js';
 export { McpCapabilityProvider } from './provider.js';
 
+// FEATURE_222 — host-injected server→client reverse capabilities.
+export type {
+  McpReverseCapabilities,
+  McpRoot,
+  McpElicitRequest,
+  McpElicitResult,
+  McpSamplingRequest,
+  McpSamplingResult,
+} from './reverse-capabilities.js';
+export { buildInitializeCapabilities } from './reverse-capabilities.js';
+
 export type { McpTransport, McpTransportEvents } from './transport.js';
 export { createMcpTransport } from './transport.js';
 
