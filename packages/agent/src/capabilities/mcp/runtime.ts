@@ -21,6 +21,8 @@ import {
 import { getValidToken } from './oauth.js';
 import {
   buildInitializeCapabilities,
+  normalizeElicitResult,
+  parseElicitRequest,
   type McpReverseCapabilities,
 } from './reverse-capabilities.js';
 
@@ -804,7 +806,7 @@ export class McpServerRuntime {
    */
   private async dispatchServerRequest(
     method: string,
-    _params: Record<string, unknown> | undefined,
+    params: Record<string, unknown> | undefined,
   ): Promise<unknown> {
     switch (method) {
       case 'roots/list': {
@@ -812,6 +814,15 @@ export class McpServerRuntime {
         if (!this.reverse?.listRoots) return UNHANDLED_SERVER_REQUEST;
         const roots = await this.reverse.listRoots();
         return { roots };
+      }
+      case 'elicitation/create': {
+        // Slice B (form) / Slice C (url) — only handled when the host injected
+        // an `elicit` callback. The handler routes both modes to the host; which
+        // modes are actually advertised is gated by buildInitializeCapabilities.
+        if (!this.reverse?.elicit) return UNHANDLED_SERVER_REQUEST;
+        const request = parseElicitRequest(params);
+        const result = await this.reverse.elicit(request);
+        return normalizeElicitResult(result);
       }
       default:
         return UNHANDLED_SERVER_REQUEST;

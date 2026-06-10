@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildInitializeCapabilities,
+  normalizeElicitResult,
+  parseElicitRequest,
   type McpReverseCapabilities,
 } from './reverse-capabilities.js';
 
@@ -51,5 +53,48 @@ describe('buildInitializeCapabilities', () => {
       elicitation: { form: {} },
       sampling: {},
     });
+  });
+});
+
+describe('parseElicitRequest', () => {
+  it('parses a form request (default mode)', () => {
+    expect(parseElicitRequest({ message: 'hi', requestedSchema: { type: 'object' } })).toEqual({
+      mode: 'form',
+      message: 'hi',
+      requestedSchema: { type: 'object' },
+    });
+  });
+
+  it('parses a url request', () => {
+    expect(parseElicitRequest({ mode: 'url', message: 'auth', url: 'https://x.test/a', elicitationId: 'e1' })).toEqual({
+      mode: 'url',
+      message: 'auth',
+      url: 'https://x.test/a',
+      elicitationId: 'e1',
+    });
+  });
+
+  it('tolerates missing/garbage params', () => {
+    expect(parseElicitRequest(undefined)).toEqual({ mode: 'form', message: undefined, requestedSchema: undefined });
+    expect(parseElicitRequest({ requestedSchema: 'nope' })).toEqual({ mode: 'form', message: undefined, requestedSchema: undefined });
+  });
+});
+
+describe('normalizeElicitResult', () => {
+  it('passes through accept + content object', () => {
+    expect(normalizeElicitResult({ action: 'accept', content: { a: 1 } })).toEqual({ action: 'accept', content: { a: 1 } });
+  });
+
+  it('coerces accept with non-object content to {}', () => {
+    expect(normalizeElicitResult({ action: 'accept', content: undefined as never })).toEqual({ action: 'accept', content: {} });
+  });
+
+  it('passes decline / cancel', () => {
+    expect(normalizeElicitResult({ action: 'decline' })).toEqual({ action: 'decline' });
+    expect(normalizeElicitResult({ action: 'cancel' })).toEqual({ action: 'cancel' });
+  });
+
+  it('degrades a malformed result to cancel', () => {
+    expect(normalizeElicitResult({ action: 'weird' } as never)).toEqual({ action: 'cancel' });
   });
 });

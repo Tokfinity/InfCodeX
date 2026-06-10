@@ -419,6 +419,41 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createElicitationServerSource(recordPath: string): string {
+  return `
+const fs = require('node:fs');
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function record(p){ fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === undefined && m.id !== undefined) { record(m); return; } // client response
+  if (m.method === 'initialize') {
+    record(m);
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'elicit-test', version: '1.0.0' } } });
+    writeMessage({ jsonrpc: '2.0', id: 'elicit-1', method: 'elicitation/create', params: { mode: 'form', message: 'Your name?', requestedSchema: { type: 'object', properties: { username: { type: 'string' } }, required: ['username'] } } });
+    return;
+  }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } }); return; }
+  if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
+  if (m.method === 'prompts/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } }); }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
@@ -901,5 +936,45 @@ describe('McpServerRuntime protocol compatibility', () => {
     expect(asRecord(rootsResponse?.result)?.roots).toEqual([
       { uri: 'file:///workspace/proj', name: 'proj' },
     ]);
+  });
+
+  it('FEATURE_222 Slice B: advertises form elicitation + routes elicitation/create to the injected elicit', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'elicit.jsonl');
+    const scriptPath = await writeScript(dir, createElicitationServerSource(recordPath));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: { username: 'alice' } };
+      },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect
+        .poll(() => readFile(recordPath, 'utf8').catch(() => ''))
+        .toContain('elicit-1');
+    } finally {
+      await runtime.dispose();
+    }
+
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)));
+
+    // advertised form elicitation (not url)
+    const initialize = records.find((r) => r?.method === 'initialize');
+    const advertised = asRecord(asRecord(initialize?.params)?.capabilities);
+    expect(advertised?.elicitation).toEqual({ form: {} });
+
+    // the request reached the host elicit callback as a parsed form request
+    expect(seen).toEqual([{ mode: 'form', message: 'Your name?', requestedSchema: expect.objectContaining({ type: 'object' }) }]);
+
+    // the client responded accept + content (not -32601)
+    const response = records.find((r) => r?.id === 'elicit-1' && r?.method === undefined);
+    expect(response?.result).toEqual({ action: 'accept', content: { username: 'alice' } });
   });
 });

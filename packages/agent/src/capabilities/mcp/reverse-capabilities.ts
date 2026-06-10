@@ -108,3 +108,39 @@ export function buildInitializeCapabilities(
 
   return capabilities;
 }
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Parse a raw `elicitation/create` params object into a typed request. */
+export function parseElicitRequest(params: Record<string, unknown> | undefined): McpElicitRequest {
+  const p = params ?? {};
+  const message = typeof p.message === 'string' ? p.message : undefined;
+  if (p.mode === 'url') {
+    return {
+      mode: 'url',
+      message,
+      url: typeof p.url === 'string' ? p.url : undefined,
+      elicitationId: typeof p.elicitationId === 'string' ? p.elicitationId : undefined,
+    };
+  }
+  return { mode: 'form', message, requestedSchema: asObject(p.requestedSchema) };
+}
+
+/**
+ * Validate a host-supplied elicit result into the wire response. A malformed
+ * result degrades to `{ action: 'cancel' }` — the safe default (the server
+ * treats cancel as "user dismissed", never as data).
+ */
+export function normalizeElicitResult(result: McpElicitResult): Record<string, unknown> {
+  if (result?.action === 'accept') {
+    return { action: 'accept', content: asObject(result.content) ?? {} };
+  }
+  if (result?.action === 'decline') {
+    return { action: 'decline' };
+  }
+  return { action: 'cancel' };
+}
