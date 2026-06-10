@@ -68,11 +68,23 @@ export interface McpReverseCapabilities {
   readonly listRoots?: () => readonly McpRoot[] | Promise<readonly McpRoot[]>;
   /** Whether to advertise `roots.listChanged` (default false). */
   readonly rootsListChanged?: boolean;
-  /** Slice B/C — ask the user (form or url elicitation). */
+  /**
+   * Slice B/C — ask the user (form or url elicitation). For `mode:'url'` the
+   * host MUST show the full URL + its domain, require explicit consent, and
+   * MUST NOT auto-open the browser or expose the URL/contents to the model
+   * (anti-phishing). It resolves `accept` when the user consents to open the
+   * URL; the server later signals completion via {@link onElicitationComplete}.
+   */
   readonly elicit?: (request: McpElicitRequest) => Promise<McpElicitResult>;
   /** Which elicitation modes the injected `elicit` actually supports. Defaults
    *  to form-only (url is gated on the anti-phishing handler from Slice C). */
   readonly elicitationModes?: { readonly form?: boolean; readonly url?: boolean };
+  /**
+   * Slice C — the server finished a url elicitation (the user completed the
+   * external flow in their browser); the host can dismiss its waiting state.
+   * Correlated by the `elicitationId` from the original url request.
+   */
+  readonly onElicitationComplete?: (elicitationId: string) => void;
   /** Slice D — run a sampling request via the user's LLM. Security-sensitive:
    *  the host injects this ONLY when the user opted in, and applies guardrails. */
   readonly sample?: (request: McpSamplingRequest) => Promise<McpSamplingResult>;

@@ -454,6 +454,46 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createUrlElicitationServerSource(recordPath: string): string {
+  return `
+const fs = require('node:fs');
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function record(p){ fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === undefined && m.id !== undefined) { record(m); return; } // client response
+  if (m.method === 'initialize') {
+    record(m);
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'url-elicit-test', version: '1.0.0' } } });
+    writeMessage({ jsonrpc: '2.0', id: 'url-1', method: 'elicitation/create', params: { mode: 'url', message: 'Authorize', url: 'https://auth.example.test/grant', elicitationId: 'flow-1' } });
+    return;
+  }
+  if (m.method === undefined) { return; }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } }); return; }
+  if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
+  if (m.method === 'prompts/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } });
+    // After the catalog round-trip, signal the url elicitation completed.
+    writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: 'flow-1' } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
@@ -976,5 +1016,48 @@ describe('McpServerRuntime protocol compatibility', () => {
     // the client responded accept + content (not -32601)
     const response = records.find((r) => r?.id === 'elicit-1' && r?.method === undefined);
     expect(response?.result).toEqual({ action: 'accept', content: { username: 'alice' } });
+  });
+
+  it('FEATURE_222 Slice C: advertises url elicitation, routes url requests, and forwards completion', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-elicit.jsonl');
+    const scriptPath = await writeScript(dir, createUrlElicitationServerSource(recordPath));
+    const seen: unknown[] = [];
+    const completed: string[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        // host showed the URL + got consent (anti-phishing UI is host-side)
+        return { action: 'accept', content: {} };
+      },
+      elicitationModes: { form: true, url: true },
+      onElicitationComplete: (id) => completed.push(id),
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect.poll(() => completed.length > 0).toBe(true);
+    } finally {
+      await runtime.dispose();
+    }
+
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)));
+
+    // advertised both form + url
+    const initialize = records.find((r) => r?.method === 'initialize');
+    const advertised = asRecord(asRecord(initialize?.params)?.capabilities);
+    expect(advertised?.elicitation).toEqual({ form: {}, url: {} });
+
+    // the url request reached the host elicit with mode + url + elicitationId
+    expect(seen).toEqual([
+      { mode: 'url', message: 'Authorize', url: 'https://auth.example.test/grant', elicitationId: 'flow-1' },
+    ]);
+
+    // the completion notification was forwarded to the host
+    expect(completed).toEqual(['flow-1']);
   });
 });

@@ -748,6 +748,15 @@ export class McpServerRuntime {
     if (method.endsWith('/list_changed')) {
       this.diagnostics.dirty = true;
     }
+    // Slice C — the server completed a url elicitation; let the host dismiss
+    // its waiting state (correlated by elicitationId).
+    if (method === 'notifications/elicitation/complete') {
+      const elicitationId = readString(asRecord(payload.params)?.elicitationId);
+      if (elicitationId) {
+        this.reverse?.onElicitationComplete?.(elicitationId);
+      }
+      return;
+    }
 
     // Server→client request (has both method and id).
     const requestId = payload.id;
