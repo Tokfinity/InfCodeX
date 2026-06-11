@@ -24,6 +24,8 @@ export type {
 export type {
   McpCapabilityKind,
   McpCapabilityRisk,
+  McpIcon,
+  McpToolTaskSupport,
   McpCatalogItem,
   McpCapabilityDescriptor,
   McpServerCatalogSnapshot,

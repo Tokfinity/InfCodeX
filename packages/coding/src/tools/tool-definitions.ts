@@ -636,7 +636,7 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
     input_schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Search query to run against active MCP catalogs' },
+        query: { type: 'string', description: 'Optional search query. Omit or pass an empty string to browse active MCP catalogs.' },
         server: { type: 'string', description: 'Optional MCP server id filter' },
         kind: {
           type: 'string',
@@ -645,7 +645,6 @@ export const BUILTIN_TOOL_DEFINITIONS: LocalToolDefinition[] = [
         },
         limit: { type: 'number', description: 'Maximum number of search results to return' },
       },
-      required: ['query'],
     },
     handler: toolMcpSearch,
     sideEffect: 'readonly',

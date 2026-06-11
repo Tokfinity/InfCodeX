@@ -38,6 +38,13 @@ describe('MCP retrieval tools', () => {
     expect(searchOutput).toContain('Retrieval result for mcp_search');
     expect(searchOutput).toContain(fixture.toolId);
 
+    const browseOutput = await toolMcpSearch({ server: fixture.serverId, kind: 'tool', limit: 10 }, ctx);
+    expect(browseOutput).toContain('Retrieval result for mcp_search');
+    expect(browseOutput).toContain(fixture.toolId);
+
+    const emptyQueryOutput = await toolMcpSearch({ query: '', server: fixture.serverId, kind: 'tool' }, ctx);
+    expect(emptyQueryOutput).toContain(fixture.toolId);
+
     const describeOutput = await toolMcpDescribe({ id: fixture.toolId }, ctx);
     expect(describeOutput).toContain('Retrieval result for mcp_describe');
     expect(describeOutput).toContain('Echo Tool');

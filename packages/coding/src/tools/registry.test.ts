@@ -95,7 +95,7 @@ describe('tool registry', () => {
     expect(getRequiredToolParams('web_search')).toEqual(['query']);
     expect(getRequiredToolParams('code_search')).toEqual(['query']);
     expect(getRequiredToolParams('semantic_lookup')).toEqual(['query']);
-    expect(getRequiredToolParams('mcp_search')).toEqual(['query']);
+    expect(getRequiredToolParams('mcp_search')).toEqual([]);
     expect(getRequiredToolParams('mcp_describe')).toEqual(['id']);
     expect(getRequiredToolParams('mcp_call')).toEqual(['id']);
     expect(getRequiredToolParams('mcp_read_resource')).toEqual(['id']);

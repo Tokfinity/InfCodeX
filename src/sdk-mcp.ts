@@ -56,6 +56,8 @@ export type {
   // catalog.js
   McpCapabilityKind,
   McpCapabilityRisk,
+  McpIcon,
+  McpToolTaskSupport,
   McpCatalogItem,
   McpCapabilityDescriptor,
   McpServerCatalogSnapshot,
@@ -63,9 +65,24 @@ export type {
   McpServerRuntimeDiagnostics,
   // provider.js
   McpProviderOptions,
+  // reverse-capabilities.js
+  McpReverseCapabilities,
+  McpRoot,
+  McpElicitRequest,
+  McpElicitResult,
+  McpSamplingRequest,
+  McpSamplingResult,
   // transport.js
   McpTransport,
   McpTransportEvents,
+  // oauth-discovery.js / oauth-login.js
+  ProtectedResourceMetadata,
+  AuthorizationServerMetadata,
+  DiscoveredOAuthEndpoints,
+  WwwAuthenticateChallenge,
+  OAuthLoginConsent,
+  PerformOAuthLoginOptions,
+  OAuthClientInfo,
   // manager.js
   McpServerStatus,
   McpServerLogs,
@@ -84,8 +101,21 @@ export {
   McpServerRuntime,
   // provider.js
   McpCapabilityProvider,
+  // reverse-capabilities.js
+  buildInitializeCapabilities,
   // transport.js
   createMcpTransport,
+  McpAuthRequiredError,
+  McpExpiredSessionError,
+  // oauth-discovery.js / oauth-login.js
+  discoverOAuthEndpoints,
+  discoverProtectedResourceMetadata,
+  discoverAuthorizationServerMetadata,
+  extractResourceMetadataUrl,
+  extractInsufficientScope,
+  performOAuthLogin,
+  loadValidToken,
+  registerOAuthClient,
   // manager.js
   McpManager,
   createMcpManager,

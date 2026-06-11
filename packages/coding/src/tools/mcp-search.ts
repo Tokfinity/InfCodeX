@@ -21,6 +21,17 @@ function clampLimit(input: unknown): number {
   return Math.max(1, Math.min(20, value));
 }
 
+function formatSearchSummary(count: number, query: string): string {
+  if (count > 0) {
+    return query
+      ? `Found ${count} MCP capability result(s) for "${query}".`
+      : `Found ${count} MCP capability result(s).`;
+  }
+  return query
+    ? `No MCP capability results for "${query}".`
+    : 'No MCP capabilities found.';
+}
+
 export async function toolMcpSearch(
   input: Record<string, unknown>,
   ctx: KodaXToolExecutionContext,
@@ -30,10 +41,7 @@ export async function toolMcpSearch(
       throw new Error('mcp_search requires an active extension runtime.');
     }
 
-    const query = readOptionalString(input, 'query');
-    if (!query) {
-      throw new Error('query is required.');
-    }
+    const query = readOptionalString(input, 'query')?.trim() ?? '';
 
     const kind = readOptionalString(input, 'kind');
     const server = readOptionalString(input, 'server');
@@ -80,9 +88,7 @@ export async function toolMcpSearch(
       trust: 'provider',
       freshness: 'unknown',
       provider: server ? `mcp:${server}` : 'mcp',
-      summary: items.length > 0
-        ? `Found ${items.length} MCP capability result(s) for "${query}".`
-        : `No MCP capability results for "${query}".`,
+      summary: formatSearchSummary(items.length, query),
       items,
       artifacts,
       metadata: {
