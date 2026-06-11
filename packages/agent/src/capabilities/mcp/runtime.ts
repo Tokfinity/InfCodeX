@@ -37,6 +37,7 @@ interface JsonRpcRequestRecord {
 interface JsonRpcResponseError {
   code?: number;
   message?: string;
+  data?: unknown;
 }
 
 export interface McpServerRuntimeDiagnostics {
@@ -270,6 +271,27 @@ class McpProtocolVersionError extends Error {
   }
 }
 
+/**
+ * A JSON-RPC error response from the server, preserving `code` + `data` so
+ * callers can act on structured errors — notably the url-elicitation tool-retry
+ * closure, which keys off code -32042 and reads the elicitation from `data`.
+ */
+class McpJsonRpcError extends Error {
+  constructor(message: string, readonly code?: number, readonly data?: unknown) {
+    super(message);
+    this.name = 'McpJsonRpcError';
+  }
+}
+
+// FEATURE_222 Slice C — when a tools/call needs the user to complete a url
+// elicitation first, the server replies with this code (MCP 2025-11-25). The
+// client elicits, waits for completion, then retries the call (bounded).
+const URL_ELICITATION_REQUIRED_CODE = -32042;
+/** How long to wait for notifications/elicitation/complete before retrying. */
+const DEFAULT_URL_ELICITATION_TIMEOUT_MS = 300_000;
+/** Max url-elicitation round trips for a single tools/call (avoids loops). */
+const MAX_URL_ELICITATIONS = 3;
+
 function readNegotiatedProtocolVersion(result: unknown): string {
   const initialized = asRecord(result);
   const version = readString(initialized?.protocolVersion);
@@ -277,6 +299,30 @@ function readNegotiatedProtocolVersion(result: unknown): string {
     throw new McpProtocolVersionError(version);
   }
   return version;
+}
+
+/**
+ * Read a url elicitation out of a -32042 error, or undefined when the error is
+ * something else / lacks a usable url. The elicitation may sit directly on
+ * `error.data` or nested under `data.elicitation`.
+ */
+function parseUrlElicitationRequired(
+  error: unknown,
+): { url: string; message?: string; elicitationId?: string } | undefined {
+  if (!(error instanceof McpJsonRpcError) || error.code !== URL_ELICITATION_REQUIRED_CODE) {
+    return undefined;
+  }
+  const data = asRecord(error.data);
+  const elicitation = asRecord(data?.elicitation) ?? data;
+  const url = readString(elicitation?.url);
+  if (!url) {
+    return undefined;
+  }
+  return {
+    url,
+    message: readString(elicitation?.message),
+    elicitationId: readString(elicitation?.elicitationId),
+  };
 }
 
 function getStartupTimeoutMs(config: KodaXMcpServerConfig): number {
@@ -292,6 +338,9 @@ function getRequestTimeoutMs(config: KodaXMcpServerConfig): number {
 export class McpServerRuntime {
   private transport?: McpTransport;
   private readonly pending = new Map<number, JsonRpcRequestRecord>();
+  /** FEATURE_222 — resolvers awaiting notifications/elicitation/complete, keyed
+   *  by elicitationId (used by the url-elicitation tool-retry closure). */
+  private readonly elicitationWaiters = new Map<string, () => void>();
   private nextRequestId = 0;
   private initialized = false;
   private connectPromise?: Promise<void>;
@@ -387,17 +436,74 @@ export class McpServerRuntime {
         + `(execution.taskSupport: "required"), which KodaX does not yet support.`,
       );
     }
-    const response = await this.request('tools/call', { name, arguments: args });
-    const record = asRecord(response);
-    return {
-      content: flattenMcpContent(record?.content),
-      structuredContent: record?.structuredContent ?? record?.structured_content,
-      metadata: {
-        serverId: this.serverId,
-        isError: readBoolean(record?.isError) ?? readBoolean(record?.is_error) ?? false,
-        raw: record,
-      },
-    };
+    // A tool may require the user to complete a url elicitation first
+    // (code -32042). Elicit, wait for completion, then retry — bounded so a
+    // server that keeps demanding elicitation cannot loop forever.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const response = await this.request('tools/call', { name, arguments: args });
+        const record = asRecord(response);
+        return {
+          content: flattenMcpContent(record?.content),
+          structuredContent: record?.structuredContent ?? record?.structured_content,
+          metadata: {
+            serverId: this.serverId,
+            isError: readBoolean(record?.isError) ?? readBoolean(record?.is_error) ?? false,
+            raw: record,
+          },
+        };
+      } catch (error) {
+        const elicitation = attempt < MAX_URL_ELICITATIONS
+          ? parseUrlElicitationRequired(error)
+          : undefined;
+        if (!elicitation || !(await this.satisfyUrlElicitation(elicitation))) {
+          throw error;
+        }
+        // consent + completion done — loop retries the tools/call.
+      }
+    }
+  }
+
+  /**
+   * Drive a url elicitation the server asked for before a tools/call can
+   * succeed: route it to the host (anti-phishing consent UI) and, on consent,
+   * wait for the server's completion notification. Returns false when the host
+   * cannot serve url elicitation or the user did not consent.
+   */
+  private async satisfyUrlElicitation(
+    request: { url: string; message?: string; elicitationId?: string },
+  ): Promise<boolean> {
+    if (!this.reverse?.elicit || !canHandleElicitMode(this.reverse, 'url')) {
+      return false;
+    }
+    const result = await this.reverse.elicit({
+      mode: 'url',
+      url: request.url,
+      message: request.message,
+      elicitationId: request.elicitationId,
+    });
+    if (result.action !== 'accept') {
+      return false;
+    }
+    if (request.elicitationId) {
+      await this.waitForElicitationComplete(request.elicitationId, DEFAULT_URL_ELICITATION_TIMEOUT_MS);
+    }
+    return true;
+  }
+
+  /** Resolve when the server signals the url elicitation completed, or on timeout
+   *  (a premature retry is harmless — the server re-requests and the loop caps). */
+  private waitForElicitationComplete(elicitationId: string, timeoutMs: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const settle = (): void => {
+        clearTimeout(timer);
+        this.elicitationWaiters.delete(elicitationId);
+        resolve();
+      };
+      const timer = setTimeout(settle, timeoutMs);
+      timer.unref?.();
+      this.elicitationWaiters.set(elicitationId, settle);
+    });
   }
 
   async readResource(name: string, options: Record<string, unknown>): Promise<{
@@ -735,7 +841,7 @@ export class McpServerRuntime {
       this.pending.delete(numericId);
       const error = asRecord(payload.error) as JsonRpcResponseError | undefined;
       if (error?.message) {
-        pending.reject(new Error(error.message));
+        pending.reject(new McpJsonRpcError(error.message, error.code, error.data));
         return;
       }
       pending.resolve(payload.result);
@@ -755,6 +861,9 @@ export class McpServerRuntime {
     if (method === 'notifications/elicitation/complete') {
       const elicitationId = readString(asRecord(payload.params)?.elicitationId);
       if (elicitationId) {
+        // Release an in-flight tool-retry waiter first, then let the host
+        // dismiss its waiting UI.
+        this.elicitationWaiters.get(elicitationId)?.();
         this.reverse?.onElicitationComplete?.(elicitationId);
       }
       return;

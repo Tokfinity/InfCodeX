@@ -529,6 +529,59 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createUrlRetryToolServerSource(
+  recordPath: string,
+  options: { elicitationId?: string; emitCompletion?: boolean } = {},
+): string {
+  const elicitationIdField = options.elicitationId
+    ? `, elicitationId: ${JSON.stringify(options.elicitationId)}`
+    : '';
+  const emitCompletion = options.emitCompletion && options.elicitationId
+    ? `setTimeout(function(){ writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: ${JSON.stringify(options.elicitationId)} } }); }, 200);`
+    : '';
+  return `
+const fs = require('node:fs');
+let buffer = '';
+let toolCalls = 0;
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function record(p){ fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === undefined && m.id !== undefined) { record(m); return; } // client response
+  if (m.method === 'initialize') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'url-retry-test', version: '1.0.0' } } });
+    return;
+  }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'login_tool', inputSchema: { type: 'object' } }] } }); return; }
+  if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
+  if (m.method === 'prompts/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } }); return; }
+  if (m.method === 'tools/call'){
+    toolCalls += 1;
+    record({ kind: 'tools/call', n: toolCalls });
+    if (toolCalls === 1) {
+      writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32042, message: 'authorization required', data: { elicitation: { mode: 'url', url: 'https://auth.example.test/grant', message: 'Authorize'${elicitationIdField} } } } });
+      ${emitCompletion}
+      return;
+    }
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'logged in' }] } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
@@ -1183,5 +1236,121 @@ describe('McpServerRuntime protocol compatibility', () => {
       model: 'test-model',
       stopReason: 'endTurn',
     });
+  });
+
+  it('FEATURE_222 Slice C: -32042 → url consent → retries tools/call and succeeds', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-retry.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: {} };
+      },
+      elicitationModes: { form: true, url: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      const result = await runtime.callTool('login_tool', {});
+      expect(result.content).toContain('logged in');
+    } finally {
+      await runtime.dispose();
+    }
+
+    // The host saw a url elicitation carrying the server's URL + message.
+    expect(seen).toEqual([
+      expect.objectContaining({ mode: 'url', url: 'https://auth.example.test/grant', message: 'Authorize' }),
+    ]);
+    // tools/call was attempted exactly twice (initial -32042, then the retry).
+    const callRecords = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)))
+      .filter((r) => r?.kind === 'tools/call');
+    expect(callRecords).toHaveLength(2);
+  });
+
+  it('FEATURE_222 Slice C: -32042 → user declines → tools/call throws (no retry)', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-decline.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath));
+    const reverse: McpReverseCapabilities = {
+      elicit: async () => ({ action: 'decline' }),
+      elicitationModes: { form: true, url: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect(runtime.callTool('login_tool', {})).rejects.toThrow(/authorization required/);
+    } finally {
+      await runtime.dispose();
+    }
+
+    const callRecords = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)))
+      .filter((r) => r?.kind === 'tools/call');
+    expect(callRecords).toHaveLength(1);
+  });
+
+  it('FEATURE_222 Slice C: -32042 is surfaced unchanged when the host lacks url elicitation', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-no-host.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      // form-only host: url elicitation is not advertised, so the closure must
+      // not run — the original error propagates.
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: {} };
+      },
+      elicitationModes: { form: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect(runtime.callTool('login_tool', {})).rejects.toThrow(/authorization required/);
+    } finally {
+      await runtime.dispose();
+    }
+
+    expect(seen).toEqual([]);
+  });
+
+  it('FEATURE_222 Slice C: waits for the completion notification before retrying', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-wait.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath, {
+      elicitationId: 'flow-7',
+      emitCompletion: true,
+    }));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: {} };
+      },
+      elicitationModes: { form: true, url: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      const result = await runtime.callTool('login_tool', {});
+      expect(result.content).toContain('logged in');
+    } finally {
+      await runtime.dispose();
+    }
+
+    expect(seen).toEqual([
+      expect.objectContaining({ mode: 'url', url: 'https://auth.example.test/grant', elicitationId: 'flow-7' }),
+    ]);
   });
 });
