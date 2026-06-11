@@ -1,6 +1,6 @@
 # Known Issues
 
-_Last Updated: 2026-06-05_
+_Last Updated: 2026-06-11_
 
 ---
 
@@ -4234,7 +4234,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 64 (27 Open, 37 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 64 (24 Open, 40 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
