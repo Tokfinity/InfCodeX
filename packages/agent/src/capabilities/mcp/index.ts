@@ -54,7 +54,25 @@ export type {
 export { buildInitializeCapabilities } from './reverse-capabilities.js';
 
 export type { McpTransport, McpTransportEvents } from './transport.js';
-export { createMcpTransport } from './transport.js';
+export { createMcpTransport, McpAuthRequiredError, McpExpiredSessionError } from './transport.js';
+
+// FEATURE_222 — MCP OAuth (discovery + interactive login). The runtime drives
+// these on a 401/403; they are exported so a host can also log in proactively.
+export type {
+  ProtectedResourceMetadata,
+  AuthorizationServerMetadata,
+  DiscoveredOAuthEndpoints,
+  WwwAuthenticateChallenge,
+} from './oauth-discovery.js';
+export {
+  discoverOAuthEndpoints,
+  discoverProtectedResourceMetadata,
+  discoverAuthorizationServerMetadata,
+  extractResourceMetadataUrl,
+  extractInsufficientScope,
+} from './oauth-discovery.js';
+export type { OAuthLoginConsent, PerformOAuthLoginOptions, OAuthClientInfo } from './oauth-login.js';
+export { performOAuthLogin, loadValidToken, registerOAuthClient } from './oauth-login.js';
 
 // v0.7.42 — popout-shape manager facade (`listServers / startServer /
 // stopServer / getServerLogs / listTools`) over the capability-provider-
