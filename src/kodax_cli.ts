@@ -78,6 +78,7 @@ import {
   KodaXReasoningMode,
   createExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
+  buildMcpReverseCapabilities,
   KODAX_DEFAULT_PROVIDER,
   checkPromiseSignal,
   getProvider,
@@ -1238,7 +1239,11 @@ complete -c kodax -l version -d 'Show version'`);
 
   if ((options.extensions?.length ?? 0) > 0 || hasActiveMcp) {
     extensionRuntime = createExtensionRuntime({ config });
-    await registerConfiguredMcpCapabilityProvider(extensionRuntime, configWithExtensions.mcpServers);
+    // FEATURE_222 — expose the workspace as MCP roots so servers can resolve
+    // file:// references against the project KodaX is running in.
+    await registerConfiguredMcpCapabilityProvider(extensionRuntime, configWithExtensions.mcpServers, {
+      reverse: buildMcpReverseCapabilities({ cwd: process.cwd() }),
+    });
     const extensionLoader = extensionRuntime as typeof extensionRuntime & {
       loadExtensions: (
         paths: string[],

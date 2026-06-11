@@ -579,6 +579,9 @@ export {
   setActiveExtensionRuntime,
   getActiveExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
+  buildMcpReverseCapabilities,
+  mcpRootsFromWorkspace,
+  type McpReverseWorkspace,
   registerOfficialSandboxExtension,
 } from './extensions/index.js';
 

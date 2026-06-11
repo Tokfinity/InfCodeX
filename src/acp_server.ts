@@ -35,6 +35,7 @@ import {
   runKodaX,
   createExtensionRuntime,
   registerConfiguredMcpCapabilityProvider,
+  buildMcpReverseCapabilities,
   shutdownDefaultLspService,
   type KodaXExtensionRuntime,
 } from '@kodax-ai/coding';
@@ -391,7 +392,9 @@ export class KodaXAcpServer implements Agent {
     );
     if (hasMcp) {
       const rt = createExtensionRuntime({ config });
-      this.extensionRuntimeReady = registerConfiguredMcpCapabilityProvider(rt, mcpServers)
+      this.extensionRuntimeReady = registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
+        reverse: buildMcpReverseCapabilities({ cwd: process.cwd() }),
+      })
         .then(() => {
           rt.activate();
           this.extensionRuntime = rt;
@@ -521,7 +524,9 @@ export class KodaXAcpServer implements Agent {
     if (clientMcpServers.length > 0) {
       const converted = convertAcpMcpServers(clientMcpServers);
       const rt = createExtensionRuntime({});
-      await registerConfiguredMcpCapabilityProvider(rt, converted).catch((error) => {
+      await registerConfiguredMcpCapabilityProvider(rt, converted, {
+        reverse: buildMcpReverseCapabilities({ cwd: session.cwd }),
+      }).catch((error) => {
         const msg = error instanceof Error ? error.message : String(error);
         // eslint-disable-next-line no-console
         console.warn(`[kodax:acp] Per-session MCP init failed for ${sessionId}: ${msg}`);

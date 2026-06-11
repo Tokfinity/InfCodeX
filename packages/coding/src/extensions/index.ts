@@ -42,6 +42,14 @@ export {
   registerConfiguredMcpCapabilityProvider,
 } from '../capabilities/providers/mcp-adapter.js';
 
+// FEATURE_222 — host helper that builds the MCP reverse-capability handlers
+// (roots, …) from the workspace, to inject into the provider.
+export {
+  buildMcpReverseCapabilities,
+  mcpRootsFromWorkspace,
+  type McpReverseWorkspace,
+} from '../capabilities/providers/mcp-reverse.js';
+
 export type {
   OfficialSandboxMode,
   OfficialSandboxOptions,
