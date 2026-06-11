@@ -145,6 +145,12 @@ upsertMcpServer('filesystem', {
   connect: 'lazy',
 });
 
+// Remote servers: `type: 'streamable-http'` or `'sse'`. For ecosystem-config
+// compatibility you may also use `type: 'http'` (v0.7.48+) — a config-layer
+// alias that auto-detects Streamable HTTP first, then falls back to legacy
+// HTTP+SSE. OAuth-protected servers are zero-config: omit `auth` endpoint
+// fields and KodaX discovers + dynamically registers on the first 401.
+
 // In-flight `McpManager` does NOT hot-pickup config changes. The
 // standard pattern is: edit config, then construct a fresh manager
 // (or call dispose() + createMcpManager again) before the next agent

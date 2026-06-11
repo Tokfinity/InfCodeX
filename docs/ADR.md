@@ -2337,3 +2337,40 @@ packages/
 
 ---
 
+## ADR-039: MCP 2025-11-25 Reverse Capabilities — 声明=实现承诺 + 反钓鱼 Elicitation + 零配置 OAuth Discovery + `type:"http"` 配置别名 (FEATURE_222, v0.7.48)
+
+**Status**: Accepted (2026-06-11, shipped v0.7.48)
+
+**Context**: v0.7.47 交付了 MCP `2025-11-25` 的 forward（client→server）半边，但 client 仍声明空 `capabilities:{}`、对所有 server→client 请求回 `-32601`。本 ADR 记录补齐 reverse（server→client）半边时的关键决策。参照对照 `C:\Works\claudecode`（标杆）+ `C:\Works\PubGItProj\codex`，2 个 Explore agent 实地核实其 OAuth/elicitation 实现。
+
+**Decisions**:
+
+1. **声明=实现承诺（capability declaration = implementation promise）**。`buildInitializeCapabilities()` 只在对应 handler 被 host 注入时才点亮 `initialize.capabilities` 的键。
+   - *Why not advertise-all*：声明了却不实现 = 协议违规（conformant server 会发请求然后我们回 -32601 或挂起）。本决策让 feature **逐 slice 可增量交付**（roots → elicitation → oauth 各自独立点亮），且 headless host 不注入任何 handler 时行为与改造前完全一致（全部 -32601）。这也是为什么 `sampling` 留了 runtime seam 但**不点亮**——没有 host 注入 `sample`，capability 就不声明，server 不会发。
+
+2. **`ask_user_question` 原语下沉 agent 层 + active-interaction registry（调用时解析）**。原语从 `@kodax-ai/coding` 移到 `@kodax-ai/agent`（coding re-export 向后兼容），因为 MCP runtime 在 agent 层、够不到 coding。MCP provider 在交互 loop 之前就构造，但 server 可在任意时刻 elicit → 用 module-level `setActiveUserInteraction`/`getActiveUserInteraction` 注册表，在**调用那一刻**解析 live 交互面（非构造时）。
+   - *Why not 构造时注入*：构造时还没有 live REPL 对话框；late-binding registry 是唯一能让"启动期构造的 provider"在"运行期"拿到真实 UI 的方式。镜像既有 active-extension-runtime 模式。
+
+3. **Elicitation 反钓鱼三件套**：`McpElicitRequest` 带 `serverId`（runtime 在 dispatch / -32042 / OAuth consent 三处注入）→ form + url prompt 都展示「哪个 MCP server 在请求」；form 收集后加 **review-before-send** 确认（列出将发送的值 + Send/Cancel）；url mode 展示完整 URL + 域名、**绝不自动打开浏览器**、**绝不让 model 窥探 URL/内容**。
+   - *Why*：elicitation 是 server→user 的注入面，是钓鱼向量（恶意 server 可伪装索要 token）。最高杠杆防御是「让用户知道是谁在问」+「发送前可审阅」。这是 spec User-Interaction Model 的 client SHOULD。
+
+4. **OAuth 零配置 discovery + 复用 url-elicitation 作 consent gate**。401 → RFC 9728 PRM → RFC 8414/OIDC AS metadata → RFC 7591 DCR → PKCE(S256) + RFC 8707 `resource` → `127.0.0.1` loopback。授权 URL 通过**同一个 url-elicitation 反钓鱼门**展示（不另造 UI）。`config.auth` 端点字段改 optional（零配置）。
+   - *Why not 静态配置*：成熟客户端（claudecode/codex）都是 discovery-based 零配置；要求用户手填 `authorizationUrl`/`tokenUrl` 不现实。既有 FEATURE_065 静态路径保留（仅在三字段齐备时走）。
+   - *Why CIMD 不做*：Client ID Metadata Documents（SEP-991）是*推荐*增强非 MUST，需要 server 端 `client_id_metadata_document_supported`；DCR(RFC 7591) 是注册基线且 codex 也只用 DCR。CIMD 列为 non-goal，待真实目标 server 需要时再评估。**故对外表述为「discovery/login/step-up 完成」而非「完整对齐 2025-11-25」**。
+   - *callback 加固*：先监听再展示 URL（消除丢 redirect 竞态，首结果 buffer）；redirect URI 用 `127.0.0.1` 与监听一致（避开 IPv6 `localhost`/`::1` 错配，对齐 codex/RFC 8252）；PKCE 强制 S256，AS 不支持即硬失败拒绝降级到 `plain`。
+
+5. **`type:"http"` 是配置层 alias，不是 wire protocol**。`createAutoHttpTransport` 先 POST `initialize` 当 Streamable HTTP，仅在 `400/404/405` fallback 到旧 HTTP+SSE；`401/403/5xx/网络错误`不 fallback（auth 挑战仍走 OAuth 流程）。diagnostics 记 `resolvedTransport`。
+   - *Why not 直接映射成 `streamable-http`*：生态里 `type:"http"` 的语义是「HTTP MCP server，自己判断 flavour」；直接当 streamable 会让只支持旧 SSE 的 server 连不上。auto-detect 在 runtime 层（initialize 本就在 runtime 发），改动面最小。
+
+6. **catalog 对 optional list 容错**：`resources/list`/`prompts/list` 回 `-32601`（按 error code 判定）当空数组，不让整个 catalog refresh 失败；`tools/list` 仍硬失败。
+   - *Why tools/list 不容错*：无 tools = 无核心能力，该 server 实际不可用，硬失败比静默空 catalog 更诚实。（实测「小智数据问答」server 正是 `prompts/list` -32601 但 tools 正常的案例。）
+
+**Eval posture**: 无 prompt 改动 → $0 LLM eval（CLAUDE.md「Prompt Eval — Non-triggers」）。验证靠 130+ MCP 单测（每 slice 有 fake-MCP-server）+ 真实「小智数据问答」server 实测（type:http → http:auto->sse、发现 tool、tools/call 发出）。
+
+**先例 / 关键 memory**:
+- 参照对照 claudecode（OAuth CIMD+DCR / elicitation serverId 展示 / 127.0.0.1 loopback）+ codex（rmcp DCR / `127.0.0.1/callback/<hash>` / 无 RFC 9728）。
+- [`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md) — GPT 并发改同批 MCP 文件，选择性 staging / 原子提交。
+- [`feedback_old_design_doc_verify_against_code_first`](../../memory/feedback_old_design_doc_verify_against_code_first.md) — GPT cross-review 的论断逐条对代码核实（CIMD「MUST」被核为 SHOULD/optional）。
+
+---
+

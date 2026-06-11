@@ -52,10 +52,10 @@ _Last Updated: 2026-06-05_
 | 106 | High | Open | Managed-task structured worker blocks remain text-coupled and can fail closed on protocol drift | v0.7.14 | - | 2026-04-08 | - |
 | 107 | Medium | Open | harnessProfile 类型命名残留 - H0/H1/H2 应替换为 worker-chain composition | v0.7.16 | - | 2026-04-11 | - |
 
-| 108 | High | Open | ACP server 链路未接入 MCP — 编辑器/ACP 场景下 mcpServers 配置不生效 | v0.7.16 | - | 2026-04-11 | - |
-| 109 | Low | Open | 缺少 mcp_get_prompt 工具 — MCP prompt 能力未暴露给模型 | v0.7.16 | - | 2026-04-11 | - |
+| 108 | High | Resolved | ACP server 链路未接入 MCP — 编辑器/ACP 场景下 mcpServers 配置不生效 | v0.7.16 | v0.7.35 | 2026-04-11 | 2026-06-11 |
+| 109 | Low | Resolved | 缺少 mcp_get_prompt 工具 — MCP prompt 能力未暴露给模型 | v0.7.16 | v0.7.35 | 2026-04-11 | 2026-06-11 |
 | 110 | Low | Open | 缺少 /mcp status 和 /mcp refresh REPL 命令 | v0.7.16 | - | 2026-04-11 | - |
-| 111 | Low | Open | SSE / Streamable HTTP MCP 传输缺少专项测试 | v0.7.16 | - | 2026-04-11 | - |
+| 111 | Low | Resolved | SSE / Streamable HTTP MCP 传输缺少专项测试 | v0.7.16 | v0.7.48 | 2026-04-11 | 2026-06-11 |
 | 112 | High | Open | ask_user_question 交互机制不完备 — 数字编号歧义 + 缺少 input/multiSelect 模式 | v0.7.18 | - | 2026-04-12 | - |
 | 113 | High | Resolved | Ctrl+C 中断后工具调用仍继续执行 — abort signal 未传播到工具执行阶段 | v0.7.17 | v0.7.18 | 2026-04-12 | 2026-04-12 |
 | 114 | High | Resolved | ask_user_question ESC 取消被静默吞掉 — 用户取消后模型继续执行 | v0.7.17 | v0.7.18 | 2026-04-12 | 2026-04-12 |
@@ -2356,10 +2356,12 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ### 111: SSE / Streamable HTTP MCP 传输缺少专项测试
 
 - **Priority**: Low
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.16
-- **Fixed**: -
+- **Fixed**: v0.7.48
 - **Created**: 2026-04-11
+- **Resolved**: 2026-06-11
+- **Resolution (2026-06-11)**: 远程传输现有完整专项测试 —— `packages/agent/src/capabilities/mcp/transport.test.ts`（SSE / Streamable HTTP framing + session + 通知流重连）+ `runtime.test.ts` 的 streamable HTTP + `type:"http"` auto-detect 用例 + `oauth-connect.test.ts` 集成。FEATURE_222(v0.7.48) 又补了 http auto-detect / 401-no-fallback / fallback-to-SSE。
 
 - **Original Problem**:
   `transport.ts` 中 `createSseTransport()` 和 `createStreamableHttpTransport()` 已实现，但没有对应的测试用例。stdio 路径有完整集成测试覆盖（provider.test.ts + mcp-tools.test.ts），远程传输尚未验证。
@@ -2388,10 +2390,12 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ### 109: 缺少 mcp_get_prompt 工具 — MCP prompt 能力未暴露给模型
 
 - **Priority**: Low
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.16
-- **Fixed**: -
+- **Fixed**: v0.7.35
 - **Created**: 2026-04-11
+- **Resolved**: 2026-06-11
+- **Resolution**: `packages/coding/src/tools/mcp-get-prompt.ts` 已实现并接入（v0.7.35 commit `2ac1c035`）；本条为陈旧未更新，于 v0.7.48 发版整理时确认关闭。
 
 - **Original Problem**:
   MCP 协议支持三种能力：tool、resource、prompt。KodaX 暴露了 `mcp_call`（tool）、`mcp_read_resource`（resource），但 prompt 能力只在 runtime API 和测试中可达（`runtime.getPrompt()`），没有对应的模型可调用工具。
@@ -2404,10 +2408,12 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ### 108: ACP server 链路未接入 MCP — 编辑器/ACP 场景下 mcpServers 配置不生效
 
 - **Priority**: High
-- **Status**: Open
+- **Status**: Resolved
 - **Introduced**: v0.7.16
-- **Fixed**: -
+- **Fixed**: v0.7.35
 - **Created**: 2026-04-11
+- **Resolved**: 2026-06-11
+- **Resolution**: `src/acp_server.ts` 已接 `registerConfiguredMcpCapabilityProvider`（两处 session 入口 + `convertAcpMcpServers`，v0.7.35 commit `2ac1c035`）；FEATURE_222(v0.7.48) 又把 MCP reverse caps（roots，roots-only out-of-process）接入 ACP 入口。本条为陈旧未更新。建议真实编辑器场景做一次 smoke 确认 mcpServers 工具可见。
 
 - **Original Problem**:
   `acp_server.ts` 的 `buildKodaXOptions()` 没创建 extensionRuntime，编辑器/ACP 场景下 `mcpServers` 配置只记录了服务器数量（用于 diagnostics），不会实际注册 MCP capability provider。因此 VS Code 扩展等 ACP 场景无法使用 MCP 工具。
