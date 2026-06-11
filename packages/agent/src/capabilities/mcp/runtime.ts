@@ -14,11 +14,18 @@ import {
   writeMcpServerCatalog,
 } from './catalog.js';
 import {
+  McpAuthRequiredError,
   McpExpiredSessionError,
   createMcpTransport,
   type McpTransport,
 } from './transport.js';
-import { getValidToken } from './oauth.js';
+import { getValidToken, type OAuthToken } from './oauth.js';
+import {
+  loadValidToken,
+  performOAuthLogin,
+  type OAuthLoginConsent,
+} from './oauth-login.js';
+import { extractInsufficientScope, extractResourceMetadataUrl } from './oauth-discovery.js';
 import {
   buildInitializeCapabilities,
   canHandleElicitMode,
@@ -325,6 +332,10 @@ function parseUrlElicitationRequired(
   };
 }
 
+function bearerHeader(token: OAuthToken): Record<string, string> {
+  return { Authorization: `${token.tokenType ?? 'Bearer'} ${token.accessToken}` };
+}
+
 function getStartupTimeoutMs(config: KodaXMcpServerConfig): number {
   return config.startupTimeoutMs
     ?? (parseInt(process.env.MCP_TIMEOUT ?? '', 10) || DEFAULT_STARTUP_TIMEOUT_MS);
@@ -626,25 +637,58 @@ export class McpServerRuntime {
 
   private async doConnect(): Promise<void> {
     this.diagnostics.status = 'connecting';
+    let authHeaders = await this.resolveInitialAuthHeaders();
+    try {
+      await this.handshakeWithFramings(authHeaders);
+    } catch (error) {
+      // FEATURE_222 — the server demanded auth. Discover + interactively log in
+      // (once), then retry the handshake with the issued Bearer token.
+      if (!(error instanceof McpAuthRequiredError)) throw error;
+      const token = await this.runOAuthLogin(error.wwwAuthenticate);
+      if (!token) throw error;
+      authHeaders = bearerHeader(token);
+      await this.handshakeWithFramings(authHeaders);
+    }
+  }
 
-    // FEATURE_065: OAuth token acquisition for authenticated MCP servers
-    let authHeaders: Record<string, string> | undefined;
-    if (this.config.auth?.type === 'oauth2') {
-      const token = await getValidToken(this.serverId, this.config.auth);
+  /** Initial Authorization header: a static-config token, or a cached token
+   *  from a prior discovery-based login. Absent → connect unauthenticated. */
+  private async resolveInitialAuthHeaders(): Promise<Record<string, string> | undefined> {
+    const auth = this.config.auth;
+    // Static (FEATURE_065) path only when fully pre-configured; otherwise the
+    // token is acquired via discovery-based login on the first 401.
+    if (auth?.type === 'oauth2' && auth.clientId && auth.authorizationUrl && auth.tokenUrl) {
+      const token = await getValidToken(this.serverId, {
+        type: 'oauth2',
+        clientId: auth.clientId,
+        authorizationUrl: auth.authorizationUrl,
+        tokenUrl: auth.tokenUrl,
+        scopes: auth.scopes,
+        redirectPort: auth.redirectPort,
+      });
       if (token) {
         if (this.config.headers?.Authorization) {
           process.stderr.write(
             `[kodax:mcp] OAuth token will override user-provided Authorization header for "${this.serverId}"\n`,
           );
         }
-        authHeaders = { Authorization: `${token.tokenType ?? 'Bearer'} ${token.accessToken}` };
-      } else {
-        process.stderr.write(
-          `[kodax:mcp] OAuth token required for "${this.serverId}" but not available. Connecting without auth.\n`,
-        );
+        return bearerHeader(token);
       }
+      process.stderr.write(
+        `[kodax:mcp] OAuth token required for "${this.serverId}" but not available. Connecting without auth.\n`,
+      );
+      return undefined;
     }
+    if (this.config.url) {
+      const cached = await loadValidToken(this.serverId);
+      if (cached) return bearerHeader(cached);
+    }
+    return undefined;
+  }
 
+  private async handshakeWithFramings(
+    authHeaders: Record<string, string> | undefined,
+  ): Promise<void> {
     // MCP stdio uses newline-delimited JSON. Keep Content-Length only as a
     // compatibility fallback for legacy/custom servers.
     const isStdio = (this.config.type ?? 'stdio') === 'stdio';
@@ -713,6 +757,45 @@ export class McpServerRuntime {
     }
   }
 
+  /**
+   * FEATURE_222 — discover + interactively log in to an authenticated MCP
+   * server. The authorization URL is shown through the host's url-elicitation
+   * consent (anti-phishing; never auto-opened). Returns undefined when the host
+   * has no url-consent surface, discovery fails, or the user declines.
+   */
+  private async runOAuthLogin(
+    wwwAuthenticate?: string,
+    stepUpScope?: string,
+  ): Promise<OAuthToken | undefined> {
+    const serverUrl = this.config.url;
+    if (!serverUrl) return undefined;
+    if (!this.reverse?.elicit || !canHandleElicitMode(this.reverse, 'url')) return undefined;
+    const elicit = this.reverse.elicit;
+    const consent: OAuthLoginConsent = async (authorizationUrl) => {
+      const result = await elicit({
+        mode: 'url',
+        url: authorizationUrl,
+        message: `Sign in to MCP server "${this.serverId}" to authorize access.`,
+      });
+      return result.action === 'accept';
+    };
+    try {
+      return await performOAuthLogin({
+        serverId: this.serverId,
+        serverUrl,
+        resourceMetadataUrl: extractResourceMetadataUrl(wwwAuthenticate),
+        configuredClientId: this.config.auth?.clientId,
+        configuredScopes: this.config.auth?.scopes,
+        stepUpScope,
+        consent,
+        redirectPort: this.config.auth?.redirectPort,
+      });
+    } catch (error) {
+      this.diagnostics.lastError = error instanceof Error ? error.message : String(error);
+      return undefined;
+    }
+  }
+
   private async listDescriptors(
     method: 'tools/list' | 'resources/list' | 'prompts/list',
     kind: 'tools' | 'resources' | 'prompts',
@@ -770,6 +853,17 @@ export class McpServerRuntime {
         await this.resetTransport();
         await this.connect();
         return this.request(method, params, timeoutMs, false);
+      }
+      // FEATURE_222 — mid-session 401 (token expired) or 403 insufficient_scope
+      // (step-up): re-authenticate, reconnect, and retry the request once.
+      if (retryExpiredSession && error instanceof McpAuthRequiredError) {
+        const stepUpScope = extractInsufficientScope(error.wwwAuthenticate);
+        const token = await this.runOAuthLogin(error.wwwAuthenticate, stepUpScope);
+        if (token) {
+          await this.resetTransport();
+          await this.connect();
+          return this.request(method, params, timeoutMs, false);
+        }
       }
       throw error;
     }

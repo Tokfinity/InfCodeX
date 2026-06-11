@@ -37,6 +37,18 @@ export class McpExpiredSessionError extends Error {
   }
 }
 
+/**
+ * FEATURE_222 — the server demanded OAuth (401) or a stronger scope (403). It
+ * carries the `WWW-Authenticate` header so the connect flow can discover the
+ * authorization server (RFC 9728 pointer) or read the step-up scope.
+ */
+export class McpAuthRequiredError extends Error {
+  constructor(readonly status: number, readonly wwwAuthenticate?: string) {
+    super(`MCP server requires authorization (HTTP ${status}).`);
+    this.name = 'McpAuthRequiredError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Stdio transport
 // ---------------------------------------------------------------------------
@@ -640,6 +652,12 @@ export function createStreamableHttpTransport(config: {
       if (!response.ok) {
         if (handleExpiredSession(response.status)) {
           throw new McpExpiredSessionError();
+        }
+        // 401 (needs auth) and 403 with a Bearer challenge (step-up) carry a
+        // WWW-Authenticate header the connect flow uses to discover/elevate.
+        const wwwAuthenticate = response.headers.get('www-authenticate') ?? undefined;
+        if (response.status === 401 || (response.status === 403 && wwwAuthenticate)) {
+          throw new McpAuthRequiredError(response.status, wwwAuthenticate);
         }
         throw new Error(`HTTP POST failed: ${response.status} ${response.statusText}`);
       }

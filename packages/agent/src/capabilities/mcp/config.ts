@@ -27,12 +27,17 @@ export interface McpServerConfig {
   connect?: McpConnectMode;
   startupTimeoutMs?: number;
   requestTimeoutMs?: number;
-  /** OAuth 2.0 configuration for authenticated MCP servers. */
+  /**
+   * OAuth 2.0 for authenticated MCP servers. All endpoint fields are optional:
+   * when omitted, KodaX discovers them at runtime (RFC 9728 → RFC 8414) and
+   * dynamically registers a client (RFC 7591). Provide them only to pin a
+   * pre-registered client / static endpoints.
+   */
   auth?: {
     readonly type: 'oauth2';
-    readonly clientId: string;
-    readonly authorizationUrl: string;
-    readonly tokenUrl: string;
+    readonly clientId?: string;
+    readonly authorizationUrl?: string;
+    readonly tokenUrl?: string;
     readonly scopes?: readonly string[];
     readonly redirectPort?: number;
   };
