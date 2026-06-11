@@ -114,8 +114,9 @@ export interface InvokeLlmJudgeOptions<TVerdict> {
   /** Canonical report tool name used for exact + fuzzy matching. */
   readonly reportToolName: string;
   /** Parse a matched tool_use block into a verdict. `exact` is false on
-   *  a fuzzy (edit-distance) match. Return undefined to signal a parse
-   *  failure → `defaultVerdict('parse_failure')`. */
+   *  a fuzzy (edit-distance) match. Return undefined — or throw — to
+   *  signal a parse failure → `defaultVerdict('parse_failure')`. A
+   *  throwing parser never breaks the "never throws" contract. */
   readonly parseToolCall: (block: KodaXToolUseBlock, exact: boolean) => TVerdict | undefined;
   /** Safe-default verdict factory, keyed by the failure reason so the
    *  caller can preserve distinct diagnostic traces. */
@@ -153,7 +154,15 @@ export async function invokeLlmJudge<TVerdict>(
     if (!match) {
       return options.defaultVerdict('no_tool_call');
     }
-    const parsed = options.parseToolCall(match.block, match.exact);
+    // The parser is caller-supplied — a throwing parser must not break
+    // the "never throws" contract. Any throw maps to parse_failure, same
+    // as a returned undefined.
+    let parsed: TVerdict | undefined;
+    try {
+      parsed = options.parseToolCall(match.block, match.exact);
+    } catch {
+      return options.defaultVerdict('parse_failure');
+    }
     if (parsed === undefined) {
       return options.defaultVerdict('parse_failure');
     }

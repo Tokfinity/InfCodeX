@@ -171,6 +171,23 @@ describe('invokeLlmJudge — fail-open default verdict', () => {
     const provider = fakeProvider(async () => { throw new Error('boom'); });
     await expect(invoke(provider)).resolves.toBeDefined();
   });
+
+  it('throwing parseToolCall → defaultVerdict(parse_failure), does not reject', async () => {
+    const provider = fakeProvider(async () => ({
+      textBlocks: [], thinkingBlocks: [],
+      toolBlocks: [toolBlock('emit_verdict', { value: 'good' })],
+    }));
+    const v = await invokeLlmJudge<TestVerdict>({
+      provider,
+      systemPrompt: 'judge',
+      reportTool: REPORT_TOOL,
+      userMessage: 'm',
+      reportToolName: 'emit_verdict',
+      parseToolCall: () => { throw new Error('parser blew up'); },
+      defaultVerdict,
+    });
+    expect(v.trace).toBe('parse_failure');
+  });
 });
 
 describe('createLlmJudgedStopHook', () => {
