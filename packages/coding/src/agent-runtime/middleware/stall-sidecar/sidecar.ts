@@ -25,8 +25,7 @@
  *   - **Third-person transcript embedding**. The transcript is rendered
  *     into a *user-message text body* (not passed as priorMessages) so
  *     the sidecar doesn't mis-attribute the main agent's past actions as
- *     its own. This was an eval-pilot finding — passing assistant
- *     messages directly caused "I read the file" first-person framing.
+ *     its own.
  *
  * **Runtime safety belt** (production-only — eval didn't need these):
  *   - **5s timeout**. Bounds the wall-clock cost of every L1 fire.
@@ -38,24 +37,35 @@
  *     (edit distance ≤ 2) and string→boolean coercion absorb these
  *     without dropping the verdict.
  *   - **Provider error → no nudge**. Any thrown error from the provider
- *     stream is caught and converted to `{isStuck:false}`. We trade
- *     missed-detection for not blocking the main loop on transient
- *     network / rate-limit errors in the sidecar layer.
+ *     stream is caught and converted to `{isStuck:false}`.
+ *
+ * **FEATURE_215 (v0.7.49)**: the domain-neutral invocation skeleton
+ * (stream → fuzzy-match → parse → timeout-race → fail-open) moved to
+ * `@kodax-ai/agent` as `invokeLlmJudge`. This module is now a thin
+ * consumer: it injects the stall-specific parser + default-verdict
+ * mapping. `editDistance` / `findFuzzyToolMatch` are re-exported from the
+ * agent kernel (single source of truth — no more copy-paste); the
+ * stall-specific `normalizeIsStuck` stays local.
  *
  * Killswitch — global feature kill is owned by `stall-detector.ts`
- * (`KODAX_STALL_DETECT=0`). If the L1 detector is disabled, this
- * sidecar is never invoked because no stall signals are produced.
+ * (`KODAX_STALL_DETECT=0`).
  *
  * DI-clean: provider injection is the only external surface. Tests pass
  * a fake provider that returns canned `{textBlocks, toolBlocks}` results.
  */
 
 import type {
-  KodaXMessage,
   KodaXToolDefinition,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
 import type { KodaXBaseProvider } from '@kodax-ai/llm';
+import type { LlmJudgeFailureReason } from '@kodax-ai/agent';
+import { invokeLlmJudge, editDistance, findFuzzyToolMatch } from '@kodax-ai/agent';
+
+// Re-export the domain-neutral fuzzy-match helpers from the agent kernel
+// so existing `./sidecar.js` import sites (incl. tests) keep working.
+// FEATURE_215 made these the single source of truth in `@kodax-ai/agent`.
+export { editDistance, findFuzzyToolMatch };
 
 /**
  * The set of suggested-tool names the sidecar is allowed to reference.
@@ -134,11 +144,7 @@ export interface StallSidecarOptions {
   /**
    * Specific model id on the provider. When omitted, the provider's
    * registered default model is used. FEATURE_187 Phase B production
-   * wiring passes the model resolved by `resolveStallSidecarProvider()`
-   * so the `KODAX_STALL_MODEL` env override takes effect at the
-   * `provider.stream` call (without this thread the override would be
-   * cosmetic — provider name changes but model stays at provider
-   * default).
+   * wiring passes the model resolved by `resolveStallSidecarProvider()`.
    */
   readonly model?: string;
 
@@ -146,7 +152,7 @@ export interface StallSidecarOptions {
    * The pre-rendered user-message body for the sidecar. Caller builds
    * this by combining the L1 stall signal envelope with the rendered
    * third-person transcript (see `buildSidecarUserMessage` in the
-   * prompts module — added in commit 3/4 alongside production wiring).
+   * prompts module).
    */
   readonly userMessage: string;
 
@@ -158,56 +164,6 @@ export interface StallSidecarOptions {
 
   /** Timeout in ms before sidecar gives up. Default 5000. */
   readonly timeoutMs?: number;
-}
-
-/**
- * Levenshtein edit distance between two strings. Short, no regex.
- * Used by `findFuzzyToolMatch` to absorb typos like
- * `report_stall_jundgment` → `report_stall_judgment` that surfaced in
- * the F178 eval (mmx P3 run=2).
- */
-export function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const prev = new Array(b.length + 1);
-  const curr = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        prev[j] + 1,
-        curr[j - 1] + 1,
-        prev[j - 1] + cost,
-      );
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
-  }
-  return prev[b.length];
-}
-
-/**
- * Find the tool_use block whose name matches `expectedToolName` exactly
- * or within edit distance 2. Returns undefined when no candidate is
- * close enough.
- */
-export function findFuzzyToolMatch(
-  toolBlocks: readonly KodaXToolUseBlock[],
-  expectedToolName: string,
-): { block: KodaXToolUseBlock; exact: boolean } | undefined {
-  const exact = toolBlocks.find((b) => b.name === expectedToolName);
-  if (exact) return { block: exact, exact: true };
-
-  let best: { block: KodaXToolUseBlock; distance: number } | undefined;
-  for (const b of toolBlocks) {
-    const d = editDistance(b.name, expectedToolName);
-    if (d <= 2 && (best === undefined || d < best.distance)) {
-      best = { block: b, distance: d };
-    }
-  }
-  return best ? { block: best.block, exact: false } : undefined;
 }
 
 /**
@@ -244,82 +200,82 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const REPORT_TOOL_NAME = 'report_stall_judgment';
 
 /**
+ * Parse a `report_stall_judgment` tool call into a SidecarVerdict.
+ * Returns undefined when `isStuck` cannot be parsed — the kernel maps
+ * that to the safe-default (trace `no_tool_call`), matching the original
+ * inline behavior.
+ */
+function parseStallToolCall(
+  block: KodaXToolUseBlock,
+  exact: boolean,
+): SidecarVerdict | undefined {
+  const input = getToolInput(block);
+  const isStuckNorm = normalizeIsStuck(input.isStuck);
+  if (isStuckNorm === undefined) {
+    return undefined;
+  }
+
+  const reason = typeof input.reason === 'string' ? input.reason : undefined;
+  const rawSuggested = typeof input.suggestedTool === 'string'
+    ? input.suggestedTool.trim()
+    : '';
+  const suggestedTool = rawSuggested && ALLOWED_SUGGESTED_TOOLS.includes(rawSuggested)
+    ? rawSuggested
+    : undefined;
+  const rawNudge = typeof input.nudge === 'string' ? input.nudge.trim() : '';
+  const nudge = isStuckNorm.value && rawNudge ? rawNudge : undefined;
+
+  // Trace precedence: if both fuzzy match AND coerced bool fire, the
+  // fuzzy-match trace is reported (more semantically interesting than
+  // a single-char JSON typo).
+  let trace: SidecarVerdictTrace = 'sidecar_ok';
+  if (!exact) trace = 'fuzzy_tool_match';
+  else if (isStuckNorm.coerced) trace = 'coerced_string_bool';
+  else if (isStuckNorm.value && rawSuggested && !suggestedTool) {
+    trace = 'invalid_suggested_tool';
+  }
+
+  return {
+    isStuck: isStuckNorm.value,
+    reason,
+    suggestedTool,
+    nudge,
+    trace,
+  };
+}
+
+/**
+ * Safe-default verdict factory for the kernel's fail-open paths. A
+ * `parse_failure` (unparseable `isStuck`) is mapped to `no_tool_call`,
+ * preserving the pre-FEATURE_215 inline behavior.
+ */
+function stallDefaultVerdict(reason: LlmJudgeFailureReason): SidecarVerdict {
+  const trace: SidecarVerdictTrace =
+    reason === 'provider_error' ? 'provider_error'
+    : reason === 'timeout' ? 'timeout'
+    : 'no_tool_call';
+  return { isStuck: false, trace };
+}
+
+/**
  * Invoke the L2 sidecar against the supplied provider. Returns a
- * SidecarVerdict — always; never throws (any internal error is
- * converted to `{isStuck:false, trace:'provider_error'|'timeout'}`).
+ * SidecarVerdict — always; never throws.
+ *
+ * Thin consumer of `@kodax-ai/agent`'s `invokeLlmJudge` (FEATURE_215):
+ * injects the stall report tool name / parser / default-verdict mapping.
  */
 export async function invokeStallSidecar(
   options: StallSidecarOptions,
 ): Promise<SidecarVerdict> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-
-  const messages: KodaXMessage[] = [
-    { role: 'user', content: options.userMessage },
-  ];
-
-  const streamPromise = (async (): Promise<SidecarVerdict> => {
-    let result;
-    try {
-      result = await options.provider.stream(
-        messages,
-        [options.reportTool],
-        options.systemPrompt,
-        false,
-        options.model ? { modelOverride: options.model } : undefined,
-      );
-    } catch {
-      return { isStuck: false, trace: 'provider_error' };
-    }
-
-    const match = findFuzzyToolMatch(result.toolBlocks ?? [], REPORT_TOOL_NAME);
-    if (!match) {
-      return { isStuck: false, trace: 'no_tool_call' };
-    }
-
-    const input = getToolInput(match.block);
-    const isStuckNorm = normalizeIsStuck(input.isStuck);
-    if (isStuckNorm === undefined) {
-      return { isStuck: false, trace: 'no_tool_call' };
-    }
-
-    const reason = typeof input.reason === 'string' ? input.reason : undefined;
-    const rawSuggested = typeof input.suggestedTool === 'string'
-      ? input.suggestedTool.trim()
-      : '';
-    const suggestedTool = rawSuggested && ALLOWED_SUGGESTED_TOOLS.includes(rawSuggested)
-      ? rawSuggested
-      : undefined;
-    const rawNudge = typeof input.nudge === 'string' ? input.nudge.trim() : '';
-    const nudge = isStuckNorm.value && rawNudge ? rawNudge : undefined;
-
-    // Trace precedence: if both fuzzy match AND coerced bool fire, the
-    // fuzzy-match trace is reported (more semantically interesting than
-    // a single-char JSON typo).
-    let trace: SidecarVerdictTrace = 'sidecar_ok';
-    if (!match.exact) trace = 'fuzzy_tool_match';
-    else if (isStuckNorm.coerced) trace = 'coerced_string_bool';
-    else if (isStuckNorm.value && rawSuggested && !suggestedTool) {
-      trace = 'invalid_suggested_tool';
-    }
-
-    return {
-      isStuck: isStuckNorm.value,
-      reason,
-      suggestedTool,
-      nudge,
-      trace,
-    };
-  })();
-
-  // Timeout race — safe-default verdict on timeout.
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<SidecarVerdict>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      resolve({ isStuck: false, trace: 'timeout' });
-    }, timeoutMs);
+  return invokeLlmJudge<SidecarVerdict>({
+    provider: options.provider,
+    model: options.model,
+    systemPrompt: options.systemPrompt,
+    reportTool: options.reportTool,
+    userMessage: options.userMessage,
+    reportToolName: REPORT_TOOL_NAME,
+    parseToolCall: parseStallToolCall,
+    defaultVerdict: stallDefaultVerdict,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
-
-  const verdict = await Promise.race([streamPromise, timeoutPromise]);
-  if (timeoutHandle) clearTimeout(timeoutHandle);
-  return verdict;
 }
