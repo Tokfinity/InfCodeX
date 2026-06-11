@@ -494,6 +494,41 @@ process.on('SIGINT', () => process.exit(0));
 `;
 }
 
+function createSamplingServerSource(recordPath: string): string {
+  return `
+const fs = require('node:fs');
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function record(p){ fs.appendFileSync(${JSON.stringify(recordPath)}, JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === undefined && m.id !== undefined) { record(m); return; } // client response
+  if (m.method === 'initialize') {
+    record(m);
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {} }, serverInfo: { name: 'sampling-test', version: '1.0.0' } } });
+    writeMessage({ jsonrpc: '2.0', id: 'sample-1', method: 'sampling/createMessage', params: { messages: [{ role: 'user', content: { type: 'text', text: 'hi' } }], systemPrompt: 'Be brief', maxTokens: 16, modelPreferences: { hints: [{ name: 'fast' }] } } });
+    return;
+  }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } }); return; }
+  if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
+  if (m.method === 'prompts/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } }); }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
 async function createRuntime(
   dir: string,
   scriptPath: string,
@@ -1059,5 +1094,94 @@ describe('McpServerRuntime protocol compatibility', () => {
 
     // the completion notification was forwarded to the host
     expect(completed).toEqual(['flow-1']);
+  });
+
+  it('FEATURE_222 Slice C: rejects url elicitation when the host did not opt in', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-elicit-disabled.jsonl');
+    const scriptPath = await writeScript(dir, createUrlElicitationServerSource(recordPath));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: {} };
+      },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect
+        .poll(() => readFile(recordPath, 'utf8').catch(() => ''))
+        .toContain('url-1');
+    } finally {
+      await runtime.dispose();
+    }
+
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)));
+
+    const initialize = records.find((r) => r?.method === 'initialize');
+    const advertised = asRecord(asRecord(initialize?.params)?.capabilities);
+    expect(advertised?.elicitation).toEqual({ form: {} });
+    expect(seen).toEqual([]);
+
+    const response = records.find((r) => r?.id === 'url-1' && r?.method === undefined);
+    expect(response?.error).toEqual(expect.objectContaining({ code: -32601 }));
+  });
+
+  it('FEATURE_222 Slice D seam: advertises sampling + routes sampling/createMessage to the injected sampler', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'sampling.jsonl');
+    const scriptPath = await writeScript(dir, createSamplingServerSource(recordPath));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      sample: async (request) => {
+        seen.push(request);
+        return {
+          role: 'assistant',
+          content: { type: 'text', text: 'sampled' },
+          model: 'test-model',
+          stopReason: 'endTurn',
+        };
+      },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      await expect
+        .poll(() => readFile(recordPath, 'utf8').catch(() => ''))
+        .toContain('sample-1');
+    } finally {
+      await runtime.dispose();
+    }
+
+    const records = (await readFile(recordPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => asRecord(JSON.parse(line)));
+
+    const initialize = records.find((r) => r?.method === 'initialize');
+    const advertised = asRecord(asRecord(initialize?.params)?.capabilities);
+    expect(advertised?.sampling).toEqual({});
+
+    expect(seen).toEqual([expect.objectContaining({
+      serverId: 'test-server',
+      systemPrompt: 'Be brief',
+      maxTokens: 16,
+      messages: [{ role: 'user', content: { type: 'text', text: 'hi' } }],
+      modelPreferences: { hints: [{ name: 'fast' }] },
+    })]);
+
+    const response = records.find((r) => r?.id === 'sample-1' && r?.method === undefined);
+    expect(response?.result).toEqual({
+      role: 'assistant',
+      content: { type: 'text', text: 'sampled' },
+      model: 'test-model',
+      stopReason: 'endTurn',
+    });
   });
 });

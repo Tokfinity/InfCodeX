@@ -106,12 +106,14 @@ export function buildInitializeCapabilities(
 
   if (reverse.elicit) {
     const modes = reverse.elicitationModes;
+    const form = modes?.form ?? true;
+    const url = modes?.url === true;
     const elicitation: Record<string, unknown> = {};
     // Default to form-only; url is advertised only when the host declares it
     // (it requires the Slice C anti-phishing browser-open handler).
-    if (modes?.form ?? true) elicitation.form = {};
-    if (modes?.url) elicitation.url = {};
-    capabilities.elicitation = elicitation;
+    if (form) elicitation.form = {};
+    if (url) elicitation.url = {};
+    if (form || url) capabilities.elicitation = elicitation;
   }
 
   if (reverse.sample) {
@@ -140,6 +142,33 @@ export function parseElicitRequest(params: Record<string, unknown> | undefined):
     };
   }
   return { mode: 'form', message, requestedSchema: asObject(p.requestedSchema) };
+}
+
+/** Whether the injected host handler is allowed to receive this elicitation mode. */
+export function canHandleElicitMode(
+  reverse: McpReverseCapabilities,
+  mode: McpElicitRequest['mode'],
+): boolean {
+  const modes = reverse.elicitationModes;
+  if (mode === 'url') return modes?.url === true;
+  return modes?.form ?? true;
+}
+
+/** Parse a raw `sampling/createMessage` params object into a typed host request. */
+export function parseSamplingRequest(
+  params: Record<string, unknown> | undefined,
+  serverId: string,
+): McpSamplingRequest {
+  const p = params ?? {};
+  return {
+    serverId,
+    messages: Array.isArray(p.messages) ? p.messages : [],
+    systemPrompt: typeof p.systemPrompt === 'string' ? p.systemPrompt : undefined,
+    maxTokens: typeof p.maxTokens === 'number' && Number.isFinite(p.maxTokens)
+      ? p.maxTokens
+      : undefined,
+    modelPreferences: asObject(p.modelPreferences),
+  };
 }
 
 /**

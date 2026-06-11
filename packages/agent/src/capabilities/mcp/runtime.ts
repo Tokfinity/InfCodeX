@@ -21,8 +21,10 @@ import {
 import { getValidToken } from './oauth.js';
 import {
   buildInitializeCapabilities,
+  canHandleElicitMode,
   normalizeElicitResult,
   parseElicitRequest,
+  parseSamplingRequest,
   type McpReverseCapabilities,
 } from './reverse-capabilities.js';
 
@@ -830,8 +832,16 @@ export class McpServerRuntime {
         // modes are actually advertised is gated by buildInitializeCapabilities.
         if (!this.reverse?.elicit) return UNHANDLED_SERVER_REQUEST;
         const request = parseElicitRequest(params);
+        if (!canHandleElicitMode(this.reverse, request.mode)) {
+          return UNHANDLED_SERVER_REQUEST;
+        }
         const result = await this.reverse.elicit(request);
         return normalizeElicitResult(result);
+      }
+      case 'sampling/createMessage': {
+        if (!this.reverse?.sample) return UNHANDLED_SERVER_REQUEST;
+        const request = parseSamplingRequest(params, this.serverId);
+        return this.reverse.sample(request);
       }
       default:
         return UNHANDLED_SERVER_REQUEST;

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildInitializeCapabilities,
+  canHandleElicitMode,
   normalizeElicitResult,
   parseElicitRequest,
+  parseSamplingRequest,
   type McpReverseCapabilities,
 } from './reverse-capabilities.js';
 
@@ -35,6 +37,14 @@ describe('buildInitializeCapabilities', () => {
     expect(buildInitializeCapabilities(reverse)).toEqual({ elicitation: { form: {}, url: {} } });
   });
 
+  it('does not advertise elicitation when every mode is disabled', () => {
+    const reverse: McpReverseCapabilities = {
+      elicit: async () => ({ action: 'decline' }),
+      elicitationModes: { form: false, url: false },
+    };
+    expect(buildInitializeCapabilities(reverse)).toEqual({});
+  });
+
   it('advertises sampling only when sample is present', () => {
     const reverse: McpReverseCapabilities = {
       sample: async () => ({ role: 'assistant', content: { type: 'text', text: 'x' }, model: 'm' }),
@@ -53,6 +63,22 @@ describe('buildInitializeCapabilities', () => {
       elicitation: { form: {} },
       sampling: {},
     });
+  });
+});
+
+describe('canHandleElicitMode', () => {
+  it('defaults to form-only', () => {
+    const reverse: McpReverseCapabilities = { elicit: async () => ({ action: 'decline' }) };
+    expect(canHandleElicitMode(reverse, 'form')).toBe(true);
+    expect(canHandleElicitMode(reverse, 'url')).toBe(false);
+  });
+
+  it('honors explicit url opt-in', () => {
+    const reverse: McpReverseCapabilities = {
+      elicit: async () => ({ action: 'decline' }),
+      elicitationModes: { form: true, url: true },
+    };
+    expect(canHandleElicitMode(reverse, 'url')).toBe(true);
   });
 });
 
@@ -77,6 +103,33 @@ describe('parseElicitRequest', () => {
   it('tolerates missing/garbage params', () => {
     expect(parseElicitRequest(undefined)).toEqual({ mode: 'form', message: undefined, requestedSchema: undefined });
     expect(parseElicitRequest({ requestedSchema: 'nope' })).toEqual({ mode: 'form', message: undefined, requestedSchema: undefined });
+  });
+});
+
+describe('parseSamplingRequest', () => {
+  it('parses sampling params for the host bridge', () => {
+    expect(parseSamplingRequest({
+      messages: [{ role: 'user', content: { type: 'text', text: 'hi' } }],
+      systemPrompt: 'be brief',
+      maxTokens: 32,
+      modelPreferences: { hints: [{ name: 'fast' }] },
+    }, 'server-a')).toEqual({
+      serverId: 'server-a',
+      messages: [{ role: 'user', content: { type: 'text', text: 'hi' } }],
+      systemPrompt: 'be brief',
+      maxTokens: 32,
+      modelPreferences: { hints: [{ name: 'fast' }] },
+    });
+  });
+
+  it('tolerates missing/garbage sampling params', () => {
+    expect(parseSamplingRequest({ messages: 'nope', maxTokens: Number.POSITIVE_INFINITY }, 'server-a')).toEqual({
+      serverId: 'server-a',
+      messages: [],
+      systemPrompt: undefined,
+      maxTokens: undefined,
+      modelPreferences: undefined,
+    });
   });
 });
 
