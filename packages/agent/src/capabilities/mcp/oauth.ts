@@ -179,7 +179,7 @@ export async function refreshToken(
 }
 
 /** Safely parse a JSON response, validating it is a non-null object. */
-async function safeParseJsonResponse(
+export async function safeParseJsonResponse(
   response: Response,
   label: string,
 ): Promise<Record<string, unknown>> {
@@ -195,7 +195,7 @@ async function safeParseJsonResponse(
   return data as Record<string, unknown>;
 }
 
-function parseTokenResponse(data: Record<string, unknown>): OAuthToken {
+export function parseTokenResponse(data: Record<string, unknown>): OAuthToken {
   const accessToken = typeof data.access_token === 'string' ? data.access_token : '';
   if (!accessToken) throw new Error('No access_token in OAuth response');
 
