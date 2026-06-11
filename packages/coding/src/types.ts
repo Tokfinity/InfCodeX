@@ -1313,35 +1313,15 @@ export interface KodaXResult {
 // ============== 工具执行上下文 ==============
 // Simplified - no permission checks in core
 
-/** A single question item used in multi-question mode. */
-export interface AskUserQuestionItem {
-  question: string;
-  header?: string;
-  options: Array<{
-    label: string;
-    description?: string;
-    value: string;
-  }>;
-  multiSelect?: boolean;
-}
-
-/** Options for multi-question mode — multiple independent questions in one tool call. */
-export interface AskUserMultiOptions {
-  questions: AskUserQuestionItem[];
-}
-
-export interface AskUserQuestionOptions {
-  question: string;
-  kind?: "select" | "input";
-  /** Required for kind="select", ignored for kind="input". */
-  options?: Array<{
-    label: string;
-    description?: string;
-    value: string;
-  }>;
-  multiSelect?: boolean;
-  default?: string;
-}
+// FEATURE_222 — the user-interaction types now live at the agent layer so the
+// MCP elicitation reverse capability can share the same primitive. Re-exported
+// here for backward compatibility (existing `../types.js` imports keep working).
+import type {
+  AskUserQuestionItem,
+  AskUserMultiOptions,
+  AskUserQuestionOptions,
+} from '@kodax-ai/agent';
+export type { AskUserQuestionItem, AskUserMultiOptions, AskUserQuestionOptions };
 
 export interface KodaXToolExecutionContext {
   /** File backups for undo functionality - 文件备份用于撤销功能 */

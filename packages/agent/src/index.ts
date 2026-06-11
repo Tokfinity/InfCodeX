@@ -357,6 +357,15 @@ export {
   type ManagedChildCleanupSummary,
 } from './runtime/managed-child-processes.js';
 
+// FEATURE_222 — user-interaction primitive (shared by coding ask_user_* tools
+// and the agent MCP elicitation reverse capability).
+export type {
+  UserInteraction,
+  AskUserQuestionItem,
+  AskUserMultiOptions,
+  AskUserQuestionOptions,
+} from './runtime/user-interaction.js';
+
 // ============== Messaging (v0.7.36 FEATURE_115) ==============
 // agentId-scoped 2-tier priority queue infrastructure. Generic agent-platform
 // primitive per ADR-021 — downstream consumers in @kodax-ai/coding (runner-driven
