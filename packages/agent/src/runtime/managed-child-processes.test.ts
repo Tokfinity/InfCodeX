@@ -134,6 +134,38 @@ describe('managed child process registry', () => {
     expect(child.exitCode).toBeNull();
   });
 
+  it('does not trust a tampered current-owner registry record', async () => {
+    tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
+    setAgentConfigHome(tempHome);
+    child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    if (child.pid === undefined) {
+      throw new Error('child pid missing');
+    }
+    registerManagedChildProcess(child, {
+      kind: 'test-child',
+      command: process.execPath,
+      args: ['-e', 'setInterval(() => {}, 1000)'],
+    });
+    await writeRegistryRecord(tempHome, {
+      version: 1,
+      pid: child.pid,
+      ownerPid: process.pid,
+      registeredAtMs: Date.now(),
+      kind: 'test-child',
+      command: 'definitely-not-this-process',
+      args: ['not-present-in-command-line'],
+    });
+
+    const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
+
+    expect(summary.killed).toBe(0);
+    expect(summary.pruned).toBe(1);
+    expect(child.exitCode).toBeNull();
+  });
+
   it('prunes a dead pid record', async () => {
     tempHome = await mkdtemp(path.join(tmpdir(), 'kodax-managed-child-'));
     setAgentConfigHome(tempHome);

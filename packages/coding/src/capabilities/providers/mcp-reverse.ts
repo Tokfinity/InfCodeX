@@ -4,8 +4,8 @@
  *
  * This is the production wiring the CLI / ACP host uses so the agent-layer
  * reverse seam (roots / elicitation) is actually advertised + served, instead
- * of staying dormant (every reverse request → -32601). Slice A (roots) is wired
- * now; elicitation is layered on here once the host UI is available.
+ * of staying dormant (every reverse request -> -32601). Elicitation is opt-in
+ * because it needs a live host UI.
  */
 
 import path from 'node:path';
@@ -52,10 +52,10 @@ export function mcpRootsFromWorkspace(workspace: McpReverseWorkspace): McpRoot[]
 }
 
 /**
- * Build the reverse-capability handlers for a workspace. Currently wires roots
- * only (Slice A); the resulting `listRoots` reflects the workspace at the time
- * the server asks. Returns `undefined` when there is nothing to expose, so the
- * caller can omit the injection entirely (→ no capability advertised).
+ * Build the reverse-capability handlers for a workspace. `listRoots` reflects
+ * the workspace captured by the host, and elicitation is wired only when the
+ * host opts in. Returns `undefined` when there is nothing to expose, so the
+ * caller can omit the injection entirely (no capability advertised).
  */
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -68,7 +68,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
   const message = request.message ?? 'A connected tool is requesting information.';
   const properties = asObject(asObject(request.requestedSchema)?.properties);
 
-  // Confirm-only form (no fields) → a single approve/decline prompt.
+  // Confirm-only form (no fields) -> a single approve/decline prompt.
   if (!properties || Object.keys(properties).length === 0) {
     if (!ui.askUser) return { action: 'decline' };
     const answer = await ui.askUser({
@@ -87,12 +87,19 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
     const enumValues = Array.isArray(prop.enum) ? prop.enum : undefined;
 
     if (enumValues && enumValues.length > 0 && ui.askUser) {
+      const choices = enumValues.map((value, index) => ({
+        label: String(value),
+        value: String(index),
+      }));
       const answer = await ui.askUser({
         question,
         kind: 'select',
-        options: enumValues.map((value) => ({ label: String(value), value: String(value) })),
+        options: choices,
       });
-      content[key] = answer;
+      const selectedIndex = Number(answer);
+      content[key] = Number.isInteger(selectedIndex) && selectedIndex >= 0 && selectedIndex < enumValues.length
+        ? enumValues[selectedIndex]
+        : answer;
     } else if (prop.type === 'boolean' && ui.askUser) {
       const answer = await ui.askUser({
         question,

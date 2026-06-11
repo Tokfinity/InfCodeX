@@ -125,12 +125,40 @@ async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<
   return !isPosixPidTreeAlive(pid);
 }
 
+async function waitForWindowsPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!signalTargetExists(pid)) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return !signalTargetExists(pid);
+}
+
+async function killWindowsPid(pid: number, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    return !signalTargetExists(pid);
+  }
+  return waitForWindowsPidExit(pid, timeoutMs);
+}
+
 export async function killPidTree(
   pid: number,
   options: ProcessTreeKillOptions = {},
 ): Promise<void> {
   if (process.platform === 'win32') {
     await runTaskkill(pid, options.taskkillMs ?? DEFAULT_TASKKILL_MS);
+    if (!signalTargetExists(pid)) {
+      return;
+    }
+    const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
+    if (await killWindowsPid(pid, 'SIGTERM', forceMs)) {
+      return;
+    }
+    await killWindowsPid(pid, 'SIGKILL', forceMs);
     return;
   }
 

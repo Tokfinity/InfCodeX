@@ -341,6 +341,8 @@ export class McpServerRuntime {
   /** FEATURE_222 — resolvers awaiting notifications/elicitation/complete, keyed
    *  by elicitationId (used by the url-elicitation tool-retry closure). */
   private readonly elicitationWaiters = new Map<string, () => void>();
+  /** Completion notifications that arrived before the host finished consent. */
+  private readonly completedElicitations = new Set<string>();
   private nextRequestId = 0;
   private initialized = false;
   private connectPromise?: Promise<void>;
@@ -494,6 +496,10 @@ export class McpServerRuntime {
   /** Resolve when the server signals the url elicitation completed, or on timeout
    *  (a premature retry is harmless — the server re-requests and the loop caps). */
   private waitForElicitationComplete(elicitationId: string, timeoutMs: number): Promise<void> {
+    if (this.completedElicitations.delete(elicitationId)) {
+      return Promise.resolve();
+    }
+    this.elicitationWaiters.get(elicitationId)?.();
     return new Promise<void>((resolve) => {
       const settle = (): void => {
         clearTimeout(timer);
@@ -586,6 +592,8 @@ export class McpServerRuntime {
       pending.reject(new Error(`MCP server "${this.serverId}" disposed during request ${id}.`));
       this.pending.delete(id);
     }
+    const elicitationWaiters = [...this.elicitationWaiters.values()];
+    this.completedElicitations.clear();
     this.initialized = false;
     if (this.transport) {
       await this.transport.close();
@@ -594,6 +602,9 @@ export class McpServerRuntime {
     if ((this.config.connect ?? 'lazy') !== 'disabled') {
       this.diagnostics.status = 'idle';
       this.diagnostics.dirty = true;
+    }
+    for (const settle of elicitationWaiters) {
+      settle();
     }
   }
 
@@ -863,7 +874,12 @@ export class McpServerRuntime {
       if (elicitationId) {
         // Release an in-flight tool-retry waiter first, then let the host
         // dismiss its waiting UI.
-        this.elicitationWaiters.get(elicitationId)?.();
+        const settle = this.elicitationWaiters.get(elicitationId);
+        if (settle) {
+          settle();
+        } else {
+          this.completedElicitations.add(elicitationId);
+        }
         this.reverse?.onElicitationComplete?.(elicitationId);
       }
       return;

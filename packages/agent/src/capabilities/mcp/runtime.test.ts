@@ -531,13 +531,13 @@ process.on('SIGINT', () => process.exit(0));
 
 function createUrlRetryToolServerSource(
   recordPath: string,
-  options: { elicitationId?: string; emitCompletion?: boolean } = {},
+  options: { elicitationId?: string; emitCompletion?: boolean; completionDelayMs?: number } = {},
 ): string {
   const elicitationIdField = options.elicitationId
     ? `, elicitationId: ${JSON.stringify(options.elicitationId)}`
     : '';
   const emitCompletion = options.emitCompletion && options.elicitationId
-    ? `setTimeout(function(){ writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: ${JSON.stringify(options.elicitationId)} } }); }, 200);`
+    ? `setTimeout(function(){ writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: ${JSON.stringify(options.elicitationId)} } }); }, ${options.completionDelayMs ?? 200});`
     : '';
   return `
 const fs = require('node:fs');
@@ -1352,5 +1352,63 @@ describe('McpServerRuntime protocol compatibility', () => {
     expect(seen).toEqual([
       expect.objectContaining({ mode: 'url', url: 'https://auth.example.test/grant', elicitationId: 'flow-7' }),
     ]);
+  });
+
+  it('FEATURE_222 Slice C: consumes completion that arrives before consent returns', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-early-complete.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath, {
+      elicitationId: 'flow-early',
+      emitCompletion: true,
+      completionDelayMs: 0,
+    }));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: (request) => new Promise((resolve) => {
+        seen.push(request);
+        setTimeout(() => resolve({ action: 'accept', content: {} }), 100);
+      }),
+      elicitationModes: { form: true, url: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    try {
+      await runtime.refreshCatalog(true);
+      const result = await runtime.callTool('login_tool', {});
+      expect(result.content).toContain('logged in');
+    } finally {
+      await runtime.dispose();
+    }
+
+    expect(seen).toEqual([
+      expect.objectContaining({ mode: 'url', url: 'https://auth.example.test/grant', elicitationId: 'flow-early' }),
+    ]);
+  });
+
+  it('FEATURE_222 Slice C: dispose releases a pending url completion wait', async () => {
+    const dir = await createTempDir();
+    const recordPath = path.join(dir, 'url-dispose.jsonl');
+    const scriptPath = await writeScript(dir, createUrlRetryToolServerSource(recordPath, {
+      elicitationId: 'flow-dispose',
+    }));
+    const seen: unknown[] = [];
+    const reverse: McpReverseCapabilities = {
+      elicit: async (request) => {
+        seen.push(request);
+        return { action: 'accept', content: {} };
+      },
+      elicitationModes: { form: true, url: true },
+    };
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000, reverse);
+
+    await runtime.refreshCatalog(true);
+    const call = runtime.callTool('login_tool', {}).catch((error: unknown) => error);
+    await expect.poll(() => seen.length).toBe(1);
+
+    await runtime.dispose();
+
+    const error = await call;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/not connected|disposed/i);
   });
 });

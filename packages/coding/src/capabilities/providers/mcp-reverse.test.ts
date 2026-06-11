@@ -124,16 +124,22 @@ describe('elicitViaUserInteraction — form mode', () => {
   });
 
   it('routes an enum field to a select prompt', async () => {
-    const offered: string[] = [];
+    const offered: Array<{ label: string; value: string }> = [];
     const ui: UserInteraction = {
       askUser: async ({ options }) => {
-        for (const o of options ?? []) offered.push(o.value);
-        return 'blue';
+        for (const o of options ?? []) offered.push({ label: o.label, value: o.value });
+        return '1';
       },
     };
     const result = await elicitViaUserInteraction(ui, formRequest({ color: { enum: ['red', 'blue'] } }));
     expect(result).toEqual({ action: 'accept', content: { color: 'blue' } });
-    expect(offered).toEqual(['red', 'blue']);
+    expect(offered).toEqual([{ label: 'red', value: '0' }, { label: 'blue', value: '1' }]);
+  });
+
+  it('preserves the original enum value type in the accepted content', async () => {
+    const ui: UserInteraction = { askUser: async () => '1' };
+    const result = await elicitViaUserInteraction(ui, formRequest({ retries: { enum: [1, 3] } }));
+    expect(result).toEqual({ action: 'accept', content: { retries: 3 } });
   });
 
   it('maps a boolean field to a yes/no select coerced to a boolean', async () => {

@@ -12,8 +12,14 @@ import {
 import type { AcpLogLevel } from '../src/acp_logger.js';
 import type { AcpEventSink, AcpRuntimeEvent } from '../src/acp_events.js';
 
-const { runKodaXMock } = vi.hoisted(() => ({
+const {
+  runKodaXMock,
+  buildMcpReverseCapabilitiesMock,
+  registerConfiguredMcpCapabilityProviderMock,
+} = vi.hoisted(() => ({
   runKodaXMock: vi.fn(),
+  buildMcpReverseCapabilitiesMock: vi.fn(),
+  registerConfiguredMcpCapabilityProviderMock: vi.fn(),
 }));
 
 const { prepareRuntimeConfigMock } = vi.hoisted(() => ({
@@ -36,6 +42,8 @@ vi.mock('@kodax-ai/coding', async (importOriginal) => {
   return {
     ...actual,
     runKodaX: runKodaXMock,
+    buildMcpReverseCapabilities: buildMcpReverseCapabilitiesMock,
+    registerConfiguredMcpCapabilityProvider: registerConfiguredMcpCapabilityProviderMock,
     createBashPrefixExtractor: () => ({
       async extract(command: string) {
         const parts = command.trim().split(/\s+/);
@@ -154,6 +162,10 @@ describe('KodaXAcpServer', () => {
       reasoningMode: 'auto',
       permissionMode: 'accept-edits',
     });
+    buildMcpReverseCapabilitiesMock.mockImplementation((workspace: { cwd: string }) => ({
+      listRoots: () => [{ uri: `mock://${workspace.cwd}`, name: 'mock' }],
+    }));
+    registerConfiguredMcpCapabilityProviderMock.mockResolvedValue(undefined);
     stderrLines.length = 0;
     stderrWriteSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
       stderrLines.push(String(chunk).replace(/\r?\n$/, ''));
@@ -515,6 +527,39 @@ describe('KodaXAcpServer', () => {
       sessionId: harness.sessionId,
       prompt: [{ type: 'text', text: 'Use configured cwd' }],
     });
+  });
+
+  it('uses the configured server cwd for global MCP reverse roots', () => {
+    const serverCwd = path.join(process.cwd(), 'configured-acp-root');
+    const mcpServers = {
+      local: {
+        type: 'stdio' as const,
+        command: process.execPath,
+        args: ['-e', ''],
+        connect: 'lazy' as const,
+      },
+    };
+    prepareRuntimeConfigMock.mockReturnValue({
+      provider: 'openai',
+      thinking: false,
+      reasoningMode: 'auto',
+      permissionMode: 'accept-edits',
+      mcpServers,
+    });
+
+    new KodaXAcpServer({
+      cwd: serverCwd,
+      logLevel: 'off',
+    });
+
+    expect(buildMcpReverseCapabilitiesMock).toHaveBeenCalledWith({
+      cwd: path.resolve(serverCwd),
+    });
+    expect(registerConfiguredMcpCapabilityProviderMock).toHaveBeenCalledWith(
+      expect.anything(),
+      mcpServers,
+      { reverse: expect.objectContaining({ listRoots: expect.any(Function) }) },
+    );
   });
 
   it('fails closed when the ACP client cannot complete a permission request', async () => {

@@ -393,7 +393,7 @@ export class KodaXAcpServer implements Agent {
     if (hasMcp) {
       const rt = createExtensionRuntime({ config });
       this.extensionRuntimeReady = registerConfiguredMcpCapabilityProvider(rt, mcpServers, {
-        reverse: buildMcpReverseCapabilities({ cwd: process.cwd() }),
+        reverse: buildMcpReverseCapabilities({ cwd: this.defaultCwd }),
       })
         .then(() => {
           rt.activate();
