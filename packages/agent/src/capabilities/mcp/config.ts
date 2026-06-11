@@ -6,7 +6,12 @@
  * `@kodax-ai/coding` for backward compatibility.
  */
 
-export type McpTransportKind = 'stdio' | 'sse' | 'streamable-http';
+/**
+ * Transport config kind. `http` is a compatibility alias used by other MCP
+ * clients' config files; KodaX auto-detects Streamable HTTP first, then falls
+ * back to the legacy HTTP+SSE transport. It is not a distinct wire protocol.
+ */
+export type McpTransportKind = 'stdio' | 'sse' | 'streamable-http' | 'http';
 export type McpConnectMode = 'lazy' | 'prewarm' | 'disabled';
 
 export interface McpServerConfig {
@@ -20,9 +25,9 @@ export interface McpServerConfig {
   cwd?: string;
   /** stdio: extra environment variables for the spawned process. */
   env?: Record<string, string>;
-  /** sse / streamable-http: server endpoint URL. */
+  /** sse / streamable-http / http(auto): server endpoint URL. */
   url?: string;
-  /** sse / streamable-http: extra HTTP headers (e.g. Authorization). */
+  /** sse / streamable-http / http(auto): extra HTTP headers (e.g. Authorization). */
   headers?: Record<string, string>;
   connect?: McpConnectMode;
   startupTimeoutMs?: number;

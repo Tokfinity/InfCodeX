@@ -4,7 +4,7 @@
  * Handles OAuth 2.0 Authorization Code + PKCE flow for MCP servers.
  * Manages token persistence and refresh.
  */
-import { createServer, type Server } from 'http';
+import { createServer } from 'http';
 import { randomBytes, createHash } from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
@@ -210,54 +210,91 @@ export function parseTokenResponse(data: Record<string, unknown>): OAuthToken {
   };
 }
 
+/** A live loopback OAuth callback listener. */
+export interface OAuthCallbackServer {
+  /** Resolve with the authorization code + state on the first callback, or
+   *  reject on an OAuth error param / timeout. Safe to await after the user has
+   *  already been redirected (the first result is buffered). */
+  waitForCode(timeoutMs?: number): Promise<{ code: string; state: string }>;
+  /** Idempotently stop listening and clear the timeout. */
+  close(): void;
+}
+
+const DEFAULT_CALLBACK_TIMEOUT_MS = 120_000;
+
 /**
- * Start a local HTTP server to receive the OAuth callback.
- * Returns the authorization code and state.
+ * Start the loopback OAuth callback listener and resolve ONCE IT IS LISTENING,
+ * so the caller can show the authorization URL only after the redirect target
+ * is live (no lost-redirect race). Binds `127.0.0.1` to match a `127.0.0.1`
+ * redirect URI — avoids IPv6 `localhost` (::1) resolution mismatches — and never
+ * listens on a non-loopback interface.
  */
-export function startCallbackServer(
-  port: number,
-): Promise<{ code: string; state: string; server: Server }> {
-  return new Promise((resolve, reject) => {
+export function startOAuthCallbackServer(port: number): Promise<OAuthCallbackServer> {
+  return new Promise((resolveServer, rejectServer) => {
+    // Buffer a result that arrives before waitForCode() is called.
+    let buffered: { code: string; state: string } | Error | undefined;
+    let deliver: ((value: { code: string; state: string }) => void) | undefined;
+    let fail: ((error: Error) => void) | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
+
+    const settle = (result: { code: string; state: string } | Error): void => {
+      if (result instanceof Error) {
+        if (fail) fail(result); else buffered ??= result;
+        return;
+      }
+      if (deliver) deliver(result); else buffered ??= result;
+    };
+
     const server = createServer((req, res) => {
-      const url = new URL(req.url ?? '/', `http://localhost:${port}`);
+      const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`);
+      const error = url.searchParams.get('error');
       const code = url.searchParams.get('code');
       const state = url.searchParams.get('state');
-      const error = url.searchParams.get('error');
 
       if (error) {
         res.writeHead(400, { 'Content-Type': 'text/html' });
         res.end(`<html><body><h1>Authorization failed</h1><p>${escapeHtml(error)}</p></body></html>`);
-        reject(new Error(`OAuth authorization failed: ${error}`));
+        settle(new Error(`OAuth authorization failed: ${error}`));
         return;
       }
-
       if (code && state) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end('<html><body><h1>Authorization successful</h1><p>You can close this window.</p></body></html>');
-        resolve({ code, state, server });
-      } else {
-        res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end('<html><body><h1>Missing authorization code</h1></body></html>');
+        settle({ code, state });
+        return;
       }
+      res.writeHead(400, { 'Content-Type': 'text/html' });
+      res.end('<html><body><h1>Missing authorization code</h1></body></html>');
     });
 
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-
-    // Clear timeout on successful resolve
-    const originalResolve = resolve;
-    resolve = ((value: { code: string; state: string; server: Server }) => {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
-      originalResolve(value);
-    }) as typeof resolve;
-
-    server.listen(port, '127.0.0.1', () => {});
-    server.on('error', reject);
-
-    // Timeout after 120 seconds
-    timeoutHandle = setTimeout(() => {
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      if (timeout) clearTimeout(timeout);
       server.close();
-      reject(new Error('OAuth callback timeout (120s)'));
-    }, 120000);
+    };
+
+    server.once('error', rejectServer);
+    server.listen(port, '127.0.0.1', () => {
+      resolveServer({
+        waitForCode(timeoutMs = DEFAULT_CALLBACK_TIMEOUT_MS) {
+          return new Promise<{ code: string; state: string }>((resolve, reject) => {
+            if (buffered) {
+              if (buffered instanceof Error) reject(buffered); else resolve(buffered);
+              return;
+            }
+            deliver = resolve;
+            fail = reject;
+            timeout = setTimeout(() => {
+              reject(new Error(`OAuth callback timeout (${Math.round(timeoutMs / 1000)}s).`));
+            }, timeoutMs);
+            timeout.unref?.();
+          });
+        },
+        close,
+      });
+    });
   });
 }
 

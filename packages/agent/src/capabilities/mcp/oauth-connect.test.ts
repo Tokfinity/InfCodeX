@@ -147,7 +147,7 @@ describe('FEATURE_222 — MCP OAuth connect flow (401 → discovery login → re
         consentUrls.push(request.url ?? '');
         const state = new URL(request.url ?? '').searchParams.get('state') ?? '';
         setTimeout(() => {
-          void fetch(`http://localhost:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
+          void fetch(`http://127.0.0.1:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
         }, 80);
         return { action: 'accept', content: {} };
       },
@@ -182,6 +182,51 @@ describe('FEATURE_222 — MCP OAuth connect flow (401 → discovery login → re
     expect(consentUrls).toHaveLength(1);
     expect(consentUrls[0]).toContain('/authorize');
     expect(consentUrls[0]).toContain('code_challenge_method=S256');
+  });
+
+  it('authenticates a protected type:http server via auto-detect + OAuth', async () => {
+    const srv = await startProtectedMcpServer();
+    const port = await getFreePort();
+    const consentUrls: string[] = [];
+
+    const reverse: McpReverseCapabilities = {
+      elicitationModes: { url: true },
+      elicit: async (request) => {
+        consentUrls.push(request.url ?? '');
+        const state = new URL(request.url ?? '').searchParams.get('state') ?? '';
+        setTimeout(() => {
+          void fetch(`http://127.0.0.1:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
+        }, 80);
+        return { action: 'accept', content: {} };
+      },
+    };
+
+    const runtime = new McpServerRuntime(
+      'protected-http-auto',
+      {
+        type: 'http',
+        url: srv.origin,
+        connect: 'lazy',
+        startupTimeoutMs: 2_000,
+        requestTimeoutMs: 2_000,
+        auth: { type: 'oauth2', redirectPort: port },
+      },
+      path.join(tempDirs[0], 'cache'),
+      reverse,
+    );
+
+    try {
+      await runtime.refreshCatalog(true);
+      const catalog = await runtime.getCatalog();
+      expect(catalog.descriptors.map((d) => d.name)).toContain('secure_tool');
+      expect(runtime.getDiagnostics().resolvedTransport).toBe('http:auto->streamable-http');
+    } finally {
+      await runtime.dispose();
+    }
+
+    expect(srv.initializeUnauthorized).toBe(1);
+    expect(srv.registrations).toBe(1);
+    expect(consentUrls).toHaveLength(1);
   });
 
   it('does not log in when the host has no url-consent surface (headless declines)', async () => {

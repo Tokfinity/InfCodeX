@@ -13,6 +13,7 @@ import {
   refreshTokenWithResource,
   registerOAuthClient,
 } from './oauth-login.js';
+import { startOAuthCallbackServer } from './oauth.js';
 
 const servers: http.Server[] = [];
 const tempDirs: string[] = [];
@@ -52,7 +53,7 @@ interface OAuthServer {
 }
 
 /** A combined fake resource + authorization server (discovery, DCR, token). */
-async function startOAuthServer(): Promise<OAuthServer> {
+async function startOAuthServer(asMetadataExtra: Record<string, unknown> = {}): Promise<OAuthServer> {
   const state: OAuthServer = { origin: '', register: [], token: [] };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', state.origin || 'http://localhost');
@@ -69,6 +70,7 @@ async function startOAuthServer(): Promise<OAuthServer> {
         authorization_endpoint: `${state.origin}/authorize`,
         token_endpoint: `${state.origin}/token`,
         registration_endpoint: `${state.origin}/register`,
+        ...asMetadataExtra,
       });
       return;
     }
@@ -171,7 +173,60 @@ describe('refreshTokenWithResource', () => {
   });
 });
 
+describe('startOAuthCallbackServer', () => {
+  it('delivers code+state from a callback and is idempotently closable', async () => {
+    const port = await getFreePort();
+    const cb = await startOAuthCallbackServer(port);
+    try {
+      const got = cb.waitForCode();
+      await fetch(`http://127.0.0.1:${port}/callback?code=c1&state=s1`).catch(() => {});
+      expect(await got).toEqual({ code: 'c1', state: 's1' });
+    } finally {
+      cb.close();
+      cb.close(); // idempotent — must not throw
+    }
+  });
+
+  it('buffers a callback that arrives before waitForCode is awaited (no lost redirect)', async () => {
+    const port = await getFreePort();
+    const cb = await startOAuthCallbackServer(port);
+    try {
+      await fetch(`http://127.0.0.1:${port}/callback?code=early&state=st`).catch(() => {});
+      await expect(cb.waitForCode()).resolves.toEqual({ code: 'early', state: 'st' });
+    } finally {
+      cb.close();
+    }
+  });
+
+  it('rejects on an OAuth error redirect', async () => {
+    const port = await getFreePort();
+    const cb = await startOAuthCallbackServer(port);
+    try {
+      // Fire the redirect, then attach the rejection handler synchronously with
+      // the waitForCode() call (no window for an unhandled rejection).
+      void fetch(`http://127.0.0.1:${port}/callback?error=access_denied`).catch(() => {});
+      await expect(cb.waitForCode()).rejects.toThrow(/access_denied/);
+    } finally {
+      cb.close();
+    }
+  });
+});
+
 describe('performOAuthLogin (discovery → DCR → loopback → token)', () => {
+  it('refuses to log in when the AS advertises PKCE methods without S256', async () => {
+    const srv = await startOAuthServer({ code_challenge_methods_supported: ['plain'] });
+    let consented = false;
+    await expect(performOAuthLogin({
+      serverId: 'srv-pkce',
+      serverUrl: `${srv.origin}/mcp`,
+      consent: async () => { consented = true; return true; },
+      redirectPort: await getFreePort(),
+    })).rejects.toThrow(/S256/);
+    // The refusal happens during discovery, before any user consent prompt.
+    expect(consented).toBe(false);
+    expect(srv.register).toHaveLength(0);
+  });
+
   it('runs the full flow, persists the client + token', async () => {
     const srv = await startOAuthServer();
     const port = await getFreePort();
@@ -181,7 +236,7 @@ describe('performOAuthLogin (discovery → DCR → loopback → token)', () => {
     const consent = async (authorizationUrl: string): Promise<boolean> => {
       const state = new URL(authorizationUrl).searchParams.get('state') ?? '';
       setTimeout(() => {
-        void fetch(`http://localhost:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
+        void fetch(`http://127.0.0.1:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
       }, 80);
       return true;
     };
@@ -225,7 +280,7 @@ describe('performOAuthLogin (discovery → DCR → loopback → token)', () => {
     const consent = async (authorizationUrl: string): Promise<boolean> => {
       const state = new URL(authorizationUrl).searchParams.get('state') ?? '';
       setTimeout(() => {
-        void fetch(`http://localhost:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
+        void fetch(`http://127.0.0.1:${port}/callback?code=auth-code&state=${state}`).catch(() => {});
       }, 80);
       return true;
     };

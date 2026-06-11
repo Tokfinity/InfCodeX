@@ -51,6 +51,7 @@ export interface McpServerRuntimeDiagnostics {
   serverId: string;
   connect: 'lazy' | 'prewarm' | 'disabled';
   status: 'idle' | 'connecting' | 'ready' | 'error' | 'disabled';
+  resolvedTransport?: string;
   dirty: boolean;
   lastError?: string;
   cachedAt?: string;
@@ -260,7 +261,11 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;   // Claude Code: 60s
 // separately via initialize.capabilities; KodaX currently sends {} there.
 const MCP_PROTOCOL_VERSION = '2025-11-25';
 
-/** Sentinel from {@link McpServerRuntime.dispatchServerRequest} = not an advertised capability (→ -32601). */
+const JsonRpcErrorCode = {
+  MethodNotFound: -32601,
+} as const;
+
+/** Sentinel from {@link McpServerRuntime.dispatchServerRequest} = not an advertised capability. */
 const UNHANDLED_SERVER_REQUEST = Symbol('mcp.unhandled-server-request');
 const SUPPORTED_MCP_PROTOCOL_VERSIONS = new Set([
   '2025-11-25',
@@ -298,6 +303,32 @@ const URL_ELICITATION_REQUIRED_CODE = -32042;
 const DEFAULT_URL_ELICITATION_TIMEOUT_MS = 300_000;
 /** Max url-elicitation round trips for a single tools/call (avoids loops). */
 const MAX_URL_ELICITATIONS = 3;
+
+function mentionsMethod(message: string, method: 'tools/list' | 'resources/list' | 'prompts/list'): boolean {
+  return message.includes(method)
+    || message.includes(method.replace('/', '.'))
+    || message.includes(method.replace('/', '_'));
+}
+
+function isMethodNotFoundLikeError(
+  error: unknown,
+  method: 'tools/list' | 'resources/list' | 'prompts/list',
+): boolean {
+  if (!(error instanceof McpJsonRpcError)) return false;
+  if (error.code === JsonRpcErrorCode.MethodNotFound) return true;
+  const message = error.message.toLowerCase();
+  return message.includes('method not found')
+    || message.includes('unknown method')
+    || (
+      mentionsMethod(message, method)
+      && (
+        message.includes('not supported')
+        || message.includes('unsupported')
+        || message.includes('not found')
+        || message.includes('unknown')
+      )
+    );
+}
 
 function readNegotiatedProtocolVersion(result: unknown): string {
   const initialized = asRecord(result);
@@ -346,6 +377,16 @@ function getRequestTimeoutMs(config: KodaXMcpServerConfig): number {
     ?? (parseInt(process.env.MCP_REQUEST_TIMEOUT ?? '', 10) || DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
+function hasServerCapability(
+  capabilities: Record<string, unknown> | undefined,
+  name: 'tools' | 'resources' | 'prompts',
+): boolean {
+  // Older or non-standard servers may omit initialize.capabilities. Keep the
+  // historical probing behavior for them; otherwise honor capability negotiation.
+  if (!capabilities) return true;
+  return asRecord(capabilities[name]) !== undefined;
+}
+
 export class McpServerRuntime {
   private transport?: McpTransport;
   private readonly pending = new Map<number, JsonRpcRequestRecord>();
@@ -358,6 +399,8 @@ export class McpServerRuntime {
   private initialized = false;
   private connectPromise?: Promise<void>;
   private catalog?: McpServerCatalogSnapshot;
+  private serverCapabilities?: Record<string, unknown>;
+  private cachedHttpTransport?: 'streamable-http' | 'sse';
   private diagnostics: McpServerRuntimeDiagnostics;
 
   constructor(
@@ -491,6 +534,7 @@ export class McpServerRuntime {
     }
     const result = await this.reverse.elicit({
       mode: 'url',
+      serverId: this.serverId,
       url: request.url,
       message: request.message,
       elicitationId: request.elicitationId,
@@ -567,9 +611,15 @@ export class McpServerRuntime {
     try {
       await this.connect();
       const cachedAt = new Date().toISOString();
-      const tools = await this.listDescriptors('tools/list', 'tools', cachedAt);
-      const resources = await this.listDescriptors('resources/list', 'resources', cachedAt);
-      const prompts = await this.listDescriptors('prompts/list', 'prompts', cachedAt);
+      const tools = hasServerCapability(this.serverCapabilities, 'tools')
+        ? await this.listDescriptors('tools/list', 'tools', cachedAt)
+        : [];
+      const resources = hasServerCapability(this.serverCapabilities, 'resources')
+        ? await this.listDescriptors('resources/list', 'resources', cachedAt)
+        : [];
+      const prompts = hasServerCapability(this.serverCapabilities, 'prompts')
+        ? await this.listDescriptors('prompts/list', 'prompts', cachedAt)
+        : [];
       const descriptors = [...tools, ...resources, ...prompts];
       const snapshot: McpServerCatalogSnapshot = {
         serverId: this.serverId,
@@ -606,12 +656,14 @@ export class McpServerRuntime {
     const elicitationWaiters = [...this.elicitationWaiters.values()];
     this.completedElicitations.clear();
     this.initialized = false;
+    this.serverCapabilities = undefined;
     if (this.transport) {
       await this.transport.close();
       this.transport = undefined;
     }
     if ((this.config.connect ?? 'lazy') !== 'disabled') {
       this.diagnostics.status = 'idle';
+      this.diagnostics.resolvedTransport = undefined;
       this.diagnostics.dirty = true;
     }
     for (const settle of elicitationWaiters) {
@@ -702,7 +754,10 @@ export class McpServerRuntime {
         : this.config;
       const transport = createMcpTransport(
         effectiveConfig,
-        framing ? { stdioFraming: framing } : {},
+        {
+          ...(framing ? { stdioFraming: framing } : {}),
+          httpResolvedTransport: this.cachedHttpTransport,
+        },
       );
       this.transport = transport;
 
@@ -735,11 +790,18 @@ export class McpServerRuntime {
           },
         }, baseStartup, false);
         const initialized = asRecord(initializeResult);
+        this.serverCapabilities = asRecord(initialized?.capabilities);
         const protocolVersion = readNegotiatedProtocolVersion(initializeResult);
         transport.setProtocolVersion?.(protocolVersion);
         await this.notify('notifications/initialized', {});
         this.initialized = true;
         this.diagnostics.status = 'ready';
+        this.diagnostics.resolvedTransport = transport.resolvedTransport ?? (this.config.type ?? 'stdio');
+        if (transport.resolvedTransport === 'http:auto->streamable-http') {
+          this.cachedHttpTransport = 'streamable-http';
+        } else if (transport.resolvedTransport === 'http:auto->sse') {
+          this.cachedHttpTransport = 'sse';
+        }
         this.diagnostics.lastError = undefined;
         this.diagnostics.dirty = this.diagnostics.dirty || initialized?.capabilities !== undefined;
         return; // Success — stop trying other framings.
@@ -774,6 +836,7 @@ export class McpServerRuntime {
     const consent: OAuthLoginConsent = async (authorizationUrl) => {
       const result = await elicit({
         mode: 'url',
+        serverId: this.serverId,
         url: authorizationUrl,
         message: `Sign in to MCP server "${this.serverId}" to authorize access.`,
       });
@@ -809,12 +872,12 @@ export class McpServerRuntime {
       try {
         result = await this.request(method, cursor ? { cursor } : {});
       } catch (error) {
+        const isOptionalList = method === 'resources/list' || method === 'prompts/list';
+        if (isOptionalList && isMethodNotFoundLikeError(error, method)) {
+          return [];
+        }
         if (descriptors.length > 0) {
           break;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.toLowerCase().includes('method not found')) {
-          return [];
         }
         throw error;
       }
@@ -1021,7 +1084,7 @@ export class McpServerRuntime {
     try {
       const handled = await this.dispatchServerRequest(method, params);
       if (handled === UNHANDLED_SERVER_REQUEST) {
-        this.sendError(requestId, -32601, `Method not supported by client: ${method}`);
+        this.sendError(requestId, JsonRpcErrorCode.MethodNotFound, `Method not supported by client: ${method}`);
         return;
       }
       this.sendResponse(requestId, handled);
@@ -1050,7 +1113,8 @@ export class McpServerRuntime {
         // an `elicit` callback. The handler routes both modes to the host; which
         // modes are actually advertised is gated by buildInitializeCapabilities.
         if (!this.reverse?.elicit) return UNHANDLED_SERVER_REQUEST;
-        const request = parseElicitRequest(params);
+        // Enrich with the server id so the host can show the user who is asking.
+        const request = { ...parseElicitRequest(params), serverId: this.serverId };
         if (!canHandleElicitMode(this.reverse, request.mode)) {
           return UNHANDLED_SERVER_REQUEST;
         }

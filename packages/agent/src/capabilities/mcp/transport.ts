@@ -28,6 +28,8 @@ export interface McpTransport {
   setProtocolVersion?(version: string | undefined): void;
   close(): Promise<void>;
   readonly connected: boolean;
+  /** Effective transport after auto-detection (diagnostics only). */
+  readonly resolvedTransport?: string;
 }
 
 export class McpExpiredSessionError extends Error {
@@ -46,6 +48,13 @@ export class McpAuthRequiredError extends Error {
   constructor(readonly status: number, readonly wwwAuthenticate?: string) {
     super(`MCP server requires authorization (HTTP ${status}).`);
     this.name = 'McpAuthRequiredError';
+  }
+}
+
+export class McpHttpStatusError extends Error {
+  constructor(readonly status: number, readonly statusText: string) {
+    super(`HTTP POST failed: ${status} ${statusText}`);
+    this.name = 'McpHttpStatusError';
   }
 }
 
@@ -659,7 +668,7 @@ export function createStreamableHttpTransport(config: {
         if (response.status === 401 || (response.status === 403 && wwwAuthenticate)) {
           throw new McpAuthRequiredError(response.status, wwwAuthenticate);
         }
-        throw new Error(`HTTP POST failed: ${response.status} ${response.statusText}`);
+        throw new McpHttpStatusError(response.status, response.statusText);
       }
       if (method !== 'initialize') {
         startNotificationStream();
@@ -723,12 +732,115 @@ export function createStreamableHttpTransport(config: {
   };
 }
 
+function shouldFallbackToLegacySse(error: unknown): boolean {
+  return error instanceof McpHttpStatusError
+    && (error.status === 400 || error.status === 404 || error.status === 405);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function autoHttpFallbackError(streamableError: unknown, sseError: unknown): Error {
+  const error = new Error(
+    `HTTP auto-detect failed. Streamable HTTP attempt: ${errorMessage(streamableError)}; `
+    + `legacy SSE fallback: ${errorMessage(sseError)}`,
+  );
+  error.name = 'McpAutoHttpFallbackError';
+  return error;
+}
+
+export function createAutoHttpTransport(config: {
+  url: string;
+  headers?: Record<string, string>;
+  preferredTransport?: 'streamable-http' | 'sse';
+}): McpTransport {
+  let transport: McpTransport | undefined;
+  let events: McpTransportEvents | undefined;
+  let protocolVersion: string | undefined;
+  let resolvedTransport: string | undefined;
+
+  function createStreamable(): McpTransport {
+    const next = createStreamableHttpTransport(config);
+    next.setProtocolVersion?.(protocolVersion);
+    return next;
+  }
+
+  function createSse(): McpTransport {
+    const next = createSseTransport(config);
+    next.setProtocolVersion?.(protocolVersion);
+    return next;
+  }
+
+  return {
+    get connected() {
+      return transport?.connected ?? false;
+    },
+
+    get resolvedTransport() {
+      return resolvedTransport ?? 'http:auto';
+    },
+
+    setProtocolVersion(version) {
+      protocolVersion = version;
+      transport?.setProtocolVersion?.(version);
+    },
+
+    async open(ev) {
+      events = ev;
+      resolvedTransport = config.preferredTransport
+        ? `http:auto->${config.preferredTransport}`
+        : undefined;
+      transport = config.preferredTransport === 'sse'
+        ? createSse()
+        : createStreamable();
+      await transport.open(ev);
+    },
+
+    async send(json) {
+      if (!transport) {
+        throw new Error('HTTP auto transport is not connected.');
+      }
+      try {
+        await transport.send(json);
+        if (!resolvedTransport) {
+          resolvedTransport = 'http:auto->streamable-http';
+        }
+      } catch (error) {
+        if (resolvedTransport || !shouldFallbackToLegacySse(error)) {
+          throw error;
+        }
+        await transport.close();
+        if (!events) {
+          throw error;
+        }
+        transport = createSse();
+        resolvedTransport = 'http:auto->sse';
+        try {
+          await transport.open(events);
+          await transport.send(json);
+        } catch (sseError) {
+          throw autoHttpFallbackError(error, sseError);
+        }
+      }
+    },
+
+    async close() {
+      await transport?.close();
+      transport = undefined;
+      events = undefined;
+      resolvedTransport = undefined;
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
 export interface McpTransportOptions {
   stdioFraming?: StdioFraming;
+  httpResolvedTransport?: 'streamable-http' | 'sse';
 }
 
 export function createMcpTransport(
@@ -765,6 +877,16 @@ export function createMcpTransport(
       return createStreamableHttpTransport({
         url: config.url,
         headers: config.headers,
+      });
+    }
+    case 'http': {
+      if (!config.url) {
+        throw new Error('MCP http auto transport requires a "url" field.');
+      }
+      return createAutoHttpTransport({
+        url: config.url,
+        headers: config.headers,
+        preferredTransport: options.httpResolvedTransport,
       });
     }
     default:

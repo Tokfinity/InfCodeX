@@ -469,12 +469,15 @@ function handle(m){
     return;
   }
   if (m.method === undefined) { return; }
-  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } }); return; }
+  if (m.method === 'tools/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [] } });
+    // After the catalog round-trip, signal the url elicitation completed.
+    writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: 'flow-1' } });
+    return;
+  }
   if (m.method === 'resources/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [] } }); return; }
   if (m.method === 'prompts/list'){
     writeMessage({ jsonrpc: '2.0', id: m.id, result: { prompts: [] } });
-    // After the catalog round-trip, signal the url elicitation completed.
-    writeMessage({ jsonrpc: '2.0', method: 'notifications/elicitation/complete', params: { elicitationId: 'flow-1' } });
   }
 }
 process.stdin.setEncoding('utf8');
@@ -563,6 +566,87 @@ function handle(m){
       return;
     }
     writeMessage({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'logged in' }] } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
+function createOptionalListsUnsupportedServerSource(): string {
+  return `
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === 'initialize') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { tools: {}, resources: {}, prompts: {} }, serverInfo: { name: 'optional-lists-test', version: '1.0.0' } } });
+    return;
+  }
+  if (m.method === 'tools/list'){ writeMessage({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'echo', inputSchema: { type: 'object' } }] } }); return; }
+  if (m.method === 'resources/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32000, message: 'resources/list not supported' } });
+    return;
+  }
+  if (m.method === 'prompts/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'prompts/list not supported' } });
+    return;
+  }
+  if (m.method === 'tools/call'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'called' }] } });
+  }
+}
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const lineEnd = buffer.indexOf('\\n');
+    if (lineEnd < 0) { return; }
+    const line = buffer.slice(0, lineEnd).replace(/\\r$/, '').trim();
+    buffer = buffer.slice(lineEnd + 1);
+    if (!line) { continue; }
+    try { handle(JSON.parse(line)); } catch { process.exit(2); }
+  }
+});
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT', () => process.exit(0));
+`;
+}
+
+function createResourcesOnlyServerSource(): string {
+  return `
+let buffer = '';
+function writeMessage(p){ process.stdout.write(JSON.stringify(p) + '\\n'); }
+function handle(m){
+  if (m.method === 'initialize') {
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: '2025-11-25', capabilities: { resources: {} }, serverInfo: { name: 'resources-only-test', version: '1.0.0' } } });
+    return;
+  }
+  if (m.method === 'tools/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'tools not supported' } });
+    return;
+  }
+  if (m.method === 'resources/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { resources: [{ uri: 'data://one', name: 'one', mimeType: 'text/plain' }] } });
+    return;
+  }
+  if (m.method === 'prompts/list'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'prompts not supported' } });
+    return;
+  }
+  if (m.method === 'resources/read'){
+    writeMessage({ jsonrpc: '2.0', id: m.id, result: { contents: [{ type: 'text', text: 'resource text' }] } });
   }
 }
 process.stdin.setEncoding('utf8');
@@ -767,6 +851,226 @@ describe('McpServerRuntime protocol compatibility', () => {
     expect(initializeProtocolVersion).toBe('2025-11-25');
     expect(observedProtocolHeaders.length).toBeGreaterThan(0);
     expect(observedProtocolHeaders.every((header) => header === '2025-11-25')).toBe(true);
+  });
+
+  it('auto-detects type:http as Streamable HTTP when POST initialize succeeds', async () => {
+    const dir = await createTempDir();
+    let initializeProtocolVersion = '';
+    const server = await startHttpServer(async (req, res) => {
+      if (req.method === 'GET') {
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.writeHead(404);
+        res.end();
+        return;
+      }
+
+      const payload = asRecord(JSON.parse(await readRequestBody(req)));
+      const method = typeof payload?.method === 'string' ? payload.method : '';
+      if (method === 'initialize') {
+        const params = asRecord(payload?.params);
+        initializeProtocolVersion = typeof params?.protocolVersion === 'string'
+          ? params.protocolVersion
+          : '';
+        writeJsonRpcResponse(res, payload?.id, {
+          protocolVersion: '2025-11-25',
+          capabilities: { tools: {}, resources: {}, prompts: {} },
+          serverInfo: { name: 'http-auto-streamable-test', version: '1.0.0' },
+        });
+        return;
+      }
+      if (payload?.id === undefined) {
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      const key = method === 'tools/list'
+        ? 'tools'
+        : method === 'resources/list'
+          ? 'resources'
+          : 'prompts';
+      writeJsonRpcResponse(res, payload.id, { [key]: [] });
+    });
+
+    const runtime = new McpServerRuntime(
+      'http-auto-streamable-test',
+      {
+        type: 'http',
+        url: server.url,
+        connect: 'lazy',
+        startupTimeoutMs: 1_000,
+        requestTimeoutMs: 1_000,
+      },
+      path.join(dir, 'cache'),
+    );
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect(initializeProtocolVersion).toBe('2025-11-25');
+      expect(runtime.getDiagnostics().resolvedTransport).toBe('http:auto->streamable-http');
+    } finally {
+      await runtime.dispose();
+      await server.stop();
+    }
+  });
+
+  it('auto-detects type:http as legacy SSE when POST initialize returns 405', async () => {
+    const dir = await createTempDir();
+    let rootPostCount = 0;
+    let endpointPostCount = 0;
+    let getCount = 0;
+    let sseResponse: http.ServerResponse | undefined;
+    const server = await startHttpServer(async (req, res) => {
+      if (req.method === 'GET' && req.headers.accept?.includes('text/event-stream')) {
+        getCount += 1;
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        });
+        sseResponse = res;
+        res.write('event: endpoint\n');
+        res.write('data: /message?sessionId=legacy\n\n');
+        return;
+      }
+      if (req.method === 'POST' && req.url?.startsWith('/message')) {
+        endpointPostCount += 1;
+        const payload = asRecord(JSON.parse(await readRequestBody(req)));
+        const method = typeof payload?.method === 'string' ? payload.method : '';
+        if (payload?.id !== undefined) {
+          const result = method === 'initialize'
+            ? {
+              protocolVersion: '2025-11-25',
+              capabilities: { tools: {}, resources: {}, prompts: {} },
+              serverInfo: { name: 'http-auto-sse-test', version: '1.0.0' },
+            }
+            : {
+              [method === 'tools/list'
+                ? 'tools'
+                : method === 'resources/list'
+                  ? 'resources'
+                  : 'prompts']: [],
+            };
+          sseResponse?.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: payload.id, result })}\n\n`);
+        }
+        res.writeHead(202);
+        res.end();
+        return;
+      }
+      if (req.method === 'POST') {
+        rootPostCount += 1;
+        res.writeHead(405);
+        res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    const runtime = new McpServerRuntime(
+      'http-auto-sse-test',
+      {
+        type: 'http',
+        url: server.url,
+        connect: 'lazy',
+        startupTimeoutMs: 1_000,
+        requestTimeoutMs: 1_000,
+      },
+      path.join(dir, 'cache'),
+    );
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect(rootPostCount).toBe(1);
+      expect(getCount).toBe(1);
+      expect(endpointPostCount).toBeGreaterThan(0);
+      expect(runtime.getDiagnostics().resolvedTransport).toBe('http:auto->sse');
+
+      await runtime.refreshCatalog(true);
+      expect(rootPostCount).toBe(1);
+      expect(getCount).toBe(2);
+      expect(runtime.getDiagnostics().resolvedTransport).toBe('http:auto->sse');
+    } finally {
+      await runtime.dispose();
+      sseResponse?.end();
+      await server.stop();
+    }
+  });
+
+  it('does not fall back from type:http to SSE on authentication failures', async () => {
+    const dir = await createTempDir();
+    let postCount = 0;
+    let getCount = 0;
+    const server = await startHttpServer(async (req, res) => {
+      if (req.method === 'GET') {
+        getCount += 1;
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.end();
+        return;
+      }
+      if (req.method === 'POST') {
+        postCount += 1;
+        await readRequestBody(req);
+        res.writeHead(401, { 'WWW-Authenticate': 'Bearer resource_metadata="https://auth.example.test/.well-known/oauth-protected-resource"' });
+        res.end();
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    const runtime = new McpServerRuntime(
+      'http-auto-auth-test',
+      {
+        type: 'http',
+        url: server.url,
+        connect: 'lazy',
+        startupTimeoutMs: 1_000,
+        requestTimeoutMs: 1_000,
+      },
+      path.join(dir, 'cache'),
+    );
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(/requires authorization/);
+      expect(postCount).toBe(1);
+      expect(getCount).toBe(0);
+    } finally {
+      await runtime.dispose();
+      await server.stop();
+    }
+  });
+
+  it('reports both Streamable HTTP and SSE errors when type:http auto-detect fully fails', async () => {
+    const dir = await createTempDir();
+    const server = await startHttpServer(async (_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+
+    const runtime = new McpServerRuntime(
+      'http-auto-mismatch-test',
+      {
+        type: 'http',
+        url: server.url,
+        connect: 'lazy',
+        startupTimeoutMs: 1_000,
+        requestTimeoutMs: 1_000,
+      },
+      path.join(dir, 'cache'),
+    );
+
+    try {
+      await expect(runtime.refreshCatalog(true)).rejects.toThrow(
+        /Streamable HTTP attempt: HTTP POST failed: 404.*legacy SSE fallback: SSE connection failed: 404/s,
+      );
+    } finally {
+      await runtime.dispose();
+      await server.stop();
+    }
   });
 
   it('uses the negotiated older protocol version in streamable HTTP follow-up headers', async () => {
@@ -1005,6 +1309,42 @@ describe('McpServerRuntime protocol compatibility', () => {
     }
   });
 
+  it('treats unsupported optional resources/prompts lists as empty and still calls tools', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createOptionalListsUnsupportedServerSource());
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect(runtime.getDiagnostics().tools).toBe(1);
+      expect(runtime.getDiagnostics().resources).toBe(0);
+      expect(runtime.getDiagnostics().prompts).toBe(0);
+
+      const result = await runtime.callTool('echo', {});
+      expect(result.content).toBe('called');
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it('loads resources-only servers that do not implement tools/list', async () => {
+    const dir = await createTempDir();
+    const scriptPath = await writeScript(dir, createResourcesOnlyServerSource());
+    const runtime = await createRuntime(dir, scriptPath, 1_000, 1_000);
+
+    try {
+      await runtime.refreshCatalog(true);
+      expect(runtime.getDiagnostics().tools).toBe(0);
+      expect(runtime.getDiagnostics().resources).toBe(1);
+      expect(runtime.getDiagnostics().prompts).toBe(0);
+
+      const result = await runtime.readResource('data://one', {});
+      expect(result.content).toBe('resource text');
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it('rejects unadvertised server-to-client capabilities with method-not-found', async () => {
     const dir = await createTempDir();
     const recordPath = path.join(dir, 'unsupported.jsonl');
@@ -1099,7 +1439,7 @@ describe('McpServerRuntime protocol compatibility', () => {
     expect(advertised?.elicitation).toEqual({ form: {} });
 
     // the request reached the host elicit callback as a parsed form request
-    expect(seen).toEqual([{ mode: 'form', message: 'Your name?', requestedSchema: expect.objectContaining({ type: 'object' }) }]);
+    expect(seen).toEqual([{ mode: 'form', serverId: 'test-server', message: 'Your name?', requestedSchema: expect.objectContaining({ type: 'object' }) }]);
 
     // the client responded accept + content (not -32601)
     const response = records.find((r) => r?.id === 'elicit-1' && r?.method === undefined);
@@ -1142,7 +1482,7 @@ describe('McpServerRuntime protocol compatibility', () => {
 
     // the url request reached the host elicit with mode + url + elicitationId
     expect(seen).toEqual([
-      { mode: 'url', message: 'Authorize', url: 'https://auth.example.test/grant', elicitationId: 'flow-1' },
+      { mode: 'url', serverId: 'test-server', message: 'Authorize', url: 'https://auth.example.test/grant', elicitationId: 'flow-1' },
     ]);
 
     // the completion notification was forwarded to the host

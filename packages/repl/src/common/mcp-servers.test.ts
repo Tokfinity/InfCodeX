@@ -192,10 +192,11 @@ describe('upsertMcpServer — validation', () => {
     ).toThrow(/connect/);
   });
 
-  it('accepts valid stdio + sse + streamable-http transports', () => {
+  it('accepts valid stdio + sse + streamable-http + http transports', () => {
     expect(() => upsertMcpServer('a', makeStdioServer())).not.toThrow();
     expect(() => upsertMcpServer('b', makeSseServer())).not.toThrow();
     expect(() => upsertMcpServer('c', { type: 'streamable-http', url: 'https://x.local' })).not.toThrow();
+    expect(() => upsertMcpServer('d', { type: 'http', url: 'https://x.local/mcp' })).not.toThrow();
   });
 });
 

@@ -32,8 +32,8 @@
  * barrel). Unlike custom providers — which have a runtime validator —
  * MCP entries have no canonical zod schema in the SDK today, so the
  * CRUD does shape-level checks only (required `name`, recognized
- * transport `type`, transport-shape coherence: stdio→command, sse|
- * streamable-http→url). Embedders that need stricter validation can
+ * transport `type`, transport-shape coherence: stdio→command, http-like
+ * transports→url). Embedders that need stricter validation can
  * layer it on top.
  *
  * Path resolution: like `custom-providers.ts`, this module resolves
@@ -134,9 +134,9 @@ export function removeMcpServer(name: string): boolean {
  *
  * Checks:
  *   - `config` is a plain object
- *   - transport `type` (when set) is one of stdio | sse | streamable-http
+ *   - transport `type` (when set) is one of stdio | sse | streamable-http | http
  *   - stdio transport requires `command`
- *   - sse / streamable-http transport requires `url`
+ *   - sse / streamable-http / http transport requires `url`
  *   - `connect` (when set) is one of lazy | prewarm | disabled
  *
  * Does NOT check that `command` resolves on PATH or that `url` is
@@ -154,9 +154,9 @@ export function validateMcpServerConfig(
     throw new TypeError(`MCP server "${name}": config must be a plain object`);
   }
   const transport = config.type ?? 'stdio';
-  if (!['stdio', 'sse', 'streamable-http'].includes(transport)) {
+  if (!['stdio', 'sse', 'streamable-http', 'http'].includes(transport)) {
     throw new TypeError(
-      `MCP server "${name}": unknown transport type "${transport}" (expected stdio | sse | streamable-http)`,
+      `MCP server "${name}": unknown transport type "${transport}" (expected stdio | sse | streamable-http | http)`,
     );
   }
   if (transport === 'stdio') {

@@ -127,6 +127,7 @@ describe('elicitViaUserInteraction — form mode', () => {
     const offered: Array<{ label: string; value: string }> = [];
     const ui: UserInteraction = {
       askUser: async ({ options }) => {
+        if (options?.some((o) => o.value === 'send')) return 'send'; // review-before-send
         for (const o of options ?? []) offered.push({ label: o.label, value: o.value });
         return '1';
       },
@@ -137,13 +138,17 @@ describe('elicitViaUserInteraction — form mode', () => {
   });
 
   it('preserves the original enum value type in the accepted content', async () => {
-    const ui: UserInteraction = { askUser: async () => '1' };
+    const ui: UserInteraction = {
+      askUser: async ({ options }) => (options?.some((o) => o.value === 'send') ? 'send' : '1'),
+    };
     const result = await elicitViaUserInteraction(ui, formRequest({ retries: { enum: [1, 3] } }));
     expect(result).toEqual({ action: 'accept', content: { retries: 3 } });
   });
 
   it('maps a boolean field to a yes/no select coerced to a boolean', async () => {
-    const ui: UserInteraction = { askUser: async () => 'true' };
+    const ui: UserInteraction = {
+      askUser: async ({ options }) => (options?.some((o) => o.value === 'send') ? 'send' : 'true'),
+    };
     const result = await elicitViaUserInteraction(ui, formRequest({ flag: { type: 'boolean' } }));
     expect(result).toEqual({ action: 'accept', content: { flag: true } });
   });
@@ -166,9 +171,46 @@ describe('elicitViaUserInteraction — form mode', () => {
     };
     expect(await elicitViaUserInteraction(ui, formRequest({ note: { type: 'string' } }))).toEqual({ action: 'cancel' });
   });
+
+  it('shows which MCP server is asking (anti-phishing) in the field prompt', async () => {
+    let shown = '';
+    const ui: UserInteraction = {
+      askUser: async ({ question, options }) => {
+        if (options?.some((o) => o.value === 'send')) return 'send';
+        shown = question;
+        return '0';
+      },
+    };
+    await elicitViaUserInteraction(ui, {
+      mode: 'form',
+      serverId: 'github',
+      message: 'Pick one',
+      requestedSchema: { type: 'object', properties: { choice: { enum: ['a'] } } },
+    });
+    expect(shown).toContain('MCP server "github"');
+    expect(shown).toContain('Pick one');
+  });
+
+  it('cancels the form when the user declines the review-before-send step', async () => {
+    const ui: UserInteraction = {
+      askUser: async ({ options }) => (options?.some((o) => o.value === 'send') ? 'cancel' : '0'),
+    };
+    const result = await elicitViaUserInteraction(ui, formRequest({ choice: { enum: ['a', 'b'] } }));
+    expect(result).toEqual({ action: 'cancel' });
+  });
 });
 
 describe('elicitViaUserInteraction — url mode', () => {
+  it('shows which MCP server is requesting browser authorization', async () => {
+    let shown = '';
+    const ui: UserInteraction = {
+      askUser: async ({ question }) => { shown = question; return 'decline'; },
+    };
+    await elicitViaUserInteraction(ui, { mode: 'url', serverId: 'payments', url: 'https://pay.example/auth' });
+    expect(shown).toContain('MCP server "payments"');
+    expect(shown).toContain('pay.example');
+  });
+
   it('shows the URL + its domain and accepts on consent (never auto-opens)', async () => {
     let shown = '';
     const ui: UserInteraction = {

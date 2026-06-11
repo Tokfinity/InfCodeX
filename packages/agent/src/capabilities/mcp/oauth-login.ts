@@ -24,7 +24,7 @@ import {
   parseTokenResponse,
   safeParseJsonResponse,
   saveToken,
-  startCallbackServer,
+  startOAuthCallbackServer,
   type OAuthToken,
 } from './oauth.js';
 import { discoverOAuthEndpoints } from './oauth-discovery.js';
@@ -236,6 +236,17 @@ export async function performOAuthLogin(
   });
   if (!endpoints) return undefined;
 
+  // PKCE is mandatory (OAuth 2.1 / MCP Authorization). If the AS advertises its
+  // supported challenge methods and S256 is not among them, refuse rather than
+  // silently downgrade to the insecure `plain` method.
+  const pkceMethods = endpoints.codeChallengeMethodsSupported;
+  if (pkceMethods && !pkceMethods.includes('S256')) {
+    throw new Error(
+      `MCP OAuth: authorization server for "${options.serverId}" does not advertise PKCE S256 support `
+      + `(got: ${pkceMethods.join(', ') || 'none'}); refusing to downgrade.`,
+    );
+  }
+
   const scope = options.stepUpScope
     ?? (options.configuredScopes && options.configuredScopes.length > 0
       ? options.configuredScopes.join(' ')
@@ -243,7 +254,9 @@ export async function performOAuthLogin(
     ?? (endpoints.resourceScopesSupported ?? endpoints.scopesSupported)?.join(' ');
 
   const port = options.redirectPort ?? DEFAULT_OAUTH_REDIRECT_PORT;
-  const redirectUri = `http://localhost:${port}/callback`;
+  // 127.0.0.1 (not `localhost`) so the redirect target matches the loopback the
+  // callback server binds — no IPv6 `localhost` (::1) resolution mismatch.
+  const redirectUri = `http://127.0.0.1:${port}/callback`;
 
   const client = await resolveClient(options, endpoints.registrationEndpoint, redirectUri, scope);
   if (!client) return undefined;
@@ -260,18 +273,20 @@ export async function performOAuthLogin(
     resource: endpoints.resource,
   });
 
-  if (!(await options.consent(authorizationUrl))) return undefined;
-
-  const callback = await startCallbackServer(port);
+  // Start the loopback listener BEFORE showing the URL, so a user who authorizes
+  // quickly cannot have their redirect land on a not-yet-listening port.
+  const callback = await startOAuthCallbackServer(port);
   try {
-    if (callback.state !== state) {
+    if (!(await options.consent(authorizationUrl))) return undefined;
+    const result = await callback.waitForCode();
+    if (result.state !== state) {
       throw new Error('OAuth callback state mismatch (possible CSRF) — login aborted.');
     }
     const token = await exchangeCodeForTokenWithResource({
       tokenEndpoint: endpoints.tokenEndpoint,
       clientId: client.clientId,
       clientSecret: client.clientSecret,
-      code: callback.code,
+      code: result.code,
       verifier: pkce.verifier,
       redirectUri,
       resource: endpoints.resource,
@@ -280,7 +295,7 @@ export async function performOAuthLogin(
     await saveToken(options.serverId, token);
     return token;
   } finally {
-    callback.server.close();
+    callback.close();
   }
 }
 

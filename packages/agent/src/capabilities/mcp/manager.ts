@@ -43,6 +43,7 @@ export interface McpServerStatus {
   readonly config: McpServerConfig;
   readonly connect: McpConnectMode;
   readonly status: McpServerRuntimeDiagnostics['status'];
+  readonly resolvedTransport?: string;
   readonly tools: number;
   readonly resources: number;
   readonly prompts: number;
@@ -55,6 +56,7 @@ export interface McpServerLogs {
   readonly serverId: string;
   readonly status: McpServerRuntimeDiagnostics['status'];
   readonly connect: McpConnectMode;
+  readonly resolvedTransport?: string;
   readonly lastError?: string;
   readonly cachedAt?: string;
 }
@@ -163,6 +165,7 @@ export class McpManager {
       serverId,
       status: diag.status,
       connect: diag.connect,
+      resolvedTransport: diag.resolvedTransport,
       lastError: diag.lastError,
       cachedAt: diag.cachedAt,
     };
@@ -272,6 +275,7 @@ export class McpManager {
       config: { ...config },
       connect: diag.connect,
       status: diag.status,
+      resolvedTransport: diag.resolvedTransport,
       tools: diag.tools,
       resources: diag.resources,
       prompts: diag.prompts,

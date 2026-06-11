@@ -23,6 +23,9 @@ export interface McpRoot {
 /** A server-initiated elicitation request (form mode now; url mode in Slice C). */
 export interface McpElicitRequest {
   readonly mode: 'form' | 'url';
+  /** The MCP server making the request. The host MUST show this to the user so
+   *  they know who is asking (anti-phishing). Enriched by the runtime. */
+  readonly serverId?: string;
   readonly message?: string;
   /** form mode: a flat object of primitive properties to collect. */
   readonly requestedSchema?: Record<string, unknown>;

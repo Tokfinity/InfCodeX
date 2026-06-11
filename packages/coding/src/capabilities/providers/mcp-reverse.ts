@@ -63,16 +63,24 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** How the requesting MCP server is named to the user (anti-phishing: the user
+ *  must always know WHO is asking, not just "a connected tool"). */
+function whoIsAsking(request: McpElicitRequest): string {
+  return request.serverId ? `MCP server "${request.serverId}"` : 'A connected MCP server';
+}
+
 /** Map an MCP `form` elicitation's schema onto the host's ask-user surface. */
 async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promise<McpElicitResult> {
-  const message = request.message ?? 'A connected tool is requesting information.';
+  const who = whoIsAsking(request);
+  const banner = `${who} is requesting information.`;
+  const detail = request.message ? `\n\n${request.message}` : '';
   const properties = asObject(asObject(request.requestedSchema)?.properties);
 
   // Confirm-only form (no fields) -> a single approve/decline prompt.
   if (!properties || Object.keys(properties).length === 0) {
     if (!ui.askUser) return { action: 'decline' };
     const answer = await ui.askUser({
-      question: message,
+      question: `${banner}${detail}`,
       kind: 'select',
       options: [{ label: 'Approve', value: 'accept' }, { label: 'Decline', value: 'decline' }],
     });
@@ -83,7 +91,7 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
   for (const [key, raw] of Object.entries(properties)) {
     const prop = asObject(raw) ?? {};
     const label = typeof prop.title === 'string' ? prop.title : key;
-    const question = `${message}\n\n${label}`;
+    const question = `${banner}${detail}\n\n${label}`;
     const enumValues = Array.isArray(prop.enum) ? prop.enum : undefined;
 
     if (enumValues && enumValues.length > 0 && ui.askUser) {
@@ -115,6 +123,18 @@ async function elicitForm(ui: UserInteraction, request: McpElicitRequest): Promi
       return { action: 'decline' };
     }
   }
+
+  // Review-before-send (spec: let the user review their response before it is
+  // sent). Show exactly what the server will receive + who receives it.
+  if (ui.askUser) {
+    const summary = Object.entries(content).map(([key, value]) => `  ${key}: ${String(value)}`).join('\n');
+    const confirm = await ui.askUser({
+      question: `${who} will receive:\n\n${summary}\n\nSend these values?`,
+      kind: 'select',
+      options: [{ label: 'Send', value: 'send' }, { label: 'Cancel', value: 'cancel' }],
+    });
+    if (confirm !== 'send') return { action: 'cancel' };
+  }
   return { action: 'accept', content };
 }
 
@@ -133,9 +153,11 @@ async function elicitUrl(ui: UserInteraction, request: McpElicitRequest): Promis
   } catch {
     // keep the raw url as the shown domain when it is not parseable
   }
+  const banner = `${whoIsAsking(request)} is requesting browser authorization.`;
+  const detail = request.message ? `\n\n${request.message}` : '';
   const answer = await ui.askUser({
     question:
-      `${request.message ?? 'A connected tool needs you to authorize something in your browser.'}\n\n`
+      `${banner}${detail}\n\n`
       + `URL: ${url}\nDomain: ${domain}\n\nOnly continue if you trust this domain. KodaX will NOT open it automatically.`,
     kind: 'select',
     options: [

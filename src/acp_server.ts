@@ -197,7 +197,7 @@ function convertAcpMcpServers(
         headerMap[h.name] = h.value;
       }
       result[server.name] = {
-        type: 'streamable-http',
+        type: 'http',
         url: server.url,
         headers: Object.keys(headerMap).length > 0 ? headerMap : undefined,
       };
