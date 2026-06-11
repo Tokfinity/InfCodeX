@@ -104,7 +104,7 @@ import type {
   TodoItem,
   TodoList,
 } from "@kodax-ai/coding";
-import { estimateTokens, bootstrapTeamMode, type TeamModeHandle } from "@kodax-ai/agent";
+import { estimateTokens, bootstrapTeamMode, setActiveUserInteraction, type TeamModeHandle } from "@kodax-ai/agent";
 import {
   PermissionMode,
   ConfirmResult,
@@ -6349,6 +6349,31 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   useEffect(() => {
     setCurrentConfigRef(currentConfig);
   }, [currentConfig, setCurrentConfigRef]);
+
+  // FEATURE_222 — register the live ask-user surface so MCP elicitation (which a
+  // server can send at any later point, long after the MCP provider was built)
+  // can prompt the user through the same Ink dialogs. Handlers resolve the
+  // current streaming events at CALL time (no stale closures); cleared on
+  // unmount so a torn-down / headless state declines.
+  useEffect(() => {
+    const resolve = (): ReturnType<typeof createStreamingEvents> => createStreamingEvents();
+    setActiveUserInteraction({
+      askUser: (options) => {
+        const fn = resolve().askUser;
+        if (!fn) throw new Error("askUser surface unavailable");
+        return fn(options);
+      },
+      askUserMulti: async (options) => {
+        const fn = resolve().askUserMulti;
+        return fn ? fn(options) : undefined;
+      },
+      askUserInput: async (options) => {
+        const fn = resolve().askUserInput;
+        return fn ? fn(options) : undefined;
+      },
+    });
+    return () => setActiveUserInteraction(undefined);
+  }, [createStreamingEvents]);
 
   // Run agent round
   const runAgentRound = async (

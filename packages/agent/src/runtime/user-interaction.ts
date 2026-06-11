@@ -60,3 +60,24 @@ export interface UserInteraction {
   /** Ask for free-text input. Resolves the text, or undefined when cancelled. */
   askUserInput?: (options: { question: string; default?: string }) => Promise<string | undefined>;
 }
+
+/**
+ * Process-wide "currently live" user-interaction surface. The MCP runtime is
+ * constructed at startup, before any interactive loop exists, yet a server can
+ * send an elicitation at any later point — so the host registers its live
+ * interaction surface here once the interactive loop is running, and the MCP
+ * elicitation handler resolves it at CALL time (not construction time). When
+ * nothing is registered (headless / between turns) consumers degrade to
+ * decline/cancel. Mirrors the existing active-extension-runtime pattern.
+ */
+let activeUserInteraction: UserInteraction | undefined;
+
+/** Register the live user-interaction surface (host calls this when interactive). */
+export function setActiveUserInteraction(interaction: UserInteraction | undefined): void {
+  activeUserInteraction = interaction;
+}
+
+/** The live user-interaction surface, or undefined when none is active. */
+export function getActiveUserInteraction(): UserInteraction | undefined {
+  return activeUserInteraction;
+}

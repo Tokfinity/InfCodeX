@@ -358,12 +358,16 @@ export {
 } from './runtime/managed-child-processes.js';
 
 // FEATURE_222 — user-interaction primitive (shared by coding ask_user_* tools
-// and the agent MCP elicitation reverse capability).
+// and the agent MCP elicitation reverse capability) + the live-surface registry.
 export type {
   UserInteraction,
   AskUserQuestionItem,
   AskUserMultiOptions,
   AskUserQuestionOptions,
+} from './runtime/user-interaction.js';
+export {
+  setActiveUserInteraction,
+  getActiveUserInteraction,
 } from './runtime/user-interaction.js';
 
 // ============== Messaging (v0.7.36 FEATURE_115) ==============

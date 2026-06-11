@@ -1239,10 +1239,12 @@ complete -c kodax -l version -d 'Show version'`);
 
   if ((options.extensions?.length ?? 0) > 0 || hasActiveMcp) {
     extensionRuntime = createExtensionRuntime({ config });
-    // FEATURE_222 — expose the workspace as MCP roots so servers can resolve
-    // file:// references against the project KodaX is running in.
+    // FEATURE_222 — expose the workspace as MCP roots, and (interactive mode)
+    // serve elicitation through the REPL's live ask-user dialogs. In print /
+    // non-interactive mode no interaction surface registers, so elicitation
+    // requests safely decline.
     await registerConfiguredMcpCapabilityProvider(extensionRuntime, configWithExtensions.mcpServers, {
-      reverse: buildMcpReverseCapabilities({ cwd: process.cwd() }),
+      reverse: buildMcpReverseCapabilities({ cwd: process.cwd(), enableElicitation: true }),
     });
     const extensionLoader = extensionRuntime as typeof extensionRuntime & {
       loadExtensions: (
