@@ -27,3 +27,15 @@ export {
   cleanupIncompleteToolCalls,
   validateAndFixToolHistory,
 } from './history-cleanup.js';
+
+export {
+  editDistance,
+  findFuzzyToolMatch,
+  invokeLlmJudge,
+  createLlmJudgedStopHook,
+} from './llm-judge.js';
+export type {
+  LlmJudgeFailureReason,
+  InvokeLlmJudgeOptions,
+  CreateLlmJudgedStopHookOptions,
+} from './llm-judge.js';
