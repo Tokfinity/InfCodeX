@@ -763,7 +763,7 @@ Two features close out v0.7.32 and the Plan B roadmap. **FEATURE_090** is the ro
 ### Documentation
 
 - **EVAL_GUIDELINES rewrite** — `benchmark/EVAL_GUIDELINES.md` now documents the **single-turn probe methodology** as the official KodaX eval pattern and removes end-to-end loop comparisons from the recommended set. Loops conflate prompt quality with tool-availability artefacts (model tries to verify with `read`/`grep`/`bash`, harness can't provide tools, benchmark scores the format-fail). Single-turn probes test the prompt-only contract.
-- **FEATURE_108 design** (`docs/features/v0.7.47.md`) — Session-Driven Reflective Prompt Patcher spec landed for v0.7.47 design preview.（注：2026-06-05 版本重排后 FEATURE_108 迁至 [`docs/features/v0.7.54.md`](docs/features/v0.7.54.md)；`v0.7.47.md` 现为 FEATURE_218 + FEATURE_132）
+- **FEATURE_108 design** (`docs/features/v0.7.47.md`) — Session-Driven Reflective Prompt Patcher spec landed for v0.7.47 design preview.（注：版本重排后 FEATURE_108 先于 2026-06-05 迁至 v0.7.54，再于 2026-06-11 顺延至 [`docs/features/v0.7.57.md`](docs/features/v0.7.57.md)；`v0.7.47.md` 现为 FEATURE_218 + FEATURE_132）
 - **FEATURE_109 design** (`docs/features/v0.7.48.md`) — Harness Observability Substrate (long-term memory + prediction contract + cross-family prose guard) spec landed for v0.7.48 design preview.
 - **`docs/features/v0.7.29.md` 1496-line expansion** — folds back the historical capability-inventory artifact (`v0.7.29-capability-inventory.md` deleted) and adds deeper FEATURE_103/104/107-related context to the v0.7.29 retrospective.
 - **`docs/CODING_AGENT_PROMPTS.md`** — cross-project prompt-system reference (4 open-source coding agents) for KodaX prompt design comparison. Research artefact, not a project doc.
