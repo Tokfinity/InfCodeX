@@ -7,8 +7,8 @@
  * agent-layer `RunOptions.stopHook` fires. This module:
  *
  *   1. Runs a second-pass LLM verification call (independent context,
- *      configurable model — usually a strong family) via
- *      `provider.stream` with a forced `emit_sidecar_verdict` tool call
+ *      configurable model — usually a strong family) with a forced
+ *      `emit_sidecar_verdict` tool call
  *   2. Maps the 3-state verdict ('accept' / 'revise' / 'blocked') to
  *      the agent-layer `StopHookResult` 3-state surface
  *      (undefined / string / {abort, reason})
@@ -16,26 +16,23 @@
  *      call, or parse failure → default `'accept'` (do not block the
  *      happy path)
  *
- * **Model selection**: by default the verifier **inherits the Main
- * Agent's provider+model** (see `verifier-provider-resolver.ts`). The
- * core architectural value of FEATURE_184 is the Stop-hook shape (out-
- * of-chain verification after Worker text-only termination, replacing
- * the in-chain Evaluator role), NOT automatic model-family decoupling.
- * Users who want to route around model quirks (e.g. zhipu/glm-5.1
- * intent-vs-action floor, memory: project_feature_167) can opt into
- * cross-family verification via `KODAX_VERIFIER_PROVIDER` +
- * `KODAX_VERIFIER_MODEL` env vars — provider injection here is the
- * indirection that makes that override possible.
+ * **FEATURE_215 (v0.7.49)**: the domain-neutral invocation skeleton
+ * (stream → fuzzy-match → parse → timeout-race → fail-open) now lives in
+ * `@kodax-ai/agent` as `invokeLlmJudge` / `createLlmJudgedStopHook`. This
+ * module is a thin consumer: it injects the verifier-specific prompt,
+ * report tool, verdict parser, default-verdict mapping, and verdict
+ * landing. Per ADR-030 the concrete judging (prompt, file-edit evidence,
+ * recorder bridge) stays here in coding.
  *
- * Phase D.1 scope (this commit): substrate module only. The
- * `createSidecarVerifierStopHook` factory returns a `StopHookFn` but it
- * is NOT yet wired into `runner-driven.ts`'s `runOnce` RunOptions —
- * that wiring is Phase D.2 (atomic swap with C.1/C.2/C.3).
+ * **Model selection**: by default the verifier **inherits the Main
+ * Agent's provider+model** (see `verifier-provider-resolver.ts`). Users
+ * who want cross-family verification can opt in via
+ * `KODAX_VERIFIER_PROVIDER` + `KODAX_VERIFIER_MODEL` env vars.
  *
  * Design references:
  * - ADR-030 (docs/ADR.md)
  * - v0.7.45.md §FEATURE_184 Phase D
- * - F178 stall-sidecar.ts — invocation / fuzzy-match / fail-open patterns
+ * - v0.7.49.md §FEATURE_215 — kernel extraction
  *
  * DI-clean: provider injection is the only external surface. Tests
  * pass a fake provider returning canned `{textBlocks, toolBlocks}`.
@@ -46,7 +43,8 @@ import type {
   KodaXMessage,
   KodaXToolUseBlock,
 } from '@kodax-ai/llm';
-import type { StopHookFn, StopHookResult } from '@kodax-ai/agent';
+import type { StopHookFn, StopHookResult, LlmJudgeFailureReason } from '@kodax-ai/agent';
+import { invokeLlmJudge, createLlmJudgedStopHook } from '@kodax-ai/agent';
 
 import {
   VERIFIER_SYSTEM_PROMPT,
@@ -114,9 +112,7 @@ export interface SidecarVerifierInvokeOptions {
   readonly provider: KodaXBaseProvider;
   /** Specific model id on the provider. When omitted, the provider's
    *  registered default model is used. Production wiring passes the
-   *  resolved model string from `resolveVerifierProvider()` so model
-   *  selection is explicit (rather than implicitly inheriting whatever
-   *  default model the provider happens to ship). */
+   *  resolved model string from `resolveVerifierProvider()`. */
   readonly model?: string;
   /** Verifier context built by the caller (`buildVerifierContext`). */
   readonly inputs: SidecarVerifierContextInputs;
@@ -129,58 +125,16 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const REPORT_TOOL_NAME = 'emit_sidecar_verdict';
 const VALID_VERDICTS: readonly SidecarVerifierVerdictValue[] = ['accept', 'revise', 'blocked'];
 
-/**
- * Levenshtein distance — duplicated from F178 stall-sidecar.ts for layer
- * cleanliness (sidecar-verifier should not depend on multi-instance/).
- * Same algorithm, ≤2 distance threshold.
- */
-function editDistance(a: string, b: string): number {
-  if (a === b) return 0;
-  if (a.length === 0) return b.length;
-  if (b.length === 0) return a.length;
-  const prev: number[] = new Array(b.length + 1);
-  const curr: number[] = new Array(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(
-        (prev[j] ?? 0) + 1,
-        (curr[j - 1] ?? 0) + 1,
-        (prev[j - 1] ?? 0) + cost,
-      );
-    }
-    for (let j = 0; j <= b.length; j++) prev[j] = curr[j] ?? 0;
-  }
-  return prev[b.length] ?? 0;
-}
-
-function findVerifierToolMatch(
-  toolBlocks: readonly KodaXToolUseBlock[],
-): { block: KodaXToolUseBlock; exact: boolean } | undefined {
-  const exact = toolBlocks.find((b) => b.name === REPORT_TOOL_NAME);
-  if (exact) return { block: exact, exact: true };
-
-  let best: { block: KodaXToolUseBlock; distance: number } | undefined;
-  for (const b of toolBlocks) {
-    const d = editDistance(b.name, REPORT_TOOL_NAME);
-    if (d <= 2 && (best === undefined || d < best.distance)) {
-      best = { block: b, distance: d };
-    }
-  }
-  return best ? { block: best.block, exact: false } : undefined;
-}
-
 function getToolInput(block: KodaXToolUseBlock): Record<string, unknown> {
   if (!block.input || typeof block.input !== 'object') return {};
   return block.input as Record<string, unknown>;
 }
 
 /**
- * Parse a `emit_sidecar_verdict` tool call into a typed verdict.
- * Returns the safe-default `accept` on any malformed input, with
- * a diagnostic trace tag.
+ * Parse an `emit_sidecar_verdict` tool call into a typed verdict.
+ * Returns the safe-default `accept` on any malformed input, with a
+ * diagnostic trace tag. Never returns undefined — a malformed call is a
+ * valid (accept) verdict, not a kernel parse failure.
  */
 function parseVerifierToolCall(
   block: KodaXToolUseBlock,
@@ -220,55 +174,44 @@ function parseVerifierToolCall(
 }
 
 /**
+ * Safe-default verdict factory for the kernel's fail-open paths. Maps
+ * each `LlmJudgeFailureReason` to an `accept` verdict carrying the
+ * verifier's diagnostic trace tag. (`parse_failure` cannot occur for the
+ * verifier — `parseVerifierToolCall` always returns a verdict — but is
+ * mapped to `no_tool_call` defensively.)
+ */
+function verifierDefaultVerdict(reason: LlmJudgeFailureReason): SidecarVerifierVerdict {
+  const trace: SidecarVerifierTrace =
+    reason === 'provider_error' ? 'provider_error'
+    : reason === 'timeout' ? 'timeout'
+    : 'no_tool_call';
+  return { verdict: 'accept', reason: '', trace };
+}
+
+/**
  * Invoke the Sidecar Verifier against the supplied provider. Returns a
  * SidecarVerifierVerdict — always; never throws (internal errors map to
  * safe-default `accept` with diagnostic trace).
  *
- * Production wiring (Phase D.2): call this from inside the StopHookFn
- * returned by `createSidecarVerifierStopHook`. Tests can call it
- * directly with a fake provider.
+ * Thin consumer of `@kodax-ai/agent`'s `invokeLlmJudge` (FEATURE_215):
+ * builds the verifier user message, then injects the verifier prompt /
+ * report tool / parser / default-verdict mapping.
  */
 export async function invokeSidecarVerifier(
   options: SidecarVerifierInvokeOptions,
 ): Promise<SidecarVerifierVerdict> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const userMessage = buildVerifierUserMessage(options.inputs);
-
-  const messages: KodaXMessage[] = [
-    { role: 'user', content: userMessage },
-  ];
-
-  const streamPromise = (async (): Promise<SidecarVerifierVerdict> => {
-    let result;
-    try {
-      result = await options.provider.stream(
-        messages,
-        [VERIFIER_REPORT_TOOL],
-        VERIFIER_SYSTEM_PROMPT,
-        false,
-        options.model ? { modelOverride: options.model } : undefined,
-      );
-    } catch {
-      return { verdict: 'accept', reason: '', trace: 'provider_error' };
-    }
-
-    const match = findVerifierToolMatch(result.toolBlocks ?? []);
-    if (!match) {
-      return { verdict: 'accept', reason: '', trace: 'no_tool_call' };
-    }
-    return parseVerifierToolCall(match.block, match.exact);
-  })();
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<SidecarVerifierVerdict>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      resolve({ verdict: 'accept', reason: '', trace: 'timeout' });
-    }, timeoutMs);
+  return invokeLlmJudge<SidecarVerifierVerdict>({
+    provider: options.provider,
+    model: options.model,
+    systemPrompt: VERIFIER_SYSTEM_PROMPT,
+    reportTool: VERIFIER_REPORT_TOOL,
+    userMessage,
+    reportToolName: REPORT_TOOL_NAME,
+    parseToolCall: parseVerifierToolCall,
+    defaultVerdict: verifierDefaultVerdict,
+    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   });
-
-  const verdict = await Promise.race([streamPromise, timeoutPromise]);
-  if (timeoutHandle) clearTimeout(timeoutHandle);
-  return verdict;
 }
 
 /**
@@ -278,7 +221,7 @@ export async function invokeSidecarVerifier(
  *   - 'revise'  → string (reason)  (reanimate via synthetic user msg)
  *   - 'blocked' → {abort, reason}  (halt + surface to caller)
  *
- * Pure function — no I/O. Exported for tests and for Phase D.2 wiring.
+ * Pure function — no I/O. Exported for tests and for D.2 wiring.
  */
 export function mapVerifierVerdictToStopHookResult(
   verdict: SidecarVerifierVerdict,
@@ -315,35 +258,35 @@ export interface CreateSidecarVerifierStopHookOptions {
 
 /**
  * Factory: returns a StopHookFn that invokes the Sidecar Verifier and
- * maps its verdict to the agent-layer 3-state result. Phase D.1
- * surfaces this for D.2 wiring — not yet attached to `runOnce`.
+ * maps its verdict to the agent-layer 3-state result.
  *
- * The returned hook is a thin shim: it builds the verifier context via
- * the caller-supplied `buildContext`, awaits `invokeSidecarVerifier`,
- * notifies `onVerdict`, and maps to StopHookResult. Composition with
- * the extension `turn:complete` bridge (Phase B's
- * `createExtensionTurnCompleteStopHook`) is the caller's
- * responsibility at the RunOptions construction site.
+ * Thin consumer of `@kodax-ai/agent`'s `createLlmJudgedStopHook`
+ * (FEATURE_215): builds the verifier context via the caller-supplied
+ * `buildContext`, renders it to the verifier user message, and injects
+ * the verifier prompt / parser / mapping / onVerdict. Composition with
+ * the extension `turn:complete` bridge is the caller's responsibility at
+ * the RunOptions construction site.
  */
 export function createSidecarVerifierStopHook(
   options: CreateSidecarVerifierStopHookOptions,
 ): StopHookFn {
-  // Convert AgentMessage (agent-layer transcript) to KodaXMessage shape
-  // for verifier context. The two types are structurally compatible at
-  // the role + content level — agent layer uses `AgentMessage` (subset
-  // of `KodaXMessage` without provider-specific extensions).
-  return async (ctx): Promise<StopHookResult> => {
-    const inputs = options.buildContext({
+  return createLlmJudgedStopHook<SidecarVerifierVerdict>({
+    provider: options.provider,
+    model: options.model,
+    systemPrompt: VERIFIER_SYSTEM_PROMPT,
+    reportTool: VERIFIER_REPORT_TOOL,
+    reportToolName: REPORT_TOOL_NAME,
+    // Convert AgentMessage (agent-layer transcript) to KodaXMessage shape
+    // for verifier context. The two types are structurally compatible at
+    // the role + content level.
+    buildUserMessage: (ctx) => buildVerifierUserMessage(options.buildContext({
       transcript: ctx.transcript as readonly KodaXMessage[],
       lastAssistantText: ctx.lastAssistantText,
-    });
-    const verdict = await invokeSidecarVerifier({
-      provider: options.provider,
-      model: options.model,
-      inputs,
-      timeoutMs: options.timeoutMs,
-    });
-    options.onVerdict?.(verdict);
-    return mapVerifierVerdictToStopHookResult(verdict);
-  };
+    })),
+    parseToolCall: parseVerifierToolCall,
+    defaultVerdict: verifierDefaultVerdict,
+    mapVerdict: mapVerifierVerdictToStopHookResult,
+    onVerdict: options.onVerdict,
+    timeoutMs: options.timeoutMs,
+  });
 }

@@ -485,6 +485,21 @@ export {
   validateAndFixToolHistory,
 } from './runtime-middleware/index.js';
 
+// FEATURE_215 (v0.7.49) — Generic LLM-judged stop-hook primitive.
+// Domain-neutral consult kernel shared by coding's Sidecar Verifier +
+// Stall Sidecar; exposed for external SDK consumers on a bare `Runner`.
+export {
+  editDistance,
+  findFuzzyToolMatch,
+  invokeLlmJudge,
+  createLlmJudgedStopHook,
+} from './runtime-middleware/index.js';
+export type {
+  LlmJudgeFailureReason,
+  InvokeLlmJudgeOptions,
+  CreateLlmJudgedStopHookOptions,
+} from './runtime-middleware/index.js';
+
 // FEATURE_124 (v0.7.43) — Memory System Alignment substrate.
 // Per-project memory directory + frontmatter taxonomy + claudecode-shape
 // truncation. Consumed by `@kodax-ai/coding` SP builder (Phase B/C) and
