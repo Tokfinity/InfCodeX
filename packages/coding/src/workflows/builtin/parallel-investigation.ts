@@ -1,0 +1,132 @@
+/**
+ * FEATURE_217 (v0.7.49) Phase C — Built-in read-only workflow.
+ *
+ * `parallel-investigation`: fan out several READ-ONLY investigators over
+ * a question (optionally split by target areas), then synthesize their
+ * findings into one ranked, evidence-keeping report. A failing
+ * investigator degrades the synthesis (its gap is noted) rather than
+ * crashing the whole run. Writes nothing — purely investigative.
+ */
+
+import type { WorkflowApi, WorkflowModule } from '@kodax-ai/agent/workflow';
+
+export interface ParallelInvestigationArgs {
+  /** What to investigate. */
+  readonly question: string;
+  /** Optional target areas/paths — one investigator per target. When
+   *  absent, a small default set of generic angles is used. */
+  readonly targets?: readonly string[];
+  /** Synthesis rubric; sensible default when omitted. */
+  readonly rubric?: string;
+  /** Lifetime agent cap (investigators + 1 synthesizer). */
+  readonly maxAgents?: number;
+  /** In-flight investigator cap. */
+  readonly maxConcurrency?: number;
+}
+
+export interface InvestigationFinding {
+  readonly angle: string;
+  readonly status: 'completed' | 'failed';
+  readonly text: string;
+}
+
+export interface ParallelInvestigationResult {
+  readonly synthesis: string;
+  readonly findings: readonly InvestigationFinding[];
+  /** True when ≥1 investigator failed and the synthesis ran degraded. */
+  readonly degraded: boolean;
+}
+
+const DEFAULT_MAX_AGENTS = 8;
+const DEFAULT_ANGLES: readonly string[] = [
+  'structure, entry points, and control flow',
+  'edge cases, error handling, and failure modes',
+  'tests, validation, and existing coverage',
+];
+
+const DEFAULT_RUBRIC =
+  'Deduplicate overlapping findings, keep concrete evidence (file:line), ' +
+  'rank by relevance to the question, and explicitly note gaps left by any ' +
+  'failed investigation.';
+
+interface InvestigationAngle {
+  readonly name: string;
+  readonly prompt: string;
+}
+
+function buildInvestigatorPrompt(question: string, focus: string): string {
+  return [
+    `Investigate the following question (READ-ONLY — do not modify any files):`,
+    question,
+    '',
+    `Focus your investigation on: ${focus}`,
+    '',
+    'Report concrete findings backed by evidence (cite file:line). If you ' +
+      'find nothing relevant for this focus, say so briefly.',
+  ].join('\n');
+}
+
+/** Resolve the investigation angles, reserving one agent for synthesis. */
+function resolveAngles(args: ParallelInvestigationArgs): InvestigationAngle[] {
+  const cap = Math.max(1, (args.maxAgents ?? DEFAULT_MAX_AGENTS) - 1);
+  const foci = args.targets && args.targets.length > 0 ? args.targets : DEFAULT_ANGLES;
+  return foci.slice(0, cap).map((focus, i) => ({
+    name: `investigate-${i + 1}`,
+    prompt: buildInvestigatorPrompt(args.question, focus),
+  }));
+}
+
+async function investigate(
+  wf: WorkflowApi,
+  angle: InvestigationAngle,
+): Promise<InvestigationFinding> {
+  try {
+    const result = await wf.runAgent({ name: angle.name, prompt: angle.prompt, readOnly: true });
+    return {
+      angle: angle.name,
+      status: result.status === 'completed' ? 'completed' : 'failed',
+      text: result.finalText,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { angle: angle.name, status: 'failed', text: `[investigation failed] ${message}` };
+  }
+}
+
+async function runParallelInvestigation(
+  wf: WorkflowApi,
+  args: ParallelInvestigationArgs,
+): Promise<ParallelInvestigationResult> {
+  const angles = resolveAngles(args);
+  const findings = await wf.phase('investigate', () =>
+    wf.parallel(
+      angles.map((angle) => () => investigate(wf, angle)),
+      args.maxConcurrency !== undefined ? { concurrency: args.maxConcurrency } : undefined,
+    ),
+  );
+
+  const degraded = findings.some((f) => f.status !== 'completed');
+  const synthesis = await wf.phase('synthesize', () =>
+    wf.synthesize({
+      inputs: findings.map((f) => `### ${f.angle} (${f.status})\n${f.text}`),
+      rubric: args.rubric ?? DEFAULT_RUBRIC,
+    }),
+  );
+
+  return { synthesis: synthesis.text, findings, degraded };
+}
+
+export const parallelInvestigation: WorkflowModule<
+  ParallelInvestigationArgs,
+  ParallelInvestigationResult
+> = {
+  meta: {
+    name: 'parallel-investigation',
+    description:
+      'Fan out read-only investigators over a question (split by target ' +
+      'areas), then synthesize ranked, evidence-keeping findings.',
+    maxAgents: DEFAULT_MAX_AGENTS,
+    maxConcurrency: 4,
+  },
+  run: runParallelInvestigation,
+};

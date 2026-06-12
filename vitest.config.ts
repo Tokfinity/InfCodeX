@@ -25,6 +25,10 @@ export default defineConfig({
     alias: {
       '@kodax-ai/agent/capabilities/skills/shared/yaml': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'shared', 'yaml.ts'),
       '@kodax-ai/agent/messaging/queue': resolveFromRoot('packages', 'agent', 'src', 'messaging', 'queue.ts'),
+      // FEATURE_217: value-imported subpath — MUST precede the root alias
+      // so the prefix-ordered matcher does not shadow it (unlike the
+      // type-only subpaths below, which are erased at runtime).
+      '@kodax-ai/agent/workflow': resolveFromRoot('packages', 'agent', 'src', 'workflow', 'index.ts'),
       '@kodax-ai/agent': resolveFromRoot('packages', 'agent', 'src', 'index.ts'),
       '@kodax-ai/llm': resolveFromRoot('packages', 'llm', 'src', 'index.ts'),
       '@kodax-ai/coding': resolveFromRoot('packages', 'coding', 'src', 'index.ts'),
@@ -32,7 +36,6 @@ export default defineConfig({
       '@kodax-ai/agent/session-lineage': resolveFromRoot('packages', 'agent', 'src', 'session-lineage', 'index.ts'),
       '@kodax-ai/agent/capabilities/skills': resolveFromRoot('packages', 'agent', 'src', 'capabilities', 'skills', 'index.ts'),
       '@kodax-ai/agent/tracing': resolveFromRoot('packages', 'agent', 'src', 'tracing', 'index.ts'),
-      '@kodax-ai/agent/workflow': resolveFromRoot('packages', 'agent', 'src', 'workflow', 'index.ts'),
     },
   },
   test: {

@@ -154,6 +154,29 @@ export interface WorkflowApi {
   log(event: WorkflowLogEvent): void;
 }
 
+/** Metadata a workflow declares (name, description, default caps). */
+export interface WorkflowMeta {
+  readonly name: string;
+  readonly description: string;
+  readonly maxAgents?: number;
+  readonly maxConcurrency?: number;
+  readonly tokenBudget?: number;
+}
+
+/** A workflow's entry function: coordinates agents via the `WorkflowApi`. */
+export type WorkflowRun<TArgs = unknown, TResult = unknown> = (
+  wf: WorkflowApi,
+  args: TArgs,
+) => Promise<TResult>;
+
+/** A self-contained workflow: metadata + entry function. Built-in
+ *  workflows (Phase C) and saved `.kodax/workflows/*.ts` (Phase E) both
+ *  materialize to this shape. */
+export interface WorkflowModule<TArgs = unknown, TResult = unknown> {
+  readonly meta: WorkflowMeta;
+  readonly run: WorkflowRun<TArgs, TResult>;
+}
+
 /**
  * Injected execution backend. The coding layer implements this over its
  * child-dispatch substrate (ChildTaskRegistry / childProgressSnapshots /
