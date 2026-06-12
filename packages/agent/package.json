@@ -34,6 +34,10 @@
     "./session-lineage": {
       "types": "./dist/session-lineage/index.d.ts",
       "import": "./dist/session-lineage/index.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow/index.d.ts",
+      "import": "./dist/workflow/index.js"
     }
   },
   "scripts": {

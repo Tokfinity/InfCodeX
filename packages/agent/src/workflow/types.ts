@@ -1,0 +1,184 @@
+/**
+ * FEATURE_217 (v0.7.49) — Dynamic Workflow Harness Runtime: public types.
+ *
+ * Domain-neutral workflow orchestration surface. A workflow *script*
+ * coordinates (decompose / fan-out / loop / wait / stop / verify /
+ * synthesize); it never touches files or shell directly. The actual
+ * agent execution is delegated to an injected `WorkflowAgentBackend`
+ * (the coding layer provides the real one in Phase B; tests inject a
+ * fake). This keeps `@kodax-ai/agent` free of any `@kodax-ai/coding`
+ * dependency (ADR-021 layer independence).
+ */
+
+/** Lifecycle status of a single workflow-spawned agent. */
+export type WorkflowTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+/** Routing hint for which provider/model tier the child should use. */
+export type WorkflowModelHint = 'fast' | 'balanced' | 'deep';
+
+/** Isolation policy for a spawned agent. `shared-cwd` is the default
+ *  (FEATURE_188); `worktree` is opt-in for high-risk parallel writes. */
+export type WorkflowIsolation = 'shared-cwd' | 'worktree';
+
+export interface WorkflowSpawnAgentInput {
+  /** Human-readable label for the agent — surfaces in events / UI. */
+  readonly name: string;
+  /** The task prompt handed to the child agent. */
+  readonly prompt: string;
+  /** When true, the child runs with a read-only tool whitelist. */
+  readonly readOnly?: boolean;
+  /** Route to a registered specialist agent (FEATURE_191). */
+  readonly subagentType?: string;
+  /** Provider/model tier hint (FEATURE_120 model_hint → env tier). */
+  readonly modelHint?: WorkflowModelHint;
+  /** Isolation policy; defaults to `shared-cwd`. */
+  readonly isolation?: WorkflowIsolation;
+  /** Evidence refs (`task_id:<id>` etc.) seeded into the child context. */
+  readonly evidenceRefs?: readonly string[];
+}
+
+/** Returned by `spawnAgent` — the child is in-flight, not yet complete. */
+export interface WorkflowTaskHandle {
+  readonly taskId: string;
+  readonly name: string;
+}
+
+export interface WorkflowTaskUsage {
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+}
+
+/** Terminal result of a spawned agent (from `wait` / `runAgent`). */
+export interface WorkflowTaskResult {
+  readonly taskId: string;
+  readonly name: string;
+  readonly status: WorkflowTaskStatus;
+  readonly finalText: string;
+  readonly usage?: WorkflowTaskUsage;
+}
+
+/** Point-in-time snapshot of a (possibly still-running) agent. */
+export interface WorkflowTaskSnapshot {
+  readonly taskId: string;
+  readonly name: string;
+  readonly status: WorkflowTaskStatus;
+  readonly lastText?: string;
+}
+
+export interface WorkflowWaitOptions {
+  readonly timeoutMs?: number;
+}
+
+export interface WorkflowParallelOptions {
+  /** In-flight cap for this parallel block; clamped by workflow
+   *  maxConcurrency. */
+  readonly concurrency?: number;
+}
+
+export interface WorkflowSynthesizeInput {
+  readonly inputs: readonly unknown[];
+  readonly rubric: string;
+}
+
+export interface WorkflowSynthesis {
+  readonly text: string;
+}
+
+export interface WorkflowArtifactRef {
+  readonly name: string;
+  readonly path?: string;
+}
+
+export interface WorkflowLogEvent {
+  readonly message: string;
+  readonly data?: unknown;
+}
+
+/**
+ * Token budget accounting. **Phase A is accounting + approval-display
+ * only — NOT hard-enforced**; a hard stop on overage is a later slice.
+ */
+export interface WorkflowBudget {
+  /** Configured token budget, or null when unbounded. */
+  readonly total: number | null;
+  /** Output tokens accounted across completed agents so far. */
+  spent(): number;
+  /** `max(0, total - spent())`, or Infinity when unbounded. */
+  remaining(): number;
+}
+
+export interface WorkflowLimits {
+  /** Total agents spawnable across the whole run lifetime. */
+  readonly maxAgents?: number;
+  /** Maximum simultaneously in-flight agents (via runAgent / parallel). */
+  readonly maxConcurrency?: number;
+  /** Token budget (accounting only in this slice). */
+  readonly tokenBudget?: number;
+}
+
+/**
+ * The surface a workflow script consumes. The script never gets raw
+ * fs/shell — all effects route through agent tools behind the backend.
+ */
+export interface WorkflowApi {
+  readonly runId: string;
+  readonly args: unknown;
+  readonly budget: WorkflowBudget;
+
+  /** Group operations under a named phase (emits phase_started/finished). */
+  phase<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  /** Start a child agent; returns immediately with a handle. */
+  spawnAgent(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle>;
+  /** spawnAgent + wait convenience; returns the terminal result. */
+  runAgent(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult>;
+  /** Await a spawned agent's terminal result. */
+  wait(taskId: string, opts?: WorkflowWaitOptions): Promise<WorkflowTaskResult>;
+  /** Snapshot a (possibly running) agent. */
+  output(taskId: string): Promise<WorkflowTaskSnapshot>;
+  /** Send a message to a running agent (via MessageQueue routing). */
+  send(taskId: string, content: string): Promise<void>;
+  /** Stop a running agent (graceful abort). */
+  stop(taskId: string, reason: string): Promise<void>;
+  /** Run lazy thunks concurrently under the concurrency gate. Thunks
+   *  MUST be `() => Promise<T>` (not already-started promises) so the
+   *  runtime can bound concurrency. */
+  parallel<T>(
+    items: readonly (() => Promise<T>)[],
+    opts?: WorkflowParallelOptions,
+  ): Promise<T[]>;
+  /** Synthesize across inputs via the backend (optional capability). */
+  synthesize(input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis>;
+  /** Persist a named artifact. */
+  artifact(name: string, value: unknown): Promise<WorkflowArtifactRef>;
+  /** Emit a free-text progress log event. */
+  log(event: WorkflowLogEvent): void;
+}
+
+/**
+ * Injected execution backend. The coding layer implements this over its
+ * child-dispatch substrate (ChildTaskRegistry / childProgressSnapshots /
+ * MessageQueue / executeChildAgents); tests inject a fake. The agent
+ * runtime depends ONLY on this interface — never on coding.
+ */
+export interface WorkflowAgentBackend {
+  spawn(input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle>;
+  wait(taskId: string, opts?: WorkflowWaitOptions): Promise<WorkflowTaskResult>;
+  output(taskId: string): Promise<WorkflowTaskSnapshot>;
+  send(taskId: string, content: string): Promise<void>;
+  stop(taskId: string, reason: string): Promise<void>;
+  /** Optional cross-input synthesis (needs an LLM — coding provides it). */
+  synthesize?(input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis>;
+  /** Optional durable artifact writer (Phase D wires the run graph). */
+  writeArtifact?(name: string, value: unknown): Promise<WorkflowArtifactRef>;
+}
+
+export type WorkflowRunStatus = 'running' | 'completed' | 'failed';
+
+/** Immutable snapshot of a workflow run's accumulated state. */
+export interface WorkflowRunState {
+  readonly runId: string;
+  readonly status: WorkflowRunStatus;
+  readonly totalSpawned: number;
+  readonly events: readonly import('./events.js').WorkflowEvent[];
+  readonly artifacts: readonly WorkflowArtifactRef[];
+}

@@ -534,3 +534,8 @@ export * from './tracing/index.js';
 // Latent bug fix: agent/package.json previously imported session-lineage
 // without declaring it in dependencies; inline collapses to intra-package.
 export * from './session-lineage/index.js';
+
+// FEATURE_217 (v0.7.49) — Dynamic Workflow Harness Runtime.
+// Domain-neutral workflow orchestration; also available at the
+// `@kodax-ai/agent/workflow` subpath. Coding provides the backend.
+export * from './workflow/index.js';
