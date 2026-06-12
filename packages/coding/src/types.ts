@@ -380,6 +380,8 @@ export interface KodaXSessionOptions {
   resume?: boolean;
   autoResume?: boolean;
   scope?: KodaXSessionScope;
+  /** Consumer-owned private string persisted with the session. */
+  tag?: string;
   storage?: KodaXSessionStorage;
   initialMessages?: KodaXMessage[];
   /**

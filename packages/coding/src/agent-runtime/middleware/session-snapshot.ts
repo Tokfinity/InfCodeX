@@ -163,6 +163,7 @@ export async function saveSessionSnapshot(
       messages: data.messages,
       title: data.title,
       gitRoot,
+      tag: options.session.tag,
       scope: options.session.scope ?? 'user',
       errorMetadata: data.errorMetadata,
       extensionState: data.runtimeSessionState

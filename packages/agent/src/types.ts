@@ -294,6 +294,8 @@ export interface KodaXSessionData {
   messages: KodaXMessage[];
   title: string;
   gitRoot: string;
+  /** Consumer-owned private string persisted with the session. */
+  tag?: string;
   runtimeInfo?: KodaXSessionRuntimeInfo;
   scope?: KodaXSessionScope;
   uiHistory?: KodaXSessionUiHistoryItem[];
@@ -309,6 +311,8 @@ export interface KodaXSessionMeta {
   title: string;
   id: string;
   gitRoot: string;
+  /** Consumer-owned private string persisted with the session. */
+  tag?: string;
   runtimeInfo?: KodaXSessionRuntimeInfo;
   createdAt: string;
   scope?: KodaXSessionScope;
@@ -407,6 +411,7 @@ export interface KodaXSessionStorage {
     id: string;
     title: string;
     msgCount: number;
+    tag?: string;
     runtimeInfo?: KodaXSessionRuntimeInfo;
   }>>;
   delete?(id: string): Promise<void>;

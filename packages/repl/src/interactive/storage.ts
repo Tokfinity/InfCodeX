@@ -72,6 +72,7 @@ interface PersistedArtifactLedgerLine {
 interface PersistedMetaUpdateLine {
   _type: 'meta_update';
   title?: string;
+  tag?: string;
   activeEntryId?: string | null;
   activeMessageCount?: number;
   uiHistory?: KodaXSessionMeta['uiHistory'];
@@ -83,6 +84,7 @@ function isPersistedMetaUpdateLine(value: unknown): value is PersistedMetaUpdate
     return false;
   }
   return (value.title === undefined || typeof value.title === 'string')
+    && (value.tag === undefined || typeof value.tag === 'string')
     && (value.activeEntryId === undefined || typeof value.activeEntryId === 'string' || value.activeEntryId === null)
     && (value.activeMessageCount === undefined || typeof value.activeMessageCount === 'number')
     && (value.uiHistory === undefined || isKodaXSessionUiHistory(value.uiHistory))
@@ -365,6 +367,7 @@ function buildSessionData(snapshot: PersistedSessionSnapshot): ResolvedSessionSn
           : [...snapshot.legacyMessages],
         title: snapshot.meta?.title ?? '',
         gitRoot: snapshot.meta?.gitRoot ?? '',
+        tag: typeof snapshot.meta?.tag === 'string' ? snapshot.meta.tag : undefined,
         runtimeInfo: isKodaXSessionRuntimeInfo(snapshot.meta?.runtimeInfo)
           ? { ...snapshot.meta.runtimeInfo }
           : undefined,
@@ -399,6 +402,7 @@ function createSessionMeta(
     title: data.title,
     id,
     gitRoot: data.gitRoot,
+    tag: data.tag,
     runtimeInfo: data.runtimeInfo ? { ...data.runtimeInfo } : undefined,
     createdAt: createdAt ?? new Date().toISOString(),
     scope: data.scope ?? 'user',
@@ -455,6 +459,7 @@ async function readPersistedSessionFile(filePath: string): Promise<PersistedSess
       if (isPersistedMetaUpdateLine(parsed)) {
         if (snapshot.meta) {
           if (parsed.title !== undefined) snapshot.meta.title = parsed.title;
+          if (parsed.tag !== undefined) snapshot.meta.tag = parsed.tag;
           if (parsed.activeEntryId !== undefined) snapshot.meta.activeEntryId = parsed.activeEntryId;
           if (parsed.activeMessageCount !== undefined) snapshot.meta.activeMessageCount = parsed.activeMessageCount;
           if (parsed.uiHistory !== undefined) snapshot.meta.uiHistory = parsed.uiHistory;
@@ -862,6 +867,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
       runtimeInfo: data.runtimeInfo ?? existing?.data.runtimeInfo,
       errorMetadata: data.errorMetadata ?? existing?.data.errorMetadata,
+      tag: data.tag ?? existing?.data.tag,
       // FEATURE_173 no-regress guard — a lineage-less snapshot whose messages
       // are a prefix of the persisted active path reuses the existing lineage
       // instead of regressing `activeEntryId` (the dual-writer corruption).
@@ -929,6 +935,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       const metaUpdate: PersistedMetaUpdateLine = {
         _type: 'meta_update',
         title: data.title,
+        ...(data.tag !== undefined ? { tag: data.tag } : {}),
         activeEntryId: data.lineage!.activeEntryId,
         activeMessageCount: countActiveLineageMessages(data.lineage!),
         ...(data.uiHistory !== undefined ? { uiHistory: data.uiHistory } : {}),
