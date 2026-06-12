@@ -785,6 +785,72 @@ describe('FileSessionStorage', () => {
     expect(loaded?.title).toBe('Fallback Updated');
   });
 
+  it('appendSessionDelta fallback persists session tag into the initial meta line', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+
+    await storage.appendSessionDelta('session-host-tag', {
+      messages: [{ role: 'user', content: 'partner request' }],
+      title: 'Host Owned Partner',
+      gitRoot,
+      scope: 'user',
+      tag: 'partner',
+    });
+
+    const loaded = await storage.load('session-host-tag');
+    expect(loaded?.tag).toBe('partner');
+
+    const sessionPath = path.join(
+      tempHome,
+      '.kodax',
+      'sessions',
+      deriveProjectKeyFromRoot(gitRoot).key,
+      'session-host-tag.jsonl',
+    );
+    const firstLine = (await readFile(sessionPath, 'utf-8')).split('\n')[0]!;
+    expect(JSON.parse(firstLine).tag).toBe('partner');
+  });
+
+  it('appendSessionDelta hot path preserves an existing tag when the partial payload omits it', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+
+    const lineage1 = createSessionLineage([
+      { role: 'user', content: 'hello' },
+    ]);
+    await storage.save('session-tag-preserve', {
+      messages: [{ role: 'user', content: 'hello' }],
+      title: 'Tagged Session',
+      gitRoot,
+      scope: 'user',
+      lineage: lineage1,
+      tag: 'partner',
+    });
+
+    const loaded1 = await storage.load('session-tag-preserve');
+    const lineage2 = createSessionLineage([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'reply' },
+    ], loaded1!.lineage);
+
+    await storage.appendSessionDelta('session-tag-preserve', {
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'reply' },
+      ],
+      title: 'Tagged Session Updated',
+      gitRoot,
+      lineage: lineage2,
+    });
+
+    const loaded2 = await storage.load('session-tag-preserve');
+    expect(loaded2?.title).toBe('Tagged Session Updated');
+    expect(loaded2?.tag).toBe('partner');
+  });
+
   it('mixed path: append → rewind (cold save) → append → load consistent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();

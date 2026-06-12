@@ -104,6 +104,25 @@ describe('saveSessionSnapshot — happy path with storage', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it('persists session.tag in the storage.save payload', async () => {
+    const saveMock = vi.fn().mockResolvedValue(undefined);
+    const opts = {
+      provider: 'anthropic',
+      session: {
+        id: `sdk-tag-${Date.now()}`,
+        tag: 'partner',
+        scope: 'user' as const,
+        storage: { save: saveMock } as never,
+      },
+    } as unknown as KodaXOptions;
+
+    await saveSessionSnapshot(opts, opts.session!.id!, minimalData);
+
+    expect(saveMock).toHaveBeenCalledTimes(1);
+    expect(saveMock.mock.calls[0]?.[1]?.tag).toBe('partner');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   // FEATURE_173 dual-writer fix — persistedByHost ownership gate.
   it('persistedByHost: skips ROUTINE save (host owns persistence)', async () => {
     const saveMock = vi.fn().mockResolvedValue(undefined);
