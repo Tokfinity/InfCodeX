@@ -26,7 +26,7 @@ import type {
   WorkflowEvent,
   WorkflowMeta,
   WorkflowModule,
-} from '@kodax-ai/agent/workflow';
+} from '@kodax-ai/agent';
 import {
   buildApprovalSummary,
   getBuiltinWorkflow,

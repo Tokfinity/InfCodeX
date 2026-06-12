@@ -6,7 +6,7 @@
  * command (Phase D) resolves against.
  */
 
-import type { WorkflowModule } from '@kodax-ai/agent/workflow';
+import type { WorkflowModule } from '@kodax-ai/agent';
 
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
 

@@ -8,7 +8,7 @@
  * crashing the whole run. Writes nothing — purely investigative.
  */
 
-import type { WorkflowApi, WorkflowModule } from '@kodax-ai/agent/workflow';
+import type { WorkflowApi, WorkflowModule } from '@kodax-ai/agent';
 
 export interface ParallelInvestigationArgs {
   /** What to investigate. */

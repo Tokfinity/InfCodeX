@@ -17,7 +17,7 @@ import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { WorkflowModule } from '@kodax-ai/agent/workflow';
+import type { WorkflowModule } from '@kodax-ai/agent';
 
 /** Extensions recognised as workflow modules, in resolution priority. */
 const WORKFLOW_EXTENSIONS: readonly string[] = ['.ts', '.mjs', '.js'];

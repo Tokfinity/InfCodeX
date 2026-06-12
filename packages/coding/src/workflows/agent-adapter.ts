@@ -29,7 +29,7 @@ import type {
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
   WorkflowTaskStatus,
-} from '@kodax-ai/agent/workflow';
+} from '@kodax-ai/agent';
 
 import { executeChildAgents } from '../child-executor.js';
 import type { ChildExecutorOptions } from '../child-executor.js';

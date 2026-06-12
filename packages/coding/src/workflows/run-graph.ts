@@ -20,7 +20,7 @@ import type {
   WorkflowEvent,
   WorkflowMeta,
   WorkflowRunState,
-} from '@kodax-ai/agent/workflow';
+} from '@kodax-ai/agent';
 
 export interface RunGraphWriterDeps {
   /** Clock for the per-event `ts` stamp. Defaults to `Date.now`. */

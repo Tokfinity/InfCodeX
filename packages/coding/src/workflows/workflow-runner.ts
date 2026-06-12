@@ -8,7 +8,7 @@
  * run dir + a stub approval callback.
  */
 
-import { runWorkflow } from '@kodax-ai/agent/workflow';
+import { runWorkflow } from '@kodax-ai/agent';
 import type {
   WorkflowAgentBackend,
   WorkflowApproval,
@@ -16,7 +16,7 @@ import type {
   WorkflowEvent,
   WorkflowModule,
   WorkflowRunState,
-} from '@kodax-ai/agent/workflow';
+} from '@kodax-ai/agent';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import { createRunGraphWriter } from './run-graph.js';
