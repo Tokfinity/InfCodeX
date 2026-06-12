@@ -160,7 +160,11 @@ export async function runWorkflowFromOptions(
   const childOptions: WorkflowChildOptions = {
     maxIterationsPerChild: DEFAULT_MAX_ITERATIONS_PER_CHILD,
     parentRole: 'worker',
-    parentHarness: 'workflow',
+    // 'tool-dispatch' (not 'workflow') so write-capable children are NOT
+    // silently dropped by `validateWriteBundles` — workflows dispatch
+    // children exactly like `dispatch_child_task`. Read-only children are
+    // unaffected; the per-agent `readOnly` flag still controls write access.
+    parentHarness: 'tool-dispatch',
     parentOptions: {
       provider: input.options.provider,
       model: input.options.model,

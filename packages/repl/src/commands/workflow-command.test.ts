@@ -22,6 +22,7 @@ import {
   formatRunsList,
   savedWorkflowDirs,
   formatSavedList,
+  resolveConfirm,
   workflowCommand,
 } from './workflow-command.js';
 
@@ -142,6 +143,37 @@ describe('saved workflow dirs + formatting', () => {
   });
   it('handles empty saved list', () => {
     expect(formatSavedList([])).toContain('no saved');
+  });
+});
+
+describe('resolveConfirm', () => {
+  it('prefers callbacks.confirm', async () => {
+    const confirm = resolveConfirm({ confirm: async () => true });
+    expect(confirm).toBeDefined();
+    expect(await confirm!('ok?')).toBe(true);
+  });
+
+  it('falls back to a readline (y/N) prompt', async () => {
+    const asked: string[] = [];
+    const rl = {
+      question: (query: string, cb: (answer: string) => void) => {
+        asked.push(query);
+        cb('y');
+      },
+    };
+    const confirm = resolveConfirm({ readline: rl });
+    expect(confirm).toBeDefined();
+    expect(await confirm!('proceed?')).toBe(true);
+    expect(asked[0]).toContain('(y/N)');
+  });
+
+  it('readline fallback treats non-yes as false', async () => {
+    const rl = { question: (_q: string, cb: (a: string) => void) => cb('n') };
+    expect(await resolveConfirm({ readline: rl })!('x?')).toBe(false);
+  });
+
+  it('returns undefined with no confirm channel (caller must fail safe)', () => {
+    expect(resolveConfirm({})).toBeUndefined();
   });
 });
 

@@ -145,6 +145,29 @@ export function formatSavedList(refs: readonly SavedWorkflowRef[]): string {
   return refs.map((r) => `  ${chalk.cyan(r.name)} ${chalk.dim(`(${r.source}: ${r.path})`)}`).join('\n');
 }
 
+export type ConfirmFn = (message: string) => Promise<boolean>;
+
+/**
+ * Resolve an interactive confirmation function. Prefers `callbacks.confirm`;
+ * falls back to a readline `(y/N)` prompt (the REPL always passes
+ * `callbacks.readline`). Returns undefined only in a non-interactive
+ * context — callers MUST fail safe (never execute local code) when so.
+ */
+export function resolveConfirm(callbacks: {
+  readonly confirm?: ConfirmFn;
+  readonly readline?: { question: (query: string, cb: (answer: string) => void) => void };
+}): ConfirmFn | undefined {
+  if (callbacks.confirm) return callbacks.confirm;
+  const rl = callbacks.readline;
+  if (rl) {
+    return (message: string) =>
+      new Promise<boolean>((resolve) => {
+        rl.question(`${message} (y/N) `, (answer) => resolve(/^y(es)?$/i.test(answer.trim())));
+      });
+  }
+  return undefined;
+}
+
 /* ------------------------------- command -------------------------------- */
 
 function renderWorkflowEvent(event: WorkflowEvent): void {
@@ -210,11 +233,12 @@ export const workflowCommand: Command = {
       return;
     }
 
-    const confirmGate = callbacks.confirm;
+    const confirm = resolveConfirm(callbacks);
     let module: WorkflowModule | undefined = getBuiltinWorkflow(invocation.name);
     if (!module) {
-      // Not a built-in — try a saved workflow. Loading executes local
-      // code, so gate it behind a trusted-local confirmation.
+      // Not a built-in — try a saved workflow. Loading EXECUTES local
+      // code, so it is hard-gated behind a trusted-local confirmation:
+      // with no interactive channel we refuse rather than run unconfirmed.
       const ref = (await discoverSavedWorkflows(dirs)).find((r) => r.name === invocation.name);
       if (!ref) {
         console.log(chalk.yellow(`\nUnknown workflow: ${invocation.name}`));
@@ -222,14 +246,21 @@ export const workflowCommand: Command = {
         console.log();
         return;
       }
-      if (confirmGate) {
-        const trusted = await confirmGate(
-          `Run local workflow file? This EXECUTES local code:\n  ${ref.path}`,
+      if (!confirm) {
+        console.log(
+          chalk.red(
+            '\n[workflow] refusing to run a saved workflow — no interactive confirmation ' +
+              'channel to authorize executing local code.\n',
+          ),
         );
-        if (!trusted) {
-          console.log(chalk.dim('Workflow cancelled.\n'));
-          return;
-        }
+        return;
+      }
+      const trusted = await confirm(
+        `Run local workflow file? This EXECUTES local code:\n  ${ref.path}`,
+      );
+      if (!trusted) {
+        console.log(chalk.dim('Workflow cancelled.\n'));
+        return;
       }
       try {
         module = await loadSavedWorkflow(ref.path);
@@ -246,7 +277,6 @@ export const workflowCommand: Command = {
       return;
     }
 
-    const confirm = callbacks.confirm;
     const approval = confirm
       ? (summary: WorkflowApprovalSummary) => confirm(renderApprovalPrompt(summary))
       : undefined;

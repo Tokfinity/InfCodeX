@@ -211,9 +211,9 @@ export interface WorkflowAgentBackend {
   output(taskId: string): Promise<WorkflowTaskSnapshot>;
   send(taskId: string, content: string): Promise<void>;
   stop(taskId: string, reason: string): Promise<void>;
-  /** Optional cross-input synthesis (needs an LLM — coding provides it). */
-  synthesize?(input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis>;
-  /** Optional durable artifact writer (Phase D wires the run graph). */
+  /** Optional durable artifact writer (Phase D wires the run graph).
+   *  `wf.synthesize` is NOT a backend method — it runs as a gated agent
+   *  through `spawn`/`wait` so it counts toward the runtime's caps. */
   writeArtifact?(name: string, value: unknown): Promise<WorkflowArtifactRef>;
 }
 

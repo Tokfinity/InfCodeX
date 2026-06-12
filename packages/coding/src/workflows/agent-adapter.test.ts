@@ -193,23 +193,5 @@ describe('createCodingWorkflowBackend — stop + send', () => {
   });
 });
 
-describe('createCodingWorkflowBackend — synthesize', () => {
-  it('runs a read-only synthesis child and returns its text', async () => {
-    let seenReadOnly: boolean | undefined;
-    let seenObjective: string | undefined;
-    const backend = createCodingWorkflowBackend({
-      ctx: fakeCtx(),
-      childOptions,
-      runChild: async (bundles) => {
-        seenReadOnly = bundles[0]!.readOnly;
-        seenObjective = bundles[0]!.objective;
-        return execResult({ summary: 'merged synthesis' });
-      },
-    });
-    const out = await backend.synthesize!({ inputs: ['finding A', 'finding B'], rubric: 'dedupe + rank' });
-    expect(out.text).toBe('merged synthesis');
-    expect(seenReadOnly).toBe(true);
-    expect(seenObjective).toContain('dedupe + rank');
-    expect(seenObjective).toContain('finding A');
-  });
-});
+// `synthesize` is no longer a backend method — it runs as a gated agent in
+// the runtime (see runtime.test.ts + parallel-investigation.test.ts).

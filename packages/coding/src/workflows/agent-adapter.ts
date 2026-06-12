@@ -23,8 +23,6 @@ import type { ChildTaskRegistry, MessageQueue } from '@kodax-ai/agent';
 import type {
   WorkflowAgentBackend,
   WorkflowSpawnAgentInput,
-  WorkflowSynthesizeInput,
-  WorkflowSynthesis,
   WorkflowTaskHandle,
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
@@ -206,29 +204,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     ctx.childAbortControllers?.get(taskId)?.abort();
   };
 
-  const synthesize = async (input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis> => {
-    const handle = await spawn({
-      name: 'synthesize',
-      prompt: buildSynthesisPrompt(input),
-      readOnly: true,
-    });
-    const result = await wait(handle.taskId);
-    return { text: result.finalText };
-  };
-
-  return { spawn, wait, output, send, stop, synthesize };
-}
-
-/** Render a synthesis child's prompt from the inputs + rubric. */
-function buildSynthesisPrompt(input: WorkflowSynthesizeInput): string {
-  const body = input.inputs
-    .map((item, i) => `## Input ${i + 1}\n${typeof item === 'string' ? item : JSON.stringify(item, null, 2)}`)
-    .join('\n\n');
-  return [
-    'You are synthesizing the findings below into a single result.',
-    '',
-    `Rubric: ${input.rubric}`,
-    '',
-    body,
-  ].join('\n');
+  // NOTE: no `synthesize` here — `wf.synthesize` runs as a gated agent in
+  // the runtime (through spawn/wait) so it counts toward maxAgents /
+  // concurrency / budget and emits run-graph events.
+  return { spawn, wait, output, send, stop };
 }

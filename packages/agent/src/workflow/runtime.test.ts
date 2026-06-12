@@ -22,7 +22,7 @@ import {
  *  number of simultaneously in-flight agents so concurrency caps can be
  *  asserted. */
 function fakeBackend(
-  config: { waitDelayMs?: number; synthesize?: WorkflowAgentBackend['synthesize'] } = {},
+  config: { waitDelayMs?: number } = {},
 ): {
   backend: WorkflowAgentBackend;
   peakInFlight: () => number;
@@ -55,7 +55,6 @@ function fakeBackend(
     output: async (taskId: string) => ({ taskId, name: taskId, status: 'running' as const }),
     send: async () => {},
     stop: async () => {},
-    ...(config.synthesize ? { synthesize: config.synthesize } : {}),
   };
   return {
     backend,
@@ -182,6 +181,36 @@ describe('abort handling', () => {
     expect(spawnCount()).toBe(0);
   });
 
+  it('propagates a mid-run abort to the in-flight child via backend.stop', async () => {
+    const controller = new AbortController();
+    const stopped: string[] = [];
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 't1', name: input.name }),
+      // wait blocks until the run aborts, then resolves as 'stopped'.
+      wait: (taskId) =>
+        new Promise((resolve) => {
+          controller.signal.addEventListener(
+            'abort',
+            () => resolve({ taskId, name: taskId, status: 'stopped', finalText: '' }),
+            { once: true },
+          );
+        }),
+      output: async (taskId) => ({ taskId, name: taskId, status: 'running' }),
+      send: async () => {},
+      stop: async (taskId) => { stopped.push(taskId); },
+    };
+    const outcome = await runWorkflow(
+      baseOpts(backend, { signal: controller.signal }),
+      async (wf) => {
+        const handlePromise = wf.runAgent({ name: 'a', prompt: 'x' });
+        setTimeout(() => controller.abort(), 5);
+        return handlePromise;
+      },
+    );
+    expect(outcome.ok).toBe(true);
+    expect(stopped).toEqual(['t1']); // abort reached the in-flight child
+  });
+
   it('parallel stops launching new thunks after abort fires mid-run', async () => {
     const { backend } = fakeBackend();
     const controller = new AbortController();
@@ -251,9 +280,13 @@ describe('createWorkflowRuntime — lower-level handle', () => {
     expect(rt.getState().events.some((e) => e.type === 'artifact_written')).toBe(true);
   });
 
-  it('synthesize throws when backend lacks the capability', async () => {
+  it('synthesize runs as a gated agent (counts toward totalSpawned + emits event)', async () => {
     const { backend } = fakeBackend();
     const rt = createWorkflowRuntime(baseOpts(backend));
-    await expect(rt.api.synthesize({ inputs: [], rubric: 'r' })).rejects.toThrow(/not supported/);
+    const result = await rt.api.synthesize({ inputs: ['a', 'b'], rubric: 'r' });
+    expect(typeof result.text).toBe('string');
+    expect(rt.getState().totalSpawned).toBe(1); // synthesize spawned one agent
+    expect(rt.getState().events.some((e) => e.type === 'synthesis_completed')).toBe(true);
+    expect(rt.getState().events.some((e) => e.type === 'agent_spawned')).toBe(true);
   });
 });

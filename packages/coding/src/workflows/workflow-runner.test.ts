@@ -36,7 +36,6 @@ function fakeBackend(): WorkflowAgentBackend {
     output: async (taskId) => ({ taskId, name: names.get(taskId) ?? taskId, status: 'completed' }),
     send: async () => {},
     stop: async () => {},
-    synthesize: async (input) => ({ text: `synth of ${input.inputs.length}` }),
   };
 }
 
@@ -93,7 +92,7 @@ describe('runWorkflowModule', () => {
     const runJson = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
     expect(runJson.status).toBe('completed');
     expect(runJson.workflow).toBe('parallel-investigation');
-    expect(runJson.totalSpawned).toBe(3); // 3 investigators (synthesize is a backend method)
+    expect(runJson.totalSpawned).toBe(4); // 3 investigators + 1 gated synthesizer
 
     // Live event sink saw the same envelope.
     expect(events[0]).toBe('workflow_started');

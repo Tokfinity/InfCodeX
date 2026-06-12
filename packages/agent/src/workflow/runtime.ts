@@ -98,6 +98,23 @@ async function runPool<T>(
   return results;
 }
 
+/** Render a generic synthesis prompt from inputs + rubric. Domain-neutral. */
+function buildSynthesisPrompt(input: WorkflowSynthesizeInput): string {
+  const body = input.inputs
+    .map(
+      (item, i) =>
+        `## Input ${i + 1}\n${typeof item === 'string' ? item : JSON.stringify(item, null, 2)}`,
+    )
+    .join('\n\n');
+  return [
+    'You are synthesizing the findings below into a single result.',
+    '',
+    `Rubric: ${input.rubric}`,
+    '',
+    body,
+  ].join('\n');
+}
+
 export interface CreateWorkflowRuntimeOptions {
   readonly runId: string;
   readonly args?: unknown;
@@ -168,6 +185,29 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     return result;
   };
 
+  // Run an agent through the gate: maxConcurrency semaphore + maxAgents
+  // cap + budget accounting + run-graph events. Propagates a workflow
+  // abort to the in-flight child via the backend's stop().
+  const runAgentImpl = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult> => {
+    checkAbort();
+    await concurrency.acquire();
+    let onAbort: (() => void) | undefined;
+    try {
+      const handle = await doSpawn(input);
+      if (opts.signal) {
+        const { taskId } = handle;
+        onAbort = () => {
+          void opts.backend.stop(taskId, 'workflow aborted');
+        };
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+      return await doWait(handle.taskId, undefined);
+    } finally {
+      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
+      concurrency.release();
+    }
+  };
+
   const budget: WorkflowBudget = {
     total: tokenBudget,
     spent: () => spentOutputTokens,
@@ -191,16 +231,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     spawnAgent: (input) => doSpawn(input),
 
-    runAgent: async (input) => {
-      checkAbort();
-      await concurrency.acquire();
-      try {
-        const handle = await doSpawn(input);
-        return await doWait(handle.taskId, undefined);
-      } finally {
-        concurrency.release();
-      }
-    },
+    runAgent: (input) => runAgentImpl(input),
 
     wait: (taskId, waitOpts) => doWait(taskId, waitOpts),
 
@@ -223,12 +254,16 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     },
 
     synthesize: async (input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis> => {
-      if (!opts.backend.synthesize) {
-        throw new Error('synthesize is not supported by this workflow backend');
-      }
-      const result = await opts.backend.synthesize(input);
+      // Synthesis runs as a gated agent (counts toward maxAgents /
+      // concurrency / budget and emits agent_spawned/completed events)
+      // rather than a backend side-channel that bypasses the runtime.
+      const result = await runAgentImpl({
+        name: 'synthesize',
+        prompt: buildSynthesisPrompt(input),
+        readOnly: true,
+      });
       recorder.emit('synthesis_completed');
-      return result;
+      return { text: result.finalText };
     },
 
     artifact: async (name, value): Promise<WorkflowArtifactRef> => {

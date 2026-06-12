@@ -5,6 +5,10 @@
  * a configurable fake backend (no real agents). Validates fan-out shape,
  * read-only investigators, target splitting, the maxAgents reservation
  * for synthesis, and degraded synthesis on investigator failure/crash.
+ *
+ * NOTE: `wf.synthesize` runs as a gated agent (spawned through the backend
+ * like any other), so a default run spawns 3 investigators + 1 synthesizer
+ * = 4 agents, and the synthesis text is the synthesis agent's finalText.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,7 +18,7 @@ import {
   type WorkflowAgentBackend,
   type WorkflowSpawnAgentInput,
   type WorkflowTaskStatus,
-} from '@kodax-ai/agent/workflow';
+} from '@kodax-ai/agent';
 
 import {
   parallelInvestigation,
@@ -31,12 +35,10 @@ interface Behavior {
 function fakeBackend(behaviors: Record<string, Behavior> = {}): {
   backend: WorkflowAgentBackend;
   spawned: WorkflowSpawnAgentInput[];
-  synthInputs: () => number;
 } {
   const byId = new Map<string, WorkflowSpawnAgentInput>();
   const spawned: WorkflowSpawnAgentInput[] = [];
   let counter = 0;
-  let synthCount = 0;
   const backend: WorkflowAgentBackend = {
     spawn: async (input) => {
       counter += 1;
@@ -59,13 +61,12 @@ function fakeBackend(behaviors: Record<string, Behavior> = {}): {
     output: async (taskId) => ({ taskId, name: byId.get(taskId)?.name ?? taskId, status: 'completed' }),
     send: async () => {},
     stop: async () => {},
-    synthesize: async (input) => {
-      synthCount = input.inputs.length;
-      return { text: `SYNTH(${input.inputs.length})` };
-    },
   };
-  return { backend, spawned, synthInputs: () => synthCount };
+  return { backend, spawned };
 }
+
+const investigators = (spawned: readonly WorkflowSpawnAgentInput[]) =>
+  spawned.filter((s) => s.name.startsWith('investigate'));
 
 function drive(backend: WorkflowAgentBackend, args: ParallelInvestigationArgs) {
   return runWorkflow<ParallelInvestigationResult>(
@@ -82,31 +83,34 @@ function drive(backend: WorkflowAgentBackend, args: ParallelInvestigationArgs) {
 }
 
 describe('parallel-investigation — fan-out + synthesis', () => {
-  it('runs 3 read-only investigators by default and synthesizes', async () => {
-    const { backend, spawned, synthInputs } = fakeBackend();
+  it('runs 3 read-only investigators + 1 synthesizer, all read-only', async () => {
+    const { backend, spawned } = fakeBackend();
     const outcome = await drive(backend, { question: 'where is the auth bug?' });
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.result.findings).toHaveLength(3);
+    expect(investigators(spawned)).toHaveLength(3);
+    expect(spawned).toHaveLength(4); // 3 investigators + 1 synthesizer
     expect(spawned.every((s) => s.readOnly === true)).toBe(true);
     expect(outcome.result.degraded).toBe(false);
-    expect(outcome.result.synthesis).toBe('SYNTH(3)');
-    expect(synthInputs()).toBe(3);
+    expect(outcome.result.synthesis).toBe('text-synthesize');
   });
 
   it('splits one investigator per target and embeds question + target in the prompt', async () => {
     const { backend, spawned } = fakeBackend();
     await drive(backend, { question: 'Q', targets: ['packages/llm', 'packages/agent'] });
-    expect(spawned).toHaveLength(2);
-    expect(spawned[0]!.prompt).toContain('Q');
-    expect(spawned[0]!.prompt).toContain('packages/llm');
-    expect(spawned[1]!.prompt).toContain('packages/agent');
+    const inv = investigators(spawned);
+    expect(inv).toHaveLength(2);
+    expect(inv[0]!.prompt).toContain('Q');
+    expect(inv[0]!.prompt).toContain('packages/llm');
+    expect(inv[1]!.prompt).toContain('packages/agent');
   });
 
   it('reserves one agent for synthesis (maxAgents cap)', async () => {
     const { backend, spawned } = fakeBackend();
     await drive(backend, { question: 'Q', targets: ['a', 'b', 'c', 'd', 'e'], maxAgents: 3 });
-    expect(spawned).toHaveLength(2); // maxAgents 3 → 2 investigators + 1 synthesis
+    expect(investigators(spawned)).toHaveLength(2); // maxAgents 3 → 2 investigators
+    expect(spawned).toHaveLength(3); // + 1 synthesizer = exactly maxAgents
   });
 });
 
@@ -118,7 +122,7 @@ describe('parallel-investigation — degraded synthesis', () => {
     if (!outcome.ok) return;
     expect(outcome.result.degraded).toBe(true);
     expect(outcome.result.findings.filter((f) => f.status === 'failed')).toHaveLength(1);
-    expect(outcome.result.synthesis).toBe('SYNTH(3)'); // synthesis still runs over all
+    expect(outcome.result.synthesis).toBe('text-synthesize'); // synthesis still runs
   });
 
   it('catches a crashing investigator and keeps the run alive', async () => {
