@@ -64,6 +64,7 @@ import { CommandRegistry } from '../commands/registry.js';
 import { copyCommand } from '../commands/copy-command.js';
 import { memoryCommand } from '../commands/memory-command.js';
 import { goalCommand } from '../commands/goal-command.js';
+import { workflowCommand } from '../commands/workflow-command.js';
 import { newCommand } from '../commands/new-command.js';
 import { reviewCommand } from '../commands/review-command.js';
 import { getActivePasteStore } from '../ui/utils/paste-store.js';
@@ -1824,6 +1825,7 @@ export const BUILTIN_COMMANDS: Command[] = [
   copyCommand,
   memoryCommand,
   goalCommand,
+  workflowCommand,
   newCommand,
   reviewCommand,
 ];

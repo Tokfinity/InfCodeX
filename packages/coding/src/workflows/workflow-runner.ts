@@ -20,7 +20,11 @@ import type {
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import { createRunGraphWriter } from './run-graph.js';
-import type { KodaXToolExecutionContext } from '../types.js';
+import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
+import type { KodaXOptions, KodaXToolExecutionContext } from '../types.js';
+
+/** Mirrors the private `dispatch-child-tasks.ts` constant. */
+const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
 
 export interface RunWorkflowModuleOptions {
   readonly module: WorkflowModule;
@@ -124,4 +128,56 @@ function buildBackend(opts: RunWorkflowModuleOptions): WorkflowAgentBackend {
     throw new Error('runWorkflowModule requires either a backend or ctx + childOptions');
   }
   return createCodingWorkflowBackend({ ctx: opts.ctx, childOptions: opts.childOptions });
+}
+
+export interface RunWorkflowFromOptionsInput {
+  readonly module: WorkflowModule;
+  readonly args: unknown;
+  readonly options: KodaXOptions;
+  readonly runId: string;
+  readonly runDir: string;
+  readonly approval?: WorkflowApproval;
+  readonly signal?: AbortSignal;
+  readonly onEvent?: (event: WorkflowEvent) => void;
+  readonly now?: () => number;
+}
+
+/**
+ * High-level entry: build a tool-execution context + child options from
+ * `KodaXOptions` (provider / model / extensionRuntime) and run the
+ * workflow module. ctx construction stays inside `@kodax-ai/coding` — the
+ * REPL passes plain `KodaXOptions` (from `createKodaXOptions`) rather than
+ * reaching into run-loop internals.
+ */
+export async function runWorkflowFromOptions(
+  input: RunWorkflowFromOptionsInput,
+): Promise<RunWorkflowModuleOutcome> {
+  const ctx = buildToolExecutionContext({
+    options: input.options,
+    runtime: input.options.extensionRuntime,
+    managedProtocolPayloadRef: { current: undefined },
+  });
+  const childOptions: WorkflowChildOptions = {
+    maxIterationsPerChild: DEFAULT_MAX_ITERATIONS_PER_CHILD,
+    parentRole: 'worker',
+    parentHarness: 'workflow',
+    parentOptions: {
+      provider: input.options.provider,
+      model: input.options.model,
+      reasoningMode: input.options.reasoningMode,
+      extensionRuntime: input.options.extensionRuntime,
+    },
+  };
+  return runWorkflowModule({
+    module: input.module,
+    args: input.args,
+    runId: input.runId,
+    runDir: input.runDir,
+    ctx,
+    childOptions,
+    ...(input.approval ? { approval: input.approval } : {}),
+    ...(input.signal ? { signal: input.signal } : {}),
+    ...(input.onEvent ? { onEvent: input.onEvent } : {}),
+    ...(input.now ? { now: input.now } : {}),
+  });
 }

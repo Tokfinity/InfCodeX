@@ -1173,3 +1173,7 @@ export type {
   DiagnosticsRequest,
   LspServiceConfig,
 } from './lsp/index.js';
+
+// FEATURE_217 (v0.7.49) — Dynamic Workflow Harness: agent backend +
+// built-in workflows + run-graph + headless orchestrator.
+export * from './workflows/index.js';
