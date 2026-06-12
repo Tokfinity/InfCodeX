@@ -1244,6 +1244,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     id: string;
     title: string;
     msgCount: number;
+    tag?: string;
     runtimeInfo?: KodaXSessionRuntimeInfo;
     archived?: boolean;
     createdAt?: string;
@@ -1335,6 +1336,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       id: string;
       title: string;
       msgCount: number;
+      tag?: string;
       createdAt?: string;
       archived?: boolean;
       runtimeInfo?: KodaXSessionRuntimeInfo;
@@ -1391,6 +1393,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
             id: path.basename(filePath, '.jsonl'),
             title: typeof first.title === 'string' ? first.title : '',
             msgCount: activeMessageCount,
+            ...(typeof first.tag === 'string' ? { tag: first.tag } : {}),
             createdAt: typeof first.createdAt === 'string' ? first.createdAt : undefined,
             // v0.7.46 fix — fall back to `sessionGitRoot` when the meta
             // record predates the nested `runtimeInfo` field. Without
@@ -1467,10 +1470,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
       // emitting `undefined` (previously every fast-path summary had
       // createdAt=undefined → consumer UIs sorting by date got
       // random order).
-      .map(({ id, title, msgCount, runtimeInfo, createdAt, archived }) => ({
+      .map(({ id, title, msgCount, tag, runtimeInfo, createdAt, archived }) => ({
         id,
         title,
         msgCount,
+        ...(tag !== undefined ? { tag } : {}),
         ...(runtimeInfo ? { runtimeInfo } : {}),
         ...(createdAt !== undefined ? { createdAt } : {}),
         ...(archived ? { archived: true } : {}),

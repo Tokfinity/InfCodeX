@@ -86,6 +86,7 @@ export interface SessionSummary {
   readonly id: string;
   readonly title: string;
   readonly msgCount: number;
+  readonly tag?: string;
   readonly createdAt?: string;
   readonly runtimeInfo?: { workspaceRoot?: string; gitRoot?: string };
   /**
@@ -125,6 +126,8 @@ export interface ListSessionsOptions {
    * timestamp. Applied after list + scope filtering.
    */
   readonly before?: string;
+  /** Exact match. Omitted means no tag filter. */
+  readonly tag?: string;
 }
 
 export type WatchSessionsCallback = (
@@ -202,8 +205,9 @@ async function listSessionsImpl(
     const includeArchived = opts?.includeArchived ?? false;
     const limit = opts?.limit ?? 50;
     const before = opts?.before ? Date.parse(opts.before) : undefined;
+    const tag = opts?.tag;
 
-    if (scope === 'user' && !gitRoot && before === undefined && !includeArchived) {
+    if (scope === 'user' && !gitRoot && before === undefined && !includeArchived && tag === undefined) {
       // Fast path: delegate to storage.list() which already handles the
       // common case (head-read every meta file, sorted newest-first,
       // archived/.archive.jsonl filtered, runtimeInfo + gitRoot
@@ -255,6 +259,9 @@ async function listSessionsImpl(
           if (!Number.isNaN(ts) && ts >= before) continue;
         }
 
+        const sessionTag = typeof meta.tag === 'string' ? meta.tag : undefined;
+        if (tag !== undefined && sessionTag !== tag) continue;
+
         const lineCount = content.split('\n').length;
         const extensionRecordCount =
           typeof meta.extensionRecordCount === 'number' && meta.extensionRecordCount > 0
@@ -279,6 +286,7 @@ async function listSessionsImpl(
           id,
           title: typeof meta.title === 'string' ? meta.title : '',
           msgCount: activeMessageCount,
+          ...(sessionTag !== undefined ? { tag: sessionTag } : {}),
           createdAt,
           runtimeInfo: ri,
           projectKey,
@@ -303,10 +311,11 @@ async function listSessionsImpl(
       return b.id.localeCompare(a.id);
     });
 
-    return sessions.slice(0, limit).map(({ id, title, msgCount, createdAt, runtimeInfo, projectKey, archived }) => ({
+    return sessions.slice(0, limit).map(({ id, title, msgCount, tag: sessionTag, createdAt, runtimeInfo, projectKey, archived }) => ({
       id,
       title,
       msgCount,
+      ...(sessionTag !== undefined ? { tag: sessionTag } : {}),
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
       ...(projectKey !== undefined ? { projectKey } : {}),
@@ -331,6 +340,7 @@ function toSessionSummary(raw: {
   id: string;
   title: string;
   msgCount: number;
+  tag?: string;
   runtimeInfo?: KodaXSessionRuntimeInfo;
   /**
    * v0.7.46 — carried through from `storage.list()` so the fast path
@@ -351,6 +361,7 @@ function toSessionSummary(raw: {
     id: raw.id,
     title: raw.title,
     msgCount: raw.msgCount,
+    ...(raw.tag !== undefined ? { tag: raw.tag } : {}),
     ...(runtimeInfo !== undefined ? { runtimeInfo } : {}),
     ...(raw.createdAt !== undefined ? { createdAt: raw.createdAt } : {}),
     projectKey,
