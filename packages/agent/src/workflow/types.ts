@@ -146,7 +146,9 @@ export interface WorkflowApi {
     items: readonly (() => Promise<T>)[],
     opts?: WorkflowParallelOptions,
   ): Promise<T[]>;
-  /** Synthesize across inputs via the backend (optional capability). */
+  /** Synthesize across inputs. Runs as a gated agent through the runtime
+   *  (spawn → wait), so it counts toward maxAgents / concurrency / budget
+   *  and emits run-graph events — it is NOT a backend side-channel. */
   synthesize(input: WorkflowSynthesizeInput): Promise<WorkflowSynthesis>;
   /** Persist a named artifact. */
   artifact(name: string, value: unknown): Promise<WorkflowArtifactRef>;

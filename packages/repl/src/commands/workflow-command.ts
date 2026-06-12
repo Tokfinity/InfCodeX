@@ -2,15 +2,17 @@
  * FEATURE_217 (v0.7.49) Phase D.2 — `/workflow` slash command.
  *
  * Surfaces the Dynamic Workflow Harness in the REPL:
- *   /workflow [list]        — list built-in workflows
+ *   /workflow [list]        — list built-in + saved workflows
  *   /workflow runs          — list this project's workflow runs
- *   /workflow <name> [args] — run a built-in workflow (with approval)
+ *   /workflow <name> [args] — run a built-in OR saved workflow (with approval)
  *
- * First version only accepts built-in workflows (no arbitrary user
- * `.ts`). Execution routes through `runWorkflowFromOptions` in
- * `@kodax-ai/coding`, which builds the tool-execution context internally —
- * the command only supplies plain `KodaXOptions` (from
- * `createKodaXOptions`) + an approval gate (`callbacks.confirm`).
+ * Resolves a built-in workflow first; otherwise loads a saved
+ * `.kodax/workflows` / `~/.kodax/workflows` file behind a trusted-local
+ * execution confirmation (loading runs local code). Execution routes
+ * through `runWorkflowFromOptions` in `@kodax-ai/coding`, which builds the
+ * tool-execution context internally — the command only supplies plain
+ * `KodaXOptions` (from `createKodaXOptions`) + an interactive confirm
+ * (`callbacks.confirm`, falling back to a readline `(y/N)` prompt).
  *
  * Pure helpers (parse / list / runs / approval text) are exported for
  * unit testing; the handler is a thin wiring layer.

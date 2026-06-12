@@ -398,6 +398,8 @@ KodaX has two layers that consumers should understand separately:
 
 **Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
 
+**Dynamic Workflows (FEATURE_217, v0.7.49)**: the domain-neutral workflow runtime is part of `/agent` — `import { createWorkflowRuntime, runWorkflow, WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/kodax/agent'`. The coding-side integration (agent backend + built-in workflows + saved-workflow discovery: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `parallelInvestigation`, `discoverSavedWorkflows`, …) is part of `/coding`. There is **no** separate `/agent/workflow` published subpath — the `@kodax-ai/agent/workflow` path is workspace-internal only.
+
 ---
 
 ## Features
