@@ -6,6 +6,7 @@ import getMaxWidth from './get-max-width.js';
 import squashTextNodes from './squash-text-nodes.js';
 import renderBorder from './render-border.js';
 import renderBackground from './render-background.js';
+import { computeScrollState } from '../../substrate/ink/scroll-state.js';
 // If parent container is `<Box>`, text nodes will be treated as separate nodes in
 // the tree and will have their own coordinates in the layout.
 // To ensure text nodes are aligned correctly, take X and Y of the first text node
@@ -67,6 +68,16 @@ export const renderNodeToScreenReaderOutput = (node, options = {}) => {
     }
     return output;
 };
+// FEATURE_212 (v0.7.45) - scroll-hint capture for the DECSTBM optimization.
+// This core mirror is the render path used by engine.js, so it must preserve
+// the same scroll-window metadata as the substrate renderer.
+let _scrollHint = null;
+export function resetScrollHint() {
+    _scrollHint = null;
+}
+export function getScrollHint() {
+    return _scrollHint;
+}
 // After nodes are laid out, render each to output object, which later gets rendered to terminal
 const renderNodeToOutput = (node, output, options) => {
     const { offsetX = 0, offsetY = 0, transformers = [], skipStaticElements, } = options;
@@ -109,11 +120,49 @@ const renderNodeToOutput = (node, output, options) => {
             return;
         }
         let clipped = false;
+        let scrollOffsetY = 0;
         if (node.nodeName === 'ink-box') {
             renderBackground(x, y, node, output);
             renderBorder(x, y, node, output);
-            const clipHorizontally = node.style.overflowX === 'hidden' || node.style.overflow === 'hidden';
-            const clipVertically = node.style.overflowY === 'hidden' || node.style.overflow === 'hidden';
+            const overflowX = node.style.overflowX ?? node.style.overflow;
+            const overflowY = node.style.overflowY ?? node.style.overflow;
+            const clipHorizontally = overflowX === 'hidden' || overflowX === 'scroll';
+            const clipVertically = overflowY === 'hidden' || overflowY === 'scroll';
+            if (overflowY === 'scroll') {
+                const borderTop = yogaNode.getComputedBorder(Yoga.EDGE_TOP);
+                const borderBottom = yogaNode.getComputedBorder(Yoga.EDGE_BOTTOM);
+                const viewportHeight = Math.max(0, yogaNode.getComputedHeight() - borderTop - borderBottom);
+                const virtualScrollWindowed = node.attributes?.virtualScrollWindowed === true;
+                const contentNode = node.childNodes[0];
+                const contentHeight = Math.max(0, Math.floor(virtualScrollWindowed
+                    ? node.attributes?.scrollHeight ?? 0
+                    : contentNode?.yogaNode?.getComputedHeight() ?? node.attributes?.scrollHeight ?? 0));
+                const previousScrollHeight = typeof node.scrollHeight === 'number'
+                    ? node.scrollHeight
+                    : contentHeight;
+                const scrollState = computeScrollState({
+                    rawScrollTop: node.scrollTop ?? node.attributes?.scrollTop ?? 0,
+                    contentHeight,
+                    viewportHeight,
+                    previousScrollHeight,
+                    stickyScroll: node.stickyScroll ?? Boolean(node.attributes?.stickyScroll),
+                    clampMin: node.attributes?.scrollClampMin,
+                    clampMax: node.attributes?.scrollClampMax,
+                    virtualScrollWindowed,
+                    inWindowScrollTop: node.attributes?.inWindowScrollTop,
+                    previousAppliedScrollTop: node.appliedScrollTop,
+                    regionTop: y + borderTop,
+                });
+                node.scrollHeight = scrollState.scrollHeight;
+                node.scrollViewportHeight = viewportHeight;
+                node.scrollViewportTop = scrollState.viewportTop;
+                node.appliedScrollTop = scrollState.appliedScrollTop;
+                if (scrollState.scrollHint) {
+                    _scrollHint = scrollState.scrollHint;
+                }
+                node.scrollTop = scrollState.scrollTop;
+                scrollOffsetY = scrollState.scrollOffsetY;
+            }
             if (clipHorizontally || clipVertically) {
                 const x1 = clipHorizontally
                     ? x + yogaNode.getComputedBorder(Yoga.EDGE_LEFT)
@@ -139,7 +188,7 @@ const renderNodeToOutput = (node, output, options) => {
             for (const childNode of node.childNodes) {
                 renderNodeToOutput(childNode, output, {
                     offsetX: x,
-                    offsetY: y,
+                    offsetY: y - scrollOffsetY,
                     transformers: newTransformers,
                     skipStaticElements,
                 });

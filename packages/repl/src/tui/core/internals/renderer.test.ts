@@ -9,18 +9,46 @@ import renderer from "./renderer.js";
  * is verified across both files. Phase 6 (v0.7.30): cell renderer is the
  * sole render path on both mirrors.
  */
-function fakeRootNode(width: number, height: number): object {
+function fakeYogaNode({
+  width,
+  height,
+  left = 0,
+  top = 0,
+}: {
+  width: number;
+  height: number;
+  left?: number;
+  top?: number;
+}): object {
   return {
-    yogaNode: {
-      getComputedWidth: () => width,
-      getComputedHeight: () => height,
-      getDisplay: () => 0, // DISPLAY_FLEX
-      getComputedLeft: () => 0,
-      getComputedTop: () => 0,
-      getComputedBorder: () => 0,
-    },
+    getComputedWidth: () => width,
+    getComputedHeight: () => height,
+    getDisplay: () => 0, // DISPLAY_FLEX
+    getComputedLeft: () => left,
+    getComputedTop: () => top,
+    getComputedBorder: () => 0,
+    getComputedPadding: () => 0,
+  };
+}
+
+function fakeTextNode(value: string, top: number): object {
+  return {
+    yogaNode: fakeYogaNode({ width: 10, height: 1, top }),
+    nodeName: "ink-text",
+    childNodes: [{ nodeName: "#text", nodeValue: value }],
+    style: {},
+    internal_static: false,
+    internal_accessibility: undefined,
+    internal_transform: undefined,
+    attributes: {},
+  };
+}
+
+function fakeRootNode(width: number, height: number, childNodes: object[] = []): object {
+  return {
+    yogaNode: fakeYogaNode({ width, height }),
     nodeName: "ink-root",
-    childNodes: [],
+    childNodes,
     style: { flexDirection: "column" },
     staticNode: undefined,
     internal_static: false,
@@ -85,6 +113,46 @@ describe("core/internals/renderer (FEATURE_057 Track F, Phase 6: cell renderer i
       expect(result.output).toBe("");
       expect(result.outputHeight).toBe(1);
       expect(result.staticOutput).toBe("");
+    });
+  });
+
+  describe("scroll containers", () => {
+    it("clips to the applied scroll window and carries the scroll hint", () => {
+      const content = {
+        yogaNode: fakeYogaNode({ width: 10, height: 2 }),
+        nodeName: "ink-box",
+        childNodes: [fakeTextNode("OLD", 0), fakeTextNode("NEW", 1)],
+        style: { flexDirection: "column" },
+        internal_static: false,
+        internal_accessibility: undefined,
+        internal_transform: undefined,
+        attributes: {},
+      };
+      const scrollBox = {
+        yogaNode: fakeYogaNode({ width: 10, height: 1 }),
+        nodeName: "ink-box",
+        childNodes: [content],
+        style: {
+          flexDirection: "column",
+          overflowY: "scroll",
+        },
+        internal_static: false,
+        internal_accessibility: undefined,
+        internal_transform: undefined,
+        attributes: {
+          scrollTop: 1,
+          scrollHeight: 2,
+          virtualScrollWindowed: false,
+        },
+        appliedScrollTop: 0,
+      };
+      const node = fakeRootNode(10, 1, [scrollBox]);
+
+      const result = renderer(node, false, { rows: 1, columns: 10 });
+
+      expect(result.output).toBe("NEW");
+      expect(result.output).not.toContain("OLD");
+      expect(result.frame!.scrollHint).toEqual({ top: 0, bottom: 0, delta: 1 });
     });
   });
 });
