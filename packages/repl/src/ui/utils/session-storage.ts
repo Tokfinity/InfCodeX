@@ -54,6 +54,7 @@ export interface SessionStorage {
     id: string;
     title: string;
     msgCount: number;
+    tag?: string;
     runtimeInfo?: KodaXSessionRuntimeInfo;
   }>>;
   delete?(id: string): Promise<void>;
@@ -75,6 +76,7 @@ export class MemorySessionStorage implements SessionStorage {
       extensionState: data.extensionState ?? existing?.extensionState,
       artifactLedger: data.artifactLedger ?? existing?.artifactLedger,
       extensionRecords: data.extensionRecords ?? existing?.extensionRecords,
+      tag: data.tag ?? existing?.tag,
       lineage: createSessionLineage(
         data.messages,
         data.lineage ?? existing?.lineage,
@@ -153,6 +155,7 @@ export class MemorySessionStorage implements SessionStorage {
       messages: getSessionMessagesFromLineage(lineage),
       title: options?.title ?? current.title,
       gitRoot: current.gitRoot,
+      tag: current.tag,
       uiHistory: current.uiHistory
         ? current.uiHistory.map((item) => ({ ...item }))
         : undefined,
@@ -197,7 +200,7 @@ export class MemorySessionStorage implements SessionStorage {
     return structuredClone(data);
   }
 
-  async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number }>> {
+  async list(_gitRoot?: string): Promise<Array<{ id: string; title: string; msgCount: number; tag?: string }>> {
     return Array.from(this.sessions.entries())
       .filter(([, data]) => (data.scope ?? 'user') === 'user')
       .map(([id, data]) => ({
@@ -206,6 +209,7 @@ export class MemorySessionStorage implements SessionStorage {
         msgCount: data.lineage
           ? countActiveLineageMessages(data.lineage)
           : data.messages.length,
+        ...(data.tag !== undefined ? { tag: data.tag } : {}),
       }));
   }
 

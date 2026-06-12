@@ -1204,6 +1204,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
         messages: getSessionMessagesFromLineage(lineage),
         title: options?.title ?? resolved.data.title,
         gitRoot: resolved.data.gitRoot,
+        tag: resolved.data.tag,
         uiHistory: resolved.data.uiHistory
           ? resolved.data.uiHistory.map((item) => ({ ...item }))
           : undefined,

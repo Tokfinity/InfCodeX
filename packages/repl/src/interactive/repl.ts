@@ -116,6 +116,7 @@ interface SessionStorage extends KodaXSessionStorage {
     id: string;
     title: string;
     msgCount: number;
+    tag?: string;
     runtimeInfo?: KodaXSessionData['runtimeInfo'];
   }>>;
 }
@@ -138,6 +139,7 @@ class MemorySessionStorage implements SessionStorage {
         uiHistory: data.uiHistory ?? existing?.data.uiHistory,
         extensionState: data.extensionState ?? existing?.data.extensionState,
         extensionRecords: data.extensionRecords ?? existing?.data.extensionRecords,
+        tag: data.tag ?? existing?.data.tag,
         lineage,
       },
     });
@@ -214,6 +216,7 @@ class MemorySessionStorage implements SessionStorage {
       messages: getSessionMessagesFromLineage(lineage),
       title: options?.title ?? current.data.title,
       gitRoot: current.data.gitRoot,
+      tag: current.data.tag,
       runtimeInfo: current.data.runtimeInfo
         ? structuredClone(current.data.runtimeInfo)
         : undefined,
@@ -263,6 +266,7 @@ class MemorySessionStorage implements SessionStorage {
     id: string;
     title: string;
     msgCount: number;
+    tag?: string;
     runtimeInfo?: KodaXSessionData['runtimeInfo'];
   }>> {
     return Array.from(this.sessions.entries())
@@ -273,6 +277,7 @@ class MemorySessionStorage implements SessionStorage {
         msgCount: session.data.lineage
           ? countActiveLineageMessages(session.data.lineage)
           : session.data.messages.length,
+        ...(session.data.tag !== undefined ? { tag: session.data.tag } : {}),
         ...(session.data.runtimeInfo
           ? {
             runtimeInfo: structuredClone(session.data.runtimeInfo),
@@ -289,6 +294,8 @@ class MemorySessionStorage implements SessionStorage {
     this.sessions.clear();
   }
 }
+
+export { MemorySessionStorage };
 
 function applyRuntimeContext(
   context: InteractiveContext,
