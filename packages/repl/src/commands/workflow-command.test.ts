@@ -20,6 +20,8 @@ import {
   renderApprovalPrompt,
   readWorkflowRuns,
   formatRunsList,
+  savedWorkflowDirs,
+  formatSavedList,
   workflowCommand,
 } from './workflow-command.js';
 
@@ -123,6 +125,23 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(out).toContain('wf');
     expect(out).toContain('r1');
     expect(out).toContain('2 agents');
+  });
+});
+
+describe('saved workflow dirs + formatting', () => {
+  it('derives project + personal dirs from cwd', () => {
+    const dirs = savedWorkflowDirs('/repo');
+    expect(dirs.project).toContain('.kodax');
+    expect(dirs.project).toContain('workflows');
+    expect(dirs.personal).toContain('workflows');
+  });
+  it('formats saved workflow refs with source + path', () => {
+    const out = formatSavedList([{ name: 'audit', path: '/p/.kodax/workflows/audit.ts', source: 'project' }]);
+    expect(out).toContain('audit');
+    expect(out).toContain('project');
+  });
+  it('handles empty saved list', () => {
+    expect(formatSavedList([])).toContain('no saved');
   });
 });
 

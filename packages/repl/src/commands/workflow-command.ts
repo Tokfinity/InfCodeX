@@ -25,12 +25,17 @@ import type {
   WorkflowApprovalSummary,
   WorkflowEvent,
   WorkflowMeta,
+  WorkflowModule,
 } from '@kodax-ai/agent/workflow';
 import {
   buildApprovalSummary,
   getBuiltinWorkflow,
   listBuiltinWorkflows,
   runWorkflowFromOptions,
+  discoverSavedWorkflows,
+  loadSavedWorkflow,
+  type SavedWorkflowDirs,
+  type SavedWorkflowRef,
 } from '@kodax-ai/coding';
 
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
@@ -127,6 +132,19 @@ export function formatRunsList(runs: readonly WorkflowRunSummary[]): string {
     .join('\n');
 }
 
+/** Project + personal saved-workflow directories for the current cwd. */
+export function savedWorkflowDirs(cwd: string): SavedWorkflowDirs {
+  return {
+    project: join(cwd, '.kodax', 'workflows'),
+    personal: getAgentConfigPath('workflows'),
+  };
+}
+
+export function formatSavedList(refs: readonly SavedWorkflowRef[]): string {
+  if (refs.length === 0) return '  (no saved workflows)';
+  return refs.map((r) => `  ${chalk.cyan(r.name)} ${chalk.dim(`(${r.source}: ${r.path})`)}`).join('\n');
+}
+
 /* ------------------------------- command -------------------------------- */
 
 function renderWorkflowEvent(event: WorkflowEvent): void {
@@ -171,9 +189,16 @@ export const workflowCommand: Command = {
     const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
     const baseDir = getAgentConfigPath('workflow-runs', projectKey);
 
+    const dirs = savedWorkflowDirs(process.cwd());
+
     if (invocation.kind === 'list') {
       console.log(chalk.bold('\nBuilt-in workflows:'));
       console.log(formatWorkflowList(listBuiltinWorkflows()));
+      const saved = await discoverSavedWorkflows(dirs);
+      if (saved.length > 0) {
+        console.log(chalk.bold('\nSaved workflows:'));
+        console.log(formatSavedList(saved));
+      }
       console.log(chalk.dim('\n  Run one with: /workflow <name> <question or JSON args>\n'));
       return;
     }
@@ -185,12 +210,34 @@ export const workflowCommand: Command = {
       return;
     }
 
-    const module = getBuiltinWorkflow(invocation.name);
+    const confirmGate = callbacks.confirm;
+    let module: WorkflowModule | undefined = getBuiltinWorkflow(invocation.name);
     if (!module) {
-      console.log(chalk.yellow(`\nUnknown workflow: ${invocation.name}`));
-      console.log(formatWorkflowList(listBuiltinWorkflows()));
-      console.log();
-      return;
+      // Not a built-in — try a saved workflow. Loading executes local
+      // code, so gate it behind a trusted-local confirmation.
+      const ref = (await discoverSavedWorkflows(dirs)).find((r) => r.name === invocation.name);
+      if (!ref) {
+        console.log(chalk.yellow(`\nUnknown workflow: ${invocation.name}`));
+        console.log(formatWorkflowList(listBuiltinWorkflows()));
+        console.log();
+        return;
+      }
+      if (confirmGate) {
+        const trusted = await confirmGate(
+          `Run local workflow file? This EXECUTES local code:\n  ${ref.path}`,
+        );
+        if (!trusted) {
+          console.log(chalk.dim('Workflow cancelled.\n'));
+          return;
+        }
+      }
+      try {
+        module = await loadSavedWorkflow(ref.path);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] failed to load ${ref.path}: ${message}\n`));
+        return;
+      }
     }
 
     const createOptions = callbacks.createKodaXOptions;
