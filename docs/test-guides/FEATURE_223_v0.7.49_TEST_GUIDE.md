@@ -1,11 +1,11 @@
-# FEATURE_223 v0.7.50 — Sidecar Verifier Custom Provider Stall Fix 人测指引
+# FEATURE_223 v0.7.49 — Sidecar Verifier Custom Provider Stall Fix 人测指引
 
 ## 功能概述
 
-**功能名称**: Sidecar Verifier Custom Provider Stall Fix  
-**版本**: v0.7.50  
-**测试日期**: 2026-06-12  
-**测试人员**: 待填写
+- **功能名称**: Sidecar Verifier Custom Provider Stall Fix
+- **版本**: v0.7.49
+- **测试日期**: 2026-06-12
+- **测试人员**: 待填写
 
 验证 Worker text-only 完成后 Sidecar Verifier 不再长时间假死在 `PLANNED`，并确认自定义 OpenAI-compatible / DeepSeek V4 flash provider 路径具备真实 forced tool choice、可取消 timeout、可诊断日志，以及 DeepSeek V4 thinking replay 配置说明。
 
@@ -178,4 +178,3 @@ export KODAX_VERIFIER_LOG=1
 
 **测试结论**: 待填写  
 **发现的问题**: 如有问题，请记录 provider 名称、model、baseUrl 类型、`KODAX_VERIFIER_LOG=1` 下的 elapsedMs/trace，以及是否设置 `replayReasoningContent`。
-
