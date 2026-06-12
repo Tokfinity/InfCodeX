@@ -156,6 +156,70 @@ describe('Session Management Public SDK', () => {
     expect(workerFound).toBeDefined();
   });
 
+  it('listSessions default fast path returns SessionSummary.tag', async () => {
+    await writeMinimalSession(sessionsDir, 'partner-fast-summary', {
+      title: 'Partner Fast Summary',
+      tag: 'partner',
+      activeMessageCount: 1,
+    });
+
+    const results = await api.listSessions({ limit: 10 });
+    const found = results.find((s) => s.id === 'partner-fast-summary');
+
+    expect(found).toBeDefined();
+    expect(found?.tag).toBe('partner');
+  });
+
+  it('listSessions({ tag }) filters by exact tag before limit and excludes untagged sessions', async () => {
+    await writeMinimalSession(sessionsDir, 'partner-newer', {
+      title: 'Partner Newer',
+      tag: 'partner',
+      createdAt: '2026-06-03T12:00:00.000Z',
+      activeMessageCount: 1,
+    });
+    await writeMinimalSession(sessionsDir, 'coder-middle', {
+      title: 'Coder Middle',
+      tag: 'coder',
+      createdAt: '2026-06-03T11:00:00.000Z',
+      activeMessageCount: 1,
+    });
+    await writeMinimalSession(sessionsDir, 'legacy-untagged', {
+      title: 'Legacy Untagged',
+      createdAt: '2026-06-03T10:00:00.000Z',
+      activeMessageCount: 1,
+    });
+
+    const partner = await api.listSessions({ tag: 'partner', limit: 1 });
+    const coder = await api.listSessions({ tag: 'coder', limit: 10 });
+    const all = await api.listSessions({ limit: 10 });
+
+    expect(partner.map((s) => s.id)).toEqual(['partner-newer']);
+    expect(partner[0]?.tag).toBe('partner');
+    expect(coder.map((s) => s.id)).toEqual(['coder-middle']);
+    expect(all.map((s) => s.id)).toEqual(
+      expect.arrayContaining(['partner-newer', 'coder-middle', 'legacy-untagged']),
+    );
+  });
+
+  it('listSessions({ tag: "" }) treats empty string as an exact tag filter', async () => {
+    await writeMinimalSession(sessionsDir, 'empty-tag-session', {
+      title: 'Empty Tag',
+      tag: '',
+      createdAt: '2026-06-03T12:00:00.000Z',
+      activeMessageCount: 1,
+    });
+    await writeMinimalSession(sessionsDir, 'untagged-session', {
+      title: 'Untagged',
+      createdAt: '2026-06-03T11:00:00.000Z',
+      activeMessageCount: 1,
+    });
+
+    const emptyTagged = await api.listSessions({ tag: '', limit: 10 });
+
+    expect(emptyTagged.map((s) => s.id)).toEqual(['empty-tag-session']);
+    expect(emptyTagged[0]?.tag).toBe('');
+  });
+
   // ── Test 4: loadSession returns null for missing id ───────────────────────
   it('loadSession returns null for a non-existent session id', async () => {
     const result = await api.loadSession('does-not-exist-xyz');
