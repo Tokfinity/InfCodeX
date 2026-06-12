@@ -851,6 +851,53 @@ describe('FileSessionStorage', () => {
     expect(loaded2?.tag).toBe('partner');
   });
 
+  it('appendSessionDelta makes a newly provided tag visible to list by rewriting the initial meta line', async () => {
+    const { FileSessionStorage } = await import('./storage.js');
+    const { deriveProjectKeyFromRoot } = await import('./project-key.js');
+    const storage = new FileSessionStorage();
+    const gitRoot = tempHome.replace(/\\/g, '/');
+
+    const lineage1 = createSessionLineage([
+      { role: 'user', content: 'hello' },
+    ]);
+    await storage.save('session-tag-late', {
+      messages: [{ role: 'user', content: 'hello' }],
+      title: 'Late Tag Session',
+      gitRoot,
+      scope: 'user',
+      lineage: lineage1,
+    });
+
+    const loaded1 = await storage.load('session-tag-late');
+    const lineage2 = createSessionLineage([
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: 'reply' },
+    ], loaded1!.lineage);
+    await storage.appendSessionDelta('session-tag-late', {
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'reply' },
+      ],
+      title: 'Late Tag Session Updated',
+      gitRoot,
+      lineage: lineage2,
+      tag: 'partner',
+    });
+
+    const sessionPath = path.join(
+      tempHome,
+      '.kodax',
+      'sessions',
+      deriveProjectKeyFromRoot(gitRoot).key,
+      'session-tag-late.jsonl',
+    );
+    const firstLine = (await readFile(sessionPath, 'utf-8')).split('\n')[0]!;
+    const listed = await storage.list(gitRoot, { limit: 10 });
+
+    expect(JSON.parse(firstLine).tag).toBe('partner');
+    expect(listed.find((session) => session.id === 'session-tag-late')?.tag).toBe('partner');
+  });
+
   it('mixed path: append → rewind (cold save) → append → load consistent', async () => {
     const { FileSessionStorage } = await import('./storage.js');
     const storage = new FileSessionStorage();

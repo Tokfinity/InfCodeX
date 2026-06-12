@@ -80,6 +80,32 @@ async function collectSessionFilePaths(
   return out;
 }
 
+function normalizeComparableRoot(value: string | undefined): string | undefined {
+  if (!value || !value.trim()) {
+    return undefined;
+  }
+  const normalized = path.resolve(value).replace(/\\/g, '/');
+  return process.platform === 'win32' || process.platform === 'darwin'
+    ? normalized.toLowerCase()
+    : normalized;
+}
+
+function sessionMatchesProjectRoot(
+  summaryRuntime: { workspaceRoot?: string; gitRoot?: string } | undefined,
+  metaGitRoot: string | undefined,
+  projectRoot: string | undefined,
+): boolean {
+  const target = normalizeComparableRoot(projectRoot);
+  if (!target) {
+    return true;
+  }
+  return [
+    summaryRuntime?.gitRoot,
+    summaryRuntime?.workspaceRoot,
+    metaGitRoot,
+  ].some((candidate) => normalizeComparableRoot(candidate) === target);
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface SessionSummary {
@@ -279,6 +305,8 @@ async function listSessionsImpl(
 
         const gitRootVal = typeof meta.gitRoot === 'string' ? meta.gitRoot : undefined;
         const ri = runtimeInfo ?? (gitRootVal ? { gitRoot: gitRootVal } : undefined);
+        if (!sessionMatchesProjectRoot(ri, gitRootVal, gitRoot)) continue;
+
         const projectKey = deriveProjectKeyFromRoot(ri?.gitRoot ?? ri?.workspaceRoot).key;
 
         seenIds.add(id);

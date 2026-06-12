@@ -372,6 +372,7 @@ import {
   type TranscriptSelectionGestureMode,
   type TranscriptSelectionSpan,
 } from "./utils/transcript-selection-gestures.js";
+import { buildHostSessionPayload } from "./utils/session-payload.js";
 
 // REPL options
 export interface InkREPLOptions extends KodaXOptions {
@@ -6436,14 +6437,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     context.uiHistory = persistedUiHistory;
     const lineage = context.lineage ?? reconcileContextLineage(context.messages);
     context.lineage = lineage;
-    const sessionPayload = {
+    const sessionPayload = buildHostSessionPayload({
       messages: context.messages,
       title,
       gitRoot: context.gitRoot ?? "",
+      tag: currentOptionsRef.current.session?.tag,
       uiHistory: persistedUiHistory,
       lineage,
       artifactLedger: context.artifactLedger,
-    };
+    });
     // Prefer append-only hot path when available (FileSessionStorage).
     // Falls back to full save() for other storage implementations.
     if ('appendSessionDelta' in storage && typeof (storage as any).appendSessionDelta === 'function') {
@@ -7173,14 +7175,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.title = title;
               const lineage = context.lineage ?? reconcileContextLineage(context.messages);
               context.lineage = lineage;
-              await storage.save(context.sessionId, {
+              await storage.save(context.sessionId, buildHostSessionPayload({
                 messages: context.messages,
                 title,
                 gitRoot: context.gitRoot ?? "",
+                tag: currentOptionsRef.current.session?.tag,
                 uiHistory: persistedUiHistoryRef.current,
                 lineage,
                 artifactLedger: context.artifactLedger,
-              });
+              }));
             }
           },
           startNewSession: () => {

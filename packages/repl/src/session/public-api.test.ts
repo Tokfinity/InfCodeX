@@ -220,6 +220,32 @@ describe('Session Management Public SDK', () => {
     expect(emptyTagged[0]?.tag).toBe('');
   });
 
+  it('listSessions({ projectRoot, tag }) keeps the tag filter scoped to the requested project root', async () => {
+    await writeMinimalSession(sessionsDir, 'project-a-partner', {
+      title: 'Project A Partner',
+      gitRoot: '/tmp/project-a',
+      tag: 'partner',
+      createdAt: '2026-06-03T12:00:00.000Z',
+      activeMessageCount: 1,
+    });
+    await writeMinimalSession(sessionsDir, 'project-b-partner', {
+      title: 'Project B Partner',
+      gitRoot: '/tmp/project-b',
+      tag: 'partner',
+      createdAt: '2026-06-03T11:00:00.000Z',
+      activeMessageCount: 1,
+    });
+
+    const results = await api.listSessions({
+      projectRoot: '/tmp/project-a',
+      tag: 'partner',
+      limit: 10,
+    });
+
+    expect(results.map((s) => s.id)).toEqual(['project-a-partner']);
+    expect(results[0]?.tag).toBe('partner');
+  });
+
   // ── Test 4: loadSession returns null for missing id ───────────────────────
   it('loadSession returns null for a non-existent session id', async () => {
     const result = await api.loadSession('does-not-exist-xyz');

@@ -619,6 +619,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
     artifactCount: number;
     extensionCount: number;
     metaUpdateCount: number;
+    tag?: string;
   }>();
 
   // ── FEATURE_219 per-project directory cache ──
@@ -648,6 +649,7 @@ export class FileSessionStorage implements KodaXSessionStorage {
       artifactCount: data.artifactLedger?.length ?? prev?.artifactCount ?? 0,
       extensionCount: data.extensionRecords?.length ?? prev?.extensionCount ?? 0,
       metaUpdateCount: metaUpdateCount ?? prev?.metaUpdateCount ?? 0,
+      tag: data.tag !== undefined ? data.tag : prev?.tag,
     });
   }
 
@@ -915,6 +917,11 @@ export class FileSessionStorage implements KodaXSessionStorage {
         return;
       }
 
+      if (data.tag !== undefined && data.tag !== cached.tag) {
+        await this.mergeAndWriteInternal(id, data);
+        return;
+      }
+
       // Compute delta
       const newLineage = data.lineage!.entries.slice(cached.lineageCount);
       const newArtifacts = (data.artifactLedger ?? []).slice(cached.artifactCount);
@@ -935,7 +942,6 @@ export class FileSessionStorage implements KodaXSessionStorage {
       const metaUpdate: PersistedMetaUpdateLine = {
         _type: 'meta_update',
         title: data.title,
-        ...(data.tag !== undefined ? { tag: data.tag } : {}),
         activeEntryId: data.lineage!.activeEntryId,
         activeMessageCount: countActiveLineageMessages(data.lineage!),
         ...(data.uiHistory !== undefined ? { uiHistory: data.uiHistory } : {}),
