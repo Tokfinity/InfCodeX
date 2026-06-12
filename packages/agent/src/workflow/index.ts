@@ -25,6 +25,8 @@ export type {
   WorkflowLimits,
   WorkflowApi,
   WorkflowMeta,
+  WorkflowApprovalSummary,
+  WorkflowApproval,
   WorkflowRun,
   WorkflowModule,
   WorkflowAgentBackend,

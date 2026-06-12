@@ -127,6 +127,8 @@ export const parallelInvestigation: WorkflowModule<
       'areas), then synthesize ranked, evidence-keeping findings.',
     maxAgents: DEFAULT_MAX_AGENTS,
     maxConcurrency: 4,
+    readOnly: true,
+    phases: ['investigate', 'synthesize'],
   },
   run: runParallelInvestigation,
 };

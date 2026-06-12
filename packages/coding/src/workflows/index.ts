@@ -12,6 +12,8 @@ import { parallelInvestigation } from './builtin/parallel-investigation.js';
 
 export * from './agent-adapter.js';
 export * from './builtin/parallel-investigation.js';
+export * from './run-graph.js';
+export * from './workflow-runner.js';
 
 /**
  * Erase a workflow's concrete arg/result types for storage in the

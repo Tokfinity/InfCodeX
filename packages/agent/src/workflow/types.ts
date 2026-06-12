@@ -161,7 +161,29 @@ export interface WorkflowMeta {
   readonly maxAgents?: number;
   readonly maxConcurrency?: number;
   readonly tokenBudget?: number;
+  /** True when the workflow only ever spawns read-only agents (no file
+   *  writes) — surfaced in the approval prompt. */
+  readonly readOnly?: boolean;
+  /** Declared phase names, for the approval prompt preview. */
+  readonly phases?: readonly string[];
 }
+
+/** Summary shown to the user before a workflow's first run. */
+export interface WorkflowApprovalSummary {
+  readonly name: string;
+  readonly description: string;
+  readonly phases: readonly string[];
+  readonly maxAgents: number | null;
+  readonly maxConcurrency: number | null;
+  readonly tokenBudget: number | null;
+  /** Whether the workflow may write files (false for read-only workflows). */
+  readonly writesFiles: boolean;
+}
+
+/** Approval gate — returns true to proceed, false to cancel the run. */
+export type WorkflowApproval = (
+  summary: WorkflowApprovalSummary,
+) => boolean | Promise<boolean>;
 
 /** A workflow's entry function: coordinates agents via the `WorkflowApi`. */
 export type WorkflowRun<TArgs = unknown, TResult = unknown> = (
