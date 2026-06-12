@@ -276,10 +276,90 @@ describe('Session Management Public SDK', () => {
     expect(forkResult?.data).toBeDefined();
   });
 
+  it('forkSession on a tagged session preserves the tag on the forked session', async () => {
+    vi.resetModules();
+    vi.doMock('../interactive/workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('../interactive/workspace-runtime.js')>(
+        '../interactive/workspace-runtime.js',
+      );
+      return {
+        ...actual,
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: '/tmp/test-repo',
+          workspaceRoot: '/tmp/test-repo',
+          executionCwd: '/tmp/test-repo',
+          branch: 'main',
+          workspaceKind: 'detected',
+        })),
+        isSameCanonicalRepo: vi.fn(() => true),
+      };
+    });
+    const storage = await import('../interactive/storage.js');
+    const pubApi = await import('./public-api.js') as unknown as SessionApiModule;
+
+    const st = new storage.FileSessionStorage();
+    await st.save('fork-tag-source', {
+      messages: [{ role: 'user' as const, content: 'hello' }],
+      title: 'Fork Tag Source',
+      gitRoot: '/tmp/test-repo',
+      tag: 'partner',
+    });
+
+    const forkResult = await pubApi.forkSession('fork-tag-source', {
+      sessionId: 'fork-tag-copy',
+      title: 'Forked Tag',
+    });
+    const loadedFork = await pubApi.loadSession('fork-tag-copy');
+
+    expect((forkResult?.data as { tag?: string } | undefined)?.tag).toBe('partner');
+    expect((loadedFork as { tag?: string } | null)?.tag).toBe('partner');
+  });
+
   // ── Test 7: rewindSession returns null for missing id ────────────────────
   it('rewindSession returns null for a non-existent session id', async () => {
     const result = await api.rewindSession('ghost-session-id');
     expect(result).toBeNull();
+  });
+
+  it('rewindSession on a tagged session keeps the original tag', async () => {
+    vi.resetModules();
+    vi.doMock('../interactive/workspace-runtime.js', async () => {
+      const actual = await vi.importActual<typeof import('../interactive/workspace-runtime.js')>(
+        '../interactive/workspace-runtime.js',
+      );
+      return {
+        ...actual,
+        inspectWorkspaceRuntime: vi.fn(async () => ({
+          canonicalRepoRoot: '/tmp/test-repo',
+          workspaceRoot: '/tmp/test-repo',
+          executionCwd: '/tmp/test-repo',
+          branch: 'main',
+          workspaceKind: 'detected',
+        })),
+        isSameCanonicalRepo: vi.fn(() => true),
+      };
+    });
+    const storage = await import('../interactive/storage.js');
+    const pubApi = await import('./public-api.js') as unknown as SessionApiModule;
+
+    const st = new storage.FileSessionStorage();
+    await st.save('rewind-tag-source', {
+      messages: [
+        { role: 'user' as const, content: 'first' },
+        { role: 'assistant' as const, content: 'reply' },
+        { role: 'user' as const, content: 'second' },
+        { role: 'assistant' as const, content: 'reply 2' },
+      ],
+      title: 'Rewind Tag Source',
+      gitRoot: '/tmp/test-repo',
+      tag: 'partner',
+    });
+
+    const rewound = await pubApi.rewindSession('rewind-tag-source');
+    const loaded = await pubApi.loadSession('rewind-tag-source');
+
+    expect((rewound as { tag?: string } | null)?.tag).toBe('partner');
+    expect((loaded as { tag?: string } | null)?.tag).toBe('partner');
   });
 
   // ── Test 8: deleteSession on missing id is no-op (no throw, ok:true) ─────
