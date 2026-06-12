@@ -976,14 +976,12 @@ const Banner: React.FC<BannerProps> = ({
   config,
   sessionId,
   workingDir,
-  terminalWidth,
   compactionInfo,
 }) => {
   const theme = getTheme("dark");
   const model = config.model ?? getProviderModel(config.provider) ?? config.provider;
   const reasoningCapability = getProviderReasoningCapability(config.provider, config.model);
   const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
-  const dividerWidth = Math.min(60, terminalWidth - 4);
 
   // Compute compaction display values
   const ctxK = compactionInfo ? Math.round(compactionInfo.contextWindow / 1000) : 0;
@@ -998,46 +996,33 @@ const Banner: React.FC<BannerProps> = ({
         </Text>
       ))}
 
-      {/* Version and Provider Info */}
+      {/* Tagline */}
       <Box>
-        <Text bold color={theme.colors.text}>
-          {"  v"}
-          {KODAX_VERSION}
-        </Text>
-        <Text dimColor>
-          {" | "}
-        </Text>
-        <Text color={theme.colors.success}>
-          {config.provider}/{model}
-        </Text>
-        <Text dimColor>
-          {` [${reasoningCapabilityShort}]`}
-        </Text>
-        <Text dimColor>
-          {" | "}
-        </Text>
-        <Text color={theme.colors.primary}>
-          {config.agentMode.toUpperCase()}
-        </Text>
-        <Text dimColor>
-          {" | "}
-        </Text>
-        <Text color={theme.colors.accent}>
-          {config.permissionMode}
-        </Text>
+        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
+        <Text color={theme.colors.secondary}>{"AI Coding Agent · Minimalist & Intelligent"}</Text>
+      </Box>
+
+      {/* Version · Provider · Mode */}
+      <Box>
+        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
+        <Text bold color={theme.colors.text}>{"v"}{KODAX_VERSION}</Text>
+        <Text dimColor>{"  ·  "}</Text>
+        <Text color={theme.colors.success}>{config.provider}/{model}</Text>
+        <Text dimColor>{` [${reasoningCapabilityShort}]`}</Text>
+        <Text dimColor>{"  ·  "}</Text>
+        <Text color={theme.colors.primary}>{config.agentMode.toUpperCase()}</Text>
+        <Text dimColor>{" / "}</Text>
+        <Text color={theme.colors.accent}>{config.permissionMode}</Text>
         {config.reasoningMode !== 'off' && (
-          <Text color={theme.colors.warning}>
-            {` +reason:${config.reasoningMode}`}
-          </Text>
+          <Text color={theme.colors.warning}>{` +reason:${config.reasoningMode}`}</Text>
         )}
       </Box>
 
-      {/* Compaction Info */}
+      {/* Compaction */}
       {compactionInfo && (
         <Box>
-          <Text dimColor>{"  Context: "}</Text>
-          <Text dimColor>{ctxK}k</Text>
-          <Text dimColor>{" | Compaction: "}</Text>
+          <Text color={theme.colors.accent}>{"  ▎ "}</Text>
+          <Text dimColor>{`ctx ${ctxK}k  ·  compaction `}</Text>
           <Text color={compactionInfo.enabled ? theme.colors.success : undefined} dimColor={!compactionInfo.enabled}>
             {compactionInfo.enabled ? "on" : "off"}
           </Text>
@@ -1045,25 +1030,14 @@ const Banner: React.FC<BannerProps> = ({
         </Box>
       )}
 
-      {/* Divider */}
-      <Text dimColor>
-        {"  "}
-        {"-".repeat(dividerWidth)}
-      </Text>
-
-      {/* Session Info */}
+      {/* Session */}
       <Box>
-        <Text dimColor>{"  Session: "}</Text>
+        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
+        <Text dimColor>{"session "}</Text>
         <Text color={theme.colors.accent}>{sessionId}</Text>
-        <Text dimColor>{" | Working: "}</Text>
+        <Text dimColor>{"  ·  "}</Text>
         <Text dimColor>{workingDir}</Text>
       </Box>
-
-      {/* Divider */}
-      <Text dimColor>
-        {"  "}
-        {"-".repeat(dividerWidth)}
-      </Text>
     </Box>
   );
 };
@@ -1075,17 +1049,16 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     props.config.model,
   );
   const reasoningCapabilityShort = formatReasoningCapabilityShort(reasoningCapability);
-  const dividerWidth = Math.min(60, props.terminalWidth - 4);
   const ctxK = props.compactionInfo ? Math.round(props.compactionInfo.contextWindow / 1000) : 0;
   const triggerK = props.compactionInfo
     ? Math.round(props.compactionInfo.contextWindow * props.compactionInfo.triggerPercent / 100 / 1000)
     : 0;
-  const versionLine = `  v${KODAX_VERSION} | ${props.config.provider}/${model} [${reasoningCapabilityShort}] | ${props.config.agentMode.toUpperCase()} | ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? ` +reason:${props.config.reasoningMode}` : ""}`;
+  const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
+  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? ` +reason:${props.config.reasoningMode}` : ""}`;
   const compactionLine = props.compactionInfo
-    ? `  Context: ${ctxK}k | Compaction: ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
+    ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
     : undefined;
-  const sessionLine = `  Session: ${props.sessionId} | Working: ${props.workingDir}`;
-  const dividerLine = `  ${"-".repeat(dividerWidth)}`;
+  const sessionLine = `  ▎ session ${props.sessionId}  ·  ${props.workingDir}`;
   const rows: TranscriptRow[] = [];
   const wrapBannerLine = (text: string): string[] => {
     const layout = calculateVisualLayout(
@@ -1113,13 +1086,12 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
   KODAX_BANNER_LOGO_LINES.forEach((line, index) => {
     pushLineRows(`banner-logo-${index}`, line, { color: "primary" });
   });
+  pushLineRows("banner-tagline", taglineLine, { color: "secondary" });
   pushLineRows("banner-version", versionLine, { color: "text", bold: true });
   if (compactionLine) {
     pushLineRows("banner-compaction", compactionLine, { color: "dim" });
   }
-  pushLineRows("banner-divider-top", dividerLine, { color: "dim" });
   pushLineRows("banner-session", sessionLine, { color: "dim" });
-  pushLineRows("banner-divider-bottom", dividerLine, { color: "dim" });
   rows.push({ key: "banner-blank", text: " " });
 
   return {

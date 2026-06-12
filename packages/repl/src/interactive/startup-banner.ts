@@ -33,16 +33,24 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
   ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
 
+  const gutter = chalk.hex(theme.colors.accent)('  ▎ ');
+  const dot = chalk.hex(theme.colors.dim)('  ·  ');
+
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
-  console.log(chalk.hex(theme.colors.text)(`\n  v${KODAX_VERSION}  |  AI Coding Agent  |  ${config.provider}:${model}`));
-  console.log(chalk.hex(theme.colors.dim)('\n  ────────────────────────────────────────────────────────'));
+  console.log('');
+  console.log(gutter + chalk.hex(theme.colors.secondary)('AI Coding Agent · Minimalist & Intelligent'));
   console.log(
-    chalk.hex(theme.colors.dim)('  Mode: ') +
-    chalk.hex(theme.colors.primary)(mode) +
-    chalk.hex(theme.colors.dim)('  |  Reasoning: ') +
+    gutter +
+    chalk.bold.hex(theme.colors.text)(`v${KODAX_VERSION}`) +
+    dot +
+    chalk.hex(theme.colors.success)(`${config.provider}:${model}`) +
+    dot +
+    chalk.hex(theme.colors.primary)(config.agentMode.toUpperCase()) +
+    chalk.hex(theme.colors.dim)(' / ') +
+    chalk.hex(theme.colors.accent)(mode) +
     (config.reasoningMode === 'off'
-      ? chalk.hex(theme.colors.dim)('off')
-      : chalk.hex(theme.colors.success)(config.reasoningMode))
+      ? ''
+      : chalk.hex(theme.colors.warning)(` +reason:${config.reasoningMode}`))
   );
 
   // Compaction info
@@ -50,18 +58,15 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     const ctxK = Math.round(compactionInfo.contextWindow / 1000);
     const triggerK = Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000);
     const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.dim)('off');
-    console.log(chalk.hex(theme.colors.dim)(`  Context: ${ctxK}k  |  Compaction: `) + statusText + chalk.hex(theme.colors.dim)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
+    console.log(gutter + chalk.hex(theme.colors.dim)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.dim)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
   }
-
-  console.log(chalk.hex(theme.colors.dim)('  ────────────────────────────────────────────────────────\n'));
 
   // Show AGENTS.md loading status
   if (agentsFiles) {
-    const totalFiles = agentsFiles.length;
-    console.log(chalk.hex(theme.colors.dim)('  Project Rules: ') + chalk.hex(theme.colors.success)(`${totalFiles} rule file(s) loaded`));
-    console.log(chalk.hex(theme.colors.dim)('  Use /reload to refresh rules\n'));
+    console.log(gutter + chalk.hex(theme.colors.dim)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
   }
 
+  console.log('');
   console.log(chalk.hex(theme.colors.dim)('  Quick tips:'));
   console.log(chalk.hex(theme.colors.primary)('    /help      ') + chalk.hex(theme.colors.dim)('Show all commands'));
   console.log(chalk.hex(theme.colors.primary)('    /mode      ') + chalk.hex(theme.colors.dim)('Switch permission mode'));
