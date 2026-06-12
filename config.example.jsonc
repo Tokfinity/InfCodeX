@@ -97,6 +97,17 @@
   //     "supportsThinking": false,
   //     "reasoningCapability": "none",
   //     //   "none" | "native-budget" | "native-effort" | "native-toggle" | "prompt-only"
+  //     //
+  //     // OpenAI-compat reasoning models that require replaying prior
+  //     // reasoning_content (notably DeepSeek V4 thinking mode) must opt in:
+  //     //     "replayReasoningContent": true
+  //     // Keep this unset/false for OpenAI proper and gateways that reject
+  //     // unknown assistant-message fields. For mixed gateways, prefer a
+  //     // per-model override:
+  //     //     "models": [
+  //     //       { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+  //     //       { "id": "gpt-5", "replayReasoningContent": false }
+  //     //     ]
   //     "contextWindow": 128000,                     // provider 默认窗口（同 provider 不同 model 不一致时，
   //                                                  // 用上面 models[] 描述符 override）
   //     "maxOutputTokens": 4096,
@@ -257,5 +268,18 @@
   // 同名环境变量优先级高于此字段。
 
   // "streamIdleTimeoutMs": 120000
+
+  // ─── 12. Sidecar Verifier 诊断与验证调试 ─────────────────────────────
+  // 开启后会显示/持久化 verifier gate + verdict 摘要，等价于
+  // KODAX_VERIFIER_LOG=1。用于验证 Worker text-only 结束后的 sidecar
+  // 是否进入 Verifying、耗时多少、trace 是 verifier_ok / timeout /
+  // provider_error / no_tool_call。
+  // "verifierLog": true
+
+  // 相关环境变量（不写进 JSON；在 shell 里设置）：
+  //   KODAX_VERIFIER_LOG=1              打开 verifier 诊断日志
+  //   KODAX_VERIFIER_PROVIDER=<name>    verifier 使用独立 provider
+  //   KODAX_VERIFIER_MODEL=<model>      verifier 使用独立 model
+  //   KODAX_VERIFIER_ALWAYS=1           调试时强制所有 text-only 结束都 fire
 
 }

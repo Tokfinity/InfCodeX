@@ -119,6 +119,8 @@ export interface SidecarVerifierInvokeOptions {
   /** Timeout in ms. Default 15000 (verification is heavier than F178
    *  anomaly detection's 5s budget). */
   readonly timeoutMs?: number;
+  /** Caller cancellation signal; forwarded to the verifier provider call. */
+  readonly abortSignal?: AbortSignal;
 }
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -211,6 +213,7 @@ export async function invokeSidecarVerifier(
     parseToolCall: parseVerifierToolCall,
     defaultVerdict: verifierDefaultVerdict,
     timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    abortSignal: options.abortSignal,
   });
 }
 

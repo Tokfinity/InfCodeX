@@ -239,6 +239,50 @@ import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout ma
 
 `userAgentMode` 默认 `"compat"`（发送 `KodaX` 而非上游 SDK 的 User-Agent）；如果你的网关要求原生 SDK header，再切到 `"sdk"`。
 
+#### OpenAI 兼容推理模型
+
+部分 OpenAI-compatible 推理模型要求多轮请求时回放上一轮 assistant 的 `reasoning_content`。DeepSeek V4 thinking mode 是已知必须开启的场景；内置 DeepSeek provider 已经默认开启，但自定义 provider 需要显式配置：
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-deepseek-v4",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "supportsThinking": true,
+      "reasoningCapability": "native-toggle",
+      "replayReasoningContent": true
+    }
+  ]
+}
+```
+
+如果网关同时代理 DeepSeek 和 OpenAI proper，建议用 per-model override，避免把 `reasoning_content` 发给不接受该字段的模型：
+
+```json
+{
+  "models": [
+    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    { "id": "gpt-5", "replayReasoningContent": false }
+  ]
+}
+```
+
+Sidecar verifier 的结构化裁决请求会优先使用 provider 级 `tool_choice` 强制工具调用；如果某个兼容端点明确拒绝 `tool_choice` 参数，KodaX 会对该 verifier 请求自动重试一次“不强制但仍带 tools”的兼容模式，并保持 fail-open，不会阻塞主 Worker。
+
+调试 Worker 结束后的 verifier 行为时可设置：
+
+```bash
+export KODAX_VERIFIER_LOG=1
+export KODAX_VERIFIER_PROVIDER=anthropic
+export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
+```
+
+`KODAX_VERIFIER_LOG=1` 等价于在 `~/.kodax/config.json` 写 `"verifierLog": true`，会显示 verifier gate、elapsedMs 和 trace；`KODAX_VERIFIER_PROVIDER` / `KODAX_VERIFIER_MODEL` 需要成对设置，用独立模型执行 verifier；`KODAX_VERIFIER_ALWAYS=1` 仅建议调试和回归测试时使用。
+
 #### 给自定义 provider 开图片 / vision 输入（FEATURE_134 v0.7.40）
 
 如果你的自定义 provider 后面的模型支持 vision，加 `capabilityProfile.multimodalSupport: "image-input"` 显式开启，KodaX 的 SA-path policy gate 就不会人为拦截多模态请求。内置的 12 个 vision-capable provider（Anthropic、OpenAI、9 个 Anthropic-/OpenAI-compat clone：DeepSeek / Kimi / Kimi-code / Qwen / Zhipu / Zhipu-coding / MiniMax-coding / MiMo-coding / Ark-coding，加 Gemini-CLI 通过 CLI 的 `@<path>` file-include 语法）已经默认开了这个 flag。只有 Codex-CLI 和自定义 provider 需要手动 opt-in。

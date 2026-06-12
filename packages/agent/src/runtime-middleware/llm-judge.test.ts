@@ -144,6 +144,98 @@ describe('invokeLlmJudge — fail-open default verdict', () => {
     expect((await invoke(provider, 30)).trace).toBe('timeout');
   });
 
+  it('passes forced tool, short output cap, and abort signal to provider.stream', async () => {
+    let capturedOptions: Parameters<KodaXBaseProvider['stream']>[4];
+    let capturedSignal: Parameters<KodaXBaseProvider['stream']>[5];
+    const provider = fakeProvider(async (
+      _messages,
+      _tools,
+      _system,
+      _reasoning,
+      streamOptions,
+      signal,
+    ) => {
+      capturedOptions = streamOptions;
+      capturedSignal = signal;
+      return {
+        textBlocks: [],
+        thinkingBlocks: [],
+        toolBlocks: [toolBlock('emit_verdict', { value: 'good' })],
+      };
+    });
+
+    const verdict = await invoke(provider);
+
+    expect(verdict.trace).toBe('ok');
+    expect(capturedOptions?.forcedToolName).toBe('emit_verdict');
+    expect(capturedOptions?.maxOutputTokensOverride).toBe(1024);
+    expect(capturedOptions?.signal).toBe(capturedSignal);
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+
+  it('aborts the provider signal when the judge timeout fires', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const provider = fakeProvider((
+      _messages,
+      _tools,
+      _system,
+      _reasoning,
+      _streamOptions,
+      signal,
+    ) => {
+      capturedSignal = signal;
+      return new Promise<KodaXStreamResult>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          reject(new DOMException('Request aborted', 'AbortError'));
+        });
+      });
+    });
+
+    const verdict = await invoke(provider, 30);
+
+    expect(verdict.trace).toBe('timeout');
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it('aborts the provider signal when the caller signal aborts', async () => {
+    const controller = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    const provider = fakeProvider((
+      _messages,
+      _tools,
+      _system,
+      _reasoning,
+      _streamOptions,
+      signal,
+    ) => {
+      capturedSignal = signal;
+      return new Promise<KodaXStreamResult>((_resolve, reject) => {
+        signal?.addEventListener('abort', () => {
+          reject(new DOMException('Request aborted', 'AbortError'));
+        });
+      });
+    });
+
+    const verdictPromise = invokeLlmJudge<TestVerdict>({
+      provider,
+      systemPrompt: 'judge',
+      reportTool: REPORT_TOOL,
+      userMessage: 'please judge',
+      reportToolName: 'emit_verdict',
+      parseToolCall,
+      defaultVerdict,
+      timeoutMs: 1000,
+      abortSignal: controller.signal,
+    });
+    await Promise.resolve();
+    controller.abort();
+
+    const verdict = await verdictPromise;
+
+    expect(verdict.trace).toBe('provider_error');
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
   it('no tool call → defaultVerdict(no_tool_call)', async () => {
     const provider = fakeProvider(async () => ({
       textBlocks: [{ type: 'text', text: 'looks fine' }], thinkingBlocks: [], toolBlocks: [],

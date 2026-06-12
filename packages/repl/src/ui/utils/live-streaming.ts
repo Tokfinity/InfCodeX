@@ -55,6 +55,11 @@ export function formatManagedTaskLiveStatusLabel(
   const harness = formatHarnessProfileShort(status.harnessProfile) ?? status.harnessProfile;
   const trimmedNote = trimRepeatedWorkerPrefix(status.note, status.activeWorkerTitle);
 
+  if (status.phase === "verifying") {
+    const label = `[${status.agentMode.toUpperCase()} Verifying]`;
+    return trimmedNote ? `${label} ${trimmedNote}` : label;
+  }
+
   if (status.activeWorkerTitle) {
     if (status.phase === "preflight") {
       // FEATURE_114 v0.7.38 Slice 7 — use the runner-supplied title
@@ -127,6 +132,8 @@ export function formatManagedTaskBreadcrumb(
         : `${prefix} - ${status.activeWorkerTitle ?? "Worker"} starting${roundSuffix}`;
     case "upgrade":
       return note ? `${prefix} - ${note}` : `${prefix} - Harness transition${roundSuffix}`;
+    case "verifying":
+      return note ? `${status.agentMode.toUpperCase()} Verifying - ${note}` : `${status.agentMode.toUpperCase()} Verifying`;
     case "completed":
       return note ? `${prefix} - ${note}` : `${prefix} - Managed task completed`;
     default:

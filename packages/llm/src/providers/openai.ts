@@ -459,6 +459,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         ...await this.convertMessages(nonSystemMessages, model),
       ];
       const openaiTools = tools.map(t => ({ type: 'function' as const, function: { name: t.name, description: t.description, parameters: t.input_schema } }));
+      const forcedToolName = streamOptions?.forcedToolName;
+      let shouldForceToolChoice = Boolean(forcedToolName);
 
       // 检查是否已被取消
       if (signal?.aborted) {
@@ -494,9 +496,16 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         model,
         messages: fullMessages,
         tools: openaiTools,
-        max_completion_tokens: this.getEffectiveMaxOutputTokens(model),
+        max_completion_tokens:
+          streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
         stream: true,
       };
+      if (forcedToolName && shouldForceToolChoice) {
+        createParams.tool_choice = {
+          type: 'function',
+          function: { name: forcedToolName },
+        };
+      }
 
       let stream: AsyncIterable<OpenAI.Chat.Completions.ChatCompletionChunk> | undefined;
       let lastError: unknown;
@@ -526,6 +535,14 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
             }
           } catch (error) {
             lastError = error;
+            if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
+              shouldForceToolChoice = false;
+              delete createParams.tool_choice;
+              this.logStreamDiagnostic(
+                `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
+              );
+              continue;
+            }
             if (
               includeUsage &&
               this.shouldFallbackForSpecificReasoningError(error, 'stream_options', 'include_usage')
@@ -709,6 +726,8 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           parameters: tool.input_schema,
         },
       }));
+      const forcedToolName = streamOptions?.forcedToolName;
+      let shouldForceToolChoice = Boolean(forcedToolName);
 
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const initialCapability =
@@ -728,8 +747,15 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
         model,
         messages: fullMessages,
         tools: openaiTools,
-        max_completion_tokens: this.getEffectiveMaxOutputTokens(model),
+        max_completion_tokens:
+          streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model),
       };
+      if (forcedToolName && shouldForceToolChoice) {
+        createParams.tool_choice = {
+          type: 'function',
+          function: { name: forcedToolName },
+        };
+      }
 
       let response: OpenAI.Chat.Completions.ChatCompletion | undefined;
       let lastError: unknown;
@@ -755,6 +781,14 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
           break;
         } catch (error) {
           lastError = error;
+          if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
+            shouldForceToolChoice = false;
+            delete createParams.tool_choice;
+            this.logStreamDiagnostic(
+              `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
+            );
+            continue;
+          }
           if (
             !this.shouldFallbackForReasoningError(
               error,

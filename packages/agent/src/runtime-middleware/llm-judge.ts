@@ -97,6 +97,7 @@ export type LlmJudgeFailureReason =
   | 'parse_failure';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_JUDGE_MAX_OUTPUT_TOKENS = 1024;
 
 export interface InvokeLlmJudgeOptions<TVerdict> {
   /** Provider used for the consult call. Often a stronger model than the
@@ -123,6 +124,10 @@ export interface InvokeLlmJudgeOptions<TVerdict> {
   readonly defaultVerdict: (reason: LlmJudgeFailureReason) => TVerdict;
   /** Timeout in ms. Default 15000. */
   readonly timeoutMs?: number;
+  /** Caller cancellation signal; combined with the judge timeout signal. */
+  readonly abortSignal?: AbortSignal;
+  /** Short structured-call output cap. Default 1024. */
+  readonly maxOutputTokens?: number;
 }
 
 /**
@@ -134,7 +139,16 @@ export async function invokeLlmJudge<TVerdict>(
   options: InvokeLlmJudgeOptions<TVerdict>,
 ): Promise<TVerdict> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const maxOutputTokens = options.maxOutputTokens ?? DEFAULT_JUDGE_MAX_OUTPUT_TOKENS;
   const messages: KodaXMessage[] = [{ role: 'user', content: options.userMessage }];
+  const streamController = new AbortController();
+  const streamSignal = streamController.signal;
+  const onCallerAbort = () => streamController.abort();
+  if (options.abortSignal?.aborted) {
+    streamController.abort();
+  } else {
+    options.abortSignal?.addEventListener('abort', onCallerAbort, { once: true });
+  }
 
   const streamPromise = (async (): Promise<TVerdict> => {
     let result;
@@ -144,7 +158,13 @@ export async function invokeLlmJudge<TVerdict>(
         [options.reportTool],
         options.systemPrompt,
         false,
-        options.model ? { modelOverride: options.model } : undefined,
+        {
+          ...(options.model ? { modelOverride: options.model } : {}),
+          forcedToolName: options.reportToolName,
+          maxOutputTokensOverride: maxOutputTokens,
+          signal: streamSignal,
+        },
+        streamSignal,
       );
     } catch {
       return options.defaultVerdict('provider_error');
@@ -173,11 +193,13 @@ export async function invokeLlmJudge<TVerdict>(
   const timeoutPromise = new Promise<TVerdict>((resolve) => {
     timeoutHandle = setTimeout(() => {
       resolve(options.defaultVerdict('timeout'));
+      streamController.abort();
     }, timeoutMs);
   });
 
   const verdict = await Promise.race([streamPromise, timeoutPromise]);
   if (timeoutHandle) clearTimeout(timeoutHandle);
+  options.abortSignal?.removeEventListener('abort', onCallerAbort);
   return verdict;
 }
 
@@ -196,6 +218,7 @@ export interface CreateLlmJudgedStopHookOptions<TVerdict> {
   /** Observability sink — called once per hook fire with the raw verdict. */
   readonly onVerdict?: (verdict: TVerdict) => void;
   readonly timeoutMs?: number;
+  readonly maxOutputTokens?: number;
 }
 
 /**
@@ -220,6 +243,8 @@ export function createLlmJudgedStopHook<TVerdict>(
       parseToolCall: options.parseToolCall,
       defaultVerdict: options.defaultVerdict,
       timeoutMs: options.timeoutMs,
+      abortSignal: ctx.abortSignal,
+      maxOutputTokens: options.maxOutputTokens,
     });
     options.onVerdict?.(verdict);
     return options.mapVerdict(verdict);

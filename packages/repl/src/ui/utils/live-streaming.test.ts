@@ -98,6 +98,24 @@ describe("live-streaming", () => {
     })).toBe("AMA H1 - Starting refinement round 2");
   });
 
+  it("formats sidecar verifier live labels instead of falling back to PLANNED", () => {
+    expect(formatManagedTaskLiveStatusLabel({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      phase: "verifying",
+      note: "Verifying agent output",
+    })).toBe("[AMA Verifying] Verifying agent output");
+  });
+
+  it("formats sidecar verifier breadcrumbs", () => {
+    expect(formatManagedTaskBreadcrumb({
+      agentMode: "ama",
+      harnessProfile: "PLANNED",
+      phase: "verifying",
+      note: "Verifying agent output",
+    })).toBe("AMA Verifying - Verifying agent output");
+  });
+
   it("formats managed-task live labels for round updates without a worker title", () => {
     expect(formatManagedTaskLiveStatusLabel({
       agentMode: "ama",

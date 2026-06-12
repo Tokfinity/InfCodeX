@@ -296,6 +296,10 @@ export function buildBusyStatusText({
     return phaseLabel;
   }
 
+  if (managedPhase === "verifying") {
+    return "Verifying";
+  }
+
   if (managedHarnessProfile) {
     const harness = formatHarnessProfileShort(managedHarnessProfile);
     const roleLabel = `${harness}${managedWorkerTitle ? ` - ${managedWorkerTitle}` : ""}`;

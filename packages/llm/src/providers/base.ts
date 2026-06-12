@@ -43,6 +43,31 @@ function parseEnvInt(raw: string | undefined): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+function abortError(): DOMException {
+  return new DOMException('Request aborted', 'AbortError');
+}
+
+function waitForRetryDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (delayMs <= 0) return Promise.resolve();
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      if (timeout) clearTimeout(timeout);
+      cleanup();
+      reject(abortError());
+    };
+    if (signal) signal.addEventListener('abort', onAbort, { once: true });
+    timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delayMs);
+  });
+}
+
 /**
  * FEATURE_130 (v0.7.36): structured payload fired through
  * `KodaXEvents.onRetryAfter` whenever a provider's `withRateLimit`
@@ -317,6 +342,24 @@ export abstract class KodaXBaseProvider {
     );
   }
 
+  protected shouldFallbackForForcedToolChoiceError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    const mentionsToolChoice =
+      message.includes('tool_choice') ||
+      message.includes('tool choice') ||
+      message.includes('toolchoice');
+
+    if (!mentionsToolChoice) {
+      return false;
+    }
+
+    return (
+      message.includes('unknown parameter') ||
+      message.includes('invalid parameter') ||
+      message.includes('unsupported')
+    );
+  }
+
   protected getReasoningFallbackChain(
     capability: KodaXReasoningCapability,
   ): KodaXReasoningCapability[] {
@@ -563,13 +606,13 @@ export abstract class KodaXBaseProvider {
           }
 
           if (signal?.aborted) {
-            throw new DOMException('Request aborted', 'AbortError');
+            throw abortError();
           }
 
-          await new Promise(resolve => setTimeout(resolve, delay));
+          await waitForRetryDelay(delay, signal);
 
           if (signal?.aborted) {
-            throw new DOMException('Request aborted', 'AbortError');
+            throw abortError();
           }
 
           continue;

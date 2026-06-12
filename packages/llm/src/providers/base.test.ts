@@ -345,6 +345,33 @@ describe('KodaXBaseProvider', () => {
     }
   });
 
+  it('aborts rate-limit retry sleep when the signal aborts', async () => {
+    vi.useFakeTimers();
+    const provider = new TestProvider();
+    const controller = new AbortController();
+    const error = Object.assign(new Error('429 rate limit hit'), {
+      headers: { 'retry-after': '60' },
+    });
+    const task = vi.fn<() => Promise<string>>().mockRejectedValue(error);
+
+    try {
+      const promise = provider.exposeWithRateLimit(
+        task,
+        controller.signal,
+        2,
+        () => undefined,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      controller.abort();
+
+      await expect(promise).rejects.toMatchObject({ name: 'AbortError' });
+      expect(task).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('FEATURE_130: classifies overloaded errors with reason="overloaded"', async () => {
     const provider = new TestProvider();
     const onRetryAfter = vi.fn();

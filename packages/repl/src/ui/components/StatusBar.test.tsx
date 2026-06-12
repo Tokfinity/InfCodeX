@@ -277,6 +277,22 @@ describe("StatusBar", () => {
     expect(text).not.toContain("H2");
   });
 
+  it("shows verifier status instead of the PLANNED harness fallback", () => {
+    const text = getStatusBarText({
+      sessionId: "session-1",
+      permissionMode: "accept-edits",
+      agentMode: "ama",
+      provider: "anthropic",
+      model: "sonnet",
+      managedPhase: "verifying",
+      managedHarnessProfile: "PLANNED",
+      managedWorkerTitle: "Worker",
+    });
+
+    expect(text).toContain("session-1 | Verifying");
+    expect(text).not.toContain("PLANNED - Worker");
+  });
+
   it("never falls back to generic iter counters for AMA when managed status is absent", () => {
     const text = getStatusBarText({
       sessionId: "session-1",

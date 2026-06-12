@@ -10,6 +10,14 @@ import type {
 } from '../types.js';
 
 const TOOLS: KodaXToolDefinition[] = [];
+const REPORT_TOOL: KodaXToolDefinition = {
+  name: 'emit_verdict',
+  description: 'Report verdict.',
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+};
 const tempDirs: string[] = [];
 
 async function createTempDir(prefix: string): Promise<string> {
@@ -47,6 +55,77 @@ class TestOpenAIProvider extends KodaXOpenAICompatProvider {
 }
 
 describe('openai message serialization', () => {
+  it('passes forced tool choice and per-call output cap on streaming calls', async () => {
+    async function* streamChunks() {
+      yield {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+    }
+    const create = vi.fn().mockResolvedValue(streamChunks());
+    const provider = new TestOpenAIProvider({
+      chat: {
+        completions: { create },
+      },
+    });
+
+    await provider.stream(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'emit_verdict' },
+    });
+    expect(kwargs.max_completion_tokens).toBe(1024);
+  });
+
+  it('retries judge streams without forced tool choice when an upstream rejects tool_choice', async () => {
+    async function* streamChunks() {
+      yield {
+        choices: [{ delta: {}, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      };
+    }
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('unsupported parameter: tool_choice'))
+      .mockResolvedValueOnce(streamChunks());
+    const provider = new TestOpenAIProvider({
+      chat: {
+        completions: { create },
+      },
+    });
+
+    await provider.stream(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    const first = create.mock.calls[0]?.[0];
+    const second = create.mock.calls[1]?.[0];
+    expect(first?.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'emit_verdict' },
+    });
+    expect(second?.tool_choice).toBeUndefined();
+    expect(second?.tools).toHaveLength(1);
+    expect(second?.max_completion_tokens).toBe(1024);
+  });
+
   it('serializes image input blocks as image_url content parts', async () => {
     const cwd = await createTempDir('kodax-openai-images-');
     const imagePath = path.join(cwd, 'diagram.png');

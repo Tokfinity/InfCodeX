@@ -654,6 +654,10 @@ export interface KodaXProviderStreamOptions {
   sessionId?: string;
   /** Override the provider's default model for a single request */
   modelOverride?: string;
+  /** Force a single tool call for one-shot judge/sidecar requests. */
+  forcedToolName?: string;
+  /** Per-request output budget override for short structured calls. */
+  maxOutputTokensOverride?: number;
   /** AbortSignal for cancelling the stream request */
   signal?: AbortSignal;
 }

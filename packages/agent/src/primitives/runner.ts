@@ -341,6 +341,8 @@ export interface StopHookContext {
   /** Total reanimate budget for this run (`stopHookReanimateBudget`
    *  or default 2). Exposed for transparency. */
   readonly reanimateBudget: number;
+  /** Caller cancellation signal, forwarded so stop hooks can cancel I/O. */
+  readonly abortSignal?: AbortSignal;
 }
 
 /**
@@ -774,6 +776,7 @@ async function genericRun<TData>(
             signal: 'natural-end',
             reanimateCount,
             reanimateBudget,
+            abortSignal: opts.abortSignal,
           });
         } catch (error) {
           hookError = error;

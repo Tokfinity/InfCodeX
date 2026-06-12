@@ -248,7 +248,8 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
-      const maxOutputTokens = this.getEffectiveMaxOutputTokens(model);
+      const maxOutputTokens =
+        streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const convertedMessages = await this.convertMessages(messages, model);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
@@ -261,6 +262,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               capability === 'none',
             )
         : ['none'];
+      let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
         capability: 'native-budget' | 'native-toggle' | 'none',
@@ -273,6 +275,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           tools: this.applyCacheControlToTools(tools),
           stream: true,
         };
+        if (streamOptions?.forcedToolName && shouldForceToolChoice) {
+          kwargs.tool_choice = {
+            type: 'tool',
+            name: streamOptions.forcedToolName,
+          };
+        }
 
         if (capability === 'native-budget') {
           const requestedBudget = resolveThinkingBudget(
@@ -324,27 +332,39 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       let lastError: unknown;
 
       for (const capability of attempts) {
-        try {
-          response = await this.client.messages.create(
-            buildRequest(capability),
-            signal ? { signal } : {},
-          );
-          if (capability !== initialCapability) {
-            this.persistReasoningCapabilityOverride(capability, model);
-          }
-          break;
-        } catch (error) {
-          lastError = error;
-          const fallbackTerms =
-            capability === 'native-budget'
-              ? ['budget_tokens', 'thinking']
-              : capability === 'native-toggle'
-                ? ['thinking']
-                : [];
+        while (!response) {
+          try {
+            response = await this.client.messages.create(
+              buildRequest(capability),
+              signal ? { signal } : {},
+            );
+            if (capability !== initialCapability) {
+              this.persistReasoningCapabilityOverride(capability, model);
+            }
+          } catch (error) {
+            lastError = error;
+            if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
+              shouldForceToolChoice = false;
+              this.logStreamDiagnostic(
+                `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
+              );
+              continue;
+            }
+            const fallbackTerms =
+              capability === 'native-budget'
+                ? ['budget_tokens', 'thinking']
+                : capability === 'native-toggle'
+                  ? ['thinking']
+                  : [];
 
-          if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
-            throw error;
+            if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
+              throw error;
+            }
+            break;
           }
+        }
+        if (response) {
+          break;
         }
       }
 
@@ -581,7 +601,8 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
     return this.withRateLimit(async () => {
       const normalizedReasoning = this.normalizeReasoning(reasoning);
       const model = streamOptions?.modelOverride ?? this.config.model;
-      const maxOutputTokens = this.getEffectiveMaxOutputTokens(model);
+      const maxOutputTokens =
+        streamOptions?.maxOutputTokensOverride ?? this.getEffectiveMaxOutputTokens(model);
       const convertedMessages = await this.convertMessages(messages, model);
       const initialCapability = normalizedReasoning.enabled
         ? this.getReasoningCapability(model)
@@ -594,6 +615,7 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
               capability === 'none',
             )
         : ['none'];
+      let shouldForceToolChoice = Boolean(streamOptions?.forcedToolName);
 
       const buildRequest = (
         capability: 'native-budget' | 'native-toggle' | 'none',
@@ -605,6 +627,12 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
           messages: convertedMessages,
           tools: this.applyCacheControlToTools(tools),
         };
+        if (streamOptions?.forcedToolName && shouldForceToolChoice) {
+          kwargs.tool_choice = {
+            type: 'tool',
+            name: streamOptions.forcedToolName,
+          };
+        }
 
         if (capability === 'native-budget') {
           const requestedBudget = resolveThinkingBudget(
@@ -629,27 +657,39 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
       let lastError: unknown;
 
       for (const capability of attempts) {
-        try {
-          response = await this.client.messages.create(
-            buildRequest(capability),
-            signal ? { signal } : {},
-          );
-          if (capability !== initialCapability) {
-            this.persistReasoningCapabilityOverride(capability, model);
-          }
-          break;
-        } catch (error) {
-          lastError = error;
-          const fallbackTerms =
-            capability === 'native-budget'
-              ? ['budget_tokens', 'thinking']
-              : capability === 'native-toggle'
-                ? ['thinking']
-                : [];
+        while (!response) {
+          try {
+            response = await this.client.messages.create(
+              buildRequest(capability),
+              signal ? { signal } : {},
+            );
+            if (capability !== initialCapability) {
+              this.persistReasoningCapabilityOverride(capability, model);
+            }
+          } catch (error) {
+            lastError = error;
+            if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
+              shouldForceToolChoice = false;
+              this.logStreamDiagnostic(
+                `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
+              );
+              continue;
+            }
+            const fallbackTerms =
+              capability === 'native-budget'
+                ? ['budget_tokens', 'thinking']
+                : capability === 'native-toggle'
+                  ? ['thinking']
+                  : [];
 
-          if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
-            throw error;
+            if (!this.shouldFallbackForReasoningError(error, ...fallbackTerms)) {
+              throw error;
+            }
+            break;
           }
+        }
+        if (response) {
+          break;
         }
       }
 

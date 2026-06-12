@@ -178,6 +178,40 @@ If you need a custom base URL or an OpenAI/Anthropic-compatible endpoint, define
 
 `userAgentMode` defaults to `"compat"`, which sends `KodaX` instead of the official SDK User-Agent. Switch it to `"sdk"` only when your gateway expects the upstream SDK header.
 
+#### OpenAI-compatible reasoning providers
+
+Some OpenAI-compatible reasoning models require KodaX to replay the previous assistant turn's `reasoning_content` on later requests. DeepSeek V4 thinking mode is the known load-bearing case. Built-in DeepSeek already opts in; custom providers must say so explicitly:
+
+```json
+{
+  "customProviders": [
+    {
+      "name": "my-deepseek-v4",
+      "protocol": "openai",
+      "baseUrl": "https://example.com/v1",
+      "apiKeyEnv": "MY_DEEPSEEK_API_KEY",
+      "model": "deepseek-v4-flash",
+      "supportsThinking": true,
+      "reasoningCapability": "native-toggle",
+      "replayReasoningContent": true
+    }
+  ]
+}
+```
+
+Keep `replayReasoningContent` unset or `false` for OpenAI proper and gateways that reject unknown assistant-message fields. If one gateway routes mixed models, prefer per-model overrides:
+
+```json
+{
+  "models": [
+    { "id": "deepseek-v4-flash", "replayReasoningContent": true },
+    { "id": "gpt-5", "replayReasoningContent": false }
+  ]
+}
+```
+
+Sidecar verifier judge calls use provider-level forced tool choice when supported. If a compatible endpoint rejects the `tool_choice` parameter, KodaX retries that verifier request once without forced tool choice and still fails open rather than blocking the main Worker.
+
 #### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
 
 If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. The 12 built-in vision-capable providers (Anthropic, OpenAI, the 9 Anthropic-/OpenAI-compat clones — DeepSeek, Kimi, Kimi-code, Qwen, Zhipu, Zhipu-coding, MiniMax-coding, MiMo-coding, Ark-coding — plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; only Codex-CLI and custom providers need to opt in.
@@ -655,6 +689,20 @@ Precedence used by every provider's `getEffectiveMaxOutputTokens()` (see `packag
 Related variables: `KODAX_MAX_TOKENS` (global fallback when no provider/model cap applies), `KODAX_ESCALATED_MAX_OUTPUT_TOKENS` (escalation budget used by the agent loop when a turn returns `stop_reason: max_tokens`).
 
 > **Retired in v0.7.42**: `KODAX_RST_PRONE_PROVIDERS` and `KODAX_WRITE_TURN_MAX_TOKENS` (the v0.7.28 P2b write-turn cap mechanism) are no longer recognized. The 2026-04 bench measured RST as time-based (zhipu-coding 308s server kill window), not payload-size-based, so the cap was retired in favor of the per-provider `streamMaxDurationMs` watchdog + non-streaming fallback chain (configured in `registry.ts`). Existing env exports become silent no-ops; remove them from shell profiles when convenient.
+
+#### Sidecar verifier diagnostics
+
+Use these when diagnosing Worker text-only completion stalls or custom provider verifier behavior:
+
+```bash
+export KODAX_VERIFIER_LOG=1
+export KODAX_VERIFIER_PROVIDER=anthropic
+export KODAX_VERIFIER_MODEL=claude-haiku-4-5-20251001
+```
+
+- `KODAX_VERIFIER_LOG=1` shows verifier gate/elapsed/trace information and is equivalent to `"verifierLog": true` in `~/.kodax/config.json`.
+- `KODAX_VERIFIER_PROVIDER` + `KODAX_VERIFIER_MODEL` route the verifier to a separate provider/model instead of inheriting the main Worker model. Set both together.
+- `KODAX_VERIFIER_ALWAYS=1` forces the verifier to fire on every text-only completion for debugging/regression sweeps.
 
 ## Advanced Library Usage
 

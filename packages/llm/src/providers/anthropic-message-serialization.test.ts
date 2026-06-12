@@ -10,6 +10,14 @@ import type {
 } from '../types.js';
 
 const TOOLS: KodaXToolDefinition[] = [];
+const REPORT_TOOL: KodaXToolDefinition = {
+  name: 'emit_verdict',
+  description: 'Report verdict.',
+  input_schema: {
+    type: 'object',
+    properties: {},
+  },
+};
 const tempDirs: string[] = [];
 
 async function createTempDir(prefix: string): Promise<string> {
@@ -67,6 +75,60 @@ describe('anthropic message serialization', () => {
         await rm(dir, { recursive: true, force: true });
       }
     }
+  });
+
+  // Sidecar verifier calls are short structured judge requests.
+  // Verifier/judge calls need a real provider-level forced tool choice,
+  // not just prompt wording that asks the model to call the tool.
+  it('passes forced tool choice and per-call output cap on streaming calls', async () => {
+    const create = vi.fn().mockResolvedValue(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    const kwargs = create.mock.calls[0]?.[0];
+    expect(kwargs.tool_choice).toEqual({
+      type: 'tool',
+      name: 'emit_verdict',
+    });
+    expect(kwargs.max_tokens).toBe(1024);
+  });
+
+  it('retries judge streams without forced tool choice when an upstream rejects tool_choice', async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('unsupported parameter: tool_choice'))
+      .mockResolvedValueOnce(createCompletedAnthropicStream());
+    const provider = new TestAnthropicProvider({ messages: { create } });
+
+    await provider.stream(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    const first = create.mock.calls[0]?.[0];
+    const second = create.mock.calls[1]?.[0];
+    expect(first?.tool_choice).toEqual({
+      type: 'tool',
+      name: 'emit_verdict',
+    });
+    expect(second?.tool_choice).toBeUndefined();
+    expect(second?.tools).toHaveLength(1);
+    expect(second?.max_tokens).toBe(1024);
   });
 
   // 2026-05-20 — claudecode parity: tool_result content can be an array
