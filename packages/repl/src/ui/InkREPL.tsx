@@ -996,15 +996,15 @@ const Banner: React.FC<BannerProps> = ({
         </Text>
       ))}
 
-      {/* Tagline */}
+      {/* Tagline — cyan gutter, ties to the logo */}
       <Box>
-        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
-        <Text color={theme.colors.secondary}>{"AI Coding Agent · Minimalist & Intelligent"}</Text>
+        <Text color={theme.colors.primary}>{"  ▎ "}</Text>
+        <Text color={theme.colors.primary}>{"AI Coding Agent · Minimalist & Intelligent"}</Text>
       </Box>
 
-      {/* Version · Provider · Mode */}
+      {/* Version · Provider · Mode — green gutter */}
       <Box>
-        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
+        <Text color={theme.colors.success}>{"  ▎ "}</Text>
         <Text bold color={theme.colors.text}>{"v"}{KODAX_VERSION}</Text>
         <Text dimColor>{"  ·  "}</Text>
         <Text color={theme.colors.success}>{config.provider}/{model}</Text>
@@ -1021,25 +1021,25 @@ const Banner: React.FC<BannerProps> = ({
         )}
       </Box>
 
-      {/* Compaction */}
+      {/* Compaction — amber gutter */}
       {compactionInfo && (
         <Box>
           <Text color={theme.colors.accent}>{"  ▎ "}</Text>
-          <Text color={theme.colors.secondary}>{`ctx ${ctxK}k  ·  compaction `}</Text>
-          <Text color={compactionInfo.enabled ? theme.colors.success : theme.colors.secondary}>
+          <Text color={theme.colors.text}>{`ctx ${ctxK}k  ·  compaction `}</Text>
+          <Text color={compactionInfo.enabled ? theme.colors.success : theme.colors.text}>
             {compactionInfo.enabled ? "on" : "off"}
           </Text>
-          <Text color={theme.colors.secondary}>{` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`}</Text>
+          <Text color={theme.colors.text}>{` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`}</Text>
         </Box>
       )}
 
-      {/* Session */}
+      {/* Session — violet gutter */}
       <Box>
-        <Text color={theme.colors.accent}>{"  ▎ "}</Text>
-        <Text color={theme.colors.secondary}>{"session "}</Text>
-        <Text color={theme.colors.accent}>{sessionId}</Text>
-        <Text color={theme.colors.secondary}>{"  ·  "}</Text>
-        <Text color={theme.colors.secondary}>{workingDir}</Text>
+        <Text color={theme.colors.secondary}>{"  ▎ "}</Text>
+        <Text color={theme.colors.text}>{"session "}</Text>
+        <Text color={theme.colors.primary}>{sessionId}</Text>
+        <Text color={theme.colors.text}>{"  ·  "}</Text>
+        <Text color={theme.colors.text}>{workingDir}</Text>
       </Box>
     </Box>
   );
@@ -1089,12 +1089,12 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
   KODAX_BANNER_LOGO_LINES.forEach((line, index) => {
     pushLineRows(`banner-logo-${index}`, line, { color: "primary" });
   });
-  pushLineRows("banner-tagline", taglineLine, { color: "secondary" });
+  pushLineRows("banner-tagline", taglineLine, { color: "primary" });
   pushLineRows("banner-version", versionLine, { color: "text", bold: true });
   if (compactionLine) {
-    pushLineRows("banner-compaction", compactionLine, { color: "secondary" });
+    pushLineRows("banner-compaction", compactionLine, { color: "text" });
   }
-  pushLineRows("banner-session", sessionLine, { color: "secondary" });
+  pushLineRows("banner-session", sessionLine, { color: "text" });
   rows.push({ key: "banner-blank", text: " " });
 
   return {

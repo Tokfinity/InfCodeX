@@ -33,14 +33,14 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
   ██║  ██╗ ╚██████╔╝ ██████╔╝  ██║  ██║  ██╔╝ ██╗
   ╚═╝  ╚═╝  ╚═════╝  ╚═════╝   ╚═╝  ╚═╝  ╚═╝  ╚═╝`;
 
-  const gutter = chalk.hex(theme.colors.accent)('  ▎ ');
+  const bar = (color: string): string => chalk.hex(color)('  ▎ ');
   const dot = chalk.hex(theme.colors.dim)('  ·  ');
 
   console.log(chalk.hex(theme.colors.primary)('\n' + logo));
   console.log('');
-  console.log(gutter + chalk.hex(theme.colors.secondary)('AI Coding Agent · Minimalist & Intelligent'));
+  console.log(bar(theme.colors.primary) + chalk.hex(theme.colors.primary)('AI Coding Agent · Minimalist & Intelligent'));
   console.log(
-    gutter +
+    bar(theme.colors.success) +
     chalk.bold.hex(theme.colors.text)(`v${KODAX_VERSION}`) +
     dot +
     chalk.hex(theme.colors.success)(`${config.provider}:${model}`) +
@@ -58,12 +58,12 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     const ctxK = Math.round(compactionInfo.contextWindow / 1000);
     const triggerK = Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000);
     const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.secondary)('off');
-    console.log(gutter + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
+    console.log(bar(theme.colors.accent) + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
   }
 
   // Show AGENTS.md loading status
   if (agentsFiles) {
-    console.log(gutter + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
+    console.log(bar(theme.colors.secondary) + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
   }
 
   console.log('');
