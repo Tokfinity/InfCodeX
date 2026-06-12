@@ -50,20 +50,20 @@ export function printStartupBanner(config: CurrentConfig, mode: string, compacti
     chalk.hex(theme.colors.accent)(mode) +
     (config.reasoningMode === 'off'
       ? ''
-      : chalk.hex(theme.colors.warning)(` +reason:${config.reasoningMode}`))
+      : chalk.hex(theme.colors.dim)('  ·  ') + chalk.hex(theme.colors.warning)(`reason:${config.reasoningMode}`))
   );
 
   // Compaction info
   if (compactionInfo) {
     const ctxK = Math.round(compactionInfo.contextWindow / 1000);
     const triggerK = Math.round(compactionInfo.contextWindow * compactionInfo.triggerPercent / 100 / 1000);
-    const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.dim)('off');
-    console.log(gutter + chalk.hex(theme.colors.dim)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.dim)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
+    const statusText = compactionInfo.enabled ? chalk.hex(theme.colors.success)('on') : chalk.hex(theme.colors.secondary)('off');
+    console.log(gutter + chalk.hex(theme.colors.secondary)(`ctx ${ctxK}k  ·  compaction `) + statusText + chalk.hex(theme.colors.secondary)(` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`));
   }
 
   // Show AGENTS.md loading status
   if (agentsFiles) {
-    console.log(gutter + chalk.hex(theme.colors.dim)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
+    console.log(gutter + chalk.hex(theme.colors.secondary)(`${agentsFiles.length} project rule file(s) loaded — `) + chalk.hex(theme.colors.dim)('/reload to refresh'));
   }
 
   console.log('');

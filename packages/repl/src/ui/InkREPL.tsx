@@ -1014,7 +1014,10 @@ const Banner: React.FC<BannerProps> = ({
         <Text dimColor>{" / "}</Text>
         <Text color={theme.colors.accent}>{config.permissionMode}</Text>
         {config.reasoningMode !== 'off' && (
-          <Text color={theme.colors.warning}>{` +reason:${config.reasoningMode}`}</Text>
+          <>
+            <Text dimColor>{"  ·  "}</Text>
+            <Text color={theme.colors.warning}>{`reason:${config.reasoningMode}`}</Text>
+          </>
         )}
       </Box>
 
@@ -1022,21 +1025,21 @@ const Banner: React.FC<BannerProps> = ({
       {compactionInfo && (
         <Box>
           <Text color={theme.colors.accent}>{"  ▎ "}</Text>
-          <Text dimColor>{`ctx ${ctxK}k  ·  compaction `}</Text>
-          <Text color={compactionInfo.enabled ? theme.colors.success : undefined} dimColor={!compactionInfo.enabled}>
+          <Text color={theme.colors.secondary}>{`ctx ${ctxK}k  ·  compaction `}</Text>
+          <Text color={compactionInfo.enabled ? theme.colors.success : theme.colors.secondary}>
             {compactionInfo.enabled ? "on" : "off"}
           </Text>
-          <Text dimColor>{` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`}</Text>
+          <Text color={theme.colors.secondary}>{` @ ${compactionInfo.triggerPercent}% (${triggerK}k)`}</Text>
         </Box>
       )}
 
       {/* Session */}
       <Box>
         <Text color={theme.colors.accent}>{"  ▎ "}</Text>
-        <Text dimColor>{"session "}</Text>
+        <Text color={theme.colors.secondary}>{"session "}</Text>
         <Text color={theme.colors.accent}>{sessionId}</Text>
-        <Text dimColor>{"  ·  "}</Text>
-        <Text dimColor>{workingDir}</Text>
+        <Text color={theme.colors.secondary}>{"  ·  "}</Text>
+        <Text color={theme.colors.secondary}>{workingDir}</Text>
       </Box>
     </Box>
   );
@@ -1054,7 +1057,7 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
     ? Math.round(props.compactionInfo.contextWindow * props.compactionInfo.triggerPercent / 100 / 1000)
     : 0;
   const taglineLine = "  ▎ AI Coding Agent · Minimalist & Intelligent";
-  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? ` +reason:${props.config.reasoningMode}` : ""}`;
+  const versionLine = `  ▎ v${KODAX_VERSION}  ·  ${props.config.provider}/${model} [${reasoningCapabilityShort}]  ·  ${props.config.agentMode.toUpperCase()} / ${props.config.permissionMode}${props.config.reasoningMode !== "off" ? `  ·  reason:${props.config.reasoningMode}` : ""}`;
   const compactionLine = props.compactionInfo
     ? `  ▎ ctx ${ctxK}k  ·  compaction ${props.compactionInfo.enabled ? "on" : "off"} @ ${props.compactionInfo.triggerPercent}% (${triggerK}k)`
     : undefined;
@@ -1089,9 +1092,9 @@ function buildBannerTranscriptSection(props: BannerProps): TranscriptSection {
   pushLineRows("banner-tagline", taglineLine, { color: "secondary" });
   pushLineRows("banner-version", versionLine, { color: "text", bold: true });
   if (compactionLine) {
-    pushLineRows("banner-compaction", compactionLine, { color: "dim" });
+    pushLineRows("banner-compaction", compactionLine, { color: "secondary" });
   }
-  pushLineRows("banner-session", sessionLine, { color: "dim" });
+  pushLineRows("banner-session", sessionLine, { color: "secondary" });
   rows.push({ key: "banner-blank", text: " " });
 
   return {
