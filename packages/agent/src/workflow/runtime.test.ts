@@ -28,11 +28,13 @@ function fakeBackend(
   backend: WorkflowAgentBackend;
   peakInFlight: () => number;
   spawnCount: () => number;
+  stoppedTaskIds: () => readonly string[];
 } {
   let counter = 0;
   let inFlight = 0;
   let peak = 0;
   let spawns = 0;
+  const stopped: string[] = [];
   const inFlightByTask = new Map<string, boolean>();
   const backend: WorkflowAgentBackend = {
     spawn: async (input: WorkflowSpawnAgentInput) => {
@@ -55,12 +57,19 @@ function fakeBackend(
     },
     output: async (taskId: string) => ({ taskId, name: taskId, status: 'running' as const }),
     send: async () => {},
-    stop: async () => {},
+    stop: async (taskId: string) => {
+      stopped.push(taskId);
+      if (inFlightByTask.get(taskId)) {
+        inFlight -= 1;
+        inFlightByTask.set(taskId, false);
+      }
+    },
   };
   return {
     backend,
     peakInFlight: () => peak,
     spawnCount: () => spawns,
+    stoppedTaskIds: () => [...stopped],
   };
 }
 
@@ -105,6 +114,38 @@ describe('runWorkflow — event envelope + ordering', () => {
     if (!outcome.ok) expect(outcome.error.message).toBe('script boom');
     expect(outcome.state.status).toBe('failed');
     expect(outcome.state.events.at(-1)?.type).toBe('workflow_failed');
+  });
+
+  it('stops spawned-but-unwaited children when the workflow fails', async () => {
+    const { backend, stoppedTaskIds } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.spawnAgent({ name: 'left-running', prompt: 'keep working' });
+      throw new Error('script boom');
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(stoppedTaskIds()).toEqual(['task-1']);
+    expect(outcome.state.events.map((event) => event.type)).toContain('agent_stopped');
+  });
+
+  it('does not hang the failed outcome when backend.stop never resolves', async () => {
+    const { backend } = fakeBackend();
+    const hangingStopBackend: WorkflowAgentBackend = {
+      ...backend,
+      stop: () => new Promise<void>(() => {}),
+    };
+    const startedAt = Date.now();
+
+    const outcome = await runWorkflow(baseOpts(hangingStopBackend), async (wf) => {
+      await wf.spawnAgent({ name: 'left-running', prompt: 'keep working' });
+      throw new Error('script boom');
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(outcome.ok).toBe(false);
+    expect(outcome.state.events.at(-1)?.type).toBe('workflow_failed');
+    const stopped = outcome.state.events.find((event) => event.type === 'agent_stopped');
+    expect(stopped?.data?.stopTimedOut).toBe(true);
   });
 });
 
@@ -207,6 +248,30 @@ describe('maxConcurrency / parallel in-flight gate', () => {
 
     expect(outcome.ok).toBe(true);
     expect(peakInFlight()).toBeLessThanOrEqual(2);
+  });
+
+  it('fails fast instead of soft-deadlocking behind an un-waited spawnAgent handle', async () => {
+    const { backend, stoppedTaskIds } = fakeBackend();
+    const outcomeOrTimeout = await Promise.race([
+      runWorkflow(
+        baseOpts(backend, { limits: { maxConcurrency: 1 } }),
+        async (wf) => {
+          await wf.spawnAgent({ name: 'left-running', prompt: 'keep working' });
+          await wf.parallel([
+            () => wf.runAgent({ name: 'blocked-behind-left-running', prompt: 'x' }),
+          ]);
+          return 'unreached';
+        },
+      ),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 500)),
+    ]);
+
+    expect(outcomeOrTimeout).not.toBe('timeout');
+    if (outcomeOrTimeout !== 'timeout') {
+      expect(outcomeOrTimeout.ok).toBe(false);
+      if (!outcomeOrTimeout.ok) expect(outcomeOrTimeout.error).toBeInstanceOf(WorkflowLimitError);
+    }
+    expect(stoppedTaskIds()).toEqual(['task-1']);
   });
 });
 

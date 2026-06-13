@@ -11,7 +11,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   parseWorkflowInvocation,
@@ -24,6 +24,7 @@ import {
   formatWorkflowRunSnapshot,
   savedWorkflowDirs,
   formatSavedList,
+  isSafeWorkflowRunId,
   renderWorkflowHelp,
   resolveConfirm,
   workflowCommand,
@@ -51,6 +52,11 @@ describe('parseWorkflowInvocation', () => {
       kind: 'save',
       runId: 'run-1',
       name: 'audit',
+    });
+    expect(parseWorkflowInvocation(['rerun', 'run-1', '{"request":"请复查"}'])).toEqual({
+      kind: 'rerun',
+      runId: 'run-1',
+      rawArgs: '{"request":"请复查"}',
     });
     expect(parseWorkflowInvocation(['create', 'compare', 'three', 'hypotheses'])).toEqual({
       kind: 'create',
@@ -122,13 +128,14 @@ describe('renderApprovalPrompt', () => {
         source: 'generated',
         sandbox: 'capability-generated',
         mayUseWorktree: true,
-        rawScriptPath: '/tmp/run/script.js',
+        rawScript: 'async function run() { return "ok"; }',
       },
     );
     expect(text).toContain('source: generated');
     expect(text).toContain('sandbox/trust: capability-generated');
     expect(text).toContain('worktree isolation: may request worktree');
-    expect(text).toContain('raw script: /tmp/run/script.js');
+    expect(text).toContain('raw script:');
+    expect(text).toContain('async function run()');
   });
 });
 
@@ -228,9 +235,21 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow resume <runId>');
     expect(text).toContain('/workflow stop <runId>');
     expect(text).toContain('/workflow save <runId> <name>');
+    expect(text).toContain('/workflow rerun <runId> [args]');
     expect(text).toContain('/workflow help');
+    expect(text).toContain('workflow capsule');
     expect(text).toContain('capability WorkflowApi runner');
     expect(text).toContain('trusted-local');
+  });
+});
+
+describe('isSafeWorkflowRunId', () => {
+  it('allows generated run ids and rejects path traversal', () => {
+    expect(isSafeWorkflowRunId('run-lx3')).toBe(true);
+    expect(isSafeWorkflowRunId('run_2026-06-13')).toBe(true);
+    expect(isSafeWorkflowRunId('../run-lx3')).toBe(false);
+    expect(isSafeWorkflowRunId('..\\run-lx3')).toBe(false);
+    expect(isSafeWorkflowRunId('')).toBe(false);
   });
 });
 
@@ -271,6 +290,75 @@ describe('workflowCommand registration shape', () => {
     expect(typeof workflowCommand.handler).toBe('function');
     expect(workflowCommand.usage).toContain('/workflow');
     expect(workflowCommand.argumentHint).toContain('help');
+    expect(workflowCommand.argumentHint).toContain('rerun');
     expect(workflowCommand.detailedHelp).toBeDefined();
+  });
+});
+
+describe('workflowCommand saved capsule preflight', () => {
+  let dir = '';
+  let previousCwd = '';
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'wf-command-'));
+    previousCwd = process.cwd();
+    process.chdir(dir);
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+    process.chdir(previousCwd);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('prints dependency-inventory warnings before saved capsule approval', async () => {
+    const workflowsDir = join(dir, '.kodax', 'workflows');
+    mkdirSync(workflowsDir, { recursive: true });
+    writeFileSync(
+      join(workflowsDir, 'needs-inventory.workflow.json'),
+      JSON.stringify({
+        format: 'kodax.workflow',
+        version: 1,
+        workflowApiVersion: 1,
+        minKodaxVersion: '0.7.49',
+        manifest: {
+          name: 'needs-inventory',
+          description: 'requires an external shell tool',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 1,
+          maxConcurrency: 1,
+          patterns: ['classify-and-act'],
+        },
+        source: 'async function run() { return "ok"; }',
+        requires: {
+          tools: ['bash'],
+        },
+      }),
+      'utf8',
+    );
+    const prompts: string[] = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    const callbacks = {
+      confirm: async (message: string) => {
+        prompts.push(message);
+        return false;
+      },
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['needs-inventory'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('capsule preflight warnings');
+    expect(output).toContain('tools:bash');
+    expect(prompts[0]).toContain('raw script:');
   });
 });

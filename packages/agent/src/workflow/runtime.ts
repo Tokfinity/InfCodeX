@@ -54,6 +54,29 @@ export class WorkflowBudgetError extends Error {
   }
 }
 
+const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
+const CONCURRENCY_DEADLOCK_CHECK_MS = 50;
+
+type StopActiveTaskOutcome =
+  | 'stopped'
+  | 'timed-out'
+  | { readonly error: string };
+
+interface SemaphoreAcquireOptions {
+  readonly deadlockCheckMs?: number;
+  shouldRejectWait(): boolean;
+  createRejection(): Error;
+}
+
+interface SemaphoreWaiter {
+  resolve(): void;
+  reject(error: Error): void;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function readPositiveLimit(
   limits: WorkflowLimits | undefined,
   key: keyof WorkflowLimits,
@@ -81,24 +104,45 @@ export function normalizeWorkflowLimits(limits?: WorkflowLimits): WorkflowLimits
 /** Capacity-bounded async semaphore. `Infinity` capacity never blocks. */
 class Semaphore {
   private available: number;
-  private readonly waiters: Array<() => void> = [];
+  private readonly waiters: SemaphoreWaiter[] = [];
 
   constructor(capacity: number) {
     this.available = capacity;
   }
 
-  async acquire(): Promise<void> {
+  async acquire(options?: SemaphoreAcquireOptions): Promise<void> {
     if (this.available > 0) {
       this.available -= 1;
       return;
     }
-    await new Promise<void>((resolve) => this.waiters.push(resolve));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await new Promise<void>((resolve, reject) => {
+      const waiter: SemaphoreWaiter = {
+        resolve: () => {
+          if (timer) clearTimeout(timer);
+          resolve();
+        },
+        reject: (error: Error) => {
+          if (timer) clearTimeout(timer);
+          reject(error);
+        },
+      };
+      this.waiters.push(waiter);
+      if (options?.deadlockCheckMs !== undefined) {
+        timer = setTimeout(() => {
+          if (!options.shouldRejectWait()) return;
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          waiter.reject(options.createRejection());
+        }, options.deadlockCheckMs);
+      }
+    });
   }
 
   release(): void {
     const next = this.waiters.shift();
     if (next) {
-      next();
+      next.resolve();
     } else {
       this.available += 1;
     }
@@ -167,6 +211,7 @@ export interface WorkflowRuntimeHandle {
 interface InternalRuntime extends WorkflowRuntimeHandle {
   readonly recorder: WorkflowEventRecorder;
   setStatus(status: WorkflowRunStatus): void;
+  stopActiveTasks(reason: string): Promise<readonly string[]>;
 }
 
 function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
@@ -182,6 +227,8 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   let status: WorkflowRunStatus = 'running';
   const artifacts: WorkflowArtifactRef[] = [];
   const releaseByTask = new Map<string, () => void>();
+  const activeTaskIds = new Set<string>();
+  let activeReleaseOperations = 0;
 
   const checkAbort = (): void => {
     if (opts.signal?.aborted) throw new WorkflowAbortError();
@@ -197,6 +244,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     const release = releaseByTask.get(taskId);
     if (!release) return;
     releaseByTask.delete(taskId);
+    activeTaskIds.delete(taskId);
     release();
   };
 
@@ -206,11 +254,26 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     }
   };
 
+  const blockedByUnreleasedTasks = (): boolean =>
+    Number.isFinite(maxConcurrency) &&
+    activeTaskIds.size >= maxConcurrency &&
+    activeReleaseOperations === 0;
+
   const doSpawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     checkAbort();
     checkBudget();
     checkAgentCap();
-    await concurrency.acquire();
+    await concurrency.acquire({
+      deadlockCheckMs: Number.isFinite(maxConcurrency)
+        ? CONCURRENCY_DEADLOCK_CHECK_MS
+        : undefined,
+      shouldRejectWait: blockedByUnreleasedTasks,
+      createRejection: () =>
+        new WorkflowLimitError(
+          `maxConcurrency cap (${maxConcurrency}) is occupied by active spawned agents; ` +
+            'wait or stop existing handles before launching more agents',
+        ),
+    });
     let acquired = true;
     try {
       checkAbort();
@@ -218,6 +281,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       checkAgentCap();
       totalSpawned += 1;
       const handle = await opts.backend.spawn(input);
+      activeTaskIds.add(handle.taskId);
       releaseByTask.set(handle.taskId, () => {
         if (!acquired) return;
         acquired = false;
@@ -242,6 +306,8 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     taskId: string,
     opts2: WorkflowWaitOptions | undefined,
   ): Promise<WorkflowTaskResult> => {
+    const releasesCapacity = releaseByTask.has(taskId);
+    if (releasesCapacity) activeReleaseOperations += 1;
     try {
       const result = await opts.backend.wait(taskId, opts2);
       accrue(result);
@@ -252,6 +318,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       });
       return result;
     } finally {
+      if (releasesCapacity) activeReleaseOperations -= 1;
       releaseTaskCapacity(taskId);
     }
   };
@@ -311,9 +378,15 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     },
 
     stop: async (taskId, reason) => {
-      await opts.backend.stop(taskId, reason);
-      releaseTaskCapacity(taskId);
-      recorder.emit('agent_stopped', { taskId, reason });
+      const releasesCapacity = releaseByTask.has(taskId);
+      if (releasesCapacity) activeReleaseOperations += 1;
+      try {
+        await opts.backend.stop(taskId, reason);
+      } finally {
+        if (releasesCapacity) activeReleaseOperations -= 1;
+        releaseTaskCapacity(taskId);
+        recorder.emit('agent_stopped', { taskId, reason });
+      }
     },
 
     parallel: <T>(items: readonly (() => Promise<T>)[], parallelOpts?: WorkflowParallelOptions) => {
@@ -361,6 +434,41 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     setStatus: (s) => {
       status = s;
     },
+    stopActiveTasks: async (reason: string): Promise<readonly string[]> => {
+      const errors: string[] = [];
+      const taskIds = [...activeTaskIds];
+      await Promise.all(
+        taskIds.map(async (taskId) => {
+          let stopError: string | undefined;
+          let stopTimedOut = false;
+          const stop = Promise.resolve()
+            .then(() => opts.backend.stop(taskId, reason))
+            .then((): StopActiveTaskOutcome => 'stopped')
+            .catch((error: unknown): StopActiveTaskOutcome => ({
+              error: error instanceof Error ? error.message : String(error),
+            }));
+          const timeout = delay(STOP_ACTIVE_TASK_TIMEOUT_MS).then(
+            (): StopActiveTaskOutcome => 'timed-out',
+          );
+          const outcome = await Promise.race([stop, timeout]);
+          if (typeof outcome === 'object') {
+            stopError = outcome.error;
+            errors.push(`${taskId}: ${stopError}`);
+          } else if (outcome === 'timed-out') {
+            stopTimedOut = true;
+            errors.push(`${taskId}: stop timed out after ${STOP_ACTIVE_TASK_TIMEOUT_MS}ms`);
+          }
+          releaseTaskCapacity(taskId);
+          recorder.emit('agent_stopped', {
+            taskId,
+            reason,
+            ...(stopError !== undefined ? { error: stopError } : {}),
+            ...(stopTimedOut ? { stopTimedOut } : {}),
+          });
+        }),
+      );
+      return errors;
+    },
     getState: (): WorkflowRunState => ({
       runId: opts.runId,
       status,
@@ -406,8 +514,12 @@ export async function runWorkflow<T>(
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     if (rt) {
+      const stopErrors = await rt.stopActiveTasks('workflow failed');
       rt.setStatus('failed');
-      rt.recorder.emit('workflow_failed', { error: err.message });
+      rt.recorder.emit('workflow_failed', {
+        error: err.message,
+        ...(stopErrors.length > 0 ? { stopErrors } : {}),
+      });
       return { ok: false, error: err, state: rt.getState() };
     }
     return {

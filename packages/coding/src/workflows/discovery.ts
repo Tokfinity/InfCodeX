@@ -14,12 +14,19 @@
  */
 
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  createRestrictedWorkflowModule,
+  createWorkflowCapsule,
+  createWorkflowModuleFromCapsule,
+  validateWorkflowCapsule,
   validateWorkflowScriptManifest,
+  type WorkflowCapsule,
+  type WorkflowCapsuleIntent,
+  type WorkflowCapsuleInputs,
+  type WorkflowCapsuleProvenance,
+  type WorkflowCapsuleRequirements,
   type WorkflowModule,
   type WorkflowScriptManifest,
 } from '@kodax-ai/agent';
@@ -48,6 +55,8 @@ export interface SavedWorkflowDirs {
 export interface SavedGeneratedWorkflowFile {
   readonly manifest: WorkflowScriptManifest;
   readonly source: string;
+  readonly capsule?: WorkflowCapsule;
+  readonly legacy?: boolean;
 }
 
 export interface SaveGeneratedWorkflowInput {
@@ -55,6 +64,11 @@ export interface SaveGeneratedWorkflowInput {
   readonly name: string;
   readonly manifest: WorkflowScriptManifest;
   readonly source: string;
+  readonly intent?: WorkflowCapsuleIntent;
+  readonly inputs?: WorkflowCapsuleInputs;
+  readonly requires?: WorkflowCapsuleRequirements;
+  readonly provenance?: WorkflowCapsuleProvenance;
+  readonly minKodaxVersion?: string;
 }
 
 export interface SaveGeneratedWorkflowFromRunInput {
@@ -62,6 +76,36 @@ export interface SaveGeneratedWorkflowFromRunInput {
   readonly targetDir: string;
   readonly name: string;
 }
+
+export interface LoadGeneratedWorkflowFromRunInput {
+  readonly runDir: string;
+}
+
+export interface LoadedGeneratedWorkflowFromRun {
+  readonly capsule: WorkflowCapsule;
+  readonly module: WorkflowModule;
+}
+
+export interface WorkflowCapsulePreflightIssue {
+  readonly severity: 'error' | 'warning';
+  readonly requirement: string;
+  readonly message: string;
+}
+
+export interface WorkflowCapsulePreflightResult {
+  readonly ok: boolean;
+  readonly issues: readonly WorkflowCapsulePreflightIssue[];
+}
+
+export interface WorkflowCapsulePreflightEnvironment {
+  readonly isGitRepo?: boolean;
+  readonly worktreeCapable?: boolean;
+  readonly availableTools?: readonly string[];
+  readonly availableMcp?: readonly string[];
+  readonly availableSkills?: readonly string[];
+}
+
+const KODAX_WORKFLOW_CAPSULE_MIN_VERSION = '0.7.49';
 
 function executionForPath(path: string): SavedWorkflowExecution {
   return path.endsWith('.workflow.json') ? 'capability-generated' : 'trusted-local';
@@ -177,27 +221,56 @@ function parseGeneratedWorkflowFile(raw: string): SavedGeneratedWorkflowFile {
   if (!isRecord(data)) {
     throw new Error('generated workflow file must be an object');
   }
+  if (data.format !== undefined && data.format !== 'kodax.workflow') {
+    throw new Error(`unsupported workflow capsule format: ${String(data.format)}`);
+  }
+  if (data.format === 'kodax.workflow') {
+    const capsule = validateWorkflowCapsule(data);
+    return {
+      manifest: capsule.manifest,
+      source: capsule.source,
+      capsule,
+      legacy: false,
+    };
+  }
   const source = data.source;
   if (typeof source !== 'string' || source.trim().length === 0) {
     throw new Error('generated workflow file source must be a non-empty string');
   }
+  const manifest = validateWorkflowScriptManifest(data.manifest);
   return {
-    manifest: validateWorkflowScriptManifest(data.manifest),
+    manifest,
     source,
+    capsule: createWorkflowCapsule({
+      minKodaxVersion: KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+      manifest,
+      source,
+    }),
+    legacy: true,
   };
+}
+
+export async function loadSavedWorkflowCapsule(filePath: string): Promise<WorkflowCapsule> {
+  const generated = parseGeneratedWorkflowFile(await readFile(filePath, 'utf8'));
+  return generated.capsule ?? createWorkflowCapsule({
+    minKodaxVersion: KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    manifest: generated.manifest,
+    source: generated.source,
+  });
 }
 
 /** Dynamically import + normalize a saved workflow file. Executes local code. */
 export async function loadSavedWorkflow(filePath: string): Promise<WorkflowModule> {
   if (filePath.endsWith('.workflow.json')) {
-    const generated = parseGeneratedWorkflowFile(await readFile(filePath, 'utf8'));
-    return createRestrictedWorkflowModule({
-      manifest: generated.manifest,
-      source: generated.source,
-    });
+    return createWorkflowModuleFromCapsule(await loadSavedWorkflowCapsule(filePath));
   }
   const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
   return normalizeWorkflowModule(mod);
+}
+
+function deriveRequirements(manifest: WorkflowScriptManifest): WorkflowCapsuleRequirements | undefined {
+  if (manifest.mayUseWorktree !== true) return undefined;
+  return { environment: ['git-repo', 'worktree-capable'] };
 }
 
 export async function saveGeneratedWorkflow(
@@ -205,13 +278,19 @@ export async function saveGeneratedWorkflow(
 ): Promise<SavedWorkflowRef> {
   const safeName = safeWorkflowName(input.name);
   const manifest = validateWorkflowScriptManifest(input.manifest);
+  const requirements = input.requires ?? deriveRequirements(manifest);
+  const capsule = createWorkflowCapsule({
+    minKodaxVersion: input.minKodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    manifest,
+    source: input.source,
+    ...(input.intent !== undefined ? { intent: input.intent } : {}),
+    ...(input.inputs !== undefined ? { inputs: input.inputs } : {}),
+    ...(requirements !== undefined ? { requires: requirements } : {}),
+    ...(input.provenance !== undefined ? { provenance: input.provenance } : {}),
+  });
   await mkdir(input.dir, { recursive: true });
   const path = join(input.dir, `${safeName}.workflow.json`);
-  await writeFile(
-    path,
-    `${JSON.stringify({ manifest, source: input.source }, null, 2)}\n`,
-    'utf8',
-  );
+  await writeFile(path, `${JSON.stringify(capsule, null, 2)}\n`, 'utf8');
   return {
     name: safeName,
     path,
@@ -220,9 +299,20 @@ export async function saveGeneratedWorkflow(
   };
 }
 
-export async function saveGeneratedWorkflowFromRun(
-  input: SaveGeneratedWorkflowFromRunInput,
-): Promise<SavedWorkflowRef> {
+function readOptionalOriginalRequest(args: unknown): string | undefined {
+  if (!isRecord(args)) return undefined;
+  const request = args.request;
+  if (typeof request === 'string' && request.trim().length > 0) return request;
+  const question = args.question;
+  if (typeof question === 'string' && question.trim().length > 0) return question;
+  return undefined;
+}
+
+function buildCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Promise<WorkflowCapsule> {
+  return readCapsuleFromRun(input);
+}
+
+async function readCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Promise<WorkflowCapsule> {
   const runRaw = JSON.parse(await readFile(join(input.runDir, 'run.json'), 'utf8')) as unknown;
   if (!isRecord(runRaw)) {
     throw new Error('workflow run.json must be an object');
@@ -233,10 +323,133 @@ export async function saveGeneratedWorkflowFromRun(
   const manifest = validateWorkflowScriptManifest(
     JSON.parse(await readFile(manifestPath, 'utf8')) as unknown,
   );
+  const runId = typeof runRaw.runId === 'string' && runRaw.runId.length > 0
+    ? runRaw.runId
+    : basename(input.runDir);
+  const originalRequest = readOptionalOriginalRequest(runRaw.args);
+  const requirements = deriveRequirements(manifest);
+  const intent: WorkflowCapsuleIntent = {
+    taskClass: manifest.patterns[0] ?? manifest.name,
+    ...(originalRequest !== undefined ? { originalRequest } : {}),
+    reusableFor: [manifest.description],
+  };
+  const inputs: WorkflowCapsuleInputs = {
+    description: 'Provide new workflow args matching the generated request shape.',
+    ...('args' in runRaw ? { examples: [runRaw.args] } : {}),
+  };
+  return createWorkflowCapsule({
+    minKodaxVersion: KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    manifest,
+    source,
+    intent,
+    inputs,
+    ...(requirements !== undefined ? { requires: requirements } : {}),
+    provenance: {
+      fromRunId: runId,
+      createdAt: new Date().toISOString(),
+      kodaxVersion: process.env.npm_package_version ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    },
+  });
+}
+
+export async function loadGeneratedWorkflowFromRun(
+  input: LoadGeneratedWorkflowFromRunInput,
+): Promise<LoadedGeneratedWorkflowFromRun> {
+  const capsule = await buildCapsuleFromRun(input);
+  return {
+    capsule,
+    module: createWorkflowModuleFromCapsule(capsule),
+  };
+}
+
+export async function saveGeneratedWorkflowFromRun(
+  input: SaveGeneratedWorkflowFromRunInput,
+): Promise<SavedWorkflowRef> {
+  const capsule = await buildCapsuleFromRun(input);
   return saveGeneratedWorkflow({
     dir: input.targetDir,
     name: input.name,
-    manifest,
-    source,
+    manifest: capsule.manifest,
+    source: capsule.source,
+    ...(capsule.intent !== undefined ? { intent: capsule.intent } : {}),
+    ...(capsule.inputs !== undefined ? { inputs: capsule.inputs } : {}),
+    ...(capsule.requires !== undefined ? { requires: capsule.requires } : {}),
+    ...(capsule.provenance !== undefined ? { provenance: capsule.provenance } : {}),
+    minKodaxVersion: capsule.minKodaxVersion,
   });
+}
+
+function addRequirementIssue(
+  issues: WorkflowCapsulePreflightIssue[],
+  severity: WorkflowCapsulePreflightIssue['severity'],
+  requirement: string,
+  message: string,
+): void {
+  issues.push({ severity, requirement, message });
+}
+
+function addMissingItems(
+  issues: WorkflowCapsulePreflightIssue[],
+  kind: 'tools' | 'mcp' | 'skills',
+  required: readonly string[] | undefined,
+  available: readonly string[] | undefined,
+): void {
+  if (!required) return;
+  if (!available) {
+    for (const item of required) {
+      addRequirementIssue(
+        issues,
+        'warning',
+        `${kind}:${item}`,
+        `workflow requires ${kind}:${item}, but no ${kind} inventory was provided`,
+      );
+    }
+    return;
+  }
+  const set = new Set(available);
+  for (const item of required) {
+    if (!set.has(item)) {
+      addRequirementIssue(
+        issues,
+        'error',
+        `${kind}:${item}`,
+        `missing required workflow ${kind}: ${item}`,
+      );
+    }
+  }
+}
+
+export function preflightWorkflowCapsule(
+  capsule: WorkflowCapsule,
+  env: WorkflowCapsulePreflightEnvironment = {},
+): WorkflowCapsulePreflightResult {
+  const validated = validateWorkflowCapsule(capsule);
+  const issues: WorkflowCapsulePreflightIssue[] = [];
+  const requirements = validated.requires;
+  if (requirements?.environment?.includes('git-repo') && env.isGitRepo === false) {
+    addRequirementIssue(
+      issues,
+      'error',
+      'environment:git-repo',
+      'workflow requires a git repository',
+    );
+  }
+  if (
+    requirements?.environment?.includes('worktree-capable') &&
+    env.worktreeCapable === false
+  ) {
+    addRequirementIssue(
+      issues,
+      'error',
+      'environment:worktree-capable',
+      'workflow may request git worktree isolation',
+    );
+  }
+  addMissingItems(issues, 'tools', requirements?.tools, env.availableTools);
+  addMissingItems(issues, 'mcp', requirements?.mcp, env.availableMcp);
+  addMissingItems(issues, 'skills', requirements?.skills, env.availableSkills);
+  return {
+    ok: !issues.some((issue) => issue.severity === 'error'),
+    issues,
+  };
 }

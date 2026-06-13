@@ -10,8 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   discoverSavedWorkflows,
+  loadGeneratedWorkflowFromRun,
   loadSavedWorkflow,
+  loadSavedWorkflowCapsule,
   normalizeWorkflowModule,
+  preflightWorkflowCapsule,
   saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
 } from './discovery.js';
@@ -142,6 +145,29 @@ describe('loadSavedWorkflow', () => {
     const mod = await loadSavedWorkflow(file);
     await expect(mod.run({} as never, {})).rejects.toThrow(/restricted workflow script failed/);
   });
+
+  it('rejects .workflow.json files with an unsupported explicit format', async () => {
+    const file = join(dir, 'future.workflow.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        format: 'kodax.workflow.v2',
+        manifest: {
+          name: 'future',
+          description: 'future',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 1,
+          maxConcurrency: 1,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run() { return "ok"; }',
+      }),
+      'utf8',
+    );
+
+    await expect(loadSavedWorkflow(file)).rejects.toThrow(/unsupported workflow capsule format/);
+  });
 });
 
 describe('saveGeneratedWorkflow', () => {
@@ -173,11 +199,14 @@ describe('saveGeneratedWorkflow', () => {
     expect(ref.execution).toBe('capability-generated');
     expect(ref.path.endsWith('unsafe-demo.workflow.json')).toBe(true);
     expect(existsSync(ref.path)).toBe(true);
-    const data = JSON.parse(readFileSync(ref.path, 'utf8'));
-    expect(data.manifest.name).toBe('saved-demo');
+    const data = JSON.parse(readFileSync(ref.path, 'utf8')) as Record<string, unknown>;
+    expect(data.format).toBe('kodax.workflow');
+    expect(data.version).toBe(1);
+    expect(data.source).toBe('async function run() { return "ok"; }');
+    expect((data.manifest as { readonly name?: string }).name).toBe('saved-demo');
   });
 
-  it('saves from a completed run script snapshot and can rerun it', async () => {
+  it('saves from a completed run script snapshot as a reusable capsule', async () => {
     const runDir = join(dir, 'run-1');
     mkdirSync(runDir, { recursive: true });
     const scriptPath = join(runDir, 'script.js');
@@ -189,6 +218,7 @@ describe('saveGeneratedWorkflow', () => {
       JSON.stringify({
         runId: 'run-1',
         workflow: 'generated',
+        args: { request: '请审计 packages/agent' },
         scriptSnapshotPath: scriptPath,
         manifestSnapshotPath: manifestPath,
       }),
@@ -200,7 +230,128 @@ describe('saveGeneratedWorkflow', () => {
       targetDir: join(dir, 'workflows'),
       name: 'saved-demo',
     });
+    const data = JSON.parse(readFileSync(ref.path, 'utf8')) as Record<string, unknown>;
+    const provenance = data.provenance as { readonly fromRunId?: string } | undefined;
+    const inputs = data.inputs as { readonly examples?: readonly unknown[] } | undefined;
+    expect(data.format).toBe('kodax.workflow');
+    expect(provenance?.fromRunId).toBe('run-1');
+    expect(inputs?.examples).toEqual([{ request: '请审计 packages/agent' }]);
+
     const mod = await loadSavedWorkflow(ref.path);
     expect(await mod.run({} as never, {})).toBe('ok');
+  });
+
+  it('loads a generated workflow directly from run history without saving it', async () => {
+    const runDir = join(dir, 'run-2');
+    mkdirSync(runDir, { recursive: true });
+    const scriptPath = join(runDir, 'script.js');
+    const manifestPath = join(runDir, 'manifest.json');
+    writeFileSync(scriptPath, 'async function run() { return "rerun-ok"; }', 'utf8');
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-2',
+        workflow: 'generated',
+        args: { request: '请检查旧目标' },
+        scriptSnapshotPath: scriptPath,
+        manifestSnapshotPath: manifestPath,
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadGeneratedWorkflowFromRun({ runDir });
+    expect(loaded.capsule.provenance?.fromRunId).toBe('run-2');
+    expect(await loaded.module.run({} as never, {})).toBe('rerun-ok');
+  });
+
+  it('preflights lightweight capsule requirements against the current environment', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'needs-worktree',
+      manifest: { ...manifest, mayUseWorktree: true },
+      source: 'async function run() { return "ok"; }',
+      requires: {
+        environment: ['git-repo', 'worktree-capable'],
+        skills: ['feature-list-tracker'],
+      },
+    });
+    const loaded = await loadGeneratedWorkflowFromRun({
+      runDir: (() => {
+        const runDir = join(dir, 'run-preflight');
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(join(runDir, 'script.js'), 'async function run() { return "ok"; }', 'utf8');
+        writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest), 'utf8');
+        writeFileSync(
+          join(runDir, 'run.json'),
+          JSON.stringify({
+            runId: 'run-preflight',
+            workflow: 'generated',
+            scriptSnapshotPath: join(runDir, 'script.js'),
+            manifestSnapshotPath: join(runDir, 'manifest.json'),
+          }),
+          'utf8',
+        );
+        return runDir;
+      })(),
+    });
+
+    const fileData = JSON.parse(readFileSync(ref.path, 'utf8')) as Record<string, unknown>;
+    const result = preflightWorkflowCapsule(
+      {
+        ...loaded.capsule,
+        requires: fileData.requires as typeof loaded.capsule.requires,
+      },
+      {
+        isGitRepo: false,
+        worktreeCapable: false,
+        availableSkills: [],
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.issues.map((issue) => issue.requirement)).toEqual([
+      'environment:git-repo',
+      'environment:worktree-capable',
+      'skills:feature-list-tracker',
+    ]);
+  });
+
+  it('warns when dependency inventories are unavailable instead of silently skipping them', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'needs-inventory',
+      manifest,
+      source: 'async function run() { return "ok"; }',
+      requires: {
+        tools: ['bash'],
+        mcp: ['github'],
+        skills: ['feature-list-tracker'],
+      },
+    });
+    const capsule = await loadSavedWorkflowCapsule(ref.path);
+
+    const result = preflightWorkflowCapsule(capsule, {
+      isGitRepo: true,
+      worktreeCapable: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([
+      {
+        severity: 'warning',
+        requirement: 'tools:bash',
+        message: 'workflow requires tools:bash, but no tools inventory was provided',
+      },
+      {
+        severity: 'warning',
+        requirement: 'mcp:github',
+        message: 'workflow requires mcp:github, but no mcp inventory was provided',
+      },
+      {
+        severity: 'warning',
+        requirement: 'skills:feature-list-tracker',
+        message: 'workflow requires skills:feature-list-tracker, but no skills inventory was provided',
+      },
+    ]);
   });
 });

@@ -233,15 +233,16 @@ connection logic.
 Workflow runtime has a strict boundary:
 
 - `packages/agent/src/workflow`: domain-neutral runtime, event recorder,
-  concurrency/cap accounting, abort, limit validation, public SDK types, and
-  backend injection.
+  concurrency/cap accounting, abort, limit validation, public SDK types,
+  workflow capsule validation/factory helpers, and backend injection.
 - `packages/coding/src/workflows`: coding backend, built-ins, durable run graph,
-  saved workflow discovery, and `/workflow` command integration.
+  workflow capsule persistence/preflight, saved workflow discovery, and
+  `/workflow` command integration.
 
 FEATURE_217 is the v0.7.49 Dynamic Workflow product feature. The implementation
 provides the substrate, JavaScript harness generation, background manager
 behavior, pause/resume/stop/save, workflow-level worktree wiring, hard budget
-checks, and advanced workflow pattern templates.
+checks, workflow capsule reuse, and advanced workflow pattern templates.
 
 Generated workflows remain dynamic JavaScript, but the runner boundary is a
 capability boundary: the script may hold loops, branches, intermediate results,
@@ -250,6 +251,14 @@ filesystem, shell, process, environment, module import, or network APIs. The
 host handles `wf.*` as structured commands and applies existing permission gates
 through child agents. `node:vm` with host objects is not a valid trust boundary
 for generated workflows.
+
+Saved generated workflows use a small capsule contract rather than a bare script
+file. A capsule stores the generated source, validated manifest, task intent,
+input examples, lightweight requirements (`git-repo`, `worktree-capable`,
+tools, MCPs, skills, model tiers), and provenance. Full JSON Schema is deferred
+until KodaX needs third-party generation, marketplace-style distribution, or
+complex cross-tool requirement validation; v0.7.49 uses TypeScript contracts and
+runtime validation to stay minimal.
 
 ## 14. REPL Detail
 

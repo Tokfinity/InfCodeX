@@ -111,11 +111,14 @@ workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 
 FEATURE_217 is the v0.7.49 home for the complete Dynamic Workflow product loop.
 The shipped surface includes Agent-layer `createWorkflowRuntime`,
-`runWorkflow`, `normalizeWorkflowLimits`, coding backend integration, one
-built-in read-only workflow, durable run graph, saved-workflow discovery,
-capability-routed generated scripts, `/workflow create`, background lifecycle
-management, pause/resume/stop/save, hard budget checks, opt-in worktree routing,
-and richer workflow pattern templates.
+`runWorkflow`, `normalizeWorkflowLimits`, workflow capsule helpers, coding
+backend integration, one built-in read-only workflow, durable run graph,
+saved-workflow discovery, capability-routed generated scripts, `/workflow
+create`, background lifecycle management, pause/resume/stop/save/rerun, hard
+budget checks, opt-in worktree routing, and richer workflow pattern templates.
+Generated workflows can be promoted into lightweight capsules that preserve the
+script plus manifest, intent, input examples, requirements, and provenance so
+they remain reusable across sessions and understandable to SDK consumers.
 
 ### Safety And Control
 

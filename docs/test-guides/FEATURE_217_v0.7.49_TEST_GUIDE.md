@@ -7,7 +7,7 @@
 **测试日期**: 2026-06-13
 **测试人员**: 待填写
 
-FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生成 JavaScript harness，runtime 负责并发、预算、取消、事件和 run graph，REPL 提供 `/workflow` 显式入口。v0.7.49 额外补齐 `SA / AMA / AMAW` 三种 agent mode：AMA 可显式使用 `/workflow` 并在复杂自然语言任务上建议 workflow；AMAW 可对显式/复杂候选静默启动 capability-isolated generated workflow，但不绕过权限 gate、本地代码确认或预算限制。workflow script 负责调度，真实文件、shell、MCP、web 等副作用仍由 child agents 通过既有工具权限执行。
+FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生成 JavaScript harness，runtime 负责并发、预算、取消、事件和 run graph，REPL 提供 `/workflow` 显式入口。v0.7.49 额外补齐 `SA / AMA / AMAW` 三种 agent mode：AMA 可显式使用 `/workflow` 并在复杂自然语言任务上建议 workflow；AMAW 可对显式/复杂候选静默启动 capability-isolated generated workflow，但不绕过权限 gate、本地代码确认或预算限制。workflow script 负责调度，真实文件、shell、MCP、web 等副作用仍由 child agents 通过既有工具权限执行。生成的 workflow 可以保存为 workflow capsule：脚本仍保存，但会附带 manifest、意图、输入示例、环境/skill/MCP/tool 依赖和 provenance，便于复用前判断是否适合当前机器和项目。
 
 ## 测试环境
 
@@ -26,10 +26,10 @@ FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生
 - Coding workflow adapter 的 spawn / wait / output / send / stop 映射。
 - Durable run graph：`run.json`、`events.jsonl`、`artifacts`、`script.js`、`manifest.json`。
 - Workflow generator 的 generate / decline 解析和 manifest validation。
-- Saved `.workflow.json` discovery、restricted rerun、trusted-local confirmation。
+- Saved workflow capsule discovery、restricted rerun、legacy `.workflow.json` compatibility、trusted-local confirmation。
 - Generated JS capability runner 逃逸回归：不能通过 `wf.constructor.constructor('return process')()`、`globalThis.constructor` 等路径拿到宿主 `process`。
 - Background run manager：list / show / pause / resume / stop。
-- `/workflow` 子命令 parsing、help、approval prompt、saved-list、run-list。
+- `/workflow` 子命令 parsing、help、approval prompt、saved-list、run-list、rerun、save capsule。
 - AMAW invocation policy、`/agent-mode amaw`、状态栏短标签 `AMAW`、`/review --workflow` request builder。
 - AMAW 按 AMA-family 预算运行；Alt+M 可从 AMAW 切回 SA。
 
@@ -38,7 +38,10 @@ FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生
 ```powershell
 npm test -- packages/agent/src/workflow packages/coding/src/workflows packages/coding/src/child-executor.test.ts packages/repl/src/commands/workflow-command.test.ts packages/repl/src/commands/review-command.test.ts packages/repl/src/interactive/commands-help.test.ts packages/repl/src/ui/view-models/status-bar.test.ts packages/repl/src/ui/view-models/ama-summary.test.ts packages/repl/src/ui/shortcuts/GlobalShortcuts.test.ts packages/coding/src/task-engine/_internal/managed-task/budget.test.ts
 npm run build:packages
+npm run build:dts
 ```
+
+最近结果：21 个相关测试文件 / 211 个测试通过；`build:packages` 通过；`build:dts` 通过（保留既有 Rollup session-lineage chunk warning）。
 
 最新验证结果：扩展 workflow gate `20` 个测试文件、`194` 条测试通过；`npm run build:packages` 通过。测试输出末尾出现一条非致命 `Could not access 'HEAD'` stderr，但测试进程退出码为 `0`。
 
@@ -262,7 +265,30 @@ npm run build:packages
 - [ ] Stop 后 run 被 abort，最终状态变为 `stopped` 或失败信息明确指出已停止。
 - [ ] pause / resume / stop 期间 REPL 仍保持可交互。
 
-### TC-012: 保存 generated workflow 并复跑
+### TC-012: 从历史 run 复跑 generated workflow
+
+**优先级**: 高
+**类型**: 正向测试
+
+**测试步骤**:
+
+1. 完成或启动一个已在 run dir 中写出 `script.js` 和 `manifest.json` 的 generated workflow。
+2. 运行：
+
+```text
+/workflow rerun <runId> {"request":"请用同样的 workflow 重新检查 packages/repl，只列出新问题"}
+```
+
+3. 运行 `/workflow runs` 和 `/workflow show <newRunId>`。
+
+**预期结果**:
+
+- [ ] 未执行 `/workflow save` 也能从 run history 加载原 generated script。
+- [ ] 新 run 使用新的中文 request，不误用旧目标路径。
+- [ ] 复跑仍通过 capability runner，不走 trusted-local direct import。
+- [ ] 若 run id 不存在或格式非法，错误信息清晰，不能访问其他路径。
+
+### TC-013: 保存 generated workflow capsule 并复跑
 
 **优先级**: 高
 **类型**: 正向测试
@@ -271,22 +297,42 @@ npm run build:packages
 
 1. 完成或启动一个已在 run dir 中写出 `script.js` 和 `manifest.json` 的 generated workflow。
 2. 运行 `/workflow save <runId> generated-audit`。
-3. 运行 `/workflow list`。
-4. 运行：
+3. 打开 `.kodax/workflows/generated-audit.workflow.json`，检查字段。
+4. 运行 `/workflow list`。
+5. 运行：
 
 ```text
-/workflow generated-audit {"request":"请对新的目标路径执行同样的审计，并只报告新增发现"}
+/workflow generated-audit {"request":"请对 packages/coding 执行同样的审计，并只报告新增发现"}
 ```
 
 **预期结果**:
 
 - [ ] 创建 `.kodax/workflows/generated-audit.workflow.json`。
+- [ ] 文件包含 `format:"kodax.workflow"`、`version:1`、`manifest`、`source`、`intent`、`inputs`、`requires`、`provenance`。
+- [ ] `source` 是 generated JavaScript harness 原文，不是 template id。
 - [ ] `/workflow list` 将该 workflow 显示为 `capability-generated`。
 - [ ] 复跑时通过 capability runner 加载，而不是 direct Node import。
 - [ ] `.workflow.json` 不出现 trusted-local code execution prompt；但正常 workflow approval 仍会出现。
 - [ ] 复跑接受新的 args，不误用旧 request 文本。
 
-### TC-013: Worktree isolation 是 opt-in
+### TC-014: Capsule preflight 能提示环境差异
+
+**优先级**: 中
+**类型**: 边界测试
+
+**测试步骤**:
+
+1. 保存一个 manifest 中声明 may use worktree 的 generated workflow capsule。
+2. 在非 git 仓库目录启动 KodaX，或临时移动到无法创建 worktree 的目录。
+3. 运行 `/workflow generated-audit {"request":"请尝试复用这个 workflow 检查当前目录"}`。
+
+**预期结果**:
+
+- [ ] KodaX 在执行前给出 `git-repo` / `worktree-capable` 相关提示或失败信息。
+- [ ] 不会静默忽略 capsule 中声明的环境依赖。
+- [ ] 如果用户回到 git 仓库环境，workflow 可以继续正常执行。
+
+### TC-015: Worktree isolation 是 opt-in
 
 **优先级**: 高
 **类型**: 集成测试
@@ -304,7 +350,7 @@ npm run build:packages
 - [ ] Child summary 中包含 workflow worktree path，便于后续 inspection / merge。
 - [ ] Child 结束后，创建出的 worktree 仍然可检查。
 
-### TC-014: Generated workflow 不能逃逸到宿主 Node 权限
+### TC-016: Generated workflow 不能逃逸到宿主 Node 权限
 
 **优先级**: 高
 **类型**: 安全回归测试
@@ -327,7 +373,7 @@ async function run(wf, args) {
 - [ ] 不能直接 `require('child_process')` 或 dynamic import Node 内置模块。
 - [ ] 失败信息清晰，不导致主 REPL 崩溃。
 
-### TC-015: Manifest cap 会被系统硬顶钳制
+### TC-017: Manifest cap 会被系统硬顶钳制
 
 **优先级**: 高
 **类型**: 边界测试
@@ -348,7 +394,7 @@ async function run(wf, args) {
 
 | 用例数 | 通过 | 失败 | 阻塞 |
 |---:|---:|---:|---:|
-| 13 | 待填写 | 待填写 | 待填写 |
+| 17 | 待填写 | 待填写 | 待填写 |
 
 **测试结论**: 待填写
 **发现的问题**: 待填写

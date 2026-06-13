@@ -51,6 +51,24 @@ export type {
 } from './script-runner.js';
 
 export {
+  WORKFLOW_CAPSULE_API_VERSION,
+  WORKFLOW_CAPSULE_FORMAT,
+  WORKFLOW_CAPSULE_VERSION,
+  createWorkflowCapsule,
+  createWorkflowModuleFromCapsule,
+  validateWorkflowCapsule,
+} from './capsule.js';
+export type {
+  CreateWorkflowCapsuleInput,
+  WorkflowCapsule,
+  WorkflowCapsuleEnvironmentRequirement,
+  WorkflowCapsuleInputs,
+  WorkflowCapsuleIntent,
+  WorkflowCapsuleProvenance,
+  WorkflowCapsuleRequirements,
+} from './capsule.js';
+
+export {
   WorkflowAbortError,
   WorkflowBudgetError,
   WorkflowLimitError,

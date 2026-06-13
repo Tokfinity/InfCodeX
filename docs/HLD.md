@@ -170,16 +170,19 @@ Published SDK subpaths expose focused subsets:
 Workflow has two layers:
 
 - `packages/agent/src/workflow`: domain-neutral runtime, events, types, caps,
-  concurrency, abort, and backend injection.
+  concurrency, abort, backend injection, and the generic workflow capsule
+  contract.
 - `packages/coding/src/workflows`: coding backend, built-in workflows,
-  durable run graph, saved-workflow discovery, and REPL command integration.
+  durable run graph, workflow capsule persistence/preflight, saved-workflow
+  discovery, and REPL command integration.
 
 FEATURE_217 is the v0.7.49 Dynamic Workflow feature. It provides the runtime
 substrate, coding backend, durable run graph, on-the-fly JavaScript harness
 generation, background management, pause/resume/stop/save, opt-in worktree
-routing, hard budget checks, and reusable workflow pattern templates. The
-domain-neutral SDK surface lives in `@kodax-ai/agent/workflow`; coding and REPL
-layers consume it rather than owning the core runtime.
+routing, hard budget checks, workflow capsules for reusable generated runs, and
+reusable workflow pattern templates. The domain-neutral SDK surface lives in
+`@kodax-ai/agent/workflow`; coding and REPL layers consume it rather than owning
+the core runtime.
 
 Generated workflow scripts keep the orchestration plan in JavaScript, matching
 Claude-style dynamic workflows. They must not receive raw host authority:
@@ -188,6 +191,12 @@ behind child agents and KodaX permission gates. Generated scripts run through a
 capability runner that exposes only structured `wf.*` calls to the host. Pattern
 templates are examples and scaffolds, not a replacement for dynamic harness
 generation.
+
+Saved generated workflows are persisted as lightweight workflow capsules:
+source, manifest, intent, input examples, environment/tool/skill/MCP
+requirements, and provenance. The capsule protocol belongs in `agent`; checks
+that depend on the local repository, skills, MCPs, or `.kodax` paths belong in
+`coding`; command help and approval text belong in `repl`.
 
 ## 11. REPL And CLI
 
