@@ -4516,13 +4516,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     clearManagedForegroundTurnHistory();
     managedLiveEventsRef.current = [];
     managedRoundEventHistoryRef.current = [];
+    managedTaskStatusRef.current = null;
+    managedTaskBreadcrumbRef.current = null;
     setManagedLiveEvents([]);
+    setManagedTaskStatus(null);
+    setWorkflowBuilderMessage(null);
+    clearWorkStripTimers();
+    setVisibleWorkStripText(undefined);
     setIsLoading(false);
+    if (stdout?.isTTY === true) {
+      getRendererInstance(stdout)?.clear?.();
+    }
   }, [
     abort,
     clearResponse,
     clearThinkingContent,
     clearToolInputContent,
+    clearWorkStripTimers,
     resetLiveToolCalls,
     clearManagedForegroundTurnHistory,
     setCurrentTool,
@@ -4531,6 +4541,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     setLastLiveActivityLabel,
     stopStreaming,
     stopThinking,
+    stdout,
   ]);
 
   const stopActiveWorkflowRuns = useCallback((reason: string): boolean => {

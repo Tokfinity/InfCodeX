@@ -1108,6 +1108,9 @@ const Ink = class Ink {
             if (eraseSeq.length > 0) {
                 this.options.stdout.write(eraseSeq);
             }
+            this.lastOutput = '';
+            this.lastOutputToRender = '';
+            this.lastOutputHeight = 0;
             this.invalidateCellFrame();
         }
     }

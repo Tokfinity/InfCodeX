@@ -94,6 +94,7 @@ const fallbackStdin = {
 } as unknown as NodeJS.ReadStream;
 
 export interface TuiRendererInstance {
+  clear?: () => void;
   setAltScreenActive?: (active: boolean, mouseTracking?: boolean) => void;
   setShellMode?: (
     mode: "virtual" | "main-screen",

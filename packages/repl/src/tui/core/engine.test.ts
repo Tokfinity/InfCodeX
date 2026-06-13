@@ -538,6 +538,42 @@ describe("tui engine (Phase 6: cell renderer is sole render path)", () => {
     expect(sameOut).not.toContain(ansiEscapes.eraseLines(3));
   });
 
+  it("clear forgets the erased live block before the next repaint", () => {
+    const engine = new Engine({
+      stdout: mocks.stdout,
+      stdin: mocks.stdin,
+      stderr: mocks.stderr,
+      shellMode: "main-screen",
+      exitOnCtrlC: false,
+      patchConsole: false,
+      kittyKeyboard: { mode: "disabled" },
+    } as ConstructorParameters<typeof Engine>[0]) as unknown as {
+      onRender: () => void;
+      clear: () => void;
+      lastOutputHeight: number;
+      lastOutput: string;
+      prevFrame: { screen: { height: number } };
+    };
+
+    mocks.renderTree.mockReturnValue(fakeRenderResult(80, 3, "a\nb\nc"));
+    engine.onRender();
+    expect(engine.lastOutputHeight).toBe(3);
+
+    mocks.stdoutWrite.mockClear();
+    engine.clear();
+
+    expect(mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join(""))
+      .toContain(ansiEscapes.eraseLines(3));
+    expect(engine.lastOutputHeight).toBe(0);
+    expect(engine.lastOutput).toBe("");
+    expect(engine.prevFrame.screen.height).toBe(0);
+
+    mocks.stdoutWrite.mockClear();
+    engine.onRender();
+    const repaintOut = mocks.stdoutWrite.mock.calls.map((call) => call[0] as string).join("");
+    expect(repaintOut).not.toContain(ansiEscapes.eraseLines(3));
+  });
+
   it("setCursorPosition clamps out-of-bounds coordinates so a future re-application can't hit setCellAt RangeError", () => {
     const engine = new Engine({
       stdout: mocks.stdout,
