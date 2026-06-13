@@ -59,5 +59,5 @@ compatibility: "Works best in a git repository or when the review target is prov
 ## 使用示例
 
 - `/code-review src/auth.ts` - 审查单个文件
-- `/code-review packages/core/src/` - 审查目录
+- `/code-review packages/coding/src/` - 审查目录
 - `/code-review` - 审查当前 git 变更

@@ -6,9 +6,10 @@
 ## When to use this
 
 **Any change that touches LLM-facing prompt content** — system prompts,
-role prompts (Scout/Generator/Planner/Evaluator), tool descriptions, or
-any string that ships in `messages[]` to the provider — must be backed by
-a prompt eval. Pure depth/parameter changes (FEATURE_078 reasoning ceiling,
+Worker / Sidecar Verifier prompts, tool descriptions, or any string that
+ships in `messages[]` to the provider — must be backed by a prompt eval.
+Historical eval docs may still mention Scout / Generator / Planner /
+Evaluator; those names describe the V1 chain retired in FEATURE_193. Pure depth/parameter changes (FEATURE_078 reasoning ceiling,
 FEATURE_103 L5 escalation) **do not** need an eval — they don't change the
 text the model sees.
 
@@ -35,7 +36,7 @@ npx vitest run -c vitest.eval.config.ts tests/your-case.eval.ts
 ```
 
 Tests skip gracefully when their required `*_API_KEY` env var is absent.
-A typical local run uses 1-3 of the 8 supported coding-plan providers.
+A typical local run uses 1-3 model aliases from the 11-entry coding-plan alias registry; new canonical panels default to the 5 aliases documented in `benchmark/harness/aliases.ts`.
 
 ## Module layout
 
@@ -76,7 +77,10 @@ and import from `../benchmark/harness/*` for shared helpers.
 | `mimo/v25` | `mimo-coding` | `mimo-v2.5` | `MIMO_CODING_API_KEY` |
 | `mimo/v25pro` | `mimo-coding` | `mimo-v2.5-pro` | `MIMO_CODING_API_KEY` |
 | `mmx/m27` | `minimax-coding` | `MiniMax-M2.7` | `MINIMAX_CODING_API_KEY` |
+| `mmx/m3` | `minimax-coding` | `MiniMax-M3` | `MINIMAX_CODING_API_KEY` |
 | `ark/glm51` | `ark-coding` | `glm-5.1` | `ARK_CODING_API_KEY` |
+| `ark/v4pro` | `ark-coding` | `deepseek-v4-pro` | `ARK_CODING_API_KEY` |
+| `ark/v4flash` | `ark-coding` | `deepseek-v4-flash` | `ARK_CODING_API_KEY` |
 | `ds/v4pro` | `deepseek` | `deepseek-v4-pro` | `DEEPSEEK_API_KEY` |
 | `ds/v4flash` | `deepseek` | `deepseek-v4-flash` | `DEEPSEEK_API_KEY` |
 
@@ -279,9 +283,11 @@ Once you have a benchmark with a baseline:
 
 ## Pattern 4 — Agent-level eval (FEATURE_107, v0.7.32)
 
-For cases where the question can't be answered by a single LLM call but
-requires running KodaX's full task loop (Scout → Planner → Generator ↔
-Evaluator) against historical repo states:
+For historical FEATURE_107 cases where the question couldn't be answered
+by a single LLM call, this harness ran KodaX's then-current V1 full task
+loop (Scout → Planner → Generator ↔ Evaluator) against historical repo
+states. New V2 agent-level evals should describe the current Worker +
+Sidecar Verifier path explicitly instead of reusing the old role graph.
 
 ```
 benchmark/harness/

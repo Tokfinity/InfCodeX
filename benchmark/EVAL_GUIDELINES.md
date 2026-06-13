@@ -10,10 +10,10 @@
 
 **反模式（之前一直在做的）**：
 
-> 给 LLM 一个 user message → 让 KodaX 从 Scout → Planner → Generator → Evaluator 自由跑多轮 → 跑完看 OK rate / hit rate。
+> 给 LLM 一个 user message → 让 KodaX 自由跑完整 task loop（历史 V1 是 Scout → Planner → Generator → Evaluator；当前 V2 是 Worker + Sidecar Verifier）→ 跑完看 OK rate / hit rate。
 
 为什么错：
-1. **信号被淹没**。Prompt 微小调整的效果被 N 轮自由决策的累积噪声覆盖。Generator 第 5 步的不同决策 ≠ prompt 的效果。
+1. **信号被淹没**。Prompt 微小调整的效果被 N 轮自由决策的累积噪声覆盖。Worker / 历史 Generator 第 5 步的不同决策 ≠ prompt 的效果。
 2. **acceptance 不可度量**。OK rate（process exit 0）、hit rate（must-touch 文件命中数）都是端到端弱信号，不能区分"prompt 让模型做对" vs "模型自己做对" vs "模型瞎跑了一下凑巧过了"。
 3. **token 成本高**。每个 cell 跑 5-15 min × 多轮 tool calls × 大量 file reads → 单 cell ~$0.5-2，36 cells × 6 prompt 版本就是 $100+。
 4. **不可重复**。同 prompt + 同 case 跑两次结果可能差很大（agent loop 随机性 + tool 调用顺序差异），1 cell 不够，必须重复 N 次取统计 → 成本指数升高。
@@ -40,7 +40,7 @@
 **何时用**：任何 "X 机制是否生效" / "X 函数是否被调用" / "X env hook 是否实装" 类问题。
 
 **例**：
-- "H2-B inputFilter 是否真生效？" → 读 [runner.ts:778-788](../packages/core/src/runner.ts#L778-L788)，2 分钟得出"会调用 filter"。再加一个 unit test "filter 函数 strip 后 history 长度变小"。**0 LLM call**。
+- "handoff inputFilter 是否真生效？" → 读 [runner.ts](../packages/agent/src/primitives/runner.ts)，确认 handoff transcript 会应用 `inputFilter`。再加一个 unit test "filter 函数 strip 后 history 长度变小"。**0 LLM call**。
 - "compaction 75% 阈值是否能从 user config 覆盖？" → 读 compaction-config.ts + 写 unit test 直接断言。
 - "FEATURE_107 hooks 是否会污染 production？" → grep `process.env.KODAX_*`，看默认值分支。
 
@@ -59,15 +59,15 @@ SAMPLE SIZE: 5-10 次重复（取多数）
 ```
 
 **例**：
-- "v3 discipline 是否减少 emit_handoff 早退？"  
-  → 构造一个 generator 收到的 history：刚跑了 1 次 vitest 失败。  
-  → 断言下一个响应**不是** `emit_handoff status="blocked"`。  
+- "v3 discipline 是否减少过早 blocked 终止？"
+  → 构造一个 Worker 收到的 history：刚跑了 1 次 vitest 失败。
+  → 断言下一个响应**不是**直接给出 blocked 终止。
   → 重复 10 次，看比例。**10 LLM call ≈ $0.5**。
-- "H2-A 和 H2-B 是否让 Generator 做出不同决策？"  
-  → 给同一 generator 系统提示 + 两种 history (full / stripped)。  
+- "两种 history 是否让 Worker 做出不同决策？"
+  → 给同一 Worker 系统提示 + 两种 history (full / stripped)。
   → 断言下一个 tool_use 的工具名是否相同。  
   → **2 alias × 2 variant × 5 重复 = 20 LLM call ≈ $1**。
-- "Generator 在 200K context 下是否漏掉前文 must-touch 信息？"  
+- "Worker 在 200K context 下是否漏掉前文 must-touch 信息？"
   → 构造一个含 must-touch hint 的长 history（接近 contextWindow）。  
   → 断言下一个响应是否引用 hint。**5 LLM call ≈ $1**。
 

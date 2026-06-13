@@ -17,7 +17,7 @@
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square"></a>
   <a href="https://github.com/icetomoyo/KodaX/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/icetomoyo/KodaX?style=flat-square&logo=github&color=f1c40f"></a>
   <a href="https://github.com/icetomoyo/KodaX/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/icetomoyo/KodaX/release.yml?style=flat-square&label=release"></a>
-  <img alt="providers" src="https://img.shields.io/badge/LLMs-13_native_+_OpenAI%2FAnthropic--compat-2ecc71?style=flat-square">
+  <img alt="providers" src="https://img.shields.io/badge/LLMs-14_aliases_+_custom-2ecc71?style=flat-square">
 </p>
 
 <p align="center">
@@ -103,7 +103,7 @@ That's it. You're in the REPL — ask anything in natural language.
       5-stage self-modification staircase (scaffold → validate → stage → test → activate) gated by an 8-invariant admission contract.
     </td>
     <td align="center" valign="top">
-      <h3>🛠 30+ built-in tools</h3>
+      <h3>🛠 50+ built-in tools</h3>
       <sub>File · shell · search · MCP · ACP</sub>
       <br><br>
       Repo intelligence, semantic search, git worktree, web fetch — all addressable through one clean tool surface.
@@ -119,7 +119,7 @@ That's it. You're in the REPL — ask anything in natural language.
 | Node-free single binary | ✅ Bun | ❌ Node | ❌ Python | ✅ Rust | ❌ Electron | ❌ Extension |
 | Native China providers<br><sub>(Zhipu · Kimi · MiniMax · MiMo · Ark · Qwen)</sub> | ✅ 6 native | ❌ | ⚠ via LiteLLM | ❌ OpenAI-first | ❌ no provider menu | ⚠ Kimi / Qwen / DeepSeek |
 | Branchable session lineage | ✅ fork & rewind | ⚠ routines / sessions | ❌ | ❌ | ❌ | ⚠ checkpoints |
-| Multi-agent + MCP + 30+ tools | ✅ all three | ✅ all three | ⚠ tools, no MCP | ✅ all three | ⚠ Composer + MCP | ✅ all three |
+| Multi-agent + MCP + 50+ tools | ✅ all three | ✅ all three | ⚠ tools, no MCP | ✅ all three | ⚠ Composer + MCP | ✅ all three |
 
 <sub>Data verified May 2026 against public docs ([Claude Code](https://github.com/anthropics/claude-code) · [Aider](https://aider.chat/docs/llms.html) · [Codex CLI](https://github.com/openai/codex) · [Cursor](https://cursor.com) · [Cline](https://github.com/cline/cline)). ⚠ = partial / requires extra setup / not first-class. Corrections welcome via PR.</sub>
 
@@ -214,7 +214,7 @@ Sidecar verifier judge calls use provider-level forced tool choice when supporte
 
 #### Opting a custom provider into image / vision input (FEATURE_134 v0.7.40)
 
-If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. The 12 built-in vision-capable providers (Anthropic, OpenAI, the 9 Anthropic-/OpenAI-compat clones — DeepSeek, Kimi, Kimi-code, Qwen, Zhipu, Zhipu-coding, MiniMax-coding, MiMo-coding, Ark-coding — plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; only Codex-CLI and custom providers need to opt in.
+If your custom provider's underlying model supports image input (vision), add a `capabilityProfile.multimodalSupport: "image-input"` block so KodaX does not artificially block multimodal requests at the SA-path policy gate. Built-in vision-capable aliases (Anthropic, OpenAI, Anthropic-/OpenAI-compatible aliases such as DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, plus Gemini-CLI via the CLI's `@<path>` file-include syntax) already ship with this flag enabled by default; Codex-CLI and custom providers need to opt in when their underlying model supports image input.
 
 ```json
 {
@@ -307,12 +307,12 @@ Setup, runtime modes, REPL controls, config schema, and external-host integratio
 
 ## Architecture
 
-KodaX uses a **monorepo architecture** with npm workspaces. Source layout has 9 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 6 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/repl`, `/skills`, `/mcp`; ADR-022 + ADR-024 v0.7.39 + ADR-032 v0.7.42 added `/mcp`):
+KodaX uses a **monorepo architecture** with npm workspaces. Source layout currently has 4 workspace packages; published as a single bundled npm package `@kodax-ai/kodax` with 7 SDK subpath exports (`/agent`, `/llm`, `/coding`, `/repl`, `/skills`, `/mcp`, `/session`; ADR-024 + ADR-032 + ADR-038, with ADR-036 consolidation):
 
 ```
 KodaX/
 ├── packages/                # 4 workspace packages (FEATURE_194 v0.7.43)
-│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (12 providers)
+│   ├── llm/                 # @kodax-ai/llm - LLM abstraction (14 built-in provider aliases)
 │   │   └── providers/       # Anthropic, OpenAI, DeepSeek, Kimi, MiMo, MiniMax, Zhipu, Ark, …
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
@@ -324,7 +324,7 @@ KodaX/
 │   │   └── tracing/         # tracing / observability (inline v0.7.43)
 │   │
 │   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
-│   │   ├── tools/           # 30+ tools: read, write, edit, bash, glob, grep, undo,
+│   │   ├── tools/           # 50+ tools: read, write, edit, bash, glob, grep, undo,
 │   │   │                    #   dispatch_child_task, send_message, task_stop,
 │   │   │                    #   ask_user_question, repo-intelligence, …
 │   │   └── repo-intelligence/ # incl. protocol.ts (inline v0.7.43)
@@ -333,7 +333,7 @@ KodaX/
 │
 ├── src/                     # CLI entry + SDK subpath entries
 │   ├── kodax_cli.ts         # Main CLI entry point (bin: `kodax`)
-│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl}
+│   └── sdk-*.ts             # SDK subpath re-exports → @kodax-ai/kodax/{agent,llm,coding,repl,skills,mcp,session}
 │
 └── package.json             # Root workspace config; release.mjs rewrites name + injects subpath exports
 ```
@@ -360,7 +360,7 @@ KodaX/
        ┌──────────────┐ ┌──────────────────────────┐ ┌──────────────┐
        │@kodax-ai/    │ │@kodax-ai/agent           │ │@kodax-ai/llm │
        │coding (via   │ │Runner + fan-out +        │ │LLM Abstract  │
-       │above)        │ │idle-yield + session-     │ │(12 providers)│
+       │above)        │ │idle-yield + session-     │ │(14 aliases)  │
        │              │ │lineage + skills + mcp +  │ │              │
        │              │ │tracing (FEATURE_194)     │ │              │
        └──────────────┘ └──────────────────────────┘ └──────────────┘
@@ -372,9 +372,9 @@ Source-side workspace package names (`@kodax-ai/*`). npm consumers install the s
 
 | Workspace package | Purpose | Key Dependencies |
 |---------|---------|------------------|
-| `@kodax-ai/llm` | LLM abstraction (12 providers + custom registration) | @anthropic-ai/sdk, openai |
+| `@kodax-ai/llm` | LLM abstraction (14 built-in provider aliases + custom registration) | @anthropic-ai/sdk, openai |
 | `@kodax-ai/agent` | Generic Agent framework — Runner, fan-out, idle-yield, session-lineage, capabilities (mcp + skills), tracing (ADR-036 v0.7.43 consolidation; subpaths: `/session-lineage`, `/capabilities/mcp`, `/capabilities/skills`, `/tracing`) | @kodax-ai/llm, js-tiktoken, fflate, yaml |
-| `@kodax-ai/coding` | Coding Agent — 30+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
+| `@kodax-ai/coding` | Coding Agent — 50+ tools (incl. `dispatch_child_task` / `send_message` / `task_stop`) + role prompts + auto-continue + repo-intelligence protocol | @kodax-ai/llm, @kodax-ai/agent |
 | `@kodax-ai/repl` | Complete interactive terminal UI (Ink/React, permission modes, commands, streaming) | @kodax-ai/coding, ink, react |
 
 ### Source-side vs npm-published surface
@@ -388,31 +388,31 @@ KodaX has two layers that consumers should understand separately:
 
 | Source package | npm subpath | Type | What you get | Example consumer |
 |---|---|---|---|---|
-| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 12-provider LLM abstraction (77 exports) | Standalone LLM clients |
+| `packages/llm`    | `@kodax-ai/kodax/llm`     | Full package | 14-alias LLM abstraction (77 exports) | Standalone LLM clients |
 | `packages/agent`  | `@kodax-ai/kodax/agent`   | Full package | Runner / fan-out / session-lineage / capabilities / tracing (202 exports) | Custom agent frameworks |
 | `packages/agent`  | `@kodax-ai/kodax/skills`  | **Narrow subset** | Skills system only — `SkillRegistry` / `loadFullSkill` / `expandSkillForLLM` / ... (26 exports = pre-v0.7.43 `@kodax-ai/skills` complete API) | Skill loaders, IDE plugins |
 | `packages/agent`  | `@kodax-ai/kodax/mcp`     | **Narrow subset** | MCP only — `McpCapabilityProvider` / `createMcpTransport` / `searchMcpCatalog` / ... (11 exports = pre-v0.7.43 `@kodax-ai/mcp` complete API) | MCP server hosts |
-| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 30+ tools + repo-intelligence (342 exports) | Build a Claude Code-shape product |
+| `packages/coding` | `@kodax-ai/kodax/coding`  | Full package | Coding agent + 50+ tools + repo-intelligence (342 exports) | Build a Claude Code-shape product |
 | `packages/repl`   | `@kodax-ai/kodax/repl`    | Full package | Ink TUI + permission modes + commands (193 exports) | Terminal-UI consumers |
 | `packages/repl`   | `@kodax-ai/kodax/session` | **Narrow subset** | Session management only — `listSessions` / `forkSession` / `watchSessions` / ... (9 exports) | IDE plugins reading session history |
 
 **Rule of thumb**: if you need Runner / Agent / fan-out, import from `/agent`. If you only need skills or mcp APIs, import from `/skills` or `/mcp` to get a smaller bundle. The narrow subsets are subsets of the full packages — they do **not** expose extra symbols.
 
-**Dynamic Workflows (FEATURE_217, v0.7.49)**: the domain-neutral workflow runtime is part of `/agent` — `import { createWorkflowRuntime, runWorkflow, WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/kodax/agent'`. The coding-side integration (agent backend + built-in workflows + saved-workflow discovery: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `parallelInvestigation`, `discoverSavedWorkflows`, …) is part of `/coding`. There is **no** separate `/agent/workflow` published subpath — the `@kodax-ai/agent/workflow` path is workspace-internal only.
+**Dynamic Workflows (FEATURE_217, v0.7.49)**: the domain-neutral workflow runtime is part of `/agent` — `import { createWorkflowRuntime, runWorkflow, WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/kodax/agent'`. The coding-side integration (agent backend + built-in workflows + saved-workflow discovery: `createCodingWorkflowBackend`, `runWorkflowFromOptions`, `parallelInvestigation`, `discoverSavedWorkflows`, …) is part of `/coding`. FEATURE_217 is the v0.7.49 home for the full Dynamic Workflow product loop: generated/saved scripts coordinate agents through `WorkflowApi`, run lifecycle state stays observable, and all file/shell effects still pass through agent tools and the existing permission gates. There is **no** separate `@kodax-ai/kodax/agent/workflow` root-package subpath; source-package consumers of `@kodax-ai/agent` can still use that package's `./workflow` subpath.
 
 ---
 
 ## Features
 
 - **Modular Architecture** - Use as CLI, as a library, or as a Node-free single binary
-- **12 LLM Providers** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding (Xiaomi Token Plan), Gemini CLI, Codex CLI — plus user-defined OpenAI/Anthropic-compatible providers
-- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. V1 Scout/Planner/Generator/Evaluator chain fully retired (FEATURE_193 v0.7.43); `emit_handoff` tool deleted (FEATURE_190 v0.7.43); accept-verdict UI silently passes through (FEATURE_195 v0.7.43); content-aware fire gate skips trivial-chat sidecar calls (FEATURE_196 v0.7.43). Async child steering via `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait (FEATURE_120 / FEATURE_155, v0.7.39); specialist routing via `subagent_type` (FEATURE_191 v0.7.43).
+- **14 Built-in Provider Aliases** - Anthropic, OpenAI, DeepSeek, Kimi, Kimi Code, Qwen, Zhipu, Zhipu Coding, MiniMax Coding, MiMo Coding, MiMo, Ark Coding, Gemini CLI, Codex CLI - plus user-defined OpenAI/Anthropic-compatible providers
+- **V2 Worker single-loop + Sidecar Verifier (default)** - Single-agent main loop with an out-of-band Sidecar Verifier as Stop-hook (claudecode-shape; FEATURE_184 v0.7.42, ADR-030). Verifier returns accept/revise/blocked verdict on Worker text-only termination. The pre-v0.7.43 V1 chain is retired, `emit_handoff` is deleted, accept-verdict UI silently passes through, and content-aware gating skips trivial-chat sidecar calls. Async child steering uses `dispatch_child_task` + `send_message` + `task_stop` with idle-yield wait; specialist routing uses `subagent_type`.
 - **Reasoning Modes** - Unified `off/auto/quick/balanced/deep` interface across providers
 - **Streaming Output** - Real-time response display
 - **Session Management** - JSONL format with branchable session lineage tree
 - **Skills System** - Natural language triggering, extensible, role-projected in AMA
 - **Repo Intelligence** - OSS baseline + optional `repointel` premium engine, with native KodaX auto-injection lane
-- **Rich Tool Surface** - 30+ built-in tools across file ops, shell, search, repo intelligence, MCP capabilities, git worktree, and agent control
+- **Rich Tool Surface** - 50+ built-in tools across file ops, shell, search, repo intelligence, MCP capabilities, git worktree, and agent control
 - **Permission Control** - 3 permission modes with pattern-based control
 - **Standalone Binary** - `bun --compile` releases for Win/macOS/Linux x64+arm64, no Node.js required on target machines
 - **Cross-Platform** - Windows/macOS/Linux
@@ -502,14 +502,15 @@ For smaller surface and tree-shake-friendly imports, the SDK is also exposed via
 
 ```typescript
 import { Runner } from '@kodax-ai/kodax/agent';                // agent runtime
-import { createProvider } from '@kodax-ai/kodax/llm';           // LLM abstraction (12 providers)
+import { getProvider } from '@kodax-ai/kodax/llm';              // LLM abstraction (14 aliases)
 import { runKodaX } from '@kodax-ai/kodax/coding';              // coding tools + prompts
 import { SkillRegistry } from '@kodax-ai/kodax/skills';         // zero-dep skill loader
 import { loadConfig } from '@kodax-ai/kodax/repl';              // REPL config / session helpers
 import { createMcpManager } from '@kodax-ai/kodax/mcp';         // MCP popout manager (v0.7.42)
+import { listSessions } from '@kodax-ai/kodax/session';         // session history helpers
 ```
 
-All 7 entries (root + 6 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
+All 8 SDK entries (root + 7 subpaths) share internal code via ESM chunk splitting — importing from `/agent` does not pull in `/repl`'s Ink + React surface.
 
 > **ESM-only.** The SDK is published as ES Modules. In a CommonJS context (Electron main process, legacy Webpack CJS bundles, `require()`-based code) you must use `await import(...)` instead of `require()`. See [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles) for the canonical recipe + the technical reason most subpaths cannot ship a dual ESM/CJS build.
 
@@ -790,7 +791,7 @@ await runKodaX({
 
 ## SDK Usage
 
-KodaX ships as a single npm package `@kodax-ai/kodax` with 6 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 added `/mcp`). Each subpath is tree-shake-friendly so consumers pull only what they need:
+KodaX ships as a single npm package `@kodax-ai/kodax` with 7 SDK subpath exports (ADR-024 v0.7.39 + ADR-032 v0.7.42 + ADR-038 v0.7.49). Each subpath is tree-shake-friendly so consumers pull only what they need:
 
 ```bash
 npm install @kodax-ai/kodax
@@ -799,18 +800,19 @@ npm install @kodax-ai/kodax
 ```typescript
 import { runKodaX } from '@kodax-ai/kodax';                       // root: CLI helpers + runKodaX
 import { Runner, runFanOut } from '@kodax-ai/kodax/agent';        // generic Agent framework
-import { getProvider } from '@kodax-ai/kodax/llm';                // 12-provider LLM abstraction
+import { getProvider } from '@kodax-ai/kodax/llm';                // 14-alias LLM abstraction
 import { KODAX_TOOLS } from '@kodax-ai/kodax/coding';             // tools + prompts + agent loop
-import { InkREPL } from '@kodax-ai/kodax/repl';                   // Ink TUI components
+import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';     // Ink TUI entrypoint
 import { SkillRegistry } from '@kodax-ai/kodax/skills';           // zero-dep skill loader
 import { createMcpManager } from '@kodax-ai/kodax/mcp';           // MCP popout manager (v0.7.42)
+import { listSessions } from '@kodax-ai/kodax/session';           // session history helpers
 ```
 
 > The SDK is **ESM-only**. CommonJS consumers (Electron main / Webpack CJS / `require()` callers) must use `await import('@kodax-ai/kodax/...')` — see [docs/SDK_EMBEDDER_GUIDE.md §5](docs/SDK_EMBEDDER_GUIDE.md#5-consuming-from-a-commonjs-context-electron-main-cjs-bundles).
 
 ### `@kodax-ai/kodax/llm` — LLM Abstraction
 
-12 built-in providers (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Zhipu, Zhipu-Coding, MiniMax-Coding, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
+14 built-in provider aliases (Anthropic, OpenAI, DeepSeek, Kimi, Kimi-Code, Qwen, Zhipu, Zhipu-Coding, MiniMax-Coding, MiMo, MiMo-Coding, Ark-Coding, Gemini-CLI, Codex-CLI) + custom provider registration.
 
 ```typescript
 import { getProvider, KodaXBaseProvider } from '@kodax-ai/kodax/llm';
@@ -888,7 +890,7 @@ const result = await executeSkill({
 
 ### `@kodax-ai/kodax/coding` — Coding Agent
 
-Complete coding agent: 30+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
+Complete coding agent: 50+ tools (`read`/`write`/`edit`/`bash`/`grep`/`glob`/`dispatch_child_task`/`send_message`/`task_stop`/...) + Worker role prompt + Sidecar Verifier (out-of-band Stop-hook) + agent loop + auto-continue + session management.
 
 ```typescript
 import { runKodaX, KodaXClient, KODAX_TOOLS } from '@kodax-ai/kodax/coding';
@@ -910,14 +912,14 @@ await client.send('Create a new file');
 await client.send('Add a function to it'); // Has context from previous message
 ```
 
-**Key Features**: 30+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · specialist routing via `subagent_type` (FEATURE_191, v0.7.43) · auto-continue · session lineage.
+**Key Features**: 50+ built-in tools (see [Tools](#tools)) · V2 Worker single-loop + Sidecar Verifier (FEATURE_184 v0.7.42 / V1 chain fully retired by FEATURE_193 v0.7.43) · async child steering via `send_message` / `task_stop` (FEATURE_120, v0.7.39) · idle-yield wait mechanic (FEATURE_155, v0.7.38) · specialist routing via `subagent_type` (FEATURE_191, v0.7.43) · auto-continue · session lineage.
 
 ### `@kodax-ai/kodax/repl` — Interactive Terminal UI
 
 Ink/React-based interactive REPL. Permission modes, command system, themed streaming display.
 
 ```typescript
-import { InkREPL } from '@kodax-ai/kodax/repl';
+import { runInkInteractiveMode } from '@kodax-ai/kodax/repl';
 
 // Usually used via the `kodax` bin command; can be embedded:
 // - Interactive terminal UI (Ink components)
@@ -925,6 +927,7 @@ import { InkREPL } from '@kodax-ai/kodax/repl';
 // - Command system (/help, /mode, /clear, /status, …)
 // - Skills integration
 // - Theme support
+await runInkInteractiveMode({ provider: 'zhipu-coding', reasoningMode: 'auto' });
 ```
 
 **Key Features**: Ink-based React components · 3 permission modes (auto / plan / accept-edits) · built-in commands · real-time streaming display · context-usage indicator.
@@ -947,7 +950,7 @@ import { InkREPL } from '@kodax-ai/kodax/repl';
 
 | Use Case | Subpath | Why |
 |----------|---------|-----|
-| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 12 providers |
+| Only need LLM abstraction | `@kodax-ai/kodax/llm` | Minimal deps; 14 built-in aliases |
 | Building custom agent | `@kodax-ai/kodax/agent` | Runner + fan-out + idle-yield + session-lineage + capabilities |
 | Coding tasks | `@kodax-ai/kodax/coding` | Complete coding agent + tools |
 | Terminal app | `@kodax-ai/kodax/repl` | Full interactive experience |
@@ -1000,7 +1003,7 @@ kodax --agent-mode ama "Analyze code structure, check test coverage, find bugs"
 
 ## Tools
 
-KodaX ships 30+ built-in tools, grouped below. They are registered as a single flat tool surface to the LLM; the categories here are just for navigation.
+KodaX ships 50+ built-in tools, grouped below. They are registered as a single flat tool surface to the LLM; the categories here are just for navigation.
 
 ### File operations
 | Tool | Description |

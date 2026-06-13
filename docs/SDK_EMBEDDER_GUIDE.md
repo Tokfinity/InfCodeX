@@ -919,8 +919,9 @@ const result = await dispatchChildTask({
 ```
 
 Unknown `subagent_type` returns a tool-result error listing available
-names (does NOT throw); write-capable specialists dispatched from a
-non-Worker/Generator role are rejected at the dispatch layer.
+names (does NOT throw); write-capable specialists dispatched outside the
+Worker path are rejected at the dispatch layer. Older V1 docs may phrase
+this as "non-Worker/Generator"; Generator is historical after FEATURE_193.
 
 ### See also
 
@@ -1248,7 +1249,7 @@ Each provider has one `verifyStrategy` value baked into `provider-capabilities.j
 | `minimal-message` | `chat.completions.create({max_tokens:1, content:'hi'})` (or Anthropic equivalent) | ~6–7 token | `zhipu`, `mimo`, `mimo-coding` |
 | `unsupported` | nothing — short-circuits | — | `gemini-cli`, `codex-cli` (cli-bridge: credentials live in CLI binary) |
 
-`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 12-provider probe matrix captured these empirically; opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
+`models-list` is NOT used as a universal default because (a) some providers' `/v1/models` is publicly accessible (so a bad key returns 200 — false positive), and (b) some compat layers don't implement it (404) or 401 even for valid keys (false negative). The 2026-05-28 provider probe matrix captured these empirically (12 providers at the time; 14 built-in aliases as of 2026-06-13); opencode's `setup-recording-env.ts` makes the same per-provider decision across its 20+ providers.
 
 ### Custom providers
 

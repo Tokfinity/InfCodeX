@@ -8,7 +8,7 @@ Target machines do **not** need Node.js or any runtime installed.
 Each archive (`tar.gz` for Linux/macOS, `zip` for Windows) extracts to:
 
 ```
-kodax-v0.7.28-linux-x64/
+kodax-v<version>-linux-x64/
 ├── kodax              # Bun-compiled standalone executable (~60 MB)
 └── builtin/           # Sidecar built-in skills (read at runtime)
     ├── code-review/SKILL.md
@@ -81,7 +81,7 @@ dist/binary/linux-x64/kodax --version
    ```bash
    # 1. Bump version in root package.json (and sync workspaces)
    # 2. Commit, then:
-   git tag v0.7.28
+   git tag v<version>
    git push --tags
    ```
 
@@ -148,9 +148,10 @@ between `Build binary` and `Package archive`, gated on platform:
 **`bun: command not found` from `npm run build:binary`** — Bun isn't on PATH.
 The script prints install hints and exits with code 1. Install Bun and retry.
 
-**`Missing packages/skills/dist/builtin`** — `npm run build` did not run, or
-`copy:builtin` failed. Run `npm run build:packages -w @kodax/skills` to
-verify, then retry.
+**`Missing packages/agent/dist/capabilities/skills/builtin`** — `npm run build`
+did not run, or the agent package's `copy:builtin` step failed. Run
+`npm run build` or `npm run copy:builtin -w @kodax-ai/agent` to verify, then
+retry.
 
 **Binary runs but reports `kodax 0.0.0`** — `KODAX_VERSION` define wasn't
 injected. Check `scripts/build-binary.mjs` was used, not raw `bun build`.

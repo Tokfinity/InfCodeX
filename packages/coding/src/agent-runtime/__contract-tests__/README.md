@@ -1,6 +1,6 @@
 # Capability Contract Tests
 
-Test suite asserting that each `CAP-XXX` entry in [`docs/features/v0.7.29-capability-inventory.md`](../../../../../docs/features/v0.7.29-capability-inventory.md) **exists and is reachable**, independent of any specific user session.
+Test suite asserting that each `CAP-XXX` entry in the [v0.7.29 Appendix A capability inventory](../../../../../docs/features/v0.7.29.md#appendix-a-feature_100-capability-inventory) **exists and is reachable**, independent of any specific user session.
 
 This is **加强 B** of the 5 重保险 listed in [v0.7.29.md](../../../../../docs/features/v0.7.29.md#5-重保险机制--3-项加强).
 
@@ -69,7 +69,7 @@ DO NOT:
 A future tool (`scripts/contract-coverage.ts`) will:
 
 1. Walk `__contract-tests__/cap-*.contract.test.ts`
-2. Cross-reference against `docs/features/v0.7.29-capability-inventory.md` CAP entries
+2. Cross-reference against the Appendix A CAP entries in `docs/features/v0.7.29.md`
 3. Report:
    - CAP entries with no contract test → P3 gate failure
    - Contract tests with no matching CAP entry → outdated test, possibly stale capability

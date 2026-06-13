@@ -49,32 +49,28 @@ If the user did not give a concrete task, read `README.md`, then check `docs/` f
 | Category | Technology | Version |
 |---|---|---|
 | Runtime | Node.js | >= 18.0.0 |
-| Language | TypeScript | >= 5.3.0 |
+| Language | TypeScript | >= 5.7.0 (root uses 5.9.x) |
 | Package Manager | npm workspaces | — |
-| CLI Framework | Ink (React for CLI) | ^4.x |
+| CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
 | Test | Vitest | ^3.2.4 |
-| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Gemini CLI, Codex CLI, … | 12 total |
+| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, … | 14 built-in aliases |
 
 ## Monorepo Structure
 
 ```
 KodaX/
 ├── packages/
-│   ├── ai/                  # LLM abstraction (standalone)
-│   ├── agent/               # Agent framework
-│   ├── coding/              # Coding tools + prompts
-│   ├── core/                # Shared core primitives
-│   ├── mcp/                 # MCP integration
-│   ├── repl/                # Interactive terminal (Ink UI)
-│   ├── repointel-protocol/  # Repo intelligence protocol
-│   ├── session-lineage/     # Session lineage tracking
-│   ├── skills/              # Agent skills (zero-dep)
-│   └── tracing/             # Tracing/observability
+│   ├── llm/                 # LLM abstraction (standalone)
+│   ├── agent/               # Agent framework + inline mcp/skills/session-lineage/tracing/workflow
+│   ├── coding/              # Coding tools + prompts + repo-intelligence protocol
+│   └── repl/                # Interactive terminal (Ink UI)
 ├── src/                     # CLI entry point
-└── docs/                    # Documentation
+├── docs/                    # Documentation
+├── clients/                 # External clients / protocol adapters
+└── benchmark/               # Eval harness and datasets
 ```
 
-Each package must remain independently usable — never break layer independence.
+Each workspace package must remain independently usable — never break layer independence. Inline subtrees such as MCP, skills, tracing, session lineage, and repo intelligence are no longer standalone workspace packages.
 
 ## Documentation Layout
 

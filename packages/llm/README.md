@@ -1,136 +1,93 @@
 # @kodax-ai/llm
 
-独立的 LLM 抽象层，可被其他项目复用。
+KodaX 的独立 LLM 抽象层。源码开发时可从 `@kodax-ai/llm` 引入；npm SDK 用户通常安装单包 `@kodax-ai/kodax`，再从 `@kodax-ai/kodax/llm` 引入同一公开能力。
 
 ## 概述
 
-`@kodax-ai/llm` 是 KodaX 的基础层，提供统一的 LLM Provider 抽象。这个包完全独立，可以被其他项目直接使用。
+`packages/llm` 负责 provider registry、OpenAI / Anthropic 兼容适配、reasoning 模式、model capability snapshot、credential verification、cost tracking 和 side-query。它不依赖 `agent` / `coding` / `repl`，可独立复用。
 
-## 安装
+## 安装 / 导入
 
 ```bash
-npm install @kodax-ai/llm
+npm install @kodax-ai/kodax
 ```
 
-## 支持的 Provider
+```typescript
+import { getProvider, listBuiltinModelCapabilities } from '@kodax-ai/kodax/llm';
+```
 
-| Provider | Environment Variable | Thinking | Default Model |
-|----------|---------------------|----------|---------------|
-| anthropic | `ANTHROPIC_API_KEY` | Yes | claude-sonnet-4-20250514 |
-| openai | `OPENAI_API_KEY` | No | gpt-4o |
-| kimi | `KIMI_API_KEY` | Yes | kimi-k2.6 |
-| kimi-code | `KIMI_CODE_API_KEY` | Yes | kimi-for-coding |
-| qwen | `QWEN_API_KEY` | No | qwen-max |
-| zhipu | `ZHIPU_API_KEY` | No | glm-4-plus |
-| zhipu-coding | `ZHIPU_CODING_API_KEY` | Yes | glm-5 |
-| ark-coding | `ARK_CODING_API_KEY` | Yes | glm-5.1 |
+仓库内部开发可直接使用 workspace 包名：
+
+```typescript
+import { getProvider } from '@kodax-ai/llm';
+```
+
+## 内置 Provider Alias
+
+Capability 数据的单一来源是 `src/providers/provider-capabilities.json`（当前更新时间：2026-06-02）。
+
+| Alias | Environment variable | Reasoning | Default model |
+|---|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` | Yes | `claude-sonnet-4-6` |
+| `openai` | `OPENAI_API_KEY` | Yes | `gpt-5.3-codex` |
+| `deepseek` | `DEEPSEEK_API_KEY` | Yes | `deepseek-v4-flash` |
+| `kimi` | `KIMI_API_KEY` | Yes | `kimi-k2.6` |
+| `kimi-code` | `KIMI_CODE_API_KEY` | Yes | `kimi-for-coding` |
+| `qwen` | `QWEN_API_KEY` | Yes | `qwen3.5-plus` |
+| `zhipu` | `ZHIPU_API_KEY` | Yes | `glm-5` |
+| `zhipu-coding` | `ZHIPU_CODING_API_KEY` | Yes | `glm-5` |
+| `minimax-coding` | `MINIMAX_CODING_API_KEY` | Yes | `MiniMax-M2.7` |
+| `mimo-coding` | `MIMO_CODING_API_KEY` | Yes | `mimo-v2.5-pro` |
+| `mimo` | `MIMO_API_KEY` | Yes | `mimo-v2.5-pro` |
+| `ark-coding` | `ARK_CODING_API_KEY` | Yes | `glm-5.1` |
+| `gemini-cli` | `GEMINI_API_KEY` | No | CLI bridge default |
+| `codex-cli` | `OPENAI_API_KEY` | No | CLI bridge default |
 
 ## 使用示例
 
-### 基本使用
-
 ```typescript
-import { getProvider, KodaXMessage, KodaXToolDefinition } from '@kodax-ai/llm';
+import { getProvider, type KodaXMessage, type KodaXToolDefinition } from '@kodax-ai/kodax/llm';
 
-// 获取 Provider 实例
 const provider = getProvider('zhipu-coding');
 
-// 检查是否已配置
 if (!provider.isConfigured()) {
-  throw new Error('请设置 ZHIPU_API_KEY 环境变量');
+  throw new Error('Set ZHIPU_CODING_API_KEY before calling zhipu-coding');
 }
 
-// 流式调用
 const messages: KodaXMessage[] = [
-  { role: 'user', content: 'Hello, world!' }
+  { role: 'user', content: 'Hello, world!' },
 ];
-
 const tools: KodaXToolDefinition[] = [];
 
 const result = await provider.stream(
   messages,
   tools,
-  'You are a helpful assistant.',
-  true, // enable thinking
+  'You are a concise assistant.',
+  { mode: 'auto' },
   {
     onTextDelta: (text) => process.stdout.write(text),
-    onThinkingDelta: (text) => console.log('[Thinking]', text),
-  }
+    onThinkingDelta: (text) => process.stderr.write(text),
+  },
 );
 
 console.log(result.text);
 ```
 
-### 自定义 Provider
+## 常用公开能力
 
-```typescript
-import { KodaXBaseProvider, registerProvider, KodaXProviderConfig } from '@kodax-ai/llm';
+- Provider registry: `getProvider`, `getProviderList`, `isProviderConfigured`, `registerCustomProviders`, `resolveProvider`
+- Model capability: `listBuiltinModelCapabilities`, `getModelCapabilities`, `listAllModelCapabilities`
+- Credential probe: `verifyProviderCredential`, `listProviderModels`, `runVerifyCredential`
+- Reasoning helpers: `normalizeReasoningRequest`, `resolveThinkingBudget`, `getReasoningCapability`
+- Custom provider base classes: `KodaXBaseProvider`, `KodaXAnthropicCompatProvider`, `KodaXOpenAICompatProvider`
+- Cost and retry helpers: `createCostTracker`, `calculateCost`, `parseRetryAfter`
 
-class MyProvider extends KodaXBaseProvider {
-  readonly name = 'my-provider';
-  readonly supportsThinking = false;
+## 构建与测试
 
-  protected config: KodaXProviderConfig = {
-    apiKeyEnv: 'MY_API_KEY',
-    model: 'my-model-1',
-  };
-
-  async stream(messages, tools, system, thinking, streamOptions) {
-    // 实现你的流式调用逻辑
-    const response = await fetch('https://api.my-provider.com/v1/chat', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.getApiKey()}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages,
-        model: this.config.model,
-        stream: true,
-      }),
-    });
-
-    // 处理流式响应...
-    return {
-      text: '...',
-      textBlocks: [],
-      thinkingBlocks: [],
-      toolBlocks: [],
-    };
-  }
-}
-
-// 注册 Provider
-registerProvider('my-provider', () => new MyProvider());
+```bash
+npm run build -w @kodax-ai/llm
+npm test -- packages/llm/src
 ```
-
-## API 导出
-
-```typescript
-// Provider 相关
-export { getProvider, listProviders, registerProvider, KodaXBaseProvider };
-
-// 类型
-export type {
-  KodaXMessage,
-  KodaXContentBlock,
-  KodaXToolDefinition,
-  KodaXProviderConfig,
-  KodaXStreamResult,
-  KodaXProviderStreamOptions,
-};
-
-// 错误
-export { KodaXProviderError, KodaXStreamError };
-
-// 常量
-export { KODAX_PROVIDERS };
-```
-
-## 依赖
-
-- `@anthropic-ai/sdk` - Anthropic API SDK
-- `openai` - OpenAI API SDK
 
 ## License
 

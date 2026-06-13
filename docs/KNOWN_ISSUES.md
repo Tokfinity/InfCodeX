@@ -1,11 +1,11 @@
 # Known Issues
 
-_Last Updated: 2026-06-11_
+_Last Updated: 2026-06-13_
 
 ---
 
 > **Archive Notice**: Historical issue records are maintained in `docs/ISSUES_ARCHIVED.md`.
-> This file tracks the active issue backlog only.
+> This file tracks the active issue backlog plus recently resolved issue records that have not yet been archived.
 
 ---
 
@@ -1570,12 +1570,12 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 #### Root Cause（已完整定位）
 
-1. **无输入时阈值拦截**：[`text-buffer.ts:164 insert({paste:true})`](packages/repl/src/ui/utils/text-buffer.ts#L164) 对大段粘贴无阈值检查，整块塞进 buffer
-2. **输入栏视口被撑爆**：[`viewport-budget.ts:109 calculateInputPromptRows`](packages/repl/src/ui/utils/viewport-budget.ts#L109) 按字符数撑高输入栏，5k 字符在 80 列终端下 wrap 到 60+ 可视行，挤掉 `messageRows`
-3. **user 消息无渲染截断**：[`transcript-layout.ts:418-431`](packages/repl/src/ui/utils/transcript-layout.ts#L418-L431) 和 [`MessageList.tsx:221-233 UserItemRenderer`](packages/repl/src/ui/components/MessageList.tsx#L221-L233) 对 user 消息无 maxLines 截断（只有 assistant 做），巨大 `<Text>` 导致 Ink 每帧 wrap/output 500ms+ 延迟 + live-region 覆盖
+1. **无输入时阈值拦截**：[`text-buffer.ts:164 insert({paste:true})`](../packages/repl/src/ui/utils/text-buffer.ts#L164) 对大段粘贴无阈值检查，整块塞进 buffer
+2. **输入栏视口被撑爆**：[`viewport-budget.ts:109 calculateInputPromptRows`](../packages/repl/src/ui/utils/viewport-budget.ts#L109) 按字符数撑高输入栏，5k 字符在 80 列终端下 wrap 到 60+ 可视行，挤掉 `messageRows`
+3. **user 消息无渲染截断**：[`transcript-layout.ts:418-431`](../packages/repl/src/ui/utils/transcript-layout.ts#L418-L431) 和 [`MessageList.tsx:221-233 UserItemRenderer`](../packages/repl/src/ui/components/MessageList.tsx#L221-L233) 对 user 消息无 maxLines 截断（只有 assistant 做），巨大 `<Text>` 导致 Ink 每帧 wrap/output 500ms+ 延迟 + live-region 覆盖
 4. **视口溢出**：提交后 `You [HH:MM]` header 被挤出视口顶部，用户看不到标签 → 误以为 prompt 丢失
 
-持久化实际没丢：[`InkREPL.tsx:5888-5891 handleSubmit`](packages/repl/src/ui/InkREPL.tsx#L5888-L5891) 全文写入 history；reducer 只按轮数/条数裁剪（[`UIStateContext.tsx:106-132`](packages/repl/src/ui/contexts/UIStateContext.tsx#L106-L132)）。`/resume` 加载 persistedUiHistory 可验证数据完整。
+持久化实际没丢：[`InkREPL.tsx:5888-5891 handleSubmit`](../packages/repl/src/ui/InkREPL.tsx#L5888-L5891) 全文写入 history；reducer 只按轮数/条数裁剪（[`UIStateContext.tsx:106-132`](../packages/repl/src/ui/contexts/UIStateContext.tsx#L106-L132)）。`/resume` 加载 persistedUiHistory 可验证数据完整。
 
 #### Proposed Solution
 
@@ -1594,7 +1594,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 - 新建 `packages/repl/src/ui/utils/paste-store.ts`：`PastedContent` 类型 / `formatPastedTextRef(id, numLines)` / `getPastedTextRefNumLines(text)` / `parseReferences(input)` / `expandPastedTextRefs(input, pastedContents)` —— 全部纯函数
 - `parseReferences` 用统一正则 `/\[(Pasted text|Image|\.\.\.Truncated text) #(\d+)(?: \+\d+ lines)?(\.)*\]/g`，与 FEATURE_031 `[Image #N]` anchor 对齐
-- 改 [`text-buffer.ts insert({paste})`](packages/repl/src/ui/utils/text-buffer.ts#L164)：超阈值时 `registerPastedContent` → 插入 `[Pasted text #N +K lines]` 占位符
+- 改 [`text-buffer.ts insert({paste})`](../packages/repl/src/ui/utils/text-buffer.ts#L164)：超阈值时 `registerPastedContent` → 插入 `[Pasted text #N +K lines]` 占位符
 
 ##### Layer 2 — 非粘贴超长输入兜底（阈值 10_000 字符）
 
@@ -1604,7 +1604,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ##### Layer 3 — 渲染硬上限（`MAX_DISPLAY_CHARS=10_000`，HEAD 2500 + TAIL 2500）
 
 - 新建 `packages/repl/src/ui/utils/user-message-display.ts`：`truncateUserMessageForDisplay(text, opts): string` —— 独立纯函数，便于 FEATURE_057（v0.7.30 InProgress）搬迁时一并带走
-- 三个 call-site：[`MessageList.tsx UserItemRenderer`](packages/repl/src/ui/components/MessageList.tsx#L221) / [`transcript-layout.ts user case`](packages/repl/src/ui/utils/transcript-layout.ts#L418) / [`prompt-surface-layout.ts user case`](packages/repl/src/ui/utils/prompt-surface-layout.ts#L225)
+- 三个 call-site：[`MessageList.tsx UserItemRenderer`](../packages/repl/src/ui/components/MessageList.tsx#L221) / [`transcript-layout.ts user case`](../packages/repl/src/ui/utils/transcript-layout.ts#L418) / [`prompt-surface-layout.ts user case`](../packages/repl/src/ui/utils/prompt-surface-layout.ts#L225)
 
 ##### 原子编辑
 
@@ -1614,8 +1614,8 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
 ##### 提交流水线
 
-- [`prompt-input-controller.ts submitCurrentText`](packages/repl/src/ui/utils/prompt-input-controller.ts#L244)：state 增 `pastedContents: Record<id, PastedContent>`；提交时 `fullText = expandPastedTextRefs(text, pastedContents)`；`onSubmit(displayText, fullText)` 双参数
-- [`InkREPL.tsx handleSubmit`](packages/repl/src/ui/InkREPL.tsx#L5839) 签名改 `(displayText, fullText)`：history 写 displayText（占位符形态）、`parseCommand` / agent 调用链走 fullText（展开原文）
+- [`prompt-input-controller.ts submitCurrentText`](../packages/repl/src/ui/utils/prompt-input-controller.ts#L244)：state 增 `pastedContents: Record<id, PastedContent>`；提交时 `fullText = expandPastedTextRefs(text, pastedContents)`；`onSubmit(displayText, fullText)` 双参数
+- [`InkREPL.tsx handleSubmit`](../packages/repl/src/ui/InkREPL.tsx#L5839) 签名改 `(displayText, fullText)`：history 写 displayText（占位符形态）、`parseCommand` / agent 调用链走 fullText（展开原文）
 - 天然兼容 FEATURE_076（v0.7.25 Planned）context.messages 整形：fullText 正好是它要的 "plainUserPrompt"
 
 ##### 会话级 + 跨会话持久化
@@ -1683,19 +1683,19 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 按三层防御模型（采纳 Claude Code 实现思路 + KodaX 本地约束）实现，一次性 bundled 落地 v1 MVP + v1.1 + v2 范围。
 
 **Layer 1 — 粘贴拦截（阈值 800 字符或 >2 逻辑行）**
-- 新增 [`packages/repl/src/ui/utils/paste-store.ts`](packages/repl/src/ui/utils/paste-store.ts) — `PasteStore` 类 + 纯函数 `parseReferences` / `expandPastedTextRefs` / `findPlaceholderBeforeCursor` / `findPlaceholderAfterCursor` / `shouldReplacePasteWithPlaceholder` / `maybeTruncateLongInput` + 模块级 active store getter/setter（供 `/paste` 命令访问）
-- [`packages/repl/src/ui/hooks/useTextBuffer.ts`](packages/repl/src/ui/hooks/useTextBuffer.ts) `handleInsert` 增加阈值判断 → 超阈值时 `pasteStore.registerText` 返回 placeholder，buffer 只插入 `[Pasted text #N +K lines]`
-- **关键修复（初版回归）**：bracketed paste 下 [`keypress-parser.ts`](packages/repl/src/ui/utils/keypress-parser.ts) 原本按字符逐个 emit keypress，导致 Layer 1 阈值 per-char 判断恒为 false（初版实测粘贴 5k 字符直接掉到 Layer 2 路径）。修复方式：parser 在 `paste_start` / `paste_end` 之间累积 `insertable` + `newline` 到 `pasteAccumulator`，`paste_end` 时 emit **一个** synthetic `{ name: "paste", sequence: <整段>, isPasted: true, insertable: true }` 事件。Issue 075 的 CRLF 归一保留（`\r` / `\r\n` 在 paste 模式都归为 `\n` 入 accumulator）
+- 新增 [`packages/repl/src/ui/utils/paste-store.ts`](../packages/repl/src/ui/utils/paste-store.ts) — `PasteStore` 类 + 纯函数 `parseReferences` / `expandPastedTextRefs` / `findPlaceholderBeforeCursor` / `findPlaceholderAfterCursor` / `shouldReplacePasteWithPlaceholder` / `maybeTruncateLongInput` + 模块级 active store getter/setter（供 `/paste` 命令访问）
+- [`packages/repl/src/ui/hooks/useTextBuffer.ts`](../packages/repl/src/ui/hooks/useTextBuffer.ts) `handleInsert` 增加阈值判断 → 超阈值时 `pasteStore.registerText` 返回 placeholder，buffer 只插入 `[Pasted text #N +K lines]`
+- **关键修复（初版回归）**：bracketed paste 下 [`keypress-parser.ts`](../packages/repl/src/ui/utils/keypress-parser.ts) 原本按字符逐个 emit keypress，导致 Layer 1 阈值 per-char 判断恒为 false（初版实测粘贴 5k 字符直接掉到 Layer 2 路径）。修复方式：parser 在 `paste_start` / `paste_end` 之间累积 `insertable` + `newline` 到 `pasteAccumulator`，`paste_end` 时 emit **一个** synthetic `{ name: "paste", sequence: <整段>, isPasted: true, insertable: true }` 事件。Issue 075 的 CRLF 归一保留（`\r` / `\r\n` 在 paste 模式都归为 `\n` 入 accumulator）
 - `handleInsert` 小粘贴路径改用 `{ paste: false }` 让 `buffer.insert` 按 `\n` 分行（聚合后的小粘贴可能含 newline）
 - 统一正则 `/\[(Pasted text|Image|\.\.\.Truncated text) #(\d+)(?: \+\d+ lines)?(\.*)\]/g` 与 FEATURE_031 `[Image #N]` 对齐，`expandPastedTextRefs` 只扩展 Pasted/Truncated，Image 原样保留
 
 **Layer 2 — 非粘贴超长输入兜底（阈值 10_000 字符）**
-- [`packages/repl/src/ui/utils/prompt-input-controller.ts`](packages/repl/src/ui/utils/prompt-input-controller.ts) 新增 `useEffect` 监听 `text.length > 10_000` → 调 `maybeTruncateLongInput` 抽中间为 `[...Truncated text #N +K lines...]`，保留首尾各 500
+- [`packages/repl/src/ui/utils/prompt-input-controller.ts`](../packages/repl/src/ui/utils/prompt-input-controller.ts) 新增 `useEffect` 监听 `text.length > 10_000` → 调 `maybeTruncateLongInput` 抽中间为 `[...Truncated text #N +K lines...]`，保留首尾各 500
 - 通过 `lastTruncatedLengthRef` + 阈值早返回防止无限循环
 
 **Layer 3 — 渲染硬上限（MAX_DISPLAY_CHARS=10_000，HEAD 2500 + TAIL 2500）**
-- 新增 [`packages/repl/src/ui/utils/user-message-display.ts`](packages/repl/src/ui/utils/user-message-display.ts) 纯函数 `truncateUserMessageForDisplay`
-- 三个 render call-site 接入：[`MessageList.tsx UserItemRenderer`](packages/repl/src/ui/components/MessageList.tsx) / [`transcript-layout.ts`](packages/repl/src/ui/utils/transcript-layout.ts) / [`prompt-surface-layout.ts`](packages/repl/src/ui/utils/prompt-surface-layout.ts) 都通过 `truncateUserMessageForDisplay(item.text)` 拿到绑定上限的 text 再 wrap
+- 新增 [`packages/repl/src/ui/utils/user-message-display.ts`](../packages/repl/src/ui/utils/user-message-display.ts) 纯函数 `truncateUserMessageForDisplay`
+- 三个 render call-site 接入：[`MessageList.tsx UserItemRenderer`](../packages/repl/src/ui/components/MessageList.tsx) / [`transcript-layout.ts`](../packages/repl/src/ui/utils/transcript-layout.ts) / [`prompt-surface-layout.ts`](../packages/repl/src/ui/utils/prompt-surface-layout.ts) 都通过 `truncateUserMessageForDisplay(item.text)` 拿到绑定上限的 text 再 wrap
 
 **原子编辑 + 方向键跳跃**
 - `TextBuffer` 保持纯接口，atomic 逻辑下移至 hook 层：`useTextBuffer` 的 `handleBackspace` / `handleDelete` 在 word boundary 处匹配 placeholder 正则 → 用 `buffer.replaceRange` 整块一次删
@@ -1706,18 +1706,18 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - 新增 `PromptSubmitPayload { displayText, fullText, pastedContents }` 类型
 - `InputPromptProps.onSubmit` 签名从 `(text: string)` 改为 `(payload: PromptSubmitPayload)`
 - `submitCurrentText` 先 `pasteStore.expand(displayText)` 得 `fullText`，再 `onSubmit(payload)`
-- [`InkREPL.tsx handleSubmit`](packages/repl/src/ui/InkREPL.tsx) 改签名：UI history 写 `displayText`、`parseCommand` / agent 调用链走 `fullText`；`processSpecialSyntax` / `executeInvocation` / `addPendingInput` 也都切换到 `fullText`
+- [`InkREPL.tsx handleSubmit`](../packages/repl/src/ui/InkREPL.tsx) 改签名：UI history 写 `displayText`、`parseCommand` / agent 调用链走 `fullText`；`processSpecialSyntax` / `executeInvocation` / `addPendingInput` 也都切换到 `fullText`
 
 **会话级输入历史（↑↓）+ 磁盘 paste-cache**
-- [`useInputHistory.ts HistoryEntry`](packages/repl/src/ui/hooks/useInputHistory.ts) 扩展 `pastedContents?: PastedContent[]`
+- [`useInputHistory.ts HistoryEntry`](../packages/repl/src/ui/hooks/useInputHistory.ts) 扩展 `pastedContents?: PastedContent[]`
 - `navigateUp` / `navigateDown` 返回 `HistoryEntry`；`prompt-input-controller` 的 `handleHistoryRecall` 把老 entry 的 pastedContents adopt 回当前会话的 PasteStore
-- 新建 [`packages/repl/src/ui/utils/paste-cache.ts`](packages/repl/src/ui/utils/paste-cache.ts) — sha256 内容寻址 + `storePastedText` / `retrievePastedText` / `cleanupOldPastes`（默认 30 天 retention）
+- 新建 [`packages/repl/src/ui/utils/paste-cache.ts`](../packages/repl/src/ui/utils/paste-cache.ts) — sha256 内容寻址 + `storePastedText` / `retrievePastedText` / `cleanupOldPastes`（默认 30 天 retention）
 - `handleSubmit` 中对 >1024 字符的 text 类型 paste content 做 fire-and-forget 异步写盘（**不**直接 mutate pastedContents 元素，避免污染会话 PasteStore 映射）
 - `handleHistoryRecall` 按 `contentHash` 异步从磁盘补全 content（为未来 JSONL 持久化预留基础）
 - InkREPL mount 时 `void cleanupOldPastes()` 清理过期文件
 
 **新命令**
-- [`/paste list`](packages/repl/src/interactive/commands.ts) 列出当前 session 的所有 pasted text id
+- [`/paste list`](../packages/repl/src/interactive/commands.ts) 列出当前 session 的所有 pasted text id
 - `/paste show <id>` 打印指定 id 的原文；若 content 缺失但 hash 存在则从磁盘 paste-cache 读取
 
 **范围外（明确 defer）**
@@ -1787,17 +1787,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - **Fixed**: -
 - **Created**: 2026-04-20
 
-- **Update 2026-05-04 (FEATURE_110, v0.7.34)**: plan-mode 路径 1 已整体删除（`runWithPlanMode` / `/plan` slash 命令 / `[planMode, setPlanMode]` state 全部移除），本 issue 现仅剩 skill / prompt 调用一条路径。skill 路径已在 v0.7.24 (Issue 121) 顺手补了 `setCanQueueFollowUps(true)` 包裹（[InkREPL.tsx:6237-6239](packages/repl/src/ui/InkREPL.tsx#L6237-L6239)），需独立验证是否完全闭合。
+- **Update 2026-05-04 (FEATURE_110, v0.7.34)**: plan-mode 路径 1 已整体删除（`runWithPlanMode` / `/plan` slash 命令 / `[planMode, setPlanMode]` state 全部移除），本 issue 现仅剩 skill / prompt 调用一条路径。skill 路径已在 v0.7.24 (Issue 121) 顺手补了 `setCanQueueFollowUps(true)` 包裹（[InkREPL.tsx:6237-6239](../packages/repl/src/ui/InkREPL.tsx#L6237-L6239)），需独立验证是否完全闭合。
 
 - **Original Problem**:
 
   用户通过 `/skill:...`（例如 `/skill:smart-changelog`）或 plan-mode（已于 v0.7.34 删除）触发 agent 执行期间，在流式过程中按 Enter 想排队追加下一条 prompt，会出现：
 
-  - 输入栏字符被吞（由 [prompt-input-controller.ts:251-252](packages/repl/src/ui/utils/prompt-input-controller.ts#L251-L252) 无条件 `clear()` 导致）
+  - 输入栏字符被吞（由 [prompt-input-controller.ts:251-252](../packages/repl/src/ui/utils/prompt-input-controller.ts#L251-L252) 无条件 `clear()` 导致）
   - 底部 `QueuedCommandsSurface` 无排队提示
   - 输入栏占位符显示 `Agent is busy...`（不是 `Queue a follow-up...`）
 
-  按占位符映射 [surface-liveness.ts:66-71](packages/repl/src/ui/view-models/surface-liveness.ts#L66-L71)：`busy` = `isLoading=true` + `canQueueFollowUps=false`。证实 `handleSubmit` 在 [InkREPL.tsx:5849](packages/repl/src/ui/InkREPL.tsx#L5849) 的 `if (!canQueueFollowUps) return;` 命中，输入被静默丢弃。
+  按占位符映射 [surface-liveness.ts:66-71](../packages/repl/src/ui/view-models/surface-liveness.ts#L66-L71)：`busy` = `isLoading=true` + `canQueueFollowUps=false`。证实 `handleSubmit` 在 [InkREPL.tsx:5849](../packages/repl/src/ui/InkREPL.tsx#L5849) 的 `if (!canQueueFollowUps) return;` 命中，输入被静默丢弃。
 
 - **Context**:
 
@@ -1805,11 +1805,11 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 
   | 入口 | 调用 | `canQueueFollowUps` |
   |---|---|---|
-  | 普通对话（[InkREPL.tsx:6518](packages/repl/src/ui/InkREPL.tsx#L6518)） | `runQueueableAgentSequence` → 内部 `setCanQueueFollowUps(true)` | ✅ true |
-  | Skill / prompt 调用（[InkREPL.tsx:6349](packages/repl/src/ui/InkREPL.tsx#L6349) → `executeInvocation` 内 [:5763](packages/repl/src/ui/InkREPL.tsx#L5763)） | 直接 `runAgentRound` | ❌ false |
-  | Plan mode（[InkREPL.tsx:6466](packages/repl/src/ui/InkREPL.tsx#L6466)） | 直接 `runWithPlanMode` | ❌ false |
+  | 普通对话（[InkREPL.tsx:6518](../packages/repl/src/ui/InkREPL.tsx#L6518)） | `runQueueableAgentSequence` → 内部 `setCanQueueFollowUps(true)` | ✅ true |
+  | Skill / prompt 调用（[InkREPL.tsx:6349](../packages/repl/src/ui/InkREPL.tsx#L6349) → `executeInvocation` 内 [:5763](../packages/repl/src/ui/InkREPL.tsx#L5763)） | 直接 `runAgentRound` | ❌ false |
+  | Plan mode（[InkREPL.tsx:6466](../packages/repl/src/ui/InkREPL.tsx#L6466)） | 直接 `runWithPlanMode` | ❌ false |
 
-  另有 `executeInvocation` 内的 plan-mode 子分支（[InkREPL.tsx:5749-5753](packages/repl/src/ui/InkREPL.tsx#L5749-L5753)）同样未接入。
+  另有 `executeInvocation` 内的 plan-mode 子分支（[InkREPL.tsx:5749-5753](../packages/repl/src/ui/InkREPL.tsx#L5749-L5753)）同样未接入。
 
   **为什么 v0.7.22/v0.7.23 才被察觉**：代码路径一直是这样。用户升级后开始频繁使用 `/skill:` 命令（如 `smart-changelog`），才撞上这个一直存在的盲区。queue 代码本身自 v0.7.20 未变。
 
@@ -1822,7 +1822,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
   1. 流式期间允许入队（`canQueueFollowUps=true`）
   2. 本轮结束后自动 drain 队列，每条作为后续对话轮执行
 
-  **改动点**（约 30 行集中在 [InkREPL.tsx](packages/repl/src/ui/InkREPL.tsx)）：
+  **改动点**（约 30 行集中在 [InkREPL.tsx](../packages/repl/src/ui/InkREPL.tsx)）：
 
   1. **新增 helper `drainPendingInputsAsFollowUps`**（紧邻 `runQueueableAgentSequence` 之后）
      - 从 `streamingState.pendingInputs` 取第一条
@@ -1834,7 +1834,7 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
      - 外层 finally 关闸
      - 正常返回路径后调 `drainPendingInputsAsFollowUps`；抛错路径不 drain（队列保留到用户下一次提交时 drain，与主路径失败行为一致）
 
-  3. **同样模式应用到 handleSubmit 的 plan-mode 分支**（[InkREPL.tsx:6459-6500](packages/repl/src/ui/InkREPL.tsx#L6459-L6500)）
+  3. **同样模式应用到 handleSubmit 的 plan-mode 分支**（[InkREPL.tsx:6459-6500](../packages/repl/src/ui/InkREPL.tsx#L6459-L6500)）
      - 在 `setIsLoading(false)` 之前 drain，保证 drain 期间仍有 loading 状态
 
   **不做的事**（刻意保持边界窄）：
@@ -1872,15 +1872,15 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 - **Context**:
 
   **触发路径**：
-  - [packages/coding/src/reasoning.ts:2275](packages/coding/src/reasoning.ts#L2275) — `deriveMutationSurface` 基于原始 prompt 文本做正则匹配，把 `plan.decision.mutationSurface` 初始化为 `docs-only` 等值
-  - [packages/coding/src/task-engine.ts:951-1011](packages/coding/src/task-engine.ts#L951-L1011) — `applyScoutDecisionToPlan` 只同步 `harnessProfile` 和 `upgradeCeiling`，**从不触碰** `mutationSurface`
-  - [packages/coding/src/task-engine.ts:3096-3104](packages/coding/src/task-engine.ts#L3096-L3104) — Generator 的 `h1MutationGuardance` 读 `decision.mutationSurface`，看到旧的 `docs-only` 就把 Generator 锁死
+  - [packages/coding/src/reasoning.ts:2275](../packages/coding/src/reasoning.ts#L2275) — `deriveMutationSurface` 基于原始 prompt 文本做正则匹配，把 `plan.decision.mutationSurface` 初始化为 `docs-only` 等值
+  - [packages/coding/src/task-engine.ts:951-1011](../packages/coding/src/task-engine.ts#L951-L1011) — `applyScoutDecisionToPlan` 只同步 `harnessProfile` 和 `upgradeCeiling`，**从不触碰** `mutationSurface`
+  - [packages/coding/src/task-engine.ts:3096-3104](../packages/coding/src/task-engine.ts#L3096-L3104) — Generator 的 `h1MutationGuardance` 读 `decision.mutationSurface`，看到旧的 `docs-only` 就把 Generator 锁死
 
   **相关下游读点**（同样读 pre-Scout 残留值）：
-  - [task-engine.ts:1743-1744](packages/coding/src/task-engine.ts#L1743-L1744) — fan-out scheduler 判 read-only/docs-only
-  - [task-engine.ts:2567, 2578](packages/coding/src/task-engine.ts#L2567-L2578) — `createRolePrompt` 的 H1 分支
-  - [task-engine.ts:2915](packages/coding/src/task-engine.ts#L2915) — 元数据打印
-  - [task-engine.ts:3401](packages/coding/src/task-engine.ts#L3401) — 传给 `createRolePrompt`
+  - [task-engine.ts:1743-1744](../packages/coding/src/task-engine.ts#L1743-L1744) — fan-out scheduler 判 read-only/docs-only
+  - [task-engine.ts:2567, 2578](../packages/coding/src/task-engine.ts#L2567-L2578) — `createRolePrompt` 的 H1 分支
+  - [task-engine.ts:2915](../packages/coding/src/task-engine.ts#L2915) — 元数据打印
+  - [task-engine.ts:3401](../packages/coding/src/task-engine.ts#L3401) — 传给 `createRolePrompt`
 
   **相关已修复 commits**（同类 bug 的另外两条通道）：
   - `3efdb7b fix(task-engine): trust Scout routing authority, fix ceiling clamp context-loss bug`
@@ -1905,12 +1905,12 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
      - `scope ∪ reviewFilesOrAreas` 全部匹配 `*.md`/`docs/`/`CHANGELOG` 等文档路径 → `docs-scoped`
      - 其它 → `open`（默认开放，信任 Scout scope + Evaluator 兜底）
 
-  2. **替换 [task-engine.ts:3096-3104](packages/coding/src/task-engine.ts#L3096-L3104) 的 `h1MutationGuardance`**
+  2. **替换 [task-engine.ts:3096-3104](../packages/coding/src/task-engine.ts#L3096-L3104) 的 `h1MutationGuardance`**
      改读 Scout 的 directive 而非 `decision.mutationSurface`；语气从"restrict/do not mutate"改成"unless ... asks for fixes"的软引导；`open` 档不加任何约束
 
   3. **迁移或删除另外 4 处下游读点**
-     [task-engine.ts:1743-1744, 2567, 2578, 3401](packages/coding/src/task-engine.ts) — 或迁移到同一推断，或直接删除该分支（依赖 Scout scope + Evaluator 作为自然约束）
-     [task-engine.ts:2915](packages/coding/src/task-engine.ts#L2915) 元数据打印保留，但改为打印 Scout 推断结果
+     [task-engine.ts:1743-1744, 2567, 2578, 3401](../packages/coding/src/task-engine.ts) — 或迁移到同一推断，或直接删除该分支（依赖 Scout scope + Evaluator 作为自然约束）
+     [task-engine.ts:2915](../packages/coding/src/task-engine.ts#L2915) 元数据打印保留，但改为打印 Scout 推断结果
 
   4. **保留不动的东西**
      - `KodaXManagedScoutPayload` 结构、Scout prompt、validator、parser、persistence schema 全部不动

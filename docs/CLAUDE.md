@@ -16,7 +16,7 @@
 > **Documentation & Testing**:
 > - **TDD First**: Write tests before implementation (RED-GREEN-REFACTOR)
 > - **Doc First**: Update docs before coding (PRD, ADR, Feature Design)
-> - **Doc Location**: ALL `.md` files go to `docs/` directory (see Documentation Standards)
+> - **Doc Location**: root docs are limited to the allow-list below; project docs live under `docs/`. Package/client/builtin skill README or SKILL files may live next to the package or skill they document.
 
 ---
 
@@ -32,7 +32,7 @@ If the user did not give you a concrete task in their first message, read README
 
 **Core Principle**: Write less code, leverage LLM intelligence, maintain high quality.
 
-**KodaX Philosophy**: 极致轻量化 - each of the 5 layers is independently usable.
+**KodaX Philosophy**: 极致轻量化 - each workspace package is independently usable.
 
 ### Code Addition Discipline
 
@@ -84,25 +84,26 @@ If the user did not give you a concrete task in their first message, read README
 
 | Category | Technology | Version |
 |----------|-----------|---------|
-| Runtime | Node.js | >= 20.0.0 |
-| Language | TypeScript | >= 5.3.0 |
+| Runtime | Node.js | >= 18.0.0 |
+| Language | TypeScript | >= 5.7.0 (root uses 5.9.x) |
 | Package Manager | npm workspaces | - |
-| CLI Framework | Ink (React for CLI) | ^4.x |
-| Test | Vitest | ^1.2.0 |
-| LLM Providers | Anthropic, OpenAI, Google, Zhipu, Kimi, MiniMax, DeepSeek, etc. | 11 total |
+| CLI Framework | Ink (React for CLI) | ^6.7.0 / React >= 19 |
+| Test | Vitest | ^3.2.4 |
+| LLM Providers | Anthropic, OpenAI, DeepSeek, Kimi, Qwen, Zhipu, MiniMax, MiMo, Ark, Gemini CLI, Codex CLI, etc. | 14 built-in aliases |
 
 ## Monorepo Structure
 
 ```
 KodaX/
 ├── packages/
-│   ├── llm/             # LLM abstraction layer (独立库, npm: @kodax-ai/llm)
-│   ├── agent/           # Agent framework
-│   ├── coding/          # Coding tools + prompts
-│   ├── repl/            # Interactive terminal (Ink UI)
-│   └── skills/          # Agent skills (零外部依赖)
+│   ├── llm/             # LLM abstraction layer
+│   ├── agent/           # Agent framework + inline mcp/skills/session-lineage/tracing/workflow
+│   ├── coding/          # Coding tools + prompts + repo-intelligence protocol
+│   └── repl/            # Interactive terminal (Ink UI)
 ├── src/                 # CLI entry point
-└── docs/                # Documentation
+├── docs/                # Documentation
+├── clients/             # External clients / protocol adapters
+└── benchmark/           # Eval harness and datasets
 ```
 
 **Layer Independence**:
@@ -110,7 +111,7 @@ KodaX/
 - `@kodax-ai/agent` - Can be used with any LLM provider
 - `@kodax-ai/coding` - Can be embedded in other agents
 - `@kodax-ai/repl` - Full REPL experience
-- `@kodax-ai/skills` - Zero external dependencies
+- Inline skills/MCP/session-lineage/tracing/repo-intelligence subtrees are not standalone workspace packages after FEATURE_194.
 
 ## Documentation Standards
 
@@ -136,6 +137,9 @@ KodaX/
 |------|---------|----------|
 | `README.md` | Project overview and quick start | ✅ Yes |
 | `README_CN.md` | Chinese README | ✅ Yes |
+| `AGENTS.md` | Agent development rules | ✅ Yes |
+| `CLAUDE.md` | Claude Code project rules | ⚠️ Optional |
+| `CHANGELOG.md` | Release notes | ✅ Yes |
 | `CONTRIBUTING.md` | Contribution guidelines | ⚠️ Optional |
 
 ### Feature Tracking
@@ -236,6 +240,6 @@ module (`aliases.ts` + `judges.ts` + `harness.ts` + `report.ts` + `persist.ts`).
 
 ## References
 
-- [Product Requirements](docs/PRD.md)
-- [Architecture Decisions](docs/ADR.md)
-- [Feature List](docs/FEATURE_LIST.md)
+- [Product Requirements](PRD.md)
+- [Architecture Decisions](ADR.md)
+- [Feature List](FEATURE_LIST.md)

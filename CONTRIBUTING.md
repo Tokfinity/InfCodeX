@@ -8,9 +8,9 @@ Thank you for your interest in contributing to KodaX / InfCodeX.
 
 ### Prerequisites
 
-- **Node.js** >= 20.0.0
-- **npm** or **yarn**
-- **TypeScript** >= 5.3.0
+- **Node.js** >= 18.0.0
+- **npm** (npm workspaces)
+- **TypeScript** >= 5.7.0 (root uses 5.9.x)
 
 ### Installation
 
@@ -89,24 +89,27 @@ KodaX / InfCodeX uses a **monorepo architecture** with npm workspaces:
 KodaX/
 ├── packages/
 │   ├── llm/                 # @kodax-ai/llm - Independent LLM abstraction layer
-│   │   └── providers/       # 12 LLM providers (Anthropic, OpenAI, DeepSeek, etc.)
+│   │   └── providers/       # 14 built-in provider aliases + custom registry
 │   │
 │   ├── agent/               # @kodax-ai/agent - Generic Agent framework
-│   │   └── session/         # Session management, message handling
-│   │
-│   ├── skills/              # @kodax-ai/skills - Skills standard implementation
-│   │   └── builtin/         # Built-in skills (code-review, tdd, git-workflow)
+│   │   ├── capabilities/    # Inline MCP + Skills systems
+│   │   ├── session-lineage/ # Branchable session tree
+│   │   ├── tracing/         # Observability primitives
+│   │   └── workflow/        # Domain-neutral workflow runtime
 │   │
 │   ├── coding/              # @kodax-ai/coding - Coding Agent (tools + prompts)
-│   │   └── tools/           # Tool implementations and execution helpers
+│   │   ├── tools/           # Tool definitions and execution helpers
+│   │   └── repo-intelligence/ # Repointel protocol integration
 │   │
 │   └── repl/                # @kodax-ai/repl - Interactive terminal UI
-│       ├── ui/              # Ink/React components, themes
+│       ├── ui/              # Ink/React components
 │       └── interactive/     # Commands, REPL logic
 │
 ├── src/
 │   └── kodax_cli.ts         # Main CLI entry point
 │
+├── clients/                 # External clients / protocol adapters
+├── benchmark/               # Eval harness and datasets
 └── package.json             # Root workspace config
 ```
 
