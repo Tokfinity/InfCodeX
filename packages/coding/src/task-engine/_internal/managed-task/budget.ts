@@ -64,7 +64,7 @@ export function createManagedBudgetController(
   plan: ReasoningPlan,
   agentMode: KodaXAgentMode,
 ): ManagedTaskBudgetController {
-  const isH0 = agentMode !== 'ama' || plan.decision.harnessProfile === 'H0_DIRECT';
+  const isH0 = agentMode === 'sa' || plan.decision.harnessProfile === 'H0_DIRECT';
   return {
     totalBudget: isH0 ? MANAGED_TASK_BUDGET_BASE.H0_DIRECT : MANAGED_TASK_BUDGET_BASE[plan.decision.harnessProfile],
     spentBudget: 0,

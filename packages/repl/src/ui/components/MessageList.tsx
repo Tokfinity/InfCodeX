@@ -6,6 +6,7 @@
  */
 
 import React, { useEffect, useMemo, memo } from "react";
+import type { KodaXAgentMode } from "@kodax-ai/coding";
 import { Box, Static, Text, useStdout } from "../tui.js";
 import { getTheme } from "../themes/index.js";
 import { Spinner } from "./LoadingIndicator.js";
@@ -74,7 +75,7 @@ export interface MessageListProps {
   /** Whether context compaction is in progress */
   isCompacting?: boolean;
   /** Managed-task agent mode shown in live transcript state */
-  agentMode?: "sa" | "ama";
+  agentMode?: KodaXAgentMode;
   /** Managed-task phase shown in live transcript state */
   managedPhase?: "starting" | "routing" | "preflight" | "round" | "worker" | "upgrade" | "verifying" | "completed";
   /** Managed-task harness profile shown in live transcript state */

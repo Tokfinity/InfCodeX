@@ -25,6 +25,7 @@ import type {
 import { resolveExecutionCwd } from './runtime-paths.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
+import { toolWorktreeCreate } from './tools/worktree.js';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
@@ -247,6 +248,51 @@ interface SpecialistOverride {
   providerOverride?: string;
 }
 
+interface ChildIsolationScope {
+  readonly ctx: KodaXToolExecutionContext;
+  readonly worktreePath?: string;
+}
+
+function readWorktreePath(raw: string): string {
+  const data = JSON.parse(raw) as unknown;
+  if (typeof data !== 'object' || data === null || !('path' in data)) {
+    throw new Error('worktree_create returned an invalid payload');
+  }
+  const path = (data as { path?: unknown }).path;
+  if (typeof path !== 'string' || path.length === 0) {
+    throw new Error('worktree_create returned an invalid path');
+  }
+  return path;
+}
+
+async function prepareChildIsolationScope(
+  bundle: KodaXChildContextBundle,
+  parentCtx: KodaXToolExecutionContext,
+): Promise<ChildIsolationScope> {
+  if (bundle.isolation !== 'worktree') {
+    return { ctx: parentCtx };
+  }
+
+  const raw = await toolWorktreeCreate(
+    { description: `workflow-${bundle.id}` },
+    parentCtx,
+  );
+  const worktreePath = readWorktreePath(raw);
+  return {
+    ctx: {
+      ...parentCtx,
+      gitRoot: worktreePath,
+      executionCwd: worktreePath,
+    },
+    worktreePath,
+  };
+}
+
+function annotateWorktreeSummary(summary: string, scope: ChildIsolationScope): string {
+  if (!scope.worktreePath) return summary;
+  return [`[Workflow worktree: ${scope.worktreePath}]`, summary].join('\n');
+}
+
 function resolveSpecialistOverride(
   bundle: KodaXChildContextBundle,
   defaultSystemPrompt: string,
@@ -300,7 +346,8 @@ async function executeReadChild(
   parentCtx: KodaXToolExecutionContext,
   options: ChildExecutorOptions,
 ): Promise<KodaXChildAgentResult> {
-  const briefing = await buildChildBriefing(bundle, parentCtx, options.maxIterationsPerChild);
+  const scope = await prepareChildIsolationScope(bundle, parentCtx);
+  const briefing = await buildChildBriefing(bundle, scope.ctx, options.maxIterationsPerChild);
   const childEvents = buildChildEvents(
     bundle.id,
     options.onProgress,
@@ -347,8 +394,8 @@ async function executeReadChild(
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
         context: {
-          gitRoot: parentCtx.gitRoot,
-          executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
+          gitRoot: scope.ctx.gitRoot,
+          executionCwd: scope.ctx.executionCwd ?? scope.ctx.gitRoot,
           systemPromptOverride,
           excludeTools,
           // FEATURE_123 v0.7.44 — propagate agentId + registry so the
@@ -356,8 +403,8 @@ async function executeReadChild(
           // child stays unable to mutate the registry (no
           // dispatch_child_task tool).
           currentAgentId: bundle.id,
-          parentAgentId: parentCtx.currentAgentId,
-          inheritedChildTaskRegistry: parentCtx.childTaskRegistry,
+          parentAgentId: scope.ctx.currentAgentId,
+          inheritedChildTaskRegistry: scope.ctx.childTaskRegistry,
         },
         events: childEvents,
       },
@@ -374,7 +421,7 @@ async function executeReadChild(
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
     return extractChildResult(
       bundle,
-      result.lastText,
+      annotateWorktreeSummary(result.lastText, scope),
       result.success ? 'completed' : 'failed',
       iterations,
       result.interrupted === true,
@@ -404,10 +451,12 @@ async function executeWriteChild(
 ): Promise<KodaXChildAgentResult> {
   // Child shares parent cwd + gitRoot. Fresh `backups` Map gives per-child
   // per-file rollback; AGENTS.md resolution uses the parent gitRoot.
-  const childCtx: KodaXToolExecutionContext = {
+  const baseCtx: KodaXToolExecutionContext = {
     ...parentCtx,
     backups: new Map(),
   };
+  const scope = await prepareChildIsolationScope(bundle, baseCtx);
+  const childCtx = scope.ctx;
 
   const briefing = await buildChildBriefing(bundle, childCtx, options.maxIterationsPerChild);
   const childEvents = buildChildEvents(
@@ -419,7 +468,7 @@ async function executeWriteChild(
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
   // (they don't mutate, so project rules don't apply).
-  const writeSystemPrompt = buildWriteSystemPrompt(parentCtx.gitRoot ?? parentCtx.executionCwd ?? process.cwd());
+  const writeSystemPrompt = buildWriteSystemPrompt(childCtx.gitRoot ?? childCtx.executionCwd ?? process.cwd());
 
   // FEATURE_191 — specialist override switch on the write path. Same fail-safe
   // semantic as the read path: unknown specialist falls back to defaults.
@@ -461,16 +510,16 @@ async function executeWriteChild(
         // (shared engine + denialTracker + circuitBreaker state).
         guardrails: options.guardrails,
         context: {
-          gitRoot: parentCtx.gitRoot,
-          executionCwd: parentCtx.executionCwd ?? parentCtx.gitRoot,
+          gitRoot: childCtx.gitRoot,
+          executionCwd: childCtx.executionCwd ?? childCtx.gitRoot,
           systemPromptOverride,
           excludeTools,
           // FEATURE_123 v0.7.44 — write children share the same peer-
           // routing surface as read children (same agentId + registry
           // propagation rules).
           currentAgentId: bundle.id,
-          parentAgentId: parentCtx.currentAgentId,
-          inheritedChildTaskRegistry: parentCtx.childTaskRegistry,
+          parentAgentId: childCtx.currentAgentId,
+          inheritedChildTaskRegistry: childCtx.childTaskRegistry,
         },
         events: childEvents,
       },
@@ -488,7 +537,7 @@ async function executeWriteChild(
 
     return extractChildResult(
       bundle,
-      result.lastText,
+      annotateWorktreeSummary(result.lastText, scope),
       result.success ? 'completed' : 'failed',
       iterations,
       result.interrupted === true,
@@ -534,6 +583,9 @@ async function buildChildBriefing(
     ``,
     `## Environment`,
     `Working Directory: ${childCwd}`,
+    ...(bundle.isolation === 'worktree'
+      ? ['Workflow Isolation: dedicated git worktree requested by the workflow coordinator.']
+      : []),
     ...(childGitRoot && childGitRoot !== childCwd ? [`Git Root: ${childGitRoot}`] : []),
     `Platform: ${platformLabel} (${os.release()})`,
     shellHint,

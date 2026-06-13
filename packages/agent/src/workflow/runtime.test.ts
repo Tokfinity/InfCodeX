@@ -12,6 +12,7 @@ import {
   createWorkflowRuntime,
   runWorkflow,
   WorkflowAbortError,
+  WorkflowBudgetError,
   WorkflowLimitError,
   type WorkflowAgentBackend,
   type WorkflowSpawnAgentInput,
@@ -234,7 +235,7 @@ describe('abort handling', () => {
   });
 });
 
-describe('budget accounting (not enforced)', () => {
+describe('budget accounting + hard stop before new spawns', () => {
   it('accrues output tokens across completed agents', async () => {
     const { backend } = fakeBackend();
     let snapshot: { total: number | null; spent: number; remaining: number } | undefined;
@@ -255,6 +256,21 @@ describe('budget accounting (not enforced)', () => {
       return 'ok';
     });
     expect(remaining).toBe(Infinity);
+  });
+
+  it('throws WorkflowBudgetError before spawning after budget is exhausted', async () => {
+    const { backend, spawnCount } = fakeBackend();
+    const outcome = await runWorkflow(
+      baseOpts(backend, { limits: { tokenBudget: 10 } }),
+      async (wf) => {
+        await wf.runAgent({ name: 'a', prompt: 'x' }); // spends 10 output tokens
+        await wf.runAgent({ name: 'b', prompt: 'x' });
+        return 'unreached';
+      },
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowBudgetError);
+    expect(spawnCount()).toBe(1);
   });
 });
 

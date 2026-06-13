@@ -131,6 +131,7 @@ export interface CommandResultData {
   data?: unknown;
   skillContent?: string;
   invocation?: CommandInvocationRequest;
+  workflow?: CommandWorkflowInvocationRequest;
 }
 
 export interface CommandInvocationRequest extends CommandExecutionMetadata {
@@ -139,6 +140,12 @@ export interface CommandInvocationRequest extends CommandExecutionMetadata {
   displayName: string;
   path?: string;
   skillInvocation?: KodaXSkillInvocationContext;
+}
+
+export interface CommandWorkflowInvocationRequest {
+  request: string;
+  source: 'command' | 'natural-language';
+  displayName: string;
 }
 
 export type CommandResult = boolean | CommandResultData;

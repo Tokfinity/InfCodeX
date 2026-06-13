@@ -13,6 +13,14 @@ describe("ama-summary view model", () => {
     }, true)).toBe("Validating 3 findings");
   });
 
+  it("keeps AMAW child fan-out in the same managed summary strip", () => {
+    expect(buildAmaWorkStripFromStatus({
+      agentMode: "amaw",
+      childFanoutClass: "finding-validation",
+      childFanoutCount: 3,
+    }, true)).toBe("Validating 3 findings");
+  });
+
   it("derives the background task bar from managed status without exposing topology", () => {
     const viewModel = buildAmaSummaryViewModel({
       status: {

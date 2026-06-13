@@ -72,6 +72,44 @@ describe('GlobalShortcuts', () => {
     expect(setShowHelp).toHaveBeenCalledWith(false);
   });
 
+  it('lets Alt+M leave AMAW mode by switching to SA', () => {
+    let currentConfig: CurrentConfig = {
+      provider: 'openai',
+      model: 'gpt-5.4',
+      thinking: false,
+      reasoningMode: 'off',
+      agentMode: 'amaw',
+      permissionMode: 'accept-edits',
+    };
+
+    const onSetAgentMode = vi.fn();
+
+    GlobalShortcuts({
+      currentConfig,
+      setCurrentConfig: (updater) => {
+        currentConfig =
+          typeof updater === 'function'
+            ? updater(currentConfig)
+            : updater;
+      },
+      isLoading: false,
+      abort: vi.fn(),
+      stopThinking: vi.fn(),
+      clearThinkingContent: vi.fn(),
+      setCurrentTool: vi.fn(),
+      setIsLoading: vi.fn(),
+      onToggleHelp: vi.fn(),
+      setShowHelp: vi.fn(),
+      onSetAgentMode,
+      isInputEmpty: true,
+    });
+
+    expect(shortcutHandlers.get('toggleAgentMode')?.()).toBe(true);
+    expect(currentConfig.agentMode).toBe('sa');
+    expect(saveConfigMock).toHaveBeenCalledWith({ agentMode: 'sa' });
+    expect(onSetAgentMode).toHaveBeenCalledWith('sa');
+  });
+
   it('lets Ctrl+O toggle transcript mode without persisting config', () => {
     const currentConfig: CurrentConfig = {
       provider: 'openai',

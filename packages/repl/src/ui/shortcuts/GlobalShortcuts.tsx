@@ -170,7 +170,7 @@ export function GlobalShortcuts({
     if (isInteractiveDialogActive) {
       return false;
     }
-    const nextMode: KodaXAgentMode = currentConfig.agentMode === 'ama' ? 'sa' : 'ama';
+    const nextMode: KodaXAgentMode = currentConfig.agentMode === 'sa' ? 'ama' : 'sa';
 
     setCurrentConfig((prev) => ({ ...prev, agentMode: nextMode }));
     saveConfig({ agentMode: nextMode });

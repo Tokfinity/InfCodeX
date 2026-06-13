@@ -16,6 +16,7 @@ import {
   extractArtifactLedger,
   KodaXInputArtifact,
   KodaXOptions,
+  type KodaXAgentMode,
   KodaXResult,
   KodaXReasoningMode,
   mergeArtifactLedger,
@@ -27,6 +28,7 @@ import {
   KODAX_DEFAULT_PROVIDER,
   getCustomProvider,
   buildGoalRuntimeBinding,
+  decideWorkflowInvocation,
 } from '@kodax-ai/coding';
 import {
   appendSessionLineageLabel,
@@ -75,6 +77,7 @@ import {
   CommandCallbacks,
   CurrentConfig,
 } from './commands.js';
+import type { CommandWorkflowInvocationRequest } from '../commands/types.js';
 import { loadCompactionConfig } from '../common/compaction-config.js';
 import { loadAlwaysAllowTools, loadAutoModeSettings, saveAlwaysAllowToolPattern } from '../common/permission-config.js';
 import {
@@ -98,6 +101,10 @@ import { ReadlineUIContext } from '../ui/readline-ui.js';
 import { extractLastAssistantText, extractTitle as extractSessionTitle } from '../ui/utils/message-utils.js';
 import { executeShellCommand, isShellCommandHandled } from '../ui/utils/shell-executor.js';
 import { prepareInvocationExecution } from './invocation-runtime.js';
+import {
+  resolveConfirm,
+  startGeneratedWorkflowFromRequest,
+} from '../commands/workflow-command.js';
 import {
   enforceSessionTransitionGuard,
 } from './session-guardrails.js';
@@ -362,7 +369,7 @@ export async function runInteractiveMode(options: RepLOptions): Promise<void> {
   const initialProvider = options.provider ?? config.provider ?? KODAX_DEFAULT_PROVIDER;
   const initialModel = options.model ?? config.model;
   const initialReasoningMode = resolveInitialReasoningMode(options, config);
-  const initialAgentMode = options.agentMode ?? (config as { agentMode?: 'ama' | 'sa' }).agentMode ?? 'ama';
+  const initialAgentMode = options.agentMode ?? (config as { agentMode?: KodaXAgentMode }).agentMode ?? 'ama';
   const initialThinking = initialReasoningMode !== 'off';
   const initialPermissionMode: PermissionMode =
     normalizePermissionMode((config as { permissionMode?: string }).permissionMode, 'accept-edits') ?? 'accept-edits';
@@ -611,6 +618,9 @@ Keyboard Shortcuts:
   // Fix: Ensure session.id is set to reuse same session - 修复：确保 session.id 被设置以复用同一 session
   let currentOptions: RepLOptions = {
     ...options,
+    provider: initialProvider,
+    model: initialModel,
+    agentMode: initialAgentMode,
     reasoningMode: initialReasoningMode,
     thinking: initialThinking,
     context: {
@@ -800,6 +810,10 @@ Keyboard Shortcuts:
       currentOptions.reasoningMode = mode;
       currentOptions.thinking = thinking;
       statusBar?.update({ reasoningMode: mode });
+    },
+    setAgentMode: (mode: KodaXAgentMode) => {
+      currentConfig.agentMode = mode;
+      currentOptions.agentMode = mode;
     },
     setPermissionMode: (mode: PermissionMode) => {
       currentConfig.permissionMode = mode;
@@ -1137,11 +1151,52 @@ Keyboard Shortcuts:
   process.on('exit', cleanup);
   process.on('SIGTERM', cleanup);
 
+  const startWorkflowInvocation = async (
+    workflow: CommandWorkflowInvocationRequest,
+    rawInput: string,
+  ): Promise<boolean> => {
+    const decision = decideWorkflowInvocation({
+      agentMode: currentConfig.agentMode,
+      source: workflow.source,
+      input: rawInput || workflow.request,
+    });
+
+    if (decision.action === 'none') {
+      return false;
+    }
+
+    if (decision.action === 'suggest' && workflow.source === 'natural-language') {
+      const confirm = resolveConfirm(callbacks);
+      if (!confirm) {
+        console.log(chalk.dim('\n[workflow] This task looks suitable for workflow. Use /workflow create <request> to run it.\n'));
+        return false;
+      }
+      const approved = await confirm('This task looks suitable for workflow. Generate and run a workflow?');
+      if (!approved) {
+        return false;
+      }
+    }
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      request: workflow.request,
+      callbacks,
+      approval: decision.action === 'auto-start' ? 'silent' : 'required',
+      sourceLabel: workflow.displayName,
+    });
+
+    return outcome === 'started' || outcome === 'cancelled';
+  };
+
   const handleCommandResult = async (
     result: Awaited<ReturnType<typeof executeCommand>>,
     rawInput: string
   ): Promise<void> => {
     if (!result || typeof result !== 'object') {
+      return;
+    }
+
+    if (result.workflow) {
+      await startWorkflowInvocation(result.workflow, rawInput);
       return;
     }
 
@@ -1238,6 +1293,14 @@ Keyboard Shortcuts:
         // Process special syntax and update lastUserMessage - 处理特殊语法并更新 lastUserMessage
         const processed = await processSpecialSyntax(trimmed);
         if (trimmed.startsWith('!') && isShellCommandHandled(processed)) {
+          continue;
+        }
+        if (await startWorkflowInvocation({
+          request: processed,
+          source: 'natural-language',
+          displayName: currentConfig.agentMode.toUpperCase(),
+        }, trimmed)) {
+          lastUserMessage = trimmed;
           continue;
         }
         const preparedArtifacts = preparePromptInputArtifacts(
@@ -1404,6 +1467,15 @@ Keyboard Shortcuts:
     }
 
     // Add user message to context - 添加用户消息到上下文
+    if (await startWorkflowInvocation({
+      request: processed,
+      source: 'natural-language',
+      displayName: currentConfig.agentMode.toUpperCase(),
+    }, trimmed)) {
+      lastUserMessage = trimmed;
+      continue;
+    }
+
     const preparedArtifacts = preparePromptInputArtifacts(
       processed,
       currentOptions.context?.executionCwd ?? process.cwd(),

@@ -69,6 +69,7 @@ import type {
   SessionErrorMetadata,
   ChildTaskRegistry,
   TaskAbortRegistry,
+  WorkflowIsolation,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -556,6 +557,11 @@ export interface KodaXChildContextBundle {
    */
   modelHint?: KodaXChildModelHint;
   /**
+   * FEATURE_217 (v0.7.49): workflow-level child isolation hint. Default is
+   * shared parent cwd; `worktree` is opt-in and parent-managed.
+   */
+  isolation?: WorkflowIsolation;
+  /**
    * FEATURE_191 — optional registered specialist agent name. When set,
    * the child is dispatched with that agent's `instructions` /
    * `tools` / `reasoning` / `guardrails` instead of the stock Worker
@@ -682,7 +688,7 @@ export interface KodaXFanoutSchedulerPlan {
   reason: string;
 }
 
-export type KodaXAgentMode = 'ama' | 'sa';
+export type KodaXAgentMode = 'ama' | 'sa' | 'amaw';
 export type KodaXMemoryStrategy = 'continuous' | 'compact' | 'reset-handoff';
 export type KodaXBudgetDisclosureZone = 'green' | 'yellow' | 'orange' | 'red';
 

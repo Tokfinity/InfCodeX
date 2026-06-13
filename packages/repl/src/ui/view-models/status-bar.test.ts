@@ -87,6 +87,13 @@ describe("status-bar (Ink view-model) — auto-mode engine indicator (FEATURE_09
     expect(planText).not.toContain("[RULES]");
     expect(planText).not.toContain("[LLM]");
   });
+
+  it("renders AMAW as the short status-bar agent label", () => {
+    const text = getStatusBarText(baseProps({ agentMode: "amaw" }));
+    expect(text).toContain("KodaX - AMAW");
+    expect(text).not.toContain("AMA-workflow");
+    expect(text).not.toContain("AMA Workflow");
+  });
 });
 
 describe("status-bar (Ink view-model) — surface-status integration", () => {

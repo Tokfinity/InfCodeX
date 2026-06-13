@@ -110,23 +110,41 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect((await backend.wait(handle.taskId)).status).toBe('stopped');
   });
 
-  it('passes readOnly + specialist + modelHint into the bundle', async () => {
-    let seenBundle: { readOnly: boolean; specialistName?: string; modelHint?: string; objective: string } | undefined;
+  it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {
+    let seenBundle:
+      | {
+          readOnly: boolean;
+          specialistName?: string;
+          modelHint?: string;
+          isolation?: string;
+          objective: string;
+        }
+      | undefined;
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),
       childOptions,
       runChild: async (bundles) => {
         const b = bundles[0]!;
-        seenBundle = { readOnly: b.readOnly, specialistName: b.specialistName, modelHint: b.modelHint, objective: b.objective };
+        seenBundle = {
+          readOnly: b.readOnly,
+          specialistName: b.specialistName,
+          modelHint: b.modelHint,
+          isolation: b.isolation,
+          objective: b.objective,
+        };
         return execResult();
       },
     });
     const h = await backend.spawn({
-      name: 'r', prompt: 'review sql', readOnly: true, subagentType: 'db-reviewer', modelHint: 'deep',
+      name: 'r', prompt: 'review sql', readOnly: true, subagentType: 'db-reviewer', modelHint: 'deep', isolation: 'worktree',
     });
     await backend.wait(h.taskId);
     expect(seenBundle).toEqual({
-      readOnly: true, specialistName: 'db-reviewer', modelHint: 'deep', objective: 'review sql',
+      readOnly: true,
+      specialistName: 'db-reviewer',
+      modelHint: 'deep',
+      isolation: 'worktree',
+      objective: 'review sql',
     });
   });
 });

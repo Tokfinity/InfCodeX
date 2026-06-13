@@ -99,6 +99,35 @@ describe('runWorkflowModule', () => {
     expect(events.at(-1)).toBe('workflow_completed');
   });
 
+  it('writes a script snapshot when a generated workflow source is provided', async () => {
+    const outcome = await runWorkflowModule({
+      module: parallelInvestigation,
+      args: { question: 'where is the bug?' },
+      runId: 'run-s',
+      runDir: dir,
+      backend: fakeBackend(),
+      scriptSnapshot: {
+        source: 'async function run() { return "ok"; }',
+        manifest: {
+          name: 'generated-investigation',
+          description: 'generated',
+          phases: ['investigate', 'synthesize'],
+          readOnly: true,
+          maxAgents: 4,
+          maxConcurrency: 2,
+          patterns: ['fan-out-and-synthesize'],
+        },
+      },
+    });
+
+    expect(outcome.kind).toBe('completed');
+    expect(existsSync(join(dir, 'script.js'))).toBe(true);
+    expect(existsSync(join(dir, 'manifest.json'))).toBe(true);
+    const runJson = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
+    expect(runJson.scriptSnapshotPath).toBe(join(dir, 'script.js'));
+    expect(runJson.manifestSnapshotPath).toBe(join(dir, 'manifest.json'));
+  });
+
   it('auto-proceeds with no approval callback (headless)', async () => {
     const outcome = await runWorkflowModule({
       module: parallelInvestigation,

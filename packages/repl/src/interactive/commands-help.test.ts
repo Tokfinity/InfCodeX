@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUILTIN_COMMANDS, getCommandRegistry, type CommandCallbacks } from './commands.js';
+import { BUILTIN_COMMANDS, executeCommand, getCommandRegistry, type CommandCallbacks } from './commands.js';
 import { createInteractiveContext } from './context.js';
 
 describe('help command output', () => {
@@ -56,6 +56,54 @@ describe('help command output', () => {
 
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).not.toContain('/internal-sync');
+  });
+
+  it('routes /<command> help through detailed help without executing the command', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const callbacks = {
+      saveSession: vi.fn(async () => {}),
+      exit: vi.fn(),
+    } as unknown as CommandCallbacks;
+
+    const result = await executeCommand(
+      { command: 'exit', args: ['help'] },
+      context,
+      callbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(result).toBe(true);
+    expect(callbacks.exit).not.toHaveBeenCalled();
+    expect(output).toContain('/exit - Exit Interactive Mode');
+  });
+
+  it('shows basic help for /<command> help when detailed help is absent', async () => {
+    const registry = getCommandRegistry();
+    const handler = vi.fn(async () => true);
+    registry.register({
+      name: 'deploy',
+      description: 'Deploy the current project',
+      usage: '/deploy [environment]',
+      source: 'prompt',
+      handler,
+    });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await executeCommand(
+      { command: 'deploy', args: ['help'] },
+      await createInteractiveContext({}),
+      {} as unknown as CommandCallbacks,
+      {} as never,
+    );
+
+    const output = logSpy.mock.calls.flat().join('\n');
+    expect(result).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+    expect(output).toContain('/deploy');
+    expect(output).toContain('Deploy the current project');
+    expect(output).toContain('Usage: /deploy [environment]');
   });
 
   it('documents workspace-aware session semantics for save/load/sessions/delete', async () => {
@@ -124,5 +172,39 @@ describe('help command output', () => {
     const output = logSpy.mock.calls.flat().join('\n');
     expect(output).toContain('KodaX Manual — Index');
     expect(output).not.toContain('Unknown command');
+  });
+
+  it('sets AMAW through /agent-mode and documents explicit /workflow support in AMA', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const context = await createInteractiveContext({});
+    const setAgentMode = vi.fn();
+    const callbacks = {
+      saveSession: vi.fn(async () => {}),
+      exit: vi.fn(),
+      setAgentMode,
+    } as unknown as CommandCallbacks;
+    const currentConfig = {
+      provider: 'openai',
+      thinking: false,
+      reasoningMode: 'off',
+      agentMode: 'ama',
+      permissionMode: 'accept-edits',
+    } as const;
+
+    const result = await executeCommand(
+      { command: 'agent-mode', args: ['amaw'] },
+      context,
+      callbacks,
+      currentConfig,
+    );
+
+    const agentModeCommand = BUILTIN_COMMANDS.find((cmd) => cmd.name === 'agent-mode');
+    agentModeCommand?.detailedHelp?.();
+    const output = logSpy.mock.calls.flat().join('\n');
+
+    expect(result).toBe(true);
+    expect(setAgentMode).toHaveBeenCalledWith('amaw');
+    expect(output).toContain('/agent-mode amaw');
+    expect(output).toContain('/workflow');
   });
 });

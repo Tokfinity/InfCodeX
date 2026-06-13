@@ -75,6 +75,7 @@ import {
   type CommandCallbacks,
   type CommandHandler as RegisteredCommandHandler,
   type CommandInvocationRequest,
+  type CommandWorkflowInvocationRequest,
   type CurrentConfig,
 } from '../commands/types.js';
 import { registerAllCommands } from '../commands/index.js';
@@ -155,10 +156,12 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /help              ') + 'Show all available commands');
       console.log(chalk.dim('  /help <command>    ') + 'Show detailed help for a specific command');
+      console.log(chalk.dim('  /<command> help    ') + 'Shortcut for command-specific help');
       console.log();
       console.log(chalk.bold('Examples:'));
       console.log(chalk.dim('  /help              ') + '# List all commands');
       console.log(chalk.dim('  /help mode         ') + '# Detailed help for /mode');
+      console.log(chalk.dim('  /mode help         ') + '# Same detailed help shortcut');
       console.log();
     },
   },
@@ -1562,25 +1565,27 @@ export const BUILTIN_COMMANDS: Command[] = [
     name: 'agent-mode',
     aliases: ['am'],
     description: 'Show or set agent mode',
-    usage: '/agent-mode [ama|sa|toggle]',
+    usage: '/agent-mode [ama|amaw|ama-workflow|sa|toggle]',
     handler: async (args, _context, callbacks, currentConfig) => {
       if (args.length === 0) {
         console.log(chalk.dim(`\nAgent mode: ${chalk.cyan(currentConfig.agentMode.toUpperCase())}`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
         return;
       }
 
       const raw = args[0]?.toLowerCase();
       const nextMode: KodaXAgentMode | undefined =
         raw === 'toggle'
-          ? (currentConfig.agentMode === 'ama' ? 'sa' : 'ama')
-          : raw === 'ama' || raw === 'sa'
+          ? (currentConfig.agentMode === 'sa' ? 'ama' : 'sa')
+          : raw === 'ama' || raw === 'sa' || raw === 'amaw'
             ? raw
+            : raw === 'ama-workflow'
+              ? 'amaw'
             : undefined;
 
       if (!nextMode) {
         console.log(chalk.red(`\n[Invalid agent mode: ${args[0]}]`));
-        console.log(chalk.dim('Usage: /agent-mode [ama|sa|toggle]\n'));
+        console.log(chalk.dim('Usage: /agent-mode [ama|amaw|ama-workflow|sa|toggle]\n'));
         return;
       }
 
@@ -1592,12 +1597,15 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.bold('Usage:'));
       console.log(chalk.dim('  /agent-mode            ') + 'Show current agent mode');
       console.log(chalk.dim('  /agent-mode ama        ') + 'Enable adaptive multi-agent mode');
+      console.log(chalk.dim('  /agent-mode amaw       ') + 'Enable AMA Workflow mode; generated workflows may start automatically');
+      console.log(chalk.dim('  /agent-mode ama-workflow') + 'Alias for /agent-mode amaw');
       console.log(chalk.dim('  /agent-mode sa         ') + 'Force single-agent execution');
-      console.log(chalk.dim('  /agent-mode toggle     ') + 'Switch between AMA and SA');
+      console.log(chalk.dim('  /agent-mode toggle     ') + 'Switch between AMA and SA; from AMAW it switches to SA');
       console.log(chalk.dim('  /am                    ') + 'Alias for /agent-mode');
       console.log();
       console.log(chalk.bold('Description:'));
-      console.log(chalk.dim('  AMA keeps adaptive multi-agent harness selection enabled.'));
+      console.log(chalk.dim('  AMA keeps adaptive multi-agent harness selection enabled and supports explicit /workflow.'));
+      console.log(chalk.dim('  AMAW keeps AMA behavior and may silently start restricted generated workflows.'));
       console.log(chalk.dim('  SA keeps routing and task artifacts, but forces single-agent execution to save tokens.'));
       console.log();
     },
@@ -2146,6 +2154,8 @@ function printHelp(): void {
   console.log(`  ${chalk.cyan('/skill')}            List all available skills`);
   console.log(`  ${chalk.cyan('/skill:<name>')}     Invoke a skill (e.g., /skill:code-review)`);
   console.log();
+  console.log(chalk.dim(`Tip: ${chalk.cyan('/<command> help')} shows command-specific help.`));
+  console.log();
 }
 
 // Print detailed help for a specific command.
@@ -2591,10 +2601,16 @@ export function parseCommand(input: string): { command: string; args: string[]; 
   return { command, args };
 }
 
+function isCommandHelpRequest(args: readonly string[]): boolean {
+  const firstArg = args[0]?.trim().toLowerCase();
+  return firstArg === 'help' || firstArg === '--help' || firstArg === '-h';
+}
+
 // Execute command.
 export type CommandResult = boolean | {
   skillContent?: string;
   invocation?: CommandInvocationRequest;
+  workflow?: CommandWorkflowInvocationRequest;
 };
 
 export async function executeCommand(
@@ -2623,6 +2639,11 @@ export async function executeCommand(
       return false;
     }
 
+    if (isCommandHelpRequest(parsed.args)) {
+      printDetailedHelp(parsed.command);
+      return true;
+    }
+
     try {
       const result = await cmd.handler(parsed.args, context, callbacks, currentConfig);
       // Handle project init prompt.
@@ -2638,6 +2659,11 @@ export async function executeCommand(
 
   const extensionCommand = getActiveExtensionCommand(parsed.command);
   if (extensionCommand) {
+    if (isCommandHelpRequest(parsed.args)) {
+      printDetailedHelp(parsed.command);
+      return true;
+    }
+
     try {
       return await executeExtensionCommand(extensionCommand, parsed.args, context);
     } catch (error) {

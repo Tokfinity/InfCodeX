@@ -37,8 +37,22 @@ export type {
 export type { WorkflowEvent, WorkflowEventType } from './events.js';
 export { WorkflowEventRecorder } from './events.js';
 
+export type { WorkflowPatternId, WorkflowScriptManifest } from './manifest.js';
+export { WORKFLOW_PATTERN_IDS, validateWorkflowScriptManifest } from './manifest.js';
+
+export {
+  WorkflowScriptExecutionError,
+  createRestrictedWorkflowModule,
+  runRestrictedWorkflowScript,
+} from './script-runner.js';
+export type {
+  RestrictedWorkflowModuleInput,
+  RunRestrictedWorkflowScriptOptions,
+} from './script-runner.js';
+
 export {
   WorkflowAbortError,
+  WorkflowBudgetError,
   WorkflowLimitError,
   createWorkflowRuntime,
   runWorkflow,

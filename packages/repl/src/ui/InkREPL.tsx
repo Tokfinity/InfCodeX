@@ -92,6 +92,7 @@ import {
   getDenialContext,
   getRegisteredToolDefinition,
   createBashPrefixExtractor,
+  decideWorkflowInvocation,
   resolveProvider,
   prewarmRepoIntelligenceCaches,
 } from "@kodax-ai/coding";
@@ -137,7 +138,13 @@ import {
   enforceSessionTransitionGuard,
 } from "../interactive/session-guardrails.js";
 import { formatSessionTree } from "../interactive/session-tree.js";
-import type { CommandInvocationRequest } from "../commands/types.js";
+import type {
+  CommandInvocationRequest,
+  CommandWorkflowInvocationRequest,
+} from "../commands/types.js";
+import {
+  startGeneratedWorkflowFromRequest,
+} from "../commands/workflow-command.js";
 import {
   formatReasoningCapabilityShort,
   getProviderModel,
@@ -7164,6 +7171,75 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // Process commands — use the EXPANDED text so `/command ...` args that
       // contain paste placeholders resolve to the real content (Issue 121).
+      const createWorkflowCallbacks = (): Pick<CommandCallbacks, 'createKodaXOptions' | 'confirm'> => ({
+        createKodaXOptions: () => ({
+          ...currentOptionsRef.current,
+          provider: currentConfig.provider,
+          model: currentConfig.model,
+          thinking: currentConfig.thinking,
+          reasoningMode: currentConfig.reasoningMode,
+          agentMode: currentConfig.agentMode,
+          guardrails: buildAutoModeGuardrails(permissionModeRef.current, autoModeBootstrap),
+          events: createStreamingEvents(),
+        }),
+        confirm: async (message: string): Promise<boolean> => {
+          const result = await showConfirmDialog("confirm", {
+            _alwaysConfirm: true,
+            _message: message,
+          });
+          return result.confirmed;
+        },
+      });
+
+      const runWorkflowInvocation = async (
+        workflow: CommandWorkflowInvocationRequest,
+        rawInput: string,
+        callbacks: Pick<CommandCallbacks, 'createKodaXOptions' | 'confirm' | 'readline'>,
+      ): Promise<boolean> => {
+        const decision = decideWorkflowInvocation({
+          agentMode: currentConfig.agentMode,
+          source: workflow.source,
+          input: rawInput || workflow.request,
+        });
+
+        if (decision.action === 'none') {
+          return false;
+        }
+
+        if (decision.action === 'suggest' && workflow.source === 'natural-language') {
+          const approved = await callbacks.confirm?.(
+            'This task looks suitable for workflow. Generate and run a workflow?',
+          );
+          if (!approved) {
+            return false;
+          }
+        }
+
+        const workflowOutput: string[] = [];
+        const originalWorkflowLog = console.log;
+        console.log = (...args: unknown[]) => {
+          workflowOutput.push(args.map((arg) => typeof arg === 'string' ? arg : String(arg)).join(' '));
+        };
+
+        try {
+          const outcome = await startGeneratedWorkflowFromRequest({
+            request: workflow.request,
+            callbacks,
+            approval: decision.action === 'auto-start' ? 'silent' : 'required',
+            sourceLabel: workflow.displayName,
+          });
+          return outcome === 'started' || outcome === 'cancelled';
+        } finally {
+          console.log = originalWorkflowLog;
+          if (workflowOutput.length > 0) {
+            addHistoryItem({
+              type: "info",
+              text: workflowOutput.filter((item, pos, self) => self.indexOf(item) === pos).join('\n'),
+            });
+          }
+        }
+      };
+
       const parsed = parseCommand(fullText.trim());
       if (parsed) {
         // Create command callbacks
@@ -7597,6 +7673,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         };
 
         let invocationToExecute: CommandInvocationRequest | undefined = undefined;
+        let workflowToExecute: CommandWorkflowInvocationRequest | undefined = undefined;
 
         try {
           const result = await executeCommand(parsed, context, callbacks, currentConfig);
@@ -7604,6 +7681,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           // Check if result contains invocation metadata to execute
           if (typeof result === 'object' && result !== null && 'invocation' in result) {
             invocationToExecute = result.invocation;
+          }
+          if (typeof result === 'object' && result !== null && 'workflow' in result) {
+            workflowToExecute = result.workflow;
           }
         } finally {
           console.log = originalLog;
@@ -7615,6 +7695,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             type: "info",
             text: capturedOutput.join('\n'),
           });
+        }
+
+        if (workflowToExecute) {
+          try {
+            await runWorkflowInvocation(workflowToExecute, fullText.trim(), callbacks);
+          } finally {
+            setIsLoading(false);
+            stopStreaming();
+            clearThinkingContent();
+          }
+          return;
         }
 
         // If a skill/prompt command returned an invocation request, execute it now
@@ -7685,6 +7776,21 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Note: Do NOT push user message to context.messages here!
       // runKodaX (agent.ts:76) will add the prompt to messages automatically.
       // If we push here, the message gets duplicated (Issue 046).
+
+      if (await runWorkflowInvocation(
+        {
+          request: processed,
+          source: 'natural-language',
+          displayName: currentConfig.agentMode.toUpperCase(),
+        },
+        fullText.trim(),
+        createWorkflowCallbacks(),
+      )) {
+        setIsLoading(false);
+        stopStreaming();
+        clearThinkingContent();
+        return;
+      }
 
       const inputArtifactCwd =
         currentOptionsRef.current.context?.executionCwd ?? process.cwd();

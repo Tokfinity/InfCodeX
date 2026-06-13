@@ -95,8 +95,8 @@ export interface WorkflowLogEvent {
 }
 
 /**
- * Token budget accounting. **Phase A is accounting + approval-display
- * only — NOT hard-enforced**; a hard stop on overage is a later slice.
+ * Token budget accounting. The runtime hard-stops before launching a new
+ * agent once completed children have exhausted the configured budget.
  */
 export interface WorkflowBudget {
   /** Configured token budget, or null when unbounded. */
@@ -112,7 +112,7 @@ export interface WorkflowLimits {
   readonly maxAgents?: number;
   /** Maximum simultaneously in-flight agents (via runAgent / parallel). */
   readonly maxConcurrency?: number;
-  /** Token budget (accounting only in this slice). */
+  /** Token budget. New spawns stop once completed usage exhausts it. */
   readonly tokenBudget?: number;
 }
 

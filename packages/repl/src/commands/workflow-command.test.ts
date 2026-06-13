@@ -20,8 +20,11 @@ import {
   renderApprovalPrompt,
   readWorkflowRuns,
   formatRunsList,
+  formatManagedRunsList,
+  formatWorkflowRunSnapshot,
   savedWorkflowDirs,
   formatSavedList,
+  renderWorkflowHelp,
   resolveConfirm,
   workflowCommand,
 } from './workflow-command.js';
@@ -33,6 +36,26 @@ describe('parseWorkflowInvocation', () => {
   });
   it('detects runs', () => {
     expect(parseWorkflowInvocation(['runs']).kind).toBe('runs');
+  });
+  it('detects help aliases', () => {
+    expect(parseWorkflowInvocation(['help'])).toEqual({ kind: 'help' });
+    expect(parseWorkflowInvocation(['--help'])).toEqual({ kind: 'help' });
+    expect(parseWorkflowInvocation(['-h'])).toEqual({ kind: 'help' });
+  });
+  it('detects run-control subcommands', () => {
+    expect(parseWorkflowInvocation(['show', 'run-1'])).toEqual({ kind: 'show', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['pause', 'run-1'])).toEqual({ kind: 'pause', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['resume', 'run-1'])).toEqual({ kind: 'resume', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['stop', 'run-1'])).toEqual({ kind: 'stop', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['save', 'run-1', 'audit'])).toEqual({
+      kind: 'save',
+      runId: 'run-1',
+      name: 'audit',
+    });
+    expect(parseWorkflowInvocation(['create', 'compare', 'three', 'hypotheses'])).toEqual({
+      kind: 'create',
+      request: 'compare three hypotheses',
+    });
   });
   it('treats other first tokens as a start invocation', () => {
     const inv = parseWorkflowInvocation(['parallel-investigation', 'where', 'is', 'the', 'bug']);
@@ -83,6 +106,28 @@ describe('renderApprovalPrompt', () => {
     expect(text).toContain('token budget: ∞');
     expect(text).toContain('read-only');
   });
+
+  it('shows source, sandbox, and worktree context when provided', () => {
+    const text = renderApprovalPrompt(
+      {
+        name: 'generated',
+        description: 'generated workflow',
+        phases: ['run'],
+        maxAgents: 2,
+        maxConcurrency: 1,
+        tokenBudget: 1000,
+        writesFiles: true,
+      },
+      {
+        source: 'generated',
+        sandbox: 'restricted-generated',
+        mayUseWorktree: true,
+      },
+    );
+    expect(text).toContain('source: generated');
+    expect(text).toContain('sandbox/trust: restricted-generated');
+    expect(text).toContain('worktree isolation: may request worktree');
+  });
 });
 
 describe('readWorkflowRuns + formatRunsList', () => {
@@ -127,6 +172,22 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(out).toContain('r1');
     expect(out).toContain('2 agents');
   });
+
+  it('formats active manager runs and a single run snapshot', () => {
+    const run = {
+      runId: 'run-active',
+      workflow: 'wf',
+      status: 'paused' as const,
+      runDir: '/tmp/run-active',
+      totalSpawned: 2,
+      eventCount: 5,
+      startedAt: 1,
+    };
+    expect(formatManagedRunsList([run])).toContain('paused');
+    expect(formatManagedRunsList([run])).toContain('5 events');
+    expect(formatWorkflowRunSnapshot(run)).toContain('/tmp/run-active');
+    expect(formatWorkflowRunSnapshot(undefined)).toContain('unknown active');
+  });
 });
 
 describe('saved workflow dirs + formatting', () => {
@@ -137,12 +198,37 @@ describe('saved workflow dirs + formatting', () => {
     expect(dirs.personal).toContain('workflows');
   });
   it('formats saved workflow refs with source + path', () => {
-    const out = formatSavedList([{ name: 'audit', path: '/p/.kodax/workflows/audit.ts', source: 'project' }]);
+    const out = formatSavedList([
+      {
+        name: 'audit',
+        path: '/p/.kodax/workflows/audit.ts',
+        source: 'project',
+        execution: 'trusted-local',
+      },
+    ]);
     expect(out).toContain('audit');
     expect(out).toContain('project');
+    expect(out).toContain('trusted-local');
   });
   it('handles empty saved list', () => {
     expect(formatSavedList([])).toContain('no saved');
+  });
+});
+
+describe('renderWorkflowHelp', () => {
+  it('documents every workflow subcommand and safety boundary', () => {
+    const text = renderWorkflowHelp();
+    expect(text).toContain('/workflow create <request>');
+    expect(text).toContain('/workflow <name> [args]');
+    expect(text).toContain('/workflow runs');
+    expect(text).toContain('/workflow show <runId>');
+    expect(text).toContain('/workflow pause <runId>');
+    expect(text).toContain('/workflow resume <runId>');
+    expect(text).toContain('/workflow stop <runId>');
+    expect(text).toContain('/workflow save <runId> <name>');
+    expect(text).toContain('/workflow help');
+    expect(text).toContain('restricted WorkflowApi runner');
+    expect(text).toContain('trusted-local');
   });
 });
 
@@ -182,5 +268,7 @@ describe('workflowCommand registration shape', () => {
     expect(workflowCommand.name).toBe('workflow');
     expect(typeof workflowCommand.handler).toBe('function');
     expect(workflowCommand.usage).toContain('/workflow');
+    expect(workflowCommand.argumentHint).toContain('help');
+    expect(workflowCommand.detailedHelp).toBeDefined();
   });
 });

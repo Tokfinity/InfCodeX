@@ -13,22 +13,29 @@
  * confirmation (Phase D.2 command) — discovery itself only reads paths.
  */
 
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { WorkflowModule } from '@kodax-ai/agent';
+import {
+  createRestrictedWorkflowModule,
+  validateWorkflowScriptManifest,
+  type WorkflowModule,
+  type WorkflowScriptManifest,
+} from '@kodax-ai/agent';
 
 /** Extensions recognised as workflow modules, in resolution priority. */
-const WORKFLOW_EXTENSIONS: readonly string[] = ['.ts', '.mjs', '.js'];
+const WORKFLOW_SUFFIXES: readonly string[] = ['.workflow.json', '.ts', '.mjs', '.js'];
 
 export type SavedWorkflowSource = 'project' | 'personal';
+export type SavedWorkflowExecution = 'trusted-local' | 'restricted-generated';
 
 export interface SavedWorkflowRef {
   /** Workflow name = filename without extension. */
   readonly name: string;
   readonly path: string;
   readonly source: SavedWorkflowSource;
+  readonly execution: SavedWorkflowExecution;
 }
 
 export interface SavedWorkflowDirs {
@@ -36,6 +43,57 @@ export interface SavedWorkflowDirs {
   readonly project?: string;
   /** `~/.kodax/workflows`. */
   readonly personal?: string;
+}
+
+export interface SavedGeneratedWorkflowFile {
+  readonly manifest: WorkflowScriptManifest;
+  readonly source: string;
+}
+
+export interface SaveGeneratedWorkflowInput {
+  readonly dir: string;
+  readonly name: string;
+  readonly manifest: WorkflowScriptManifest;
+  readonly source: string;
+}
+
+export interface SaveGeneratedWorkflowFromRunInput {
+  readonly runDir: string;
+  readonly targetDir: string;
+  readonly name: string;
+}
+
+function executionForPath(path: string): SavedWorkflowExecution {
+  return path.endsWith('.workflow.json') ? 'restricted-generated' : 'trusted-local';
+}
+
+function stripWorkflowSuffix(entry: string): string | undefined {
+  const suffix = WORKFLOW_SUFFIXES.find((candidate) => entry.endsWith(candidate));
+  return suffix ? entry.slice(0, -suffix.length) : undefined;
+}
+
+function safeWorkflowName(name: string): string {
+  const cleaned = name
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[.-]+|[.-]+$/g, '')
+    .slice(0, 80);
+  if (!cleaned || cleaned === '.' || cleaned === '..') {
+    throw new Error('workflow name must contain at least one safe filename character');
+  }
+  return cleaned;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readRequiredString(record: Record<string, unknown>, key: string): string {
+  const value = record[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`workflow run.json missing ${key}`);
+  }
+  return value;
 }
 
 async function scanDir(
@@ -50,12 +108,14 @@ async function scanDir(
     return []; // missing dir → no saved workflows
   }
   const byName = new Map<string, SavedWorkflowRef>();
-  for (const ext of WORKFLOW_EXTENSIONS) {
+  for (const suffix of WORKFLOW_SUFFIXES) {
     for (const entry of entries) {
-      if (!entry.endsWith(ext)) continue;
-      const name = entry.slice(0, -ext.length);
+      if (!entry.endsWith(suffix)) continue;
+      const name = stripWorkflowSuffix(entry);
+      if (!name) continue;
       if (name.length === 0 || byName.has(name)) continue; // higher-priority ext wins
-      byName.set(name, { name, path: join(dir, entry), source });
+      const path = join(dir, entry);
+      byName.set(name, { name, path, source, execution: executionForPath(path) });
     }
   }
   return [...byName.values()];
@@ -112,8 +172,71 @@ export function normalizeWorkflowModule(mod: Record<string, unknown>): WorkflowM
   );
 }
 
+function parseGeneratedWorkflowFile(raw: string): SavedGeneratedWorkflowFile {
+  const data = JSON.parse(raw) as unknown;
+  if (!isRecord(data)) {
+    throw new Error('generated workflow file must be an object');
+  }
+  const source = data.source;
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    throw new Error('generated workflow file source must be a non-empty string');
+  }
+  return {
+    manifest: validateWorkflowScriptManifest(data.manifest),
+    source,
+  };
+}
+
 /** Dynamically import + normalize a saved workflow file. Executes local code. */
 export async function loadSavedWorkflow(filePath: string): Promise<WorkflowModule> {
+  if (filePath.endsWith('.workflow.json')) {
+    const generated = parseGeneratedWorkflowFile(await readFile(filePath, 'utf8'));
+    return createRestrictedWorkflowModule({
+      manifest: generated.manifest,
+      source: generated.source,
+    });
+  }
   const mod = (await import(pathToFileURL(filePath).href)) as Record<string, unknown>;
   return normalizeWorkflowModule(mod);
+}
+
+export async function saveGeneratedWorkflow(
+  input: SaveGeneratedWorkflowInput,
+): Promise<SavedWorkflowRef> {
+  const safeName = safeWorkflowName(input.name);
+  const manifest = validateWorkflowScriptManifest(input.manifest);
+  await mkdir(input.dir, { recursive: true });
+  const path = join(input.dir, `${safeName}.workflow.json`);
+  await writeFile(
+    path,
+    `${JSON.stringify({ manifest, source: input.source }, null, 2)}\n`,
+    'utf8',
+  );
+  return {
+    name: safeName,
+    path,
+    source: 'project',
+    execution: 'restricted-generated',
+  };
+}
+
+export async function saveGeneratedWorkflowFromRun(
+  input: SaveGeneratedWorkflowFromRunInput,
+): Promise<SavedWorkflowRef> {
+  const runRaw = JSON.parse(await readFile(join(input.runDir, 'run.json'), 'utf8')) as unknown;
+  if (!isRecord(runRaw)) {
+    throw new Error('workflow run.json must be an object');
+  }
+  const scriptPath = readRequiredString(runRaw, 'scriptSnapshotPath');
+  const manifestPath = readRequiredString(runRaw, 'manifestSnapshotPath');
+  const source = await readFile(scriptPath, 'utf8');
+  const manifest = validateWorkflowScriptManifest(
+    JSON.parse(await readFile(manifestPath, 'utf8')) as unknown,
+  );
+  return saveGeneratedWorkflow({
+    dir: input.targetDir,
+    name: input.name,
+    manifest,
+    source,
+  });
 }

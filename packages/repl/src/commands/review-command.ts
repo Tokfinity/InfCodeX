@@ -47,16 +47,38 @@ async function getDiff(args: string[], cwd: string): Promise<{ diff: string; lab
   return { diff: await git(['diff', 'HEAD'], cwd), label: 'uncommitted changes' };
 }
 
+export interface ReviewInvocation {
+  readonly workflow: boolean;
+  readonly diffArgs: string[];
+}
+
+export function parseReviewInvocation(args: readonly string[]): ReviewInvocation {
+  return {
+    workflow: args.some((arg) => arg === '--workflow' || arg === 'workflow'),
+    diffArgs: args.filter((arg) => arg !== '--workflow' && arg !== 'workflow'),
+  };
+}
+
+export function buildReviewWorkflowRequest(label: string): string {
+  return [
+    `Review ${label} with a dynamic workflow.`,
+    'Create independent reviewers for correctness, security, performance, and design.',
+    'Have each reviewer inspect the relevant git diff evidence independently, then synthesize findings.',
+    'Final output must lead with verified findings, cite files or diff hunks, and state when no issues are found.',
+  ].join('\n');
+}
+
 export const reviewCommand: Command = {
   name: 'review',
   description: 'Review code changes (git diff) for bugs, security, performance, and design',
-  usage: '/review [base | sha <hash>]   (default: uncommitted changes)',
+  usage: '/review [--workflow] [base | sha <hash>]   (default: uncommitted changes)',
   handler: async (args, context) => {
     const cwd = context.gitRoot ?? process.cwd();
+    const invocation = parseReviewInvocation(args);
     let diff: string;
     let label: string;
     try {
-      ({ diff, label } = await getDiff(args, cwd));
+      ({ diff, label } = await getDiff(invocation.diffArgs, cwd));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, message: `/review: git failed — ${message}` };
@@ -64,6 +86,17 @@ export const reviewCommand: Command = {
 
     if (!diff.trim()) {
       return { success: true, message: 'No changes to review.' };
+    }
+
+    if (invocation.workflow) {
+      return {
+        success: true,
+        workflow: {
+          request: buildReviewWorkflowRequest(label),
+          source: 'command',
+          displayName: '/review --workflow',
+        },
+      };
     }
 
     let body = diff;

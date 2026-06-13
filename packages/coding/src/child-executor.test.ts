@@ -9,6 +9,11 @@ vi.mock('./agent.js', () => ({
   runKodaX: vi.fn(),
 }));
 
+vi.mock('./tools/worktree.js', () => ({
+  toolWorktreeCreate: vi.fn(),
+  toolWorktreeRemove: vi.fn(),
+}));
+
 // FEATURE_188 v0.7.42 — child-executor no longer imports worktree helpers,
 // so `vi.mock('./tools/worktree.js')` and its mock objects are removed.
 
@@ -30,8 +35,10 @@ import {
   registerConstructedAgent,
 } from './construction/agent-resolver.js';
 import type { AgentArtifact } from './construction/types.js';
+import { toolWorktreeCreate } from './tools/worktree.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
+const mockToolWorktreeCreate = vi.mocked(toolWorktreeCreate);
 
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
@@ -127,6 +134,35 @@ describe('executeChildAgents', () => {
     expect(result.results).toEqual([]);
     expect(result.mergedFindings).toEqual([]);
     expect(result.cancelledChildren).toEqual([]);
+  });
+
+  it('routes opt-in workflow children through a dedicated worktree context', async () => {
+    mockToolWorktreeCreate.mockResolvedValue(
+      JSON.stringify({ path: '/tmp/kodax-wt-workflow-cb-wt', branch: 'kodax-wt-workflow-cb-wt' }),
+    );
+    mockRunKodaX.mockResolvedValue({
+      success: true,
+      lastText: 'changed files in isolated branch',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's-wt',
+    });
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-wt', readOnly: false, isolation: 'worktree' })],
+      createCtx(),
+      createOptions(),
+    );
+
+    expect(mockToolWorktreeCreate).toHaveBeenCalledWith(
+      { description: 'workflow-cb-wt' },
+      expect.objectContaining({ executionCwd: '/test/repo' }),
+    );
+    const childOptions = mockRunKodaX.mock.calls[0]![0] as {
+      context?: { gitRoot?: string; executionCwd?: string };
+    };
+    expect(childOptions.context?.gitRoot).toBe('/tmp/kodax-wt-workflow-cb-wt');
+    expect(childOptions.context?.executionCwd).toBe('/tmp/kodax-wt-workflow-cb-wt');
+    expect(result.results[0]?.summary).toContain('/tmp/kodax-wt-workflow-cb-wt');
   });
 
   it('executes read-only bundles in parallel', async () => {

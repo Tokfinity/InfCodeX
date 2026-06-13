@@ -42,6 +42,28 @@ describe('createRunGraphWriter', () => {
     expect(JSON.parse(readFileSync(ref.path!, 'utf8'))).toEqual({ findings: 3 });
   });
 
+  it('writes generated workflow script and manifest snapshots', () => {
+    const writer = createRunGraphWriter(dir);
+    const snapshot = writer.writeScriptSnapshot({
+      source: 'async function run() { return "ok"; }',
+      manifest: {
+        name: 'generated-demo',
+        description: 'demo',
+        phases: ['run'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['fan-out-and-synthesize'],
+      },
+    });
+
+    expect(snapshot.scriptPath.endsWith('script.js')).toBe(true);
+    expect(snapshot.manifestPath?.endsWith('manifest.json')).toBe(true);
+    expect(readFileSync(snapshot.scriptPath, 'utf8')).toContain('async function run');
+    const manifest = JSON.parse(readFileSync(snapshot.manifestPath!, 'utf8'));
+    expect(manifest.name).toBe('generated-demo');
+  });
+
   it('writes run.json with run summary', () => {
     const writer = createRunGraphWriter(dir);
     writer.writeRunJson({
@@ -56,6 +78,10 @@ describe('createRunGraphWriter', () => {
         events: [{ seq: 0, type: 'workflow_started' }],
         artifacts: [{ name: 'report' }],
       },
+      scriptSnapshot: {
+        scriptPath: join(dir, 'script.js'),
+        manifestPath: join(dir, 'manifest.json'),
+      },
     });
     const runJson = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8'));
     expect(runJson).toMatchObject({
@@ -65,6 +91,8 @@ describe('createRunGraphWriter', () => {
       totalSpawned: 3,
       artifacts: ['report'],
       eventCount: 1,
+      scriptSnapshotPath: join(dir, 'script.js'),
+      manifestSnapshotPath: join(dir, 'manifest.json'),
     });
   });
 });

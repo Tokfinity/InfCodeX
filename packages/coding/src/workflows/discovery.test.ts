@@ -2,7 +2,7 @@
  * FEATURE_217 (v0.7.49) Phase E — Saved workflow discovery tests.
  */
 
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -12,6 +12,8 @@ import {
   discoverSavedWorkflows,
   loadSavedWorkflow,
   normalizeWorkflowModule,
+  saveGeneratedWorkflow,
+  saveGeneratedWorkflowFromRun,
 } from './discovery.js';
 
 describe('discoverSavedWorkflows', () => {
@@ -36,11 +38,28 @@ describe('discoverSavedWorkflows', () => {
 
   it('discovers .ts/.mjs/.js across project + personal', async () => {
     touch(project, 'audit.ts');
+    writeFileSync(
+      join(project, 'generated.workflow.json'),
+      JSON.stringify({
+        manifest: {
+          name: 'generated',
+          description: 'generated',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 1,
+          maxConcurrency: 1,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run() { return "ok"; }',
+      }),
+      'utf8',
+    );
     touch(personal, 'triage.mjs');
     touch(personal, 'review.js');
     const refs = await discoverSavedWorkflows({ project, personal });
-    expect(refs.map((r) => r.name)).toEqual(['audit', 'review', 'triage']);
+    expect(refs.map((r) => r.name)).toEqual(['audit', 'generated', 'review', 'triage']);
     expect(refs.find((r) => r.name === 'audit')?.source).toBe('project');
+    expect(refs.find((r) => r.name === 'generated')?.execution).toBe('restricted-generated');
     expect(refs.find((r) => r.name === 'triage')?.source).toBe('personal');
   });
 
@@ -99,5 +118,89 @@ describe('loadSavedWorkflow', () => {
     expect(mod.meta.readOnly).toBe(true);
     // The run function is executable.
     expect(await mod.run({} as never, {})).toBe('done');
+  });
+
+  it('loads .workflow.json through the restricted workflow runner', async () => {
+    const file = join(dir, 'generated.workflow.json');
+    writeFileSync(
+      file,
+      JSON.stringify({
+        manifest: {
+          name: 'generated',
+          description: 'generated',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 1,
+          maxConcurrency: 1,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run() { return process.cwd(); }',
+      }),
+      'utf8',
+    );
+
+    const mod = await loadSavedWorkflow(file);
+    await expect(mod.run({} as never, {})).rejects.toThrow(/restricted workflow script failed/);
+  });
+});
+
+describe('saveGeneratedWorkflow', () => {
+  let dir = '';
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'wf-save-'));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const manifest = {
+    name: 'saved-demo',
+    description: 'saved',
+    phases: ['run'],
+    readOnly: true,
+    maxAgents: 1,
+    maxConcurrency: 1,
+    patterns: ['fan-out-and-synthesize' as const],
+  };
+
+  it('writes a restricted generated workflow file with a safe name', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: '../unsafe demo',
+      manifest,
+      source: 'async function run() { return "ok"; }',
+    });
+
+    expect(ref.name).toBe('unsafe-demo');
+    expect(ref.execution).toBe('restricted-generated');
+    expect(ref.path.endsWith('unsafe-demo.workflow.json')).toBe(true);
+    expect(existsSync(ref.path)).toBe(true);
+    const data = JSON.parse(readFileSync(ref.path, 'utf8'));
+    expect(data.manifest.name).toBe('saved-demo');
+  });
+
+  it('saves from a completed run script snapshot and can rerun it', async () => {
+    const runDir = join(dir, 'run-1');
+    mkdirSync(runDir, { recursive: true });
+    const scriptPath = join(runDir, 'script.js');
+    const manifestPath = join(runDir, 'manifest.json');
+    writeFileSync(scriptPath, 'async function run() { return "ok"; }', 'utf8');
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-1',
+        workflow: 'generated',
+        scriptSnapshotPath: scriptPath,
+        manifestSnapshotPath: manifestPath,
+      }),
+      'utf8',
+    );
+
+    const ref = await saveGeneratedWorkflowFromRun({
+      runDir,
+      targetDir: join(dir, 'workflows'),
+      name: 'saved-demo',
+    });
+    const mod = await loadSavedWorkflow(ref.path);
+    expect(await mod.run({} as never, {})).toBe('ok');
   });
 });

@@ -85,6 +85,7 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
     evidenceRefs: input.evidenceRefs ? [...input.evidenceRefs] : [],
     constraints: [],
     ...(input.modelHint ? { modelHint: input.modelHint } : {}),
+    ...(input.isolation ? { isolation: input.isolation } : {}),
     ...(input.subagentType ? { specialistName: input.subagentType } : {}),
   };
 }

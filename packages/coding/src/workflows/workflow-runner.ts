@@ -19,7 +19,7 @@ import type {
 } from '@kodax-ai/agent';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
-import { createRunGraphWriter } from './run-graph.js';
+import { createRunGraphWriter, type WorkflowScriptSnapshotInput } from './run-graph.js';
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
 import type { KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
@@ -44,6 +44,9 @@ export interface RunWorkflowModuleOptions {
   /** Extra event sink (e.g. live UI), in addition to the durable writer. */
   readonly onEvent?: (event: WorkflowEvent) => void;
   readonly now?: () => number;
+  readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  /** Optional lifecycle gate, used by WorkflowRunManager pause/resume. */
+  readonly beforeSpawn?: () => Promise<void>;
 }
 
 export type RunWorkflowModuleOutcome =
@@ -83,10 +86,16 @@ export async function runWorkflowModule(
 
   const now = opts.now ?? (() => Date.now());
   const writer = createRunGraphWriter(opts.runDir, { now });
+  const scriptSnapshot = opts.scriptSnapshot
+    ? writer.writeScriptSnapshot(opts.scriptSnapshot)
+    : undefined;
   const baseBackend = opts.backend ?? buildBackend(opts);
+  const gatedBackend = opts.beforeSpawn
+    ? withBeforeSpawn(baseBackend, opts.beforeSpawn)
+    : baseBackend;
   // Route `wf.artifact` writes through the durable run-graph writer.
   const backend: WorkflowAgentBackend = {
-    ...baseBackend,
+    ...gatedBackend,
     writeArtifact: async (name, value) => writer.writeArtifact(name, value),
   };
 
@@ -116,6 +125,7 @@ export async function runWorkflowModule(
     state: outcome.state,
     startedAt,
     endedAt: now(),
+    ...(scriptSnapshot ? { scriptSnapshot } : {}),
   });
 
   return outcome.ok
@@ -130,6 +140,19 @@ function buildBackend(opts: RunWorkflowModuleOptions): WorkflowAgentBackend {
   return createCodingWorkflowBackend({ ctx: opts.ctx, childOptions: opts.childOptions });
 }
 
+function withBeforeSpawn(
+  backend: WorkflowAgentBackend,
+  beforeSpawn: () => Promise<void>,
+): WorkflowAgentBackend {
+  return {
+    ...backend,
+    spawn: async (input) => {
+      await beforeSpawn();
+      return backend.spawn(input);
+    },
+  };
+}
+
 export interface RunWorkflowFromOptionsInput {
   readonly module: WorkflowModule;
   readonly args: unknown;
@@ -140,6 +163,8 @@ export interface RunWorkflowFromOptionsInput {
   readonly signal?: AbortSignal;
   readonly onEvent?: (event: WorkflowEvent) => void;
   readonly now?: () => number;
+  readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
+  readonly beforeSpawn?: () => Promise<void>;
 }
 
 /**
@@ -183,5 +208,7 @@ export async function runWorkflowFromOptions(
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.onEvent ? { onEvent: input.onEvent } : {}),
     ...(input.now ? { now: input.now } : {}),
+    ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
+    ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),
   });
 }

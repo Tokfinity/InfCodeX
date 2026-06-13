@@ -4,8 +4,8 @@
  *
  * The runtime is the orchestration engine. It wraps an injected
  * `WorkflowAgentBackend` with: a maxAgents lifetime cap, a maxConcurrency
- * in-flight gate (for runAgent / parallel), token-budget accounting (NOT
- * hard-enforced in this slice), abort handling, and an append-only event
+ * in-flight gate (for runAgent / parallel), token-budget accounting with
+ * a hard stop before new spawns, abort handling, and an append-only event
  * log. It has zero `@kodax-ai/coding` dependency.
  */
 
@@ -43,6 +43,14 @@ export class WorkflowLimitError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WorkflowLimitError';
+  }
+}
+
+/** Thrown when a new spawn would start after the token budget is exhausted. */
+export class WorkflowBudgetError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkflowBudgetError';
   }
 }
 
@@ -153,8 +161,15 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     if (opts.signal?.aborted) throw new WorkflowAbortError();
   };
 
+  const checkBudget = (): void => {
+    if (tokenBudget !== null && spentOutputTokens >= tokenBudget) {
+      throw new WorkflowBudgetError(`tokenBudget cap (${tokenBudget}) exhausted`);
+    }
+  };
+
   const doSpawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     checkAbort();
+    checkBudget();
     if (totalSpawned >= maxAgents) {
       throw new WorkflowLimitError(`maxAgents cap (${maxAgents}) reached`);
     }

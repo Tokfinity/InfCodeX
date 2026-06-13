@@ -20,6 +20,7 @@ import type {
   WorkflowEvent,
   WorkflowMeta,
   WorkflowRunState,
+  WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 
 export interface RunGraphWriterDeps {
@@ -33,6 +34,17 @@ export interface RunJsonInput {
   readonly state: WorkflowRunState;
   readonly startedAt: number;
   readonly endedAt: number;
+  readonly scriptSnapshot?: WorkflowScriptSnapshotRef;
+}
+
+export interface WorkflowScriptSnapshotInput {
+  readonly source: string;
+  readonly manifest?: WorkflowScriptManifest;
+}
+
+export interface WorkflowScriptSnapshotRef {
+  readonly scriptPath: string;
+  readonly manifestPath?: string;
 }
 
 export interface RunGraphWriter {
@@ -41,6 +53,8 @@ export interface RunGraphWriter {
   onEvent(event: WorkflowEvent): void;
   /** Persist an artifact under `artifacts/<safe-name>.json`. */
   writeArtifact(name: string, value: unknown): WorkflowArtifactRef;
+  /** Persist generated workflow source + optional manifest beside run.json. */
+  writeScriptSnapshot(input: WorkflowScriptSnapshotInput): WorkflowScriptSnapshotRef;
   /** Write the terminal `run.json` summary. */
   writeRunJson(input: RunJsonInput): void;
 }
@@ -66,6 +80,14 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
       writeFileSync(path, JSON.stringify(value, null, 2), 'utf8');
       return { name, path };
     },
+    writeScriptSnapshot: (input) => {
+      const scriptPath = join(runDir, 'script.js');
+      writeFileSync(scriptPath, input.source, 'utf8');
+      if (!input.manifest) return { scriptPath };
+      const manifestPath = join(runDir, 'manifest.json');
+      writeFileSync(manifestPath, `${JSON.stringify(input.manifest, null, 2)}\n`, 'utf8');
+      return { scriptPath, manifestPath };
+    },
     writeRunJson: (input) => {
       const runJson = {
         runId: input.state.runId,
@@ -77,6 +99,14 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
         startedAt: input.startedAt,
         endedAt: input.endedAt,
         args: input.args,
+        ...(input.scriptSnapshot
+          ? {
+              scriptSnapshotPath: input.scriptSnapshot.scriptPath,
+              ...(input.scriptSnapshot.manifestPath
+                ? { manifestSnapshotPath: input.scriptSnapshot.manifestPath }
+                : {}),
+            }
+          : {}),
       };
       writeFileSync(join(runDir, 'run.json'), `${JSON.stringify(runJson, null, 2)}\n`, 'utf8');
     },
