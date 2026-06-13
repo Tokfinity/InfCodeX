@@ -248,8 +248,10 @@ describe('readWorkflowRuns + formatRunsList', () => {
     });
 
     const runs = readWorkflowRuns(dir);
+    const detail = readWorkflowRunDetail(dir, 'run-safe');
 
     expect(runs.map((run) => run.runId)).toEqual(['run-safe']);
+    expect(detail?.runId).toBe('run-safe');
   });
 
   it('skips malformed run.json', () => {

@@ -393,7 +393,7 @@ export function readWorkflowRunDetail(baseDir: string, runId: string): WorkflowR
   try {
     const data = JSON.parse(readFileSync(runJsonPath, 'utf8')) as Record<string, unknown>;
     return {
-      runId: typeof data.runId === 'string' ? data.runId : runId,
+      runId,
       workflow: typeof data.workflow === 'string' ? data.workflow : '?',
       status: typeof data.status === 'string' ? data.status : '?',
       totalSpawned: typeof data.totalSpawned === 'number' ? data.totalSpawned : 0,
