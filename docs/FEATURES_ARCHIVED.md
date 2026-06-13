@@ -320,7 +320,7 @@ _Archive Created: 2026-05-19_
 
 ---
 
-## 2026-06-13 Tracker Cleanup (94 entries)
+## 2026-06-13 Tracker Cleanup (93 entries)
 
 These rows were removed from `FEATURE_LIST.md` because they are released, cancelled, absorbed, or explicitly shelved. Long rationale remains in the version design docs and git history.
 
@@ -426,5 +426,5 @@ These rows were removed from `FEATURE_LIST.md` because they are released, cancel
 ## Summary
 
 - Initial archive: 99 features moved on 2026-05-19.
-- Tracker cleanup: 94 stale live-roadmap entries moved on 2026-06-13.
-- Current live roadmap: `docs/FEATURE_LIST.md` tracks 11 active features.
+- Tracker cleanup: 93 stale live-roadmap entries moved on 2026-06-13.
+- Current live roadmap: `docs/FEATURE_LIST.md` tracks 12 active features.

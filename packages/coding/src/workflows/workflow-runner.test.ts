@@ -12,7 +12,8 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { WorkflowAgentBackend } from '@kodax-ai/agent/workflow';
+import type { WorkflowAgentBackend, WorkflowModule } from '@kodax-ai/agent/workflow';
+import { WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
 import { buildApprovalSummary, runWorkflowModule } from './workflow-runner.js';
@@ -149,5 +150,62 @@ describe('runWorkflowModule', () => {
         approval: () => true,
       }),
     ).rejects.toThrow(/requires either a backend/);
+  });
+
+  it('clamps manifest caps to system hard limits', async () => {
+    let spawns = 0;
+    const backend: WorkflowAgentBackend = {
+      ...fakeBackend(),
+      spawn: async (input) => {
+        spawns += 1;
+        return { taskId: `t${spawns}`, name: input.name };
+      },
+    };
+    const module: WorkflowModule = {
+      meta: {
+        name: 'runaway-generated',
+        description: 'runaway',
+        maxAgents: 999999,
+        maxConcurrency: 999999,
+      },
+      run: async (wf) => {
+        for (let i = 0; i < 70; i += 1) {
+          await wf.runAgent({ name: `a${i}`, prompt: 'x' });
+        }
+      },
+    };
+
+    const outcome = await runWorkflowModule({
+      module,
+      args: {},
+      runId: 'run-cap',
+      runDir: dir,
+      backend,
+    });
+
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind === 'failed') {
+      expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+    }
+    expect(spawns).toBeLessThanOrEqual(64);
+  });
+
+  it('normalizes invalid meta caps in approval summaries', () => {
+    const module: WorkflowModule = {
+      meta: {
+        name: 'bad-caps',
+        description: 'bad caps',
+        maxAgents: Number.NaN,
+        maxConcurrency: 0,
+        tokenBudget: -1,
+      },
+      run: async () => undefined,
+    };
+
+    expect(buildApprovalSummary(module)).toMatchObject({
+      maxAgents: 1,
+      maxConcurrency: 1,
+      tokenBudget: 1,
+    });
   });
 });

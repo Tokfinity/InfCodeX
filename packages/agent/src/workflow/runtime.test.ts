@@ -124,6 +124,21 @@ describe('maxAgents total cap', () => {
 });
 
 describe('maxConcurrency / parallel in-flight gate', () => {
+  it('fails fast on invalid maxConcurrency instead of hanging spawned agents', async () => {
+    const { backend, spawnCount } = fakeBackend();
+    const outcome = await runWorkflow(
+      baseOpts(backend, { limits: { maxConcurrency: 0 } }),
+      async (wf) => {
+        await wf.runAgent({ name: 'a', prompt: 'x' });
+        return 'unreached';
+      },
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+    expect(spawnCount()).toBe(0);
+  });
+
   it('never exceeds maxConcurrency simultaneously in flight', async () => {
     const { backend, peakInFlight } = fakeBackend({ waitDelayMs: 5 });
     const outcome = await runWorkflow(
@@ -151,6 +166,17 @@ describe('maxConcurrency / parallel in-flight gate', () => {
     expect(peakInFlight()).toBeLessThanOrEqual(2);
   });
 
+  it('rejects invalid parallel concurrency', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.parallel([() => Promise.resolve('a')], { concurrency: 0 });
+      return 'unreached';
+    });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+  });
+
   it('parallel preserves result order by index', async () => {
     const { backend } = fakeBackend();
     const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
@@ -162,6 +188,25 @@ describe('maxConcurrency / parallel in-flight gate', () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.result).toEqual(['a', 'b', 'c']);
+  });
+
+  it('gates bare spawnAgent until the matching wait releases capacity', async () => {
+    const { backend, peakInFlight } = fakeBackend({ waitDelayMs: 5 });
+    const outcome = await runWorkflow(
+      baseOpts(backend, { limits: { maxConcurrency: 2 } }),
+      async (wf) => {
+        await Promise.all(
+          Array.from({ length: 6 }, async (_unused, i) => {
+            const handle = await wf.spawnAgent({ name: `bare-${i}`, prompt: 'x' });
+            return wf.wait(handle.taskId);
+          }),
+        );
+        return 'ok';
+      },
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(peakInFlight()).toBeLessThanOrEqual(2);
   });
 });
 
@@ -268,6 +313,24 @@ describe('budget accounting + hard stop before new spawns', () => {
         return 'unreached';
       },
     );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowBudgetError);
+    expect(spawnCount()).toBe(1);
+  });
+
+  it('rechecks token budget after waiting for concurrency capacity', async () => {
+    const { backend, spawnCount } = fakeBackend({ waitDelayMs: 5 });
+    const outcome = await runWorkflow(
+      baseOpts(backend, { limits: { maxConcurrency: 1, tokenBudget: 10 } }),
+      async (wf) => {
+        await Promise.all([
+          wf.runAgent({ name: 'a', prompt: 'x' }),
+          wf.runAgent({ name: 'b', prompt: 'x' }),
+        ]);
+        return 'unreached';
+      },
+    );
+
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowBudgetError);
     expect(spawnCount()).toBe(1);

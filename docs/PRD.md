@@ -110,12 +110,12 @@ workspace packages. Public SDK access is through `@kodax-ai/kodax/skills` and
 ### Dynamic Workflow Harness
 
 FEATURE_217 is the v0.7.49 home for the complete Dynamic Workflow product loop.
-The first shipped slice includes `createWorkflowRuntime`, `runWorkflow`, coding
-backend integration, one built-in read-only workflow, durable run graph,
-saved-workflow discovery, and a minimal `/workflow` command. The remaining
-v0.7.49 completion work covers generated scripts, restricted execution,
-background run lifecycle, pause/resume/stop/save, hard budget checks, worktree
-routing, and richer workflow patterns.
+The shipped surface includes Agent-layer `createWorkflowRuntime`,
+`runWorkflow`, `normalizeWorkflowLimits`, coding backend integration, one
+built-in read-only workflow, durable run graph, saved-workflow discovery,
+capability-routed generated scripts, `/workflow create`, background lifecycle
+management, pause/resume/stop/save, hard budget checks, opt-in worktree routing,
+and richer workflow pattern templates.
 
 ### Safety And Control
 
@@ -131,8 +131,8 @@ explicit user confirmation for trusted-local workflow scripts.
 - Adding broad configuration for hypothetical future use.
 - Replacing git, package managers, test runners, or the user's own review
   process.
-- Treating the complete Dynamic Workflow product loop as shipped before
-  FEATURE_217 completion work lands.
+- Treating generated workflow scripts as trusted local code; generated
+  workflows must stay on the capability runner path.
 
 ## 8. Success Criteria
 

@@ -28,7 +28,7 @@ import {
 const WORKFLOW_SUFFIXES: readonly string[] = ['.workflow.json', '.ts', '.mjs', '.js'];
 
 export type SavedWorkflowSource = 'project' | 'personal';
-export type SavedWorkflowExecution = 'trusted-local' | 'restricted-generated';
+export type SavedWorkflowExecution = 'trusted-local' | 'capability-generated';
 
 export interface SavedWorkflowRef {
   /** Workflow name = filename without extension. */
@@ -64,7 +64,7 @@ export interface SaveGeneratedWorkflowFromRunInput {
 }
 
 function executionForPath(path: string): SavedWorkflowExecution {
-  return path.endsWith('.workflow.json') ? 'restricted-generated' : 'trusted-local';
+  return path.endsWith('.workflow.json') ? 'capability-generated' : 'trusted-local';
 }
 
 function stripWorkflowSuffix(entry: string): string | undefined {
@@ -216,7 +216,7 @@ export async function saveGeneratedWorkflow(
     name: safeName,
     path,
     source: 'project',
-    execution: 'restricted-generated',
+    execution: 'capability-generated',
   };
 }
 

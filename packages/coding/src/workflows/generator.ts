@@ -2,9 +2,9 @@
  * FEATURE_217 (v0.7.49) Phase G — LLM-generated workflow scripts.
  *
  * The generator is intentionally small: one text-only LLM call must return
- * structured JSON, which is validated before it can become a restricted
- * workflow module. Execution safety still belongs to the restricted VM; this
- * file adds an earlier prompt/output gate so bad generations fail closed.
+ * structured JSON, which is validated before it can become a capability-routed
+ * workflow module. Execution safety belongs to the WorkflowApi command bridge;
+ * this file adds an earlier prompt/output gate so bad generations fail closed.
  */
 
 import {
@@ -143,6 +143,7 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '- wf.parallel([() => promise], { concurrency })',
     '- wf.synthesize({ inputs, rubric })',
     '- wf.artifact(name, value), wf.log({ message, data })',
+    '- For fan-out, prefer wf.parallel with thunks that call wf.runAgent; if using wf.spawnAgent, always wait or stop each handle so maxConcurrency capacity can release.',
     '',
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
     '',

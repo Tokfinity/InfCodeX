@@ -7,7 +7,7 @@
 **测试日期**: 2026-06-13
 **测试人员**: 待填写
 
-FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生成受限 workflow script，runtime 负责并发、预算、取消、事件和 run graph，REPL 提供 `/workflow` 显式入口。v0.7.49 额外补齐 `SA / AMA / AMAW` 三种 agent mode：AMA 可显式使用 `/workflow` 并在复杂自然语言任务上建议 workflow；AMAW 可对显式/复杂候选静默启动 restricted-generated workflow，但不绕过权限 gate、本地代码确认或预算限制。
+FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生成 JavaScript harness，runtime 负责并发、预算、取消、事件和 run graph，REPL 提供 `/workflow` 显式入口。v0.7.49 额外补齐 `SA / AMA / AMAW` 三种 agent mode：AMA 可显式使用 `/workflow` 并在复杂自然语言任务上建议 workflow；AMAW 可对显式/复杂候选静默启动 capability-isolated generated workflow，但不绕过权限 gate、本地代码确认或预算限制。workflow script 负责调度，真实文件、shell、MCP、web 等副作用仍由 child agents 通过既有工具权限执行。
 
 ## 测试环境
 
@@ -27,6 +27,7 @@ FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生
 - Durable run graph：`run.json`、`events.jsonl`、`artifacts`、`script.js`、`manifest.json`。
 - Workflow generator 的 generate / decline 解析和 manifest validation。
 - Saved `.workflow.json` discovery、restricted rerun、trusted-local confirmation。
+- Generated JS capability runner 逃逸回归：不能通过 `wf.constructor.constructor('return process')()`、`globalThis.constructor` 等路径拿到宿主 `process`。
 - Background run manager：list / show / pause / resume / stop。
 - `/workflow` 子命令 parsing、help、approval prompt、saved-list、run-list。
 - AMAW invocation policy、`/agent-mode amaw`、状态栏短标签 `AMAW`、`/review --workflow` request builder。
@@ -60,7 +61,7 @@ npm run build:packages
 **预期结果**:
 
 - [ ] 帮助中包含 `/workflow create <request>`、`list`、`runs`、`show`、`pause`、`resume`、`stop`、`save`。
-- [ ] 帮助中说明 generated / `.workflow.json` 走 restricted runner。
+- [ ] 帮助中说明 generated / `.workflow.json` 走 capability runner。
 - [ ] 帮助中说明 local `.ts/.mjs/.js` workflow 是 trusted-local，需要显式确认。
 
 ### TC-002: 列出 built-in workflow 和 pattern templates
@@ -98,6 +99,7 @@ npm run build:packages
 **预期结果**:
 
 - [ ] Approval prompt 显示 phases、agent / concurrency caps、token budget、write risk、source、sandbox / trust、worktree intent。
+- [ ] Approval prompt 提供 raw script 查看方式，不能只依赖 generated summary。
 - [ ] Workflow 在后台启动，并打印 run id。
 - [ ] `/workflow runs` 能看到该 run。
 - [ ] `/workflow show <runId>` 显示 status、event count、agent count、run dir。
@@ -162,7 +164,7 @@ npm run build:packages
 - [ ] 拒绝建议后，输入可以继续走普通 agent 路径。
 - [ ] 显式 `/workflow create ...` 仍能进入 generated workflow approval prompt。
 
-### TC-007: AMAW 对复杂自然语言任务静默启动 restricted-generated workflow
+### TC-007: AMAW 对复杂自然语言任务静默启动 capability-isolated workflow
 
 **优先级**: 高
 **类型**: 正向测试
@@ -179,9 +181,10 @@ npm run build:packages
 **预期结果**:
 
 - [ ] 不出现额外的“是否使用 workflow?”确认提示。
-- [ ] 系统生成 restricted workflow，并打印 generated summary。
+- [ ] 系统生成 capability-isolated workflow，并打印 generated summary。
 - [ ] 系统启动 workflow 并打印 run id 与 `/workflow show <runId>` 提示。
 - [ ] 子 agent 的工具调用仍遵守当前 permission mode 的确认规则。
+- [ ] 如果 capability runner 不可用，系统必须 fail closed 或要求显式确认，不能静默执行 host-object VM workflow。
 
 ### TC-008: AMAW 尊重否定指令
 
@@ -278,8 +281,8 @@ npm run build:packages
 **预期结果**:
 
 - [ ] 创建 `.kodax/workflows/generated-audit.workflow.json`。
-- [ ] `/workflow list` 将该 workflow 显示为 `restricted-generated`。
-- [ ] 复跑时通过 restricted runner 加载，而不是 direct Node import。
+- [ ] `/workflow list` 将该 workflow 显示为 `capability-generated`。
+- [ ] 复跑时通过 capability runner 加载，而不是 direct Node import。
 - [ ] `.workflow.json` 不出现 trusted-local code execution prompt；但正常 workflow approval 仍会出现。
 - [ ] 复跑接受新的 args，不误用旧 request 文本。
 
@@ -300,6 +303,46 @@ npm run build:packages
 - [ ] 请求 `isolation:"worktree"` 的 child 运行在 dedicated worktree path 中。
 - [ ] Child summary 中包含 workflow worktree path，便于后续 inspection / merge。
 - [ ] Child 结束后，创建出的 worktree 仍然可检查。
+
+### TC-014: Generated workflow 不能逃逸到宿主 Node 权限
+
+**优先级**: 高
+**类型**: 安全回归测试
+
+**测试步骤**:
+
+1. 使用自动化测试或临时 saved `.workflow.json` 构造包含以下片段的 generated source：
+```text
+async function run(wf, args) {
+  return wf.constructor.constructor('return process')().versions.node;
+}
+```
+2. 再构造一个尝试使用 `globalThis.constructor.constructor('return process')()` 的变体。
+3. 运行对应 workflow。
+
+**预期结果**:
+
+- [ ] workflow 失败在 capability runner 内部，不能返回 Node 版本号。
+- [ ] 不能读取 `process.env`。
+- [ ] 不能直接 `require('child_process')` 或 dynamic import Node 内置模块。
+- [ ] 失败信息清晰，不导致主 REPL 崩溃。
+
+### TC-015: Manifest cap 会被系统硬顶钳制
+
+**优先级**: 高
+**类型**: 边界测试
+
+**测试步骤**:
+
+1. 生成或保存一个 manifest 声明 `maxAgents: 999999`、`maxConcurrency: 999999` 的 workflow。
+2. 执行该 workflow。
+3. 查看 approval prompt、run events 和 `/workflow show <runId>`。
+
+**预期结果**:
+
+- [ ] approval prompt 显示实际执行 caps 已被系统硬顶限制。
+- [ ] workflow 无法超过系统 hard cap 派生 agent。
+- [ ] 裸 `wf.spawnAgent` 与 `wf.runAgent` 一样受 maxConcurrency 约束。
 
 ## 测试总结
 

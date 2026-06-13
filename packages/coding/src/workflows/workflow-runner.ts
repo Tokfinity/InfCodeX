@@ -14,6 +14,8 @@ import type {
   WorkflowApproval,
   WorkflowApprovalSummary,
   WorkflowEvent,
+  WorkflowLimits,
+  WorkflowMeta,
   WorkflowModule,
   WorkflowRunState,
 } from '@kodax-ai/agent';
@@ -25,6 +27,12 @@ import type { KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
 /** Mirrors the private `dispatch-child-tasks.ts` constant. */
 const DEFAULT_MAX_ITERATIONS_PER_CHILD = 200;
+
+export const SYSTEM_WORKFLOW_LIMITS = {
+  maxAgents: 64,
+  maxConcurrency: 16,
+  tokenBudget: 200_000,
+} as const;
 
 export interface RunWorkflowModuleOptions {
   readonly module: WorkflowModule;
@@ -57,14 +65,35 @@ export type RunWorkflowModuleOutcome =
 /** Build the pre-run approval summary from a workflow module's metadata. */
 export function buildApprovalSummary(module: WorkflowModule): WorkflowApprovalSummary {
   const meta = module.meta;
+  const limits = clampWorkflowLimits(meta);
   return {
     name: meta.name,
     description: meta.description,
     phases: meta.phases ?? [],
-    maxAgents: meta.maxAgents ?? null,
-    maxConcurrency: meta.maxConcurrency ?? null,
-    tokenBudget: meta.tokenBudget ?? null,
+    maxAgents: limits.maxAgents ?? null,
+    maxConcurrency: limits.maxConcurrency ?? null,
+    tokenBudget: limits.tokenBudget ?? null,
     writesFiles: meta.readOnly !== true,
+  };
+}
+
+function clampLimit(value: number | undefined, hardCap: number): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value <= 0) return 1;
+  return Math.min(value, hardCap);
+}
+
+export function clampWorkflowLimits(meta: WorkflowMeta): WorkflowLimits {
+  return {
+    ...(meta.maxAgents !== undefined
+      ? { maxAgents: clampLimit(meta.maxAgents, SYSTEM_WORKFLOW_LIMITS.maxAgents) }
+      : {}),
+    ...(meta.maxConcurrency !== undefined
+      ? { maxConcurrency: clampLimit(meta.maxConcurrency, SYSTEM_WORKFLOW_LIMITS.maxConcurrency) }
+      : {}),
+    ...(meta.tokenBudget !== undefined
+      ? { tokenBudget: clampLimit(meta.tokenBudget, SYSTEM_WORKFLOW_LIMITS.tokenBudget) }
+      : {}),
   };
 }
 
@@ -105,11 +134,7 @@ export async function runWorkflowModule(
       runId: opts.runId,
       args: opts.args,
       backend,
-      limits: {
-        ...(opts.module.meta.maxAgents !== undefined ? { maxAgents: opts.module.meta.maxAgents } : {}),
-        ...(opts.module.meta.maxConcurrency !== undefined ? { maxConcurrency: opts.module.meta.maxConcurrency } : {}),
-        ...(opts.module.meta.tokenBudget !== undefined ? { tokenBudget: opts.module.meta.tokenBudget } : {}),
-      },
+      limits: clampWorkflowLimits(opts.module.meta),
       ...(opts.signal ? { signal: opts.signal } : {}),
       onEvent: (event) => {
         writer.onEvent(event);

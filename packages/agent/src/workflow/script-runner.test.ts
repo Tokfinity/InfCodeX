@@ -17,8 +17,9 @@ function notImplemented(name: string): never {
   throw new Error(`${name} not implemented`);
 }
 
-function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[] } {
+function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string[] } {
   const prompts: string[] = [];
+  const phases: string[] = [];
   const wf: WorkflowApi = {
     runId: 'run-script',
     args: undefined,
@@ -27,7 +28,14 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[] } {
       spent: () => 0,
       remaining: () => 100,
     },
-    phase: async (_name, fn) => fn(),
+    phase: async (name, fn) => {
+      phases.push(`start:${name}`);
+      try {
+        return await fn();
+      } finally {
+        phases.push(`finish:${name}`);
+      }
+    },
     spawnAgent: async (input): Promise<WorkflowTaskHandle> => {
       prompts.push(input.prompt);
       return { taskId: 'task-1', name: input.name };
@@ -51,7 +59,7 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[] } {
     artifact: async (name): Promise<WorkflowArtifactRef> => ({ name }),
     log: () => {},
   };
-  return { wf, prompts };
+  return { wf, prompts, phases };
 }
 
 describe('runRestrictedWorkflowScript', () => {
@@ -98,6 +106,98 @@ describe('runRestrictedWorkflowScript', () => {
         source: 'async function run() { return await import("node:fs"); }',
       }),
     ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
+  });
+
+  it('does not expose host objects through constructor-chain escapes', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return wf.constructor.constructor('return process')().versions.node;
+          }
+        `,
+      }),
+    ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
+
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run() {
+            return globalThis.constructor.constructor('return process')().versions.node;
+          }
+        `,
+      }),
+    ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
+  });
+
+  it('keeps dynamic JavaScript orchestration through wf.parallel', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      args: { targets: ['a', 'b', 'c'] },
+      source: `
+        async function run(wf, args) {
+          const jobs = args.targets.map((target) => async () => {
+            const result = await wf.runAgent({
+              name: 'check-' + target,
+              prompt: 'check ' + target,
+              readOnly: true
+            });
+            return result.finalText;
+          });
+          const results = await wf.parallel(jobs, { concurrency: 2 });
+          return { count: results.length, results };
+        }
+      `,
+    });
+
+    expect(result).toEqual({
+      count: 3,
+      results: ['done:check a', 'done:check b', 'done:check c'],
+    });
+    expect(prompts).toEqual(['check a', 'check b', 'check c']);
+  });
+
+  it('bridges generated phase scopes to the host runtime', async () => {
+    const { wf, phases } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      source: `
+        async function run(wf) {
+          return wf.phase('review', async () => {
+            const one = await wf.runAgent({ name: 'r', prompt: 'review', readOnly: true });
+            return one.finalText;
+          });
+        }
+      `,
+    });
+
+    expect(result).toBe('done:review');
+    expect(phases).toEqual(['start:review', 'finish:review']);
+  });
+
+  it('propagates host phase failures instead of swallowing them', async () => {
+    const { wf } = fakeWorkflowApi();
+    const failingPhaseWorkflow: WorkflowApi = {
+      ...wf,
+      phase: async () => {
+        throw new Error('phase writer failed');
+      },
+    };
+
+    await expect(
+      runRestrictedWorkflowScript({
+        wf: failingPhaseWorkflow,
+        source: `
+          async function run(wf) {
+            return wf.phase('broken', async () => 'unreached');
+          }
+        `,
+      }),
+    ).rejects.toThrow(/phase writer failed/);
   });
 
   it('times out synchronous runaway scripts', async () => {

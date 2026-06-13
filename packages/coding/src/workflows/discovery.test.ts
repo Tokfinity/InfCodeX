@@ -59,7 +59,7 @@ describe('discoverSavedWorkflows', () => {
     const refs = await discoverSavedWorkflows({ project, personal });
     expect(refs.map((r) => r.name)).toEqual(['audit', 'generated', 'review', 'triage']);
     expect(refs.find((r) => r.name === 'audit')?.source).toBe('project');
-    expect(refs.find((r) => r.name === 'generated')?.execution).toBe('restricted-generated');
+    expect(refs.find((r) => r.name === 'generated')?.execution).toBe('capability-generated');
     expect(refs.find((r) => r.name === 'triage')?.source).toBe('personal');
   });
 
@@ -161,7 +161,7 @@ describe('saveGeneratedWorkflow', () => {
     patterns: ['fan-out-and-synthesize' as const],
   };
 
-  it('writes a restricted generated workflow file with a safe name', async () => {
+  it('writes a capability-generated workflow file with a safe name', async () => {
     const ref = await saveGeneratedWorkflow({
       dir,
       name: '../unsafe demo',
@@ -170,7 +170,7 @@ describe('saveGeneratedWorkflow', () => {
     });
 
     expect(ref.name).toBe('unsafe-demo');
-    expect(ref.execution).toBe('restricted-generated');
+    expect(ref.execution).toBe('capability-generated');
     expect(ref.path.endsWith('unsafe-demo.workflow.json')).toBe(true);
     expect(existsSync(ref.path)).toBe(true);
     const data = JSON.parse(readFileSync(ref.path, 'utf8'));

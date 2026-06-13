@@ -233,15 +233,23 @@ connection logic.
 Workflow runtime has a strict boundary:
 
 - `packages/agent/src/workflow`: domain-neutral runtime, event recorder,
-  concurrency/cap accounting, abort, and backend injection.
+  concurrency/cap accounting, abort, limit validation, public SDK types, and
+  backend injection.
 - `packages/coding/src/workflows`: coding backend, built-ins, durable run graph,
   saved workflow discovery, and `/workflow` command integration.
 
-FEATURE_217 remains the v0.7.49 Dynamic Workflow product feature. The current
-implementation provides the substrate; the same feature owns script generation,
-restricted script execution, background manager behavior, pause/resume/stop/save,
-workflow-level worktree wiring, hard budget checks, and advanced workflow
-patterns before completion.
+FEATURE_217 is the v0.7.49 Dynamic Workflow product feature. The implementation
+provides the substrate, JavaScript harness generation, background manager
+behavior, pause/resume/stop/save, workflow-level worktree wiring, hard budget
+checks, and advanced workflow pattern templates.
+
+Generated workflows remain dynamic JavaScript, but the runner boundary is a
+capability boundary: the script may hold loops, branches, intermediate results,
+model routing, and calls to `wf.*`; it must not receive direct host access to
+filesystem, shell, process, environment, module import, or network APIs. The
+host handles `wf.*` as structured commands and applies existing permission gates
+through child agents. `node:vm` with host objects is not a valid trust boundary
+for generated workflows.
 
 ## 14. REPL Detail
 

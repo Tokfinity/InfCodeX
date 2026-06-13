@@ -55,6 +55,7 @@ export {
   WorkflowBudgetError,
   WorkflowLimitError,
   createWorkflowRuntime,
+  normalizeWorkflowLimits,
   runWorkflow,
 } from './runtime.js';
 export type {

@@ -1,38 +1,39 @@
-# Feature ??
+# Feature 总表
 
-> ???? roadmap ?????????????????? feature?
-> ????????????????? [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)?
-> ??????? [docs/features/v{VERSION}.md](features/)?????? [CHANGELOG.md](../CHANGELOG.md)?
+> 这是活跃 roadmap 索引，只保留仍需要计划、实现或验证的 feature。
+> 已发布、取消、吸收、搁置的历史项见 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)。
+> 版本设计细节见 [docs/features/v{VERSION}.md](features/)；发布历史见 [CHANGELOG.md](../CHANGELOG.md)。
 
 ---
 
-## ????
+## 当前概况
 
 | Item | Value |
 |---|---|
 | Current released version | `v0.7.49` |
 | Current package version | `@kodax-ai/kodax@0.7.49` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
-| Total tracked features | `11` |
+| Total tracked features | `12` |
 | InProgress | `0` |
-| Planned | `11` |
+| Planned | `12` |
 | Completed | `0` |
-| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225` |
-| Archive cutoff | `<= v0.7.49` ???????????????? |
+| Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228` |
+| Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
-### ???
+### 一览表
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| InProgress | 0 | - | - |
-| Planned, near-term | 6 | `224, 225, 174, 105, 211, 108` | `v0.7.50` -> `v0.7.57` |
+| InProgress | 0 | — | — |
+| Planned, near-term | 7 | `224, 228, 225, 174, 105, 211, 108` | `v0.7.50` -> `v0.7.57` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
 
-### ???????
+### 各版本待做分布
 
 | Version | Planned features |
 |---|---:|
 | `v0.7.50` | `1` |
+| `v0.7.51` | `1` |
 | `v0.7.52` | `1` |
 | `v0.7.53` | `1` |
 | `v0.7.56` | `2` |
@@ -43,20 +44,20 @@
 
 ---
 
-## ???? Feature
+## 进行中的 Feature
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
-
-???????? feature????????? Planned ?????????????????
+| — | 当前无进行中的 feature | — | — |
 
 ---
 
-## ???? Feature
+## 计划中的 Feature
 
 | ID | Title | Category | Priority | Planned | Design |
 |---|---|---|---|---|---|
 | `224` | Self-Improvement Skill Loop | Core / Skills + Self-Improvement | High | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_224-self-improvement-skill-loop--background-learning-sidecar--skill-governance) |
+| `228` | Unified Memory Control Plane + Memory Governance | Core / Memory + Governance | High | `v0.7.51` | [v0.7.51](features/v0.7.51.md#feature_228-unified-memory-control-plane--memory-governance) |
 | `225` | REPL Dead / Legacy Code Cleanup | Internal / Refactor + Tech Debt | Medium | `v0.7.52` | [v0.7.52](features/v0.7.52.md#feature_225-repl-dead--legacy-code-cleanup) |
 | `174` | `kodax sessions dedupe` | Internal / Maintenance + CLI | Low | `v0.7.53` | [v0.7.53](features/v0.7.53.md#feature_174-kodax-sessions-dedupe--cleanup-of-orphaned-runner-jsonl-ghost-files) |
 | `105` | Verifiable Advisor Consult Primitive | Internal / Core | High | `v0.7.56` | [v0.7.56](features/v0.7.56.md#feature_105-verifiable-advisor-consult-primitive) |
@@ -70,27 +71,27 @@
 
 ---
 
-## ????
+## 阅读说明
 
-- `FEATURE_LIST.md` ?????????????????
-- ???? feature ???????ID?????????????????????
-- ????????????????`TBD` / parking-lot / ??????????????
-- ??????????????????? [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)??????????????
-- ? feature ????????????????????????? feature ??????????????
-- ???????????????????? [CHANGELOG.md](../CHANGELOG.md) ????
+- `FEATURE_LIST.md` 是活跃索引，不再承载长篇立项正文。
+- 每个活跃 feature 在本表只保留：ID、标题、类别、优先级、目标版本、设计入口。
+- 活跃项必须有明确版本和设计入口；`TBD` / parking-lot / 用户需求未成熟的项不进主表。
+- 已完成、取消、吸收、搁置的历史项归档到 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md)，避免它们继续污染待办统计。
+- 新 feature 进入本表前，应先确认是否已有相同目标、是否可被现有 feature 吸收、是否需要单独设计文档。
+- 发布后把对应行移出本表，并把发布事实写入 [CHANGELOG.md](../CHANGELOG.md) 或归档。
 
 ---
 
-## ??? Feature
+## 已完成 Feature
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
 
-?????????????????? [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md) ? [CHANGELOG.md](../CHANGELOG.md)?
+当前活跃索引不保留完成项。完成项请查 [FEATURES_ARCHIVED.md](FEATURES_ARCHIVED.md) 和 [CHANGELOG.md](../CHANGELOG.md)。
 
 ---
 
-## ??????
+## 相关文档入口
 
 - [Product Requirements](PRD.md)
 - [Architecture Decision Records](ADR.md)

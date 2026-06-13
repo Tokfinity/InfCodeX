@@ -4,7 +4,7 @@
  *
  * The runtime is the orchestration engine. It wraps an injected
  * `WorkflowAgentBackend` with: a maxAgents lifetime cap, a maxConcurrency
- * in-flight gate (for runAgent / parallel), token-budget accounting with
+ * in-flight gate (for spawnAgent / runAgent / parallel), token-budget accounting with
  * a hard stop before new spawns, abort handling, and an append-only event
  * log. It has zero `@kodax-ai/coding` dependency.
  */
@@ -52,6 +52,30 @@ export class WorkflowBudgetError extends Error {
     super(message);
     this.name = 'WorkflowBudgetError';
   }
+}
+
+function readPositiveLimit(
+  limits: WorkflowLimits | undefined,
+  key: keyof WorkflowLimits,
+): number | undefined {
+  const value = limits?.[key];
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new WorkflowLimitError(`workflow limit ${key} must be a positive integer`);
+  }
+  return value;
+}
+
+/** Validate user-provided runtime limits for SDK consumers. */
+export function normalizeWorkflowLimits(limits?: WorkflowLimits): WorkflowLimits {
+  const maxAgents = readPositiveLimit(limits, 'maxAgents');
+  const maxConcurrency = readPositiveLimit(limits, 'maxConcurrency');
+  const tokenBudget = readPositiveLimit(limits, 'tokenBudget');
+  return {
+    ...(maxAgents !== undefined ? { maxAgents } : {}),
+    ...(maxConcurrency !== undefined ? { maxConcurrency } : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+  };
 }
 
 /** Capacity-bounded async semaphore. `Infinity` capacity never blocks. */
@@ -147,15 +171,17 @@ interface InternalRuntime extends WorkflowRuntimeHandle {
 
 function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const recorder = new WorkflowEventRecorder(opts.onEvent);
-  const maxAgents = opts.limits?.maxAgents ?? Infinity;
-  const maxConcurrency = opts.limits?.maxConcurrency ?? Infinity;
-  const tokenBudget = opts.limits?.tokenBudget ?? null;
+  const limits = normalizeWorkflowLimits(opts.limits);
+  const maxAgents = limits.maxAgents ?? Infinity;
+  const maxConcurrency = limits.maxConcurrency ?? Infinity;
+  const tokenBudget = limits.tokenBudget ?? null;
   const concurrency = new Semaphore(maxConcurrency);
 
   let totalSpawned = 0;
   let spentOutputTokens = 0;
   let status: WorkflowRunStatus = 'running';
   const artifacts: WorkflowArtifactRef[] = [];
+  const releaseByTask = new Map<string, () => void>();
 
   const checkAbort = (): void => {
     if (opts.signal?.aborted) throw new WorkflowAbortError();
@@ -167,16 +193,42 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     }
   };
 
-  const doSpawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
-    checkAbort();
-    checkBudget();
+  const releaseTaskCapacity = (taskId: string): void => {
+    const release = releaseByTask.get(taskId);
+    if (!release) return;
+    releaseByTask.delete(taskId);
+    release();
+  };
+
+  const checkAgentCap = (): void => {
     if (totalSpawned >= maxAgents) {
       throw new WorkflowLimitError(`maxAgents cap (${maxAgents}) reached`);
     }
-    totalSpawned += 1;
-    const handle = await opts.backend.spawn(input);
-    recorder.emit('agent_spawned', { taskId: handle.taskId, name: handle.name });
-    return handle;
+  };
+
+  const doSpawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
+    checkAbort();
+    checkBudget();
+    checkAgentCap();
+    await concurrency.acquire();
+    let acquired = true;
+    try {
+      checkAbort();
+      checkBudget();
+      checkAgentCap();
+      totalSpawned += 1;
+      const handle = await opts.backend.spawn(input);
+      releaseByTask.set(handle.taskId, () => {
+        if (!acquired) return;
+        acquired = false;
+        concurrency.release();
+      });
+      recorder.emit('agent_spawned', { taskId: handle.taskId, name: handle.name });
+      return handle;
+    } catch (error) {
+      if (acquired) concurrency.release();
+      throw error;
+    }
   };
 
   const accrue = (result: WorkflowTaskResult): void => {
@@ -190,22 +242,24 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     taskId: string,
     opts2: WorkflowWaitOptions | undefined,
   ): Promise<WorkflowTaskResult> => {
-    const result = await opts.backend.wait(taskId, opts2);
-    accrue(result);
-    recorder.emit(terminalEventType(result.status), {
-      taskId: result.taskId,
-      name: result.name,
-      status: result.status,
-    });
-    return result;
+    try {
+      const result = await opts.backend.wait(taskId, opts2);
+      accrue(result);
+      recorder.emit(terminalEventType(result.status), {
+        taskId: result.taskId,
+        name: result.name,
+        status: result.status,
+      });
+      return result;
+    } finally {
+      releaseTaskCapacity(taskId);
+    }
   };
 
-  // Run an agent through the gate: maxConcurrency semaphore + maxAgents
-  // cap + budget accounting + run-graph events. Propagates a workflow
+  // Run an agent through the same spawn/wait gate, then propagate a workflow
   // abort to the in-flight child via the backend's stop().
   const runAgentImpl = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult> => {
     checkAbort();
-    await concurrency.acquire();
     let onAbort: (() => void) | undefined;
     try {
       const handle = await doSpawn(input);
@@ -219,7 +273,6 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       return await doWait(handle.taskId, undefined);
     } finally {
       if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
-      concurrency.release();
     }
   };
 
@@ -259,11 +312,18 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
     stop: async (taskId, reason) => {
       await opts.backend.stop(taskId, reason);
+      releaseTaskCapacity(taskId);
       recorder.emit('agent_stopped', { taskId, reason });
     },
 
     parallel: <T>(items: readonly (() => Promise<T>)[], parallelOpts?: WorkflowParallelOptions) => {
       checkAbort();
+      if (
+        parallelOpts?.concurrency !== undefined &&
+        (!Number.isInteger(parallelOpts.concurrency) || parallelOpts.concurrency <= 0)
+      ) {
+        throw new WorkflowLimitError('workflow parallel concurrency must be a positive integer');
+      }
       const cap = Math.min(parallelOpts?.concurrency ?? maxConcurrency, maxConcurrency);
       return runPool(items, cap, opts.signal);
     },
@@ -335,17 +395,31 @@ export async function runWorkflow<T>(
   opts: CreateWorkflowRuntimeOptions,
   script: (api: WorkflowApi, args: unknown) => Promise<T>,
 ): Promise<WorkflowRunOutcome<T>> {
-  const rt = buildRuntime(opts);
-  rt.recorder.emit('workflow_started', { runId: opts.runId });
+  let rt: InternalRuntime | undefined;
   try {
+    rt = buildRuntime(opts);
+    rt.recorder.emit('workflow_started', { runId: opts.runId });
     const result = await script(rt.api, opts.args);
     rt.setStatus('completed');
     rt.recorder.emit('workflow_completed');
     return { ok: true, result, state: rt.getState() };
   } catch (error) {
-    rt.setStatus('failed');
     const err = error instanceof Error ? error : new Error(String(error));
-    rt.recorder.emit('workflow_failed', { error: err.message });
-    return { ok: false, error: err, state: rt.getState() };
+    if (rt) {
+      rt.setStatus('failed');
+      rt.recorder.emit('workflow_failed', { error: err.message });
+      return { ok: false, error: err, state: rt.getState() };
+    }
+    return {
+      ok: false,
+      error: err,
+      state: {
+        runId: opts.runId,
+        status: 'failed',
+        totalSpawned: 0,
+        events: [],
+        artifacts: [],
+      },
+    };
   }
 }

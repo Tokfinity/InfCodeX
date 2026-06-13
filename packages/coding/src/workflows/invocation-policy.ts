@@ -63,7 +63,7 @@ export function decideWorkflowInvocation(
   }
 
   if (input.agentMode === 'amaw') {
-    return decision('auto-start', explicit ? 'explicit' : 'complexity', 'AMAW starts restricted generated workflows automatically');
+    return decision('auto-start', explicit ? 'explicit' : 'complexity', 'AMAW starts capability-generated workflows automatically');
   }
 
   if (input.source === 'command') {

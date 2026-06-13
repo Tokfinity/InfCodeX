@@ -120,13 +120,15 @@ describe('renderApprovalPrompt', () => {
       },
       {
         source: 'generated',
-        sandbox: 'restricted-generated',
+        sandbox: 'capability-generated',
         mayUseWorktree: true,
+        rawScriptPath: '/tmp/run/script.js',
       },
     );
     expect(text).toContain('source: generated');
-    expect(text).toContain('sandbox/trust: restricted-generated');
+    expect(text).toContain('sandbox/trust: capability-generated');
     expect(text).toContain('worktree isolation: may request worktree');
+    expect(text).toContain('raw script: /tmp/run/script.js');
   });
 });
 
@@ -227,7 +229,7 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow stop <runId>');
     expect(text).toContain('/workflow save <runId> <name>');
     expect(text).toContain('/workflow help');
-    expect(text).toContain('restricted WorkflowApi runner');
+    expect(text).toContain('capability WorkflowApi runner');
     expect(text).toContain('trusted-local');
   });
 });

@@ -174,11 +174,20 @@ Workflow has two layers:
 - `packages/coding/src/workflows`: coding backend, built-in workflows,
   durable run graph, saved-workflow discovery, and REPL command integration.
 
-FEATURE_217 is the v0.7.49 Dynamic Workflow feature. Its first slice provides
-the runtime substrate and minimal runner surface; the same feature also owns the
-remaining product loop: on-the-fly script generation, restricted script
-execution, background management, pause/resume/stop/save, worktree routing,
-hard budget checks, and richer workflow patterns.
+FEATURE_217 is the v0.7.49 Dynamic Workflow feature. It provides the runtime
+substrate, coding backend, durable run graph, on-the-fly JavaScript harness
+generation, background management, pause/resume/stop/save, opt-in worktree
+routing, hard budget checks, and reusable workflow pattern templates. The
+domain-neutral SDK surface lives in `@kodax-ai/agent/workflow`; coding and REPL
+layers consume it rather than owning the core runtime.
+
+Generated workflow scripts keep the orchestration plan in JavaScript, matching
+Claude-style dynamic workflows. They must not receive raw host authority:
+filesystem, shell, process, environment, module import, and network effects stay
+behind child agents and KodaX permission gates. Generated scripts run through a
+capability runner that exposes only structured `wf.*` calls to the host. Pattern
+templates are examples and scaffolds, not a replacement for dynamic harness
+generation.
 
 ## 11. REPL And CLI
 

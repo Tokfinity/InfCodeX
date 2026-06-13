@@ -31,6 +31,7 @@ import type {
 } from '@kodax-ai/agent';
 import {
   buildApprovalSummary,
+  createRunGraphWriter,
   getBuiltinWorkflow,
   listBuiltinWorkflows,
   listWorkflowPatternTemplates,
@@ -98,6 +99,7 @@ export interface WorkflowApprovalRenderContext {
   readonly source: string;
   readonly sandbox: string;
   readonly mayUseWorktree: boolean;
+  readonly rawScriptPath?: string;
 }
 
 export function renderApprovalPrompt(
@@ -116,6 +118,7 @@ export function renderApprovalPrompt(
           `  source: ${context.source}`,
           `  sandbox/trust: ${context.sandbox}`,
           `  worktree isolation: ${context.mayUseWorktree ? 'may request worktree' : 'shared cwd / per-child default'}`,
+          ...(context.rawScriptPath ? [`  raw script: ${context.rawScriptPath}`] : []),
         ]
       : []),
   ].join('\n');
@@ -227,7 +230,7 @@ export function renderWorkflowHelp(): string {
     `  ${chalk.dim('/workflow save run-lx3 generated-audit')}`,
     '',
     `${chalk.bold('Safety:')}`,
-    '  - Generated and .workflow.json workflows run in the restricted WorkflowApi runner.',
+    '  - Generated and .workflow.json workflows run in the capability WorkflowApi runner.',
     '  - Local .ts/.mjs/.js workflows are trusted-local and require explicit confirmation.',
     '  - File, shell, MCP, and web effects still go through child agents and existing permission gates.',
   ].join('\n');
@@ -340,12 +343,20 @@ export async function startGeneratedWorkflowFromRequest(
   }
 
   console.log(chalk.dim(`\nGenerated workflow: ${generated.approvalSummary}\n`));
+  const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
+  const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+  const manager = getDefaultWorkflowRunManager();
+  const runId = `run-${Date.now().toString(36)}`;
+  const runDir = join(baseDir, runId);
+  const scriptSnapshot = createRunGraphWriter(runDir).writeScriptSnapshot(generated.scriptSnapshot);
+
   if (confirm) {
     const approved = await confirm(
       renderApprovalPrompt(buildApprovalSummary(generated.module), {
         source: input.sourceLabel ?? 'generated',
-        sandbox: 'restricted-generated',
+        sandbox: 'capability-generated',
         mayUseWorktree: generated.manifest.mayUseWorktree === true,
+        rawScriptPath: scriptSnapshot.scriptPath,
       }),
     );
     if (!approved) {
@@ -353,14 +364,9 @@ export async function startGeneratedWorkflowFromRequest(
       return 'cancelled';
     }
   } else {
-    console.log(chalk.dim('AMAW auto-start: restricted generated workflow; normal permission gates still apply.\n'));
+    console.log(chalk.dim('AMAW auto-start: capability-isolated generated workflow; normal permission gates still apply.\n'));
   }
 
-  const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
-  const baseDir = getAgentConfigPath('workflow-runs', projectKey);
-  const manager = getDefaultWorkflowRunManager();
-  const runId = `run-${Date.now().toString(36)}`;
-  const runDir = join(baseDir, runId);
   console.log(chalk.dim(`\nStarted workflow ${generated.module.meta.name} (${runId}). Use /workflow show ${runId} for status.\n`));
 
   const managed = manager.startFromOptions({

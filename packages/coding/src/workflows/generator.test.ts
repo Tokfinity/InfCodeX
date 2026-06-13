@@ -15,6 +15,7 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     const prompt = buildWorkflowGenerationUserPrompt('rank 80 resumes');
     expect(prompt).toContain('wf.spawnAgent');
     expect(prompt).toContain('wf.parallel');
+    expect(prompt).toContain('always wait or stop each handle');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('rank 80 resumes');
