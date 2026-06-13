@@ -46,9 +46,7 @@
 
 ## 进行中的 Feature
 
-| ID | Title | Planned | Design |
-|---|---|---|---|
-| — | 当前无进行中的 feature | — | — |
+_当前无进行中的 feature。_
 
 ---
 
