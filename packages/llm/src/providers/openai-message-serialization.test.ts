@@ -126,6 +126,47 @@ describe('openai message serialization', () => {
     expect(second?.max_completion_tokens).toBe(1024);
   });
 
+  it('retries judge complete() without forced tool choice when an upstream rejects tool_choice (single-capability)', async () => {
+    // Regression for the complete() path: reasoning off → attempts === ['none']
+    // (one capability). A flat for+continue skipped to a non-existent next
+    // capability and threw; the inner while must RE-ATTEMPT the same one
+    // without tool_choice.
+    const completion = {
+      choices: [{ message: { role: 'assistant', content: 'ok', tool_calls: [] }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    };
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('unsupported parameter: tool_choice'))
+      .mockResolvedValueOnce(completion);
+    const provider = new TestOpenAIProvider({
+      chat: {
+        completions: { create },
+      },
+    });
+
+    await provider.complete(
+      [{ role: 'user', content: 'judge this' }],
+      [REPORT_TOOL],
+      'judge system',
+      false,
+      {
+        forcedToolName: 'emit_verdict',
+        maxOutputTokensOverride: 1024,
+      },
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    const first = create.mock.calls[0]?.[0];
+    const second = create.mock.calls[1]?.[0];
+    expect(first?.tool_choice).toEqual({
+      type: 'function',
+      function: { name: 'emit_verdict' },
+    });
+    expect(second?.tool_choice).toBeUndefined();
+    expect(second?.tools).toHaveLength(1);
+    expect(second?.max_completion_tokens).toBe(1024);
+  });
+
   it('serializes image input blocks as image_url content parts', async () => {
     const cwd = await createTempDir('kodax-openai-images-');
     const imagePath = path.join(cwd, 'diagram.png');

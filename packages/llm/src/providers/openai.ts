@@ -761,42 +761,53 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
       let lastError: unknown;
 
       for (const capability of attempts) {
-        const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
-          ...createParams,
-        };
+        // Mirror the stream() path: an inner `while (!response)` so a
+        // forced-tool-choice rejection retries the SAME capability without
+        // tool_choice. A flat for+continue would instead skip to the next
+        // capability — and with a single-element `attempts` (reasoning off)
+        // the tool_choice fallback would never re-attempt at all.
+        while (!response) {
+          const attemptParams: OpenAI.Chat.ChatCompletionCreateParamsNonStreaming = {
+            ...createParams,
+          };
 
-        this.resetReasoningCapabilityParams(
-          attemptParams as unknown as Record<string, unknown>,
-        );
-        this.applyReasoningCapability(attemptParams as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, capability, normalizedReasoning);
+          this.resetReasoningCapabilityParams(
+            attemptParams as unknown as Record<string, unknown>,
+          );
+          this.applyReasoningCapability(attemptParams as unknown as OpenAI.Chat.ChatCompletionCreateParamsStreaming, capability, normalizedReasoning);
 
-        try {
-          response = await this.client.chat.completions.create(
-            attemptParams,
-            signal ? { signal } : {},
-          ) as OpenAI.Chat.Completions.ChatCompletion;
-          if (capability !== initialCapability) {
-            this.persistReasoningCapabilityOverride(capability, model);
+          try {
+            response = await this.client.chat.completions.create(
+              attemptParams,
+              signal ? { signal } : {},
+            ) as OpenAI.Chat.Completions.ChatCompletion;
+            if (capability !== initialCapability) {
+              this.persistReasoningCapabilityOverride(capability, model);
+            }
+          } catch (error) {
+            lastError = error;
+            if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
+              shouldForceToolChoice = false;
+              delete createParams.tool_choice;
+              this.logStreamDiagnostic(
+                `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
+              );
+              continue;
+            }
+            if (
+              !this.shouldFallbackForReasoningError(
+                error,
+                ...this.getFallbackTerms(capability),
+              )
+            ) {
+              throw error;
+            }
+            break;
           }
+        }
+
+        if (response) {
           break;
-        } catch (error) {
-          lastError = error;
-          if (shouldForceToolChoice && this.shouldFallbackForForcedToolChoiceError(error)) {
-            shouldForceToolChoice = false;
-            delete createParams.tool_choice;
-            this.logStreamDiagnostic(
-              `[${this.name}] upstream rejected forced tool_choice; retrying without forced tool choice`,
-            );
-            continue;
-          }
-          if (
-            !this.shouldFallbackForReasoningError(
-              error,
-              ...this.getFallbackTerms(capability),
-            )
-          ) {
-            throw error;
-          }
         }
       }
 

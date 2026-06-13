@@ -144,10 +144,13 @@ export async function invokeLlmJudge<TVerdict>(
   const streamController = new AbortController();
   const streamSignal = streamController.signal;
   const onCallerAbort = () => streamController.abort();
+  // Register the listener BEFORE reading `aborted` so there is no gap (even a
+  // theoretical one under a future async refactor) where an abort between the
+  // check and the registration is missed. `addEventListener` on an already-
+  // aborted signal never fires, so the explicit post-check covers that case.
+  options.abortSignal?.addEventListener('abort', onCallerAbort, { once: true });
   if (options.abortSignal?.aborted) {
     streamController.abort();
-  } else {
-    options.abortSignal?.addEventListener('abort', onCallerAbort, { once: true });
   }
 
   const streamPromise = (async (): Promise<TVerdict> => {
