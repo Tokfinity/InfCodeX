@@ -7310,6 +7310,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               context.title = loaded.title;
               context.sessionId = id;
               context.contextTokenSnapshot = undefined;
+              // FEATURE_226: back-propagate the loaded session's tag into the
+              // live options so subsequent saves / forks reflect it (the save
+              // side reads currentOptionsRef.current.session?.tag).
+              currentOptionsRef.current.session = {
+                ...currentOptionsRef.current.session,
+                id,
+                tag: loaded.tag,
+              };
               persistedUiHistoryRef.current = context.uiHistory ?? [];
               setLiveTokenCount(null);
               clearUIHistory();
@@ -8660,7 +8668,10 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
       existingArtifactLedger = loaded.artifactLedger;
       sessionTitle = loaded.title;
       sessionId = options.session.id;
-      console.log(chalk.green(`[Session loaded: ${options.session.id}]`));
+      // FEATURE_226: carry the resumed session's tag into options so the
+      // live currentOptionsRef reflects it (save side reads it back).
+      options = { ...options, session: { ...(options.session ?? {}), id: sessionId, tag: loaded.tag } };
+      console.log(chalk.green(`[Session loaded: ${sessionId}]`));
     }
   }
   // -c or autoResume: Load most recent session
@@ -8677,6 +8688,11 @@ export async function runInkInteractiveMode(options: InkREPLOptions): Promise<vo
           existingArtifactLedger = loaded.artifactLedger;
           sessionTitle = loaded.title;
           sessionId = recentSession.id;
+          // FEATURE_226: carry the resumed session's tag into options.
+          options = {
+            ...options,
+            session: { ...(options.session ?? {}), tag: loaded.tag },
+          };
           console.log(chalk.green(`[Continuing session: ${recentSession.id}]`));
         }
       }

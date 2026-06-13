@@ -664,6 +664,9 @@ Keyboard Shortcuts:
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
           artifactLedger: context.artifactLedger,
+          // FEATURE_226: carry the session tag so a brand-new session's first
+          // save persists it (storage merges `data.tag ?? existing` otherwise).
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
       }
     },
@@ -719,6 +722,9 @@ Keyboard Shortcuts:
         currentOptions.session = {
           ...currentOptions.session,
           id,
+          // FEATURE_226: reflect the loaded session's tag in-memory so saves
+          // / forks carry it (storage merges `data.tag ?? existing` on save).
+          tag: loaded.tag,
         };
         statusBar?.update({
           sessionId: id,
@@ -1258,6 +1264,7 @@ Keyboard Shortcuts:
           title,
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
       }
       await prepared.finalize();
@@ -1336,6 +1343,7 @@ Keyboard Shortcuts:
                     runtimeInfo: context.runtimeInfo,
                     artifactLedger: context.artifactLedger,
                     lineage: context.lineage,
+                    ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
                   });
                 },
                 // getLatestUsage + getTurnStartMs are overridden inside
@@ -1422,6 +1430,7 @@ Keyboard Shortcuts:
               gitRoot: context.gitRoot ?? '',
               runtimeInfo: context.runtimeInfo,
               artifactLedger: context.artifactLedger,
+              ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
             });
           }
         } catch (err) {
@@ -1528,6 +1537,7 @@ Keyboard Shortcuts:
           gitRoot: context.gitRoot ?? '',
           runtimeInfo: context.runtimeInfo,
           artifactLedger: context.artifactLedger,
+          ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
         });
       }
     } catch (err) {
