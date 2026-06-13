@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildWorkflowGenerationUserPrompt,
+  DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS,
   generateWorkflow,
+  resolveWorkflowGenerationTimeoutMs,
   validateGeneratedWorkflowSource,
 } from './generator.js';
 
@@ -16,6 +18,7 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('wf.spawnAgent');
     expect(prompt).toContain('wf.parallel');
     expect(prompt).toContain('always wait or stop each handle');
+    expect(prompt).toContain('lifetime total cap');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('rank 80 resumes');
@@ -35,6 +38,21 @@ describe('validateGeneratedWorkflowSource', () => {
     expect(() =>
       validateGeneratedWorkflowSource('async function run() { return require("fs"); }'),
     ).toThrow(/forbidden generated workflow token: require/);
+  });
+});
+
+describe('resolveWorkflowGenerationTimeoutMs', () => {
+  it('uses a workflow-specific default timeout', () => {
+    expect(resolveWorkflowGenerationTimeoutMs({})).toBe(DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS);
+  });
+
+  it('accepts a positive integer override from env', () => {
+    expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: '45000' })).toBe(45000);
+  });
+
+  it('falls back to the default for invalid env values', () => {
+    expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: '0' })).toBe(DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS);
+    expect(resolveWorkflowGenerationTimeoutMs({ KODAX_WORKFLOW_GENERATION_TIMEOUT_MS: 'nope' })).toBe(DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS);
   });
 });
 
@@ -92,6 +110,131 @@ describe('generateWorkflow', () => {
     expect(result.approvalSummary).toContain('read-only investigators');
     const output = await result.module.run({ runId: 'run-1' } as never, { request: 'Q' });
     expect(output).toEqual({ request: 'Q', runId: 'run-1' });
+  });
+
+  it('canonicalizes common generated phases shapes before manifest validation', async () => {
+    const objectPhaseResult = await generateWorkflow({
+      request: 'Create a workflow to compare three optimization hypotheses.',
+      generateText: async () => JSON.stringify({
+        action: 'generate',
+        manifest: {
+          name: 'optimization-hypotheses',
+          description: 'Compare optimization hypotheses.',
+          phases: [
+            { name: 'hypothesize' },
+            { title: 'verify' },
+            { phase: 'synthesize' },
+          ],
+          readOnly: true,
+          maxAgents: 4,
+          maxConcurrency: 3,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+      }),
+    });
+
+    expect(objectPhaseResult.kind).toBe('generated');
+    if (objectPhaseResult.kind !== 'generated') return;
+    expect(objectPhaseResult.manifest.phases).toEqual(['hypothesize', 'verify', 'synthesize']);
+
+    const stringPhaseResult = await generateWorkflow({
+      request: 'Create a workflow to compare three optimization hypotheses.',
+      generateText: async () => JSON.stringify({
+        action: 'generate',
+        manifest: {
+          name: 'optimization-hypotheses',
+          description: 'Compare optimization hypotheses.',
+          phases: 'hypothesize -> verify -> synthesize',
+          readOnly: true,
+          maxAgents: 4,
+          maxConcurrency: 3,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+      }),
+    });
+
+    expect(stringPhaseResult.kind).toBe('generated');
+    if (stringPhaseResult.kind !== 'generated') return;
+    expect(stringPhaseResult.manifest.phases).toEqual(['hypothesize', 'verify', 'synthesize']);
+  });
+
+  it('reserves enough maxAgents capacity for generated multi-phase fan-out scripts', async () => {
+    const result = await generateWorkflow({
+      request: 'Audit a large feature with several parallel reviewers and synthesize.',
+      generateText: async () => JSON.stringify({
+        action: 'generate',
+        manifest: {
+          name: 'feature-audit',
+          description: 'Audit a feature with fan-out reviewers.',
+          phases: ['inventory', 'fan-out', 'cross-check', 'synthesize'],
+          readOnly: true,
+          maxAgents: 8,
+          maxConcurrency: 4,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: [
+          'async function run(wf, args) {',
+          '  await wf.phase("inventory", async () => { await wf.runAgent({ name: "inventory", prompt: String(args.request), readOnly: true }); });',
+          '  await wf.phase("fan-out", async () => { await wf.parallel([1,2,3,4,5].map((n) => () => wf.runAgent({ name: "auditor-" + n, prompt: "audit", readOnly: true })), { concurrency: 4 }); });',
+          '  await wf.phase("cross-check", async () => { await wf.parallel([1,2,3].map((n) => () => wf.runAgent({ name: "cross-" + n, prompt: "check", readOnly: true })), { concurrency: 3 }); });',
+          '  await wf.phase("synthesize", async () => wf.synthesize({ inputs: "all", rubric: "summarize" }));',
+          '}',
+        ].join('\n'),
+      }),
+    });
+
+    expect(result.kind).toBe('generated');
+    if (result.kind !== 'generated') return;
+    expect(result.manifest.maxAgents).toBe(18);
+    expect(result.module.meta.maxAgents).toBe(18);
+    expect(result.scriptSnapshot.manifest.maxAgents).toBe(18);
+  });
+
+  it('repairs a manifest validation error once before failing the builder', async () => {
+    const calls: string[] = [];
+    const result = await generateWorkflow({
+      request: 'Create a workflow to compare three optimization hypotheses.',
+      generateText: async ({ prompt }) => {
+        calls.push(prompt);
+        if (calls.length === 1) {
+          return JSON.stringify({
+            action: 'generate',
+            manifest: {
+              name: 'optimization-hypotheses',
+              description: 'Compare optimization hypotheses.',
+              phases: ['hypothesize', 'verify', 'synthesize'],
+              readOnly: 'true',
+              maxAgents: 4,
+              maxConcurrency: 3,
+              patterns: ['fan-out-and-synthesize'],
+            },
+            source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+          });
+        }
+        return JSON.stringify({
+          action: 'generate',
+          manifest: {
+            name: 'optimization-hypotheses',
+            description: 'Compare optimization hypotheses.',
+            phases: ['hypothesize', 'verify', 'synthesize'],
+            readOnly: true,
+            maxAgents: 4,
+            maxConcurrency: 3,
+            patterns: ['fan-out-and-synthesize'],
+          },
+          source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+        });
+      },
+    });
+
+    expect(result.kind).toBe('generated');
+    if (result.kind !== 'generated') return;
+    expect(result.manifest.phases).toEqual(['hypothesize', 'verify', 'synthesize']);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain('Validation error: workflow manifest readOnly must be a boolean');
+    expect(calls[1]).toContain('Return corrected JSON only');
   });
 
   it('fails closed on invalid generated source', async () => {

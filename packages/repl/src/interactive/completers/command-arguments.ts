@@ -7,9 +7,20 @@
 
 // FEATURE_093 (v0.7.24): import types from ./types.ts to break the
 // `argument-completer.ts ↔ command-arguments.ts` cycle.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { ArgumentDefinition, CommandArgumentsRegistry } from './types.js';
-import { REPOINTEL_DEFAULT_ENDPOINT, getAvailableProviderNames, isKnownProvider } from '@kodax-ai/coding';
+import { getAgentConfigPath } from '@kodax-ai/agent';
+import {
+  REPOINTEL_DEFAULT_ENDPOINT,
+  getAvailableProviderNames,
+  getDefaultWorkflowRunManager,
+  isKnownProvider,
+  listBuiltinWorkflows,
+} from '@kodax-ai/coding';
 import { getProviderAvailableModels } from '../../common/utils.js';
+import { deriveProjectKeyFromRoot } from '../project-key.js';
 
 /**
  * Mode command arguments - /mode 命令参数
@@ -264,6 +275,158 @@ const REPOINTEL_RESETTABLE_ARGS: ArgumentDefinition[] = [
   },
 ];
 
+const WORKFLOW_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
+  { name: 'list', description: 'List built-in and saved workflows', type: 'enum' },
+  { name: 'create', description: 'Generate and run a workflow from a request', type: 'enum' },
+  { name: 'runs', description: 'List active and recent workflow runs', type: 'enum' },
+  { name: 'show', description: 'Show latest run or a specific workflow run', type: 'enum' },
+  { name: 'pause', description: 'Pause future child launches for a run', type: 'enum' },
+  { name: 'resume', description: 'Resume a paused run', type: 'enum' },
+  { name: 'stop', description: 'Stop an active workflow run', type: 'enum' },
+  { name: 'delete', description: 'Delete one persisted workflow run', type: 'enum' },
+  { name: 'prune', description: 'Preview or delete old terminal workflow runs', type: 'enum' },
+  { name: 'rerun', description: 'Rerun a generated workflow from run history', type: 'enum' },
+  { name: 'save', description: 'Save a generated run as a workflow capsule', type: 'enum' },
+  { name: 'help', description: 'Show workflow help', type: 'enum' },
+];
+
+const WORKFLOW_RUN_ID_SUBCOMMANDS = new Set([
+  'show',
+  'pause',
+  'resume',
+  'stop',
+  'delete',
+  'rerun',
+  'save',
+]);
+
+const WORKFLOW_PERSISTED_RUN_ID_SUBCOMMANDS = new Set(['show', 'delete', 'rerun', 'save']);
+
+const WORKFLOW_RUNS_OPTION_ARGS: ArgumentDefinition[] = [
+  { name: '--all', description: 'Show all persisted workflow runs', type: 'enum' },
+  { name: '--limit', description: 'Show at most N persisted workflow runs', type: 'enum' },
+];
+
+const WORKFLOW_PRUNE_OPTION_ARGS: ArgumentDefinition[] = [
+  { name: '--dry-run', description: 'Preview cleanup without deleting runs', type: 'enum' },
+  { name: '--keep', description: 'Keep the newest N terminal runs', type: 'enum' },
+  { name: '--older-than', description: 'Delete terminal runs older than Nd or Nh', type: 'enum' },
+];
+
+function workflowRunMatchesSubcommand(subcommand: string, status: string): boolean {
+  switch (subcommand) {
+    case 'pause':
+      return status === 'running';
+    case 'resume':
+      return status === 'paused';
+    case 'stop':
+      return status === 'running' || status === 'paused';
+    case 'delete':
+      return status !== 'running' && status !== 'paused';
+    case 'show':
+    case 'rerun':
+    case 'save':
+    default:
+      return true;
+  }
+}
+
+function isWorkflowRunEntryName(value: string): boolean {
+  return (
+    /^[a-zA-Z0-9._-]{1,120}$/.test(value) &&
+    !value.startsWith('.') &&
+    !value.includes('..')
+  );
+}
+
+interface WorkflowRunArgumentCandidate {
+  readonly arg: ArgumentDefinition;
+  readonly endedAt: number;
+}
+
+function getPersistedWorkflowRunIdArgs(): ArgumentDefinition[] {
+  const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
+  const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+  if (!existsSync(baseDir)) return [];
+
+  const candidates: WorkflowRunArgumentCandidate[] = [];
+  for (const entry of readdirSync(baseDir)) {
+    if (!isWorkflowRunEntryName(entry)) continue;
+    const runJsonPath = join(baseDir, entry, 'run.json');
+    if (!existsSync(runJsonPath)) continue;
+    try {
+      const data = JSON.parse(readFileSync(runJsonPath, 'utf8')) as Record<string, unknown>;
+      const workflow = typeof data.workflow === 'string' ? data.workflow : '?';
+      const status = typeof data.status === 'string' ? data.status : '?';
+      candidates.push({
+        arg: {
+          name: entry,
+          description: `${workflow} - ${status}`,
+          type: 'string',
+        },
+        endedAt: typeof data.endedAt === 'number' ? data.endedAt : 0,
+      });
+    } catch {
+      // Malformed persisted runs should not break command completion.
+    }
+  }
+
+  return candidates
+    .sort((a, b) => b.endedAt - a.endedAt)
+    .map((candidate) => candidate.arg);
+}
+
+function getWorkflowRunIdArgs(subcommand: string): ArgumentDefinition[] {
+  const activeArgs = getDefaultWorkflowRunManager()
+    .list()
+    .filter((run) => workflowRunMatchesSubcommand(subcommand, run.status))
+    .map((run) => ({
+      name: run.runId,
+      description: `${run.workflow} - ${run.status}`,
+      type: 'string' as const,
+    }));
+  const persistedArgs = WORKFLOW_PERSISTED_RUN_ID_SUBCOMMANDS.has(subcommand)
+    ? getPersistedWorkflowRunIdArgs()
+    : [];
+  const seen = new Set<string>();
+  return [...activeArgs, ...persistedArgs].filter((arg) => {
+    if (seen.has(arg.name)) return false;
+    seen.add(arg.name);
+    return true;
+  });
+}
+
+function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
+  const [subcommand = ''] = argParts;
+  const normalizedSubcommand = subcommand.toLowerCase();
+  const effectiveLength = argParts.length === 1 && argParts[0] === '' ? 0 : argParts.length;
+
+  if (effectiveLength <= 1) {
+    return [
+      ...WORKFLOW_SUBCOMMAND_ARGS,
+      ...listBuiltinWorkflows().map((workflow) => ({
+        name: workflow.name,
+        description: workflow.description,
+        type: 'enum' as const,
+      })),
+    ];
+  }
+
+  if (WORKFLOW_RUN_ID_SUBCOMMANDS.has(normalizedSubcommand) && effectiveLength <= 2) {
+    return getWorkflowRunIdArgs(normalizedSubcommand);
+  }
+
+  if (normalizedSubcommand === 'runs' && effectiveLength <= 2) {
+    return WORKFLOW_RUNS_OPTION_ARGS;
+  }
+
+  if (normalizedSubcommand === 'prune' && effectiveLength <= 2) {
+    return WORKFLOW_PRUNE_OPTION_ARGS;
+  }
+
+  return [];
+}
+
 function getRepointelArgs(argParts: string[]): ArgumentDefinition[] {
   const [subcommand = ''] = argParts;
   const normalizedSubcommand = subcommand.toLowerCase();
@@ -333,6 +496,7 @@ export const COMMAND_ARGUMENTS: CommandArgumentsRegistry = new Map([
  */
 const MODEL_COMMAND_NAMES = new Set(['model', 'm']);
 const REPOINTEL_COMMAND_NAMES = new Set(['repointel', 'ri']);
+const WORKFLOW_COMMAND_NAMES = new Set(['workflow']);
 
 export function getCommandArguments(commandName: string, partial?: string, argParts: string[] = []): ArgumentDefinition[] {
   const key = commandName.toLowerCase();
@@ -341,6 +505,9 @@ export function getCommandArguments(commandName: string, partial?: string, argPa
   }
   if (REPOINTEL_COMMAND_NAMES.has(key)) {
     return getRepointelArgs(argParts);
+  }
+  if (WORKFLOW_COMMAND_NAMES.has(key)) {
+    return getWorkflowArgs(argParts);
   }
   return COMMAND_ARGUMENTS.get(key) ?? [];
 }

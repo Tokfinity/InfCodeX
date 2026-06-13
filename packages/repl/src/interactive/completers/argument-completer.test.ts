@@ -2,8 +2,15 @@
  * Tests for Argument Completer - 参数补全器测试
  */
 
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { getAgentConfigPath, type WorkflowAgentBackend, type WorkflowModule } from '@kodax-ai/agent';
+import { getDefaultWorkflowRunManager } from '@kodax-ai/coding';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ArgumentCompleter } from '../completers/argument-completer.js';
+import { deriveProjectKeyFromRoot } from '../project-key.js';
 
 describe('ArgumentCompleter', () => {
   let completer: ArgumentCompleter;
@@ -335,6 +342,96 @@ describe('ArgumentCompleter', () => {
       it('should stop suggesting after a complete second-level repointel argument', async () => {
         const completions = await completer.getCompletions('/repointel mode premium-native ', 31);
         expect(completions).toEqual([]);
+      });
+    });
+
+    describe('/workflow command', () => {
+      it('should return workflow subcommands and built-in workflows', async () => {
+        const completions = await completer.getCompletions('/workflow ', 10);
+
+        expect(completions.some(c => c.display === 'runs')).toBe(true);
+        expect(completions.some(c => c.display === 'stop')).toBe(true);
+        expect(completions.some(c => c.display === 'delete')).toBe(true);
+        expect(completions.some(c => c.display === 'prune')).toBe(true);
+        expect(completions.some(c => c.display === 'parallel-investigation')).toBe(true);
+      });
+
+      it('should return workflow list and prune options', async () => {
+        const runsOptions = await completer.getCompletions('/workflow runs ', 15);
+        expect(runsOptions.some(c => c.display === '--all')).toBe(true);
+        expect(runsOptions.some(c => c.display === '--limit')).toBe(true);
+
+        const pruneOptions = await completer.getCompletions('/workflow prune ', 16);
+        expect(pruneOptions.some(c => c.display === '--dry-run')).toBe(true);
+        expect(pruneOptions.some(c => c.display === '--keep')).toBe(true);
+        expect(pruneOptions.some(c => c.display === '--older-than')).toBe(true);
+      });
+
+      it('should return persisted workflow run ids for history commands', async () => {
+        const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-persisted-complete-'));
+        const previousCwd = process.cwd();
+        process.chdir(cwd);
+        const projectKey = deriveProjectKeyFromRoot(cwd).key;
+        const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+        const runDir = join(baseDir, 'run-persisted-complete');
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, 'run.json'),
+          JSON.stringify({
+            runId: '../../outside',
+            workflow: 'persisted-audit',
+            status: 'failed',
+            totalSpawned: 1,
+            endedAt: Date.now(),
+          }),
+          'utf8',
+        );
+
+        try {
+          const input = '/workflow delete ';
+          const completions = await completer.getCompletions(input, input.length);
+
+          expect(completions.some(c => c.display === 'run-persisted-complete')).toBe(true);
+          expect(completions.some(c => c.display === '../../outside')).toBe(false);
+        } finally {
+          process.chdir(previousCwd);
+          rmSync(baseDir, { recursive: true, force: true });
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      });
+
+      it('should return active run ids after workflow control subcommands', async () => {
+        const runDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-complete-'));
+        const manager = getDefaultWorkflowRunManager();
+        let finishRun = (): void => undefined;
+        const module: WorkflowModule = {
+          meta: {
+            name: 'autocomplete-hold',
+            description: 'Hold open for autocomplete tests',
+            phases: ['hold'],
+            readOnly: true,
+          },
+          run: async () => new Promise<void>((resolve) => {
+            finishRun = resolve;
+          }),
+        };
+        const run = manager.start({
+          module,
+          args: {},
+          runId: 'run-autocomplete-live',
+          runDir,
+          backend: {} as WorkflowAgentBackend,
+        });
+
+        try {
+          const completions = await completer.getCompletions('/workflow stop ', 15);
+          expect(completions.some(c => c.display === 'run-autocomplete-live')).toBe(true);
+        } finally {
+          manager.stop('run-autocomplete-live');
+          finishRun();
+          await run.done.catch(() => undefined);
+          rmSync(runDir, { recursive: true, force: true });
+        }
       });
     });
 

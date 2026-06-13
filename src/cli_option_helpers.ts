@@ -15,7 +15,7 @@ import type { AcpPermissionMode } from './acp_server.js';
 
 export const ACP_PERMISSION_MODES: AcpPermissionMode[] = ['plan', 'accept-edits', 'auto-in-project'];
 export const CLI_OUTPUT_MODES = ['text', 'json'] as const;
-export const KODAX_AGENT_MODES = ['ama', 'sa'] as const;
+export const KODAX_AGENT_MODES = ['ama', 'amaw', 'sa'] as const;
 export type CliOutputMode = typeof CLI_OUTPUT_MODES[number];
 
 export interface CliOptions {

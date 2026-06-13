@@ -15,6 +15,7 @@ import {
   WorkflowBudgetError,
   WorkflowLimitError,
   type WorkflowAgentBackend,
+  type WorkflowEvent,
   type WorkflowSpawnAgentInput,
   type WorkflowTaskResult,
 } from './index.js';
@@ -126,6 +127,47 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(outcome.ok).toBe(false);
     expect(stoppedTaskIds()).toEqual(['task-1']);
     expect(outcome.state.events.map((event) => event.type)).toContain('agent_stopped');
+  });
+
+  it('does not emit agent_completed after a failed workflow has stopped the task', async () => {
+    const events: WorkflowEvent[] = [];
+    let resolveWait: ((result: WorkflowTaskResult) => void) | undefined;
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'task-1', name: input.name }),
+      wait: (taskId) =>
+        new Promise<WorkflowTaskResult>((resolve) => {
+          resolveWait = resolve;
+        }).then((result) => ({ ...result, taskId })),
+      output: async (taskId) => ({ taskId, name: taskId, status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+
+    const outcome = await runWorkflow(
+      baseOpts(backend, { onEvent: (event: WorkflowEvent) => events.push(event) }),
+      async (wf) => {
+        const handle = await wf.spawnAgent({ name: 'late-finisher', prompt: 'keep working' });
+        void wf.wait(handle.taskId);
+        await Promise.resolve();
+        throw new Error('script boom');
+      },
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(events.some((event) => event.type === 'agent_stopped')).toBe(true);
+    resolveWait?.({
+      taskId: 'task-1',
+      name: 'late-finisher',
+      status: 'completed',
+      finalText: 'late done',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const terminalTypes = events
+      .filter((event) => event.type === 'agent_stopped' || event.type === 'agent_completed')
+      .map((event) => event.type);
+    expect(terminalTypes).toEqual(['agent_stopped']);
   });
 
   it('does not hang the failed outcome when backend.stop never resolves', async () => {

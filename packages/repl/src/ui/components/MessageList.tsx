@@ -94,6 +94,8 @@ export interface MessageListProps {
   managedBudgetApprovalRequired?: boolean;
   /** Last known live activity label used when the stream is between deltas */
   lastLiveActivityLabel?: string;
+  /** Stable text rows for live status surfaces outside transcript history */
+  liveStatusLines?: readonly string[];
   /** Visible viewport rows for transcript slicing */
   viewportRows?: number;
   /** Optional width override for deterministic transcript layout */
@@ -638,6 +640,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   managedBudgetUsage,
   managedBudgetApprovalRequired,
   lastLiveActivityLabel,
+  liveStatusLines,
   viewportRows,
   viewportWidth,
   scrollOffset = 0,
@@ -687,6 +690,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       managedBudgetUsage,
       managedBudgetApprovalRequired,
       lastLiveActivityLabel,
+      liveStatusLines,
       windowed,
       showFullThinking,
       showDetailedTools,
@@ -721,6 +725,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       managedBudgetUsage,
       managedBudgetApprovalRequired,
       lastLiveActivityLabel,
+      liveStatusLines,
       windowed,
       showFullThinking,
       showDetailedTools,

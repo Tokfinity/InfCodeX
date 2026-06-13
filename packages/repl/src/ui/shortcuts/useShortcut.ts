@@ -63,7 +63,7 @@ export function useShortcut(
   // Register the shortcut definition and handler on mount
   useEffect(() => {
     // Set handler in registry
-    registry.setHandler(actionId, (...args) => handlerRef.current(...args));
+    registry.setHandler(actionId, (keyInfo) => handlerRef.current(keyInfo));
 
     // Cleanup: clear handler on unmount
     return () => {
@@ -96,7 +96,7 @@ export function useShortcut(
 
       if (match && match.definition.id === actionId) {
         // Execute the handler
-        const result = handlerRef.current();
+        const result = handlerRef.current(keyInfo);
         return result === true;
       }
 

@@ -117,9 +117,13 @@ describe('parseAgentModeOption', () => {
     expect(parseAgentModeOption('SA')).toBe('sa');
   });
 
+  it('accepts AMAW mode case-insensitively', () => {
+    expect(parseAgentModeOption('AMAW')).toBe('amaw');
+  });
+
   it('rejects unsupported agent modes', () => {
     expect(() => parseAgentModeOption('team')).toThrow(
-      'Expected one of: ama, sa.',
+      'Expected one of: ama, amaw, sa.',
     );
   });
 });

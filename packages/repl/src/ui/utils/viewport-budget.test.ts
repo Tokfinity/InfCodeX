@@ -290,6 +290,34 @@ describe("viewport-budget", () => {
     );
   });
 
+  it("reserves rows for WorkflowRunSurface so composer + status-bar stay visible", () => {
+    const withoutWorkflow = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+    });
+    const withWorkflow = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 80,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      workflowSurfaceRows: 6,
+      activityBarVisible: true,
+    });
+
+    expect(withWorkflow.workflowSurfaceRows).toBe(6);
+    expect(withWorkflow.activityRows).toBe(1);
+    expect(withWorkflow.messageRows).toBe(withoutWorkflow.messageRows - 7);
+    expect(withWorkflow.footerRows).toBeGreaterThanOrEqual(
+      withoutWorkflow.footerRows + 7,
+    );
+  });
+
   it("reserves activityBar row when only the plan-list counter is visible (no spinner verb)", () => {
     // The plan-list counter ("X/N completed") shares the activityBar
     // slot with the spinner verb. When the verb is absent but the

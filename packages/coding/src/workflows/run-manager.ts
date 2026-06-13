@@ -26,6 +26,7 @@ export interface ManagedWorkflowSnapshot {
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly error?: string;
+  readonly resultText?: string;
 }
 
 export interface ManagedWorkflowRun {
@@ -43,6 +44,7 @@ interface MutableRun {
   startedAt: number;
   endedAt?: number;
   error?: string;
+  resultText?: string;
   controller: AbortController;
   pauseWaiters: Array<() => void>;
 }
@@ -68,6 +70,7 @@ function snapshot(run: MutableRun): ManagedWorkflowSnapshot {
     startedAt: run.startedAt,
     ...(run.endedAt !== undefined ? { endedAt: run.endedAt } : {}),
     ...(run.error !== undefined ? { error: run.error } : {}),
+    ...(run.resultText !== undefined ? { resultText: run.resultText } : {}),
   };
 }
 
@@ -76,6 +79,23 @@ function terminalStatus(outcome: RunWorkflowModuleOutcome, aborted: boolean): Ma
   if (outcome.kind === 'completed') return 'completed';
   if (outcome.kind === 'denied') return 'denied';
   return 'failed';
+}
+
+function resultText(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const synthesis = record.synthesis;
+  if (typeof synthesis === 'string' && synthesis.trim().length > 0) return synthesis;
+  if (typeof synthesis === 'object' && synthesis !== null) {
+    const text = (synthesis as Record<string, unknown>).text;
+    if (typeof text === 'string' && text.trim().length > 0) return text;
+  }
+  for (const key of ['summary', 'report', 'text', 'result']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate;
+  }
+  return undefined;
 }
 
 export function createWorkflowRunManager(
@@ -139,6 +159,7 @@ export function createWorkflowRunManager(
     run.status = terminalStatus(outcome, run.controller.signal.aborted || run.status === 'stopped');
     run.endedAt = now();
     if (outcome.kind === 'failed') run.error = outcome.error.message;
+    if (outcome.kind === 'completed') run.resultText = resultText(outcome.result);
     releasePauseWaiters(run);
     return outcome;
   };

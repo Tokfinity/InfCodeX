@@ -1177,16 +1177,23 @@ Keyboard Shortcuts:
         console.log(chalk.dim('\n[workflow] This task looks suitable for workflow. Use /workflow create <request> to run it.\n'));
         return false;
       }
-      const approved = await confirm('This task looks suitable for workflow. Generate and run a workflow?');
+      const cancelsTurn = decision.trigger === 'explicit';
+      const approved = await confirm(
+        cancelsTurn
+          ? 'This request explicitly asks for workflow. Generate and run it? Choose No to cancel this turn.'
+          : 'This task looks suitable for workflow. Use workflow? Choose No to continue with normal AMA.',
+      );
       if (!approved) {
-        return false;
+        if (!cancelsTurn) return false;
+        console.log(chalk.dim('\nWorkflow request cancelled. No normal AMA fallback was started.\n'));
+        return true;
       }
     }
 
     const outcome = await startGeneratedWorkflowFromRequest({
       request: workflow.request,
       callbacks,
-      approval: decision.action === 'auto-start' ? 'silent' : 'required',
+      approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
       sourceLabel: workflow.displayName,
     });
 

@@ -58,6 +58,15 @@ describe("transcript-search", () => {
     expect(buildTranscriptCopyText(items[1])).toContain("Planner is active");
   });
 
+  it("strips ANSI control sequences from copied transcript text", () => {
+    expect(buildTranscriptCopyText({
+      id: "info-ansi",
+      type: "info",
+      timestamp: Date.now(),
+      text: "\u001b[32mgenerated-fast-audit\u001b[39m \u001b[2mrun-mqc5v6ys\u001b[22m",
+    })).toBe("generated-fast-audit run-mqc5v6ys");
+  });
+
   it("builds a compact selection summary and copies selected tool input", () => {
     const toolItem: HistoryItem = {
       id: "tool-1",

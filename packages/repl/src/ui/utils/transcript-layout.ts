@@ -11,6 +11,7 @@ import {
 } from "./tool-display.js";
 import { truncateUserMessageForDisplay } from "./user-message-display.js";
 import { stripOuterBlankLines } from "./strip-outer-blank-lines.js";
+import { stripAnsi } from "./strip-ansi.js";
 
 /**
  * FEATURE_141 (v0.7.37) wired a colored `<DiffHunk>` component, but the live
@@ -169,6 +170,7 @@ export interface TranscriptBuildOptions {
   managedBudgetUsage?: number;
   managedBudgetApprovalRequired?: boolean;
   lastLiveActivityLabel?: string;
+  liveStatusLines?: readonly string[];
   /**
    * FEATURE_149 (v0.7.38) — when a todo item is `in_progress` and carries
    * an `activeForm` string, the spinner status line uses it as the leader
@@ -392,7 +394,8 @@ function pushWrappedRows(
   width: number,
   style: Omit<TranscriptRow, "key" | "text">
 ): void {
-  const lines = wrapText(text, width);
+  const plainText = stripAnsi(text);
+  const lines = wrapText(plainText, width);
   if (lines.length === 0) {
     rows.push({ key: `${keyPrefix}-0`, text: "", ...style });
     return;
@@ -602,6 +605,7 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
     managedRound,
     managedMaxRounds,
     lastLiveActivityLabel,
+    liveStatusLines = [],
     currentTodoActiveForm,
     showFullThinking = false,
     showDetailedTools = false,
@@ -968,6 +972,23 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         { color: "accent", spinner: true }
       );
     }
+  }
+
+  if (showLiveProgressRows && liveStatusLines.length > 0) {
+    pushWrappedRows(rows, "live-status-header", "Live status", viewportWidth, {
+      color: "dim",
+      bold: true,
+    });
+    liveStatusLines.forEach((line, index) => {
+      pushWrappedRows(
+        rows,
+        `live-status-${index}`,
+        line,
+        getBodyWidth(viewportWidth, 2),
+        { color: "dim", indent: 2 },
+      );
+    });
+    pushBlankRow(rows, "live-status-blank");
   }
 
   if (streamingResponse) {

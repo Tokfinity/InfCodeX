@@ -6,6 +6,8 @@
  * Design: Centralized, discoverable, configurable shortcuts
  */
 
+import type { KeyInfo } from '../types.js';
+
 // === Shortcut Action IDs ===
 
 /**
@@ -21,7 +23,7 @@ export type ShortcutActionId =
   | 'toggleTranscriptMode' // Ctrl+O - toggle transcript mode
   | 'openTranscriptSearch' // Ctrl+F - search transcript
   | 'togglePermissionMode' // Shift+Tab - 切换权限模式
-  | 'toggleAgentMode' // Alt+M - 切换 AMA / SA
+  | 'toggleAgentMode' // Alt+M - cycle AMA / AMAW / SA
   | 'submitInput' // Enter - 提交输入
   // Input shortcuts - 输入快捷键
   | 'acceptCompletion' // Tab - 接受补全
@@ -116,7 +118,7 @@ export interface ShortcutDefinition {
  * @returns true if the shortcut was handled and should stop propagation
  *          返回 true 表示快捷键已处理，应停止传播
  */
-export type ShortcutHandler = () => boolean | void;
+export type ShortcutHandler = (keyInfo?: KeyInfo) => boolean | void;
 
 /**
  * Options for useShortcut hook
@@ -154,4 +156,3 @@ export interface KeyMatchResult {
   /** Whether the key was consumed - 按键是否被消费 */
   consumed: boolean;
 }
-

@@ -31,6 +31,10 @@ export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
   'Never use import, require, process, fs, child_process, network APIs, shell commands, or direct file access.',
 ].join('\n');
 
+export const DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS = 120_000;
+const WORKFLOW_GENERATION_TIMEOUT_ENV = 'KODAX_WORKFLOW_GENERATION_TIMEOUT_MS';
+const GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP = 64;
+
 export interface WorkflowGenerationTextRequest {
   readonly system: string;
   readonly prompt: string;
@@ -82,6 +86,20 @@ const FORBIDDEN_SOURCE_PATTERNS: readonly {
   { id: 'Bun', pattern: /\bBun\b/ },
 ];
 
+export function resolveWorkflowGenerationTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[WORKFLOW_GENERATION_TIMEOUT_ENV];
+  if (raw === undefined || raw.trim().length === 0) {
+    return DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_WORKFLOW_GENERATION_TIMEOUT_MS;
+  }
+  return Math.floor(parsed);
+}
+
 function readRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null) {
     throw new Error(`${label} must be an object`);
@@ -113,6 +131,78 @@ function extractJsonText(rawText: string): string {
 function parseGenerationJson(rawText: string): Record<string, unknown> {
   const jsonText = extractJsonText(rawText);
   return readRecord(JSON.parse(jsonText) as unknown, 'workflow generation output');
+}
+
+function normalizePhaseEntry(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of ['name', 'id', 'title', 'phase']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function splitPhaseString(value: string): readonly string[] {
+  return value
+    .split(/(?:->|\u2192|,|\n)/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function normalizeGeneratedManifestCandidate(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+  const phasesValue = record.phases;
+  let phases: readonly string[] | undefined;
+
+  if (Array.isArray(phasesValue)) {
+    const normalized = phasesValue.map(normalizePhaseEntry);
+    if (normalized.every((item): item is string => item !== undefined)) {
+      phases = normalized;
+    }
+  } else if (typeof phasesValue === 'string') {
+    const split = splitPhaseString(phasesValue);
+    if (split.length > 0) {
+      phases = split;
+    }
+  }
+
+  return phases ? { ...record, phases } : value;
+}
+
+function estimateDirectAgentCalls(source: string): number {
+  return source.match(/\bwf\.(?:runAgent|spawnAgent|synthesize)\s*\(/g)?.length ?? 0;
+}
+
+function reserveGeneratedWorkflowAgentCapacity(
+  manifest: WorkflowScriptManifest,
+  source: string,
+): WorkflowScriptManifest {
+  const phaseConcurrencyReserve =
+    manifest.maxConcurrency * Math.max(1, manifest.phases.length) + 2;
+  const directCallReserve = estimateDirectAgentCalls(source) + 2;
+  const required = Math.min(
+    GENERATED_WORKFLOW_MAX_AGENTS_HARD_CAP,
+    Math.max(manifest.maxAgents, phaseConcurrencyReserve, directCallReserve),
+  );
+
+  return required > manifest.maxAgents
+    ? { ...manifest, maxAgents: required }
+    : manifest;
 }
 
 export function validateGeneratedWorkflowSource(source: string): string {
@@ -149,10 +239,32 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '',
     'Manifest requirements:',
     '- name, description, phases, readOnly, maxAgents, maxConcurrency, optional tokenBudget',
+    '- phases must be a JSON array of non-empty string literals, for example ["investigate","verify","synthesize"]; never return phase objects or a single string',
+    '- maxAgents and maxConcurrency must be positive JSON integers',
+    '- maxAgents is a lifetime total cap for every wf.runAgent, wf.spawnAgent, and wf.synthesize call in the whole run, not the parallel lane count; reserve enough for all phases plus synthesis',
+    '- readOnly must be a JSON boolean',
     '- optional mayUseWorktree when child prompts need isolated worktrees',
     '- patterns must use only supported ids',
     '',
     'Return JSON only.',
+  ].join('\n');
+}
+
+function buildWorkflowGenerationRepairPrompt(input: {
+  readonly request: string;
+  readonly previousOutput: string;
+  readonly error: string;
+}): string {
+  return [
+    buildWorkflowGenerationUserPrompt(input.request),
+    '',
+    'Your previous output failed KodaX workflow validation.',
+    `Validation error: ${input.error}`,
+    '',
+    'Previous output:',
+    input.previousOutput,
+    '',
+    'Return corrected JSON only. Keep the same task intent, but make the manifest and source valid.',
   ].join('\n');
 }
 
@@ -172,8 +284,11 @@ export function parseWorkflowGeneration(rawText: string): WorkflowGenerationResu
     throw new Error('workflow generation action must be "generate" or "decline"');
   }
 
-  const manifest = validateWorkflowScriptManifest(data.manifest);
   const source = validateGeneratedWorkflowSource(readNonEmptyString(data, 'source'));
+  const manifest = reserveGeneratedWorkflowAgentCapacity(
+    validateWorkflowScriptManifest(normalizeGeneratedManifestCandidate(data.manifest)),
+    source,
+  );
   const approvalSummary =
     typeof data.approvalSummary === 'string' && data.approvalSummary.trim().length > 0
       ? data.approvalSummary
@@ -203,7 +318,21 @@ export async function generateWorkflow(
     prompt: buildWorkflowGenerationUserPrompt(request),
     ...(input.signal ? { signal: input.signal } : {}),
   });
-  return parseWorkflowGeneration(rawText);
+  try {
+    return parseWorkflowGeneration(rawText);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const repairedText = await input.generateText({
+      system: WORKFLOW_GENERATION_SYSTEM_PROMPT,
+      prompt: buildWorkflowGenerationRepairPrompt({
+        request,
+        previousOutput: rawText,
+        error: message,
+      }),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+    return parseWorkflowGeneration(repairedText);
+  }
 }
 
 export async function generateWorkflowFromOptions(
@@ -211,23 +340,30 @@ export async function generateWorkflowFromOptions(
 ): Promise<WorkflowGenerationResult> {
   const provider = resolveProvider(input.options.provider);
   const model = input.options.modelOverride ?? input.options.model ?? provider.getModel();
-  const messages: readonly KodaXMessage[] = [
-    { role: 'user', content: buildWorkflowGenerationUserPrompt(input.request) },
-  ];
+  const timeoutMs = input.timeoutMs ?? resolveWorkflowGenerationTimeoutMs();
+  return generateWorkflow({
+    request: input.request,
+    ...(input.signal ? { signal: input.signal } : {}),
+    generateText: async (request) => {
+      const messages: readonly KodaXMessage[] = [
+        { role: 'user', content: request.prompt },
+      ];
+      const result = await sideQuery({
+        provider,
+        model,
+        system: request.system,
+        messages,
+        querySource: 'workflow-generation',
+        timeoutMs,
+        ...(request.signal ? { abortSignal: request.signal } : {}),
+      });
 
-  const result = await sideQuery({
-    provider,
-    model,
-    system: WORKFLOW_GENERATION_SYSTEM_PROMPT,
-    messages,
-    querySource: 'workflow-generation',
-    ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
-    ...(input.signal ? { abortSignal: input.signal } : {}),
+      if (!result.text.trim()) {
+        const suffix = result.error ? `: ${result.error.message}` : '';
+        const timeoutHint = result.stopReason === 'timeout' ? ` after ${timeoutMs}ms` : '';
+        throw new Error(`workflow generation failed (${result.stopReason}${timeoutHint})${suffix}`);
+      }
+      return result.text;
+    },
   });
-
-  if (!result.text.trim()) {
-    const suffix = result.error ? `: ${result.error.message}` : '';
-    throw new Error(`workflow generation failed (${result.stopReason})${suffix}`);
-  }
-  return parseWorkflowGeneration(result.text);
 }

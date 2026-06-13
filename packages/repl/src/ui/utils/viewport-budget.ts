@@ -72,6 +72,7 @@ export interface ViewportBudgetOptions {
    * Bug filed in v0.7.38 user-test session.
    */
   todoSurfaceRows?: number;
+  workflowSurfaceRows?: number;
   /**
    * Whether the activityBar slot (containing the spinner + activity
    * verb + "X/N completed" counter) is rendered at all. The slot
@@ -118,6 +119,7 @@ export interface ViewportBudgetResult {
   reviewHintRows: number;
   /** Rows reserved for TodoListSurface in the footer (0 when hidden). */
   todoSurfaceRows: number;
+  workflowSurfaceRows: number;
   slots: ViewportBudgetSlot[];
 }
 
@@ -178,9 +180,11 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     maxVisibleSelectOptions = 5,
     reviewHint,
     todoSurfaceRows: todoSurfaceRowsRaw = 0,
+    workflowSurfaceRows: workflowSurfaceRowsRaw = 0,
     activityBarVisible = false,
   } = options;
   const todoSurfaceRows = Math.max(0, Math.floor(todoSurfaceRowsRaw));
+  const workflowSurfaceRows = Math.max(0, Math.floor(workflowSurfaceRowsRaw));
 
   const headerRows = footerHeaderText
     ? wrapLineCount(footerHeaderText, Math.max(1, terminalWidth - 2))
@@ -312,6 +316,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
   const footerRows =
     headerRows +
     activityRows +
+    workflowSurfaceRows +
     todoSurfaceRows +
     pendingInputRows +
     stashNoticeRows +
@@ -361,6 +366,7 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     visibleSelectOptions,
     reviewHintRows,
     todoSurfaceRows,
+    workflowSurfaceRows,
     slots,
   };
 }

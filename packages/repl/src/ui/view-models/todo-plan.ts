@@ -96,6 +96,25 @@ export interface TodoPlanViewModel {
   readonly totalCount: number;
 }
 
+export function formatTodoPlanViewModelForTranscript(
+  viewModel: TodoPlanViewModel,
+): readonly string[] {
+  if (!viewModel.shouldRender || viewModel.rows.length === 0) {
+    return [];
+  }
+
+  const lines = [
+    `Plan ${viewModel.completedCount}/${viewModel.totalCount} completed`,
+  ];
+
+  for (const row of viewModel.rows) {
+    const badge = row.evaluatorBadge ? ` ${row.evaluatorBadge}` : "";
+    lines.push(`${row.symbol} ${row.text}${badge}`);
+  }
+
+  return lines;
+}
+
 export interface BuildTodoPlanOptions {
   /**
    * Current epoch ms. FEATURE_151 (v0.7.38): no longer consulted by the

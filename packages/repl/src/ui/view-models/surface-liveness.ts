@@ -31,6 +31,8 @@ export interface BuildPromptActivityTextOptions {
   isLoading: boolean;
   streamingState: SurfaceLivenessStreamingState;
   managedState?: SurfaceLivenessManagedState;
+  workflowBuilderMessage?: string;
+  backgroundWorkflowMessage?: string;
   waitingReason?: PromptWaitingReason;
 }
 
@@ -83,6 +85,22 @@ export function buildPromptActivityViewModel(
       kind: "waiting",
       text: formatPromptWaitingText(options.waitingReason),
       showSpinner: false,
+    };
+  }
+
+  if (options.workflowBuilderMessage) {
+    return {
+      kind: "busy",
+      text: options.workflowBuilderMessage,
+      showSpinner: true,
+    };
+  }
+
+  if (options.backgroundWorkflowMessage) {
+    return {
+      kind: "busy",
+      text: options.backgroundWorkflowMessage,
+      showSpinner: true,
     };
   }
 

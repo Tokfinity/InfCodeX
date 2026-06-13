@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CurrentConfig } from '../../interactive/commands.js';
+import type { KeyInfo } from '../types.js';
 
 const {
   shortcutHandlers,
   saveConfigMock,
 } = vi.hoisted(() => ({
-  shortcutHandlers: new Map<string, () => boolean>(),
+  shortcutHandlers: new Map<string, (keyInfo?: KeyInfo) => boolean | void>(),
   saveConfigMock: vi.fn(),
 }));
 
@@ -13,7 +14,7 @@ const {
 // from `./useShortcut.js` rather than the barrel `./index.js` to avoid the
 // cycle — mock the concrete path so the hook is intercepted at the source.
 vi.mock('./useShortcut.js', () => ({
-  useShortcut: (actionId: string, handler: () => boolean) => {
+  useShortcut: (actionId: string, handler: (keyInfo?: KeyInfo) => boolean | void) => {
     shortcutHandlers.set(actionId, handler);
   },
 }));
@@ -23,6 +24,19 @@ vi.mock('../../common/utils.js', () => ({
 }));
 
 import { GlobalShortcuts } from './GlobalShortcuts.js';
+import { DEFAULT_SHORTCUTS } from './defaultShortcuts.js';
+
+function createKey(overrides: Partial<KeyInfo>): KeyInfo {
+  return {
+    name: '',
+    sequence: '',
+    ctrl: false,
+    meta: false,
+    shift: false,
+    insertable: false,
+    ...overrides,
+  };
+}
 
 describe('GlobalShortcuts', () => {
   beforeEach(() => {
@@ -30,7 +44,7 @@ describe('GlobalShortcuts', () => {
     saveConfigMock.mockReset();
   });
 
-  it('lets Alt+M toggle agent mode and persist the change', () => {
+  it('lets Alt+M cycle agent mode AMA -> AMAW -> SA -> AMA and persist each change', () => {
     let currentConfig: CurrentConfig = {
       provider: 'openai',
       model: 'gpt-5.4',
@@ -43,32 +57,47 @@ describe('GlobalShortcuts', () => {
     const setShowHelp = vi.fn();
     const onSetAgentMode = vi.fn();
 
-    GlobalShortcuts({
-      currentConfig,
-      setCurrentConfig: (updater) => {
-        currentConfig =
-          typeof updater === 'function'
-            ? updater(currentConfig)
-            : updater;
-      },
-      isLoading: false,
-      abort: vi.fn(),
-      stopThinking: vi.fn(),
-      clearThinkingContent: vi.fn(),
-      setCurrentTool: vi.fn(),
-      setIsLoading: vi.fn(),
-      onToggleHelp: vi.fn(),
-      setShowHelp,
-      onSetAgentMode,
-      isInputEmpty: true,
-    });
+    const renderShortcuts = () => {
+      GlobalShortcuts({
+        currentConfig,
+        setCurrentConfig: (updater) => {
+          currentConfig =
+            typeof updater === 'function'
+              ? updater(currentConfig)
+              : updater;
+        },
+        isLoading: false,
+        abort: vi.fn(),
+        stopThinking: vi.fn(),
+        clearThinkingContent: vi.fn(),
+        setCurrentTool: vi.fn(),
+        setIsLoading: vi.fn(),
+        onToggleHelp: vi.fn(),
+        setShowHelp,
+        onSetAgentMode,
+        isInputEmpty: true,
+      });
+      return shortcutHandlers.get('toggleAgentMode');
+    };
 
-    const handler = shortcutHandlers.get('toggleAgentMode');
+    let handler = renderShortcuts();
     expect(handler).toBeDefined();
     expect(handler?.()).toBe(true);
+    expect(currentConfig.agentMode).toBe('amaw');
+    expect(saveConfigMock).toHaveBeenLastCalledWith({ agentMode: 'amaw' });
+    expect(onSetAgentMode).toHaveBeenLastCalledWith('amaw');
+
+    handler = renderShortcuts();
+    expect(handler?.()).toBe(true);
     expect(currentConfig.agentMode).toBe('sa');
-    expect(saveConfigMock).toHaveBeenCalledWith({ agentMode: 'sa' });
-    expect(onSetAgentMode).toHaveBeenCalledWith('sa');
+    expect(saveConfigMock).toHaveBeenLastCalledWith({ agentMode: 'sa' });
+    expect(onSetAgentMode).toHaveBeenLastCalledWith('sa');
+
+    handler = renderShortcuts();
+    expect(handler?.()).toBe(true);
+    expect(currentConfig.agentMode).toBe('ama');
+    expect(saveConfigMock).toHaveBeenLastCalledWith({ agentMode: 'ama' });
+    expect(onSetAgentMode).toHaveBeenLastCalledWith('ama');
     expect(setShowHelp).toHaveBeenCalledWith(false);
   });
 
@@ -317,5 +346,94 @@ describe('GlobalShortcuts', () => {
     expect(toggleThinking?.()).toBe(false);
     expect(saveConfigMock).not.toHaveBeenCalled();
     expect(setShowHelp).not.toHaveBeenCalled();
+  });
+
+  it('interrupts an active run and clears live state', () => {
+    const currentConfig: CurrentConfig = {
+      provider: 'openai',
+      model: 'gpt-5.4',
+      thinking: false,
+      reasoningMode: 'off',
+      agentMode: 'ama',
+      permissionMode: 'accept-edits',
+    };
+    const abort = vi.fn();
+    const stopThinking = vi.fn();
+    const clearThinkingContent = vi.fn();
+    const setCurrentTool = vi.fn();
+    const setIsLoading = vi.fn();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    GlobalShortcuts({
+      currentConfig,
+      setCurrentConfig: vi.fn(),
+      isLoading: true,
+      abort,
+      stopThinking,
+      clearThinkingContent,
+      setCurrentTool,
+      setIsLoading,
+      onToggleHelp: vi.fn(),
+      setShowHelp: vi.fn(),
+      isInputEmpty: true,
+    });
+
+    expect(shortcutHandlers.get('interrupt')?.()).toBe(true);
+    expect(abort).toHaveBeenCalledOnce();
+    expect(stopThinking).toHaveBeenCalledOnce();
+    expect(clearThinkingContent).toHaveBeenCalledOnce();
+    expect(setCurrentTool).toHaveBeenCalledWith(undefined);
+    expect(setIsLoading).toHaveBeenCalledWith(false);
+    logSpy.mockRestore();
+  });
+
+  it('lets dialog Escape stay local while keeping Ctrl+C as a hard interrupt', () => {
+    const currentConfig: CurrentConfig = {
+      provider: 'openai',
+      model: 'gpt-5.4',
+      thinking: false,
+      reasoningMode: 'off',
+      agentMode: 'ama',
+      permissionMode: 'accept-edits',
+    };
+    const abort = vi.fn();
+    const stopThinking = vi.fn();
+    const clearThinkingContent = vi.fn();
+    const setCurrentTool = vi.fn();
+    const setIsLoading = vi.fn();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    GlobalShortcuts({
+      currentConfig,
+      setCurrentConfig: vi.fn(),
+      isLoading: true,
+      abort,
+      stopThinking,
+      clearThinkingContent,
+      setCurrentTool,
+      setIsLoading,
+      onToggleHelp: vi.fn(),
+      setShowHelp: vi.fn(),
+      isInteractiveDialogActive: true,
+      isInputEmpty: true,
+    });
+
+    const interrupt = shortcutHandlers.get('interrupt');
+    expect(interrupt?.(createKey({ name: 'escape' }))).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
+
+    expect(interrupt?.(createKey({ name: 'c', sequence: '\u0003', ctrl: true }))).toBe(true);
+    expect(abort).toHaveBeenCalledOnce();
+    expect(stopThinking).toHaveBeenCalledOnce();
+    expect(clearThinkingContent).toHaveBeenCalledOnce();
+    expect(setCurrentTool).toHaveBeenCalledWith(undefined);
+    expect(setIsLoading).toHaveBeenCalledWith(false);
+    logSpy.mockRestore();
+  });
+
+  it('binds interrupt to both Ctrl+C and Escape while loading', () => {
+    const interrupt = DEFAULT_SHORTCUTS.find((shortcut) => shortcut.id === 'interrupt');
+    expect(interrupt?.defaultBindings).toContainEqual({ key: 'c', ctrl: true });
+    expect(interrupt?.defaultBindings).toContainEqual({ key: 'escape' });
   });
 });

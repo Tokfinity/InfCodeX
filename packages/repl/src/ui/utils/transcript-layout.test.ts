@@ -39,6 +39,25 @@ function renderedText(model: ReturnType<typeof buildTranscriptRenderModel>): str
   return [...model.rows, ...model.previewRows].map((row) => row.text).join("\n");
 }
 
+describe("transcript ANSI sanitization", () => {
+  it("strips command color sequences before rows are wrapped or selected", () => {
+    const model = buildTranscriptRenderModel({
+      items: [{
+        id: "ansi-info",
+        type: "info",
+        timestamp: 1,
+        icon: "\u2713",
+        text: "\u001b[36mgenerated-fast-audit\u001b[39m \u001b[2mrun-mqc5v6ys\u001b[22m - completed",
+      }],
+      viewportWidth: 120,
+    });
+
+    const text = renderedText(model);
+    expect(text).toContain("generated-fast-audit run-mqc5v6ys - completed");
+    expect(text).not.toContain("\u001b[");
+  });
+});
+
 describe("splitInlineLedgerModel (FEATURE_214 bounded live + unified line commit source)", () => {
   const row = (text: string, key = `k-${text}`) => ({ key, text });
   const sec = (key: string, texts: string[]) => ({ key, rows: texts.map((t) => row(t)) });
@@ -407,6 +426,34 @@ describe("transcript-layout", () => {
     expect(text).toContain("partial response");
     expect(text).toContain("read_file");
     expect(text).toContain("* tools: read_file");
+  });
+
+  it("renders copyable live status lines when live progress rows are enabled", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 80,
+      liveStatusLines: [
+        "workflow feature-audit (run-123) - 1/2 active",
+        "Plan 1/3 completed",
+      ],
+      showLiveProgressRows: true,
+    });
+
+    const text = rows.map((row) => row.text).join("\n");
+    expect(text).toContain("Live status");
+    expect(text).toContain("workflow feature-audit");
+    expect(text).toContain("Plan 1/3 completed");
+  });
+
+  it("does not render live status lines when live progress rows are disabled", () => {
+    const rows = buildTranscriptRows({
+      items: [],
+      viewportWidth: 80,
+      liveStatusLines: ["Plan 1/3 completed"],
+      showLiveProgressRows: false,
+    });
+
+    expect(rows.map((row) => row.text).join("\n")).not.toContain("Plan 1/3 completed");
   });
 
   // FEATURE_149 (v0.7.38) — activeForm-driven spinner. Mirrors CC's

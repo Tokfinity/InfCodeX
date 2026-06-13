@@ -187,7 +187,7 @@ export class ShortcutsRegistry {
   public executeShortcut(keyInfo: KeyInfo, context: ShortcutContext): boolean {
     const match = this.findMatchingShortcut(keyInfo, context);
     if (match?.handler) {
-      const result = match.handler();
+      const result = match.handler(keyInfo);
       return result === true;
     }
     return false;

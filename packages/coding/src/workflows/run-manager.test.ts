@@ -87,6 +87,7 @@ describe('WorkflowRunManager', () => {
       workflow: 'quick',
       status: 'completed',
       totalSpawned: 1,
+      resultText: 'ok',
     });
   });
 

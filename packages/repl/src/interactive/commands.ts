@@ -50,6 +50,7 @@ import {
   saveConfig,
 } from '../common/utils.js';
 import { savePermissionModeUser } from '../common/permission-config.js';
+import { nextAgentMode } from '../common/agent-mode.js';
 import { compact } from '@kodax-ai/agent';
 import type { CompactionConfig } from '@kodax-ai/agent';
 import { loadCompactionConfig } from '../common/compaction-config.js';
@@ -1576,7 +1577,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       const raw = args[0]?.toLowerCase();
       const nextMode: KodaXAgentMode | undefined =
         raw === 'toggle'
-          ? (currentConfig.agentMode === 'sa' ? 'ama' : 'sa')
+          ? nextAgentMode(currentConfig.agentMode)
           : raw === 'ama' || raw === 'sa' || raw === 'amaw'
             ? raw
             : raw === 'ama-workflow'
@@ -1600,7 +1601,7 @@ export const BUILTIN_COMMANDS: Command[] = [
       console.log(chalk.dim('  /agent-mode amaw       ') + 'Enable AMA Workflow mode; generated workflows may start automatically');
       console.log(chalk.dim('  /agent-mode ama-workflow') + 'Alias for /agent-mode amaw');
       console.log(chalk.dim('  /agent-mode sa         ') + 'Force single-agent execution');
-      console.log(chalk.dim('  /agent-mode toggle     ') + 'Switch between AMA and SA; from AMAW it switches to SA');
+      console.log(chalk.dim('  /agent-mode toggle     ') + 'Cycle AMA -> AMAW -> SA');
       console.log(chalk.dim('  /am                    ') + 'Alias for /agent-mode');
       console.log();
       console.log(chalk.bold('Description:'));

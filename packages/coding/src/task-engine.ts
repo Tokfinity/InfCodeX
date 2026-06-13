@@ -1,7 +1,7 @@
 /**
  * FEATURE_076 + FEATURE_084 (v0.7.26):
  *
- * `runManagedTask` is the single public entry point for AMA/SA task runs.
+ * `runManagedTask` is the single public entry point for AMA/AMAW/SA task runs.
  * Its body collapsed dramatically in Shard 6d when the legacy state-machine
  * orchestration (formerly ~6000 lines of role dispatch, protocol parsing,
  * harness escalation, budget accounting, and manual evaluator reshaping)

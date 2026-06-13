@@ -228,6 +228,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const artifacts: WorkflowArtifactRef[] = [];
   const releaseByTask = new Map<string, () => void>();
   const activeTaskIds = new Set<string>();
+  const terminalTaskIds = new Set<string>();
   let activeReleaseOperations = 0;
 
   const checkAbort = (): void => {
@@ -250,7 +251,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
   const checkAgentCap = (): void => {
     if (totalSpawned >= maxAgents) {
-      throw new WorkflowLimitError(`maxAgents cap (${maxAgents}) reached`);
+      throw new WorkflowLimitError(`maxAgents lifetime cap (${maxAgents}) reached`);
     }
   };
 
@@ -302,6 +303,17 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const terminalEventType = (s: WorkflowTaskResult['status']): WorkflowEventType =>
     s === 'stopped' ? 'agent_stopped' : 'agent_completed';
 
+  const emitTerminalTaskEvent = (
+    taskId: string,
+    type: WorkflowEventType,
+    data: Record<string, unknown>,
+  ): boolean => {
+    if (terminalTaskIds.has(taskId)) return false;
+    terminalTaskIds.add(taskId);
+    recorder.emit(type, data);
+    return true;
+  };
+
   const doWait = async (
     taskId: string,
     opts2: WorkflowWaitOptions | undefined,
@@ -310,12 +322,13 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     if (releasesCapacity) activeReleaseOperations += 1;
     try {
       const result = await opts.backend.wait(taskId, opts2);
-      accrue(result);
-      recorder.emit(terminalEventType(result.status), {
+      if (emitTerminalTaskEvent(result.taskId, terminalEventType(result.status), {
         taskId: result.taskId,
         name: result.name,
         status: result.status,
-      });
+      })) {
+        accrue(result);
+      }
       return result;
     } finally {
       if (releasesCapacity) activeReleaseOperations -= 1;
@@ -385,7 +398,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       } finally {
         if (releasesCapacity) activeReleaseOperations -= 1;
         releaseTaskCapacity(taskId);
-        recorder.emit('agent_stopped', { taskId, reason });
+        emitTerminalTaskEvent(taskId, 'agent_stopped', { taskId, reason });
       }
     },
 
@@ -459,7 +472,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
             errors.push(`${taskId}: stop timed out after ${STOP_ACTIVE_TASK_TIMEOUT_MS}ms`);
           }
           releaseTaskCapacity(taskId);
-          recorder.emit('agent_stopped', {
+          emitTerminalTaskEvent(taskId, 'agent_stopped', {
             taskId,
             reason,
             ...(stopError !== undefined ? { error: stopError } : {}),

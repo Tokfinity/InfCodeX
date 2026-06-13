@@ -161,23 +161,22 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
  * FEATURE_111 absorbed soft-pause UX (v0.7.36 FEATURE_115 Phase 1D).
  *
  * The "single ESC during a run while the input is empty and no pending
- * input is queued" path returns `arm-double-escape`. This is the
- * absorbed FEATURE_111 soft-pause entry point — it is NOT a no-op:
+ * input is queued" path interrupts immediately. This supersedes the older
+ * double-ESC requirement, which was unreliable in some terminals because
+ * fast ESC presses can be coalesced into escape-sequence parsing.
  *
- *   1. The run continues in the background (the agent does not need
- *      runner-level pause; the substrate is a queue, not a lock).
- *   2. The user can type a follow-up; on Enter, `addPendingInput`
+ *   1. ESC on an empty prompt interrupts the active run.
+ *   2. If queued follow-ups exist, ESC removes the latest queued item.
+ *   3. If the user is typing a follow-up, prompt input owns ESC for editing.
+ *   4. The user can type a follow-up; on Enter, `addPendingInput`
  *      enqueues into both the React `pendingInputs` array AND the
  *      `@kodax-ai/agent` `MessageQueue` main-thread `user` slice
  *      (FEATURE_115 Phase 1B mirror in `StreamingContext`).
- *   3. At the next iteration boundary, `runner-driven.ts` consults
+ *   5. At the next iteration boundary, `runner-driven.ts` consults
  *      both `events.hasPendingInputs?.()` and
  *      `getMessageQueue().has({ maxPriority: 'user' })`
  *      (FEATURE_115 Phase 1C) and yields the loop early so the outer
  *      REPL can fold the queued input into the next round.
- *   4. A second ESC within `doubleEscapeIntervalMs` upgrades to
- *      `interrupt` (full abort) — the existing double-ESC contract.
- *
  * This design intentionally keeps the runner unaware of a pause flag:
  * the queue + iteration-boundary yield is enough to deliver the FEATURE_111
  * UX without introducing a stateful pause/resume machinery in the agent
@@ -187,8 +186,7 @@ export function shouldDeferInterruptToTranscriptSelectionCopy(
 export type StreamingInterruptAction =
   | { kind: "none" }
   | { kind: "interrupt" }
-  | { kind: "pop-pending-input" }
-  | { kind: "arm-double-escape" };
+  | { kind: "pop-pending-input" };
 
 export interface ResolveStreamingInterruptActionOptions {
   keyName: string | undefined;
@@ -198,8 +196,42 @@ export interface ResolveStreamingInterruptActionOptions {
   isInputEmpty: boolean;
   pendingInputCount: number;
   hasTranscriptTextSelection: boolean;
-  timeSinceLastEscapeMs: number;
-  doubleEscapeIntervalMs: number;
+}
+
+export interface ResolveWorkflowInterruptOptions {
+  keyName: string | undefined;
+  ctrl: boolean;
+  isTranscriptMode: boolean;
+  isAwaitingUserInteraction: boolean;
+  isInputEmpty: boolean;
+  pendingInputCount: number;
+  hasTranscriptTextSelection: boolean;
+  hasActiveWorkflow: boolean;
+}
+
+export function shouldStopWorkflowFromInterruptKey(
+  options: ResolveWorkflowInterruptOptions,
+): boolean {
+  if (!options.hasActiveWorkflow) {
+    return false;
+  }
+
+  if (options.ctrl && options.keyName === "c") {
+    return !shouldDeferInterruptToTranscriptSelectionCopy({
+      isTranscriptMode: options.isTranscriptMode,
+      hasTextSelection: options.hasTranscriptTextSelection,
+    });
+  }
+
+  if (options.keyName !== "escape") {
+    return false;
+  }
+
+  if (options.isTranscriptMode || options.isAwaitingUserInteraction) {
+    return false;
+  }
+
+  return options.isInputEmpty && options.pendingInputCount === 0;
 }
 
 export function resolveStreamingInterruptAction(
@@ -230,7 +262,5 @@ export function resolveStreamingInterruptAction(
     return { kind: "none" };
   }
 
-  return options.timeSinceLastEscapeMs < options.doubleEscapeIntervalMs
-    ? { kind: "interrupt" }
-    : { kind: "arm-double-escape" };
+  return { kind: "interrupt" };
 }

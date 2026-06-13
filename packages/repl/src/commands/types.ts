@@ -91,6 +91,26 @@ export interface CommandCallbacks {
   reloadAgentsFiles?: () => Promise<AgentsFile[]>;
   confirm?: (message: string) => Promise<boolean>;
   readline?: readline.Interface;
+  onWorkflowBuilderEvent?: (event: {
+    readonly stage: string;
+    readonly message: string;
+  }) => void;
+  onWorkflowRunMessage?: (event: {
+    readonly type: 'info' | 'success' | 'error' | 'event';
+    readonly text: string;
+  }) => void;
+  onWorkflowRunUpdate?: (event: {
+    readonly runId: string;
+    readonly workflow: string;
+    readonly status: 'running' | 'completed' | 'failed' | 'stopped';
+    readonly phase?: string;
+    readonly activeAgents: readonly string[];
+    readonly totalSpawned: number;
+    readonly completedAgents: number;
+    readonly failedAgents: number;
+    readonly stoppedAgents: number;
+    readonly message?: string;
+  }) => void;
   startCompacting?: () => void;
   stopCompacting?: () => void;
   /**

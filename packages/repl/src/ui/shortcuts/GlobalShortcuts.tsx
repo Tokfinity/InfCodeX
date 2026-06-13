@@ -18,7 +18,9 @@ import {
 import { useShortcut } from './useShortcut.js';
 import type { CurrentConfig } from '../../interactive/commands.js';
 import type { PermissionMode } from '../../permission/types.js';
+import { nextAgentMode } from '../../common/agent-mode.js';
 import { saveConfig } from '../../common/utils.js';
+import type { KeyInfo } from '../types.js';
 
 export interface GlobalShortcutsProps {
   currentConfig: CurrentConfig;
@@ -65,9 +67,15 @@ export function GlobalShortcuts({
   isInputEmpty,
   onSavePermissionMode,
 }: GlobalShortcutsProps): null {
+  const isCtrlCInterrupt = (keyInfo: KeyInfo | undefined): boolean =>
+    keyInfo?.name?.toLowerCase() === 'c' && keyInfo.ctrl === true;
+
   useShortcut(
     'interrupt',
-    () => {
+    (keyInfo) => {
+      if (isInteractiveDialogActive && !isCtrlCInterrupt(keyInfo)) {
+        return false;
+      }
       if (isLoading) {
         abort();
         stopThinking();
@@ -170,7 +178,7 @@ export function GlobalShortcuts({
     if (isInteractiveDialogActive) {
       return false;
     }
-    const nextMode: KodaXAgentMode = currentConfig.agentMode === 'sa' ? 'ama' : 'sa';
+    const nextMode: KodaXAgentMode = nextAgentMode(currentConfig.agentMode);
 
     setCurrentConfig((prev) => ({ ...prev, agentMode: nextMode }));
     saveConfig({ agentMode: nextMode });

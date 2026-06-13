@@ -12,6 +12,7 @@ import {
   MIN_ITEMS_TO_RENDER,
   POST_COMPLETION_LINGER_MS,
   buildTodoPlanViewModel,
+  formatTodoPlanViewModelForTranscript,
   isPlanFullyClosed,
 } from "./todo-plan.js";
 
@@ -331,6 +332,27 @@ describe("counts", () => {
     const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
     expect(vm.completedCount).toBe(2);
     expect(vm.totalCount).toBe(5);
+  });
+});
+
+describe("formatTodoPlanViewModelForTranscript", () => {
+  it("serializes the visible plan rows into stable copy text", () => {
+    const items: TodoItem[] = [
+      { ...makeItem("todo_1", "Compile", "in_progress"), evaluator: "build" },
+      makeItem("todo_2", "Run tests", "pending"),
+    ];
+    const vm = buildTodoPlanViewModel(items, { now: NOW, lastAllCompletedAt: null });
+
+    expect(formatTodoPlanViewModelForTranscript(vm)).toEqual([
+      "Plan 0/2 completed",
+      `${vm.rows[0]?.symbol} Compile [build]`,
+      `${vm.rows[1]?.symbol} Run tests`,
+    ]);
+  });
+
+  it("returns no lines when the plan surface is hidden", () => {
+    const vm = buildTodoPlanViewModel([], { now: NOW, lastAllCompletedAt: null });
+    expect(formatTodoPlanViewModelForTranscript(vm)).toEqual([]);
   });
 });
 

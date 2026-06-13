@@ -207,4 +207,41 @@ describe('help command output', () => {
     expect(output).toContain('/agent-mode amaw');
     expect(output).toContain('/workflow');
   });
+
+  it('cycles /agent-mode toggle through AMA, AMAW, and SA', async () => {
+    const context = await createInteractiveContext({});
+    const setAgentMode = vi.fn();
+    const callbacks = {
+      saveSession: vi.fn(async () => {}),
+      exit: vi.fn(),
+      setAgentMode,
+    } as unknown as CommandCallbacks;
+    const baseConfig = {
+      provider: 'openai',
+      thinking: false,
+      reasoningMode: 'off',
+      permissionMode: 'accept-edits',
+    } as const;
+
+    await executeCommand(
+      { command: 'agent-mode', args: ['toggle'] },
+      context,
+      callbacks,
+      { ...baseConfig, agentMode: 'ama' },
+    );
+    await executeCommand(
+      { command: 'agent-mode', args: ['toggle'] },
+      context,
+      callbacks,
+      { ...baseConfig, agentMode: 'amaw' },
+    );
+    await executeCommand(
+      { command: 'agent-mode', args: ['toggle'] },
+      context,
+      callbacks,
+      { ...baseConfig, agentMode: 'sa' },
+    );
+
+    expect(setAgentMode.mock.calls.map((call) => call[0])).toEqual(['amaw', 'sa', 'ama']);
+  });
 });

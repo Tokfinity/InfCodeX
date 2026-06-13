@@ -1,4 +1,5 @@
 import type { HistoryItem, HistoryItemToolGroup } from "../types.js";
+import { stripAnsi } from "./strip-ansi.js";
 
 export interface TranscriptSearchMatch {
   itemId: string;
@@ -24,10 +25,10 @@ function buildSearchText(item: HistoryItem): string {
         .map((tool) => {
           const parts = [tool.name];
           if (typeof tool.output === "string") {
-            parts.push(tool.output);
+            parts.push(stripAnsi(tool.output));
           }
           if (tool.error) {
-            parts.push(tool.error);
+            parts.push(stripAnsi(tool.error));
           }
           return parts.join("\n");
         })
@@ -39,7 +40,7 @@ function buildSearchText(item: HistoryItem): string {
     case "error":
     case "info":
     case "hint":
-      return item.text;
+      return stripAnsi(item.text);
     default:
       return "";
   }
@@ -272,10 +273,10 @@ export function buildTranscriptCopyText(item: HistoryItem | undefined): string |
             parts.push(`Input: ${JSON.stringify(tool.input)}`);
           }
           if (typeof tool.output === "string" && tool.output.trim()) {
-            parts.push(`Output: ${tool.output}`);
+            parts.push(`Output: ${stripAnsi(tool.output)}`);
           }
           if (tool.error) {
-            parts.push(`Error: ${tool.error}`);
+            parts.push(`Error: ${stripAnsi(tool.error)}`);
           }
           return parts.join("\n");
         })
@@ -287,7 +288,7 @@ export function buildTranscriptCopyText(item: HistoryItem | undefined): string |
     case "error":
     case "info":
     case "hint":
-      return item.text;
+      return stripAnsi(item.text);
     default:
       return undefined;
   }

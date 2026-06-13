@@ -7,6 +7,7 @@ import {
   shouldDeferInterruptToTranscriptSelectionCopy,
   shouldHandleManagedTranscriptMouse,
   shouldHandleManagedTranscriptWheel,
+  shouldStopWorkflowFromInterruptKey,
 } from "./transcript-input-policy.js";
 
 describe("transcript-input-policy", () => {
@@ -163,8 +164,6 @@ describe("transcript-input-policy", () => {
       isInputEmpty: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: true,
-      timeSinceLastEscapeMs: 0,
-      doubleEscapeIntervalMs: 500,
     })).toEqual({ kind: "none" });
 
     expect(resolveStreamingInterruptAction({
@@ -175,8 +174,6 @@ describe("transcript-input-policy", () => {
       isInputEmpty: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
-      timeSinceLastEscapeMs: 0,
-      doubleEscapeIntervalMs: 500,
     })).toEqual({ kind: "interrupt" });
 
     expect(resolveStreamingInterruptAction({
@@ -187,8 +184,6 @@ describe("transcript-input-policy", () => {
       isInputEmpty: true,
       pendingInputCount: 1,
       hasTranscriptTextSelection: false,
-      timeSinceLastEscapeMs: 0,
-      doubleEscapeIntervalMs: 500,
     })).toEqual({ kind: "pop-pending-input" });
 
     expect(resolveStreamingInterruptAction({
@@ -199,8 +194,65 @@ describe("transcript-input-policy", () => {
       isInputEmpty: true,
       pendingInputCount: 0,
       hasTranscriptTextSelection: false,
-      timeSinceLastEscapeMs: 700,
-      doubleEscapeIntervalMs: 500,
-    })).toEqual({ kind: "arm-double-escape" });
+    })).toEqual({ kind: "interrupt" });
+  });
+
+  it("routes Esc and Ctrl+C to an active background workflow without waiting for foreground loading", () => {
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "escape",
+      ctrl: false,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: false,
+      hasActiveWorkflow: true,
+    })).toBe(true);
+
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "c",
+      ctrl: true,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: false,
+      hasActiveWorkflow: true,
+    })).toBe(true);
+  });
+
+  it("keeps workflow interrupt keys out of text editing, pending input, and transcript selection", () => {
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "escape",
+      ctrl: false,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: false,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: false,
+      hasActiveWorkflow: true,
+    })).toBe(false);
+
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "escape",
+      ctrl: false,
+      isTranscriptMode: false,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      pendingInputCount: 1,
+      hasTranscriptTextSelection: false,
+      hasActiveWorkflow: true,
+    })).toBe(false);
+
+    expect(shouldStopWorkflowFromInterruptKey({
+      keyName: "c",
+      ctrl: true,
+      isTranscriptMode: true,
+      isAwaitingUserInteraction: false,
+      isInputEmpty: true,
+      pendingInputCount: 0,
+      hasTranscriptTextSelection: true,
+      hasActiveWorkflow: true,
+    })).toBe(false);
   });
 });

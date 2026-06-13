@@ -70,6 +70,48 @@ describe("surface-liveness", () => {
     })).toContain("Thinking");
   });
 
+  it("surfaces workflow builder status as spinner activity", () => {
+    expect(buildPromptActivityViewModel({
+      isTranscriptMode: false,
+      isLoading: false,
+      workflowBuilderMessage: "Workflow - generating harness",
+      streamingState: {
+        isThinking: true,
+        thinkingCharCount: 42,
+        currentTool: undefined,
+        activeToolCalls: [],
+        toolInputCharCount: 0,
+        toolInputContent: "",
+        isCompacting: false,
+      },
+    })).toEqual({
+      kind: "busy",
+      text: "Workflow - generating harness",
+      showSpinner: true,
+    });
+  });
+
+  it("surfaces a background workflow while the prompt is otherwise idle", () => {
+    expect(buildPromptActivityViewModel({
+      isTranscriptMode: false,
+      isLoading: false,
+      backgroundWorkflowMessage: "Workflow feature-audit - fan-out",
+      streamingState: {
+        isThinking: false,
+        thinkingCharCount: 0,
+        currentTool: undefined,
+        activeToolCalls: [],
+        toolInputCharCount: 0,
+        toolInputContent: "",
+        isCompacting: false,
+      },
+    })).toEqual({
+      kind: "busy",
+      text: "Workflow feature-audit - fan-out",
+      showSpinner: true,
+    });
+  });
+
   it("treats confirmation and ui requests as waiting instead of busy", () => {
     expect(buildPromptActivityViewModel({
       isTranscriptMode: false,

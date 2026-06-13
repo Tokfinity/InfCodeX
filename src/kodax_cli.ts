@@ -136,7 +136,7 @@ const CLI_HELP_TOPICS: Record<string, () => void> = {
     console.log(chalk.dim('  -m, --provider <name>        ') + 'Provider to use');
     console.log(chalk.dim('  --model <name>               ') + 'Model override');
     console.log(chalk.dim('  --reasoning <mode>           ') + 'Reasoning mode: off, auto, quick, balanced, deep');
-    console.log(chalk.dim('  --agent-mode <mode>          ') + 'Agent mode: ama, sa');
+    console.log(chalk.dim('  --agent-mode <mode>          ') + 'Agent mode: ama, amaw, sa');
     console.log(chalk.dim('  --repo-intelligence <mode>   ') + 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native');
     console.log(chalk.dim('  --repo-intelligence-trace    ') + 'Emit repo intelligence trace metadata/logging');
     console.log(chalk.dim('  --repointel-endpoint <url>   ') + 'Premium daemon endpoint override');
@@ -501,7 +501,7 @@ function showBasicHelp(): void {
   console.log('  --model NAME            Model override for the selected provider');
   console.log('  -t, --thinking          Compatibility alias for --reasoning auto');
   console.log('  --reasoning MODE        Reasoning mode: off, auto, quick, balanced, deep');
-  console.log('  --agent-mode MODE       Agent mode: ama, sa');
+  console.log('  --agent-mode MODE       Agent mode: ama, amaw, sa');
   console.log('  -y, --auto              Backward-compat alias; no effect in non-REPL CLI');
   console.log('  -s, --session OP        Legacy session operations: list, resume, delete <id>, delete-all, or raw session ID');
   console.log('  --no-session            Disable session persistence (print mode only)');
@@ -581,7 +581,7 @@ async function main() {
     .option('--model <name>', 'Model override')
     .option('-t, --thinking', 'Compatibility alias for --reasoning auto')
     .option('--reasoning <mode>', 'Reasoning mode: off, auto, quick, balanced, deep')
-    .option('--agent-mode <mode>', 'Agent mode: ama, sa', parseAgentModeOption)
+    .option('--agent-mode <mode>', 'Agent mode: ama, amaw, sa', parseAgentModeOption)
     .option('--repo-intelligence <mode>', 'Repo intelligence mode: auto, off, oss, premium-shared, premium-native')
     .option('--repo-intelligence-trace', 'Enable repo intelligence trace metadata/logging')
     .option('--repointel-endpoint <url>', 'Premium daemon endpoint override')
@@ -604,7 +604,7 @@ async function main() {
     .action((shell: string) => {
       const providerNames = getAvailableProviderNames().join(' ');
       const reasoningModes = 'off auto quick balanced deep';
-      const agentModes = 'ama sa';
+      const agentModes = 'ama amaw sa';
 
       if (shell === 'bash') {
         console.log(`# KodaX bash completion — add to ~/.bashrc:
@@ -639,7 +639,7 @@ _kodax() {
   subcmds=(acp skill tools completion)
   providers=(${providerNames.replace(/ /g, ' ')})
   reasoning_modes=(off auto quick balanced deep)
-  agent_modes=(ama sa)
+  agent_modes=(ama amaw sa)
   repo_modes=(auto off oss premium-shared premium-native)
 
   _arguments -C \\

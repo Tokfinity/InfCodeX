@@ -14,6 +14,7 @@ import {
   resolveToolExplanationTone,
 } from "./tool-display.js";
 import { stripOuterBlankLines } from "./strip-outer-blank-lines.js";
+import { stripAnsi } from "./strip-ansi.js";
 import { truncateUserMessageForDisplay } from "./user-message-display.js";
 
 export interface PromptSurfaceRenderModelOptions {
@@ -127,7 +128,7 @@ function pushWrappedRows(
   width: number,
   style: Omit<TranscriptRow, "key" | "text">,
 ): void {
-  const lines = wrapText(text, width);
+  const lines = wrapText(stripAnsi(text), width);
   lines.forEach((line, index) => {
     rows.push({
       key: `${keyPrefix}-${index}`,

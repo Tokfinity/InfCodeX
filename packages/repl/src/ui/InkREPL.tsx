@@ -35,9 +35,16 @@ import { StashNotice } from "./components/StashNotice.js";
 import { Spinner, SpinnerStatsTail } from "./components/LoadingIndicator.js";
 import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
+import { WorkflowRunSurface } from "./components/WorkflowRunSurface.js";
 import {
   buildTodoPlanViewModel,
+  formatTodoPlanViewModelForTranscript,
 } from "./view-models/todo-plan.js";
+import {
+  buildWorkflowLiveViewModel,
+  formatWorkflowLiveViewModelForTranscript,
+  type WorkflowLiveSnapshot,
+} from "./view-models/workflow-live.js";
 import { buildFooterHeaderViewModel } from "./view-models/footer-header.js";
 import {
   UIStateProvider,
@@ -62,6 +69,7 @@ import {
 } from "./types.js";
 import { getActivePasteStore, type PastedContent } from "./utils/paste-store.js";
 import { hashPastedText, storePastedText, retrievePastedText, cleanupOldPastes } from "./utils/paste-cache.js";
+import { stripAnsi } from "./utils/strip-ansi.js";
 import {
   applySessionCompaction,
   buildSessionTree,
@@ -93,6 +101,7 @@ import {
   getRegisteredToolDefinition,
   createBashPrefixExtractor,
   decideWorkflowInvocation,
+  getDefaultWorkflowRunManager,
   resolveProvider,
   prewarmRepoIntelligenceCaches,
 } from "@kodax-ai/coding";
@@ -253,6 +262,7 @@ import {
   hasTranscriptInputActivity,
   resolveStreamingInterruptAction,
   resolveTranscriptPointerAction,
+  shouldStopWorkflowFromInterruptKey,
 } from "./utils/transcript-input-policy.js";
 import { resolveTranscriptKeyboardAction } from "./utils/transcript-key-actions.js";
 import { executeTranscriptKeyboardAction } from "./utils/transcript-interaction-controller.js";
@@ -578,6 +588,15 @@ function resolveInitialReasoningMode(
     return 'auto';
   }
   return 'off';
+}
+
+function formatCapturedConsoleOutput(args: readonly unknown[]): string {
+  return stripAnsi(args.map((arg) => (typeof arg === "string" ? arg : String(arg))).join(" "));
+}
+
+function joinCapturedConsoleOutput(lines: readonly string[]): string | undefined {
+  const text = lines.map(stripAnsi).join("\n").trimEnd();
+  return text.trim().length > 0 ? text : undefined;
 }
 
 function buildManagedTranscriptCompactText(text: string): string | undefined {
@@ -1325,6 +1344,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [transcriptSnapshot, setTranscriptSnapshot] = useState<TranscriptSnapshot | null>(null);
   const [promptSurfaceSnapshot, setPromptSurfaceSnapshot] = useState<TranscriptSnapshot | null>(null);
   const [managedTaskStatus, setManagedTaskStatus] = useState<KodaXManagedTaskStatusEvent | null>(null);
+  const [workflowBuilderMessage, setWorkflowBuilderMessage] = useState<string | null>(null);
+  const [workflowLiveStatus, setWorkflowLiveStatus] = useState<WorkflowLiveSnapshot | null>(null);
   // FEATURE_097 (v0.7.34) — todo plan surface state. Single source of
   // truth for the rendered list; the runner-side `onTodoUpdate` handler
   // does `setTodoItems(items)` directly (no managedForegroundLedger
@@ -2610,6 +2631,32 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     && !streamingState.currentResponse
     && !streamingState.thinkingContent
     && activeToolCalls.length === 0;
+  const workflowLiveViewModel = useMemo(
+    () => buildWorkflowLiveViewModel(workflowLiveStatus),
+    [workflowLiveStatus],
+  );
+  const workflowActivityText = workflowLiveViewModel.shouldRender
+    ? `Workflow ${workflowLiveViewModel.workflow}${workflowLiveViewModel.phase ? ` - ${workflowLiveViewModel.phase}` : ""}`
+    : undefined;
+  const todoPlanViewModel = useMemo(
+    () => buildTodoPlanViewModel(todoItems, {
+      now: Date.now(),
+      lastAllCompletedAt: null,
+    }),
+    [todoItems],
+  );
+  const transcriptLiveStatusLines = useMemo(() => {
+    if (!isTranscriptMode) {
+      return [] as readonly string[];
+    }
+
+    const lines: string[] = [];
+    lines.push(...formatWorkflowLiveViewModelForTranscript(workflowLiveViewModel));
+    if (isLoading && todoPlanViewModel.shouldRender) {
+      lines.push(...formatTodoPlanViewModelForTranscript(todoPlanViewModel));
+    }
+    return lines;
+  }, [isTranscriptMode, isLoading, todoPlanViewModel, workflowLiveViewModel]);
   const bannerProps = useMemo<BannerProps>(() => ({
     config: currentConfig,
     sessionId: context.sessionId,
@@ -2806,6 +2853,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         managedBudgetUsage: transcriptDisplayIsLoading ? managedTaskStatus?.budgetUsage : undefined,
         managedBudgetApprovalRequired: transcriptDisplayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
         lastLiveActivityLabel: transcriptStreamingState.lastLiveActivityLabel,
+        liveStatusLines: transcriptLiveStatusLines,
         currentTodoActiveForm,
         showFullThinking: true,
         showDetailedTools: showAllInTranscript,
@@ -2851,6 +2899,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       transcriptStreamingState.toolInputCharCount,
       transcriptStreamingState.toolInputContent,
       showAllInTranscript,
+      transcriptLiveStatusLines,
       useRendererViewportShell,
       currentTodoActiveForm,
     ],
@@ -2897,6 +2946,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           managedBudgetUsage: currentSurfaceIsLoading ? managedTaskStatus?.budgetUsage : undefined,
           managedBudgetApprovalRequired: currentSurfaceIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined,
           lastLiveActivityLabel: currentSurfaceStreamingState.lastLiveActivityLabel,
+          liveStatusLines: transcriptLiveStatusLines,
           // FEATURE_149 (v0.7.38) — spinner reads currentTodo.activeForm
           currentTodoActiveForm,
           windowed: true,
@@ -2943,6 +2993,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       terminalWidth,
       transcriptMaxLines,
       transcriptOwnsViewport,
+      transcriptLiveStatusLines,
       showAllInTranscript,
       currentTodoActiveForm,
     ],
@@ -3293,9 +3344,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           phase: managedTaskStatus?.phase,
           harnessProfile: managedTaskStatus?.harnessProfile,
           workerTitle: managedTaskStatus?.activeWorkerTitle,
-        }
+      }
         : undefined,
       waitingReason: promptWaitingReason,
+      workflowBuilderMessage: workflowBuilderMessage ?? undefined,
+      backgroundWorkflowMessage: workflowActivityText,
     }),
     [
       effectivePromptStreamingState.activeToolCalls,
@@ -3311,34 +3364,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       managedTaskStatus?.phase,
       promptWaitingReason,
       statusBarIsLoading,
+      workflowBuilderMessage,
+      workflowActivityText,
     ],
   );
   const promptBusyText = promptActivityViewModel?.text;
-
-  // FEATURE_097 (v0.7.34) — recompute the todo plan view-model whenever
-  // the underlying items snapshot changes. FEATURE_151 (v0.7.38) Slice
-  // A changes that survive: the view-model no longer hides on a
-  // 5-second linger, MIN_ITEMS_TO_RENDER drops to 1 for CC parity, and
-  // `now` / `lastAllCompletedAt` are kept on `BuildTodoPlanOptions`
-  // for back-compat but the view-model ignores them.
-  //
-  // v0.7.38 Slice C correction (2026-05-11 hotfix): the original Slice
-  // C "persistent visibility" rationale misread CC's gate composition
-  // — re-verifying `c:/Works/claudecode/src/` confirmed CC hides the
-  // list at run-end by default (Spinner-internal mount +
-  // `expandedView==='tasks'` toggle defaulting to 'none'). The surface
-  // mount is now re-gated on `isLoading` at the JSX site below, and the
-  // `useEffect([isLoading])` immediately following this hook clears
-  // `todoItems` on the true→false edge so a stale list doesn't flash
-  // back on the next prompt's first frame. See the long-form comment
-  // on the `todoSurface=` prop for verbatim CC source references.
-  const todoPlanViewModel = useMemo(
-    () => buildTodoPlanViewModel(todoItems, {
-      now: Date.now(),
-      lastAllCompletedAt: null,
-    }),
-    [todoItems],
-  );
 
   // v0.7.38 hotfix (2026-05-11) — FEATURE_151 Slice C correction.
   // Clear `todoItems` when the loading lifecycle transitions
@@ -3479,6 +3509,12 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const footerBudgetPendingInputSummary = isTranscriptMode ? undefined : pendingInputSummary;
   const footerBudgetWorkStripText = displayWorkStripText;
   const footerBudgetShowHelp = isTranscriptMode ? false : showHelp;
+  const workflowFooterRows = workflowLiveViewModel.shouldRender
+    ? workflowLiveViewModel.rows.length
+    : 0;
+  const todoFooterRows = isLoading && todoPlanViewModel.shouldRender
+    ? todoPlanViewModel.rows.length
+    : 0;
   const viewportBudget = useMemo(
     // Budget transcript, footer, overlay, status, and task slots together so
     // the viewport always receives a stable number of visible rows.
@@ -3502,7 +3538,8 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // composer.
       activityBarVisible: isTranscriptMode
         ? false
-        : Boolean(promptBusyText) || (isLoading && todoPlanViewModel.shouldRender),
+        : Boolean(promptBusyText) || workflowFooterRows > 0 || todoFooterRows > 0,
+      workflowSurfaceRows: isTranscriptMode ? 0 : workflowFooterRows,
       // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38) — TodoListSurface
       // is rendered between activityBar and composer in PromptFooter.
       // Each viewModel row is a single Ink Box (1 line). Without this
@@ -3516,9 +3553,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // empty rows when the run terminates.
       todoSurfaceRows: isTranscriptMode
         ? 0
-        : (isLoading && todoPlanViewModel.shouldRender)
-          ? todoPlanViewModel.rows.length
-          : 0,
+        : todoFooterRows,
       pendingInputSummary: footerBudgetPendingInputSummary,
       stashNoticeSummary: stashNoticeText,
       notificationSummary: footerNotificationSummary,
@@ -3561,6 +3596,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       footerBudgetInputText,
       footerHeaderSummary,
       promptBusyText,
+      isTranscriptMode,
+      workflowFooterRows,
+      todoFooterRows,
       footerBudgetPendingInputSummary,
       stashNoticeText,
       footerNotificationSummary,
@@ -4495,16 +4533,87 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     stopThinking,
   ]);
 
-  // Double-ESC detection for interrupt handling.
-  const lastEscPressRef = useRef<number>(0);
-  const DOUBLE_ESC_INTERVAL = 500; // ms
+  const stopActiveWorkflowRuns = useCallback((reason: string): boolean => {
+    const manager = getDefaultWorkflowRunManager();
+    const activeRuns = manager
+      .list()
+      .filter((run) => run.status === "running" || run.status === "paused");
+
+    if (activeRuns.length === 0) {
+      return false;
+    }
+
+    for (const run of activeRuns) {
+      manager.stop(run.runId, reason);
+    }
+
+    setWorkflowLiveStatus((current) => {
+      if (!current || current.status !== "running") {
+        return current;
+      }
+      if (!activeRuns.some((run) => run.runId === current.runId)) {
+        return current;
+      }
+      return {
+        ...current,
+        status: "stopped",
+        activeAgents: [],
+        message: "Workflow stopped by user.",
+      };
+    });
+
+    const firstRun = activeRuns[0];
+    if (activeRuns.length === 1 && firstRun) {
+      emitInfoItemToCorrectLayer({
+        type: "info",
+        text: `Stopped workflow ${firstRun.workflow} (${firstRun.runId}).`,
+      }, "workflow-stop");
+    } else {
+      emitInfoItemToCorrectLayer({
+        type: "info",
+        text: `Stopped ${activeRuns.length} active workflows.`,
+      }, "workflow-stop");
+    }
+
+    return true;
+  }, [emitInfoItemToCorrectLayer]);
+
+  useEffect(() => {
+    if (!workflowLiveViewModel.shouldRender) {
+      return;
+    }
+
+    const handleSigint = (): void => {
+      stopActiveWorkflowRuns("stopped by Ctrl+C");
+    };
+
+    process.on("SIGINT", handleSigint);
+    return () => {
+      process.off("SIGINT", handleSigint);
+    };
+  }, [stopActiveWorkflowRuns, workflowLiveViewModel.shouldRender]);
 
   // Global interrupt handler using the Gemini CLI style isActive pattern.
-  // Only subscribe during streaming so keyboard events are captured correctly.
+  // Foreground streaming and background workflow runs both own interrupt keys.
   // Reference: Gemini CLI useGeminiStream.ts useKeypress usage.
   useKeypress(
     KeypressHandlerPriority.Critical,
     (key) => {
+      if (shouldStopWorkflowFromInterruptKey({
+        keyName: key.name,
+        ctrl: Boolean(key.ctrl),
+        isTranscriptMode,
+        isAwaitingUserInteraction,
+        isInputEmpty,
+        pendingInputCount: streamingState.pendingInputs.length,
+        hasTranscriptTextSelection: Boolean(transcriptModeTextSelection),
+        hasActiveWorkflow: workflowLiveViewModel.shouldRender,
+      })) {
+        return stopActiveWorkflowRuns(
+          key.ctrl ? "stopped by Ctrl+C" : "stopped by Escape",
+        );
+      }
+
       if (!isLoading) {
         return false;
       }
@@ -4517,22 +4626,15 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         isInputEmpty,
         pendingInputCount: streamingState.pendingInputs.length,
         hasTranscriptTextSelection: Boolean(transcriptModeTextSelection),
-        timeSinceLastEscapeMs: Date.now() - lastEscPressRef.current,
-        doubleEscapeIntervalMs: DOUBLE_ESC_INTERVAL,
       });
 
       switch (interruptAction.kind) {
         case "interrupt":
-          lastEscPressRef.current = 0;
           queueInterruptedPersistence();
           resetInterruptedPromptState();
           return true;
         case "pop-pending-input":
           removeLastPendingInput();
-          lastEscPressRef.current = 0;
-          return true;
-        case "arm-double-escape":
-          lastEscPressRef.current = Date.now();
           return true;
         case "none":
         default:
@@ -4550,6 +4652,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       removeLastPendingInput,
       queueInterruptedPersistence,
       resetInterruptedPromptState,
+      stopActiveWorkflowRuns,
+      transcriptModeTextSelection,
+      workflowLiveViewModel.shouldRender,
     ]
   );
 
@@ -7144,6 +7249,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       // Issue 116: bump generation so stale round completions are discarded
       ++promptGenerationRef.current;
       setManagedTaskStatus(null);
+      setWorkflowBuilderMessage(null);
       managedTaskStatusRef.current = null;
       managedTaskBreadcrumbRef.current = null;
       setLastLiveActivityLabel(undefined);
@@ -7171,7 +7277,70 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       // Process commands — use the EXPANDED text so `/command ...` args that
       // contain paste placeholders resolve to the real content (Issue 121).
-      const createWorkflowCallbacks = (): Pick<CommandCallbacks, 'createKodaXOptions' | 'confirm'> => ({
+      type WorkflowBuilderUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowBuilderEvent']>>[0];
+      type WorkflowRunMessageUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowRunMessage']>>[0];
+      type WorkflowRunUiEvent = Parameters<NonNullable<CommandCallbacks['onWorkflowRunUpdate']>>[0];
+      const handleWorkflowBuilderEvent = (event: WorkflowBuilderUiEvent): void => {
+        if (
+          event.stage === "started"
+          || event.stage === "generating"
+          || event.stage === "validating"
+          || event.stage === "ready"
+        ) {
+          setWorkflowBuilderMessage(event.message);
+          return;
+        }
+        setWorkflowBuilderMessage(null);
+      };
+      const handleWorkflowRunUpdate = (event: WorkflowRunUiEvent): void => {
+        if (event.status === "running") {
+          setWorkflowLiveStatus({
+            runId: event.runId,
+            workflow: event.workflow,
+            status: event.status,
+            ...(event.phase !== undefined ? { phase: event.phase } : {}),
+            activeAgents: event.activeAgents,
+            totalSpawned: event.totalSpawned,
+            completedAgents: event.completedAgents,
+            failedAgents: event.failedAgents,
+            stoppedAgents: event.stoppedAgents,
+            ...(event.message !== undefined ? { message: event.message } : {}),
+          });
+          return;
+        }
+        setWorkflowLiveStatus((current) => (
+          current?.runId === event.runId ? null : current
+        ));
+      };
+      const handleWorkflowRunMessage = (event: WorkflowRunMessageUiEvent): void => {
+        if (event.type === "event") {
+          return;
+        }
+        const text = stripAnsi(event.text).trimEnd();
+        if (!text.trim()) {
+          return;
+        }
+        if (event.type === "error") {
+          addHistoryItem({
+            type: "error",
+            text,
+          });
+          return;
+        }
+        emitInfoItemToCorrectLayer({
+          type: "info",
+          text,
+        }, "workflow-message");
+      };
+
+      const createWorkflowCallbacks = (): Pick<
+        CommandCallbacks,
+        | 'createKodaXOptions'
+        | 'confirm'
+        | 'onWorkflowBuilderEvent'
+        | 'onWorkflowRunMessage'
+        | 'onWorkflowRunUpdate'
+      > => ({
         createKodaXOptions: () => ({
           ...currentOptionsRef.current,
           provider: currentConfig.provider,
@@ -7189,12 +7358,23 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           });
           return result.confirmed;
         },
+        onWorkflowBuilderEvent: handleWorkflowBuilderEvent,
+        onWorkflowRunMessage: handleWorkflowRunMessage,
+        onWorkflowRunUpdate: handleWorkflowRunUpdate,
       });
 
       const runWorkflowInvocation = async (
         workflow: CommandWorkflowInvocationRequest,
         rawInput: string,
-        callbacks: Pick<CommandCallbacks, 'createKodaXOptions' | 'confirm' | 'readline'>,
+        callbacks: Pick<
+          CommandCallbacks,
+          | 'createKodaXOptions'
+          | 'confirm'
+          | 'readline'
+          | 'onWorkflowBuilderEvent'
+          | 'onWorkflowRunMessage'
+          | 'onWorkflowRunUpdate'
+        >,
       ): Promise<boolean> => {
         const decision = decideWorkflowInvocation({
           agentMode: currentConfig.agentMode,
@@ -7207,34 +7387,47 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         }
 
         if (decision.action === 'suggest' && workflow.source === 'natural-language') {
+          const cancelsTurn = decision.trigger === 'explicit';
           const approved = await callbacks.confirm?.(
-            'This task looks suitable for workflow. Generate and run a workflow?',
+            cancelsTurn
+              ? 'This request explicitly asks for workflow. Generate and run it? Choose No to cancel this turn.'
+              : 'This task looks suitable for workflow. Use workflow? Choose No to continue with normal AMA.',
           );
           if (!approved) {
-            return false;
+            if (!cancelsTurn) return false;
+            addHistoryItem({
+              type: "info",
+              text: "Workflow request cancelled. No normal AMA fallback was started.",
+            });
+            return true;
           }
         }
 
         const workflowOutput: string[] = [];
         const originalWorkflowLog = console.log;
         console.log = (...args: unknown[]) => {
-          workflowOutput.push(args.map((arg) => typeof arg === 'string' ? arg : String(arg)).join(' '));
+          workflowOutput.push(formatCapturedConsoleOutput(args));
         };
 
         try {
           const outcome = await startGeneratedWorkflowFromRequest({
             request: workflow.request,
             callbacks,
-            approval: decision.action === 'auto-start' ? 'silent' : 'required',
+            approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
             sourceLabel: workflow.displayName,
+            onBuilderEvent: callbacks.onWorkflowBuilderEvent,
           });
           return outcome === 'started' || outcome === 'cancelled';
         } finally {
+          setWorkflowBuilderMessage(null);
           console.log = originalWorkflowLog;
-          if (workflowOutput.length > 0) {
+          const workflowOutputText = joinCapturedConsoleOutput(
+            workflowOutput.filter((item, pos, self) => self.indexOf(item) === pos),
+          );
+          if (workflowOutputText) {
             addHistoryItem({
               type: "info",
-              text: workflowOutput.filter((item, pos, self) => self.indexOf(item) === pos).join('\n'),
+              text: workflowOutputText,
             });
           }
         }
@@ -7649,6 +7842,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             });
             return result.confirmed;
           },
+          onWorkflowBuilderEvent: handleWorkflowBuilderEvent,
+          onWorkflowRunMessage: handleWorkflowRunMessage,
+          onWorkflowRunUpdate: handleWorkflowRunUpdate,
           // UI context for interactive dialogs.
           ui: {
             select: async (title: string, options: string[]): Promise<string | undefined> => {
@@ -7674,10 +7870,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         const capturedOutput: string[] = [];
         const originalLog = console.log;
         console.log = (...args: unknown[]) => {
-          const output = args.map(arg =>
-            typeof arg === 'string' ? arg : String(arg)
-          ).join(' ');
-          capturedOutput.push(output);
+          capturedOutput.push(formatCapturedConsoleOutput(args));
         };
 
         let invocationToExecute: CommandInvocationRequest | undefined = undefined;
@@ -7694,14 +7887,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             workflowToExecute = result.workflow;
           }
         } finally {
+          setWorkflowBuilderMessage(null);
           console.log = originalLog;
         }
 
         // Add captured command output to history as info item
-        if (capturedOutput.length > 0) {
+        const capturedText = joinCapturedConsoleOutput(capturedOutput);
+        if (capturedText) {
           addHistoryItem({
             type: "info",
-            text: capturedOutput.join('\n'),
+            text: capturedText,
           });
         }
 
@@ -7823,10 +8018,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       const capturedOutput: string[] = [];
       const originalLog = console.log;
       console.log = (...args: unknown[]) => {
-        const output = args.map(arg =>
-          typeof arg === 'string' ? arg : String(arg)
-        ).join(' ');
-        capturedOutput.push(output);
+        capturedOutput.push(formatCapturedConsoleOutput(args));
       };
 
       try {
@@ -7934,11 +8126,14 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           const uniqueOutput = capturedOutput.filter((item, pos, self) => {
             return self.indexOf(item) === pos;
           });
+          const capturedText = joinCapturedConsoleOutput(uniqueOutput);
 
-          addHistoryItem({
-            type: "info",
-            text: uniqueOutput.join('\n'),
-          });
+          if (capturedText) {
+            addHistoryItem({
+              type: "info",
+              text: capturedText,
+            });
+          }
         }
 
         // v0.7.39 run-end safety net — finalize any tool calls left in
@@ -8026,6 +8221,28 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     ]
   );
 
+  const workflowFooterSurface = workflowLiveViewModel.shouldRender ? (
+    <Box paddingX={1}>
+      <WorkflowRunSurface viewModel={workflowLiveViewModel} />
+    </Box>
+  ) : undefined;
+  const todoFooterSurface = (isLoading && todoPlanViewModel.shouldRender) ? (
+    <Box paddingX={1}>
+      <TodoListSurface viewModel={todoPlanViewModel} />
+    </Box>
+  ) : undefined;
+  const promptEmbeddedStatusSurface = workflowFooterSurface || todoFooterSurface ? (
+    <Box flexDirection="column">
+      {workflowFooterSurface}
+      {todoFooterSurface}
+    </Box>
+  ) : undefined;
+  const workflowFooterCounterText = workflowLiveViewModel.shouldRender
+    ? `${workflowLiveViewModel.totalSpawned === 0
+      ? "waiting"
+      : `${workflowLiveViewModel.activeCount}/${workflowLiveViewModel.totalSpawned} active`}${workflowLiveViewModel.failedAgents > 0 ? `, ${workflowLiveViewModel.failedAgents} failed` : ""}`
+    : undefined;
+
   const promptFooterSurface = (
     <PromptFooter
       left={<PromptFooterLeftSide items={footerLeftItems} />}
@@ -8036,7 +8253,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       inlineNotices={promptFooterNotices.length > 0 ? (
         <StatusNoticesSurface notices={promptFooterNotices} />
       ) : undefined}
-      activityBar={(promptActivityViewModel || (isLoading && todoPlanViewModel.shouldRender)) ? (
+      activityBar={(promptActivityViewModel || workflowLiveViewModel.shouldRender || (isLoading && todoPlanViewModel.shouldRender)) ? (
         // FEATURE_151 (v0.7.38) Slice H' — spinner verb + todo counter
         // share one line. Left column: existing spinner glyph + verb
         // text (when any activity is present). Right column: dim
@@ -8089,7 +8306,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
               />
             ) : null}
           </Box>
-          {(isLoading && todoPlanViewModel.shouldRender) ? (
+          {workflowFooterCounterText ? (
+            <Text dimColor>
+              {workflowFooterCounterText}
+            </Text>
+          ) : (isLoading && todoPlanViewModel.shouldRender) ? (
             <Text dimColor>
               {`${todoPlanViewModel.completedCount}/${todoPlanViewModel.totalCount} completed`}
             </Text>
@@ -8128,11 +8349,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         // `useEffect` below) prevents stale plan items from a
         // previous run flashing back when the next prompt re-enters
         // the loading state.
-        (isLoading && todoPlanViewModel.shouldRender) ? (
-          <Box paddingX={1}>
-            <TodoListSurface viewModel={todoPlanViewModel} />
-          </Box>
-        ) : undefined
+        promptEmbeddedStatusSurface
       }
       composer={(
         <PromptComposer
@@ -8272,6 +8489,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       managedBudgetUsage={transcriptDisplayIsLoading ? managedTaskStatus?.budgetUsage : undefined}
       managedBudgetApprovalRequired={transcriptDisplayIsLoading ? managedTaskStatus?.budgetApprovalRequired : undefined}
       lastLiveActivityLabel={transcriptStreamingState.lastLiveActivityLabel}
+      liveStatusLines={transcriptLiveStatusLines}
       viewportRows={viewportBudget.messageRows}
       viewportWidth={terminalWidth}
       scrollOffset={historyScrollOffset}
@@ -8327,6 +8545,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     transcriptStreamingState.thinkingContent,
     transcriptStreamingState.toolInputCharCount,
     transcriptStreamingState.toolInputContent,
+    transcriptLiveStatusLines,
     transcriptModeTextSelection?.rowRanges,
     effectiveTranscriptSearchState,
     showAllInTranscript,

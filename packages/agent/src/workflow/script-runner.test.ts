@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import { Script } from 'node:vm';
 
 import type {
   WorkflowApi,
@@ -12,6 +14,7 @@ import {
   runRestrictedWorkflowScript,
   WorkflowScriptExecutionError,
 } from './index.js';
+import { DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS } from './script-runner.js';
 
 function notImplemented(name: string): never {
   throw new Error(`${name} not implemented`);
@@ -63,6 +66,48 @@ function fakeWorkflowApi(): { wf: WorkflowApi; prompts: string[]; phases: string
 }
 
 describe('runRestrictedWorkflowScript', () => {
+  it('does not arm node:vm watchdog timeouts for trusted host RPC polling', async () => {
+    const { wf } = fakeWorkflowApi();
+    const originalRunInContext = Script.prototype.runInContext;
+    const optionsSeen: unknown[] = [];
+    const spy = vi
+      .spyOn(Script.prototype, 'runInContext')
+      .mockImplementation(function (
+        this: Script,
+        context: Parameters<Script['runInContext']>[0],
+        options?: Parameters<Script['runInContext']>[1],
+      ): ReturnType<Script['runInContext']> {
+        optionsSeen.push(options);
+        const args = options === undefined ? [context] : [context, options];
+        return Reflect.apply(originalRunInContext, this, args) as ReturnType<Script['runInContext']>;
+      });
+
+    try {
+      await expect(
+        runRestrictedWorkflowScript({
+          wf,
+          source: `
+            async function run(wf) {
+              const result = await wf.runAgent({
+                name: 'reader',
+                prompt: 'check rpc timeout usage',
+                readOnly: true
+              });
+              return result.finalText;
+            }
+          `,
+        }),
+      ).resolves.toBe('done:check rpc timeout usage');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(optionsSeen.length).toBeGreaterThan(2);
+    expect(optionsSeen[0]).toBeUndefined();
+    expect(optionsSeen[1]).toMatchObject({ timeout: DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS });
+    expect(optionsSeen.slice(2).every((options) => options === undefined)).toBe(true);
+  });
+
   it('runs a generated script through WorkflowApi only', async () => {
     const { wf, prompts } = fakeWorkflowApi();
     const result = await runRestrictedWorkflowScript({
@@ -209,6 +254,53 @@ describe('runRestrictedWorkflowScript', () => {
         source: 'async function run() { while (true) {} }',
       }),
     ).rejects.toBeInstanceOf(WorkflowScriptExecutionError);
+  });
+
+  it('does not use the sync timeout as a 10s wall-clock cap for child waits', async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = new Date('2026-06-13T10:00:00.000Z');
+      vi.setSystemTime(startedAt);
+      const { wf } = fakeWorkflowApi();
+      let resolveAgent: ((result: WorkflowTaskResult) => void) | undefined;
+      const slowWorkflowApi: WorkflowApi = {
+        ...wf,
+        runAgent: async (input): Promise<WorkflowTaskResult> => {
+          void input;
+          return new Promise<WorkflowTaskResult>((resolve) => {
+            resolveAgent = resolve;
+          });
+        },
+      };
+
+      const run = runRestrictedWorkflowScript({
+        wf: slowWorkflowApi,
+        source: `
+          async function run(wf) {
+            const result = await wf.runAgent({
+              name: 'slow-reader',
+              prompt: 'slow but valid',
+              readOnly: true
+            });
+            return result.finalText;
+          }
+        `,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.setSystemTime(new Date(startedAt.getTime() + 10_050));
+      await vi.advanceTimersByTimeAsync(1);
+      resolveAgent?.({
+        taskId: 'task-slow',
+        name: 'slow-reader',
+        status: 'completed',
+        finalText: 'done:slow but valid',
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run).resolves.toBe('done:slow but valid');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

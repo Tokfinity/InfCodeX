@@ -37,6 +37,9 @@ export interface RestrictedWorkflowModuleInput {
   readonly timeoutMs?: number;
 }
 
+export const DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS = 10_000;
+export const DEFAULT_WORKFLOW_SCRIPT_WALL_TIMEOUT_MS = 30 * 60 * 1_000;
+
 function wrapSource(source: string): string {
   return [
     '"use strict";',
@@ -283,10 +286,15 @@ const wf = Object.freeze({
 `;
 }
 
+function runTrustedHostScript<T>(context: object, source: string): T {
+  // These snippets are KodaX-authored RPC glue, not generated workflow code.
+  // Avoid node:vm watchdog timeouts here: repeated short timeout runs can
+  // abort the Windows Node process before JavaScript can catch anything.
+  return new Script(source).runInContext(context) as T;
+}
+
 function readCommands(context: object): readonly WorkflowRpcCommand[] {
-  const raw = new Script('JSON.stringify(__kodaxTakeCommands())').runInContext(context, {
-    timeout: 1000,
-  });
+  const raw = runTrustedHostScript<unknown>(context, 'JSON.stringify(__kodaxTakeCommands())');
   if (typeof raw !== 'string') {
     throw new WorkflowScriptExecutionError('workflow command queue did not serialize');
   }
@@ -303,7 +311,7 @@ function readCommands(context: object): readonly WorkflowRpcCommand[] {
 }
 
 function pendingCount(context: object): number {
-  const value = new Script('__kodaxPendingCount()').runInContext(context, { timeout: 1000 });
+  const value = runTrustedHostScript<unknown>(context, '__kodaxPendingCount()');
   if (typeof value !== 'number') {
     throw new WorkflowScriptExecutionError('workflow pending count must be a number');
   }
@@ -318,7 +326,7 @@ function settleCommand(
 ): void {
   const envelopeJson = jsonStringify(envelope, 'workflow command result');
   const code = `__kodaxSettle(${JSON.stringify(command.id)}, ${ok ? 'true' : 'false'}, ${JSON.stringify(envelopeJson)})`;
-  new Script(code).runInContext(context, { timeout: 1000 });
+  runTrustedHostScript<unknown>(context, code);
 }
 
 async function handleCommand(
@@ -417,12 +425,10 @@ async function closeOpenPhases(state: WorkflowRpcHostState): Promise<void> {
 export async function runRestrictedWorkflowScript(
   opts: RunRestrictedWorkflowScriptOptions,
 ): Promise<unknown> {
-  const timeoutMs = opts.timeoutMs ?? 10000;
+  const wallTimeoutMs = opts.timeoutMs ?? DEFAULT_WORKFLOW_SCRIPT_WALL_TIMEOUT_MS;
+  const syncTimeoutMs = Math.min(wallTimeoutMs, DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS);
   const context = createContext({});
-  new Script(buildBootstrap(opts), { filename: 'workflow-capability-bootstrap.js' }).runInContext(
-    context,
-    { timeout: 1000 },
-  );
+  new Script(buildBootstrap(opts), { filename: 'workflow-capability-bootstrap.js' }).runInContext(context);
   const script = new Script(wrapSource(opts.source), {
     filename: opts.filename ?? 'generated-workflow.js',
   });
@@ -432,7 +438,7 @@ export async function runRestrictedWorkflowScript(
   let failure: unknown;
   let hostState: WorkflowRpcHostState | undefined;
   try {
-    const scriptResult = script.runInContext(context, { timeout: timeoutMs }) as unknown;
+    const scriptResult = script.runInContext(context, { timeout: syncTimeoutMs }) as unknown;
     void Promise.resolve(scriptResult).then(
       (value) => {
         settled = true;
@@ -453,8 +459,8 @@ export async function runRestrictedWorkflowScript(
     };
 
     for (;;) {
-      if (Date.now() - startedAt > timeoutMs) {
-        throw new WorkflowScriptExecutionError(`workflow script timed out after ${timeoutMs}ms`);
+      if (Date.now() - startedAt > wallTimeoutMs) {
+        throw new WorkflowScriptExecutionError(`workflow script timed out after ${wallTimeoutMs}ms`);
       }
 
       const commands = readCommands(context);
