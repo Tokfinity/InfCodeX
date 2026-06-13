@@ -5,6 +5,7 @@ _Archive Created: 2026-05-19_
 > This file holds the historical record of all features that have shipped (or were rolled into a shipped version) in KodaX.
 > Each section is grouped by the release version that delivered the feature.
 > Detailed design documents remain under `docs/features/v{VERSION}.md`.
+> Tracker cleanup on 2026-06-13 moved stale live-roadmap rows here so `FEATURE_LIST.md` only shows active work.
 
 ---
 
@@ -319,8 +320,111 @@ _Archive Created: 2026-05-19_
 
 ---
 
+## 2026-06-13 Tracker Cleanup (94 entries)
+
+These rows were removed from `FEATURE_LIST.md` because they are released, cancelled, absorbed, or explicitly shelved. Long rationale remains in the version design docs and git history.
+
+| ID | Title | Final status | Version / slot | Source |
+|---|---|---|---|---|
+| `057` | Claude-Aligned TUI Substrate Refactor | Completed / Released | `v0.7.30` | [v0.7.30](features/v0.7.30.md) |
+| `059` | Managed Task Structured Protocol V2 | Absorbed | `v0.8.0` | [v0.8.0](features/v0.8.0.md) |
+| `060` | Claude-Aligned Bounded-Memory Runtime and OOM Hardening | Completed / Released | `v0.7.30` | [v0.7.30](features/v0.7.30.md) |
+| `063` | Extensible Hook & Automation Substrate | Cancelled | `v0.7.18` | [v0.7.18](features/v0.7.18.md) |
+| `073` | Reference-Style Lineage and Island Model Removal | Cancelled | `v0.7.25` | [v0.7.25](features/v0.7.25.md) |
+| `078` | Role-Aware Reasoning Profiles | Completed / Released | `v0.7.29` | [v0.7.29](features/v0.7.29.md) |
+| `087` | ConstructionRuntime and Constructed-World Substrate | Completed / Released | `v0.7.28` | [v0.7.28](features/v0.7.28.md) |
+| `088` | Self-Construction Tier 2 - Tool Generation | Completed / Released | `v0.7.28` | [v0.7.28](features/v0.7.28.md) |
+| `089` | Self-Construction Tier 3 - Agent Generation | Completed / Released | `v0.7.31` | [v0.7.31](features/v0.7.31.md) |
+| `094` | Deep Anti-Escape Hardening | Cancelled | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `095` | SSH-Friendly Cell-Level Diff Renderer for Ink Substrate | Absorbed | `v0.7.39` | [v0.7.30](features/v0.7.30.md) |
+| `096` | Windows-SSH ConPTY Host Auto-Downgrade to Main-Screen Policy | Completed / Released | `v0.7.30` | [v0.7.30](features/v0.7.30.md) |
+| `100` | SA Runner Frame Adoption & Capability Unification | Completed / Released | `v0.7.29` | [v0.7.29](features/v0.7.29.md) |
+| `101` | Constructed Agent Admission Contract | Completed / Released | `v0.7.31` | [v0.7.31](features/v0.7.31.md) |
+| `102` | Adaptive Multi-Provider Orchestration Runtime | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `103` | Scout Calibration & L5 User-Followup Escalate | Completed / Released | `v0.7.29` | [v0.7.29](features/v0.7.29.md) |
+| `104` | Prompt-Eval Harness Module | Completed / Released | `v0.7.29` | [v0.7.29](features/v0.7.29.md) |
+| `106` | AMA Harness Selection Calibration | Completed / Released | `v0.7.31` | [v0.7.31](features/v0.7.31.md) |
+| `109` | Harness Observability Substrate RFC | Cancelled | `v0.7.48` | [v0.7.48](features/v0.7.48.md) |
+| `111` | Runner-Level Soft-Pause Protocol | Absorbed | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `114` | AMA Harness V2 - Worker + Evaluator | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `115` | Message Queue Foundation | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `116` | Active Cache Control Foundation | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
+| `117` | Mutation Context Injection | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `119` | Async Child Dispatch - Pattern B | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `120` | Async Child Steering | Completed / Released | `v0.7.39` | [v0.7.39](features/v0.7.39.md) |
+| `122` | PM Thinking Framework Prompt | Cancelled | `v0.7.41` | [v0.7.41](features/v0.7.41.md) |
+| `123` | Peer-to-Peer SendMessage | Completed / Released | `v0.7.44` | [v0.7.44](features/v0.7.44.md) |
+| `124` | Memory System Alignment | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `126` | PM Mode Tool Restriction | Cancelled | none; original `v0.8.x` placeholder | Original row depended on cancelled `FEATURE_122` production data |
+| `127` | Per-Agent Model Tier Routing | Cancelled | none | Re-scoped into `FEATURE_120` and `FEATURE_102` |
+| `128` | Dispatch-to-Self-Construction Bridge | Superseded | `v0.7.50` | Superseded by `FEATURE_191` |
+| `130` | Provider Retry-After Header + Exponential Backoff | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `131` | Tool Safety Patch Pack | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `132` | LSP Native Integration | Completed / Released | `v0.7.47` | [v0.7.47](features/v0.7.47.md) |
+| `137` | RPC Headless Protocol | Absorbed | `v0.8.0` | Merged into `FEATURE_030`; JSON-Line stdin/stdout bridge details moved to [v0.8.0](features/v0.8.0.md#feature_030-multi-surface-delivery) |
+| `141` | Transcript Inline Diff Renderer | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
+| `142` | Package Boundary Cleanup | Completed / Released | `v0.7.35.1` | [v0.7.35](features/v0.7.35.md) |
+| `143` | Skill UX Upgrade + Prompt Overlay Fix | Completed / Released | `v0.7.36` | [v0.7.36](features/v0.7.36.md) |
+| `144` | AMA Worker Capability Context Parity | Completed / Released | `v0.7.35.1` | [v0.7.35](features/v0.7.35.md) |
+| `145` | Agent Config Home Resolution Pipeline | Completed / Released | `v0.7.35.1` | [v0.7.35](features/v0.7.35.md) |
+| `146` | v0.7.36 Behavioral Eval Follow-ups | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
+| `147` | npm Publishing Pipeline | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
+| `148` | Pattern B Post-Dispatch Probe | Completed / Released | `v0.7.37` | [v0.7.37](features/v0.7.37.md) |
+| `149` | Queued Prompt Injection Latency & Mid-Turn UX Parity | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `151` | TodoList Visibility & LLM Self-Seeding Parity | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `152` | Bash Regex to AST Migration | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `153` | LLM-Backed Bash Prefix Extractor | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `154` | Universal `--help` Fast-Path | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `155` | Chat-While-Waiting | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `156` | Idle-Wait Visual Continuity | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `157` | Windows / macOS Case-Insensitive Workspace Match | Completed / Released | `v0.7.38` | [v0.7.38](features/v0.7.38.md) |
+| `158` | auto[llm] Signal-Based Classifier | Completed / Released | `v0.7.39` | [v0.7.39](features/v0.7.39.md) |
+| `173` | Session Management Public SDK | Completed / Released | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `175` | Plan-List Resilience | Completed / Released | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `184` | Sidecar Verifier Substrate | Completed / Released | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `186` | SDK Embedder Surface Closure | Completed / Released | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `187` | Stall Sidecar Middleware Unification | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `188` | dispatch_child Worktree Drop | Completed / Released | `v0.7.42` | [v0.7.42](features/v0.7.42.md) |
+| `189` | Systemic Prompt Audit | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `190` | FEATURE_184 Cleanup Tail | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `191` | User-Authored Custom Agents | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `192` | User-Set Persistent Goal | Completed / Released | `v0.7.44` | [v0.7.44](features/v0.7.44.md) |
+| `193` | V1 Chain Full Retirement | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `194` | Package Consolidation | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `195` | Sidecar Verifier UI Silent Accept | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `196` | Sidecar Verifier Content-Aware Gate | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `197` | Read-Only Markdown Agent Discovery | Completed / Released | `v0.7.43` | [v0.7.43](features/v0.7.43.md) |
+| `198` | Provider Capability Metadata | Completed / Released | `v0.7.44` | [v0.7.44](features/v0.7.44.md) |
+| `199` | Sibling-Aware Child Dispatch | Completed / Released | `v0.7.44` | [v0.7.44](features/v0.7.44.md) |
+| `200` | Structural Split of Top-10 Large Source Files | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `201` | Streaming Render Upgrade | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `202` | Reasoning to Live Status Header Extraction | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `203` | Overlay Deferral Queue | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `204` | `kodax doctor` Diagnostic CLI | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `205` | Cyclic Dependencies Pull-Tool | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `206` | `/review` Slash Command | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `207` | `@` Picker Extension | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `208` | Process Hardening | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `209` | Tracing Package Activation | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `210` | Daemon / TUI Split | Shelved | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `212` | REPL Fullscreen Render Perf | Completed / Released | `v0.7.45` | [CHANGELOG.md](../CHANGELOG.md) |
+| `213` | Idle-Yield Queued-Prompt UI Fix | Completed / Released | `v0.7.45` | [CHANGELOG.md](../CHANGELOG.md) |
+| `214` | Inline Viewport / Codex-Style True Inline | Completed / Released | `v0.7.46` | [v0.7.46](features/v0.7.46.md) |
+| `215` | Generic LLM-Judged Stop-Hook Primitive | Completed / Released | `v0.7.49` | [v0.7.49](features/v0.7.49.md) |
+| `216` | Provider Credential Verification API | Completed / Released | `v0.7.45` | [v0.7.45](features/v0.7.45.md) |
+| `217` | Dynamic Workflow Harness Runtime | Completed / Released | `v0.7.49` | [v0.7.49](features/v0.7.49.md) |
+| `218` | KodaX Self-Knowledge Manual & Help Tool | Completed / Released | `v0.7.47` | [v0.7.47](features/v0.7.47.md) |
+| `219` | Per-Project Session Storage | Completed / Released | `v0.7.46` | [v0.7.46](features/v0.7.46.md) |
+| `220` | Continuous Thinking + Tool-Call Block Rendering | Completed / Released | `v0.7.47` | [v0.7.47](features/v0.7.47.md) |
+| `221` | Injectable Self-Manual for SDK Consumers | Completed / Released | `v0.7.47` | [v0.7.47](features/v0.7.47.md) |
+| `222` | MCP 2025-11-25 Reverse Capabilities | Completed / Released | `v0.7.48` | [v0.7.48](features/v0.7.48.md) |
+| `223` | Sidecar Verifier Custom Provider Stall Fix | Completed / Released | `v0.7.49` | [v0.7.49](features/v0.7.49.md) |
+| `226` | Session Custom Tag + List Filtering | Completed / Released | `v0.7.49` | [v0.7.49](features/v0.7.49.md) |
+
+---
+
 ## Summary
 
-- Total Archived: 99 features
-- Archive Created: 2026-05-19
-- Source: `docs/FEATURE_LIST.md` § 已完成 Feature (pre-archive snapshot)
+- Initial archive: 99 features moved on 2026-05-19.
+- Tracker cleanup: 94 stale live-roadmap entries moved on 2026-06-13.
+- Current live roadmap: `docs/FEATURE_LIST.md` tracks 11 active features.
