@@ -45,12 +45,22 @@ describe('built-in provider model capabilities (no API key required)', () => {
     expect(haiku?.maxOutputTokens).toBe(64000);
   });
 
-  it('exposes kimi-k2.6 at 256K (issue history: FEATURE_098 wrongly pinned 128K)', () => {
+  it('exposes Kimi K2.7 Code and K2.6 at 256K', () => {
+    const k27 = getModelCapabilities('kimi', 'kimi-k2.7-code');
+    expect(k27?.contextWindow).toBe(256_000);
+    expect(k27?.maxOutputTokens).toBe(32_768);
+
     const k26 = getModelCapabilities('kimi', 'kimi-k2.6');
     expect(k26?.contextWindow).toBe(256_000);
     // k2.5 inherits the same provider-level 256K — descriptor has no override.
     const k25 = getModelCapabilities('kimi', 'k2.5');
     expect(k25?.contextWindow).toBe(256_000);
+  });
+
+  it('exposes Zhipu GLM-5.2 at 1M context / 128K max output', () => {
+    const glm52 = getModelCapabilities('zhipu', 'glm-5.2');
+    expect(glm52?.contextWindow).toBe(1_000_000);
+    expect(glm52?.maxOutputTokens).toBe(131_072);
   });
 
   it('exposes deepseek-v4 series at 1M context', () => {

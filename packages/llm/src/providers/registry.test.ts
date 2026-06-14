@@ -163,9 +163,15 @@ describe('provider registry', () => {
     // sourced incorrectly. Both Kimi models now inherit the 256K
     // provider-level window without per-model overrides.
     expect(kimi.getEffectiveContextWindow('k2.5')).toBe(256_000);
+    expect(kimi.getAvailableModels()).toContain('kimi-k2.7-code');
+    expect(kimi.getEffectiveContextWindow('kimi-k2.7-code')).toBe(256_000);
+    expect(kimi.getEffectiveMaxOutputTokens('kimi-k2.7-code')).toBe(32_768);
 
     const zhipu = getProvider('zhipu');
     expect(zhipu.getEffectiveContextWindow('glm-5')).toBe(200_000);
+    expect(zhipu.getAvailableModels()).toContain('glm-5.2');
+    expect(zhipu.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(zhipu.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zhipu.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
     // User-confirmed (2026-05): GLM-5 Turbo is also 200K, not 128K. The
     // historical FEATURE_098 128K pin mirrored docs that were outdated
@@ -174,6 +180,9 @@ describe('provider registry', () => {
     expect(zhipu.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
 
     const zhipuCoding = getProvider('zhipu-coding');
+    expect(zhipuCoding.getAvailableModels()).toContain('glm-5.2');
+    expect(zhipuCoding.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(zhipuCoding.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
     expect(zhipuCoding.getEffectiveContextWindow('glm-5-turbo')).toBe(200_000);
   });
 });

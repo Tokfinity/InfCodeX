@@ -187,11 +187,36 @@ describe('FEATURE_198 — provider-capabilities loader', () => {
       expect(k.models).toBeUndefined();
     });
 
+    it('kimi: K2.7 Code model descriptor is available at 256K context', () => {
+      const k = getProviderSnapshots().kimi;
+      expect(k.models?.find((m) => m.id === 'kimi-k2.7-code')).toEqual({
+        id: 'kimi-k2.7-code',
+        displayName: 'Kimi K2.7 Code',
+        contextWindow: 256_000,
+      });
+    });
+
+    it('zhipu: GLM-5.2 model descriptor carries its 1M context override', () => {
+      const z = getProviderSnapshots().zhipu;
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual({
+        id: 'glm-5.2',
+        displayName: 'GLM-5.2',
+        contextWindow: 1_000_000,
+        maxOutputTokens: 131_072,
+      });
+    });
+
     it('zhipu-coding: bench-tuned 16K maxOutputTokens + thinkingBudgetCap', () => {
       const z = getProviderSnapshots()['zhipu-coding'];
       expect(z.maxOutputTokens).toBe(16000);
       expect(z.thinkingBudgetCap).toBe(16000);
       expect(z.contextWindow).toBe(200000);
+      expect(z.models?.find((m) => m.id === 'glm-5.2')).toEqual({
+        id: 'glm-5.2',
+        displayName: 'GLM-5.2',
+        contextWindow: 1_000_000,
+        maxOutputTokens: 131_072,
+      });
     });
 
     it('ark-coding: per-model contextWindow overrides preserved', () => {
