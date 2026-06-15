@@ -136,6 +136,22 @@ async function waitForWindowsPidExit(pid: number, timeoutMs: number): Promise<bo
   return !signalTargetExists(pid);
 }
 
+async function waitForWindowsPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
+  const uniquePids = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
+  if (uniquePids.length === 0) {
+    return true;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (uniquePids.every((pid) => !signalTargetExists(pid))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return uniquePids.every((pid) => !signalTargetExists(pid));
+}
+
 function readWindowsPidListJson(stdout: string): number[] {
   const trimmed = stdout.trim();
   if (!trimmed) return [];
@@ -230,20 +246,38 @@ export async function killPidTree(
 ): Promise<void> {
   if (process.platform === 'win32') {
     const descendantPids = collectWindowsDescendantPids(pid);
-    await runTaskkill(pid, options.taskkillMs ?? DEFAULT_TASKKILL_MS);
-    for (const childPid of descendantPids.reverse()) {
+    const killOrder = [...descendantPids].reverse();
+    const targets = [pid, ...descendantPids];
+    const taskkillMs = options.taskkillMs ?? DEFAULT_TASKKILL_MS;
+    const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
+
+    await runTaskkill(pid, taskkillMs);
+    for (const childPid of killOrder) {
       if (signalTargetExists(childPid)) {
-        await runTaskkill(childPid, options.taskkillMs ?? DEFAULT_TASKKILL_MS);
+        await runTaskkill(childPid, taskkillMs);
       }
     }
-    if (!signalTargetExists(pid)) {
+    if (await waitForWindowsPidsExit(targets, forceMs)) {
       return;
     }
-    const forceMs = options.forceMs ?? DEFAULT_FORCE_MS;
-    if (await killWindowsPid(pid, 'SIGTERM', forceMs)) {
+
+    for (const childPid of killOrder) {
+      if (signalTargetExists(childPid)) {
+        await killWindowsPid(childPid, 'SIGTERM', forceMs);
+      }
+    }
+    await killWindowsPid(pid, 'SIGTERM', forceMs);
+    if (await waitForWindowsPidsExit(targets, forceMs)) {
       return;
+    }
+
+    for (const childPid of killOrder) {
+      if (signalTargetExists(childPid)) {
+        await killWindowsPid(childPid, 'SIGKILL', forceMs);
+      }
     }
     await killWindowsPid(pid, 'SIGKILL', forceMs);
+    await waitForWindowsPidsExit(targets, forceMs);
     return;
   }
 

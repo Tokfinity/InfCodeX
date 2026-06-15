@@ -106,6 +106,22 @@ async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<
   return !isPosixPidTreeAlive(pid);
 }
 
+async function waitForWindowsPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
+  const uniquePids = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
+  if (uniquePids.length === 0) {
+    return true;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (uniquePids.every((pid) => !signalTargetExists(pid))) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return uniquePids.every((pid) => !signalTargetExists(pid));
+}
+
 function readWindowsPidListJson(stdout: string): number[] {
   const trimmed = stdout.trim();
   if (!trimmed) return [];
@@ -188,14 +204,29 @@ function collectWindowsDescendantPids(pid: number, seen = new Set<number>()): nu
 export async function killChildProcessTree(child: ChildProcess): Promise<void> {
   if (process.platform === 'win32' && child.pid !== undefined) {
     const descendantPids = collectWindowsDescendantPids(child.pid);
+    const killOrder = [...descendantPids].reverse();
+    const targets = [child.pid, ...descendantPids];
     if (!isExited(child)) {
       await runTaskkill(child.pid);
     }
-    for (const childPid of descendantPids.reverse()) {
+    for (const childPid of killOrder) {
       if (signalTargetExists(childPid)) {
         await runTaskkill(childPid);
       }
     }
+    if (await waitForWindowsPidsExit(targets, FORCE_WAIT_MS)) {
+      await waitForExit(child, FORCE_WAIT_MS);
+      return;
+    }
+    for (const childPid of killOrder) {
+      if (signalTargetExists(childPid)) {
+        await runTaskkill(childPid);
+      }
+    }
+    if (signalTargetExists(child.pid)) {
+      await runTaskkill(child.pid);
+    }
+    await waitForWindowsPidsExit(targets, FORCE_WAIT_MS);
     await waitForExit(child, FORCE_WAIT_MS);
     return;
   }
