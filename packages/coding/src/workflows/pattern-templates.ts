@@ -41,7 +41,7 @@ async function run(wf, args) {
       modelHint: "deep"
     });
     return await wf.synthesize({
-      inputs: [candidate, verifier],
+      inputs: [candidate.finalText, verifier.finalText],
       rubric: "Return the final answer plus any verified fixes or caveats."
     });
   });
@@ -62,7 +62,7 @@ async function run(wf, args) {
     { concurrency: 3 }
   );
   return await wf.synthesize({
-    inputs: entries,
+    inputs: entries.map((entry) => entry.finalText),
     rubric: "Judge pairwise, explain tradeoffs, and pick the top result."
   });
 }
@@ -83,7 +83,7 @@ async function run(wf, args) {
     if (/NO_NEW_FINDINGS/i.test(result.finalText)) break;
   }
   return await wf.synthesize({
-    inputs: findings,
+    inputs: findings.map((finding) => finding.finalText),
     rubric: "Deduplicate findings and clearly state whether more work remains."
   });
 }
@@ -108,7 +108,7 @@ async function run(wf, args) {
     modelHint: "deep"
   });
   return await wf.synthesize({
-    inputs: [filtered],
+    inputs: [filtered.finalText],
     rubric: "Return only the strongest candidates with reasons."
   });
 }
@@ -136,7 +136,7 @@ async function run(wf, args) {
     evidenceRefs: ["task_id:" + classification.taskId]
   });
   return await wf.synthesize({
-    inputs: [classification, result],
+    inputs: [classification.finalText, result.finalText],
     rubric: "Explain the route and final result."
   });
 }

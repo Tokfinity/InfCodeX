@@ -55,6 +55,8 @@ export interface WorkflowTaskResult {
   readonly name: string;
   readonly status: WorkflowTaskStatus;
   readonly finalText: string;
+  /** Short user-facing digest, separate from the full finalText used for synthesis/audit. */
+  readonly digest?: string;
   readonly usage?: WorkflowTaskUsage;
 }
 

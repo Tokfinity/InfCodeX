@@ -57,9 +57,6 @@ export class WorkflowBudgetError extends Error {
 const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
 const CONCURRENCY_DEADLOCK_CHECK_MS = 50;
 const MAX_TASK_EVENT_SUMMARY_CHARS = 4096;
-const WORKFLOW_HANDOFF_OPEN = '[workflow handoff]';
-const WORKFLOW_HANDOFF_CLOSE = '[/workflow handoff]';
-
 type StopActiveTaskOutcome =
   | 'stopped'
   | 'timed-out'
@@ -84,17 +81,6 @@ function boundedTaskEventSummary(text: string): string {
   return text.length > MAX_TASK_EVENT_SUMMARY_CHARS
     ? `${text.slice(0, MAX_TASK_EVENT_SUMMARY_CHARS).trimEnd()}...`
     : text;
-}
-
-function extractWorkflowHandoffBlock(text: string): string | undefined {
-  const lower = text.toLowerCase();
-  const closeIndex = lower.lastIndexOf(WORKFLOW_HANDOFF_CLOSE);
-  if (closeIndex < 0) return undefined;
-  const openIndex = lower.lastIndexOf(WORKFLOW_HANDOFF_OPEN, closeIndex);
-  if (openIndex < 0) return undefined;
-  const end = closeIndex + WORKFLOW_HANDOFF_CLOSE.length;
-  const block = text.slice(openIndex, end).trim();
-  return block ? boundedTaskEventSummary(block) : undefined;
 }
 
 function readPositiveLimit(
@@ -354,10 +340,16 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const terminalEventType = (s: WorkflowTaskResult['status']): WorkflowEventType =>
     s === 'stopped' ? 'agent_stopped' : 'agent_completed';
 
-  const summarizeTaskResult = (result: WorkflowTaskResult): string | undefined => {
+  const summarizeTaskResult = (
+    result: WorkflowTaskResult,
+  ): { readonly text: string; readonly kind: 'digest' | 'excerpt' } | undefined => {
+    const digest = result.digest?.trim();
+    if (digest) {
+      return { text: boundedTaskEventSummary(digest), kind: 'digest' };
+    }
     const trimmed = result.finalText.trim();
     if (!trimmed) return undefined;
-    return extractWorkflowHandoffBlock(trimmed) ?? boundedTaskEventSummary(trimmed);
+    return { text: boundedTaskEventSummary(trimmed), kind: 'excerpt' };
   };
 
   const emitTerminalTaskEvent = (
@@ -429,7 +421,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
           ? { usage: result.usage }
           : {}),
         ...(summary !== undefined
-          ? { summary }
+          ? { summary: summary.text, summaryKind: summary.kind }
           : {}),
       })) {
         accrue(result);

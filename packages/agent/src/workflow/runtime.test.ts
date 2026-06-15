@@ -109,15 +109,16 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   });
 
-  it('keeps enough completed child text for workflow handoff digest extraction', async () => {
+  it('prefers the child self-distilled digest for completed-agent events', async () => {
     const finalText = [
       'I now have a complete picture of the workflow changes.',
       'Here is my long report.',
       'x'.repeat(700),
-      '[workflow handoff]',
-      'Conclusion: the digest formatter must not be starved by a short event summary.',
-      'Evidence: the useful handoff can appear after a long report preamble.',
-      '[/workflow handoff]',
+      'Finding: this full report stays available for synthesis.',
+    ].join('\n');
+    const digest = [
+      '- Finding: workflow transcript uses the child digest.',
+      '- Evidence: full finalText stays separate for synthesis.',
     ].join('\n');
     const backend: WorkflowAgentBackend = {
       spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-long', name: input.name }),
@@ -126,6 +127,7 @@ describe('runWorkflow — event envelope + ordering', () => {
         name: 'long-child',
         status: 'completed',
         finalText,
+        digest,
       }),
       output: async (taskId: string) => ({ taskId, name: 'long-child', status: 'running' }),
       send: async () => {},
@@ -139,20 +141,17 @@ describe('runWorkflow — event envelope + ordering', () => {
 
     expect(outcome.ok).toBe(true);
     const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
-    expect(completed?.data?.summary).toContain('[workflow handoff]');
-    expect(completed?.data?.summary).toContain('Conclusion: the digest formatter');
-    expect(String(completed?.data?.summary).length).toBeLessThanOrEqual(4096 + 3);
+    expect(completed?.data?.summary).toBe(digest);
+    expect(completed?.data?.summaryKind).toBe('digest');
+    expect(completed?.data?.summary).not.toContain('long report');
   });
 
-  it('preserves a workflow handoff block beyond the normal event summary prefix', async () => {
+  it('falls back to bounded finalText excerpts when a child digest is missing', async () => {
     const finalText = [
       'I now have a complete picture of the workflow changes.',
       'Here is my long report.',
       'overview details '.repeat(400),
-      '[workflow handoff]',
-      '- confirmed: final handoff survived the long report.',
-      '- risk: prefix-only truncation would hide this.',
-      '[/workflow handoff]',
+      'Finding: finalText fallback remains bounded.',
     ].join('\n');
     const backend: WorkflowAgentBackend = {
       spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-long', name: input.name }),
@@ -174,10 +173,9 @@ describe('runWorkflow — event envelope + ordering', () => {
 
     expect(outcome.ok).toBe(true);
     const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
-    expect(completed?.data?.summary).toContain('[workflow handoff]');
-    expect(completed?.data?.summary).toContain('final handoff survived');
-    expect(completed?.data?.summary).toContain('prefix-only truncation would hide this');
-    expect(completed?.data?.summary).not.toContain('overview details overview details');
+    expect(completed?.data?.summary).toContain('overview details');
+    expect(completed?.data?.summaryKind).toBe('excerpt');
+    expect(String(completed?.data?.summary).length).toBeLessThanOrEqual(4096 + 3);
   });
 
   it('emits workflow_failed and surfaces the error when the script throws', async () => {

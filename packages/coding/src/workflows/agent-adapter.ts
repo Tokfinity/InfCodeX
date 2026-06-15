@@ -129,14 +129,24 @@ function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChil
 function deriveTerminal(
   result: KodaXChildExecutionResult,
   taskId: string,
-): { status: WorkflowTaskStatus; snapStatus: ChildProgressStatus; finalText: string } {
+): {
+  status: WorkflowTaskStatus;
+  snapStatus: ChildProgressStatus;
+  finalText: string;
+  digest?: string;
+} {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
   }
   const child = result.results[0];
   const finalText = child?.summary ?? '';
   if (child?.status === 'completed') {
-    return { status: 'completed', snapStatus: 'completed', finalText };
+    return {
+      status: 'completed',
+      snapStatus: 'completed',
+      finalText,
+      ...(child.digest ? { digest: child.digest } : {}),
+    };
   }
   return { status: 'failed', snapStatus: 'failed', finalText };
 }
@@ -176,6 +186,11 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     const perChild: ChildExecutorOptions = {
       ...childOptions,
       maxParallel: 1,
+      // FEATURE_217 — every child launched through the workflow backend gets the
+      // self-distill digest. This is the single workflow boundary, so it marks
+      // workflow children without overloading `parentHarness` (which stays
+      // 'tool-dispatch' so write children are not dropped by validateWriteBundles).
+      workflowChild: true,
       abortSignal: abort.signal,
       snapshotUpdater: snapshotMap
         ? (event) => applyChildSnapshotEvent(snapshotMap, childId, event)
@@ -220,6 +235,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       name: entry.name,
       status: term.status,
       finalText: term.finalText,
+      ...(term.digest ? { digest: term.digest } : {}),
       usage: { totalTokens: result.totalTokensUsed },
     };
   };

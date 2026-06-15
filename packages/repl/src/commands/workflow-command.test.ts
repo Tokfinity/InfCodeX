@@ -43,6 +43,7 @@ import {
   formatWorkflowAgentDigest,
   createWorkflowAgentDigestLimiter,
   formatFinalEventSummary,
+  formatResult,
   createWorkflowLiveUpdateEmitter,
   observeManagedWorkflowDone,
   isSafeWorkflowRunId,
@@ -359,12 +360,12 @@ describe('workflow agentic presentation helpers', () => {
     expect(summary).not.toContain('[truncated]');
   });
 
-  it('summarizes long or mismatched child-agent reports with useful localized handoff excerpts', () => {
+  it('summarizes long or mismatched child-agent reports with useful localized excerpts', () => {
     const longEnglishReport = [
       'I now have comprehensive evidence across the state machine, durable persistence, concurrency, and UI-state layers.',
       'Here is a long markdown report that should not be copied into the conversational transcript as a half-truncated assistant reply.',
       '## Details',
-      'Finding: runtime events should carry enough child output to extract useful handoff details.',
+      'Finding: runtime events should carry enough child output to extract useful digest details.',
       'Evidence: a report preamble can hide the actionable lines after the old 360 character cap.',
       'Risk: users see report headers instead of real workflow progress.',
       'The complete report belongs in the workflow run timeline and final synthesis rather than the live chat stream.',
@@ -392,7 +393,7 @@ describe('workflow agentic presentation helpers', () => {
     expect(digest).not.toContain('Here is a long markdown report');
   });
 
-  it('prefers an explicit workflow handoff block over report preamble text', () => {
+  it('filters legacy workflow handoff marker fragments in fallback excerpts', () => {
     const report = [
       'I now have a complete picture of the files.',
       'Here is my comprehensive report.',
@@ -413,37 +414,38 @@ describe('workflow agentic presentation helpers', () => {
         status: 'completed',
         summary: report,
       },
-    }, 'en', 'run-handoff');
+    }, 'en', 'run-legacy-marker');
 
     expect(digest).toContain('Conclusion: token budget accounting is missing');
     expect(digest).toContain('Evidence: packages/coding/src/workflows/agent-adapter.ts');
+    expect(digest).not.toContain('[workflow handoff]');
+    expect(digest).not.toContain('[/workflow handoff]');
     expect(digest).not.toContain('I now have a complete picture');
     expect(digest).not.toContain('Here is my comprehensive report');
   });
 
-  it('labels explicit workflow handoff digests as intelligent summaries, not extracted summaries', () => {
+  it('labels self-distilled workflow digests as summaries, not extracted summaries', () => {
     const digest = formatWorkflowAgentDigest({
       seq: 4,
       type: 'agent_completed',
       data: {
         name: 'overview-scout',
+        summaryKind: 'digest',
         status: 'completed',
         summary: [
-          '[workflow handoff]',
           '- 结论：feature 217 的主要风险集中在 workflow 展示链路和 stop 状态映射。',
           '- 证据：runtime 已产出 handoff，但旧摘要只保留报告开头。',
           '- 下一步：优先保证 handoff 进入 agent_completed.summary。',
-          '[/workflow handoff]',
         ].join('\n'),
       },
-    }, 'zh', 'run-handoff');
+    }, 'zh', 'run-digest');
 
-    expect(digest).toContain('子 Agent overview-scout 已完成。智能摘要：');
+    expect(digest).toContain('子 Agent overview-scout 已完成。摘要：');
     expect(digest).not.toContain('摘录摘要');
-    expect(digest).not.toContain('关键信息');
+    expect(digest).not.toContain('[workflow handoff]');
   });
 
-  it('does not ellipsize valid intelligent handoff lines', () => {
+  it('does not ellipsize valid self-distilled digest lines', () => {
     const longFinding = [
       '发现：用户掌控感的主要缺口不是缺少 run id，而是子 Agent 从启动到完成之间没有可解释的中间反馈，',
       '因此用户只能看到 live surface 的名称变化，却无法判断当前工作是否仍在推进、是否卡住、是否已经产出可验证结论。',
@@ -453,22 +455,21 @@ describe('workflow agentic presentation helpers', () => {
       type: 'agent_completed',
       data: {
         name: 'control-sense-reviewer',
+        summaryKind: 'digest',
         status: 'completed',
         summary: [
-          '[workflow handoff]',
           `- ${longFinding}`,
           '- 证据：agent_completed 之前只有 spawn/phase 事件，缺少 agent_progress 或工具快照摘要。',
-          '[/workflow handoff]',
         ].join('\n'),
       },
-    }, 'zh', 'run-long-handoff');
+    }, 'zh', 'run-long-digest');
 
-    expect(digest).toContain('子 Agent control-sense-reviewer 已完成。智能摘要：');
+    expect(digest).toContain('子 Agent control-sense-reviewer 已完成。摘要：');
     expect(digest).toContain(longFinding);
     expect(digest).not.toContain('...');
   });
 
-  it('falls back to extracted summaries when a handoff block is not useful', () => {
+  it('falls back to extracted summaries when legacy marker content is not useful', () => {
     const report = [
       '[workflow handoff]',
       'Here is my report.',
@@ -482,18 +483,38 @@ describe('workflow agentic presentation helpers', () => {
       seq: 4,
       type: 'agent_completed',
       data: {
-        name: 'handoff-quality-checker',
+        name: 'legacy-marker-quality-checker',
         status: 'completed',
         summary: report,
       },
-    }, 'en', 'run-handoff-fallback');
+    }, 'en', 'run-marker-fallback');
 
-    expect(digest).toContain('Agent handoff-quality-checker completed. Extracted summary:');
+    expect(digest).toContain('Agent legacy-marker-quality-checker completed. Extracted summary:');
     expect(digest).toContain('Finding: workflow show is an event timeline');
     expect(digest).toContain('Evidence: readWorkflowRunDetail');
     expect(digest).toContain('Risk: telling users');
     expect(digest).not.toContain('Intelligent summary');
     expect(digest).not.toContain('Here is my report');
+  });
+
+  it('does not show collapsed legacy workflow marker fragments as a digest line', () => {
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'legacy-marker-fragment',
+        status: 'completed',
+        summary: [
+          '- [workflow handoff]...[/workflow handoff]',
+          '- Finding: users need a real digest, not marker text.',
+          '- Evidence: collapsed marker fragments used to leak into chat.',
+        ].join('\n'),
+      },
+    }, 'en', 'run-marker-fragment');
+
+    expect(digest).toContain('Finding: users need a real digest');
+    expect(digest).toContain('Evidence: collapsed marker fragments');
+    expect(digest).not.toContain('[workflow handoff]');
   });
 
   it('skips low-information report openers when falling back to local extraction', () => {
@@ -630,7 +651,7 @@ describe('workflow agentic presentation helpers', () => {
       '| coding workflow | packages/coding/src/workflows/generator.ts | +220/-40 | 生成器 prompt 与 capsule 接入 |',
       '## 关键发现',
       '- 运行时和 REPL 展示路径耦合在 agent_completed.summary 上，需要保证 bounded finalText。',
-      '- saved rerun 复用旧脚本，因此不会自动产生 handoff block。',
+      '- saved rerun 复用旧脚本，因此可能缺少结构化 digest。',
       '- fallback 摘要必须跳过结构性标题和表格，保留真实发现。',
     ].join('\n');
 
@@ -650,6 +671,34 @@ describe('workflow agentic presentation helpers', () => {
     expect(digest).not.toContain('FEATURE_217 变更地图');
     expect(digest).not.toContain('| 层 | 来源 | 规模 | 性质 |');
     expect(digest).not.toContain('agent runtime | packages/agent');
+  });
+});
+
+describe('formatResult', () => {
+  it('renders strings and known result keys directly', () => {
+    expect(formatResult('hello')).toBe('hello');
+    expect(formatResult({ synthesis: 'done' })).toBe('done');
+    expect(formatResult({ synthesis: { text: 'nested' } })).toBe('nested');
+    expect(formatResult({ summary: 'sum' })).toBe('sum');
+  });
+
+  it('renders an unrecognized non-empty object/array as JSON so it stays visible (FEATURE_217)', () => {
+    // Keeps the build-time source lint and runtime formatter in agreement:
+    // a non-trivial run() return must produce a visible answer, not a silent
+    // content-free completion.
+    const obj = formatResult({ findings: ['a'], recommendations: ['b'] });
+    expect(obj).toContain('findings');
+    expect(obj).toContain('a');
+    const arr = formatResult([{ point: 'x' }]);
+    expect(arr).toContain('point');
+  });
+
+  it('treats truly empty / nullish returns as no displayable result', () => {
+    expect(formatResult(undefined)).toBeUndefined();
+    expect(formatResult(null)).toBeUndefined();
+    expect(formatResult({})).toBeUndefined();
+    expect(formatResult([])).toBeUndefined();
+    expect(formatResult('')).toBeUndefined();
   });
 });
 

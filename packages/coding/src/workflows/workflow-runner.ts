@@ -20,8 +20,16 @@ import type {
   WorkflowRunState,
 } from '@kodax-ai/agent';
 
+import { dirname } from 'node:path';
+
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
 import { createRunGraphWriter, type WorkflowScriptSnapshotInput } from './run-graph.js';
+import {
+  workflowWorktreeBaseDir,
+  sweepWorkflowRunWorktrees,
+  pruneStaleWorkflowWorktrees,
+  type WorktreeSweepDeps,
+} from './worktree-sweep.js';
 import { buildToolExecutionContext } from '../agent-runtime/tool-execution-context.js';
 import type { KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
@@ -55,6 +63,8 @@ export interface RunWorkflowModuleOptions {
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
   /** Optional lifecycle gate, used by WorkflowRunManager pause/resume. */
   readonly beforeSpawn?: () => Promise<void>;
+  /** Test seam: inject git/mtime for the worktree sweep (FEATURE_217 Layer 2/3). */
+  readonly worktreeSweepDeps?: WorktreeSweepDeps;
 }
 
 export type RunWorkflowModuleOutcome =
@@ -115,6 +125,17 @@ export async function runWorkflowModule(
   }
 
   const now = opts.now ?? (() => Date.now());
+
+  // FEATURE_217 Layer 3 — reclaim worktrees orphaned by a previous hard kill
+  // before this run starts allocating its own. Fail-soft, never blocks the run.
+  // Git runs from the same cwd `toolWorktreeCreate` used (`executionCwd ?? gitRoot`)
+  // so `git worktree list/remove` resolves the repo even when `gitRoot` is unset.
+  const gitRoot = opts.ctx?.executionCwd ?? opts.ctx?.gitRoot;
+  await pruneStaleWorkflowWorktrees(
+    { workflowRunsRoot: dirname(opts.runDir), gitRoot },
+    { now, ...opts.worktreeSweepDeps },
+  );
+
   const writer = createRunGraphWriter(opts.runDir, { now });
   const scriptSnapshot = opts.scriptSnapshot
     ? writer.writeScriptSnapshot(opts.scriptSnapshot)
@@ -130,20 +151,32 @@ export async function runWorkflowModule(
   };
 
   const startedAt = now();
-  const outcome = await runWorkflow(
-    {
-      runId: opts.runId,
-      args: opts.args,
-      backend,
-      limits: clampWorkflowLimits(opts.module.meta),
-      ...(opts.signal ? { signal: opts.signal } : {}),
-      onEvent: (event) => {
-        writer.onEvent(event);
-        opts.onEvent?.(event);
+  let outcome: Awaited<ReturnType<typeof runWorkflow>>;
+  try {
+    outcome = await runWorkflow(
+      {
+        runId: opts.runId,
+        args: opts.args,
+        backend,
+        limits: clampWorkflowLimits(opts.module.meta),
+        ...(opts.signal ? { signal: opts.signal } : {}),
+        onEvent: (event) => {
+          writer.onEvent(event);
+          opts.onEvent?.(event);
+        },
       },
-    },
-    (wf) => opts.module.run(wf, opts.args),
-  );
+      (wf) => opts.module.run(wf, opts.args),
+    );
+  } finally {
+    // FEATURE_217 Layer 2 — reclaim any worktree still registered under this
+    // run's base dir on every terminal path (success / failure / cancel),
+    // covering aborted or spawn-without-wait children that skipped per-child
+    // cleanup. Fail-soft.
+    await sweepWorkflowRunWorktrees(
+      { baseDir: workflowWorktreeBaseDir(opts.runDir), gitRoot },
+      { now, ...opts.worktreeSweepDeps },
+    );
+  }
 
   writer.writeRunJson({
     meta: opts.module.meta,
@@ -203,11 +236,16 @@ export interface RunWorkflowFromOptionsInput {
 export async function runWorkflowFromOptions(
   input: RunWorkflowFromOptionsInput,
 ): Promise<RunWorkflowModuleOutcome> {
-  const ctx = buildToolExecutionContext({
-    options: input.options,
-    runtime: input.options.extensionRuntime,
-    managedProtocolPayloadRef: { current: undefined },
-  });
+  const ctx: KodaXToolExecutionContext = {
+    ...buildToolExecutionContext({
+      options: input.options,
+      runtime: input.options.extensionRuntime,
+      managedProtocolPayloadRef: { current: undefined },
+    }),
+    // FEATURE_217 Layer B — workflow child worktrees nest under the run dir so
+    // they are reclaimable and never pollute the user's project tree.
+    workflowWorktreeBaseDir: workflowWorktreeBaseDir(input.runDir),
+  };
   const childOptions: WorkflowChildOptions = {
     maxIterationsPerChild: DEFAULT_MAX_ITERATIONS_PER_CHILD,
     parentRole: 'worker',

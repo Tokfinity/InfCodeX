@@ -321,8 +321,21 @@ function findOuterRunReturnExpression(source: string): string | undefined {
 
 function hasDisplayableRunReturn(source: string): boolean {
   const expression = findOuterRunReturnExpression(source);
-  if (!expression || /^(?:undefined|null|\{\})$/.test(expression.trim())) return false;
-  return /\b(?:synthesis|summary|report|text|result|finalText)\b|\bwf\.synthesize\s*\(/.test(expression);
+  if (!expression) return false;
+  const trimmed = expression.trim();
+  // Reject trivially non-displayable returns (nothing reaches the user). These
+  // mirror what the REPL result formatter treats as empty, so the build-time
+  // lint and runtime presentation agree on what counts as displayable.
+  if (/^(?:undefined|null|void\s+0|\{\s*\}|\[\s*\]|''|""|``)$/.test(trimmed)) return false;
+  // A durable artifact write or a `wf.phase(...)` result is not the user-facing
+  // answer — these are the artifact-only / phase-local anti-patterns.
+  if (/^await\s+wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
+  if (/^wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
+  // Any other non-empty value return is displayable. We deliberately do NOT
+  // require specific identifier names (synthesis/report/...) — a workflow may
+  // legitimately return `{ findings }`, `analysis`, etc. The runtime result
+  // contract verifies the actual rendered text at execution time.
+  return true;
 }
 
 export function validateGeneratedWorkflowSource(source: string): string {
@@ -347,7 +360,13 @@ export function validateGeneratedWorkflowSource(source: string): string {
     }
   }
   if (!hasDisplayableRunReturn(source)) {
-    throw new Error('workflow generation source outer run function must return displayable final text');
+    const expr = findOuterRunReturnExpression(source);
+    const detail = expr === undefined
+      ? 'no top-level `return` was found in run() — a return inside a wf.phase(...) callback does not count'
+      : `the top-level return \`${expr.slice(0, 80)}\` is not displayable — do not return undefined/null/{}, a bare wf.artifact(...) write, or a wf.phase(...) result`;
+    throw new Error(
+      `workflow generation source outer run function must return displayable final text (${detail})`,
+    );
   }
   return source;
 }
@@ -371,7 +390,7 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '- Keep intermediate findings in local variables and pass their finalText/text values forward; artifacts are durable outputs, not mutable args.',
     '- The outer run function must return displayable final text, preferably { synthesis: finalText }. Returning only inside a wf.phase callback is invalid. Artifact-only or empty returns are invalid.',
     '- Also await wf.artifact("final-report", { summary/report/text: finalText }) for durable inspection when a final report is produced.',
-    '- Every child agent prompt must ask the child to end with a compact [workflow handoff]...[/workflow handoff] block in the same language as the request. The block should contain 2-4 short bullet lines with concrete conclusions, evidence, risks, unresolved questions, or next actions. Each bullet should be self-contained, concise, and must not use ellipses, markdown tables, report titles, or generic report preambles.',
+    '- Do not ask child agents to emit special transcript marker blocks. KodaX derives child-agent transcript digests after each child finishes; child prompts should focus on the actual work product and final report.',
     '',
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
     '',

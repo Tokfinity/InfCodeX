@@ -6,6 +6,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { toolWorktreeCreate, toolWorktreeRemove } from './worktree.js';
 import type { KodaXToolExecutionContext } from '../types.js';
 
+// `toolWorktreeCreate` mkdirs an explicit base_dir; stub it so tests touch no fs.
+vi.mock('fs', () => ({ mkdirSync: vi.fn() }));
+
 // Mock child_process.execFile with default behavior
 let mockExecFileImpl: Function | null = null;
 
@@ -84,6 +87,39 @@ describe('toolWorktreeCreate', () => {
       const parsed = JSON.parse(result);
       expect(parsed.branch).toBe(name);
     }
+  });
+
+  it('defaults the worktree to a sibling of the git root', async () => {
+    let addPath: string | undefined;
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      if (args[0] === 'worktree' && args[1] === 'add') addPath = args[args.length - 1];
+      cb(null, { stdout: '', stderr: '' });
+    });
+    const result = await toolWorktreeCreate({ branch_name: 'sibling-wt' }, mockContext);
+    setMockExecFileImpl(null);
+
+    const parsed = JSON.parse(result);
+    // cwd '/test/repo' → parent '/test' → '/test/.kodax-worktree-sibling-wt'
+    // (drive-letter agnostic: path.resolve prepends a drive on win32).
+    expect(parsed.path.replace(/\\/g, '/')).toMatch(/\/test\/\.kodax-worktree-sibling-wt$/);
+    expect(addPath?.replace(/\\/g, '/')).toMatch(/\/test\/\.kodax-worktree-sibling-wt$/);
+  });
+
+  it('nests the worktree under an explicit base_dir (workflow runs)', async () => {
+    let addPath: string | undefined;
+    setMockExecFileImpl((_cmd: string, args: string[], _opts: unknown, cb: Function) => {
+      if (args[0] === 'worktree' && args[1] === 'add') addPath = args[args.length - 1];
+      cb(null, { stdout: '', stderr: '' });
+    });
+    const result = await toolWorktreeCreate(
+      { branch_name: 'wf-child-1', base_dir: '/runs/proj/r1/worktrees' },
+      mockContext,
+    );
+    setMockExecFileImpl(null);
+
+    const parsed = JSON.parse(result);
+    expect(parsed.path.replace(/\\/g, '/')).toMatch(/\/runs\/proj\/r1\/worktrees\/\.kodax-worktree-wf-child-1$/);
+    expect(addPath?.replace(/\\/g, '/')).toMatch(/\/runs\/proj\/r1\/worktrees\/\.kodax-worktree-wf-child-1$/);
   });
 });
 

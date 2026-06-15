@@ -155,6 +155,105 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(result.totalTokensUsed).toBe(42);
   });
 
+  it('adds a no-tool same-session digest turn for workflow children only', async () => {
+    const childMessages = [
+      { role: 'assistant' as const, content: 'Full report with file:line evidence.' },
+    ];
+    mockRunKodaX
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: 'Full report with file:line evidence.',
+        messages: childMessages,
+        sessionId: 's-child',
+        usage: { inputTokens: 30, outputTokens: 12, totalTokens: 42 },
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: '- Finding: workflow users get a concise digest.\n- Evidence: full report remains separate.',
+        messages: [
+          ...childMessages,
+          { role: 'assistant' as const, content: '- Finding: workflow users get a concise digest.' },
+        ],
+        sessionId: 's-child',
+        usage: { inputTokens: 5, outputTokens: 8, totalTokens: 13 },
+      });
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-digest', readOnly: true })],
+      createCtx(),
+      // FEATURE_217: digest gates on `workflowChild`, NOT parentHarness — the
+      // workflow runner keeps parentHarness:'tool-dispatch' for write children.
+      createOptions({ workflowChild: true }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(result.results[0]?.summary).toBe('Full report with file:line evidence.');
+    expect(result.results[0]?.digest).toContain('workflow users get a concise digest');
+    expect(result.totalTokensUsed).toBe(55);
+    const digestOptions = mockRunKodaX.mock.calls[1]![0] as {
+      maxIter?: number;
+      session?: { initialMessages?: readonly unknown[] };
+      context?: { excludeTools?: readonly string[] };
+    };
+    expect(digestOptions.maxIter).toBe(1);
+    expect(digestOptions.session?.initialMessages).toBe(childMessages);
+    expect(digestOptions.context?.excludeTools).toContain('read');
+  });
+
+  it('does not add the digest turn for ordinary dispatch-child-tasks children', async () => {
+    mockRunKodaX.mockResolvedValueOnce({
+      success: true,
+      lastText: 'ordinary child output',
+      messages: [{ role: 'assistant' as const, content: 'ordinary child output' }],
+      sessionId: 's-tool',
+      usage: { inputTokens: 2, outputTokens: 3, totalTokens: 5 },
+    });
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-tool-dispatch', readOnly: true })],
+      createCtx(),
+      createOptions({ parentHarness: 'tool-dispatch' }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(1);
+    expect(result.results[0]?.digest).toBeUndefined();
+  });
+
+  it('runs the digest inside the worktree scope, then reclaims the worktree (FEATURE_217 Layer 1)', async () => {
+    // Guards the Layer 1 refactor: the self-distill digest must complete inside
+    // the isolated worktree BEFORE the worktree is removed, and the digest must
+    // still reach the result.
+    const order: string[] = [];
+    const childMessages = [{ role: 'assistant' as const, content: 'report' }];
+    mockToolWorktreeCreate.mockResolvedValue(
+      JSON.stringify({ path: '/tmp/wt-digest', branch: 'kodax-wt-workflow-cb-wd' }),
+    );
+    mockToolWorktreeRemove.mockImplementation(async () => {
+      order.push('worktree-remove');
+      return JSON.stringify({ restored: true });
+    });
+    mockRunKodaX
+      .mockImplementationOnce(async () => {
+        order.push('child-run');
+        return { success: true, lastText: 'report', messages: childMessages, sessionId: 's-wd' };
+      })
+      .mockImplementationOnce(async (opts: { context?: { gitRoot?: string } }) => {
+        order.push('digest-run');
+        // Digest runs scoped to the worktree (not the parent repo).
+        expect(opts.context?.gitRoot).toBe('/tmp/wt-digest');
+        return { success: true, lastText: '- Finding: scoped digest', messages: childMessages, sessionId: 's-wd' };
+      });
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-wd', readOnly: true, isolation: 'worktree' })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+
+    expect(result.results[0]?.digest).toContain('scoped digest');
+    expect(order).toEqual(['child-run', 'digest-run', 'worktree-remove']);
+  });
+
   it('removes parent-managed workflow worktrees after a child completes', async () => {
     mockToolWorktreeCreate.mockResolvedValue(JSON.stringify({
       path: '/tmp/kodax-worktree-cb-worktree',
@@ -226,6 +325,31 @@ describe('executeChildAgents', () => {
     expect(childOptions.context?.gitRoot).toBe('/tmp/kodax-wt-workflow-cb-wt');
     expect(childOptions.context?.executionCwd).toBe('/tmp/kodax-wt-workflow-cb-wt');
     expect(result.results[0]?.summary).toContain('/tmp/kodax-wt-workflow-cb-wt');
+  });
+
+  it('nests the worktree under ctx.workflowWorktreeBaseDir when the runner provides one', async () => {
+    // FEATURE_217 Layer B — workflow runs point worktrees at <runDir>/worktrees
+    // so they are reclaimable and never pollute the user's project tree.
+    mockToolWorktreeCreate.mockResolvedValue(
+      JSON.stringify({ path: '/runs/p/r1/worktrees/.kodax-worktree-x', branch: 'kodax-wt-workflow-cb-base' }),
+    );
+    mockRunKodaX.mockResolvedValue({
+      success: true,
+      lastText: 'done',
+      messages: [{ role: 'assistant', content: '' }],
+      sessionId: 's-base',
+    });
+
+    await executeChildAgents(
+      [createBundle({ id: 'cb-base', readOnly: true, isolation: 'worktree' })],
+      { ...createCtx(), workflowWorktreeBaseDir: '/runs/p/r1/worktrees' },
+      createOptions(),
+    );
+
+    expect(mockToolWorktreeCreate).toHaveBeenCalledWith(
+      { description: 'workflow-cb-base', base_dir: '/runs/p/r1/worktrees' },
+      expect.objectContaining({ workflowWorktreeBaseDir: '/runs/p/r1/worktrees' }),
+    );
   });
 
   it('executes read-only bundles in parallel', async () => {

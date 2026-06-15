@@ -128,6 +128,45 @@ describe('runWorkflowModule', () => {
     expect(runJson.status).toBe('stopped');
   });
 
+  it('reclaims leftover run worktrees on the terminal path (FEATURE_217 Layer 2/3)', async () => {
+    const calls: string[][] = [];
+    const baseDir = join(dir, 'worktrees');
+    const leftover = join(baseDir, '.kodax-worktree-wf-child-1');
+    const runGit = async (args: readonly string[]): Promise<string> => {
+      calls.push([...args]);
+      if (args[0] === 'worktree' && args[1] === 'list') {
+        return [
+          'worktree /repo', 'HEAD a', 'branch refs/heads/main', '',
+          `worktree ${leftover}`, 'HEAD b', 'branch refs/heads/kodax-wt-workflow-wf-child-1', '',
+        ].join('\n');
+      }
+      return '';
+    };
+
+    const outcome = await runWorkflowModule({
+      module: parallelInvestigation,
+      args: { question: 'Q' },
+      runId: 'run-wt',
+      runDir: dir,
+      backend: fakeBackend(),
+      ctx: { backups: new Map(), gitRoot: '/repo' },
+      approval: () => true,
+      // Fresh mtime → Layer 3 startup prune leaves it; Layer 2 terminal sweep
+      // (path-prefix, mtime-agnostic) is what reclaims it.
+      worktreeSweepDeps: { runGit, now: () => 0, mtimeMs: () => 0 },
+    });
+
+    expect(outcome.kind).toBe('completed');
+    const removed = calls
+      .filter((c) => c[0] === 'worktree' && c[1] === 'remove')
+      .map((c) => c[2]);
+    expect(removed).toContain(leftover);
+    // The main repo worktree is never touched.
+    expect(removed).not.toContain('/repo');
+    // Startup prune ran (Layer 3) in addition to the terminal sweep.
+    expect(calls.some((c) => c[0] === 'worktree' && c[1] === 'prune')).toBe(true);
+  });
+
   it('writes a script snapshot when a generated workflow source is provided', async () => {
     const outcome = await runWorkflowModule({
       module: parallelInvestigation,

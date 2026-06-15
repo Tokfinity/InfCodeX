@@ -78,14 +78,19 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     const backend = createCodingWorkflowBackend({
       ctx,
       childOptions,
-      runChild: async () => execResult({ status: 'completed', summary: 'found 3 bugs' }),
+      runChild: async () => execResult({
+        status: 'completed',
+        summary: 'full child report',
+        digest: '- Found 3 workflow UX risks.',
+      }),
       generateId: () => 'task-x',
     });
     const handle = await backend.spawn({ name: 'security', prompt: 'audit' });
     expect(handle).toEqual({ taskId: 'task-x', name: 'security' });
     const result = await backend.wait(handle.taskId);
     expect(result.status).toBe('completed');
-    expect(result.finalText).toBe('found 3 bugs');
+    expect(result.finalText).toBe('full child report');
+    expect(result.digest).toBe('- Found 3 workflow UX risks.');
     expect(result.name).toBe('security');
   });
 
@@ -129,6 +134,25 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       /timed out after 5ms/,
     );
     expect(seenSignal?.aborted).toBe(true);
+  });
+
+  it('marks every child as a workflow child so the self-distill digest fires (FEATURE_217)', async () => {
+    let seenWorkflowChild: boolean | undefined;
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      generateId: () => 'task-wf-child',
+      runChild: (_bundles, _ctx, opts) => {
+        seenWorkflowChild = opts.workflowChild;
+        return Promise.resolve(execResult());
+      },
+    });
+
+    await backend.spawn({ name: 'x', prompt: 'x' });
+    // The backend stamps `workflowChild` regardless of parentHarness, so the
+    // digest fires in production where parentHarness stays 'tool-dispatch'
+    // (write children must not be dropped by validateWriteBundles).
+    expect(seenWorkflowChild).toBe(true);
   });
 
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {

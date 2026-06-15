@@ -604,6 +604,8 @@ export interface KodaXChildAgentResult {
   contradictions: string[];
   artifactPaths?: string[];
   sessionId?: string;
+  /** Bounded workflow transcript digest. Full `summary` remains the synthesis/audit source. */
+  digest?: string;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */
@@ -1005,6 +1007,24 @@ export interface KodaXSelfManualConfig {
   readonly topics?: readonly KodaXManualTopicInput[];
 }
 
+/**
+ * SDK-consumer auto-compaction override. When a field is provided it wins
+ * over both the adaptive default and `~/.kodax/config.json`. Lets an
+ * embedder that calls `runManagedTask` in-process pin the context window /
+ * trigger for a model the built-in capability table doesn't cover (or that
+ * it resolves through a custom provider), or disable auto-compaction for a
+ * run — without writing to the user's home-dir config file. Omitted fields
+ * fall through to the normal resolution cascade.
+ */
+export interface KodaXCompactionOverride {
+  /** Override the resolved provider context window, in tokens. */
+  contextWindow?: number;
+  /** Override the auto-compaction trigger percentage (0-100). */
+  triggerPercent?: number;
+  /** Set false to disable automatic compaction for this run. */
+  enabled?: boolean;
+}
+
 export interface KodaXOptions {
   provider: string;
   model?: string;
@@ -1041,6 +1061,11 @@ export interface KodaXOptions {
    * SDK callers can also instantiate one via {@link createSessionControl}.
    */
   sessionControl?: KodaXSessionControl;
+  /**
+   * SDK-consumer auto-compaction override. Wins over the adaptive default
+   * and `~/.kodax/config.json`. See {@link KodaXCompactionOverride}.
+   */
+  compaction?: KodaXCompactionOverride;
 }
 
 /**
@@ -1344,6 +1369,13 @@ export interface KodaXToolExecutionContext {
   selfManual?: KodaXSelfManualConfig;
   /** Working directory used to resolve relative paths and execute shell commands. */
   executionCwd?: string;
+  /**
+   * FEATURE_217 (v0.7.49): parent dir for `isolation:'worktree'` workflow child
+   * worktrees. Workflow runs point this at `<runDir>/worktrees` so worktrees are
+   * reclaimable (Layer 2/3 sweep) and never pollute the user's project tree.
+   * Absent on non-workflow paths → worktrees fall back to the git root's parent.
+   */
+  workflowWorktreeBaseDir?: string;
   /** Shared extension capability runtime used by retrieval-family tools. */
   extensionRuntime?: ExtensionRuntimeContract;
   /** Ask user a question interactively (select mode) - 交互式向用户提问 (Issue 069) */

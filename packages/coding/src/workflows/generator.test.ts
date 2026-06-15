@@ -36,13 +36,11 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('synthesis rubric');
   });
 
-  it('asks child agents to end with a workflow handoff block for transcript digests', () => {
+  it('does not ask child agents to emit workflow handoff marker blocks', () => {
     const prompt = buildWorkflowGenerationUserPrompt('review feature 217');
-    expect(prompt).toContain('[workflow handoff]');
-    expect(prompt).toContain('[/workflow handoff]');
-    expect(prompt).toContain('2-4 short bullet lines');
-    expect(prompt).toContain('concrete conclusions');
-    expect(prompt).toContain('must not use ellipses');
+    expect(prompt).not.toContain('[workflow handoff]');
+    expect(prompt).not.toContain('[/workflow handoff]');
+    expect(prompt).toContain('KodaX derives child-agent transcript digests after each child finishes');
   });
 });
 
@@ -50,6 +48,20 @@ describe('validateGeneratedWorkflowSource', () => {
   it('accepts a restricted run function', () => {
     const source = 'async function run(wf, args) { return { result: args }; }';
     expect(validateGeneratedWorkflowSource(source)).toBe(source);
+  });
+
+  it('accepts displayable returns that do not use whitelisted identifier names', () => {
+    // Regression: an investigation workflow may return custom-named values.
+    // These are displayable and must not be rejected by the build-time lint.
+    const sources = [
+      'async function run(wf) { const a = await wf.runAgent({ name: "a", prompt: "x" }); return a.finalText; }',
+      'async function run(wf) { return { findings: [], recommendations: [] }; }',
+      'async function run(wf) { const r = await wf.synthesize({ inputs: [], rubric: "x" }); return r.text; }',
+      'async function run(wf) { return await wf.synthesize({ inputs: [], rubric: "x" }); }',
+    ];
+    for (const source of sources) {
+      expect(validateGeneratedWorkflowSource(source)).toBe(source);
+    }
   });
 
   it('rejects direct Node escape surfaces before VM execution', () => {

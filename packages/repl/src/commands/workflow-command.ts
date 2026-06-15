@@ -998,7 +998,7 @@ function trimWorkflowLaunchSummary(text: string): string {
   return `${compact.slice(0, MAX_WORKFLOW_LAUNCH_SUMMARY_CHARS).trimEnd()}...`;
 }
 
-function formatResult(
+export function formatResult(
   result: unknown,
   options: WorkflowResultFormatOptions = {},
 ): string | undefined {
@@ -1021,6 +1021,26 @@ function formatResult(
       if (typeof value === 'string' && value.trim().length > 0) {
         return trimResultPreview(value, options);
       }
+    }
+  }
+  // FEATURE_217 — fallback: render any other non-empty value (plain object /
+  // array / number / boolean) as readable JSON so a workflow that returns an
+  // unrecognized-but-non-empty shape still produces a VISIBLE final answer
+  // instead of a content-free "completed" with no body. This keeps the
+  // build-time source lint and this runtime formatter in agreement: a
+  // non-trivial run() return is displayable. Empty `{}` / `[]` and
+  // null/undefined still fall through to the no-result contract path.
+  if (result !== undefined && result !== null) {
+    try {
+      const json = JSON.stringify(result, null, 2);
+      if (typeof json === 'string') {
+        const trimmed = json.trim();
+        if (trimmed.length > 0 && trimmed !== '{}' && trimmed !== '[]' && trimmed !== '""') {
+          return trimResultPreview(json, options);
+        }
+      }
+    } catch {
+      // Non-serializable (e.g. circular) — fall through to the no-result path.
     }
   }
   return undefined;
@@ -1180,19 +1200,14 @@ export function formatWorkflowAgentDigest(
   if (readEventString(event, 'status') !== 'completed') return undefined;
   const rawSummary = readEventString(event, 'summary');
   if (!rawSummary) return undefined;
-  const handoffSummary = extractWorkflowHandoffBlock(rawSummary);
-  const handoffExcerpts = handoffSummary
-    ? extractWorkflowAgentDigestExcerpts(handoffSummary, { truncateLines: false })
-    : [];
-  const useHandoff = handoffExcerpts.length > 0;
-  const summary = useHandoff && handoffSummary ? handoffSummary : rawSummary;
+  const isModelDigest = readEventString(event, 'summaryKind') === 'digest';
   const name = readEventString(event, 'name') ?? readEventString(event, 'taskId') ?? 'agent';
   return formatWorkflowAgentLongDigest(
     name,
-    summary,
+    rawSummary,
     locale,
     runId,
-    useHandoff,
+    isModelDigest,
   );
 }
 
@@ -1200,17 +1215,6 @@ function trimWorkflowAgentDigestExcerpt(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (compact.length <= MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS) return compact;
   return `${compact.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS).trimEnd()}...`;
-}
-
-function extractWorkflowHandoffBlock(summary: string): string | undefined {
-  const match = /\[workflow handoff\]([\s\S]*?)\[\/workflow handoff\]/i.exec(summary);
-  const body = match?.[1]
-    ?.split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .join('\n')
-    .trim();
-  return body && body.length > 0 ? body : undefined;
 }
 
 function isHighSignalWorkflowAgentDigestLine(line: string): boolean {
@@ -1223,6 +1227,7 @@ function isHighSignalWorkflowAgentDigestLine(line: string): boolean {
 
 function isLowInformationWorkflowAgentDigestLine(line: string): boolean {
   const lower = line.toLowerCase();
+  if (/\[\/?workflow handoff\]/i.test(line)) return true;
   if (/^\|.*\|$/.test(line)) return true;
   if (/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(line)) return true;
   if (/^(?:i now have|i have|i now understand|here is|let me|i will|this report|the report)\b/.test(lower)) {
@@ -1299,10 +1304,10 @@ function formatWorkflowAgentLongDigest(
       : 'This is a child-agent digest; use /workflow show for the event timeline.';
   const heading = locale === 'zh'
     ? isStructuredSummary
-      ? `子 Agent ${name} 已完成。智能摘要：`
+      ? `子 Agent ${name} 已完成。摘要：`
       : `子 Agent ${name} 已完成。摘录摘要：`
     : isStructuredSummary
-      ? `Agent ${name} completed. Intelligent summary:`
+      ? `Agent ${name} completed. Summary:`
       : `Agent ${name} completed. Extracted summary:`;
   if (excerptLines.length === 0) {
     const emptyHeading = locale === 'zh'

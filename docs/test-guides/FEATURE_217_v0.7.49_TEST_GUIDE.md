@@ -42,7 +42,7 @@ FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生
 - Workflow 结束摘要：成功时 Assistant 直接显示完整最终结果；失败显示 run id、错误、show/rerun 提示。
 - Workflow live surface 进度：显示阶段序号、运行中智能体、`finished/spawned`、cap、failed/stopped 详情、show/stop hint、elapsed 时间和已完成 child 的 token 用量，并支持中文标签。
 - Workflow 长任务控制：默认不再设置 workflow 总墙钟超时；保留同步 JS watchdog，显式 `timeoutMs` 仍可 opt-in，实际长任务靠 per-step `wf.wait(...,{timeoutMs})`、caps/budget、progress 和 `/workflow stop` 控制。
-- Natural-language / AMAW agentic transcript：启动说明、每个子 Agent 的有界完成摘要和完整最终综合使用 assistant-style；显式 `[workflow handoff]` 作为“智能摘要”展示，缺少 handoff 时以“摘录摘要”做兼容提取，不折叠摘要本身。子 Agent 摘要必须尽量包含具体发现、判断、风险、证据指针、未决问题或下一步；不能只说“已完成、报告较长”。
+- Natural-language / AMAW agentic transcript：启动说明、每个子 Agent 的有界完成摘要和完整最终综合使用 assistant-style；workflow 子 Agent 完成后会追加一次同会话、无工具、单轮的自蒸馏摘要，缺失或失败时才以“摘录摘要”做 deterministic fallback，不折叠摘要本身。子 Agent 摘要必须尽量包含具体发现、判断、风险、证据指针、未决问题或下一步；不能只说“已完成、报告较长”。
 - 彩色 workflow transcript 选择/复制：app-managed transcript/fullscreen selection 会在命中测试和复制前剥离 ANSI escape sequences，复制结果不应包含 `\u001b[` / `ESC[` 这类颜色控制字符。
 - Restricted workflow runner 对空 taskId 等非法 task command 做 sandbox 侧校验，失败时保持为 workflow 错误，不让 REPL 崩溃。
 - Workflow manager crash hardening：run graph / startup persistence 异常会 settle 为 failed run，不会让 background `done` promise 以未处理 rejection 形式冒出；REPL observer 也会把 rejected `done` promise 渲染成可见 workflow 错误。
@@ -553,7 +553,7 @@ async function run(wf, args) {
 - [ ] Live surface 展示当前阶段序号（例如 `2/4 parallel-deep-analysis`）、可见运行中智能体、`已完成 / 计划数` 或 `已完成 / 已启动` 进度、agent 上限和 show/stop hint；`agent 上限` 是安全上限，不应被显示成“总任务数”或百分比进度分母。完成详情通过历史区 child digest 与 `/workflow show <runId>` 查看，不把所有 child chat 倾倒到主历史。
 - [ ] 自然语言 / AMAW 路径的启动说明和普通运行进展不使用 `info` 样式刷历史；`info` 主要保留给显式 slash 命令结果、确认/权限提示和错误。
 - [ ] 每个完成的 child agent 都在历史区出现中文有界结果摘要，且至少包含一个有效结论：具体发现、判断、风险、证据指针、未决问题或下一步。如果 child 返回长报告或非中文报告，历史区显示 3-4 行左右的中文摘录摘要；不能折叠掉摘要本身，也不能只说“报告较长、稍后汇总”。
-- [ ] 生成的 child prompt 会要求 child agent 在结尾输出 `[workflow handoff]...[/workflow handoff]` 交接摘要；runtime 必须优先把该 handoff 块写进 `agent_completed.summary`，即使它出现在长报告末尾。历史区优先展示该 handoff 中的结论/证据/风险/下一步，并标成“智能摘要”。合格的智能摘要不应被本地 formatter 加 `...` 截断；缺少 handoff 时 fallback 到 deterministic extraction，标成“摘录摘要”，并跳过 “I now have...” / “Here is my report” / 报告标题 / markdown 表头 / 断裂片段等低信息内容。
+- [ ] workflow 子 Agent 完成后，KodaX 会在同一个 child session 中追加一次无工具、单轮的自蒸馏请求，生成 2-4 条给用户看的摘要；runtime 优先把该 `digest` 写进 `agent_completed.summary`，完整 child `finalText` 仍用于 synthesis / artifact / audit。历史区展示摘要中的结论/证据/风险/下一步，并标成“摘要”。如果自蒸馏失败或没有有效内容，fallback 到 deterministic extraction，标成“摘录摘要”，并跳过 `[workflow handoff]` 原始标记、 “I now have...” / “Here is my report” / 报告标题 / markdown 表头 / 断裂片段等低信息内容。
 - [ ] 子任务完整输出不会全部刷进历史；需要更多细节时先用 `/workflow show <runId>` 查看事件和 artifacts，完整 child-chat 级别详情属于后续 FEATURE_229/system process surface。
 - [ ] workflow 完成后自动在当前对话中显示完整中文最终回答或 artifact 摘要，而不是只显示 `Workflow completed` 与 `/workflow show <runId>` 提示；即使最终结果很长，主历史区也不能截断、不能要求用户通过 `/workflow show --full <runId>` 才能看到完整答案，也不能出现裸 `[truncated]`。
 - [ ] 如果 run 只产出 artifact，历史区至少显示 artifact 名称、路径和简短说明；如果没有可显示结果，必须明确提示“已完成但没有可显示结果”，不能假装正常完成。

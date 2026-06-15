@@ -6,6 +6,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { mkdirSync } from 'fs';
 import path from 'path';
 import type { KodaXToolExecutionContext } from '../types.js';
 
@@ -39,7 +40,10 @@ function isValidBranchName(name: string): boolean {
  * Usage:
  *   {
  *     "branch_name": "feature-xyz",  // optional: explicit branch name
- *     "description": "Add new feature"  // optional: auto-generate branch name from description
+ *     "description": "Add new feature",  // optional: auto-generate branch name from description
+ *     "base_dir": "/abs/run/worktrees"   // optional: parent dir for the worktree
+ *                                        // (workflow runs nest worktrees beside
+ *                                        //  the run graph; default is the git root's parent)
  *   }
  *
  * Returns:
@@ -73,13 +77,26 @@ export async function toolWorktreeCreate(
 
   const cwd = ctx.executionCwd ?? ctx.gitRoot ?? process.cwd();
 
-  // Resolve worktree path: .kodax-worktree-<branch> relative to git root
-  const parentDir = path.resolve(cwd, '..');
-  const worktreePath = path.resolve(parentDir, `.kodax-worktree-${branch}`);
+  // Resolve worktree parent: an explicit `base_dir` (workflow runs point this
+  // at `<runDir>/worktrees` so worktrees are reclaimable and never pollute the
+  // user's project tree) or, by default, the git root's parent — a sibling of
+  // the repo, since a git worktree cannot nest inside the main working tree.
+  const explicitBaseDir = typeof input.base_dir === 'string' && input.base_dir.length > 0
+    ? path.resolve(input.base_dir)
+    : undefined;
+  const baseDir = explicitBaseDir ?? path.resolve(cwd, '..');
+  const worktreePath = path.resolve(baseDir, `.kodax-worktree-${branch}`);
 
   // Verify the resolved path stays within the expected parent directory
-  if (!worktreePath.startsWith(parentDir)) {
+  if (!worktreePath.startsWith(baseDir)) {
     throw new Error(`Worktree path escaped expected directory. Resolved to: ${worktreePath}`);
+  }
+
+  // `git worktree add` creates the leaf dir but not missing parents. An
+  // explicit base (e.g. a fresh `<runDir>/worktrees`) may not exist yet; the
+  // default sibling-of-repo base always does.
+  if (explicitBaseDir) {
+    mkdirSync(explicitBaseDir, { recursive: true });
   }
 
   // Create worktree with new branch
