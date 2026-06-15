@@ -282,9 +282,10 @@ function findRunBodyRange(source: string): { readonly start: number; readonly en
   return undefined;
 }
 
-function findOuterRunReturnExpression(source: string): string | undefined {
-  const range = findRunBodyRange(source);
-  if (!range) return undefined;
+function findTopLevelReturnExpression(
+  source: string,
+  range: { readonly start: number; readonly end: number },
+): string | undefined {
   const stripped = stripGeneratedSourceLiterals(source);
   let depth = 1;
   for (let i = range.start; i < range.end; i += 1) {
@@ -317,6 +318,12 @@ function findOuterRunReturnExpression(source: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function findOuterRunReturnExpression(source: string): string | undefined {
+  const range = findRunBodyRange(source);
+  if (!range) return undefined;
+  return findTopLevelReturnExpression(source, range);
 }
 
 function findOuterRunStatements(source: string): readonly string[] {
@@ -366,24 +373,83 @@ function isReturnedArtifactHandle(source: string, expression: string): boolean {
   );
 }
 
+function findMatchingDelimiter(source: string, open: number, openChar: string, closeChar: string): number | undefined {
+  let depth = 0;
+  for (let i = open; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === openChar) depth += 1;
+    if (ch === closeChar) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return undefined;
+}
+
+function findTopLevelComma(source: string, start: number, end: number): number | undefined {
+  let depth = 0;
+  for (let i = start; i < end; i += 1) {
+    const ch = source[i];
+    if (ch === '(' || ch === '[' || ch === '{') {
+      depth += 1;
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      depth -= 1;
+      continue;
+    }
+    if (ch === ',' && depth === 0) return i;
+  }
+  return undefined;
+}
+
+function findPhaseCallbackReturnExpression(expression: string): string | undefined {
+  const stripped = stripGeneratedSourceLiterals(expression);
+  const phaseMatch = /^\s*(?:await\s+)?wf\s*\.\s*phase\s*\(/.exec(stripped);
+  if (!phaseMatch) return undefined;
+  const open = stripped.indexOf('(', phaseMatch.index);
+  if (open < 0) return undefined;
+  const close = findMatchingDelimiter(stripped, open, '(', ')');
+  if (close === undefined) return undefined;
+  const comma = findTopLevelComma(stripped, open + 1, close);
+  if (comma === undefined) return undefined;
+
+  const callbackSource = expression.slice(comma + 1, close).trim();
+  const callbackStripped = stripGeneratedSourceLiterals(callbackSource);
+  const arrow = callbackStripped.indexOf('=>');
+  if (arrow < 0) return undefined;
+  const bodyStart = arrow + 2;
+  const offset = callbackStripped.slice(bodyStart).search(/\S/);
+  if (offset < 0) return undefined;
+  const firstBodyChar = bodyStart + offset;
+  if (callbackStripped[firstBodyChar] !== '{') {
+    return callbackSource.slice(firstBodyChar).trim();
+  }
+  const blockClose = findMatchingDelimiter(callbackStripped, firstBodyChar, '{', '}');
+  if (blockClose === undefined) return undefined;
+  return findTopLevelReturnExpression(callbackSource, { start: firstBodyChar + 1, end: blockClose });
+}
+
+function isDirectWorkflowCall(expression: string, method: 'artifact' | 'phase'): boolean {
+  return new RegExp(`^(?:await\\s+)?wf\\s*\\.\\s*${method}\\b`).test(expression.trim());
+}
+
+function isDisplayableReturnExpression(source: string, expression: string): boolean {
+  const trimmed = expression.trim();
+  if (/^(?:undefined|null|void\s+0|\{\s*\}|\[\s*\]|''|""|``)$/.test(trimmed)) return false;
+  if (isDirectWorkflowCall(trimmed, 'artifact')) return false;
+  if (isReturnedArtifactHandle(source, trimmed)) return false;
+  if (isDirectWorkflowCall(trimmed, 'phase')) {
+    const callbackReturn = findPhaseCallbackReturnExpression(trimmed);
+    return callbackReturn !== undefined && isDisplayableReturnExpression(trimmed, callbackReturn);
+  }
+  return true;
+}
+
 function hasDisplayableRunReturn(source: string): boolean {
   const expression = findOuterRunReturnExpression(source);
   if (!expression) return false;
-  const trimmed = expression.trim();
-  // Reject trivially non-displayable returns (nothing reaches the user). These
-  // mirror what the REPL result formatter treats as empty, so the build-time
-  // lint and runtime presentation agree on what counts as displayable.
-  if (/^(?:undefined|null|void\s+0|\{\s*\}|\[\s*\]|''|""|``)$/.test(trimmed)) return false;
-  // A durable artifact write or a `wf.phase(...)` result is not the user-facing
-  // answer — these are the artifact-only / phase-local anti-patterns.
-  if (/^await\s+wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
-  if (/^wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
-  if (isReturnedArtifactHandle(source, trimmed)) return false;
-  // Any other non-empty value return is displayable. We deliberately do NOT
-  // require specific identifier names (synthesis/report/...) — a workflow may
-  // legitimately return `{ findings }`, `analysis`, etc. The runtime result
-  // contract verifies the actual rendered text at execution time.
-  return true;
+  return isDisplayableReturnExpression(source, expression);
 }
 
 export function validateGeneratedWorkflowSource(source: string): string {
@@ -411,7 +477,7 @@ export function validateGeneratedWorkflowSource(source: string): string {
     const expr = findOuterRunReturnExpression(source);
     const detail = expr === undefined
       ? 'no top-level `return` was found in run() — a return inside a wf.phase(...) callback does not count'
-      : `the top-level return \`${expr.slice(0, 80)}\` is not displayable — do not return undefined/null/{}, a bare wf.artifact(...) write, or a wf.phase(...) result`;
+      : `the top-level return \`${expr.slice(0, 80)}\` is not displayable — do not return undefined/null/{}, a bare wf.artifact(...) write, or a wf.phase(...) without a displayable callback return`;
     throw new Error(
       `workflow generation source outer run function must return displayable final text (${detail})`,
     );

@@ -58,6 +58,7 @@ describe('validateGeneratedWorkflowSource', () => {
       'async function run(wf) { return { findings: [], recommendations: [] }; }',
       'async function run(wf) { const r = await wf.synthesize({ inputs: [], rubric: "x" }); return r.text; }',
       'async function run(wf) { return await wf.synthesize({ inputs: [], rubric: "x" }); }',
+      'async function run(wf) { return await wf.phase("synthesize", async () => { return await wf.synthesize({ inputs: [], rubric: "x" }); }); }',
       'async function run(wf) { const finalText = "done"; const ref = await wf.artifact("final-report", { report: finalText }); return { report: finalText, artifact: ref.name }; }',
     ];
     for (const source of sources) {
