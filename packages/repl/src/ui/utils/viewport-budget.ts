@@ -191,17 +191,22 @@ export function calculateViewportBudget(options: ViewportBudgetOptions): Viewpor
     : 0;
   // FEATURE_114 v0.7.36 Slice 4 (UX bugfix v0.7.38): the activityBar
   // slot in InkREPL.tsx renders whenever EITHER the spinner verb OR
-  // the plan-list counter is visible. If only the counter is shown,
-  // `activitySummary` is empty but the slot still occupies 1 row.
-  // Reserve max(verb-rows, 1) rows when the slot is visible at all,
-  // otherwise the composer + status-bar push off-screen as soon as
-  // the plan list renders without an active spinner verb.
+  // the plan-list / workflow counter is visible.
+  //
+  // The slot is a single flex-row whose children (verb text, stats tail,
+  // counter) all render with `wrap="truncate"`, so it always occupies
+  // EXACTLY one row when visible, regardless of verb-text length. Reserve
+  // exactly 1 row to match. Measuring the verb text's wrapped height (the
+  // old `max(verb-rows, 1)`) over-reserved whenever the verb wrapped at
+  // the budget's full width but the real render truncated it to one line
+  // (the verb shares the row with a right-aligned counter, so its actual
+  // width is narrower) — that budget-vs-render divergence pushed the
+  // composer + status bar up a row, most visibly during long-named
+  // workflow runs.
   const activityVerbRows = activitySummary
     ? wrapLineCount(activitySummary, Math.max(1, terminalWidth - 2))
     : 0;
-  const activityRows = activityBarVisible
-    ? Math.max(1, activityVerbRows)
-    : activityVerbRows;
+  const activityRows = activityBarVisible ? 1 : activityVerbRows;
   const pendingInputRows = pendingInputSummary
     ? wrapLineCount(pendingInputSummary, Math.max(1, terminalWidth - 2))
     : 0;

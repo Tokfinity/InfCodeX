@@ -283,6 +283,35 @@ function info(id: string, text: string, icon = "\u23F3"): HistoryItem {
 }
 
 describe("transcript-layout", () => {
+  it("collapses a trailing newline so only the fixed spacer separates the answer from the next block", () => {
+    // Models frequently end their output with a trailing newline. Without
+    // normalization `wrapText` turns it into an empty body row, which stacks
+    // on top of the fixed `-blank` spacer → two blank lines between the
+    // answer and the next tool/assistant block instead of one.
+    const rows = buildTranscriptRows({
+      items: [assistant("answer body\n")],
+      viewportWidth: 80,
+    });
+
+    const bodyRows = rows.filter((row) => row.key.startsWith("assistant-1-body"));
+    expect(bodyRows).toHaveLength(1);
+    expect(bodyRows[0]?.text).toBe("answer body");
+    expect(bodyRows.some((row) => row.text.trim() === "")).toBe(false);
+    expect(rows.filter((row) => row.key === "assistant-1-blank")).toHaveLength(1);
+  });
+
+  it("preserves internal paragraph breaks while trimming the outer trailing newline", () => {
+    const rows = buildTranscriptRows({
+      items: [assistant("para one\n\npara two\n")],
+      viewportWidth: 80,
+    });
+
+    const bodyText = rows
+      .filter((row) => row.key.startsWith("assistant-1-body"))
+      .map((row) => row.text);
+    expect(bodyText).toEqual(["para one", "", "para two"]);
+  });
+
   it("preserves the final assistant line without a trailing newline", () => {
     const rows = buildTranscriptRows({
       items: [assistant("## Verify\n\n```bash\nmysql -h 127.0.0.1 -P 13306\n```\n\nFinal line must stay visible")],

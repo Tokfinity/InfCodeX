@@ -338,6 +338,24 @@ describe("viewport-budget", () => {
     expect(counterOnly.todoSurfaceRows).toBe(3);
   });
 
+  it("keeps a visible activityBar to one budget row for long workflow text", () => {
+    const budget = calculateViewportBudget({
+      terminalRows: 24,
+      terminalWidth: 121,
+      inputText: "",
+      suggestionsReserved: false,
+      showHelp: false,
+      statusBarText: "status",
+      activitySummary:
+        "Workflow feature-217-workflow-footer-layout-regression-audit - collecting-renderer-budget-and-completion-state-evidence",
+      activityBarVisible: true,
+      workflowSurfaceRows: 4,
+    });
+
+    expect(budget.activityRows).toBe(1);
+    expect(budget.workflowSurfaceRows).toBe(4);
+  });
+
   it("does not reserve plan-list rows when shouldRender is false", () => {
     const noPlan = calculateViewportBudget({
       terminalRows: 24,

@@ -291,7 +291,11 @@ export const SpinnerStatsTail: React.FC<SpinnerStatsTailProps> = ({
   if (roundStartedAt === null) return null;
 
   const statsText = buildSpinnerStatsText(Date.now() - roundStartedAt, charCount);
-  return <Text color={theme.colors.dim}>{statsText}</Text>;
+  return (
+    <Text color={theme.colors.dim} wrap="truncate">
+      {statsText}
+    </Text>
+  );
 };
 
 /**

@@ -33,12 +33,15 @@ const WorkflowRunRow: React.FC<WorkflowRunRowProps> = ({ row }) => {
   const symbolColor = resolveSymbolColor(row.symbolColor);
   return (
     <Box flexDirection="row">
-      <Text color={symbolColor} bold={row.isActive}>
-        {row.symbol.padEnd(LABEL_WIDTH)}
-      </Text>
+      <Box width={LABEL_WIDTH} flexShrink={0}>
+        <Text color={symbolColor} bold={row.isActive} wrap="truncate">
+          {row.symbol.padEnd(LABEL_WIDTH)}
+        </Text>
+      </Box>
       <Text
         color={row.kind === "hint" ? getTheme("dark").colors.dim : undefined}
         bold={row.isActive}
+        wrap="truncate"
       >
         {row.text}
       </Text>
@@ -48,6 +51,16 @@ const WorkflowRunRow: React.FC<WorkflowRunRowProps> = ({ row }) => {
 
 export interface WorkflowRunSurfaceProps {
   readonly viewModel: WorkflowLiveViewModel;
+}
+
+export function measureWorkflowRunSurfaceRows(
+  viewModel: WorkflowLiveViewModel,
+): number {
+  if (!viewModel.shouldRender || viewModel.rows.length === 0) {
+    return 0;
+  }
+
+  return viewModel.rows.length;
 }
 
 export const WorkflowRunSurface: React.FC<WorkflowRunSurfaceProps> = ({

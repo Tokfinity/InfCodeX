@@ -635,7 +635,16 @@ export function buildTranscriptRows(options: TranscriptBuildOptions): Transcript
         rows.push({ key: `${item.id}-blank`, text: " ", itemId: item.id });
         break;
       case "assistant": {
-        const displayText = showAllContent ? item.text : item.compactText ?? item.text;
+        // Strip OUTER blank lines from the body before wrapping. The model
+        // output frequently ends with a trailing newline; `wrapText` turns
+        // that into an empty visual row, which then stacks on top of the
+        // fixed `${id}-blank` spacer below — two blank lines between the
+        // answer and the next tool/assistant block instead of one. Internal
+        // blank lines (paragraph breaks) are preserved. Mirrors the `info`
+        // row's normalization; display-only, the stored text is untouched.
+        const displayText = stripOuterBlankLines(
+          showAllContent ? item.text : item.compactText ?? item.text
+        );
         pushWrappedRows(
           rows,
           `${item.id}-header`,

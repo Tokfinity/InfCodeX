@@ -35,7 +35,10 @@ import { StashNotice } from "./components/StashNotice.js";
 import { Spinner, SpinnerStatsTail, useSharedSpinnerTick } from "./components/LoadingIndicator.js";
 import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
-import { WorkflowRunSurface } from "./components/WorkflowRunSurface.js";
+import {
+  measureWorkflowRunSurfaceRows,
+  WorkflowRunSurface,
+} from "./components/WorkflowRunSurface.js";
 import {
   buildTodoPlanViewModel,
   formatTodoPlanViewModelForTranscript,
@@ -3512,7 +3515,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const footerBudgetWorkStripText = displayWorkStripText;
   const footerBudgetShowHelp = isTranscriptMode ? false : showHelp;
   const workflowFooterRows = workflowLiveViewModel.shouldRender
-    ? workflowLiveViewModel.rows.length
+    ? measureWorkflowRunSurfaceRows(workflowLiveViewModel)
     : 0;
   const todoFooterRows = isLoading && todoPlanViewModel.shouldRender
     ? todoPlanViewModel.rows.length
@@ -8395,6 +8398,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
                     ? getTheme("dark").colors.warning
                     : getTheme("dark").colors.accent
                 }
+                wrap="truncate"
               >
                 {promptActivityViewModel.showSpinner ? " " : ""}
                 {promptActivityViewModel.text}
@@ -8422,11 +8426,11 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ) : null}
           </Box>
           {workflowFooterCounterText ? (
-            <Text dimColor>
+            <Text dimColor wrap="truncate">
               {workflowFooterCounterText}
             </Text>
           ) : (isLoading && todoPlanViewModel.shouldRender) ? (
-            <Text dimColor>
+            <Text dimColor wrap="truncate">
               {`${todoPlanViewModel.completedCount}/${todoPlanViewModel.totalCount} completed`}
             </Text>
           ) : null}
