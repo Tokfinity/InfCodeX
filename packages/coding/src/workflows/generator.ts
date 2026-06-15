@@ -28,6 +28,7 @@ export const WORKFLOW_GENERATION_SYSTEM_PROMPT = [
   'For complex tasks, return:',
   '{"action":"generate","manifest":{...},"source":"async function run(wf, args) { ... }","approvalSummary":"..."}',
   'Generated source may only coordinate agents through wf and args.',
+  'Generated source must return displayable final text for the user.',
   'Never use import, require, process, fs, child_process, network APIs, shell commands, or direct file access.',
 ].join('\n');
 
@@ -205,6 +206,125 @@ function reserveGeneratedWorkflowAgentCapacity(
     : manifest;
 }
 
+function stripGeneratedSourceLiterals(source: string): string {
+  let stripped = '';
+  let i = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === '/' && next === '/') {
+      stripped += '  ';
+      i += 2;
+      while (i < source.length && source[i] !== '\n') {
+        stripped += ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      stripped += '  ';
+      i += 2;
+      while (i < source.length) {
+        if (source[i] === '*' && source[i + 1] === '/') {
+          stripped += '  ';
+          i += 2;
+          break;
+        }
+        stripped += source[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      stripped += ' ';
+      i += 1;
+      while (i < source.length) {
+        const current = source[i];
+        stripped += current === '\n' ? '\n' : ' ';
+        i += 1;
+        if (current === '\\') {
+          if (i < source.length) {
+            stripped += source[i] === '\n' ? '\n' : ' ';
+            i += 1;
+          }
+          continue;
+        }
+        if (current === quote) break;
+      }
+      continue;
+    }
+    stripped += ch ?? '';
+    i += 1;
+  }
+  return stripped;
+}
+
+function isIdentifierPart(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_$]/.test(ch);
+}
+
+function findRunBodyRange(source: string): { readonly start: number; readonly end: number } | undefined {
+  const stripped = stripGeneratedSourceLiterals(source);
+  const match = /\basync\s+function\s+run\s*\([^)]*\)\s*\{/.exec(stripped);
+  if (!match) return undefined;
+  const open = stripped.indexOf('{', match.index);
+  if (open < 0) return undefined;
+  let depth = 0;
+  for (let i = open; i < stripped.length; i += 1) {
+    const ch = stripped[i];
+    if (ch === '{') depth += 1;
+    if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return { start: open + 1, end: i };
+    }
+  }
+  return undefined;
+}
+
+function findOuterRunReturnExpression(source: string): string | undefined {
+  const range = findRunBodyRange(source);
+  if (!range) return undefined;
+  const stripped = stripGeneratedSourceLiterals(source);
+  let depth = 1;
+  for (let i = range.start; i < range.end; i += 1) {
+    const ch = stripped[i];
+    if (ch === '{') {
+      depth += 1;
+      continue;
+    }
+    if (ch === '}') {
+      depth -= 1;
+      continue;
+    }
+    if (
+      depth === 1
+      && stripped.startsWith('return', i)
+      && !isIdentifierPart(stripped[i - 1])
+      && !isIdentifierPart(stripped[i + 'return'.length])
+    ) {
+      const expressionStart = i + 'return'.length;
+      let nested = 0;
+      for (let j = expressionStart; j < range.end; j += 1) {
+        const current = stripped[j];
+        if (current === '(' || current === '[' || current === '{') nested += 1;
+        if (current === ')' || current === ']' || current === '}') nested -= 1;
+        if (nested === 0 && (current === ';' || current === '\n' || current === '\r')) {
+          return source.slice(expressionStart, j).trim();
+        }
+      }
+      return source.slice(expressionStart, range.end).trim();
+    }
+  }
+  return undefined;
+}
+
+function hasDisplayableRunReturn(source: string): boolean {
+  const expression = findOuterRunReturnExpression(source);
+  if (!expression || /^(?:undefined|null|\{\})$/.test(expression.trim())) return false;
+  return /\b(?:synthesis|summary|report|text|result|finalText)\b|\bwf\.synthesize\s*\(/.test(expression);
+}
+
 export function validateGeneratedWorkflowSource(source: string): string {
   if (source.trim().length === 0) {
     throw new Error('workflow generation source must be non-empty');
@@ -216,6 +336,18 @@ export function validateGeneratedWorkflowSource(source: string): string {
     if (forbidden.pattern.test(source)) {
       throw new Error(`forbidden generated workflow token: ${forbidden.id}`);
     }
+  }
+  if (/\.\s*output\b/.test(source)) {
+    throw new Error('workflow generation source must use finalText/text instead of non-existent .output');
+  }
+  for (const line of source.split(/\r?\n/)) {
+    const artifactCall = line.search(/\bwf\.artifact\s*\(/);
+    if (artifactCall >= 0 && !/\b(?:await|return)\b/.test(line.slice(0, artifactCall))) {
+      throw new Error('workflow generation source must await wf.artifact(...)');
+    }
+  }
+  if (!hasDisplayableRunReturn(source)) {
+    throw new Error('workflow generation source outer run function must return displayable final text');
   }
   return source;
 }
@@ -233,7 +365,13 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '- wf.parallel([() => promise], { concurrency })',
     '- wf.synthesize({ inputs, rubric })',
     '- wf.artifact(name, value), wf.log({ message, data })',
+    '- Return shapes: wf.runAgent/wf.wait return { taskId, name, status, finalText, usage }; wf.synthesize returns { text }; wf.artifact returns { name, path? }. Never use a non-existent .output field.',
+    '- Always await asynchronous workflow calls, especially wf.artifact(...), before returning.',
     '- For fan-out, prefer wf.parallel with thunks that call wf.runAgent; if using wf.spawnAgent, always wait or stop each handle so maxConcurrency capacity can release.',
+    '- Keep intermediate findings in local variables and pass their finalText/text values forward; artifacts are durable outputs, not mutable args.',
+    '- The outer run function must return displayable final text, preferably { synthesis: finalText }. Returning only inside a wf.phase callback is invalid. Artifact-only or empty returns are invalid.',
+    '- Also await wf.artifact("final-report", { summary/report/text: finalText }) for durable inspection when a final report is produced.',
+    '- Every child agent prompt must ask the child to end with a compact [workflow handoff]...[/workflow handoff] block in the same language as the request. The block should contain concrete conclusions, evidence, risks, unresolved questions, or next actions, not generic report preambles.',
     '',
     `Supported pattern ids: ${WORKFLOW_PATTERN_IDS.join(', ')}`,
     '',
@@ -242,9 +380,11 @@ export function buildWorkflowGenerationUserPrompt(request: string): string {
     '- phases must be a JSON array of non-empty string literals, for example ["investigate","verify","synthesize"]; never return phase objects or a single string',
     '- maxAgents and maxConcurrency must be positive JSON integers',
     '- maxAgents is a lifetime total cap for every wf.runAgent, wf.spawnAgent, and wf.synthesize call in the whole run, not the parallel lane count; reserve enough for all phases plus synthesis',
+    '- Do not set tokenBudget unless the user explicitly asks for a token/resource budget; omit it for normal complex work',
     '- readOnly must be a JSON boolean',
     '- optional mayUseWorktree when child prompts need isolated worktrees',
     '- patterns must use only supported ids',
+    '- Use the same natural language as the task request for manifest description, approvalSummary, child agent prompts, synthesis rubric, and artifact text unless the user explicitly asks otherwise',
     '',
     'Return JSON only.',
   ].join('\n');
@@ -268,7 +408,32 @@ function buildWorkflowGenerationRepairPrompt(input: {
   ].join('\n');
 }
 
-export function parseWorkflowGeneration(rawText: string): WorkflowGenerationResult {
+interface ParseWorkflowGenerationOptions {
+  readonly request?: string;
+}
+
+function requestExplicitlyMentionsTokenBudget(request: string): boolean {
+  return /(?:token\s*(?:budget|limit|cap)|budget\s*(?:for|of)?\s*tokens?|\b\d+(?:\.\d+)?\s*(?:k|m)?\s*tokens?\b|\d+(?:\.\d+)?\s*(?:k|m)?\s*令牌|(?:tokens?|令牌).{0,12}(?:预算|上限|限制)|(?:预算|上限|限制).{0,12}(?:tokens?|令牌))/i.test(request);
+}
+
+function stripImplicitTokenBudget(
+  manifest: WorkflowScriptManifest,
+  request: string | undefined,
+): WorkflowScriptManifest {
+  if (manifest.tokenBudget === undefined || request === undefined) {
+    return manifest;
+  }
+  if (requestExplicitlyMentionsTokenBudget(request)) {
+    return manifest;
+  }
+  const { tokenBudget: _tokenBudget, ...withoutTokenBudget } = manifest;
+  return withoutTokenBudget;
+}
+
+export function parseWorkflowGeneration(
+  rawText: string,
+  options: ParseWorkflowGenerationOptions = {},
+): WorkflowGenerationResult {
   const data = parseGenerationJson(rawText);
   const action = data.action;
 
@@ -285,9 +450,12 @@ export function parseWorkflowGeneration(rawText: string): WorkflowGenerationResu
   }
 
   const source = validateGeneratedWorkflowSource(readNonEmptyString(data, 'source'));
-  const manifest = reserveGeneratedWorkflowAgentCapacity(
-    validateWorkflowScriptManifest(normalizeGeneratedManifestCandidate(data.manifest)),
-    source,
+  const manifest = stripImplicitTokenBudget(
+    reserveGeneratedWorkflowAgentCapacity(
+      validateWorkflowScriptManifest(normalizeGeneratedManifestCandidate(data.manifest)),
+      source,
+    ),
+    options.request,
   );
   const approvalSummary =
     typeof data.approvalSummary === 'string' && data.approvalSummary.trim().length > 0
@@ -319,7 +487,7 @@ export async function generateWorkflow(
     ...(input.signal ? { signal: input.signal } : {}),
   });
   try {
-    return parseWorkflowGeneration(rawText);
+    return parseWorkflowGeneration(rawText, { request });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const repairedText = await input.generateText({
@@ -331,7 +499,7 @@ export async function generateWorkflow(
       }),
       ...(input.signal ? { signal: input.signal } : {}),
     });
-    return parseWorkflowGeneration(repairedText);
+    return parseWorkflowGeneration(repairedText, { request });
   }
 }
 

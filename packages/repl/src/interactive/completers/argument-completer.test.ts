@@ -400,6 +400,45 @@ describe('ArgumentCompleter', () => {
         }
       });
 
+      it('should return saved workflow names for top-level and rerun completions', async () => {
+        const cwd = mkdtempSync(join(tmpdir(), 'kodax-workflow-saved-complete-'));
+        const previousCwd = process.cwd();
+        process.chdir(cwd);
+        const workflowsDir = join(cwd, '.kodax', 'workflows');
+        mkdirSync(workflowsDir, { recursive: true });
+        writeFileSync(join(workflowsDir, 'saved-audit.workflow.json'), '{}', 'utf8');
+
+        const projectKey = deriveProjectKeyFromRoot(cwd).key;
+        const baseDir = getAgentConfigPath('workflow-runs', projectKey);
+        const runDir = join(baseDir, 'run-persisted-complete');
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, 'run.json'),
+          JSON.stringify({
+            runId: 'run-persisted-complete',
+            workflow: 'persisted-audit',
+            status: 'completed',
+            totalSpawned: 0,
+            endedAt: Date.now(),
+          }),
+          'utf8',
+        );
+
+        try {
+          const topLevel = await completer.getCompletions('/workflow ', 10);
+          expect(topLevel.some((c) => c.display === 'saved-audit')).toBe(true);
+
+          const rerun = await completer.getCompletions('/workflow rerun ', 16);
+          expect(rerun.some((c) => c.display === 'run-persisted-complete')).toBe(true);
+          const saved = rerun.find((c) => c.display === 'saved-audit');
+          expect(saved?.description).toContain('saved workflow');
+        } finally {
+          process.chdir(previousCwd);
+          rmSync(baseDir, { recursive: true, force: true });
+          rmSync(cwd, { recursive: true, force: true });
+        }
+      });
+
       it('should return active run ids after workflow control subcommands', async () => {
         const runDir = mkdtempSync(join(tmpdir(), 'kodax-workflow-complete-'));
         const manager = getDefaultWorkflowRunManager();

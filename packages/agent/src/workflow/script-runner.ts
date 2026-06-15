@@ -28,6 +28,7 @@ export interface RunRestrictedWorkflowScriptOptions {
   readonly wf: WorkflowApi;
   readonly args?: unknown;
   readonly filename?: string;
+  /** Optional explicit wall-clock cap. Default workflows are open-ended. */
   readonly timeoutMs?: number;
 }
 
@@ -38,7 +39,6 @@ export interface RestrictedWorkflowModuleInput {
 }
 
 export const DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS = 10_000;
-export const DEFAULT_WORKFLOW_SCRIPT_WALL_TIMEOUT_MS = 30 * 60 * 1_000;
 
 function wrapSource(source: string): string {
   return [
@@ -191,8 +191,25 @@ function __kodaxEnqueue(method, input) {
   const promise = new Promise((resolve, reject) => {
     __kodaxPending.set(id, { resolve, reject });
   });
+  // Fire-and-forget commands must not escape as Node unhandled rejections.
+  // Awaiting the original promise still observes the rejection.
+  promise.catch(() => undefined);
   __kodaxQueue.push(command);
   return promise;
+}
+
+function __kodaxNonEmptyString(value, label) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error("workflow command " + label + " must be a non-empty string");
+  }
+  return value;
+}
+
+function __kodaxRecord(value, label) {
+  if (typeof value !== "object" || value === null) {
+    throw new Error("workflow command " + label + " must be an object");
+  }
+  return value;
 }
 
 function __kodaxTakeCommands() {
@@ -265,23 +282,29 @@ const wf = Object.freeze({
     remaining: () => __kodaxBudgetRemaining,
   }),
   phase: async (name, fn) => {
-    const entered = await __kodaxEnqueue("phaseEnter", { name });
+    const entered = await __kodaxEnqueue("phaseEnter", { name: __kodaxNonEmptyString(name, "name") });
     try {
       return await fn();
     } finally {
       await __kodaxEnqueue("phaseExit", { token: entered && entered.token });
     }
   },
-  spawnAgent: (input) => __kodaxEnqueue("spawnAgent", input),
-  runAgent: (input) => __kodaxEnqueue("runAgent", input),
-  wait: (taskId, opts) => __kodaxEnqueue("wait", { taskId, opts }),
-  output: (taskId) => __kodaxEnqueue("output", { taskId }),
-  send: (taskId, content) => __kodaxEnqueue("send", { taskId, content }),
-  stop: (taskId, reason) => __kodaxEnqueue("stop", { taskId, reason }),
+  spawnAgent: (input) => __kodaxEnqueue("spawnAgent", __kodaxRecord(input, "spawnAgent input")),
+  runAgent: (input) => __kodaxEnqueue("runAgent", __kodaxRecord(input, "runAgent input")),
+  wait: (taskId, opts) => __kodaxEnqueue("wait", { taskId: __kodaxNonEmptyString(taskId, "taskId"), opts }),
+  output: (taskId) => __kodaxEnqueue("output", { taskId: __kodaxNonEmptyString(taskId, "taskId") }),
+  send: (taskId, content) => __kodaxEnqueue("send", {
+    taskId: __kodaxNonEmptyString(taskId, "taskId"),
+    content: __kodaxNonEmptyString(content, "content"),
+  }),
+  stop: (taskId, reason) => __kodaxEnqueue("stop", {
+    taskId: __kodaxNonEmptyString(taskId, "taskId"),
+    reason: __kodaxNonEmptyString(reason, "reason"),
+  }),
   parallel: __kodaxParallel,
-  synthesize: (input) => __kodaxEnqueue("synthesize", input),
-  artifact: (name, value) => __kodaxEnqueue("artifact", { name, value }),
-  log: (event) => { void __kodaxEnqueue("log", event); },
+  synthesize: (input) => __kodaxEnqueue("synthesize", __kodaxRecord(input, "synthesize input")),
+  artifact: (name, value) => __kodaxEnqueue("artifact", { name: __kodaxNonEmptyString(name, "name"), value }),
+  log: (event) => { void __kodaxEnqueue("log", __kodaxRecord(event, "log input")); },
 });
 `;
 }
@@ -413,6 +436,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeExplicitTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) return undefined;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new WorkflowScriptExecutionError('workflow script timeoutMs must be a positive finite number');
+  }
+  return Math.floor(timeoutMs);
+}
+
 async function closeOpenPhases(state: WorkflowRpcHostState): Promise<void> {
   const phases = [...state.openPhases.values()];
   state.openPhases.clear();
@@ -425,8 +456,10 @@ async function closeOpenPhases(state: WorkflowRpcHostState): Promise<void> {
 export async function runRestrictedWorkflowScript(
   opts: RunRestrictedWorkflowScriptOptions,
 ): Promise<unknown> {
-  const wallTimeoutMs = opts.timeoutMs ?? DEFAULT_WORKFLOW_SCRIPT_WALL_TIMEOUT_MS;
-  const syncTimeoutMs = Math.min(wallTimeoutMs, DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS);
+  const wallTimeoutMs = normalizeExplicitTimeoutMs(opts.timeoutMs);
+  const syncTimeoutMs = wallTimeoutMs === undefined
+    ? DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS
+    : Math.min(wallTimeoutMs, DEFAULT_WORKFLOW_SCRIPT_SYNC_TIMEOUT_MS);
   const context = createContext({});
   new Script(buildBootstrap(opts), { filename: 'workflow-capability-bootstrap.js' }).runInContext(context);
   const script = new Script(wrapSource(opts.source), {
@@ -459,7 +492,7 @@ export async function runRestrictedWorkflowScript(
     };
 
     for (;;) {
-      if (Date.now() - startedAt > wallTimeoutMs) {
+      if (wallTimeoutMs !== undefined && Date.now() - startedAt > wallTimeoutMs) {
         throw new WorkflowScriptExecutionError(`workflow script timed out after ${wallTimeoutMs}ms`);
       }
 

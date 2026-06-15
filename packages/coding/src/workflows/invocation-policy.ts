@@ -17,24 +17,41 @@ export interface WorkflowInvocationPolicyDecision {
 }
 
 const NEGATED_WORKFLOW_PATTERNS: readonly RegExp[] = [
-  /(?:不要|别|不用|不要使用|不使用|禁止)\s*(?:workflow|工作流|多\s*agent|多智能体)/iu,
-  /\b(?:do not|don't|dont|without|no)\s+(?:use\s+)?(?:workflow|multi-agent|multi agent)\b/iu,
+  /\b(?:do not|don't|dont|without|avoid|skip|no)\s+(?:using\s+|use\s+)?(?:a\s+|an\s+|the\s+)?(?:workflow|workflows|multi[- ]?agent|multi agent)\b/iu,
+  /(?:不要|别|不用|不要使用|不使用|禁止|避免|跳过)\s*(?:使用|用)?\s*(?:workflow|工作流|多\s*agent|多智能体)/iu,
 ];
 
-const EXPLICIT_WORKFLOW_PATTERNS: readonly RegExp[] = [
-  /\bworkflow\b/iu,
-  /工作流/u,
-  /\bultracode\b/iu,
+const EXPLICIT_WORKFLOW_REQUEST_PATTERNS: readonly RegExp[] = [
+  /\b(?:use|run|start|create|build|generate|make|launch|set\s+up|setup)\s+(?:a\s+|an\s+|the\s+)?(?:dynamic\s+|multi[- ]?agent\s+)?workflow\b/iu,
+  /\bworkflow\s+(?:for|to)\b/iu,
+  /(?:用|使用|建立|创建|新建|生成|启动|运行|跑|建)\s*(?:一个|这个|该)?\s*(?:workflow|工作流)/iu,
+  /(?:workflow|工作流)\s*(?:来|去|用于|帮我|执行|运行)/iu,
 ];
 
-const COMPLEXITY_PATTERNS: readonly RegExp[] = [
-  /(?:批量|大量|上百|几十|多份|多个|多角度|多视角|互相独立|竞争假设|竞品假设)/u,
-  /(?:对抗|验证|反驳|评审团|锦标赛|排序|筛选|去重|循环|直到完成|深度研究|根因|triage)/iu,
-  /\b(?:batch|many|multiple|parallel|fan[- ]?out|adversarial|verify|verification|tournament|rank|sort|loop until done|deep research|triage|root cause)\b/iu,
+const STRONG_COMPLEXITY_PATTERNS: readonly RegExp[] = [
+  /\b(?:fan[- ]?out|multi[- ]?agent|parallel agents?|competing hypotheses|independent hypotheses)\b/iu,
+  /(?:互相独立|竞争假设|竞品假设|并行|多\s*agent|多智能体)/iu,
+];
+
+const COMPLEXITY_SIGNAL_PATTERNS: readonly RegExp[] = [
+  /\b(?:batch|many|multiple|several|three|3)\b/iu,
+  /\b(?:compare|competing|independent|hypotheses|hypothesis)\b/iu,
+  /\b(?:verify|verification|audit|review|rank|sort|dedupe|filter)\b/iu,
+  /\b(?:loop until done|deep research|triage|root cause)\b/iu,
+  /(?:批量|大量|多个|多份|几十|上百|三个|多角度|多视角)/iu,
+  /(?:验证|审计|评审|排序|筛选|去重|循环|直到完成|深度研究|根因|排查)/iu,
 ];
 
 function matchesAny(input: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(input));
+}
+
+function workflowComplexityScore(input: string): number {
+  if (matchesAny(input, STRONG_COMPLEXITY_PATTERNS)) return 2;
+  return COMPLEXITY_SIGNAL_PATTERNS.reduce(
+    (score, pattern) => score + (pattern.test(input) ? 1 : 0),
+    0,
+  );
 }
 
 function decision(
@@ -55,8 +72,9 @@ export function decideWorkflowInvocation(
     return decision('none', 'negated', 'user explicitly rejected workflow or multi-agent execution');
   }
 
-  const explicit = input.source === 'command' || matchesAny(text, EXPLICIT_WORKFLOW_PATTERNS);
-  const complex = matchesAny(text, COMPLEXITY_PATTERNS);
+  const explicit =
+    input.source === 'command' || matchesAny(text, EXPLICIT_WORKFLOW_REQUEST_PATTERNS);
+  const complex = workflowComplexityScore(text) >= 2;
 
   if (!explicit && !complex) {
     return decision('none', 'none', 'no workflow trigger detected');

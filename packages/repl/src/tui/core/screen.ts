@@ -3,6 +3,7 @@ import {
   getTranscriptTextDisplayWidth,
   getTranscriptTextLength,
 } from "../../ui/utils/transcript-text-metrics.js";
+import { stripAnsi } from "../../ui/utils/strip-ansi.js";
 
 export interface TranscriptScreenRow {
   key: string;
@@ -37,7 +38,7 @@ export interface BuildTranscriptScreenBufferOptions {
 }
 
 function normalizeTranscriptRowText(row: TranscriptRow): string {
-  return row.text === " " ? "" : row.text;
+  return row.text === " " ? "" : stripAnsi(row.text);
 }
 
 export function buildTranscriptRowIndexByKey(

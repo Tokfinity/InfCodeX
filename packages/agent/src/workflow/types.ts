@@ -46,6 +46,7 @@ export interface WorkflowTaskHandle {
 export interface WorkflowTaskUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  readonly totalTokens?: number;
 }
 
 /** Terminal result of a spawned agent (from `wait` / `runAgent`). */
@@ -101,7 +102,7 @@ export interface WorkflowLogEvent {
 export interface WorkflowBudget {
   /** Configured token budget, or null when unbounded. */
   readonly total: number | null;
-  /** Output tokens accounted across completed agents so far. */
+  /** Tokens accounted across completed agents so far. */
   spent(): number;
   /** `max(0, total - spent())`, or Infinity when unbounded. */
   remaining(): number;
@@ -219,7 +220,7 @@ export interface WorkflowAgentBackend {
   writeArtifact?(name: string, value: unknown): Promise<WorkflowArtifactRef>;
 }
 
-export type WorkflowRunStatus = 'running' | 'completed' | 'failed';
+export type WorkflowRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 /** Immutable snapshot of a workflow run's accumulated state. */
 export interface WorkflowRunState {

@@ -57,4 +57,18 @@ describe("transcript text selection", () => {
     expect(resolveTranscriptTextColumn(cjkRow, 5)).toBe(2);
     expect(resolveTranscriptTextColumn(cjkRow, 6)).toBe(3);
   });
+
+  it("strips ANSI sequences before copying selected text", () => {
+    const selection = buildTranscriptTextSelection(
+      [{
+        key: "ansi-row",
+        text: "\u001b[32m✓\u001b[39m \u001b[36mgenerated-fast-audit\u001b[39m",
+      }],
+      { rowIndex: 0, column: 1 },
+      { rowIndex: 0, column: 24 },
+    );
+
+    expect(selection?.text).toBe("✓ generated-fast-audit");
+    expect(selection?.text).not.toContain("\u001b[");
+  });
 });

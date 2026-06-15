@@ -110,6 +110,27 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect((await backend.wait(handle.taskId)).status).toBe('stopped');
   });
 
+  it('honors wait timeout and aborts the in-flight child', async () => {
+    const ctx = fakeCtx();
+    let seenSignal: AbortSignal | undefined;
+    const backend = createCodingWorkflowBackend({
+      ctx,
+      childOptions,
+      generateId: () => 'task-timeout',
+      runChild: (_bundles, _ctx, opts) => {
+        seenSignal = opts.abortSignal;
+        return new Promise<KodaXChildExecutionResult>(() => {});
+      },
+    });
+
+    const handle = await backend.spawn({ name: 'slow', prompt: 'x' });
+
+    await expect(backend.wait(handle.taskId, { timeoutMs: 5 })).rejects.toThrow(
+      /timed out after 5ms/,
+    );
+    expect(seenSignal?.aborted).toBe(true);
+  });
+
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {
     let seenBundle:
       | {

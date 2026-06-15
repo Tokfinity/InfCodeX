@@ -13,7 +13,13 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WorkflowGenerationResult } from '@kodax-ai/coding';
+import {
+  createWorkflowRunManager,
+  type ManagedWorkflowRun,
+  type WorkflowGenerationResult,
+  type WorkflowRunManager,
+} from '@kodax-ai/coding';
+import { getAgentConfigPath, type WorkflowEvent } from '@kodax-ai/agent';
 
 import {
   parseWorkflowInvocation,
@@ -31,14 +37,88 @@ import {
   isActiveManagedWorkflowRun,
   selectWorkflowPruneCandidates,
   selectDefaultWorkflowRunId,
+  selectDefaultActiveWorkflowRunId,
   savedWorkflowDirs,
   formatSavedList,
+  formatWorkflowAgentDigest,
+  createWorkflowAgentDigestLimiter,
+  formatFinalEventSummary,
+  createWorkflowLiveUpdateEmitter,
+  observeManagedWorkflowDone,
   isSafeWorkflowRunId,
   renderWorkflowHelp,
   resolveConfirm,
   startGeneratedWorkflowFromRequest,
   workflowCommand,
 } from './workflow-command.js';
+import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
+
+function writeSavedWorkflowCapsule(
+  dir: string,
+  name: string,
+  options: {
+    readonly description?: string;
+    readonly source?: string;
+  } = {},
+): string {
+  const workflowsDir = join(dir, '.kodax', 'workflows');
+  mkdirSync(workflowsDir, { recursive: true });
+  const path = join(workflowsDir, `${name}.workflow.json`);
+  const source = options.source ?? 'async function run() { return "ok"; }';
+  writeFileSync(
+    path,
+    JSON.stringify({
+      format: 'kodax.workflow',
+      version: 1,
+      workflowApiVersion: 1,
+      minKodaxVersion: '0.7.49',
+      manifest: {
+        name,
+        description: options.description ?? 'saved reusable audit workflow',
+        phases: ['run'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['classify-and-act'],
+      },
+      source,
+    }),
+    'utf8',
+  );
+  return path;
+}
+
+function writeGeneratedRunSnapshot(baseDir: string, runId: string): void {
+  const runDir = join(baseDir, runId);
+  mkdirSync(runDir, { recursive: true });
+  const manifest = {
+    name: 'feature-217-regression-audit',
+    description: '仔细审查 feature 217 的代码改动，只做问题探查',
+    phases: ['discover-and-map', 'synthesize'],
+    readOnly: true,
+    maxAgents: 2,
+    maxConcurrency: 1,
+    patterns: ['fan-out-and-synthesize'],
+  };
+  const scriptPath = join(runDir, 'script.js');
+  const manifestPath = join(runDir, 'manifest.json');
+  writeFileSync(scriptPath, 'async function run() { return "完成"; }', 'utf8');
+  writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+  writeFileSync(
+    join(runDir, 'run.json'),
+    JSON.stringify({
+      runId,
+      workflow: manifest.name,
+      status: 'completed',
+      totalSpawned: 0,
+      args: { request: '请检查 feature 217 的 UI 问题' },
+      scriptSnapshotPath: scriptPath,
+      manifestSnapshotPath: manifestPath,
+      endedAt: Date.now(),
+    }),
+    'utf8',
+  );
+}
 
 function fakeGeneratedWorkflow(): Extract<WorkflowGenerationResult, { readonly kind: 'generated' }> {
   const manifest = {
@@ -72,6 +152,55 @@ function fakeGeneratedWorkflow(): Extract<WorkflowGenerationResult, { readonly k
   };
 }
 
+function fakeArtifactOnlyGeneratedWorkflow(): Extract<WorkflowGenerationResult, { readonly kind: 'generated' }> {
+  const manifest = {
+    name: 'generated-artifact-audit',
+    description: 'Generated workflow that writes an artifact-only report',
+    phases: ['investigate', 'synthesize'],
+    readOnly: true,
+    maxAgents: 2,
+    maxConcurrency: 2,
+    patterns: ['fan-out-and-synthesize'],
+  } as const;
+  const source = 'async function run(wf) { await wf.artifact("final-report", { summary: "Artifact-only final report" }); return {}; }';
+  return {
+    kind: 'generated',
+    manifest,
+    source,
+    module: {
+      meta: {
+        name: manifest.name,
+        description: manifest.description,
+        phases: manifest.phases,
+        readOnly: manifest.readOnly,
+        maxAgents: manifest.maxAgents,
+        maxConcurrency: manifest.maxConcurrency,
+      },
+      run: async (wf) => {
+        await wf.artifact('final-report', { summary: 'Artifact-only final report' });
+        return {};
+      },
+    },
+    scriptSnapshot: { manifest, source },
+    approvalSummary: 'Generated artifact-only audit workflow.',
+    rawText: '{}',
+  };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('parseWorkflowInvocation', () => {
   it('defaults to list', () => {
     expect(parseWorkflowInvocation([]).kind).toBe('list');
@@ -91,6 +220,16 @@ describe('parseWorkflowInvocation', () => {
   });
   it('detects run-control subcommands', () => {
     expect(parseWorkflowInvocation(['show', 'run-1'])).toEqual({ kind: 'show', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['show', '--full', 'run-1'])).toEqual({
+      kind: 'show',
+      runId: 'run-1',
+      full: true,
+    });
+    expect(parseWorkflowInvocation(['show', 'run-1', '--full'])).toEqual({
+      kind: 'show',
+      runId: 'run-1',
+      full: true,
+    });
     expect(parseWorkflowInvocation(['pause', 'run-1'])).toEqual({ kind: 'pause', runId: 'run-1' });
     expect(parseWorkflowInvocation(['resume', 'run-1'])).toEqual({ kind: 'resume', runId: 'run-1' });
     expect(parseWorkflowInvocation(['stop', 'run-1'])).toEqual({ kind: 'stop', runId: 'run-1' });
@@ -156,6 +295,260 @@ describe('workflow run cleanup options', () => {
   });
 });
 
+describe('workflow agentic presentation helpers', () => {
+  it('formats child-agent completion digests from workflow events', () => {
+    expect(formatWorkflowAgentDigest({
+      seq: 1,
+      type: 'agent_completed',
+      data: {
+        name: 'layout-auditor',
+        status: 'completed',
+        summary: 'Found one responsive layout risk.',
+      },
+    })).toBe('Agent layout-auditor completed:\nFound one responsive layout risk.');
+
+    expect(formatWorkflowAgentDigest({
+      seq: 2,
+      type: 'agent_completed',
+      data: {
+        name: 'layout-auditor',
+        status: 'failed',
+        summary: 'failed output',
+      },
+    })).toBeUndefined();
+  });
+
+  it('emits every child-agent digest because each digest is already bounded', () => {
+    const digest = createWorkflowAgentDigestLimiter('run-digests');
+    const event = (name: string) => ({
+      seq: 1,
+      type: 'agent_completed' as const,
+      data: {
+        name,
+        status: 'completed',
+        summary: `${name} summary`,
+      },
+    });
+
+    expect(digest(event('a'), 'en')).toBe('Agent a completed:\na summary');
+    expect(digest(event('b'), 'en')).toBe('Agent b completed:\nb summary');
+    expect(digest(event('c'), 'en')).toBe('Agent c completed:\nc summary');
+    expect(digest(event('d'), 'en')).toBe('Agent d completed:\nd summary');
+  });
+
+  it('keeps fallback final event summaries complete when requested', () => {
+    const longSummary = `fallback start\n${'detail '.repeat(1200)}\nfallback end`;
+    const event: WorkflowEvent = {
+      seq: 9,
+      type: 'agent_completed',
+      data: {
+        name: 'synthesize',
+        status: 'completed',
+        summary: longSummary,
+      },
+    };
+
+    const summary = formatFinalEventSummary([event], { full: true });
+
+    expect(summary).toContain('fallback start');
+    expect(summary).toContain('fallback end');
+    expect(summary).not.toContain('[truncated]');
+  });
+
+  it('summarizes long or mismatched child-agent reports with useful localized handoff excerpts', () => {
+    const longEnglishReport = [
+      'I now have comprehensive evidence across the state machine, durable persistence, concurrency, and UI-state layers.',
+      'Here is a long markdown report that should not be copied into the conversational transcript as a half-truncated assistant reply.',
+      '## Details',
+      'Finding: runtime events should carry enough child output to extract useful handoff details.',
+      'Evidence: a report preamble can hide the actionable lines after the old 360 character cap.',
+      'Risk: users see report headers instead of real workflow progress.',
+      'The complete report belongs in the workflow run timeline and final synthesis rather than the live chat stream.',
+    ].join('\n\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 3,
+      type: 'agent_completed',
+      data: {
+        name: 'state-data-integrity-analyzer',
+        status: 'completed',
+        summary: longEnglishReport,
+      },
+    }, 'zh', 'run-fold');
+
+    expect(digest).toContain('Finding: runtime events should carry enough child output');
+    expect(digest).toContain('Evidence: a report preamble can hide');
+    expect(digest).toContain('Risk: users see report headers');
+    expect(digest).toContain('/workflow show run-fold');
+    expect(digest).toContain('运行事件时间线');
+    expect(digest).not.toContain('完整内容');
+    expect(digest).not.toContain('I now have comprehensive evidence');
+    expect(digest).not.toContain('Here is a long markdown report');
+  });
+
+  it('prefers an explicit workflow handoff block over report preamble text', () => {
+    const report = [
+      'I now have a complete picture of the files.',
+      'Here is my comprehensive report.',
+      '[workflow handoff]',
+      'Conclusion: token budget accounting is missing from the adapter.',
+      'Evidence: packages/coding/src/workflows/agent-adapter.ts returns zero usage.',
+      'Next: verify runtime budget tests against real child usage.',
+      '[/workflow handoff]',
+      '# Full report',
+      'Long details follow.',
+    ].join('\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'budget-reviewer',
+        status: 'completed',
+        summary: report,
+      },
+    }, 'en', 'run-handoff');
+
+    expect(digest).toContain('Conclusion: token budget accounting is missing');
+    expect(digest).toContain('Evidence: packages/coding/src/workflows/agent-adapter.ts');
+    expect(digest).not.toContain('I now have a complete picture');
+    expect(digest).not.toContain('Here is my comprehensive report');
+  });
+
+  it('labels explicit workflow handoff digests as summaries, not excerpts', () => {
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'overview-scout',
+        status: 'completed',
+        summary: [
+          '[workflow handoff]',
+          '- 结论：feature 217 的主要风险集中在 workflow 展示链路和 stop 状态映射。',
+          '- 证据：runtime 已产出 handoff，但旧摘要只保留报告开头。',
+          '- 下一步：优先保证 handoff 进入 agent_completed.summary。',
+          '[/workflow handoff]',
+        ].join('\n'),
+      },
+    }, 'zh', 'run-handoff');
+
+    expect(digest).toContain('子 Agent overview-scout 已完成。摘要：');
+    expect(digest).not.toContain('摘要摘录');
+    expect(digest).not.toContain('关键信息');
+  });
+
+  it('skips low-information report openers when falling back to local extraction', () => {
+    const report = [
+      'I now have a comprehensive picture of all changed files.',
+      'Let me compile my findings into a systematic report.',
+      '# FEATURE_217 Review Report',
+      'Scope: reviewed workflow runtime and REPL presentation files.',
+      'Confirmed issue: child digest extraction is using report headers instead of findings.',
+      'Evidence: workflow-command.ts reads the first non-empty lines from finalText.',
+      'Risk: users see mechanical progress instead of useful intermediate results.',
+    ].join('\n\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 5,
+      type: 'agent_completed',
+      data: {
+        name: 'presentation-reviewer',
+        status: 'completed',
+        summary: report,
+      },
+    }, 'en', 'run-fallback');
+
+    expect(digest).toContain('Confirmed issue: child digest extraction');
+    expect(digest).toContain('Evidence: workflow-command.ts');
+    expect(digest).toContain('Risk: users see mechanical progress');
+    expect(digest).not.toContain('I now have a comprehensive picture');
+    expect(digest).not.toContain('Let me compile my findings');
+    expect(digest).not.toContain('FEATURE_217 Review Report');
+  });
+
+  it('treats a stopped managed workflow abort as a stopped run instead of an error', async () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const messages: WorkflowRunMessage[] = [];
+    const terminalStatuses: string[] = [];
+    const managed: ManagedWorkflowRun = {
+      runId: 'run-stop',
+      getSnapshot: () => ({
+        runId: 'run-stop',
+        workflow: 'stop-test',
+        status: 'stopped',
+        runDir: '/tmp/run-stop',
+        totalSpawned: 1,
+        eventCount: 3,
+        startedAt: 1,
+        endedAt: 2,
+      }),
+      done: Promise.resolve({
+        kind: 'failed',
+        error: new Error('Workflow aborted'),
+        state: {
+          runId: 'run-stop',
+          status: 'failed',
+          totalSpawned: 1,
+          events: [],
+          artifacts: [],
+        },
+      }),
+    };
+
+    observeManagedWorkflowDone(
+      managed,
+      { onWorkflowRunMessage: (event) => messages.push(event) },
+      'run-stop',
+      {
+        onEvent: () => undefined,
+        running: () => undefined,
+        complete: (status) => {
+          terminalStatuses.push(status);
+        },
+      },
+    );
+
+    await managed.done;
+    await Promise.resolve();
+
+    expect(terminalStatuses).toEqual(['stopped']);
+    expect(messages.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  it('does not treat Chinese report titles or markdown table headers as a digest', () => {
+    const report = [
+      '# FEATURE_217 变更地图 — Dynamic Workflow Harness Runtime',
+      'FEATURE_217 的改动分布在**两个来源**，均属本 feature：',
+      '| 层 | 来源 | 规模 | 性质 |',
+      '| --- | --- | --- | --- |',
+      '| agent runtime | packages/agent/src/workflow/runtime.ts | +180/-20 | 新增 workflow runtime 和事件模型 |',
+      '| coding workflow | packages/coding/src/workflows/generator.ts | +220/-40 | 生成器 prompt 与 capsule 接入 |',
+      '## 关键发现',
+      '- 运行时和 REPL 展示路径耦合在 agent_completed.summary 上，需要保证 bounded finalText。',
+      '- saved rerun 复用旧脚本，因此不会自动产生 handoff block。',
+      '- fallback 摘要必须跳过结构性标题和表格，保留真实发现。',
+    ].join('\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 6,
+      type: 'agent_completed',
+      data: {
+        name: 'change-mapper',
+        status: 'completed',
+        summary: report,
+      },
+    }, 'zh', 'run-cn');
+
+    expect(digest).toContain('运行时和 REPL 展示路径耦合');
+    expect(digest).toContain('saved rerun 复用旧脚本');
+    expect(digest).toContain('fallback 摘要必须跳过结构性标题和表格');
+    expect(digest).not.toContain('FEATURE_217 变更地图');
+    expect(digest).not.toContain('| 层 | 来源 | 规模 | 性质 |');
+    expect(digest).not.toContain('agent runtime | packages/agent');
+  });
+});
+
 describe('formatWorkflowList', () => {
   it('lists names + descriptions', () => {
     const out = formatWorkflowList([{ name: 'demo', description: 'a demo' }]);
@@ -207,7 +600,35 @@ describe('renderApprovalPrompt', () => {
     expect(text).toContain('sandbox/trust: capability-generated');
     expect(text).toContain('worktree isolation: may request worktree');
     expect(text).toContain('raw script:');
+    expect(text).toContain('raw script preview:');
     expect(text).toContain('async function run()');
+  });
+
+  it('uses source paths instead of inline previews when a raw script path exists', () => {
+    const rawScript = Array.from({ length: 80 }, (_, i) => `const line${i} = ${i};`).join('\n');
+    const text = renderApprovalPrompt(
+      {
+        name: 'generated-long',
+        description: 'long generated workflow',
+        phases: ['plan', 'run'],
+        maxAgents: 4,
+        maxConcurrency: 2,
+        tokenBudget: null,
+        writesFiles: false,
+      },
+      {
+        source: 'run:run-long',
+        sandbox: 'capability-generated',
+        mayUseWorktree: false,
+        rawScriptPath: 'C:\\runs\\run-long\\script.js',
+        rawScript,
+      },
+    );
+
+    expect(text).toContain('raw script: C:\\runs\\run-long\\script.js');
+    expect(text).not.toContain('raw script preview:');
+    expect(text).not.toContain('const line0 = 0;');
+    expect(text).not.toContain('const line79 = 79;');
   });
 });
 
@@ -332,6 +753,54 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(formatWorkflowRunSnapshot(undefined)).toContain('unknown workflow');
   });
 
+  it('keeps workflow show concise by default and can expand full artifact results', () => {
+    const runDir = join(dir, 'run-full');
+    const artifactsDir = join(runDir, 'artifacts');
+    mkdirSync(artifactsDir, { recursive: true });
+    const longReport = `full report start\n${'detail '.repeat(1200)}\nfull report end`;
+    writeFileSync(join(artifactsDir, 'final-report.json'), JSON.stringify({ report: longReport }), 'utf8');
+    writeFileSync(join(runDir, 'run.json'), JSON.stringify({
+      runId: 'run-full',
+      workflow: 'wf',
+      status: 'completed',
+      totalSpawned: 2,
+      eventCount: 1,
+      startedAt: 1,
+      endedAt: 2,
+      artifacts: ['final-report'],
+    }), 'utf8');
+
+    const detail = readWorkflowRunDetail(dir, 'run-full');
+    const preview = formatWorkflowRunSnapshot(undefined, detail);
+    expect(preview).toContain('result preview');
+    expect(preview).toContain('/workflow show --full run-full');
+    expect(preview).not.toContain('[truncated]');
+
+    const full = formatWorkflowRunSnapshot(undefined, detail, { full: true });
+    expect(full).toContain('result:');
+    expect(full).toContain('full report end');
+    expect(full).not.toContain('[truncated]');
+
+    const managed = {
+      runId: 'run-full',
+      workflow: 'wf',
+      status: 'completed' as const,
+      runDir,
+      totalSpawned: 2,
+      eventCount: 1,
+      startedAt: 1,
+      resultText: longReport,
+    };
+    const managedPreview = formatWorkflowRunSnapshot(managed, detail);
+    expect(managedPreview).toContain('result preview');
+    expect(managedPreview).toContain('/workflow show --full run-full');
+    expect(managedPreview).not.toContain('full report end');
+    expect(managedPreview).not.toContain('[truncated]');
+
+    const managedFull = formatWorkflowRunSnapshot(managed, detail, { full: true });
+    expect(managedFull).toContain('full report end');
+  });
+
   it('selects an active run by default, then latest managed, then persisted run', () => {
     const managed = [
       {
@@ -361,6 +830,8 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(selectDefaultWorkflowRunId([managed[0]!], persisted)).toBe('run-completed');
     expect(selectDefaultWorkflowRunId([], persisted)).toBe('run-persisted');
     expect(selectDefaultWorkflowRunId([], [])).toBeUndefined();
+    expect(selectDefaultActiveWorkflowRunId(managed)).toBe('run-active');
+    expect(selectDefaultActiveWorkflowRunId([managed[0]!])).toBeUndefined();
   });
 
   it('reads run details from run.json plus events and surfaces failure context', () => {
@@ -415,6 +886,8 @@ describe('readWorkflowRuns + formatRunsList', () => {
 
     const detail = readWorkflowRunDetail(dir, 'run-generated');
     expect(detail?.canRerun).toBe(true);
+    expect(detail?.scriptSnapshotPath).toBe(scriptPath);
+    expect(detail?.manifestSnapshotPath).toBe(manifestPath);
     expect(formatWorkflowRunSnapshot(undefined, detail)).toContain('/workflow rerun run-generated');
   });
 
@@ -508,14 +981,16 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow <name> [args]');
     expect(text).toContain('/workflow runs');
     expect(text).toContain('--limit N');
-    expect(text).toContain('/workflow show [runId]');
+    expect(text).toContain('/workflow show [--full] [runId]');
     expect(text).toContain('/workflow pause <runId>');
     expect(text).toContain('/workflow resume <runId>');
-    expect(text).toContain('/workflow stop <runId>');
+    expect(text).toContain('/workflow stop [runId]');
     expect(text).toContain('/workflow delete <runId>');
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
-    expect(text).toContain('/workflow rerun <runId> [args]');
+    expect(text).toContain('/workflow rerun <runId|savedName> [args]');
+    expect(text).toContain('run id reruns');
+    expect(text).toContain('saved name runs');
     expect(text).toContain('/workflow help');
     expect(text).toContain('workflow capsule');
     expect(text).toContain('capability WorkflowApi runner');
@@ -565,18 +1040,39 @@ describe('resolveConfirm', () => {
 });
 
 describe('startGeneratedWorkflowFromRequest launch policy', () => {
+  let runBaseDir = '';
+  let runManager: WorkflowRunManager;
+
+  beforeEach(() => {
+    runBaseDir = mkdtempSync(join(tmpdir(), 'wf-generated-runs-'));
+    runManager = createWorkflowRunManager();
+  });
+
+  afterEach(() => {
+    rmSync(runBaseDir, { recursive: true, force: true });
+  });
+
+  function isolatedWorkflowRuntime(): {
+    readonly runBaseDir: string;
+    readonly runManager: WorkflowRunManager;
+  } {
+    return { runBaseDir, runManager };
+  }
+
   it('auto-starts capability-generated workflows without confirmation when approval is silent', async () => {
     const confirm = vi.fn(async () => false);
     const generateWorkflow = vi.fn(async () => fakeGeneratedWorkflow());
     const builderStages: string[] = [];
-    const runMessages: Array<{ readonly type: string; readonly text: string }> = [];
+    const runMessages: Array<{ readonly type: string; readonly text: string; readonly final?: boolean }> = [];
     type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
     type WorkflowRunUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
     const runUpdates: WorkflowRunUpdate[] = [];
 
     const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
       request: 'Generate a parallel audit workflow',
       approval: 'silent',
+      presentation: 'agentic',
       callbacks: {
         confirm,
         createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
@@ -595,8 +1091,147 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       expect(runMessages.some((event) => event.text.includes('Workflow completed'))).toBe(true);
     });
     expect(runUpdates.some((event) => event.status === 'running' && event.workflow === 'generated-fast-audit')).toBe(true);
+    expect(runUpdates.some((event) => event.status === 'running' && event.phaseTotal === 2)).toBe(true);
     expect(runUpdates.at(-1)?.status).toBe('completed');
-    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generate a parallel audit workflow'))).toBe(true);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Run workflow'))).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('AMAW auto-start'))).toBe(false);
+    expect(runMessages.some((event) => (
+      event.type === 'assistant'
+      && event.final !== true
+      && event.text.includes('generated-fast-audit')
+      && event.text.includes('Generated two-agent audit workflow.')
+    ))).toBe(true);
+    expect(runMessages.some((event) => (
+      event.type === 'assistant'
+      && event.final === true
+      && event.text.includes('Generate a parallel audit workflow')
+    ))).toBe(true);
+    expect(runMessages.some((event) => (
+      event.type === 'assistant'
+      && event.final === true
+      && event.text.includes('/workflow show')
+    ))).toBe(false);
+  });
+
+  it('uses artifact content as the agentic completion answer when no synthesis text is returned', async () => {
+    const runMessages: Array<{ readonly type: string; readonly text: string; readonly final?: boolean }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: '请只输出 artifact 报告',
+      approval: 'silent',
+      presentation: 'agentic',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow: async () => fakeArtifactOnlyGeneratedWorkflow(),
+    });
+
+    expect(outcome).toBe('started');
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    expect(runMessages.some((event) => (
+      event.type === 'assistant'
+      && event.final !== true
+      && event.text.includes('我会用 workflow')
+    ))).toBe(true);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(false);
+    const answer = runMessages.find((event) => event.type === 'assistant' && event.final === true)?.text;
+    expect(answer).toContain('Artifact-only final report');
+    expect(answer).toContain('final-report');
+    expect(answer).not.toContain('/workflow show');
+  });
+
+  it('emits full long agentic completion results without preview truncation', async () => {
+    const runMessages: Array<{ readonly type: string; readonly text: string; readonly final?: boolean }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    const longRequest = `full report start\n${'detail '.repeat(1200)}\nfull report end`;
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: longRequest,
+      approval: 'silent',
+      presentation: 'agentic',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow: async () => fakeGeneratedWorkflow(),
+    });
+
+    expect(outcome).toBe('started');
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    const answer = runMessages.find((event) => event.type === 'assistant' && event.final === true)?.text;
+    expect(answer).toContain('full report start');
+    expect(answer).toContain('full report end');
+    expect(answer).not.toContain('Result preview truncated');
+    expect(answer).not.toContain('/workflow show --full');
+    expect(answer).not.toContain('[truncated]');
+  });
+
+  it('keeps command presentation as success plus info result by default', async () => {
+    const runMessages: Array<{ readonly type: string; readonly text: string; readonly final?: boolean }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: 'Generate a parallel audit workflow',
+      approval: 'silent',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow: async () => fakeGeneratedWorkflow(),
+    });
+
+    expect(outcome).toBe('started');
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'success')).toBe(true);
+    });
+    expect(runMessages.some((event) => event.type === 'assistant')).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Generated workflow'))).toBe(true);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('AMAW auto-start'))).toBe(true);
+    expect(runMessages.some((event) => (
+      event.type === 'info'
+      && event.text.includes('Workflow result:')
+      && event.text.includes('Generate a parallel audit workflow')
+    ))).toBe(true);
+  });
+
+  it('prints agentic completion through console fallback without info result framing', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    try {
+      const outcome = await startGeneratedWorkflowFromRequest({
+        ...isolatedWorkflowRuntime(),
+        request: 'Generate a parallel audit workflow',
+        approval: 'silent',
+        presentation: 'agentic',
+        callbacks: {
+          createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        },
+        generateWorkflow: async () => fakeGeneratedWorkflow(),
+      });
+
+      expect(outcome).toBe('started');
+      await vi.waitFor(() => {
+        const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+        expect(output).toContain('Workflow completed');
+      });
+      const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+      expect(output).toContain('Final result:');
+      expect(output).toContain('Generate a parallel audit workflow');
+      expect(output).not.toContain('Workflow result:');
+      expect(output).not.toContain('Use /workflow show');
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('requires confirmation only when the caller asks for approval', async () => {
@@ -604,6 +1239,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
 
     const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
       request: 'Generate a parallel audit workflow',
       approval: 'required',
       callbacks: {
@@ -624,6 +1260,7 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
 
     const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
       request: 'Generate a parallel audit workflow',
       approval: 'silent',
       callbacks: {
@@ -645,6 +1282,140 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
     expect(output).toContain('builder failed');
     expect(output).toContain('timeout after 120000ms');
   });
+
+  it('emits builder failure instead of throwing when option creation fails', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const builderEvents: Array<{ readonly stage: string; readonly message: string }> = [];
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: 'Generate a parallel audit workflow',
+      approval: 'silent',
+      callbacks: {
+        createKodaXOptions: () => {
+          throw new Error('options unavailable');
+        },
+      },
+      generateWorkflow: async () => fakeGeneratedWorkflow(),
+      onBuilderEvent: (event) => builderEvents.push({ stage: event.stage, message: event.message }),
+    });
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    logSpy.mockRestore();
+    expect(outcome).toBe('failed');
+    expect(builderEvents.at(-1)).toEqual({
+      stage: 'failed',
+      message: 'options unavailable',
+    });
+    expect(output).toContain('builder failed');
+  });
+
+  it('routes builder failures through error messages when a UI callback is available', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const runMessages: Array<{ readonly type: string; readonly text: string }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: 'Generate a parallel audit workflow',
+      approval: 'silent',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow: async () => {
+        throw new Error('manifest phases must be a non-empty string array');
+      },
+      onBuilderEvent: () => undefined,
+    });
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    logSpy.mockRestore();
+    expect(outcome).toBe('failed');
+    expect(output).not.toContain('builder failed');
+    expect(runMessages).toEqual([{
+      type: 'error',
+      text: 'Workflow builder failed: manifest phases must be a non-empty string array',
+    }]);
+  });
+});
+
+describe('workflow live update emitter', () => {
+  it('does not reopen a terminal workflow when late child events arrive', () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
+    const updates: WorkflowRunUpdate[] = [];
+    const live = createWorkflowLiveUpdateEmitter(
+      { onWorkflowRunUpdate: (event) => updates.push(event) },
+      'run-late',
+      {
+        name: 'late-event-workflow',
+        description: 'test',
+        phases: ['run'],
+        readOnly: true,
+        maxAgents: 2,
+        maxConcurrency: 1,
+      },
+    );
+
+    live.running();
+    live.complete('failed', 'boom');
+    live.onEvent({
+      seq: 1,
+      type: 'agent_spawned',
+      data: { taskId: 'late-task', name: 'late-agent' },
+    });
+
+    expect(updates.map((event) => event.status)).toEqual(['running', 'failed']);
+  });
+
+  it('includes elapsed time and completed child token usage in live updates', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-06-13T10:00:00.000Z'));
+      type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+      type WorkflowRunUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
+      const updates: WorkflowRunUpdate[] = [];
+      const live = createWorkflowLiveUpdateEmitter(
+        { onWorkflowRunUpdate: (event) => updates.push(event) },
+        'run-usage',
+        {
+          name: 'usage-workflow',
+          description: 'test',
+          phases: ['run'],
+          readOnly: true,
+          maxAgents: 2,
+          maxConcurrency: 1,
+          tokenBudget: 50_000,
+        },
+      );
+
+      live.onEvent({
+        seq: 1,
+        type: 'agent_spawned',
+        data: { taskId: 'task-1', name: 'reader' },
+      });
+      vi.setSystemTime(new Date('2026-06-13T10:01:05.000Z'));
+      live.onEvent({
+        seq: 2,
+        type: 'agent_completed',
+        data: {
+          taskId: 'task-1',
+          name: 'reader',
+          status: 'completed',
+          usage: { totalTokens: 12_345 },
+        },
+      });
+
+      expect(updates.at(-1)).toMatchObject({
+        elapsedMs: 65_000,
+        tokenBudgetSpent: 12_345,
+        tokenBudgetTotal: 50_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('workflowCommand registration shape', () => {
@@ -661,10 +1432,12 @@ describe('workflowCommand registration shape', () => {
 describe('workflowCommand saved capsule preflight', () => {
   let dir = '';
   let previousCwd = '';
+  let workflowRunsDir = '';
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'wf-command-'));
+    workflowRunsDir = getAgentConfigPath('workflow-runs', deriveProjectKeyFromRoot(dir).key);
     previousCwd = process.cwd();
     process.chdir(dir);
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -674,6 +1447,7 @@ describe('workflowCommand saved capsule preflight', () => {
     logSpy.mockRestore();
     process.chdir(previousCwd);
     rmSync(dir, { recursive: true, force: true });
+    rmSync(workflowRunsDir, { recursive: true, force: true });
   });
 
   it('prints dependency-inventory warnings before saved capsule approval', async () => {
@@ -723,5 +1497,156 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(output).toContain('capsule preflight warnings');
     expect(output).toContain('tools:bash');
     expect(prompts[0]).toContain('raw script:');
+  });
+
+  it('runs a saved workflow name rerun with the saved workflow locale', async () => {
+    writeSavedWorkflowCapsule(dir, 'saved-audit', {
+      description: '中文审计 workflow',
+      source: 'async function run() { return "完成"; }',
+    });
+    const prompts: string[] = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowLiveUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const updates: WorkflowLiveUpdate[] = [];
+    const runMessages: WorkflowRunMessage[] = [];
+    const callbacks = {
+      confirm: async (message: string) => {
+        prompts.push(message);
+        return true;
+      },
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+      onWorkflowRunMessage: (event) => {
+        runMessages.push(event);
+      },
+      onWorkflowRunUpdate: (event) => {
+        updates.push(event);
+      },
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['rerun', 'saved-audit', '{"request":"请复查"}'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).not.toContain('rerun failed');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('source: saved:project');
+    expect(prompts[0]).toContain('raw script:');
+    expect(updates[0]).toMatchObject({ locale: 'zh' });
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    expect(runMessages.some((event) => event.type === 'success')).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
+  });
+
+  it('preserves locale from a historical generated run when rerunning by run id', async () => {
+    writeGeneratedRunSnapshot(workflowRunsDir, 'run-zh-audit');
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowLiveUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const updates: WorkflowLiveUpdate[] = [];
+    const runMessages: WorkflowRunMessage[] = [];
+    const callbacks = {
+      confirm: async () => true,
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+      onWorkflowRunMessage: (event) => {
+        runMessages.push(event);
+      },
+      onWorkflowRunUpdate: (event) => {
+        updates.push(event);
+      },
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['rerun', 'run-zh-audit'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).not.toContain('rerun failed');
+    expect(updates[0]).toMatchObject({ locale: 'zh' });
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    expect(runMessages.some((event) => event.type === 'success')).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
+  });
+
+  it('runs a saved workflow name with agentic completion instead of info result', async () => {
+    writeSavedWorkflowCapsule(dir, 'saved-direct', {
+      description: 'saved direct workflow',
+      source: 'async function run() { return "direct result"; }',
+    });
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const runMessages: WorkflowRunMessage[] = [];
+    const callbacks = {
+      confirm: async () => true,
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+      onWorkflowRunMessage: (event) => {
+        runMessages.push(event);
+      },
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['saved-direct'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    const finalText = runMessages.find((event) => event.type === 'assistant' && event.final === true)?.text;
+    expect(finalText).toContain('direct result');
+    expect(runMessages.some((event) => event.type === 'success')).toBe(false);
+    expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
+  });
+
+  it('fails closed when a rerun target matches both a run id and saved workflow name', async () => {
+    writeSavedWorkflowCapsule(dir, 'same-name');
+    const projectKey = deriveProjectKeyFromRoot(dir).key;
+    const runDir = join(getAgentConfigPath('workflow-runs', projectKey), 'same-name');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'same-name',
+        workflow: 'same-name',
+        status: 'completed',
+        totalSpawned: 0,
+        endedAt: Date.now(),
+      }),
+      'utf8',
+    );
+    const prompts: string[] = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    const callbacks = {
+      confirm: async (message: string) => {
+        prompts.push(message);
+        return true;
+      },
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['rerun', 'same-name'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('ambiguous rerun target');
+    expect(output).toContain('/workflow same-name');
+    expect(prompts).toHaveLength(0);
   });
 });

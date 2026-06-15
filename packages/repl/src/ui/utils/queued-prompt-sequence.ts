@@ -5,6 +5,7 @@ export interface QueuedPromptSequenceOptions<TResult> {
   onRoundComplete?: (result: TResult) => Promise<void> | void;
   onBeforeQueuedRound?: (prompt: string) => Promise<void> | void;
   shouldContinue?: (result: TResult) => boolean;
+  shouldDrainQueuedPrompts?: () => boolean;
 }
 
 /**
@@ -27,6 +28,7 @@ export async function runQueuedPromptSequence<TResult>(
     onRoundComplete,
     onBeforeQueuedRound,
     shouldContinue = () => true,
+    shouldDrainQueuedPrompts = () => true,
   } = options;
 
   let prompt = initialPrompt;
@@ -36,6 +38,10 @@ export async function runQueuedPromptSequence<TResult>(
     await onRoundComplete?.(result);
 
     if (!shouldContinue(result)) {
+      return result;
+    }
+
+    if (!shouldDrainQueuedPrompts()) {
       return result;
     }
 

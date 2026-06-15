@@ -14,11 +14,14 @@ function runningSnapshot(
     workflow: "feature-217-ui-regression-audit",
     status: "running",
     phase: "fan-out-ui-audit",
+    phaseIndex: 2,
+    phaseTotal: 4,
     activeAgents: [
       "layout-and-positioning-auditor",
       "styling-and-visual-auditor",
     ],
     totalSpawned: 3,
+    agentCap: 8,
     completedAgents: 1,
     failedAgents: 0,
     stoppedAgents: 0,
@@ -45,15 +48,15 @@ describe("buildWorkflowLiveViewModel", () => {
       "phase",
       "agent",
       "agent",
-      "done",
+      "progress",
       "hint",
     ]);
     expect(vm.rows.map((row) => row.text)).toEqual([
-      "feature-217-ui-regression-audit (run-mqc7av6y) - 2/3 active",
-      "fan-out-ui-audit",
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
+      "2/4 fan-out-ui-audit",
       "layout-and-positioning-auditor",
       "styling-and-visual-auditor",
-      "1 done",
+      "1/3 finished (2 active agents, cap 8)",
       "Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
   });
@@ -62,15 +65,40 @@ describe("buildWorkflowLiveViewModel", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot({
       failedAgents: 1,
       activeAgents: ["remaining-auditor"],
+      totalSpawned: 4,
       completedAgents: 2,
     }));
 
-    expect(vm.rows.map((row) => row.text)).toContain("1 failed");
+    expect(vm.rows.map((row) => row.text)).toContain("3/4 finished (1 active agent, 1 failed, cap 8)");
     expect(vm.rows.map((row) => row.text)).toContain("remaining-auditor");
-    expect(vm.rows.map((row) => row.text)).toContain("2 done");
   });
 
-  it("keeps the show/stop hint visible when many agents are active", () => {
+  it("renders elapsed time and token usage when available", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      startedAt: 1_000,
+      elapsedMs: 2_000,
+      tokenBudgetSpent: 12_345,
+      tokenBudgetTotal: 50_000,
+    }), 66_000);
+
+    expect(vm.rows[0]?.text).toBe(
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents · 1m5s · spent 12.3k/50k tokens",
+    );
+  });
+
+  it("labels an unused workflow token budget as a budget, not context usage", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      startedAt: 1_000,
+      tokenBudgetSpent: 0,
+      tokenBudgetTotal: 200_000,
+    }), 3_000);
+
+    expect(vm.rows[0]?.text).toBe(
+      "feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents · 2s · budget 200k tokens",
+    );
+  });
+
+  it("keeps progress and the show/stop hint visible when many agents are active", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot({
       activeAgents: ["a1", "a2", "a3", "a4", "a5"],
       completedAgents: 0,
@@ -79,6 +107,8 @@ describe("buildWorkflowLiveViewModel", () => {
     }));
 
     expect(vm.rows).toHaveLength(6);
+    expect(vm.rows.map((row) => row.text)).toContain("4 more active agents");
+    expect(vm.rows.map((row) => row.text)).toContain("0/3 finished (5 active agents, cap 8)");
     expect(vm.rows.at(-1)?.text).toBe("show: /workflow show run-mqc7av6y | stop: /workflow stop run-mqc7av6y");
   });
 
@@ -86,12 +116,37 @@ describe("buildWorkflowLiveViewModel", () => {
     const vm = buildWorkflowLiveViewModel(runningSnapshot());
 
     expect(formatWorkflowLiveViewModelForTranscript(vm)).toEqual([
-      "workflow feature-217-ui-regression-audit (run-mqc7av6y) - 2/3 active",
-      "phase    fan-out-ui-audit",
+      "workflow feature-217-ui-regression-audit (run-mqc7av6y) - 2 active agents",
+      "phase    2/4 fan-out-ui-audit",
       "agent    layout-and-positioning-auditor",
       "agent    styling-and-visual-auditor",
-      "done     1 done",
+      "progress 1/3 finished (2 active agents, cap 8)",
       "hint     Use /workflow show run-mqc7av6y for status or /workflow stop run-mqc7av6y to stop.",
     ]);
+  });
+
+  it("localizes labels and progress text for Chinese workflow requests", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      locale: "zh",
+      phase: "验证",
+      phaseIndex: 1,
+      phaseTotal: 3,
+      activeAgents: ["布局审计"],
+      totalSpawned: 2,
+      completedAgents: 1,
+      message: undefined,
+    }));
+
+    expect(vm.rows.map((row) => row.symbol)).toEqual([
+      "工作流",
+      "阶段",
+      "智能体",
+      "进度",
+      "提示",
+    ]);
+    expect(vm.rows.map((row) => row.text)).toContain("1/3 验证");
+    expect(vm.rows.map((row) => row.text)).toContain("1/2 完成（1 个智能体运行中，上限 8）");
+    expect(vm.rows.at(-1)?.text).toBe("查看: /workflow show run-mqc7av6y | 停止: /workflow stop run-mqc7av6y");
+    expect(vm.counterText).toBe("1/2 个智能体运行中");
   });
 });

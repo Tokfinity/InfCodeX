@@ -12,6 +12,8 @@ describe("WorkflowRunSurface", () => {
       workflow: "feature-217-ui-regression-audit",
       status: "running",
       phase: "fan-out-ui-audit",
+      phaseIndex: 2,
+      phaseTotal: 4,
       activeAgents: ["layout-auditor"],
       totalSpawned: 2,
       completedAgents: 1,
@@ -25,9 +27,9 @@ describe("WorkflowRunSurface", () => {
 
     expect(frame.trimStart().startsWith("workflow")).toBe(true);
     expect(frame).toContain("workflow feature-217-ui-regression-audit");
-    expect(frame).toContain("phase    fan-out-ui-audit");
+    expect(frame).toContain("phase    2/4 fan-out-ui-audit");
     expect(frame).toContain("agent    layout-auditor");
-    expect(frame).toContain("1 done");
+    expect(frame).toContain("progress 1/2 finished (1 active agent)");
     expect(frame).toContain("/workflow show run-mqc7av6y");
   });
 

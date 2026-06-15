@@ -101,9 +101,83 @@ describe('runWorkflow — event envelope + ordering', () => {
       'phase_finished',
       'workflow_completed',
     ]);
+    const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
+    expect(completed?.data?.summary).toBe('done');
+    expect(completed?.data?.usage).toEqual({ outputTokens: 10 });
     // seq strictly increasing.
     const seqs = outcome.state.events.map((e) => e.seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  });
+
+  it('keeps enough completed child text for workflow handoff digest extraction', async () => {
+    const finalText = [
+      'I now have a complete picture of the workflow changes.',
+      'Here is my long report.',
+      'x'.repeat(700),
+      '[workflow handoff]',
+      'Conclusion: the digest formatter must not be starved by a short event summary.',
+      'Evidence: the useful handoff can appear after a long report preamble.',
+      '[/workflow handoff]',
+    ].join('\n');
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-long', name: input.name }),
+      wait: async (taskId: string): Promise<WorkflowTaskResult> => ({
+        taskId,
+        name: 'long-child',
+        status: 'completed',
+        finalText,
+      }),
+      output: async (taskId: string) => ({ taskId, name: 'long-child', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.runAgent({ name: 'long-child', prompt: 'x' });
+      return 'ok';
+    });
+
+    expect(outcome.ok).toBe(true);
+    const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
+    expect(completed?.data?.summary).toContain('[workflow handoff]');
+    expect(completed?.data?.summary).toContain('Conclusion: the digest formatter');
+    expect(String(completed?.data?.summary).length).toBeLessThanOrEqual(4096 + 3);
+  });
+
+  it('preserves a workflow handoff block beyond the normal event summary prefix', async () => {
+    const finalText = [
+      'I now have a complete picture of the workflow changes.',
+      'Here is my long report.',
+      'overview details '.repeat(400),
+      '[workflow handoff]',
+      '- confirmed: final handoff survived the long report.',
+      '- risk: prefix-only truncation would hide this.',
+      '[/workflow handoff]',
+    ].join('\n');
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-long', name: input.name }),
+      wait: async (taskId: string): Promise<WorkflowTaskResult> => ({
+        taskId,
+        name: 'long-child',
+        status: 'completed',
+        finalText,
+      }),
+      output: async (taskId: string) => ({ taskId, name: 'long-child', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.runAgent({ name: 'long-child', prompt: 'x' });
+      return 'ok';
+    });
+
+    expect(outcome.ok).toBe(true);
+    const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
+    expect(completed?.data?.summary).toContain('[workflow handoff]');
+    expect(completed?.data?.summary).toContain('final handoff survived');
+    expect(completed?.data?.summary).toContain('prefix-only truncation would hide this');
+    expect(completed?.data?.summary).not.toContain('overview details overview details');
   });
 
   it('emits workflow_failed and surfaces the error when the script throws', async () => {
@@ -117,6 +191,20 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(outcome.state.events.at(-1)?.type).toBe('workflow_failed');
   });
 
+  it('records user aborts as stopped instead of failed', async () => {
+    const { backend } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async () => {
+      throw new WorkflowAbortError();
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.state.status).toBe('stopped');
+    expect(outcome.state.events.map((event) => event.type)).toEqual([
+      'workflow_started',
+      'workflow_stopped',
+    ]);
+  });
+
   it('stops spawned-but-unwaited children when the workflow fails', async () => {
     const { backend, stoppedTaskIds } = fakeBackend();
     const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
@@ -127,6 +215,53 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(outcome.ok).toBe(false);
     expect(stoppedTaskIds()).toEqual(['task-1']);
     expect(outcome.state.events.map((event) => event.type)).toContain('agent_stopped');
+  });
+
+  it('stops spawned-but-unwaited children when the workflow succeeds', async () => {
+    const { backend, stoppedTaskIds } = fakeBackend();
+    const outcome = await runWorkflow(baseOpts(backend), async (wf) => {
+      await wf.spawnAgent({ name: 'left-running', prompt: 'keep working' });
+      return 'ok';
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(stoppedTaskIds()).toEqual(['task-1']);
+    expect(outcome.state.status).toBe('completed');
+    expect(outcome.state.events.map((event) => event.type)).toEqual([
+      'workflow_started',
+      'agent_spawned',
+      'agent_stopped',
+      'workflow_completed',
+    ]);
+  });
+
+  it('does not leak concurrency capacity when the agent_spawned event sink throws', async () => {
+    const { backend, peakInFlight } = fakeBackend();
+    let failFirstSpawnEvent = true;
+    const outcome = await runWorkflow(
+      baseOpts(backend, {
+        limits: { maxConcurrency: 1 },
+        onEvent: (event: WorkflowEvent) => {
+          if (event.type === 'agent_spawned' && failFirstSpawnEvent) {
+            failFirstSpawnEvent = false;
+            throw new Error('event sink failed');
+          }
+        },
+      }),
+      async (wf) => {
+        try {
+          await wf.spawnAgent({ name: 'first', prompt: 'x' });
+        } catch {
+          // Simulates generated workflow recovery after a host-side event failure.
+        }
+        const second = await wf.spawnAgent({ name: 'second', prompt: 'x' });
+        await wf.stop(second.taskId, 'done');
+        return 'ok';
+      },
+    );
+
+    expect(outcome.ok).toBe(true);
+    expect(peakInFlight()).toBe(1);
   });
 
   it('does not emit agent_completed after a failed workflow has stopped the task', async () => {
@@ -360,7 +495,8 @@ describe('abort handling', () => {
         return handlePromise;
       },
     );
-    expect(outcome.ok).toBe(true);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toBeInstanceOf(WorkflowAbortError);
     expect(stopped).toEqual(['t1']); // abort reached the in-flight child
   });
 
@@ -385,6 +521,41 @@ describe('abort handling', () => {
     expect(outcome.ok).toBe(false);
     expect(launched).toBeLessThan(5); // abort prevented remaining launches
   });
+
+  it('propagates a mid-run abort to a bare spawnAgent waiter', async () => {
+    const controller = new AbortController();
+    const stopped: string[] = [];
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'bare-1', name: input.name }),
+      wait: () => new Promise<WorkflowTaskResult>(() => {}),
+      output: async (taskId) => ({ taskId, name: taskId, status: 'running' }),
+      send: async () => {},
+      stop: async (taskId) => {
+        stopped.push(taskId);
+      },
+    };
+
+    const outcomeOrTimeout = await Promise.race([
+      runWorkflow(
+        baseOpts(backend, { signal: controller.signal }),
+        async (wf) => {
+          const handle = await wf.spawnAgent({ name: 'bare', prompt: 'x' });
+          setTimeout(() => controller.abort(), 5);
+          await wf.wait(handle.taskId);
+          return 'unreached';
+        },
+      ),
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 500)),
+    ]);
+
+    expect(outcomeOrTimeout).not.toBe('timeout');
+    if (outcomeOrTimeout !== 'timeout') {
+      expect(outcomeOrTimeout.ok).toBe(false);
+      if (!outcomeOrTimeout.ok) expect(outcomeOrTimeout.error).toBeInstanceOf(WorkflowAbortError);
+      expect(outcomeOrTimeout.state.events.some((event) => event.type === 'agent_stopped')).toBe(true);
+    }
+    expect(stopped).toEqual(['bare-1']);
+  });
 });
 
 describe('budget accounting + hard stop before new spawns', () => {
@@ -398,6 +569,31 @@ describe('budget accounting + hard stop before new spawns', () => {
       return 'ok';
     });
     expect(snapshot).toEqual({ total: 100, spent: 20, remaining: 80 });
+  });
+
+  it('accrues totalTokens when outputTokens is not provided', async () => {
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input) => ({ taskId: 'task-total', name: input.name }),
+      wait: async (taskId) => ({
+        taskId,
+        name: 'total',
+        status: 'completed',
+        finalText: 'done',
+        usage: { totalTokens: 25 },
+      }),
+      output: async (taskId) => ({ taskId, name: taskId, status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+    };
+    let spent = 0;
+
+    await runWorkflow(baseOpts(backend, { limits: { tokenBudget: 100 } }), async (wf) => {
+      await wf.runAgent({ name: 'a', prompt: 'x' });
+      spent = wf.budget.spent();
+      return 'ok';
+    });
+
+    expect(spent).toBe(25);
   });
 
   it('remaining is Infinity when no budget configured', async () => {

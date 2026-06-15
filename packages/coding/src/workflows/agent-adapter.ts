@@ -27,6 +27,7 @@ import type {
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
   WorkflowTaskStatus,
+  WorkflowWaitOptions,
 } from '@kodax-ai/agent';
 
 import { executeChildAgents } from '../child-executor.js';
@@ -74,6 +75,39 @@ export interface CodingWorkflowBackendDeps {
 interface TaskEntry {
   readonly name: string;
   readonly promise: Promise<KodaXChildExecutionResult>;
+}
+
+function normalizeWaitTimeoutMs(opts: WorkflowWaitOptions | undefined): number | undefined {
+  if (opts?.timeoutMs === undefined) return undefined;
+  if (!Number.isFinite(opts.timeoutMs) || opts.timeoutMs <= 0) {
+    throw new Error('workflow wait timeoutMs must be a positive number');
+  }
+  return Math.floor(opts.timeoutMs);
+}
+
+async function waitForChildResult(
+  entry: TaskEntry,
+  taskId: string,
+  opts: WorkflowWaitOptions | undefined,
+  ctx: KodaXToolExecutionContext,
+): Promise<KodaXChildExecutionResult> {
+  const timeoutMs = normalizeWaitTimeoutMs(opts);
+  if (timeoutMs === undefined) return entry.promise;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      entry.promise,
+      new Promise<KodaXChildExecutionResult>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          ctx.childAbortControllers?.get(taskId)?.abort();
+          reject(new Error(`workflow task ${taskId} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function buildBundle(childId: string, input: WorkflowSpawnAgentInput): KodaXChildContextBundle {
@@ -173,17 +207,20 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
     return { taskId: childId, name: input.name };
   };
 
-  const wait = async (taskId: string): Promise<WorkflowTaskResult> => {
+  const wait = async (
+    taskId: string,
+    opts?: WorkflowWaitOptions,
+  ): Promise<WorkflowTaskResult> => {
     const entry = tasks.get(taskId);
     if (!entry) throw new Error(`unknown workflow task: ${taskId}`);
-    const result = await entry.promise;
+    const result = await waitForChildResult(entry, taskId, opts, ctx);
     const term = deriveTerminal(result, taskId);
     return {
       taskId,
       name: entry.name,
       status: term.status,
       finalText: term.finalText,
-      usage: { outputTokens: result.totalTokensUsed },
+      usage: { totalTokens: result.totalTokensUsed },
     };
   };
 

@@ -69,6 +69,25 @@ describe("runQueuedPromptSequence", () => {
     expect(shiftPendingPrompt).not.toHaveBeenCalled();
   });
 
+  it("can finish the current round without consuming queued prompts", async () => {
+    const runRound = vi.fn(async (prompt: string) => ({
+      prompt,
+      interrupted: false,
+    }));
+    const shiftPendingPrompt = vi.fn(() => "stale queued prompt");
+
+    const result = await runQueuedPromptSequence({
+      initialPrompt: "fresh prompt",
+      runRound,
+      shiftPendingPrompt,
+      shouldDrainQueuedPrompts: () => false,
+    });
+
+    expect(result.prompt).toBe("fresh prompt");
+    expect(runRound).toHaveBeenCalledOnce();
+    expect(shiftPendingPrompt).not.toHaveBeenCalled();
+  });
+
   it("skips blank entries while batching the rest into a single round", async () => {
     const prompts = ["   ", "", "follow-up A", "  ", "follow-up B"];
     const runRound = vi.fn(async (prompt: string) => ({ prompt, interrupted: false }));

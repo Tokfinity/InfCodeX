@@ -285,7 +285,7 @@ const WORKFLOW_SUBCOMMAND_ARGS: ArgumentDefinition[] = [
   { name: 'stop', description: 'Stop an active workflow run', type: 'enum' },
   { name: 'delete', description: 'Delete one persisted workflow run', type: 'enum' },
   { name: 'prune', description: 'Preview or delete old terminal workflow runs', type: 'enum' },
-  { name: 'rerun', description: 'Rerun a generated workflow from run history', type: 'enum' },
+  { name: 'rerun', description: 'Rerun a run id or saved workflow name', type: 'enum' },
   { name: 'save', description: 'Save a generated run as a workflow capsule', type: 'enum' },
   { name: 'help', description: 'Show workflow help', type: 'enum' },
 ];
@@ -312,6 +312,8 @@ const WORKFLOW_PRUNE_OPTION_ARGS: ArgumentDefinition[] = [
   { name: '--keep', description: 'Keep the newest N terminal runs', type: 'enum' },
   { name: '--older-than', description: 'Delete terminal runs older than Nd or Nh', type: 'enum' },
 ];
+
+const WORKFLOW_SAVED_FILE_SUFFIXES = ['.workflow.json', '.ts', '.mjs', '.js'] as const;
 
 function workflowRunMatchesSubcommand(subcommand: string, status: string): boolean {
   switch (subcommand) {
@@ -396,6 +398,70 @@ function getWorkflowRunIdArgs(subcommand: string): ArgumentDefinition[] {
   });
 }
 
+function savedWorkflowNameFromFile(entry: string): string | undefined {
+  for (const suffix of WORKFLOW_SAVED_FILE_SUFFIXES) {
+    if (entry.endsWith(suffix)) {
+      const name = entry.slice(0, -suffix.length);
+      return isWorkflowRunEntryName(name) ? name : undefined;
+    }
+  }
+  return undefined;
+}
+
+function getSavedWorkflowNameArgs(): ArgumentDefinition[] {
+  const dirs = [
+    { path: getAgentConfigPath('workflows'), source: 'personal' },
+    { path: join(process.cwd(), '.kodax', 'workflows'), source: 'project' },
+  ] as const;
+  const byName = new Map<string, ArgumentDefinition>();
+
+  for (const dir of dirs) {
+    if (!existsSync(dir.path)) continue;
+    try {
+      for (const entry of readdirSync(dir.path)) {
+        const name = savedWorkflowNameFromFile(entry);
+        if (!name) continue;
+        byName.set(name, {
+          name,
+          description: `${dir.source} saved workflow`,
+          type: 'enum',
+        });
+      }
+    } catch {
+      // Saved workflow discovery should never break command completion.
+    }
+  }
+
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getWorkflowRerunArgs(): ArgumentDefinition[] {
+  const byName = new Map<string, ArgumentDefinition>();
+  for (const arg of getWorkflowRunIdArgs('rerun')) {
+    byName.set(arg.name, {
+      ...arg,
+      description: `recent run: ${arg.description}`,
+      type: 'string',
+    });
+  }
+  for (const arg of getSavedWorkflowNameArgs()) {
+    const existing = byName.get(arg.name);
+    if (existing) {
+      byName.set(arg.name, {
+        ...existing,
+        description: `${existing.description}; also ${arg.description}`,
+      });
+      continue;
+    }
+    byName.set(arg.name, {
+      ...arg,
+      description: arg.description,
+      type: 'string',
+    });
+  }
+  return [...byName.values()];
+}
+
 function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
   const [subcommand = ''] = argParts;
   const normalizedSubcommand = subcommand.toLowerCase();
@@ -409,7 +475,12 @@ function getWorkflowArgs(argParts: string[]): ArgumentDefinition[] {
         description: workflow.description,
         type: 'enum' as const,
       })),
+      ...getSavedWorkflowNameArgs(),
     ];
+  }
+
+  if (normalizedSubcommand === 'rerun' && effectiveLength <= 2) {
+    return getWorkflowRerunArgs();
   }
 
   if (WORKFLOW_RUN_ID_SUBCOMMANDS.has(normalizedSubcommand) && effectiveLength <= 2) {

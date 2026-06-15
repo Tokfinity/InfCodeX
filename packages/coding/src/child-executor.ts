@@ -25,7 +25,7 @@ import type {
 import { resolveExecutionCwd } from './runtime-paths.js';
 import { resolveModelHintTier } from './model-hint-routing.js';
 import { invokeChildWithFallback } from './child-fallback.js';
-import { toolWorktreeCreate } from './tools/worktree.js';
+import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
@@ -293,6 +293,47 @@ function annotateWorktreeSummary(summary: string, scope: ChildIsolationScope): s
   return [`[Workflow worktree: ${scope.worktreePath}]`, summary].join('\n');
 }
 
+async function cleanupChildIsolationScope(
+  scope: ChildIsolationScope,
+  parentCtx: KodaXToolExecutionContext,
+): Promise<string | undefined> {
+  if (!scope.worktreePath) return undefined;
+  try {
+    await toolWorktreeRemove(
+      {
+        action: 'remove',
+        worktree_path: scope.worktreePath,
+        discard_changes: true,
+      },
+      parentCtx,
+    );
+    return undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `[Workflow worktree cleanup failed: ${message}]`;
+  }
+}
+
+function appendCleanupWarning(
+  result: KodaXChildAgentResult,
+  cleanupWarning: string | undefined,
+): KodaXChildAgentResult {
+  if (!cleanupWarning) return result;
+  return {
+    ...result,
+    summary: `${result.summary}\n${cleanupWarning}`,
+  };
+}
+
+function readChildTokenUsage(result: KodaXResult): number {
+  const candidate =
+    result.usage?.totalTokens ??
+    result.contextTokenSnapshot?.usage?.totalTokens ??
+    result.contextTokenSnapshot?.currentTokens ??
+    0;
+  return Number.isFinite(candidate) && candidate > 0 ? candidate : 0;
+}
+
 function resolveSpecialistOverride(
   bundle: KodaXChildContextBundle,
   defaultSystemPrompt: string,
@@ -347,7 +388,20 @@ async function executeReadChild(
   options: ChildExecutorOptions,
 ): Promise<KodaXChildAgentResult> {
   const scope = await prepareChildIsolationScope(bundle, parentCtx);
-  const briefing = await buildChildBriefing(bundle, scope.ctx, options.maxIterationsPerChild);
+  let briefing: string;
+  try {
+    briefing = await buildChildBriefing(bundle, scope.ctx, options.maxIterationsPerChild);
+  } catch (error) {
+    const childResult = extractChildResult(
+      bundle,
+      error instanceof Error ? error.message : String(error),
+      'failed',
+      0,
+      false,
+    );
+    const cleanupWarning = await cleanupChildIsolationScope(scope, parentCtx);
+    return appendCleanupWarning(childResult, cleanupWarning);
+  }
   const childEvents = buildChildEvents(
     bundle.id,
     options.onProgress,
@@ -378,6 +432,7 @@ async function executeReadChild(
   const provider =
     bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
+  let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
     const result = await invokeChildWithFallback(
@@ -419,15 +474,16 @@ async function executeReadChild(
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
-    return extractChildResult(
+    childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
       result.success ? 'completed' : 'failed',
       iterations,
       result.interrupted === true,
+      readChildTokenUsage(result),
     );
   } catch (error) {
-    return extractChildResult(
+    childResult = extractChildResult(
       bundle,
       error instanceof Error ? error.message : String(error),
       'failed',
@@ -435,6 +491,8 @@ async function executeReadChild(
       false,
     );
   }
+  const cleanupWarning = await cleanupChildIsolationScope(scope, parentCtx);
+  return appendCleanupWarning(childResult, cleanupWarning);
 }
 
 /* ---------- Write child execution ---------- */
@@ -458,7 +516,20 @@ async function executeWriteChild(
   const scope = await prepareChildIsolationScope(bundle, baseCtx);
   const childCtx = scope.ctx;
 
-  const briefing = await buildChildBriefing(bundle, childCtx, options.maxIterationsPerChild);
+  let briefing: string;
+  try {
+    briefing = await buildChildBriefing(bundle, childCtx, options.maxIterationsPerChild);
+  } catch (error) {
+    const childResult = extractChildResult(
+      bundle,
+      error instanceof Error ? error.message : String(error),
+      'failed',
+      0,
+      false,
+    );
+    const cleanupWarning = await cleanupChildIsolationScope(scope, baseCtx);
+    return appendCleanupWarning(childResult, cleanupWarning);
+  }
   const childEvents = buildChildEvents(
     bundle.id,
     options.onProgress,
@@ -494,6 +565,7 @@ async function executeWriteChild(
   const provider =
     bundle.provider ?? providerOverride ?? hintTier?.provider ?? options.parentOptions.provider ?? 'anthropic';
 
+  let childResult: KodaXChildAgentResult;
   try {
     const runFn = await getRunKodaX();
     const result = await invokeChildWithFallback(
@@ -535,15 +607,16 @@ async function executeWriteChild(
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
 
-    return extractChildResult(
+    childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
       result.success ? 'completed' : 'failed',
       iterations,
       result.interrupted === true,
+      readChildTokenUsage(result),
     );
   } catch (error) {
-    return extractChildResult(
+    childResult = extractChildResult(
       bundle,
       error instanceof Error ? error.message : String(error),
       'failed',
@@ -551,6 +624,8 @@ async function executeWriteChild(
       false,
     );
   }
+  const cleanupWarning = await cleanupChildIsolationScope(scope, baseCtx);
+  return appendCleanupWarning(childResult, cleanupWarning);
 }
 
 /* ---------- Structured briefing ---------- */
@@ -958,6 +1033,7 @@ function extractChildResult(
   status: KodaXChildAgentResult['status'],
   actualIterations?: number,
   interrupted?: boolean,
+  totalTokensUsed?: number,
 ): KodaXChildAgentResult {
   return {
     childId: bundle.id,
@@ -968,6 +1044,7 @@ function extractChildResult(
     evidenceRefs: bundle.evidenceRefs,
     contradictions: [],
     actualIterations,
+    ...(totalTokensUsed !== undefined && totalTokensUsed > 0 ? { totalTokensUsed } : {}),
     interrupted,
   };
 }
@@ -1003,12 +1080,16 @@ function mergeChildResults(
   const mergedArtifacts = [
     ...new Set(results.flatMap((r) => r.artifactPaths ?? [])),
   ];
+  const totalTokensUsed = results.reduce(
+    (sum, result) => sum + (result.totalTokensUsed ?? 0),
+    0,
+  );
 
   return {
     results,
     mergedFindings,
     mergedArtifacts,
-    totalTokensUsed: 0, // Tracked via FEATURE_064 cost observatory when available
+    totalTokensUsed,
     cancelledChildren: [...cancelledChildren],
   };
 }

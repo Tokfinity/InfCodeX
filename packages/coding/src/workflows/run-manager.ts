@@ -1,4 +1,4 @@
-import type { WorkflowEvent } from '@kodax-ai/agent';
+import type { WorkflowEvent, WorkflowRunState } from '@kodax-ai/agent';
 
 import {
   runWorkflowFromOptions,
@@ -32,6 +32,7 @@ export interface ManagedWorkflowSnapshot {
 export interface ManagedWorkflowRun {
   readonly runId: string;
   readonly done: Promise<RunWorkflowModuleOutcome>;
+  readonly getSnapshot?: () => ManagedWorkflowSnapshot | undefined;
 }
 
 interface MutableRun {
@@ -98,6 +99,22 @@ function resultText(value: unknown): string | undefined {
   return undefined;
 }
 
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function failedOutcome(run: MutableRun, error: unknown): RunWorkflowModuleOutcome {
+  const err = toError(error);
+  const state: WorkflowRunState = {
+    runId: run.runId,
+    status: 'failed',
+    totalSpawned: run.totalSpawned,
+    events: [],
+    artifacts: [],
+  };
+  return { kind: 'failed', error: err, state };
+}
+
 export function createWorkflowRunManager(
   deps: { readonly now?: () => number } = {},
 ): WorkflowRunManager {
@@ -158,7 +175,7 @@ export function createWorkflowRunManager(
   ): RunWorkflowModuleOutcome => {
     run.status = terminalStatus(outcome, run.controller.signal.aborted || run.status === 'stopped');
     run.endedAt = now();
-    if (outcome.kind === 'failed') run.error = outcome.error.message;
+    if (outcome.kind === 'failed' && run.status !== 'stopped') run.error = outcome.error.message;
     if (outcome.kind === 'completed') run.resultText = resultText(outcome.result);
     releasePauseWaiters(run);
     return outcome;
@@ -172,8 +189,10 @@ export function createWorkflowRunManager(
         signal: run.controller.signal,
         beforeSpawn: () => waitIfPaused(run),
         onEvent: onEvent(run, opts.onEvent),
-      }).then((outcome) => settle(run, outcome));
-      return { runId: run.runId, done };
+      })
+        .catch((error: unknown) => failedOutcome(run, error))
+        .then((outcome) => settle(run, outcome));
+      return { runId: run.runId, done, getSnapshot: () => snapshot(run) };
     },
 
     startFromOptions: (input) => {
@@ -183,8 +202,10 @@ export function createWorkflowRunManager(
         signal: run.controller.signal,
         beforeSpawn: () => waitIfPaused(run),
         onEvent: onEvent(run, input.onEvent),
-      }).then((outcome) => settle(run, outcome));
-      return { runId: run.runId, done };
+      })
+        .catch((error: unknown) => failedOutcome(run, error))
+        .then((outcome) => settle(run, outcome));
+      return { runId: run.runId, done, getSnapshot: () => snapshot(run) };
     },
 
     list: () =>

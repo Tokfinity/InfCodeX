@@ -43,4 +43,18 @@ describe("transcript screen selection", () => {
     expect(selection?.charCount).toBe(1);
     expect(selection?.rowRanges.get("row-cjk")).toEqual({ start: 1, end: 2 });
   });
+
+  it("strips ANSI color sequences before computing selection text", () => {
+    const selection = buildTranscriptScreenSelection(
+      [{
+        key: "ansi-row",
+        text: "\u001b[32m✓\u001b[39m \u001b[36mgenerated-fast-audit\u001b[39m run-mqc5v6ys",
+      }],
+      { rowKey: "ansi-row", modelRowIndex: 0, column: 0 },
+      { rowKey: "ansi-row", modelRowIndex: 0, column: 36 },
+    );
+
+    expect(selection?.text).toBe("✓ generated-fast-audit run-mqc5v6ys");
+    expect(selection?.text).not.toContain("\u001b[");
+  });
 });

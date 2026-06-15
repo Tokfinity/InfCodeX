@@ -40,6 +40,13 @@ describe('workflow pattern templates', () => {
     expect(typeof module.run).toBe('function');
   });
 
+  it('declares read-only templates as read-only for approval accuracy', () => {
+    expect(getWorkflowPatternTemplate('tournament')?.manifest.readOnly).toBe(true);
+    expect(getWorkflowPatternTemplate('loop-until-done')?.manifest.readOnly).toBe(true);
+    expect(getWorkflowPatternTemplate('generate-and-filter')?.manifest.readOnly).toBe(true);
+    expect(getWorkflowPatternTemplate('adversarial-verification')?.manifest.readOnly).toBe(false);
+  });
+
   it('returns undefined for unknown templates and throws on materialization', () => {
     expect(getWorkflowPatternTemplate('missing')).toBeUndefined();
     expect(() => createWorkflowPatternTemplateModule('missing')).toThrow(/unknown workflow pattern/);

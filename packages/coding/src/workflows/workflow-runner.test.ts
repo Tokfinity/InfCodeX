@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { WorkflowAgentBackend, WorkflowModule } from '@kodax-ai/agent/workflow';
-import { WorkflowLimitError } from '@kodax-ai/agent/workflow';
+import { WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
 import { buildApprovalSummary, runWorkflowModule } from './workflow-runner.js';
@@ -98,6 +98,34 @@ describe('runWorkflowModule', () => {
     // Live event sink saw the same envelope.
     expect(events[0]).toBe('workflow_started');
     expect(events.at(-1)).toBe('workflow_completed');
+  });
+
+  it('writes stopped status for user-aborted workflow runs', async () => {
+    const module: WorkflowModule = {
+      meta: {
+        name: 'abort-test',
+        description: 'aborts',
+        readOnly: true,
+        phases: ['abort'],
+      },
+      run: async () => {
+        throw new WorkflowAbortError();
+      },
+    };
+
+    const outcome = await runWorkflowModule({
+      module,
+      args: {},
+      runId: 'run-stopped',
+      runDir: dir,
+      backend: fakeBackend(),
+      approval: () => true,
+    });
+
+    expect(outcome.kind).toBe('failed');
+    expect(outcome.state.status).toBe('stopped');
+    const runJson = JSON.parse(readFileSync(join(dir, 'run.json'), 'utf8')) as { status?: unknown };
+    expect(runJson.status).toBe('stopped');
   });
 
   it('writes a script snapshot when a generated workflow source is provided', async () => {

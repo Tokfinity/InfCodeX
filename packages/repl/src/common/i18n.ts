@@ -184,7 +184,7 @@ const translations = {
     "placeholder.confirm": "请回应上方的审批提示...",
     "placeholder.select": "请在上方选择一个选项...",
     "placeholder.input": "请回答上方的提示...",
-    "placeholder.busy": "代理正在工作中...",
+    "placeholder.busy": "智能体正在工作中...",
     "placeholder.queue": "排队等待下一轮跟进...",
     "placeholder.idle": "输入消息...",
 

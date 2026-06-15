@@ -17,17 +17,35 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     const prompt = buildWorkflowGenerationUserPrompt('rank 80 resumes');
     expect(prompt).toContain('wf.spawnAgent');
     expect(prompt).toContain('wf.parallel');
+    expect(prompt).toContain('wf.runAgent/wf.wait return');
+    expect(prompt).toContain('Never use a non-existent .output field');
+    expect(prompt).toContain('Artifact-only or empty returns are invalid');
     expect(prompt).toContain('always wait or stop each handle');
     expect(prompt).toContain('lifetime total cap');
+    expect(prompt).toContain('Do not set tokenBudget unless the user explicitly asks');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
     expect(prompt).toContain('rank 80 resumes');
+  });
+
+  it('asks generated workflows to preserve the request language in user-facing text', () => {
+    const prompt = buildWorkflowGenerationUserPrompt('请用 workflow 检查 UI 回归');
+    expect(prompt).toContain('Use the same natural language as the task request');
+    expect(prompt).toContain('child agent prompts');
+    expect(prompt).toContain('synthesis rubric');
+  });
+
+  it('asks child agents to end with a workflow handoff block for transcript digests', () => {
+    const prompt = buildWorkflowGenerationUserPrompt('review feature 217');
+    expect(prompt).toContain('[workflow handoff]');
+    expect(prompt).toContain('[/workflow handoff]');
+    expect(prompt).toContain('concrete conclusions');
   });
 });
 
 describe('validateGeneratedWorkflowSource', () => {
   it('accepts a restricted run function', () => {
-    const source = 'async function run(wf, args) { return args; }';
+    const source = 'async function run(wf, args) { return { result: args }; }';
     expect(validateGeneratedWorkflowSource(source)).toBe(source);
   });
 
@@ -38,6 +56,24 @@ describe('validateGeneratedWorkflowSource', () => {
     expect(() =>
       validateGeneratedWorkflowSource('async function run() { return require("fs"); }'),
     ).toThrow(/forbidden generated workflow token: require/);
+  });
+
+  it('rejects workflow API result misuse that would hide final output', () => {
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { const r = await wf.runAgent({ name: "a", prompt: "x" }); return { synthesis: r.output }; }'),
+    ).toThrow(/finalText\/text/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { wf.artifact("report", { text: "x" }); return { synthesis: "x" }; }'),
+    ).toThrow(/await wf\.artifact/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { await wf.runAgent({ name: "a", prompt: "x" }); }'),
+    ).toThrow(/return displayable final text/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { await wf.phase("synthesize", async () => { return { synthesis: "hidden" }; }); }'),
+    ).toThrow(/outer run function/);
+    expect(() =>
+      validateGeneratedWorkflowSource('async function run(wf) { return await wf.phase("synthesize", async () => { await wf.runAgent({ name: "a", prompt: "x" }); }); }'),
+    ).toThrow(/outer run function/);
   });
 });
 
@@ -94,7 +130,7 @@ describe('generateWorkflow', () => {
               mayUseWorktree: false,
               patterns: ['fan-out-and-synthesize', 'adversarial-verification'],
             },
-            source: 'async function run(wf, args) { return { request: args.request, runId: wf.runId }; }',
+            source: 'async function run(wf, args) { return { synthesis: String(args.request || ""), runId: wf.runId }; }',
           }),
           '```',
         ].join('\n'),
@@ -109,7 +145,7 @@ describe('generateWorkflow', () => {
     ]);
     expect(result.approvalSummary).toContain('read-only investigators');
     const output = await result.module.run({ runId: 'run-1' } as never, { request: 'Q' });
-    expect(output).toEqual({ request: 'Q', runId: 'run-1' });
+    expect(output).toEqual({ synthesis: 'Q', runId: 'run-1' });
   });
 
   it('canonicalizes common generated phases shapes before manifest validation', async () => {
@@ -179,7 +215,9 @@ describe('generateWorkflow', () => {
           '  await wf.phase("inventory", async () => { await wf.runAgent({ name: "inventory", prompt: String(args.request), readOnly: true }); });',
           '  await wf.phase("fan-out", async () => { await wf.parallel([1,2,3,4,5].map((n) => () => wf.runAgent({ name: "auditor-" + n, prompt: "audit", readOnly: true })), { concurrency: 4 }); });',
           '  await wf.phase("cross-check", async () => { await wf.parallel([1,2,3].map((n) => () => wf.runAgent({ name: "cross-" + n, prompt: "check", readOnly: true })), { concurrency: 3 }); });',
-          '  await wf.phase("synthesize", async () => wf.synthesize({ inputs: "all", rubric: "summarize" }));',
+          '  const synthesis = await wf.phase("synthesize", async () => wf.synthesize({ inputs: "all", rubric: "summarize" }));',
+          '  await wf.artifact("final-report", { summary: synthesis.text });',
+          '  return { synthesis: synthesis.text };',
           '}',
         ].join('\n'),
       }),
@@ -190,6 +228,58 @@ describe('generateWorkflow', () => {
     expect(result.manifest.maxAgents).toBe(18);
     expect(result.module.meta.maxAgents).toBe(18);
     expect(result.scriptSnapshot.manifest.maxAgents).toBe(18);
+  });
+
+  it('strips unsolicited token budgets from generated workflows', async () => {
+    const result = await generateWorkflow({
+      request: 'Audit a large feature with several parallel reviewers and synthesize.',
+      generateText: async () => JSON.stringify({
+        action: 'generate',
+        manifest: {
+          name: 'feature-audit',
+          description: 'Audit a feature with fan-out reviewers.',
+          phases: ['fan-out', 'synthesize'],
+          readOnly: true,
+          maxAgents: 4,
+          maxConcurrency: 2,
+          tokenBudget: 200_000,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+      }),
+    });
+
+    expect(result.kind).toBe('generated');
+    if (result.kind !== 'generated') return;
+    expect(result.manifest.tokenBudget).toBeUndefined();
+    expect(result.module.meta.tokenBudget).toBeUndefined();
+    expect(result.scriptSnapshot.manifest.tokenBudget).toBeUndefined();
+  });
+
+  it('keeps token budgets when the request explicitly asks for one', async () => {
+    const result = await generateWorkflow({
+      request: 'Audit a large feature with several reviewers. Use a 200k token budget.',
+      generateText: async () => JSON.stringify({
+        action: 'generate',
+        manifest: {
+          name: 'budgeted-feature-audit',
+          description: 'Audit a feature with a requested token budget.',
+          phases: ['fan-out', 'synthesize'],
+          readOnly: true,
+          maxAgents: 4,
+          maxConcurrency: 2,
+          tokenBudget: 200_000,
+          patterns: ['fan-out-and-synthesize'],
+        },
+        source: 'async function run(wf, args) { return { synthesis: String(args.request || "") }; }',
+      }),
+    });
+
+    expect(result.kind).toBe('generated');
+    if (result.kind !== 'generated') return;
+    expect(result.manifest.tokenBudget).toBe(200_000);
+    expect(result.module.meta.tokenBudget).toBe(200_000);
+    expect(result.scriptSnapshot.manifest.tokenBudget).toBe(200_000);
   });
 
   it('repairs a manifest validation error once before failing the builder', async () => {

@@ -316,6 +316,26 @@ describe('saveGeneratedWorkflow', () => {
     ]);
   });
 
+  it('rejects capsules that require a newer KodaX version', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'future-version',
+      manifest,
+      source: 'async function run() { return "ok"; }',
+      minKodaxVersion: '99.0.0',
+    });
+    const capsule = await loadSavedWorkflowCapsule(ref.path);
+
+    const result = preflightWorkflowCapsule(capsule, { kodaxVersion: '0.7.49' });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toContainEqual({
+      severity: 'error',
+      requirement: 'kodax:min-version',
+      message: 'workflow requires KodaX >= 99.0.0, current version is 0.7.49',
+    });
+  });
+
   it('warns when dependency inventories are unavailable instead of silently skipping them', async () => {
     const ref = await saveGeneratedWorkflow({
       dir,

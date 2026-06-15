@@ -4,6 +4,7 @@ import {
   resolveTranscriptTextIndexAtVisualColumn,
   sliceTranscriptText,
 } from "./transcript-text-metrics.js";
+import { stripAnsi } from "./strip-ansi.js";
 
 export interface TranscriptSelectionPoint {
   rowIndex: number;
@@ -30,7 +31,7 @@ export interface BuildTranscriptTextSelectionOptions {
 }
 
 function normalizeTranscriptRowText(row: TranscriptRow): string {
-  return row.text === " " ? "" : row.text;
+  return row.text === " " ? "" : stripAnsi(row.text);
 }
 
 function resolveTextStartColumn(

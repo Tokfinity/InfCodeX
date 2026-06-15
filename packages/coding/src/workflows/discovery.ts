@@ -98,6 +98,7 @@ export interface WorkflowCapsulePreflightResult {
 }
 
 export interface WorkflowCapsulePreflightEnvironment {
+  readonly kodaxVersion?: string;
   readonly isGitRepo?: boolean;
   readonly worktreeCapable?: boolean;
   readonly availableTools?: readonly string[];
@@ -388,6 +389,55 @@ function addRequirementIssue(
   issues.push({ severity, requirement, message });
 }
 
+function parseSemver(version: string): readonly [number, number, number] | undefined {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version.trim());
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+function compareSemver(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  for (let i = 0; i < 3; i += 1) {
+    const diff = a[i]! - b[i]!;
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
+function addMinVersionIssue(
+  issues: WorkflowCapsulePreflightIssue[],
+  minKodaxVersion: string,
+  currentVersion: string,
+): void {
+  const min = parseSemver(minKodaxVersion);
+  const current = parseSemver(currentVersion);
+  if (!min) {
+    addRequirementIssue(
+      issues,
+      'error',
+      'kodax:min-version',
+      `workflow minKodaxVersion is not valid semver: ${minKodaxVersion}`,
+    );
+    return;
+  }
+  if (!current) {
+    addRequirementIssue(
+      issues,
+      'warning',
+      'kodax:min-version',
+      `cannot verify workflow minKodaxVersion ${minKodaxVersion}; current version is unknown`,
+    );
+    return;
+  }
+  if (compareSemver(current, min) < 0) {
+    addRequirementIssue(
+      issues,
+      'error',
+      'kodax:min-version',
+      `workflow requires KodaX >= ${minKodaxVersion}, current version is ${currentVersion}`,
+    );
+  }
+}
+
 function addMissingItems(
   issues: WorkflowCapsulePreflightIssue[],
   kind: 'tools' | 'mcp' | 'skills',
@@ -426,6 +476,11 @@ export function preflightWorkflowCapsule(
   const validated = validateWorkflowCapsule(capsule);
   const issues: WorkflowCapsulePreflightIssue[] = [];
   const requirements = validated.requires;
+  addMinVersionIssue(
+    issues,
+    validated.minKodaxVersion,
+    env.kodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+  );
   if (requirements?.environment?.includes('git-repo') && env.isGitRepo === false) {
     addRequirementIssue(
       issues,

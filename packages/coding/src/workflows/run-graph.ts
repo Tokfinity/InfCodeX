@@ -59,7 +59,7 @@ export interface RunGraphWriter {
   writeRunJson(input: RunJsonInput): void;
 }
 
-function safeName(name: string): string {
+export function safeWorkflowArtifactName(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
   return cleaned.length > 0 ? cleaned : 'artifact';
 }
@@ -76,7 +76,7 @@ export function createRunGraphWriter(runDir: string, deps: RunGraphWriterDeps = 
       appendFileSync(eventsPath, `${JSON.stringify({ ...event, ts: now() })}\n`, 'utf8');
     },
     writeArtifact: (name, value) => {
-      const path = join(artifactsDir, `${safeName(name)}.json`);
+      const path = join(artifactsDir, `${safeWorkflowArtifactName(name)}.json`);
       writeFileSync(path, JSON.stringify(value, null, 2), 'utf8');
       return { name, path };
     },

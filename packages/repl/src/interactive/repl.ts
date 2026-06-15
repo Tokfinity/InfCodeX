@@ -1190,10 +1190,61 @@ Keyboard Shortcuts:
       }
     }
 
+    let workflowUserCommitted = false;
+    const commitWorkflowFinal = (text: string): void => {
+      if (!workflowUserCommitted) {
+        workflowUserCommitted = true;
+        context.messages.push({
+          role: 'user',
+          content: rawInput || workflow.request,
+        });
+      }
+      context.messages.push({ role: 'assistant', content: text });
+      statusBar?.update({ messageCount: context.messages.length });
+      const title = extractTitle(context.messages);
+      context.title = title;
+      void storage.save(context.sessionId, {
+        messages: context.messages,
+        title,
+        gitRoot: context.gitRoot ?? '',
+        runtimeInfo: context.runtimeInfo,
+        artifactLedger: context.artifactLedger,
+        ...(currentOptions.session?.tag !== undefined ? { tag: currentOptions.session.tag } : {}),
+      }).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] failed to save final answer: ${message}\n`));
+      });
+    };
+    const workflowCallbacks: CommandCallbacks = {
+      ...callbacks,
+      onWorkflowRunMessage: (event) => {
+        if (event.type === 'event') return;
+        const text = event.text.trimEnd();
+        if (!text.trim()) return;
+        if (event.type === 'error') {
+          console.log(chalk.red(`\n${text}\n`));
+          return;
+        }
+        if (event.type === 'success') {
+          console.log(chalk.green(`\n${text}\n`));
+          return;
+        }
+        if (event.type === 'assistant') {
+          console.log(`\n${text}\n`);
+          if (event.final === true) {
+            commitWorkflowFinal(text);
+          }
+          return;
+        }
+        console.log(chalk.dim(`\n${text}\n`));
+      },
+    };
+
     const outcome = await startGeneratedWorkflowFromRequest({
       request: workflow.request,
-      callbacks,
+      callbacks: workflowCallbacks,
       approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
+      presentation: 'agentic',
       sourceLabel: workflow.displayName,
     });
 

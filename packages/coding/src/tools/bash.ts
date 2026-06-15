@@ -150,21 +150,51 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
     });
 
     const proc = spawn(command, [], { shell: true, windowsHide: true, cwd });
+    const unregisterManagedChild = registerManagedChildProcess(proc, {
+      kind: 'bash-background',
+      command,
+      cwd,
+    });
+    const cleanupOnProcessExit = (): void => killChildProcessTreeSync(proc);
+    process.once('exit', cleanupOnProcessExit);
+    const abortSignal = ctx.abortSignal;
+    let cleaned = false;
+    let onAbort: (() => void) | undefined;
+    const cleanupProcessHooks = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      process.off('exit', cleanupOnProcessExit);
+      if (onAbort) {
+        abortSignal?.removeEventListener('abort', onAbort);
+      }
+      unregisterManagedChild();
+    };
+    const stopBackgroundProcess = (): void => {
+      void killChildProcessTree(proc).finally(cleanupProcessHooks);
+    };
 
     proc.stdout?.pipe(logStream, { end: false });
     proc.stderr?.pipe(logStream, { end: false });
     proc.on('close', (code) => {
+      cleanupProcessHooks();
       if (!logStream.destroyed) {
         logStream.write(`\n[Exit: ${code}]\n`);
         logStream.end();
       }
     });
     proc.on('error', (err) => {
+      cleanupProcessHooks();
       if (!logStream.destroyed) {
         logStream.write(`\n[Error: ${err.message}]\n`);
         logStream.end();
       }
     });
+    if (abortSignal?.aborted) {
+      stopBackgroundProcess();
+    } else if (abortSignal) {
+      onAbort = stopBackgroundProcess;
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
 
     return `Command started in background.\nPID: ${proc.pid}\nOutput: ${outputFile}\n\nUse the read tool to check output when done.`;
   }

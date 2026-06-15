@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -169,5 +169,31 @@ describe('WorkflowRunManager', () => {
     await run.done;
     expect(manager.get('run-stop')?.status).toBe('stopped');
     expect(backendState.stopCount()).toBeGreaterThan(0);
+  });
+
+  it('settles as failed instead of rejecting when startup persistence throws', async () => {
+    const manager = createWorkflowRunManager();
+    const { backend } = fakeBackend();
+    const blockedRunDir = join(dir, 'not-a-directory');
+    writeFileSync(blockedRunDir, '', 'utf8');
+    const module: WorkflowModule = {
+      meta: { name: 'bad-run-dir', description: 'bad dir', readOnly: true },
+      run: async () => 'unreached',
+    };
+
+    const run = manager.start({
+      module,
+      args: {},
+      runId: 'run-bad-dir',
+      runDir: blockedRunDir,
+      backend,
+    });
+
+    const outcome = await run.done;
+    expect(outcome.kind).toBe('failed');
+    expect(manager.get('run-bad-dir')).toMatchObject({
+      status: 'failed',
+      error: expect.stringContaining('not-a-directory'),
+    });
   });
 });

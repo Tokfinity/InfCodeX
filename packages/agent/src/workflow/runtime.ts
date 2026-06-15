@@ -56,6 +56,9 @@ export class WorkflowBudgetError extends Error {
 
 const STOP_ACTIVE_TASK_TIMEOUT_MS = 250;
 const CONCURRENCY_DEADLOCK_CHECK_MS = 50;
+const MAX_TASK_EVENT_SUMMARY_CHARS = 4096;
+const WORKFLOW_HANDOFF_OPEN = '[workflow handoff]';
+const WORKFLOW_HANDOFF_CLOSE = '[/workflow handoff]';
 
 type StopActiveTaskOutcome =
   | 'stopped'
@@ -75,6 +78,23 @@ interface SemaphoreWaiter {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function boundedTaskEventSummary(text: string): string {
+  return text.length > MAX_TASK_EVENT_SUMMARY_CHARS
+    ? `${text.slice(0, MAX_TASK_EVENT_SUMMARY_CHARS).trimEnd()}...`
+    : text;
+}
+
+function extractWorkflowHandoffBlock(text: string): string | undefined {
+  const lower = text.toLowerCase();
+  const closeIndex = lower.lastIndexOf(WORKFLOW_HANDOFF_CLOSE);
+  if (closeIndex < 0) return undefined;
+  const openIndex = lower.lastIndexOf(WORKFLOW_HANDOFF_OPEN, closeIndex);
+  if (openIndex < 0) return undefined;
+  const end = closeIndex + WORKFLOW_HANDOFF_CLOSE.length;
+  const block = text.slice(openIndex, end).trim();
+  return block ? boundedTaskEventSummary(block) : undefined;
 }
 
 function readPositiveLimit(
@@ -276,12 +296,13 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         ),
     });
     let acquired = true;
+    let handle: WorkflowTaskHandle | undefined;
     try {
       checkAbort();
       checkBudget();
       checkAgentCap();
+      handle = await opts.backend.spawn(input);
       totalSpawned += 1;
-      const handle = await opts.backend.spawn(input);
       activeTaskIds.add(handle.taskId);
       releaseByTask.set(handle.taskId, () => {
         if (!acquired) return;
@@ -291,17 +312,37 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
       recorder.emit('agent_spawned', { taskId: handle.taskId, name: handle.name });
       return handle;
     } catch (error) {
-      if (acquired) concurrency.release();
+      const spawnedHandle = handle;
+      if (spawnedHandle) {
+        activeTaskIds.delete(spawnedHandle.taskId);
+        releaseByTask.delete(spawnedHandle.taskId);
+        await Promise.race([
+          Promise.resolve()
+            .then(() => opts.backend.stop(spawnedHandle.taskId, 'workflow spawn failed'))
+            .catch(() => undefined),
+          delay(STOP_ACTIVE_TASK_TIMEOUT_MS),
+        ]);
+      }
+      if (acquired) {
+        acquired = false;
+        concurrency.release();
+      }
       throw error;
     }
   };
 
   const accrue = (result: WorkflowTaskResult): void => {
-    spentOutputTokens += result.usage?.outputTokens ?? 0;
+    spentOutputTokens += result.usage?.outputTokens ?? result.usage?.totalTokens ?? 0;
   };
 
   const terminalEventType = (s: WorkflowTaskResult['status']): WorkflowEventType =>
     s === 'stopped' ? 'agent_stopped' : 'agent_completed';
+
+  const summarizeTaskResult = (result: WorkflowTaskResult): string | undefined => {
+    const trimmed = result.finalText.trim();
+    if (!trimmed) return undefined;
+    return extractWorkflowHandoffBlock(trimmed) ?? boundedTaskEventSummary(trimmed);
+  };
 
   const emitTerminalTaskEvent = (
     taskId: string,
@@ -314,46 +355,98 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     return true;
   };
 
+  const stopBackendTask = async (
+    taskId: string,
+    reason: string,
+  ): Promise<{ readonly error?: string; readonly stopTimedOut?: true }> => {
+    const stop = Promise.resolve()
+      .then(() => opts.backend.stop(taskId, reason))
+      .then((): StopActiveTaskOutcome => 'stopped')
+      .catch((error: unknown): StopActiveTaskOutcome => ({
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    const timeout = delay(STOP_ACTIVE_TASK_TIMEOUT_MS).then(
+      (): StopActiveTaskOutcome => 'timed-out',
+    );
+    const outcome = await Promise.race([stop, timeout]);
+    if (typeof outcome === 'object') return { error: outcome.error };
+    if (outcome === 'timed-out') return { stopTimedOut: true };
+    return {};
+  };
+
+  const createAbortRace = (): {
+    readonly promise: Promise<never>;
+    dispose(): void;
+  } | undefined => {
+    if (!opts.signal) return undefined;
+    let onAbort: (() => void) | undefined;
+    const promise = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(new WorkflowAbortError());
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    return {
+      promise,
+      dispose: () => {
+        if (onAbort) opts.signal?.removeEventListener('abort', onAbort);
+      },
+    };
+  };
+
   const doWait = async (
     taskId: string,
     opts2: WorkflowWaitOptions | undefined,
   ): Promise<WorkflowTaskResult> => {
     const releasesCapacity = releaseByTask.has(taskId);
     if (releasesCapacity) activeReleaseOperations += 1;
+    let abortRace: ReturnType<typeof createAbortRace>;
     try {
-      const result = await opts.backend.wait(taskId, opts2);
+      checkAbort();
+      abortRace = createAbortRace();
+      const wait = opts.backend.wait(taskId, opts2);
+      const result = abortRace ? await Promise.race([wait, abortRace.promise]) : await wait;
+      const summary = result.status === 'completed' ? summarizeTaskResult(result) : undefined;
       if (emitTerminalTaskEvent(result.taskId, terminalEventType(result.status), {
         taskId: result.taskId,
         name: result.name,
         status: result.status,
+        ...(result.usage !== undefined
+          ? { usage: result.usage }
+          : {}),
+        ...(summary !== undefined
+          ? { summary }
+          : {}),
       })) {
         accrue(result);
       }
       return result;
+    } catch (error) {
+      if (releasesCapacity && !terminalTaskIds.has(taskId)) {
+        const reason = error instanceof WorkflowAbortError
+          ? 'workflow aborted'
+          : 'workflow wait failed';
+        const stopOutcome = await stopBackendTask(taskId, reason);
+        emitTerminalTaskEvent(taskId, 'agent_stopped', {
+          taskId,
+          reason,
+          ...(error instanceof Error ? { error: error.message } : {}),
+          ...(stopOutcome.error !== undefined ? { stopError: stopOutcome.error } : {}),
+          ...(stopOutcome.stopTimedOut ? { stopTimedOut: true } : {}),
+        });
+      }
+      throw error;
     } finally {
+      abortRace?.dispose();
       if (releasesCapacity) activeReleaseOperations -= 1;
       releaseTaskCapacity(taskId);
     }
   };
 
-  // Run an agent through the same spawn/wait gate, then propagate a workflow
-  // abort to the in-flight child via the backend's stop().
+  // Run an agent through the same spawn/wait gate; doWait owns abort
+  // propagation so runAgent and bare spawnAgent+wait behave consistently.
   const runAgentImpl = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskResult> => {
     checkAbort();
-    let onAbort: (() => void) | undefined;
-    try {
-      const handle = await doSpawn(input);
-      if (opts.signal) {
-        const { taskId } = handle;
-        onAbort = () => {
-          void opts.backend.stop(taskId, 'workflow aborted');
-        };
-        opts.signal.addEventListener('abort', onAbort, { once: true });
-      }
-      return await doWait(handle.taskId, undefined);
-    } finally {
-      if (opts.signal && onAbort) opts.signal.removeEventListener('abort', onAbort);
-    }
+    const handle = await doSpawn(input);
+    return await doWait(handle.taskId, undefined);
   };
 
   const budget: WorkflowBudget = {
@@ -521,18 +614,27 @@ export async function runWorkflow<T>(
     rt = buildRuntime(opts);
     rt.recorder.emit('workflow_started', { runId: opts.runId });
     const result = await script(rt.api, opts.args);
+    const stopErrors = await rt.stopActiveTasks('workflow completed');
     rt.setStatus('completed');
-    rt.recorder.emit('workflow_completed');
+    rt.recorder.emit('workflow_completed', stopErrors.length > 0 ? { stopErrors } : undefined);
     return { ok: true, result, state: rt.getState() };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     if (rt) {
-      const stopErrors = await rt.stopActiveTasks('workflow failed');
-      rt.setStatus('failed');
-      rt.recorder.emit('workflow_failed', {
-        error: err.message,
-        ...(stopErrors.length > 0 ? { stopErrors } : {}),
-      });
+      const stopped = err instanceof WorkflowAbortError;
+      const stopErrors = await rt.stopActiveTasks(stopped ? 'workflow stopped' : 'workflow failed');
+      rt.setStatus(stopped ? 'stopped' : 'failed');
+      if (stopped) {
+        rt.recorder.emit(
+          'workflow_stopped',
+          stopErrors.length > 0 ? { stopErrors } : undefined,
+        );
+      } else {
+        rt.recorder.emit('workflow_failed', {
+          error: err.message,
+          ...(stopErrors.length > 0 ? { stopErrors } : {}),
+        });
+      }
       return { ok: false, error: err, state: rt.getState() };
     }
     return {

@@ -19,6 +19,7 @@ export type WorkflowEventType =
   | 'artifact_written'
   | 'synthesis_completed'
   | 'workflow_completed'
+  | 'workflow_stopped'
   | 'workflow_failed';
 
 export interface WorkflowEvent {

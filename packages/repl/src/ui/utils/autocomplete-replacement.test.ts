@@ -40,4 +40,30 @@ describe("buildAutocompleteReplacement", () => {
       replacement: "anthropic/claude",
     });
   });
+
+  it("inserts an argument without replacing the command when the argument is empty", () => {
+    expect(
+      buildAutocompleteReplacement("/workflow ", 10, {
+        text: "runs",
+        type: "argument",
+      })
+    ).toEqual({
+      start: 10,
+      end: 10,
+      replacement: "runs",
+    });
+  });
+
+  it("keeps a bare command when inserting its first argument", () => {
+    expect(
+      buildAutocompleteReplacement("/workflow", 9, {
+        text: "runs",
+        type: "argument",
+      })
+    ).toEqual({
+      start: 9,
+      end: 9,
+      replacement: " runs",
+    });
+  });
 });

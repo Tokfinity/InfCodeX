@@ -26,6 +26,7 @@ import chalk from 'chalk';
 import { getAgentConfigPath } from '@kodax-ai/agent';
 import type {
   WorkflowApprovalSummary,
+  WorkflowArtifactRef,
   WorkflowEvent,
   WorkflowMeta,
   WorkflowModule,
@@ -43,11 +44,13 @@ import {
   loadSavedWorkflow,
   loadSavedWorkflowCapsule,
   preflightWorkflowCapsule,
+  safeWorkflowArtifactName,
   saveGeneratedWorkflowFromRun,
   type ManagedWorkflowRun,
   type ManagedWorkflowSnapshot,
   type SavedWorkflowDirs,
   type SavedWorkflowRef,
+  type WorkflowRunManager,
 } from '@kodax-ai/coding';
 
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
@@ -59,7 +62,7 @@ export type WorkflowInvocation =
   | { readonly kind: 'help' }
   | { readonly kind: 'list' }
   | { readonly kind: 'runs'; readonly rawArgs: readonly string[] }
-  | { readonly kind: 'show'; readonly runId: string }
+  | { readonly kind: 'show'; readonly runId: string; readonly full?: boolean }
   | { readonly kind: 'pause'; readonly runId: string }
   | { readonly kind: 'resume'; readonly runId: string }
   | { readonly kind: 'stop'; readonly runId: string }
@@ -74,13 +77,21 @@ export const DEFAULT_WORKFLOW_RUNS_LIMIT = 20;
 export const DEFAULT_WORKFLOW_PRUNE_KEEP = 50;
 const MAX_WORKFLOW_RUNS_LIMIT = 200;
 const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'denied']);
+const MAX_WORKFLOW_AGENT_DIGEST_INLINE_CHARS = 260;
+const MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS = 3;
+const MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS = 180;
 
 export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvocation {
   const first = args[0]?.toLowerCase();
   if (first === 'help' || first === '--help' || first === '-h') return { kind: 'help' };
   if (!first || first === 'list') return { kind: 'list' };
   if (first === 'runs') return { kind: 'runs', rawArgs: args.slice(1) };
-  if (first === 'show') return { kind: 'show', runId: args[1] ?? '' };
+  if (first === 'show') {
+    const rest = args.slice(1);
+    const full = rest.includes('--full');
+    const runId = rest.find((arg) => arg !== '--full') ?? '';
+    return full ? { kind: 'show', runId, full: true } : { kind: 'show', runId };
+  }
   if (first === 'pause') return { kind: 'pause', runId: args[1] ?? '' };
   if (first === 'resume') return { kind: 'resume', runId: args[1] ?? '' };
   if (first === 'stop') return { kind: 'stop', runId: args[1] ?? '' };
@@ -219,6 +230,44 @@ export interface WorkflowApprovalRenderContext {
   readonly rawScript?: string;
 }
 
+const APPROVAL_SCRIPT_PREVIEW_LINES = 6;
+const APPROVAL_SCRIPT_PREVIEW_CHARS = 900;
+
+function renderApprovalScriptPreview(source: string): readonly string[] {
+  const lines = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  const preview: string[] = [];
+  let usedChars = 0;
+  let truncatedByChars = false;
+
+  for (const line of lines) {
+    if (preview.length >= APPROVAL_SCRIPT_PREVIEW_LINES) break;
+    const indented = `    ${line}`;
+    const remainingChars = APPROVAL_SCRIPT_PREVIEW_CHARS - usedChars;
+    if (remainingChars <= 0) {
+      truncatedByChars = true;
+      break;
+    }
+    if (indented.length > remainingChars) {
+      if (remainingChars > 16) {
+        preview.push(`${indented.slice(0, remainingChars - 4)} ...`);
+      }
+      truncatedByChars = true;
+      break;
+    }
+    preview.push(indented);
+    usedChars += indented.length + 1;
+  }
+
+  const omittedLines = Math.max(0, lines.length - preview.length);
+  if (omittedLines > 0 || truncatedByChars) {
+    const omitted = omittedLines > 0
+      ? `${omittedLines} more line(s)`
+      : 'source truncated';
+    preview.push(`    ... (${omitted}; full source omitted from prompt)`);
+  }
+  return preview;
+}
+
 export function renderApprovalPrompt(
   summary: WorkflowApprovalSummary,
   context?: WorkflowApprovalRenderContext,
@@ -235,9 +284,13 @@ export function renderApprovalPrompt(
           `  source: ${context.source}`,
           `  sandbox/trust: ${context.sandbox}`,
           `  worktree isolation: ${context.mayUseWorktree ? 'may request worktree' : 'shared cwd / per-child default'}`,
-          ...(context.rawScriptPath ? [`  raw script: ${context.rawScriptPath}`] : []),
-          ...(context.rawScript
-            ? ['  raw script:', ...context.rawScript.split('\n').map((line) => `    ${line}`)]
+          ...(context.rawScriptPath
+            ? [`  raw script: ${context.rawScriptPath}`]
+            : context.rawScript
+              ? ['  raw script: preview below']
+              : []),
+          ...(context.rawScript && !context.rawScriptPath
+            ? ['  raw script preview:', ...renderApprovalScriptPreview(context.rawScript)]
             : []),
         ]
       : []),
@@ -260,6 +313,8 @@ export interface WorkflowRunDetail {
   readonly eventCount: number;
   readonly runDir: string;
   readonly canRerun: boolean;
+  readonly scriptSnapshotPath?: string;
+  readonly manifestSnapshotPath?: string;
   readonly startedAt?: number;
   readonly endedAt?: number;
   readonly error?: string;
@@ -392,6 +447,8 @@ export function readWorkflowRunDetail(baseDir: string, runId: string): WorkflowR
 
   try {
     const data = JSON.parse(readFileSync(runJsonPath, 'utf8')) as Record<string, unknown>;
+    const scriptSnapshotPath = readNonEmptyString(data.scriptSnapshotPath);
+    const manifestSnapshotPath = readNonEmptyString(data.manifestSnapshotPath);
     return {
       runId,
       workflow: typeof data.workflow === 'string' ? data.workflow : '?',
@@ -400,6 +457,8 @@ export function readWorkflowRunDetail(baseDir: string, runId: string): WorkflowR
       eventCount: typeof data.eventCount === 'number' ? data.eventCount : events.length,
       runDir,
       canRerun: hasRerunnableGeneratedWorkflowRun(runDir, data),
+      ...(scriptSnapshotPath ? { scriptSnapshotPath } : {}),
+      ...(manifestSnapshotPath ? { manifestSnapshotPath } : {}),
       ...(typeof data.startedAt === 'number' ? { startedAt: data.startedAt } : {}),
       ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
       ...(failure ? { error: failure } : {}),
@@ -538,6 +597,12 @@ export function selectDefaultWorkflowRunId(
   return active?.runId ?? managedRuns[0]?.runId ?? persistedRuns[0]?.runId;
 }
 
+export function selectDefaultActiveWorkflowRunId(
+  managedRuns: readonly ManagedWorkflowSnapshot[],
+): string | undefined {
+  return managedRuns.find(isActiveManagedWorkflowRun)?.runId;
+}
+
 function formatTime(value: number | undefined): string | undefined {
   return value === undefined ? undefined : new Date(value).toLocaleString();
 }
@@ -556,6 +621,14 @@ function canRerunWorkflowRun(
   return detail?.canRerun ?? (run?.runDir ? hasRerunnableGeneratedWorkflowRun(run.runDir) : false);
 }
 
+function workflowArtifactRefs(detail: WorkflowRunDetail | undefined): readonly WorkflowArtifactRef[] {
+  if (!detail) return [];
+  return detail.artifacts.map((name) => ({
+    name,
+    path: join(detail.runDir, 'artifacts', `${safeWorkflowArtifactName(name)}.json`),
+  }));
+}
+
 function formatWorkflowNextActions(runId: string, canRerun: boolean): string {
   return canRerun
     ? `/workflow show ${runId} | /workflow rerun ${runId}`
@@ -568,9 +641,14 @@ function formatWorkflowFailureAction(runId: string, canRerun: boolean): string {
     : `Use /workflow show ${runId} for events.`;
 }
 
+export interface WorkflowRunSnapshotFormatOptions {
+  readonly full?: boolean;
+}
+
 export function formatWorkflowRunSnapshot(
   run: ManagedWorkflowSnapshot | undefined,
   detail?: WorkflowRunDetail,
+  options: WorkflowRunSnapshotFormatOptions = {},
 ): string {
   if (!run && !detail) return '  (unknown workflow run)';
   const workflow = run?.workflow ?? detail?.workflow ?? '?';
@@ -582,8 +660,23 @@ export function formatWorkflowRunSnapshot(
   const startedAt = formatTime(run?.startedAt ?? detail?.startedAt);
   const endedAt = formatTime(run?.endedAt ?? detail?.endedAt);
   const error = run?.error ?? detail?.error;
-  const resultText = run?.resultText;
   const artifacts = detail?.artifacts ?? [];
+  const artifactRefs = workflowArtifactRefs(detail);
+  const managedResultText = run?.resultText;
+  const artifactResult = options.full === true || managedResultText === undefined
+    ? formatArtifactResult(artifactRefs, detectWorkflowLocale(workflow), { full: options.full === true })
+    : undefined;
+  const rawResultText = options.full === true
+    ? artifactResult ?? managedResultText
+    : managedResultText !== undefined
+      ? formatResult(managedResultText)
+      : artifactResult;
+  const resultText = rawResultText
+    ? replaceWorkflowResultTruncationMarker(rawResultText, runId, detectWorkflowLocale(rawResultText))
+    : undefined;
+  const resultLabel = options.full === true || !rawResultText || !isWorkflowResultPreviewTruncated(rawResultText)
+    ? 'result:'
+    : 'result preview:';
   const recentEvents = detail ? formatRecentWorkflowEvents(detail.events) : [];
   const canRerun = canRerunWorkflowRun(run, detail);
   return [
@@ -596,7 +689,7 @@ export function formatWorkflowRunSnapshot(
     ...(runDir ? [`  run dir: ${runDir}`] : []),
     ...(artifacts.length > 0 ? [`  artifacts: ${artifacts.join(', ')}`] : []),
     ...(error ? [`  error: ${error}`] : []),
-    ...(resultText ? ['', '  result:', ...resultText.split('\n').map((line) => `    ${line}`)] : []),
+    ...(resultText ? ['', `  ${resultLabel}`, ...resultText.split('\n').map((line) => `    ${line}`)] : []),
     ...(recentEvents.length > 0
       ? ['', '  recent events:', ...recentEvents.map((event) => `  ${event.trimEnd()}`)]
       : []),
@@ -637,14 +730,14 @@ export function renderWorkflowHelp(): string {
     `  ${chalk.cyan('/workflow create <request>')}             Generate a restricted workflow from a complex request.`,
     `  ${chalk.cyan('/workflow <name> [args]')}                Run a built-in or saved workflow. Args may be JSON or bare text.`,
     `  ${chalk.cyan('/workflow runs [--all|--limit N]')}       List active and recent workflow runs for this project.`,
-    `  ${chalk.cyan('/workflow show [runId]')}                 Show the latest run, or a specific run with events and errors.`,
+    `  ${chalk.cyan('/workflow show [--full] [runId]')}        Show the latest run; use --full for complete result artifacts.`,
     `  ${chalk.cyan('/workflow pause <runId>')}                Pause future child launches for an active run.`,
     `  ${chalk.cyan('/workflow resume <runId>')}               Resume a paused run.`,
-    `  ${chalk.cyan('/workflow stop <runId>')}                 Stop an active run through abort propagation.`,
+    `  ${chalk.cyan('/workflow stop [runId]')}                 Stop an active run through abort propagation. Defaults to the active run.`,
     `  ${chalk.cyan('/workflow delete <runId>')}               Delete one persisted run record.`,
     `  ${chalk.cyan('/workflow prune --dry-run|--keep N|--older-than Nd')}`,
     `                                            Preview or delete old terminal run records.`,
-    `  ${chalk.cyan('/workflow rerun <runId> [args]')}         Rerun a generated workflow from run history without saving it.`,
+    `  ${chalk.cyan('/workflow rerun <runId|savedName> [args]')} Rerun a historical generated run, or run the current saved workflow by name.`,
     `  ${chalk.cyan('/workflow save <runId> <name>')}          Save a generated run as a workflow capsule.`,
     `  ${chalk.cyan('/workflow help')}                         Show this help. Also available as /help workflow.`,
     '',
@@ -652,11 +745,13 @@ export function renderWorkflowHelp(): string {
     `  ${chalk.dim('/workflow create Compare three flaky-test hypotheses and verify each one')}`,
     `  ${chalk.dim('/workflow parallel-investigation {"question":"请检查这个竞态在哪里","targets":["packages/agent"]}')}`,
     `  ${chalk.dim('/workflow rerun run-lx3 {"request":"请用同样流程复查 packages/repl"}')}`,
+    `  ${chalk.dim('/workflow rerun generated-audit {"request":"reuse the saved workflow for packages/repl"}')}`,
     `  ${chalk.dim('/workflow prune --dry-run')}`,
     `  ${chalk.dim('/workflow save run-lx3 generated-audit')}`,
     '',
     `${chalk.bold('Safety:')}`,
     '  - Generated and workflow capsule (.workflow.json) workflows run in the capability WorkflowApi runner.',
+    '  - For rerun, a run id reruns its saved snapshot; a saved name runs the current saved capsule version.',
     '  - Local .ts/.mjs/.js workflows are trusted-local and require explicit confirmation.',
     '  - File, shell, MCP, and web effects still go through child agents and existing permission gates.',
   ].join('\n');
@@ -738,6 +833,71 @@ function printPreflightWarnings(result: ReturnType<typeof preflightWorkflowCapsu
   console.log();
 }
 
+type WorkflowScriptSnapshot = {
+  readonly manifest: WorkflowScriptManifest;
+  readonly source: string;
+};
+
+interface PreparedSavedWorkflow {
+  readonly module: WorkflowModule;
+  readonly approvalContext: WorkflowApprovalRenderContext;
+  readonly scriptSnapshot?: WorkflowScriptSnapshot;
+}
+
+async function prepareSavedWorkflow(
+  ref: SavedWorkflowRef,
+  confirm: ConfirmFn,
+): Promise<PreparedSavedWorkflow | undefined> {
+  if (ref.execution === 'trusted-local') {
+    const trusted = await confirm(
+      `Run local workflow file? This EXECUTES local code:\n  ${ref.path}`,
+    );
+    if (!trusted) {
+      console.log(chalk.dim('Workflow cancelled.\n'));
+      return undefined;
+    }
+  }
+
+  try {
+    let approvalContext: WorkflowApprovalRenderContext = {
+      source: `saved:${ref.source}`,
+      sandbox: ref.execution,
+      mayUseWorktree: false,
+    };
+    let scriptSnapshot: WorkflowScriptSnapshot | undefined;
+
+    if (ref.execution === 'capability-generated') {
+      const capsule = await loadSavedWorkflowCapsule(ref.path);
+      const preflight = preflightWorkflowCapsule(capsule, currentWorkflowPreflightEnv());
+      if (!preflight.ok) {
+        printPreflightFailure(preflight);
+        return undefined;
+      }
+      printPreflightWarnings(preflight);
+      approvalContext = {
+        source: `saved:${ref.source}`,
+        sandbox: ref.execution,
+        mayUseWorktree: capsule.manifest.mayUseWorktree === true,
+        rawScriptPath: ref.path,
+        rawScript: capsule.source,
+      };
+      scriptSnapshot = {
+        manifest: capsule.manifest,
+        source: capsule.source,
+      };
+    }
+
+    const module = await loadSavedWorkflow(ref.path);
+    return scriptSnapshot
+      ? { module, approvalContext, scriptSnapshot }
+      : { module, approvalContext };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(chalk.red(`\n[workflow] failed to load ${ref.path}: ${message}\n`));
+    return undefined;
+  }
+}
+
 /* ------------------------------- command -------------------------------- */
 
 function workflowEventStatus(event: WorkflowEvent): string | undefined {
@@ -767,6 +927,8 @@ function formatWorkflowEvent(event: WorkflowEvent): string | undefined {
       return '  synthesis complete';
     case 'workflow_completed':
       return '  workflow completed';
+    case 'workflow_stopped':
+      return '  workflow stopped';
     case 'workflow_failed':
       return `  workflow failed: ${event.data?.error ?? 'unknown error'}`;
     default:
@@ -779,31 +941,394 @@ function renderWorkflowEvent(event: WorkflowEvent): void {
   if (text) console.log(chalk.dim(text));
 }
 
-function formatResult(result: unknown): string | undefined {
+const MAX_WORKFLOW_RESULT_PREVIEW_CHARS = 6000;
+const MAX_WORKFLOW_LAUNCH_SUMMARY_CHARS = 360;
+const WORKFLOW_RESULT_TRUNCATED_MARKER = '[truncated]';
+
+export type WorkflowRunPresentation = 'command' | 'agentic';
+export type WorkflowRunLocale = 'en' | 'zh';
+
+interface WorkflowResultFormatOptions {
+  readonly full?: boolean;
+}
+
+function detectWorkflowLocale(text: string): WorkflowRunLocale {
+  return /[\u3400-\u9fff]/u.test(text) ? 'zh' : 'en';
+}
+
+function inferWorkflowLocaleFromParts(
+  ...parts: readonly (string | undefined)[]
+): WorkflowRunLocale {
+  return detectWorkflowLocale(parts.filter((part): part is string => typeof part === 'string').join('\n'));
+}
+
+function trimResultPreview(text: string, options: WorkflowResultFormatOptions = {}): string {
+  const trimmed = text.trim();
+  if (options.full === true) return trimmed;
+  if (trimmed.length <= MAX_WORKFLOW_RESULT_PREVIEW_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_WORKFLOW_RESULT_PREVIEW_CHARS).trimEnd()}\n\n${WORKFLOW_RESULT_TRUNCATED_MARKER}`;
+}
+
+function isWorkflowResultPreviewTruncated(text: string): boolean {
+  return text.includes(WORKFLOW_RESULT_TRUNCATED_MARKER);
+}
+
+function formatWorkflowResultTruncationHint(runId: string, locale: WorkflowRunLocale): string {
+  return locale === 'zh'
+    ? `[结果预览已截断。完整结果请用 /workflow show --full ${runId} 查看；artifact 文件也保存在本次 run 目录。]`
+    : `[Result preview truncated. Use /workflow show --full ${runId} for the complete result; artifacts are also saved in the run directory.]`;
+}
+
+function replaceWorkflowResultTruncationMarker(
+  text: string,
+  runId: string,
+  locale: WorkflowRunLocale,
+): string {
+  const index = text.lastIndexOf(WORKFLOW_RESULT_TRUNCATED_MARKER);
+  if (index < 0) return text;
+  return `${text.slice(0, index).trimEnd()}\n\n${formatWorkflowResultTruncationHint(runId, locale)}`;
+}
+
+function trimWorkflowLaunchSummary(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= MAX_WORKFLOW_LAUNCH_SUMMARY_CHARS) return compact;
+  return `${compact.slice(0, MAX_WORKFLOW_LAUNCH_SUMMARY_CHARS).trimEnd()}...`;
+}
+
+function formatResult(
+  result: unknown,
+  options: WorkflowResultFormatOptions = {},
+): string | undefined {
   if (typeof result === 'string' && result.trim().length > 0) {
-    return result;
+    return trimResultPreview(result, options);
   }
   if (result && typeof result === 'object' && 'synthesis' in result) {
     const synthesis = (result as { synthesis?: unknown }).synthesis;
-    if (typeof synthesis === 'string') return synthesis;
+    if (typeof synthesis === 'string' && synthesis.trim().length > 0) {
+      return trimResultPreview(synthesis, options);
+    }
     if (synthesis && typeof synthesis === 'object' && 'text' in synthesis) {
       const text = (synthesis as { text?: unknown }).text;
-      if (typeof text === 'string' && text.trim().length > 0) return text;
+      if (typeof text === 'string' && text.trim().length > 0) return trimResultPreview(text, options);
     }
   }
   if (result && typeof result === 'object') {
     for (const key of ['summary', 'report', 'text', 'result']) {
       const value = (result as Record<string, unknown>)[key];
       if (typeof value === 'string' && value.trim().length > 0) {
-        return value;
+        return trimResultPreview(value, options);
       }
     }
   }
   return undefined;
 }
 
+export function formatFinalEventSummary(
+  events: readonly WorkflowEvent[],
+  options: WorkflowResultFormatOptions = {},
+): string | undefined {
+  const completed = [...events]
+    .reverse()
+    .filter((event) => event.type === 'agent_completed' && readEventString(event, 'status') === 'completed');
+  const synthesis = completed.find((event) => readEventString(event, 'name') === 'synthesize');
+  const event = synthesis ?? completed[0];
+  const summary = event ? readEventString(event, 'summary') : undefined;
+  return summary ? trimResultPreview(summary, options) : undefined;
+}
+
+function formatArtifactPreview(
+  artifact: WorkflowArtifactRef,
+  options: WorkflowResultFormatOptions = {},
+): string | undefined {
+  if (!artifact.path || !existsSync(artifact.path)) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(artifact.path, 'utf8'));
+    const text = formatResult(parsed, options);
+    if (text) return text;
+    const json = JSON.stringify(parsed, null, 2);
+    return typeof json === 'string' && json.trim().length > 0
+      ? trimResultPreview(json, options)
+      : undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `artifact preview unavailable: ${message}`;
+  }
+}
+
+function formatArtifactResult(
+  artifacts: readonly WorkflowArtifactRef[],
+  locale: WorkflowRunLocale,
+  options: WorkflowResultFormatOptions = {},
+): string | undefined {
+  for (let index = artifacts.length - 1; index >= 0; index -= 1) {
+    const artifact = artifacts[index];
+    if (!artifact) continue;
+    const preview = formatArtifactPreview(artifact, options);
+    if (preview) {
+      return locale === 'zh'
+        ? `产物 ${artifact.name}:\n${preview}`
+        : `Artifact ${artifact.name}:\n${preview}`;
+    }
+  }
+  if (artifacts.length === 0) return undefined;
+  const names = artifacts.map((artifact) => artifact.name).join(', ');
+  return locale === 'zh'
+    ? `已生成产物: ${names}`
+    : `Artifacts created: ${names}`;
+}
+
+function formatWorkflowCompletionAnswer(input: {
+  readonly runId: string;
+  readonly totalSpawned: number;
+  readonly resultText?: string;
+  readonly locale: WorkflowRunLocale;
+  readonly isFallbackPreview?: boolean;
+}): string {
+  const displayResultText = input.resultText
+    ? replaceWorkflowResultTruncationMarker(input.resultText, input.runId, input.locale)
+    : undefined;
+  if (input.locale === 'zh') {
+    const header = input.resultText && input.isFallbackPreview !== true
+      ? `Workflow 已完成（${input.totalSpawned} 个智能体，run ${input.runId}）。`
+      : `Workflow 运行结束，但结果契约失败（${input.totalSpawned} 个智能体，run ${input.runId}）。`;
+    if (displayResultText) {
+      const label = input.isFallbackPreview === true
+        ? '结果契约异常：workflow 运行结束，但没有返回完整最终结果。以下是最后综合输出：'
+        : '最终结果：';
+      return `${header}\n\n${label}\n\n${displayResultText}`;
+    }
+    return [
+      header,
+      '',
+      '这次 workflow 运行结束，但生成脚本违反结果契约：没有返回可直接展示的最终结果或可预览产物。这不是正常完成状态，需要修复生成脚本后重新运行。',
+    ].join('\n');
+  }
+
+  const header = input.resultText && input.isFallbackPreview !== true
+    ? `Workflow completed (${input.totalSpawned} agents, run ${input.runId}).`
+    : `Workflow ended with a result contract failure (${input.totalSpawned} agents, run ${input.runId}).`;
+  if (displayResultText) {
+    const label = input.isFallbackPreview === true
+      ? 'Result contract violation: the workflow ended without returning a complete final result. Last synthesis output:'
+      : 'Final result:';
+    return `${header}\n\n${label}\n\n${displayResultText}`;
+  }
+  return [
+    header,
+    '',
+    'The workflow ended, but the generated script violated the result contract: it did not return displayable final text or a previewable artifact. This is not a normal completion state; fix the generated script and rerun it.',
+  ].join('\n');
+}
+
+function formatWorkflowLaunchAnswer(input: {
+  readonly runId: string;
+  readonly summary: WorkflowApprovalSummary;
+  readonly approvalSummary: string;
+  readonly locale: WorkflowRunLocale;
+}): string {
+  const phases = input.summary.phases.length > 0
+    ? input.summary.phases.join(' -> ')
+    : 'dynamic';
+  const maxAgents = input.summary.maxAgents === null ? 'unbounded' : String(input.summary.maxAgents);
+  const maxConcurrency = input.summary.maxConcurrency === null
+    ? 'unbounded'
+    : String(input.summary.maxConcurrency);
+  const plan = trimWorkflowLaunchSummary(input.approvalSummary);
+  if (input.locale === 'zh') {
+    const writePolicy = input.summary.writesFiles
+      ? '如需写文件，仍会经过正常权限确认。'
+      : '这是只读探查，不会主动修改文件。';
+    return [
+      `我会用 workflow 做这次任务，已启动 ${input.summary.name}（${input.runId}）。`,
+      `计划：${plan}`,
+      `阶段：${phases}；规模：最多 ${maxAgents} 个智能体，并发 ${maxConcurrency}。${writePolicy}`,
+      '运行过程会在下方动态更新，完成后我会直接汇总结论。',
+    ].join('\n');
+  }
+  const writePolicy = input.summary.writesFiles
+    ? 'File-writing work still goes through normal permission gates.'
+    : 'This is read-only and will not modify files.';
+  return [
+    `I will use a workflow for this task: ${input.summary.name} (${input.runId}).`,
+    `Plan: ${plan}`,
+    `Phases: ${phases}; scale: up to ${maxAgents} agents, ${maxConcurrency} concurrent. ${writePolicy}`,
+    'Progress will update below, and I will summarize the result when it finishes.',
+  ].join('\n');
+}
+
+function readEventString(event: WorkflowEvent, key: string): string | undefined {
+  const value = event.data?.[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export function formatWorkflowAgentDigest(
+  event: WorkflowEvent,
+  locale: WorkflowRunLocale = 'en',
+  runId?: string,
+): string | undefined {
+  if (event.type !== 'agent_completed') return undefined;
+  if (readEventString(event, 'status') !== 'completed') return undefined;
+  const rawSummary = readEventString(event, 'summary');
+  if (!rawSummary) return undefined;
+  const handoffSummary = extractWorkflowHandoffBlock(rawSummary);
+  const summary = handoffSummary ?? rawSummary;
+  const name = readEventString(event, 'name') ?? readEventString(event, 'taskId') ?? 'agent';
+  const forceStructuredSummary = handoffSummary !== undefined ||
+    shouldFoldWorkflowAgentDigest(summary, locale) ||
+    isFragmentaryWorkflowAgentDigest(summary);
+  if (forceStructuredSummary) {
+    return formatWorkflowAgentLongDigest(name, summary, locale, runId, true);
+  }
+  return locale === 'zh'
+    ? `子 Agent ${name} 完成：\n${summary}`
+    : `Agent ${name} completed:\n${summary}`;
+}
+
+function containsCjk(text: string): boolean {
+  return /[\u3400-\u9fff]/u.test(text);
+}
+
+function shouldFoldWorkflowAgentDigest(summary: string, locale: WorkflowRunLocale): boolean {
+  const compact = summary.replace(/\s+/g, ' ').trim();
+  if (compact.length > MAX_WORKFLOW_AGENT_DIGEST_INLINE_CHARS) return true;
+  return locale === 'zh' && !containsCjk(compact);
+}
+
+function isFragmentaryWorkflowAgentDigest(summary: string): boolean {
+  const compact = summary.trim();
+  if (/^`+\s/.test(compact)) return true;
+  if (/^[)\]}，,、。；;：:]/.test(compact)) return true;
+  return false;
+}
+
+function trimWorkflowAgentDigestExcerpt(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS) return compact;
+  return `${compact.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS).trimEnd()}...`;
+}
+
+function extractWorkflowHandoffBlock(summary: string): string | undefined {
+  const match = /\[workflow handoff\]([\s\S]*?)\[\/workflow handoff\]/i.exec(summary);
+  const body = match?.[1]
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join('\n')
+    .trim();
+  return body && body.length > 0 ? body : undefined;
+}
+
+function isHighSignalWorkflowAgentDigestLine(line: string): boolean {
+  if (/^(?:conclusion|finding|confirmed issue|issue|evidence|risk|next|unresolved|decision|result|summary|结论|发现|问题|证据|风险|下一步|未决|判断|决定|结果|摘要)[:：]/i.test(line)) {
+    return true;
+  }
+  if (/^(?:[A-Z]{1,3}-?\d+|[HMSLP]\d+)[.)：:\s-]/i.test(line)) return true;
+  return /(?:critical|high|medium|low)\s+severity|(?:严重|高危|中危|低危)/i.test(line);
+}
+
+function isLowInformationWorkflowAgentDigestLine(line: string): boolean {
+  const lower = line.toLowerCase();
+  if (/^\|.*\|$/.test(line)) return true;
+  if (/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/.test(line)) return true;
+  if (/^(?:i now have|i have|i now understand|here is|let me|i will|this report|the report)\b/.test(lower)) {
+    return true;
+  }
+  if (/^(?:scope|review scope|范围|审查范围)[:：]/i.test(line)) return true;
+  if (/^feature[_\s-]*\d+.*(?:report|review|audit|map|审查|报告|地图|变更地图)/i.test(line)) return true;
+  if (/^feature[_\s-]*\d+.*改动分布.*feature/i.test(line)) return true;
+  if (/(?:review report|audit|审查报告|综合报告|分析报告|变更地图)$/i.test(line) && line.length < 140) return true;
+  return false;
+}
+
+function normalizeWorkflowAgentDigestLine(line: string): string | undefined {
+  const stripped = line
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*]\s+/, '')
+    .replace(/^\d+[.)]\s+/, '')
+    .replace(/^`{3,}.*$/, '')
+    .replace(/^[`"'“”‘’)\]}，,、。；;：:.\s]+/, '')
+    .trim();
+  if (stripped.length < 12) return undefined;
+  if (/^[-*_`#\s]+$/.test(stripped)) return undefined;
+  if (isLowInformationWorkflowAgentDigestLine(stripped)) return undefined;
+  return trimWorkflowAgentDigestExcerpt(stripped);
+}
+
+function extractWorkflowAgentDigestExcerpts(summary: string): readonly string[] {
+  const highSignal: string[] = [];
+  const excerpts: string[] = [];
+  for (const rawLine of summary.split(/\r?\n+/)) {
+    const line = normalizeWorkflowAgentDigestLine(rawLine);
+    if (!line) continue;
+    const target = isHighSignalWorkflowAgentDigestLine(line) ? highSignal : excerpts;
+    if (highSignal.includes(line) || excerpts.includes(line)) continue;
+    target.push(line);
+  }
+  if (highSignal.length > 0) return highSignal.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS);
+  if (excerpts.length > 0) return excerpts.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS);
+  const fallback = trimWorkflowAgentDigestExcerpt(summary);
+  return fallback ? [fallback] : [];
+}
+
+function formatWorkflowAgentLongDigest(
+  name: string,
+  summary: string,
+  locale: WorkflowRunLocale,
+  runId: string | undefined,
+  isStructuredSummary = false,
+): string {
+  const excerpts = extractWorkflowAgentDigestExcerpts(summary);
+  const excerptLines = excerpts.map((line) => `- ${line}`);
+  const detailHint = runId
+    ? locale === 'zh'
+      ? `这只是子 Agent 摘要；/workflow show ${runId} 可查看运行事件时间线。`
+      : `This is a child-agent summary; use /workflow show ${runId} for the event timeline.`
+    : locale === 'zh'
+      ? '这只是子 Agent 摘要；/workflow show 可查看运行事件时间线。'
+      : 'This is a child-agent summary; use /workflow show for the event timeline.';
+  const heading = locale === 'zh'
+    ? isStructuredSummary
+      ? `子 Agent ${name} 已完成。摘要：`
+      : `子 Agent ${name} 已完成。关键信息：`
+    : isStructuredSummary
+      ? `Agent ${name} completed. Summary:`
+      : `Agent ${name} completed. Key details:`;
+  return [
+    heading,
+    ...excerptLines,
+    detailHint,
+  ].join('\n');
+}
+
+export function createWorkflowAgentDigestLimiter(
+  runId: string,
+): (event: WorkflowEvent, locale?: WorkflowRunLocale) => string | undefined {
+  return (event, locale = 'en') => {
+    return formatWorkflowAgentDigest(event, locale, runId);
+  };
+}
+
 type WorkflowRunMessageCallback = NonNullable<CommandCallbacks['onWorkflowRunMessage']>;
 type WorkflowRunUpdateCallback = NonNullable<CommandCallbacks['onWorkflowRunUpdate']>;
+
+function readWorkflowEventUsageTokens(data: Record<string, unknown> | undefined): number {
+  const usage = data?.usage;
+  if (typeof usage !== 'object' || usage === null) return 0;
+  const record = usage as Record<string, unknown>;
+  const totalTokens = record.totalTokens;
+  if (typeof totalTokens === 'number' && Number.isFinite(totalTokens) && totalTokens > 0) {
+    return totalTokens;
+  }
+  const inputTokens = record.inputTokens;
+  const outputTokens = record.outputTokens;
+  const input = typeof inputTokens === 'number' && Number.isFinite(inputTokens) && inputTokens > 0
+    ? inputTokens
+    : 0;
+  const output = typeof outputTokens === 'number' && Number.isFinite(outputTokens) && outputTokens > 0
+    ? outputTokens
+    : 0;
+  return input + output;
+}
 
 function emitWorkflowRunMessage(
   callbacks: Pick<CommandCallbacks, 'onWorkflowRunMessage'>,
@@ -825,19 +1350,41 @@ function emitWorkflowRunMessage(
     console.log(chalk.dim(event.text));
     return;
   }
+  if (event.type === 'assistant') {
+    console.log(`\n${event.text}\n`);
+    return;
+  }
   console.log(chalk.dim(`\n${event.text}\n`));
 }
 
 function workflowEventSink(
   callbacks: Pick<CommandCallbacks, 'onWorkflowRunMessage'>,
   live?: WorkflowLiveUpdateEmitter,
+  options: {
+    readonly presentation?: WorkflowRunPresentation;
+    readonly locale?: WorkflowRunLocale;
+    readonly runId?: string;
+  } = {},
 ): (event: WorkflowEvent) => void {
+  const digest = options.presentation === 'agentic'
+    ? createWorkflowAgentDigestLimiter(options.runId ?? 'current')
+    : undefined;
   return (event) => {
     live?.onEvent(event);
     const text = formatWorkflowEvent(event);
     if (!text) return;
     if (callbacks.onWorkflowRunMessage) {
       emitWorkflowRunMessage(callbacks, { type: 'event', text });
+      if (digest) {
+        const summary = digest(event, options.locale ?? 'en');
+        if (summary) {
+          emitWorkflowRunMessage(callbacks, {
+            type: 'assistant',
+            text: summary,
+            final: false,
+          });
+        }
+      }
       return;
     }
     renderWorkflowEvent(event);
@@ -850,39 +1397,61 @@ interface WorkflowLiveUpdateEmitter {
   running(message?: string): void;
 }
 
-function createWorkflowLiveUpdateEmitter(
+export function createWorkflowLiveUpdateEmitter(
   callbacks: Pick<CommandCallbacks, 'onWorkflowRunUpdate'>,
   runId: string,
-  workflow: string,
+  meta: WorkflowMeta,
+  locale: WorkflowRunLocale = 'en',
 ): WorkflowLiveUpdateEmitter {
+  const startedAt = Date.now();
   const activeAgents = new Map<string, string>();
   let phase: string | undefined;
   let totalSpawned = 0;
   let completedAgents = 0;
   let failedAgents = 0;
   let stoppedAgents = 0;
+  let tokenBudgetSpent = 0;
+  let terminal = false;
+  const phases = meta.phases ?? [];
+  const tokenBudgetTotal = meta.tokenBudget !== undefined && Number.isFinite(meta.tokenBudget)
+    ? meta.tokenBudget
+    : undefined;
 
   const emit = (
     status: Parameters<WorkflowRunUpdateCallback>[0]['status'],
     message?: string,
   ): void => {
+    const phaseOffset = phase === undefined ? -1 : phases.indexOf(phase);
+    const phaseIndex = phaseOffset >= 0 ? phaseOffset + 1 : undefined;
+    const phaseTotal = phases.length > 0 ? phases.length : undefined;
     callbacks.onWorkflowRunUpdate?.({
       runId,
-      workflow,
+      workflow: meta.name,
       status,
       ...(phase !== undefined ? { phase } : {}),
+      ...(phaseIndex !== undefined ? { phaseIndex } : {}),
+      ...(phaseTotal !== undefined ? { phaseTotal } : {}),
+      startedAt,
+      elapsedMs: Math.max(0, Date.now() - startedAt),
       activeAgents: [...activeAgents.values()],
       totalSpawned,
+      ...(meta.maxAgents !== undefined ? { agentCap: meta.maxAgents } : {}),
+      tokenBudgetSpent,
+      ...(tokenBudgetTotal !== undefined ? { tokenBudgetTotal } : {}),
       completedAgents,
       failedAgents,
       stoppedAgents,
       ...(message !== undefined ? { message } : {}),
+      locale,
     });
   };
 
   return {
-    running: (message) => emit('running', message),
+    running: (message) => {
+      if (!terminal) emit('running', message);
+    },
     onEvent: (event) => {
+      if (terminal) return;
       switch (event.type) {
         case 'phase_started': {
           const name = event.data?.name;
@@ -903,6 +1472,7 @@ function createWorkflowLiveUpdateEmitter(
         case 'agent_completed': {
           const taskId = typeof event.data?.taskId === 'string' ? event.data.taskId : undefined;
           if (taskId) activeAgents.delete(taskId);
+          tokenBudgetSpent += readWorkflowEventUsageTokens(event.data);
           const status = workflowEventStatus(event);
           if (status === 'failed') {
             failedAgents += 1;
@@ -915,6 +1485,7 @@ function createWorkflowLiveUpdateEmitter(
         case 'agent_stopped': {
           const taskId = typeof event.data?.taskId === 'string' ? event.data.taskId : undefined;
           if (taskId) activeAgents.delete(taskId);
+          tokenBudgetSpent += readWorkflowEventUsageTokens(event.data);
           stoppedAgents += 1;
           emit('running');
           break;
@@ -927,19 +1498,31 @@ function createWorkflowLiveUpdateEmitter(
           break;
       }
     },
-    complete: (status, message) => emit(status, message),
+    complete: (status, message) => {
+      if (terminal) return;
+      terminal = true;
+      emit(status, message);
+    },
   };
 }
 
-function observeManagedWorkflowDone(
+export function observeManagedWorkflowDone(
   managed: ManagedWorkflowRun,
   callbacks: Pick<CommandCallbacks, 'onWorkflowRunMessage'>,
   runId: string,
   live?: WorkflowLiveUpdateEmitter,
-  options: { readonly canRerun?: boolean } = {},
+  options: {
+    readonly canRerun?: boolean;
+    readonly presentation?: WorkflowRunPresentation;
+    readonly locale?: WorkflowRunLocale;
+  } = {},
 ): void {
   void managed.done.then((outcome) => {
     if (outcome.kind === 'failed') {
+      if (managed.getSnapshot?.()?.status === 'stopped') {
+        live?.complete('stopped', 'Workflow stopped by user.');
+        return;
+      }
       live?.complete('failed', outcome.error.message);
       emitWorkflowRunMessage(callbacks, {
         type: 'error',
@@ -951,8 +1534,31 @@ function observeManagedWorkflowDone(
       return;
     }
     if (outcome.kind === 'completed') {
-      const resultText = formatResult(outcome.result);
+      const locale = options.locale ?? 'en';
+      const resultOptions = { full: options.presentation === 'agentic' };
+      const directResultText = formatResult(outcome.result, resultOptions)
+        ?? formatArtifactResult(outcome.state.artifacts, locale, resultOptions);
+      const fallbackResultText = directResultText === undefined
+        ? formatFinalEventSummary(outcome.state.events, resultOptions)
+        : undefined;
+      const resultText = directResultText ?? fallbackResultText;
       live?.complete('completed', resultText ? 'completed with result' : 'completed');
+      if (options.presentation === 'agentic') {
+        emitWorkflowRunMessage(callbacks, {
+          type: 'assistant',
+          text: formatWorkflowCompletionAnswer({
+            runId,
+            totalSpawned: outcome.state.totalSpawned,
+            ...(resultText !== undefined ? { resultText } : {}),
+            ...(directResultText === undefined && fallbackResultText !== undefined
+              ? { isFallbackPreview: true }
+              : {}),
+            locale,
+          }),
+          final: true,
+        });
+        return;
+      }
       emitWorkflowRunMessage(callbacks, {
         type: 'success',
         text: [
@@ -967,6 +1573,20 @@ function observeManagedWorkflowDone(
         });
       }
     }
+  }).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (managed.getSnapshot?.()?.status === 'stopped') {
+      live?.complete('stopped', 'Workflow stopped by user.');
+      return;
+    }
+    live?.complete('failed', message);
+    emitWorkflowRunMessage(callbacks, {
+      type: 'error',
+      text: [
+        `Workflow failed (${runId}): ${message}`,
+        formatWorkflowFailureAction(runId, options.canRerun === true),
+      ].join('\n'),
+    });
   });
 }
 
@@ -1000,8 +1620,11 @@ export interface StartGeneratedWorkflowFromRequestOptions {
     | 'onWorkflowRunUpdate'
   >;
   readonly approval: GeneratedWorkflowApprovalMode;
+  readonly presentation?: WorkflowRunPresentation;
   readonly sourceLabel?: string;
   readonly generateWorkflow?: GenerateWorkflowForRequest;
+  readonly runBaseDir?: string;
+  readonly runManager?: WorkflowRunManager;
   readonly onBuilderEvent?: (event: WorkflowBuilderEvent) => void;
 }
 
@@ -1011,7 +1634,10 @@ function emitWorkflowBuilderEvent(
 ): void {
   input.onBuilderEvent?.(event);
   if (event.stage === 'failed') {
-    console.log(chalk.red(`\n[workflow] builder failed: ${event.message}\n`));
+    emitWorkflowRunMessage(input.callbacks, {
+      type: 'error',
+      text: `Workflow builder failed: ${event.message}`,
+    });
     return;
   }
   if (!input.onBuilderEvent && (
@@ -1041,7 +1667,8 @@ export async function startGeneratedWorkflowFromRequest(
     return 'failed';
   }
 
-  const options = createOptions();
+  const locale = detectWorkflowLocale(input.request);
+  let options: ReturnType<NonNullable<CommandCallbacks['createKodaXOptions']>>;
   let generated: Awaited<ReturnType<typeof generateWorkflowFromOptions>>;
   try {
     emitWorkflowBuilderEvent(input, {
@@ -1052,6 +1679,7 @@ export async function startGeneratedWorkflowFromRequest(
       stage: 'generating',
       message: 'Workflow - generating harness',
     });
+    options = createOptions();
     const generateWorkflow = input.generateWorkflow ?? generateWorkflowFromOptions;
     generated = await generateWorkflow({
       request: input.request,
@@ -1083,19 +1711,23 @@ export async function startGeneratedWorkflowFromRequest(
     stage: 'ready',
     message: 'Workflow - harness ready',
   });
-  emitWorkflowRunMessage(input.callbacks, {
-    type: 'info',
-    text: `Generated workflow: ${generated.approvalSummary}`,
-  });
+  const presentation = input.presentation ?? 'command';
+  const approvalSummary = buildApprovalSummary(generated.module);
+  if (presentation !== 'agentic') {
+    emitWorkflowRunMessage(input.callbacks, {
+      type: 'info',
+      text: `Generated workflow: ${generated.approvalSummary}`,
+    });
+  }
   const projectKey = deriveProjectKeyFromRoot(process.cwd()).key;
-  const baseDir = getAgentConfigPath('workflow-runs', projectKey);
-  const manager = getDefaultWorkflowRunManager();
+  const baseDir = input.runBaseDir ?? getAgentConfigPath('workflow-runs', projectKey);
+  const manager = input.runManager ?? getDefaultWorkflowRunManager();
   const runId = `run-${Date.now().toString(36)}`;
   const runDir = join(baseDir, runId);
 
   if (confirm) {
     const approved = await confirm(
-      renderApprovalPrompt(buildApprovalSummary(generated.module), {
+      renderApprovalPrompt(approvalSummary, {
         source: input.sourceLabel ?? 'generated',
         sandbox: 'capability-generated',
         mayUseWorktree: generated.manifest.mayUseWorktree === true,
@@ -1111,25 +1743,40 @@ export async function startGeneratedWorkflowFromRequest(
       return 'cancelled';
     }
   } else {
-    emitWorkflowRunMessage(input.callbacks, {
-      type: 'info',
-      text: renderApprovalPrompt(buildApprovalSummary(generated.module), {
-        source: input.sourceLabel ?? 'generated',
-        sandbox: 'capability-generated',
-        mayUseWorktree: generated.manifest.mayUseWorktree === true,
-      }),
-    });
-    emitWorkflowRunMessage(input.callbacks, {
-      type: 'info',
-      text: 'AMAW auto-start: capability-isolated generated workflow; normal permission gates still apply.',
-    });
+    if (presentation !== 'agentic') {
+      emitWorkflowRunMessage(input.callbacks, {
+        type: 'info',
+        text: renderApprovalPrompt(approvalSummary, {
+          source: input.sourceLabel ?? 'generated',
+          sandbox: 'capability-generated',
+          mayUseWorktree: generated.manifest.mayUseWorktree === true,
+        }),
+      });
+      emitWorkflowRunMessage(input.callbacks, {
+        type: 'info',
+        text: 'AMAW auto-start: capability-isolated generated workflow; normal permission gates still apply.',
+      });
+    }
   }
 
-  emitWorkflowRunMessage(input.callbacks, {
-    type: 'info',
-    text: `Started workflow ${generated.module.meta.name} (${runId}). Use /workflow show ${runId} for status.`,
-  });
-  const live = createWorkflowLiveUpdateEmitter(input.callbacks, runId, generated.module.meta.name);
+  if (presentation === 'agentic') {
+    emitWorkflowRunMessage(input.callbacks, {
+      type: 'assistant',
+      text: formatWorkflowLaunchAnswer({
+        runId,
+        summary: approvalSummary,
+        approvalSummary: generated.approvalSummary,
+        locale,
+      }),
+      final: false,
+    });
+  } else {
+    emitWorkflowRunMessage(input.callbacks, {
+      type: 'info',
+      text: `Started workflow ${generated.module.meta.name} (${runId}). Use /workflow show ${runId} for status.`,
+    });
+  }
+  const live = createWorkflowLiveUpdateEmitter(input.callbacks, runId, generated.module.meta, locale);
   live.running(`Use /workflow show ${runId} for status or /workflow stop ${runId} to stop.`);
 
   const managed = manager.startFromOptions({
@@ -1139,14 +1786,22 @@ export async function startGeneratedWorkflowFromRequest(
     runId,
     runDir,
     scriptSnapshot: generated.scriptSnapshot,
-    onEvent: workflowEventSink(input.callbacks, live),
+    onEvent: workflowEventSink(input.callbacks, live, {
+      presentation: input.presentation ?? 'command',
+      locale,
+      runId,
+    }),
   });
   emitWorkflowBuilderEvent(input, {
     stage: 'launched',
     message: `Workflow ${generated.module.meta.name} started`,
   });
 
-  observeManagedWorkflowDone(managed, input.callbacks, runId, live, { canRerun: true });
+  observeManagedWorkflowDone(managed, input.callbacks, runId, live, {
+    canRerun: true,
+    presentation,
+    locale,
+  });
 
   return 'started';
 }
@@ -1155,7 +1810,7 @@ export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
   usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | create | <name> [args]]',
-  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop <runId> | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId> [args] | save <runId> <name> | create <request> | <name> [args]',
+  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, _context, callbacks, currentConfig) => {
     const invocation = parseWorkflowInvocation(args);
@@ -1219,7 +1874,7 @@ export const workflowCommand: Command = {
       const managed = manager.get(runId);
       const detail = readWorkflowRunDetail(baseDir, runId);
       console.log(chalk.bold('\nWorkflow run:'));
-      console.log(formatWorkflowRunSnapshot(managed, detail));
+      console.log(formatWorkflowRunSnapshot(managed, detail, { full: invocation.full === true }));
       console.log();
       return;
     }
@@ -1239,19 +1894,24 @@ export const workflowCommand: Command = {
     }
 
     if (invocation.kind === 'stop') {
-      if (!ensureSafeRunId(invocation.runId)) return;
-      const ok = manager.stop(invocation.runId, 'stopped by user');
-      const snapshot = manager.get(invocation.runId);
-      const detail = snapshot ? readWorkflowRunDetail(baseDir, invocation.runId) : undefined;
+      const runId = invocation.runId || selectDefaultActiveWorkflowRunId(manager.list());
+      if (!runId) {
+        console.log(chalk.yellow('\nNo active workflow to stop.\n'));
+        return;
+      }
+      if (!ensureSafeRunId(runId)) return;
+      const ok = manager.stop(runId, 'stopped by user');
+      const snapshot = manager.get(runId);
+      const detail = snapshot ? readWorkflowRunDetail(baseDir, runId) : undefined;
       const nextActions = formatWorkflowNextActions(
-        invocation.runId,
+        runId,
         canRerunWorkflowRun(snapshot, detail),
       );
       console.log(ok
-        ? chalk.dim(`Stopped workflow ${invocation.runId}.\n`)
+        ? chalk.dim(`Stopped workflow ${runId}.\n`)
         : snapshot && !isActiveManagedWorkflowRun(snapshot)
-          ? chalk.yellow(`Workflow ${invocation.runId} is already ${snapshot.status}. Next: ${nextActions}.\n`)
-          : chalk.yellow(`No active workflow ${invocation.runId}.\n`));
+          ? chalk.yellow(`Workflow ${runId} is already ${snapshot.status}. Next: ${nextActions}.\n`)
+          : chalk.yellow(`No active workflow ${runId}.\n`));
       return;
     }
 
@@ -1320,20 +1980,74 @@ export const workflowCommand: Command = {
 
     if (invocation.kind === 'rerun') {
       if (!invocation.runId) {
-        console.log(chalk.yellow('\nUsage: /workflow rerun <runId> [args]\n'));
+        console.log(chalk.yellow('\nUsage: /workflow rerun <runId|savedName> [args]\n'));
         return;
       }
       if (!ensureSafeRunId(invocation.runId)) return;
       const confirm = resolveConfirm(callbacks);
       if (!confirm) {
         console.log(
-          chalk.red('\n[workflow] refusing to rerun a generated workflow without an interactive approval channel.\n'),
+          chalk.red('\n[workflow] refusing to rerun a workflow without an interactive approval channel.\n'),
         );
         return;
       }
       const createOptions = callbacks.createKodaXOptions;
       if (!createOptions) {
         console.log(chalk.red('\n[workflow] cannot start — REPL options unavailable in this context.\n'));
+        return;
+      }
+      const savedRef = (await discoverSavedWorkflows(dirs)).find((r) => r.name === invocation.runId);
+      const targetMatchesRun = manager.list().some((run) => run.runId === invocation.runId) ||
+        existsSync(join(baseDir, invocation.runId, 'run.json'));
+      if (savedRef && targetMatchesRun) {
+        console.log(
+          chalk.red(
+            `\n[workflow] ambiguous rerun target: ${invocation.runId} matches both a workflow run id and a saved workflow name.\n`,
+          ),
+        );
+        console.log(
+          chalk.yellow(
+            `Use /workflow ${invocation.runId} to run the saved workflow, or rerun a unique run id/name.\n`,
+          ),
+        );
+        return;
+      }
+      if (savedRef && !targetMatchesRun) {
+        const prepared = await prepareSavedWorkflow(savedRef, confirm);
+        if (!prepared) return;
+        const locale = inferWorkflowLocaleFromParts(
+          invocation.rawArgs,
+          prepared.module.meta.name,
+          prepared.module.meta.description,
+          prepared.scriptSnapshot?.source,
+        );
+        const presentation: WorkflowRunPresentation = 'agentic';
+        const approved = await confirm(
+          renderApprovalPrompt(buildApprovalSummary(prepared.module), prepared.approvalContext),
+        );
+        if (!approved) {
+          console.log(chalk.dim('Workflow cancelled.\n'));
+          return;
+        }
+        const newRunId = `run-${Date.now().toString(36)}`;
+        const newRunDir = join(baseDir, newRunId);
+        console.log(chalk.dim(`\nStarted workflow ${prepared.module.meta.name} (${newRunId}). Use /workflow show ${newRunId} for status.\n`));
+        const live = createWorkflowLiveUpdateEmitter(callbacks, newRunId, prepared.module.meta, locale);
+        live.running(`Use /workflow show ${newRunId} for status or /workflow stop ${newRunId} to stop.`);
+        const managed = manager.startFromOptions({
+          module: prepared.module,
+          args: parseWorkflowArgs(invocation.rawArgs),
+          options: createOptions(),
+          runId: newRunId,
+          runDir: newRunDir,
+          ...(prepared.scriptSnapshot ? { scriptSnapshot: prepared.scriptSnapshot } : {}),
+          onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId: newRunId }),
+        });
+        observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
+          canRerun: prepared.scriptSnapshot !== undefined,
+          presentation,
+          locale,
+        });
         return;
       }
       let loaded: Awaited<ReturnType<typeof loadGeneratedWorkflowFromRun>>;
@@ -1346,6 +2060,15 @@ export const workflowCommand: Command = {
         console.log(chalk.red(`\n[workflow] rerun failed: ${message}\n`));
         return;
       }
+      const runDetail = readWorkflowRunDetail(baseDir, invocation.runId);
+      const rawScriptPath = runDetail?.scriptSnapshotPath ?? join(baseDir, invocation.runId, 'script.js');
+      const locale = inferWorkflowLocaleFromParts(
+        invocation.rawArgs,
+        loaded.capsule.manifest.name,
+        loaded.capsule.manifest.description,
+        loaded.capsule.source,
+      );
+      const presentation: WorkflowRunPresentation = 'agentic';
       const preflight = preflightWorkflowCapsule(loaded.capsule, currentWorkflowPreflightEnv());
       if (!preflight.ok) {
         printPreflightFailure(preflight);
@@ -1357,6 +2080,7 @@ export const workflowCommand: Command = {
           source: `run:${invocation.runId}`,
           sandbox: 'capability-generated',
           mayUseWorktree: loaded.capsule.manifest.mayUseWorktree === true,
+          rawScriptPath,
           rawScript: loaded.capsule.source,
         }),
       );
@@ -1367,7 +2091,7 @@ export const workflowCommand: Command = {
       const newRunId = `run-${Date.now().toString(36)}`;
       const newRunDir = join(baseDir, newRunId);
       console.log(chalk.dim(`\nStarted workflow ${loaded.module.meta.name} (${newRunId}). Use /workflow show ${newRunId} for status.\n`));
-      const live = createWorkflowLiveUpdateEmitter(callbacks, newRunId, loaded.module.meta.name);
+      const live = createWorkflowLiveUpdateEmitter(callbacks, newRunId, loaded.module.meta, locale);
       live.running(`Use /workflow show ${newRunId} for status or /workflow stop ${newRunId} to stop.`);
       const managed = manager.startFromOptions({
         module: loaded.module,
@@ -1379,9 +2103,13 @@ export const workflowCommand: Command = {
           manifest: loaded.capsule.manifest,
           source: loaded.capsule.source,
         },
-        onEvent: workflowEventSink(callbacks, live),
+        onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId: newRunId }),
       });
-      observeManagedWorkflowDone(managed, callbacks, newRunId, live, { canRerun: true });
+      observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
+        canRerun: true,
+        presentation,
+        locale,
+      });
       return;
     }
 
@@ -1394,6 +2122,7 @@ export const workflowCommand: Command = {
         request: invocation.request,
         callbacks,
         approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
+        presentation: 'agentic',
         sourceLabel: 'generated',
         onBuilderEvent: callbacks.onWorkflowBuilderEvent,
       });
@@ -1447,6 +2176,7 @@ export const workflowCommand: Command = {
             source: `saved:${ref.source}`,
             sandbox: ref.execution,
             mayUseWorktree: capsule.manifest.mayUseWorktree === true,
+            rawScriptPath: ref.path,
             rawScript: capsule.source,
           };
           scriptSnapshot = {
@@ -1484,8 +2214,15 @@ export const workflowCommand: Command = {
     const runId = `run-${Date.now().toString(36)}`;
     const runDir = join(baseDir, runId);
     console.log(chalk.dim(`\nStarted workflow ${module.meta.name} (${runId}). Use /workflow show ${runId} for status.\n`));
-    const live = createWorkflowLiveUpdateEmitter(callbacks, runId, module.meta.name);
+    const locale = inferWorkflowLocaleFromParts(
+      invocation.rawArgs,
+      module.meta.name,
+      module.meta.description,
+      scriptSnapshot?.source,
+    );
+    const live = createWorkflowLiveUpdateEmitter(callbacks, runId, module.meta, locale);
     live.running(`Use /workflow show ${runId} for status or /workflow stop ${runId} to stop.`);
+    const presentation: WorkflowRunPresentation = 'agentic';
 
     const managed = manager.startFromOptions({
       module,
@@ -1494,9 +2231,13 @@ export const workflowCommand: Command = {
       runId,
       runDir,
       ...(scriptSnapshot ? { scriptSnapshot } : {}),
-      onEvent: workflowEventSink(callbacks, live),
+      onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId }),
     });
 
-    observeManagedWorkflowDone(managed, callbacks, runId, live, { canRerun: scriptSnapshot !== undefined });
+    observeManagedWorkflowDone(managed, callbacks, runId, live, {
+      canRerun: scriptSnapshot !== undefined,
+      presentation,
+      locale,
+    });
   },
 };

@@ -96,20 +96,29 @@ export interface CommandCallbacks {
     readonly message: string;
   }) => void;
   onWorkflowRunMessage?: (event: {
-    readonly type: 'info' | 'success' | 'error' | 'event';
+    readonly type: 'info' | 'success' | 'error' | 'event' | 'assistant';
     readonly text: string;
+    readonly final?: boolean;
   }) => void;
   onWorkflowRunUpdate?: (event: {
     readonly runId: string;
     readonly workflow: string;
     readonly status: 'running' | 'completed' | 'failed' | 'stopped';
     readonly phase?: string;
+    readonly phaseIndex?: number;
+    readonly phaseTotal?: number;
+    readonly startedAt?: number;
+    readonly elapsedMs?: number;
     readonly activeAgents: readonly string[];
     readonly totalSpawned: number;
+    readonly agentCap?: number;
+    readonly tokenBudgetSpent?: number;
+    readonly tokenBudgetTotal?: number;
     readonly completedAgents: number;
     readonly failedAgents: number;
     readonly stoppedAgents: number;
     readonly message?: string;
+    readonly locale?: 'en' | 'zh';
   }) => void;
   startCompacting?: () => void;
   stopCompacting?: () => void;

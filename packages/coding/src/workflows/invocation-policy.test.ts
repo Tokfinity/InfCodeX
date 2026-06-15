@@ -14,7 +14,7 @@ describe('decideWorkflowInvocation', () => {
       decideWorkflowInvocation({
         agentMode: 'sa',
         source: 'natural-language',
-        input: '用 workflow 分析这个 flaky test，提出三个独立假设并验证',
+        input: 'please create a workflow to analyze this flaky test',
       }),
     ).toMatchObject({ action: 'none' });
   });
@@ -24,7 +24,7 @@ describe('decideWorkflowInvocation', () => {
       decideWorkflowInvocation({
         agentMode: 'ama',
         source: 'natural-language',
-        input: '用 workflow 分析这个 flaky test，提出三个独立假设并验证',
+        input: 'please create a workflow to analyze this flaky test',
       }),
     ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
   });
@@ -34,19 +34,67 @@ describe('decideWorkflowInvocation', () => {
       decideWorkflowInvocation({
         agentMode: 'amaw',
         source: 'natural-language',
-        input: '这个测试大约每 50 次会失败 1 次，请提出多个竞争假设并互相验证',
+        input: 'Please compare three independent competing hypotheses and verify each one.',
       }),
     ).toMatchObject({ action: 'auto-start', trigger: 'complexity' });
   });
 
-  it('lets explicit negation override workflow triggers', () => {
+  it('does not auto-start AMAW for routine single-signal verbs', () => {
+    for (const input of [
+      'please verify this one file',
+      'sort this short list alphabetically',
+      'what does the workflow option do?',
+    ]) {
+      expect(
+        decideWorkflowInvocation({
+          agentMode: 'amaw',
+          source: 'natural-language',
+          input,
+        }),
+      ).toMatchObject({ action: 'none' });
+    }
+  });
+
+  it('treats workflow mentions as explicit only when they request workflow execution', () => {
     expect(
       decideWorkflowInvocation({
-        agentMode: 'amaw',
+        agentMode: 'ama',
         source: 'natural-language',
-        input: '不要用 workflow，也不要多 agent，直接告诉我这个函数做什么',
+        input: 'what does the workflow option do?',
       }),
-    ).toMatchObject({ action: 'none', trigger: 'negated' });
+    ).toMatchObject({ action: 'none', trigger: 'none' });
+
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'ama',
+        source: 'natural-language',
+        input: 'why did the workflow that failed yesterday stop?',
+      }),
+    ).toMatchObject({ action: 'none', trigger: 'none' });
+
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'ama',
+        source: 'natural-language',
+        input: 'please create a workflow for this UI regression audit',
+      }),
+    ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
+  });
+
+  it('lets explicit negation override workflow triggers', () => {
+    for (const input of [
+      'do not use a workflow; just answer directly',
+      'without using a workflow, verify these ideas',
+      'avoid workflows and skip multi-agent routing',
+    ]) {
+      expect(
+        decideWorkflowInvocation({
+          agentMode: 'amaw',
+          source: 'natural-language',
+          input,
+        }),
+      ).toMatchObject({ action: 'none', trigger: 'negated' });
+    }
   });
 
   it('treats command-level workflow requests as explicit in every mode', () => {

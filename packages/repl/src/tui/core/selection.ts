@@ -4,6 +4,7 @@ import {
   getTranscriptTextLength,
   sliceTranscriptText,
 } from "../../ui/utils/transcript-text-metrics.js";
+import { stripAnsi } from "../../ui/utils/strip-ansi.js";
 
 export interface TranscriptRowSelectionRange {
   start: number;
@@ -25,7 +26,7 @@ export interface BuildTranscriptSelectionOptions {
 }
 
 function normalizeTranscriptRowText(row: TranscriptRow): string {
-  return row.text === " " ? "" : row.text;
+  return row.text === " " ? "" : stripAnsi(row.text);
 }
 
 function comparePoints(

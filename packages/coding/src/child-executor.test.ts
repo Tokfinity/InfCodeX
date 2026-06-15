@@ -35,10 +35,11 @@ import {
   registerConstructedAgent,
 } from './construction/agent-resolver.js';
 import type { AgentArtifact } from './construction/types.js';
-import { toolWorktreeCreate } from './tools/worktree.js';
+import { toolWorktreeCreate, toolWorktreeRemove } from './tools/worktree.js';
 
 const mockRunKodaX = runKodaX as ReturnType<typeof vi.fn>;
 const mockToolWorktreeCreate = vi.mocked(toolWorktreeCreate);
+const mockToolWorktreeRemove = vi.mocked(toolWorktreeRemove);
 
 function createBundle(overrides: Partial<KodaXChildContextBundle> = {}): KodaXChildContextBundle {
   return {
@@ -119,6 +120,68 @@ describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b
     } as Partial<ChildExecutorOptions>));
     const childGuardrails = (mockRunKodaX.mock.calls[0]![0] as { guardrails?: readonly unknown[] }).guardrails;
     expect(childGuardrails![0]).toBe(fakeGuardrail); // identity, not equality
+  });
+});
+
+describe('executeChildAgents — workflow accounting and isolation cleanup', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const okResult = (
+    lastText: string,
+    usage: { readonly inputTokens: number; readonly outputTokens: number; readonly totalTokens: number },
+  ) => ({
+    success: true,
+    lastText,
+    messages: [{ role: 'assistant', content: lastText }],
+    usage,
+  });
+
+  it('aggregates child token usage into totalTokensUsed', async () => {
+    mockRunKodaX
+      .mockResolvedValueOnce(okResult('first done', { inputTokens: 10, outputTokens: 5, totalTokens: 15 }))
+      .mockResolvedValueOnce(okResult('second done', { inputTokens: 20, outputTokens: 7, totalTokens: 27 }));
+
+    const result = await executeChildAgents(
+      [
+        createBundle({ id: 'cb-token-1', readOnly: true }),
+        createBundle({ id: 'cb-token-2', readOnly: true }),
+      ],
+      createCtx(),
+      createOptions({ maxParallel: 1 }),
+    );
+
+    expect(result.totalTokensUsed).toBe(42);
+  });
+
+  it('removes parent-managed workflow worktrees after a child completes', async () => {
+    mockToolWorktreeCreate.mockResolvedValue(JSON.stringify({
+      path: '/tmp/kodax-worktree-cb-worktree',
+      branch: 'kodax-worktree-cb-worktree',
+    }));
+    mockToolWorktreeRemove.mockResolvedValue(JSON.stringify({ restored: true }));
+    mockRunKodaX.mockResolvedValue(okResult('done in isolated tree', {
+      inputTokens: 1,
+      outputTokens: 2,
+      totalTokens: 3,
+    }));
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-worktree', readOnly: true, isolation: 'worktree' })],
+      createCtx(),
+      createOptions(),
+    );
+
+    expect(result.results[0]?.status).toBe('completed');
+    expect(mockToolWorktreeRemove).toHaveBeenCalledWith(
+      {
+        action: 'remove',
+        worktree_path: '/tmp/kodax-worktree-cb-worktree',
+        discard_changes: true,
+      },
+      expect.objectContaining({ executionCwd: '/test/repo' }),
+    );
   });
 });
 

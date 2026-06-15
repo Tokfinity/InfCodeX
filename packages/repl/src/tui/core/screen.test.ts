@@ -45,6 +45,22 @@ describe("transcript screen buffer", () => {
     });
   });
 
+  it("ignores ANSI color sequences when computing hit-test text width", () => {
+    const buffer = buildTranscriptScreenBuffer([
+      {
+        key: "ansi-row",
+        text: "\u001b[32m✓\u001b[39m \u001b[36mgenerated-fast-audit\u001b[39m",
+      },
+    ]);
+
+    expect(buffer.rows[0]).toMatchObject({
+      key: "ansi-row",
+      text: "✓ generated-fast-audit",
+      textLength: 22,
+      textEndColumn: 24,
+    });
+  });
+
   it("keeps absolute indices aligned when visible rows include trailing preview rows", () => {
     const allRows = [
       { key: "stable-1", text: "prompt" },

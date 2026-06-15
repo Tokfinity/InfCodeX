@@ -1346,6 +1346,7 @@ complete -c kodax -l version -d 'Show version'`);
         extensionRuntime: kodaXOptions.extensionRuntime,
         session: kodaXOptions.session,
         storage: new FileSessionStorage(),
+        hardExitOnClose: false,
       };
 
       if (useClassicInteractiveMode) {
@@ -1390,6 +1391,7 @@ complete -c kodax -l version -d 'Show version'`);
     await extensionRuntime?.dispose();
     extensionRuntime = undefined;
     await shutdownDefaultLspService();
+    await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
     await shutdownTracing();
   }
 }

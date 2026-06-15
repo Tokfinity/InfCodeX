@@ -606,6 +606,8 @@ export interface KodaXChildAgentResult {
   sessionId?: string;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
+  /** Best-known token usage for this child run. Used by workflow budget accounting. */
+  totalTokensUsed?: number;
   /**
    * True when the child's `runKodaX` exited via CAP-083 AbortError silent
    * terminal (`KodaXResult.interrupted === true`). Surfaces the
@@ -1301,6 +1303,8 @@ export interface KodaXResult {
   managedTask?: KodaXManagedTask;
   /** Best-known token snapshot after the round completes. */
   contextTokenSnapshot?: KodaXContextTokenSnapshot;
+  /** Latest provider usage when the caller has it directly. */
+  usage?: KodaXTokenUsage;
   /**
    * FEATURE_076: artifact ledger pre-extracted before round-boundary reshape.
    * Populated when the reshape replaces `messages` with a clean {user, assistant}

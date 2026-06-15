@@ -344,6 +344,11 @@ export function createCompleter(cwd?: string | (() => string)): (line: string) =
 
     const allCompletions: Completion[] = [];
 
+    if (hasSlash) {
+      const completions = await getArgumentCompletions(line, line.length);
+      allCompletions.push(...completions);
+    }
+
     if (hasSlash && commandCompleter.canComplete(line, line.length)) {
       const completions = await commandCompleter.getCompletions(line, line.length);
       allCompletions.push(...completions);
@@ -355,7 +360,7 @@ export function createCompleter(cwd?: string | (() => string)): (line: string) =
     }
 
     // Format for readline: [[completions], originalLine] - 格式化为 readline 需要的格式
-    const displays = allCompletions.map(c => c.display);
+    const displays = allCompletions.map((completion) => formatReadlineCompletion(line, completion));
     return [displays, line];
   };
 }
@@ -395,6 +400,27 @@ export function displayCompletions(completions: Completion[]): void {
 /**
  * Get completion suggestions for UI display - 获取补全建议 (用于 UI 显示)
  */
+async function getArgumentCompletions(input: string, cursorPos: number): Promise<Completion[]> {
+  const { ArgumentCompleter } = await import('./completers/argument-completer.js');
+  const argumentCompleter = new ArgumentCompleter();
+  if (!argumentCompleter.canComplete(input, cursorPos)) return [];
+  return argumentCompleter.getCompletions(input, cursorPos);
+}
+
+function formatReadlineCompletion(line: string, completion: Completion): string {
+  if (completion.type !== 'argument') {
+    return completion.display;
+  }
+  const commandSlashIndex = findCommandSlashIndex(line);
+  if (commandSlashIndex !== -1 && !/\s/.test(line.slice(commandSlashIndex))) {
+    return `${line} ${completion.text}`;
+  }
+  const match = line.match(/\S+$/);
+  const currentToken = match?.[0] ?? '';
+  const prefix = currentToken ? line.slice(0, line.length - currentToken.length) : line;
+  return `${prefix}${completion.text}`;
+}
+
 export async function getCompletionSuggestions(
   input: string,
   cursorPos: number,
@@ -404,6 +430,8 @@ export async function getCompletionSuggestions(
   const commandCompleter = new CommandCompleter();
 
   const results: Completion[] = [];
+
+  results.push(...await getArgumentCompletions(input, cursorPos));
 
   if (commandCompleter.canComplete(input, cursorPos)) {
     results.push(...await commandCompleter.getCompletions(input, cursorPos));

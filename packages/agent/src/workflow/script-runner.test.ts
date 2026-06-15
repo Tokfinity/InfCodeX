@@ -245,6 +245,21 @@ describe('runRestrictedWorkflowScript', () => {
     ).rejects.toThrow(/phase writer failed/);
   });
 
+  it('fails invalid task commands inside the script boundary', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            void wf.stop('', 'missing task id');
+            return 'unreached';
+          }
+        `,
+      }),
+    ).rejects.toThrow(/taskId must be a non-empty string/);
+  });
+
   it('times out synchronous runaway scripts', async () => {
     const { wf } = fakeWorkflowApi();
     await expect(
@@ -298,6 +313,53 @@ describe('runRestrictedWorkflowScript', () => {
       });
       await vi.advanceTimersByTimeAsync(1);
       await expect(run).resolves.toBe('done:slow but valid');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not apply a default total wall-clock timeout to long agent workflows', async () => {
+    vi.useFakeTimers();
+    try {
+      const startedAt = new Date('2026-06-13T10:00:00.000Z');
+      vi.setSystemTime(startedAt);
+      const { wf } = fakeWorkflowApi();
+      let resolveAgent: ((result: WorkflowTaskResult) => void) | undefined;
+      const slowWorkflowApi: WorkflowApi = {
+        ...wf,
+        runAgent: async (input): Promise<WorkflowTaskResult> => {
+          void input;
+          return new Promise<WorkflowTaskResult>((resolve) => {
+            resolveAgent = resolve;
+          });
+        },
+      };
+
+      const run = runRestrictedWorkflowScript({
+        wf: slowWorkflowApi,
+        source: `
+          async function run(wf) {
+            const result = await wf.runAgent({
+              name: 'very-slow-reader',
+              prompt: 'slow but still valid',
+              readOnly: true
+            });
+            return result.finalText;
+          }
+        `,
+      });
+
+      await vi.advanceTimersByTimeAsync(1);
+      vi.setSystemTime(new Date(startedAt.getTime() + 31 * 60 * 1_000));
+      await vi.advanceTimersByTimeAsync(1);
+      resolveAgent?.({
+        taskId: 'task-very-slow',
+        name: 'very-slow-reader',
+        status: 'completed',
+        finalText: 'done:slow but still valid',
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(run).resolves.toBe('done:slow but still valid');
     } finally {
       vi.useRealTimers();
     }

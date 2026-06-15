@@ -3,7 +3,13 @@ import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createExtensionRuntime, setActiveExtensionRuntime } from '@kodax-ai/coding';
-import { CommandCompleter, FileCompleter, findCommandSlashIndex } from './autocomplete.js';
+import {
+  CommandCompleter,
+  FileCompleter,
+  createCompleter,
+  findCommandSlashIndex,
+  getCompletionSuggestions,
+} from './autocomplete.js';
 import { getRecentWorkingSetFiles } from './recent-files.js';
 import { getCommandRegistry } from './commands.js';
 
@@ -281,5 +287,32 @@ describe('findCommandSlashIndex', () => {
     expect(findCommandSlashIndex('a/b')).toBe(-1);
     expect(findCommandSlashIndex('')).toBe(-1);
     expect(findCommandSlashIndex('no slash here')).toBe(-1);
+  });
+});
+
+describe('legacy completion helpers', () => {
+  it('include /workflow subcommands in UI completion suggestions', async () => {
+    const completions = await getCompletionSuggestions('/workflow ', 10);
+
+    expect(completions.some((item) => item.type === 'argument' && item.display === 'runs')).toBe(true);
+    expect(completions.some((item) => item.type === 'argument' && item.display === 'stop')).toBe(true);
+  });
+
+  it('returns readline-safe full-line workflow argument completions', async () => {
+    const completer = createCompleter();
+    const [completions, original] = await completer('/workflow ');
+
+    expect(original).toBe('/workflow ');
+    expect(completions).toContain('/workflow runs');
+    expect(completions).toContain('/workflow stop');
+  });
+
+  it('keeps the command prefix when completing bare workflow commands', async () => {
+    const completer = createCompleter();
+    const [completions, original] = await completer('/workflow');
+
+    expect(original).toBe('/workflow');
+    expect(completions).toContain('/workflow runs');
+    expect(completions).not.toContain('runs');
   });
 });

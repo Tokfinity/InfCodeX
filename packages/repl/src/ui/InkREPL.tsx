@@ -32,7 +32,7 @@ import { QueuedCommandsSurface } from "./components/QueuedCommandsSurface.js";
 import { NotificationsSurface } from "./components/NotificationsSurface.js";
 import { StatusNoticesSurface } from "./components/StatusNoticesSurface.js";
 import { StashNotice } from "./components/StashNotice.js";
-import { Spinner, SpinnerStatsTail } from "./components/LoadingIndicator.js";
+import { Spinner, SpinnerStatsTail, useSharedSpinnerTick } from "./components/LoadingIndicator.js";
 import { BackgroundTaskBar } from "./components/BackgroundTaskBar.js";
 import { TodoListSurface } from "./components/TodoListSurface.js";
 import { WorkflowRunSurface } from "./components/WorkflowRunSurface.js";
@@ -1290,6 +1290,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
   const [submitCounter, setSubmitCounter] = useState(0); // Counter to trigger clear on submit
   const [canQueueFollowUps, setCanQueueFollowUps] = useState(false);
   const [liveTokenCount, setLiveTokenCount] = useState<number | null>(null); // Live token count for real-time display
+  const workflowIntentBoundaryQueueLockedRef = useRef(false);
   const terminalHostProfile = useMemo(() => detectTerminalHostProfile(), []);
   const lastCompactionTokensBeforeRef = useRef<number | null>(null);
   const persistContextStateRef = useRef<((uiHistoryOverride?: KodaXSessionUiHistoryItem[]) => Promise<void>) | null>(null);
@@ -2631,9 +2632,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     && !streamingState.currentResponse
     && !streamingState.thinkingContent
     && activeToolCalls.length === 0;
+  const workflowLiveTick = useSharedSpinnerTick(workflowLiveStatus?.status === "running");
   const workflowLiveViewModel = useMemo(
-    () => buildWorkflowLiveViewModel(workflowLiveStatus),
-    [workflowLiveStatus],
+    () => buildWorkflowLiveViewModel(workflowLiveStatus, Date.now()),
+    [workflowLiveStatus, workflowLiveTick],
   );
   const workflowActivityText = workflowLiveViewModel.shouldRender
     ? `Workflow ${workflowLiveViewModel.workflow}${workflowLiveViewModel.phase ? ` - ${workflowLiveViewModel.phase}` : ""}`
@@ -6904,6 +6906,16 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           await stageQueuedPrompt(prompt);
         },
         shouldContinue: (result) => !userInterruptedRef.current && result.success !== false,
+        shouldDrainQueuedPrompts: () => {
+          if (!workflowIntentBoundaryQueueLockedRef.current) {
+            return true;
+          }
+          if (streamingStateRef.current.pendingInputs.length === 0) {
+            workflowIntentBoundaryQueueLockedRef.current = false;
+            return true;
+          }
+          return false;
+        },
       });
     } finally {
       setCanQueueFollowUps(false);
@@ -7310,12 +7322,20 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             workflow: event.workflow,
             status: event.status,
             ...(event.phase !== undefined ? { phase: event.phase } : {}),
+            ...(event.phaseIndex !== undefined ? { phaseIndex: event.phaseIndex } : {}),
+            ...(event.phaseTotal !== undefined ? { phaseTotal: event.phaseTotal } : {}),
+            ...(event.startedAt !== undefined ? { startedAt: event.startedAt } : {}),
+            ...(event.elapsedMs !== undefined ? { elapsedMs: event.elapsedMs } : {}),
             activeAgents: event.activeAgents,
             totalSpawned: event.totalSpawned,
+            ...(event.agentCap !== undefined ? { agentCap: event.agentCap } : {}),
+            ...(event.tokenBudgetSpent !== undefined ? { tokenBudgetSpent: event.tokenBudgetSpent } : {}),
+            ...(event.tokenBudgetTotal !== undefined ? { tokenBudgetTotal: event.tokenBudgetTotal } : {}),
             completedAgents: event.completedAgents,
             failedAgents: event.failedAgents,
             stoppedAgents: event.stoppedAgents,
             ...(event.message !== undefined ? { message: event.message } : {}),
+            ...(event.locale !== undefined ? { locale: event.locale } : {}),
           });
           return;
         }
@@ -7336,6 +7356,13 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             type: "error",
             text,
           });
+          return;
+        }
+        if (event.type === "assistant") {
+          appendHistoryItemsWithPersistence([{
+            type: "assistant",
+            text,
+          }]);
           return;
         }
         emitInfoItemToCorrectLayer({
@@ -7419,15 +7446,56 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         console.log = (...args: unknown[]) => {
           workflowOutput.push(formatCapturedConsoleOutput(args));
         };
+        let workflowUserCommitted = false;
+        const commitWorkflowUserMessage = (): void => {
+          if (workflowUserCommitted) {
+            return;
+          }
+          workflowUserCommitted = true;
+          context.messages.push({
+            role: "user",
+            content: rawInput || workflow.request,
+          });
+        };
+        const workflowCallbacks = {
+          ...callbacks,
+          onWorkflowRunMessage: (event: WorkflowRunMessageUiEvent): void => {
+            callbacks.onWorkflowRunMessage?.(event);
+            if (event.type !== "assistant") {
+              return;
+            }
+            if (event.final !== true) {
+              return;
+            }
+            const text = stripAnsi(event.text).trimEnd();
+            if (!text.trim()) {
+              return;
+            }
+            commitWorkflowUserMessage();
+            context.messages.push({
+              role: "assistant",
+              content: text,
+            });
+            reconcileContextLineage(context.messages);
+            void persistContextStateInBackground();
+            if (streamingStateRef.current.pendingInputs.length > 0) {
+              workflowIntentBoundaryQueueLockedRef.current = true;
+            }
+          },
+        } satisfies typeof callbacks;
 
         try {
           const outcome = await startGeneratedWorkflowFromRequest({
             request: workflow.request,
-            callbacks,
+            callbacks: workflowCallbacks,
             approval: currentConfig.permissionMode === 'plan' ? 'required' : 'silent',
+            presentation: 'agentic',
             sourceLabel: workflow.displayName,
-            onBuilderEvent: callbacks.onWorkflowBuilderEvent,
+            onBuilderEvent: workflowCallbacks.onWorkflowBuilderEvent,
           });
+          if (outcome === 'started' && streamingStateRef.current.pendingInputs.length > 0) {
+            workflowIntentBoundaryQueueLockedRef.current = true;
+          }
           return outcome === 'started' || outcome === 'cancelled';
         } finally {
           setWorkflowBuilderMessage(null);
@@ -7446,6 +7514,25 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
 
       const parsed = parseCommand(fullText.trim());
       if (parsed) {
+        let slashWorkflowUserCommitted = false;
+        const commitSlashWorkflowFinalMessage = (text: string): void => {
+          if (parsed.command !== "workflow") {
+            return;
+          }
+          if (!slashWorkflowUserCommitted) {
+            slashWorkflowUserCommitted = true;
+            context.messages.push({
+              role: "user",
+              content: fullText.trim(),
+            });
+          }
+          context.messages.push({
+            role: "assistant",
+            content: text,
+          });
+          reconcileContextLineage(context.messages);
+          void persistContextStateInBackground();
+        };
         // Create command callbacks
         const callbacks: CommandCallbacks = {
           exit: requestGracefulExit,
@@ -7854,7 +7941,17 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             return result.confirmed;
           },
           onWorkflowBuilderEvent: handleWorkflowBuilderEvent,
-          onWorkflowRunMessage: handleWorkflowRunMessage,
+          onWorkflowRunMessage: (event) => {
+            handleWorkflowRunMessage(event);
+            if (event.type !== "assistant" || event.final !== true) {
+              return;
+            }
+            const text = stripAnsi(event.text).trimEnd();
+            if (!text.trim()) {
+              return;
+            }
+            commitSlashWorkflowFinalMessage(text);
+          },
           onWorkflowRunUpdate: handleWorkflowRunUpdate,
           // UI context for interactive dialogs.
           ui: {
@@ -7915,6 +8012,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           try {
             await runWorkflowInvocation(workflowToExecute, fullText.trim(), callbacks);
           } finally {
+            if (streamingStateRef.current.pendingInputs.length > 0) {
+              workflowIntentBoundaryQueueLockedRef.current = true;
+            }
             setIsLoading(false);
             stopStreaming();
             clearThinkingContent();
@@ -8000,6 +8100,9 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
         fullText.trim(),
         createWorkflowCallbacks(),
       )) {
+        if (streamingStateRef.current.pendingInputs.length > 0) {
+          workflowIntentBoundaryQueueLockedRef.current = true;
+        }
         setIsLoading(false);
         stopStreaming();
         clearThinkingContent();
@@ -8218,8 +8321,10 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
       getFullResponse,
       getThinkingContent,
       appendHistoryItemsToCurrentSnapshot,
+      appendHistoryItemsWithPersistence,
       appendLastAssistantToHistory,
       persistContextState,
+      persistContextStateInBackground,
       reconcileContextLineage,
       runQueueableAgentSequence,
       drainPendingInputsAsFollowUps,
@@ -8249,9 +8354,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
     </Box>
   ) : undefined;
   const workflowFooterCounterText = workflowLiveViewModel.shouldRender
-    ? `${workflowLiveViewModel.totalSpawned === 0
-      ? "waiting"
-      : `${workflowLiveViewModel.activeCount}/${workflowLiveViewModel.totalSpawned} active`}${workflowLiveViewModel.failedAgents > 0 ? `, ${workflowLiveViewModel.failedAgents} failed` : ""}`
+    ? workflowLiveViewModel.counterText
     : undefined;
 
   const promptFooterSurface = (
