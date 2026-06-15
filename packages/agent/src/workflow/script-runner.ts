@@ -119,6 +119,83 @@ function readString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
+/** Require a non-empty string field, attributing the error to `label`. */
+function readNonEmptyField(record: Record<string, unknown>, key: string, label: string): string {
+  const value = record[key];
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new WorkflowScriptExecutionError(`${label} ${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+/** Validate a `WorkflowSpawnAgentInput` payload at the host boundary so a
+ *  malformed generated call fails loudly with a clear message instead of
+ *  silently spawning a real child agent with an undefined name/prompt. */
+function readSpawnAgentInput(value: unknown, label: string): WorkflowSpawnAgentInput {
+  const record = readRecord(value, label);
+  const input: {
+    name: string;
+    prompt: string;
+    readOnly?: boolean;
+    subagentType?: string;
+    modelHint?: WorkflowSpawnAgentInput['modelHint'];
+    isolation?: WorkflowSpawnAgentInput['isolation'];
+    evidenceRefs?: readonly string[];
+  } = {
+    name: readNonEmptyField(record, 'name', label),
+    prompt: readNonEmptyField(record, 'prompt', label),
+  };
+  if (record.readOnly !== undefined) {
+    if (typeof record.readOnly !== 'boolean') {
+      throw new WorkflowScriptExecutionError(`${label} readOnly must be a boolean when provided`);
+    }
+    input.readOnly = record.readOnly;
+  }
+  if (record.subagentType !== undefined) {
+    input.subagentType = readNonEmptyField(record, 'subagentType', label);
+  }
+  if (record.modelHint !== undefined) {
+    input.modelHint = readNonEmptyField(record, 'modelHint', label) as WorkflowSpawnAgentInput['modelHint'];
+  }
+  if (record.isolation !== undefined) {
+    input.isolation = readNonEmptyField(record, 'isolation', label) as WorkflowSpawnAgentInput['isolation'];
+  }
+  if (record.evidenceRefs !== undefined) {
+    if (
+      !Array.isArray(record.evidenceRefs) ||
+      record.evidenceRefs.some((ref) => typeof ref !== 'string')
+    ) {
+      throw new WorkflowScriptExecutionError(`${label} evidenceRefs must be an array of strings when provided`);
+    }
+    input.evidenceRefs = record.evidenceRefs as readonly string[];
+  }
+  return input;
+}
+
+/** Validate a `WorkflowSynthesizeInput` payload at the host boundary. The
+ *  runtime normalizes `inputs` (array | string | object) into a list; this
+ *  gate rejects the shapes that normalization cannot handle so the failure
+ *  is attributed to the generated call rather than surfacing deep inside
+ *  prompt construction. */
+function readSynthesizeInput(value: unknown, label: string): WorkflowSynthesizeInput {
+  const record = readRecord(value, label);
+  const rubric = readNonEmptyField(record, 'rubric', label);
+  const inputs = record.inputs;
+  const isUsable =
+    Array.isArray(inputs) || typeof inputs === 'string' || (typeof inputs === 'object' && inputs !== null);
+  if (!isUsable) {
+    throw new WorkflowScriptExecutionError(`${label} inputs must be an array, string, or object`);
+  }
+  return { inputs, rubric } as WorkflowSynthesizeInput;
+}
+
+/** Validate a `WorkflowLogEvent` payload at the host boundary. */
+function readLogEvent(value: unknown, label: string): WorkflowLogEvent {
+  const record = readRecord(value, label);
+  const message = readNonEmptyField(record, 'message', label);
+  return record.data !== undefined ? { message, data: record.data } : { message };
+}
+
 function budgetEnvelope(wf: WorkflowApi, value: unknown): WorkflowRpcEnvelope {
   const budget = workflowBudget(wf);
   const remaining = budget.remaining();
@@ -364,7 +441,7 @@ async function handleCommand(
       return wf.artifact(readString(record, 'name'), record.value) satisfies Promise<WorkflowArtifactRef>;
     }
     case 'log':
-      wf.log(readRecord(input, 'workflow log input') as unknown as WorkflowLogEvent);
+      wf.log(readLogEvent(input, 'workflow log input'));
       return undefined;
     case 'output': {
       const record = readRecord(input, 'workflow output input');
@@ -405,21 +482,21 @@ async function handleCommand(
       return undefined;
     }
     case 'runAgent':
-      return wf.runAgent(readRecord(input, 'workflow runAgent input') as unknown as WorkflowSpawnAgentInput) satisfies Promise<WorkflowTaskResult>;
+      return wf.runAgent(readSpawnAgentInput(input, 'workflow runAgent input')) satisfies Promise<WorkflowTaskResult>;
     case 'send': {
       const record = readRecord(input, 'workflow send input');
       await wf.send(readString(record, 'taskId'), readString(record, 'content'));
       return undefined;
     }
     case 'spawnAgent':
-      return wf.spawnAgent(readRecord(input, 'workflow spawnAgent input') as unknown as WorkflowSpawnAgentInput) satisfies Promise<WorkflowTaskHandle>;
+      return wf.spawnAgent(readSpawnAgentInput(input, 'workflow spawnAgent input')) satisfies Promise<WorkflowTaskHandle>;
     case 'stop': {
       const record = readRecord(input, 'workflow stop input');
       await wf.stop(readString(record, 'taskId'), readString(record, 'reason'));
       return undefined;
     }
     case 'synthesize':
-      return wf.synthesize(readRecord(input, 'workflow synthesize input') as unknown as WorkflowSynthesizeInput);
+      return wf.synthesize(readSynthesizeInput(input, 'workflow synthesize input'));
     case 'wait': {
       const record = readRecord(input, 'workflow wait input');
       const waitOpts = record.opts === undefined
@@ -558,6 +635,7 @@ export function createRestrictedWorkflowModule(
       description: manifest.description,
       phases: manifest.phases,
       readOnly: manifest.readOnly,
+      ...(manifest.plannedAgents !== undefined ? { plannedAgents: manifest.plannedAgents } : {}),
       maxAgents: manifest.maxAgents,
       maxConcurrency: manifest.maxConcurrency,
       ...(manifest.tokenBudget !== undefined ? { tokenBudget: manifest.tokenBudget } : {}),

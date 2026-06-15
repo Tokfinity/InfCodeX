@@ -305,7 +305,11 @@ describe('workflow agentic presentation helpers', () => {
         status: 'completed',
         summary: 'Found one responsive layout risk.',
       },
-    })).toBe('Agent layout-auditor completed:\nFound one responsive layout risk.');
+    })).toBe([
+      'Agent layout-auditor completed. Extracted summary:',
+      '- Found one responsive layout risk.',
+      'This is a child-agent digest; use /workflow show for the event timeline.',
+    ].join('\n'));
 
     expect(formatWorkflowAgentDigest({
       seq: 2,
@@ -326,14 +330,14 @@ describe('workflow agentic presentation helpers', () => {
       data: {
         name,
         status: 'completed',
-        summary: `${name} summary`,
+        summary: `Finding: ${name} completed a useful bounded review.`,
       },
     });
 
-    expect(digest(event('a'), 'en')).toBe('Agent a completed:\na summary');
-    expect(digest(event('b'), 'en')).toBe('Agent b completed:\nb summary');
-    expect(digest(event('c'), 'en')).toBe('Agent c completed:\nc summary');
-    expect(digest(event('d'), 'en')).toBe('Agent d completed:\nd summary');
+    expect(digest(event('a'), 'en')).toContain('Agent a completed. Extracted summary:');
+    expect(digest(event('b'), 'en')).toContain('Agent b completed. Extracted summary:');
+    expect(digest(event('c'), 'en')).toContain('Agent c completed. Extracted summary:');
+    expect(digest(event('d'), 'en')).toContain('Agent d completed. Extracted summary:');
   });
 
   it('keeps fallback final event summaries complete when requested', () => {
@@ -379,6 +383,8 @@ describe('workflow agentic presentation helpers', () => {
     expect(digest).toContain('Finding: runtime events should carry enough child output');
     expect(digest).toContain('Evidence: a report preamble can hide');
     expect(digest).toContain('Risk: users see report headers');
+    expect(digest).toContain('子 Agent state-data-integrity-analyzer 已完成。摘录摘要：');
+    expect(digest).not.toContain('智能摘要');
     expect(digest).toContain('/workflow show run-fold');
     expect(digest).toContain('运行事件时间线');
     expect(digest).not.toContain('完整内容');
@@ -415,7 +421,7 @@ describe('workflow agentic presentation helpers', () => {
     expect(digest).not.toContain('Here is my comprehensive report');
   });
 
-  it('labels explicit workflow handoff digests as summaries, not excerpts', () => {
+  it('labels explicit workflow handoff digests as intelligent summaries, not extracted summaries', () => {
     const digest = formatWorkflowAgentDigest({
       seq: 4,
       type: 'agent_completed',
@@ -432,9 +438,62 @@ describe('workflow agentic presentation helpers', () => {
       },
     }, 'zh', 'run-handoff');
 
-    expect(digest).toContain('子 Agent overview-scout 已完成。摘要：');
-    expect(digest).not.toContain('摘要摘录');
+    expect(digest).toContain('子 Agent overview-scout 已完成。智能摘要：');
+    expect(digest).not.toContain('摘录摘要');
     expect(digest).not.toContain('关键信息');
+  });
+
+  it('does not ellipsize valid intelligent handoff lines', () => {
+    const longFinding = [
+      '发现：用户掌控感的主要缺口不是缺少 run id，而是子 Agent 从启动到完成之间没有可解释的中间反馈，',
+      '因此用户只能看到 live surface 的名称变化，却无法判断当前工作是否仍在推进、是否卡住、是否已经产出可验证结论。',
+    ].join('');
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'control-sense-reviewer',
+        status: 'completed',
+        summary: [
+          '[workflow handoff]',
+          `- ${longFinding}`,
+          '- 证据：agent_completed 之前只有 spawn/phase 事件，缺少 agent_progress 或工具快照摘要。',
+          '[/workflow handoff]',
+        ].join('\n'),
+      },
+    }, 'zh', 'run-long-handoff');
+
+    expect(digest).toContain('子 Agent control-sense-reviewer 已完成。智能摘要：');
+    expect(digest).toContain(longFinding);
+    expect(digest).not.toContain('...');
+  });
+
+  it('falls back to extracted summaries when a handoff block is not useful', () => {
+    const report = [
+      '[workflow handoff]',
+      'Here is my report.',
+      '[/workflow handoff]',
+      'Finding: workflow show is an event timeline, not a child transcript viewer.',
+      'Evidence: readWorkflowRunDetail only formats events and artifacts.',
+      'Risk: telling users to open show for full child output is misleading.',
+    ].join('\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'handoff-quality-checker',
+        status: 'completed',
+        summary: report,
+      },
+    }, 'en', 'run-handoff-fallback');
+
+    expect(digest).toContain('Agent handoff-quality-checker completed. Extracted summary:');
+    expect(digest).toContain('Finding: workflow show is an event timeline');
+    expect(digest).toContain('Evidence: readWorkflowRunDetail');
+    expect(digest).toContain('Risk: telling users');
+    expect(digest).not.toContain('Intelligent summary');
+    expect(digest).not.toContain('Here is my report');
   });
 
   it('skips low-information report openers when falling back to local extraction', () => {
@@ -461,9 +520,54 @@ describe('workflow agentic presentation helpers', () => {
     expect(digest).toContain('Confirmed issue: child digest extraction');
     expect(digest).toContain('Evidence: workflow-command.ts');
     expect(digest).toContain('Risk: users see mechanical progress');
+    expect(digest).toContain('Agent presentation-reviewer completed. Extracted summary:');
+    expect(digest).not.toContain('Intelligent summary');
     expect(digest).not.toContain('I now have a comprehensive picture');
     expect(digest).not.toContain('Let me compile my findings');
     expect(digest).not.toContain('FEATURE_217 Review Report');
+  });
+
+  it('keeps extracted child-agent summaries bounded to four useful lines', () => {
+    const report = [
+      'Finding: first concrete issue.',
+      'Evidence: first source pointer.',
+      'Risk: first user-visible regression.',
+      'Next: verify with a focused test.',
+      'Decision: this fifth line should stay out of the digest.',
+    ].join('\n');
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 5,
+      type: 'agent_completed',
+      data: {
+        name: 'bounded-reviewer',
+        status: 'completed',
+        summary: report,
+      },
+    }, 'en', 'run-bounded');
+
+    expect(digest).toContain('Finding: first concrete issue');
+    expect(digest).toContain('Evidence: first source pointer');
+    expect(digest).toContain('Risk: first user-visible regression');
+    expect(digest).toContain('Next: verify with a focused test');
+    expect(digest).not.toContain('Decision: this fifth line');
+  });
+
+  it('does not pretend low-information child output is an extracted summary', () => {
+    const digest = formatWorkflowAgentDigest({
+      seq: 5,
+      type: 'agent_completed',
+      data: {
+        name: 'empty-reviewer',
+        status: 'completed',
+        summary: 'Here is my report.',
+      },
+    }, 'en', 'run-empty');
+
+    expect(digest).toContain('Agent empty-reviewer completed. No useful summary could be extracted.');
+    expect(digest).toContain('/workflow show run-empty');
+    expect(digest).not.toContain('Extracted summary');
+    expect(digest).not.toContain('Here is my report');
   });
 
   it('treats a stopped managed workflow abort as a stopped run instead of an error', async () => {
@@ -576,6 +680,22 @@ describe('renderApprovalPrompt', () => {
     expect(text).toContain('agent total cap: 8');
     expect(text).toContain('token budget: ∞');
     expect(text).toContain('read-only');
+  });
+
+  it('shows planned agents separately from the safety cap', () => {
+    const text = renderApprovalPrompt({
+      name: 'planned-investigation',
+      description: 'fan out with a known plan',
+      phases: ['inspect', 'synthesize'],
+      plannedAgents: 7,
+      maxAgents: 14,
+      maxConcurrency: 3,
+      tokenBudget: null,
+      writesFiles: false,
+    });
+
+    expect(text).toContain('planned agents: 7');
+    expect(text).toContain('agent safety cap: 14');
   });
 
   it('shows source, sandbox, and worktree context when provided', () => {
@@ -1415,6 +1535,37 @@ describe('workflow live update emitter', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('carries planned agent counts separately from the hard cap', () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunUpdate = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunUpdate']>>[0];
+    const updates: WorkflowRunUpdate[] = [];
+    const live = createWorkflowLiveUpdateEmitter(
+      { onWorkflowRunUpdate: (event) => updates.push(event) },
+      'run-planned',
+      {
+        name: 'planned-workflow',
+        description: 'test',
+        phases: ['inspect', 'synthesize'],
+        readOnly: true,
+        plannedAgents: 7,
+        maxAgents: 14,
+        maxConcurrency: 3,
+      },
+    );
+
+    live.onEvent({
+      seq: 1,
+      type: 'agent_spawned',
+      data: { taskId: 'task-1', name: 'reader' },
+    });
+
+    expect(updates.at(-1)).toMatchObject({
+      plannedAgents: 7,
+      agentCap: 14,
+      totalSpawned: 1,
+    });
   });
 });
 

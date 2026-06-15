@@ -149,4 +149,39 @@ describe("buildWorkflowLiveViewModel", () => {
     expect(vm.rows.at(-1)?.text).toBe("查看: /workflow show run-mqc7av6y | 停止: /workflow stop run-mqc7av6y");
     expect(vm.counterText).toBe("1/2 个智能体运行中");
   });
+
+  it("uses planned agent count for user-facing progress when declared", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      locale: "zh",
+      activeAgents: ["feature-217-diff-explorer"],
+      totalSpawned: 1,
+      plannedAgents: 7,
+      agentCap: 14,
+      completedAgents: 0,
+      message: undefined,
+    }));
+
+    expect(vm.rows.map((row) => row.text)).toContain(
+      "0/7 完成（1 个智能体运行中，已启动 1，上限 14）",
+    );
+    expect(vm.counterText).toBe("1/7 个智能体运行中");
+  });
+
+  it("keeps the progress denominator at least as large as actual spawned agents", () => {
+    const vm = buildWorkflowLiveViewModel(runningSnapshot({
+      activeAgents: ["extra-reviewer"],
+      totalSpawned: 9,
+      plannedAgents: 7,
+      agentCap: 14,
+      completedAgents: 8,
+      failedAgents: 0,
+      stoppedAgents: 0,
+      message: undefined,
+    }));
+
+    expect(vm.rows.map((row) => row.text)).toContain(
+      "8/9 finished (1 active agent, started 9, cap 14)",
+    );
+    expect(vm.counterText).toBe("1/9 active agent");
+  });
 });

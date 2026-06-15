@@ -7328,6 +7328,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
             ...(event.elapsedMs !== undefined ? { elapsedMs: event.elapsedMs } : {}),
             activeAgents: event.activeAgents,
             totalSpawned: event.totalSpawned,
+            ...(event.plannedAgents !== undefined ? { plannedAgents: event.plannedAgents } : {}),
             ...(event.agentCap !== undefined ? { agentCap: event.agentCap } : {}),
             ...(event.tokenBudgetSpent !== undefined ? { tokenBudgetSpent: event.tokenBudgetSpent } : {}),
             ...(event.tokenBudgetTotal !== undefined ? { tokenBudgetTotal: event.tokenBudgetTotal } : {}),

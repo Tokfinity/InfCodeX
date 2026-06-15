@@ -111,6 +111,7 @@ export interface CommandCallbacks {
     readonly elapsedMs?: number;
     readonly activeAgents: readonly string[];
     readonly totalSpawned: number;
+    readonly plannedAgents?: number;
     readonly agentCap?: number;
     readonly tokenBudgetSpent?: number;
     readonly tokenBudgetTotal?: number;

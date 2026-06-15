@@ -77,7 +77,7 @@ export interface WorkflowParallelOptions {
 }
 
 export interface WorkflowSynthesizeInput {
-  readonly inputs: readonly unknown[];
+  readonly inputs: readonly unknown[] | string | Record<string, unknown>;
   readonly rubric: string;
 }
 
@@ -161,6 +161,8 @@ export interface WorkflowApi {
 export interface WorkflowMeta {
   readonly name: string;
   readonly description: string;
+  /** Best-effort expected child-agent count for progress UI; not a hard cap. */
+  readonly plannedAgents?: number;
   readonly maxAgents?: number;
   readonly maxConcurrency?: number;
   readonly tokenBudget?: number;
@@ -176,6 +178,7 @@ export interface WorkflowApprovalSummary {
   readonly name: string;
   readonly description: string;
   readonly phases: readonly string[];
+  readonly plannedAgents?: number;
   readonly maxAgents: number | null;
   readonly maxConcurrency: number | null;
   readonly tokenBudget: number | null;

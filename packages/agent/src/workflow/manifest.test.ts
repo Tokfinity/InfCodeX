@@ -12,6 +12,7 @@ describe('validateWorkflowScriptManifest', () => {
       description: 'Audit multiple areas and synthesize findings.',
       phases: ['inspect', 'verify', 'synthesize'],
       readOnly: true,
+      plannedAgents: 5,
       maxAgents: 6,
       maxConcurrency: 3,
       tokenBudget: 12000,
@@ -24,6 +25,7 @@ describe('validateWorkflowScriptManifest', () => {
       description: 'Audit multiple areas and synthesize findings.',
       phases: ['inspect', 'verify', 'synthesize'],
       readOnly: true,
+      plannedAgents: 5,
       maxAgents: 6,
       maxConcurrency: 3,
       tokenBudget: 12000,
@@ -42,6 +44,36 @@ describe('validateWorkflowScriptManifest', () => {
         patterns: ['fan-out-and-synthesize'],
       }),
     ).toThrow(/maxAgents/);
+  });
+
+  it('rejects plannedAgents when it is not a positive integer', () => {
+    expect(() =>
+      validateWorkflowScriptManifest({
+        name: 'bad-plan',
+        description: 'bad planned count',
+        phases: ['run'],
+        readOnly: true,
+        plannedAgents: 0,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['fan-out-and-synthesize'],
+      }),
+    ).toThrow(/plannedAgents/);
+  });
+
+  it('rejects plannedAgents when it exceeds maxAgents', () => {
+    expect(() =>
+      validateWorkflowScriptManifest({
+        name: 'bad-plan',
+        description: 'bad planned count',
+        phases: ['run'],
+        readOnly: true,
+        plannedAgents: 3,
+        maxAgents: 2,
+        maxConcurrency: 1,
+        patterns: ['fan-out-and-synthesize'],
+      }),
+    ).toThrow(/plannedAgents/);
   });
 
   it('rejects unknown workflow pattern ids', () => {

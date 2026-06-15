@@ -77,8 +77,7 @@ export const DEFAULT_WORKFLOW_RUNS_LIMIT = 20;
 export const DEFAULT_WORKFLOW_PRUNE_KEEP = 50;
 const MAX_WORKFLOW_RUNS_LIMIT = 200;
 const TERMINAL_WORKFLOW_STATUSES = new Set(['completed', 'failed', 'stopped', 'denied']);
-const MAX_WORKFLOW_AGENT_DIGEST_INLINE_CHARS = 260;
-const MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS = 3;
+const MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS = 4;
 const MAX_WORKFLOW_AGENT_DIGEST_EXCERPT_CHARS = 180;
 
 export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvocation {
@@ -273,11 +272,15 @@ export function renderApprovalPrompt(
   context?: WorkflowApprovalRenderContext,
 ): string {
   const cap = (n: number | null): string => (n === null ? '∞' : String(n));
+  const planned = summary.plannedAgents === undefined ? undefined : String(summary.plannedAgents);
+  const agentScale = planned === undefined
+    ? `agent total cap: ${cap(summary.maxAgents)}`
+    : `planned agents: ${planned} · agent safety cap: ${cap(summary.maxAgents)}`;
   return [
     `Run workflow ${chalk.cyan(summary.name)}?`,
     `  ${summary.description}`,
     `  phases: ${summary.phases.length > 0 ? summary.phases.join(' → ') : '(dynamic)'}`,
-    `  agent total cap: ${cap(summary.maxAgents)} · max concurrency: ${cap(summary.maxConcurrency)} · token budget: ${cap(summary.tokenBudget)}`,
+    `  ${agentScale} · max concurrency: ${cap(summary.maxConcurrency)} · token budget: ${cap(summary.tokenBudget)}`,
     `  writes files: ${summary.writesFiles ? chalk.yellow('yes') : 'no (read-only)'}`,
     ...(context
       ? [
@@ -1130,6 +1133,13 @@ function formatWorkflowLaunchAnswer(input: {
     ? input.summary.phases.join(' -> ')
     : 'dynamic';
   const maxAgents = input.summary.maxAgents === null ? 'unbounded' : String(input.summary.maxAgents);
+  const agentScale = input.summary.plannedAgents === undefined
+    ? input.locale === 'zh'
+      ? `最多 ${maxAgents} 个智能体`
+      : `up to ${maxAgents} agents`
+    : input.locale === 'zh'
+      ? `计划约 ${input.summary.plannedAgents} 个智能体，安全上限 ${maxAgents}`
+      : `about ${input.summary.plannedAgents} planned agents, safety cap ${maxAgents}`;
   const maxConcurrency = input.summary.maxConcurrency === null
     ? 'unbounded'
     : String(input.summary.maxConcurrency);
@@ -1141,7 +1151,7 @@ function formatWorkflowLaunchAnswer(input: {
     return [
       `我会用 workflow 做这次任务，已启动 ${input.summary.name}（${input.runId}）。`,
       `计划：${plan}`,
-      `阶段：${phases}；规模：最多 ${maxAgents} 个智能体，并发 ${maxConcurrency}。${writePolicy}`,
+      `阶段：${phases}；规模：${agentScale}，并发 ${maxConcurrency}。${writePolicy}`,
       '运行过程会在下方动态更新，完成后我会直接汇总结论。',
     ].join('\n');
   }
@@ -1151,7 +1161,7 @@ function formatWorkflowLaunchAnswer(input: {
   return [
     `I will use a workflow for this task: ${input.summary.name} (${input.runId}).`,
     `Plan: ${plan}`,
-    `Phases: ${phases}; scale: up to ${maxAgents} agents, ${maxConcurrency} concurrent. ${writePolicy}`,
+    `Phases: ${phases}; scale: ${agentScale}, ${maxConcurrency} concurrent. ${writePolicy}`,
     'Progress will update below, and I will summarize the result when it finishes.',
   ].join('\n');
 }
@@ -1171,34 +1181,19 @@ export function formatWorkflowAgentDigest(
   const rawSummary = readEventString(event, 'summary');
   if (!rawSummary) return undefined;
   const handoffSummary = extractWorkflowHandoffBlock(rawSummary);
-  const summary = handoffSummary ?? rawSummary;
+  const handoffExcerpts = handoffSummary
+    ? extractWorkflowAgentDigestExcerpts(handoffSummary, { truncateLines: false })
+    : [];
+  const useHandoff = handoffExcerpts.length > 0;
+  const summary = useHandoff && handoffSummary ? handoffSummary : rawSummary;
   const name = readEventString(event, 'name') ?? readEventString(event, 'taskId') ?? 'agent';
-  const forceStructuredSummary = handoffSummary !== undefined ||
-    shouldFoldWorkflowAgentDigest(summary, locale) ||
-    isFragmentaryWorkflowAgentDigest(summary);
-  if (forceStructuredSummary) {
-    return formatWorkflowAgentLongDigest(name, summary, locale, runId, true);
-  }
-  return locale === 'zh'
-    ? `子 Agent ${name} 完成：\n${summary}`
-    : `Agent ${name} completed:\n${summary}`;
-}
-
-function containsCjk(text: string): boolean {
-  return /[\u3400-\u9fff]/u.test(text);
-}
-
-function shouldFoldWorkflowAgentDigest(summary: string, locale: WorkflowRunLocale): boolean {
-  const compact = summary.replace(/\s+/g, ' ').trim();
-  if (compact.length > MAX_WORKFLOW_AGENT_DIGEST_INLINE_CHARS) return true;
-  return locale === 'zh' && !containsCjk(compact);
-}
-
-function isFragmentaryWorkflowAgentDigest(summary: string): boolean {
-  const compact = summary.trim();
-  if (/^`+\s/.test(compact)) return true;
-  if (/^[)\]}，,、。；;：:]/.test(compact)) return true;
-  return false;
+  return formatWorkflowAgentLongDigest(
+    name,
+    summary,
+    locale,
+    runId,
+    useHandoff,
+  );
 }
 
 function trimWorkflowAgentDigestExcerpt(text: string): string {
@@ -1240,7 +1235,18 @@ function isLowInformationWorkflowAgentDigestLine(line: string): boolean {
   return false;
 }
 
-function normalizeWorkflowAgentDigestLine(line: string): string | undefined {
+interface WorkflowAgentDigestExtractionOptions {
+  readonly truncateLines?: boolean;
+}
+
+function compactWorkflowAgentDigestLine(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function normalizeWorkflowAgentDigestLine(
+  line: string,
+  options: WorkflowAgentDigestExtractionOptions = {},
+): string | undefined {
   const stripped = line
     .replace(/^#{1,6}\s+/, '')
     .replace(/^[-*]\s+/, '')
@@ -1248,17 +1254,21 @@ function normalizeWorkflowAgentDigestLine(line: string): string | undefined {
     .replace(/^`{3,}.*$/, '')
     .replace(/^[`"'“”‘’)\]}，,、。；;：:.\s]+/, '')
     .trim();
-  if (stripped.length < 12) return undefined;
-  if (/^[-*_`#\s]+$/.test(stripped)) return undefined;
-  if (isLowInformationWorkflowAgentDigestLine(stripped)) return undefined;
-  return trimWorkflowAgentDigestExcerpt(stripped);
+  const compact = compactWorkflowAgentDigestLine(stripped);
+  if (compact.length < 12) return undefined;
+  if (/^[-*_`#\s]+$/.test(compact)) return undefined;
+  if (isLowInformationWorkflowAgentDigestLine(compact)) return undefined;
+  return options.truncateLines === false ? compact : trimWorkflowAgentDigestExcerpt(compact);
 }
 
-function extractWorkflowAgentDigestExcerpts(summary: string): readonly string[] {
+function extractWorkflowAgentDigestExcerpts(
+  summary: string,
+  options: WorkflowAgentDigestExtractionOptions = {},
+): readonly string[] {
   const highSignal: string[] = [];
   const excerpts: string[] = [];
   for (const rawLine of summary.split(/\r?\n+/)) {
-    const line = normalizeWorkflowAgentDigestLine(rawLine);
+    const line = normalizeWorkflowAgentDigestLine(rawLine, options);
     if (!line) continue;
     const target = isHighSignalWorkflowAgentDigestLine(line) ? highSignal : excerpts;
     if (highSignal.includes(line) || excerpts.includes(line)) continue;
@@ -1266,8 +1276,7 @@ function extractWorkflowAgentDigestExcerpts(summary: string): readonly string[] 
   }
   if (highSignal.length > 0) return highSignal.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS);
   if (excerpts.length > 0) return excerpts.slice(0, MAX_WORKFLOW_AGENT_DIGEST_EXCERPTS);
-  const fallback = trimWorkflowAgentDigestExcerpt(summary);
-  return fallback ? [fallback] : [];
+  return [];
 }
 
 function formatWorkflowAgentLongDigest(
@@ -1277,22 +1286,33 @@ function formatWorkflowAgentLongDigest(
   runId: string | undefined,
   isStructuredSummary = false,
 ): string {
-  const excerpts = extractWorkflowAgentDigestExcerpts(summary);
+  const excerpts = extractWorkflowAgentDigestExcerpts(summary, {
+    truncateLines: !isStructuredSummary,
+  });
   const excerptLines = excerpts.map((line) => `- ${line}`);
   const detailHint = runId
     ? locale === 'zh'
-      ? `这只是子 Agent 摘要；/workflow show ${runId} 可查看运行事件时间线。`
-      : `This is a child-agent summary; use /workflow show ${runId} for the event timeline.`
+      ? `这是子 Agent 的有界摘要；/workflow show ${runId} 可查看运行事件时间线。`
+      : `This is a child-agent digest; use /workflow show ${runId} for the event timeline.`
     : locale === 'zh'
-      ? '这只是子 Agent 摘要；/workflow show 可查看运行事件时间线。'
-      : 'This is a child-agent summary; use /workflow show for the event timeline.';
+      ? '这是子 Agent 的有界摘要；/workflow show 可查看运行事件时间线。'
+      : 'This is a child-agent digest; use /workflow show for the event timeline.';
   const heading = locale === 'zh'
     ? isStructuredSummary
-      ? `子 Agent ${name} 已完成。摘要：`
-      : `子 Agent ${name} 已完成。关键信息：`
+      ? `子 Agent ${name} 已完成。智能摘要：`
+      : `子 Agent ${name} 已完成。摘录摘要：`
     : isStructuredSummary
-      ? `Agent ${name} completed. Summary:`
-      : `Agent ${name} completed. Key details:`;
+      ? `Agent ${name} completed. Intelligent summary:`
+      : `Agent ${name} completed. Extracted summary:`;
+  if (excerptLines.length === 0) {
+    const emptyHeading = locale === 'zh'
+      ? `子 Agent ${name} 已完成，但未能提取到有效摘要。`
+      : `Agent ${name} completed. No useful summary could be extracted.`;
+    return [
+      emptyHeading,
+      detailHint,
+    ].join('\n');
+  }
   return [
     heading,
     ...excerptLines,
@@ -1435,6 +1455,7 @@ export function createWorkflowLiveUpdateEmitter(
       elapsedMs: Math.max(0, Date.now() - startedAt),
       activeAgents: [...activeAgents.values()],
       totalSpawned,
+      ...(meta.plannedAgents !== undefined ? { plannedAgents: meta.plannedAgents } : {}),
       ...(meta.maxAgents !== undefined ? { agentCap: meta.maxAgents } : {}),
       tokenBudgetSpent,
       ...(tokenBudgetTotal !== undefined ? { tokenBudgetTotal } : {}),

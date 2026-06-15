@@ -70,6 +70,7 @@ export function buildApprovalSummary(module: WorkflowModule): WorkflowApprovalSu
     name: meta.name,
     description: meta.description,
     phases: meta.phases ?? [],
+    ...(meta.plannedAgents !== undefined ? { plannedAgents: meta.plannedAgents } : {}),
     maxAgents: limits.maxAgents ?? null,
     maxConcurrency: limits.maxConcurrency ?? null,
     tokenBudget: limits.tokenBudget ?? null,

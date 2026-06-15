@@ -207,7 +207,10 @@ status semantics, `coding` maps domain workflow runs, host policy, and lifecycle
 controls into that state, and `repl` renders it. REPL workflow callbacks are a
 v0.7.49 bridge for terminal UX; Space-style hosts must consume the F229
 snapshot/controller contract rather than parsing terminal text or Ink view
-models.
+models. The host contract must also preserve parent guardrails, existing SDK
+event callbacks, workflow logs, capsule preflight, and provider/model policy
+when a workflow spawns child agents; entering workflow mode must not weaken
+safety or observability.
 
 ## 11. REPL And CLI
 

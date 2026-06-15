@@ -12,6 +12,7 @@ export interface WorkflowLiveSnapshot {
   readonly elapsedMs?: number;
   readonly activeAgents: readonly string[];
   readonly totalSpawned: number;
+  readonly plannedAgents?: number;
   readonly agentCap?: number;
   readonly tokenBudgetSpent?: number;
   readonly tokenBudgetTotal?: number;
@@ -43,6 +44,7 @@ export interface WorkflowLiveViewModel {
   readonly phaseTotal?: number;
   readonly activeCount: number;
   readonly totalSpawned: number;
+  readonly plannedAgents?: number;
   readonly completedAgents: number;
   readonly failedAgents: number;
   readonly stoppedAgents: number;
@@ -75,6 +77,7 @@ const labels = {
     finished: "finished",
     failed: "failed",
     stopped: "stopped",
+    started: "started",
     cap: "cap",
     budget: "budget",
     spent: "spent",
@@ -94,6 +97,7 @@ const labels = {
     finished: "完成",
     failed: "失败",
     stopped: "停止",
+    started: "已启动",
     cap: "上限",
     budget: "预算",
     spent: "已用",
@@ -193,9 +197,11 @@ function formatWorkflowProgress(snapshot: WorkflowLiveSnapshot): string | undefi
   if (snapshot.totalSpawned === 0 && finished === 0) {
     return undefined;
   }
+  const denominator = workflowProgressDenominator(snapshot, finished);
 
   const details: string[] = [];
   if (snapshot.activeAgents.length > 0) details.push(label.activeAgents(snapshot.activeAgents.length));
+  if (snapshot.plannedAgents !== undefined) details.push(`${label.started} ${snapshot.totalSpawned}`);
   if (snapshot.failedAgents > 0) details.push(`${snapshot.failedAgents} ${label.failed}`);
   if (snapshot.stoppedAgents > 0) details.push(`${snapshot.stoppedAgents} ${label.stopped}`);
   if (snapshot.agentCap !== undefined) details.push(`${label.cap} ${snapshot.agentCap}`);
@@ -205,16 +211,17 @@ function formatWorkflowProgress(snapshot: WorkflowLiveSnapshot): string | undefi
     : snapshot.locale === "zh"
       ? `（${details.join("，")}）`
       : ` (${details.join(", ")})`;
-  return `${finished}/${snapshot.totalSpawned} ${label.finished}${suffix}`;
+  return `${finished}/${denominator} ${label.finished}${suffix}`;
 }
 
 function formatWorkflowCounter(snapshot: WorkflowLiveSnapshot): string {
   const label = workflowLiveLabels(snapshot.locale);
   if (snapshot.totalSpawned === 0) return label.waiting;
   const active = snapshot.activeAgents.length;
+  const denominator = workflowProgressDenominator(snapshot);
   const main = snapshot.locale === "zh"
-    ? `${active}/${snapshot.totalSpawned} 个智能体运行中`
-    : `${active}/${snapshot.totalSpawned} active agent${active === 1 ? "" : "s"}`;
+    ? `${active}/${denominator} 个智能体运行中`
+    : `${active}/${denominator} active agent${active === 1 ? "" : "s"}`;
   const details: string[] = [];
   if (snapshot.failedAgents > 0) details.push(`${snapshot.failedAgents} ${label.failed}`);
   if (snapshot.stoppedAgents > 0) details.push(`${snapshot.stoppedAgents} ${label.stopped}`);
@@ -222,6 +229,11 @@ function formatWorkflowCounter(snapshot: WorkflowLiveSnapshot): string {
   return snapshot.locale === "zh"
     ? `${main}，${details.join("，")}`
     : `${main}, ${details.join(", ")}`;
+}
+
+function workflowProgressDenominator(snapshot: WorkflowLiveSnapshot, finished?: number): number {
+  const actualFinished = finished ?? snapshot.completedAgents + snapshot.failedAgents + snapshot.stoppedAgents;
+  return Math.max(snapshot.plannedAgents ?? 0, snapshot.totalSpawned, actualFinished);
 }
 
 function formatWorkflowPhase(snapshot: WorkflowLiveSnapshot): string | undefined {
@@ -340,6 +352,7 @@ export function buildWorkflowLiveViewModel(
     ...(snapshot.phaseTotal !== undefined ? { phaseTotal: snapshot.phaseTotal } : {}),
     activeCount: snapshot.activeAgents.length,
     totalSpawned: snapshot.totalSpawned,
+    ...(snapshot.plannedAgents !== undefined ? { plannedAgents: snapshot.plannedAgents } : {}),
     completedAgents: snapshot.completedAgents,
     failedAgents: snapshot.failedAgents,
     stoppedAgents: snapshot.stoppedAgents,

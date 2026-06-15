@@ -272,7 +272,11 @@ snapshots only. KodaX Space and other SDK hosts should configure invocation
 policy, subscribe to process snapshots, and control runs through the SDK
 controller instead of replaying slash commands or depending on REPL callback
 text. This keeps progress semantics reusable and prevents terminal UI state from
-becoming the hidden source of truth.
+becoming the hidden source of truth. F229 also requires workflow child agents to
+inherit or explicitly fail closed on parent guardrails, existing SDK event
+callbacks, workflow logs, capsule preflight, and provider/model policy. Durable
+run graphs remain audit/result records in this slice; they are not
+cross-process executable checkpoints.
 
 ## 14. REPL Detail
 

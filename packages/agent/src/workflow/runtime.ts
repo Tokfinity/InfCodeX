@@ -196,7 +196,9 @@ async function runPool<T>(
 
 /** Render a generic synthesis prompt from inputs + rubric. Domain-neutral. */
 function buildSynthesisPrompt(input: WorkflowSynthesizeInput): string {
-  const body = input.inputs
+  const inputs = normalizeSynthesisInputs(input.inputs);
+  const rubric = normalizeSynthesisRubric(input.rubric);
+  const body = inputs
     .map(
       (item, i) =>
         `## Input ${i + 1}\n${typeof item === 'string' ? item : JSON.stringify(item, null, 2)}`,
@@ -205,10 +207,24 @@ function buildSynthesisPrompt(input: WorkflowSynthesizeInput): string {
   return [
     'You are synthesizing the findings below into a single result.',
     '',
-    `Rubric: ${input.rubric}`,
+    `Rubric: ${rubric}`,
     '',
     body,
   ].join('\n');
+}
+
+function normalizeSynthesisRubric(rubric: unknown): string {
+  if (typeof rubric === 'string' && rubric.trim().length > 0) return rubric;
+  throw new TypeError('workflow synthesize rubric must be a non-empty string');
+}
+
+function normalizeSynthesisInputs(inputs: unknown): readonly unknown[] {
+  if (Array.isArray(inputs)) return inputs;
+  if (typeof inputs === 'string') return [inputs];
+  if (typeof inputs === 'object' && inputs !== null) {
+    return Object.entries(inputs).map(([name, value]) => ({ name, value }));
+  }
+  throw new TypeError('workflow synthesize inputs must be an array, string, or object');
 }
 
 export interface CreateWorkflowRuntimeOptions {

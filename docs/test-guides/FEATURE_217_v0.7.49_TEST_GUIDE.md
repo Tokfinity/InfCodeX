@@ -42,7 +42,7 @@ FEATURE_217 让 KodaX 支持动态多 agent workflow：LLM 可为复杂任务生
 - Workflow 结束摘要：成功时 Assistant 直接显示完整最终结果；失败显示 run id、错误、show/rerun 提示。
 - Workflow live surface 进度：显示阶段序号、运行中智能体、`finished/spawned`、cap、failed/stopped 详情、show/stop hint、elapsed 时间和已完成 child 的 token 用量，并支持中文标签。
 - Workflow 长任务控制：默认不再设置 workflow 总墙钟超时；保留同步 JS watchdog，显式 `timeoutMs` 仍可 opt-in，实际长任务靠 per-step `wf.wait(...,{timeoutMs})`、caps/budget、progress 和 `/workflow stop` 控制。
-- Natural-language / AMAW agentic transcript：启动说明、每个子 Agent 的有界完成摘要和完整最终综合使用 assistant-style；显式 `[workflow handoff]` 作为“摘要”展示，缺少 handoff 时才以“关键信息”做兼容提取，不折叠摘要本身。子 Agent 摘要必须尽量包含具体发现、判断、风险、证据指针、未决问题或下一步；不能只说“已完成、报告较长”。
+- Natural-language / AMAW agentic transcript：启动说明、每个子 Agent 的有界完成摘要和完整最终综合使用 assistant-style；显式 `[workflow handoff]` 作为“智能摘要”展示，缺少 handoff 时以“摘录摘要”做兼容提取，不折叠摘要本身。子 Agent 摘要必须尽量包含具体发现、判断、风险、证据指针、未决问题或下一步；不能只说“已完成、报告较长”。
 - 彩色 workflow transcript 选择/复制：app-managed transcript/fullscreen selection 会在命中测试和复制前剥离 ANSI escape sequences，复制结果不应包含 `\u001b[` / `ESC[` 这类颜色控制字符。
 - Restricted workflow runner 对空 taskId 等非法 task command 做 sandbox 侧校验，失败时保持为 workflow 错误，不让 REPL 崩溃。
 - Workflow manager crash hardening：run graph / startup persistence 异常会 settle 为 failed run，不会让 background `done` promise 以未处理 rejection 形式冒出；REPL observer 也会把 rejected `done` promise 渲染成可见 workflow 错误。
@@ -548,20 +548,20 @@ async function run(wf, args) {
 **预期结果**:
 
 - [ ] Live surface 有最大高度，不因 agent 多或文本长而挤掉输入栏 / 状态栏。
-- [ ] Live surface 显示整体进度：英文请求显示类似 `1/3 finished (2 active agents, cap 8)`，中文请求显示类似 `1/2 完成（1 个智能体运行中，上限 8）`，失败/停止会进入同一进度行，不能只显示 `2 done`。
+- [ ] Live surface 显示整体进度：如果 workflow 声明了计划智能体数，中文请求显示类似 `0/7 完成（1 个智能体运行中，已启动 1，上限 14）`；如果没有计划数，英文请求显示类似 `1/3 finished (2 active agents, cap 8)`。失败/停止会进入同一进度行，不能只显示 `2 done`。
 - [ ] Live surface header 显示运行时长和 workflow token 用量（来自已完成 child 的真实 usage）；计时刷新应与普通 Agent spinner 一样持续更新，不出现卡住或另起一套不同步动画。
-- [ ] Live surface 展示当前阶段序号（例如 `2/4 parallel-deep-analysis`）、可见运行中智能体、`已完成 / 已启动` 进度、agent 上限和 show/stop hint；`agent 上限` 是安全上限，不应被显示成“总任务数”或百分比进度分母。完成详情通过历史区 child digest 与 `/workflow show <runId>` 查看，不把所有 child chat 倾倒到主历史。
+- [ ] Live surface 展示当前阶段序号（例如 `2/4 parallel-deep-analysis`）、可见运行中智能体、`已完成 / 计划数` 或 `已完成 / 已启动` 进度、agent 上限和 show/stop hint；`agent 上限` 是安全上限，不应被显示成“总任务数”或百分比进度分母。完成详情通过历史区 child digest 与 `/workflow show <runId>` 查看，不把所有 child chat 倾倒到主历史。
 - [ ] 自然语言 / AMAW 路径的启动说明和普通运行进展不使用 `info` 样式刷历史；`info` 主要保留给显式 slash 命令结果、确认/权限提示和错误。
-- [ ] 每个完成的 child agent 都在历史区出现中文有界结果摘要，且至少包含一个有效结论：具体发现、判断、风险、证据指针、未决问题或下一步。如果 child 返回长报告或非中文报告，历史区显示 2-4 行中文摘录摘要并指向 `/workflow show <runId>` 查看原文；不能折叠掉摘要本身，也不能只说“报告较长、稍后汇总”。
-- [ ] 生成的 child prompt 会要求 child agent 在结尾输出 `[workflow handoff]...[/workflow handoff]` 交接摘要；runtime 必须优先把该 handoff 块写进 `agent_completed.summary`，即使它出现在长报告末尾。历史区优先展示该 handoff 中的结论/证据/风险/下一步，而不是固定模板或报告头部截断。缺少 handoff 时可以 fallback 到 deterministic extraction，但必须跳过 “I now have...” / “Here is my report” / 报告标题等低信息开场。
+- [ ] 每个完成的 child agent 都在历史区出现中文有界结果摘要，且至少包含一个有效结论：具体发现、判断、风险、证据指针、未决问题或下一步。如果 child 返回长报告或非中文报告，历史区显示 3-4 行左右的中文摘录摘要；不能折叠掉摘要本身，也不能只说“报告较长、稍后汇总”。
+- [ ] 生成的 child prompt 会要求 child agent 在结尾输出 `[workflow handoff]...[/workflow handoff]` 交接摘要；runtime 必须优先把该 handoff 块写进 `agent_completed.summary`，即使它出现在长报告末尾。历史区优先展示该 handoff 中的结论/证据/风险/下一步，并标成“智能摘要”。合格的智能摘要不应被本地 formatter 加 `...` 截断；缺少 handoff 时 fallback 到 deterministic extraction，标成“摘录摘要”，并跳过 “I now have...” / “Here is my report” / 报告标题 / markdown 表头 / 断裂片段等低信息内容。
 - [ ] 子任务完整输出不会全部刷进历史；需要更多细节时先用 `/workflow show <runId>` 查看事件和 artifacts，完整 child-chat 级别详情属于后续 FEATURE_229/system process surface。
 - [ ] workflow 完成后自动在当前对话中显示完整中文最终回答或 artifact 摘要，而不是只显示 `Workflow completed` 与 `/workflow show <runId>` 提示；即使最终结果很长，主历史区也不能截断、不能要求用户通过 `/workflow show --full <runId>` 才能看到完整答案，也不能出现裸 `[truncated]`。
 - [ ] 如果 run 只产出 artifact，历史区至少显示 artifact 名称、路径和简短说明；如果没有可显示结果，必须明确提示“已完成但没有可显示结果”，不能假装正常完成。
-- [ ] 主历史区展示每个完成 child agent 的有界摘要和完整最终回答，不默认倾倒所有 child chat；完整过程可通过 `/workflow show <runId>` 和后续 FEATURE_229 详情入口显式查看。
+- [ ] 主历史区展示每个完成 child agent 的有界摘要和完整最终回答，不默认倾倒所有 child chat；`/workflow show <runId>` 用于查看运行事件时间线、状态和 artifacts，完整 child-chat 详情属于后续 FEATURE_229 详情入口。
 - [ ] workflow 完成后再输入 `你好`，系统应按新话题正常问候或询问需要什么帮助，不能沿着刚才 workflow 的任务继续读文件、跑工具或规划同一个调查。
 - [ ] 如果 workflow 期间确实排队了 follow-up，完成后必须明确显示 queued prompt，并允许取消/编辑；不能在用户输入新话题时静默消费旧 queued prompt。
 - [ ] 中文请求下，状态标签、解释、摘要和最终回答使用中文；命令、run id、workflow id、agent id 保持英文稳定标识，live 区使用“智能体”而不是含糊的“代理”。
-- [ ] 如果 child 摘要无法安全内联，workflow 不失败；历史区出现可理解的摘要不可用 fallback，并保留 `/workflow show <runId>` 查看原始 child 输出的提示。
+- [ ] 如果 child 摘要无法安全内联，workflow 不失败；历史区出现可理解的摘要不可用 fallback，并保留 `/workflow show <runId>` 查看运行事件时间线/产物的提示，不能暗示该命令能查看完整 child 原文。
 - [ ] 复杂 workflow 不会因为默认 30 分钟总墙钟 timeout 在 synthesis 前后被杀；如果需要中断，用户可用 `/workflow stop [runId]`，脚本死循环仍会被同步 watchdog 拦住。
 - [ ] 选择/复制包含彩色 `Workflow runs` 或 live/history 行时，复制出来的是可读纯文本，不含 `ESC[32m`、`ESC[39m`、`\u001b[` 等 ANSI 控制字符；不同颜色的行不会造成明显左右选区偏移。
 

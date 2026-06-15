@@ -22,6 +22,7 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     expect(prompt).toContain('Artifact-only or empty returns are invalid');
     expect(prompt).toContain('always wait or stop each handle');
     expect(prompt).toContain('lifetime total cap');
+    expect(prompt).toContain('plannedAgents is the best estimate of how many child agents');
     expect(prompt).toContain('Do not set tokenBudget unless the user explicitly asks');
     expect(prompt).toContain('fan-out-and-synthesize');
     expect(prompt).toContain('loop-until-done');
@@ -39,7 +40,9 @@ describe('buildWorkflowGenerationUserPrompt', () => {
     const prompt = buildWorkflowGenerationUserPrompt('review feature 217');
     expect(prompt).toContain('[workflow handoff]');
     expect(prompt).toContain('[/workflow handoff]');
+    expect(prompt).toContain('2-4 short bullet lines');
     expect(prompt).toContain('concrete conclusions');
+    expect(prompt).toContain('must not use ellipses');
   });
 });
 
@@ -124,6 +127,7 @@ describe('generateWorkflow', () => {
               description: 'Compare hypotheses with independent checks.',
               phases: ['investigate', 'synthesize'],
               readOnly: true,
+              plannedAgents: 4,
               maxAgents: 4,
               maxConcurrency: 3,
               tokenBudget: 10000,
@@ -139,6 +143,8 @@ describe('generateWorkflow', () => {
     expect(result.kind).toBe('generated');
     if (result.kind !== 'generated') return;
     expect(result.manifest.name).toBe('hypothesis-tournament');
+    expect(result.manifest.plannedAgents).toBe(4);
+    expect(result.module.meta.plannedAgents).toBe(4);
     expect(result.scriptSnapshot.manifest.patterns).toEqual([
       'fan-out-and-synthesize',
       'adversarial-verification',

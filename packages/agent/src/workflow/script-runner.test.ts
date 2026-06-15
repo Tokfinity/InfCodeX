@@ -364,6 +364,93 @@ describe('runRestrictedWorkflowScript', () => {
       vi.useRealTimers();
     }
   });
+
+  it('rejects a runAgent call with a missing prompt instead of spawning a child', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.runAgent({ name: 'reader' });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/runAgent input prompt must be a non-empty string/);
+    expect(prompts).toEqual([]);
+  });
+
+  it('rejects a spawnAgent call with a blank name', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.spawnAgent({ name: '   ', prompt: 'do work' });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/spawnAgent input name must be a non-empty string/);
+  });
+
+  it('rejects a runAgent call whose readOnly flag is not a boolean', async () => {
+    const { wf, prompts } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.runAgent({ name: 'reader', prompt: 'do work', readOnly: 'yes' });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/readOnly must be a boolean/);
+    expect(prompts).toEqual([]);
+  });
+
+  it('rejects a synthesize call with a missing rubric', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.synthesize({ inputs: ['a', 'b'] });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/synthesize input rubric must be a non-empty string/);
+  });
+
+  it('rejects a synthesize call whose inputs are neither array, string, nor object', async () => {
+    const { wf } = fakeWorkflowApi();
+    await expect(
+      runRestrictedWorkflowScript({
+        wf,
+        source: `
+          async function run(wf) {
+            return await wf.synthesize({ inputs: 42, rubric: 'merge' });
+          }
+        `,
+      }),
+    ).rejects.toThrow(/synthesize input inputs must be an array, string, or object/);
+  });
+
+  it('accepts a synthesize call whose inputs are a single pre-combined string', async () => {
+    const { wf } = fakeWorkflowApi();
+    const result = await runRestrictedWorkflowScript({
+      wf,
+      source: `
+        async function run(wf) {
+          const combined = ['## a', 'finding a', '## b', 'finding b'].join('\\n');
+          const syn = await wf.synthesize({ inputs: combined, rubric: 'merge' });
+          return syn.text;
+        }
+      `,
+    });
+    expect(result).toBe('synthesis');
+  });
 });
 
 describe('createRestrictedWorkflowModule', () => {

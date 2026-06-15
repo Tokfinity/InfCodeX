@@ -82,12 +82,73 @@ _Last Updated: 2026-06-13_
 | 135 | Medium | Resolved | FEATURE_167 B2 synth verdict path bypasses `autoCompleteOnAccept` — UI shows `0/N completed` even when run terminates as `accept` | v0.7.41 | v0.7.42 | 2026-05-19 | 2026-05-19 |
 | 136 | Low | Open | 流式 / 滚动时 spinner 动画卡顿 + 计时变慢 — 根因在 CPU 侧每帧渲染（React reconciliation + outputToScreen 全量重建），**非**终端写入字节量（cell-diff + DECSTBM 两次否证 I/O 假设） | 待调研 | - | 2026-05-31 | - |
 | 137 | High | Resolved | Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers | v0.7.16 | v0.7.45 | 2026-06-05 | 2026-06-05 |
+| 138 | High | Resolved | Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token | v0.7.49 | v0.7.49 | 2026-06-15 | 2026-06-15 |
 
 ---
 
 ## Issue Details
 <!-- Full details for each issue - REQUIRED for all issues -->
 ---
+### 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token
+
+- **Priority**: High（畸形的生成脚本会让整轮 workflow 在合成阶段全损，或静默派发空 objective 的子 Agent 消耗预算）
+- **Status**: **Resolved**（v0.7.49）
+- **Introduced**: v0.7.49（FEATURE_217 dynamic workflow invocation）
+- **Created**: 2026-06-15
+- **Resolved**: 2026-06-15
+- **Fixed**: v0.7.49
+
+#### Original Problem
+
+`/workflow create` 生成的动态 workflow 在合成阶段失败，报错 `restricted workflow script failed: Error: input.inputs.map is not a function`。三个 investigator 子 Agent 全部成功完成（摘要已产出），却在最后一步整轮丢弃，且抛出的是一条看似内部崩溃的裸 `TypeError`。
+
+复现信号：
+
+- 生成脚本把 findings 先 `.map().join()` 拼成一份带标题的可读文档，再 `wf.synthesize({ inputs: combined, rubric })` —— `combined` 是字符串，不是数组。
+- 事件时间线：3× `agent_completed` → `phase_started(synthesize)` → 1ms 内 `workflow_failed`，**没有** `agent_spawned(synthesize)`，说明崩在 prompt 构造，连合成 Agent 都没起。
+
+#### Root Cause
+
+Workflow host RPC 边界对**标量字符串参数**（taskId/name/content/reason）在沙箱 + host 两层都有校验和友好报错，但对**对象载荷**（`runAgent`/`spawnAgent` 的 input、`synthesize` 的 input、`log` 的 event）只检查"是不是对象"，随即 `readRecord(input) as unknown as X` 强转放行，字段形状零校验。同源缺陷的三个表现：
+
+- `synthesize`：`buildSynthesisPrompt` 同步 `input.inputs.map(...)` → 非数组直接崩裸 `TypeError`，整轮全损（本 issue 的触发点）。
+- `runAgent`/`spawnAgent`：`name`/`prompt` 为 `undefined` 时静默流入真实 child 派发，烧 token 跑空 objective 的子 Agent，事件/UI 里 `name=undefined`（比崩溃更隐蔽）。
+- `log`：`message` 为 `undefined` 时产生 UI 垃圾行。
+
+同 runtime 的 `wf.parallel` 反而做对了（`Array.isArray` + 逐项 function 检查 + 清晰报错），证明这是"host 边界缺一个复合载荷校验 helper"导致的系统性遗漏，而非逐点疏忽。静态校验（`validateGeneratedWorkflowSource` 正则）无法拦——`inputs` 是运行时值。
+
+#### Resolution
+
+按"放宽契约 + 边界统一校验"两路修复：
+
+- **容忍单值**（runtime）：`WorkflowSynthesizeInput.inputs` 拓宽为 `array | string | object`；`normalizeSynthesisInputs` 把字符串/对象归一为数组，`normalizeSynthesisRubric` 校验 rubric 非空。从源头消除"模型先拼成串"这个几乎必然复发的陷阱。
+- **host 边界校验**（script-runner）：新增 `readSpawnAgentInput` / `readSynthesizeInput` / `readLogEvent`，替换 `handleCommand` 中 `runAgent`/`spawnAgent`/`synthesize`/`log` 的 4 处 `as unknown as` 裸转。强制 name/prompt 非空串（堵静默烧 token）、`readOnly` 必须 boolean（read-only 白名单为安全相关 flag）、rubric 非空、inputs 形状合法；畸形输入以"哪个调用、哪个字段"的明确信息在边界失败。
+- **prompt 提示**（generator）：`wf.synthesize` 说明 inputs 可为数组 / 单个已拼接字符串 / 命名对象，减少模型生成错误形状。
+- `wait` 的 opts 裸转刻意保留——仅 `{ timeoutMs? }`，downstream `normalizeWaitTimeoutMs` 已校验并给友好报错，不属于崩溃/烧钱类。
+
+#### Files Changed
+
+- `packages/agent/src/workflow/script-runner.ts`（host 边界校验器 + 接线）
+- `packages/agent/src/workflow/script-runner.test.ts`（6 个边界拒绝/接受测试）
+- `packages/agent/src/workflow/runtime.ts`（`normalizeSynthesisInputs/Rubric`）
+- `packages/agent/src/workflow/types.ts`（`WorkflowSynthesizeInput.inputs` 拓宽）
+- `packages/agent/src/workflow/runtime.test.ts`（命名对象 / 已格式化字符串两个 synthesize 测试）
+- `packages/coding/src/workflows/generator.ts`（synthesize prompt 提示）
+- `docs/KNOWN_ISSUES.md`
+
+#### Tests Added
+
+- script-runner：缺 prompt 拒绝、空 name 拒绝、`readOnly` 非布尔拒绝、缺 rubric 拒绝、`inputs: 42` 拒绝、单字符串 inputs 接受（验证不再误报）。
+- runtime：synthesize 接受命名对象（转 `{name,value}` 列表）+ 已格式化字符串（包进 `## Input 1`）。
+
+#### Verification
+
+- `npx vitest run packages/coding/src/workflows/ packages/agent/src/workflow/` → 135 passed
+- `npx tsc --noEmit -p packages/agent/tsconfig.json` + `packages/coding/tsconfig.json` → clean
+- `npm run build:packages` → success
+
+---
+
 ### 137: Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers
 
 - **Priority**: High（sessionful Streamable HTTP MCP server 会导致所有后续 MCP 工具请求失败）
@@ -4234,11 +4295,17 @@ Commit `ef085fc` 把 V1 精简到 V2 时没区分"信息载体"和"脚手架"，
 ---
 
 ## Summary
-- Total: 64 (24 Open, 40 Resolved, 0 Partially Resolved, 0 Won't Fix)
+- Total: 65 (24 Open, 41 Resolved, 0 Partially Resolved, 0 Won't Fix)
 - Highest Priority Open: 091 - 缺少一等公民 MCP / Web Search / Code Search 工具体系 (High)
 - Historical archived issues are maintained in ISSUES_ARCHIVED.md
 
 ## Changelog
+
+### 2026-06-15: Issue 138 added & resolved
+- Added & Resolved 138: Workflow host RPC 边界对对象载荷零校验 — `synthesize` 传非数组 inputs 崩裸 TypeError + `runAgent`/`spawnAgent` 缺 name/prompt 静默烧 token (High)
+- Root cause: host RPC 边界对标量字符串参数两层校验，但对对象载荷（runAgent/spawnAgent/synthesize/log input）只检查"是对象"后 `as unknown as` 裸转，字段形状零校验；`buildSynthesisPrompt` 同步 `.inputs.map` 让非数组直接崩，runAgent/spawnAgent 的缺字段则静默派发空 objective 子 Agent。
+- Fix: runtime 容忍 inputs 为 array/string/object（`normalizeSynthesisInputs/Rubric`）+ script-runner 新增 `readSpawnAgentInput`/`readSynthesizeInput`/`readLogEvent` 替换 4 处裸转、强制 name/prompt 非空 + readOnly 布尔 + rubric 非空 + generator prompt 提示。
+- Verification: workflow 全套件 135 passed、agent+coding typecheck clean、`npm run build:packages` success。
 
 ### 2026-06-05: Issue 137 added & resolved
 - Added & Resolved 137: Streamable HTTP MCP transport drops `Mcp-Session-Id` on sessionful servers (High)

@@ -14,6 +14,7 @@ export type WorkflowPatternId = (typeof WORKFLOW_PATTERN_IDS)[number];
 export interface WorkflowScriptManifest extends WorkflowMeta {
   readonly phases: readonly string[];
   readonly readOnly: boolean;
+  readonly plannedAgents?: number;
   readonly maxAgents: number;
   readonly maxConcurrency: number;
   readonly tokenBudget?: number;
@@ -97,6 +98,12 @@ export function validateWorkflowScriptManifest(value: unknown): WorkflowScriptMa
   }
 
   const tokenBudget = readOptionalPositiveInt(value, 'tokenBudget');
+  const plannedAgents = readOptionalPositiveInt(value, 'plannedAgents');
+  const maxAgents = readPositiveInt(value, 'maxAgents');
+  const maxConcurrency = readPositiveInt(value, 'maxConcurrency');
+  if (plannedAgents !== undefined && plannedAgents > maxAgents) {
+    throw new Error('workflow manifest plannedAgents must be less than or equal to maxAgents');
+  }
   const mayUseWorktree = value.mayUseWorktree;
   if (mayUseWorktree !== undefined && typeof mayUseWorktree !== 'boolean') {
     throw new Error('workflow manifest mayUseWorktree must be a boolean when provided');
@@ -107,8 +114,9 @@ export function validateWorkflowScriptManifest(value: unknown): WorkflowScriptMa
     description: readString(value, 'description'),
     phases: readStringArray(value, 'phases'),
     readOnly: readBoolean(value, 'readOnly'),
-    maxAgents: readPositiveInt(value, 'maxAgents'),
-    maxConcurrency: readPositiveInt(value, 'maxConcurrency'),
+    ...(plannedAgents !== undefined ? { plannedAgents } : {}),
+    maxAgents,
+    maxConcurrency,
     ...(tokenBudget !== undefined ? { tokenBudget } : {}),
     ...(mayUseWorktree !== undefined ? { mayUseWorktree } : {}),
     patterns: readPatternArray(value),
