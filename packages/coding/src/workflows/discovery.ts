@@ -13,8 +13,8 @@
  * confirmation (Phase D.2 command) — discovery itself only reads paths.
  */
 
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
@@ -75,6 +75,13 @@ export interface SaveGeneratedWorkflowFromRunInput {
   readonly runDir: string;
   readonly targetDir: string;
   readonly name: string;
+}
+
+export interface RenameSavedWorkflowInput {
+  readonly dirs: SavedWorkflowDirs;
+  readonly name: string;
+  readonly newName: string;
+  readonly source?: SavedWorkflowSource;
 }
 
 export interface LoadGeneratedWorkflowFromRunInput {
@@ -296,6 +303,59 @@ export async function saveGeneratedWorkflow(
     name: safeName,
     path,
     source: 'project',
+    execution: 'capability-generated',
+  };
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await readFile(path, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function renameSavedWorkflow(
+  input: RenameSavedWorkflowInput,
+): Promise<SavedWorkflowRef> {
+  const refs = (await discoverSavedWorkflows(input.dirs))
+    .filter((ref) => ref.name === input.name)
+    .filter((ref) => input.source === undefined || ref.source === input.source);
+  if (refs.length === 0) {
+    throw new Error(`saved workflow not found: ${input.name}`);
+  }
+  if (refs.length > 1) {
+    throw new Error(`ambiguous saved workflow name: ${input.name}`);
+  }
+  const ref = refs[0]!;
+  if (!ref.path.endsWith('.workflow.json')) {
+    throw new Error('only generated workflow capsules can be renamed');
+  }
+  const safeName = safeWorkflowName(input.newName);
+  const targetPath = join(dirname(ref.path), `${safeName}.workflow.json`);
+  if (targetPath !== ref.path && await fileExists(targetPath)) {
+    throw new Error(`saved workflow already exists: ${safeName}`);
+  }
+  const capsule = await loadSavedWorkflowCapsule(ref.path);
+  const renamed = createWorkflowCapsule({
+    minKodaxVersion: capsule.minKodaxVersion,
+    manifest: {
+      ...capsule.manifest,
+      name: safeName,
+    },
+    source: capsule.source,
+    ...(capsule.intent !== undefined ? { intent: capsule.intent } : {}),
+    ...(capsule.inputs !== undefined ? { inputs: capsule.inputs } : {}),
+    ...(capsule.requires !== undefined ? { requires: capsule.requires } : {}),
+    ...(capsule.provenance !== undefined ? { provenance: capsule.provenance } : {}),
+  });
+  await writeFile(targetPath, `${JSON.stringify(renamed, null, 2)}\n`, 'utf8');
+  if (targetPath !== ref.path) await unlink(ref.path);
+  return {
+    name: safeName,
+    path: targetPath,
+    source: ref.source,
     execution: 'capability-generated',
   };
 }

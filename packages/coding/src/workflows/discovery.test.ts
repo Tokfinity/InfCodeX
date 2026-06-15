@@ -15,6 +15,7 @@ import {
   loadSavedWorkflowCapsule,
   normalizeWorkflowModule,
   preflightWorkflowCapsule,
+  renameSavedWorkflow,
   saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
 } from './discovery.js';
@@ -263,6 +264,27 @@ describe('saveGeneratedWorkflow', () => {
     const loaded = await loadGeneratedWorkflowFromRun({ runDir });
     expect(loaded.capsule.provenance?.fromRunId).toBe('run-2');
     expect(await loaded.module.run({} as never, {})).toBe('rerun-ok');
+  });
+
+  it('renames generated workflow capsules and updates manifest identity', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'old-name',
+      manifest: { ...manifest, name: 'old-name' },
+      source: 'async function run() { return "ok"; }',
+    });
+
+    const renamed = await renameSavedWorkflow({
+      dirs: { project: dir },
+      name: 'old-name',
+      newName: 'new name',
+    });
+
+    expect(renamed.name).toBe('new-name');
+    expect(existsSync(ref.path)).toBe(false);
+    expect(existsSync(renamed.path)).toBe(true);
+    const capsule = await loadSavedWorkflowCapsule(renamed.path);
+    expect(capsule.manifest.name).toBe('new-name');
   });
 
   it('preflights lightweight capsule requirements against the current environment', async () => {
