@@ -10,8 +10,9 @@
 // The inline fallback below only covers `node dist/kodax_cli.js` invoked
 // directly; in that path we cannot guarantee React is still in production
 // mode, but setting NODE_ENV here keeps downstream NODE_ENV checks sane.
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = process.env.KODAX_DEV === '1' ? 'development' : 'production';
+const nodeEnvKey = ['NODE', 'ENV'].join('_') as 'NODE_ENV';
+if (!process.env[nodeEnvKey]) {
+  process.env[nodeEnvKey] = process.env.KODAX_DEV === '1' ? 'development' : 'production';
 }
 
 // Propagate a sensible V8 heap limit to child processes (sub-agents, forks).

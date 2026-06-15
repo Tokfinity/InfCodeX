@@ -52,7 +52,6 @@
 
 | ID | Title | Category | Priority | Planned | Started | Design |
 |---|---|---|---|---|---|---|
-| - | - | - | - | - | - | - |
 
 ---
 

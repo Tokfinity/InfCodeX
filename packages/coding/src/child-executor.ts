@@ -9,7 +9,7 @@
  * concurrent conflict avoidance, see ADR-034).
  */
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import fsPromises from 'fs/promises';
 import os from 'os';
 import type {
@@ -1009,9 +1009,10 @@ export async function resolveEvidenceRef(
   if (ref.startsWith('diff:')) {
     const filePath = ref.slice(5);
     try {
-      const diff = execSync(`git diff HEAD -- "${filePath}"`, {
+      const diff = execFileSync('git', ['diff', 'HEAD', '--', filePath], {
         cwd: ctx.gitRoot ?? undefined,
         encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 10_000,
       });
       return diff.length > 0

@@ -6,7 +6,7 @@ import type { KodaXMessage } from '@kodax-ai/llm';
 import type {
   KodaXCompactMemorySeed,
   KodaXSessionArtifactLedgerEntry,
-} from '../../index.js';
+} from '../../types.js';
 
 export interface CompactionConfig {
   /** Whether automatic compaction is enabled. */

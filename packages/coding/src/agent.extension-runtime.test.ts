@@ -443,7 +443,7 @@ describe('runKodaX extension runtime integration', () => {
         },
         'this should fail early',
       ),
-    ).rejects.toThrow('ANTHROPIC_API_KEY not set');
+    ).rejects.toThrow('Provider "anthropic" not configured. Set ANTHROPIC_API_KEY');
 
     expect(getActiveExtensionRuntime()).toBe(previousRuntime);
 
