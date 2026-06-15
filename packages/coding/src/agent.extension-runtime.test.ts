@@ -430,25 +430,32 @@ describe('runKodaX extension runtime integration', () => {
   }, 30_000);
 
   it('restores the previously active runtime when startup fails', async () => {
+    // Force the "provider not configured" startup failure by removing the key,
+    // then restore it so the deletion does not leak to other tests sharing the
+    // process env (this provider env is ambient in many sibling suites).
+    const savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY;
 
     const previousRuntime = createExtensionRuntime().activate();
     const requestedRuntime = createExtensionRuntime();
 
-    await expect(
-      runKodaX(
-        {
-          provider: 'anthropic',
-          extensionRuntime: requestedRuntime,
-        },
-        'this should fail early',
-      ),
-    ).rejects.toThrow('Provider "anthropic" not configured. Set ANTHROPIC_API_KEY');
+    try {
+      await expect(
+        runKodaX(
+          {
+            provider: 'anthropic',
+            extensionRuntime: requestedRuntime,
+          },
+          'this should fail early',
+        ),
+      ).rejects.toThrow('Provider "anthropic" not configured. Set ANTHROPIC_API_KEY');
 
-    expect(getActiveExtensionRuntime()).toBe(previousRuntime);
-
-    await previousRuntime.dispose();
-    await requestedRuntime.dispose();
+      expect(getActiveExtensionRuntime()).toBe(previousRuntime);
+    } finally {
+      if (savedAnthropicKey !== undefined) process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+      await previousRuntime.dispose();
+      await requestedRuntime.dispose();
+    }
   });
 
   it('runs independent extension tools concurrently when parallel mode is enabled', async () => {

@@ -27,7 +27,7 @@
  * STATUS: ACTIVE since FEATURE_100 P3.1.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { KodaXOptions } from '../../types.js';
 import type { CompactionConfig } from '@kodax-ai/agent';
@@ -55,6 +55,20 @@ function fakeSessionState(overrides: Partial<RuntimeSessionState> = {}): Runtime
 const compactionConfig = { enabled: true, triggerPercent: 75 } as CompactionConfig;
 
 describe('CAP-055: resolvePerTurnProvider — per-turn re-resolution', () => {
+  // The success-path cases below resolve the `anthropic` provider and rely on
+  // `isConfigured()` returning true. They never make an API call (resolution
+  // only), so a dummy key keeps them deterministic without depending on an
+  // ambient ANTHROPIC_API_KEY (absent in CI; deletable by sibling suites).
+  let savedAnthropicKey: string | undefined;
+  beforeEach(() => {
+    savedAnthropicKey = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = savedAnthropicKey ?? 'test-dummy-key';
+  });
+  afterEach(() => {
+    if (savedAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+    else process.env.ANTHROPIC_API_KEY = savedAnthropicKey;
+  });
+
   it('CAP-PER-TURN-PROVIDER-001a: extension-set sessionState.modelSelection.provider overrides options.provider', () => {
     // Anthropic env is reliably set in test envs (default). Use it as the
     // override target so isConfigured() doesn't throw.
