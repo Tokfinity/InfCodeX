@@ -165,7 +165,12 @@ class AnthropicProvider extends KodaXAnthropicCompatProvider {
     // accept any signature, so they keep the lenient default. v0.7.28.
     strictThinkingSignature: true,
   });
-  constructor() { super(); this.client = new Anthropic({ apiKey: this.getApiKey() }); }
+
+  // Anthropic proper talks to api.anthropic.com and must keep the SDK's
+  // native user agent — unlike the compat base, it adds no gateway headers.
+  protected override buildClient(): Anthropic {
+    return new Anthropic({ apiKey: this.getApiKey() });
+  }
 }
 
 class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
@@ -181,7 +186,6 @@ class ZhipuCodingProvider extends KodaXAnthropicCompatProvider {
     // cleanly in bench and need no equivalent cap.
     streamMaxDurationMs: 300_000,
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class KimiCodeProvider extends KodaXAnthropicCompatProvider {
@@ -197,7 +201,6 @@ class KimiCodeProvider extends KodaXAnthropicCompatProvider {
     // yield no cache benefit while losing tool_use schema fidelity.
     baseUrl: 'https://api.kimi.com/coding/',
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class MiniMaxCodingProvider extends KodaXAnthropicCompatProvider {
@@ -205,7 +208,6 @@ class MiniMaxCodingProvider extends KodaXAnthropicCompatProvider {
   protected readonly config: KodaXProviderConfig = buildProviderConfig('minimax-coding', {
     baseUrl: 'https://api.minimaxi.com/anthropic',
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class MimoCodingProvider extends KodaXAnthropicCompatProvider {
@@ -216,7 +218,6 @@ class MimoCodingProvider extends KodaXAnthropicCompatProvider {
     // pin to CN until users surface a region-switch need).
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class MimoProvider extends KodaXAnthropicCompatProvider {
@@ -231,7 +232,6 @@ class MimoProvider extends KodaXAnthropicCompatProvider {
     // budget, max_tokens, etc.) come from `provider-capabilities.json`.
     baseUrl: 'https://api.xiaomimimo.com/anthropic',
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class ArkCodingProvider extends KodaXAnthropicCompatProvider {
@@ -248,13 +248,11 @@ class ArkCodingProvider extends KodaXAnthropicCompatProvider {
     // subscription.
     baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class OpenAIProvider extends KodaXOpenAICompatProvider {
   readonly name = 'openai';
   protected readonly config: KodaXProviderConfig = buildProviderConfig('openai');
-  constructor() { super(); this.initClient(); }
 }
 
 class DeepSeekProvider extends KodaXOpenAICompatProvider {
@@ -268,7 +266,6 @@ class DeepSeekProvider extends KodaXOpenAICompatProvider {
     // provider entries below.
     replayReasoningContent: true,
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class KimiProvider extends KodaXOpenAICompatProvider {
@@ -282,7 +279,6 @@ class KimiProvider extends KodaXOpenAICompatProvider {
     // OpenAI proper stays explicitly off (different protocol).
     replayReasoningContent: true,
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class QwenProvider extends KodaXOpenAICompatProvider {
@@ -292,7 +288,6 @@ class QwenProvider extends KodaXOpenAICompatProvider {
     // Same rationale as Kimi above — unverified, opting in.
     replayReasoningContent: true,
   });
-  constructor() { super(); this.initClient(); }
 }
 
 class ZhipuProvider extends KodaXOpenAICompatProvider {
@@ -302,7 +297,6 @@ class ZhipuProvider extends KodaXOpenAICompatProvider {
     // Same rationale as Kimi above — unverified, opting in.
     replayReasoningContent: true,
   });
-  constructor() { super(); this.initClient(); }
 }
 
 // ============== Provider 工厂 ==============

@@ -177,11 +177,28 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
   readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
-  protected client!: OpenAI;
+  private _client?: OpenAI;
 
-  protected initClient(): void {
+  /**
+   * The SDK client is built lazily on first use. Constructing it requires the
+   * API key (`getApiKey()` throws when the env var is unset), so deferring it
+   * lets callers construct a provider and read static metadata (context
+   * window, model descriptors) without a key. This also keeps key-less unit
+   * tests (which mock the actual LLM calls) from failing at construction time.
+   */
+  protected get client(): OpenAI {
+    return (this._client ??= this.buildClient());
+  }
+
+  // Lets subclasses / tests inject a client without going through buildClient
+  // (and so without requiring an API key).
+  protected set client(client: OpenAI) {
+    this._client = client;
+  }
+
+  protected buildClient(): OpenAI {
     const defaultHeaders = getOpenAICompatDefaultHeaders(this.config);
-    this.client = new OpenAI({
+    return new OpenAI({
       apiKey: this.getApiKey(),
       baseURL: this.config.baseUrl,
       // Some OpenAI-compatible gateways block the SDK's default
@@ -191,7 +208,9 @@ export abstract class KodaXOpenAICompatProvider extends KodaXBaseProvider {
   }
 
   protected override onStaleConnection(): void {
-    this.initClient();
+    // Drop the memoized client so the next call rebuilds it, discarding the
+    // stale keep-alive socket pool.
+    this._client = undefined;
   }
 
   /**

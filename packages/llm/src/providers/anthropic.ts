@@ -106,11 +106,28 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   abstract override readonly name: string;
   readonly supportsThinking = true;
   protected abstract override readonly config: KodaXProviderConfig;
-  protected client!: Anthropic;
+  private _client?: Anthropic;
 
-  protected initClient(): void {
+  /**
+   * The SDK client is built lazily on first use. Constructing it requires the
+   * API key (`getApiKey()` throws when the env var is unset), so deferring it
+   * lets callers construct a provider and read static metadata (context
+   * window, model descriptors) without a key. This also keeps key-less unit
+   * tests (which mock the actual LLM calls) from failing at construction time.
+   */
+  protected get client(): Anthropic {
+    return (this._client ??= this.buildClient());
+  }
+
+  // Lets subclasses / tests inject a client without going through buildClient
+  // (and so without requiring an API key).
+  protected set client(client: Anthropic) {
+    this._client = client;
+  }
+
+  protected buildClient(): Anthropic {
     const defaultHeaders = getAnthropicCompatDefaultHeaders(this.config);
-    this.client = new Anthropic({
+    return new Anthropic({
       apiKey: this.getApiKey(),
       baseURL: this.config.baseUrl,
       // Some Anthropic-compatible gateways block the SDK's default
@@ -120,8 +137,9 @@ export abstract class KodaXAnthropicCompatProvider extends KodaXBaseProvider {
   }
 
   protected override onStaleConnection(): void {
-    // Rebuild the Anthropic client to discard the stale keep-alive socket pool.
-    this.initClient();
+    // Drop the memoized client so the next call rebuilds it, discarding the
+    // stale keep-alive socket pool.
+    this._client = undefined;
   }
 
   /**

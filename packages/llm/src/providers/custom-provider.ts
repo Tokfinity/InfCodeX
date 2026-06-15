@@ -133,7 +133,6 @@ class DynamicAnthropicProvider extends KodaXAnthropicCompatProvider {
     super();
     this.name = name;
     this.config = config;
-    this.initClient();
   }
 }
 
@@ -145,6 +144,5 @@ class DynamicOpenAIProvider extends KodaXOpenAICompatProvider {
     super();
     this.name = name;
     this.config = config;
-    this.initClient();
   }
 }
