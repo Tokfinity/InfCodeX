@@ -49,6 +49,14 @@ export interface WorkflowTaskUsage {
   readonly totalTokens?: number;
 }
 
+export type WorkflowTaskSummaryKind = 'digest' | 'excerpt' | 'digest-failed' | 'pending';
+
+export interface WorkflowTaskSummaryEventUpdate {
+  readonly summary?: string;
+  readonly summaryKind: WorkflowTaskSummaryKind;
+  readonly usage?: WorkflowTaskUsage;
+}
+
 /** Terminal result of a spawned agent (from `wait` / `runAgent`). */
 export interface WorkflowTaskResult {
   readonly taskId: string;
@@ -59,6 +67,8 @@ export interface WorkflowTaskResult {
   readonly digest?: string;
   /** True when a digest was attempted but failed (error/timeout/empty); the UI then labels the excerpt fallback. */
   readonly digestFailed?: boolean;
+  /** True when a digest was scheduled asynchronously and may arrive via `agent_summary_updated`. */
+  readonly digestPending?: boolean;
   readonly usage?: WorkflowTaskUsage;
 }
 
@@ -221,6 +231,10 @@ export interface WorkflowAgentBackend {
   output(taskId: string): Promise<WorkflowTaskSnapshot>;
   send(taskId: string, content: string): Promise<void>;
   stop(taskId: string, reason: string): Promise<void>;
+  /** Optional late summary stream for presentation-only async digests. */
+  subscribeTaskSummaryUpdates?(
+    listener: (taskId: string, update: WorkflowTaskSummaryEventUpdate) => void,
+  ): () => void;
   /** Optional durable artifact writer (Phase D wires the run graph).
    *  `wf.synthesize` is NOT a backend method — it runs as a gated agent
    *  through `spawn`/`wait` so it counts toward the runtime's caps. */

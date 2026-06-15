@@ -26,6 +26,7 @@ import type {
   WorkflowSynthesis,
   WorkflowTaskHandle,
   WorkflowTaskResult,
+  WorkflowTaskSummaryKind,
   WorkflowTaskSnapshot,
   WorkflowWaitOptions,
 } from './types.js';
@@ -253,6 +254,18 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const terminalTaskIds = new Set<string>();
   let activeReleaseOperations = 0;
 
+  opts.backend.subscribeTaskSummaryUpdates?.((taskId, update) => {
+    if (status === 'stopped') return;
+    recorder.emit('agent_summary_updated', {
+      taskId,
+      ...(update.summary !== undefined
+        ? { summary: boundedTaskEventSummary(update.summary) }
+        : {}),
+      summaryKind: update.summaryKind,
+      ...(update.usage !== undefined ? { usage: update.usage } : {}),
+    });
+  });
+
   const checkAbort = (): void => {
     if (opts.signal?.aborted) throw new WorkflowAbortError();
   };
@@ -342,12 +355,18 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
   const summarizeTaskResult = (
     result: WorkflowTaskResult,
-  ): { readonly text: string; readonly kind: 'digest' | 'excerpt' | 'digest-failed' } | undefined => {
+  ): { readonly text?: string; readonly kind: WorkflowTaskSummaryKind } | undefined => {
     const digest = result.digest?.trim();
     if (digest) {
       return { text: boundedTaskEventSummary(digest), kind: 'digest' };
     }
     const trimmed = result.finalText.trim();
+    if (result.digestPending) {
+      return {
+        ...(trimmed ? { text: boundedTaskEventSummary(trimmed) } : {}),
+        kind: 'pending',
+      };
+    }
     if (!trimmed) return undefined;
     // `digest-failed`: a digest was attempted but failed/timed out, so the UI
     // labels this deterministic excerpt as "smart summary unavailable" rather
@@ -427,7 +446,10 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
           ? { usage: result.usage }
           : {}),
         ...(summary !== undefined
-          ? { summary: summary.text, summaryKind: summary.kind }
+          ? {
+              ...(summary.text !== undefined ? { summary: summary.text } : {}),
+              summaryKind: summary.kind,
+            }
           : {}),
       })) {
         accrue(result);

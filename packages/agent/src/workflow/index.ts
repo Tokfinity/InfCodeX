@@ -13,6 +13,8 @@ export type {
   WorkflowSpawnAgentInput,
   WorkflowTaskHandle,
   WorkflowTaskUsage,
+  WorkflowTaskSummaryKind,
+  WorkflowTaskSummaryEventUpdate,
   WorkflowTaskResult,
   WorkflowTaskSnapshot,
   WorkflowWaitOptions,
@@ -36,6 +38,29 @@ export type {
 
 export type { WorkflowEvent, WorkflowEventType } from './events.js';
 export { WorkflowEventRecorder } from './events.js';
+
+export {
+  createWorkflowProcessTracker,
+  isFinalWorkflowProcessStatus,
+} from './process.js';
+export type {
+  WorkflowEventCorrelation,
+  WorkflowProcessArtifact,
+  WorkflowProcessCounts,
+  WorkflowProcessEvent,
+  WorkflowProcessItem,
+  WorkflowProcessItemKind,
+  WorkflowProcessItemStatus,
+  WorkflowProcessProgress,
+  WorkflowProcessSnapshot,
+  WorkflowProcessSource,
+  WorkflowProcessStatus,
+  WorkflowProcessSummaryStatus,
+  WorkflowProcessTokenUsage,
+  WorkflowProcessTracker,
+  WorkflowProcessTrackerOptions,
+  WorkflowTaskSummaryUpdate,
+} from './process.js';
 
 export type { WorkflowPatternId, WorkflowScriptManifest } from './manifest.js';
 export { WORKFLOW_PATTERN_IDS, validateWorkflowScriptManifest } from './manifest.js';

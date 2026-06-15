@@ -178,6 +178,107 @@ describe('runWorkflow — event envelope + ordering', () => {
     expect(String(completed?.data?.summary).length).toBeLessThanOrEqual(4096 + 3);
   });
 
+  it('emits pending completion first and appends async digest updates later', async () => {
+    let summaryListener:
+      | ((taskId: string, update: { readonly summary?: string; readonly summaryKind: 'digest' }) => void)
+      | undefined;
+    const events: WorkflowEvent[] = [];
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-async', name: input.name }),
+      wait: async (taskId: string): Promise<WorkflowTaskResult> => ({
+        taskId,
+        name: 'async-child',
+        status: 'completed',
+        finalText: 'Full report while digest is still running.',
+        digestPending: true,
+      }),
+      output: async (taskId: string) => ({ taskId, name: 'async-child', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+      subscribeTaskSummaryUpdates: (listener) => {
+        summaryListener = listener;
+        return () => {
+          summaryListener = undefined;
+        };
+      },
+    };
+
+    const outcome = await runWorkflow(
+      baseOpts(backend, { onEvent: (event: WorkflowEvent) => events.push(event) }),
+      async (wf) => {
+        await wf.runAgent({ name: 'async-child', prompt: 'x' });
+        return 'ok';
+      },
+    );
+
+    expect(outcome.ok).toBe(true);
+    const completed = events.find((event) => event.type === 'agent_completed');
+    expect(completed?.data).toMatchObject({
+      taskId: 'task-async',
+      summary: 'Full report while digest is still running.',
+      summaryKind: 'pending',
+    });
+
+    summaryListener?.('task-async', {
+      summary: '- Finding: async digest arrived.',
+      summaryKind: 'digest',
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-async',
+        summary: '- Finding: async digest arrived.',
+        summaryKind: 'digest',
+      },
+    });
+  });
+
+  it('drops async digest updates after the workflow is stopped', async () => {
+    let summaryListener:
+      | ((taskId: string, update: { readonly summary?: string; readonly summaryKind: 'digest' }) => void)
+      | undefined;
+    const events: WorkflowEvent[] = [];
+    const backend: WorkflowAgentBackend = {
+      spawn: async (input: WorkflowSpawnAgentInput) => ({ taskId: 'task-stop', name: input.name }),
+      wait: async (taskId: string): Promise<WorkflowTaskResult> => ({
+        taskId,
+        name: 'stopped-child',
+        status: 'completed',
+        finalText: 'done',
+      }),
+      output: async (taskId: string) => ({ taskId, name: 'stopped-child', status: 'running' }),
+      send: async () => {},
+      stop: async () => {},
+      subscribeTaskSummaryUpdates: (listener) => {
+        summaryListener = listener;
+        return () => {
+          summaryListener = undefined;
+        };
+      },
+    };
+
+    const outcome = await runWorkflow(
+      baseOpts(backend, { onEvent: (event: WorkflowEvent) => events.push(event) }),
+      async (wf) => {
+        await wf.spawnAgent({ name: 'stopped-child', prompt: 'x' });
+        throw new WorkflowAbortError();
+      },
+    );
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.state.status).toBe('stopped');
+    const eventCount = events.length;
+
+    summaryListener?.('task-stop', {
+      summary: '- Finding: digest arrived after stop.',
+      summaryKind: 'digest',
+    });
+
+    expect(events).toHaveLength(eventCount);
+    expect(events.some((event) => event.type === 'agent_summary_updated')).toBe(false);
+  });
+
   it('emits workflow_failed and surfaces the error when the script throws', async () => {
     const { backend } = fakeBackend();
     const outcome = await runWorkflow(baseOpts(backend), async () => {
