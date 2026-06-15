@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { WorkflowAgentBackend, WorkflowModule } from '@kodax-ai/agent';
+import type { WorkflowAgentBackend, WorkflowModule, WorkflowProcessEvent } from '@kodax-ai/agent';
 
 import { createWorkflowRunManager } from './run-manager.js';
 
@@ -91,6 +91,96 @@ describe('WorkflowRunManager', () => {
     });
   });
 
+  it('publishes workflow process snapshots for SDK-style subscribers', async () => {
+    const manager = createWorkflowRunManager({ now: () => 1_000 });
+    const events: WorkflowProcessEvent[] = [];
+    const unsubscribe = manager.subscribeWorkflowProcess((event) => events.push(event));
+    const { backend } = fakeBackend();
+    const module: WorkflowModule = {
+      meta: {
+        name: 'process-test',
+        description: 'process',
+        readOnly: true,
+        phases: ['scan'],
+        maxAgents: 3,
+      },
+      run: async (wf) => {
+        await wf.phase('scan', async () => {
+          await wf.runAgent({ name: 'reader', prompt: 'read', readOnly: true });
+        });
+        return { summary: 'final process result' };
+      },
+    };
+
+    const run = manager.start({
+      module,
+      args: {},
+      runId: 'run-process',
+      runDir: dir,
+      backend,
+    });
+
+    await run.done;
+    unsubscribe();
+
+    const snapshot = manager.getWorkflowProcessSnapshot('run-process');
+    expect(snapshot).toMatchObject({
+      runId: 'run-process',
+      workflowName: 'process-test',
+      status: 'completed',
+      resultSummary: 'final process result',
+      progress: {
+        spawnedAgents: 1,
+        finishedAgents: 1,
+        activeAgents: 0,
+        failedAgents: 0,
+        stoppedAgents: 0,
+        agentCap: 3,
+      },
+    });
+    expect(events.map((event) => event.type)).toContain('workflow_started');
+    expect(events.map((event) => event.type)).toContain('workflow_finished');
+    expect(manager.listWorkflowProcessSnapshots({ activeOnly: true })).toEqual([]);
+  });
+
+  it('publishes host-clamped process caps for managed runs', async () => {
+    const manager = createWorkflowRunManager();
+    const { backend } = fakeBackend();
+    const module: WorkflowModule = {
+      meta: {
+        name: 'host-capped-process',
+        description: 'host capped process',
+        readOnly: true,
+        maxAgents: 10,
+        tokenBudget: 50_000,
+      },
+      run: async () => 'ok',
+    };
+
+    const run = manager.start({
+      module,
+      args: {},
+      runId: 'run-host-capped',
+      runDir: dir,
+      backend,
+      hostPolicy: {
+        maxAgents: 2,
+        tokenBudget: 1_000,
+      },
+    });
+
+    await run.done;
+
+    expect(manager.getWorkflowProcessSnapshot('run-host-capped')).toMatchObject({
+      progress: {
+        agentCap: 2,
+      },
+      tokens: {
+        total: 1_000,
+      },
+    });
+  });
+
   it('pauses before launching new agents and resumes later', async () => {
     const manager = createWorkflowRunManager();
     const { backend, spawnCount } = fakeBackend();
@@ -118,12 +208,14 @@ describe('WorkflowRunManager', () => {
     await readyForSecond.promise;
     expect(spawnCount()).toBe(1);
     expect(manager.pause('run-pause')).toBe(true);
+    expect(manager.getWorkflowProcessSnapshot('run-pause')?.status).toBe('paused');
     allowSecond.resolve();
     await Promise.resolve();
     expect(manager.get('run-pause')?.status).toBe('paused');
     expect(spawnCount()).toBe(1);
 
     expect(manager.resume('run-pause')).toBe(true);
+    expect(manager.getWorkflowProcessSnapshot('run-pause')?.status).toBe('running');
     const outcome = await run.done;
     expect(outcome.kind).toBe('completed');
     expect(spawnCount()).toBe(2);

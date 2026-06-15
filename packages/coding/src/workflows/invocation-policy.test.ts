@@ -106,4 +106,45 @@ describe('decideWorkflowInvocation', () => {
       }),
     ).toMatchObject({ action: 'suggest', trigger: 'explicit' });
   });
+
+  it('lets hosts disable or confirm AMAW natural-language workflow auto-start', () => {
+    const input = 'Please compare three independent competing hypotheses and verify each one.';
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'amaw',
+        source: 'natural-language',
+        input,
+        hostPolicy: { autoStart: 'off' },
+      }),
+    ).toMatchObject({ action: 'none', trigger: 'complexity' });
+
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'amaw',
+        source: 'natural-language',
+        input,
+        hostPolicy: { autoStart: 'confirm' },
+      }),
+    ).toMatchObject({ action: 'suggest', trigger: 'complexity' });
+
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'amaw',
+        source: 'natural-language',
+        input,
+        hostPolicy: { autoStart: 'on' },
+      }),
+    ).toMatchObject({ action: 'auto-start', trigger: 'complexity' });
+  });
+
+  it('does not let host auto-start policy weaken explicit command routing', () => {
+    expect(
+      decideWorkflowInvocation({
+        agentMode: 'amaw',
+        source: 'command',
+        input: '/workflow create audit this feature',
+        hostPolicy: { autoStart: 'off' },
+      }),
+    ).toMatchObject({ action: 'auto-start', trigger: 'explicit' });
+  });
 });

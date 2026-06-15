@@ -124,6 +124,13 @@ export type PlanModeBlockCheck = (
   input: Record<string, unknown>,
 ) => string | null;
 
+export interface WorkflowChildDigestUpdate {
+  readonly childId: string;
+  readonly digest?: string;
+  readonly digestFailed?: boolean;
+  readonly totalTokensUsed: number;
+}
+
 export interface ChildExecutorOptions {
   readonly maxParallel: number;
   readonly maxIterationsPerChild: number;
@@ -139,6 +146,14 @@ export interface ChildExecutorOptions {
    * write children — the two concerns cannot share one field.
    */
   readonly workflowChild?: boolean;
+  /**
+   * Workflow child digest mode. `blocking` preserves FEATURE_217 behavior.
+   * `async` returns the child result immediately and reports the digest through
+   * `onWorkflowChildDigest`; worktree-isolated children still use blocking mode
+   * so the digest runs before cleanup removes the worktree.
+   */
+  readonly workflowDigestMode?: 'blocking' | 'async';
+  readonly onWorkflowChildDigest?: (update: WorkflowChildDigestUpdate) => void;
   /** Progress callback for REPL status display. Called when children start, progress, and complete. */
   readonly onProgress?: (status: string) => void;
   /**
@@ -428,6 +443,17 @@ function shouldCreateWorkflowChildDigest(
     result.lastText.trim().length > 0;
 }
 
+function shouldRunWorkflowDigestAsync(
+  bundle: KodaXChildContextBundle,
+  options: ChildExecutorOptions,
+  result: KodaXResult,
+): boolean {
+  return options.workflowDigestMode === 'async' &&
+    bundle.isolation !== 'worktree' &&
+    options.onWorkflowChildDigest !== undefined &&
+    shouldCreateWorkflowChildDigest(options, result);
+}
+
 async function createWorkflowChildDigest(
   input: {
     readonly runFn: RunKodaXFn;
@@ -486,6 +512,32 @@ async function createWorkflowChildDigest(
     clearTimeout(timer);
     input.options.abortSignal?.removeEventListener('abort', onParentAbort);
   }
+}
+
+function scheduleWorkflowChildDigest(
+  input: {
+    readonly runFn: RunKodaXFn;
+    readonly result: KodaXResult;
+    readonly provider: string;
+    readonly model?: string;
+    readonly scopeCtx: KodaXToolExecutionContext;
+    readonly bundle: KodaXChildContextBundle;
+    readonly options: ChildExecutorOptions;
+  },
+): void {
+  void createWorkflowChildDigest(input).then((digest) => {
+    try {
+      input.options.onWorkflowChildDigest?.({
+        childId: input.bundle.id,
+        ...(digest.digest ? { digest: digest.digest } : {}),
+        ...(digest.attemptFailed ? { digestFailed: true } : {}),
+        totalTokensUsed: digest.totalTokensUsed,
+      });
+    } catch {
+      // Digest callbacks are observers. A host panel must not change child
+      // completion semantics after the child has already returned.
+    }
+  });
 }
 
 function resolveSpecialistOverride(
@@ -636,15 +688,21 @@ async function runReadChildBody(
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
-    const digest = await createWorkflowChildDigest({
+    const totalTokensUsed = readChildTokenUsage(result);
+    const digestInput = {
       runFn,
       result,
       provider,
-      model,
+      ...(model ? { model } : {}),
       scopeCtx: scope.ctx,
       bundle,
       options,
-    });
+    };
+    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
+    const digest = runDigestAsync
+      ? { totalTokensUsed: 0 }
+      : await createWorkflowChildDigest(digestInput);
+    if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
     childResult = extractChildResult(
       bundle,
       annotateWorktreeSummary(result.lastText, scope),
@@ -652,10 +710,11 @@ async function runReadChildBody(
       {
         actualIterations: iterations,
         interrupted: result.interrupted === true,
-        totalTokensUsed: readChildTokenUsage(result) + digest.totalTokensUsed,
+        totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         sessionId: result.sessionId,
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
+        digestPending: runDigestAsync,
       },
     );
   } catch (error) {
@@ -788,15 +847,21 @@ async function runWriteChildBody(
     );
 
     const iterations = result.messages.filter((m) => m.role === 'assistant').length;
-    const digest = await createWorkflowChildDigest({
+    const totalTokensUsed = readChildTokenUsage(result);
+    const digestInput = {
       runFn,
       result,
       provider,
-      model,
+      ...(model ? { model } : {}),
       scopeCtx: childCtx,
       bundle,
       options,
-    });
+    };
+    const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
+    const digest = runDigestAsync
+      ? { totalTokensUsed: 0 }
+      : await createWorkflowChildDigest(digestInput);
+    if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
 
     childResult = extractChildResult(
       bundle,
@@ -805,10 +870,11 @@ async function runWriteChildBody(
       {
         actualIterations: iterations,
         interrupted: result.interrupted === true,
-        totalTokensUsed: readChildTokenUsage(result) + digest.totalTokensUsed,
+        totalTokensUsed: totalTokensUsed + digest.totalTokensUsed,
         sessionId: result.sessionId,
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
+        digestPending: runDigestAsync,
       },
     );
   } catch (error) {
@@ -1228,6 +1294,7 @@ interface ExtractChildResultMeta {
   readonly sessionId?: string;
   readonly digest?: string;
   readonly digestFailed?: boolean;
+  readonly digestPending?: boolean;
 }
 
 function extractChildResult(
@@ -1251,6 +1318,7 @@ function extractChildResult(
     ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
     ...(meta.digest ? { digest: meta.digest } : {}),
     ...(meta.digestFailed ? { digestFailed: true } : {}),
+    ...(meta.digestPending ? { digestPending: true } : {}),
     interrupted: meta.interrupted,
   };
 }

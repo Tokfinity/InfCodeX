@@ -12,7 +12,11 @@ import { tmpdir } from 'node:os';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { WorkflowAgentBackend, WorkflowModule } from '@kodax-ai/agent/workflow';
+import type {
+  WorkflowAgentBackend,
+  WorkflowModule,
+  WorkflowProcessEvent,
+} from '@kodax-ai/agent/workflow';
 import { WorkflowAbortError, WorkflowLimitError } from '@kodax-ai/agent/workflow';
 
 import { parallelInvestigation } from './builtin/parallel-investigation.js';
@@ -98,6 +102,39 @@ describe('runWorkflowModule', () => {
     // Live event sink saw the same envelope.
     expect(events[0]).toBe('workflow_started');
     expect(events.at(-1)).toBe('workflow_completed');
+  });
+
+  it('emits workflow process events for SDK consumers without REPL helpers', async () => {
+    const processEvents: WorkflowProcessEvent[] = [];
+    const outcome = await runWorkflowModule({
+      module: parallelInvestigation,
+      args: { question: 'where is the bug?' },
+      runId: 'run-process',
+      runDir: dir,
+      backend: fakeBackend(),
+      onWorkflowProcessEvent: (event) => processEvents.push(event),
+    });
+
+    expect(outcome.kind).toBe('completed');
+    expect(processEvents.map((event) => event.type)).toContain('workflow_started');
+    expect(processEvents.find((event) => event.type === 'workflow_finished')).toMatchObject({
+      type: 'workflow_finished',
+      snapshot: {
+        runId: 'run-process',
+        workflowName: 'parallel-investigation',
+        status: 'completed',
+        progress: {
+          spawnedAgents: 4,
+          finishedAgents: 4,
+        },
+      },
+    });
+    expect(processEvents.at(-1)).toMatchObject({
+      type: 'workflow_updated',
+      snapshot: {
+        resultSummary: expect.stringContaining('result for'),
+      },
+    });
   });
 
   it('writes stopped status for user-aborted workflow runs', async () => {
@@ -274,5 +311,67 @@ describe('runWorkflowModule', () => {
       maxConcurrency: 1,
       tokenBudget: 1,
     });
+  });
+
+  it('lowers approval caps with host policy ceilings', () => {
+    const module: WorkflowModule = {
+      meta: {
+        name: 'host-capped-summary',
+        description: 'host capped',
+        maxAgents: 10,
+        maxConcurrency: 8,
+        tokenBudget: 50_000,
+      },
+      run: async () => undefined,
+    };
+
+    expect(buildApprovalSummary(module, {
+      maxAgents: 3,
+      maxConcurrency: 2,
+      tokenBudget: 1_000,
+    })).toMatchObject({
+      maxAgents: 3,
+      maxConcurrency: 2,
+      tokenBudget: 1_000,
+    });
+  });
+
+  it('enforces host policy ceilings at runtime', async () => {
+    let spawns = 0;
+    const backend: WorkflowAgentBackend = {
+      ...fakeBackend(),
+      spawn: async (input) => {
+        spawns += 1;
+        return { taskId: `t${spawns}`, name: input.name };
+      },
+    };
+    const module: WorkflowModule = {
+      meta: {
+        name: 'host-capped-runtime',
+        description: 'host capped runtime',
+        maxAgents: 10,
+        maxConcurrency: 4,
+      },
+      run: async (wf) => {
+        await wf.runAgent({ name: 'a1', prompt: 'x' });
+        await wf.runAgent({ name: 'a2', prompt: 'x' });
+        await wf.runAgent({ name: 'a3', prompt: 'x' });
+      },
+    };
+
+    const outcome = await runWorkflowModule({
+      module,
+      args: {},
+      runId: 'run-host-cap',
+      runDir: dir,
+      backend,
+      hostPolicy: { maxAgents: 2 },
+    });
+
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind === 'failed') {
+      expect(outcome.error).toBeInstanceOf(WorkflowLimitError);
+    }
+    expect(spawns).toBe(2);
   });
 });

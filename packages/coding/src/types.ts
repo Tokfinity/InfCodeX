@@ -70,6 +70,7 @@ import type {
   ChildTaskRegistry,
   TaskAbortRegistry,
   WorkflowIsolation,
+  WorkflowProcessEvent,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
 // (coding-AMA vocabulary; see ADR-021). Imported directly here instead of
@@ -162,6 +163,7 @@ export type {
   KodaXSessionUiHistoryItemType,
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
+  WorkflowProcessEvent,
 };
 
 // ============== 事件接口 ==============
@@ -285,6 +287,8 @@ export interface KodaXEvents {
   onComplete?: () => void;
   onError?: (error: Error) => void;
   onManagedTaskStatus?: (status: KodaXManagedTaskStatusEvent) => void;
+  /** FEATURE_229: workflow process snapshot stream for SDK/host panels. */
+  onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   /**
    * Fired when Scout's managed-task completion is inferred but the harness
    * detected suspicious signals (mutation expected but none happened, budget
@@ -608,6 +612,8 @@ export interface KodaXChildAgentResult {
   digest?: string;
   /** True when a workflow child digest was attempted but failed (error/timeout/empty distillation). */
   digestFailed?: boolean;
+  /** True when a workflow child digest is running asynchronously and may arrive later. */
+  digestPending?: boolean;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */
@@ -1039,6 +1045,8 @@ export interface KodaXOptions {
   context?: KodaXContextOptions;
   events?: KodaXEvents;
   extensionRuntime?: ExtensionRuntimeContract;
+  /** FEATURE_229: host-owned policy for workflow auto-start and ceilings. */
+  workflowHostPolicy?: import('./workflows/invocation-policy.js').WorkflowHostPolicy;
   /** FEATURE_221: SDK-consumer self-manual injection (product name + topics). */
   selfManual?: KodaXSelfManualConfig;
   /**

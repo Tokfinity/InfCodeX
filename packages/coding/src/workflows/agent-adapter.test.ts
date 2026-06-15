@@ -8,12 +8,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { MessageQueue } from '@kodax-ai/agent';
+import type { MessageQueue, WorkflowTaskSummaryEventUpdate } from '@kodax-ai/agent';
 
 import {
   createCodingWorkflowBackend,
   type WorkflowChildOptions,
 } from './agent-adapter.js';
+import type { ChildExecutorOptions } from '../child-executor.js';
 import type {
   KodaXChildAgentResult,
   KodaXChildExecutionResult,
@@ -153,6 +154,54 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     // digest fires in production where parentHarness stays 'tool-dispatch'
     // (write children must not be dropped by validateWriteBundles).
     expect(seenWorkflowChild).toBe(true);
+  });
+
+  it('enables async digest updates when the runtime subscribes', async () => {
+    let seenDigestMode: ChildExecutorOptions['workflowDigestMode'];
+    let seenDigestCallback: ChildExecutorOptions['onWorkflowChildDigest'];
+    const updates: Array<{
+      readonly taskId: string;
+      readonly update: WorkflowTaskSummaryEventUpdate;
+    }> = [];
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      generateId: () => 'task-async',
+      runChild: (_bundles, _ctx, opts) => {
+        seenDigestMode = opts.workflowDigestMode;
+        seenDigestCallback = opts.onWorkflowChildDigest;
+        opts.onWorkflowChildDigest?.({
+          childId: 'task-async',
+          digest: '- Finding: adapter forwarded digest.',
+          totalTokensUsed: 9,
+        });
+        return Promise.resolve(execResult({
+          childId: 'task-async',
+          status: 'completed',
+          summary: 'full report',
+          digestPending: true,
+        }, { totalTokensUsed: 12 }));
+      },
+    });
+    backend.subscribeTaskSummaryUpdates?.((taskId, update) => updates.push({ taskId, update }));
+
+    const handle = await backend.spawn({ name: 'x', prompt: 'x' });
+    const result = await backend.wait(handle.taskId);
+
+    expect(seenDigestMode).toBe('async');
+    expect(seenDigestCallback).toBeDefined();
+    expect(result.digestPending).toBe(true);
+    expect(result.digest).toBeUndefined();
+    expect(updates).toEqual([
+      {
+        taskId: 'task-async',
+        update: {
+          summary: '- Finding: adapter forwarded digest.',
+          summaryKind: 'digest',
+          usage: { totalTokens: 9 },
+        },
+      },
+    ]);
   });
 
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {

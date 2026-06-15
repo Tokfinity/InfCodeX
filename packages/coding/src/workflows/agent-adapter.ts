@@ -25,6 +25,7 @@ import type {
   WorkflowSpawnAgentInput,
   WorkflowTaskHandle,
   WorkflowTaskResult,
+  WorkflowTaskSummaryEventUpdate,
   WorkflowTaskSnapshot,
   WorkflowTaskStatus,
   WorkflowWaitOptions,
@@ -49,7 +50,12 @@ import type {
  *  per spawn. */
 export type WorkflowChildOptions = Omit<
   ChildExecutorOptions,
-  'maxParallel' | 'abortSignal' | 'snapshotUpdater'
+  | 'maxParallel'
+  | 'abortSignal'
+  | 'snapshotUpdater'
+  | 'workflowChild'
+  | 'workflowDigestMode'
+  | 'onWorkflowChildDigest'
 >;
 
 export interface CodingWorkflowBackendDeps {
@@ -70,6 +76,7 @@ export interface CodingWorkflowBackendDeps {
   readonly generateId?: () => string;
   /** Seam: clock for snapshot timestamps. */
   readonly now?: () => number;
+  readonly onTaskSummary?: (taskId: string, update: WorkflowTaskSummaryEventUpdate) => void;
 }
 
 interface TaskEntry {
@@ -135,6 +142,7 @@ function deriveTerminal(
   finalText: string;
   digest?: string;
   digestFailed?: boolean;
+  digestPending?: boolean;
 } {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
@@ -148,6 +156,7 @@ function deriveTerminal(
       finalText,
       ...(child.digest ? { digest: child.digest } : {}),
       ...(child.digestFailed ? { digestFailed: true } : {}),
+      ...(child.digestPending ? { digestPending: true } : {}),
     };
   }
   return { status: 'failed', snapStatus: 'failed', finalText };
@@ -165,9 +174,34 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   const genId = deps.generateId ?? (() => `wf-child-${(counter += 1)}`);
 
   const tasks = new Map<string, TaskEntry>();
+  const summarySubscribers = new Set<(
+    taskId: string,
+    update: WorkflowTaskSummaryEventUpdate,
+  ) => void>();
   // Registry used ONLY for routeMessage target validation; auto-cleared on
   // settle by registerChildTask. `tasks` (above) persists for wait/output.
   const registry: ChildTaskRegistry<KodaXChildExecutionResult> = new Map();
+
+  const hasTaskSummaryObservers = (): boolean =>
+    deps.onTaskSummary !== undefined || summarySubscribers.size > 0;
+
+  const notifyTaskSummary = (
+    taskId: string,
+    update: WorkflowTaskSummaryEventUpdate,
+  ): void => {
+    try {
+      deps.onTaskSummary?.(taskId, update);
+    } catch {
+      // Late digest subscribers are observers.
+    }
+    for (const subscriber of summarySubscribers) {
+      try {
+        subscriber(taskId, update);
+      } catch {
+        // Late digest subscribers are observers.
+      }
+    }
+  };
 
   const spawn = async (input: WorkflowSpawnAgentInput): Promise<WorkflowTaskHandle> => {
     const childId = genId();
@@ -193,6 +227,20 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       // workflow children without overloading `parentHarness` (which stays
       // 'tool-dispatch' so write children are not dropped by validateWriteBundles).
       workflowChild: true,
+      workflowDigestMode: hasTaskSummaryObservers() ? 'async' : 'blocking',
+      ...(hasTaskSummaryObservers()
+        ? {
+            onWorkflowChildDigest: (update) => {
+              notifyTaskSummary(update.childId, {
+                ...(update.digest ? { summary: update.digest } : {}),
+                summaryKind: update.digest ? 'digest' : 'digest-failed',
+                ...(update.totalTokensUsed > 0
+                  ? { usage: { totalTokens: update.totalTokensUsed } }
+                  : {}),
+              });
+            },
+          }
+        : {}),
       abortSignal: abort.signal,
       snapshotUpdater: snapshotMap
         ? (event) => applyChildSnapshotEvent(snapshotMap, childId, event)
@@ -239,6 +287,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       finalText: term.finalText,
       ...(term.digest ? { digest: term.digest } : {}),
       ...(term.digestFailed ? { digestFailed: true } : {}),
+      ...(term.digestPending ? { digestPending: true } : {}),
       usage: { totalTokens: result.totalTokensUsed },
     };
   };
@@ -264,5 +313,17 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
   // NOTE: no `synthesize` here — `wf.synthesize` runs as a gated agent in
   // the runtime (through spawn/wait) so it counts toward maxAgents /
   // concurrency / budget and emits run-graph events.
-  return { spawn, wait, output, send, stop };
+  return {
+    spawn,
+    wait,
+    output,
+    send,
+    stop,
+    subscribeTaskSummaryUpdates: (listener) => {
+      summarySubscribers.add(listener);
+      return () => {
+        summarySubscribers.delete(listener);
+      };
+    },
+  };
 }

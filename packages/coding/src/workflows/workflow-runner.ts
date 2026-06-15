@@ -8,7 +8,10 @@
  * run dir + a stub approval callback.
  */
 
-import { runWorkflow } from '@kodax-ai/agent';
+import {
+  createWorkflowProcessTracker,
+  runWorkflow,
+} from '@kodax-ai/agent';
 import type {
   WorkflowAgentBackend,
   WorkflowApproval,
@@ -17,12 +20,14 @@ import type {
   WorkflowLimits,
   WorkflowMeta,
   WorkflowModule,
+  WorkflowProcessEvent,
   WorkflowRunState,
 } from '@kodax-ai/agent';
 
 import { dirname } from 'node:path';
 
 import { createCodingWorkflowBackend, type WorkflowChildOptions } from './agent-adapter.js';
+import type { WorkflowHostPolicy } from './invocation-policy.js';
 import { createRunGraphWriter, type WorkflowScriptSnapshotInput } from './run-graph.js';
 import {
   workflowWorktreeBaseDir,
@@ -56,9 +61,13 @@ export interface RunWorkflowModuleOptions {
   readonly backend?: WorkflowAgentBackend;
   /** Approval gate. When omitted, the run auto-proceeds (SDK / headless). */
   readonly approval?: WorkflowApproval;
+  /** Optional host/SDK ceilings. These may only lower manifest/system limits. */
+  readonly hostPolicy?: WorkflowHostPolicy;
   readonly signal?: AbortSignal;
   /** Extra event sink (e.g. live UI), in addition to the durable writer. */
   readonly onEvent?: (event: WorkflowEvent) => void;
+  /** Host/SDK process snapshot stream. */
+  readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
   /** Optional lifecycle gate, used by WorkflowRunManager pause/resume. */
@@ -73,9 +82,12 @@ export type RunWorkflowModuleOutcome =
   | { readonly kind: 'failed'; readonly error: Error; readonly state: WorkflowRunState };
 
 /** Build the pre-run approval summary from a workflow module's metadata. */
-export function buildApprovalSummary(module: WorkflowModule): WorkflowApprovalSummary {
+export function buildApprovalSummary(
+  module: WorkflowModule,
+  hostPolicy?: WorkflowHostPolicy,
+): WorkflowApprovalSummary {
   const meta = module.meta;
-  const limits = clampWorkflowLimits(meta);
+  const limits = clampWorkflowLimits(meta, hostPolicy);
   return {
     name: meta.name,
     description: meta.description,
@@ -94,18 +106,59 @@ function clampLimit(value: number | undefined, hardCap: number): number | undefi
   return Math.min(value, hardCap);
 }
 
-export function clampWorkflowLimits(meta: WorkflowMeta): WorkflowLimits {
+function clampEffectiveLimit(
+  manifestValue: number | undefined,
+  hostValue: number | undefined,
+  hardCap: number,
+): number | undefined {
+  const manifestLimit = clampLimit(manifestValue, hardCap);
+  const hostLimit = clampLimit(hostValue, hardCap);
+  if (manifestLimit === undefined) return hostLimit;
+  if (hostLimit === undefined) return manifestLimit;
+  return Math.min(manifestLimit, hostLimit);
+}
+
+export function clampWorkflowLimits(
+  meta: WorkflowMeta,
+  hostPolicy?: WorkflowHostPolicy,
+): WorkflowLimits {
+  const maxAgents = clampEffectiveLimit(
+    meta.maxAgents,
+    hostPolicy?.maxAgents,
+    SYSTEM_WORKFLOW_LIMITS.maxAgents,
+  );
+  const maxConcurrency = clampEffectiveLimit(
+    meta.maxConcurrency,
+    hostPolicy?.maxConcurrency,
+    SYSTEM_WORKFLOW_LIMITS.maxConcurrency,
+  );
+  const tokenBudget = clampEffectiveLimit(
+    meta.tokenBudget,
+    hostPolicy?.tokenBudget,
+    SYSTEM_WORKFLOW_LIMITS.tokenBudget,
+  );
   return {
-    ...(meta.maxAgents !== undefined
-      ? { maxAgents: clampLimit(meta.maxAgents, SYSTEM_WORKFLOW_LIMITS.maxAgents) }
-      : {}),
-    ...(meta.maxConcurrency !== undefined
-      ? { maxConcurrency: clampLimit(meta.maxConcurrency, SYSTEM_WORKFLOW_LIMITS.maxConcurrency) }
-      : {}),
-    ...(meta.tokenBudget !== undefined
-      ? { tokenBudget: clampLimit(meta.tokenBudget, SYSTEM_WORKFLOW_LIMITS.tokenBudget) }
-      : {}),
+    ...(maxAgents !== undefined ? { maxAgents } : {}),
+    ...(maxConcurrency !== undefined ? { maxConcurrency } : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
   };
+}
+
+function workflowResultSummary(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  const synthesis = record.synthesis;
+  if (typeof synthesis === 'string' && synthesis.trim().length > 0) return synthesis;
+  if (typeof synthesis === 'object' && synthesis !== null) {
+    const text = (synthesis as Record<string, unknown>).text;
+    if (typeof text === 'string' && text.trim().length > 0) return text;
+  }
+  for (const key of ['summary', 'report', 'text', 'result']) {
+    const candidate = record[key];
+    if (typeof candidate === 'string' && candidate.trim().length > 0) return candidate;
+  }
+  return undefined;
 }
 
 /**
@@ -118,7 +171,8 @@ export function clampWorkflowLimits(meta: WorkflowMeta): WorkflowLimits {
 export async function runWorkflowModule(
   opts: RunWorkflowModuleOptions,
 ): Promise<RunWorkflowModuleOutcome> {
-  const summary = buildApprovalSummary(opts.module);
+  const limits = clampWorkflowLimits(opts.module.meta, opts.hostPolicy);
+  const summary = buildApprovalSummary(opts.module, opts.hostPolicy);
   if (opts.approval) {
     const approved = await opts.approval(summary);
     if (!approved) return { kind: 'denied', summary };
@@ -137,6 +191,20 @@ export async function runWorkflowModule(
   );
 
   const writer = createRunGraphWriter(opts.runDir, { now });
+  const processTracker = opts.onWorkflowProcessEvent
+    ? createWorkflowProcessTracker({
+        runId: opts.runId,
+        workflowName: opts.module.meta.name,
+        displayName: opts.module.meta.name,
+        ...(opts.module.meta.phases !== undefined ? { phases: opts.module.meta.phases } : {}),
+        ...(limits.maxAgents !== undefined ? { maxAgents: limits.maxAgents } : {}),
+        ...(opts.module.meta.plannedAgents !== undefined
+          ? { plannedAgents: opts.module.meta.plannedAgents }
+          : {}),
+        ...(limits.tokenBudget !== undefined ? { tokenBudget: limits.tokenBudget } : {}),
+        now: () => new Date(now()).toISOString(),
+      })
+    : undefined;
   const scriptSnapshot = opts.scriptSnapshot
     ? writer.writeScriptSnapshot(opts.scriptSnapshot)
     : undefined;
@@ -158,10 +226,13 @@ export async function runWorkflowModule(
         runId: opts.runId,
         args: opts.args,
         backend,
-        limits: clampWorkflowLimits(opts.module.meta),
+        limits,
         ...(opts.signal ? { signal: opts.signal } : {}),
         onEvent: (event) => {
           writer.onEvent(event);
+          if (processTracker) {
+            opts.onWorkflowProcessEvent?.(processTracker.applyEvent(event));
+          }
           opts.onEvent?.(event);
         },
       },
@@ -186,6 +257,13 @@ export async function runWorkflowModule(
     endedAt: now(),
     ...(scriptSnapshot ? { scriptSnapshot } : {}),
   });
+
+  if (processTracker && outcome.ok) {
+    const summaryText = workflowResultSummary(outcome.result);
+    if (summaryText !== undefined) {
+      opts.onWorkflowProcessEvent?.(processTracker.setResultSummary(summaryText));
+    }
+  }
 
   return outcome.ok
     ? { kind: 'completed', result: outcome.result, state: outcome.state }
@@ -221,6 +299,7 @@ export interface RunWorkflowFromOptionsInput {
   readonly approval?: WorkflowApproval;
   readonly signal?: AbortSignal;
   readonly onEvent?: (event: WorkflowEvent) => void;
+  readonly onWorkflowProcessEvent?: (event: WorkflowProcessEvent) => void;
   readonly now?: () => number;
   readonly scriptSnapshot?: WorkflowScriptSnapshotInput;
   readonly beforeSpawn?: () => Promise<void>;
@@ -261,6 +340,13 @@ export async function runWorkflowFromOptions(
       extensionRuntime: input.options.extensionRuntime,
     },
   };
+  const onWorkflowProcessEvent =
+    input.onWorkflowProcessEvent || input.options.events?.onWorkflowProcessEvent
+      ? (event: WorkflowProcessEvent): void => {
+          input.onWorkflowProcessEvent?.(event);
+          input.options.events?.onWorkflowProcessEvent?.(event);
+        }
+      : undefined;
   return runWorkflowModule({
     module: input.module,
     args: input.args,
@@ -271,6 +357,8 @@ export async function runWorkflowFromOptions(
     ...(input.approval ? { approval: input.approval } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.onEvent ? { onEvent: input.onEvent } : {}),
+    ...(onWorkflowProcessEvent ? { onWorkflowProcessEvent } : {}),
+    ...(input.options.workflowHostPolicy ? { hostPolicy: input.options.workflowHostPolicy } : {}),
     ...(input.now ? { now: input.now } : {}),
     ...(input.scriptSnapshot ? { scriptSnapshot: input.scriptSnapshot } : {}),
     ...(input.beforeSpawn ? { beforeSpawn: input.beforeSpawn } : {}),

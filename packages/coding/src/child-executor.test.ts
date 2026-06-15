@@ -28,7 +28,7 @@ import {
   CHILD_EXCLUDE_TOOLS_BASE,
 } from './child-executor.js';
 import { clearAgentsLoaderCacheForTesting } from './context/agents-loader.js';
-import type { ChildExecutorOptions } from './child-executor.js';
+import type { ChildExecutorOptions, WorkflowChildDigestUpdate } from './child-executor.js';
 import { runKodaX } from './agent.js';
 import {
   _resetAgentResolverForTesting,
@@ -70,6 +70,17 @@ function createCtx() {
     gitRoot: '/test/repo',
     executionCwd: '/test/repo',
   };
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe('executeChildAgents — guardrails propagation (FEATURE_092 phase 2b.7b slice D)', () => {
@@ -198,6 +209,62 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(digestOptions.maxIter).toBe(1);
     expect(digestOptions.session?.initialMessages).toBe(childMessages);
     expect(digestOptions.context?.excludeTools).toContain('read');
+  });
+
+  it('can return a workflow child before its async digest finishes', async () => {
+    const childMessages = [
+      { role: 'assistant' as const, content: 'Full report with evidence.' },
+    ];
+    const digestRun = deferred<{
+      readonly success: true;
+      readonly lastText: string;
+      readonly messages: readonly { readonly role: 'assistant'; readonly content: string }[];
+      readonly sessionId: string;
+      readonly usage: { readonly totalTokens: number };
+    }>();
+    const digestUpdate = deferred<WorkflowChildDigestUpdate>();
+    mockRunKodaX
+      .mockResolvedValueOnce({
+        success: true,
+        lastText: 'Full report with evidence.',
+        messages: childMessages,
+        sessionId: 's-child',
+        usage: { inputTokens: 30, outputTokens: 12, totalTokens: 42 },
+      })
+      .mockImplementationOnce(() => digestRun.promise);
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-async-digest', readOnly: true })],
+      createCtx(),
+      createOptions({
+        workflowChild: true,
+        workflowDigestMode: 'async',
+        onWorkflowChildDigest: (update) => digestUpdate.resolve(update),
+      }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(result.results[0]?.summary).toBe('Full report with evidence.');
+    expect(result.results[0]?.digest).toBeUndefined();
+    expect(result.results[0]?.digestPending).toBe(true);
+    expect(result.totalTokensUsed).toBe(42);
+
+    digestRun.resolve({
+      success: true,
+      lastText: '- Finding: async digest is late.',
+      messages: [
+        ...childMessages,
+        { role: 'assistant' as const, content: '- Finding: async digest is late.' },
+      ],
+      sessionId: 's-child',
+      usage: { totalTokens: 13 },
+    });
+
+    await expect(digestUpdate.promise).resolves.toMatchObject({
+      childId: 'cb-async-digest',
+      digest: '- Finding: async digest is late.',
+      totalTokensUsed: 13,
+    });
   });
 
   it('does not add the digest turn for ordinary dispatch-child-tasks children', async () => {

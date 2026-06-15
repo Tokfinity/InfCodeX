@@ -4,10 +4,18 @@ export type WorkflowInvocationSource = 'natural-language' | 'command';
 export type WorkflowInvocationAction = 'none' | 'suggest' | 'auto-start';
 export type WorkflowInvocationTrigger = 'explicit' | 'complexity' | 'negated' | 'none';
 
+export interface WorkflowHostPolicy {
+  readonly autoStart?: 'off' | 'confirm' | 'on';
+  readonly maxAgents?: number;
+  readonly maxConcurrency?: number;
+  readonly tokenBudget?: number;
+}
+
 export interface WorkflowInvocationPolicyInput {
   readonly agentMode: KodaXAgentMode;
   readonly source: WorkflowInvocationSource;
   readonly input: string;
+  readonly hostPolicy?: WorkflowHostPolicy;
 }
 
 export interface WorkflowInvocationPolicyDecision {
@@ -81,6 +89,14 @@ export function decideWorkflowInvocation(
   }
 
   if (input.agentMode === 'amaw') {
+    if (input.source === 'natural-language') {
+      if (input.hostPolicy?.autoStart === 'off') {
+        return decision('none', explicit ? 'explicit' : 'complexity', 'host policy disabled natural-language workflow auto-start');
+      }
+      if (input.hostPolicy?.autoStart === 'confirm') {
+        return decision('suggest', explicit ? 'explicit' : 'complexity', 'host policy requires confirmation before workflow auto-start');
+      }
+    }
     return decision('auto-start', explicit ? 'explicit' : 'complexity', 'AMAW starts capability-generated workflows automatically');
   }
 
