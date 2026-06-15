@@ -319,6 +319,53 @@ function findOuterRunReturnExpression(source: string): string | undefined {
   return undefined;
 }
 
+function findOuterRunStatements(source: string): readonly string[] {
+  const range = findRunBodyRange(source);
+  if (!range) return [];
+  const stripped = stripGeneratedSourceLiterals(source);
+  const statements: string[] = [];
+  let start = range.start;
+  let depth = 1;
+  for (let i = range.start; i < range.end; i += 1) {
+    const ch = stripped[i];
+    if (ch === '{' || ch === '(' || ch === '[') {
+      depth += 1;
+      continue;
+    }
+    if (ch === '}' || ch === ')' || ch === ']') {
+      depth -= 1;
+      continue;
+    }
+    if (ch === ';' && depth === 1) {
+      const statement = source.slice(start, i + 1).trim();
+      if (statement) statements.push(statement);
+      start = i + 1;
+    }
+  }
+  const trailing = source.slice(start, range.end).trim();
+  if (trailing) statements.push(trailing);
+  return statements;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isReturnedArtifactHandle(source: string, expression: string): boolean {
+  const variable = /^[A-Za-z_$][A-Za-z0-9_$]*$/.exec(expression.trim())?.[0];
+  if (!variable) return false;
+  const escaped = escapeRegExp(variable);
+  const declaration = new RegExp(
+    `^\\s*(?:const|let|var)\\s+${escaped}\\s*=\\s*(?:await\\s+)?wf\\s*\\.\\s*artifact\\b`,
+  );
+  const assignment = new RegExp(
+    `^\\s*${escaped}\\s*=\\s*(?:await\\s+)?wf\\s*\\.\\s*artifact\\b`,
+  );
+  return findOuterRunStatements(source).some((statement) =>
+    declaration.test(statement) || assignment.test(statement),
+  );
+}
+
 function hasDisplayableRunReturn(source: string): boolean {
   const expression = findOuterRunReturnExpression(source);
   if (!expression) return false;
@@ -331,6 +378,7 @@ function hasDisplayableRunReturn(source: string): boolean {
   // answer — these are the artifact-only / phase-local anti-patterns.
   if (/^await\s+wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
   if (/^wf\s*\.\s*(?:artifact|phase)\b/.test(trimmed)) return false;
+  if (isReturnedArtifactHandle(source, trimmed)) return false;
   // Any other non-empty value return is displayable. We deliberately do NOT
   // require specific identifier names (synthesis/report/...) — a workflow may
   // legitimately return `{ findings }`, `analysis`, etc. The runtime result
