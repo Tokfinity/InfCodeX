@@ -74,3 +74,38 @@ describe('loadCompactionConfig — adaptive integration', () => {
     }
   });
 });
+
+describe('loadCompactionConfig — SDK overrides (KodaXOptions.compaction)', () => {
+  it('SDK triggerPercent wins over adaptive default and user config', async () => {
+    // Deterministic: an explicit SDK triggerPercent is the top of the
+    // cascade, so it holds regardless of the dev machine's config.json.
+    const cfg = await loadCompactionConfig(1_000_000, { triggerPercent: 42 });
+    expect(cfg.triggerPercent).toBe(42);
+  });
+
+  it('SDK contextWindow is applied and moves the adaptive trigger bucket', async () => {
+    // SDK pins 200K even though the provider arg is 1M. The contextWindow
+    // is applied, and the adaptive bucket keys off the effective (pinned)
+    // window — so the result matches passing 200K directly as the arg.
+    const viaArg = await loadCompactionConfig(200_000);
+    const viaSdkWindow = await loadCompactionConfig(1_000_000, {
+      contextWindow: 200_000,
+    });
+    expect(viaSdkWindow.contextWindow).toBe(200_000);
+    expect(viaSdkWindow.triggerPercent).toBe(viaArg.triggerPercent);
+  });
+
+  it('SDK enabled=false disables compaction', async () => {
+    expect((await loadCompactionConfig(200_000, { enabled: false })).enabled).toBe(
+      false,
+    );
+  });
+
+  it('omitted override fields fall through to the normal cascade', async () => {
+    const base = await loadCompactionConfig(1_000_000);
+    const withEmpty = await loadCompactionConfig(1_000_000, {});
+    expect(withEmpty.triggerPercent).toBe(base.triggerPercent);
+    expect(withEmpty.enabled).toBe(base.enabled);
+    expect(withEmpty.contextWindow).toBe(base.contextWindow);
+  });
+});

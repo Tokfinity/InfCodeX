@@ -138,6 +138,40 @@ describe('KodaXBaseProvider', () => {
     expect(provider.getEffectiveContextWindow('unknown-model')).toBe(200_000);
   });
 
+  it('reads default-model contextWindow from models[] when declared there', () => {
+    // Regression: a custom provider whose DEFAULT model also appears in
+    // models[] with a per-model contextWindow must resolve to that window,
+    // not the provider-level fallback. Previously getModelDescriptor
+    // short-circuited the default model to a bare { id }, dropping the
+    // declared contextWindow and silently using the provider default.
+    class DefaultInListProvider extends KodaXBaseProvider {
+      readonly name = 'default-in-list';
+      readonly supportsThinking = false;
+      protected readonly config: KodaXProviderConfig = {
+        apiKeyEnv: 'DEFAULT_IN_LIST_KEY',
+        model: 'glm-5.2',
+        models: [
+          { id: 'glm-5.2', contextWindow: 1_000_000, maxOutputTokens: 131_072 },
+          { id: 'glm-5.1' },
+        ],
+        supportsThinking: false,
+        contextWindow: 200_000,
+        maxOutputTokens: 32_000,
+      };
+      async stream(): Promise<KodaXStreamResult> {
+        throw new Error('not implemented in unit test');
+      }
+    }
+    const provider = new DefaultInListProvider();
+    // Default model resolved both explicitly and via the no-arg overload.
+    expect(provider.getEffectiveContextWindow('glm-5.2')).toBe(1_000_000);
+    expect(provider.getEffectiveContextWindow()).toBe(1_000_000);
+    expect(provider.getContextWindow()).toBe(1_000_000);
+    expect(provider.getEffectiveMaxOutputTokens('glm-5.2')).toBe(131_072);
+    // A models[] entry without contextWindow still falls back to provider level.
+    expect(provider.getEffectiveContextWindow('glm-5.1')).toBe(200_000);
+  });
+
   it('reads maxOutputTokens from the active model descriptor when present', () => {
     const provider = new TestProvider();
     expect(provider.getEffectiveMaxOutputTokens()).toBe(32_000);

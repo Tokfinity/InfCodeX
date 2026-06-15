@@ -34,7 +34,14 @@ import {
   runManagedTaskViaRunner,
 } from './runner-driven.js';
 import type { RunnableTool } from '@kodax-ai/agent';
-import type { KodaXMessage, KodaXToolDefinition, KodaXToolUseBlock } from '@kodax-ai/llm';
+import type {
+  KodaXMessage,
+  KodaXProviderStreamOptions,
+  KodaXReasoningRequest,
+  KodaXStreamResult,
+  KodaXToolDefinition,
+  KodaXToolUseBlock,
+} from '@kodax-ai/llm';
 import type { KodaXChildExecutionResult, KodaXEvents, KodaXOptions, KodaXToolExecutionContext } from '../types.js';
 
 // Shared scratch directory for `managedTaskWorkspaceDir` so the
@@ -308,6 +315,81 @@ describe('buildRunnerLlmAdapter — max_tokens escalation (FEATURE_085 Scout par
       provider: ESCALATION_PROVIDER_NAME,
     };
   }
+
+  it('passes the requested model into every provider stream call, including L5 continuation', async () => {
+    const observedModels: Array<string | undefined> = [];
+    const responses: KodaXStreamResult[] = [
+      {
+        textBlocks: [],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        stopReason: 'max_tokens',
+      },
+      {
+        textBlocks: [{ type: 'text', text: 'half' }],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        stopReason: 'max_tokens',
+      },
+      {
+        textBlocks: [{ type: 'text', text: ' done' }],
+        toolBlocks: [],
+        thinkingBlocks: [],
+        stopReason: 'end_turn',
+      },
+    ];
+    let callIdx = 0;
+    class Scripted extends KodaXBaseProviderRef {
+      readonly name = ESCALATION_PROVIDER_NAME;
+      readonly supportsThinking = false;
+      protected readonly config = {
+        apiKeyEnv: ESCALATION_PROVIDER_API_KEY_ENV,
+        model: 'scripted',
+        supportsThinking: false,
+        reasoningCapability: 'prompt-only' as const,
+        maxOutputTokens: KODAX_CAPPED,
+        capabilityProfile: {
+          transport: 'native-api' as const,
+          conversationSemantics: 'full-history' as const,
+          mcpSupport: 'none' as const,
+          contextFidelity: 'full' as const,
+          toolCallingFidelity: 'full' as const,
+          sessionSupport: 'stateless' as const,
+          longRunningSupport: 'limited' as const,
+          multimodalSupport: 'none' as const,
+          evidenceSupport: 'limited' as const,
+        },
+      };
+      async stream(
+        _messages: KodaXMessage[],
+        _tools: KodaXToolDefinition[],
+        _system: string,
+        _reasoning?: boolean | KodaXReasoningRequest,
+        streamOptions?: KodaXProviderStreamOptions,
+      ): Promise<KodaXStreamResult> {
+        observedModels.push(streamOptions?.modelOverride);
+        const resp = responses[callIdx++];
+        if (!resp) throw new Error(`No scripted response for stream call #${callIdx}`);
+        this.setMaxOutputTokensOverride(undefined);
+        return resp;
+      }
+    }
+    process.env[ESCALATION_PROVIDER_API_KEY_ENV] = 'test-key';
+    registerModelProviderFn(ESCALATION_PROVIDER_NAME, () => new Scripted());
+
+    const adapter = buildRunnerLlmAdapter({
+      ...makeAdapterOptions(),
+      model: 'glm-5.2',
+    });
+    const result = await adapter(
+      [{ role: 'system', content: 'sys' }, { role: 'user', content: 'Big task.' }],
+      { name: 'scout', instructions: '' },
+    );
+
+    expect(result.text).toContain('half');
+    expect(result.text).toContain('done');
+    expect(observedModels).toEqual(['glm-5.2', 'glm-5.2', 'glm-5.2']);
+  }, 15_000);
 
   it('escalates capped budget to 64K on first max_tokens, reissues same turn', async () => {
     const observedBudgets: number[] = [];

@@ -68,6 +68,7 @@ import {
   microcompact,
   needsCompaction,
   POST_COMPACT_TOKEN_BUDGET,
+  resolveContextWindow,
   type CompactionConfig,
   type CompactionUpdate,
 } from '@kodax-ai/agent';
@@ -151,21 +152,29 @@ export async function buildManagedTaskCompactionHook(
 ): Promise<RunnerCompactionHook | undefined> {
   const provider = resolveProvider(options.provider ?? 'anthropic');
   const activeModel = options.modelOverride ?? options.model;
-  // Pass per-model contextWindow so loadCompactionConfig's adaptive
-  // triggerPercent bucket matches the active model. Without this, a
+  // Resolve the provider's per-model window first so loadCompactionConfig's
+  // adaptive triggerPercent bucket matches the active model. Without this, a
   // task started on ark-coding/deepseek-v4-pro (1M) would inherit
   // ark-coding/glm-5.1's bucket (200K → 60%) and fire compaction
-  // ~150K tokens too early. User-config triggerPercent still wins.
+  // ~150K tokens too early. SDK (`options.compaction`) and user-config
+  // overrides still win.
+  const providerWindow =
+    provider.getEffectiveContextWindow?.(activeModel) ?? provider.getContextWindow();
   const compactionConfig: CompactionConfig = await loadCompactionConfig(
-    provider.getEffectiveContextWindow?.(activeModel) ?? provider.getContextWindow(),
+    providerWindow,
+    options.compaction,
   );
   if (!compactionConfig.enabled) {
     return undefined;
   }
-  const contextWindow = compactionConfig.contextWindow
-    ?? provider.getEffectiveContextWindow?.(activeModel)
-    ?? provider.getContextWindow?.()
-    ?? 200_000;
+  // Single source of truth (CAP-056): the same cascade the per-turn SA path
+  // (`resolvePerTurnProvider`) and the status-bar indicator
+  // (`resolveEffectiveCompactionInfo`) use, so AMA compaction triggers on
+  // the same window the user sees. `resolveContextWindow` honours
+  // `compactionConfig.contextWindow` (SDK / user override) first, then the
+  // provider's per-model window — replacing the hand-rolled cascade that
+  // could drift from those two consumers.
+  const contextWindow = resolveContextWindow(compactionConfig, provider, activeModel);
   const events = options.events;
   const snapshotRef = hookOptions.contextTokenSnapshotRef;
   const onPostCompact = hookOptions.onPostCompact;

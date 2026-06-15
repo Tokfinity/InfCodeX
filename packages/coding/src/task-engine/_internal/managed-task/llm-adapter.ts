@@ -193,6 +193,7 @@ export function buildRunnerLlmAdapter(
     options.events.getCostReport.current = () =>
       formatCostReport(getCostSummary(costTracker));
   }
+  const activeModel = options.modelOverride ?? options.model;
 
   return async (messages, agent) => {
     // Strip every leading contiguous system message and concatenate their
@@ -366,7 +367,7 @@ export function buildRunnerLlmAdapter(
         attempt += 1;
         boundaryTracker.beginRequest(
           providerName,
-          provider.getModel?.() ?? options.modelOverride ?? 'unknown',
+          activeModel ?? provider.getModel?.() ?? 'unknown',
           providerMessages,
           attempt,
           false,
@@ -414,6 +415,7 @@ export function buildRunnerLlmAdapter(
         // coordinator inspects these markers to decide whether a failure
         // happened before the first delta, mid-stream, post-tool, etc.
         const streamOptions = {
+          modelOverride: activeModel,
           onTextDelta: (text: string) => {
             boundaryTracker.markTextDelta(text);
             resetIdleTimer();
@@ -464,7 +466,7 @@ export function buildRunnerLlmAdapter(
             raw.stopReason === 'max_tokens'
             && !hasEscalatedForCurrentAdapterCall
             && !process.env.KODAX_MAX_OUTPUT_TOKENS
-            && provider.getEffectiveMaxOutputTokens() < KODAX_ESCALATED_MAX_OUTPUT_TOKENS
+            && provider.getEffectiveMaxOutputTokens(activeModel) < KODAX_ESCALATED_MAX_OUTPUT_TOKENS
           ) {
             hasEscalatedForCurrentAdapterCall = true;
             provider.setMaxOutputTokensOverride(KODAX_ESCALATED_MAX_OUTPUT_TOKENS);
@@ -584,7 +586,7 @@ export function buildRunnerLlmAdapter(
               idleTimer = undefined;
               boundaryTracker.beginRequest(
                 providerName,
-                provider.getModel?.() ?? options.modelOverride ?? 'unknown',
+                activeModel ?? provider.getModel?.() ?? 'unknown',
                 providerMessages,
                 attempt,
                 true,
@@ -596,6 +598,7 @@ export function buildRunnerLlmAdapter(
                 system,
                 providerReasoning,
                 {
+                  modelOverride: activeModel,
                   onTextDelta: (text: string) => {
                     boundaryTracker.markTextDelta(text);
                     options.events?.onTextDelta?.(text);
@@ -736,6 +739,7 @@ export function buildRunnerLlmAdapter(
             system,
             providerReasoning,
             {
+              modelOverride: activeModel,
               onTextDelta: (text: string) => {
                 const hasMarker = text.includes('```')
                   || MANAGED_CONTROL_PLANE_MARKERS.some((marker) => text.includes(marker));

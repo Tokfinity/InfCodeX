@@ -414,7 +414,10 @@ export async function runSubstrate(
   const initialContextWindow =
     initialProvider.getEffectiveContextWindow?.(turnState.currentModelOverride)
     ?? initialProvider.getContextWindow();
-  const compactionConfig = await loadCompactionConfig(initialContextWindow);
+  const compactionConfig = await loadCompactionConfig(
+    initialContextWindow,
+    options.compaction,
+  );
 
   // CAP-043: autoResume / resume — pick the most recent persisted
   // session when no explicit id was supplied. Folded into

@@ -122,6 +122,7 @@ export type {
   KodaXAgentMode,
   KodaXManagedTaskStatusEvent,
   KodaXOptions,
+  KodaXCompactionOverride,
   KodaXSelfManualConfig,
   KodaXResult,
   KodaXSessionControl,

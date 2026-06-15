@@ -43,18 +43,32 @@ const BASE_CONFIG: Pick<CompactionConfig, 'enabled'> = {
 };
 
 /**
- * Load compaction config. Resolution order for `triggerPercent`:
+ * SDK-consumer compaction override. Mirrors the subset of `CompactionConfig`
+ * an in-process caller (`KodaXOptions.compaction`) is allowed to pin.
+ */
+export type CompactionConfigOverride = Partial<
+  Pick<CompactionConfig, 'contextWindow' | 'triggerPercent' | 'enabled'>
+>;
+
+/**
+ * Load compaction config. Resolution precedence for every field
+ * (highest to lowest):
  *
- *   1. user-config explicit value (`~/.kodax/config.json` →
- *      `compaction.triggerPercent`) — always wins
- *   2. adaptive default based on `contextWindow` argument
- *   3. legacy 75% when no context window is known
+ *   1. SDK override (`overrides` arg — in-process `KodaXOptions.compaction`)
+ *   2. user config (`~/.kodax/config.json` → `compaction.*`)
+ *   3. adaptive / base default
  *
- * @param contextWindow active provider's context window in tokens. Used
- *   only when user has not specified an explicit triggerPercent.
+ * For `triggerPercent` the bottom of the cascade is the adaptive bucket
+ * keyed off the *effective* context window (an override window must move
+ * the bucket too); falls back to legacy 75% when no window is known.
+ *
+ * @param contextWindow active provider's context window in tokens (used for
+ *   the adaptive trigger bucket when neither layer pins a window/percent).
+ * @param overrides in-process overrides that win over the user config file.
  */
 export async function loadCompactionConfig(
   contextWindow?: number,
+  overrides?: CompactionConfigOverride,
 ): Promise<CompactionConfig> {
   const userConfigPath = getAgentConfigPath('config.json');
   let userOverrides: Partial<CompactionConfig> | undefined;
@@ -67,16 +81,32 @@ export async function loadCompactionConfig(
     // ignore — fall through to default
   }
 
-  const triggerPercent =
-    typeof userOverrides?.triggerPercent === 'number'
-      ? userOverrides.triggerPercent
-      : adaptiveTriggerPercent(contextWindow);
-
-  return {
+  const merged: CompactionConfig = {
     ...BASE_CONFIG,
     ...userOverrides,
-    triggerPercent,
+    // triggerPercent is recomputed below; this satisfies the required field
+    // during the spread when userOverrides omits it.
+    triggerPercent: LEGACY_DEFAULT_TRIGGER_PERCENT,
   };
+
+  // SDK overrides win over the user config file — only for fields the
+  // caller actually set.
+  if (overrides?.enabled !== undefined) merged.enabled = overrides.enabled;
+  if (overrides?.contextWindow !== undefined) {
+    merged.contextWindow = overrides.contextWindow;
+  }
+
+  // The adaptive bucket keys off the effective window so a pinned window
+  // (SDK or user config) lands in the right bucket.
+  const bucketWindow = merged.contextWindow ?? contextWindow;
+  merged.triggerPercent =
+    typeof overrides?.triggerPercent === 'number'
+      ? overrides.triggerPercent
+      : typeof userOverrides?.triggerPercent === 'number'
+        ? userOverrides.triggerPercent
+        : adaptiveTriggerPercent(bucketWindow);
+
+  return merged;
 }
 
 async function readConfigFile(

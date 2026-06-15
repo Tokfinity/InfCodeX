@@ -26,6 +26,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('@kodax-ai/agent', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@kodax-ai/agent')>();
@@ -41,6 +44,7 @@ import {
   compact as mockedCompact,
   microcompact as mockedMicrocompact,
   gracefulCompactDegradation as mockedGracefulDegradation,
+  setAgentConfigHome,
   type CompactionResult,
 } from '@kodax-ai/agent';
 import type { KodaXMessage } from '@kodax-ai/llm';
@@ -560,6 +564,86 @@ describe('buildManagedTaskCompactionHook — v0.7.40 parity gaps', () => {
       // Must not throw.
       await expect(hook!(messages)).resolves.toBeDefined();
       expect(onPostCompact).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('SDK compaction override (KodaXOptions.compaction)', () => {
+    it('uses zhipu-coding glm-5.2 per-model 1M context window without contextWindow override', async () => {
+      const previousApiKey = process.env.ZHIPU_CODING_API_KEY;
+      const tempHome = await mkdtemp(path.join(os.tmpdir(), 'kodax-compaction-'));
+      setAgentConfigHome(tempHome);
+      process.env.ZHIPU_CODING_API_KEY = previousApiKey ?? 'test-key';
+      try {
+        const messages = buildLargeTranscript();
+        const snapshotRef: ContextTokenSnapshotRef = {
+          current: snapshotAtApiTotal(150_000, messages),
+        };
+        const hook = await buildManagedTaskCompactionHook(
+          makeOptions({ provider: 'zhipu-coding', model: 'glm-5.2' }),
+          { contextTokenSnapshotRef: snapshotRef },
+        );
+        const result = await hook!(messages);
+        expect(compactMock).not.toHaveBeenCalled();
+        expect(gracefulDegradationMock).not.toHaveBeenCalled();
+        expect(result).toBeUndefined();
+      } finally {
+        setAgentConfigHome(undefined);
+        if (previousApiKey === undefined) {
+          delete process.env.ZHIPU_CODING_API_KEY;
+        } else {
+          process.env.ZHIPU_CODING_API_KEY = previousApiKey;
+        }
+        await rm(tempHome, { recursive: true, force: true });
+      }
+    });
+
+    // These pin triggerPercent explicitly so they don't depend on the
+    // dev machine's ~/.kodax/config.json. They exercise the #1 + #4 fix:
+    // options.compaction flows through loadCompactionConfig and
+    // resolveContextWindow, so the override window actually controls the
+    // trigger threshold (the bug was AMA resolving a 1M model to 200K).
+    it('enabled=false disables the hook entirely', async () => {
+      const hook = await buildManagedTaskCompactionHook(
+        makeOptions({ compaction: { enabled: false } }),
+      );
+      expect(hook).toBeUndefined();
+    });
+
+    it('large contextWindow override raises the threshold so mid-size context does not compact', async () => {
+      const messages = buildLargeTranscript();
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      // 1M window * 80% = 800k threshold; 150k API total is well under it.
+      const hook = await buildManagedTaskCompactionHook(
+        makeOptions({ compaction: { contextWindow: 1_000_000, triggerPercent: 80 } }),
+        { contextTokenSnapshotRef: snapshotRef },
+      );
+      const result = await hook!(messages);
+      expect(compactMock).not.toHaveBeenCalled();
+      expect(gracefulDegradationMock).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('small contextWindow override lowers the threshold so the same context compacts', async () => {
+      const messages = buildLargeTranscript();
+      const snapshotRef: ContextTokenSnapshotRef = {
+        current: snapshotAtApiTotal(150_000, messages),
+      };
+      compactMock.mockResolvedValueOnce({
+        compacted: true,
+        messages: [{ role: 'user', content: 'compacted' }],
+        tokensBefore: 150_000,
+        tokensAfter: 40_000,
+        entriesRemoved: 2,
+      } satisfies CompactionResult);
+      // 100k window * 80% = 80k threshold; 150k API total is over it.
+      const hook = await buildManagedTaskCompactionHook(
+        makeOptions({ compaction: { contextWindow: 100_000, triggerPercent: 80 } }),
+        { contextTokenSnapshotRef: snapshotRef },
+      );
+      await hook!(messages);
+      expect(compactMock).toHaveBeenCalledTimes(1);
     });
   });
 });

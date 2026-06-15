@@ -251,10 +251,26 @@ export abstract class KodaXBaseProvider {
   }
 
   getModelDescriptor(modelId?: string): KodaXModelDescriptor | undefined {
-    if (!modelId || modelId === this.config.model) {
-      return { id: this.config.model };
-    }
-    return this.config.models?.find(m => m.id === modelId);
+    // Resolve undefined to the provider's default model so "the active
+    // model" asks resolve to the same descriptor as an explicit id.
+    const id = modelId ?? this.config.model;
+    // Prefer the full descriptor from `models[]` when present — it carries
+    // per-model contextWindow / maxOutputTokens / reasoning fields. This
+    // applies EVEN when `id` is the default model: previously the default
+    // model short-circuited to a bare `{ id }`, dropping any per-model
+    // fields declared for it in `models[]`. That made
+    // `getEffectiveContextWindow(defaultModel)` fall back to the
+    // provider-level window even when `models[]` declared a larger one —
+    // e.g. a custom provider whose default model is GLM-5.2 (1M ctx)
+    // silently resolved to the 200K provider default and fired compaction
+    // ~5x early.
+    const fromList = this.config.models?.find(m => m.id === id);
+    if (fromList) return fromList;
+    // No per-model descriptor — return a bare default-model marker so the
+    // getEffective* cascade drops to the provider-level config; unknown
+    // non-default ids resolve to undefined (same as before).
+    if (id === this.config.model) return { id: this.config.model };
+    return undefined;
   }
 
   getBaseUrl(): string | undefined {
