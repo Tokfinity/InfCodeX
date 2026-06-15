@@ -198,6 +198,17 @@ requirements, and provenance. The capsule protocol belongs in `agent`; checks
 that depend on the local repository, skills, MCPs, or `.kodax` paths belong in
 `coding`; command help and approval text belong in `repl`.
 
+FEATURE_229 (`v0.7.50`) is the planned process layer on top of FEATURE_217. It
+standardizes workflow progress as agent-layer snapshots and events so SDK
+embedders, coding commands, REPL inline/fullscreen surfaces, and future system
+event bridges can subscribe to the same source of truth. This follows the same
+boundary rule as the runtime itself: `agent` owns process state and terminal
+status semantics, `coding` maps domain workflow runs, host policy, and lifecycle
+controls into that state, and `repl` renders it. REPL workflow callbacks are a
+v0.7.49 bridge for terminal UX; Space-style hosts must consume the F229
+snapshot/controller contract rather than parsing terminal text or Ink view
+models.
+
 ## 11. REPL And CLI
 
 `packages/repl` owns terminal UX:

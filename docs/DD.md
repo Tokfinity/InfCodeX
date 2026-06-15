@@ -260,6 +260,20 @@ until KodaX needs third-party generation, marketplace-style distribution, or
 complex cross-tool requirement validation; v0.7.49 uses TypeScript contracts and
 runtime validation to stay minimal.
 
+FEATURE_229 (`v0.7.50`) adds the missing process contract without changing the
+dynamic harness model. The agent workflow package should expose
+`WorkflowProcessSnapshot`, `WorkflowProcessEvent`, and
+`isFinalWorkflowProcessStatus`. The first event model stays intentionally small:
+`workflow_started`, `workflow_updated`, and `workflow_finished`, each carrying a
+snapshot with phase/agent/item status. `WorkflowRunManager` updates and emits the
+snapshot after runtime events; coding commands and SDK callers receive
+callbacks/read APIs plus host-owned lifecycle controls; REPL surfaces render
+snapshots only. KodaX Space and other SDK hosts should configure invocation
+policy, subscribe to process snapshots, and control runs through the SDK
+controller instead of replaying slash commands or depending on REPL callback
+text. This keeps progress semantics reusable and prevents terminal UI state from
+becoming the hidden source of truth.
+
 ## 14. REPL Detail
 
 `packages/repl` owns:
