@@ -1200,16 +1200,20 @@ export function formatWorkflowAgentDigest(
   if (readEventString(event, 'status') !== 'completed') return undefined;
   const rawSummary = readEventString(event, 'summary');
   if (!rawSummary) return undefined;
-  const isModelDigest = readEventString(event, 'summaryKind') === 'digest';
+  const rawKind = readEventString(event, 'summaryKind');
+  const summaryKind: WorkflowAgentSummaryKind =
+    rawKind === 'digest' ? 'digest' : rawKind === 'digest-failed' ? 'digest-failed' : 'excerpt';
   const name = readEventString(event, 'name') ?? readEventString(event, 'taskId') ?? 'agent';
   return formatWorkflowAgentLongDigest(
     name,
     rawSummary,
     locale,
     runId,
-    isModelDigest,
+    summaryKind,
   );
 }
+
+type WorkflowAgentSummaryKind = 'digest' | 'excerpt' | 'digest-failed';
 
 function trimWorkflowAgentDigestExcerpt(text: string): string {
   const compact = text.replace(/\s+/g, ' ').trim();
@@ -1289,10 +1293,11 @@ function formatWorkflowAgentLongDigest(
   summary: string,
   locale: WorkflowRunLocale,
   runId: string | undefined,
-  isStructuredSummary = false,
+  summaryKind: WorkflowAgentSummaryKind = 'excerpt',
 ): string {
+  const isModelDigest = summaryKind === 'digest';
   const excerpts = extractWorkflowAgentDigestExcerpts(summary, {
-    truncateLines: !isStructuredSummary,
+    truncateLines: !isModelDigest,
   });
   const excerptLines = excerpts.map((line) => `- ${line}`);
   const detailHint = runId
@@ -1302,13 +1307,20 @@ function formatWorkflowAgentLongDigest(
     : locale === 'zh'
       ? '这是子 Agent 的有界摘要；/workflow show 可查看运行事件时间线。'
       : 'This is a child-agent digest; use /workflow show for the event timeline.';
+  // `digest-failed` tells the user the LLM self-distill was attempted but
+  // unavailable (error/timeout), so the lines below are a deterministic
+  // local excerpt — not the intended smart summary.
   const heading = locale === 'zh'
-    ? isStructuredSummary
+    ? isModelDigest
       ? `子 Agent ${name} 已完成。摘要：`
-      : `子 Agent ${name} 已完成。摘录摘要：`
-    : isStructuredSummary
+      : summaryKind === 'digest-failed'
+        ? `子 Agent ${name} 已完成（智能摘要不可用，以下为本地摘录）：`
+        : `子 Agent ${name} 已完成。摘录摘要：`
+    : isModelDigest
       ? `Agent ${name} completed. Summary:`
-      : `Agent ${name} completed. Extracted summary:`;
+      : summaryKind === 'digest-failed'
+        ? `Agent ${name} completed (smart summary unavailable; local excerpt):`
+        : `Agent ${name} completed. Extracted summary:`;
   if (excerptLines.length === 0) {
     const emptyHeading = locale === 'zh'
       ? `子 Agent ${name} 已完成，但未能提取到有效摘要。`

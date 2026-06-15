@@ -103,6 +103,11 @@ const WORKFLOW_CHILD_DIGEST_PROMPT = [
 
 const WORKFLOW_CHILD_DIGEST_MAX_LINES = 4;
 
+// Bound the best-effort self-distill so a rate-limited / slow digest cannot
+// make a completed child appear stuck. On timeout we abandon it and fall back
+// to a clearly-labeled deterministic excerpt (FEATURE_217).
+const WORKFLOW_CHILD_DIGEST_TIMEOUT_MS = 10_000;
+
 /* ---------- Public API ---------- */
 
 /**
@@ -392,6 +397,13 @@ function readChildTokenUsage(result: KodaXResult): number {
 interface WorkflowChildDigestResult {
   readonly digest?: string;
   readonly totalTokensUsed: number;
+  /**
+   * True when a digest was attempted for a workflow child but produced nothing
+   * usable (LLM error, timeout, parent abort, or empty distillation). Lets the
+   * transcript tell the user the smart summary was unavailable instead of
+   * silently presenting a deterministic excerpt as the intended digest.
+   */
+  readonly attemptFailed?: boolean;
 }
 
 function normalizeWorkflowChildDigest(text: string): string | undefined {
@@ -430,6 +442,12 @@ async function createWorkflowChildDigest(
   if (!shouldCreateWorkflowChildDigest(input.options, input.result)) {
     return { totalTokensUsed: 0 };
   }
+  // Abandon the digest on timeout or parent abort so the child's completion is
+  // not blocked indefinitely by a slow self-distill turn.
+  const controller = new AbortController();
+  const onParentAbort = (): void => controller.abort();
+  input.options.abortSignal?.addEventListener('abort', onParentAbort);
+  const timer = setTimeout(() => controller.abort(), WORKFLOW_CHILD_DIGEST_TIMEOUT_MS);
   try {
     const digestRun = await input.runFn(
       {
@@ -438,7 +456,7 @@ async function createWorkflowChildDigest(
         reasoningMode: input.options.parentOptions.reasoningMode,
         agentMode: 'sa',
         maxIter: 1,
-        abortSignal: input.options.abortSignal,
+        abortSignal: controller.signal,
         extensionRuntime: input.options.parentOptions.extensionRuntime,
         guardrails: input.options.guardrails,
         session: { initialMessages: input.result.messages },
@@ -454,15 +472,19 @@ async function createWorkflowChildDigest(
       },
       WORKFLOW_CHILD_DIGEST_PROMPT,
     );
-    return {
-      digest: normalizeWorkflowChildDigest(digestRun.lastText),
-      totalTokensUsed: readChildTokenUsage(digestRun),
-    };
+    const digest = normalizeWorkflowChildDigest(digestRun.lastText);
+    const totalTokensUsed = readChildTokenUsage(digestRun);
+    // An empty distillation counts as a failed attempt so the transcript is
+    // honest about the smart summary being unavailable.
+    return digest ? { digest, totalTokensUsed } : { totalTokensUsed, attemptFailed: true };
   } catch {
     // Digest generation is presentation-only. Keep the completed child result
-    // available for synthesis/audit and let the workflow formatter use its
-    // deterministic excerpt fallback.
-    return { totalTokensUsed: 0 };
+    // for synthesis/audit; flag the failed attempt so the formatter labels the
+    // deterministic excerpt fallback as "smart summary unavailable".
+    return { totalTokensUsed: 0, attemptFailed: true };
+  } finally {
+    clearTimeout(timer);
+    input.options.abortSignal?.removeEventListener('abort', onParentAbort);
   }
 }
 
@@ -633,6 +655,7 @@ async function runReadChildBody(
         totalTokensUsed: readChildTokenUsage(result) + digest.totalTokensUsed,
         sessionId: result.sessionId,
         digest: digest.digest,
+        digestFailed: digest.attemptFailed,
       },
     );
   } catch (error) {
@@ -785,6 +808,7 @@ async function runWriteChildBody(
         totalTokensUsed: readChildTokenUsage(result) + digest.totalTokensUsed,
         sessionId: result.sessionId,
         digest: digest.digest,
+        digestFailed: digest.attemptFailed,
       },
     );
   } catch (error) {
@@ -1203,6 +1227,7 @@ interface ExtractChildResultMeta {
   readonly totalTokensUsed?: number;
   readonly sessionId?: string;
   readonly digest?: string;
+  readonly digestFailed?: boolean;
 }
 
 function extractChildResult(
@@ -1225,6 +1250,7 @@ function extractChildResult(
       : {}),
     ...(meta.sessionId ? { sessionId: meta.sessionId } : {}),
     ...(meta.digest ? { digest: meta.digest } : {}),
+    ...(meta.digestFailed ? { digestFailed: true } : {}),
     interrupted: meta.interrupted,
   };
 }

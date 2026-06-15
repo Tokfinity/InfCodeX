@@ -606,6 +606,8 @@ export interface KodaXChildAgentResult {
   sessionId?: string;
   /** Bounded workflow transcript digest. Full `summary` remains the synthesis/audit source. */
   digest?: string;
+  /** True when a workflow child digest was attempted but failed (error/timeout/empty distillation). */
+  digestFailed?: boolean;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */

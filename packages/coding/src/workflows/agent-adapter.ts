@@ -134,6 +134,7 @@ function deriveTerminal(
   snapStatus: ChildProgressStatus;
   finalText: string;
   digest?: string;
+  digestFailed?: boolean;
 } {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
@@ -146,6 +147,7 @@ function deriveTerminal(
       snapStatus: 'completed',
       finalText,
       ...(child.digest ? { digest: child.digest } : {}),
+      ...(child.digestFailed ? { digestFailed: true } : {}),
     };
   }
   return { status: 'failed', snapStatus: 'failed', finalText };
@@ -236,6 +238,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       status: term.status,
       finalText: term.finalText,
       ...(term.digest ? { digest: term.digest } : {}),
+      ...(term.digestFailed ? { digestFailed: true } : {}),
       usage: { totalTokens: result.totalTokensUsed },
     };
   };

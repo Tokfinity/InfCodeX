@@ -342,14 +342,20 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
 
   const summarizeTaskResult = (
     result: WorkflowTaskResult,
-  ): { readonly text: string; readonly kind: 'digest' | 'excerpt' } | undefined => {
+  ): { readonly text: string; readonly kind: 'digest' | 'excerpt' | 'digest-failed' } | undefined => {
     const digest = result.digest?.trim();
     if (digest) {
       return { text: boundedTaskEventSummary(digest), kind: 'digest' };
     }
     const trimmed = result.finalText.trim();
     if (!trimmed) return undefined;
-    return { text: boundedTaskEventSummary(trimmed), kind: 'excerpt' };
+    // `digest-failed`: a digest was attempted but failed/timed out, so the UI
+    // labels this deterministic excerpt as "smart summary unavailable" rather
+    // than implying no digest was ever intended.
+    return {
+      text: boundedTaskEventSummary(trimmed),
+      kind: result.digestFailed ? 'digest-failed' : 'excerpt',
+    };
   };
 
   const emitTerminalTaskEvent = (

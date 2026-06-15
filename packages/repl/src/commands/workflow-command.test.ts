@@ -323,6 +323,33 @@ describe('workflow agentic presentation helpers', () => {
     })).toBeUndefined();
   });
 
+  it('labels the excerpt as smart-summary-unavailable when the digest attempt failed (FEATURE_217 risk 2)', () => {
+    const out = formatWorkflowAgentDigest({
+      seq: 3,
+      type: 'agent_completed',
+      data: {
+        name: 'layout-auditor',
+        status: 'completed',
+        summary: 'Found one responsive layout risk worth tracking.',
+        summaryKind: 'digest-failed',
+      },
+    }, 'en');
+    expect(out).toContain('smart summary unavailable');
+    expect(out).toContain('Found one responsive layout risk');
+
+    const zh = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_completed',
+      data: {
+        name: 'layout-auditor',
+        status: 'completed',
+        summary: '发现一个值得跟踪的响应式布局风险点。',
+        summaryKind: 'digest-failed',
+      },
+    }, 'zh');
+    expect(zh).toContain('智能摘要不可用');
+  });
+
   it('emits every child-agent digest because each digest is already bounded', () => {
     const digest = createWorkflowAgentDigestLimiter('run-digests');
     const event = (name: string) => ({

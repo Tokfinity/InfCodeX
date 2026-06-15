@@ -254,6 +254,24 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(order).toEqual(['child-run', 'digest-run', 'worktree-remove']);
   });
 
+  it('flags digestFailed when the workflow child self-distill turn fails (FEATURE_217 risk 2)', async () => {
+    const childMessages = [{ role: 'assistant' as const, content: 'report' }];
+    mockRunKodaX
+      .mockResolvedValueOnce({ success: true, lastText: 'report', messages: childMessages, sessionId: 's-df' })
+      .mockRejectedValueOnce(new Error('rate limited'));
+
+    const result = await executeChildAgents(
+      [createBundle({ id: 'cb-dfail', readOnly: true })],
+      createCtx(),
+      createOptions({ workflowChild: true }),
+    );
+
+    expect(mockRunKodaX).toHaveBeenCalledTimes(2);
+    expect(result.results[0]?.status).toBe('completed');
+    expect(result.results[0]?.digest).toBeUndefined();
+    expect(result.results[0]?.digestFailed).toBe(true);
+  });
+
   it('removes parent-managed workflow worktrees after a child completes', async () => {
     mockToolWorktreeCreate.mockResolvedValue(JSON.stringify({
       path: '/tmp/kodax-worktree-cb-worktree',

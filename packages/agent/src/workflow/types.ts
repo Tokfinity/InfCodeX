@@ -57,6 +57,8 @@ export interface WorkflowTaskResult {
   readonly finalText: string;
   /** Short user-facing digest, separate from the full finalText used for synthesis/audit. */
   readonly digest?: string;
+  /** True when a digest was attempted but failed (error/timeout/empty); the UI then labels the excerpt fallback. */
+  readonly digestFailed?: boolean;
   readonly usage?: WorkflowTaskUsage;
 }
 
