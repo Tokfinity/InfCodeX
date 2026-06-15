@@ -23,6 +23,7 @@ All notable changes to this project will be documented in this file.
 - **FEATURE_217 — duplicate / double-counted terminal task events.** When a workflow task was both waited on and stopped (e.g. a failed run stopping in-flight children), the runtime could emit `agent_completed`/`agent_stopped` twice and accrue its token usage twice. Terminal events now route through a single dedup gate (`emitTerminalTaskEvent`) keyed by task id, so each task emits exactly one terminal event and accrues once.
 - **Per-model compaction windows honored.** Compaction-config resolution now keys its adaptive trigger bucket off the *effective* context window and accepts an in-process `KodaXOptions.compaction` override (`contextWindow` / `triggerPercent` / `enabled`), so a model with a smaller/larger window compacts at the right point instead of the legacy fixed 75% bucket. Provider `base` exposes the per-model context window used to drive it.
 - **REPL scroll viewport rendering.** Fixed an inline/fullscreen scroll viewport rendering glitch in the TUI renderer (`render-node-to-output` / `renderer`).
+- **REPL fullscreen transcript spacing & workflow footer height.** Two fullscreen-transcript rendering glitches: an assistant body ending in a trailing newline rendered an extra blank row on top of the fixed block spacer (two blank lines before the next block) — now normalized at render time (display-only; stored text untouched); and the workflow live footer could render one row taller than its reserved budget (the activity verb wraps narrower since it shares a row with a right-aligned counter, and surface rows could wrap), pushing the composer + status bar up a row for long-named workflows at some terminal widths — the footer rows are now forced to a single truncated line with exactly one reserved activity-bar row so reserved height equals rendered height at any width.
 
 ## [0.7.48] - 2026-06-11
 
@@ -1557,7 +1558,7 @@ repl            → coding, skills
 ### Tests
 - Added / expanded tests for `task-engine`, `reasoning`, `tool-display`, `live-streaming`, `StatusBar`, `invocation-runtime`, `types-legacy`, and `InkREPL.interrupted`
 
-<!-- last-sync: 49491cfa -->
+<!-- last-sync: fe6ca81a -->
 
 ### Added
 - **Repository intelligence substrate (FEATURE_018)**: Task-aware repository intelligence layer under `.agent/repo-intelligence/` with durable artifacts — `repo-overview.json`, `changed-scope.json`, `module-index.json`, `symbol-index.json`, `process-index.json`, `repo-intelligence-manifest.json` — supporting incremental refresh, freshness metadata, and language-tiered extraction (TS/JS via AST, Python, Go, Rust, Java, C++)
