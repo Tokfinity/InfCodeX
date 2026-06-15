@@ -69,6 +69,9 @@ export interface WorkflowTaskResult {
   readonly digestFailed?: boolean;
   /** True when a digest was scheduled asynchronously and may arrive via `agent_summary_updated`. */
   readonly digestPending?: boolean;
+  /** Best-known provider/model used by the child, for host correlation only. */
+  readonly provider?: string;
+  readonly model?: string;
   readonly usage?: WorkflowTaskUsage;
 }
 

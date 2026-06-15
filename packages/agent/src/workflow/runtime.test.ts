@@ -128,6 +128,8 @@ describe('runWorkflow — event envelope + ordering', () => {
         status: 'completed',
         finalText,
         digest,
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
       }),
       output: async (taskId: string) => ({ taskId, name: 'long-child', status: 'running' }),
       send: async () => {},
@@ -143,6 +145,8 @@ describe('runWorkflow — event envelope + ordering', () => {
     const completed = outcome.state.events.find((event) => event.type === 'agent_completed');
     expect(completed?.data?.summary).toBe(digest);
     expect(completed?.data?.summaryKind).toBe('digest');
+    expect(completed?.data?.provider).toBe('anthropic');
+    expect(completed?.data?.model).toBe('claude-sonnet-4-5');
     expect(completed?.data?.summary).not.toContain('long report');
   });
 
@@ -749,6 +753,9 @@ describe('createWorkflowRuntime — lower-level handle', () => {
     const state = rt.getState();
     expect(state.totalSpawned).toBe(1);
     expect(state.status).toBe('running'); // no envelope sets terminal status
+    expect(state.events.find((event) => event.type === 'workflow_log')).toMatchObject({
+      data: { message: 'hello' },
+    });
     expect(onLog).toEqual(['hello']);
   });
 

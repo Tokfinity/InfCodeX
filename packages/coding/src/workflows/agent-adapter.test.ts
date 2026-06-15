@@ -83,6 +83,8 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
         status: 'completed',
         summary: 'full child report',
         digest: '- Found 3 workflow UX risks.',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-5',
       }),
       generateId: () => 'task-x',
     });
@@ -92,6 +94,8 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
     expect(result.status).toBe('completed');
     expect(result.finalText).toBe('full child report');
     expect(result.digest).toBe('- Found 3 workflow UX risks.');
+    expect(result.provider).toBe('anthropic');
+    expect(result.model).toBe('claude-sonnet-4-5');
     expect(result.name).toBe('security');
   });
 
@@ -202,6 +206,33 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
         },
       },
     ]);
+  });
+
+  it('passes workflow correlation into child executor options', async () => {
+    let seenCorrelation: ChildExecutorOptions['workflowCorrelation'];
+    const backend = createCodingWorkflowBackend({
+      ctx: fakeCtx(),
+      childOptions,
+      runId: 'run-correlation',
+      generateId: () => 'task-correlation',
+      runChild: (_bundles, _ctx, opts) => {
+        seenCorrelation = opts.workflowCorrelation;
+        return Promise.resolve(execResult({
+          childId: 'task-correlation',
+          status: 'completed',
+          summary: 'done',
+        }));
+      },
+    });
+
+    const handle = await backend.spawn({ name: 'x', prompt: 'x' });
+    await backend.wait(handle.taskId);
+
+    expect(seenCorrelation).toEqual({
+      workflowRunId: 'run-correlation',
+      childAgentId: 'task-correlation',
+      itemId: 'agent:task-correlation',
+    });
   });
 
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {

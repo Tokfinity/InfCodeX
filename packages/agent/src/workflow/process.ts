@@ -476,6 +476,10 @@ export function createWorkflowProcessTracker(
     target.title = title;
     target.status = itemStatus;
     target.endedAt = updatedAt;
+    const provider = readString(data, 'provider');
+    const model = readString(data, 'model');
+    if (provider !== undefined) target.provider = provider;
+    if (model !== undefined) target.model = model;
     if (summary !== undefined) target.summary = summary;
     if (summaryStatus !== undefined) target.summaryStatus = summaryStatus;
     if (itemStatus === 'failed') target.error = readString(data, 'error') ?? 'workflow agent failed';
@@ -559,6 +563,9 @@ export function createWorkflowProcessTracker(
           return processEvent('workflow_updated', latestMessage);
         case 'agent_message_sent':
           latestMessage = 'agent message sent';
+          return processEvent('workflow_updated', latestMessage);
+        case 'workflow_log':
+          latestMessage = readString(event.data, 'message') ?? 'workflow progress';
           return processEvent('workflow_updated', latestMessage);
         case 'artifact_written': {
           const name = readString(event.data, 'name') ?? 'artifact';

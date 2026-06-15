@@ -17,6 +17,7 @@ export type WorkflowEventType =
   | 'agent_completed'
   | 'agent_summary_updated'
   | 'agent_stopped'
+  | 'workflow_log'
   | 'artifact_written'
   | 'synthesis_completed'
   | 'workflow_completed'

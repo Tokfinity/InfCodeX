@@ -442,6 +442,8 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
         taskId: result.taskId,
         name: result.name,
         status: result.status,
+        ...(result.provider !== undefined ? { provider: result.provider } : {}),
+        ...(result.model !== undefined ? { model: result.model } : {}),
         ...(result.usage !== undefined
           ? { usage: result.usage }
           : {}),
@@ -566,6 +568,10 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     },
 
     log: (event) => {
+      recorder.emit('workflow_log', {
+        message: boundedTaskEventSummary(event.message),
+        ...(event.data !== undefined ? { data: event.data } : {}),
+      });
       opts.onLog?.(event);
     },
   };

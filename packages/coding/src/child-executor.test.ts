@@ -1005,6 +1005,46 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     expect(decision).toContain('Not available in child agent context');
     expect(check).not.toHaveBeenCalled();
   });
+
+  it('preserves parent event callbacks and annotates workflow correlation', async () => {
+    const correlation = {
+      workflowRunId: 'run-1',
+      childAgentId: 'cb-test',
+      itemId: 'agent:cb-test',
+    };
+    const parentBeforeTool = vi.fn(async () => true);
+    const parentIterationStart = vi.fn();
+    const parentToolUseStart = vi.fn();
+    const events = buildChildEvents(
+      'cb-test',
+      undefined,
+      undefined,
+      undefined,
+      {
+        beforeToolExecute: parentBeforeTool,
+        onIterationStart: parentIterationStart,
+        onToolUseStart: parentToolUseStart,
+      },
+      correlation,
+    );
+
+    expect(events?.workflowCorrelation).toEqual(correlation);
+    await expect(events!.beforeToolExecute!('read', { path: '/x.ts' }, { toolId: 'tool-1' }))
+      .resolves.toBe(true);
+    events!.onIterationStart!(2, 20);
+    events!.onToolUseStart!({ name: 'read', id: 'tool-1', input: { path: '/x.ts' } });
+
+    expect(parentBeforeTool).toHaveBeenCalledWith('read', { path: '/x.ts' }, {
+      toolId: 'tool-1',
+      workflowCorrelation: correlation,
+    });
+    expect(parentIterationStart).toHaveBeenCalledWith(2, 20);
+    expect(parentToolUseStart).toHaveBeenCalledWith({
+      name: 'read',
+      id: 'tool-1',
+      input: { path: '/x.ts' },
+    });
+  });
 });
 
 describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
@@ -1129,13 +1169,17 @@ describe('executeChildAgents — FEATURE_191 specialist routing (A.2b)', () => {
 
     const bundles = [createBundle({ id: 'cb-sp-mp', readOnly: true, specialistName: 'opus-reviewer' })];
     // Parent runs deepseek; the specialist must override to anthropic/opus.
-    await executeChildAgents(bundles, createCtx(), createOptions({
+    const result = await executeChildAgents(bundles, createCtx(), createOptions({
       parentOptions: { provider: 'deepseek', model: 'deepseek-v4-flash' },
     }));
 
     const childOptions = mockRunKodaX.mock.calls[0]![0] as { provider?: string; model?: string };
     expect(childOptions.provider).toBe('anthropic');
     expect(childOptions.model).toBe('claude-opus-4-8');
+    expect(result.results[0]).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-opus-4-8',
+    });
   });
 
   it('applies bundle.provider + bundle.model to the child (FEATURE_102 P2 dispatch override)', async () => {

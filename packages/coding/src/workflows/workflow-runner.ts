@@ -274,7 +274,7 @@ function buildBackend(opts: RunWorkflowModuleOptions): WorkflowAgentBackend {
   if (!opts.ctx || !opts.childOptions) {
     throw new Error('runWorkflowModule requires either a backend or ctx + childOptions');
   }
-  return createCodingWorkflowBackend({ ctx: opts.ctx, childOptions: opts.childOptions });
+  return createCodingWorkflowBackend({ ctx: opts.ctx, childOptions: opts.childOptions, runId: opts.runId });
 }
 
 function withBeforeSpawn(
@@ -338,6 +338,7 @@ export async function runWorkflowFromOptions(
       model: input.options.model,
       reasoningMode: input.options.reasoningMode,
       extensionRuntime: input.options.extensionRuntime,
+      events: input.options.events,
     },
   };
   const onWorkflowProcessEvent =

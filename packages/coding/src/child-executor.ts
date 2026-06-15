@@ -41,7 +41,7 @@ import { runFanOut } from '@kodax-ai/agent';
 // is the YAGNI-compliant substitute per ADR-035 R11).
 import { resolveConstructedAgent } from './construction/agent-resolver.js';
 import { getAllRegisteredTools } from './tools/registry.js';
-import type { Agent } from '@kodax-ai/agent';
+import type { Agent, WorkflowEventCorrelation } from '@kodax-ai/agent';
 // FEATURE_093 (v0.7.24): lazy-load `runKodaX` to break the cycle
 // `agent.ts → extensions/runtime.ts → tools/index.ts → tools/registry.ts
 // → tools/dispatch-child-tasks.ts → child-executor.ts → agent.ts`.
@@ -135,7 +135,7 @@ export interface ChildExecutorOptions {
   readonly maxParallel: number;
   readonly maxIterationsPerChild: number;
   readonly abortSignal?: AbortSignal;
-  readonly parentOptions: Readonly<Partial<Pick<KodaXOptions, 'provider' | 'model' | 'reasoningMode' | 'extensionRuntime'>>>;
+  readonly parentOptions: Readonly<Partial<Pick<KodaXOptions, 'provider' | 'model' | 'reasoningMode' | 'extensionRuntime' | 'events'>>>;
   readonly parentRole: string;
   readonly parentHarness: string;
   /**
@@ -154,6 +154,7 @@ export interface ChildExecutorOptions {
    */
   readonly workflowDigestMode?: 'blocking' | 'async';
   readonly onWorkflowChildDigest?: (update: WorkflowChildDigestUpdate) => void;
+  readonly workflowCorrelation?: WorkflowEventCorrelation;
   /** Progress callback for REPL status display. Called when children start, progress, and complete. */
   readonly onProgress?: (status: string) => void;
   /**
@@ -620,6 +621,8 @@ async function runReadChildBody(
     options.onProgress,
     options.planModeBlockCheck,
     options.snapshotUpdater,
+    options.parentOptions.events,
+    options.workflowCorrelation,
   );
 
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
@@ -715,6 +718,8 @@ async function runReadChildBody(
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
+        provider,
+        model,
       },
     );
   } catch (error) {
@@ -775,6 +780,8 @@ async function runWriteChildBody(
     options.onProgress,
     options.planModeBlockCheck,
     options.snapshotUpdater,
+    options.parentOptions.events,
+    options.workflowCorrelation,
   );
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
@@ -875,6 +882,8 @@ async function runWriteChildBody(
         digest: digest.digest,
         digestFailed: digest.attemptFailed,
         digestPending: runDigestAsync,
+        provider,
+        model,
       },
     );
   } catch (error) {
@@ -1214,6 +1223,8 @@ export function buildChildEvents(
   snapshotUpdater?: (
     event: import('./child-progress-snapshot.js').ChildSnapshotEvent,
   ) => void,
+  parentEvents?: KodaXEvents,
+  workflowCorrelation?: WorkflowEventCorrelation,
 ): KodaXEvents | undefined {
   let iterationCount = 0;
   let maxIterations = 200;
@@ -1229,10 +1240,16 @@ export function buildChildEvents(
   };
 
   return {
+    ...parentEvents,
+    ...(workflowCorrelation ? { workflowCorrelation } : {}),
     // Block AMA-specific and recursive tools, then enforce live plan mode.
     // planModeBlockCheck reads parent state at call time, so mid-run mode toggles
     // (common: user flips plan ↔ accept-edits mid-stream) propagate immediately.
-    beforeToolExecute: async (tool: string, input: Record<string, unknown>) => {
+    beforeToolExecute: async (
+      tool: string,
+      input: Record<string, unknown>,
+      meta?: { toolId?: string },
+    ) => {
       if (CHILD_BLOCKED_TOOLS.has(tool)) {
         return `[Tool Error] ${tool}: Not available in child agent context.`;
       }
@@ -1242,10 +1259,15 @@ export function buildChildEvents(
           return `${reason} You are a child agent inheriting plan-mode constraints. Complete investigation and return findings as text — the parent agent will request user approval for any implementation.`;
         }
       }
-      return true;
+      if (!parentEvents?.beforeToolExecute) return true;
+      return parentEvents.beforeToolExecute(tool, input, {
+        ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : {}),
+        ...(workflowCorrelation !== undefined ? { workflowCorrelation } : {}),
+      });
     },
     // Silently update counter; tool use line will include it.
     onIterationStart: (iter: number, maxIter: number) => {
+      parentEvents?.onIterationStart?.(iter, maxIter);
       iterationCount = iter;
       maxIterations = maxIter;
       // FEATURE_177: feed iteration into snapshot. Not throttled — one
@@ -1257,6 +1279,7 @@ export function buildChildEvents(
     },
     // Combined progress: "sec-coding [3/200] → read src/foo.ts" (throttled)
     onToolUseStart: (tool) => {
+      parentEvents?.onToolUseStart?.(tool);
       const inputHint = tool.input
         ? (typeof tool.input === 'object'
           ? (tool.input as Record<string, unknown>).path
@@ -1295,6 +1318,8 @@ interface ExtractChildResultMeta {
   readonly digest?: string;
   readonly digestFailed?: boolean;
   readonly digestPending?: boolean;
+  readonly provider?: string;
+  readonly model?: string;
 }
 
 function extractChildResult(
@@ -1319,6 +1344,8 @@ function extractChildResult(
     ...(meta.digest ? { digest: meta.digest } : {}),
     ...(meta.digestFailed ? { digestFailed: true } : {}),
     ...(meta.digestPending ? { digestPending: true } : {}),
+    ...(meta.provider ? { provider: meta.provider } : {}),
+    ...(meta.model ? { model: meta.model } : {}),
     interrupted: meta.interrupted,
   };
 }

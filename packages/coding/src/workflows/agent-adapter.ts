@@ -56,6 +56,7 @@ export type WorkflowChildOptions = Omit<
   | 'workflowChild'
   | 'workflowDigestMode'
   | 'onWorkflowChildDigest'
+  | 'workflowCorrelation'
 >;
 
 export interface CodingWorkflowBackendDeps {
@@ -76,6 +77,8 @@ export interface CodingWorkflowBackendDeps {
   readonly generateId?: () => string;
   /** Seam: clock for snapshot timestamps. */
   readonly now?: () => number;
+  /** Workflow run id for correlating child-agent SDK callbacks. */
+  readonly runId?: string;
   readonly onTaskSummary?: (taskId: string, update: WorkflowTaskSummaryEventUpdate) => void;
 }
 
@@ -143,6 +146,8 @@ function deriveTerminal(
   digest?: string;
   digestFailed?: boolean;
   digestPending?: boolean;
+  provider?: string;
+  model?: string;
 } {
   if (result.cancelledChildren.includes(taskId)) {
     return { status: 'stopped', snapStatus: 'aborted', finalText: '' };
@@ -157,6 +162,8 @@ function deriveTerminal(
       ...(child.digest ? { digest: child.digest } : {}),
       ...(child.digestFailed ? { digestFailed: true } : {}),
       ...(child.digestPending ? { digestPending: true } : {}),
+      ...(child.provider ? { provider: child.provider } : {}),
+      ...(child.model ? { model: child.model } : {}),
     };
   }
   return { status: 'failed', snapStatus: 'failed', finalText };
@@ -227,6 +234,15 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       // workflow children without overloading `parentHarness` (which stays
       // 'tool-dispatch' so write children are not dropped by validateWriteBundles).
       workflowChild: true,
+      ...(deps.runId !== undefined
+        ? {
+            workflowCorrelation: {
+              workflowRunId: deps.runId,
+              childAgentId: childId,
+              itemId: `agent:${childId}`,
+            },
+          }
+        : {}),
       workflowDigestMode: hasTaskSummaryObservers() ? 'async' : 'blocking',
       ...(hasTaskSummaryObservers()
         ? {
@@ -288,6 +304,8 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
       ...(term.digest ? { digest: term.digest } : {}),
       ...(term.digestFailed ? { digestFailed: true } : {}),
       ...(term.digestPending ? { digestPending: true } : {}),
+      ...(term.provider ? { provider: term.provider } : {}),
+      ...(term.model ? { model: term.model } : {}),
       usage: { totalTokens: result.totalTokensUsed },
     };
   };

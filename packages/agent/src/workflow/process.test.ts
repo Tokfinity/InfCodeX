@@ -29,6 +29,8 @@ describe('workflow process tracker', () => {
           taskId: 'child-1',
           name: 'reader',
           status: 'completed',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-5',
           summary: 'Finding: process snapshots are reusable.',
           summaryKind: 'digest',
           usage: { inputTokens: 10, outputTokens: 15 },
@@ -75,6 +77,8 @@ describe('workflow process tracker', () => {
       summary: 'Finding: process snapshots are reusable.',
       summaryStatus: 'result',
       childAgentId: 'child-1',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-5',
     });
     expect(snapshot.artifacts).toEqual([{ name: 'report', path: 'artifacts/report.json' }]);
   });
@@ -139,6 +143,27 @@ describe('workflow process tracker', () => {
       summary: 'Finding: the model-authored digest arrived later.',
       summaryStatus: 'result',
     });
+  });
+
+  it('folds workflow log events into latest process messages', () => {
+    const tracker = createWorkflowProcessTracker({
+      runId: 'run-log',
+      workflowName: 'log-test',
+      now: () => '2026-06-15T00:00:00.000Z',
+    });
+
+    tracker.applyEvent({ seq: 0, type: 'workflow_started' });
+    const update = tracker.applyEvent({
+      seq: 1,
+      type: 'workflow_log',
+      data: { message: 'checking generated workflow contract' },
+    });
+
+    expect(update).toMatchObject({
+      type: 'workflow_updated',
+      message: 'checking generated workflow contract',
+    });
+    expect(tracker.getSnapshot().latestMessage).toBe('checking generated workflow contract');
   });
 
   it('closes pending and running items when a host forces a terminal status', () => {

@@ -70,6 +70,7 @@ import type {
   ChildTaskRegistry,
   TaskAbortRegistry,
   WorkflowIsolation,
+  WorkflowEventCorrelation,
   WorkflowProcessEvent,
 } from '@kodax-ai/agent';
 // v0.7.35.1 FEATURE_142 (A-R4): AMA / harness types live in @kodax-ai/llm
@@ -163,12 +164,15 @@ export type {
   KodaXSessionUiHistoryItemType,
   KodaXSessionWorkspaceKind,
   SessionErrorMetadata,
+  WorkflowEventCorrelation,
   WorkflowProcessEvent,
 };
 
 // ============== 事件接口 ==============
 
 export interface KodaXEvents {
+  /** FEATURE_229: correlates child-agent SDK callbacks back to a workflow run/item. */
+  workflowCorrelation?: WorkflowEventCorrelation;
   // 流式输出
   onTextDelta?: (text: string) => void;
   onThinkingDelta?: (text: string) => void;
@@ -328,7 +332,7 @@ export interface KodaXEvents {
   beforeToolExecute?: (
     tool: string,
     input: Record<string, unknown>,
-    meta?: { toolId?: string }
+    meta?: { toolId?: string; workflowCorrelation?: WorkflowEventCorrelation }
   ) => Promise<boolean | string>;
   /** Ask user a question interactively - Issue 069 - 交互式向用户提问 */
   askUser?: (options: AskUserQuestionOptions) => Promise<string>;
@@ -614,6 +618,9 @@ export interface KodaXChildAgentResult {
   digestFailed?: boolean;
   /** True when a workflow child digest is running asynchronously and may arrive later. */
   digestPending?: boolean;
+  /** Actual provider/model selected for this child run, when known. */
+  provider?: string;
+  model?: string;
   /** Actual iterations consumed by this child agent. */
   actualIterations?: number;
   /** Best-known token usage for this child run. Used by workflow budget accounting. */

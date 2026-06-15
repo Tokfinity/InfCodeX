@@ -990,6 +990,8 @@ function formatWorkflowEvent(event: WorkflowEvent): string | undefined {
         : `    done ${label}`;
     case 'agent_stopped':
       return `    stopped ${label}`;
+    case 'workflow_log':
+      return `    log ${event.data?.message ?? ''}`;
     case 'artifact_written':
       return `    artifact ${event.data?.name ?? ''}`;
     case 'synthesis_completed':
