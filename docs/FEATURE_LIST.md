@@ -14,9 +14,9 @@
 | Current package version | `@kodax-ai/kodax@0.7.49` |
 | Workspace baseline | `llm / agent / coding / repl` 4 packages |
 | Total tracked features | `13` |
-| InProgress | `1` |
+| InProgress | `0` |
 | Planned | `12` |
-| Completed | `0` |
+| Completed | `1` |
 | Tracked feature IDs | `007, 030, 093, 105, 108, 113, 139, 174, 211, 224, 225, 228, 229` |
 | Archive cutoff | Shipped / canceled / absorbed / shelved items through `v0.7.49` are archived. |
 
@@ -24,8 +24,8 @@
 
 | Status | Count | Feature IDs | Next checkpoint |
 |---|---:|---|---|
-| InProgress | 1 | `229` | full FEATURE_229 completion, including `revise --replace` |
-| Completed | 0 | - | - |
+| InProgress | 0 | - | - |
+| Completed | 1 | `229` | implementation complete; release validation pending |
 | Planned, near-term | 7 | `224, 228, 225, 174, 105, 211, 108` | `v0.7.51` -> `v0.7.58` |
 | Planned, v0.8.x | 5 | `007, 030, 093, 113, 139` | `v0.8.0+` |
 
@@ -35,7 +35,6 @@
 
 | Version | Planned features |
 |---|---:|
-| `v0.7.50` | `1` |
 | `v0.7.51` | `1` |
 | `v0.7.52` | `1` |
 | `v0.7.53` | `1` |
@@ -52,7 +51,6 @@
 
 | ID | Title | Planned | Design |
 |---|---|---|---|
-| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) |
 
 ---
 
@@ -90,6 +88,7 @@
 
 | ID | Title | Released | Design | Notes |
 |---|---|---|---|---|
+| `229` | Workflow Process Events + SDK/System Progress Surface | `v0.7.50` | [v0.7.50](features/v0.7.50.md#feature_229-workflow-process-events--sdksystem-progress-surface) | Implementation complete; release validation pending. |
 
 ---
 
