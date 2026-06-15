@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildWorkflowLiveViewModel,
   formatWorkflowLiveViewModelForTranscript,
+  workflowLiveSnapshotFromProcess,
   type WorkflowLiveSnapshot,
 } from "./workflow-live.js";
+import type { WorkflowProcessSnapshot } from "@kodax-ai/agent";
 
 function runningSnapshot(
   overrides: Partial<WorkflowLiveSnapshot> = {},
@@ -183,5 +185,126 @@ describe("buildWorkflowLiveViewModel", () => {
       "8/9 finished (1 active agent, started 9, cap 14)",
     );
     expect(vm.counterText).toBe("1/9 active agent");
+  });
+
+  it("adapts workflow process snapshots into the existing live surface model", () => {
+    const process: WorkflowProcessSnapshot = {
+      runId: "run-process",
+      workflowName: "process-workflow",
+      displayName: "Process Workflow",
+      status: "running",
+      startedAt: "2026-06-15T00:00:00.000Z",
+      updatedAt: "2026-06-15T00:01:00.000Z",
+      elapsedMs: 60_000,
+      activePhaseId: "phase:scan",
+      activePhaseIndex: 1,
+      phaseCount: 2,
+      items: [
+        {
+          id: "phase:scan",
+          title: "scan",
+          kind: "phase",
+          status: "running",
+        },
+        {
+          id: "agent:a",
+          title: "reader",
+          kind: "agent",
+          status: "running",
+          childAgentId: "a",
+        },
+        {
+          id: "agent:b",
+          title: "auditor",
+          kind: "agent",
+          status: "completed",
+          childAgentId: "b",
+        },
+        {
+          id: "agent:c",
+          title: "critic",
+          kind: "agent",
+          status: "failed",
+          childAgentId: "c",
+        },
+      ],
+      counts: {
+        pending: 0,
+        running: 2,
+        completed: 1,
+        failed: 1,
+        cancelled: 0,
+        skipped: 0,
+      },
+      progress: {
+        spawnedAgents: 3,
+        finishedAgents: 2,
+        activeAgents: 1,
+        failedAgents: 1,
+        stoppedAgents: 0,
+        plannedItems: 5,
+        agentCap: 8,
+      },
+      tokens: { spent: 123, total: 1_000 },
+      latestMessage: "agent failed: critic",
+    };
+
+    expect(workflowLiveSnapshotFromProcess(process, { locale: "en" })).toMatchObject({
+      runId: "run-process",
+      workflow: "Process Workflow",
+      status: "running",
+      phase: "scan",
+      phaseIndex: 1,
+      phaseTotal: 2,
+      activeAgents: ["reader"],
+      totalSpawned: 3,
+      plannedAgents: 5,
+      agentCap: 8,
+      tokenBudgetSpent: 123,
+      tokenBudgetTotal: 1_000,
+      completedAgents: 1,
+      failedAgents: 1,
+      stoppedAgents: 0,
+      message: "agent failed: critic",
+      locale: "en",
+    });
+  });
+
+  it("maps process cancellation to the user-facing stopped live status", () => {
+    const process: WorkflowProcessSnapshot = {
+      runId: "run-stopped",
+      workflowName: "stop-workflow",
+      status: "cancelled",
+      startedAt: "2026-06-15T00:00:00.000Z",
+      updatedAt: "2026-06-15T00:00:01.000Z",
+      elapsedMs: 1_000,
+      items: [
+        {
+          id: "agent:a",
+          title: "worker",
+          kind: "agent",
+          status: "cancelled",
+          childAgentId: "a",
+        },
+      ],
+      counts: {
+        pending: 0,
+        running: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: 1,
+        skipped: 0,
+      },
+      progress: {
+        spawnedAgents: 1,
+        finishedAgents: 1,
+        activeAgents: 0,
+        failedAgents: 0,
+        stoppedAgents: 1,
+      },
+    };
+
+    expect(workflowLiveSnapshotFromProcess(process).status).toBe("stopped");
+    expect(workflowLiveSnapshotFromProcess(process).stoppedAgents).toBe(1);
   });
 });

@@ -7422,6 +7422,7 @@ const InkREPLInner: React.FC<InkREPLProps> = ({
           agentMode: currentConfig.agentMode,
           source: workflow.source,
           input: rawInput || workflow.request,
+          hostPolicy: currentOptionsRef.current.workflowHostPolicy,
         });
 
         if (decision.action === 'none') {

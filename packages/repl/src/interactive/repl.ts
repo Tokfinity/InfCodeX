@@ -1165,6 +1165,7 @@ Keyboard Shortcuts:
       agentMode: currentConfig.agentMode,
       source: workflow.source,
       input: rawInput || workflow.request,
+      hostPolicy: currentOptions.workflowHostPolicy,
     });
 
     if (decision.action === 'none') {

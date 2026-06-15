@@ -19,7 +19,7 @@
  * unit testing; the handler is a thin wiring layer.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import chalk from 'chalk';
@@ -30,6 +30,8 @@ import type {
   WorkflowEvent,
   WorkflowMeta,
   WorkflowModule,
+  WorkflowProcessEvent,
+  WorkflowCapsule,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 import {
@@ -44,7 +46,10 @@ import {
   loadSavedWorkflow,
   loadSavedWorkflowCapsule,
   preflightWorkflowCapsule,
+  renameSavedWorkflow,
+  resolveWorkflowIdentity,
   safeWorkflowArtifactName,
+  saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
   type ManagedWorkflowRun,
   type ManagedWorkflowSnapshot,
@@ -54,6 +59,7 @@ import {
 } from '@kodax-ai/coding';
 
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
+import { workflowLiveSnapshotFromProcess } from '../ui/view-models/workflow-live.js';
 import type { Command, CommandCallbacks } from './types.js';
 
 /* ----------------------------- pure helpers ----------------------------- */
@@ -69,6 +75,8 @@ export type WorkflowInvocation =
   | { readonly kind: 'delete'; readonly runId: string }
   | { readonly kind: 'prune'; readonly rawArgs: readonly string[] }
   | { readonly kind: 'save'; readonly runId: string; readonly name: string }
+  | { readonly kind: 'rename'; readonly target: string; readonly newName: string }
+  | { readonly kind: 'revise'; readonly target: string; readonly request: string }
   | { readonly kind: 'rerun'; readonly runId: string; readonly rawArgs: string }
   | { readonly kind: 'create'; readonly request: string }
   | { readonly kind: 'start'; readonly name: string; readonly rawArgs: string };
@@ -97,6 +105,12 @@ export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvoca
   if (first === 'delete') return { kind: 'delete', runId: args[1] ?? '' };
   if (first === 'prune') return { kind: 'prune', rawArgs: args.slice(1) };
   if (first === 'save') return { kind: 'save', runId: args[1] ?? '', name: args[2] ?? '' };
+  if (first === 'rename') {
+    return { kind: 'rename', target: args[1] ?? '', newName: args.slice(2).join(' ').trim() };
+  }
+  if (first === 'revise') {
+    return { kind: 'revise', target: args[1] ?? '', request: args.slice(2).join(' ').trim() };
+  }
   if (first === 'rerun') {
     return { kind: 'rerun', runId: args[1] ?? '', rawArgs: args.slice(2).join(' ').trim() };
   }
@@ -116,6 +130,30 @@ export function parseWorkflowArgs(raw: string): unknown {
     }
   }
   return { question: trimmed };
+}
+
+export function buildWorkflowRevisionRequest(input: {
+  readonly target: string;
+  readonly capsule: WorkflowCapsule;
+  readonly changeRequest: string;
+}): string {
+  return [
+    'Revise this existing KodaX dynamic workflow capsule.',
+    'Return a complete revised workflow, not a patch.',
+    'Preserve the reusable workflow intent, safety requirements, and compatible args shape unless the requested change explicitly requires otherwise.',
+    '',
+    `Target: ${input.target}`,
+    '',
+    'Original manifest:',
+    JSON.stringify(input.capsule.manifest, null, 2),
+    '',
+    'Original source:',
+    '```js',
+    input.capsule.source,
+    '```',
+    '',
+    `Change request: ${input.changeRequest}`,
+  ].join('\n');
 }
 
 function parseNonNegativeInteger(value: string | undefined): number | undefined {
@@ -457,7 +495,7 @@ export function readWorkflowRunDetail(baseDir: string, runId: string): WorkflowR
       workflow: typeof data.workflow === 'string' ? data.workflow : '?',
       status: typeof data.status === 'string' ? data.status : '?',
       totalSpawned: typeof data.totalSpawned === 'number' ? data.totalSpawned : 0,
-      eventCount: typeof data.eventCount === 'number' ? data.eventCount : events.length,
+      eventCount: events.length,
       runDir,
       canRerun: hasRerunnableGeneratedWorkflowRun(runDir, data),
       ...(scriptSnapshotPath ? { scriptSnapshotPath } : {}),
@@ -709,6 +747,15 @@ export function savedWorkflowDirs(cwd: string): SavedWorkflowDirs {
   };
 }
 
+async function nextRevisionWorkflowName(
+  dirs: SavedWorkflowDirs,
+  preferredName: string,
+): Promise<string> {
+  const existing = new Set((await discoverSavedWorkflows(dirs)).map((ref) => ref.name));
+  if (!existing.has(preferredName)) return preferredName;
+  return `${preferredName}-revision-${Date.now().toString(36)}`;
+}
+
 export function formatSavedList(refs: readonly SavedWorkflowRef[]): string {
   if (refs.length === 0) return '  (no saved workflows)';
   return refs
@@ -742,6 +789,8 @@ export function renderWorkflowHelp(): string {
     `                                            Preview or delete old terminal run records.`,
     `  ${chalk.cyan('/workflow rerun <runId|savedName> [args]')} Rerun a historical generated run, or run the current saved workflow by name.`,
     `  ${chalk.cyan('/workflow save <runId> <name>')}          Save a generated run as a workflow capsule.`,
+    `  ${chalk.cyan('/workflow rename <runId|savedName> <newName>')} Rename a run display name or generated saved capsule.`,
+    `  ${chalk.cyan('/workflow revise <runId|savedName> <change>')} Generate and save a new capsule revision.`,
     `  ${chalk.cyan('/workflow help')}                         Show this help. Also available as /help workflow.`,
     '',
     `${chalk.bold('Examples:')}`,
@@ -795,6 +844,23 @@ function ensureSafeRunId(runId: string): boolean {
   if (isSafeWorkflowRunId(runId)) return true;
   printInvalidRunId(runId);
   return false;
+}
+
+export function writeWorkflowRunDisplayName(
+  baseDir: string,
+  runId: string,
+  displayName: string,
+): boolean {
+  const trimmed = displayName.trim();
+  if (!trimmed || !isSafeWorkflowRunId(runId)) return false;
+  const detail = readWorkflowRunDetail(baseDir, runId);
+  if (!detail) return false;
+  writeFileSync(
+    join(baseDir, runId, 'workflow-metadata.json'),
+    `${JSON.stringify({ displayName: trimmed }, null, 2)}\n`,
+    'utf8',
+  );
+  return true;
 }
 
 function currentWorkflowPreflightEnv(): {
@@ -1430,8 +1496,20 @@ function workflowEventSink(
 
 interface WorkflowLiveUpdateEmitter {
   onEvent(event: WorkflowEvent): void;
+  onProcessEvent(event: WorkflowProcessEvent): void;
   complete(status: 'completed' | 'failed' | 'stopped', message?: string): void;
   running(message?: string): void;
+}
+
+function subscribeWorkflowLiveProcess(
+  manager: WorkflowRunManager,
+  live: WorkflowLiveUpdateEmitter,
+  runId: string,
+): () => void {
+  return manager.subscribeWorkflowProcess((event) => {
+    if (event.snapshot.runId !== runId) return;
+    live.onProcessEvent(event);
+  });
 }
 
 export function createWorkflowLiveUpdateEmitter(
@@ -1487,6 +1565,23 @@ export function createWorkflowLiveUpdateEmitter(
   return {
     running: (message) => {
       if (!terminal) emit('running', message);
+    },
+    onProcessEvent: (event) => {
+      if (terminal && event.type !== 'workflow_finished') return;
+      const status = event.snapshot.status;
+      if (
+        event.type === 'workflow_finished'
+        || status === 'completed'
+        || status === 'failed'
+        || status === 'cancelled'
+      ) {
+        terminal = true;
+      }
+      const message = event.type === 'workflow_updated' ? event.message : undefined;
+      callbacks.onWorkflowRunUpdate?.(workflowLiveSnapshotFromProcess(
+        event.snapshot,
+        message === undefined ? { locale } : { locale, message },
+      ));
     },
     onEvent: (event) => {
       if (terminal) return;
@@ -1816,6 +1911,7 @@ export async function startGeneratedWorkflowFromRequest(
   }
   const live = createWorkflowLiveUpdateEmitter(input.callbacks, runId, generated.module.meta, locale);
   live.running(`Use /workflow show ${runId} for status or /workflow stop ${runId} to stop.`);
+  const unsubscribeProcess = subscribeWorkflowLiveProcess(manager, live, runId);
 
   const managed = manager.startFromOptions({
     module: generated.module,
@@ -1824,12 +1920,13 @@ export async function startGeneratedWorkflowFromRequest(
     runId,
     runDir,
     scriptSnapshot: generated.scriptSnapshot,
-    onEvent: workflowEventSink(input.callbacks, live, {
+    onEvent: workflowEventSink(input.callbacks, undefined, {
       presentation: input.presentation ?? 'command',
       locale,
       runId,
     }),
   });
+  void managed.done.finally(unsubscribeProcess);
   emitWorkflowBuilderEvent(input, {
     stage: 'launched',
     message: `Workflow ${generated.module.meta.name} started`,
@@ -2016,6 +2113,163 @@ export const workflowCommand: Command = {
       return;
     }
 
+    if (invocation.kind === 'rename') {
+      if (!invocation.target || !invocation.newName) {
+        console.log(chalk.yellow('\nUsage: /workflow rename <runId|savedName> <newName>\n'));
+        return;
+      }
+      const resolution = await resolveWorkflowIdentity({
+        target: invocation.target,
+        runBaseDir: baseDir,
+        savedWorkflowDirs: dirs,
+      });
+      if (resolution.kind === 'ambiguous') {
+        console.log(
+          chalk.red(
+            `\n[workflow] ambiguous rename target: ${invocation.target} matches both a workflow run id and a saved workflow name.\n`,
+          ),
+        );
+        return;
+      }
+      if (resolution.kind === 'missing') {
+        console.log(chalk.red(`\n[workflow] rename target not found: ${invocation.target}\n`));
+        return;
+      }
+      if (resolution.kind === 'run') {
+        if (!writeWorkflowRunDisplayName(baseDir, resolution.runId, invocation.newName)) {
+          console.log(chalk.red(`\n[workflow] rename failed: ${resolution.runId}\n`));
+          return;
+        }
+        console.log(chalk.green(`\nRenamed workflow run ${resolution.runId} to ${invocation.newName.trim()}.\n`));
+        return;
+      }
+      try {
+        const renamed = await renameSavedWorkflow({
+          dirs,
+          name: resolution.savedWorkflow.name,
+          newName: invocation.newName,
+          source: resolution.savedWorkflow.source,
+        });
+        console.log(chalk.green(`\nRenamed saved workflow ${invocation.target} to ${renamed.name}.\n`));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] rename failed: ${message}\n`));
+      }
+      return;
+    }
+
+    if (invocation.kind === 'revise') {
+      if (!invocation.target || !invocation.request) {
+        console.log(chalk.yellow('\nUsage: /workflow revise <runId|savedName> <change request>\n'));
+        return;
+      }
+      const confirm = resolveConfirm(callbacks);
+      if (!confirm) {
+        console.log(
+          chalk.red('\n[workflow] refusing to revise a workflow without an interactive approval channel.\n'),
+        );
+        return;
+      }
+      const createOptions = callbacks.createKodaXOptions;
+      if (!createOptions) {
+        console.log(chalk.red('\n[workflow] cannot revise - REPL options unavailable in this context.\n'));
+        return;
+      }
+      const resolution = await resolveWorkflowIdentity({
+        target: invocation.target,
+        runBaseDir: baseDir,
+        savedWorkflowDirs: dirs,
+      });
+      if (resolution.kind === 'ambiguous') {
+        console.log(
+          chalk.red(
+            `\n[workflow] ambiguous revise target: ${invocation.target} matches both a workflow run id and a saved workflow name.\n`,
+          ),
+        );
+        return;
+      }
+      if (resolution.kind === 'missing') {
+        console.log(chalk.red(`\n[workflow] revise target not found: ${invocation.target}\n`));
+        return;
+      }
+      let capsule: WorkflowCapsule;
+      try {
+        if (resolution.kind === 'run') {
+          capsule = (await loadGeneratedWorkflowFromRun({ runDir: resolution.runDir })).capsule;
+        } else {
+          if (resolution.savedWorkflow.execution !== 'capability-generated') {
+            console.log(chalk.red('\n[workflow] only generated workflow capsules can be revised.\n'));
+            return;
+          }
+          capsule = await loadSavedWorkflowCapsule(resolution.savedWorkflow.path);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] revise failed: ${message}\n`));
+        return;
+      }
+
+      const revisionRequest = buildWorkflowRevisionRequest({
+        target: invocation.target,
+        capsule,
+        changeRequest: invocation.request,
+      });
+      let generated: Awaited<ReturnType<typeof generateWorkflowFromOptions>>;
+      try {
+        generated = await generateWorkflowFromOptions({
+          request: revisionRequest,
+          options: createOptions(),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`\n[workflow] revise generation failed: ${message}\n`));
+        return;
+      }
+      if (generated.kind === 'declined') {
+        console.log(chalk.dim(`\nWorkflow revision not created: ${generated.reason}\n`));
+        return;
+      }
+      const savedName = await nextRevisionWorkflowName(dirs, generated.manifest.name);
+      const manifest = savedName === generated.manifest.name
+        ? generated.manifest
+        : { ...generated.manifest, name: savedName };
+      const approved = await confirm(
+        renderApprovalPrompt(buildApprovalSummary({ meta: manifest, run: generated.module.run }), {
+          source: `revision:${invocation.target}`,
+          sandbox: 'capability-generated',
+          mayUseWorktree: manifest.mayUseWorktree === true,
+          rawScript: generated.source,
+        }),
+      );
+      if (!approved) {
+        console.log(chalk.dim('Workflow revision cancelled.\n'));
+        return;
+      }
+      const ref = await saveGeneratedWorkflow({
+        dir: dirs.project ?? join(process.cwd(), '.kodax', 'workflows'),
+        name: savedName,
+        manifest,
+        source: generated.source,
+        intent: {
+          taskClass: manifest.patterns[0] ?? manifest.name,
+          originalRequest: invocation.request,
+          reusableFor: [manifest.description],
+        },
+        ...(capsule.inputs !== undefined ? { inputs: capsule.inputs } : {}),
+        ...(capsule.requires !== undefined ? { requires: capsule.requires } : {}),
+        provenance: {
+          ...(capsule.provenance?.fromRunId !== undefined
+            ? { fromRunId: capsule.provenance.fromRunId }
+            : {}),
+          ...(resolution.kind === 'run' ? { fromRunId: resolution.runId } : {}),
+          createdAt: new Date().toISOString(),
+          kodaxVersion: process.env.npm_package_version ?? '0.7.50',
+        },
+      });
+      console.log(chalk.green(`\nSaved workflow revision ${ref.name} to ${ref.path}\n`));
+      return;
+    }
+
     if (invocation.kind === 'rerun') {
       if (!invocation.runId) {
         console.log(chalk.yellow('\nUsage: /workflow rerun <runId|savedName> [args]\n'));
@@ -2072,6 +2326,7 @@ export const workflowCommand: Command = {
         console.log(chalk.dim(`\nStarted workflow ${prepared.module.meta.name} (${newRunId}). Use /workflow show ${newRunId} for status.\n`));
         const live = createWorkflowLiveUpdateEmitter(callbacks, newRunId, prepared.module.meta, locale);
         live.running(`Use /workflow show ${newRunId} for status or /workflow stop ${newRunId} to stop.`);
+        const unsubscribeProcess = subscribeWorkflowLiveProcess(manager, live, newRunId);
         const managed = manager.startFromOptions({
           module: prepared.module,
           args: parseWorkflowArgs(invocation.rawArgs),
@@ -2079,8 +2334,9 @@ export const workflowCommand: Command = {
           runId: newRunId,
           runDir: newRunDir,
           ...(prepared.scriptSnapshot ? { scriptSnapshot: prepared.scriptSnapshot } : {}),
-          onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId: newRunId }),
+          onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
         });
+        void managed.done.finally(unsubscribeProcess);
         observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
           canRerun: prepared.scriptSnapshot !== undefined,
           presentation,
@@ -2131,6 +2387,7 @@ export const workflowCommand: Command = {
       console.log(chalk.dim(`\nStarted workflow ${loaded.module.meta.name} (${newRunId}). Use /workflow show ${newRunId} for status.\n`));
       const live = createWorkflowLiveUpdateEmitter(callbacks, newRunId, loaded.module.meta, locale);
       live.running(`Use /workflow show ${newRunId} for status or /workflow stop ${newRunId} to stop.`);
+      const unsubscribeProcess = subscribeWorkflowLiveProcess(manager, live, newRunId);
       const managed = manager.startFromOptions({
         module: loaded.module,
         args: parseWorkflowArgs(invocation.rawArgs),
@@ -2141,8 +2398,9 @@ export const workflowCommand: Command = {
           manifest: loaded.capsule.manifest,
           source: loaded.capsule.source,
         },
-        onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId: newRunId }),
+        onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
       });
+      void managed.done.finally(unsubscribeProcess);
       observeManagedWorkflowDone(managed, callbacks, newRunId, live, {
         canRerun: true,
         presentation,
@@ -2261,6 +2519,7 @@ export const workflowCommand: Command = {
     const live = createWorkflowLiveUpdateEmitter(callbacks, runId, module.meta, locale);
     live.running(`Use /workflow show ${runId} for status or /workflow stop ${runId} to stop.`);
     const presentation: WorkflowRunPresentation = 'agentic';
+    const unsubscribeProcess = subscribeWorkflowLiveProcess(manager, live, runId);
 
     const managed = manager.startFromOptions({
       module,
@@ -2269,8 +2528,9 @@ export const workflowCommand: Command = {
       runId,
       runDir,
       ...(scriptSnapshot ? { scriptSnapshot } : {}),
-      onEvent: workflowEventSink(callbacks, live, { presentation, locale, runId }),
+      onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId }),
     });
+    void managed.done.finally(unsubscribeProcess);
 
     observeManagedWorkflowDone(managed, callbacks, runId, live, {
       canRerun: scriptSnapshot !== undefined,

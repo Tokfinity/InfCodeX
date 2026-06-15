@@ -1,3 +1,5 @@
+import type { WorkflowProcessSnapshot } from "@kodax-ai/agent";
+
 export type WorkflowLiveStatus = "running" | "completed" | "failed" | "stopped";
 export type WorkflowLiveLocale = "en" | "zh";
 
@@ -50,6 +52,58 @@ export interface WorkflowLiveViewModel {
   readonly stoppedAgents: number;
   readonly counterText?: string;
   readonly rows: readonly WorkflowLiveRow[];
+}
+
+export function workflowLiveSnapshotFromProcess(
+  snapshot: WorkflowProcessSnapshot,
+  options: {
+    readonly locale?: WorkflowLiveLocale;
+    readonly message?: string;
+  } = {},
+): WorkflowLiveSnapshot {
+  const agentItems = snapshot.items.filter((item) => item.kind === "agent");
+  const activeAgents = agentItems
+    .filter((item) => item.status === "running")
+    .map((item) => item.title);
+  const completedAgents = agentItems.filter((item) => item.status === "completed").length;
+  const failedAgents = agentItems.filter((item) => item.status === "failed").length;
+  const stoppedAgents = agentItems.filter((item) => item.status === "cancelled").length;
+  const status: WorkflowLiveStatus =
+    snapshot.status === "completed"
+      ? "completed"
+      : snapshot.status === "failed"
+        ? "failed"
+        : snapshot.status === "cancelled"
+          ? "stopped"
+          : "running";
+  const activePhaseTitle = snapshot.activePhaseId === undefined
+    ? undefined
+    : snapshot.items.find((item) => item.id === snapshot.activePhaseId)?.title;
+  const startedAt = Date.parse(snapshot.startedAt);
+  const message = options.message ?? snapshot.latestMessage;
+  return {
+    runId: snapshot.runId,
+    workflow: snapshot.displayName ?? snapshot.workflowName,
+    status,
+    ...(activePhaseTitle !== undefined ? { phase: activePhaseTitle } : {}),
+    ...(snapshot.activePhaseIndex !== undefined ? { phaseIndex: snapshot.activePhaseIndex } : {}),
+    ...(snapshot.phaseCount !== undefined ? { phaseTotal: snapshot.phaseCount } : {}),
+    ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+    elapsedMs: snapshot.elapsedMs,
+    activeAgents,
+    totalSpawned: snapshot.progress.spawnedAgents,
+    ...(snapshot.progress.plannedItems !== undefined
+      ? { plannedAgents: snapshot.progress.plannedItems }
+      : {}),
+    ...(snapshot.progress.agentCap !== undefined ? { agentCap: snapshot.progress.agentCap } : {}),
+    ...(snapshot.tokens !== undefined ? { tokenBudgetSpent: snapshot.tokens.spent } : {}),
+    ...(snapshot.tokens?.total !== undefined ? { tokenBudgetTotal: snapshot.tokens.total } : {}),
+    completedAgents,
+    failedAgents,
+    stoppedAgents,
+    ...(message !== undefined ? { message } : {}),
+    ...(options.locale !== undefined ? { locale: options.locale } : {}),
+  };
 }
 
 export function formatWorkflowLiveViewModelForTranscript(

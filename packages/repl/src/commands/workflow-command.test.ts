@@ -19,7 +19,7 @@ import {
   type WorkflowGenerationResult,
   type WorkflowRunManager,
 } from '@kodax-ai/coding';
-import { getAgentConfigPath, type WorkflowEvent } from '@kodax-ai/agent';
+import { createWorkflowCapsule, getAgentConfigPath, type WorkflowEvent } from '@kodax-ai/agent';
 
 import {
   parseWorkflowInvocation,
@@ -45,6 +45,7 @@ import {
   formatFinalEventSummary,
   formatResult,
   createWorkflowLiveUpdateEmitter,
+  buildWorkflowRevisionRequest,
   observeManagedWorkflowDone,
   isSafeWorkflowRunId,
   renderWorkflowHelp,
@@ -241,6 +242,16 @@ describe('parseWorkflowInvocation', () => {
       runId: 'run-1',
       name: 'audit',
     });
+    expect(parseWorkflowInvocation(['rename', 'run-1', 'Readable', 'Audit'])).toEqual({
+      kind: 'rename',
+      target: 'run-1',
+      newName: 'Readable Audit',
+    });
+    expect(parseWorkflowInvocation(['revise', 'run-1', 'add', 'verification'])).toEqual({
+      kind: 'revise',
+      target: 'run-1',
+      request: 'add verification',
+    });
     expect(parseWorkflowInvocation(['rerun', 'run-1', '{"request":"请复查"}'])).toEqual({
       kind: 'rerun',
       runId: 'run-1',
@@ -269,6 +280,35 @@ describe('parseWorkflowArgs', () => {
   });
   it('returns empty object for blank', () => {
     expect(parseWorkflowArgs('   ')).toEqual({});
+  });
+});
+
+describe('buildWorkflowRevisionRequest', () => {
+  it('includes original manifest, source, and requested change', () => {
+    const capsule = createWorkflowCapsule({
+      minKodaxVersion: '0.7.49',
+      manifest: {
+        name: 'saved-audit',
+        description: 'saved audit',
+        phases: ['scan'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['classify-and-act'],
+      },
+      source: 'export default async function run() { return "old"; }',
+    });
+
+    const prompt = buildWorkflowRevisionRequest({
+      target: 'saved-audit',
+      capsule,
+      changeRequest: 'add final verification',
+    });
+
+    expect(prompt).toContain('Return a complete revised workflow');
+    expect(prompt).toContain('"name": "saved-audit"');
+    expect(prompt).toContain('export default async function run()');
+    expect(prompt).toContain('add final verification');
   });
 });
 
@@ -997,6 +1037,33 @@ describe('readWorkflowRuns + formatRunsList', () => {
     expect(managedFull).toContain('full report end');
   });
 
+  it('counts persisted workflow events from events.jsonl instead of stale run.json metadata', () => {
+    const runDir = join(dir, 'run-stale-count');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'run.json'), JSON.stringify({
+      runId: 'run-stale-count',
+      workflow: 'wf',
+      status: 'completed',
+      totalSpawned: 1,
+      eventCount: 1,
+      startedAt: 1,
+      endedAt: 2,
+      artifacts: [],
+    }), 'utf8');
+    writeFileSync(join(runDir, 'events.jsonl'), [
+      JSON.stringify({ seq: 0, type: 'workflow_started', data: {} }),
+      JSON.stringify({ seq: 1, type: 'agent_spawned', data: { taskId: 't1', name: 'reader' } }),
+      JSON.stringify({
+        seq: 2,
+        type: 'agent_summary_updated',
+        data: { taskId: 't1', summaryKind: 'digest' },
+      }),
+      '',
+    ].join('\n'), 'utf8');
+
+    expect(readWorkflowRunDetail(dir, 'run-stale-count')?.eventCount).toBe(3);
+  });
+
   it('selects an active run by default, then latest managed, then persisted run', () => {
     const managed = [
       {
@@ -1184,6 +1251,8 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow delete <runId>');
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
+    expect(text).toContain('/workflow rename <runId|savedName> <newName>');
+    expect(text).toContain('/workflow revise <runId|savedName> <change>');
     expect(text).toContain('/workflow rerun <runId|savedName> [args]');
     expect(text).toContain('run id reruns');
     expect(text).toContain('saved name runs');
