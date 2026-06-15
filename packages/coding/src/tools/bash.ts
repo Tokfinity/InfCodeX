@@ -18,6 +18,8 @@ import {
   truncateTail,
 } from './truncate.js';
 
+const BACKGROUND_ABORT_KILL_MS = process.platform === 'win32' ? 5_000 : 2_000;
+
 type TailCollector = {
   chunks: Buffer[];
   keptBytes: number;
@@ -170,7 +172,10 @@ export async function toolBash(input: Record<string, unknown>, ctx: KodaXToolExe
       unregisterManagedChild();
     };
     const stopBackgroundProcess = (): void => {
-      void killChildProcessTree(proc).finally(cleanupProcessHooks);
+      void killChildProcessTree(proc, {
+        forceMs: BACKGROUND_ABORT_KILL_MS,
+        taskkillMs: BACKGROUND_ABORT_KILL_MS,
+      }).finally(cleanupProcessHooks);
     };
 
     proc.stdout?.pipe(logStream, { end: false });

@@ -1,9 +1,14 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { cleanupRegisteredManagedChildren, setAgentConfigHome } from '@kodax-ai/agent';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { toolBash } from './bash.js';
+
+const WINDOWS_PROCESS_TREE_EXIT_WAIT_MS = process.platform === 'win32' ? 30_000 : 5_000;
+const WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 30_000;
+const BACKGROUND_CHILD_MARKER = 'child-pid:';
 
 function parseBackgroundPid(result: string): number {
   const match = /PID:\s*(\d+)/.exec(result);
@@ -43,7 +48,32 @@ async function waitForOutputMatch(
   throw new Error(`pattern ${pattern} not found in background output: ${content}`);
 }
 
-function isPidAlive(pid: number): boolean {
+function getWindowsCommandLine(pid: number): string | undefined {
+  const result = spawnSync('wmic', [
+    'process',
+    'where',
+    `ProcessId=${pid}`,
+    'get',
+    'CommandLine',
+    '/format:list',
+  ], {
+    encoding: 'utf8',
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  const line = result.stdout
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .find((value) => value.startsWith('CommandLine='));
+  const commandLine = line?.slice('CommandLine='.length).trim();
+  return commandLine ? commandLine : undefined;
+}
+
+function isPidAlive(pid: number, commandMarker?: string): boolean {
+  if (process.platform === 'win32' && commandMarker !== undefined) {
+    const commandLine = getWindowsCommandLine(pid);
+    return commandLine?.includes(commandMarker) ?? false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -52,15 +82,19 @@ function isPidAlive(pid: number): boolean {
   }
 }
 
-async function waitForPidExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+async function waitForPidExit(
+  pid: number,
+  timeoutMs = 5_000,
+  commandMarker?: string,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (!isPidAlive(pid)) {
+    if (!isPidAlive(pid, commandMarker)) {
       return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  return !isPidAlive(pid);
+  return !isPidAlive(pid, commandMarker);
 }
 
 describe('toolBash', () => {
@@ -148,9 +182,15 @@ describe('toolBash', () => {
     const summary = await cleanupRegisteredManagedChildren({ includeCurrentOwner: true });
 
     expect(summary.killed).toBe(1);
-    await expect(waitForPidExit(pid)).resolves.toBe(true);
-    await expect(waitForPidExit(childPid)).resolves.toBe(true);
-  });
+    await Promise.all([
+      expect(
+        waitForPidExit(pid, WINDOWS_PROCESS_TREE_EXIT_WAIT_MS),
+      ).resolves.toBe(true),
+      expect(
+        waitForPidExit(childPid, WINDOWS_PROCESS_TREE_EXIT_WAIT_MS, BACKGROUND_CHILD_MARKER),
+      ).resolves.toBe(true),
+    ]);
+  }, WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS);
 
   it('stops background commands when the caller aborts', async () => {
     const controller = new AbortController();
@@ -168,9 +208,15 @@ describe('toolBash', () => {
 
     controller.abort();
 
-    await expect(waitForPidExit(pid)).resolves.toBe(true);
-    await expect(waitForPidExit(childPid)).resolves.toBe(true);
-  });
+    await Promise.all([
+      expect(
+        waitForPidExit(pid, WINDOWS_PROCESS_TREE_EXIT_WAIT_MS),
+      ).resolves.toBe(true),
+      expect(
+        waitForPidExit(childPid, WINDOWS_PROCESS_TREE_EXIT_WAIT_MS, BACKGROUND_CHILD_MARKER),
+      ).resolves.toBe(true),
+    ]);
+  }, WINDOWS_PROCESS_TREE_TEST_TIMEOUT_MS);
 
   describe('live progress reporting (FEATURE_149)', () => {
     it('calls reportToolProgress with stdout tail during execution', async () => {

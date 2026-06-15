@@ -9,7 +9,7 @@ import {
 
 const DEFAULT_GRACE_MS = 300;
 const DEFAULT_FORCE_MS = 2_000;
-const DEFAULT_TASKKILL_MS = 2_000;
+const DEFAULT_TASKKILL_MS = 5_000;
 
 export interface ProcessTreeKillOptions {
   readonly gracefulStdinEnd?: boolean;
@@ -179,10 +179,6 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
     timeout: DEFAULT_TASKKILL_MS,
     windowsHide: true,
   });
-  if (result.error || result.status !== 0) {
-    return [];
-  }
-
   const pids: number[] = [];
   const pattern = /ProcessId=(\d+)/g;
   let match: RegExpExecArray | null;
@@ -196,6 +192,9 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
 }
 
 function getWindowsChildPids(parentPid: number): number[] {
+  const wmicPids = getWindowsChildPidsViaWmic(parentPid);
+  if (wmicPids.length > 0) return wmicPids;
+
   const script = [
     `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid}"`,
     'if ($null -eq $children) { exit 0 }',
@@ -215,7 +214,9 @@ function getWindowsChildPids(parentPid: number): number[] {
     const pids = readWindowsPidListJson(result.stdout);
     if (pids.length > 0) return pids;
   }
-  return getWindowsChildPidsViaWmic(parentPid);
+  const partialPids = readWindowsPidListJson(result.stdout);
+  if (partialPids.length > 0) return partialPids;
+  return [];
 }
 
 function collectWindowsDescendantPids(pid: number, seen = new Set<number>()): number[] {
