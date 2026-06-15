@@ -293,6 +293,63 @@ describe('WorkflowLifecycleController', () => {
     });
   });
 
+  it('replaces saved workflow capsules through the lifecycle controller', async () => {
+    const manager = createWorkflowRunManager();
+    const savedDir = join(dir, 'saved-replace');
+    const controller = createWorkflowLifecycleController({
+      runManager: manager,
+      runBaseDir: dir,
+      savedWorkflowDirs: { project: savedDir },
+    });
+    await saveGeneratedWorkflow({
+      dir: savedDir,
+      name: 'saved-audit',
+      manifest: {
+        name: 'saved-audit',
+        description: 'saved audit',
+        phases: ['scan'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['classify-and-act'],
+      },
+      source: 'export default async function run() { return "old"; }',
+    });
+
+    const replaced = await controller.replaceSavedWorkflow({
+      name: 'saved-audit',
+      manifest: {
+        name: 'generated-revision',
+        description: 'saved audit revision',
+        phases: ['scan'],
+        readOnly: true,
+        maxAgents: 1,
+        maxConcurrency: 1,
+        patterns: ['classify-and-act'],
+      },
+      source: 'export default async function run() { return "new"; }',
+      provenance: {
+        fromWorkflowName: 'saved-audit',
+        revisionOf: 'saved-audit',
+        replacesWorkflowName: 'saved-audit',
+        createdAt: '2026-06-15T00:00:00.000Z',
+        kodaxVersion: '0.7.50',
+      },
+    });
+
+    expect(replaced?.name).toBe('saved-audit');
+    expect(existsSync(replaced?.previousPath ?? '')).toBe(true);
+    await expect(loadSavedWorkflowCapsule(replaced?.path ?? '')).resolves.toMatchObject({
+      manifest: {
+        name: 'saved-audit',
+        description: 'saved audit revision',
+      },
+      provenance: {
+        replacesWorkflowName: 'saved-audit',
+      },
+    });
+  });
+
   it('skips malformed persisted event lines and rejects path-like run ids', async () => {
     const manager = createWorkflowRunManager();
     const controller = createWorkflowLifecycleController({ runManager: manager, runBaseDir: dir });

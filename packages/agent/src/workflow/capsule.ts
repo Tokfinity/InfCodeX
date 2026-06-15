@@ -39,6 +39,9 @@ export interface WorkflowCapsuleRequirements {
 
 export interface WorkflowCapsuleProvenance {
   readonly fromRunId?: string;
+  readonly fromWorkflowName?: string;
+  readonly revisionOf?: string;
+  readonly replacesWorkflowName?: string;
   readonly createdAt: string;
   readonly kodaxVersion: string;
 }
@@ -197,8 +200,14 @@ function validateProvenance(value: unknown): WorkflowCapsuleProvenance | undefin
   if (value === undefined) return undefined;
   if (!isRecord(value)) throw new Error('workflow capsule provenance must be an object');
   const fromRunId = readOptionalString(value, 'fromRunId');
+  const fromWorkflowName = readOptionalString(value, 'fromWorkflowName');
+  const revisionOf = readOptionalString(value, 'revisionOf');
+  const replacesWorkflowName = readOptionalString(value, 'replacesWorkflowName');
   return {
     ...(fromRunId !== undefined ? { fromRunId } : {}),
+    ...(fromWorkflowName !== undefined ? { fromWorkflowName } : {}),
+    ...(revisionOf !== undefined ? { revisionOf } : {}),
+    ...(replacesWorkflowName !== undefined ? { replacesWorkflowName } : {}),
     createdAt: readString(value, 'createdAt'),
     kodaxVersion: readString(value, 'kodaxVersion'),
   };

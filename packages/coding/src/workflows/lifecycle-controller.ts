@@ -20,11 +20,14 @@ import {
 import type {
   SavedWorkflowDirs,
   SavedWorkflowRef,
+  ReplaceSavedWorkflowInput,
+  ReplaceSavedWorkflowResult,
   WorkflowCapsulePreflightEnvironment,
   WorkflowCapsulePreflightResult,
 } from './discovery.js';
 import {
   preflightWorkflowCapsule as runWorkflowCapsulePreflight,
+  replaceSavedWorkflow as replaceSavedWorkflowCapsule,
   renameSavedWorkflow as renameSavedWorkflowCapsule,
 } from './discovery.js';
 import {
@@ -69,6 +72,9 @@ export interface WorkflowLifecycleController {
   resumeWorkflow(runId: string): Promise<boolean>;
   renameWorkflowRun(runId: string, displayName: string): Promise<boolean>;
   renameSavedWorkflow(name: string, newName: string): Promise<SavedWorkflowRef | undefined>;
+  replaceSavedWorkflow(
+    input: Omit<ReplaceSavedWorkflowInput, 'dirs'>,
+  ): Promise<ReplaceSavedWorkflowResult | undefined>;
   readWorkflowResult(runId: string): Promise<string | undefined>;
   readWorkflowArtifact(runId: string, name: string): Promise<unknown | undefined>;
   deleteWorkflowRun(runId: string): Promise<boolean>;
@@ -318,6 +324,14 @@ export function createWorkflowLifecycleController(
         dirs: options.savedWorkflowDirs,
         name,
         newName,
+      });
+    },
+
+    replaceSavedWorkflow: async (input) => {
+      if (!options.savedWorkflowDirs) return undefined;
+      return replaceSavedWorkflowCapsule({
+        ...input,
+        dirs: options.savedWorkflowDirs,
       });
     },
 

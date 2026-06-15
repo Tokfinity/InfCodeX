@@ -13,7 +13,7 @@
  * confirmation (Phase D.2 command) — discovery itself only reads paths.
  */
 
-import { mkdir, readdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -82,6 +82,15 @@ export interface RenameSavedWorkflowInput {
   readonly name: string;
   readonly newName: string;
   readonly source?: SavedWorkflowSource;
+}
+
+export interface ReplaceSavedWorkflowInput extends Omit<SaveGeneratedWorkflowInput, 'dir'> {
+  readonly dirs: SavedWorkflowDirs;
+  readonly savedSource?: SavedWorkflowSource;
+}
+
+export interface ReplaceSavedWorkflowResult extends SavedWorkflowRef {
+  readonly previousPath: string;
 }
 
 export interface LoadGeneratedWorkflowFromRunInput {
@@ -307,6 +316,10 @@ export async function saveGeneratedWorkflow(
   };
 }
 
+async function writeCapsuleFile(path: string, capsule: WorkflowCapsule): Promise<void> {
+  await writeFile(path, `${JSON.stringify(capsule, null, 2)}\n`, 'utf8');
+}
+
 async function fileExists(path: string): Promise<boolean> {
   try {
     await readFile(path, 'utf8');
@@ -357,6 +370,68 @@ export async function renameSavedWorkflow(
     path: targetPath,
     source: ref.source,
     execution: 'capability-generated',
+  };
+}
+
+export async function replaceSavedWorkflow(
+  input: ReplaceSavedWorkflowInput,
+): Promise<ReplaceSavedWorkflowResult> {
+  const safeName = safeWorkflowName(input.name);
+  const refs = (await discoverSavedWorkflows(input.dirs))
+    .filter((ref) => ref.name === safeName)
+    .filter((ref) => input.savedSource === undefined || ref.source === input.savedSource);
+  if (refs.length === 0) {
+    throw new Error(`saved workflow not found: ${safeName}`);
+  }
+  if (refs.length > 1) {
+    throw new Error(`ambiguous saved workflow name: ${safeName}`);
+  }
+  const ref = refs[0]!;
+  if (!ref.path.endsWith('.workflow.json')) {
+    throw new Error('only generated workflow capsules can be replaced');
+  }
+
+  const manifest = validateWorkflowScriptManifest({
+    ...input.manifest,
+    name: safeName,
+  });
+  const requirements = input.requires ?? deriveRequirements(manifest);
+  const capsule = createWorkflowCapsule({
+    minKodaxVersion: input.minKodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    manifest,
+    source: input.source,
+    ...(input.intent !== undefined ? { intent: input.intent } : {}),
+    ...(input.inputs !== undefined ? { inputs: input.inputs } : {}),
+    ...(requirements !== undefined ? { requires: requirements } : {}),
+    ...(input.provenance !== undefined ? { provenance: input.provenance } : {}),
+  });
+  const previousCapsule = await loadSavedWorkflowCapsule(ref.path);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const archiveDir = join(dirname(ref.path), '.revisions', safeName);
+  const archiveSuffix = `${timestamp}-${process.hrtime.bigint().toString(36)}`;
+  const previousPath = join(archiveDir, `${safeName}-${archiveSuffix}.workflow.json`);
+  const tempPath = join(dirname(ref.path), `.${safeName}.${process.pid}.${Date.now().toString(36)}.tmp`);
+
+  await mkdir(archiveDir, { recursive: true });
+  await writeCapsuleFile(previousPath, previousCapsule);
+  try {
+    await writeCapsuleFile(tempPath, capsule);
+    await rename(tempPath, ref.path);
+  } catch (error) {
+    try {
+      await unlink(tempPath);
+    } catch {
+      // Best-effort cleanup; rethrow the original replace failure.
+    }
+    throw error;
+  }
+
+  return {
+    name: safeName,
+    path: ref.path,
+    source: ref.source,
+    execution: 'capability-generated',
+    previousPath,
   };
 }
 

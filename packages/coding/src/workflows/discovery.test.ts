@@ -15,6 +15,7 @@ import {
   loadSavedWorkflowCapsule,
   normalizeWorkflowModule,
   preflightWorkflowCapsule,
+  replaceSavedWorkflow,
   renameSavedWorkflow,
   saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
@@ -285,6 +286,46 @@ describe('saveGeneratedWorkflow', () => {
     expect(existsSync(renamed.path)).toBe(true);
     const capsule = await loadSavedWorkflowCapsule(renamed.path);
     expect(capsule.manifest.name).toBe('new-name');
+  });
+
+  it('replaces generated workflow capsules under the same saved name and archives the previous capsule', async () => {
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'saved-demo',
+      manifest: { ...manifest, name: 'saved-demo' },
+      source: 'async function run() { return "old"; }',
+    });
+
+    const replaced = await replaceSavedWorkflow({
+      dirs: { project: dir },
+      name: 'saved-demo',
+      manifest: { ...manifest, name: 'generated-new-name', description: 'replacement' },
+      source: 'async function run() { return "new"; }',
+      provenance: {
+        fromWorkflowName: 'saved-demo',
+        revisionOf: 'saved-demo',
+        replacesWorkflowName: 'saved-demo',
+        createdAt: '2026-06-15T00:00:00.000Z',
+        kodaxVersion: '0.7.50',
+      },
+    });
+
+    expect(replaced.name).toBe('saved-demo');
+    expect(replaced.path).toBe(ref.path);
+    expect(existsSync(replaced.previousPath)).toBe(true);
+    const previous = await loadSavedWorkflowCapsule(replaced.previousPath);
+    expect(previous.source).toContain('old');
+
+    const current = await loadSavedWorkflowCapsule(ref.path);
+    expect(current.source).toContain('new');
+    expect(current.manifest.name).toBe('saved-demo');
+    expect(current.manifest.description).toBe('replacement');
+    expect(current.provenance).toMatchObject({
+      fromWorkflowName: 'saved-demo',
+      revisionOf: 'saved-demo',
+      replacesWorkflowName: 'saved-demo',
+    });
+    expect((await discoverSavedWorkflows({ project: dir })).map((item) => item.name)).toEqual(['saved-demo']);
   });
 
   it('preflights lightweight capsule requirements against the current environment', async () => {

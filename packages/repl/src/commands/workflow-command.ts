@@ -32,6 +32,7 @@ import type {
   WorkflowModule,
   WorkflowProcessEvent,
   WorkflowCapsule,
+  WorkflowCapsuleProvenance,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 import {
@@ -47,6 +48,7 @@ import {
   loadSavedWorkflowCapsule,
   preflightWorkflowCapsule,
   renameSavedWorkflow,
+  replaceSavedWorkflow,
   resolveWorkflowIdentity,
   safeWorkflowArtifactName,
   saveGeneratedWorkflow,
@@ -76,7 +78,7 @@ export type WorkflowInvocation =
   | { readonly kind: 'prune'; readonly rawArgs: readonly string[] }
   | { readonly kind: 'save'; readonly runId: string; readonly name: string }
   | { readonly kind: 'rename'; readonly target: string; readonly newName: string }
-  | { readonly kind: 'revise'; readonly target: string; readonly request: string }
+  | { readonly kind: 'revise'; readonly target: string; readonly request: string; readonly replace?: boolean }
   | { readonly kind: 'rerun'; readonly runId: string; readonly rawArgs: string }
   | { readonly kind: 'create'; readonly request: string }
   | { readonly kind: 'start'; readonly name: string; readonly rawArgs: string };
@@ -109,7 +111,15 @@ export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvoca
     return { kind: 'rename', target: args[1] ?? '', newName: args.slice(2).join(' ').trim() };
   }
   if (first === 'revise') {
-    return { kind: 'revise', target: args[1] ?? '', request: args.slice(2).join(' ').trim() };
+    const raw = args.slice(1);
+    const replace = raw.includes('--replace');
+    const cleaned = raw.filter((arg) => arg !== '--replace');
+    return {
+      kind: 'revise',
+      target: cleaned[0] ?? '',
+      request: cleaned.slice(1).join(' ').trim(),
+      ...(replace ? { replace: true } : {}),
+    };
   }
   if (first === 'rerun') {
     return { kind: 'rerun', runId: args[1] ?? '', rawArgs: args.slice(2).join(' ').trim() };
@@ -756,6 +766,33 @@ async function nextRevisionWorkflowName(
   return `${preferredName}-revision-${Date.now().toString(36)}`;
 }
 
+function buildWorkflowRevisionProvenance(input: {
+  readonly capsule: WorkflowCapsule;
+  readonly resolution: Awaited<ReturnType<typeof resolveWorkflowIdentity>>;
+  readonly replacesWorkflowName?: string;
+}): WorkflowCapsuleProvenance {
+  const fromRunId = input.resolution.kind === 'run'
+    ? input.resolution.runId
+    : input.capsule.provenance?.fromRunId;
+  const fromWorkflowName = input.resolution.kind === 'saved'
+    ? input.resolution.savedWorkflow.name
+    : input.capsule.provenance?.fromWorkflowName;
+  const revisionOf = input.resolution.kind === 'run'
+    ? input.resolution.runId
+    : input.resolution.kind === 'saved'
+      ? input.resolution.savedWorkflow.name
+      : undefined;
+
+  return {
+    ...(fromRunId !== undefined ? { fromRunId } : {}),
+    ...(fromWorkflowName !== undefined ? { fromWorkflowName } : {}),
+    ...(revisionOf !== undefined ? { revisionOf } : {}),
+    ...(input.replacesWorkflowName !== undefined ? { replacesWorkflowName: input.replacesWorkflowName } : {}),
+    createdAt: new Date().toISOString(),
+    kodaxVersion: process.env.npm_package_version ?? '0.7.50',
+  };
+}
+
 export function formatSavedList(refs: readonly SavedWorkflowRef[]): string {
   if (refs.length === 0) return '  (no saved workflows)';
   return refs
@@ -790,7 +827,7 @@ export function renderWorkflowHelp(): string {
     `  ${chalk.cyan('/workflow rerun <runId|savedName> [args]')} Rerun a historical generated run, or run the current saved workflow by name.`,
     `  ${chalk.cyan('/workflow save <runId> <name>')}          Save a generated run as a workflow capsule.`,
     `  ${chalk.cyan('/workflow rename <runId|savedName> <newName>')} Rename a run display name or generated saved capsule.`,
-    `  ${chalk.cyan('/workflow revise <runId|savedName> <change>')} Generate and save a new capsule revision.`,
+    `  ${chalk.cyan('/workflow revise [--replace] <runId|savedName> <change>')} Generate and save a capsule revision.`,
     `  ${chalk.cyan('/workflow help')}                         Show this help. Also available as /help workflow.`,
     '',
     `${chalk.bold('Examples:')}`,
@@ -804,6 +841,7 @@ export function renderWorkflowHelp(): string {
     `${chalk.bold('Safety:')}`,
     '  - Generated and workflow capsule (.workflow.json) workflows run in the capability WorkflowApi runner.',
     '  - For rerun, a run id reruns its saved snapshot; a saved name runs the current saved capsule version.',
+    '  - For revise --replace, only a saved generated capsule name can move; the previous capsule is archived.',
     '  - Local .ts/.mjs/.js workflows are trusted-local and require explicit confirmation.',
     '  - File, shell, MCP, and web effects still go through child agents and existing permission gates.',
   ].join('\n');
@@ -1946,8 +1984,8 @@ export async function startGeneratedWorkflowFromRequest(
 export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
-  usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | create | <name> [args]]',
-  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | create <request> | <name> [args]',
+  usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args]]',
+  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|savedName> <newName> | revise [--replace] <runId|savedName> <change> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, _context, callbacks, currentConfig) => {
     const invocation = parseWorkflowInvocation(args);
@@ -2162,7 +2200,7 @@ export const workflowCommand: Command = {
 
     if (invocation.kind === 'revise') {
       if (!invocation.target || !invocation.request) {
-        console.log(chalk.yellow('\nUsage: /workflow revise <runId|savedName> <change request>\n'));
+        console.log(chalk.yellow('\nUsage: /workflow revise [--replace] <runId|savedName> <change request>\n'));
         return;
       }
       const confirm = resolveConfirm(callbacks);
@@ -2192,6 +2230,10 @@ export const workflowCommand: Command = {
       }
       if (resolution.kind === 'missing') {
         console.log(chalk.red(`\n[workflow] revise target not found: ${invocation.target}\n`));
+        return;
+      }
+      if (invocation.replace === true && resolution.kind !== 'saved') {
+        console.log(chalk.red('\n[workflow] revise --replace requires a saved workflow name target.\n'));
         return;
       }
       let capsule: WorkflowCapsule;
@@ -2231,13 +2273,20 @@ export const workflowCommand: Command = {
         console.log(chalk.dim(`\nWorkflow revision not created: ${generated.reason}\n`));
         return;
       }
-      const savedName = await nextRevisionWorkflowName(dirs, generated.manifest.name);
+      const replaceSavedResolution = invocation.replace === true && resolution.kind === 'saved'
+        ? resolution
+        : undefined;
+      const replaceWorkflowName = replaceSavedResolution?.savedWorkflow.name;
+      const savedName = replaceWorkflowName
+        ?? await nextRevisionWorkflowName(dirs, generated.manifest.name);
       const manifest = savedName === generated.manifest.name
         ? generated.manifest
         : { ...generated.manifest, name: savedName };
       const approved = await confirm(
         renderApprovalPrompt(buildApprovalSummary({ meta: manifest, run: generated.module.run }), {
-          source: `revision:${invocation.target}`,
+          source: replaceWorkflowName
+            ? `revision-replace:${replaceWorkflowName}`
+            : `revision:${invocation.target}`,
           sandbox: 'capability-generated',
           mayUseWorktree: manifest.mayUseWorktree === true,
           rawScript: generated.source,
@@ -2247,8 +2296,7 @@ export const workflowCommand: Command = {
         console.log(chalk.dim('Workflow revision cancelled.\n'));
         return;
       }
-      const ref = await saveGeneratedWorkflow({
-        dir: dirs.project ?? join(process.cwd(), '.kodax', 'workflows'),
+      const revisionInput = {
         name: savedName,
         manifest,
         source: generated.source,
@@ -2259,14 +2307,30 @@ export const workflowCommand: Command = {
         },
         ...(capsule.inputs !== undefined ? { inputs: capsule.inputs } : {}),
         ...(capsule.requires !== undefined ? { requires: capsule.requires } : {}),
-        provenance: {
-          ...(capsule.provenance?.fromRunId !== undefined
-            ? { fromRunId: capsule.provenance.fromRunId }
-            : {}),
-          ...(resolution.kind === 'run' ? { fromRunId: resolution.runId } : {}),
-          createdAt: new Date().toISOString(),
-          kodaxVersion: process.env.npm_package_version ?? '0.7.50',
-        },
+        provenance: buildWorkflowRevisionProvenance({
+          capsule,
+          resolution,
+          ...(replaceWorkflowName !== undefined ? { replacesWorkflowName: replaceWorkflowName } : {}),
+        }),
+      };
+      if (replaceSavedResolution) {
+        const ref = await replaceSavedWorkflow({
+          ...revisionInput,
+          dirs,
+          savedSource: replaceSavedResolution.savedWorkflow.source,
+        });
+        console.log(
+          chalk.green(
+            `\nReplaced saved workflow ${ref.name} with revised capsule at ${ref.path}\n`,
+          ),
+        );
+        console.log(chalk.dim(`Previous capsule archived at ${ref.previousPath}\n`));
+        return;
+      }
+
+      const ref = await saveGeneratedWorkflow({
+        ...revisionInput,
+        dir: dirs.project ?? join(process.cwd(), '.kodax', 'workflows'),
       });
       console.log(chalk.green(`\nSaved workflow revision ${ref.name} to ${ref.path}\n`));
       return;

@@ -252,6 +252,18 @@ describe('parseWorkflowInvocation', () => {
       target: 'run-1',
       request: 'add verification',
     });
+    expect(parseWorkflowInvocation(['revise', '--replace', 'saved-audit', 'add', 'verification'])).toEqual({
+      kind: 'revise',
+      target: 'saved-audit',
+      request: 'add verification',
+      replace: true,
+    });
+    expect(parseWorkflowInvocation(['revise', 'saved-audit', '--replace', 'add', 'verification'])).toEqual({
+      kind: 'revise',
+      target: 'saved-audit',
+      request: 'add verification',
+      replace: true,
+    });
     expect(parseWorkflowInvocation(['rerun', 'run-1', '{"request":"请复查"}'])).toEqual({
       kind: 'rerun',
       runId: 'run-1',
@@ -1252,8 +1264,9 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
     expect(text).toContain('/workflow rename <runId|savedName> <newName>');
-    expect(text).toContain('/workflow revise <runId|savedName> <change>');
+    expect(text).toContain('/workflow revise [--replace] <runId|savedName> <change>');
     expect(text).toContain('/workflow rerun <runId|savedName> [args]');
+    expect(text).toContain('revise --replace');
     expect(text).toContain('run id reruns');
     expect(text).toContain('saved name runs');
     expect(text).toContain('/workflow help');
