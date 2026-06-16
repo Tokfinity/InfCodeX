@@ -124,6 +124,14 @@ export interface WorkflowCapsulePreflightEnvironment {
 
 const KODAX_WORKFLOW_CAPSULE_MIN_VERSION = '0.7.49';
 
+function currentKodaxWorkflowVersion(): string {
+  return (
+    process.env.KODAX_VERSION ??
+    process.env.npm_package_version ??
+    KODAX_WORKFLOW_CAPSULE_MIN_VERSION
+  );
+}
+
 function executionForPath(path: string): SavedWorkflowExecution {
   return path.endsWith('.workflow.json') ? 'capability-generated' : 'trusted-local';
 }
@@ -483,7 +491,7 @@ async function readCapsuleFromRun(input: LoadGeneratedWorkflowFromRunInput): Pro
     provenance: {
       fromRunId: runId,
       createdAt: new Date().toISOString(),
-      kodaxVersion: process.env.npm_package_version ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+      kodaxVersion: currentKodaxWorkflowVersion(),
     },
   });
 }
@@ -614,7 +622,7 @@ export function preflightWorkflowCapsule(
   addMinVersionIssue(
     issues,
     validated.minKodaxVersion,
-    env.kodaxVersion ?? KODAX_WORKFLOW_CAPSULE_MIN_VERSION,
+    env.kodaxVersion ?? currentKodaxWorkflowVersion(),
   );
   if (requirements?.environment?.includes('git-repo') && env.isGitRepo === false) {
     addRequirementIssue(

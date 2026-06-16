@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   discoverSavedWorkflows,
@@ -177,7 +177,10 @@ describe('saveGeneratedWorkflow', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'wf-save-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  });
 
   const manifest = {
     name: 'saved-demo',
@@ -265,6 +268,31 @@ describe('saveGeneratedWorkflow', () => {
     const loaded = await loadGeneratedWorkflowFromRun({ runDir });
     expect(loaded.capsule.provenance?.fromRunId).toBe('run-2');
     expect(await loaded.module.run({} as never, {})).toBe('rerun-ok');
+  });
+
+  it('uses bundled KODAX_VERSION for run provenance when npm version env is absent', async () => {
+    vi.stubEnv('KODAX_VERSION', '0.7.50');
+    vi.stubEnv('npm_package_version', undefined);
+    const runDir = join(dir, 'run-binary-version');
+    mkdirSync(runDir, { recursive: true });
+    const scriptPath = join(runDir, 'script.js');
+    const manifestPath = join(runDir, 'manifest.json');
+    writeFileSync(scriptPath, 'async function run() { return "ok"; }', 'utf8');
+    writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-binary-version',
+        workflow: 'generated',
+        scriptSnapshotPath: scriptPath,
+        manifestSnapshotPath: manifestPath,
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadGeneratedWorkflowFromRun({ runDir });
+
+    expect(loaded.capsule.provenance?.kodaxVersion).toBe('0.7.50');
   });
 
   it('renames generated workflow capsules and updates manifest identity', async () => {
@@ -397,6 +425,24 @@ describe('saveGeneratedWorkflow', () => {
       requirement: 'kodax:min-version',
       message: 'workflow requires KodaX >= 99.0.0, current version is 0.7.49',
     });
+  });
+
+  it('uses bundled KODAX_VERSION for default min-version preflight', async () => {
+    vi.stubEnv('KODAX_VERSION', '0.7.50');
+    vi.stubEnv('npm_package_version', undefined);
+    const ref = await saveGeneratedWorkflow({
+      dir,
+      name: 'binary-version',
+      manifest,
+      source: 'async function run() { return "ok"; }',
+      minKodaxVersion: '0.7.50',
+    });
+    const capsule = await loadSavedWorkflowCapsule(ref.path);
+
+    const result = preflightWorkflowCapsule(capsule);
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
   });
 
   it('warns when dependency inventories are unavailable instead of silently skipping them', async () => {
