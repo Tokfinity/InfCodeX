@@ -106,6 +106,17 @@ async function waitForPosixPidTreeExit(pid: number, timeoutMs: number): Promise<
   return !isPosixPidTreeAlive(pid);
 }
 
+async function waitForWindowsPidExit(pid: number, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!signalTargetExists(pid)) {
+      return true;
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  return !signalTargetExists(pid);
+}
+
 async function waitForWindowsPidsExit(pids: readonly number[], timeoutMs: number): Promise<boolean> {
   const uniquePids = [...new Set(pids.filter((pid) => Number.isFinite(pid) && pid > 0))];
   if (uniquePids.length === 0) {
@@ -166,6 +177,7 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
 }
 
 function getWindowsChildPids(parentPid: number): number[] {
+  // Mirror the agent copy: CIM first, partial stdout accepted, WMIC fallback.
   const script = [
     `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid}"`,
     'if ($null -eq $children) { exit 0 }',
@@ -185,6 +197,8 @@ function getWindowsChildPids(parentPid: number): number[] {
     const pids = readWindowsPidListJson(result.stdout);
     if (pids.length > 0) return pids;
   }
+  const partialPids = readWindowsPidListJson(result.stdout);
+  if (partialPids.length > 0) return partialPids;
   return getWindowsChildPidsViaWmic(parentPid);
 }
 
@@ -201,8 +215,18 @@ function collectWindowsDescendantPids(pid: number, seen = new Set<number>()): nu
   return descendants;
 }
 
+async function killWindowsPid(pid: number, signal: NodeJS.Signals): Promise<boolean> {
+  try {
+    process.kill(pid, signal);
+  } catch {
+    return !signalTargetExists(pid);
+  }
+  return waitForWindowsPidExit(pid, FORCE_WAIT_MS);
+}
+
 export async function killChildProcessTree(child: ChildProcess): Promise<void> {
   if (process.platform === 'win32' && child.pid !== undefined) {
+    // Mirror the agent copy: taskkill first, then direct SIGTERM/SIGKILL fallbacks.
     const descendantPids = collectWindowsDescendantPids(child.pid);
     const killOrder = [...descendantPids].reverse();
     const targets = [child.pid, ...descendantPids];
@@ -218,14 +242,24 @@ export async function killChildProcessTree(child: ChildProcess): Promise<void> {
       await waitForExit(child, FORCE_WAIT_MS);
       return;
     }
+
     for (const childPid of killOrder) {
       if (signalTargetExists(childPid)) {
-        await runTaskkill(childPid);
+        await killWindowsPid(childPid, 'SIGTERM');
       }
     }
-    if (signalTargetExists(child.pid)) {
-      await runTaskkill(child.pid);
+    await killWindowsPid(child.pid, 'SIGTERM');
+    if (await waitForWindowsPidsExit(targets, FORCE_WAIT_MS)) {
+      await waitForExit(child, FORCE_WAIT_MS);
+      return;
     }
+
+    for (const childPid of killOrder) {
+      if (signalTargetExists(childPid)) {
+        await killWindowsPid(childPid, 'SIGKILL');
+      }
+    }
+    await killWindowsPid(child.pid, 'SIGKILL');
     await waitForWindowsPidsExit(targets, FORCE_WAIT_MS);
     await waitForExit(child, FORCE_WAIT_MS);
     return;

@@ -179,6 +179,10 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
     timeout: DEFAULT_TASKKILL_MS,
     windowsHide: true,
   });
+  if (result.error || result.status !== 0) {
+    return [];
+  }
+
   const pids: number[] = [];
   const pattern = /ProcessId=(\d+)/g;
   let match: RegExpExecArray | null;
@@ -192,9 +196,7 @@ function getWindowsChildPidsViaWmic(parentPid: number): number[] {
 }
 
 function getWindowsChildPids(parentPid: number): number[] {
-  const wmicPids = getWindowsChildPidsViaWmic(parentPid);
-  if (wmicPids.length > 0) return wmicPids;
-
+  // Mirror the llm copy: CIM first, partial stdout accepted, WMIC fallback.
   const script = [
     `$children = Get-CimInstance Win32_Process -Filter "ParentProcessId = ${parentPid}"`,
     'if ($null -eq $children) { exit 0 }',
@@ -216,7 +218,7 @@ function getWindowsChildPids(parentPid: number): number[] {
   }
   const partialPids = readWindowsPidListJson(result.stdout);
   if (partialPids.length > 0) return partialPids;
-  return [];
+  return getWindowsChildPidsViaWmic(parentPid);
 }
 
 function collectWindowsDescendantPids(pid: number, seen = new Set<number>()): number[] {
@@ -246,6 +248,7 @@ export async function killPidTree(
   options: ProcessTreeKillOptions = {},
 ): Promise<void> {
   if (process.platform === 'win32') {
+    // Mirror the llm copy: taskkill first, then direct SIGTERM/SIGKILL fallbacks.
     const descendantPids = collectWindowsDescendantPids(pid);
     const killOrder = [...descendantPids].reverse();
     const targets = [pid, ...descendantPids];
