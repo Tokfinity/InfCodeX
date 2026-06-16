@@ -166,6 +166,39 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(result.totalTokensUsed).toBe(42);
   });
 
+  it('emits child activity end metadata after a child leaves the executor', async () => {
+    const onChildActivityEnd = vi.fn();
+    const correlation = {
+      workflowRunId: 'run-activity',
+      childAgentId: 'cb-live',
+      itemId: 'agent:cb-live',
+    };
+    mockRunKodaX.mockResolvedValueOnce(
+      okResult('child done', { inputTokens: 10, outputTokens: 5, totalTokens: 15 }),
+    );
+
+    await executeChildAgents(
+      [createBundle({ id: 'cb-live', readOnly: true })],
+      createCtx(),
+      createOptions({
+        workflowCorrelation: correlation,
+        childActivityName: 'live child',
+        parentOptions: {
+          provider: 'anthropic',
+          events: { onChildActivityEnd },
+        },
+      }),
+    );
+
+    expect(onChildActivityEnd).toHaveBeenCalledOnce();
+    expect(onChildActivityEnd).toHaveBeenCalledWith({
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-live',
+      childAgentName: 'live child',
+      liveOnly: true,
+    });
+  });
+
   it('adds a no-tool same-session digest turn for workflow children only', async () => {
     const childMessages = [
       { role: 'assistant' as const, content: 'Full report with file:line evidence.' },
@@ -189,6 +222,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
         usage: { inputTokens: 5, outputTokens: 8, totalTokens: 13 },
       });
 
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const result = await executeChildAgents(
       [createBundle({ id: 'cb-digest', readOnly: true })],
       createCtx(),
@@ -201,6 +235,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(result.results[0]?.summary).toBe('Full report with file:line evidence.');
     expect(result.results[0]?.digest).toContain('workflow users get a concise digest');
     expect(result.totalTokensUsed).toBe(55);
+    expect(timeoutSpy.mock.calls.some((call) => call[1] === 10_000)).toBe(true);
     const digestOptions = mockRunKodaX.mock.calls[1]![0] as {
       maxIter?: number;
       session?: { initialMessages?: readonly unknown[] };
@@ -209,6 +244,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(digestOptions.maxIter).toBe(1);
     expect(digestOptions.session?.initialMessages).toBe(childMessages);
     expect(digestOptions.context?.excludeTools).toContain('read');
+    timeoutSpy.mockRestore();
   });
 
   it('can return a workflow child before its async digest finishes', async () => {
@@ -233,6 +269,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
       })
       .mockImplementationOnce(() => digestRun.promise);
 
+    const timeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const result = await executeChildAgents(
       [createBundle({ id: 'cb-async-digest', readOnly: true })],
       createCtx(),
@@ -248,6 +285,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
     expect(result.results[0]?.digest).toBeUndefined();
     expect(result.results[0]?.digestPending).toBe(true);
     expect(result.totalTokensUsed).toBe(42);
+    expect(timeoutSpy.mock.calls.some((call) => call[1] === 45_000)).toBe(true);
 
     digestRun.resolve({
       success: true,
@@ -265,6 +303,7 @@ describe('executeChildAgents — workflow accounting and isolation cleanup', () 
       digest: '- Finding: async digest is late.',
       totalTokensUsed: 13,
     });
+    timeoutSpy.mockRestore();
   });
 
   it('does not add the digest turn for ordinary dispatch-child-tasks children', async () => {
@@ -1014,7 +1053,22 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     };
     const parentBeforeTool = vi.fn(async () => true);
     const parentIterationStart = vi.fn();
+    const parentIterationEnd = vi.fn();
     const parentToolUseStart = vi.fn();
+    const parentToolInputDelta = vi.fn();
+    const parentToolProgress = vi.fn();
+    const parentToolResult = vi.fn();
+    const parentTextDelta = vi.fn();
+    const parentThinkingDelta = vi.fn();
+    const parentThinkingEnd = vi.fn();
+    const parentStreamEnd = vi.fn();
+    const parentProviderRateLimit = vi.fn();
+    const parentRetryAfter = vi.fn();
+    const parentRetry = vi.fn();
+    const parentCompactStart = vi.fn();
+    const parentAskUser = vi.fn(async () => 'approve');
+    const parentAskUserMulti = vi.fn(async () => ({ choice: 'yes' }));
+    const parentAskUserInput = vi.fn(async () => 'typed answer');
     const events = buildChildEvents(
       'cb-test',
       undefined,
@@ -1023,7 +1077,22 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
       {
         beforeToolExecute: parentBeforeTool,
         onIterationStart: parentIterationStart,
+        onIterationEnd: parentIterationEnd,
         onToolUseStart: parentToolUseStart,
+        onToolInputDelta: parentToolInputDelta,
+        onToolProgress: parentToolProgress,
+        onToolResult: parentToolResult,
+        onTextDelta: parentTextDelta,
+        onThinkingDelta: parentThinkingDelta,
+        onThinkingEnd: parentThinkingEnd,
+        onStreamEnd: parentStreamEnd,
+        onProviderRateLimit: parentProviderRateLimit,
+        onRetryAfter: parentRetryAfter,
+        onRetry: parentRetry,
+        onCompactStart: parentCompactStart,
+        askUser: parentAskUser,
+        askUserMulti: parentAskUserMulti,
+        askUserInput: parentAskUserInput,
       },
       correlation,
     );
@@ -1032,18 +1101,170 @@ describe('buildChildEvents plan-mode propagation (FEATURE_074)', () => {
     await expect(events!.beforeToolExecute!('read', { path: '/x.ts' }, { toolId: 'tool-1' }))
       .resolves.toBe(true);
     events!.onIterationStart!(2, 20);
+    events!.onIterationEnd!({
+      iter: 2,
+      maxIter: 20,
+      tokenCount: 123,
+      tokenSource: 'estimate',
+    });
     events!.onToolUseStart!({ name: 'read', id: 'tool-1', input: { path: '/x.ts' } });
+    events!.onToolInputDelta!('read', '{"path"', { toolId: 'tool-1' });
+    events!.onToolProgress!({ id: 'tool-1', message: 'reading' });
+    events!.onToolResult!({ name: 'read', id: 'tool-1', content: 'ok' });
+    events!.onTextDelta!('child text');
+    events!.onThinkingDelta!('child thinking');
+    events!.onThinkingEnd!('final thinking');
+    events!.onStreamEnd!();
+    events!.onProviderRateLimit?.(1, 3, 500);
+    events!.onRetryAfter?.({
+      provider: 'anthropic',
+      waitMs: 500,
+      reason: 'rate-limit',
+      source: 'retry-after-ms',
+      attempt: 1,
+      maxAttempts: 3,
+    });
+    events!.onRetry?.('rate-limit', 1, 3);
+    events!.onCompactStart?.();
+    await expect(events!.askUser!({
+      question: 'Proceed?',
+      kind: 'select',
+      options: [{ label: 'Yes', value: 'yes' }],
+    })).resolves.toBe('approve');
+    await expect(events!.askUserMulti!({
+      questions: [{
+        question: 'Pick one',
+        options: [{ label: 'Yes', value: 'yes' }],
+      }],
+    })).resolves.toEqual({ choice: 'yes' });
+    await expect(events!.askUserInput!({ question: 'Why?' })).resolves.toBe('typed answer');
 
     expect(parentBeforeTool).toHaveBeenCalledWith('read', { path: '/x.ts' }, {
       toolId: 'tool-1',
       workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
     });
-    expect(parentIterationStart).toHaveBeenCalledWith(2, 20);
-    expect(parentToolUseStart).toHaveBeenCalledWith({
-      name: 'read',
-      id: 'tool-1',
-      input: { path: '/x.ts' },
+    expect(parentIterationStart).not.toHaveBeenCalled();
+    expect(parentIterationEnd).toHaveBeenCalledWith({
+      iter: 2,
+      maxIter: 20,
+      tokenCount: 123,
+      tokenSource: 'estimate',
+      scope: 'worker',
     });
+    expect(parentToolUseStart).toHaveBeenCalledWith(
+      {
+        name: 'read',
+        id: 'tool-1',
+        input: { path: '/x.ts' },
+      },
+      {
+        toolId: 'tool-1',
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentToolInputDelta).toHaveBeenCalledWith('read', '{"path"', {
+      toolId: 'tool-1',
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentToolProgress).toHaveBeenCalledWith(
+      { id: 'tool-1', message: 'reading' },
+      {
+        toolId: 'tool-1',
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentToolResult).toHaveBeenCalledWith(
+      { name: 'read', id: 'tool-1', content: 'ok' },
+      {
+        toolId: 'tool-1',
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentTextDelta).toHaveBeenCalledWith('child text', {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentThinkingDelta).toHaveBeenCalledWith('child thinking', {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentThinkingEnd).toHaveBeenCalledWith('final thinking', {
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentStreamEnd).toHaveBeenCalledWith({
+      workflowCorrelation: correlation,
+      childAgentId: 'cb-test',
+      childAgentName: 'cb-test',
+      liveOnly: true,
+    });
+    expect(parentProviderRateLimit).toHaveBeenCalledWith(1, 3, 500);
+    expect(parentRetryAfter).toHaveBeenCalledWith({
+      provider: 'anthropic',
+      waitMs: 500,
+      reason: 'rate-limit',
+      source: 'retry-after-ms',
+      attempt: 1,
+      maxAttempts: 3,
+    });
+    expect(parentRetry).not.toHaveBeenCalled();
+    expect(parentCompactStart).not.toHaveBeenCalled();
+    expect(parentAskUser).toHaveBeenCalledWith(
+      {
+        question: 'Proceed?',
+        kind: 'select',
+        options: [{ label: 'Yes', value: 'yes' }],
+      },
+      {
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentAskUserMulti).toHaveBeenCalledWith(
+      {
+        questions: [{
+          question: 'Pick one',
+          options: [{ label: 'Yes', value: 'yes' }],
+        }],
+      },
+      {
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
+    expect(parentAskUserInput).toHaveBeenCalledWith(
+      { question: 'Why?' },
+      {
+        workflowCorrelation: correlation,
+        childAgentId: 'cb-test',
+        childAgentName: 'cb-test',
+        liveOnly: true,
+      },
+    );
   });
 });
 

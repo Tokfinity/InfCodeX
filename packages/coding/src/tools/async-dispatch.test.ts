@@ -22,6 +22,7 @@ import { toolDispatchChildTask } from './dispatch-child-tasks.js';
 // dispatch-half tests stay.
 import type {
   KodaXChildExecutionResult,
+  KodaXEvents,
   KodaXToolExecutionContext,
 } from '../types.js';
 
@@ -123,6 +124,26 @@ describe('FEATURE_119 Pattern B — async dispatch', () => {
     // Settle so the test does not leak an unresolved promise.
     resolveExec(buildSuccessResult('c1', ['ok']));
     await registry.get('c1');
+  });
+
+  it('passes parent events into child executor options for child live telemetry', async () => {
+    const events: KodaXEvents = {
+      onTextDelta: () => {},
+      onToolProgress: () => {},
+    };
+    mockExec.mockResolvedValue(buildSuccessResult('telemetry-child', ['done']));
+    const ctx = {
+      ...buildBaseCtx(undefined),
+      parentEvents: events,
+    };
+
+    await drainGeneratorReturn(
+      toolDispatchChildTask({ id: 'telemetry-child', objective: 'scan' }, ctx),
+    );
+
+    expect(mockExec).toHaveBeenCalledOnce();
+    const options = mockExec.mock.calls[0]![2] as { parentOptions: { events?: KodaXEvents } };
+    expect(options.parentOptions.events).toBe(events);
   });
 
   it('rejects duplicate task_ids', async () => {

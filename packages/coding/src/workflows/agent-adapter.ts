@@ -243,6 +243,7 @@ export function createCodingWorkflowBackend(deps: CodingWorkflowBackendDeps): Wo
             },
           }
         : {}),
+      childActivityName: input.name,
       workflowDigestMode: hasTaskSummaryObservers() ? 'async' : 'blocking',
       ...(hasTaskSummaryObservers()
         ? {

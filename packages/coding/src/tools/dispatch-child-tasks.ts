@@ -497,6 +497,7 @@ export async function* toolDispatchChildTask(
       model: parentConfig?.model,
       reasoningMode: parentConfig?.reasoningMode,
       extensionRuntime: ctx.extensionRuntime,
+      events: ctx.parentEvents,
     },
     // FEATURE_193 (v0.7.43): fallback `'scout'` (V1 role, retired) replaced
     // with `'worker'`. In V2 `role` is set by `wrapDispatchChildTaskForRole`

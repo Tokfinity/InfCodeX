@@ -17,9 +17,11 @@ import type {
   KodaXChildAgentResult,
   KodaXChildExecutionResult,
   KodaXChildFinding,
+  KodaXActivityEventMeta,
   KodaXEvents,
   KodaXOptions,
   KodaXResult,
+  KodaXToolEventMeta,
   KodaXToolExecutionContext,
 } from './types.js';
 import { resolveExecutionCwd } from './runtime-paths.js';
@@ -104,9 +106,11 @@ const WORKFLOW_CHILD_DIGEST_PROMPT = [
 const WORKFLOW_CHILD_DIGEST_MAX_LINES = 4;
 
 // Bound the best-effort self-distill so a rate-limited / slow digest cannot
-// make a completed child appear stuck. On timeout we abandon it and fall back
-// to a clearly-labeled deterministic excerpt (FEATURE_217).
-const WORKFLOW_CHILD_DIGEST_TIMEOUT_MS = 10_000;
+// make a completed child appear stuck. Blocking paths keep a short window;
+// async workflow digests can wait longer because child completion is already
+// visible and the late summary is presentation-only.
+const WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS = 10_000;
+const WORKFLOW_CHILD_DIGEST_ASYNC_TIMEOUT_MS = 45_000;
 
 /* ---------- Public API ---------- */
 
@@ -155,6 +159,8 @@ export interface ChildExecutorOptions {
   readonly workflowDigestMode?: 'blocking' | 'async';
   readonly onWorkflowChildDigest?: (update: WorkflowChildDigestUpdate) => void;
   readonly workflowCorrelation?: WorkflowEventCorrelation;
+  /** User-facing child label for live telemetry surfaces. Defaults to bundle id. */
+  readonly childActivityName?: string;
   /** Progress callback for REPL status display. Called when children start, progress, and complete. */
   readonly onProgress?: (status: string) => void;
   /**
@@ -464,6 +470,7 @@ async function createWorkflowChildDigest(
     readonly scopeCtx: KodaXToolExecutionContext;
     readonly bundle: KodaXChildContextBundle;
     readonly options: ChildExecutorOptions;
+    readonly timeoutMs: number;
   },
 ): Promise<WorkflowChildDigestResult> {
   if (!shouldCreateWorkflowChildDigest(input.options, input.result)) {
@@ -474,7 +481,7 @@ async function createWorkflowChildDigest(
   const controller = new AbortController();
   const onParentAbort = (): void => controller.abort();
   input.options.abortSignal?.addEventListener('abort', onParentAbort);
-  const timer = setTimeout(() => controller.abort(), WORKFLOW_CHILD_DIGEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), input.timeoutMs);
   try {
     const digestRun = await input.runFn(
       {
@@ -526,7 +533,10 @@ function scheduleWorkflowChildDigest(
     readonly options: ChildExecutorOptions;
   },
 ): void {
-  void createWorkflowChildDigest(input).then((digest) => {
+  void createWorkflowChildDigest({
+    ...input,
+    timeoutMs: WORKFLOW_CHILD_DIGEST_ASYNC_TIMEOUT_MS,
+  }).then((digest) => {
     try {
       input.options.onWorkflowChildDigest?.({
         childId: input.bundle.id,
@@ -623,6 +633,7 @@ async function runReadChildBody(
     options.snapshotUpdater,
     options.parentOptions.events,
     options.workflowCorrelation,
+    options.childActivityName,
   );
 
   // FEATURE_191 — specialist override switch (no-op when bundle.specialistName
@@ -704,7 +715,10 @@ async function runReadChildBody(
     const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
     const digest = runDigestAsync
       ? { totalTokensUsed: 0 }
-      : await createWorkflowChildDigest(digestInput);
+      : await createWorkflowChildDigest({
+          ...digestInput,
+          timeoutMs: WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS,
+        });
     if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
     childResult = extractChildResult(
       bundle,
@@ -728,6 +742,13 @@ async function runReadChildBody(
       error instanceof Error ? error.message : String(error),
       'failed',
       { actualIterations: 0, interrupted: false },
+    );
+  } finally {
+    emitChildActivityEnd(
+      bundle.id,
+      options.parentOptions.events,
+      options.workflowCorrelation,
+      options.childActivityName,
     );
   }
   return childResult;
@@ -782,6 +803,7 @@ async function runWriteChildBody(
     options.snapshotUpdater,
     options.parentOptions.events,
     options.workflowCorrelation,
+    options.childActivityName,
   );
   // FEATURE_117 v2 (v0.7.38): write children inherit AGENTS.md mutation
   // policy. Read-only children stay on the bare `CHILD_AGENT_SYSTEM_PROMPT`
@@ -867,7 +889,10 @@ async function runWriteChildBody(
     const runDigestAsync = shouldRunWorkflowDigestAsync(bundle, options, result);
     const digest = runDigestAsync
       ? { totalTokensUsed: 0 }
-      : await createWorkflowChildDigest(digestInput);
+      : await createWorkflowChildDigest({
+          ...digestInput,
+          timeoutMs: WORKFLOW_CHILD_DIGEST_BLOCKING_TIMEOUT_MS,
+        });
     if (runDigestAsync) scheduleWorkflowChildDigest(digestInput);
 
     childResult = extractChildResult(
@@ -892,6 +917,13 @@ async function runWriteChildBody(
       error instanceof Error ? error.message : String(error),
       'failed',
       { actualIterations: 0, interrupted: false },
+    );
+  } finally {
+    emitChildActivityEnd(
+      bundle.id,
+      options.parentOptions.events,
+      options.workflowCorrelation,
+      options.childActivityName,
     );
   }
   return childResult;
@@ -1212,6 +1244,30 @@ const CHILD_EXCLUDE_TOOLS_READONLY: readonly string[] = [
  */
 const CHILD_BLOCKED_TOOLS = new Set<string>(CHILD_EXCLUDE_TOOLS_BASE);
 
+function childActivityEventMeta(
+  childId: string,
+  workflowCorrelation?: WorkflowEventCorrelation,
+  childName?: string,
+): KodaXActivityEventMeta {
+  return {
+    ...(workflowCorrelation !== undefined ? { workflowCorrelation } : {}),
+    childAgentId: childId,
+    childAgentName: childName ?? childId,
+    liveOnly: true,
+  };
+}
+
+function emitChildActivityEnd(
+  childId: string,
+  parentEvents?: KodaXEvents,
+  workflowCorrelation?: WorkflowEventCorrelation,
+  childName?: string,
+): void {
+  parentEvents?.onChildActivityEnd?.(
+    childActivityEventMeta(childId, workflowCorrelation, childName),
+  );
+}
+
 /**
  * @param planModeBlockCheck FEATURE_074: parent-injected predicate that returns the
  *   block reason for currently-plan-mode-violating tool calls, or `null` when allowed.
@@ -1226,6 +1282,7 @@ export function buildChildEvents(
   ) => void,
   parentEvents?: KodaXEvents,
   workflowCorrelation?: WorkflowEventCorrelation,
+  childName?: string,
 ): KodaXEvents | undefined {
   let iterationCount = 0;
   let maxIterations = 200;
@@ -1239,17 +1296,73 @@ export function buildChildEvents(
     lastProgressTime = now;
     onProgress(msg);
   };
+  const activityEventMeta = (
+    meta?: KodaXActivityEventMeta,
+    options: { readonly liveOnly?: boolean } = {},
+  ): KodaXActivityEventMeta | undefined => {
+    const correlatedWorkflow = workflowCorrelation ?? meta?.workflowCorrelation;
+    const next: KodaXActivityEventMeta = {
+      ...(correlatedWorkflow !== undefined ? { workflowCorrelation: correlatedWorkflow } : {}),
+      ...(meta?.childAgentId !== undefined ? { childAgentId: meta.childAgentId } : { childAgentId: childId }),
+      ...(meta?.childAgentName !== undefined ? { childAgentName: meta.childAgentName } : { childAgentName: childName ?? childId }),
+      ...(meta?.parentToolId !== undefined ? { parentToolId: meta.parentToolId } : {}),
+      ...(options.liveOnly !== undefined ? { liveOnly: options.liveOnly } : {}),
+    };
+    return next.workflowCorrelation === undefined
+      && next.childAgentId === undefined
+      && next.childAgentName === undefined
+      && next.parentToolId === undefined
+      && next.liveOnly === undefined
+      ? undefined
+      : next;
+  };
+
+  const toolEventMeta = (
+    meta?: KodaXToolEventMeta,
+    options: { readonly liveOnly?: boolean } = {},
+  ): KodaXToolEventMeta | undefined => {
+    const activityMeta = activityEventMeta(meta, options);
+    const next: KodaXToolEventMeta = {
+      ...(activityMeta ?? {}),
+      ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : {}),
+    };
+    return next.toolId === undefined
+      && next.workflowCorrelation === undefined
+      && next.childAgentId === undefined
+      && next.childAgentName === undefined
+      && next.parentToolId === undefined
+      && next.liveOnly === undefined
+      ? undefined
+      : next;
+  };
 
   return {
-    ...parentEvents,
     ...(workflowCorrelation ? { workflowCorrelation } : {}),
+    onTextDelta: (text, meta) => {
+      parentEvents?.onTextDelta?.(text, activityEventMeta(meta, { liveOnly: true }));
+    },
+    onThinkingDelta: (text, meta) => {
+      parentEvents?.onThinkingDelta?.(text, activityEventMeta(meta, { liveOnly: true }));
+    },
+    onThinkingEnd: (thinking, meta) => {
+      parentEvents?.onThinkingEnd?.(thinking, activityEventMeta(meta, { liveOnly: true }));
+    },
+    onStreamEnd: (meta) => {
+      parentEvents?.onStreamEnd?.(activityEventMeta(meta, { liveOnly: true }));
+    },
+    onProviderRateLimit: (attempt, maxRetries, delayMs) => {
+      parentEvents?.onProviderRateLimit?.(attempt, maxRetries, delayMs);
+    },
+    onRetryAfter: (payload) => {
+      parentEvents?.onRetryAfter?.(payload);
+    },
     // Block AMA-specific and recursive tools, then enforce live plan mode.
     // planModeBlockCheck reads parent state at call time, so mid-run mode toggles
     // (common: user flips plan ↔ accept-edits mid-stream) propagate immediately.
     beforeToolExecute: async (
       tool: string,
       input: Record<string, unknown>,
-      meta?: { toolId?: string },
+      meta?: KodaXToolEventMeta,
     ) => {
       if (CHILD_BLOCKED_TOOLS.has(tool)) {
         return `[Tool Error] ${tool}: Not available in child agent context.`;
@@ -1261,14 +1374,10 @@ export function buildChildEvents(
         }
       }
       if (!parentEvents?.beforeToolExecute) return true;
-      return parentEvents.beforeToolExecute(tool, input, {
-        ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : {}),
-        ...(workflowCorrelation !== undefined ? { workflowCorrelation } : {}),
-      });
+      return parentEvents.beforeToolExecute(tool, input, toolEventMeta(meta));
     },
     // Silently update counter; tool use line will include it.
     onIterationStart: (iter: number, maxIter: number) => {
-      parentEvents?.onIterationStart?.(iter, maxIter);
       iterationCount = iter;
       maxIterations = maxIter;
       // FEATURE_177: feed iteration into snapshot. Not throttled — one
@@ -1279,8 +1388,15 @@ export function buildChildEvents(
       }
     },
     // Combined progress: "sec-coding [3/200] → read src/foo.ts" (throttled)
-    onToolUseStart: (tool) => {
-      parentEvents?.onToolUseStart?.(tool);
+    onIterationEnd: (info) => {
+      parentEvents?.onIterationEnd?.({ ...info, scope: 'worker' });
+    },
+    // Combined progress: child [iteration/max] -> tool name (throttled).
+    onToolUseStart: (tool, meta) => {
+      parentEvents?.onToolUseStart?.(tool, toolEventMeta({
+        ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : { toolId: tool.id }),
+        ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
+      }, { liveOnly: true }));
       const inputHint = tool.input
         ? (typeof tool.input === 'object'
           ? (tool.input as Record<string, unknown>).path
@@ -1306,6 +1422,37 @@ export function buildChildEvents(
         });
       }
     },
+    onToolInputDelta: (toolName, partialJson, meta) => {
+      parentEvents?.onToolInputDelta?.(
+        toolName,
+        partialJson,
+        toolEventMeta(meta, { liveOnly: true }),
+      );
+    },
+    onToolProgress: (update, meta) => {
+      parentEvents?.onToolProgress?.(
+        update,
+        toolEventMeta({
+          ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : { toolId: update.id }),
+          ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
+        }, { liveOnly: true }),
+      );
+    },
+    onToolResult: (result, meta) => {
+      parentEvents?.onToolResult?.(result, toolEventMeta({
+        ...(meta?.toolId !== undefined ? { toolId: meta.toolId } : { toolId: result.id }),
+        ...(meta?.workflowCorrelation !== undefined ? { workflowCorrelation: meta.workflowCorrelation } : {}),
+      }, { liveOnly: true }));
+    },
+    ...(parentEvents?.askUser
+      ? { askUser: (options, meta) => parentEvents.askUser!(options, toolEventMeta(meta, { liveOnly: true })) }
+      : {}),
+    ...(parentEvents?.askUserMulti
+      ? { askUserMulti: (options, meta) => parentEvents.askUserMulti!(options, toolEventMeta(meta, { liveOnly: true })) }
+      : {}),
+    ...(parentEvents?.askUserInput
+      ? { askUserInput: (options, meta) => parentEvents.askUserInput!(options, toolEventMeta(meta, { liveOnly: true })) }
+      : {}),
   };
 }
 

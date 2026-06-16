@@ -210,6 +210,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
 
   it('passes workflow correlation into child executor options', async () => {
     let seenCorrelation: ChildExecutorOptions['workflowCorrelation'];
+    let seenChildActivityName: ChildExecutorOptions['childActivityName'];
     const backend = createCodingWorkflowBackend({
       ctx: fakeCtx(),
       childOptions,
@@ -217,6 +218,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       generateId: () => 'task-correlation',
       runChild: (_bundles, _ctx, opts) => {
         seenCorrelation = opts.workflowCorrelation;
+        seenChildActivityName = opts.childActivityName;
         return Promise.resolve(execResult({
           childId: 'task-correlation',
           status: 'completed',
@@ -233,6 +235,7 @@ describe('createCodingWorkflowBackend — spawn + wait', () => {
       childAgentId: 'task-correlation',
       itemId: 'agent:task-correlation',
     });
+    expect(seenChildActivityName).toBe('x');
   });
 
   it('passes readOnly + specialist + modelHint + isolation into the bundle', async () => {
