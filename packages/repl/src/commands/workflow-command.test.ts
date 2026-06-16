@@ -461,6 +461,35 @@ describe('workflow agentic presentation helpers', () => {
     expect(messages[0]?.text).not.toContain('Extracted summary');
   });
 
+  it('suppresses child-agent digests after the workflow terminal event', () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const messages: WorkflowRunMessage[] = [];
+    const sink = workflowEventSink(
+      { onWorkflowRunMessage: (event) => messages.push(event) },
+      undefined,
+      { presentation: 'agentic', locale: 'en', runId: 'run-complete' },
+    );
+
+    sink({
+      seq: 1,
+      type: 'workflow_completed',
+      data: { resultSummary: 'done' },
+    });
+    sink({
+      seq: 2,
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-late',
+        name: 'late-summarizer',
+        summary: '- Finding: this should not appear after final output.',
+        summaryKind: 'digest',
+      },
+    });
+
+    expect(messages.filter((message) => message.type === 'assistant')).toEqual([]);
+  });
+
   it('emits a bounded fallback child-agent summary when the async digest fails', () => {
     type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
     type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];

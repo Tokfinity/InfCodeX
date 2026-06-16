@@ -257,9 +257,17 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
   const activeTaskIds = new Set<string>();
   const terminalTaskIds = new Set<string>();
   let activeReleaseOperations = 0;
+  let unsubscribeTaskSummaryUpdates: (() => void) | undefined;
 
-  opts.backend.subscribeTaskSummaryUpdates?.((taskId, update) => {
-    if (status === 'stopped') return;
+  const closeTaskSummaryUpdates = (): void => {
+    const unsubscribe = unsubscribeTaskSummaryUpdates;
+    if (!unsubscribe) return;
+    unsubscribeTaskSummaryUpdates = undefined;
+    unsubscribe();
+  };
+
+  unsubscribeTaskSummaryUpdates = opts.backend.subscribeTaskSummaryUpdates?.((taskId, update) => {
+    if (status !== 'running') return;
     const name = taskNames.get(taskId);
     const summary = update.summary
       ?? (update.summaryKind === 'digest-failed' ? pendingTaskSummaries.get(taskId) : undefined);
@@ -601,6 +609,7 @@ function buildRuntime(opts: CreateWorkflowRuntimeOptions): InternalRuntime {
     recorder,
     setStatus: (s) => {
       status = s;
+      if (s !== 'running') closeTaskSummaryUpdates();
     },
     stopActiveTasks: async (reason: string): Promise<readonly string[]> => {
       const errors: string[] = [];

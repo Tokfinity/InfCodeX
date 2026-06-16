@@ -114,7 +114,11 @@ export function workflowEventSink(
   const digest = options.presentation === 'agentic'
     ? createWorkflowAgentDigestLimiter(options.runId ?? 'current')
     : undefined;
+  let terminal = false;
   return (event) => {
+    if (terminal && (event.type === 'agent_completed' || event.type === 'agent_summary_updated')) {
+      return;
+    }
     live?.onEvent(event);
     const text = formatWorkflowEvent(event);
     if (callbacks.onWorkflowRunMessage) {
@@ -131,7 +135,21 @@ export function workflowEventSink(
           });
         }
       }
+      if (
+        event.type === 'workflow_completed' ||
+        event.type === 'workflow_failed' ||
+        event.type === 'workflow_stopped'
+      ) {
+        terminal = true;
+      }
       return;
+    }
+    if (
+      event.type === 'workflow_completed' ||
+      event.type === 'workflow_failed' ||
+      event.type === 'workflow_stopped'
+    ) {
+      terminal = true;
     }
     if (!text) return;
     renderWorkflowEvent(event);
