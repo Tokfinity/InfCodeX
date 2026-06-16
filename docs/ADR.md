@@ -2378,3 +2378,41 @@ packages/
 
 ---
 
+## ADR-040: Workflow Process Layer — Agent-Layer Domain-Neutral Snapshot/Event + Child Telemetry Correlation + Restricted-Source Validation (FEATURE_229, v0.7.50)
+
+**Status**: Accepted
+**Context**: FEATURE_217 (v0.7.49) 已交付动态工作流的完整产品闭环（生成 JS harness、capsule、save/rerun、worktree isolation、REPL `/workflow`）。但工作流的「运行过程」本身还不是 agent 层标准的 process/event/snapshot——SDK 宿主、REPL inline/fullscreen、未来 extension/automation 只能各自拼 UI 和状态解释。FEATURE_229 把这一层抽象成可订阅契约。本 ADR 记录其架构取舍（feature 设计见 [features/v0.7.50.md](features/v0.7.50.md)）。
+
+**Decisions**:
+
+1. **Workflow process 是 agent 层 domain-neutral 的 snapshot/event，不耦合 `KodaXEvents`**。`@kodax-ai/agent/workflow` 暴露 `WorkflowProcessSnapshot` / `WorkflowProcessEvent` / `isFinalWorkflowProcessStatus`；一个薄 reducer 把已有 `WorkflowEvent` 折叠成 snapshot，**不让 generated script 感知 process 状态**。
+   - *Why*：保持层独立（CLAUDE.md）。SDK 宿主订阅工作流进度不应被迫拖入 `@kodax-ai/coding` 或 REPL 类型。agent workflow 包**不 import `KodaXEvents`**。
+
+2. **事件只保留三种粗粒度类型**（`workflow_started` / `workflow_updated` / `workflow_finished`），细粒度 phase/agent/step 状态折进 `snapshot.items`。
+   - *Why not 全 app-server 事件 taxonomy*：v0.7.50 不发布完整 app-server 协议（YAGNI）。粗事件 + 快照 diff 足以驱动 UI 与 SDK，且避免提前发明协议。
+
+3. **child completion 与 digest 解耦：runtime 暴露 domain-neutral `updateTaskSummary(taskId, { summary, summaryStatus })`**。child 完成立即置 `completed` + `summaryStatus:'pending'`（确定性摘录作 interim），model-authored digest 在关键路径外算好后经该通道作为后续 `workflow_updated`（`result`/`unavailable`）交付；run 已 stop/cancel 时 late digest 静默丢弃。
+   - *Why*：v0.7.49 的 digest 在 child 结果返回前同步生成，rate-limit 时「完成」感被阻塞。runtime 只收 `{summary, summaryStatus}` 纯数据，**具体 LLM 自蒸馏仍留 coding**（与 ADR-030/ADR-021 一致：判断/蒸馏属 coding，invocation kernel 属 agent）。worktree-isolated child 保留阻塞式 digest，确保 digest 在 worktree 清理前跑完。
+
+4. **child/tool 遥测走「既有 `KodaXEvents` 回调 + 可选 meta 尾参」，不新开事件通道**。回调签名扩展为 `(x, meta?)`，meta 为 `KodaXToolEventMeta` / `KodaXActivityEventMeta` / `KodaXWorkflowEventMeta`，携带 `toolId`、child agent identity、`WorkflowEventCorrelation`（`workflowRunId`/`childAgentId`/`itemId`）。`onChildActivityEnd` 标记 child 离开执行器。
+   - *Why not 第二套事件协议*：宿主只需把每个 tool/thinking/text/progress 事件**归因**到发起它的 child agent 和 workflow run，一个可选 meta 参数即可，不必复制一套并行 event taxonomy。`WorkflowEventCorrelation` 由 coding 层填充，agent workflow 包仍不 import `KodaXEvents`。REPL 据此把 child 活动路由到 bounded `ChildActivitySurface`，不污染主 transcript。
+
+5. **host policy 与 lifecycle controller 属 coding/SDK 边界，不进 domain-neutral runtime**。`WorkflowHostPolicy`（`autoStart` off/confirm/on + `maxAgents`/`maxConcurrency`/`tokenBudget` 上限）clamp caps；`createWorkflowLifecycleController` 提供 stop/pause/resume/result/artifact/delete/prune/identity/preflight。
+   - *Why*：它们需要 run storage、artifact 读取、invocation policy 和宿主产品策略，本质是 coding 关注点。host policy 只能更严（不能抬高 KodaX 硬上限、不能绕过 child permission gate）。lifecycle controller 不导入 REPL 类型、不输出 ANSI、不要求宿主解析 slash-command。
+
+6. **generated/saved 工作流源码在 generate/save/rename/replace/run 各路径过 `validateRestrictedWorkflowSource`**（JS 编译检查 + 对去注释/去字符串后的源做策略扫描），generator 增加有界多轮 repair loop（syntax + smoke 执行检查）。`wf.output(taskId)` 别名为 `wf.snapshot(taskId)`（`output` 保留兼容）。
+   - *Why*：generated JS 在受限 VM 执行，落盘/运行前先验证可编译且不含越界源模式，比运行时再失败更早暴露问题；smoke 执行用 fake API 跑一遍 harness 形状，抓住「能编译但结构不可显示」的生成缺陷。
+
+7. **identity 模型显式三态、run graph append-only**：`runId` 不可变历史 / saved capsule 版本化（rename 改 capsule identity）/ revision 是新对象。`revise --replace` 确认后移动 saved 名字并把旧 capsule 归档到 `.revisions/<savedName>/`，rename/revise 元数据记为事件或 sidecar，不重写旧时间线。
+   - *Why*：用户/ SDK 宿主需要稳定 identity + rename/revise/provenance 而不必记 opaque run id；历史 run 必须保持可审计。
+
+**Layering 边界总结**：snapshot/event schema + 终态 helper + `updateTaskSummary` 通道 ∈ `@kodax-ai/agent`（domain-neutral）；run manager bridge、lifecycle controller、host policy、`KodaXEvents` correlation 填充、digest 自蒸馏、capsule preflight ∈ `@kodax-ai/coding`；inline/fullscreen 渲染 + `ChildActivitySurface` ∈ `@kodax-ai/repl`（只消费 snapshot，不作 source of truth）。
+
+**Eval posture**: 主体为 SDK/runtime 契约与 UI，非 prompt 内容 → 该部分 $0 LLM eval；验证靠各 slice 单测（process reducer / lifecycle controller / generator smoke / child telemetry / 契约测试）+ 全量套件绿。**例外**：同窗附带的 role-prompt「语言连续性」规则触碰 LLM-facing prompt（CLAUDE.md role-prompt.ts 是 eval trigger），需补 prompt-eval。
+
+**先例 / 关键 memory**:
+- 承接 FEATURE_217（v0.7.49）的产品闭环；本 ADR 只补 process/SDK/lifecycle 层，不降级 dynamic JS harness。
+- ADR-030（判断/蒸馏留 coding、invocation kernel 留 agent）与 ADR-036（包内联、层独立）是分层取舍的直接依据。
+- [`feedback_concurrent_thread_git_race`](../../memory/feedback_concurrent_thread_git_race.md) — 本版多线程并发开发，按功能分批原子提交。
+
+---
