@@ -29,6 +29,7 @@ import {
   getCustomProvider,
   buildGoalRuntimeBinding,
   decideWorkflowInvocation,
+  workflowStartOutcomeConsumesTurn,
 } from '@kodax-ai/coding';
 import {
   appendSessionLineageLabel,
@@ -1251,7 +1252,21 @@ Keyboard Shortcuts:
         ?? (workflow.source === 'natural-language' ? 'amaw' : 'command'),
     });
 
-    return outcome === 'started' || outcome === 'cancelled';
+    const consumesTurn = workflowStartOutcomeConsumesTurn({
+      outcome,
+    });
+    if (
+      !consumesTurn
+      && workflow.source === 'natural-language'
+      && (outcome === 'failed' || outcome === 'declined')
+    ) {
+      console.log(chalk.dim(
+        outcome === 'failed'
+          ? '\nWorkflow builder failed after repair attempts. Falling back to normal Agent for this turn.\n'
+          : '\nWorkflow builder declined to create a workflow. Continuing with normal Agent for this turn.\n',
+      ));
+    }
+    return consumesTurn;
   };
 
   const handleCommandResult = async (

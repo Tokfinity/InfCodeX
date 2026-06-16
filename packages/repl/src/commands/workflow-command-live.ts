@@ -30,6 +30,32 @@ import {
 type WorkflowRunMessageCallback = NonNullable<CommandCallbacks['onWorkflowRunMessage']>;
 type WorkflowRunUpdateCallback = NonNullable<CommandCallbacks['onWorkflowRunUpdate']>;
 
+function isWorkflowHarnessFailure(error: Error, totalSpawned: number | undefined): boolean {
+  if (totalSpawned !== 0) return false;
+  return error.name === 'WorkflowScriptExecutionError' ||
+    /restricted workflow script|workflow generation source|workflow command .* must|unsupported workflow command/i.test(error.message);
+}
+
+function formatWorkflowFailedMessage(input: {
+  readonly runId: string;
+  readonly error: Error;
+  readonly canRerun: boolean;
+  readonly totalSpawned?: number;
+}): string {
+  const action = formatWorkflowFailureAction(input.runId, input.canRerun);
+  if (!isWorkflowHarnessFailure(input.error, input.totalSpawned)) {
+    return [
+      `Workflow failed (${input.runId}): ${input.error.message}`,
+      action,
+    ].join('\n');
+  }
+  return [
+    `Workflow harness failed before launching child agents (${input.runId}): ${input.error.message}`,
+    'This points to an invalid generated workflow script or saved capsule, not a failed child-agent task.',
+    action,
+  ].join('\n');
+}
+
 function readWorkflowEventUsageTokens(data: Record<string, unknown> | undefined): number {
   const usage = data?.usage;
   if (typeof usage !== 'object' || usage === null) return 0;
@@ -91,9 +117,10 @@ export function workflowEventSink(
   return (event) => {
     live?.onEvent(event);
     const text = formatWorkflowEvent(event);
-    if (!text) return;
     if (callbacks.onWorkflowRunMessage) {
-      emitWorkflowRunMessage(callbacks, { type: 'event', text });
+      if (text) {
+        emitWorkflowRunMessage(callbacks, { type: 'event', text });
+      }
       if (digest) {
         const summary = digest(event, options.locale ?? 'en');
         if (summary) {
@@ -106,6 +133,7 @@ export function workflowEventSink(
       }
       return;
     }
+    if (!text) return;
     renderWorkflowEvent(event);
   };
 }
@@ -275,10 +303,12 @@ export function observeManagedWorkflowDone(
       live?.complete('failed', outcome.error.message);
       emitWorkflowRunMessage(callbacks, {
         type: 'error',
-        text: [
-          `Workflow failed (${runId}): ${outcome.error.message}`,
-          formatWorkflowFailureAction(runId, options.canRerun === true),
-        ].join('\n'),
+        text: formatWorkflowFailedMessage({
+          runId,
+          error: outcome.error,
+          canRerun: options.canRerun === true,
+          totalSpawned: outcome.state.totalSpawned,
+        }),
       });
       return;
     }
@@ -331,10 +361,11 @@ export function observeManagedWorkflowDone(
     live?.complete('failed', message);
     emitWorkflowRunMessage(callbacks, {
       type: 'error',
-      text: [
-        `Workflow failed (${runId}): ${message}`,
-        formatWorkflowFailureAction(runId, options.canRerun === true),
-      ].join('\n'),
+      text: formatWorkflowFailedMessage({
+        runId,
+        error: error instanceof Error ? error : new Error(message),
+        canRerun: options.canRerun === true,
+      }),
     });
   });
 }

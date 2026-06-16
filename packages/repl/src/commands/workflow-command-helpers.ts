@@ -487,8 +487,9 @@ export function selectDefaultActiveWorkflowRunId(
   return managedRuns.find(isActiveManagedWorkflowRun)?.runId;
 }
 
-function formatTime(value: number | undefined): string | undefined {
-  return value === undefined ? undefined : new Date(value).toLocaleString();
+function formatTime(value: number | string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === 'number' ? new Date(value).toLocaleString() : value;
 }
 
 function formatRecentWorkflowEvents(events: readonly WorkflowEvent[], limit = 10): readonly string[] {
@@ -521,7 +522,7 @@ export function formatWorkflowNextActions(runId: string, canRerun: boolean): str
 
 export function formatWorkflowFailureAction(runId: string, canRerun: boolean): string {
   return canRerun
-    ? `Use /workflow show ${runId} for events, or /workflow rerun ${runId} after adjusting the request.`
+    ? `Use /workflow show ${runId} for events. /workflow rerun ${runId} repeats the saved workflow script.`
     : `Use /workflow show ${runId} for events.`;
 }
 
@@ -535,18 +536,21 @@ export function formatWorkflowRunSnapshot(
   detail?: WorkflowRunDetail,
   options: WorkflowRunSnapshotFormatOptions = {},
 ): string {
-  if (!run && !detail) return '  (unknown workflow run)';
   const processSnapshot = options.processSnapshot;
+  if (!run && !detail && !processSnapshot) return '  (unknown workflow run)';
   const workflow = processSnapshot?.workflowName ?? run?.workflow ?? detail?.workflow ?? '?';
-  const runId = run?.runId ?? detail?.runId ?? '?';
+  const runId = processSnapshot?.runId ?? run?.runId ?? detail?.runId ?? '?';
   const status = processSnapshot?.status ?? run?.status ?? detail?.status ?? '?';
   const totalSpawned = processSnapshot?.progress.spawnedAgents ?? run?.totalSpawned ?? detail?.totalSpawned ?? 0;
   const eventCount = run?.eventCount ?? detail?.eventCount ?? 0;
   const runDir = run?.runDir ?? detail?.runDir ?? '';
-  const startedAt = formatTime(run?.startedAt ?? detail?.startedAt);
-  const endedAt = formatTime(run?.endedAt ?? detail?.endedAt);
+  const startedAt = formatTime(run?.startedAt ?? detail?.startedAt ?? processSnapshot?.startedAt);
+  const processEndedAt = processSnapshot && processSnapshot.status !== 'running' && processSnapshot.status !== 'paused'
+    ? processSnapshot.updatedAt
+    : undefined;
+  const endedAt = formatTime(run?.endedAt ?? detail?.endedAt ?? processEndedAt);
   const error = processSnapshot?.error ?? run?.error ?? detail?.error;
-  const artifacts = detail?.artifacts ?? [];
+  const artifacts = detail?.artifacts ?? processSnapshot?.artifacts?.map((artifact) => artifact.name) ?? [];
   const artifactRefs = workflowArtifactRefs(detail);
   const managedResultText = run?.resultText;
   const artifactResult = options.full === true || managedResultText === undefined
@@ -751,6 +755,7 @@ interface PreparedSavedWorkflow {
   readonly module: WorkflowModule;
   readonly approvalContext: WorkflowApprovalRenderContext;
   readonly scriptSnapshot?: WorkflowScriptSnapshot;
+  readonly provenance?: WorkflowCapsuleProvenance;
 }
 
 export async function prepareSavedWorkflow(
@@ -774,6 +779,7 @@ export async function prepareSavedWorkflow(
       mayUseWorktree: false,
     };
     let scriptSnapshot: WorkflowScriptSnapshot | undefined;
+    let provenance: WorkflowCapsuleProvenance | undefined;
 
     if (ref.execution === 'capability-generated') {
       const capsule = await loadSavedWorkflowCapsule(ref.path);
@@ -794,12 +800,16 @@ export async function prepareSavedWorkflow(
         manifest: capsule.manifest,
         source: capsule.source,
       };
+      provenance = capsule.provenance;
     }
 
     const module = await loadSavedWorkflow(ref.path);
-    return scriptSnapshot
-      ? { module, approvalContext, scriptSnapshot }
-      : { module, approvalContext };
+    return {
+      module,
+      approvalContext,
+      ...(scriptSnapshot !== undefined ? { scriptSnapshot } : {}),
+      ...(provenance !== undefined ? { provenance } : {}),
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.log(chalk.red(`\n[workflow] failed to load ${ref.path}: ${message}\n`));

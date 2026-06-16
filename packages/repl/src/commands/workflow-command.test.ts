@@ -7,7 +7,7 @@
  * `workflow-runner` tests in @kodax-ai/coding.
  */
 
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -22,6 +22,8 @@ import {
 import {
   createWorkflowCapsule,
   getAgentConfigPath,
+  WorkflowScriptExecutionError,
+  type WorkflowCapsuleProvenance,
   type WorkflowEvent,
   type WorkflowProcessSnapshot,
 } from '@kodax-ai/agent';
@@ -58,6 +60,7 @@ import {
   startGeneratedWorkflowFromRequest,
   workflowCommand,
 } from './workflow-command.js';
+import { workflowEventSink } from './workflow-command-live.js';
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
 
 function writeSavedWorkflowCapsule(
@@ -66,6 +69,7 @@ function writeSavedWorkflowCapsule(
   options: {
     readonly description?: string;
     readonly source?: string;
+    readonly provenance?: WorkflowCapsuleProvenance;
   } = {},
 ): string {
   const workflowsDir = join(dir, '.kodax', 'workflows');
@@ -89,10 +93,17 @@ function writeSavedWorkflowCapsule(
         patterns: ['classify-and-act'],
       },
       source,
+      ...(options.provenance !== undefined ? { provenance: options.provenance } : {}),
     }),
     'utf8',
   );
   return path;
+}
+
+function readSingleWorkflowRunJson(baseDir: string): Record<string, unknown> {
+  const runIds = readdirSync(baseDir).filter((name) => name.startsWith('run-'));
+  expect(runIds).toHaveLength(1);
+  return JSON.parse(readFileSync(join(baseDir, runIds[0]!, 'run.json'), 'utf8')) as Record<string, unknown>;
 }
 
 function writeGeneratedRunSnapshot(baseDir: string, runId: string): void {
@@ -241,6 +252,16 @@ describe('parseWorkflowInvocation', () => {
     expect(parseWorkflowInvocation(['resume', 'run-1'])).toEqual({ kind: 'resume', runId: 'run-1' });
     expect(parseWorkflowInvocation(['stop', 'run-1'])).toEqual({ kind: 'stop', runId: 'run-1' });
     expect(parseWorkflowInvocation(['delete', 'run-1'])).toEqual({ kind: 'delete', runId: 'run-1' });
+    expect(parseWorkflowInvocation(['delete', '--force', 'run-1'])).toEqual({
+      kind: 'delete',
+      runId: 'run-1',
+      force: true,
+    });
+    expect(parseWorkflowInvocation(['delete', 'run-1', '--force'])).toEqual({
+      kind: 'delete',
+      runId: 'run-1',
+      force: true,
+    });
     expect(parseWorkflowInvocation(['prune', '--dry-run'])).toEqual({ kind: 'prune', rawArgs: ['--dry-run'] });
     expect(parseWorkflowInvocation(['save', 'run-1', 'audit'])).toEqual({
       kind: 'save',
@@ -378,6 +399,96 @@ describe('workflow agentic presentation helpers', () => {
         summary: 'failed output',
       },
     })).toBeUndefined();
+  });
+
+  it('waits for async child-agent digest updates instead of rendering pending excerpts', () => {
+    expect(formatWorkflowAgentDigest({
+      seq: 3,
+      type: 'agent_completed',
+      data: {
+        name: 'async-auditor',
+        status: 'completed',
+        summary: 'Full report while the digest is still running.',
+        summaryKind: 'pending',
+      },
+    }, 'en', 'run-async')).toBeUndefined();
+
+    const digest = formatWorkflowAgentDigest({
+      seq: 4,
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-async',
+        name: 'async-auditor',
+        summary: '- Finding: async digest arrived after child completion.',
+        summaryKind: 'digest',
+      },
+    }, 'en', 'run-async');
+
+    expect(digest).toContain('Agent async-auditor completed. Summary:');
+    expect(digest).not.toContain('Extracted summary');
+    expect(digest).toContain('async digest arrived after child completion');
+    expect(digest).toContain('/workflow show run-async');
+  });
+
+  it('emits late async child-agent digests even when the raw workflow event is silent', () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const messages: WorkflowRunMessage[] = [];
+    const sink = workflowEventSink(
+      { onWorkflowRunMessage: (event) => messages.push(event) },
+      undefined,
+      { presentation: 'agentic', locale: 'en', runId: 'run-async' },
+    );
+
+    sink({
+      seq: 4,
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-async',
+        name: 'async-auditor',
+        summary: '- Finding: late digest reached the transcript.',
+        summaryKind: 'digest',
+      },
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'assistant',
+      final: false,
+    });
+    expect(messages[0]?.text).toContain('Agent async-auditor completed. Summary:');
+    expect(messages[0]?.text).toContain('late digest reached the transcript');
+    expect(messages[0]?.text).not.toContain('Extracted summary');
+  });
+
+  it('emits a bounded fallback child-agent summary when the async digest fails', () => {
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const messages: WorkflowRunMessage[] = [];
+    const sink = workflowEventSink(
+      { onWorkflowRunMessage: (event) => messages.push(event) },
+      undefined,
+      { presentation: 'agentic', locale: 'en', runId: 'run-digest-failed' },
+    );
+
+    sink({
+      seq: 3,
+      type: 'agent_summary_updated',
+      data: {
+        taskId: 'task-digest-failed',
+        name: 'digest-failed-child',
+        summary: 'Fallback report with evidence while digest is unavailable.',
+        summaryKind: 'digest-failed',
+      },
+    });
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'assistant',
+      final: false,
+    });
+    expect(messages[0]?.text).toContain('Agent digest-failed-child completed (smart summary unavailable; local excerpt):');
+    expect(messages[0]?.text).toContain('Fallback report with evidence');
   });
 
   it('labels the excerpt as smart-summary-unavailable when the digest attempt failed (FEATURE_217 risk 2)', () => {
@@ -1341,7 +1452,7 @@ describe('renderWorkflowHelp', () => {
     expect(text).toContain('/workflow pause <runId>');
     expect(text).toContain('/workflow resume <runId>');
     expect(text).toContain('/workflow stop [runId]');
-    expect(text).toContain('/workflow delete <runId>');
+    expect(text).toContain('/workflow delete [--force] <runId>');
     expect(text).toContain('/workflow prune');
     expect(text).toContain('/workflow save <runId> <name>');
     expect(text).toContain('/workflow rename <runId|alias|savedName> <newName>');
@@ -1572,6 +1683,43 @@ describe('startGeneratedWorkflowFromRequest launch policy', () => {
       && event.text.includes('Workflow result:')
       && event.text.includes('Generate a parallel audit workflow')
     ))).toBe(true);
+  });
+
+  it('labels zero-child script failures as workflow harness failures', async () => {
+    const runMessages: Array<{ readonly type: string; readonly text: string; readonly final?: boolean }> = [];
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    const generated = fakeGeneratedWorkflow();
+
+    const outcome = await startGeneratedWorkflowFromRequest({
+      ...isolatedWorkflowRuntime(),
+      request: 'Generate a broken audit workflow',
+      approval: 'silent',
+      callbacks: {
+        createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+        onWorkflowRunMessage: (event) => runMessages.push(event),
+      },
+      generateWorkflow: async () => ({
+        ...generated,
+        module: {
+          ...generated.module,
+          run: async () => {
+            throw new WorkflowScriptExecutionError(
+              'restricted workflow script failed to compile: Invalid or unexpected token',
+            );
+          },
+        },
+      }),
+    });
+
+    expect(outcome).toBe('started');
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'error')).toBe(true);
+    });
+    const errorText = runMessages.find((event) => event.type === 'error')?.text ?? '';
+    expect(errorText).toContain('Workflow harness failed before launching child agents');
+    expect(errorText).toContain('invalid generated workflow script or saved capsule');
+    expect(errorText).toContain('/workflow rerun');
+    expect(errorText).toContain('repeats the saved workflow script');
   });
 
   it('prints agentic completion through console fallback without info result framing', async () => {
@@ -1851,6 +1999,136 @@ describe('workflowCommand saved capsule preflight', () => {
     rmSync(workflowRunsDir, { recursive: true, force: true });
   });
 
+  it('refuses non-terminal persisted workflow runs unless --force is explicit', async () => {
+    const runDir = join(workflowRunsDir, 'run-running');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-running',
+        workflow: 'running-audit',
+        status: 'running',
+        totalSpawned: 1,
+        startedAt: 1,
+        endedAt: 0,
+        artifacts: [],
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['delete', 'run-running'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Workflow run-running is a non-terminal persisted running record');
+    expect(output).toContain('/workflow delete --force run-running');
+    expect(existsSync(runDir)).toBe(true);
+  });
+
+  it('force-deletes a stale non-terminal persisted workflow run', async () => {
+    const runDir = join(workflowRunsDir, 'run-stale-running');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-stale-running',
+        workflow: 'running-audit',
+        status: 'running',
+        totalSpawned: 1,
+        startedAt: 1,
+        endedAt: 0,
+        artifacts: [],
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['delete', '--force', 'run-stale-running'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Deleted workflow run run-stale-running with --force');
+    expect(existsSync(runDir)).toBe(false);
+  });
+
+  it('shows persisted workflow process identity and result metadata', async () => {
+    const runDir = join(workflowRunsDir, 'run-metadata');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-metadata',
+        workflow: 'generated-audit',
+        displayName: 'Customer Audit',
+        status: 'completed',
+        source: 'capsule',
+        savedWorkflowName: 'saved-audit',
+        sourceRunId: 'run-source',
+        sourceWorkflowName: 'saved-source',
+        revisionOf: 'saved-source',
+        resultSummary: 'metadata-backed result',
+        totalSpawned: 1,
+        startedAt: 1,
+        endedAt: 2,
+        artifacts: ['report'],
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['show', 'run-metadata'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('display name: Customer Audit');
+    expect(output).toContain('source: capsule');
+    expect(output).toContain('saved workflow: saved-audit');
+    expect(output).toContain('source run: run-source');
+    expect(output).toContain('source workflow: saved-source');
+    expect(output).toContain('revision of: saved-source');
+    expect(output).toContain('metadata-backed result');
+  });
+
+  it('reports persisted-only terminal workflow runs as already finished on stop', async () => {
+    const runDir = join(workflowRunsDir, 'run-terminal-stop');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-terminal-stop',
+        workflow: 'terminal-audit',
+        status: 'completed',
+        totalSpawned: 1,
+        startedAt: 1,
+        endedAt: 2,
+        artifacts: [],
+      }),
+      'utf8',
+    );
+
+    await workflowCommand.handler(
+      ['stop', 'run-terminal-stop'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      {} as Parameters<typeof workflowCommand.handler>[2],
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    const output = logSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+    expect(output).toContain('Workflow run-terminal-stop is already completed');
+    expect(output).toContain('Next: /workflow show run-terminal-stop');
+    expect(output).not.toContain('No active workflow run-terminal-stop');
+  });
+
   it('prints dependency-inventory warnings before saved capsule approval', async () => {
     const workflowsDir = join(dir, '.kodax', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
@@ -1945,6 +2223,46 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
   });
 
+  it('persists saved capsule provenance when rerunning a saved workflow name', async () => {
+    writeSavedWorkflowCapsule(dir, 'saved-lineage-rerun', {
+      source: 'async function run() { return "lineage rerun"; }',
+      provenance: {
+        fromRunId: 'run-source',
+        fromWorkflowName: 'saved-source',
+        revisionOf: 'saved-source',
+        createdAt: '2026-06-16T00:00:00.000Z',
+        kodaxVersion: '0.7.50',
+      },
+    });
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const runMessages: WorkflowRunMessage[] = [];
+    const callbacks = {
+      confirm: async () => true,
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+      onWorkflowRunMessage: (event) => {
+        runMessages.push(event);
+      },
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['rerun', 'saved-lineage-rerun'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    const runJson = readSingleWorkflowRunJson(workflowRunsDir);
+    expect(runJson.source).toBe('capsule');
+    expect(runJson.savedWorkflowName).toBe('saved-lineage-rerun');
+    expect(runJson.sourceRunId).toBe('run-source');
+    expect(runJson.sourceWorkflowName).toBe('saved-source');
+    expect(runJson.revisionOf).toBe('saved-source');
+  });
+
   it('preserves locale from a historical generated run when rerunning by run id', async () => {
     writeGeneratedRunSnapshot(workflowRunsDir, 'run-zh-audit');
     type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
@@ -2010,6 +2328,46 @@ describe('workflowCommand saved capsule preflight', () => {
     expect(finalText).toContain('direct result');
     expect(runMessages.some((event) => event.type === 'success')).toBe(false);
     expect(runMessages.some((event) => event.type === 'info' && event.text.includes('Workflow result:'))).toBe(false);
+  });
+
+  it('persists saved capsule provenance when starting a saved workflow name', async () => {
+    writeSavedWorkflowCapsule(dir, 'saved-lineage-direct', {
+      source: 'async function run() { return "lineage direct"; }',
+      provenance: {
+        fromRunId: 'run-original',
+        fromWorkflowName: 'saved-original',
+        revisionOf: 'saved-original',
+        createdAt: '2026-06-16T00:00:00.000Z',
+        kodaxVersion: '0.7.50',
+      },
+    });
+    type WorkflowHandlerCallbacks = Parameters<typeof workflowCommand.handler>[2];
+    type WorkflowRunMessage = Parameters<NonNullable<WorkflowHandlerCallbacks['onWorkflowRunMessage']>>[0];
+    const runMessages: WorkflowRunMessage[] = [];
+    const callbacks = {
+      confirm: async () => true,
+      createKodaXOptions: () => ({}) as ReturnType<NonNullable<WorkflowHandlerCallbacks['createKodaXOptions']>>,
+      onWorkflowRunMessage: (event) => {
+        runMessages.push(event);
+      },
+    } as WorkflowHandlerCallbacks;
+
+    await workflowCommand.handler(
+      ['saved-lineage-direct'],
+      {} as Parameters<typeof workflowCommand.handler>[1],
+      callbacks,
+      {} as Parameters<typeof workflowCommand.handler>[3],
+    );
+
+    await vi.waitFor(() => {
+      expect(runMessages.some((event) => event.type === 'assistant' && event.final === true)).toBe(true);
+    });
+    const runJson = readSingleWorkflowRunJson(workflowRunsDir);
+    expect(runJson.source).toBe('capsule');
+    expect(runJson.savedWorkflowName).toBe('saved-lineage-direct');
+    expect(runJson.sourceRunId).toBe('run-original');
+    expect(runJson.sourceWorkflowName).toBe('saved-original');
+    expect(runJson.revisionOf).toBe('saved-original');
   });
 
   it('fails closed when a rerun target matches both a run id and saved workflow name', async () => {

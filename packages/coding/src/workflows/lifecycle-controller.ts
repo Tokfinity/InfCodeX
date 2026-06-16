@@ -57,6 +57,10 @@ export interface WorkflowRunRetentionResult {
   readonly dryRun: boolean;
 }
 
+export interface DeleteWorkflowRunOptions {
+  readonly force?: boolean;
+}
+
 export interface WorkflowCapsulePreflightInput {
   readonly capsule: WorkflowCapsule;
   readonly env?: WorkflowCapsulePreflightEnvironment;
@@ -78,7 +82,7 @@ export interface WorkflowLifecycleController {
   ): Promise<ReplaceSavedWorkflowResult | undefined>;
   readWorkflowResult(runId: string): Promise<string | undefined>;
   readWorkflowArtifact(runId: string, name: string): Promise<unknown | undefined>;
-  deleteWorkflowRun(runId: string): Promise<boolean>;
+  deleteWorkflowRun(runId: string, options?: DeleteWorkflowRunOptions): Promise<boolean>;
   pruneWorkflowRuns(options: WorkflowRunRetentionOptions): Promise<WorkflowRunRetentionResult>;
 }
 
@@ -178,6 +182,16 @@ function runDir(baseDir: string, runId: string): string | undefined {
   const base = resolve(baseDir);
   const target = resolve(base, runId);
   return target.startsWith(`${base}${sep}`) ? target : undefined;
+}
+
+function isManagedWorkflowActive(status: string): boolean {
+  return status === 'running' || status === 'paused';
+}
+
+function isPathWithinBase(baseDir: string, path: string): boolean {
+  const base = resolve(baseDir);
+  const target = resolve(path);
+  return target === base || target.startsWith(`${base}${sep}`);
 }
 
 function readPersistedRun(baseDir: string, runId: string): PersistedWorkflowRun | undefined {
@@ -416,13 +430,16 @@ export function createWorkflowLifecycleController(
       return readJsonFile(join(dir, 'artifacts', `${safeWorkflowArtifactName(name)}.json`));
     },
 
-    deleteWorkflowRun: async (runId) => {
+    deleteWorkflowRun: async (runId, deleteOptions) => {
       const active = runManager
         .listWorkflowProcessSnapshots({ activeOnly: true })
         .some((snapshot) => snapshot.runId === runId);
       if (active) return false;
       const persisted = readPersistedRun(runBaseDir, runId);
-      if (!persisted || !TERMINAL_RUN_STATUSES.has(persisted.status)) return false;
+      if (!persisted) return false;
+      if (!TERMINAL_RUN_STATUSES.has(persisted.status) && deleteOptions?.force !== true) {
+        return false;
+      }
       const dir = runDir(runBaseDir, runId);
       if (!dir) return false;
       rmSync(dir, { recursive: true, force: true });
@@ -430,11 +447,22 @@ export function createWorkflowLifecycleController(
     },
 
     pruneWorkflowRuns: async (pruneOptions) => {
-      const activeIds = new Set(
+      const activeProcessIds = new Set(
         runManager.listWorkflowProcessSnapshots({ activeOnly: true }).map((snapshot) => snapshot.runId),
       );
+      const activeManagedIds = new Set(
+        runManager.list()
+          .filter((run) => isManagedWorkflowActive(run.status))
+          .filter((run) => isPathWithinBase(runBaseDir, run.runDir))
+          .map((run) => run.runId),
+      );
+      const activeIds = new Set([...activeProcessIds, ...activeManagedIds]);
       const runs = listPersistedRuns(runBaseDir);
-      const protectedRuns = runs.filter((run) => activeIds.has(run.runId)).length;
+      const protectedRunIds = new Set([
+        ...activeManagedIds,
+        ...runs.filter((run) => activeProcessIds.has(run.runId)).map((run) => run.runId),
+      ]);
+      const protectedRuns = protectedRunIds.size;
       const candidates = pruneCandidates(runs, pruneOptions, now())
         .filter((run) => !activeIds.has(run.runId));
       if (pruneOptions.dryRun === true) {

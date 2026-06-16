@@ -260,11 +260,16 @@ export function formatWorkflowAgentDigest(
   locale: WorkflowRunLocale = 'en',
   runId?: string,
 ): string | undefined {
-  if (event.type !== 'agent_completed') return undefined;
-  if (readEventString(event, 'status') !== 'completed') return undefined;
+  if (event.type !== 'agent_completed' && event.type !== 'agent_summary_updated') {
+    return undefined;
+  }
+  if (event.type === 'agent_completed' && readEventString(event, 'status') !== 'completed') {
+    return undefined;
+  }
   const rawSummary = readEventString(event, 'summary');
   if (!rawSummary) return undefined;
   const rawKind = readEventString(event, 'summaryKind');
+  if (rawKind === 'pending') return undefined;
   const summaryKind: WorkflowAgentSummaryKind =
     rawKind === 'digest' ? 'digest' : rawKind === 'digest-failed' ? 'digest-failed' : 'excerpt';
   const name = readEventString(event, 'name') ?? readEventString(event, 'taskId') ?? 'agent';

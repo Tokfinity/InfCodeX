@@ -92,7 +92,7 @@ describe('WorkflowLifecycleController', () => {
         maxConcurrency: 1,
         patterns: ['classify-and-act'],
       },
-      source: 'export default async function run() { return "ok"; }',
+      source: 'async function run() { return "ok"; }',
       requires: {
         tools: ['read'],
       },
@@ -121,6 +121,7 @@ describe('WorkflowLifecycleController', () => {
     });
     const terminalDir = join(dir, 'run-old');
     const activeDir = join(dir, 'run-active');
+    const activeUnflushedDir = join(dir, 'run-active-unflushed');
     const module: WorkflowModule = {
       meta: { name: 'active', description: 'active', readOnly: true },
       run: async () => new Promise(() => undefined),
@@ -130,6 +131,13 @@ describe('WorkflowLifecycleController', () => {
       args: {},
       runId: 'run-active',
       runDir: activeDir,
+      backend: fakeBackend(),
+    });
+    manager.start({
+      module,
+      args: {},
+      runId: 'run-active-unflushed',
+      runDir: activeUnflushedDir,
       backend: fakeBackend(),
     });
     mkdirSync(terminalDir, { recursive: true });
@@ -168,7 +176,7 @@ describe('WorkflowLifecycleController', () => {
     const dryRun = await controller.pruneWorkflowRuns({ keep: 0, dryRun: true });
     expect(dryRun).toMatchObject({
       deleted: 0,
-      protectedRuns: 1,
+      protectedRuns: 2,
       candidates: ['run-old'],
       dryRun: true,
     });
@@ -179,13 +187,26 @@ describe('WorkflowLifecycleController', () => {
     expect(controller.getWorkflowProcessSnapshot('run-active')?.status).toBe('running');
   });
 
-  it('deletes one terminal persisted run while protecting active or non-terminal runs', async () => {
+  it('deletes terminal runs and force-deletes stale non-terminal records while protecting active runs', async () => {
     const manager = createWorkflowRunManager();
     const controller = createWorkflowLifecycleController({ runManager: manager, runBaseDir: dir });
     const doneDir = join(dir, 'run-done');
     const runningDir = join(dir, 'run-running');
+    const activeDir = join(dir, 'run-active');
+    const module: WorkflowModule = {
+      meta: { name: 'active-delete', description: 'active', readOnly: true },
+      run: async () => new Promise(() => undefined),
+    };
+    manager.start({
+      module,
+      args: {},
+      runId: 'run-active',
+      runDir: activeDir,
+      backend: fakeBackend(),
+    });
     mkdirSync(doneDir, { recursive: true });
     mkdirSync(runningDir, { recursive: true });
+    mkdirSync(activeDir, { recursive: true });
     writeFileSync(
       join(doneDir, 'run.json'),
       JSON.stringify({
@@ -216,11 +237,29 @@ describe('WorkflowLifecycleController', () => {
       }),
       'utf8',
     );
+    writeFileSync(
+      join(activeDir, 'run.json'),
+      JSON.stringify({
+        runId: 'run-active',
+        workflow: 'active',
+        status: 'running',
+        totalSpawned: 0,
+        artifacts: [],
+        eventCount: 0,
+        startedAt: 1,
+        endedAt: 0,
+        args: {},
+      }),
+      'utf8',
+    );
 
     await expect(controller.deleteWorkflowRun('run-running')).resolves.toBe(false);
+    await expect(controller.deleteWorkflowRun('run-running', { force: true })).resolves.toBe(true);
+    await expect(controller.deleteWorkflowRun('run-active', { force: true })).resolves.toBe(false);
     await expect(controller.deleteWorkflowRun('run-done')).resolves.toBe(true);
     expect(existsSync(doneDir)).toBe(false);
-    expect(existsSync(runningDir)).toBe(true);
+    expect(existsSync(runningDir)).toBe(false);
+    expect(existsSync(activeDir)).toBe(true);
   });
 
   it('renames persisted run display names and exposes them in process snapshots', async () => {
@@ -273,7 +312,7 @@ describe('WorkflowLifecycleController', () => {
         maxConcurrency: 1,
         patterns: ['classify-and-act'],
       },
-      source: 'export default async function run() { return "ok"; }',
+      source: 'async function run() { return "ok"; }',
     });
 
     await expect(controller.resolveWorkflowIdentity('saved-audit')).resolves.toMatchObject({
@@ -313,7 +352,7 @@ describe('WorkflowLifecycleController', () => {
         maxConcurrency: 1,
         patterns: ['classify-and-act'],
       },
-      source: 'export default async function run() { return "old"; }',
+      source: 'async function run() { return "old"; }',
     });
 
     const replaced = await controller.replaceSavedWorkflow({
@@ -327,7 +366,7 @@ describe('WorkflowLifecycleController', () => {
         maxConcurrency: 1,
         patterns: ['classify-and-act'],
       },
-      source: 'export default async function run() { return "new"; }',
+      source: 'async function run() { return "new"; }',
       provenance: {
         fromWorkflowName: 'saved-audit',
         revisionOf: 'saved-audit',

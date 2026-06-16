@@ -455,7 +455,7 @@ export async function prepareInvocationExecution(
 
   const wrappedEvents: KodaXEvents = {
     ...baseEvents,
-    beforeToolExecute: async (tool, input) => {
+    beforeToolExecute: async (tool, input, meta) => {
       if (!isToolAllowed(allowedToolPolicy, tool, input)) {
         await emitWithNotifications(`[Blocked] Tool '${tool}' is not allowed by ${request.displayName}`);
         return false;
@@ -477,11 +477,11 @@ export async function prepareInvocationExecution(
 
       // Propagate the result from baseEvents.beforeToolExecute (may be true, false, or a string message)
       return baseEvents.beforeToolExecute
-        ? await baseEvents.beforeToolExecute(tool, input)
+        ? await baseEvents.beforeToolExecute(tool, input, meta)
         : true;
     },
-    onToolResult: (result) => {
-      baseEvents.onToolResult?.(result);
+    onToolResult: (result, meta) => {
+      baseEvents.onToolResult?.(result, meta);
       void runHooks(
         request.hooks,
         'PostToolUse',

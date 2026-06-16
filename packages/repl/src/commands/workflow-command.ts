@@ -3,18 +3,20 @@
  * Parser, formatting, live updates, and builder helpers live beside this file.
  */
 
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import chalk from 'chalk';
-import { getAgentConfigPath } from '@kodax-ai/agent';
+import { getAgentConfigPath, isFinalWorkflowProcessStatus } from '@kodax-ai/agent';
 import type {
   WorkflowModule,
   WorkflowCapsule,
+  WorkflowProcessSnapshot,
   WorkflowScriptManifest,
 } from '@kodax-ai/agent';
 import {
   buildApprovalSummary,
+  createWorkflowLifecycleController,
   getBuiltinWorkflow,
   listBuiltinWorkflows,
   listWorkflowPatternTemplates,
@@ -27,14 +29,13 @@ import {
   preflightWorkflowCapsule,
   renameSavedWorkflow,
   replaceSavedWorkflow,
-  resolveWorkflowIdentity,
   saveGeneratedWorkflow,
   saveGeneratedWorkflowFromRun,
   type SavedWorkflowRef,
 } from '@kodax-ai/coding';
 
 import { deriveProjectKeyFromRoot } from '../interactive/project-key.js';
-import type { Command, CommandCallbacks } from './types.js';
+import type { Command } from './types.js';
 import {
   buildWorkflowProcessMetadata,
   startGeneratedWorkflowFromRequest,
@@ -72,6 +73,7 @@ import {
   formatWorkflowRunSnapshot,
   inferWorkflowLocaleFromParts,
   isActiveManagedWorkflowRun,
+  isTerminalWorkflowStatus,
   nextRevisionWorkflowName,
   prepareSavedWorkflow,
   printPreflightFailure,
@@ -84,11 +86,11 @@ import {
   savedWorkflowDirs,
   selectDefaultActiveWorkflowRunId,
   selectDefaultWorkflowRunId,
-  selectWorkflowPruneCandidates,
-  writeWorkflowRunDisplayName,
   type WorkflowApprovalRenderContext,
+  type WorkflowPruneCandidate,
   type WorkflowRunLocale,
   type WorkflowRunPresentation,
+  type WorkflowRunSummary,
 } from './workflow-command-helpers.js';
 export {
   createWorkflowAgentDigestLimiter,
@@ -145,11 +147,62 @@ export {
 
 /* ----------------------------- pure helpers ----------------------------- */
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function processSnapshotsByRunId(
+  snapshots: readonly WorkflowProcessSnapshot[],
+): ReadonlyMap<string, WorkflowProcessSnapshot> {
+  return new Map(snapshots.map((snapshot) => [snapshot.runId, snapshot]));
+}
+
+function workflowPruneRetentionOptions(options: WorkflowPruneOptions): {
+  readonly dryRun?: boolean;
+  readonly keep?: number;
+  readonly olderThanDays?: number;
+} {
+  return {
+    dryRun: options.dryRun,
+    ...(options.keep !== undefined ? { keep: options.keep } : {}),
+    ...(options.olderThanMs !== undefined ? { olderThanDays: options.olderThanMs / DAY_MS } : {}),
+  };
+}
+
+function workflowPruneCandidateSummaries(
+  runSummaries: readonly WorkflowRunSummary[],
+  candidateRunIds: readonly string[],
+): readonly WorkflowPruneCandidate[] {
+  const byRunId = new Map(runSummaries.map((run) => [run.runId, run]));
+  return candidateRunIds.map((runId) => {
+    const run = byRunId.get(runId);
+    return {
+      runId,
+      workflow: run?.workflow ?? '?',
+      status: run?.status ?? '?',
+      endedAt: run?.endedAt ?? 0,
+    };
+  });
+}
+
+function buildSavedWorkflowProcessMetadata(input: {
+  readonly displayName: string;
+  readonly savedWorkflowName: string;
+  readonly provenance?: WorkflowCapsule['provenance'];
+}) {
+  return buildWorkflowProcessMetadata({
+    source: 'capsule',
+    displayName: input.displayName,
+    savedWorkflowName: input.savedWorkflowName,
+    sourceRunId: input.provenance?.fromRunId,
+    sourceWorkflowName: input.provenance?.fromWorkflowName ?? input.savedWorkflowName,
+    revisionOf: input.provenance?.revisionOf,
+  });
+}
+
 export const workflowCommand: Command = {
   name: 'workflow',
   description: 'Run a dynamic multi-agent workflow (FEATURE_217)',
   usage: '/workflow [help | list | runs | show | pause | resume | stop | delete | prune | rerun | save | rename | revise | create | <name> [args]]',
-  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
+  argumentHint: 'help | list | runs [--all|--limit N] | show [runId] | pause <runId> | resume <runId> | stop [runId] | delete [--force] <runId> | prune --dry-run|--keep N|--older-than Nd | rerun <runId|savedName> [args] | save <runId> <name> | rename <runId|alias|savedName> <newName> | revise [--replace] <runId|alias|savedName> <change> | create <request> | <name> [args]',
   detailedHelp: printWorkflowHelp,
   handler: async (args, _context, callbacks, currentConfig) => {
     const invocation = parseWorkflowInvocation(args);
@@ -158,6 +211,11 @@ export const workflowCommand: Command = {
     const manager = getDefaultWorkflowRunManager();
 
     const dirs = savedWorkflowDirs(process.cwd());
+    const lifecycle = createWorkflowLifecycleController({
+      runManager: manager,
+      runBaseDir: baseDir,
+      savedWorkflowDirs: dirs,
+    });
 
     if (invocation.kind === 'help') {
       printWorkflowHelp();
@@ -187,10 +245,7 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow(`\nUsage: /workflow runs [--all] [--limit N]\n${options.error}\n`));
         return;
       }
-      const processSnapshots = new Map(
-        manager.listWorkflowProcessSnapshots({ activeOnly: false })
-          .map((snapshot) => [snapshot.runId, snapshot]),
-      );
+      const processSnapshots = processSnapshotsByRunId(lifecycle.listWorkflowProcessSnapshots({ activeOnly: false }));
       const active = manager.list().filter(isActiveManagedWorkflowRun);
       if (active.length > 0) {
         console.log(chalk.bold('\nActive workflow runs:'));
@@ -217,7 +272,7 @@ export const workflowCommand: Command = {
       if (!ensureSafeRunId(runId)) return;
       const managed = manager.get(runId);
       const detail = readWorkflowRunDetail(baseDir, runId);
-      const processSnapshot = manager.getWorkflowProcessSnapshot(runId);
+      const processSnapshot = lifecycle.getWorkflowProcessSnapshot(runId);
       console.log(chalk.bold('\nWorkflow run:'));
       console.log(formatWorkflowRunSnapshot(managed, detail, {
         full: invocation.full === true,
@@ -248,35 +303,50 @@ export const workflowCommand: Command = {
         return;
       }
       if (!ensureSafeRunId(runId)) return;
-      const ok = manager.stop(runId, 'stopped by user');
+      const ok = await lifecycle.stopWorkflow(runId, 'stopped by user');
       const snapshot = manager.get(runId);
-      const detail = snapshot ? readWorkflowRunDetail(baseDir, runId) : undefined;
+      const detail = readWorkflowRunDetail(baseDir, runId);
+      const processSnapshot = lifecycle.getWorkflowProcessSnapshot(runId);
+      const status = snapshot?.status ?? detail?.status ?? processSnapshot?.status;
+      const alreadyTerminal = snapshot
+        ? !isActiveManagedWorkflowRun(snapshot)
+        : detail
+          ? isTerminalWorkflowStatus(detail.status)
+          : processSnapshot !== undefined && isFinalWorkflowProcessStatus(processSnapshot.status);
       const nextActions = formatWorkflowNextActions(
         runId,
         canRerunWorkflowRun(snapshot, detail),
       );
       console.log(ok
         ? chalk.dim(`Stopped workflow ${runId}.\n`)
-        : snapshot && !isActiveManagedWorkflowRun(snapshot)
-          ? chalk.yellow(`Workflow ${runId} is already ${snapshot.status}. Next: ${nextActions}.\n`)
+        : status && alreadyTerminal
+          ? chalk.yellow(`Workflow ${runId} is already ${status}. Next: ${nextActions}.\n`)
           : chalk.yellow(`No active workflow ${runId}.\n`));
       return;
     }
 
     if (invocation.kind === 'delete') {
       if (!ensureSafeRunId(invocation.runId)) return;
-      const snapshot = manager.get(invocation.runId);
-      if (snapshot && isActiveManagedWorkflowRun(snapshot)) {
-        console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is ${snapshot.status}. Stop it before deleting the run record.\n`));
+      const deleted = await lifecycle.deleteWorkflowRun(invocation.runId, { force: invocation.force });
+      if (deleted) {
+        console.log(chalk.dim(`\nDeleted workflow run ${invocation.runId}${invocation.force ? ' with --force' : ''}.\n`));
         return;
       }
-      const runDir = join(baseDir, invocation.runId);
-      if (!existsSync(runDir)) {
+      const activeSnapshot = manager.getWorkflowProcessSnapshot(invocation.runId);
+      const processSnapshot = lifecycle.getWorkflowProcessSnapshot(invocation.runId);
+      if (!processSnapshot && !existsSync(join(baseDir, invocation.runId, 'run.json'))) {
         console.log(chalk.yellow(`\nNo persisted workflow run ${invocation.runId}.\n`));
         return;
       }
-      rmSync(runDir, { recursive: true, force: true });
-      console.log(chalk.dim(`\nDeleted workflow run ${invocation.runId}.\n`));
+      if (activeSnapshot && !isFinalWorkflowProcessStatus(activeSnapshot.status)) {
+        console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is ${activeSnapshot.status}. Stop it before deleting the run record.\n`));
+        return;
+      }
+      if (processSnapshot && !isFinalWorkflowProcessStatus(processSnapshot.status)) {
+        console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is a non-terminal persisted ${processSnapshot.status} record. If it is stale, run /workflow delete --force ${invocation.runId}.\n`));
+        return;
+      }
+      console.log(chalk.yellow(`\nWorkflow ${invocation.runId} is not a deletable terminal run.\n`));
       return;
     }
 
@@ -290,16 +360,21 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow('\nUsage: /workflow prune --dry-run | --keep N | --older-than Nd\nNo cleanup rule was provided.\n'));
         return;
       }
-      const activeIds = new Set(manager.list().filter(isActiveManagedWorkflowRun).map((run) => run.runId));
-      const candidates = selectWorkflowPruneCandidates(readWorkflowRuns(baseDir), options)
-        .filter((run) => !activeIds.has(run.runId));
+      // Keep display metadata before prune deletes candidate directories.
+      const runSummaries = readWorkflowRuns(baseDir);
+      const retention = await lifecycle.pruneWorkflowRuns(workflowPruneRetentionOptions(options));
+      const candidates = workflowPruneCandidateSummaries(runSummaries, retention.candidates);
       console.log(chalk.bold(options.dryRun ? '\nWorkflow prune preview:' : '\nWorkflow prune:'));
       console.log(formatWorkflowPruneCandidates(candidates));
+      if (retention.protectedRuns > 0) {
+        console.log(
+          chalk.dim(
+            `\nProtected ${retention.protectedRuns} active workflow run${retention.protectedRuns === 1 ? '' : 's'} from pruning.`,
+          ),
+        );
+      }
       if (!options.dryRun) {
-        for (const run of candidates) {
-          rmSync(join(baseDir, run.runId), { recursive: true, force: true });
-        }
-        console.log(chalk.dim(`\nDeleted ${candidates.length} workflow run${candidates.length === 1 ? '' : 's'}.\n`));
+        console.log(chalk.dim(`\nDeleted ${retention.deleted} workflow run${retention.deleted === 1 ? '' : 's'}.\n`));
       } else {
         console.log(chalk.dim('\nDry run only. Add --keep N or --older-than Nd without --dry-run to delete.\n'));
       }
@@ -331,11 +406,7 @@ export const workflowCommand: Command = {
         console.log(chalk.yellow('\nUsage: /workflow rename <runId|alias|savedName> <newName>\n'));
         return;
       }
-      const resolution = await resolveWorkflowIdentity({
-        target: invocation.target,
-        runBaseDir: baseDir,
-        savedWorkflowDirs: dirs,
-      });
+      const resolution = await lifecycle.resolveWorkflowIdentity(invocation.target);
       if (resolution.kind === 'ambiguous') {
         console.log(
           chalk.red(
@@ -349,7 +420,7 @@ export const workflowCommand: Command = {
         return;
       }
       if (resolution.kind === 'run') {
-        if (!writeWorkflowRunDisplayName(baseDir, resolution.runId, invocation.newName)) {
+        if (!await lifecycle.renameWorkflowRun(resolution.runId, invocation.newName)) {
           console.log(chalk.red(`\n[workflow] rename failed: ${resolution.runId}\n`));
           return;
         }
@@ -388,11 +459,7 @@ export const workflowCommand: Command = {
         console.log(chalk.red('\n[workflow] cannot revise - REPL options unavailable in this context.\n'));
         return;
       }
-      const resolution = await resolveWorkflowIdentity({
-        target: invocation.target,
-        runBaseDir: baseDir,
-        savedWorkflowDirs: dirs,
-      });
+      const resolution = await lifecycle.resolveWorkflowIdentity(invocation.target);
       if (resolution.kind === 'ambiguous') {
         console.log(
           chalk.red(
@@ -573,11 +640,10 @@ export const workflowCommand: Command = {
           runId: newRunId,
           runDir: newRunDir,
           ...(prepared.scriptSnapshot ? { scriptSnapshot: prepared.scriptSnapshot } : {}),
-          processMetadata: buildWorkflowProcessMetadata({
-            source: 'capsule',
+          processMetadata: buildSavedWorkflowProcessMetadata({
             displayName: prepared.module.meta.name,
             savedWorkflowName: savedRef.name,
-            sourceWorkflowName: savedRef.name,
+            provenance: prepared.provenance,
           }),
           onEvent: workflowEventSink(callbacks, undefined, { presentation, locale, runId: newRunId }),
         });
@@ -691,6 +757,7 @@ export const workflowCommand: Command = {
     let scriptSnapshot: { readonly manifest: WorkflowScriptManifest; readonly source: string } | undefined;
     let module: WorkflowModule | undefined = getBuiltinWorkflow(invocation.name);
     let savedWorkflowRef: SavedWorkflowRef | undefined;
+    let savedWorkflowProvenance: WorkflowCapsule['provenance'];
     if (!module) {
       // Not a built-in — try a saved workflow. Loading EXECUTES local
       // code, so it is hard-gated behind a trusted-local confirmation:
@@ -732,6 +799,7 @@ export const workflowCommand: Command = {
             manifest: capsule.manifest,
             source: capsule.source,
           };
+          savedWorkflowProvenance = capsule.provenance;
         }
         module = await loadSavedWorkflow(ref.path);
         if (ref.execution === 'trusted-local') {
@@ -782,11 +850,10 @@ export const workflowCommand: Command = {
       runDir,
       ...(scriptSnapshot ? { scriptSnapshot } : {}),
       processMetadata: savedWorkflowRef
-        ? buildWorkflowProcessMetadata({
-            source: 'capsule',
+        ? buildSavedWorkflowProcessMetadata({
             displayName: module.meta.name,
             savedWorkflowName: savedWorkflowRef.name,
-            sourceWorkflowName: savedWorkflowRef.name,
+            provenance: savedWorkflowProvenance,
           })
         : buildWorkflowProcessMetadata({
             source: 'command',

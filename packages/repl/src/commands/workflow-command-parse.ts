@@ -8,7 +8,7 @@ export type WorkflowInvocation =
   | { readonly kind: 'pause'; readonly runId: string }
   | { readonly kind: 'resume'; readonly runId: string }
   | { readonly kind: 'stop'; readonly runId: string }
-  | { readonly kind: 'delete'; readonly runId: string }
+  | { readonly kind: 'delete'; readonly runId: string; readonly force?: boolean }
   | { readonly kind: 'prune'; readonly rawArgs: readonly string[] }
   | { readonly kind: 'save'; readonly runId: string; readonly name: string }
   | { readonly kind: 'rename'; readonly target: string; readonly newName: string }
@@ -35,7 +35,12 @@ export function parseWorkflowInvocation(args: readonly string[]): WorkflowInvoca
   if (first === 'pause') return { kind: 'pause', runId: args[1] ?? '' };
   if (first === 'resume') return { kind: 'resume', runId: args[1] ?? '' };
   if (first === 'stop') return { kind: 'stop', runId: args[1] ?? '' };
-  if (first === 'delete') return { kind: 'delete', runId: args[1] ?? '' };
+  if (first === 'delete') {
+    const rest = args.slice(1);
+    const force = rest.includes('--force');
+    const runId = rest.find((arg) => arg !== '--force') ?? '';
+    return force ? { kind: 'delete', runId, force: true } : { kind: 'delete', runId };
+  }
   if (first === 'prune') return { kind: 'prune', rawArgs: args.slice(1) };
   if (first === 'save') return { kind: 'save', runId: args[1] ?? '', name: args[2] ?? '' };
   if (first === 'rename') {
